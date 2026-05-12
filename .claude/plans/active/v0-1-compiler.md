@@ -806,6 +806,7 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 **Branch**: `feat/m2-lexer`
 **Flag**: N/A
 **Est. lines**: ~400
+**Status**: COMPLETE (2026-05-12) — commit a8c3efe on `feat/m2-lexer`. 39 lex tests green, full workspace 0 failures. Token count locked at 42 (10 M1 + 32 M2). Key implementation decisions: `//` comments stripped in `skip_whitespace_and_comments` before `lex_one`; dot-method-call disambiguation (`.` only consumed as decimal point when followed by a digit so `42.toString()` works); `validate_underscores` checks each digit segment independently; 4 plumbing tokens (Dot, LBracket, RBracket, Comma) added ahead of schedule for Phase 3; `spec/operators.md` updated to include `%`.
 **Objective**: Lexing a representative M2 source produces the expected token stream (snapshot-asserted). Malformed literals (`1.2.3`, `0xZZ`, `0b22`, `1__000` with adjacent underscores) produce three-part diagnostics; lexer continues.
 
 **Spec correction landing in this phase**: add `%` to the arithmetic operator list in `spec/operators.md` (currently missing). Same PR.

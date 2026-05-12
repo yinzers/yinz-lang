@@ -25,7 +25,7 @@
 source $HOME/.cargo/env    # activate Rust in this shell session
 
 cargo build --workspace    # build all crates
-cargo test --workspace     # run all 51 tests
+cargo test --workspace     # run all tests (was 118, now higher with P2 lexer tests)
 cargo clippy --workspace -- -D warnings
 cargo fmt --all
 
@@ -33,8 +33,8 @@ cargo fmt --all
 ./target/debug/ynz run crates/ynz-driver/tests/fixtures/hello.ynz
 # → hello, yinz
 
-# M2 work starts on a feature branch:
-# git checkout -b feat/literals-variables
+# Current branch: feat/m2-lexer (P2 complete — commit a8c3efe)
+# Next: git checkout main && git merge feat/m2-lexer && git checkout -b feat/m2-parser
 ```
 
 ---
@@ -64,6 +64,7 @@ cargo fmt --all
 - [2026-05-12] **M2 plan reviewed (Opus-authored, Sonnet-reviewed)**: Plan is appended to `v0-1-compiler.md`. Pre-Phase-1 decisions locked: `FloatLit` removed from Token+AST, `PrimitiveIntrinsicTable` replaces `BuiltinTable`, `int.toString()` uses thread-local static buffer, `libynz_rt.a` path via `build.rs`→`cargo:rustc-env`. `1763` smoke-fixture value = `count * count - 1` where count=42; tests int×int (smul.with.overflow) + int-int (ssub) + Pratt precedence (* beats -).
 - [2026-05-12] **M2 Phase 1 complete, branch pushed (59fcee2 on `feat/numerics-runtime`)**: `ynz-numerics` + `ynz-runtime` + driver link. 118 tests. PR URL: https://github.com/patrickrizzardi/ynz/pull/new/feat/numerics-runtime — needs `gh auth login` to create via CLI. Big-O docs added to U256::div_rem (O(256) binary long division, v0.4 Knuth Algorithm D perf target), mul_finite, div_finite, clamp_to_34_digits, decimal_digits functions. New chat needed for Phase 2 (current chat at context limit).
 - [2026-05-12] **Project structure = root-relative flat discovery**: `yinz.toml` defines project root. Imports are root-relative (`import { X } from "models/player"`). No `mod` declarations, no explicit file graph. Single-segment = stdlib, multi-segment = project. Already fully specced in `spec/modules.md`.
+- [2026-05-12] **M2 Phase 2 complete (a8c3efe on `feat/m2-lexer`)**: 42 tokens (10 M1 + 32 M2). Token count locked by test-ratchet. Key lexer decisions: `//` comments stripped pre-`lex_one`; dot-method-call disambiguation (`.` only decimal when followed by digit); banned-op diagnostics for `+=`/`++`/`-=`/`--`/`*=`/`/=`/`%=`; malformed-literal recovery to next whitespace. 4 plumbing tokens (Dot, LBracket, RBracket, Comma) added ahead of Phase 3 schedule — implicit P3 dependencies. 39 lex tests. Next: Phase 3 AST+parser on `feat/m2-parser`.
 
 ---
 
