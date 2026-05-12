@@ -26,36 +26,38 @@ fn lex_counts(source: &str) -> (usize, usize) {
     (output.tokens.len(), output.diagnostics.len())
 }
 
-// ─── Happy path ─────────────────────────────────────────────────────────────
-
-#[test]
-fn m1_source_produces_expected_tokens() {
-    // WHY: This is the exact token stream the Phase 4 parser depends on.
-    // A silent change to this snapshot means the parser's expectations are broken.
-    let source = r#"function main() -> nothing { print("hello, yinz") }"#;
-    let tokens = lex_tokens(source);
-    assert_debug_snapshot!("m1_token_stream", tokens);
+/// Run the lexer and return just the diagnostics.
+fn lex_diags(source: &str) -> Vec<ynz_diagnostics::Diagnostic> {
+    let db = CompilerDb::default();
+    let sf = SourceFile::new(&db, FILE.to_string(), source.to_string());
+    let output = lex_query(&db, sf);
+    output.diagnostics.clone()
 }
 
 // ─── Scope-creep gate ────────────────────────────────────────────────────────
 
 #[test]
-fn m1_token_variant_count_locked() {
-    // WHY: This test pins the token vocabulary to the M1 surface.
+fn m2_token_variant_count_locked() {
+    // WHY: This test pins the token vocabulary to the M2 surface.
     // If you need to add a new token for a later milestone, add an inline
-    // // test-ratchet: <reason-and-milestone> comment on this line and update
+    // `// test-ratchet: <reason-and-milestone>` comment on this test and update
     // the count in the Token enum's doc comment.
     //
-    // The count here is the number of discriminants in the Token enum.
-    // M1 count: Function(1) + Nothing(2) + Identifier(3) + StringLit(4) +
-    //           LParen(5) + RParen(6) + LBrace(7) + RBrace(8) + Arrow(9) + Eof(10)
-    let expected_count = 10usize;
+    // test-ratchet: M2 adds 32 variants over M1's 10:
+    //   Keywords (4):   Let, Const, True, False
+    //   Literals (2):   IntLit, NumberLit  (FloatLit removed — per pre-phase decision)
+    //   Arithmetic (5): Plus, Minus, Star, Slash, Percent
+    //   Comparison (6): EqEq, NotEq, Lt, LtEq, Gt, GtEq
+    //   Boolean (3):    AmpAmp, PipePipe, Bang
+    //   Bitwise (6):    Amp, Pipe, Caret, Tilde, LtLt, GtGt
+    //   Punctuation (2): Eq, Colon
+    //   Plumbing (4):   Dot, LBracket, RBracket, Comma  (needed by P3 within M2 scope)
+    //   Total M1+M2: 10 + 32 = 42
+    let expected_count = 42usize;
 
-    // Verify by constructing one of each variant and checking we haven't missed any.
-    // This is a manual count test — Rust stable does not expose variant_count() for
-    // non-unit enums without a nightly feature. We enumerate exhaustively.
     use ynz_parser::Token::*;
     let all_variants: &[Token] = &[
+        // M1
         Function,
         Nothing,
         Identifier("x".into()),
@@ -66,6 +68,46 @@ fn m1_token_variant_count_locked() {
         RBrace,
         Arrow,
         Eof,
+        // M2 keywords
+        Let,
+        Const,
+        True,
+        False,
+        // M2 literals
+        IntLit(0),
+        NumberLit("0.0".into()),
+        // M2 arithmetic
+        Plus,
+        Minus,
+        Star,
+        Slash,
+        Percent,
+        // M2 comparison
+        EqEq,
+        NotEq,
+        Lt,
+        LtEq,
+        Gt,
+        GtEq,
+        // M2 boolean
+        AmpAmp,
+        PipePipe,
+        Bang,
+        // M2 bitwise
+        Amp,
+        Pipe,
+        Caret,
+        Tilde,
+        LtLt,
+        GtGt,
+        // M2 punctuation
+        Eq,
+        Colon,
+        // M2 plumbing
+        Dot,
+        LBracket,
+        RBracket,
+        Comma,
     ];
     assert_eq!(
         all_variants.len(),
@@ -73,6 +115,354 @@ fn m1_token_variant_count_locked() {
         "Token variant count changed from {expected_count} — update this test \
          with a // test-ratchet: <reason> comment and update the Token doc comment"
     );
+}
+
+// ─── Happy path: M1 source still works ──────────────────────────────────────
+
+#[test]
+fn m1_source_produces_expected_tokens() {
+    // WHY: The M2 lexer must not break any M1 token. A regression here means
+    // something in the M2 extension changed an existing token's behaviour.
+    let source = r#"function main() -> nothing { print("hello, yinz") }"#;
+    let tokens = lex_tokens(source);
+    assert_debug_snapshot!("m1_token_stream", tokens);
+}
+
+// ─── Happy path: M2 smoke test source ────────────────────────────────────────
+
+#[test]
+fn m2_source_produces_expected_tokens() {
+    // WHY: This is the exact token stream Phase 3 (parser) depends on for the
+    // M2 smoke test. A silent change here means the parser's expectations break.
+    let source = r#"function main() -> nothing {
+  let price = 0.1 + 0.2
+  let count: int = 42
+  let active = true
+  print(price)
+  print(count * count - 1)
+  print(active && (count > 0))
+}"#;
+    let tokens = lex_tokens(source);
+    assert_debug_snapshot!("m2_token_stream", tokens);
+}
+
+// ─── Integer literals ────────────────────────────────────────────────────────
+
+#[test]
+fn decimal_integer_literal() {
+    // WHY: `42` must produce exactly IntLit(42), not a number or string.
+    assert_eq!(lex_tokens("42"), vec![Token::IntLit(42), Token::Eof]);
+}
+
+#[test]
+fn decimal_integer_with_underscores() {
+    // WHY: Underscores are visual separators — `1_000_000` must equal 1000000.
+    assert_eq!(
+        lex_tokens("1_000_000"),
+        vec![Token::IntLit(1_000_000), Token::Eof]
+    );
+}
+
+#[test]
+fn hex_integer_literal() {
+    // WHY: `0xFF` must parse as 255 — the hex encoding of the same integer.
+    assert_eq!(lex_tokens("0xFF"), vec![Token::IntLit(255), Token::Eof]);
+    assert_eq!(lex_tokens("0xff"), vec![Token::IntLit(255), Token::Eof]);
+    assert_eq!(
+        lex_tokens("0xDEAD_BEEF"),
+        vec![Token::IntLit(0xDEAD_BEEF), Token::Eof]
+    );
+}
+
+#[test]
+fn binary_integer_literal() {
+    // WHY: `0b1010` must parse as 10 — the binary encoding of the integer.
+    assert_eq!(lex_tokens("0b1010"), vec![Token::IntLit(10), Token::Eof]);
+    assert_eq!(
+        lex_tokens("0b1111_0000"),
+        vec![Token::IntLit(0b1111_0000), Token::Eof]
+    );
+}
+
+// ─── Number literals ─────────────────────────────────────────────────────────
+
+#[test]
+fn decimal_number_literal_with_dot() {
+    // WHY: `3.14` must produce NumberLit, not IntLit — the dot signals decimal.
+    assert_eq!(
+        lex_tokens("3.14"),
+        vec![Token::NumberLit("3.14".into()), Token::Eof]
+    );
+}
+
+#[test]
+fn decimal_number_literal_scientific() {
+    // WHY: `1e5` and `2.5e-3` are number literals — the exponent signals decimal.
+    assert_eq!(
+        lex_tokens("1e5"),
+        vec![Token::NumberLit("1e5".into()), Token::Eof]
+    );
+    assert_eq!(
+        lex_tokens("2.5e-3"),
+        vec![Token::NumberLit("2.5e-3".into()), Token::Eof]
+    );
+}
+
+#[test]
+fn number_literal_underscores_stripped() {
+    // WHY: Underscores in a number literal must be removed from the stored string.
+    assert_eq!(
+        lex_tokens("1_000.5"),
+        vec![Token::NumberLit("1000.5".into()), Token::Eof]
+    );
+}
+
+#[test]
+fn integer_followed_by_dot_method_call() {
+    // WHY: `42.toString()` must NOT consume the dot as part of the int literal.
+    // The dot is a method call separator. If the lexer consumed it, `.toString()`
+    // would be unreachable and method calls on int literals would be impossible.
+    let tokens = lex_tokens("42.toString()");
+    assert_eq!(tokens[0], Token::IntLit(42));
+    assert_eq!(tokens[1], Token::Dot);
+    assert_eq!(tokens[2], Token::Identifier("toString".into()));
+}
+
+// ─── Boolean keywords ────────────────────────────────────────────────────────
+
+#[test]
+fn true_and_false_keywords() {
+    // WHY: `true` and `false` must produce keyword tokens, not identifiers.
+    assert_eq!(lex_tokens("true"), vec![Token::True, Token::Eof]);
+    assert_eq!(lex_tokens("false"), vec![Token::False, Token::Eof]);
+}
+
+// ─── Operator tokens ─────────────────────────────────────────────────────────
+
+#[test]
+fn two_char_operators_beat_single_char() {
+    // WHY: Multi-char operators must be greedily matched — `==` must not become
+    // `=` then `=`, and `<=` must not become `<` then `=`. If this fails,
+    // every comparison in the language misparses.
+    assert_eq!(lex_tokens("=="), vec![Token::EqEq, Token::Eof]);
+    assert_eq!(lex_tokens("!="), vec![Token::NotEq, Token::Eof]);
+    assert_eq!(lex_tokens("<="), vec![Token::LtEq, Token::Eof]);
+    assert_eq!(lex_tokens(">="), vec![Token::GtEq, Token::Eof]);
+    assert_eq!(lex_tokens("&&"), vec![Token::AmpAmp, Token::Eof]);
+    assert_eq!(lex_tokens("||"), vec![Token::PipePipe, Token::Eof]);
+    assert_eq!(lex_tokens("<<"), vec![Token::LtLt, Token::Eof]);
+    assert_eq!(lex_tokens(">>"), vec![Token::GtGt, Token::Eof]);
+}
+
+#[test]
+fn arrow_still_works() {
+    // WHY: `->` must still produce Arrow in M2. The `-` arm checks for `>`
+    // first so `->` beats the new `Minus` token.
+    assert_eq!(
+        lex_tokens("-> nothing"),
+        vec![Token::Arrow, Token::Nothing, Token::Eof]
+    );
+}
+
+#[test]
+fn minus_without_gt_is_minus() {
+    // WHY: A bare `-` must produce Minus, not Arrow. If the `->` check
+    // accidentally consumes `-` without `>`, subtraction breaks.
+    assert_eq!(
+        lex_tokens("a - b"),
+        vec![
+            Token::Identifier("a".into()),
+            Token::Minus,
+            Token::Identifier("b".into()),
+            Token::Eof
+        ]
+    );
+}
+
+// ─── Comment skipping ────────────────────────────────────────────────────────
+
+#[test]
+fn line_comment_is_skipped() {
+    // WHY: `//` comments are not tokens. They must be invisible to the parser.
+    // If a comment produces a token, the parser sees garbage after valid code.
+    assert_eq!(
+        lex_tokens("let x = 1 // this is a comment\nlet y = 2"),
+        vec![
+            Token::Let,
+            Token::Identifier("x".into()),
+            Token::Eq,
+            Token::IntLit(1),
+            Token::Let,
+            Token::Identifier("y".into()),
+            Token::Eq,
+            Token::IntLit(2),
+            Token::Eof
+        ]
+    );
+}
+
+#[test]
+fn comment_at_end_of_file_does_not_panic() {
+    // WHY: A comment on the last line (no trailing newline) must not read past EOF.
+    let tokens = lex_tokens("let x = 1 // trailing comment");
+    assert_eq!(tokens.last(), Some(&Token::Eof));
+    let (_, diag_count) = lex_counts("let x = 1 // trailing comment");
+    assert_eq!(diag_count, 0);
+}
+
+#[test]
+fn slash_not_followed_by_slash_is_division() {
+    // WHY: A single `/` must remain a Slash (division) token. Only `//`
+    // triggers comment mode. If `/` alone becomes a comment, division is gone.
+    assert_eq!(
+        lex_tokens("a / b"),
+        vec![
+            Token::Identifier("a".into()),
+            Token::Slash,
+            Token::Identifier("b".into()),
+            Token::Eof
+        ]
+    );
+}
+
+// ─── Malformed literals — error recovery ─────────────────────────────────────
+
+#[test]
+fn two_dots_in_literal_produces_diagnostic() {
+    // WHY: `1.2.3` is not a valid number. The lexer must emit a diagnostic at
+    // the second dot and recover, not silently produce a wrong token.
+    let (_, diag_count) = lex_counts("1.2.3");
+    assert_eq!(diag_count, 1, "Expected exactly 1 diagnostic for `1.2.3`");
+
+    let diags = lex_diags("1.2.3");
+    assert!(
+        diags[0].what.contains("decimal point"),
+        "Diagnostic should mention 'decimal point', got: {:?}",
+        diags[0].what
+    );
+}
+
+#[test]
+fn adjacent_underscores_produce_diagnostic() {
+    // WHY: `1__000` is a formatting mistake. The lexer must catch it with a
+    // teaching diagnostic rather than silently accepting or panicking.
+    let (_, diag_count) = lex_counts("1__000");
+    assert_eq!(diag_count, 1, "Expected exactly 1 diagnostic for `1__000`");
+
+    let diags = lex_diags("1__000");
+    assert!(
+        diags[0].what.contains("adjacent"),
+        "Diagnostic should mention 'adjacent', got: {:?}",
+        diags[0].what
+    );
+}
+
+#[test]
+fn trailing_underscore_produces_diagnostic() {
+    // WHY: `1_` is a formatting mistake. The trailing underscore has no visual
+    // meaning and the lexer must reject it with a teaching diagnostic.
+    let (_, diag_count) = lex_counts("1_");
+    assert_eq!(diag_count, 1, "Expected exactly 1 diagnostic for `1_`");
+}
+
+#[test]
+fn invalid_hex_digit_produces_diagnostic() {
+    // WHY: `0xZZ` contains non-hex characters. The lexer must identify the bad
+    // character with a span pointing directly at it.
+    let (_, diag_count) = lex_counts("0xZZ");
+    assert!(diag_count >= 1, "Expected at least 1 diagnostic for `0xZZ`");
+
+    let diags = lex_diags("0xZZ");
+    assert!(
+        diags[0].what.contains("hex"),
+        "Diagnostic should mention 'hex', got: {:?}",
+        diags[0].what
+    );
+}
+
+#[test]
+fn invalid_binary_digit_produces_diagnostic() {
+    // WHY: `0b22` contains non-binary digits. The lexer must teach the user
+    // that binary literals only allow `0` and `1`.
+    let (_, diag_count) = lex_counts("0b22");
+    assert!(diag_count >= 1, "Expected at least 1 diagnostic for `0b22`");
+
+    let diags = lex_diags("0b22");
+    assert!(
+        diags[0].what.contains("binary"),
+        "Diagnostic should mention 'binary', got: {:?}",
+        diags[0].what
+    );
+}
+
+#[test]
+fn integer_overflow_produces_diagnostic() {
+    // WHY: Integers larger than i64::MAX must be caught at lex time with a
+    // clear message pointing at `number` as the alternative type.
+    let too_big = "99999999999999999999999";
+    let (_, diag_count) = lex_counts(too_big);
+    assert_eq!(diag_count, 1, "Expected exactly 1 diagnostic for overflow literal");
+
+    let diags = lex_diags(too_big);
+    assert!(
+        diags[0].what.contains("int"),
+        "Diagnostic should mention 'int', got: {:?}",
+        diags[0].what
+    );
+}
+
+// ─── Banned operators — teaching diagnostics ─────────────────────────────────
+
+#[test]
+fn compound_assignment_plus_eq_produces_diagnostic() {
+    // WHY: `+=` is not supported. The diagnostic must teach the user to write
+    // `x = x + n` instead. If this passes silently, the parse layer gets confused.
+    let (_, diag_count) = lex_counts("x += 1");
+    assert_eq!(diag_count, 1, "Expected 1 diagnostic for `+=`");
+
+    let diags = lex_diags("x += 1");
+    assert!(
+        diags[0].what.contains("+="),
+        "Diagnostic should name the operator, got: {:?}",
+        diags[0].what
+    );
+}
+
+#[test]
+fn increment_plus_plus_produces_diagnostic() {
+    // WHY: `++` is not supported. Every mutation must be explicit: `x = x + 1`.
+    let (_, diag_count) = lex_counts("x++");
+    assert_eq!(diag_count, 1, "Expected 1 diagnostic for `++`");
+}
+
+#[test]
+fn compound_assignment_minus_eq_produces_diagnostic() {
+    let (_, diag_count) = lex_counts("x -= 1");
+    assert_eq!(diag_count, 1, "Expected 1 diagnostic for `-=`");
+}
+
+#[test]
+fn decrement_minus_minus_produces_diagnostic() {
+    let (_, diag_count) = lex_counts("x--");
+    assert_eq!(diag_count, 1, "Expected 1 diagnostic for `--`");
+}
+
+#[test]
+fn compound_assignment_star_eq_produces_diagnostic() {
+    let (_, diag_count) = lex_counts("x *= 2");
+    assert_eq!(diag_count, 1, "Expected 1 diagnostic for `*=`");
+}
+
+#[test]
+fn compound_assignment_slash_eq_produces_diagnostic() {
+    let (_, diag_count) = lex_counts("x /= 2");
+    assert_eq!(diag_count, 1, "Expected 1 diagnostic for `/=`");
+}
+
+#[test]
+fn compound_assignment_percent_eq_produces_diagnostic() {
+    let (_, diag_count) = lex_counts("x %= 2");
+    assert_eq!(diag_count, 1, "Expected 1 diagnostic for `%=`");
 }
 
 // ─── Positions ───────────────────────────────────────────────────────────────
@@ -91,7 +481,6 @@ fn token_spans_reconstruct_lexemes() {
             continue;
         }
         let reconstructed = &source[spanned.span.start..spanned.span.end];
-        // Reconstructed lexeme must match what we'd expect for the token kind.
         match &spanned.value {
             Token::Function => assert_eq!(reconstructed, "function"),
             Token::Nothing => assert_eq!(reconstructed, "nothing"),
@@ -105,6 +494,74 @@ fn token_spans_reconstruct_lexemes() {
                 assert!(reconstructed.starts_with('"') && reconstructed.ends_with('"'));
             }
             Token::Eof => {}
+            // M2 — the source above does not contain these; span check is trivially true
+            // by exhaustiveness (the compiler requires all arms).
+            Token::Let
+            | Token::Const
+            | Token::True
+            | Token::False
+            | Token::IntLit(_)
+            | Token::NumberLit(_)
+            | Token::Plus
+            | Token::Minus
+            | Token::Star
+            | Token::Slash
+            | Token::Percent
+            | Token::EqEq
+            | Token::NotEq
+            | Token::Lt
+            | Token::LtEq
+            | Token::Gt
+            | Token::GtEq
+            | Token::AmpAmp
+            | Token::PipePipe
+            | Token::Bang
+            | Token::Amp
+            | Token::Pipe
+            | Token::Caret
+            | Token::Tilde
+            | Token::LtLt
+            | Token::GtGt
+            | Token::Eq
+            | Token::Colon
+            | Token::Dot
+            | Token::LBracket
+            | Token::RBracket
+            | Token::Comma => {
+                // Span must be non-empty for every token that has a source location.
+                assert!(
+                    spanned.span.start < spanned.span.end,
+                    "Token {:?} has empty span",
+                    spanned.value
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn m2_token_spans_cover_source() {
+    // WHY: M2 tokens must have accurate spans so ariadne can point at the right
+    // character for every error involving an operator, literal, or keyword.
+    let source = "let x: int = 42 + 0xFF";
+    let db = CompilerDb::default();
+    let sf = SourceFile::new(&db, FILE.to_string(), source.to_string());
+    let output = lex_query(&db, sf);
+
+    for spanned in &output.tokens {
+        if spanned.value == Token::Eof {
+            continue;
+        }
+        let reconstructed = &source[spanned.span.start..spanned.span.end];
+        match &spanned.value {
+            Token::Let => assert_eq!(reconstructed, "let"),
+            Token::Colon => assert_eq!(reconstructed, ":"),
+            Token::Eq => assert_eq!(reconstructed, "="),
+            Token::IntLit(42) => assert_eq!(reconstructed, "42"),
+            Token::IntLit(255) => assert_eq!(reconstructed, "0xFF"),
+            Token::Plus => assert_eq!(reconstructed, "+"),
+            Token::Identifier(s) => assert_eq!(reconstructed, s.as_str()),
+            _ => {} // other M2 tokens not present in this source
         }
     }
 }
@@ -127,14 +584,11 @@ fn whitespace_only_source_produces_only_eof() {
 
 #[test]
 fn unknown_char_produces_diagnostic_and_continues() {
-    // WHY: the lexer must not bail on the first unknown character. A broken
+    // WHY: The lexer must not bail on the first unknown character. A broken
     // file should show all its errors at once, not just the first.
     let source = r#"function main() -> nothing { print($) }"#;
     let (token_count, diag_count) = lex_counts(source);
-    assert_eq!(
-        diag_count, 1,
-        "Expected exactly 1 diagnostic for the unknown '$'"
-    );
+    assert_eq!(diag_count, 1, "Expected exactly 1 diagnostic for the unknown '$'");
     assert!(
         token_count > 1,
         "Lexer must produce a usable token stream after the error"
@@ -143,7 +597,7 @@ fn unknown_char_produces_diagnostic_and_continues() {
 
 #[test]
 fn unterminated_string_produces_diagnostic_and_continues() {
-    // WHY: parser must not panic on unterminated strings — it needs a
+    // WHY: Parser must not panic on unterminated strings — it needs a
     // complete token stream to detect all parse errors at once.
     let source = r#"function main() -> nothing { print("oops) }"#;
     let (token_count, diag_count) = lex_counts(source);
@@ -159,15 +613,11 @@ fn unterminated_string_produces_diagnostic_and_continues() {
 
 #[test]
 fn non_ascii_bytes_inside_string_lex_clean() {
-    // WHY: M1 strings are raw UTF-8 bytes passed through to codegen unchanged.
-    // Non-ASCII content is NOT an error at lex time — it becomes the bytes
-    // in the StringLit token's Vec<u8>.
+    // WHY: M1/M2 strings are raw UTF-8 bytes passed through to codegen unchanged.
+    // Non-ASCII content is NOT an error at lex time.
     let source = r#"function main() -> nothing { print("café") }"#;
     let (token_count, diag_count) = lex_counts(source);
-    assert_eq!(
-        diag_count, 0,
-        "Non-ASCII in a string literal must not produce a diagnostic"
-    );
+    assert_eq!(diag_count, 0, "Non-ASCII in a string literal must not produce a diagnostic");
 
     let db = CompilerDb::default();
     let sf = SourceFile::new(&db, FILE.to_string(), source.to_string());
@@ -186,7 +636,7 @@ fn non_ascii_bytes_inside_string_lex_clean() {
             "StringLit bytes must match the UTF-8 encoding of the literal"
         );
     }
-    let _ = token_count; // used implicitly via find above
+    let _ = token_count;
 }
 
 // ─── Salsa invalidation ──────────────────────────────────────────────────────
@@ -206,7 +656,6 @@ fn changing_source_text_invalidates_cache() {
     let output1 = lex_query(&db, sf);
     let token_count_1 = output1.tokens.len();
 
-    // Mutate the source text — salsa should invalidate the cached lex result.
     sf.set_text(&mut db)
         .to(r#"function main() -> nothing { print("hello") }"#.to_string());
 

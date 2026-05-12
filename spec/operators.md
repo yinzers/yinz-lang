@@ -6,7 +6,7 @@
 
 ```
 // Arithmetic
-+    -    *    /
++    -    *    /    %
 
 // Comparison
 ==    !=    <    >    <=    >=
