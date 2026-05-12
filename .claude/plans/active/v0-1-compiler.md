@@ -866,6 +866,7 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 **Branch**: `feat/m2-parser`
 **Flag**: N/A
 **Est. lines**: ~700
+**Status**: COMPLETE (2026-05-12) — commit 6cee795 on main. 30 parse tests green, full workspace 0 failures. Key decisions: Pratt BP table encoded as infix_bp() (pub for spec-parity test); `is_stmt_boundary()` recovery avoids consuming `}` / keywords as atoms; `parse_call` updated for comma-separated multi-arg; `parse_method_call` handles receiver.method(args); `number[N]` deferral diagnostic for N != 34 points at v0.8; `spec/operators.md` precedence table updated to include `%` at level 3; `parser_precedence_table_matches_spec` test reads spec at runtime and asserts BP/level alignment; typeck gets minimal stubs (M2 Expr/Stmt/Type arms → Type::Error) so M1 tests stay green.
 **Objective**: M2 source parses to the snapshot AST with zero diagnostics. Malformed expressions (`let x = 1 +`, `let : int = 5`, `let x: int = 1.5`, `let x = }`, `print(1, 2, 3)`) produce three-part diagnostics; parser recovers per the strategy from M1 P4.
 
 **Current-state anchors**:
