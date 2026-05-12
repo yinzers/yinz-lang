@@ -68,3 +68,42 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 ynz build main.ynz
 ynz run main.ynz
 ```
+
+---
+
+## Release Workflow
+
+Two project-local skills handle the ship cycle:
+
+- `/pr` — opens a draft PR for the current feature branch (auto-detects milestone from Cargo.toml; scans `.claude/plans/active/` for plan reference)
+- `/release` — cuts a tagged milestone release (bumps `Cargo.toml`, generates CHANGELOG section from merged PRs since last tag, commits, tags, pushes with user approval)
+
+**When to invoke each**:
+
+| Situation | Skill |
+|---|---|
+| Phase work complete on feature branch | `/pr` |
+| Milestone complete (all phases merged to main) | `/release` |
+| Unsure which | Just invoke either — they auto-detect and route to the other if the signals point that way |
+
+**Proactive reminders** — Claude should suggest `/release` when:
+- All tasks in the active milestone plan are checked off, AND
+- All milestone PRs are merged to main, AND
+- `Cargo.toml` still shows the previous milestone version (i.e., the bump hasn't happened yet)
+
+Don't wait to be asked. If you see "ready to ship" signals, surface them.
+
+
+---
+
+## Claude Code Conventions
+
+This project uses `.claude/` for AI-assisted workflow state — plain markdown files, no special tooling required.
+
+- **`.claude/state.md`** — project radar: environment, decisions, active workstreams. Read at session start.
+- **`.claude/todos.md`** — cross-workstream backlog.
+- **`.claude/plans/active/<slug>.md`** — one in-progress workstream per file. **Source of truth for that work** (not chat history, not state.md).
+- **`.claude/plans/paused/`** and **`.claude/plans/done/`** — parked or completed workstreams.
+- **`.claude/graveyard.md`** — known failure patterns specific to this project.
+
+If you see an active plan file, read it before continuing the work it describes.
