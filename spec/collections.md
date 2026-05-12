@@ -46,6 +46,13 @@ rgb.add(50)
 // fixed[number] is size-locked. Use array[number] if it needs to grow.
 ```
 
+You CAN replace existing elements — the size stays the same:
+
+```
+rgb[1] = 200            // OK — size unchanged
+rgb.set(1, 200)         // same thing, longer form
+```
+
 ---
 
 ## array[T] — growable arrays
@@ -56,7 +63,61 @@ rgb.add(50)
 let roster: array[Player] = []
 roster.add({ name: "Alice", health: 100 })
 roster.add({ name: "Bob", health: 80 })
-roster.remove(0)    // remove by index
+roster.remove(0)        // remove by index
+roster[0] = newPlayer   // replace element at index 0
+```
+
+---
+
+## Safe access — brackets are sugar for .get()
+
+Reading by index uses brackets, which is shorthand for `.get()`. Both forms return `maybe T` — never a raw value, so you can't accidentally crash on out-of-bounds:
+
+```
+let player = players[3]              // sugar for players.get(3)
+let player = players.get(3)          // same thing, longer form
+// both return: maybe Player
+
+if (player.exists()) {
+  print(player.value.name)
+}
+
+// Or with a default
+let player = players.get(5).or(defaultPlayer)   // always returns a Player
+```
+
+The same rule applies to all collections — `array`, `fixed`, `map`, and `string`. Every access that might not exist returns `maybe`. No out-of-bounds crashes anywhere in the language.
+
+**Why brackets and `.get()` both exist:** brackets are the everyday shorthand familiar to anyone who's used JS, Python, or any C-family language. `.get()` is the long form — useful when you want the operation to be explicit, or when chaining with `.or(default)`.
+
+---
+
+## Writing by index
+
+Writes use the same sugar — brackets desugar to `.set()`:
+
+```
+players[2] = newPlayer       // sugar for players.set(2, newPlayer)
+scores["alice"] = 75          // sugar for scores.set("alice", 75)
+```
+
+Writing past the end is a runtime error, not a sparse-array creation:
+
+```
+let arr: array[number] = [1, 2, 3]
+arr[10] = 99
+// RUNTIME ERROR: index 10 out of bounds (arr.count() == 3).
+//   .set() replaces existing elements only.
+//   To append: use .add(99).
+//   To grow with default values: use .resize(newSize, defaultValue).
+```
+
+Fixed arrays catch out-of-bounds at compile time when the index is a literal:
+
+```
+let rgb: fixed[number] = [255, 128, 0]
+rgb[5] = 100
+// COMPILE ERROR: index 5 out of bounds. rgb has 3 elements.
 ```
 
 ---
@@ -68,6 +129,7 @@ roster.remove(0)    // remove by index
 .sort(fn, order)    // sorted copy — order is asc or desc (see Options)
 .map(fn)            // transform — returns new collection of results
 .get(index)         // item at position → maybe T (safe, returns none if out of bounds)
+.set(index, value)  // replace item at position — runtime error if out of bounds
 .first()            // first item → maybe T
 .last()             // last item → maybe T
 .find(fn)           // first item matching condition → maybe T
@@ -82,32 +144,7 @@ roster.remove(0)    // remove by index
 
 `.concat()`, `.append()`, and `.prepend()` work on `fixed[T]` because they return new collections. The original stays untouched.
 
----
-
-## Safe access — no direct indexing
-
-You cannot access a collection by index using `[]`:
-
-```
-let item = players[5]
-// COMPILE ERROR: Direct index access is not allowed.
-// Use players.get(5) — it returns maybe Player and handles out-of-bounds safely.
-```
-
-Use `.get(index)` instead. It returns `maybe T`, forcing you to handle the case where the index doesn't exist:
-
-```
-let item = players.get(5)             // → maybe Player
-
-if (item.exists()) {
-  print(item.value.name)             // compiler knows it's safe here
-}
-
-// Or with a default
-let item = players.get(5).or(defaultPlayer)   // always returns a Player
-```
-
-This applies to all collection types — `fixed`, `array`, and `map`. Every access that might not exist returns `maybe`. No out-of-bounds crashes anywhere in the language.
+`.set()` works on `fixed[T]` because it replaces an existing element without changing size.
 
 ---
 
@@ -131,8 +168,8 @@ Use maps when keys aren't known at compile time. For known fields, define a `typ
 ```
 let wordCounts: map[string, number] = {}
 for (word in words) {
-  let current = wordCounts.get(word).or(0)
-  wordCounts.set(word, current + 1)
+  let current = wordCounts[word].or(0)
+  wordCounts[word] = current + 1
 }
 ```
 
@@ -150,6 +187,14 @@ Map dot methods:
 .sort(fn, order)      // sorted copy
 .filter(fn)           // new map with only matching entries — fn receives entry with .key and .value
 .find(fn)             // first matching entry → maybe entry (has .key and .value)
+.count()              // → number of entries
+```
+
+**Bracket sugar works on maps too:**
+
+```
+scores["alice"]              // sugar for scores.get("alice") → maybe number
+scores["alice"] = 75         // sugar for scores.set("alice", 75)
 ```
 
 **Bulk update with `.update({...})`:**
@@ -171,6 +216,44 @@ if (aliceEntry.exists()) {
   print(`${aliceEntry.value.key}: ${aliceEntry.value.value}`)
 }
 ```
+
+---
+
+## Dot is for types; brackets are for collections
+
+There's one rule that determines whether to use `.` or `[]`:
+
+| Access | What it does |
+|--------|--------------|
+| `obj.fieldName` | Field on a type — compile-time known name |
+| `obj.methodName()` | Method on a type or collection |
+| `arr[i]` | Index lookup → `maybe T` (sugar for `.get(i)`) |
+| `m[key]` | Key lookup → `maybe V` (sugar for `.get(key)`) |
+| `s[i]` | Code point lookup → `maybe string` (sugar for `.get(i)`) |
+
+Types and collections are different concepts. Trying to use brackets on a type, or dot to access a runtime key on a map, both fail:
+
+```
+type Player { name: string, health: number }
+let p: Player = { name: "Alice", health: 100 }
+let n = p["name"]
+// COMPILE ERROR: Bracket access is for collections (array, fixed, map, string).
+//                Use dot access on types: p.name
+
+let scores: map[string, number] = { alice: 50 }
+scores.alice
+// COMPILE ERROR: Dot access is for methods, not map keys.
+//   Use scores["alice"] for the value at the "alice" key.
+//   If you actually have a fixed set of known keys, consider using a type
+//   instead — it's faster AND gives you dot access:
+//
+//     type Scores { alice: number, bob: number }
+//     scores.alice         // works — alice is a compile-time field
+//
+//   See: spec/collections.md#use-types-instead-of-maps-for-known-fields
+```
+
+The simple rule: **dot is for compile-time-known names; brackets are for runtime lookups.**
 
 ---
 

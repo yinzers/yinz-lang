@@ -39,7 +39,48 @@ function loadConfig() -> Config errors {
 }
 ```
 
-`raw` and `config` are automatically the success types (`string` and `Config`). You just write the happy path.
+You write the happy path. The compiler handles the failure path.
+
+---
+
+## Logging or recovering before propagating
+
+Sometimes you want to log a warning, fall back to a default, or retry before letting the error bubble up. Just check the result first:
+
+```
+function loadConfig() -> Config errors {
+  let raw = readFile("config.txt")
+
+  if (raw.failed()) {
+    log.warn(`config missing, using default: ${raw.message}`)
+    return Config.default()           // recover with a fallback
+  }
+
+  return parseConfig(raw)             // raw narrows to string after the check
+}
+```
+
+The rule: **if you call `.failed()` or `.message` on the result before using the success value, auto-propagation is suppressed for that variable.** You've taken responsibility for handling it. If you DON'T check, the compiler auto-propagates the first time you use the value.
+
+Same code pattern, two behaviors picked by the compiler from what you wrote. You never have to think "which mode am I in?"
+
+---
+
+## Compile error if you check after using
+
+```
+function loadConfig() -> Config errors {
+  let raw = readFile("config.txt")
+  let parsed = parseConfig(raw)              // ← raw used here, auto-propagated
+  if (raw.failed()) { return Config.default() }
+}
+// COMPILE ERROR: raw was auto-propagated on line 3 when you passed it to
+//                parseConfig(raw). After auto-propagation, raw is narrowed
+//                to a plain string and no longer has .failed().
+//
+//                If you want to handle the error before propagating, move
+//                the .failed() check above the parseConfig() call.
+```
 
 ---
 
@@ -92,7 +133,7 @@ function loadConfig() -> Config {
 
 ## Dot methods on error results
 
-When you call an `errors` function in a non-errors context, the result has these methods until you handle it:
+When you call an `errors` function, the result has these methods until it is propagated or handled:
 
 ```
 content.failed()           // did it fail? → bool
@@ -163,9 +204,3 @@ setErrorHandler(e => {
 `e.message` — human-readable error description
 `e.trace` — call path as structured data
 `e.source` — file and line where the error originated
-
----
-
-## Open design question
-
-The exact behavior of auto-propagation in `errors` functions — specifically whether you can manually check `.failed()` on a sub-call inside an `errors` function (to log before propagating) — is still being finalized. See `/design/open-questions.md` for details.

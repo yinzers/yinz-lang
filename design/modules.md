@@ -61,3 +61,49 @@ Tree shaking still works — the compiler traces which stdlib functions are actu
 Unused imports produce a compile warning. The IDE auto-removes them on save.
 
 **Why**: Unused imports add noise and slow compile times (more symbols to analyze). Making it a warning (not an error) means code still compiles during development when imports are temporarily unused.
+
+---
+
+## Import Aliases — `as` Renaming
+
+Both named and namespace imports support `as` renaming, TypeScript-style:
+
+```yinz
+// Destructured import with rename
+import { fetchUser as getUser } from "services/users"
+
+// Namespace import with rename
+import math as advancedMath from "math"
+
+// Mixed within one import
+import { Player as PlayerType, Score } from "models/game"
+```
+
+**Why**: Real codebases have naming collisions — a local `Player` type and a third-party `Player` type, a custom `math` namespace overlapping with stdlib. Aliasing is the only escape valve that doesn't require renaming the source. TypeScript's syntax is well-understood; reuse it rather than invent a Yinz-specific spelling.
+
+---
+
+## Duplicate Import Names — Compile Error, Force Aliasing
+
+When two imports bring the same name (or namespace) into the same file, the compiler refuses to silently pick one:
+
+```yinz
+import { Player } from "models/game"
+import { Player } from "external/legacy"
+//
+// COMPILE ERROR: 'Player' is imported from two places.
+//
+//   Line 1: from "models/game"
+//   Line 2: from "external/legacy"
+//
+//   These can't both use the name 'Player' in the same file. Rename one:
+//
+//     import { Player } from "models/game"
+//     import { Player as LegacyPlayer } from "external/legacy"
+```
+
+Same rule applies to namespace imports (`import http from "..."` collisions) and to local-vs-stdlib name collisions (a local module named `math` colliding with `stdlib/math`).
+
+**Why**: Silent picking is a TypeScript / JavaScript footgun — last-import-wins semantics cause subtle bugs when refactors reorder imports. Forcing the user to disambiguate makes the code's intent explicit and refactor-safe. Same principle as `maybe`: if there's ambiguity, the compiler refuses to guess.
+
+**Resolution implication for stdlib vs local**: there's no special precedence rule. If a project happens to define a local `math` module, the compiler errors at the import site and forces the user to alias. No silent shadowing of stdlib.
