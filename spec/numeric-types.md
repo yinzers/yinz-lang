@@ -208,7 +208,19 @@ let y = 3.14        // inferred as number
 let z: float = 1.0  // explicit float
 ```
 
-Mixed-type expressions promote to the most capable type in the expression.
+Mixed-type expressions are a compile error — you must convert explicitly:
+
+```
+let a: int = 42
+let b: number = 1.5
+let c = a + b        // COMPILE ERROR: `+` cannot be used with `int` and `number`.
+                     // Convert the `int` to `number`: `a.toNumber() + b`
+                     // Both sides of an expression must have the same type.
+
+let c = a.toNumber() + b   // OK: number + number = number
+```
+
+This makes type conversions visible in code. You never accidentally lose precision or change numeric behavior without knowing it.
 
 ---
 

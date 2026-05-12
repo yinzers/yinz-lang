@@ -935,6 +935,7 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 **Branch**: `feat/m2-typeck`
 **Flag**: N/A
 **Est. lines**: ~900
+**Status**: COMPLETE (2026-05-12) — on `feat/m2-typeck`, awaiting user review before commit. 38 typeck tests green, full workspace 0 failures. Key decisions: `builtins.rs` git-mv'd to `intrinsics.rs` (clean blame); `BuiltinTable` → `PrimitiveIntrinsicTable` (polymorphic print + 8 conversion methods, single source of truth); `scope.rs` (new) with Levenshtein-distance suggestion for undefined vars; literal inference with annotation hint (`IntLit` → number/float when annotated); mixed-type-arithmetic suggestion picks `.toNumber()` / `.toFloat()` per direction, lists both for number+float tradeoff; `spec/variables.md:48` corrected (int not number); `spec/numeric-types.md:211` corrected (compile-error behavior with example). `m1_source_type_checks_clean` Bouncer-fixed: restored `expr_types` string-type assertion after test-weakening detection.
 **Objective**: M2 source type-checks clean. The full matrix of typeck failures (mismatched types, const reassignment, undefined variable, wrong arity on `print`, `number[N]` for N != 34, etc.) produces three-part diagnostics with actionable suggestions.
 
 **Spec corrections landing in this phase** (same PR as the implementation):

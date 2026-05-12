@@ -4,8 +4,8 @@ use ynz_diagnostics::Diagnostic;
 use ynz_parser::{parse_query, SourceFile};
 
 use crate::{
-    builtins::BuiltinTable,
     check::{check, TypedModule},
+    intrinsics::PrimitiveIntrinsicTable,
 };
 
 /// The output of the type-check pass.
@@ -23,11 +23,9 @@ pub struct CheckOutput {
 pub fn check_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<CheckOutput> {
     let parse = parse_query(db, source);
 
-    // Collect all diagnostics from lex and parse.
     let mut all_diags: Vec<Diagnostic> = parse.diagnostics.clone();
 
-    // Run the type checker.
-    let (typed, check_diags) = check(&parse.module, &BuiltinTable::m1());
+    let (typed, check_diags) = check(&parse.module, &PrimitiveIntrinsicTable::m2());
     all_diags.extend(check_diags.into_iter());
 
     Arc::new(CheckOutput {

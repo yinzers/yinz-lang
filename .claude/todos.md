@@ -2,22 +2,18 @@
 
 Global cross-workstream items only. Granular per-chat work lives in:
 - `.claude/plans/active/{slug}.md` for planned work
-- `.claude/work/{slug}/todos.md` for unplanned chat-scoped work
 
 ---
 
-## Now (active cross-workstream items)
-
-*(none — M1 shipped, M2 not started)*
-
 ## Now (active)
 
-- [ ] **M2 Phase 1 PR** — Branch `feat/numerics-runtime` pushed (59fcee2). `gh auth login` needed to create draft PR via CLI. Manual PR URL: `https://github.com/patrickrizzardi/ynz/pull/new/feat/numerics-runtime`. Merge before starting Phase 2.
-- [ ] **M2 Phase 2 — Lexer extension (`feat/m2-lexer`)** — Start in new chat (current chat near context limit). Extend lexer with M2 token set: `let`/`const`/`true`/`false` keywords; int/float/number literals (decimal, hex, binary, scientific, underscore separators); arithmetic/comparison/boolean operators; `=` and `:` punctuation. No `FloatLit` token. Add `%` to spec/operators.md. Variant-count test bumped with `// test-ratchet:` marker.
+- [ ] **Comment cleanup sweep** — Strip section banners (`// ── X ──` style, Hard Rule 6) from Phase 2–4 files that are already on main: `lexer.rs`, `parser.rs`, `nodes.rs`, `token.rs`. Also `check.rs` on current branch. Remove "what" comments (e.g. `// ── M1 expressions ──` inside match arms). Pending user approval to start.
+
+- [ ] **Phase 4 review + commit** — User reviewing Phase 4 diff on `feat/m2-typeck`. Once approved: commit, merge to main, branch `feat/m2-codegen` for Phase 5.
 
 ## Soon (committed, not started)
 
-- [ ] **M2 Phases 3–7** — After Phase 2 merges: parser extension (Pratt precedence), typeck (PrimitiveIntrinsicTable replaces BuiltinTable), codegen (LLVM ops + runtime calls), driver integration + fixtures, verification sweep + tag `v0.1.0-m2`.
+- [ ] **M2 Phases 5–7** — After Phase 4 merges: codegen (LLVM ops + runtime calls), driver integration + fixtures, verification sweep + tag `v0.1.0-m2`.
 
 ## Later (idea bin — not committed)
 
@@ -26,5 +22,9 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Done (recent)
 
-- [x] **M1 compiler end-to-end (2026-05-12)** — `ynz run hello.ynz` → `hello, yinz`. 51 tests green. Committed to main (820bfdc). Full pipeline: lex → parse → typecheck → LLVM codegen → link → execute, all wired as salsa queries.
-- [x] **Compiler error-message audit (2026-05-12)** — wrote `design/compiler-errors.md`, swept all spec files for jargon, banned-jargon CI gate wired into `ynz-diagnostics` test suite.
+- [x] **M2 Phase 4 — Typeck extension** (feat/m2-typeck, awaiting commit) — PrimitiveIntrinsicTable, scope.rs, full M2 type rules, spec corrections. Bouncer caught + fixed test weakening in `m1_source_type_checks_clean`.
+- [x] **M2 Phase 3 — AST + parser (6cee795)** — Pratt climber, Stmt::Let/Assign, all M2 Expr/Type variants, spec-parity test. 30 parse tests.
+- [x] **M2 Phase 2 — Lexer extension (a8c3efe)** — 42 tokens, banned-op diagnostics, malformed-literal recovery. 39 lex tests.
+- [x] **M2 Phase 1 — ynz-numerics + ynz-runtime (59fcee2)** — IEEE 754 decimal128 from scratch, libynz_rt.a, 118 tests.
+- [x] **M1 compiler end-to-end (2026-05-12)** — `ynz run hello.ynz` → `hello, yinz`. 51 tests. Committed to main (820bfdc).
+- [x] **Compiler error-message audit (2026-05-12)** — wrote `design/compiler-errors.md`, swept all spec files for jargon, banned-jargon CI gate.
