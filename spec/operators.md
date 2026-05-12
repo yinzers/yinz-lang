@@ -1,0 +1,228 @@
+# Operators
+
+---
+
+## All operators at a glance
+
+```
+// Arithmetic
++    -    *    /
+
+// Comparison
+==    !=    <    >    <=    >=
+
+// Boolean
+&&    ||    !
+
+// Bitwise
+&    |    ^    ~    <<    >>
+
+// Assignment
+=
+```
+
+---
+
+## Boolean operators
+
+```
+if (active && verified) {
+  grantAccess()
+}
+
+if (isAdmin || isModerator) {
+  allowEdit()
+}
+
+if (!loggedIn) {
+  redirect("/login")
+}
+
+// Combined — standard precedence, add parentheses when it helps
+if (active && (isAdmin || isModerator) && !banned) {
+  grantFullAccess()
+}
+```
+
+`&&` = AND. `||` = OR. `!` = NOT.
+
+Note: `|` (single pipe) is for **union types**, not boolean OR: `type Shape = Circle | Square`. `||` (double pipe) is boolean OR in expressions.
+
+---
+
+## Bitwise operators
+
+For bit manipulation — permissions, flags, color channels, binary protocols:
+
+```
+let combined = FLAG_A | FLAG_B       // bitwise OR — combine bits
+let masked = value & 0xFF            // bitwise AND — extract bits
+let toggled = value ^ mask           // bitwise XOR — flip specific bits
+let inverted = ~value                // bitwise NOT — flip all bits
+let doubled = value << 1             // shift left — multiply by 2
+let halved = value >> 1              // shift right — divide by 2
+```
+
+**Boolean vs bitwise — clean split:**
+
+| Purpose | Operator | Example |
+|---------|----------|---------|
+| Boolean AND | `&&` | `if (active && verified)` |
+| Boolean OR | `\|\|` | `if (admin \|\| mod)` |
+| Boolean NOT | `!` | `if (!banned)` |
+| Bitwise AND | `&` | `value & 0xFF` |
+| Bitwise OR | `\|` | `FLAG_A \| FLAG_B` |
+| Bitwise XOR | `^` | `value ^ mask` |
+| Bitwise NOT | `~` | `~value` |
+| Shift left | `<<` | `value << 4` |
+| Shift right | `>>` | `value >> 1` |
+
+**Permissions example:**
+```
+const READ: int = 1
+const WRITE: int = 2
+const EXECUTE: int = 4
+
+let perms = READ | WRITE              // 3 — has read and write
+if (perms & READ != 0) { ... }        // check a permission
+perms = perms | EXECUTE               // add execute
+perms = perms & ~WRITE                // remove write
+```
+
+---
+
+## No compound assignment or increment
+
+```
+x += 5     // NOT valid — use x = x + 5
+x -= 1     // NOT valid — use x = x - 1
+x++        // NOT valid — use x = x + 1
+x--        // NOT valid — use x = x - 1
+```
+
+One assignment operator: `=`. Makes mutations visible and explicit.
+
+---
+
+## Operator precedence — standard PEMDAS
+
+```
+1.  ()                   // parentheses
+2.  !  ~                 // NOT operators
+3.  *  /                 // multiplication, division
+4.  +  -                 // addition, subtraction
+5.  <<  >>               // bit shifts
+6.  <  >  <=  >=         // comparison
+7.  ==  !=               // equality
+8.  &                    // bitwise AND
+9.  ^                    // bitwise XOR
+10. |                    // bitwise OR
+11. &&                   // boolean AND
+12. ||                   // boolean OR
+```
+
+Same as C/Java/JavaScript. When in doubt, add parentheses.
+
+The IDE hints when precedence might be misread:
+
+```
+let check = a || b && c
+// IDE HINT: && evaluates before ||.
+// Result is a || (b && c). Add parentheses to clarify intent.
+```
+
+---
+
+## Operator overloading
+
+Types can implement operators through `follows` contracts from the standard library. See [Operator Overloading](operators.md#overloading) for details.
+
+---
+
+## Overloading
+
+The standard library defines contracts for operators. Follow the contract, implement the method:
+
+```
+type Addable {
+  function add(share self, share other: Self) -> Self
+}
+
+type Equatable {
+  function equals(share self, share other: Self) -> bool
+}
+
+type Comparable follows Equatable {
+  function compareTo(share self, share other: Self) -> int
+}
+
+type Printable {
+  function toString(share self) -> string
+}
+```
+
+`Self` is a reserved keyword meaning "the type that follows this contract."
+
+**Example:**
+
+```
+type Vector2D follows Addable, Equatable, Printable {
+  x: number
+  y: number
+
+  function add(share self, share other: Vector2D) -> Vector2D {
+    return { x: self.x + other.x, y: self.y + other.y }
+  }
+
+  function equals(share self, share other: Vector2D) -> bool {
+    return self.x == other.x && self.y == other.y
+  }
+
+  function toString(share self) -> string {
+    return `(${self.x}, ${self.y})`
+  }
+}
+
+let a: Vector2D = { x: 1, y: 2 }
+let b: Vector2D = { x: 3, y: 4 }
+
+let c = a + b           // calls a.add(b)
+let same = a == b        // calls a.equals(b)
+print(a)                 // calls a.toString()
+```
+
+**Operator to method mapping:**
+
+| Operator | Contract | Method |
+|----------|----------|--------|
+| `+` | `Addable` | `add()` |
+| `-` | `Subtractable` | `subtract()` |
+| `*` | `Multipliable` | `multiply()` |
+| `/` | `Divisible` | `divide()` |
+| `==` | `Equatable` | `equals()` |
+| `<` `>` `<=` `>=` | `Comparable` | `compareTo()` |
+| `print(x)` | `Printable` | `toString()` |
+
+---
+
+## `print()` always works
+
+All types are printable. Built-in types print naturally. Custom types get a default representation — type name and visible fields:
+
+```
+print(player)    // Player { name: "Alice", health: 100 }
+```
+
+Follow `Printable` to customize the format.
+
+---
+
+## No `===` triple equals
+
+`==` is always type-safe. Comparing incompatible types is a compile error:
+
+```
+let a: string = "5"
+let b: number = 5
+if (a == b) { }    // COMPILE ERROR: cannot compare string and number
+```

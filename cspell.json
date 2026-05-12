@@ -1,0 +1,28 @@
+{
+  "version": "0.2",
+  "language": "en",
+  "words": [
+    "OHLCV",
+    "VWAP",
+    "vwap",
+    "Vwap",
+    "MACD",
+    "Macd",
+    "macd",
+    "RVOL",
+    "rvol",
+    "Bollinger",
+    "bollinger",
+    "Donchian",
+    "PSAR",
+    "DEMA",
+    "TEMA",
+    "intraday",
+    "lookback",
+    "stdDev",
+    "specced",
+    "Yinz",
+    "yinz",
+    "ynz"
+  ]
+}
