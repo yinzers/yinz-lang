@@ -9,7 +9,7 @@
 *(auto-rebuilt by SessionStart hook from `.claude/plans/active/*.md` front-matter — do not edit by hand)*
 
 <!-- RADAR-START -->
-- v0-1-compiler (patrick) — 5 files touched — 0/95 done — 2026-05-12-r3
+- v0-1-compiler (patrick) — 5 files touched — 0/183 done — 2026-05-12-r4
 <!-- RADAR-END -->
 
 ---
@@ -17,12 +17,24 @@
 ## Environment & Commands (CRITICAL — survives compaction)
 
 **Project**: ynz
-**Package Manager**: {bun/npm/yarn/pnpm}
-**Container**: {yes/no — exec pattern if yes}
-**Database**: {connection / db name}
+**Language**: Rust (compiler implementation)
+**Toolchain**: Rust 1.95 stable, LLVM 18.1.8, cargo workspace
+**LLVM prefix**: `/usr/lib/llvm-18` (set in `.cargo/config.toml` via `LLVM_SYS_181_PREFIX`)
 
 ```bash
-# Common commands
+source $HOME/.cargo/env    # activate Rust in this shell session
+
+cargo build --workspace    # build all crates
+cargo test --workspace     # run all 51 tests
+cargo clippy --workspace -- -D warnings
+cargo fmt --all
+
+# Run the compiler
+./target/debug/ynz run crates/ynz-driver/tests/fixtures/hello.ynz
+# → hello, yinz
+
+# M2 work starts on a feature branch:
+# git checkout -b feat/literals-variables
 ```
 
 ---
@@ -47,6 +59,11 @@
 - [2026-05-12] **Teaching mission codified as a first-class language goal**: Created `design/teaching-mission.md`. Expanded Rule 11 (compiler is a teacher) to require all diagnostics follow WHAT/WHAT-INSTEAD/WHY three-part format. Added 4th decision criterion in `.claude/rules/language-design.md`: "Does this teach the user something, or just hide complexity?" Long-term aspiration: Yinz becomes a CS-101 teaching language (production-grade AND approachable). Updated project `CLAUDE.md` Rule 11.
 - [2026-05-12] **Compiler error style spec + jargon audit**: Created `design/compiler-errors.md` — the canonical style spec for all compiler diagnostics. Includes required three-part WHAT/WHAT-INSTEAD/WHY format, banned-jargon list ("propagate", "narrow", "infer", "polymorphic", etc.), tone guide, multi-error strategy. Audited existing `spec/**/*.md` and `design/**/*.md` for jargon in user-facing error messages and prose — rewrote `spec/errors.md`, `spec/control-flow.md`, `spec/unions.md`, `spec/type-conversion.md`, `spec/main.md`, `spec/testing.md`, `spec/types.md`, `spec/functions.md` to remove banned terms. "Auto-propagation" kept as Yinz's official feature name but must be explained in plain English on first use. Final compiler-errors audit deferred — `spec/linting.md` notes its catalog examples are abbreviated.
 - [2026-05-12] **Error-flow metaphor = "cascades", not "bubbles up"**: Per patrick's preference, the language teaching uses "cascades" instead of "bubbles up" to describe what happens when an error travels through the call stack. Captures the downstream-impact angle (the cascade affects everything along the way) better than "bubble" (which only describes upward travel). Updated `design/compiler-errors.md` jargon-replacement table, swept `spec/errors.md`, `spec/main.md`, `spec/testing.md`, `design/errors.md` to use the new term. Future error messages and prose use "cascades" — the linked replacement for the banned word "propagate".
+- [2026-05-12] **M1 compiler complete, committed to main (820bfdc)**: `ynz run hello.ynz` → `hello, yinz`. 51 tests. Stack: Rust 1.95, LLVM 18.1.8, inkwell 0.9 (`llvm18-1-prefer-dynamic`), salsa 0.26.2, ariadne 0.6.0. Ubuntu requires `prefer-dynamic` — libLLVMPolly.a not in `llvm-18-dev` package. M2+ uses feature branches starting with `feat/literals-variables`.
+- [2026-05-12] **M2 decimal128 strategy = hand-rolled, no crates**: Patrick confirmed — implement from scratch to guarantee no floating-point issues. `int` = i64 (native), `float` = f64 (native), `number` = hand-rolled decimal128 in a new `ynz-numerics` crate, validated against IEEE 754 test vectors.
+- [2026-05-12] **M2 plan reviewed (Opus-authored, Sonnet-reviewed)**: Plan is appended to `v0-1-compiler.md`. Pre-Phase-1 decisions locked: `FloatLit` removed from Token+AST, `PrimitiveIntrinsicTable` replaces `BuiltinTable`, `int.toString()` uses thread-local static buffer, `libynz_rt.a` path via `build.rs`→`cargo:rustc-env`. `1763` smoke-fixture value = `count * count - 1` where count=42; tests int×int (smul.with.overflow) + int-int (ssub) + Pratt precedence (* beats -).
+- [2026-05-12] **M2 Phase 1 complete, branch pushed (59fcee2 on `feat/numerics-runtime`)**: `ynz-numerics` + `ynz-runtime` + driver link. 118 tests. PR URL: https://github.com/patrickrizzardi/ynz/pull/new/feat/numerics-runtime — needs `gh auth login` to create via CLI. Big-O docs added to U256::div_rem (O(256) binary long division, v0.4 Knuth Algorithm D perf target), mul_finite, div_finite, clamp_to_34_digits, decimal_digits functions. New chat needed for Phase 2 (current chat at context limit).
+- [2026-05-12] **Project structure = root-relative flat discovery**: `yinz.toml` defines project root. Imports are root-relative (`import { X } from "models/player"`). No `mod` declarations, no explicit file graph. Single-segment = stdlib, multi-segment = project. Already fully specced in `spec/modules.md`.
 
 ---
 
