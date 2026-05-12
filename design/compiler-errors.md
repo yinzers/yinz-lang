@@ -32,7 +32,7 @@ These words should NEVER appear in user-facing diagnostics. They require CS back
 
 | Jargon (banned) | Plain English (use this) |
 |-----------------|---------------------------|
-| propagate, propagation | "let the error bubble up", "pass the error to the caller", "the error rises out of this function". **Exception:** "auto-propagation" / "auto-propagate" stays as Yinz's name for the feature, but the FIRST use in any user-facing doc must explain it in plain English ("the error bubbles up automatically"). |
+| propagate, propagation | "the error cascades to the caller", "an unhandled error cascades up through the call stack". **Exception:** "auto-propagation" / "auto-propagate" stays as Yinz's name for the feature, but the FIRST use in any user-facing doc must explain it in plain English ("the error cascades to the caller automatically"). |
 | narrow, narrowing | "the compiler now treats X as a [type]", "from here on, X is [type]" |
 | discriminator | "the tag that says which kind it is", "the label" |
 | infer, inference | "figure out automatically", "guess from context", "work out from the value" |

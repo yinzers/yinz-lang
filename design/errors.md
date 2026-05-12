@@ -12,7 +12,7 @@ No try/catch. No Result types. No `?` operator. Functions that can fail declare 
 
 **Why Result types were rejected**: Require boilerplate at every level of the call stack. Every function that calls a fallible function must unwrap or propagate explicitly — the boilerplate multiplies through the codebase. Rust's `?` operator reduces this, but it's still a symbol with no plain-English meaning.
 
-**Why `errors` works**: Keeps the contract at the function boundary with zero boilerplate inside `errors` functions. Auto-propagation handles the common case (let failures bubble up). Explicit handling is required when the function doesn't propagate, enforced at compile time.
+**Why `errors` works**: Keeps the contract at the function boundary with zero boilerplate inside `errors` functions. Auto-propagation handles the common case (let failures cascade to the caller). Explicit handling is required when the function doesn't auto-propagate, enforced at compile time.
 
 **`maybe` vs `errors`**: Distinct concepts. `maybe T` = value might not exist (absence, not failure). `-> T errors` = function might fail (failure with a message and call trace). A function can have both: `-> maybe User errors` means "might fail AND might not find a user."
 

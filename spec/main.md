@@ -24,7 +24,7 @@ function main() -> nothing errors {
 }
 ```
 
-Errors that aren't handled bubble all the way up to the default error handler — it prints a clean call trace and exits with code 1.
+Errors that aren't handled cascade all the way up to the default error handler — it prints a clean call trace and exits with code 1.
 
 ---
 

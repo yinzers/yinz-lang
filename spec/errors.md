@@ -33,7 +33,7 @@ If your function is also marked `errors`, any call to an `errors` function auto-
 
 ```
 function loadConfig() -> Config errors {
-  let raw = readFile("config.txt")    // if this fails, the error bubbles up automatically
+  let raw = readFile("config.txt")    // if this fails, the error cascades to the caller automatically
   let config = parseConfig(raw)       // same — auto-propagates on failure
   return config                       // only gets here on success
 }
@@ -45,7 +45,7 @@ You write the happy path. The compiler handles the failure path.
 
 ## Logging or recovering before propagating
 
-Sometimes you want to log a warning, fall back to a default, or retry before letting the error bubble up. Just check the result first:
+Sometimes you want to log a warning, fall back to a default, or retry before letting the error cascade. Just check the result first:
 
 ```
 function loadConfig() -> Config errors {
@@ -105,7 +105,7 @@ function loadConfig() -> Config {
 
 Three ways to handle it:
 
-**Option 1 — Let the error bubble up to the caller (mark your function as errors)**
+**Option 1 — Let the error cascade to the caller (mark your function as errors)**
 
 ```
 function loadConfig() -> Config errors {
@@ -140,7 +140,7 @@ function loadConfig() -> Config {
 
 ## Dot methods on error results
 
-When you call an `errors` function, the result has these methods until you handle the error (or the auto-bubble-up kicks in):
+When you call an `errors` function, the result has these methods until you handle the error (or auto-propagation cascades it to the caller):
 
 ```
 content.failed()           // did it fail? → bool
