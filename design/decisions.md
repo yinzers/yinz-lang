@@ -20,7 +20,7 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Scope | `design/scope.md` | Block scoping, no mutable globals, const expressions, export for sharing |
 | Main entry | `design/main-entry.md` | `function main()`, file from yinz.toml, args from stdlib, errors to default handler |
 | Doc comments | `design/doc-comments.md` | `///` only, no block docs, exported items only, field documentation |
-| Testing | `design/testing.md` | Built-in `test` keyword, assertion functions, compiler-as-teacher output |
+| Testing | `design/testing.md` | Built-in `test` keyword, setup/teardown (file+per-test), single-level groups, `assertFails`/`assertPanics`, file-level parallelism |
 | Packages | `design/packages.md` | `ynz add/remove/update`, lock file, yinz_modules, tree shaking |
 | Operators | `design/operators.md` | `follows` contracts, `Self` keyword, `print()` default, `&&`/`\|\|`/`!` symbols, bitwise symbols, no `===` |
 | Sensitive values | `design/sensitive.md` | `sensitive` modifier, auto-redact in all output, `.reveal()` explicit opt-in, stripped from release |
@@ -32,7 +32,7 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Concurrency | `design/concurrency.md` | Auto-parallelization, `wait`, `background`, ownership with tasks (optimization DEFERRED to v0.3) |
 | Modules | `design/modules.md` | `import`/`export`, no defaults, no wildcards, root-relative paths, stdlib auto-import |
 | Configuration | `design/config.md` | Three layers, TOML choice, no env splitting, `set` functions |
-| Linting & build | `design/linting.md` | Three-tier linting, debug vs release, compile speed principle |
+| Linting & build | `design/linting.md` | "Compiler IS the linter" — three-tier diagnostics (errors/warnings/suggestions), curated v0.4 rule list, three-part WHAT/INSTEAD/WHY format, customization v1.x |
 | Versioning | `design/versioning.md` | Pre-release delete policy, post-release major bumps, no backwards compat |
 
 ## Compiler & Tooling
@@ -47,7 +47,8 @@ Every design topic has its own file. This is the index. One line per topic, link
 
 | Topic | File | What's in it |
 |-------|------|--------------|
-| Golden rules | `design/golden-rules.md` | All 13 rules with full reasoning |
+| Golden rules | `design/golden-rules.md` | All 13 rules with full reasoning. Rule 11 expanded — teaching mission. |
+| Teaching mission | `design/teaching-mission.md` | First-class language goal — compiler as mentor, three-part diagnostic format, university-adoption aspiration |
 | Open questions | `design/open-questions.md` | Unresolved design decisions |
 | Deferrals | `design/deferrals.md` | Features intentionally not in v0.1 — with substitute and trigger conditions |
 

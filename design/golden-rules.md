@@ -75,9 +75,11 @@ The default behavior is always the most performant option. Developers opt INTO s
 ---
 
 **11. The compiler is a teacher**
-Compile errors explain what went wrong and suggest the fix.
+Errors explain what went wrong AND why. Suggestions explain why one approach is better than another — performance, clarity, or idiomatic Yinz. Every diagnostic answers three questions: WHAT happened, WHAT to do instead, and WHY. The compiler is not a checker — it's a senior developer mentoring a junior developer through every interaction.
 
-*Why*: Learning happens at the moment of error. A developer who just hit an ownership violation is primed to understand ownership. That's the optimal moment to explain it — not in a doc they read two weeks earlier.
+*Why*: Learning happens at the moment of feedback. A developer who just hit an ownership violation is primed to understand ownership. A developer who just wrote `map[string, number]` with all-static keys is primed to learn why a `type` is faster. That's the optimal moment to teach — not in a doc they read two weeks earlier, not after the bug ships.
+
+The teaching mission is a first-class language goal — see `design/teaching-mission.md` for the full rationale, the required three-part diagnostic format, and the long-term aspiration that Yinz becomes a CS-101 teaching language.
 
 ---
 

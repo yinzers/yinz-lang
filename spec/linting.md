@@ -188,6 +188,25 @@ let perms = wait fetchPermissions(user)
 // and would auto-wait via the dependency graph. Remove wait for cleaner code.
 ```
 
+**Recommended graceful-shutdown pattern (informational):**
+```
+while (true) {
+  let job = jobQueue.next()
+  job.process()
+}
+// SUGGESTION: This loop has no graceful shutdown path. For long-running
+//             background tasks, prefer:
+//   while (process.isRunning()) {
+//     let job = jobQueue.next()
+//     job.process()
+//   }
+//
+// Why: process.isRunning() returns false on shutdown signals (SIGTERM,
+//      SIGINT, SIGHUP), letting the loop exit cleanly before the process
+//      terminates. Without it, the OS forcibly kills the process, which
+//      can leave resources in a bad state.
+```
+
 ---
 
 ## Suggestions — IDE only by default

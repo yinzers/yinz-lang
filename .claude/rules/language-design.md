@@ -34,6 +34,20 @@ The developer who doesn't think about performance should automatically write fas
 
 ---
 
+## The Teaching Test
+
+Ask: "Does this teach the user something, or does it just hide complexity?"
+
+Every feature, rule, error message, and example should INFORM the developer about why something works the way it does. Features that make it easier to write code WITHOUT learning anything are anti-Yinz — they create dependent developers instead of capable ones.
+
+**Features that PASS this test:** error messages with the three-part WHAT/WHAT-INSTEAD/WHY format, lint suggestions with reasoning attached, spec examples that show realistic code AND explain the design decision, IDE hints that teach performance and idiomatic patterns.
+
+**Features that FAIL this test:** implicit conversions with no diagnostic, automatic behaviors that happen invisibly, abstractions that hide what the machine is doing, "magic" that works without explanation.
+
+See `design/teaching-mission.md` for the full mission and the required three-part diagnostic format. This is a load-bearing criterion — Yinz's positioning as a teaching language depends on it.
+
+---
+
 ## Documenting Decisions
 
 Every decision goes in `/design/decisions.md` with:

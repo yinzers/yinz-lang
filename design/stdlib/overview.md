@@ -47,32 +47,52 @@ This applies to all stdlib modules: `math`, `file`, `http`, `date`, `duration`, 
 
 ---
 
-## Module Areas
+## Module Areas — Ships In
 
-| File | Status |
-|------|--------|
-| [math.md](math.md) | Design phase |
-| [dates.md](dates.md) | Design phase |
-| [http.md](http.md) | Design phase |
-| [concurrency.md](concurrency.md) | Partially resolved — discussion ongoing |
-| [filesystem.md](filesystem.md) | Design phase |
-| [cli.md](cli.md) | Design phase |
-| [data.md](data.md) | Design phase |
-| [ml.md](ml.md) | Design phase |
-| [strings.md](strings.md) | Design phase |
-| [markets.md](markets.md) | Design phase |
+Each module ships in a specific Yinz version per `design/mvp-scope.md`. The granular versioning means each module gets dedicated design + implementation when its turn comes.
+
+| Module | Ships In | Notes |
+|--------|----------|-------|
+| `file` + `path` + `directory` | **v0.6** | Tight trio; see [filesystem.md](filesystem.md) |
+| `math` | **v0.7** | See [math.md](math.md) |
+| `cli` + `env` + `process` | **v0.8** | Tight trio; see [cli.md](cli.md) |
+| `json` | **v0.9** | Part of [data.md](data.md) |
+| `date` + `duration` | **v0.10** | Tight pair; see [dates.md](dates.md) |
+| `log` (basic) | **v0.11** | Logging framework v0.22 |
+| `random` | **v0.12** | |
+| Testing framework | **v0.13** | Language feature, not stdlib (`test` keyword) |
+| `regex` | **v0.14** | |
+| `http` client | **v0.15** | Three-tier API (helpers + builder + raw sockets) — see [http.md](http.md) |
+| `stats` | **v0.16** | Built on math |
+| `crypto` / `hash` | **v0.17** | SHA, AES, HMAC, KDF |
+| `compression` | **v0.18** | gzip, zstd, maybe brotli |
+| `terminal` | **v0.19** | ANSI colors, cursor |
+| `csv` | **v0.20** | Part of [data.md](data.md) |
+| `http.server` | **v0.21** | Builds on http client |
+| Logging framework | **v0.22** | Structured logging, sinks, filters; builds on basic `log` |
+| Process spawning | **v0.23** | `process.spawn`, pipes, signals; distinct from v0.8 `process` |
+| `ml` / `tensor` | **v2+** | DEFERRED — see [ml.md](ml.md) and `design/deferrals.md` |
+| `markets` | **v2+** | DEFERRED — see [markets.md](markets.md) |
+| TCP/UDP networking beyond `http` | **v2+** | DEFERRED |
+| Database drivers | **packages only** | Not in stdlib; community ships via package registry (v1.2+) |
+
+For language features (not stdlib) — strings, collections, concurrency keywords — see the relevant `spec/*.md` and `design/*.md`. All language features ship in v0.1.
 
 ---
 
-## Open Standard Library Questions
+## Resolved Stdlib Questions (formerly open)
 
-- Package manager design (like npm, cargo, pip)
-- Testing framework (built-in or stdlib?)
-- Database drivers (built-in SQLite? or packages only?)
-- Logging framework
-- Regex engine specifics
-- Crypto / hashing (SHA, AES, etc.)
-- Networking beyond HTTP (TCP, UDP, raw sockets)
-- Process spawning and OS interaction
-- Environment variables
-- Compression (gzip, zstd)
+The questions that previously lived in `design/open-questions.md` have been resolved:
+
+- **Package manager design** — RESOLVED. See `design/packages.md`. Ships v0.5.
+- **Testing framework** — RESOLVED. Built into the language as the `test` keyword. See `design/testing.md`. Ships v0.13.
+- **Logging framework** — RESOLVED. Basic `log` ships v0.11; full framework v0.22.
+- **Regex** — Ships v0.14. Engine choice + detailed API designed at that version.
+- **Crypto / hashing** — Ships v0.17.
+- **Networking beyond HTTP** — Raw sockets at the bottom of the http module (v0.15) provide the floor. TCP/UDP as standalone modules deferred to v2+.
+- **Process spawning** — Ships v0.23.
+- **Environment variables** — RESOLVED. `env` module ships in the v0.8 CLI trio.
+- **Compression** — Ships v0.18.
+- **Database drivers** — Not stdlib. Community packages from v1.2 onwards.
+
+Open questions remaining: the per-module API designs themselves (designed at each module's version turn). The list of modules is locked.
