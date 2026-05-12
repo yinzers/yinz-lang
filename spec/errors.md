@@ -56,7 +56,7 @@ function loadConfig() -> Config errors {
     return Config.default()           // recover with a fallback
   }
 
-  return parseConfig(raw)             // raw narrows to string after the check
+  return parseConfig(raw)             // raw is treated as a plain string from here on
 }
 ```
 
@@ -71,15 +71,22 @@ Same code pattern, two behaviors picked by the compiler from what you wrote. You
 ```
 function loadConfig() -> Config errors {
   let raw = readFile("config.txt")
-  let parsed = parseConfig(raw)              // ← raw used here, auto-propagated
+  let parsed = parseConfig(raw)              // ← raw used here as a string
   if (raw.failed()) { return Config.default() }
 }
-// COMPILE ERROR: raw was auto-propagated on line 3 when you passed it to
-//                parseConfig(raw). After auto-propagation, raw is narrowed
-//                to a plain string and no longer has .failed().
+// COMPILE ERROR: raw can no longer be checked for failure here.
 //
-//                If you want to handle the error before propagating, move
-//                the .failed() check above the parseConfig() call.
+//                Move the failure check above the line that uses raw as a string:
+//                  let raw = readFile("config.txt")
+//                  if (raw.failed()) { return Config.default() }
+//                  let parsed = parseConfig(raw)
+//
+//                Why: When you passed raw to parseConfig() on line 3, the
+//                compiler treated it as a plain string from that point on
+//                (since you didn't check for failure first). Once raw is
+//                treated as a plain string, the .failed() method no longer
+//                applies. Always check for failure BEFORE using the value
+//                if you want a chance to recover.
 ```
 
 ---
@@ -98,7 +105,7 @@ function loadConfig() -> Config {
 
 Three ways to handle it:
 
-**Option 1 — Propagate it (mark your function as errors)**
+**Option 1 — Let the error bubble up to the caller (mark your function as errors)**
 
 ```
 function loadConfig() -> Config errors {
@@ -125,7 +132,7 @@ function loadConfig() -> Config {
     log(raw.message)
     return defaultConfig        // return a fallback Config
   }
-  return parseConfig(raw)       // raw is narrowed to string after the failed() check
+  return parseConfig(raw)       // raw is treated as a plain string after the failed() check
 }
 ```
 
@@ -133,7 +140,7 @@ function loadConfig() -> Config {
 
 ## Dot methods on error results
 
-When you call an `errors` function, the result has these methods until it is propagated or handled:
+When you call an `errors` function, the result has these methods until you handle the error (or the auto-bubble-up kicks in):
 
 ```
 content.failed()           // did it fail? → bool
@@ -143,7 +150,7 @@ content.or("fallback")     // use this default if failed → T
 
 After `content.or(...)`, you get back a plain value — no more error handling needed.
 
-After `if (content.failed()) { return ... }`, the variable is narrowed to the success type in the remaining code.
+After `if (content.failed()) { return ... }`, the variable is treated as its plain success type in the remaining code.
 
 ---
 

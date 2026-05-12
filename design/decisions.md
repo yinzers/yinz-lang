@@ -41,7 +41,8 @@ Every design topic has its own file. This is the index. One line per topic, link
 |-------|------|--------------|
 | Compiler design | `design/compiler.md` | Incremental builds, IDE language server, no-indexing rationale |
 | Compiler implementation language | `design/compiler-language.md` | Rust + Salsa + inkwell + ariadne + hand-written recursive descent — decision and rationale |
-| MVP scope | `design/mvp-scope.md` | What ships in v0.1 / v0.2 / v0.3 / v1.0 / v2+ |
+| MVP scope | `design/mvp-scope.md` | Granular 24-version sequence to v1.0 + 3 post-launch versions |
+| Compiler error style | `design/compiler-errors.md` | Required three-part WHAT/WHAT-INSTEAD/WHY format, jargon ban-list, tone guide, multi-error strategy |
 
 ## Reference
 

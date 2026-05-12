@@ -145,7 +145,17 @@ base type Entity {
   health: number
 }
 
-let e: Entity = { name: "test", health: 50 }    // COMPILE ERROR: Entity is a base type
+let e: Entity = { name: "test", health: 50 }
+// COMPILE ERROR: Entity is a base type — you can't create one directly.
+//
+//   Create a type that extends Entity instead:
+//     type Warrior extends Entity { weapon: string, armor: number }
+//     let w: Warrior = { name: "test", health: 50, weapon: "axe", armor: 10 }
+//
+//   Why: base types describe shared behavior but aren't meant to stand alone.
+//        Creating one directly would give you an incomplete object. Always
+//        use a specific type that extends the base.
+
 let w: Warrior = { name: "test", health: 50, weapon: "axe", armor: 10 }   // fine
 ```
 

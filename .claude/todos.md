@@ -8,10 +8,12 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Now (active cross-workstream items)
 
-- [ ] **After current question pass is complete: tackle the compiler error-message audit.** Two-part task (per `design/open-questions.md#compiler-error-format--full-spec`):
-  - **A.** Write the plain-English error-message style rule. Likely a new `design/compiler-errors.md` with a jargon ban-list, jr-dev readability test, format spec, and tone guide.
-  - **B.** Sweep all error-message examples in `spec/**/*.md` and `design/**/*.md`. Flag and rewrite any programmer jargon ("propagate," "narrow," "infer," etc.) in plain English.
-  - **Motivation:** Golden Rule 11 says the compiler is a teacher. If error messages use jargon, the language fails its own promise. Triggered by patrick noticing "propagate" in an example error during the Iterable design discussion (2026-05-12).
+- [x] **Compiler error-message audit (2026-05-12)** — DONE:
+  - **A.** Wrote `design/compiler-errors.md` — the style spec with required three-part WHAT/WHAT-INSTEAD/WHY format, banned-jargon list, tone guide, multi-error strategy.
+  - **B.** Swept `spec/**/*.md` for jargon. Rewrote: `spec/errors.md`, `spec/control-flow.md`, `spec/unions.md`, `spec/type-conversion.md`, `spec/main.md`, `spec/testing.md`, `spec/types.md`, `spec/functions.md`.
+  - "Auto-propagation" kept as Yinz's official feature name but must be explained in plain English on first use.
+  - `spec/linting.md` notes its catalog examples are abbreviated — the real compiler output uses the full three-part format.
+  - Future error messages added by new versions must follow `design/compiler-errors.md`.
 
 ## Soon (committed, not started)
 

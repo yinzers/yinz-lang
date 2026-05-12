@@ -4,6 +4,8 @@ The compiler catches problems at three levels. Errors block compilation. Warning
 
 The philosophy: catch real bugs, enforce code quality, don't police style. Every rule prevents an actual problem — nothing is enforced just because "that's how it's usually done."
 
+**Note on the examples below:** This file is a catalog — each example is abbreviated to fit a one-or-two-line summary of the rule it shows. The actual compiler output includes the full three-part diagnostic (WHAT happened, WHAT to do instead, WHY) per `design/compiler-errors.md`. So when you see `ERROR: Cannot add to a fixed array` here, the real output also shows the suggested fix (`Use array[number] if it needs to grow`) and the reason behind the rule.
+
 ---
 
 ## Errors — code won't compile

@@ -58,9 +58,9 @@ let bad = "hello".toInt().or(0)     // 0 — fallback
 
 ---
 
-## Union type narrowing — no conversion needed
+## Union types — no conversion needed, just check which kind
 
-For union types, use `is` to narrow the type. No cast required:
+For union types, use `is` to ask which kind it is. No cast required:
 
 ```
 if (shape is Circle) {

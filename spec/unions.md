@@ -18,7 +18,7 @@ type Shape = Circle | Square | Triangle
 
 ---
 
-## Checking which type it is — `is` narrows the type automatically
+## Checking which type it is — `is` tells the compiler which kind
 
 ```
 function getArea(share shape: Shape) -> number {
