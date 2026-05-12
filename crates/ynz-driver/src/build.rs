@@ -77,10 +77,19 @@ pub fn build(source_path: &Path) -> BuildResult {
         return build_failed(diags, source_path);
     }
 
-    // 4. Link with system `cc`.
+    // 4. Link with system `cc`, including the Yinz runtime library.
+    //
+    // YNZ_RT_LIB_DIR and YNZ_RT_LIB_NAME are emitted by crates/ynz-driver/build.rs
+    // at compile time and resolve to the target/{profile}/ directory where cargo
+    // places the ynz-runtime staticlib.
+    let rt_lib_dir = env!("YNZ_RT_LIB_DIR");
+    let rt_lib_name = env!("YNZ_RT_LIB_NAME");
+
     let binary_path = source_path.with_extension("");
     let cc_result = Command::new("cc")
         .arg(&obj_path)
+        .arg(format!("-L{rt_lib_dir}"))
+        .arg(format!("-l{rt_lib_name}"))
         .arg("-o")
         .arg(&binary_path)
         .output();

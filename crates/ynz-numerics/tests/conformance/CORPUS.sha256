@@ -1,0 +1,13 @@
+# SHA-256 of the IBM Hursley decimal-test corpus tarball.
+#
+# Source: https://github.com/nicowillis/decimal-test  (MIT License)
+# Archive: decimal-test-main.zip
+#
+# To regenerate this hash after downloading the corpus:
+#   sha256sum decimal-test-main.zip
+#
+# To add corpus files to the repo: extract the .decTest files into
+# crates/ynz-numerics/tests/conformance/ and update this hash.
+#
+# Pinned hash (update when corpus is deliberately upgraded):
+# CORPUS_NOT_PINNED_YET — download the corpus and update this file before M2 ships

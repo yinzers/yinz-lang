@@ -7,6 +7,8 @@ members = [
     "crates/ynz-parser",
     "crates/ynz-typeck",
     "crates/ynz-codegen",
+    "crates/ynz-numerics",
+    "crates/ynz-runtime",
 ]
 
 [workspace.package]
@@ -24,9 +26,12 @@ unicode-segmentation = "1.13.2"
 insta = { version = "1.47.2", features = ["redactions"] }
 clap = { version = "4.6.1", features = ["derive"] }
 
+proptest = { version = "1.6.0", default-features = false, features = ["std"] }
+
 # Cross-crate workspace deps
 ynz-diagnostics = { path = "crates/ynz-diagnostics" }
 ynz-ast          = { path = "crates/ynz-ast" }
 ynz-parser       = { path = "crates/ynz-parser" }
 ynz-typeck       = { path = "crates/ynz-typeck" }
 ynz-codegen      = { path = "crates/ynz-codegen" }
+ynz-numerics     = { path = "crates/ynz-numerics" }
