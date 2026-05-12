@@ -5,8 +5,10 @@
     "context": ".."
   },
   // * Fix docker socket perms for host daemon access
-  // * Symlink .claude.json from persistent volume (can't mount volumes to files, only dirs)
-  "postStartCommand": "sudo chmod 666 /var/run/docker.sock; sudo chown ubuntu:ubuntu /home/ubuntu/.claude-persist; [ ! -f /home/ubuntu/.claude-persist/.claude.json ] && echo '{}' > /home/ubuntu/.claude-persist/.claude.json; ln -sf /home/ubuntu/.claude-persist/.claude.json /home/ubuntu/.claude.json; jq '.mcpServers[\"code-indexer\"] //= {\"type\":\"stdio\",\"command\":\"docker\",\"args\":[\"exec\",\"-i\",\"claude-code-indexer\",\"npx\",\"@code-indexer/mcp\"],\"env\":{}}' /home/ubuntu/.claude-persist/.claude.json > /tmp/.claude-mcp-tmp.json && mv /tmp/.claude-mcp-tmp.json /home/ubuntu/.claude-persist/.claude.json",
+  // * Chown all named volumes (Docker initializes them as root:root)
+  // * Symlink .claude.json and history.jsonl from persistent volumes
+  //   (volumes can only mount to dirs — file paths become dirs, breaking writes)
+  "postStartCommand": "sudo chmod 666 /var/run/docker.sock; sudo chown -R ubuntu:ubuntu /home/ubuntu/.claude-persist /home/ubuntu/.claude-history-persist /home/ubuntu/.claude/projects /home/ubuntu/.claude/sessions; [ ! -f /home/ubuntu/.claude-persist/.claude.json ] && echo '{}' > /home/ubuntu/.claude-persist/.claude.json; ln -sf /home/ubuntu/.claude-persist/.claude.json /home/ubuntu/.claude.json; [ ! -f /home/ubuntu/.claude-history-persist/history.jsonl ] && echo '' > /home/ubuntu/.claude-history-persist/history.jsonl; ln -sf /home/ubuntu/.claude-history-persist/history.jsonl /home/ubuntu/.claude/history.jsonl; jq '.mcpServers[\"code-indexer\"] //= {\"type\":\"stdio\",\"command\":\"docker\",\"args\":[\"exec\",\"-i\",\"claude-code-indexer\",\"npx\",\"@code-indexer/mcp\"],\"env\":{}}' /home/ubuntu/.claude-persist/.claude.json > /tmp/.claude-mcp-tmp.json && mv /tmp/.claude-mcp-tmp.json /home/ubuntu/.claude-persist/.claude.json",
   "mounts": [
     // Claude files from local machine
     // IMPORTANT: Single-FILE bind mounts below are marked `readonly` to prevent
@@ -41,8 +43,9 @@
     // Persistent container-only storage
     "source=ynz-claude-sessions,target=/home/ubuntu/.claude/sessions,type=volume",
     "source=ynz-claude-projects,target=/home/ubuntu/.claude/projects,type=volume",
-    "source=ynz-claude-history,target=/home/ubuntu/.claude/history.jsonl,type=volume",
-    // Persistent state for .claude.json, requires postStartCommand to symlink to .claude.json because can't mount volumes to files, only dirs
+    // history.jsonl is a FILE — volumes mount as dirs, so use staging dir + symlink
+    "source=ynz-claude-history,target=/home/ubuntu/.claude-history-persist,type=volume",
+    // .claude.json same pattern — staging dir, symlinked by postStartCommand
     "source=ynz-claude-state,target=/home/ubuntu/.claude-persist,type=volume",
     // Portable aliases (docker, git, claude shortcuts — lives in repo, survives WSL reinstalls)
     "source=${localWorkspaceFolder}/.devcontainer/bash_aliases,target=/home/ubuntu/.bash_aliases,type=bind,readonly",
