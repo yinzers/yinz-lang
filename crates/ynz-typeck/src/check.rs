@@ -99,6 +99,10 @@ impl<'b> Checker<'b> {
                 Stmt::Expr(expr) => {
                     self.infer_expr(expr);
                 }
+                // M2 stmts — full type-checking is Phase 4 work.
+                Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
+                    self.infer_expr(value);
+                }
             }
         }
     }
@@ -112,6 +116,13 @@ impl<'b> Checker<'b> {
                 self.expr_types.insert(span.start, Type::Error);
                 return Type::Error;
             }
+            // M2 expressions — full type inference is Phase 4 work.
+            Expr::IntLit(_, _)
+            | Expr::NumberLit(_, _)
+            | Expr::BoolLit(_, _)
+            | Expr::BinOp { .. }
+            | Expr::UnaryOp { .. }
+            | Expr::MethodCall { .. } => Type::Error,
         };
         self.expr_types.insert(expr.span().start, ty.clone());
         ty
@@ -208,6 +219,7 @@ impl<'b> Checker<'b> {
 fn body_has_error_node(stmts: &[Stmt]) -> bool {
     stmts.iter().any(|s| match s {
         Stmt::Expr(e) => expr_has_error(e),
+        Stmt::Let { value, .. } | Stmt::Assign { value, .. } => expr_has_error(value),
     })
 }
 
@@ -215,7 +227,16 @@ fn expr_has_error(expr: &Expr) -> bool {
     match expr {
         Expr::Error(_) => true,
         Expr::Call(c) => expr_has_error(&c.callee) || c.args.iter().any(expr_has_error),
-        Expr::Ident(_, _) | Expr::StringLit(_, _) => false,
+        Expr::BinOp { lhs, rhs, .. } => expr_has_error(lhs) || expr_has_error(rhs),
+        Expr::UnaryOp { operand, .. } => expr_has_error(operand),
+        Expr::MethodCall { receiver, args, .. } => {
+            expr_has_error(receiver) || args.iter().any(expr_has_error)
+        }
+        Expr::Ident(_, _)
+        | Expr::StringLit(_, _)
+        | Expr::IntLit(_, _)
+        | Expr::NumberLit(_, _)
+        | Expr::BoolLit(_, _) => false,
     }
 }
 
@@ -232,6 +253,10 @@ fn ast_type_name(t: &AstType) -> &'static str {
         AstType::Nothing => "nothing",
         AstType::Named(_, _) => "named type",
         AstType::Error => "unknown",
+        AstType::Int => "int",
+        AstType::Float => "float",
+        AstType::Number { .. } => "number",
+        AstType::Bool => "bool",
     }
 }
 
