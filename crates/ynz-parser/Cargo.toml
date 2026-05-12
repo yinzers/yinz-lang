@@ -1,0 +1,16 @@
+[package]
+name = "ynz-parser"
+description = "Lexer and parser for the ynz language"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+salsa             = { workspace = true }
+ynz-diagnostics   = { workspace = true }
+ynz-ast           = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }

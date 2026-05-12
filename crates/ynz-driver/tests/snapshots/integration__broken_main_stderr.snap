@@ -1,0 +1,36 @@
+---
+source: crates/ynz-driver/tests/integration.rs
+expression: stderr
+---
+Error: This file has no `main` function.
+   ╭─[ /workspaces/ynz/crates/ynz-driver/tests/fixtures/broken_main.ynz:1:1 ]
+   │
+ 1 │ ╭─▶ function main() {
+   ┆ ┆   
+ 3 │ ├─▶ }
+   │ │       
+   │ ╰─────── Add a main function:
+  function main() -> nothing {
+    ...
+  }
+   │     
+   │     Note: Why: Every Yinz program needs a `main` function — that is where execution starts.
+───╯
+Error: Missing return type on `main`.
+   ╭─[ /workspaces/ynz/crates/ynz-driver/tests/fixtures/broken_main.ynz:1:17 ]
+   │
+ 1 │ function main() {
+   │                 ┬  
+   │                 ╰── Add `-> nothing` after the parentheses: `function main() -> nothing`
+   │ 
+   │ Note: Why: Every function in Yinz declares what it returns. Use `-> nothing` for functions that don't return a value.
+───╯
+Error: Unexpected `}` at the top level.
+   ╭─[ /workspaces/ynz/crates/ynz-driver/tests/fixtures/broken_main.ynz:3:1 ]
+   │
+ 3 │ }
+   │ ┬  
+   │ ╰── Top-level code must be inside a `function` declaration.
+   │ 
+   │ Note: Why: Yinz programs are made of functions. Only `function` declarations are allowed at the top level.
+───╯

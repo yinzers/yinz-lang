@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ynz-driver",
+    "crates/ynz-diagnostics",
+    "crates/ynz-ast",
+    "crates/ynz-parser",
+    "crates/ynz-typeck",
+    "crates/ynz-codegen",
+]
+
+[workspace.package]
+version = "0.1.0-m1"
+edition = "2021"
+rust-version = "1.80"
+authors = ["The Yinz Contributors"]
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+salsa = "0.26.2"
+inkwell = { version = "0.9.0", features = ["llvm18-1-prefer-dynamic"] }
+ariadne = "0.6.0"
+unicode-segmentation = "1.13.2"
+insta = { version = "1.47.2", features = ["redactions"] }
+clap = { version = "4.6.1", features = ["derive"] }
+
+# Cross-crate workspace deps
+ynz-diagnostics = { path = "crates/ynz-diagnostics" }
+ynz-ast          = { path = "crates/ynz-ast" }
+ynz-parser       = { path = "crates/ynz-parser" }
+ynz-typeck       = { path = "crates/ynz-typeck" }
+ynz-codegen      = { path = "crates/ynz-codegen" }

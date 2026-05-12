@@ -1,0 +1,17 @@
+[package]
+name = "ynz-typeck"
+description = "Type checker and name resolver for the ynz compiler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+salsa             = { workspace = true }
+ynz-diagnostics   = { workspace = true }
+ynz-ast           = { workspace = true }
+ynz-parser        = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }

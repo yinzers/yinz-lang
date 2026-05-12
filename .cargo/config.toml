@@ -1,0 +1,10 @@
+# Tell llvm-sys where to find LLVM 18 on Linux.
+# Contributors on macOS with Homebrew: export LLVM_SYS_181_PREFIX=$(brew --prefix llvm@18)
+# See README.md for full setup instructions.
+[env]
+LLVM_SYS_181_PREFIX = "/usr/lib/llvm-18"
+
+# Add the LLVM dynamic library to the linker search path so libLLVM-18.so is found
+# at link time. Ubuntu's LLVM packages ship the shared library but not static Polly.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-Wl,-rpath,/usr/lib/llvm-18/lib"]

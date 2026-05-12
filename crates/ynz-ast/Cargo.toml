@@ -1,0 +1,11 @@
+[package]
+name = "ynz-ast"
+description = "Abstract syntax tree node types for the ynz compiler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+ynz-diagnostics = { workspace = true }

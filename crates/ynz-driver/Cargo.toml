@@ -1,0 +1,23 @@
+[package]
+name = "ynz-driver"
+description = "The ynz compiler CLI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ynz"
+path = "src/main.rs"
+
+[dependencies]
+clap            = { workspace = true }
+ynz-diagnostics = { workspace = true }
+ynz-ast         = { workspace = true }
+ynz-parser      = { workspace = true }
+ynz-typeck      = { workspace = true }
+ynz-codegen     = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }

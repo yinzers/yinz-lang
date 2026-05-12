@@ -9,7 +9,7 @@
 *(auto-rebuilt by SessionStart hook from `.claude/plans/active/*.md` front-matter — do not edit by hand)*
 
 <!-- RADAR-START -->
-*(no active workstreams)*
+- v0-1-compiler (patrick) — 5 files touched — 0/95 done — 2026-05-12-r3
 <!-- RADAR-END -->
 
 ---

@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Verify that LLVM 18 is installed and that the LLVM_SYS_181_PREFIX env var
+# or the system llvm-config-18 binary is available.
+#
+# Exit codes:
+#   0  LLVM 18 found
+#   1  LLVM 18 not found
+
+set -euo pipefail
+
+REQUIRED_MAJOR=18
+
+find_llvm_config() {
+    if command -v llvm-config-18 &>/dev/null; then
+        echo "llvm-config-18"
+        return 0
+    fi
+    if [[ -n "${LLVM_SYS_181_PREFIX:-}" ]]; then
+        local candidate="$LLVM_SYS_181_PREFIX/bin/llvm-config"
+        if [[ -x "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    fi
+    if command -v llvm-config &>/dev/null; then
+        echo "llvm-config"
+        return 0
+    fi
+    return 1
+}
+
+if ! LLVM_CONFIG=$(find_llvm_config); then
+    echo "ERROR: LLVM ${REQUIRED_MAJOR} not found." >&2
+    echo "" >&2
+    echo "On Ubuntu/Debian:  sudo apt-get install llvm-${REQUIRED_MAJOR} llvm-${REQUIRED_MAJOR}-dev libclang-${REQUIRED_MAJOR}-dev" >&2
+    echo "On macOS (Homebrew): brew install llvm@${REQUIRED_MAJOR}" >&2
+    echo "                     export LLVM_SYS_181_PREFIX=\$(brew --prefix llvm@${REQUIRED_MAJOR})" >&2
+    exit 1
+fi
+
+ACTUAL_VERSION=$("$LLVM_CONFIG" --version 2>/dev/null | grep -oE '^[0-9]+' || echo "unknown")
+
+if [[ "$ACTUAL_VERSION" != "$REQUIRED_MAJOR" ]]; then
+    echo "ERROR: Found LLVM ${ACTUAL_VERSION} but LLVM ${REQUIRED_MAJOR} is required." >&2
+    echo "The golden SHA-256 hashes in crates/ynz-codegen/tests/__golden__/ are only" >&2
+    echo "valid for LLVM ${REQUIRED_MAJOR}. Install LLVM ${REQUIRED_MAJOR} first." >&2
+    exit 1
+fi
+
+echo "OK: LLVM ${ACTUAL_VERSION} found via $LLVM_CONFIG"
