@@ -1227,7 +1227,13 @@ declare void @ynz_panic_div_by_zero(ptr)
 1. **Broad TODO sweep** (same grep as M1):
    `rg -i 'TODO|FIXME|HACK|XXX|TEMP|PLACEHOLDER|acceptable for now|works in current state|fine until|we.?ll revisit|for now|good enough for the MVP|executor will figure' crates/`
    Migrate findings to the plan file (M3+ work), or `.claude/todos.md` (cross-milestone), or delete (no-longer-relevant comments). Zero results required to proceed.
-2. **Catch-up list audit**:
+2. **Comment rules sweep** (`~/.claude/rules/comments.md` Hard Rules):
+   - `rg '// ──|// ───|// ════' crates/` — find section banners (Hard Rule 6: banned). Remove every `// ── X ───` divider. If a function needs visual structure, split it instead.
+   - `rg '// [A-Z][A-Za-z]+ part|// [A-Z]+ [a-z]' crates/src` — spot-check for "what" comments that describe the obvious (e.g. `// Integer literals`, `// M1 expressions`). Delete them.
+   - Verify no multi-line `/* ... */` comment blocks exist in non-doc positions.
+   - Verify all `// SAFETY:` comments on `unsafe` blocks are still present (required, not banned).
+   - After cleanup: `cargo clippy --workspace -- -D warnings` must still pass.
+3. **Catch-up list audit**:
    - For every entry in the M2 catch-up list, verify (a) a fixture exists that exercises the current deferral, (b) a stderr snapshot exists capturing the deferral diagnostic, (c) the owning milestone (M4 / M6 / M8) is unambiguously named in the diagnostic body AND in this plan file.
    - Tabulate the catch-up entries in this plan file (already done above in the "Catch-Up list for downstream milestones" section — verify the table is in sync with the fixtures).
 3. **M2 explicitly-NOT list audit**: confirm nothing slipped in. Variant-count tests for `Token`, `Stmt`, `Expr`, `Type` confirm mechanically; this step is a sanity audit.
@@ -1239,6 +1245,7 @@ declare void @ynz_panic_div_by_zero(ptr)
 
 **Acceptance criteria**:
 - [ ] TODO sweep returns zero matches.
+- [ ] Comment rules sweep: zero section banners (`rg '// ──' crates/` returns empty), no "what" comments, all `// SAFETY:` blocks intact.
 - [ ] Catch-up list audit passes — every deferred feature has fixture + snapshot + named owner.
 - [ ] M2 "explicitly NOT" list audited; no slips.
 - [ ] Spec corrections verified.
