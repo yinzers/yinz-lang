@@ -48,7 +48,6 @@ fn ynz_run_stdout(source_path: &Path) -> (String, String, i32) {
     (stdout, stderr, code)
 }
 
-// ─── Golden path ─────────────────────────────────────────────────────────────
 
 #[test]
 fn hello_ynz_prints_hello_yinz_and_exits_zero() {
@@ -61,7 +60,6 @@ fn hello_ynz_prints_hello_yinz_and_exits_zero() {
     );
 }
 
-// ─── Build subcommand ─────────────────────────────────────────────────────────
 
 #[test]
 fn build_produces_executable_and_exits_zero() {
@@ -94,7 +92,6 @@ fn build_produces_executable_and_exits_zero() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-// ─── Error cases ─────────────────────────────────────────────────────────────
 
 #[test]
 fn broken_main_exits_nonzero_with_diagnostic() {
@@ -129,7 +126,6 @@ fn empty_source_exits_nonzero_with_missing_main_diagnostic() {
     insta::assert_snapshot!("empty_stderr", stderr);
 }
 
-// ─── File path with spaces ────────────────────────────────────────────────────
 
 #[test]
 fn file_path_with_spaces_runs_correctly() {
@@ -149,7 +145,6 @@ fn file_path_with_spaces_runs_correctly() {
     assert_eq!(stdout, "hello, yinz\n");
 }
 
-// ─── Invalid UTF-8 ──────────────────────────────────────────────────────────
 
 #[test]
 fn invalid_utf8_source_exits_nonzero_with_diagnostic() {
@@ -168,7 +163,6 @@ fn invalid_utf8_source_exits_nonzero_with_diagnostic() {
     );
 }
 
-// ─── M2: happy path ───────────────────────────────────────────────────────────
 
 #[test]
 fn m2_smoke_prints_expected_stdout() {
@@ -194,7 +188,6 @@ fn m2_decimal_exactness_prints_0_3() {
     assert_eq!(stdout, "0.3\n", "0.1 + 0.2 must print exactly `0.3`");
 }
 
-// ─── M2: compile-time errors ─────────────────────────────────────────────────
 
 #[test]
 fn m2_mixed_int_number_produces_diagnostic() {
@@ -251,7 +244,6 @@ fn m2_compound_assign_produces_diagnostic() {
     insta::assert_snapshot!("m2_compound_assign_stderr", stderr);
 }
 
-// ─── M2: runtime panics ───────────────────────────────────────────────────────
 
 #[test]
 fn m2_int_overflow_panics_and_exits_nonzero() {

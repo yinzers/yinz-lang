@@ -12,7 +12,6 @@
 ///   dqAdd, dqSubtract, dqMultiply, dqDivide, dqCompare, dqAbs, dqMinus, dqPlus
 use ynz_numerics::{abs, add, compare, decode, div, format, mul, neg, parse, sub};
 
-// ── Embedded minimal test vectors ─────────────────────────────────────────────
 // WHY: conformance must not silently pass when the IBM corpus is absent.
 // These vectors cover the load-bearing invariants: associativity-breaking edge
 // cases, NaN propagation, and the 0.1+0.2=0.3 exactness guarantee.
@@ -26,7 +25,6 @@ struct TestCase {
 }
 
 const EMBEDDED_VECTORS: &[TestCase] = &[
-    // ─── Add ───────────────────────────────────────────────────────────────
     TestCase {
         id: "dqAdd001",
         op: "add",
@@ -62,7 +60,6 @@ const EMBEDDED_VECTORS: &[TestCase] = &[
         b: Some("-1e10"),
         expected: "0",
     },
-    // ─── Subtract ──────────────────────────────────────────────────────────
     TestCase {
         id: "dqSub001",
         op: "sub",
@@ -84,7 +81,6 @@ const EMBEDDED_VECTORS: &[TestCase] = &[
         b: Some("3"),
         expected: "-2",
     },
-    // ─── Multiply ──────────────────────────────────────────────────────────
     TestCase {
         id: "dqMul001",
         op: "mul",
@@ -113,7 +109,6 @@ const EMBEDDED_VECTORS: &[TestCase] = &[
         b: Some("99"),
         expected: "0",
     },
-    // ─── Divide ────────────────────────────────────────────────────────────
     TestCase {
         id: "dqDiv001",
         op: "div",
@@ -135,7 +130,6 @@ const EMBEDDED_VECTORS: &[TestCase] = &[
         b: Some("7"),
         expected: "3.142857142857142857142857142857143",
     },
-    // ─── Compare ───────────────────────────────────────────────────────────
     TestCase {
         id: "dqCmp001",
         op: "compare",
@@ -157,7 +151,6 @@ const EMBEDDED_VECTORS: &[TestCase] = &[
         b: Some("2"),
         expected: "1",
     },
-    // ─── Abs ───────────────────────────────────────────────────────────────
     TestCase {
         id: "dqAbs001",
         op: "abs",
@@ -172,7 +165,6 @@ const EMBEDDED_VECTORS: &[TestCase] = &[
         b: None,
         expected: "5",
     },
-    // ─── Neg ───────────────────────────────────────────────────────────────
     TestCase {
         id: "dqNeg001",
         op: "neg",

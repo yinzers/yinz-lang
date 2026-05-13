@@ -34,7 +34,7 @@ pub struct Block {
 /// A single statement.
 ///
 /// Variant count is pinned by `m2_stmt_variant_count_locked` in the test suite.
-/// M1 count: 1 (Expr). M2 adds 2 (Let, Assign). Current M2 count: 3.
+/// Current count: 3.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt {
     /// A bare expression used as a statement (e.g. a function call).
@@ -67,7 +67,7 @@ pub enum Stmt {
 /// Binary operator kinds.
 ///
 /// Variant count is pinned by `m2_binopkind_variant_count_locked` in the test suite.
-/// M2 count: 18 (5 arithmetic + 6 comparison + 2 boolean + 5 bitwise).
+/// Current count: 18.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BinOpKind {
     // Arithmetic
@@ -108,12 +108,9 @@ pub enum UnaryOpKind {
 /// An expression.
 ///
 /// Variant count is pinned by `m2_expr_variant_count_locked` in the test suite.
-/// M1 count: 4 (Ident, StringLit, Call, Error).
-/// M2 adds 6 (IntLit, NumberLit, BoolLit, BinOp, UnaryOp, MethodCall).
-/// Current M2 count: 10.
+/// Current count: 10.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
-    // ─── M1 variants ─────────────────────────────────────────────────────────
 
     /// A function or identifier name.
     Ident(String, SourceSpan),
@@ -125,7 +122,6 @@ pub enum Expr {
     /// The type checker skips functions whose bodies contain Error nodes.
     Error(SourceSpan),
 
-    // ─── M2 variants ─────────────────────────────────────────────────────────
 
     /// An integer literal: `42`, `0xFF`, `0b1010`.
     IntLit(i64, SourceSpan),
@@ -188,11 +184,9 @@ pub struct CallExpr {
 /// A type annotation.
 ///
 /// Variant count is pinned by `m2_type_variant_count_locked` in the test suite.
-/// M1 count: 3 (Nothing, Named, Error). M2 adds 4 (Int, Float, Number, Bool).
-/// Current M2 count: 7.
+/// Current count: 7.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Type {
-    // ─── M1 variants ─────────────────────────────────────────────────────────
 
     /// The `nothing` return type.
     Nothing,
@@ -201,7 +195,6 @@ pub enum Type {
     /// A placeholder inserted during error recovery.
     Error,
 
-    // ─── M2 variants ─────────────────────────────────────────────────────────
 
     /// The `int` primitive type (signed 64-bit integer).
     Int,

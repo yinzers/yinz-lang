@@ -1,12 +1,9 @@
 /// The types known to the M2 type checker.
 ///
 /// Variant count is pinned by `m2_type_variant_count_locked` in tests.
-/// M1 count: Nothing(1) + String(2) + Error(3)
-/// M2 adds:  Int(4) + Float(5) + Number(6) + Bool(7)
-/// Current M2 count: 7
+/// Current count: 7
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
-    // ─── M1 types ────────────────────────────────────────────────────────────
 
     /// Functions that don't return a value.
     Nothing,
@@ -16,7 +13,6 @@ pub enum Type {
     /// The type checker does not cascade errors through Error-typed expressions.
     Error,
 
-    // ─── M2 types ────────────────────────────────────────────────────────────
 
     /// Signed 64-bit integer — the default inferred type for integer literals.
     Int,

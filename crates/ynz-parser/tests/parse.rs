@@ -22,7 +22,6 @@ fn parse(source: &str) -> ynz_parser::ParseOutput {
     (*output).clone()
 }
 
-// ─── Scope-creep gates ───────────────────────────────────────────────────────
 
 #[test]
 fn m2_stmt_variant_count_locked() {
@@ -118,7 +117,6 @@ fn m2_type_variant_count_locked() {
     assert_eq!(all_variants.len(), 7, "Type variant count changed from 7");
 }
 
-// ─── Happy path: M1 source still works ──────────────────────────────────────
 
 #[test]
 fn m1_source_parses_to_expected_ast() {
@@ -133,7 +131,6 @@ fn m1_source_parses_to_expected_ast() {
     assert_debug_snapshot!("m1_ast", output.module);
 }
 
-// ─── Happy path: M2 smoke test ───────────────────────────────────────────────
 
 #[test]
 fn m2_source_parses_to_expected_ast() {
@@ -156,7 +153,6 @@ fn m2_source_parses_to_expected_ast() {
     assert_debug_snapshot!("m2_ast", output.module);
 }
 
-// ─── Type annotations ────────────────────────────────────────────────────────
 
 #[test]
 fn type_annotations_parse_correctly() {
@@ -204,7 +200,6 @@ fn number_n_not_34_produces_deferral_diagnostic() {
     );
 }
 
-// ─── Operator precedence — Pratt correctness ─────────────────────────────────
 
 #[test]
 fn mul_binds_tighter_than_add() {
@@ -309,7 +304,6 @@ fn parentheses_override_precedence() {
     }
 }
 
-// ─── Spec/code parity: precedence table ──────────────────────────────────────
 
 #[test]
 fn parser_precedence_table_matches_spec() {
@@ -418,7 +412,6 @@ fn parser_precedence_table_matches_spec() {
     }
 }
 
-// ─── Malformed input — error recovery ────────────────────────────────────────
 
 #[test]
 fn missing_rhs_produces_diagnostic_and_recovers() {
@@ -529,7 +522,6 @@ fn chained_comparison_parses_as_left_associative() {
     }
 }
 
-// ─── Assignments ─────────────────────────────────────────────────────────────
 
 #[test]
 fn assignment_parses_as_stmt_assign() {
@@ -548,7 +540,6 @@ fn assignment_parses_as_stmt_assign() {
     );
 }
 
-// ─── Method calls ────────────────────────────────────────────────────────────
 
 #[test]
 fn method_call_parses_correctly() {
@@ -567,7 +558,6 @@ fn method_call_parses_correctly() {
     }
 }
 
-// ─── Unary operators ─────────────────────────────────────────────────────────
 
 #[test]
 fn unary_neg_parses_correctly() {
@@ -587,7 +577,6 @@ fn unary_neg_parses_correctly() {
     }
 }
 
-// ─── Existing M1 tests ───────────────────────────────────────────────────────
 
 #[test]
 fn missing_arrow_produces_diagnostic_and_recovers() {

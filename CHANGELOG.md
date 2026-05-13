@@ -1,45 +1,57 @@
 # Changelog
 
-## v0.1.0-m1 — Hello-world end-to-end (M1 milestone)
+## v0.1.0-m2 — Literals, Variables, Arithmetic
 
-**Release tag:** `v0.1.0-m1`
+### What's new
 
-### What ships
+- **Numeric types**: `int` (i64), `float` (f64), `number` (IEEE 754 decimal128, hand-rolled from scratch with full conformance test suite)
+- **Variables**: `let` and `const` declarations with optional type annotations; block-scoped; Levenshtein "did you mean" suggestions on undefined names
+- **Arithmetic**: full operator set (`+`, `-`, `*`, `/`, `%`), integer overflow panics, float follows IEEE 754 (no panic on infinity), decimal exact arithmetic (`0.1 + 0.2 == 0.3`)
+- **Comparisons and booleans**: `<`, `<=`, `>`, `>=`, `==`, `!=`, `&&`, `||`, `!`, short-circuit evaluation
+- **Bitwise operators**: `&`, `|`, `^`, `~`, `<<`, `>>`
+- **Type inference**: `let x = 42` infers `int`; `let x = 3.14` infers `number`; annotation overrides default
+- **Mixed-type errors**: `int + number` is a compile error with a specific `.toNumber()` suggestion; `number + float` lists both conversion directions and explains the tradeoff
+- **Conversion methods**: `.toNumber()`, `.toFloat()`, `.toString()` on all primitive types
+- **Polymorphic `print`**: accepts `int`, `float`, `number`, `bool`, and `string`
+- **Comments**: `//` line comments
 
-M1 is the walking skeleton: `ynz run hello.ynz` compiles and runs a Yinz
-program for the first time. The full pipeline — lex → parse → type check →
-LLVM codegen → link → execute — is wired together through salsa queries.
+### Compiler internals
 
-### Language surface (M1)
+- Pratt precedence climber (12-level table, mechanically verified against `spec/operators.md`)
+- `PrimitiveIntrinsicTable` replaces M1's `BuiltinTable`; single source of truth for all built-in method dispatch
+- Block-scoped variable environment with `is_const` tracking
+- LLVM codegen for all M2 constructs: int overflow via `llvm.sadd/ssub/smul.with.overflow.i64`, decimal128 via `ynz-runtime` C ABI, short-circuit `&&`/`||` with phi nodes
+- Runtime panic stubs for overflow and division by zero (three-part diagnostic to stderr + abort)
+- `expr_types` keyed by `(span.start, span.end)` — fixes span collision between BinOp parent and leftmost child
 
-The M1 language surface is intentionally minimal:
+### Spec
 
-- `function main() -> nothing { ... }` — entry point only
-- `print("string literal")` — builtin that writes text + newline to stdout
-- String literals (raw UTF-8 bytes, no escape processing)
-- The `nothing` return type
+- `spec/operators.md`: added `%` to operator lists and precedence table (level 3)
+- `spec/variables.md`: corrected `// compiler knows: number` → `// compiler knows: int`
+- `spec/numeric-types.md`: replaced wrong "promotes to most capable" claim with compile-error behavior + example
 
-Everything else (variables, arithmetic, types, ownership, generics, etc.)
-lands in M2–M8.
+### Deferred (tracked as catch-up entries)
 
-### Compiler features
+- `number[N]` for N > 34 (bignum) — M8
+- Overflow escape valves (`.wrappingAdd()` etc.) — M4
+- Fallible conversions (`.toInt()`) — M6
+- Type-attached constants (`int.max`) — M4
 
-- **Diagnostics** (`ynz-diagnostics`): mandatory three-part WHAT/WHAT-INSTEAD/WHY
-  format, 50-error cap, ariadne-rendered output, automated banned-jargon audit.
-- **Lexer** (`ynz-parser`): salsa-tracked `lex_query`, UTF-8 source, M1 token set,
-  error recovery on unknown characters and unterminated strings.
-- **Parser** (`ynz-parser`): hand-written recursive-descent `parse_query`, error
-  recovery with `Expr::Error` / `Type::Error` placeholder nodes.
-- **Type checker** (`ynz-typeck`): salsa-tracked `check_query`, verifies `main`
-  signature, resolves `print` builtin, type-checks arguments, parse-error gate
-  prevents cascade noise.
-- **Codegen** (`ynz-codegen`): salsa-tracked `codegen_query`, emits LLVM IR via
-  inkwell (LLVM 18), links against libc `puts`. SHA-256 golden hash for
-  reproducibility testing.
-- **Driver** (`ynz-driver`): `ynz build <file>` and `ynz run <file>` subcommands.
+### Integration test
 
-### Tests
+```
+$ ynz run m2_smoke.ynz
+0.3
+1763
+true
+```
 
-51 tests across 6 crates, all passing. Includes unit tests, snapshot tests
-(insta), integration tests that run the actual `ynz` binary, and a SHA-256
-golden hash test for codegen reproducibility.
+---
+
+## v0.1.0-m1 — Hello World
+
+- `ynz run hello.ynz` → `hello, yinz`
+- Full pipeline: lex → parse → typecheck → LLVM codegen → link → execute
+- All passes wired as salsa queries for incremental rebuilds
+- Three-part diagnostic format (WHAT / WHAT-INSTEAD / WHY) with ariadne rendering
+- Banned-jargon CI gate

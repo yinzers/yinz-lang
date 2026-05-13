@@ -16,29 +16,15 @@ impl<T> Spanned<T> {
     }
 }
 
-/// The complete token vocabulary for M2.
+/// The complete token vocabulary.
 ///
 /// Variant count is pinned by `m2_token_variant_count_locked` in the test suite.
 /// Adding a variant requires both an inline `// test-ratchet: <reason>` marker
 /// on that test AND updating this comment with the new count.
 ///
-/// M1 count: 10 (Function, Nothing, Identifier, StringLit, LParen,
-/// RParen, LBrace, RBrace, Arrow, Eof)
-///
-/// M2 adds 32:
-///   Keywords:   Let, Const, True, False
-///   Literals:   IntLit, NumberLit
-///   Arithmetic: Plus, Minus, Star, Slash, Percent
-///   Comparison: EqEq, NotEq, Lt, LtEq, Gt, GtEq
-///   Boolean:    AmpAmp, PipePipe, Bang
-///   Bitwise:    Amp, Pipe, Caret, Tilde, LtLt, GtGt
-///   Punctuation: Eq, Colon
-///   Plumbing (needed by P3 within M2 scope): Dot, LBracket, RBracket, Comma
-///
-/// Current M2 count: 42
+/// Current count: 42
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Token {
-    // ─── M1 tokens ───────────────────────────────────────────────────────────
 
     /// The `function` keyword.
     Function,
@@ -61,7 +47,6 @@ pub enum Token {
     /// End of file.
     Eof,
 
-    // ─── M2 keywords ─────────────────────────────────────────────────────────
 
     /// The `let` keyword.
     Let,
@@ -72,7 +57,6 @@ pub enum Token {
     /// The `false` boolean literal keyword.
     False,
 
-    // ─── M2 literals ─────────────────────────────────────────────────────────
 
     /// An integer literal parsed to i64.
     ///
@@ -89,7 +73,6 @@ pub enum Token {
     /// float from number at this stage.
     NumberLit(String),
 
-    // ─── M2 arithmetic operators ─────────────────────────────────────────────
 
     /// `+`
     Plus,
@@ -102,7 +85,6 @@ pub enum Token {
     /// `%`
     Percent,
 
-    // ─── M2 comparison operators ─────────────────────────────────────────────
 
     /// `==`
     EqEq,
@@ -117,7 +99,6 @@ pub enum Token {
     /// `>=`
     GtEq,
 
-    // ─── M2 boolean operators ────────────────────────────────────────────────
 
     /// `&&`
     AmpAmp,
@@ -126,7 +107,6 @@ pub enum Token {
     /// `!`
     Bang,
 
-    // ─── M2 bitwise operators ────────────────────────────────────────────────
 
     /// `&` (bitwise AND — distinguished from `&&` by token kind)
     Amp,
@@ -141,14 +121,12 @@ pub enum Token {
     /// `>>`
     GtGt,
 
-    // ─── M2 punctuation ──────────────────────────────────────────────────────
 
     /// `=` (variable binding and type annotation separator)
     Eq,
     /// `:`
     Colon,
 
-    // ─── M2 plumbing (needed by Phase 3 within M2 scope) ────────────────────
 
     /// `.` (method-call receiver separator, e.g. `x.toString()`)
     Dot,

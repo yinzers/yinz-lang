@@ -73,7 +73,6 @@ impl<'src> Lexer<'src> {
         let byte = self.src[self.pos];
 
         match byte {
-            // ─── Single-char delimiters ───────────────────────────────────────
 
             b'(' => {
                 self.pos += 1;
@@ -120,7 +119,6 @@ impl<'src> Lexer<'src> {
                 self.push_token(Token::Caret, start, self.pos);
             }
 
-            // ─── Arithmetic operators (with banned-op checks) ─────────────────
 
             b'+' => {
                 if self.peek(1) == Some(b'=') {
@@ -183,7 +181,6 @@ impl<'src> Lexer<'src> {
                 }
             }
 
-            // ─── Comparison / assignment / bang ───────────────────────────────
 
             b'=' => {
                 if self.peek(1) == Some(b'=') {
@@ -235,7 +232,6 @@ impl<'src> Lexer<'src> {
                 }
             },
 
-            // ─── Bitwise / boolean ────────────────────────────────────────────
 
             b'&' => {
                 if self.peek(1) == Some(b'&') {
@@ -257,15 +253,12 @@ impl<'src> Lexer<'src> {
                 }
             }
 
-            // ─── String literals ──────────────────────────────────────────────
 
             b'"' => self.lex_string(start),
 
-            // ─── Numeric literals ─────────────────────────────────────────────
 
             b'0'..=b'9' => self.lex_number(start),
 
-            // ─── Identifiers and keywords ─────────────────────────────────────
 
             b if b.is_ascii_alphabetic() || b == b'_' => {
                 self.lex_identifier_or_keyword(start)
@@ -278,7 +271,6 @@ impl<'src> Lexer<'src> {
         }
     }
 
-    // ─── Identifier / keyword scanner ────────────────────────────────────────
 
     fn lex_identifier_or_keyword(&mut self, start: usize) {
         while self.pos < self.src.len() {
@@ -303,7 +295,6 @@ impl<'src> Lexer<'src> {
         self.push_token(tok, start, self.pos);
     }
 
-    // ─── String literal scanner ───────────────────────────────────────────────
 
     fn lex_string(&mut self, start: usize) {
         self.pos += 1; // skip opening `"`
@@ -347,7 +338,6 @@ impl<'src> Lexer<'src> {
         }
     }
 
-    // ─── Numeric literal scanner ──────────────────────────────────────────────
 
     fn lex_number(&mut self, start: usize) {
         // Dispatch on prefix: `0x` = hex, `0b` = binary, else decimal
@@ -636,7 +626,6 @@ impl<'src> Lexer<'src> {
         }
     }
 
-    // ─── Helpers ─────────────────────────────────────────────────────────────
 
     fn emit_banned_compound_op(
         &mut self,

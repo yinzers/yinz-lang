@@ -34,7 +34,6 @@ fn lex_diags(source: &str) -> Vec<ynz_diagnostics::Diagnostic> {
     output.diagnostics.clone()
 }
 
-// ─── Scope-creep gate ────────────────────────────────────────────────────────
 
 #[test]
 fn m2_token_variant_count_locked() {
@@ -68,42 +67,34 @@ fn m2_token_variant_count_locked() {
         RBrace,
         Arrow,
         Eof,
-        // M2 keywords
         Let,
         Const,
         True,
         False,
-        // M2 literals
         IntLit(0),
         NumberLit("0.0".into()),
-        // M2 arithmetic
         Plus,
         Minus,
         Star,
         Slash,
         Percent,
-        // M2 comparison
         EqEq,
         NotEq,
         Lt,
         LtEq,
         Gt,
         GtEq,
-        // M2 boolean
         AmpAmp,
         PipePipe,
         Bang,
-        // M2 bitwise
         Amp,
         Pipe,
         Caret,
         Tilde,
         LtLt,
         GtGt,
-        // M2 punctuation
         Eq,
         Colon,
-        // M2 plumbing
         Dot,
         LBracket,
         RBracket,
@@ -117,7 +108,6 @@ fn m2_token_variant_count_locked() {
     );
 }
 
-// ─── Happy path: M1 source still works ──────────────────────────────────────
 
 #[test]
 fn m1_source_produces_expected_tokens() {
@@ -128,7 +118,6 @@ fn m1_source_produces_expected_tokens() {
     assert_debug_snapshot!("m1_token_stream", tokens);
 }
 
-// ─── Happy path: M2 smoke test source ────────────────────────────────────────
 
 #[test]
 fn m2_source_produces_expected_tokens() {
@@ -146,7 +135,6 @@ fn m2_source_produces_expected_tokens() {
     assert_debug_snapshot!("m2_token_stream", tokens);
 }
 
-// ─── Integer literals ────────────────────────────────────────────────────────
 
 #[test]
 fn decimal_integer_literal() {
@@ -184,7 +172,6 @@ fn binary_integer_literal() {
     );
 }
 
-// ─── Number literals ─────────────────────────────────────────────────────────
 
 #[test]
 fn decimal_number_literal_with_dot() {
@@ -228,7 +215,6 @@ fn integer_followed_by_dot_method_call() {
     assert_eq!(tokens[2], Token::Identifier("toString".into()));
 }
 
-// ─── Boolean keywords ────────────────────────────────────────────────────────
 
 #[test]
 fn true_and_false_keywords() {
@@ -237,7 +223,6 @@ fn true_and_false_keywords() {
     assert_eq!(lex_tokens("false"), vec![Token::False, Token::Eof]);
 }
 
-// ─── Operator tokens ─────────────────────────────────────────────────────────
 
 #[test]
 fn two_char_operators_beat_single_char() {
@@ -279,7 +264,6 @@ fn minus_without_gt_is_minus() {
     );
 }
 
-// ─── Comment skipping ────────────────────────────────────────────────────────
 
 #[test]
 fn line_comment_is_skipped() {
@@ -325,7 +309,6 @@ fn slash_not_followed_by_slash_is_division() {
     );
 }
 
-// ─── Malformed literals — error recovery ─────────────────────────────────────
 
 #[test]
 fn two_dots_in_literal_produces_diagnostic() {
@@ -411,7 +394,6 @@ fn integer_overflow_produces_diagnostic() {
     );
 }
 
-// ─── Banned operators — teaching diagnostics ─────────────────────────────────
 
 #[test]
 fn compound_assignment_plus_eq_produces_diagnostic() {
@@ -465,7 +447,6 @@ fn compound_assignment_percent_eq_produces_diagnostic() {
     assert_eq!(diag_count, 1, "Expected 1 diagnostic for `%=`");
 }
 
-// ─── Positions ───────────────────────────────────────────────────────────────
 
 #[test]
 fn token_spans_reconstruct_lexemes() {
@@ -566,7 +547,6 @@ fn m2_token_spans_cover_source() {
     }
 }
 
-// ─── Empty and whitespace sources ────────────────────────────────────────────
 
 #[test]
 fn empty_source_produces_only_eof() {
@@ -580,7 +560,6 @@ fn whitespace_only_source_produces_only_eof() {
     assert_eq!(tokens, vec![Token::Eof]);
 }
 
-// ─── Error recovery ──────────────────────────────────────────────────────────
 
 #[test]
 fn unknown_char_produces_diagnostic_and_continues() {
@@ -639,7 +618,6 @@ fn non_ascii_bytes_inside_string_lex_clean() {
     let _ = token_count;
 }
 
-// ─── Salsa invalidation ──────────────────────────────────────────────────────
 
 #[test]
 fn changing_source_text_invalidates_cache() {

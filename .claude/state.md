@@ -9,7 +9,7 @@
 *(auto-rebuilt by SessionStart hook from `.claude/plans/active/*.md` front-matter — do not edit by hand)*
 
 <!-- RADAR-START -->
-- v0-1-compiler (patrick) — 5 files touched — 0/183 done — 2026-05-12-r4
+- v0-1-compiler (patrick) — 5 files touched — 0/184 done — 2026-05-12-r4
 <!-- RADAR-END -->
 
 ---
@@ -67,7 +67,9 @@ cargo fmt --all
 - [2026-05-12] **M2 Phase 2 complete (a8c3efe on `feat/m2-lexer`)**: 42 tokens (10 M1 + 32 M2). Token count locked by test-ratchet. Key lexer decisions: `//` comments stripped pre-`lex_one`; dot-method-call disambiguation (`.` only decimal when followed by digit); banned-op diagnostics for `+=`/`++`/`-=`/`--`/`*=`/`/=`/`%=`; malformed-literal recovery to next whitespace. 4 plumbing tokens (Dot, LBracket, RBracket, Comma) added ahead of Phase 3 schedule — implicit P3 dependencies. 39 lex tests.
 - [2026-05-12] **M2 Phase 3 complete (6cee795 on main)**: Pratt precedence climber (infix_bp, 12-level table), Stmt::Let/Assign, Expr::IntLit/NumberLit/BoolLit/BinOp/UnaryOp/MethodCall, Type::Int/Float/Number/Bool. `is_stmt_boundary()` recovery pattern prevents consuming `}`/keywords as atoms. `parser_precedence_table_matches_spec` test reads spec/operators.md at runtime — spec/code parity enforced mechanically. `spec/operators.md` precedence table updated with `%` at level 3. 30 parse tests.
 - [2026-05-12] **M2 Phase 4 complete (1af9a62 on main)**: Full M2 type checker. `PrimitiveIntrinsicTable`, `scope.rs`, literal-hint inference, mixed-type errors, spec corrections. 38 typeck tests.
-- [2026-05-13] **M2 Phase 5 complete (feat/m2-codegen, awaiting review+commit)**: Full LLVM codegen for M2 AST. `runtime_decls.rs` (all extern C in one struct). Int overflow via LLVM intrinsics, float native ops, decimal128 via runtime calls, short-circuit `&&`/`||` with phi nodes, polymorphic `print`. Critical bug fixed: `expr_types` key `usize` → `(usize, usize)` to prevent BinOp span.start collision with leftmost child. 13 codegen tests, all workspace tests green. Next: review → commit → merge → Phase 6 (driver integration).
+- [2026-05-13] **M2 Phase 5 complete (ed6120a on main)**: Full LLVM codegen, `expr_types` span-key bug fixed.
+- [2026-05-13] **M2 Phase 6 complete (f089c2e on main)**: Driver integration, 8 M2 integration tests. ABI fix: format shims are `(value)->ptr`.
+- [2026-05-13] **M2 Phase 7 complete (chore/m2-verification, awaiting commit+tag)**: 148 section banners removed. Changelog-style enum doc comments simplified. CHANGELOG.md written. v0.1.0-m2 ready to tag.
 
 ---
 

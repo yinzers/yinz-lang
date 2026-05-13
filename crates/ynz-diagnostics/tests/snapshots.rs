@@ -18,7 +18,6 @@ fn span(start: usize, end: usize) -> SourceSpan {
     SourceSpan::new(FILE, start, end)
 }
 
-// ─── Case 1: single error with a source span ────────────────────────────────
 
 #[test]
 fn single_error_with_span() {
@@ -36,7 +35,6 @@ fn single_error_with_span() {
     assert_snapshot!("single_error_with_span", output);
 }
 
-// ─── Case 2: two errors in the same file at different spans ─────────────────
 
 #[test]
 fn two_errors_same_file() {
@@ -60,7 +58,6 @@ fn two_errors_same_file() {
     assert_snapshot!("two_errors_same_file", output);
 }
 
-// ─── Case 3: one error + one warning ────────────────────────────────────────
 
 #[test]
 fn error_and_warning() {
@@ -84,7 +81,6 @@ fn error_and_warning() {
     assert_snapshot!("error_and_warning", output);
 }
 
-// ─── Case 4: suggestion-only diagnostic ─────────────────────────────────────
 
 #[test]
 fn suggestion_only() {
@@ -103,7 +99,6 @@ fn suggestion_only() {
     assert_snapshot!("suggestion_only", output);
 }
 
-// ─── Case 5: 60-error bucket — cap at 50 + hidden footer ────────────────────
 
 #[test]
 fn sixty_errors_capped_at_fifty() {
@@ -136,7 +131,6 @@ fn sixty_errors_capped_at_fifty() {
     assert_snapshot!("sixty_errors_capped_at_fifty", output);
 }
 
-// ─── Constructor validation ──────────────────────────────────────────────────
 
 #[test]
 #[should_panic(expected = "what must not be empty")]

@@ -8,7 +8,6 @@ use super::bits::{
 };
 use super::wide::U256;
 
-// ── Public API ─────────────────────────────────────────────────────────────
 
 /// Add two decimal128 values.
 pub fn add(a: u128, b: u128) -> u128 {
@@ -162,7 +161,6 @@ pub fn compare(a: u128, b: u128) -> i32 {
     }
 }
 
-// ── Internal arithmetic ────────────────────────────────────────────────────
 
 fn add_sub(a: u128, b: u128, subtract: bool) -> u128 {
     let av = decode(a);
@@ -519,7 +517,6 @@ mod tests {
         super::super::format::format(bits)
     }
 
-    // ── Addition ──────────────────────────────────────────────────────────
 
     #[test]
     fn add_one_plus_one() {
@@ -554,7 +551,6 @@ mod tests {
         assert_eq!(to_str(sub(from_str("3"), from_str("5"))), "-2");
     }
 
-    // ── Multiplication ────────────────────────────────────────────────────
 
     #[test]
     fn mul_basic() {
@@ -577,7 +573,6 @@ mod tests {
         assert_eq!(to_str(mul(from_str("-3"), from_str("4"))), "-12");
     }
 
-    // ── Division ──────────────────────────────────────────────────────────
 
     #[test]
     fn div_basic() {
@@ -600,7 +595,6 @@ mod tests {
         assert!(!result.sign);
     }
 
-    // ── Special values ────────────────────────────────────────────────────
 
     #[test]
     fn add_inf_plus_inf_is_inf() {
@@ -623,7 +617,6 @@ mod tests {
         assert!(result.is_nan());
     }
 
-    // ── Compare ───────────────────────────────────────────────────────────
 
     #[test]
     fn compare_equal() {

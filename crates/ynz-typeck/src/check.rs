@@ -48,7 +48,6 @@ struct Checker<'b> {
 }
 
 impl<'b> Checker<'b> {
-    // ── module / function ─────────────────────────────────────────────────
 
     fn check_module(&mut self, module: &Module) {
         let main_decl = module.items.iter().find_map(|item| match item {
@@ -101,7 +100,6 @@ impl<'b> Checker<'b> {
         self.scope.pop();
     }
 
-    // ── statements ────────────────────────────────────────────────────────
 
     fn check_stmts(&mut self, stmts: &[Stmt]) {
         for stmt in stmts {
@@ -233,7 +231,6 @@ impl<'b> Checker<'b> {
         }
     }
 
-    // ── expression inference ──────────────────────────────────────────────
 
     /// Infer the type of `expr`.
     ///
@@ -242,7 +239,6 @@ impl<'b> Checker<'b> {
     /// not change how compound expressions like `BinOp` are inferred.
     fn infer_expr(&mut self, expr: &Expr, hint: Option<&Type>) -> Type {
         let ty = match expr {
-            // ── M1 expressions ────────────────────────────────────────────
             Expr::StringLit(_, _) => Type::String,
             Expr::Ident(name, span) => self.resolve_ident(name, span),
             Expr::Call(call) => self.check_call(call),
@@ -251,7 +247,6 @@ impl<'b> Checker<'b> {
                 return Type::Error;
             }
 
-            // ── M2 literals ───────────────────────────────────────────────
 
             // `IntLit` infers as `int` unless the binding context says `number` or `float`.
             Expr::IntLit(_, _) => match hint {
@@ -268,7 +263,6 @@ impl<'b> Checker<'b> {
 
             Expr::BoolLit(_, _) => Type::Bool,
 
-            // ── M2 operators ──────────────────────────────────────────────
 
             Expr::BinOp { op, lhs, rhs, span } => {
                 let lhs_ty = self.infer_expr(lhs, None);
@@ -281,7 +275,6 @@ impl<'b> Checker<'b> {
                 self.check_unaryop(op, &operand_ty, span)
             }
 
-            // ── M2 method call ────────────────────────────────────────────
 
             Expr::MethodCall {
                 receiver,
@@ -302,7 +295,6 @@ impl<'b> Checker<'b> {
         ty
     }
 
-    // ── identifier resolution ─────────────────────────────────────────────
 
     fn resolve_ident(&mut self, name: &str, span: &SourceSpan) -> Type {
         if let Some(entry) = self.scope.lookup(name) {
@@ -325,7 +317,6 @@ impl<'b> Checker<'b> {
         Type::Error
     }
 
-    // ── call type checking ────────────────────────────────────────────────
 
     fn check_call(&mut self, call: &CallExpr) -> Type {
         let callee_name = match &call.callee {
@@ -390,7 +381,6 @@ impl<'b> Checker<'b> {
         Type::Nothing
     }
 
-    // ── binary and unary operator type rules ──────────────────────────────
 
     fn check_binop(
         &mut self,
@@ -563,7 +553,6 @@ impl<'b> Checker<'b> {
         }
     }
 
-    // ── helpers ───────────────────────────────────────────────────────────
 
     /// Convert a syntactic AST type to the typeck type.
     fn ast_type_to_type(&mut self, ast_ty: &AstType) -> Type {
@@ -611,7 +600,6 @@ impl<'b> Checker<'b> {
         ));
     }
 
-    // ── test-only helpers ─────────────────────────────────────────────────
 
     #[cfg(test)]
     fn check_test_fn_call(
@@ -659,7 +647,6 @@ impl<'b> Checker<'b> {
     }
 }
 
-// ── free functions ────────────────────────────────────────────────────────────
 
 fn body_has_error_node(stmts: &[Stmt]) -> bool {
     stmts.iter().any(|s| match s {
@@ -786,7 +773,6 @@ fn find_closest_name<'a>(target: &str, candidates: &[&'a str]) -> Option<&'a str
         .map(|(_, c)| c)
 }
 
-// ── unit tests (use test-only intrinsics for isolation) ───────────────────────
 
 #[cfg(test)]
 mod tests {

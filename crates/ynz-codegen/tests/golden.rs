@@ -67,7 +67,6 @@ fn run_codegen() -> CompiledArtifact {
     output.artifact.clone()
 }
 
-// ─── LLVM version assertion ──────────────────────────────────────────────────
 
 #[test]
 fn llvm_version_is_18() {
@@ -82,7 +81,6 @@ fn llvm_version_is_18() {
     );
 }
 
-// ─── Object-file determinism (golden SHA-256) ────────────────────────────────
 
 #[test]
 fn object_file_sha256_matches_golden() {
@@ -106,7 +104,6 @@ fn object_file_sha256_matches_golden() {
     }
 }
 
-// ─── Cross-run determinism ───────────────────────────────────────────────────
 
 #[test]
 fn codegen_is_deterministic_across_two_runs() {
@@ -130,7 +127,6 @@ fn codegen_is_deterministic_across_two_runs() {
     );
 }
 
-// ─── IR text snapshot (informational) ────────────────────────────────────────
 
 #[test]
 fn ir_text_snapshot() {
@@ -141,7 +137,6 @@ fn ir_text_snapshot() {
     insta::assert_snapshot!("hello_ir", artifact.ir_text);
 }
 
-// ─── Object file is non-empty and module verify passed ──────────────────────
 
 #[test]
 fn object_file_is_non_empty() {
@@ -153,7 +148,6 @@ fn object_file_is_non_empty() {
     );
 }
 
-// ─── SHA-256 implementation sanity check ─────────────────────────────────────
 
 #[test]
 fn sha256_of_empty_input_matches_known_value() {
@@ -186,7 +180,6 @@ fn sha256_of_abc_matches_known_value() {
     );
 }
 
-// ─── Salsa: inkwell types don't leak past codegen ───────────────────────────
 
 #[test]
 fn codegen_query_returns_owned_bytes_not_inkwell_types() {
@@ -199,7 +192,6 @@ fn codegen_query_returns_owned_bytes_not_inkwell_types() {
     assert_send_sync(&artifact);
 }
 
-// ── M2 codegen tests ──────────────────────────────────────────────────────────
 
 fn run_m2_codegen() -> Option<CompiledArtifact> {
     let db = CompilerDb::default();

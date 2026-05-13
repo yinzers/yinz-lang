@@ -80,7 +80,6 @@ pub fn emit_artifact(
     Ok(CompiledArtifact { object_bytes, ir_text, sha256: hash })
 }
 
-// ── Module-level globals shared across all functions ──────────────────────────
 
 struct ModuleGlobals<'ctx> {
     str_true: GlobalValue<'ctx>,
@@ -124,7 +123,6 @@ fn build_module<'ctx, 'g>(
     Ok(())
 }
 
-// ── Per-function codegen context ──────────────────────────────────────────────
 
 struct Cg<'ctx, 'g> {
     ctx: &'ctx Context,
@@ -207,7 +205,6 @@ fn lower_function<'ctx, 'g>(
     Ok(())
 }
 
-// ── Statement lowering ────────────────────────────────────────────────────────
 
 fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
     match stmt {
@@ -232,7 +229,6 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
     Ok(())
 }
 
-// ── Expression lowering ───────────────────────────────────────────────────────
 
 fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
     match expr {
@@ -308,7 +304,6 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
     }
 }
 
-// ── Binary operators ──────────────────────────────────────────────────────────
 
 fn lower_binop<'ctx>(
     cg: &mut Cg<'ctx, '_>,
@@ -530,7 +525,6 @@ fn lower_short_circuit<'ctx>(
     Ok(phi.as_basic_value())
 }
 
-// ── Unary operators ───────────────────────────────────────────────────────────
 
 fn lower_unary<'ctx>(
     cg: &mut Cg<'ctx, '_>,
@@ -553,7 +547,6 @@ fn lower_unary<'ctx>(
     }
 }
 
-// ── print ─────────────────────────────────────────────────────────────────────
 
 fn lower_print<'ctx>(cg: &mut Cg<'ctx, '_>, val: BasicValueEnum<'ctx>, ty: &Type) -> Result<(), String> {
     let p = to_c_string(cg, val, ty)?;
@@ -587,7 +580,6 @@ fn to_c_string<'ctx>(cg: &mut Cg<'ctx, '_>, val: BasicValueEnum<'ctx>, ty: &Type
     }
 }
 
-// ── Method calls ──────────────────────────────────────────────────────────────
 
 fn lower_method_call<'ctx>(
     cg: &mut Cg<'ctx, '_>,
@@ -624,7 +616,6 @@ fn lower_method_call<'ctx>(
     }
 }
 
-// ── Store / load helpers ──────────────────────────────────────────────────────
 
 fn store<'ctx>(cg: &mut Cg<'ctx, '_>, val: BasicValueEnum<'ctx>, ty: &Type, slot: PointerValue<'ctx>) -> Result<(), String> {
     match ty {
@@ -654,7 +645,6 @@ fn load<'ctx>(cg: &mut Cg<'ctx, '_>, slot: PointerValue<'ctx>, ty: &Type, name: 
     }
 }
 
-// ── Global constant helpers ───────────────────────────────────────────────────
 
 fn build_string_global<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>, s: &str, name: &str) -> GlobalValue<'ctx> {
     let i8t = ctx.i8_type();

@@ -15,7 +15,6 @@
 /// safe for multi-threaded use.  A comment at each function marks this limitation.
 use ynz_numerics::{abs, add, compare, div, format, mul, neg, parse, sub};
 
-// ── Type alias ─────────────────────────────────────────────────────────────
 
 /// Raw decimal128 storage: 16 bytes = 128 bits, BID encoding.
 type D128 = [u8; 16];
@@ -34,7 +33,6 @@ fn store(p: *mut D128, v: u128) {
     unsafe { *p = v.to_ne_bytes() }
 }
 
-// ── Decimal128 arithmetic shims ─────────────────────────────────────────────
 
 #[no_mangle]
 pub extern "C" fn ynz_decimal_add(a: *const D128, b: *const D128, out: *mut D128) {
@@ -107,7 +105,6 @@ pub extern "C" fn ynz_decimal_to_string(a: *const D128) -> *const u8 {
     })
 }
 
-// ── Panic stubs ─────────────────────────────────────────────────────────────
 
 /// Called by compiled code on integer overflow.
 ///
@@ -148,7 +145,6 @@ pub unsafe extern "C" fn ynz_panic_div_by_zero(op_name: *const u8) -> ! {
     std::process::abort();
 }
 
-// ── Integer/float formatting ─────────────────────────────────────────────────
 
 /// Convert an i64 to its decimal string representation.
 ///
@@ -190,7 +186,6 @@ pub extern "C" fn ynz_float_to_string(x: f64) -> *const u8 {
     })
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
 
 unsafe fn cstr_to_str<'a>(p: *const u8) -> &'a str {
     if p.is_null() {

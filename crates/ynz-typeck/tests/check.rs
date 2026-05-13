@@ -42,7 +42,6 @@ fn assert_errors(source: &str, expected_count: usize) -> CheckOutput {
     output
 }
 
-// ─── Type variant count gate ─────────────────────────────────────────────────
 
 #[test]
 fn m2_type_variant_count_locked() {
@@ -62,7 +61,6 @@ fn m2_type_variant_count_locked() {
     assert_eq!(all.len(), 7, "Type variant count changed from 7");
 }
 
-// ─── Happy path ───────────────────────────────────────────────────────────────
 
 #[test]
 fn m1_source_type_checks_clean() {
@@ -122,7 +120,6 @@ fn conversion_methods_type_check_clean() {
     );
 }
 
-// ─── Literal type inference ───────────────────────────────────────────────────
 
 #[test]
 fn int_literal_infers_as_int() {
@@ -165,7 +162,6 @@ fn number_literal_retypes_as_float_with_annotation() {
     assert_clean("function main() -> nothing { let x: float = 1.0\nprint(x) }");
 }
 
-// ─── Type annotation mismatch ─────────────────────────────────────────────────
 
 #[test]
 fn int_annotation_rejects_number_literal() {
@@ -182,7 +178,6 @@ fn int_annotation_rejects_number_literal() {
     );
 }
 
-// ─── Binary operator type rules ───────────────────────────────────────────────
 
 #[test]
 fn int_arithmetic_type_checks_clean() {
@@ -274,7 +269,6 @@ fn bool_less_than_int_is_type_error() {
     );
 }
 
-// ─── Comparison result is bool ────────────────────────────────────────────────
 
 #[test]
 fn comparison_result_type_is_bool() {
@@ -283,7 +277,6 @@ fn comparison_result_type_is_bool() {
     assert_clean("function main() -> nothing { let x: int = 1\nlet y: int = 2\nlet z = x < y\nprint(z) }");
 }
 
-// ─── Boolean operators ────────────────────────────────────────────────────────
 
 #[test]
 fn bool_and_type_checks_clean() {
@@ -296,7 +289,6 @@ fn int_and_bool_is_type_error() {
     assert_errors("function main() -> nothing { let x = 42 && true }", 1);
 }
 
-// ─── Unary operators ─────────────────────────────────────────────────────────
 
 #[test]
 fn unary_neg_on_int_type_checks_clean() {
@@ -314,7 +306,6 @@ fn unary_neg_on_bool_is_type_error() {
     assert_errors("function main() -> nothing { let x = -true }", 1);
 }
 
-// ─── Const reassignment ───────────────────────────────────────────────────────
 
 #[test]
 fn const_reassignment_is_error() {
@@ -336,7 +327,6 @@ fn const_reassignment_is_error() {
     );
 }
 
-// ─── Undefined variable ───────────────────────────────────────────────────────
 
 #[test]
 fn undefined_identifier_produces_diagnostic() {
@@ -375,7 +365,6 @@ fn undefined_in_assignment_produces_diagnostic() {
     assert_errors("function main() -> nothing { x = 42 }", 1);
 }
 
-// ─── print arity ─────────────────────────────────────────────────────────────
 
 #[test]
 fn print_with_two_args_produces_arity_error() {
@@ -403,7 +392,6 @@ fn print_with_each_primitive_type_is_clean() {
     assert_clean("function main() -> nothing { let f: float = 1.0\nprint(f) }");
 }
 
-// ─── Method calls ─────────────────────────────────────────────────────────────
 
 #[test]
 fn unknown_method_produces_error_with_available_list() {
@@ -437,7 +425,6 @@ fn to_float_on_int_produces_float() {
     );
 }
 
-// ─── Parse-error gate ─────────────────────────────────────────────────────────
 
 #[test]
 fn parse_error_gate_prevents_cascade_noise() {
@@ -459,7 +446,6 @@ fn parse_error_gate_prevents_cascade_noise() {
     );
 }
 
-// ─── Missing `main` ───────────────────────────────────────────────────────────
 
 #[test]
 fn empty_file_missing_main_produces_diagnostic() {
@@ -484,7 +470,6 @@ fn main_with_wrong_return_type_produces_diagnostic() {
     );
 }
 
-// ─── Salsa invalidation ───────────────────────────────────────────────────────
 
 #[test]
 fn check_re_runs_when_source_changes() {

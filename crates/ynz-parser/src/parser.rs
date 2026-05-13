@@ -39,7 +39,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // ── cursor helpers ────────────────────────────────────────────────────
 
     fn peek(&self) -> &Token {
         self.tokens
@@ -112,7 +111,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // ── grammar ───────────────────────────────────────────────────────────
 
     pub fn parse_module(&mut self) -> Module {
         let start = self.current_span();
@@ -233,7 +231,6 @@ impl<'a> Parser<'a> {
         })
     }
 
-    // ── types ─────────────────────────────────────────────────────────────
 
     fn parse_type(&mut self) -> Type {
         match self.peek().clone() {
@@ -321,7 +318,6 @@ impl<'a> Parser<'a> {
         Type::Number { precision: 34 }
     }
 
-    // ── blocks and statements ─────────────────────────────────────────────
 
     fn parse_block(&mut self) -> Block {
         let start = self.current_span();
@@ -457,7 +453,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // ── Pratt expression parser ───────────────────────────────────────────
 
     /// Parse an expression with the given minimum binding power.
     ///
@@ -624,7 +619,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // ── call and method call ──────────────────────────────────────────────
 
     fn parse_call(&mut self, callee: Expr) -> Expr {
         let start = callee.span().start;
@@ -741,7 +735,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // ── binary operator helpers ───────────────────────────────────────────
 
     fn consume_bin_op(&mut self) -> BinOpKind {
         let op = match self.peek() {

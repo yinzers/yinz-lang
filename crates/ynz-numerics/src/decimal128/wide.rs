@@ -38,7 +38,6 @@ impl U256 {
         U256 { hi, lo }
     }
 
-    // ── Comparison ──────────────────────────────────────────────────────
 
     /// Multiply U256 by a u128, returning the lower 256 bits (wrapping on overflow).
     /// Sufficient for our use case since all intermediate values fit in 226 bits.
@@ -55,7 +54,6 @@ impl U256 {
         self.hi < rhs.hi || (self.hi == rhs.hi && self.lo <= rhs.lo)
     }
 
-    // ── Arithmetic ──────────────────────────────────────────────────────
 
     /// Saturating subtraction.  Panics in debug if `rhs > self`.
     pub fn sub(self, rhs: U256) -> U256 {

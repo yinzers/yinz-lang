@@ -88,7 +88,6 @@ fn compare_with_python(op_name: &str, a_str: &str, b_str: Option<&str>, ynz_resu
     );
 }
 
-// ── Deterministic differential cases ─────────────────────────────────────────
 
 #[test]
 fn differential_decimal_exactness() {
@@ -121,7 +120,6 @@ fn differential_large_multiply() {
     compare_with_python("mul", a, Some(b), result);
 }
 
-// ── Proptest-based random differential testing ───────────────────────────────
 
 #[cfg(test)]
 mod proptest_differential {
