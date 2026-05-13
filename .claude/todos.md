@@ -7,26 +7,22 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Now (active)
 
-- [ ] **Comment cleanup sweep** — Strip section banners (`// ── X ──` style, Hard Rule 6) from Phase 2–4 files that are already on main: `lexer.rs`, `parser.rs`, `nodes.rs`, `token.rs`. Also `check.rs` on current branch. Remove "what" comments (e.g. `// ── M1 expressions ──` inside match arms). Pending user approval to start.
-
-- [ ] **Phase 4 review + commit** — User reviewing Phase 4 diff on `feat/m2-typeck`. Once approved: commit, merge to main, branch `feat/m2-codegen` for Phase 5.
+- [ ] **M3 plan (Opus)** — Run `/plan` for M3 (control flow + user functions). User-defined function registry is new infrastructure at every layer; LLVM basic-block branching for `if`/`else`/`while`; `range` temporary builtin design decision; early `return` with unreachable tracking. Multi-session, plan with Opus first.
 
 ## Soon (committed, not started)
 
-- [ ] **M2 Phases 5–7** — After Phase 4 merges: codegen (LLVM ops + runtime calls), driver integration + fixtures, verification sweep + tag `v0.1.0-m2`.
+- [ ] **M3 implementation** — After plan approval: `if`/`else`, `while`, `for x in range(...)`, early `return`, user-defined functions with parameters and return types, block scoping. Depends on M3 plan.
 
 ## Later (idea bin — not committed)
 
-- [ ] **`<>` generics syntax — compiler** — When M5 (generics) is implemented, the compiler must use `<>` not `[]` for type parameters. Docs were updated (2026-05-13). Parser, AST, typeck, and codegen must all follow `array<T>`, `map<K, V>`, `fixed<T>`, `function foo<T>()` syntax. No `[]` for type parameters anywhere in the compiler.
-
+- [ ] **`<>` generics syntax — compiler** — When M5 (generics) is implemented, the compiler must use `<>` not `[]` for type parameters. Docs were updated (2026-05-13). Parser, AST, typeck, and codegen must all follow `array<T>`, `map<K, V>`, `fixed<T>`, `function foo<T>()` syntax.
 - [ ] Wire up GitHub Actions CI once repo is pushed to GitHub (ci.yml already written, just needs a remote)
-- [ ] macOS CI golden hash for ynz-codegen (currently only `hello.x86_64-linux.sha256` committed)
+- [ ] macOS CI golden hash for ynz-codegen
 
 ## Done (recent)
 
-- [x] **M2 Phase 4 — Typeck extension** (feat/m2-typeck, awaiting commit) — PrimitiveIntrinsicTable, scope.rs, full M2 type rules, spec corrections. Bouncer caught + fixed test weakening in `m1_source_type_checks_clean`.
-- [x] **M2 Phase 3 — AST + parser (6cee795)** — Pratt climber, Stmt::Let/Assign, all M2 Expr/Type variants, spec-parity test. 30 parse tests.
-- [x] **M2 Phase 2 — Lexer extension (a8c3efe)** — 42 tokens, banned-op diagnostics, malformed-literal recovery. 39 lex tests.
-- [x] **M2 Phase 1 — ynz-numerics + ynz-runtime (59fcee2)** — IEEE 754 decimal128 from scratch, libynz_rt.a, 118 tests.
-- [x] **M1 compiler end-to-end (2026-05-12)** — `ynz run hello.ynz` → `hello, yinz`. 51 tests. Committed to main (820bfdc).
-- [x] **Compiler error-message audit (2026-05-12)** — wrote `design/compiler-errors.md`, swept all spec files for jargon, banned-jargon CI gate.
+- [x] **M2 Phase 7 — verification sweep + tag (c39fe8a, v0.1.0-m2)** — TODO clean, 148 banners removed, CHANGELOG written.
+- [x] **M2 Phase 6 — driver integration (f089c2e)** — 8 integration tests, ABI fix.
+- [x] **M2 Phase 5 — LLVM codegen (ed6120a)** — Full M2 lowering, expr_types span-key bug fixed.
+- [x] **M2 Phases 1–4 — numerics, lexer, parser, typeck** — All on main.
+- [x] **M1 compiler end-to-end** — `ynz run hello.ynz` → `hello, yinz`.

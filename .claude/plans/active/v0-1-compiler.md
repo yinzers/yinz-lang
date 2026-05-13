@@ -1221,6 +1221,7 @@ declare void @ynz_panic_div_by_zero(ptr)
 **Branch**: `chore/m2-verification`
 **Flag**: N/A
 **Est. lines**: ~80
+**Status**: COMPLETE (2026-05-13) — commit c39fe8a on main, tagged `v0.1.0-m2`. TODO sweep clean. Comment rules sweep: 148 section banners removed from 19 files (Hard Rule 6), changelog-style enum doc history stripped, grouping labels removed from lex test. Spec corrections verified. CHANGELOG.md written. All variant count gates confirmed. `ynz run m2_smoke.ynz` → `0.3\n1763\ntrue\n`.
 **Objective**: M2 can be tagged without regret. Catch-up entries are unambiguous so downstream milestones cannot accidentally orphan them.
 
 **Steps**:
