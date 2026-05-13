@@ -36,8 +36,8 @@ fn lex_diags(source: &str) -> Vec<ynz_diagnostics::Diagnostic> {
 
 
 #[test]
-fn m2_token_variant_count_locked() {
-    // WHY: This test pins the token vocabulary to the M2 surface.
+fn m3_token_variant_count_locked() {
+    // WHY: This test pins the token vocabulary to the M3 surface.
     // If you need to add a new token for a later milestone, add an inline
     // `// test-ratchet: <reason-and-milestone>` comment on this test and update
     // the count in the Token enum's doc comment.
@@ -52,7 +52,12 @@ fn m2_token_variant_count_locked() {
     //   Punctuation (2): Eq, Colon
     //   Plumbing (4):   Dot, LBracket, RBracket, Comma  (needed by P3 within M2 scope)
     //   Total M1+M2: 10 + 32 = 42
-    let expected_count = 42usize;
+    //
+    // test-ratchet: M3 adds 7 variants over M2's 42:
+    //   Keywords (6):    If, Else, While, For, In, Return
+    //   Punctuation (1): FatArrow (`=>`)
+    //   Total M1+M2+M3: 42 + 7 = 49
+    let expected_count = 49usize;
 
     use ynz_parser::Token::*;
     let all_variants: &[Token] = &[
@@ -67,6 +72,7 @@ fn m2_token_variant_count_locked() {
         RBrace,
         Arrow,
         Eof,
+        // M2
         Let,
         Const,
         True,
@@ -99,6 +105,14 @@ fn m2_token_variant_count_locked() {
         LBracket,
         RBracket,
         Comma,
+        // M3
+        If,
+        Else,
+        While,
+        For,
+        In,
+        Return,
+        FatArrow,
     ];
     assert_eq!(
         all_variants.len(),
@@ -475,7 +489,7 @@ fn token_spans_reconstruct_lexemes() {
                 assert!(reconstructed.starts_with('"') && reconstructed.ends_with('"'));
             }
             Token::Eof => {}
-            // M2 — the source above does not contain these; span check is trivially true
+            // M2/M3 — the source above does not contain these; span check is trivially true
             // by exhaustiveness (the compiler requires all arms).
             Token::Let
             | Token::Const
@@ -508,7 +522,14 @@ fn token_spans_reconstruct_lexemes() {
             | Token::Dot
             | Token::LBracket
             | Token::RBracket
-            | Token::Comma => {
+            | Token::Comma
+            | Token::If
+            | Token::Else
+            | Token::While
+            | Token::For
+            | Token::In
+            | Token::Return
+            | Token::FatArrow => {
                 // Span must be non-empty for every token that has a source location.
                 assert!(
                     spanned.span.start < spanned.span.end,
@@ -618,6 +639,132 @@ fn non_ascii_bytes_inside_string_lex_clean() {
     let _ = token_count;
 }
 
+
+#[test]
+fn m3_keywords_lex_correctly() {
+    // WHY: All six M3 control-flow keywords must produce their dedicated token,
+    // not fall through to Identifier. If any keyword becomes an identifier,
+    // the parser can never recognize that construct and every M3 control-flow
+    // test fails with a confusing "expected statement" error.
+    assert_eq!(lex_tokens("if"), vec![Token::If, Token::Eof]);
+    assert_eq!(lex_tokens("else"), vec![Token::Else, Token::Eof]);
+    assert_eq!(lex_tokens("while"), vec![Token::While, Token::Eof]);
+    assert_eq!(lex_tokens("for"), vec![Token::For, Token::Eof]);
+    assert_eq!(lex_tokens("in"), vec![Token::In, Token::Eof]);
+    assert_eq!(lex_tokens("return"), vec![Token::Return, Token::Eof]);
+}
+
+#[test]
+fn fat_arrow_lexes_as_fat_arrow() {
+    // WHY: `=>` is the multi-case arm separator. If it lexes as `=` + `>` the
+    // parser sees two separate tokens and cannot parse any multi-case `if` arm.
+    assert_eq!(lex_tokens("=>"), vec![Token::FatArrow, Token::Eof]);
+}
+
+#[test]
+fn fat_arrow_distinct_from_eq_and_gt() {
+    // WHY: Three closely-related token sequences — `=`, `>`, `=>` — must all
+    // lex correctly. A greedy-match bug that turns `=` alone into `FatArrow`
+    // would break every assignment. A bug that turns `=>` into `Eq` + `Gt`
+    // would break every multi-case arm.
+    assert_eq!(lex_tokens("="), vec![Token::Eq, Token::Eof]);
+    assert_eq!(lex_tokens(">"), vec![Token::Gt, Token::Eof]);
+    assert_eq!(lex_tokens("=>"), vec![Token::FatArrow, Token::Eof]);
+    assert_eq!(lex_tokens("=="), vec![Token::EqEq, Token::Eof]);
+    // `=>` inside a realistic multi-case arm context
+    assert_eq!(
+        lex_tokens("1 => 2"),
+        vec![
+            Token::IntLit(1),
+            Token::FatArrow,
+            Token::IntLit(2),
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
+fn match_keyword_produces_teaching_diagnostic() {
+    // WHY: A user coming from Rust/Swift may write `match (x) { ... }`.
+    // The lexer teaches them to use multi-case `if` instead. The token stream
+    // must still contain an Identifier("match") so the parser can recover
+    // rather than amplifying the error into a cascade of parse failures.
+    let (_, diag_count) = lex_counts("match");
+    assert_eq!(diag_count, 1, "Expected exactly 1 diagnostic for `match`");
+
+    let diags = lex_diags("match");
+    assert!(
+        diags[0].what.contains("match"),
+        "Diagnostic should name the keyword, got: {:?}",
+        diags[0].what
+    );
+    assert!(
+        diags[0].what_instead.contains("if"),
+        "Diagnostic should point to `if`, got: {:?}",
+        diags[0].what_instead
+    );
+
+    // Recovery: the identifier token is still emitted so the parser doesn't cascade.
+    let tokens = lex_tokens("match");
+    assert!(
+        tokens.contains(&Token::Identifier("match".into())),
+        "Lexer must emit Identifier(\"match\") for parser recovery"
+    );
+}
+
+#[test]
+fn switch_keyword_produces_teaching_diagnostic() {
+    // WHY: A user coming from JavaScript/C may write `switch (x) { ... }`.
+    // Same teaching pattern as `match` above — one diagnostic, identifier
+    // token emitted for parser recovery.
+    let (_, diag_count) = lex_counts("switch");
+    assert_eq!(diag_count, 1, "Expected exactly 1 diagnostic for `switch`");
+
+    let diags = lex_diags("switch");
+    assert!(
+        diags[0].what.contains("switch"),
+        "Diagnostic should name the keyword, got: {:?}",
+        diags[0].what
+    );
+    assert!(
+        diags[0].what_instead.contains("if"),
+        "Diagnostic should point to `if`, got: {:?}",
+        diags[0].what_instead
+    );
+
+    let tokens = lex_tokens("switch");
+    assert!(
+        tokens.contains(&Token::Identifier("switch".into())),
+        "Lexer must emit Identifier(\"switch\") for parser recovery"
+    );
+}
+
+#[test]
+fn m3_source_produces_expected_tokens() {
+    // WHY: Snapshot locks the full M3 token stream so any lexer regression is
+    // immediately visible. The source exercises all seven new token kinds.
+    let source = r#"function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+
+function main() -> nothing {
+  let result = fib(10)
+  while (result > 0) {
+    result = result - 1
+  }
+  for (i in range(0, 5)) {
+    if (i) {
+      0 => print("zero")
+      else => print("nonzero")
+    }
+  }
+}"#;
+    let tokens = lex_tokens(source);
+    assert_debug_snapshot!("m3_token_stream", tokens);
+}
 
 #[test]
 fn changing_source_text_invalidates_cache() {

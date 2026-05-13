@@ -186,6 +186,9 @@ impl<'src> Lexer<'src> {
                 if self.peek(1) == Some(b'=') {
                     self.pos += 2;
                     self.push_token(Token::EqEq, start, self.pos);
+                } else if self.peek(1) == Some(b'>') {
+                    self.pos += 2;
+                    self.push_token(Token::FatArrow, start, self.pos);
                 } else {
                     self.pos += 1;
                     self.push_token(Token::Eq, start, self.pos);
@@ -290,6 +293,16 @@ impl<'src> Lexer<'src> {
             "const" => Token::Const,
             "true" => Token::True,
             "false" => Token::False,
+            "if" => Token::If,
+            "else" => Token::Else,
+            "while" => Token::While,
+            "for" => Token::For,
+            "in" => Token::In,
+            "return" => Token::Return,
+            "match" | "switch" => {
+                self.emit_banned_keyword(start, self.pos, text);
+                Token::Identifier(text.to_string())
+            }
             other => Token::Identifier(other.to_string()),
         };
         self.push_token(tok, start, self.pos);
@@ -640,6 +653,16 @@ impl<'src> Lexer<'src> {
             format!("Use `{}` instead.", suggestion),
             "Compound assignment and increment operators are not part of the Yinz language. \
              Step-by-step assignment on its own line makes the intent explicit.",
+        ));
+    }
+
+    fn emit_banned_keyword(&mut self, start: usize, end: usize, keyword: &str) {
+        self.diags.push(Diagnostic::warning(
+            SourceSpan::new(self.file, start, end),
+            format!("`{keyword}` is not a keyword in Yinz."),
+            "Use multi-case `if` with `=>` arms: `if (value) { 1 => ...; 2 => ...; else => ... }`",
+            "Yinz uses one `if` keyword for simple branches, value matching, and type narrowing. \
+             One concept, one keyword.",
         ));
     }
 

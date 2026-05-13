@@ -840,5 +840,12 @@ fn token_display(tok: &Token) -> &str {
         Token::LBracket => "[",
         Token::RBracket => "]",
         Token::Comma => ",",
+        Token::If => "if",
+        Token::Else => "else",
+        Token::While => "while",
+        Token::For => "for",
+        Token::In => "in",
+        Token::Return => "return",
+        Token::FatArrow => "=>",
     }
 }
