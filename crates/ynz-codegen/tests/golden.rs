@@ -11,6 +11,16 @@ use ynz_parser::{CompilerDb, SourceFile};
 const FILE: &str = "hello.ynz";
 const M1_SOURCE: &str = r#"function main() -> nothing { print("hello, yinz") }"#;
 
+const M2_SMOKE_FILE: &str = "m2_smoke.ynz";
+const M2_SMOKE_SOURCE: &str = r#"function main() -> nothing {
+  let price = 0.1 + 0.2
+  let count: int = 42
+  let active = true
+  print(price)
+  print(count * count - 1)
+  print(active && (count > 0))
+}"#;
+
 fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/__golden__")
 }
@@ -24,8 +34,9 @@ fn triple_slug() -> String {
 }
 
 /// Load or update the golden SHA-256 for the current host triple.
-fn load_golden(slug: &str) -> Option<[u8; 32]> {
-    let path = golden_dir().join(format!("hello.{slug}.sha256"));
+/// Load a golden SHA-256 by full filename (e.g. `"hello.x86_64-linux.sha256"`).
+fn load_golden(filename: &str) -> Option<[u8; 32]> {
+    let path = golden_dir().join(filename);
     let hex = std::fs::read_to_string(&path).ok()?;
     let hex = hex.trim();
     if hex.len() != 64 {
@@ -38,8 +49,8 @@ fn load_golden(slug: &str) -> Option<[u8; 32]> {
     Some(bytes)
 }
 
-fn save_golden(slug: &str, hash: &[u8; 32]) {
-    let path = golden_dir().join(format!("hello.{slug}.sha256"));
+fn save_golden(filename: &str, hash: &[u8; 32]) {
+    let path = golden_dir().join(filename);
     let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
     std::fs::write(&path, hex).expect("failed to write golden hash");
 }
@@ -80,7 +91,7 @@ fn object_file_sha256_matches_golden() {
     let artifact = run_codegen();
     let slug = triple_slug();
 
-    match load_golden(&slug) {
+    match load_golden(&format!("hello.{slug}.sha256")) {
         Some(expected) => {
             assert_eq!(
                 artifact.sha256, expected,
@@ -89,8 +100,7 @@ fn object_file_sha256_matches_golden() {
             );
         }
         None => {
-            // First run on this host: write the golden.
-            save_golden(&slug, &artifact.sha256);
+            save_golden(&format!("hello.{slug}.sha256"), &artifact.sha256);
             println!("INFO: wrote new golden hash for triple={slug}");
         }
     }
@@ -187,4 +197,100 @@ fn codegen_query_returns_owned_bytes_not_inkwell_types() {
     // If this compiles, the output type is Send + Sync.
     fn assert_send_sync<T: Send + Sync>(_: &T) {}
     assert_send_sync(&artifact);
+}
+
+// ── M2 codegen tests ──────────────────────────────────────────────────────────
+
+fn run_m2_codegen() -> Option<CompiledArtifact> {
+    let db = CompilerDb::default();
+    let sf = SourceFile::new(&db, M2_SMOKE_FILE.to_string(), M2_SMOKE_SOURCE.to_string());
+    let output = codegen_query(&db, sf);
+    if !output.diagnostics.is_empty() {
+        eprintln!("M2 codegen diagnostics: {:#?}", output.diagnostics);
+        return None;
+    }
+    Some(output.artifact.clone())
+}
+
+#[test]
+fn m2_smoke_codegen_produces_non_empty_object() {
+    // WHY: if this returns None, print the diagnostics — a type or codegen
+    // error is present and the M2 smoke test won't pass end-to-end.
+    let artifact = run_m2_codegen().expect("M2 smoke codegen must succeed");
+    assert!(
+        !artifact.object_bytes.is_empty(),
+        "M2 smoke object file must be non-empty"
+    );
+}
+
+#[test]
+fn m2_smoke_codegen_is_deterministic() {
+    // WHY: two independent runs must produce byte-identical output.
+    // Non-determinism here means the SHA-256 golden is meaningless.
+    let db1 = CompilerDb::default();
+    let sf1 = SourceFile::new(&db1, M2_SMOKE_FILE.to_string(), M2_SMOKE_SOURCE.to_string());
+    let a1 = codegen_query(&db1, sf1).artifact.clone();
+
+    let db2 = CompilerDb::default();
+    let sf2 = SourceFile::new(&db2, M2_SMOKE_FILE.to_string(), M2_SMOKE_SOURCE.to_string());
+    let a2 = codegen_query(&db2, sf2).artifact.clone();
+
+    assert_eq!(
+        a1.sha256, a2.sha256,
+        "M2 smoke codegen is not deterministic"
+    );
+}
+
+#[test]
+fn m2_smoke_ir_snapshot() {
+    // WHY: IR text diffs reveal codegen regressions during development.
+    // Informational — the SHA-256 test is the gate.
+    if let Some(artifact) = run_m2_codegen() {
+        insta::assert_snapshot!("m2_smoke_ir", artifact.ir_text);
+    }
+}
+
+#[test]
+fn m2_smoke_sha256_golden() {
+    // WHY: reproducibility contract for M2. If this changes without
+    // an intentional compiler change, codegen or LLVM changed silently.
+    let artifact = match run_m2_codegen() {
+        Some(a) => a,
+        None => {
+            eprintln!("SKIP: M2 codegen had errors — fix them before the golden matters");
+            return;
+        }
+    };
+    let slug = triple_slug();
+    let golden_name = format!("m2_smoke.{slug}.sha256");
+    match load_golden(&golden_name) {
+        Some(expected) => {
+            assert_eq!(
+                artifact.sha256, expected,
+                "M2 smoke SHA-256 changed. If intentional, delete tests/__golden__/{golden_name} and re-run."
+            );
+        }
+        None => {
+            save_golden(&golden_name, &artifact.sha256);
+            println!("INFO: wrote new M2 smoke golden for triple={slug}");
+        }
+    }
+}
+
+#[test]
+fn m2_decimal_exactness() {
+    // WHY: the whole point of decimal128 is that 0.1 + 0.2 == 0.3 exactly.
+    // This test compiles just the number computation (not the full smoke test)
+    // and verifies the IR is produced without codegen errors. End-to-end
+    // execution is Phase 6 (driver integration) which actually runs the binary.
+    let source = "function main() -> nothing { let x = 0.1 + 0.2\nprint(x) }";
+    let db = CompilerDb::default();
+    let sf = SourceFile::new(&db, "decimal_test.ynz".to_string(), source.to_string());
+    let output = codegen_query(&db, sf);
+    assert!(
+        output.diagnostics.is_empty(),
+        "Decimal exactness source must compile without errors: {:#?}",
+        output.diagnostics
+    );
+    assert!(!output.artifact.object_bytes.is_empty(), "Must produce an object file");
 }

@@ -2,17 +2,62 @@
 source: crates/ynz-codegen/tests/golden.rs
 expression: artifact.ir_text
 ---
-; ModuleID = 'ynz-m1-hello.ynz'
-source_filename = "ynz-m1-hello.ynz"
+; ModuleID = 'ynz-hello.ynz'
+source_filename = "ynz-hello.ynz"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-linux-gnu"
 
-@str_data = private unnamed_addr constant [12 x i8] c"hello, yinz\00"
+@.str.true = private unnamed_addr constant [5 x i8] c"true\00"
+@.str.false = private unnamed_addr constant [6 x i8] c"false\00"
+@.dec.zero = private unnamed_addr constant i128 45235290231555418299757684020165476352
+@.panic.iadd = private unnamed_addr constant [20 x i8] c"int overflow in '+'\00"
+@.panic.isub = private unnamed_addr constant [20 x i8] c"int overflow in '-'\00"
+@.panic.imul = private unnamed_addr constant [20 x i8] c"int overflow in '*'\00"
+@.panic.idiv = private unnamed_addr constant [23 x i8] c"division by zero (int)\00"
+@.panic.irem = private unnamed_addr constant [24 x i8] c"remainder by zero (int)\00"
+@.panic.ddiv = private unnamed_addr constant [26 x i8] c"division by zero (number)\00"
+@.panic.drem = private unnamed_addr constant [27 x i8] c"remainder by zero (number)\00"
+@str = private unnamed_addr constant [12 x i8] c"hello, yinz\00"
 
 declare i32 @puts(ptr)
 
+declare void @ynz_decimal_add(ptr, ptr, ptr)
+
+declare void @ynz_decimal_sub(ptr, ptr, ptr)
+
+declare void @ynz_decimal_mul(ptr, ptr, ptr)
+
+declare void @ynz_decimal_div(ptr, ptr, ptr)
+
+declare i32 @ynz_decimal_compare(ptr, ptr)
+
+declare void @ynz_decimal_from_int(i64, ptr)
+
+declare void @ynz_decimal_from_float(double, ptr)
+
+declare i64 @ynz_decimal_to_string(ptr, ptr, i64)
+
+declare i64 @ynz_int_to_string(i64, ptr, i64)
+
+declare i64 @ynz_float_to_string(double, ptr, i64)
+
+declare void @ynz_panic_overflow(ptr)
+
+declare void @ynz_panic_div_by_zero(ptr)
+
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64) #0
+
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64) #0
+
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64) #0
+
 define i32 @main() {
 entry:
-  %puts_call = call i32 @puts(ptr @str_data)
+  %puts = call i32 @puts(ptr @str)
   ret i32 0
 }
+
+attributes #0 = { nocallback nofree nosync nounwind speculatable willreturn memory(none) }

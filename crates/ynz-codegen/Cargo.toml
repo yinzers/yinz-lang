@@ -12,6 +12,7 @@ inkwell         = { workspace = true }
 salsa           = { workspace = true }
 ynz-diagnostics = { workspace = true }
 ynz-ast         = { workspace = true }
+ynz-numerics    = { path = "../ynz-numerics" }
 ynz-parser      = { workspace = true }
 ynz-typeck      = { workspace = true }
 

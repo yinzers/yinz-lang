@@ -1231,6 +1231,7 @@ dependencies = [
  "salsa",
  "ynz-ast",
  "ynz-diagnostics",
+ "ynz-numerics",
  "ynz-parser",
  "ynz-typeck",
 ]

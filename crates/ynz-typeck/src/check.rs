@@ -13,8 +13,12 @@ use crate::{
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypedModule {
     pub module: Module,
-    /// Per-expression types keyed by the expression's span start byte.
-    pub expr_types: std::collections::HashMap<usize, Type>,
+    /// Per-expression types keyed by `(span.start, span.end)`.
+    ///
+    /// Keying by start alone causes collisions when a BinOp's span.start
+    /// equals its leftmost child's span.start — the parent overwrites the child.
+    /// The full `(start, end)` pair is unique per expression node.
+    pub expr_types: std::collections::HashMap<(usize, usize), Type>,
 }
 
 /// Run the M2 type checker.
@@ -38,7 +42,7 @@ pub fn check(
 
 struct Checker<'b> {
     intrinsics: &'b PrimitiveIntrinsicTable,
-    expr_types: std::collections::HashMap<usize, Type>,
+    expr_types: std::collections::HashMap<(usize, usize), Type>,
     diags: DiagnosticBucket,
     scope: Scope,
 }
@@ -243,7 +247,7 @@ impl<'b> Checker<'b> {
             Expr::Ident(name, span) => self.resolve_ident(name, span),
             Expr::Call(call) => self.check_call(call),
             Expr::Error(span) => {
-                self.expr_types.insert(span.start, Type::Error);
+                self.expr_types.insert((span.start, span.end), Type::Error);
                 return Type::Error;
             }
 
@@ -294,7 +298,7 @@ impl<'b> Checker<'b> {
             }
         };
 
-        self.expr_types.insert(expr.span().start, ty.clone());
+        self.expr_types.insert((expr.span().start, expr.span().end), ty.clone());
         ty
     }
 
