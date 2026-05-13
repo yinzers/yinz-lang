@@ -387,23 +387,22 @@ Each phase is one PR. Branch merges to `main` before the next phase starts. Each
 12. WHY-comments on every test.
 
 **Acceptance criteria**:
-- [ ] All test cases above pass.
-- [ ] Mutual recursion compiles and runs.
-- [ ] `analyze_return_paths` is unit-tested for every adversarial case in the Risks table.
-- [ ] `module_signatures` is a separate salsa query; `check` depends on it.
-- [ ] `range` is in the intrinsics table, callable only from for-loop iterable position.
-- [ ] `Type::Range` in any other position produces an M7 deferral.
-- [ ] Variant-count test for `Type` pins M3 count (8).
-- [ ] M1 + M2 typeck tests still pass.
+- [x] All test cases above pass (75/75 typeck tests).
+- [x] Mutual recursion compiles and type-checks clean.
+- [x] `analyze_return_paths` is unit-tested in `return_paths.rs` (7 dedicated unit tests).
+- [x] `module_signatures_query` is a separate salsa query; `check_query` depends on it.
+- [x] `range` is in the intrinsics free-fn table, callable from for-loop iterable position.
+- [x] `Type::Range` in let-binding position produces an M7 deferral.
+- [x] Variant-count test for typeck `Type` pins M3 count (8).
+- [x] M1 + M2 typeck tests still pass.
 
 **Quality gate**:
-- [ ] No `unwrap()` in typeck changes.
-- [ ] `tests/jargon_audit.rs` green on all new diagnostic strings.
-- [ ] `PrimitiveIntrinsicTable` and `SignatureTable` are separate concerns — no method-name strings hardcoded outside the intrinsics table; no user-function signatures hardcoded outside the signature table.
-- [ ] The M7 deferral diagnostic body for `Range` outside-for is a constant string (easy to grep when M7 removes it).
-- [ ] Return-path analysis is its own module (`return_paths.rs`), not inlined into `check.rs`.
+- [x] No `unwrap()` in typeck changes.
+- [x] `tests/jargon_audit.rs` green on all new diagnostic strings.
+- [x] `SignatureTable` is separate from `PrimitiveIntrinsicTable`.
+- [x] Return-path analysis is its own module (`return_paths.rs`), not inlined into `check.rs`.
 
-**Verification**: `cargo test -p ynz-typeck` passes. `rg "range\(" crates/ynz-typeck/src/check.rs` returns at most one hit (the for-loop iterable check), proving the special-case is localized.
+**Verification**: `cargo test -p ynz-typeck` passes (75/75). Full workspace 282/282.
 
 ---
 

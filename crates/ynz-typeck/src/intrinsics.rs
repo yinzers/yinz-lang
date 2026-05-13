@@ -7,17 +7,21 @@ pub struct FreeFnSig {
     pub ret: Type,
 }
 
-/// The table of primitive intrinsics available in M2.
+/// The table of primitive intrinsics available in M3.
 ///
-/// Two categories:
-///   1. Free-standing calls — `print` (polymorphic over all primitive types).
-///   2. Method calls — `.toNumber()`, `.toFloat()`, `.toString()` on primitive types.
+/// Three categories:
+///   1. Free-standing polymorphic calls — `print` (accepts all primitive types).
+///   2. Fixed-signature free-standing calls — `range` (checked via `free_fns`).
+///   3. Method calls — `.toNumber()`, `.toFloat()`, `.toString()` on primitive types.
 ///
-/// Single source of truth: no scattered hardcoded method-name lists exist
+/// Single source of truth: no scattered hardcoded function-name lists exist
 /// anywhere else in the type checker.
 pub struct PrimitiveIntrinsicTable {
     /// Types that `print` accepts as its single argument.
     print_types: Vec<Type>,
+    /// Fixed-signature free-standing functions: (name, sig).
+    /// Multiple entries with the same name represent overloads (e.g. `range` with 1 or 2 args).
+    pub free_fns: Vec<(&'static str, FreeFnSig)>,
     /// Method dispatch: `(receiver_type, method_name)` → return type.
     methods: Vec<(Type, &'static str, Type)>,
     /// Test-only free-standing functions added via `with_test_intrinsic`.
@@ -27,6 +31,11 @@ pub struct PrimitiveIntrinsicTable {
 
 impl PrimitiveIntrinsicTable {
     pub fn m2() -> Self {
+        Self::m3()
+    }
+
+    pub fn m3() -> Self {
+        let range_ret = || Type::Range { element: Box::new(Type::Int), end_inclusive: false };
         Self {
             print_types: vec![
                 Type::String,
@@ -34,6 +43,12 @@ impl PrimitiveIntrinsicTable {
                 Type::Float,
                 Type::Number { precision: 34 },
                 Type::Bool,
+            ],
+            free_fns: vec![
+                // range(end) — 0..end exclusive
+                ("range", FreeFnSig { params: vec![Type::Int], ret: range_ret() }),
+                // range(start, end) — start..end exclusive
+                ("range", FreeFnSig { params: vec![Type::Int, Type::Int], ret: range_ret() }),
             ],
             methods: vec![
                 // int conversions
@@ -52,6 +67,25 @@ impl PrimitiveIntrinsicTable {
             #[cfg(test)]
             test_fns: Vec::new(),
         }
+    }
+
+    /// Look up a `range` overload by argument count.
+    ///
+    /// Returns the matching `FreeFnSig` if one exists, or `None` on arity mismatch.
+    pub fn lookup_free_fn(&self, name: &str, arg_count: usize) -> Option<&FreeFnSig> {
+        self.free_fns
+            .iter()
+            .find(|(n, sig)| *n == name && sig.params.len() == arg_count)
+            .map(|(_, sig)| sig)
+    }
+
+    /// All free-function names (for Levenshtein suggestions on undefined-function errors).
+    pub fn free_fn_names(&self) -> Vec<&'static str> {
+        let mut names: Vec<&'static str> =
+            self.free_fns.iter().map(|(n, _)| *n).collect();
+        names.sort_unstable();
+        names.dedup();
+        names
     }
 
     /// Whether `ty` is a type that `print` can accept.

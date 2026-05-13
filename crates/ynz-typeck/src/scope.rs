@@ -9,6 +9,10 @@ pub struct ScopeEntry {
     pub ty: Type,
     /// True when declared with `const`; the type checker rejects reassignment.
     pub is_const: bool,
+    /// True for function parameters — reassignment emits an M4 deferral diagnostic.
+    pub is_param: bool,
+    /// True for `for`-loop variables — immutable inside the loop body.
+    pub is_loop_var: bool,
     /// Where the binding was declared (for "previously defined here" spans).
     pub defined_at: SourceSpan,
 }
