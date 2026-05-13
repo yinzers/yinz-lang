@@ -34,11 +34,11 @@ declare void @ynz_decimal_from_int(i64, ptr)
 
 declare void @ynz_decimal_from_float(double, ptr)
 
-declare i64 @ynz_decimal_to_string(ptr, ptr, i64)
+declare ptr @ynz_decimal_to_string(ptr)
 
-declare i64 @ynz_int_to_string(i64, ptr, i64)
+declare ptr @ynz_int_to_string(i64)
 
-declare i64 @ynz_float_to_string(double, ptr, i64)
+declare ptr @ynz_float_to_string(double)
 
 declare void @ynz_panic_overflow(ptr)
 
@@ -71,9 +71,8 @@ entry:
   %dec_ld = load i128, ptr %price, align 16
   %price2 = alloca i128, align 16
   store i128 %dec_ld, ptr %price2, align 16
-  %dec_buf = alloca [48 x i8], align 1
-  %0 = call i64 @ynz_decimal_to_string(ptr %price2, ptr %dec_buf, i64 48)
-  %puts = call i32 @puts(ptr %dec_buf)
+  %dec_str = call ptr @ynz_decimal_to_string(ptr %price2)
+  %puts = call i32 @puts(ptr %dec_str)
   %count3 = load i64, ptr %count, align 8
   %count4 = load i64, ptr %count, align 8
   %ov_res = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %count3, i64 %count4)
@@ -92,9 +91,8 @@ ov_panic:                                         ; preds = %entry
   unreachable
 
 ov_ok8:                                           ; preds = %ov_ok
-  %int_buf = alloca [24 x i8], align 1
-  %1 = call i64 @ynz_int_to_string(i64 %sum6, ptr %int_buf, i64 24)
-  %puts10 = call i32 @puts(ptr %int_buf)
+  %int_str = call ptr @ynz_int_to_string(i64 %sum6)
+  %puts10 = call i32 @puts(ptr %int_str)
   %active11 = load i1, ptr %active, align 1
   br i1 %active11, label %and_rhs, label %and_short
 

@@ -86,20 +86,22 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 "ynz_decimal_from_float",
                 void.fn_type(&[f64.into(), ptr.into()], false),
             ),
+            // Format shims: value → ptr to null-terminated string in thread-local buffer.
+            // Runtime uses thread-local static buffers, not caller-allocated buffers.
             decimal_to_string: declare_fn(
                 module,
                 "ynz_decimal_to_string",
-                i64.fn_type(&[ptr.into(), ptr.into(), i64.into()], false),
+                ptr.fn_type(&[ptr.into()], false),
             ),
             int_to_string: declare_fn(
                 module,
                 "ynz_int_to_string",
-                i64.fn_type(&[i64.into(), ptr.into(), i64.into()], false),
+                ptr.fn_type(&[i64.into()], false),
             ),
             float_to_string: declare_fn(
                 module,
                 "ynz_float_to_string",
-                i64.fn_type(&[f64.into(), ptr.into(), i64.into()], false),
+                ptr.fn_type(&[f64.into()], false),
             ),
             panic_overflow: declare_fn(
                 module,

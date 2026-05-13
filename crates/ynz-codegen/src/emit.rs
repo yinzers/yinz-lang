@@ -565,24 +565,23 @@ fn to_c_string<'ctx>(cg: &mut Cg<'ctx, '_>, val: BasicValueEnum<'ctx>, ty: &Type
     match ty {
         Type::String => Ok(val.into_pointer_value()),
 
-        Type::Bool => {
-            cg.builder.build_select(val.into_int_value(), cg.globals.str_true.as_pointer_value(), cg.globals.str_false.as_pointer_value(), "bstr")
-                .map(|v| v.into_pointer_value()).map_err(|e| format!("{e}"))
-        }
+        Type::Bool => cg.builder
+            .build_select(val.into_int_value(), cg.globals.str_true.as_pointer_value(), cg.globals.str_false.as_pointer_value(), "bstr")
+            .map(|v| v.into_pointer_value())
+            .map_err(|e| format!("{e}")),
+
+        // Runtime format shims return a ptr into a thread-local static buffer.
         Type::Int => {
-            let buf = cg.builder.build_alloca(cg.i8().array_type(24), "int_buf").map_err(|e| format!("{e}"))?;
-            cg.builder.build_call(cg.rt.int_to_string, &[val.into(), buf.into(), cg.i64().const_int(24, false).into()], "").map_err(|e| format!("{e}"))?;
-            Ok(buf)
+            let c = cg.builder.build_call(cg.rt.int_to_string, &[val.into()], "int_str").map_err(|e| format!("{e}"))?;
+            Ok(c.try_as_basic_value().basic().ok_or("int_to_string returned void")?.into_pointer_value())
         }
         Type::Float => {
-            let buf = cg.builder.build_alloca(cg.i8().array_type(32), "flt_buf").map_err(|e| format!("{e}"))?;
-            cg.builder.build_call(cg.rt.float_to_string, &[val.into(), buf.into(), cg.i64().const_int(32, false).into()], "").map_err(|e| format!("{e}"))?;
-            Ok(buf)
+            let c = cg.builder.build_call(cg.rt.float_to_string, &[val.into()], "flt_str").map_err(|e| format!("{e}"))?;
+            Ok(c.try_as_basic_value().basic().ok_or("float_to_string returned void")?.into_pointer_value())
         }
         Type::Number { .. } => {
-            let buf = cg.builder.build_alloca(cg.i8().array_type(48), "dec_buf").map_err(|e| format!("{e}"))?;
-            cg.builder.build_call(cg.rt.decimal_to_string, &[val.into(), buf.into(), cg.i64().const_int(48, false).into()], "").map_err(|e| format!("{e}"))?;
-            Ok(buf)
+            let c = cg.builder.build_call(cg.rt.decimal_to_string, &[val.into()], "dec_str").map_err(|e| format!("{e}"))?;
+            Ok(c.try_as_basic_value().basic().ok_or("decimal_to_string returned void")?.into_pointer_value())
         }
         _ => Err(format!("codegen: cannot convert {:?} to string", ty)),
     }
@@ -603,7 +602,7 @@ fn lower_method_call<'ctx>(
             Ok(out.into())
         }
         (Type::Int, "toFloat") => cg.builder.build_signed_int_to_float(recv.into_int_value(), cg.f64(), "i2f").map(|v| v.into()).map_err(|e| format!("{e}")),
-        (Type::Int, "toString") => to_c_string(cg, recv, &Type::Int).map(|p| p.into()),
+        (Type::Int, "toString") => to_c_string(cg, recv, &Type::Int).map(|p: PointerValue<'ctx>| p.into()),
         (Type::Float, "toNumber") => {
             let out = cg.builder.build_alloca(cg.i128(), "f2n").map_err(|e| format!("{e}"))?;
             cg.builder.build_call(cg.rt.decimal_from_float, &[recv.into(), out.into()], "").map_err(|e| format!("{e}"))?;

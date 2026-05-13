@@ -35,11 +35,11 @@ declare void @ynz_decimal_from_int(i64, ptr)
 
 declare void @ynz_decimal_from_float(double, ptr)
 
-declare i64 @ynz_decimal_to_string(ptr, ptr, i64)
+declare ptr @ynz_decimal_to_string(ptr)
 
-declare i64 @ynz_int_to_string(i64, ptr, i64)
+declare ptr @ynz_int_to_string(i64)
 
-declare i64 @ynz_float_to_string(double, ptr, i64)
+declare ptr @ynz_float_to_string(double)
 
 declare void @ynz_panic_overflow(ptr)
 
