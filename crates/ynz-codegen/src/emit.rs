@@ -225,6 +225,10 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
             let val = lower_expr(cg, value)?;
             store(cg, val, &ty, slot)?;
         }
+        // M3 control flow — lowering implemented in Phase 4.
+        Stmt::If { .. } | Stmt::Match { .. } | Stmt::While { .. } | Stmt::For { .. } | Stmt::Return { .. } => {
+            return Err("M3 control-flow lowering not yet implemented (Phase 4)".to_string());
+        }
     }
     Ok(())
 }

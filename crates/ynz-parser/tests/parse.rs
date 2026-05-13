@@ -5,7 +5,7 @@
 
 use insta::assert_debug_snapshot;
 use salsa::Setter as _;
-use ynz_ast::nodes::{BinOpKind, Expr, Item, Stmt, Type};
+use ynz_ast::nodes::{BinOpKind, Expr, Item, MatchPatternKind, Stmt, Type};
 use ynz_diagnostics::SourceSpan;
 use ynz_parser::{parse_query, CompilerDb, SourceFile};
 
@@ -24,31 +24,80 @@ fn parse(source: &str) -> ynz_parser::ParseOutput {
 
 
 #[test]
-fn m2_stmt_variant_count_locked() {
-    // WHY: Stmt variants beyond the M2 set are M3+ work. This test pins the count.
+fn m3_stmt_variant_count_locked() {
+    // WHY: Stmt variants beyond the M3 set are M4+ work. This test pins the count.
     // Add a `// test-ratchet: <reason>` comment to unlock.
     //
     // test-ratchet: M2 adds 2 variants over M1's 1: Let and Assign.
     //   M1: Expr(1). M2: Let(2), Assign(3). Total: 3.
+    //
+    // test-ratchet: M3 adds 5 variants for control flow.
+    //   If(4), Match(5), While(6), For(7), Return(8). Total: 8.
     use ynz_ast::nodes::Stmt::*;
+    let err = ynz_ast::nodes::Expr::Error(span(0, 0));
+    let empty_block = ynz_ast::nodes::Block { stmts: vec![], span: span(0, 0) };
     let all_variants: &[Stmt] = &[
-        Expr(ynz_ast::nodes::Expr::Error(span(0, 0))),
+        Expr(err.clone()),
         Let {
             is_const: false,
             name: String::new(),
             name_span: span(0, 0),
             ty: None,
-            value: ynz_ast::nodes::Expr::Error(span(0, 0)),
+            value: err.clone(),
             span: span(0, 0),
         },
         Assign {
             target: String::new(),
             target_span: span(0, 0),
-            value: ynz_ast::nodes::Expr::Error(span(0, 0)),
+            value: err.clone(),
+            span: span(0, 0),
+        },
+        If {
+            cond: err.clone(),
+            body: empty_block.clone(),
+            span: span(0, 0),
+        },
+        Match {
+            scrutinee: err.clone(),
+            arms: vec![],
+            else_arm: None,
+            span: span(0, 0),
+        },
+        While {
+            cond: err.clone(),
+            body: empty_block.clone(),
+            span: span(0, 0),
+        },
+        For {
+            var: String::new(),
+            var_span: span(0, 0),
+            iter: err.clone(),
+            body: empty_block.clone(),
+            span: span(0, 0),
+        },
+        Return {
+            value: None,
             span: span(0, 0),
         },
     ];
-    assert_eq!(all_variants.len(), 3, "Stmt variant count changed from 3");
+    assert_eq!(all_variants.len(), 8, "Stmt variant count changed from 8 — add a // test-ratchet: comment");
+}
+
+#[test]
+fn m3_match_pattern_kind_variant_count_locked() {
+    // WHY: Only three MatchPatternKind variants ship in M3: Value (active),
+    // IsType and Variant (both reserved for M6). Locking this prevents
+    // accidentally adding a fourth without documenting the milestone.
+    //
+    // test-ratchet: M3 adds 3 variants: Value(1), IsType(2), Variant(3).
+    //   IsType and Variant are deferred to M6 — parser emits diagnostics.
+    use ynz_ast::nodes::MatchPatternKind::*;
+    let all_variants: &[MatchPatternKind] = &[
+        Value(ynz_ast::nodes::Expr::Error(span(0, 0))),
+        IsType("Foo".into()),
+        Variant("bar".into()),
+    ];
+    assert_eq!(all_variants.len(), 3, "MatchPatternKind variant count changed from 3");
 }
 
 #[test]
@@ -96,14 +145,19 @@ fn m2_expr_variant_count_locked() {
 }
 
 #[test]
-fn m2_type_variant_count_locked() {
-    // WHY: Type variants beyond M2 are M3+ work. This pins the count.
+fn m3_type_variant_count_locked() {
+    // WHY: Type variants beyond M3 are M4+ work. This pins the count.
     // Add a `// test-ratchet: <reason>` comment to unlock.
     //
     // test-ratchet: M2 adds 4 variants over M1's 3.
     //   M1: Nothing(1), Named(2), Error(3).
     //   M2: Int(4), Float(5), Number(6), Bool(7).
     //   Total: 7.
+    //
+    // test-ratchet: M3 adds 1 variant for the range builtin iterable type.
+    //   Range is restricted to for-loop iterable position only.
+    //   Full Iterable[T] protocol replaces it in M7.
+    //   Total: 8.
     use ynz_ast::nodes::Type::*;
     let all_variants: &[Type] = &[
         Nothing,
@@ -113,8 +167,9 @@ fn m2_type_variant_count_locked() {
         Float,
         Number { precision: 34 },
         Bool,
+        Range { element: Box::new(Int), end_inclusive: false },
     ];
-    assert_eq!(all_variants.len(), 7, "Type variant count changed from 7");
+    assert_eq!(all_variants.len(), 8, "Type variant count changed from 8 — add a // test-ratchet: comment");
 }
 
 
@@ -639,6 +694,304 @@ fn wrong_return_type_parses_with_named_type() {
                 f.return_type
             );
         }
+    }
+}
+
+#[test]
+fn m3_source_parses_to_expected_ast() {
+    // WHY: Snapshot locks the full M3 AST shape including function parameters,
+    // if/while/for/return, and multi-case match arms. Any silent regression in
+    // parser output breaks the typeck and codegen stages that depend on this shape.
+    let source = r#"function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+
+function main() -> nothing {
+  let result = fib(10)
+  print(result)
+}"#;
+    let output = parse(source);
+    assert_eq!(
+        output.diagnostics.len(),
+        0,
+        "M3 fibonacci source must parse with no diagnostics"
+    );
+    assert_debug_snapshot!("m3_ast", output.module);
+}
+
+#[test]
+fn function_with_parameters_parses_correctly() {
+    // WHY: `function add(x: int, y: int) -> int { ... }` must produce a
+    // FunctionDecl with two Param entries. If params are silently dropped,
+    // typeck cannot check argument types at call sites.
+    let output = parse("function add(x: int, y: int) -> int { return x }");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::Function(f) => {
+            assert_eq!(f.params.len(), 2, "Expected 2 params");
+            assert_eq!(f.params[0].name, "x");
+            assert_eq!(f.params[1].name, "y");
+            assert!(matches!(f.params[0].ty, Type::Int));
+            assert!(matches!(f.params[1].ty, Type::Int));
+        }
+    }
+}
+
+#[test]
+fn function_with_no_params_still_parses() {
+    // WHY: Zero-parameter functions were the only form in M1/M2. This guards
+    // against the M3 parameter parser accidentally requiring at least one param.
+    let output = parse("function main() -> nothing { }");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::Function(f) => assert_eq!(f.params.len(), 0),
+    }
+}
+
+#[test]
+fn trailing_comma_in_params_is_accepted() {
+    // WHY: `function foo(x: int,) -> nothing { }` (trailing comma) must parse
+    // cleanly. Trailing commas are ergonomic when adding params line-by-line;
+    // rejecting them would be a footgun with no benefit.
+    let output = parse("function foo(x: int,) -> nothing { }");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::Function(f) => assert_eq!(f.params.len(), 1),
+    }
+}
+
+#[test]
+fn duplicate_param_name_produces_diagnostic() {
+    // WHY: `function foo(a: int, a: int) -> int { return a }` — two params with
+    // the same name — must produce a diagnostic. Silent acceptance would leave
+    // typeck to pick one arbitrarily (implementation-defined behavior = bug).
+    let output = parse("function foo(a: int, a: int) -> int { return a }");
+    assert!(
+        !output.diagnostics.is_empty(),
+        "Duplicate param name must produce at least 1 diagnostic"
+    );
+    assert!(
+        output.diagnostics[0].what.contains("Duplicate"),
+        "Diagnostic should mention 'Duplicate', got: {:?}",
+        output.diagnostics[0].what
+    );
+}
+
+#[test]
+fn ownership_annotation_on_param_produces_m4_deferral() {
+    // WHY: `function foo(share x: int) -> nothing { }` — the `share` keyword —
+    // must produce a deferral diagnostic pointing at M4, then continue parsing
+    // the param as `x: int`. If the parser hard-rejects `share`, users get a
+    // confusing "unexpected token" error instead of a teaching message.
+    let output = parse("function foo(share x: int) -> nothing { }");
+    assert_eq!(
+        output.diagnostics.len(),
+        1,
+        "share annotation must produce exactly 1 M4 deferral diagnostic"
+    );
+    assert!(
+        output.diagnostics[0].why.contains("milestone 4"),
+        "Deferral must mention milestone 4, got: {:?}",
+        output.diagnostics[0].why
+    );
+    // Parser must recover and still see the param
+    match &output.module.items[0] {
+        Item::Function(f) => assert_eq!(f.params.len(), 1, "Param must be recovered after deferral"),
+    }
+}
+
+#[test]
+fn simple_if_parses_correctly() {
+    // WHY: `if (cond) { body }` must produce Stmt::If, not Stmt::Match.
+    // If disambiguation defaults to multi-case, every simple if in the codebase
+    // would fail to parse.
+    let output = parse("function main() -> nothing { if (x > 0) { print(x) } }");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::Function(f) => match &f.body.stmts[0] {
+            Stmt::If { .. } => {}
+            other => panic!("Expected Stmt::If, got {other:?}"),
+        },
+    }
+}
+
+#[test]
+fn while_loop_parses_correctly() {
+    // WHY: `while (cond) { body }` must produce Stmt::While. Regression would
+    // mean loops silently become expression statements or fail to parse.
+    let output = parse("function main() -> nothing { while (x > 0) { x = x - 1 } }");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::Function(f) => match &f.body.stmts[0] {
+            Stmt::While { .. } => {}
+            other => panic!("Expected Stmt::While, got {other:?}"),
+        },
+    }
+}
+
+#[test]
+fn for_loop_parses_correctly() {
+    // WHY: `for (i in range(0, 5)) { body }` must produce Stmt::For with `var`
+    // set to "i" and `iter` as a Call to range. The loop variable and iterable
+    // expression are both critical for typeck's `range`-as-only-iterable check.
+    let output = parse("function main() -> nothing { for (i in range(0, 5)) { print(i) } }");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::Function(f) => match &f.body.stmts[0] {
+            Stmt::For { var, .. } => assert_eq!(var, "i"),
+            other => panic!("Expected Stmt::For, got {other:?}"),
+        },
+    }
+}
+
+#[test]
+fn return_with_value_parses_correctly() {
+    // WHY: `return expr` must produce Stmt::Return with value Some(expr).
+    // If value is None when an expression is present, typeck cannot check
+    // the return type against the function signature.
+    let output = parse("function foo() -> int { return 42 }");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::Function(f) => match &f.body.stmts[0] {
+            Stmt::Return { value: Some(_), .. } => {}
+            other => panic!("Expected Stmt::Return with value, got {other:?}"),
+        },
+    }
+}
+
+#[test]
+fn return_without_value_parses_correctly() {
+    // WHY: `return` alone (no expression) must produce Stmt::Return with value
+    // None. This is the only valid form for `-> nothing` functions; typeck
+    // uses the None/Some to determine whether a value was provided.
+    let output = parse("function main() -> nothing { return }");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::Function(f) => match &f.body.stmts[0] {
+            Stmt::Return { value: None, .. } => {}
+            other => panic!("Expected Stmt::Return with no value, got {other:?}"),
+        },
+    }
+}
+
+#[test]
+fn multi_case_if_with_int_arms_parses_as_match() {
+    // WHY: `if (x) { 1 => ...; 2 => ... }` must produce Stmt::Match, not Stmt::If.
+    // If the parser always picks simple-if, multi-case `if` becomes syntactically
+    // impossible and the entire branching-by-value feature is dead.
+    let output = parse("function main() -> nothing { if (x) { 1 => print(1) 2 => print(2) } }");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::Function(f) => match &f.body.stmts[0] {
+            Stmt::Match { arms, else_arm: None, .. } => {
+                assert_eq!(arms.len(), 2, "Expected 2 arms");
+            }
+            other => panic!("Expected Stmt::Match, got {other:?}"),
+        },
+    }
+}
+
+#[test]
+fn multi_case_if_with_else_arm() {
+    // WHY: `if (x) { 1 => ...; else => ... }` must produce Stmt::Match with
+    // else_arm = Some(_). Typeck uses the presence of else_arm to determine
+    // whether the multi-case is exhaustive for return-path analysis.
+    let output = parse("function main() -> nothing { if (x) { 1 => print(1) else => print(0) } }");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::Function(f) => match &f.body.stmts[0] {
+            Stmt::Match { arms, else_arm: Some(_), .. } => {
+                assert_eq!(arms.len(), 1, "Expected 1 value arm + else");
+            }
+            other => panic!("Expected Stmt::Match with else_arm, got {other:?}"),
+        },
+    }
+}
+
+#[test]
+fn multi_case_else_only_parses_as_match() {
+    // WHY: `if (x) { else => ... }` (only a catch-all, no value arms) is a
+    // valid multi-case `if`. Typeck treats it as an exhaustive match that always
+    // executes the else_arm body. Parser must not reject it as malformed.
+    let output = parse("function main() -> nothing { if (x) { else => print(0) } }");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::Function(f) => match &f.body.stmts[0] {
+            Stmt::Match { arms, else_arm: Some(_), .. } => {
+                assert_eq!(arms.len(), 0, "Else-only: 0 value arms");
+            }
+            other => panic!("Expected Stmt::Match with else_arm only, got {other:?}"),
+        },
+    }
+}
+
+#[test]
+fn is_type_arm_produces_m6_deferral_diagnostic() {
+    // WHY: `if (shape) { is Circle => ... }` is the M6 type-narrowing form.
+    // In M3 the parser must emit a deferral diagnostic (not a confusing
+    // "unexpected token" error) and produce a MatchArm so the parser recovers.
+    let output = parse("function main() -> nothing { if (shape) { is Circle => print(1) } }");
+    assert_eq!(
+        output.diagnostics.len(),
+        1,
+        "is-type arm must produce exactly 1 M6 deferral diagnostic"
+    );
+    assert!(
+        output.diagnostics[0].why.contains("milestone 6"),
+        "Deferral must mention milestone 6, got: {:?}",
+        output.diagnostics[0].why
+    );
+}
+
+#[test]
+fn if_without_parens_produces_diagnostic() {
+    // WHY: `if cond { }` (no parentheses) is a common mistake from languages like
+    // Rust/Go. The parser must emit a teaching diagnostic, not silently misbehave.
+    // Yinz requires `if (cond)` consistently with `while (cond)` and `for (...)`.
+    let output = parse("function main() -> nothing { if x > 0 { print(x) } }");
+    assert!(
+        !output.diagnostics.is_empty(),
+        "Missing parens on if must produce at least 1 diagnostic"
+    );
+}
+
+#[test]
+fn multi_function_module_parses_correctly() {
+    // WHY: M3 is the first milestone with multi-function modules. Both functions
+    // must appear as separate items in the AST. If the parser stops after the
+    // first function, mutual recursion and callee lookups in typeck fail silently.
+    let source = r#"function add(a: int, b: int) -> int { return a }
+function main() -> nothing { let x = add(1, 2) }"#;
+    let output = parse(source);
+    assert_eq!(output.diagnostics.len(), 0);
+    assert_eq!(output.module.items.len(), 2, "Expected 2 function items");
+}
+
+#[test]
+fn nested_if_inside_for_parses_correctly() {
+    // WHY: Control-flow nesting is the typical real-program pattern. If nested
+    // blocks corrupt the block-end tracking, only the outermost construct works
+    // and every realistic program fails to parse.
+    let source = r#"function main() -> nothing {
+  for (i in range(0, 5)) {
+    if (i > 2) {
+      print(i)
+    }
+  }
+}"#;
+    let output = parse(source);
+    assert_eq!(output.diagnostics.len(), 0, "Nested if-inside-for must parse cleanly");
+    match &output.module.items[0] {
+        Item::Function(f) => match &f.body.stmts[0] {
+            Stmt::For { body, .. } => match &body.stmts[0] {
+                Stmt::If { .. } => {}
+                other => panic!("Inner stmt should be If, got {other:?}"),
+            },
+            other => panic!("Outer stmt should be For, got {other:?}"),
+        },
     }
 }
 

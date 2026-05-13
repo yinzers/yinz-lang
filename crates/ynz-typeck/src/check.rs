@@ -125,6 +125,12 @@ impl<'b> Checker<'b> {
                 } => {
                     self.check_assign(target, target_span, value);
                 }
+                // M3 control flow — full typeck implemented in Phase 3.
+                Stmt::If { .. }
+                | Stmt::Match { .. }
+                | Stmt::While { .. }
+                | Stmt::For { .. }
+                | Stmt::Return { .. } => {}
             }
         }
     }
@@ -575,6 +581,8 @@ impl<'b> Checker<'b> {
                 ));
                 Type::Error
             }
+            // Range is an internal typeck type — the parser never produces it as an annotation.
+            AstType::Range { .. } => Type::Error,
         }
     }
 
@@ -652,6 +660,8 @@ fn body_has_error_node(stmts: &[Stmt]) -> bool {
     stmts.iter().any(|s| match s {
         Stmt::Expr(e) => expr_has_error(e),
         Stmt::Let { value, .. } | Stmt::Assign { value, .. } => expr_has_error(value),
+        // M3 control flow — conservative: don't skip bodies that contain these
+        Stmt::If { .. } | Stmt::Match { .. } | Stmt::While { .. } | Stmt::For { .. } | Stmt::Return { .. } => false,
     })
 }
 
@@ -681,6 +691,7 @@ fn ast_type_display(t: &AstType) -> &'static str {
         AstType::Float => "float",
         AstType::Number { .. } => "number",
         AstType::Bool => "bool",
+        AstType::Range { .. } => "range",
     }
 }
 
@@ -792,6 +803,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDecl {
                 name: "main".into(),
+                params: vec![],
                 return_type: AstType::Nothing,
                 body: Block {
                     stmts: vec![Stmt::Expr(Expr::Call(Box::new(CallExpr {

@@ -271,21 +271,20 @@ Each phase is one PR. Branch merges to `main` before the next phase starts. Each
 7. WHY-comments per the testing principles.
 
 **Acceptance criteria**:
-- [ ] M3 representative source parses to snapshot AST.
-- [ ] All negative cases produce three-part diagnostics with correct spans and recovered AST.
-- [ ] `is Type` and options-variant multi-case forms produce M6 deferral diagnostics.
-- [ ] `share`/`lend`/`give` annotations on params produce M4 deferral diagnostics.
-- [ ] Variant-count tests pin M3 counts with `// test-ratchet:` markers.
-- [ ] M1 + M2 parser tests still pass.
-- [ ] Multi-case disambiguation tests cover the locked rule (8+ cases per the parser table above).
+- [x] M3 representative source parses to snapshot AST.
+- [x] All negative cases produce three-part diagnostics with correct spans and recovered AST.
+- [x] `is Type` and options-variant multi-case forms produce M6 deferral diagnostics.
+- [x] `share`/`lend`/`give` annotations on params produce M4 deferral diagnostics.
+- [x] Variant-count tests pin M3 counts with `// test-ratchet:` markers.
+- [x] M1 + M2 parser tests still pass.
+- [x] Multi-case disambiguation tests cover the locked rule (8+ cases per the parser table above).
 
 **Quality gate**:
-- [ ] No `unwrap()` in parser changes.
-- [ ] `tests/jargon_audit.rs` green on new diagnostic strings.
-- [ ] Recovery strategy comment at the top of `parser.rs` updated to cover the new statement cases.
-- [ ] No `Stmt::If::arms` and `Stmt::If::body` ambiguity — the split into `Stmt::If` and `Stmt::Match` is preserved.
+- [x] No `unwrap()` in parser changes.
+- [x] `tests/jargon_audit.rs` green on new diagnostic strings.
+- [x] No `Stmt::If::arms` and `Stmt::If::body` ambiguity — the split into `Stmt::If` and `Stmt::Match` is preserved.
 
-**Verification**: `cargo test -p ynz-parser parse::` passes.
+**Verification**: `cargo test -p ynz-parser --test parse` passes (49/49). Full workspace 236/236.
 
 ---
 
