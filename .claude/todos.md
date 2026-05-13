@@ -17,6 +17,8 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Later (idea bin — not committed)
 
+- [ ] **`<>` generics syntax — compiler** — When M5 (generics) is implemented, the compiler must use `<>` not `[]` for type parameters. Docs were updated (2026-05-13). Parser, AST, typeck, and codegen must all follow `array<T>`, `map<K, V>`, `fixed<T>`, `function foo<T>()` syntax. No `[]` for type parameters anywhere in the compiler.
+
 - [ ] Wire up GitHub Actions CI once repo is pushed to GitHub (ci.yml already written, just needs a remote)
 - [ ] macOS CI golden hash for ynz-codegen (currently only `hello.x86_64-linux.sha256` committed)
 

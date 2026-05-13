@@ -61,8 +61,8 @@ These enforce Yinz language fundamentals. Violating them creates ambiguity that 
 | `type-naming` | Types must start with capital letter (Golden Rule 13). `type player` is an error. |
 | `variable-naming` | Variables/functions/modules must start with lowercase. `function FetchUser` is an error. |
 | `duplicate-import-name` | Same name imported twice without alias. Forces explicit disambiguation. |
-| `out-of-bounds-literal` | `fixed[T]` of size N, accessed with literal index ≥ N. |
-| `out-of-precision-literal` | `number[N]` with N > 4096 (the cap from `design/numeric-types.md`). |
+| `out-of-bounds-literal` | `fixed<T>` of size N, accessed with literal index ≥ N. |
+| `out-of-precision-literal` | `number<N>` with N > 4096 (the cap from `design/numeric-types.md`). |
 
 ### Tier 2 — Warnings (compile succeeds, message visible)
 
@@ -95,8 +95,8 @@ The "compiler-as-teacher" tier. About code quality, performance, and pedagogy, n
 |------|----------|
 | `use-int-for-whole-numbers` | `let count: number = 0` for a counter — suggest `int` (faster) |
 | `avoid-float-for-finance` | `let price: float = 19.99` — suggest `number` (exact decimal) |
-| `use-type-for-static-keys` | `map[string, V]` literal with all-string-literal keys — suggest a `type` |
-| `prefer-fixed-when-immutable` | `array[T]` that never calls `.add()` or `.remove()` — suggest `fixed[T]` |
+| `use-type-for-static-keys` | `map<string, V>` literal with all-string-literal keys — suggest a `type` |
+| `prefer-fixed-when-immutable` | `array<T>` that never calls `.add()` or `.remove()` — suggest `fixed<T>` |
 | `max-function-length` | Functions over 50 lines (default, configurable) — suggest splitting |
 | `max-nesting-depth` | More than 4 levels of nesting (configurable) — suggest restructuring |
 | `long-parameter-list` | 5+ params (configurable) — suggest options object pattern |

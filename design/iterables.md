@@ -4,7 +4,7 @@ User spec: `spec/iterables.md`
 
 ---
 
-## `follows Iterable[T]` with `next()` — Consistent with the Type System
+## `follows Iterable<T>` with `next()` — Consistent with the Type System
 
 Custom iteration uses the existing `follows` contract system. No special iterator syntax, no magic methods, no separate iterator trait.
 
@@ -27,7 +27,7 @@ Custom iteration uses the existing `follows` contract system. No special iterato
 Iterator state (current position, buffers, page numbers) is tracked with `hidden` fields with defaults. This is what `hidden` was designed for — implementation details that the caller shouldn't see or set.
 
 ```
-type Range follows Iterable[int] {
+type Range follows Iterable<int> {
   start: int
   end: int
   hidden current: int = 0    // iterator state — caller never sets this
@@ -37,16 +37,16 @@ type Range follows Iterable[int] {
 
 ---
 
-## Two Contracts — `Iterable[T]` and `FallibleIterable[T]`
+## Two Contracts — `Iterable<T>` and `FallibleIterable<T>`
 
-Resolved: two separate contracts. In-memory iteration uses `Iterable[T]`; iteration over I/O sources (files, network, paginated APIs) uses `FallibleIterable[T]`. The user almost never sees the distinction directly — the compiler infers it from the iterator's type and propagates errors only when needed.
+Resolved: two separate contracts. In-memory iteration uses `Iterable<T>`; iteration over I/O sources (files, network, paginated APIs) uses `FallibleIterable<T>`. The user almost never sees the distinction directly — the compiler infers it from the iterator's type and propagates errors only when needed.
 
 ```yinz
-type Iterable[T] {
+type Iterable<T> {
   function next(lend self) -> maybe T
 }
 
-type FallibleIterable[T] {
+type FallibleIterable<T> {
   function next(lend self) -> maybe T errors
 }
 ```
@@ -55,28 +55,28 @@ type FallibleIterable[T] {
 
 | Source | Contract |
 |--------|----------|
-| `array[T].items()` | `Iterable[T]` |
-| `fixed[T].items()` | `Iterable[T]` |
-| `map[K,V].entries()` | `Iterable[Entry[K,V]]` |
-| `range(start, end)` | `Iterable[int]` |
-| `file.lines(path)` | `FallibleIterable[string]` |
-| `http.stream(url)` | `FallibleIterable[Response]` |
-| Paginated API clients | `FallibleIterable[T]` |
+| `array<T>.items()` | `Iterable<T>` |
+| `fixed<T>.items()` | `Iterable<T>` |
+| `map<K,V>.entries()` | `Iterable<Entry<K,V>>` |
+| `range(start, end)` | `Iterable<int>` |
+| `file.lines(path)` | `FallibleIterable<string>` |
+| `http.stream(url)` | `FallibleIterable<Response>` |
+| Paginated API clients | `FallibleIterable<T>` |
 
 **Compiler behavior at for-loop sites:**
 
 The for loop syntax is identical for both contracts. The compiler checks the iterator's type:
-- If it follows `Iterable[T]`, the loop runs anywhere.
-- If it follows `FallibleIterable[T]`, the loop requires an `errors` context (or an explicit adapter). The compiler auto-propagates per-iteration errors using the same flow-sensitive narrowing rule as direct `errors` function calls (see `design/errors.md`).
+- If it follows `Iterable<T>`, the loop runs anywhere.
+- If it follows `FallibleIterable<T>`, the loop requires an `errors` context (or an explicit adapter). The compiler auto-propagates per-iteration errors using the same flow-sensitive narrowing rule as direct `errors` function calls (see `design/errors.md`).
 
 **Stdlib adapters for ergonomic fallible-to-infallible conversion:**
 
 ```yinz
 // Skip failed iterations silently (logs the error, continues to next item)
-let lines = file.lines(path).orSkipFailures()        // Iterable[string]
+let lines = file.lines(path).orSkipFailures()        // Iterable<string>
 
 // Get each step's success-or-failure as a value
-let results = file.lines(path).withErrors()          // Iterable[Result[string]]
+let results = file.lines(path).withErrors()          // Iterable<Result<string>>
 ```
 
 These let users iterate fallible sources from non-errors functions when they have a specific recovery strategy.
@@ -97,8 +97,8 @@ Violates Yinz's core error principle: failures are visible and structured. A `fo
 
 ```yinz
 // In-memory data — implements the infallible contract
-type CircularBuffer[T] follows Iterable[T] {
-  items: array[T]
+type CircularBuffer<T> follows Iterable<T> {
+  items: array<T>
   hidden position: int = 0
 
   function next(lend self) -> maybe T {
@@ -110,7 +110,7 @@ type CircularBuffer[T] follows Iterable[T] {
 }
 
 // I/O data — implements the fallible contract
-type ApiPager[T] follows FallibleIterable[T] {
+type ApiPager<T> follows FallibleIterable<T> {
   cursor: maybe string
   hidden done: bool = false
 

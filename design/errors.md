@@ -80,7 +80,42 @@ function loadConfig() -> Config errors {
 When an error reaches a custom handler (`setErrorHandler`) or propagates to the top, it carries:
 
 - `.message` — human-readable description (string)
+- `.suggestions` — array of human-readable next steps (array<string>, may be empty)
 - `.trace` — call path as structured data (array of frames, each with file + line + function name)
 - `.source` — `{ file, line }` of the originating failure
 
-This is enough to produce the "compiler-as-teacher" output spec'd in `spec/errors.md` (the readable stack trace with suggestions).
+`suggestions` is part of the base shape because the teaching-compiler philosophy applies at runtime too — not just compile time. An error that can tell you what to do next is better than one that just tells you what went wrong. Stdlib modules are expected to populate suggestions where the cause is known. User-defined errors may leave it empty.
+
+---
+
+## Typed Stdlib Errors
+
+Stdlib modules define first-class error types with domain-specific fields — not just string messages. Callers pattern-match on the error type to handle specific failure modes. No string parsing, no try/catch, no guessing.
+
+Example from the db module:
+
+```
+type DatabaseError {
+    summary: string             // short human-readable description
+    suggestions: array<string>  // what to do about it
+    code: string | null         // raw driver error code (e.g. Postgres "23505")
+    query: string | null        // sanitized query that failed
+    detail: string | null       // full driver-level message
+}
+```
+
+The principle: a caller receiving a `DatabaseError` can switch on `.code`, read `.summary`, display `.suggestions` — all without parsing a string. The error is data, not a message.
+
+Every stdlib module that uses `errors` should define a typed error for its domain. The base error fields (`.message`, `.suggestions`, `.trace`, `.source`) are always present. Domain-specific fields are additive.
+
+This is the runtime equivalent of the compiler's WHAT/WHAT-INSTEAD/WHY diagnostic format — applied to errors that happen while the program is running.
+
+---
+
+## Implementation Note (for M7)
+
+The `errors` keyword, flow-sensitive auto-propagation, and cascades are scheduled for **M7** (`design/stdlib/database.md` is already written against this contract). When implementing M7:
+
+- The base error shape above (`message`, `suggestions`, `trace`, `source`) must be the foundation the `errors` keyword surfaces to callers via `.message`, `.suggestions`, etc.
+- Typed stdlib errors (like `DatabaseError`) are additive on top of the base — the `errors` keyword must support domain-specific error types, not just a single generic error shape.
+- See `design/stdlib/database.md` → "Structured Runtime Errors" for the first concrete example of a typed stdlib error this design must support.

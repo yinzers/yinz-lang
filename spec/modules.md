@@ -204,7 +204,7 @@ import { Order } from "services/orders"
 
 export type User {
   name: string
-  orders: array[Order]
+  orders: array<Order>
 }
 
 // services/orders.ynz

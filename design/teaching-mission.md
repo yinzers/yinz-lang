@@ -40,7 +40,7 @@ Yinz's unique combination: **easy syntax (Python-tier learning curve) + real sys
 ### Pattern 1 — Data structure recommendations
 
 ```yinz
-let scores: map[string, number] = { alice: 90, bob: 85, charlie: 78 }
+let scores: map<string, number> = { alice: 90, bob: 85, charlie: 78 }
 // IDE HINT: All keys here are compile-time string literals — a type
 //           is significantly faster:
 //   type Scores { alice: number, bob: number, charlie: number }
@@ -55,13 +55,13 @@ let scores: map[string, number] = { alice: 90, bob: 85, charlie: 78 }
 ### Pattern 2 — Performance suggestions
 
 ```yinz
-let data: array[Player] = []
+let data: array<Player> = []
 for (i in range(0, 10000)) {
   data.add({ name: `Player ${i}`, health: 100 })
 }
 // IDE HINT: Growing an array to a known final size triggers ~13 reallocations
 //           as the array's capacity doubles. Pre-allocate to skip them:
-//   let data = array.withCapacity[Player](10000)
+//   let data = array.withCapacity<Player>(10000)
 //
 // Why: Each reallocation copies the entire array. For 10,000 elements that's
 //      ~130KB of needless copying. Pre-allocation is one allocation total.

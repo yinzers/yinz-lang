@@ -76,7 +76,7 @@ These are Yinz's chosen names — use them freely:
 - `share` / `lend` / `give` / `copy` / `.freeze` — ownership modifiers
 - `options` — Yinz's `enum` replacement
 - `type`, `field`, `method` — basic structure terms; universally understood
-- `number`, `float`, `int`, `number[N]` — the type names
+- `number`, `float`, `int`, `number<N>` — the type names
 - `array`, `fixed`, `map` — collection type names
 - `wait`, `background` — concurrency keywords
 - `setup` / `teardown` — testing keywords
@@ -90,8 +90,8 @@ If a word is the official name of a Yinz feature, use it. The ban-list applies t
 
 - **Direct, not condescending.** "You can't add to a fixed array" is fine. "Oh no! It looks like you tried to..." is too cute.
 - **No accusatory voice.** Say "the compiler now treats X as Y" not "you tried to do Y."
-- **Suggest concretely.** "Use `array[T]` instead" with the actual replacement code. Not "consider an alternative."
-- **Quote the user's variable/type/function names.** "`scores` is a `map[string, number]`" — not "this variable is a map type." Reference what they wrote.
+- **Suggest concretely.** "Use `array<T>` instead" with the actual replacement code. Not "consider an alternative."
+- **Quote the user's variable/type/function names.** "`scores` is a `map<string, number>`" — not "this variable is a map type." Reference what they wrote.
 - **No exclamation marks.** Errors are not exciting.
 - **No emoji.** Plain text only.
 

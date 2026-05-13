@@ -9,12 +9,12 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Topic | File | What's in it |
 |-------|------|--------------|
 | Type system | `design/type-system.md` | `type`, `base`, `extends`, `follows`, `override`, structural typing, `or`, `maybe`, `options`, `hidden`, type aliases |
-| Generics | `design/generics.md` | Type generics `[T]`, function generics, `follows` constraints inline, type inference at call sites |
+| Generics | `design/generics.md` | Type generics `<T>`, function generics, `follows` constraints inline, type inference at call sites |
 | Ownership | `design/ownership.md` | `.share`/`.lend`/`.give`/`.copy`/`.freeze`, no direct array indexing |
 | Collections | `design/collections.md` | `fixed`/`array`/`map`, no chaining, method naming, bracket sugar for `.get()`/`.set()`, string indexing methods |
 | Error handling | `design/errors.md` | `errors` keyword, no try/catch, flow-sensitive auto-propagation narrowing |
 | Functions | `design/functions.md` | `function` keyword, `-> nothing`, no tuples, closure syntax |
-| Numeric types | `design/numeric-types.md` | `number`/`float`/`int`, `number[N]` parameterized precision (cap 4096), handwritten impls, overflow methods |
+| Numeric types | `design/numeric-types.md` | `number`/`float`/`int`, `number<N>` parameterized precision (cap 4096), handwritten impls, overflow methods |
 | Naming | `design/naming.md` | Human-readable keywords, capital = type rule, comments syntax |
 | Control flow | `design/control-flow.md` | No standalone `else`, multi-case `if`, exhaustiveness, jump table optimization |
 | Scope | `design/scope.md` | Block scoping, no mutable globals, const expressions, export for sharing |
@@ -25,7 +25,7 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Operators | `design/operators.md` | `follows` contracts, `Self` keyword, `print()` default, `&&`/`\|\|`/`!` symbols, bitwise symbols, no `===` |
 | Sensitive values | `design/sensitive.md` | `sensitive` modifier, auto-redact in all output, `.reveal()` explicit opt-in, stripped from release |
 | FFI | `design/ffi.md` | `foreign` keyword, wrap in safe functions, compiler requires `wait` (DEFERRED to v2+) |
-| Iterables | `design/iterables.md` | `follows Iterable[T]`, `next()` with `maybe T`, hidden state fields |
+| Iterables | `design/iterables.md` | `follows Iterable<T>`, `next()` with `maybe T`, hidden state fields |
 | GPU dispatch | `design/gpu.md` | MVP2+ vision: `gpu` call-site keyword, compiler manages CPU/GPU dispatch (DEFERRED to v2+) |
 | Destructuring | `design/destructuring.md` | Object only, no array, `as` rename, parameter destructuring |
 | Type conversion | `design/type-conversion.md` | Dot methods, no `as` keyword, safe vs unsafe split, no ternary |

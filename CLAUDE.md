@@ -17,8 +17,8 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 7. **Step-by-step over chaining.** No method chaining. Each operation gets its own line with a named variable. Compiler fuses into a single optimized pass.
 8. **Zero-cost abstractions.** High-level syntax compiles to the same machine code as hand-written low-level code.
 9. **Fast to type.** Quick to write without sacrificing readability. `function` over `fn` is worth it; don't add ceremony where it adds nothing.
-10. **Efficiency first, dynamic after.** Default = most performant. `fixed[T]` by default, opt into `array[T]` when you need growth.
-11. **The compiler is a teacher.** Errors explain what went wrong AND why. Suggestions explain why one approach beats another. Every diagnostic answers WHAT happened, WHAT to do instead, and WHY. The compiler is a senior developer mentoring a junior developer — see `design/teaching-mission.md` for the full mission.
+10. **Efficiency first, dynamic after.** Default = most performant. `fixed<T>` by default, opt into `array<T>` when you need growth.
+11. **The compiler is a teacher.** Errors explain what went wrong AND why. Suggestions explain why one approach beats another. Every diagnostic answers WHAT happened, WHAT to do instead, and WHY. The WHY must be **specific and contextual** — not generic ("avoids allocation") but tied to the actual call site ("scores isn't used again after this, so sortInPlace() skips the allocation"). The compiler is a senior developer mentoring a junior developer — see `design/teaching-mission.md` for the full mission.
 12. **Human-readable over programmer jargon.** `options` not `enum`. `follows` not `implements`. `nothing` not `void`. If a non-programmer can guess the meaning, the naming is right. (Note: union types use `|` for consistency with TypeScript — `or` was triple-overloaded.)
 13. **Capital letter = type. Everything else = lowercase.** Scan any line of code — capital letter means type, no capital means everything else (function, variable, keyword, module). `Player` is a type. `player` is a variable. `http` is a module. `Http` would be a type. Zero ambiguity.
 

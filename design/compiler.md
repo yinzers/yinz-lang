@@ -15,7 +15,7 @@ Design document for compiler and IDE language server implementation. Not user-fa
 ## Lessons From Other Languages
 
 ### Why Rust is slow to compile:
-1. **Monomorphization** — every generic usage (`array[Player]`, `array[string]`) generates separate compiled code. Multiplies the work significantly.
+1. **Monomorphization** — every generic usage (`array<Player>`, `array<string>`) generates separate compiled code. Multiplies the work significantly.
 2. **Borrow checker** — deep per-reference analysis to prove safety across the whole function.
 3. **LLVM optimization** — multi-pass, heavy optimization produces fast binaries at the cost of compile time.
 4. **Whole-crate compilation** — Rust compiles large units at once rather than file-by-file.

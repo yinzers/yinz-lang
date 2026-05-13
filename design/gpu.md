@@ -21,8 +21,8 @@ Mixing GPU and CPU code in one application is a multi-language, multi-toolchain 
 
 ```
 // Data just exists — compiler decides where it lives
-let prices: array[float] = loadMarketData()
-let signals: array[float] = loadSignals()
+let prices: array<float> = loadMarketData()
+let signals: array<float> = loadSignals()
 
 // CPU operation — small data, stays on CPU
 let avg = math.average(prices.take(100))
@@ -59,7 +59,7 @@ The same proof that prevents data races in CPU concurrency can prevent GPU/CPU d
 
 **Trading systems:**
 ```
-function analyzeMarket(share data: MarketData) -> array[Signal] errors {
+function analyzeMarket(share data: MarketData) -> array<Signal> errors {
   let correlations = gpu matrix.correlate(data.prices, data.volumes)
   let features = gpu tensor.transform(correlations, data.indicators)
   let signals = features.where(f => f.strength > threshold)

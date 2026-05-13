@@ -7,9 +7,9 @@ Three ways to hold multiple values.
 ## The three collection types
 
 ```
-fixed[string]           // fixed size, stack-allocated — size locked at creation, fastest
-array[Player]           // growable, heap-allocated — add and remove freely
-map[string, number]     // key-value pairs with dynamic keys
+fixed<string>           // fixed size, stack-allocated — size locked at creation, fastest
+array<Player>           // growable, heap-allocated — add and remove freely
+map<string, number>     // key-value pairs with dynamic keys
 ```
 
 All collections are typed. Every element must be the same type:
@@ -19,20 +19,20 @@ let stuff = [42, "hello", true]
 // COMPILE ERROR: Cannot mix types in a collection. Pick one type.
 ```
 
-The syntax is the same for all three: `kind[type]`. No exceptions.
+The syntax is the same for all three: `kind<type>`. No exceptions.
 
 ---
 
-## fixed[T] — fixed-size arrays
+## fixed<T> — fixed-size arrays
 
-`fixed[T]` is stack-allocated and size-locked at creation. The fastest option — no heap, no growth tracking.
+`fixed<T>` is stack-allocated and size-locked at creation. The fastest option — no heap, no growth tracking.
 
-Use `fixed[T]` when you know the size up front:
+Use `fixed<T>` when you know the size up front:
 
 ```
-let rgb: fixed[number] = [255, 128, 0]
-let names: fixed[string] = ["Alice", "Bob", "Charlie"]
-let players: fixed[Player] = [
+let rgb: fixed<number> = [255, 128, 0]
+let names: fixed<string> = ["Alice", "Bob", "Charlie"]
+let players: fixed<Player> = [
   { name: "Alice", health: 100 },
   { name: "Bob", health: 80 }
 ]
@@ -43,7 +43,7 @@ You cannot add or remove elements:
 ```
 rgb.add(50)
 // COMPILE ERROR: Cannot add to a fixed array.
-// fixed[number] is size-locked. Use array[number] if it needs to grow.
+// fixed<number> is size-locked. Use array<number> if it needs to grow.
 ```
 
 You CAN replace existing elements — the size stays the same:
@@ -55,12 +55,12 @@ rgb.set(1, 200)         // same thing, longer form
 
 ---
 
-## array[T] — growable arrays
+## array<T> — growable arrays
 
-`array[T]` is heap-allocated and can grow and shrink:
+`array<T>` is heap-allocated and can grow and shrink:
 
 ```
-let roster: array[Player] = []
+let roster: array<Player> = []
 roster.add({ name: "Alice", health: 100 })
 roster.add({ name: "Bob", health: 80 })
 roster.remove(0)        // remove by index
@@ -86,7 +86,7 @@ if (player.exists()) {
 let player = players.get(5).or(defaultPlayer)   // always returns a Player
 ```
 
-The same rule applies to all collections — `array`, `fixed`, `map`, and `string`. Every access that might not exist returns `maybe`. No out-of-bounds crashes anywhere in the language.
+The same rule applies to all collections — `array<T>`, `fixed<T>`, `map<K, V>`, and `string`. Every access that might not exist returns `maybe`. No out-of-bounds crashes anywhere in the language.
 
 **Why brackets and `.get()` both exist:** brackets are the everyday shorthand familiar to anyone who's used JS, Python, or any C-family language. `.get()` is the long form — useful when you want the operation to be explicit, or when chaining with `.or(default)`.
 
@@ -104,7 +104,7 @@ scores["alice"] = 75          // sugar for scores.set("alice", 75)
 Writing past the end is a runtime error, not a sparse-array creation:
 
 ```
-let arr: array[number] = [1, 2, 3]
+let arr: array<number> = [1, 2, 3]
 arr[10] = 99
 // RUNTIME ERROR: index 10 out of bounds (arr.count() == 3).
 //   .set() replaces existing elements only.
@@ -115,7 +115,7 @@ arr[10] = 99
 Fixed arrays catch out-of-bounds at compile time when the index is a literal:
 
 ```
-let rgb: fixed[number] = [255, 128, 0]
+let rgb: fixed<number> = [255, 128, 0]
 rgb[5] = 100
 // COMPILE ERROR: index 5 out of bounds. rgb has 3 elements.
 ```
@@ -142,9 +142,9 @@ rgb[5] = 100
 .prepend(item)      // new collection with item added at the front
 ```
 
-`.concat()`, `.append()`, and `.prepend()` work on `fixed[T]` because they return new collections. The original stays untouched.
+`.concat()`, `.append()`, and `.prepend()` work on `fixed<T>` because they return new collections. The original stays untouched.
 
-`.set()` works on `fixed[T]` because it replaces an existing element without changing size.
+`.set()` works on `fixed<T>` because it replaces an existing element without changing size.
 
 ---
 
@@ -161,12 +161,12 @@ These mutate in place, which requires dynamic sizing:
 
 ---
 
-## map[K, V] — key-value pairs
+## map<K, V> — key-value pairs
 
 Use maps when keys aren't known at compile time. For known fields, define a `type` — it's faster.
 
 ```
-let wordCounts: map[string, number] = {}
+let wordCounts: map<string, number> = {}
 for (word in words) {
   let current = wordCounts[word].or(0)
   wordCounts[word] = current + 1
@@ -181,8 +181,8 @@ Map dot methods:
 .update({...})        // add or update multiple keys at once
 .has(key)             // does the key exist? → bool
 .remove(key)          // delete by key
-.keys()               // → array[K]
-.values()             // → array[V]
+.keys()               // → array<K>
+.values()             // → array<V>
 .entries()            // → array of key-value pairs (each has .key and .value)
 .sort(fn, order)      // sorted copy
 .filter(fn)           // new map with only matching entries — fn receives entry with .key and .value
@@ -200,7 +200,7 @@ scores["alice"] = 75         // sugar for scores.set("alice", 75)
 **Bulk update with `.update({...})`:**
 
 ```
-let scores: map[string, number] = { alice: 50, bob: 60 }
+let scores: map<string, number> = { alice: 50, bob: 60 }
 
 scores.update({ alice: 75, charlie: 40 })
 // Result: alice=75 (updated), bob=60 (untouched), charlie=40 (added)
@@ -228,7 +228,7 @@ There's one rule that determines whether to use `.` or `[]`:
 | `obj.fieldName` | Field on a type — compile-time known name |
 | `obj.methodName()` | Method on a type or collection |
 | `arr[i]` | Index lookup → `maybe T` (sugar for `.get(i)`) |
-| `m[key]` | Key lookup → `maybe V` (sugar for `.get(key)`) |
+| `m["key"]` | Key lookup → `maybe V` (sugar for `.get(key)`) |
 | `s[i]` | Code point lookup → `maybe string` (sugar for `.get(i)`) |
 
 Types and collections are different concepts. Trying to use brackets on a type, or dot to access a runtime key on a map, both fail:
@@ -240,7 +240,7 @@ let n = p["name"]
 // COMPILE ERROR: Bracket access is for collections (array, fixed, map, string).
 //                Use dot access on types: p.name
 
-let scores: map[string, number] = { alice: 50 }
+let scores: map<string, number> = { alice: 50 }
 scores.alice
 // COMPILE ERROR: Dot access is for methods, not map keys.
 //   Use scores["alice"] for the value at the "alice" key.
@@ -263,7 +263,7 @@ If you know all the keys at compile time, a `type` is faster (direct field acces
 
 ```
 // Slower — known fields in a map
-let stats: map[string, number] = { health: 100, attack: 50 }
+let stats: map<string, number> = { health: 100, attack: 50 }
 
 // Faster — typed object with fixed offsets
 type Stats { health: number, attack: number }
@@ -280,7 +280,7 @@ Don't nest collection types inline. Name the inner shape:
 
 ```
 // Hard to read
-let data: map[string, map[string, number]] = { ... }
+let data: map<string, map<string, number>> = { ... }
 
 // Clear — name each layer
 type PlayerScores {
@@ -288,7 +288,7 @@ type PlayerScores {
   deaths: number
   assists: number
 }
-let scoreboard: map[string, PlayerScores] = {
+let scoreboard: map<string, PlayerScores> = {
   alice: { kills: 10, deaths: 3, assists: 7 },
   bob: { kills: 5, deaths: 8, assists: 12 }
 }
@@ -312,7 +312,7 @@ The compiler sees that each result is only used once and fuses all four steps in
 Early returns fit naturally into this pattern:
 
 ```
-function getTopNames(share players: fixed[Player], count: number) -> array[string] {
+function getTopNames(share players: fixed<Player>, count: number) -> array<string> {
   let active = players.filter(p => p.health > 0)
 
   if (active.count() == 0) {

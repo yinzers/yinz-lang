@@ -4,7 +4,7 @@ The compiler catches problems at three levels. Errors block compilation. Warning
 
 The philosophy: catch real bugs, enforce code quality, don't police style. Every rule prevents an actual problem — nothing is enforced just because "that's how it's usually done."
 
-**Note on the examples below:** This file is a catalog — each example is abbreviated to fit a one-or-two-line summary of the rule it shows. The actual compiler output includes the full three-part diagnostic (WHAT happened, WHAT to do instead, WHY) per `design/compiler-errors.md`. So when you see `ERROR: Cannot add to a fixed array` here, the real output also shows the suggested fix (`Use array[number] if it needs to grow`) and the reason behind the rule.
+**Note on the examples below:** This file is a catalog — each example is abbreviated to fit a one-or-two-line summary of the rule it shows. The actual compiler output includes the full three-part diagnostic (WHAT happened, WHAT to do instead, WHY) per `design/compiler-errors.md`. So when you see `ERROR: Cannot add to a fixed array` here, the real output also shows the suggested fix (`Use array<number> if it needs to grow`) and the reason behind the rule.
 
 ---
 
@@ -68,10 +68,10 @@ let stuff = [42, "hello", true]
 
 **Adding to a fixed array:**
 ```
-let nums: fixed[number] = [1, 2, 3]
+let nums: fixed<number> = [1, 2, 3]
 nums.add(4)
 // ERROR: Cannot add to a fixed array.
-// fixed[number] is size-locked. Use array[number] if it needs to grow.
+// fixed<number> is size-locked. Use array<number> if it needs to grow.
 ```
 
 **Direct array indexing — use .get() instead:**
@@ -217,14 +217,14 @@ These are informational. The IDE shows them. The terminal doesn't, unless you've
 
 **Performance: consider fixed instead of array:**
 ```
-let players: array[Player] = [p1, p2, p3]
+let players: array<Player> = [p1, p2, p3]
 // players never calls .add() or .remove()
-// SUGGESTION: players is never modified after creation. Consider fixed[Player] for better performance.
+// SUGGESTION: players is never modified after creation. Consider fixed<Player> for better performance.
 ```
 
 **Performance: consider type instead of map:**
 ```
-let stats: map[string, number] = { health: 100, attack: 50, defense: 30 }
+let stats: map<string, number> = { health: 100, attack: 50, defense: 30 }
 // SUGGESTION: all keys are known at compile time. Consider defining a type for direct field access.
 ```
 

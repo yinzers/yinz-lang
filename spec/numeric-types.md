@@ -49,28 +49,28 @@ You only lose precision if you exceed the configured digit limit (34 digits by d
 
 ---
 
-## number[N] — higher precision when you need it
+## number<N> — higher precision when you need it
 
-For scientific computing, physics simulations, or any work that needs more than 34 digits of precision, use `number[N]`:
+For scientific computing, physics simulations, or any work that needs more than 34 digits of precision, use `number<N>`:
 
 ```
-let position: number[70] = 0.0000000000000001
-let chaotic: number[200] = initialCondition
+let position: number<70> = 0.0000000000000001
+let chaotic: number<200> = initialCondition
 ```
 
 `N` is the number of significant decimal digits.
 
 | Range | Backing storage | Speed |
 |-------|-----------------|-------|
-| `number` (= `number[34]`) | u128 coefficient (hardware) | Fastest |
-| `number[N]` for N ≤ 34 | u128 coefficient | Fastest |
-| `number[N]` for N > 34 | Bignum coefficient | Slower per op, still bounded |
+| `number` (= `number<34>`) | u128 coefficient (hardware) | Fastest |
+| `number<N>` for N ≤ 34 | u128 coefficient | Fastest |
+| `number<N>` for N > 34 | Bignum coefficient | Slower per op, still bounded |
 
-**Maximum precision: `number[4096]`.** Larger values are a compile error:
+**Maximum precision: `number<4096>`.** Larger values are a compile error:
 
 ```
-let huge: number[5000] = 0.001
-// COMPILE ERROR: number[N] precision is capped at 4096 in v0.1.
+let huge: number<5000> = 0.001
+// COMPILE ERROR: number<N> precision is capped at 4096 in v0.1.
 //                If you genuinely need unbounded precision, see design/deferrals.md.
 //                File an issue with your workload — the cap is intentional and
 //                we want to know about real cases that exceed it.
@@ -79,17 +79,17 @@ let huge: number[5000] = 0.001
 **Mixing precisions in arithmetic** promotes to the higher precision automatically:
 
 ```
-let a: number[34] = 1.0
-let b: number[100] = 2.0
-let c = a + b              // c is number[100] — promoted, no precision lost
+let a: number<34> = 1.0
+let b: number<100> = 2.0
+let c = a + b              // c is number<100> — promoted, no precision lost
 ```
 
 **Assigning to a narrower precision** rounds with a compiler warning:
 
 ```
-let high: number[100] = 0.123456789012345678901234567890
-let low: number[34] = high
-// COMPILER WARNING: assigning number[100] to number[34] will round to 34 digits.
+let high: number<100> = 0.123456789012345678901234567890
+let low: number<34> = high
+// COMPILER WARNING: assigning number<100> to number<34> will round to 34 digits.
 //   If this is intentional, the warning can be silenced. Otherwise widen the target.
 ```
 
@@ -187,7 +187,7 @@ The same suffix pattern applies to subtract / multiply / etc:
 |--------------------------|------|
 | Money, prices, financial math | `number` |
 | Any general math where you want exact results | `number` |
-| Physics requiring >34 digits | `number[70]` (or higher up to 4096) |
+| Physics requiring >34 digits | `number<70>` (or higher up to 4096) |
 | Not sure | `number` |
 | Loop counters, array indices, counts of things | `int` |
 | Graphics positions, colors, transforms | `float` |

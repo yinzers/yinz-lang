@@ -31,9 +31,9 @@ type Player { name: string, health: number, position: Position }
 
 ## Efficiency first by default
 
-`fixed[T]` arrays are stack-allocated and size-locked. Stack allocation is faster than heap allocation. The default path — the one you reach without thinking — is the fast path.
+`fixed<T>` arrays are stack-allocated and size-locked. Stack allocation is faster than heap allocation. The default path — the one you reach without thinking — is the fast path.
 
-Typed objects (`type Player`) are faster than maps (`map[string, number]`) because fields are at fixed offsets — direct access. Maps use hash tables — slower.
+Typed objects (`type Player`) are faster than maps (`map<string, number>`) because fields are at fixed offsets — direct access. Maps use hash tables — slower.
 
 A developer who never thinks about performance automatically writes fast code.
 

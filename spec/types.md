@@ -237,7 +237,7 @@ type Player {
   name: string
   health: number
   hidden damageMultiplier: number = 1.0
-  hidden internalCache: map[string, number] = {}
+  hidden internalCache: map<string, number> = {}
 
   function takeDamage(lend self, amount: number) -> nothing {
     let actual = amount * self.damageMultiplier    // accessible inside Player's methods
@@ -272,7 +272,7 @@ Create a new name for an existing type. Zero runtime cost — the alias is erase
 ```
 type UserId = string
 type Timestamp = number
-type PlayerList = array[Player]
+type PlayerList = array<Player>
 type Coordinates = { x: number, y: number }
 ```
 

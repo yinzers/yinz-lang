@@ -55,6 +55,6 @@ Always use Yinz terms. Never use the traditional term in spec files or user-faci
 | `.clone()` | `.copy` | Dot modifier on value |
 | `Result<T, E>` / `throws` | `errors` keyword | `-> string errors` |
 | `match` / `switch` on types | `if (x is Type)` | Pattern matching via type narrowing |
-| `T[]` / `Array<T>` | `array[T]` | Growable, heap-allocated |
-| fixed-size array / stack array | `fixed[T]` | Stack-allocated, size-locked at creation |
-| `HashMap<K, V>` / `Map<K, V>` | `map[K, V]` | Dynamic key-value |
+| `T[]` / `Array<T>` | `array<T>` | Growable, heap-allocated |
+| fixed-size array / stack array | `fixed<T>` | Stack-allocated, size-locked at creation |
+| `HashMap<K, V>` / `Map<K, V>` | `map<K, V>` | Dynamic key-value |

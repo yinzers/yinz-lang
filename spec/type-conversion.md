@@ -56,6 +56,27 @@ let bad = "hello".toInt()           // none — "hello" is not a number
 let bad = "hello".toInt().or(0)     // 0 — fallback
 ```
 
+## Parsing non-decimal strings
+
+For hex, binary, and octal strings, use explicit methods. All return `maybe int` — the string might not be valid for that base.
+
+```
+"FF".fromHex()        // maybe int — 255
+"ff".fromHex()        // maybe int — 255 (case-insensitive)
+"1010".fromBinary()   // maybe int — 10
+"17".fromOctal()      // maybe int — 15
+
+// With fallback:
+"FF".fromHex().or(0)  // 255
+"ZZ".fromHex().or(0)  // 0 — "ZZ" is not valid hex
+
+// Failure case:
+"GG".fromHex()        // none — G is not a valid hex digit
+"19".fromOctal()      // none — 9 is not a valid octal digit
+```
+
+There is no "parse with radix" argument. Each base has its own method — unambiguous, no magic numbers.
+
 ---
 
 ## Union types — no conversion needed, just check which kind

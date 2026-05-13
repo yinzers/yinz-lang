@@ -10,28 +10,28 @@ Yinz has both **type generics** and **function generics**, both using the same b
 
 **Type generics** (already in spec):
 ```yinz
-type Pair[A, B] {
+type Pair<A, B> {
   first: A
   second: B
 }
 
-type Box[T] {
+type Box<T> {
   value: T
 }
 ```
 
 **Function generics** (this decision):
 ```yinz
-function identity[T](give value: T) -> T {
+function identity<T>(give value: T) -> T {
   return value
 }
 
-function pair[A, B](give first: A, give second: B) -> Pair[A, B] {
+function pair<A, B>(give first: A, give second: B) -> Pair<A, B> {
   return { first, second }
 }
 ```
 
-Both ship in v0.1. Type generics are unusable without function generics — collections (`array[T]`, `map[K,V]`) need generic methods (`.filter`, `.map`, `.sort`) that work on any T, and the stdlib needs to ship a generic `sort`, `find`, `groupBy`, etc.
+Both ship in v0.1. Type generics are unusable without function generics — collections (`array<T>`, `map<K,V>`) need generic methods (`.filter`, `.map`, `.sort`) that work on any T, and the stdlib needs to ship a generic `sort`, `find`, `groupBy`, etc.
 
 ---
 
@@ -41,12 +41,14 @@ Same bracket convention used everywhere else parameterized types appear:
 
 | Use | Syntax |
 |-----|--------|
-| Generic type | `type Pair[A, B] { ... }` |
-| Generic function | `function pair[A, B](...) -> Pair[A, B]` |
-| Parameterized type instance | `array[Player]`, `map[string, int]`, `number[70]`, `int[8]` |
-| Type parameter constraint | `function sort[T follows Comparable](...)` |
+| Generic type | `type Pair<A, B> { ... }` |
+| Generic function | `function pair<A, B>(...) -> Pair<A, B>` |
+| Parameterized type instance | `array<Player>`, `map<string, int>`, `number<70>` |
+| Type parameter constraint | `function sort<T follows Comparable>(...)` |
 
-One syntax. No `<>` (already means comparison). No `<T>` (foreign to Yinz convention). Brackets everywhere.
+One syntax. Angle brackets everywhere for type parameters.
+
+**Why `<>` not `[]`**: `[]` is already used for index access (`arr[0]`, `map["key"]`). Using `[]` for type parameters too creates ambiguity — `json.parse[User](raw)` reads as array indexing, not a type parameter. `<>` is unambiguous: `<>` always means type parameter, `[]` always means index. Also consistent with TypeScript (Golden Rule 6 — borrow familiar syntax).
 
 ---
 
@@ -55,19 +57,19 @@ One syntax. No `<>` (already means comparison). No `<T>` (foreign to Yinz conven
 Constraints use `follows` (the same keyword as type contracts) and are written **inline** with the type parameter:
 
 ```yinz
-function sort[T follows Comparable](share items: array[T]) -> array[T] { ... }
+function sort<T follows Comparable>(share items: array<T>) -> array<T> { ... }
 
-function process[T follows Comparable, Serializable](share item: T) -> string { ... }
+function process<T follows Comparable, Serializable>(share item: T) -> string { ... }
 ```
 
 **Why inline over a separate `where` clause:**
 
 ```yinz
 // Inline (chosen):
-function sort[T follows Comparable](share items: array[T]) -> array[T] { ... }
+function sort<T follows Comparable>(share items: array<T>) -> array<T> { ... }
 
 // Where clause (rejected):
-function sort[T](share items: array[T]) -> array[T] where T follows Comparable { ... }
+function sort<T>(share items: array<T>) -> array<T> where T follows Comparable { ... }
 ```
 
 The inline form keeps the constraint visible right next to the type parameter — the reader's eyes don't have to jump to a separate location. Rust adopted `where` clauses because Rust constraints got very complex (lifetimes + multiple traits + associated types + higher-ranked bounds). Yinz won't have that complexity in v0.1 or even v1.0 — keep it inline.
@@ -90,27 +92,26 @@ let sorted = sort(players)             // T inferred as Player
 let unique = dedupe([1, 2, 1, 3])      // T inferred as int
 
 // Explicit only when ambiguous or no args:
-let empty = createList[Player]()       // no args, T must be specified
-let widened: array[number] = empty[number]()  // explicit widening
+let empty = createList<Player>()       // no args, T must be specified
 ```
 
-This matches Rule 4 (compiler does the hard work) — jr devs don't type the `[T]` for normal calls. The bracket type-param syntax exists primarily for the *function signature*, not the call site.
+This matches Rule 4 (compiler does the hard work) — jr devs don't write `<T>` for normal calls. The angle-bracket type-param syntax exists primarily for the *function signature*, not the call site.
 
 ---
 
 ## Compile errors
 
 ```yinz
-function sort[T follows Comparable](share items: array[T]) -> array[T] { ... }
+function sort<T follows Comparable>(share items: array<T>) -> array<T> { ... }
 
 type Player { name: string, health: number }
 
-let players: array[Player] = [...]
+let players: array<Player> = [...]
 let sorted = sort(players)
 //
 // COMPILE ERROR: Type Player does not follow contract Comparable.
 //
-//   sort[T follows Comparable] requires T to follow Comparable, but Player
+//   sort<T follows Comparable> requires T to follow Comparable, but Player
 //   does not implement it. To make Player sortable, add a follows clause:
 //
 //     type Player follows Comparable { ... }
@@ -123,14 +124,14 @@ let x = identity()
 //
 // COMPILE ERROR: Cannot infer type parameter T for function identity.
 //
-//   identity[T](value: T) -> T needs a value to infer T from, but no
+//   identity<T>(value: T) -> T needs a value to infer T from, but no
 //   arguments were passed. Either pass a value:
 //
 //     let x = identity(5)              // T inferred as int
 //
 //   Or specify T explicitly:
 //
-//     let x: int = identity[int]()     // explicit type — but identity()
+//     let x: int = identity<int>()     // explicit type — but identity()
 //                                       // with no args has no meaning
 ```
 
@@ -142,7 +143,7 @@ let x = identity()
 
 **Lifetime parameters** (Rust-style `'a` lifetimes): Not exposed. Ownership in Yinz is fully inferred — users write `share`/`lend`/`give`/`copy` on values, never on type parameters. The compiler handles the equivalent of lifetimes internally.
 
-**Const generics with arbitrary values:** `int[N]` and `uint[N]` use compile-time integer constants — that's all the const generic machinery Yinz has in v0.1. General-purpose const generics (`array[T, length]`?) are deferred. (Use `fixed[T]` with type inference instead.)
+**Const generics with arbitrary values:** Yinz has no general-purpose const generics in v0.1. General-purpose const generics are deferred. (Use `fixed<T>` with type inference instead.)
 
 **Associated types:** A type contract that requires another type as part of the contract. Not in v0.1. Workaround: use explicit type parameters when needed.
 

@@ -4,13 +4,13 @@ User spec: `spec/collections.md`
 
 ---
 
-## `fixed[T]` and `array[T]`
+## `fixed<T>` and `array<T>`
 
-`fixed[T]` = stack-allocated, size-locked at creation. `array[T]` = heap-allocated, growable.
+`fixed<T>` = stack-allocated, size-locked at creation. `array<T>` = heap-allocated, growable.
 
-**Why**: Golden Rule 10 — the fast default should be the default path. Developers who don't think about performance automatically write fast code. `fixed[T]` requires no annotation — it's what you get when you declare a collection with known content. `array[T]` is the explicit opt-in for when you need growth.
+**Why**: Golden Rule 10 — the fast default should be the default path. Developers who don't think about performance automatically write fast code. `fixed<T>` requires no annotation — it's what you get when you declare a collection with known content. `array<T>` is the explicit opt-in for when you need growth.
 
-**Removed**: `collection[T]` type removed — unnecessary complexity. Two collection types are enough. "Collections" still exists as an English umbrella term covering `fixed[T]`, `array[T]`, `map[K,V]` — but it's not a TYPE, just a category name.
+**Removed**: `collection<T>` type removed — unnecessary complexity. Two collection types are enough. "Collections" still exists as an English umbrella term covering `fixed<T>`, `array<T>`, `map<K,V>` — but it's not a TYPE, just a category name.
 
 **No spread operator**: Not included. Compiler handles optimization internally.
 
@@ -50,16 +50,16 @@ players[2] = newPlayer          // sugar for players.set(2, newPlayer)
 scores["bob"] = 75              // sugar for scores.set("bob", 75)
 ```
 
-Works on: `array[T]`, `fixed[T]`, `map[K,V]`, `string` (read only — strings are immutable).
+Works on: `array<T>`, `fixed<T>`, `map<K,V>`, `string` (read only — strings are immutable).
 
 Does NOT work on: `type` instances. Types use dot access for fields and methods — brackets at a value position on a type are a compile error. This forces the visual distinction between "compile-time-known field name" (dot) and "runtime value lookup" (bracket).
 
 **Why bracket sugar:**
 - **Familiarity:** Every JS/Python/C-family dev expects `arr[0]`. Forcing `.get(0)` everywhere creates needless friction.
 - **Safety preserved:** The sugar still returns `maybe T`. The type system enforces handling. Surface looks familiar; semantics stay safe.
-- **No syntax conflict with type parameters:** Same brackets, different position. `array[Player]` is a TYPE (left of equals or in a type annotation); `players[0]` is a VALUE (right of equals or in an expression). TypeScript proved this distinction works for human readers.
+- **No syntax conflict with type parameters:** Different syntax, different position. `array<Player>` is a TYPE (left of equals or in a type annotation); `players[0]` is a VALUE (right of equals or in an expression). TypeScript proved this distinction works for human readers.
 
-**Reverses an earlier decision:** the original `design/collections.md` rejected `map["key"]` notation citing visual ambiguity with `array[Player]` type syntax. That argument was weaker than originally stated — TS does both fine. Reversing for consistency: brackets work universally on all four collection types for read; on map/array/fixed for write.
+**Reverses an earlier decision:** the original `design/collections.md` rejected `map["key"]` notation citing visual ambiguity with `array<Player>` type syntax. That argument was weaker than originally stated — TS does both fine. Reversing for consistency: brackets work universally on all four collection types for read; on map/array/fixed for write.
 
 **Why dot doesn't work on map keys (the real reason):**
 
@@ -72,7 +72,7 @@ Bracket access keeps the namespaces visually separated: `m["count"]` is unambigu
 **Out-of-bounds on `.set()`:**
 
 ```yinz
-let arr: array[number] = [1, 2, 3]
+let arr: array<number> = [1, 2, 3]
 arr[10] = 99
 // RUNTIME ERROR: index 10 out of bounds (arr.count() == 3).
 //   .set() replaces existing elements only.
@@ -84,12 +84,12 @@ Sparse-array growth (JS's `arr[100] = "x"` creating `<97 empty items>`) is rejec
 
 ---
 
-## Methods Added: `.set()` on `array[T]` and `fixed[T]`
+## Methods Added: `.set()` on `array<T>` and `fixed<T>`
 
 Originally `.set()` only existed on maps. For the bracket-write sugar to work consistently, arrays and fixed arrays also need `.set(index, value)`:
 
-- `array[T].set(lend self, index: int, value: T) -> nothing` — replace at index. Runtime error if out of bounds.
-- `fixed[T].set(lend self, index: int, value: T) -> nothing` — same. Index out of bounds is a compile error when the index is a literal AND the size is known; runtime error otherwise.
+- `array<T>.set(lend self, index: int, value: T) -> nothing` — replace at index. Runtime error if out of bounds.
+- `fixed<T>.set(lend self, index: int, value: T) -> nothing` — same. Index out of bounds is a compile error when the index is a literal AND the size is known; runtime error otherwise.
 
 These replace existing elements only. Use `.add()` to append; `.insertAt(i, value)` (planned, may not be v0.1) to insert.
 

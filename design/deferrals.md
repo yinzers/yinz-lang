@@ -6,9 +6,9 @@ Cross-referenced from any spec / design file that touches a deferred feature.
 
 ---
 
-## Sized integer variants (`int[N]`, `uint[N]` for N != 64)
+## Sized integer variants (`int<N>`, `uint<N>` for N != 64)
 
-**What:** Bracket-parameterized sized integers (`int[8]`, `int[16]`, `int[32]`, `uint[8]`, `uint[16]`, `uint[32]`, `uint[64]`, etc.) and signed equivalents.
+**What:** Angle-bracket-parameterized sized integers (`int<8>`, `int<16>`, `int<32>`, `uint<8>`, `uint<16>`, `uint<32>`, `uint<64>`, etc.) and signed equivalents.
 
 **Why deferred:**
 - Requires const generics (numeric values as type parameters) — a meaningful compiler sub-project that took Rust years to land well.
@@ -18,7 +18,7 @@ Cross-referenced from any spec / design file that touches a deferred feature.
 
 **Trigger to land:** Either (a) FFI work begins, OR (b) a real user workload needs to interop with a binary protocol that v0.1's byte-array helpers can't ergonomically handle.
 
-**Planned syntax when it lands:** `int[N]` / `uint[N]` where N is a compile-time integer (probably 8, 16, 32, 64, 128, 256, 512). Matches existing bracket convention (`array[T]`, `map[K,V]`, `fixed[T]`, `number[N]`).
+**Planned syntax when it lands:** `int<N>` / `uint<N>` where N is a compile-time integer (probably 8, 16, 32, 64, 128, 256, 512). Matches existing angle-bracket convention (`array<T>`, `map<K,V>`, `fixed<T>`, `number<N>`).
 
 **Cross-references:** `spec/numeric-types.md`, `design/numeric-types.md`
 
@@ -36,13 +36,13 @@ Cross-referenced from any spec / design file that touches a deferred feature.
 
 **Trigger to land:** GPU dispatch begins OR ML stdlib begins.
 
-**Planned syntax when it lands:** Possibly `float[32]` to match the bracket convention, OR a built-in `f32` type — decide when the use case is concrete.
+**Planned syntax when it lands:** Possibly `float<32>` to match the angle-bracket convention, OR a built-in `f32` type — decide when the use case is concrete.
 
 **Cross-references:** `spec/numeric-types.md`, `design/gpu.md`
 
 ---
 
-## Arbitrary-precision decimal beyond `number[4096]`
+## Arbitrary-precision decimal beyond `number<4096>`
 
 **What:** `number` precision larger than 4096 significant digits — true unbounded decimal arithmetic.
 
@@ -51,11 +51,11 @@ Cross-referenced from any spec / design file that touches a deferred feature.
 - Unbounded precision means unbounded memory per value and unbounded per-operation time — breaks the language's "predictable performance" character.
 - Real arbitrary-precision libraries (GMP, MPFR) are massive projects.
 
-**v0.1 substitute:** Use `number[N]` with N up to 4096. Compile error if a user tries `number[5000]` — error message explicitly points to this deferral.
+**v0.1 substitute:** Use `number<N>` with N up to 4096. Compile error if a user tries `number<5000>` — error message explicitly points to this deferral.
 
 **Trigger to land:** A real user workload genuinely exceeds 4096 digits AND can't be restructured to fit. This is a deliberately high bar.
 
-**Planned form when it lands:** Either a separate `bignumber` type with heap-allocated coefficient, OR `number[arbitrary]` as a keyword in the bracket position.
+**Planned form when it lands:** Either a separate `bignumber` type with heap-allocated coefficient, OR `number<arbitrary>` as a keyword in the angle-bracket position.
 
 **Cross-references:** `spec/numeric-types.md`, `design/numeric-types.md`
 
@@ -179,13 +179,13 @@ Cross-referenced from any spec / design file that touches a deferred feature.
 
 ---
 
-## Custom iterables (`follows Iterable[T]` / `follows FallibleIterable[T]`)
+## Custom iterables (`follows Iterable<T>` / `follows FallibleIterable<T>`)
 
-**What:** User types can implement `Iterable[T]` or `FallibleIterable[T]` and be iterated with `for`.
+**What:** User types can implement `Iterable<T>` or `FallibleIterable<T>` and be iterated with `for`.
 
 **Why deferred:** Built-in `for` over collections (`array`, `fixed`, `map`, ranges) works without this. Built-in `for` over fallible iterables like `file.lines()` works in v0.6. Custom user types implementing the contracts is the extension that ships at v1.0.
 
-**Substitute:** Users with iterable-like data expose a `.items()` method returning `array[T]` and `for (item in foo.items())`. Lossy compared to true iteration (materializes the whole collection) but works.
+**Substitute:** Users with iterable-like data expose a `.items()` method returning `array<T>` and `for (item in foo.items())`. Lossy compared to true iteration (materializes the whole collection) but works.
 
 **Trigger to land:** v1.0.
 

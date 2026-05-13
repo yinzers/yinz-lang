@@ -19,8 +19,8 @@ The absolute minimum: the language compiles and runs a hello-world program. No s
 - Options (named value sets, replaces enums)
 - Unions (`type Foo = A or B or C`)
 - Maybe types (`maybe T`, `none`, `.exists()`, `.value`, `.or(default)`)
-- Generics — both **type generics** (`array[T]`, `map[K,V]`) AND **function generics** (`function foo[T](...)`)
-- Collections (`fixed[T]`, `array[T]`, `map[K,V]`) with bracket sugar for `.get()` / `.set()`
+- Generics — both **type generics** (`array<T>`, `map<K,V>`) AND **function generics** (`function foo<T>(...)`)
+- Collections (`fixed<T>`, `array<T>`, `map<K,V>`) with bracket sugar for `.get()` / `.set()`
 - Control flow (`if`, multi-case `if`, `for`, `while`, early returns)
 - Strings (with interpolation, indexing via code-point / byte / grapheme)
 - Scope (block scoping, file-level constants)
@@ -28,9 +28,9 @@ The absolute minimum: the language compiles and runs a hello-world program. No s
 - Type conversion (dot methods, no `as` keyword)
 - Errors (`errors` keyword, flow-sensitive auto-propagation)
 - Ownership (`share`/`lend`/`give`/`copy`/`.freeze`)
-- Numeric types (`number` = decimal128 default, `number[N]` up to 4096, `float` = f64, `int` = i64)
+- Numeric types (`number` = decimal128 default, `number<N>` up to 4096, `float` = f64, `int` = i64)
 - Concurrency keywords parse + type-check (`wait`, `background`) — runs SEQUENTIALLY (auto-parallelization comes in v0.3)
-- Iterables — built-in iteration over collections (`for (x in arr)`). Custom `follows Iterable[T]` is v1.0.
+- Iterables — built-in iteration over collections (`for (x in arr)`). Custom `follows Iterable<T>` is v1.0.
 - Modules (`import`, `export`, root-relative paths, aliases with `as`, duplicate-name compile error)
 - Main entry (`function main()`)
 - Doc comments (`///`)
@@ -235,7 +235,7 @@ Structured logging on top of v0.11's basic `log` module. Sinks (file, stdout, sy
 Public launch milestone. Ships:
 
 - **Operator overloading** — user types can `follows Add`, `follows Subtract`, etc., and use `+`, `-`, `*`, `/` operators
-- **Custom iterables** — user types can `follows Iterable[T]` and `follows FallibleIterable[T]`
+- **Custom iterables** — user types can `follows Iterable<T>` and `follows FallibleIterable<T>`
 - **Formal grammar lock** — the EBNF / parser becomes the contract for backward compatibility
 - **All compile errors reviewed** for the WHAT/WHAT-INSTEAD/WHY format per `design/teaching-mission.md`
 - **Backward-compatibility policy** kicks in (see `design/versioning.md`)
@@ -279,9 +279,9 @@ See `design/deferrals.md` for the authoritative ledger. Headline entries:
 
 - **FFI** (call C/C++/Rust libraries from Yinz)
 - **GPU dispatch** (the `gpu` call-site keyword, kernel compilation)
-- **Sized integer variants** (`int[N]`, `uint[N]` for N != 64)
+- **Sized integer variants** (`int<N>`, `uint<N>` for N != 64)
 - **Sized float variants** (`f32`)
-- **Arbitrary-precision decimal** beyond `number[4096]`
+- **Arbitrary-precision decimal** beyond `number<4096>`
 - **ML stdlib** (tensors, neural net primitives)
 - **Markets stdlib** (financial data, brokerage integrations)
 - **Self-hosted compiler** (Yinz compiler written in Yinz)

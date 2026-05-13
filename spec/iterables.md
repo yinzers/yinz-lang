@@ -21,11 +21,11 @@ The compiler calls `.next()` on `players` repeatedly until it returns `none`. Th
 Most iterables can never fail mid-step. Some iterables (reading a file, paging through an API) can — disk errors, network timeouts, etc. Yinz has a contract for each:
 
 ```
-type Iterable[T] {
+type Iterable<T> {
   function next(lend self) -> maybe T
 }
 
-type FallibleIterable[T] {
+type FallibleIterable<T> {
   function next(lend self) -> maybe T errors
 }
 ```
@@ -36,12 +36,12 @@ You almost never think about which contract is which — the compiler picks base
 
 | You're iterating over | Contract |
 |-----------------------|----------|
-| `array[T]`, `fixed[T]` | `Iterable[T]` |
-| `map[K, V].entries()` | `Iterable[Entry[K, V]]` |
-| `range(start, end)` | `Iterable[int]` |
-| `file.lines(path)` | `FallibleIterable[string]` |
-| `http.stream(url)` | `FallibleIterable[Response]` |
-| Paginated API clients | `FallibleIterable[T]` |
+| `array<T>`, `fixed<T>` | `Iterable<T>` |
+| `map<K, V>.entries()` | `Iterable<Entry<K, V>>` |
+| `range(start, end)` | `Iterable<int>` |
+| `file.lines(path)` | `FallibleIterable<string>` |
+| `http.stream(url)` | `FallibleIterable<Response>` |
+| Paginated API clients | `FallibleIterable<T>` |
 
 The `for` syntax is the same either way. What changes is that a fallible loop requires your function to be marked `errors` (or you handle the failures explicitly).
 
@@ -56,7 +56,7 @@ for (num in range(1, 1000000)) {
 }
 ```
 
-`range()` is built into the standard library. Each number is generated on demand — no million-element array created. Under the hood it's a `Range` type that follows `Iterable[int]`.
+`range()` is built into the standard library. Each number is generated on demand — no million-element array created. Under the hood it's a `Range` type that follows `Iterable<int>`.
 
 ---
 
@@ -64,8 +64,8 @@ for (num in range(1, 1000000)) {
 
 ```
 // Process a 50GB log file with only one line in memory at a time
-function findErrors(path: string) -> array[string] errors {
-  let errors: array[string] = []
+function findErrors(path: string) -> array<string> errors {
+  let errors: array<string> = []
   for (line in file.lines(path)) {     // each read can fail — auto-propagates
     if (line.contains("ERROR")) {
       errors.add(line)
@@ -75,7 +75,7 @@ function findErrors(path: string) -> array[string] errors {
 }
 ```
 
-`file.lines()` returns a `FallibleIterable[string]` — it reads one line at a time, and any read can fail (disk errors, mid-read closure, etc.). Because the enclosing function is `errors`, failures auto-propagate just like a direct `errors` function call.
+`file.lines()` returns a `FallibleIterable<string>` — it reads one line at a time, and any read can fail (disk errors, mid-read closure, etc.). Because the enclosing function is `errors`, failures auto-propagate just like a direct `errors` function call.
 
 If you want to keep reading past failures (for example, log them and continue), use one of the adapters:
 
@@ -101,10 +101,10 @@ With either adapter, the enclosing function no longer needs to be `errors`.
 
 ## Building a custom iterable
 
-Implement `follows Iterable[T]` with a `next(lend self) -> maybe T` method. Use `hidden` fields with defaults to track internal state:
+Implement `follows Iterable<T>` with a `next(lend self) -> maybe T` method. Use `hidden` fields with defaults to track internal state:
 
 ```
-type CountDown follows Iterable[int] {
+type CountDown follows Iterable<int> {
   end: int
   hidden current: int = 0
 
@@ -127,7 +127,7 @@ for (num in counter) {
 If your iteration step can fail (I/O, network), follow the fallible contract instead:
 
 ```
-type ApiPager[T] follows FallibleIterable[T] {
+type ApiPager<T> follows FallibleIterable<T> {
   baseUrl: string
   hidden cursor: maybe string = none
   hidden done: bool = false
@@ -144,7 +144,7 @@ type ApiPager[T] follows FallibleIterable[T] {
 }
 ```
 
-The choice — `Iterable` vs `FallibleIterable` — comes down to one question: can a single step fail at runtime? If yes, use `FallibleIterable[T]`. If no, use `Iterable[T]`. The compiler will catch you trying to do I/O inside an infallible `next()`.
+The choice — `Iterable<T>` vs `FallibleIterable<T>` — comes down to one question: can a single step fail at runtime? If yes, use `FallibleIterable<T>`. If no, use `Iterable<T>`. The compiler will catch you trying to do I/O inside an infallible `next()`.
 
 ---
 
@@ -152,8 +152,8 @@ The choice — `Iterable` vs `FallibleIterable` — comes down to one question: 
 
 Most developers never build one. Standard iterables cover all common cases:
 
-- `array[T]` and `fixed[T]` — iterate elements
-- `map[K, V]` — iterate entries (each with `.key` and `.value`)
+- `array<T>` and `fixed<T>` — iterate elements
+- `map<K, V>` — iterate entries (each with `.key` and `.value`)
 - `range(start, end)` — number sequences
 - `file.lines(path)` — file lines without loading into memory
 

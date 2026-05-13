@@ -9,42 +9,42 @@ Sometimes you want a type that works with any type. That's what generics are for
 You've been using generics this whole time:
 
 ```
-array[Player]           // an array that holds Players
-map[string, number]     // a map with string keys and number values
-fixed[string]           // a fixed array of strings
+array<Player>           // an array that holds Players
+map<string, number>     // a map with string keys and number values
+fixed<string>           // a fixed array of strings
 ```
 
-The `[T]` part is the generic parameter — it says what type the collection holds.
+The `<T>` part is the generic parameter — it says what type the collection holds.
 
 ---
 
 ## Defining your own generic types
 
-Use the same `name[T]` pattern:
+Use the same `name<T>` pattern:
 
 ```
-type Box[T] {
+type Box<T> {
   value: T
 }
 
-let playerBox: Box[Player] = { value: somePlayer }
-let numberBox: Box[number] = { value: 42 }
+let playerBox: Box<Player> = { value: somePlayer }
+let numberBox: Box<number> = { value: 42 }
 ```
 
-`Box[Player]` is a Box that holds a `Player`. `Box[number]` holds a `number`. One definition, works with any type.
+`Box<Player>` is a Box that holds a `Player`. `Box<number>` holds a `number`. One definition, works with any type.
 
 ---
 
 ## Multiple type parameters
 
 ```
-type Pair[A, B] {
+type Pair<A, B> {
   first: A
   second: B
 }
 
-let coord: Pair[number, number] = { first: 10, second: 20 }
-let entry: Pair[string, number] = { first: "score", second: 100 }
+let coord: Pair<number, number> = { first: 10, second: 20 }
+let entry: Pair<string, number> = { first: "score", second: 100 }
 ```
 
 ---
@@ -54,10 +54,10 @@ let entry: Pair[string, number] = { first: "score", second: 100 }
 The pattern is the same everywhere — your types and the built-in types work the same way:
 
 ```
-array[Player]           // built-in — holds Players
-Box[Player]             // yours — holds a Player
-Pair[string, number]    // yours — holds a string and a number
-map[string, number]     // built-in — maps strings to numbers
+array<Player>           // built-in — holds Players
+Box<Player>             // yours — holds a Player
+Pair<string, number>    // yours — holds a string and a number
+map<string, number>     // built-in — maps strings to numbers
 ```
 
 One pattern. No special cases.
@@ -66,10 +66,10 @@ One pattern. No special cases.
 
 ## Generic functions
 
-Functions can have type parameters too — same `name[T]` syntax, after the function name:
+Functions can have type parameters too — same `name<T>` syntax, after the function name:
 
 ```
-function identity[T](give value: T) -> T {
+function identity<T>(give value: T) -> T {
   return value
 }
 
@@ -84,22 +84,22 @@ The compiler picks `T` from the argument you pass. You almost never write it exp
 ## Multiple type parameters on a function
 
 ```
-function pair[A, B](give first: A, give second: B) -> Pair[A, B] {
+function pair<A, B>(give first: A, give second: B) -> Pair<A, B> {
   return { first, second }
 }
 
-let coord = pair(10, 20)            // A=int, B=int — Pair[int, int]
-let entry = pair("score", 100)      // A=string, B=int — Pair[string, int]
+let coord = pair(10, 20)            // A=int, B=int — Pair<int, int>
+let entry = pair("score", 100)      // A=string, B=int — Pair<string, int>
 ```
 
 ---
 
 ## Constraints — require the type to follow a contract
 
-If your function needs the type to support certain operations, use `follows` right inside the bracket:
+If your function needs the type to support certain operations, use `follows` right inside the angle brackets:
 
 ```
-function sort[T follows Comparable](share items: array[T]) -> array[T] {
+function sort<T follows Comparable>(share items: array<T>) -> array<T> {
   // T is guaranteed to follow Comparable, so .compare() works
   // ...
 }
@@ -110,7 +110,7 @@ let sorted = sort(players)         // works because Player follows Comparable
 Multiple constraints — separate with commas:
 
 ```
-function process[T follows Comparable, Serializable](share item: T) -> string {
+function process<T follows Comparable, Serializable>(share item: T) -> string {
   // T follows both Comparable AND Serializable
 }
 ```
@@ -123,7 +123,7 @@ type Player { name: string, health: number }   // no follows clause
 let sorted = sort(players)
 // COMPILE ERROR: Type Player does not follow contract Comparable.
 //
-//   sort[T follows Comparable] requires T to follow Comparable, but Player
+//   sort<T follows Comparable> requires T to follow Comparable, but Player
 //   does not implement it. To make Player sortable, add a follows clause:
 //
 //     type Player follows Comparable { ... }
@@ -135,14 +135,14 @@ let sorted = sort(players)
 
 ## Explicit type parameters — only when needed
 
-In rare cases the compiler can't infer `T` (usually when no arguments use the type). Specify it manually with brackets at the call site:
+In rare cases the compiler can't infer `T` (usually when no arguments use the type). Specify it manually with angle brackets at the call site:
 
 ```
-function createList[T]() -> array[T] {
+function createList<T>() -> array<T> {
   return []
 }
 
-let empty = createList[Player]()       // explicit — there's nothing to infer from
+let empty = createList<Player>()       // explicit — there's nothing to infer from
 ```
 
-99% of calls don't need this. If you find yourself writing `[T]` at a call site often, the function signature probably has a design issue.
+99% of calls don't need this. If you find yourself writing `<T>` at a call site often, the function signature probably has a design issue.

@@ -38,27 +38,27 @@ If we ever consider switching to a crate, the test suite IS the contract — dro
 
 ---
 
-## `number[N]` — Parameterized Precision
+## `number<N>` — Parameterized Precision
 
-`number` defaults to 34 significant decimal digits (= `number[34]` = IEEE 754 decimal128). For higher-precision work (physics, scientific computing, number theory), users opt in to wider precision per-variable:
+`number` defaults to 34 significant decimal digits (= `number<34>` = IEEE 754 decimal128). For higher-precision work (physics, scientific computing, number theory), users opt in to wider precision per-variable:
 
 ```yinz
 let price: number = 19.99                    // 34 digits (default, fastest)
-let position: number[70] = 0.000000001       // 70 digits
-let chaotic: number[200] = startingCondition // 200 digits
+let position: number<70> = 0.000000001       // 70 digits
+let chaotic: number<200> = startingCondition // 200 digits
 ```
 
 **Maximum precision: 4096 digits.** Higher values are a compile error:
 
 ```
-let huge: number[5000] = 0.001
-// COMPILE ERROR: number[N] precision is capped at 4096 in v0.1.
+let huge: number<5000> = 0.001
+// COMPILE ERROR: number<N> precision is capped at 4096 in v0.1.
 //                See design/deferrals.md for the arbitrary-precision deferral.
 ```
 
 **Why 4096:**
 - Covers gravitational wave numerics (~200 digits), QCD calculations (~50 digits), and far exceeds any realistic physics workload.
-- Memory per value bounded at ~1.7 KB — predictable, fits in `fixed[T]` without surprise.
+- Memory per value bounded at ~1.7 KB — predictable, fits in `fixed<T>` without surprise.
 - Multiplication cost bounded — at N=4096 with Karatsuba, still microseconds. No surprise milliseconds-per-op.
 - Yinz's character is "predictable performance" — unbounded precision means unbounded per-op cost. Cap exists to preserve that character.
 
@@ -70,10 +70,10 @@ let huge: number[5000] = 0.001
 **Mixed-precision arithmetic:** binary operators promote to the higher precision. Assignment to a narrower precision rounds half-even with a compiler warning:
 
 ```yinz
-let a: number[34] = 1.0
-let b: number[100] = 2.0
-let c = a + b           // c is number[100] — promoted
-let d: number[34] = c   // COMPILER WARNING: assigning number[100] to number[34]
+let a: number<34> = 1.0
+let b: number<100> = 2.0
+let c = a + b           // c is number<100> — promoted
+let d: number<34> = c   // COMPILER WARNING: assigning number<100> to number<34>
                         //   will round to 34 digits.
 ```
 
@@ -112,4 +112,4 @@ count = count + 1
 
 **Why panic over wrap:** Wrapping is almost always a bug, not a feature. Making the bug loud at the call site is better than silent corruption downstream. Users who genuinely want wrap (rare — usually cryptography, hashing) get to ask for it explicitly with `.wrappingAdd()`. That visibility is good — code review can spot it.
 
-**Sized variants (`int[N]`, `uint[N]`):** Deferred to v2+ — see `design/deferrals.md`.
+**Sized variants (`int<N>`, `uint<N>`):** Deferred to v2+ — see `design/deferrals.md`.
