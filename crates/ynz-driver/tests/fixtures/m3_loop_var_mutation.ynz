@@ -1,0 +1,6 @@
+function main() -> nothing {
+  for (i in range(0, 5)) {
+    i = 10
+    print(i)
+  }
+}

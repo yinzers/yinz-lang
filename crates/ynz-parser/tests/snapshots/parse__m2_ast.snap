@@ -7,6 +7,7 @@ Module {
         Function(
             FunctionDecl {
                 name: "main",
+                params: [],
                 return_type: Nothing,
                 body: Block {
                     stmts: [

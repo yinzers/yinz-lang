@@ -1,0 +1,13 @@
+function classify(x: int) -> int {
+  if (x) {
+    1 => return 10
+    2 => return 20
+    else => return 0
+  }
+}
+
+function main() -> nothing {
+  print(classify(1))
+  print(classify(2))
+  print(classify(99))
+}

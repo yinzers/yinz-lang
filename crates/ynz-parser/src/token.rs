@@ -18,11 +18,11 @@ impl<T> Spanned<T> {
 
 /// The complete token vocabulary.
 ///
-/// Variant count is pinned by `m2_token_variant_count_locked` in the test suite.
+/// Variant count is pinned by `m3_token_variant_count_locked` in the test suite.
 /// Adding a variant requires both an inline `// test-ratchet: <reason>` marker
 /// on that test AND updating this comment with the new count.
 ///
-/// Current count: 42
+/// Current count: 49
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Token {
 
@@ -136,6 +136,22 @@ pub enum Token {
     RBracket,
     /// `,` (argument separator in calls)
     Comma,
+
+
+    /// The `if` keyword.
+    If,
+    /// The `else` keyword (used in multi-case `if` arms as `else =>`).
+    Else,
+    /// The `while` keyword.
+    While,
+    /// The `for` keyword.
+    For,
+    /// The `in` keyword (for-loop separator: `for (x in collection)`).
+    In,
+    /// The `return` keyword.
+    Return,
+    /// `=>` (fat arrow — multi-case arm separator in `if (value) { 1 => ... }`).
+    FatArrow,
 }
 
 impl Token {

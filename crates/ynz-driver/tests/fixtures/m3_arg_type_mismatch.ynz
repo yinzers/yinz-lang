@@ -1,0 +1,7 @@
+function greet(name: string) -> nothing {
+  print(name)
+}
+
+function main() -> nothing {
+  greet(42)
+}

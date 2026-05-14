@@ -1,0 +1,10 @@
+// CATCH-UP M4: ownership modifiers (`share`, `lend`, `give`) on parameters
+// land in milestone 4. Until then the parser emits a deferral diagnostic.
+function greet(share name: string) -> nothing {
+  print(name)
+}
+
+function main() -> nothing {
+  let n = "world"
+  greet(n)
+}

@@ -1,0 +1,7 @@
+function foo() -> int {
+  return
+}
+
+function main() -> nothing {
+  print(foo())
+}

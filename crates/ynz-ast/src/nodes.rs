@@ -17,11 +17,24 @@ pub enum Item {
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunctionDecl {
     pub name: String,
+    pub params: Vec<Param>,
     pub return_type: Type,
     pub body: Block,
     pub span: SourceSpan,
     /// Span of the function name identifier.
     pub name_span: SourceSpan,
+}
+
+/// A single function parameter: `name: Type`.
+///
+/// No ownership annotations in M3 — those arrive in M4 (`share`, `lend`, `give`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Param {
+    pub name: String,
+    pub name_span: SourceSpan,
+    pub ty: Type,
+    pub ty_span: SourceSpan,
+    pub span: SourceSpan,
 }
 
 /// A block of statements surrounded by `{` ... `}`.
@@ -33,8 +46,8 @@ pub struct Block {
 
 /// A single statement.
 ///
-/// Variant count is pinned by `m2_stmt_variant_count_locked` in the test suite.
-/// Current count: 3.
+/// Variant count is pinned by `m3_stmt_variant_count_locked` in the test suite.
+/// Current count: 8.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt {
     /// A bare expression used as a statement (e.g. a function call).
@@ -62,6 +75,85 @@ pub enum Stmt {
         value: Expr,
         span: SourceSpan,
     },
+
+    /// A simple `if (cond) { body }` — no else clause.
+    ///
+    /// The Yinz spec has no standalone `else { }` block. Alternation is expressed
+    /// via early return (pattern 1) or pre-assignment (pattern 2). For value-based
+    /// branching, use the `Stmt::Match` multi-case form with `else =>` catch-all.
+    If {
+        cond: Expr,
+        body: Block,
+        span: SourceSpan,
+    },
+
+    /// A multi-case `if (scrutinee) { arms }` with optional `else =>` catch-all.
+    ///
+    /// Distinct from `Stmt::If` to prevent the malformed state where both a body
+    /// and arms are populated simultaneously.
+    Match {
+        scrutinee: Expr,
+        arms: Vec<MatchArm>,
+        else_arm: Option<Block>,
+        span: SourceSpan,
+    },
+
+    /// A `while (cond) { body }` loop.
+    While {
+        cond: Expr,
+        body: Block,
+        span: SourceSpan,
+    },
+
+    /// A `for (var in iter) { body }` loop.
+    ///
+    /// In M3, `iter` must be a `range(...)` call — enforced by typeck (P3).
+    /// Parser accepts any expression so M7's `Iterable[T]` protocol requires
+    /// only a typeck change, not a parser change.
+    For {
+        var: String,
+        var_span: SourceSpan,
+        iter: Expr,
+        body: Block,
+        span: SourceSpan,
+    },
+
+    /// An early `return [value]`.
+    Return {
+        value: Option<Expr>,
+        span: SourceSpan,
+    },
+}
+
+/// A single multi-case arm: `pattern => { body }`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MatchArm {
+    pub pattern: MatchPattern,
+    pub body: Block,
+    pub arrow_span: SourceSpan,
+}
+
+/// The pattern in a multi-case arm.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MatchPattern {
+    pub kind: MatchPatternKind,
+    pub span: SourceSpan,
+}
+
+/// The kind of a multi-case arm pattern.
+///
+/// Variant count is pinned by `m3_match_pattern_kind_variant_count` in the test suite.
+/// Current count: 3.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MatchPatternKind {
+    /// A value literal or expression: `1 => ...`, `"hello" => ...`.
+    Value(Expr),
+    /// `is TypeName =>` — type-narrowing form, deferred to M6.
+    // REPLACE-AT M6: widen String to TypePath for narrowing
+    IsType(String),
+    /// `variant_name =>` — options-variant form, deferred to M6.
+    // REPLACE-AT M6: widen String to VariantPath for options exhaustiveness
+    Variant(String),
 }
 
 /// Binary operator kinds.
@@ -183,8 +275,8 @@ pub struct CallExpr {
 
 /// A type annotation.
 ///
-/// Variant count is pinned by `m2_type_variant_count_locked` in the test suite.
-/// Current count: 7.
+/// Variant count is pinned by `m3_type_variant_count_locked` in the test suite.
+/// Current count: 8.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Type {
 
@@ -207,4 +299,18 @@ pub enum Type {
     Number { precision: u32 },
     /// The `bool` primitive type.
     Bool,
+
+    /// The internal type of a `range(...)` expression.
+    ///
+    /// Never written by users in M3 — only produced by typeck when it checks
+    /// the iterable position of a `for` loop. Using `Range` in any other position
+    /// (let binding, parameter, return type) is a typeck error pointing to M7.
+    ///
+    /// REPLACE-AT M7: remove this variant and replace with `Iterable[T]` protocol dispatch.
+    Range {
+        /// Always `Int` in M3 — `range(...)` only produces integer ranges.
+        element: Box<Type>,
+        /// Always `false` in M3 — `range(end)` and `range(start, end)` are end-exclusive.
+        end_inclusive: bool,
+    },
 }

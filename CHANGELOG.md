@@ -1,5 +1,49 @@
 # Changelog
 
+## v0.1.0-m3 — Control Flow + User Functions
+
+### What's new
+
+- **User-defined functions**: Multiple functions per file, parameters with type
+  annotations, return types declared on every function, early `return` statements,
+  mutual recursion supported via two-pass signature pre-pass.
+- **`if` statement**: `if (condition) { body }` with no standalone `else` block —
+  early-return and pre-assignment patterns handle alternation.
+- **Multi-case `if`**: `if (scrutinee) { 1 => ...; 2 => ...; else => ... }` for
+  value-based branching on `int`, `string`, `float`, and `bool`. String comparison
+  uses byte-equality via `ynz_string_eq` (Unicode canonical equivalence in M7).
+- **`while` loop**: `while (condition) { body }` with full type checking on the bool condition.
+- **`for` loop**: `for (i in range(0, n)) { body }` with a temporary `range` builtin
+  (replaced by `Iterable[T]` protocol in M7). Loop variable is immutable inside the body.
+- **Block scoping**: each `{}` block pushes/pops a scope; shadowing is allowed.
+- **Return-path analysis**: non-`nothing` functions must return on every path or get
+  a compile error naming the uncovered path. Dead code after a definite `return`
+  emits a warning.
+- **Parameter read-only enforcement**: assignment to a parameter is a compile error
+  with an M4-deferral diagnostic pointing at the `lend` ownership modifier.
+- **Dead-code warnings**: code after a definite return renders to stderr even on
+  successful builds.
+- **Deferred-feature teaching diagnostics**: `is TypeName =>` arms point to M6,
+  `share`/`lend`/`give` parameter annotations point to M4, `range` outside
+  for-loop position points to M7.
+- **`match`/`switch` banned-keyword diagnostics**: teaching messages redirect to
+  multi-case `if`.
+
+### Compiler internals
+
+- Two-pass typeck: `module_signatures_query` (salsa) collects all function
+  signatures before any body is checked; body typeck depends on this query for
+  cross-function call site resolution.
+- Return-path analysis in `crates/ynz-typeck/src/return_paths.rs`: pure CFG walk
+  over `Block`, no typeck context needed. 7 dedicated unit tests.
+- LLVM codegen: two-pass `build_module` forward-declares all functions first
+  (mutual recursion), then emits bodies. `lower_stmt_{if,match,while,for,return}`
+  helpers. All control-flow uses `alloca`-per-local for uniform variable model;
+  LLVM mem2reg elides copies.
+- `ynz_string_eq` added to `libynz_rt.a` (pointer arithmetic only; kernel-mode safe).
+- Linker now passes `-no-pie` on Linux to match LLVM's non-PIC object output
+  (PIE vs non-PIE relocation alignment fix).
+
 ## v0.1.0-m2 — Literals, Variables, Arithmetic
 
 ### What's new

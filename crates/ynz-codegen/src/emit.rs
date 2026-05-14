@@ -20,11 +20,13 @@ use inkwell::{
     targets::{
         CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
     },
-    types::BasicTypeEnum,
-    values::{BasicValueEnum, FunctionValue, GlobalValue, PointerValue},
+    types::{BasicMetadataTypeEnum, BasicTypeEnum},
+    values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, GlobalValue, PointerValue},
     AddressSpace, IntPredicate, OptimizationLevel,
 };
-use ynz_ast::nodes::{BinOpKind, Expr, FunctionDecl, Item, Stmt, UnaryOpKind};
+use ynz_ast::nodes::{
+    BinOpKind, Expr, FunctionDecl, Item, MatchPatternKind, Stmt, UnaryOpKind,
+};
 use ynz_numerics; // parse(s: &str) -> Option<u128>
 use ynz_typeck::{Type, TypedModule};
 
@@ -115,11 +117,55 @@ fn build_module<'ctx, 'g>(
         panic_dec_rem: build_string_global(ctx, module, "remainder by zero (number)", ".panic.drem"),
     };
 
+    // Pass 1 — forward-declare every function so mutual recursion resolves.
+    for item in &typed.module.items {
+        match item {
+            Item::Function(f) => declare_function(ctx, module, f)?,
+        }
+    }
+
+    // Pass 2 — emit bodies.
     for item in &typed.module.items {
         match item {
             Item::Function(f) => lower_function(ctx, module, &rt, &globals, typed, f)?,
         }
     }
+    Ok(())
+}
+
+/// Compute the LLVM parameter types for a function declaration.
+fn llvm_param_types<'ctx>(ctx: &'ctx Context, f: &FunctionDecl) -> Vec<BasicMetadataTypeEnum<'ctx>> {
+    let ptr = ctx.ptr_type(AddressSpace::default());
+    f.params.iter().map(|p| {
+        match &p.ty {
+            ynz_ast::nodes::Type::Int   => ctx.i64_type().into(),
+            ynz_ast::nodes::Type::Float => ctx.f64_type().into(),
+            ynz_ast::nodes::Type::Bool  => ctx.bool_type().into(),
+            // String and Number both pass as ptr
+            _                           => ptr.into(),
+        }
+    }).collect()
+}
+
+/// Forward-declare a function in the LLVM module (signature only, no body).
+fn declare_function<'ctx>(
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    f: &FunctionDecl,
+) -> Result<(), String> {
+    let params = llvm_param_types(ctx, f);
+    let fn_ty = if f.name == "main" {
+        ctx.i32_type().fn_type(&params, false)
+    } else {
+        match &f.return_type {
+            ynz_ast::nodes::Type::Nothing => ctx.void_type().fn_type(&params, false),
+            ynz_ast::nodes::Type::Int     => ctx.i64_type().fn_type(&params, false),
+            ynz_ast::nodes::Type::Float   => ctx.f64_type().fn_type(&params, false),
+            ynz_ast::nodes::Type::Bool    => ctx.bool_type().fn_type(&params, false),
+            _                             => ctx.ptr_type(AddressSpace::default()).fn_type(&params, false),
+        }
+    };
+    module.add_function(&f.name, fn_ty, None);
     Ok(())
 }
 
@@ -132,6 +178,10 @@ struct Cg<'ctx, 'g> {
     globals: &'g ModuleGlobals<'ctx>,
     typed: &'g TypedModule,
     current_fn: FunctionValue<'ctx>,
+    /// True when this function is `main` (affects return type and implicit ret).
+    is_main: bool,
+    /// Return type of the current function (reserved for Phase 4 value-return lowering).
+    _current_fn_ret_ty: Type,
     locals: HashMap<String, PointerValue<'ctx>>,
 }
 
@@ -179,8 +229,12 @@ fn lower_function<'ctx, 'g>(
     typed: &'g TypedModule,
     f: &FunctionDecl,
 ) -> Result<(), String> {
-    let fn_ty = ctx.i32_type().fn_type(&[], false);
-    let fn_val = module.add_function("main", fn_ty, None);
+    let fn_val = module.get_function(&f.name)
+        .ok_or_else(|| format!("function `{}` was not forward-declared", f.name))?;
+
+    let ret_ty = ast_type_to_typeck_type(&f.return_type);
+    let is_main = f.name == "main";
+    let ret_is_nothing = matches!(ret_ty, Type::Nothing);
 
     let mut cg = Cg {
         ctx,
@@ -190,19 +244,86 @@ fn lower_function<'ctx, 'g>(
         globals,
         typed,
         current_fn: fn_val,
+        is_main,
+        _current_fn_ret_ty: ret_ty,
         locals: HashMap::new(),
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
     cg.builder.position_at_end(entry);
 
+    // Materialize each parameter as an alloca so the "every name = alloca" invariant holds.
+    for (i, param) in f.params.iter().enumerate() {
+        let llvm_param = fn_val.get_nth_param(i as u32)
+            .ok_or_else(|| format!("missing LLVM param {} for `{}`", i, f.name))?;
+        let param_ty = ast_type_to_typeck_type(&param.ty);
+        materialize_param(&mut cg, &param.name, llvm_param, &param_ty)?;
+    }
+
     for stmt in &f.body.stmts {
+        if is_block_terminated(&cg) { break; }
         lower_stmt(&mut cg, stmt)?;
     }
 
-    cg.builder.build_return(Some(&ctx.i32_type().const_int(0, false)))
-        .map_err(|e| format!("return: {e}"))?;
+    // Implicit terminator if the current block has no terminator yet.
+    //
+    // - main: always ret i32 0 (C ABI entry point).
+    // - nothing-returning functions: ret void (legitimate fall-off-the-end).
+    // - non-nothing functions: unreachable — either the typeck confirmed all
+    //   paths return (so this block is dead code after an exhaustive match) or
+    //   it's a typeck bug. Either way, ret void would fail LLVM verify.
+    if !is_block_terminated(&cg) {
+        if is_main {
+            cg.builder.build_return(Some(&ctx.i32_type().const_int(0, false)))
+                .map_err(|e| format!("implicit main ret: {e}"))?;
+        } else if ret_is_nothing {
+            cg.builder.build_return(None)
+                .map_err(|e| format!("implicit void ret: {e}"))?;
+        } else {
+            cg.builder.build_unreachable()
+                .map_err(|e| format!("implicit unreachable: {e}"))?;
+        }
+    }
     Ok(())
+}
+
+/// Map an AST type annotation to the typeck `Type` for use in codegen decisions.
+fn ast_type_to_typeck_type(ast_ty: &ynz_ast::nodes::Type) -> Type {
+    match ast_ty {
+        ynz_ast::nodes::Type::Nothing      => Type::Nothing,
+        ynz_ast::nodes::Type::Int          => Type::Int,
+        ynz_ast::nodes::Type::Float        => Type::Float,
+        ynz_ast::nodes::Type::Bool         => Type::Bool,
+        ynz_ast::nodes::Type::Number { .. }=> Type::Number { precision: 34 },
+        ynz_ast::nodes::Type::Named(n, _) if n == "string" => Type::String,
+        _                                  => Type::Error,
+    }
+}
+
+/// Materialize an LLVM function parameter as a named alloca.
+///
+/// Scalars (int, float, bool) are stored directly. Pointer params (string, number)
+/// get a local alloca for uniform "every name = alloca" variable access.
+fn materialize_param<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    name: &str,
+    llvm_val: inkwell::values::BasicValueEnum<'ctx>,
+    param_ty: &Type,
+) -> Result<(), String> {
+    let slot = cg.alloca(param_ty, name)?;
+    store(cg, llvm_val, param_ty, slot)?;
+    cg.locals.insert(name.to_string(), slot);
+    Ok(())
+}
+
+/// True when the current basic block already has a terminator instruction.
+///
+/// Used to avoid emitting dead instructions after `ret`, `br`, or `unreachable`.
+fn is_block_terminated(cg: &Cg) -> bool {
+    cg.builder
+        .get_insert_block()
+        .map(|bb| bb.get_terminator().is_some())
+        .unwrap_or(true)
 }
 
 
@@ -225,8 +346,273 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
             let val = lower_expr(cg, value)?;
             store(cg, val, &ty, slot)?;
         }
+
+        Stmt::If { cond, body, .. } => {
+            lower_stmt_if(cg, cond, body)?;
+        }
+
+        Stmt::Match { scrutinee, arms, else_arm, .. } => {
+            lower_stmt_match(cg, scrutinee, arms, else_arm.as_ref())?;
+        }
+
+        Stmt::While { cond, body, .. } => {
+            lower_stmt_while(cg, cond, body)?;
+        }
+
+        Stmt::For { var, iter, body, .. } => {
+            lower_stmt_for(cg, var, iter, body)?;
+        }
+
+        Stmt::Return { value, .. } => {
+            lower_stmt_return(cg, value.as_ref())?;
+        }
     }
     Ok(())
+}
+
+fn lower_stmt_if<'ctx>(cg: &mut Cg<'ctx, '_>, cond: &Expr, body: &ynz_ast::nodes::Block) -> Result<(), String> {
+    let cond_val = lower_expr(cg, cond)?.into_int_value();
+    let then_bb = cg.append_block("if_then");
+    let merge_bb = cg.append_block("if_merge");
+
+    cg.builder.build_conditional_branch(cond_val, then_bb, merge_bb)
+        .map_err(|e| format!("if branch: {e}"))?;
+
+    cg.builder.position_at_end(then_bb);
+    for stmt in &body.stmts {
+        if is_block_terminated(cg) { break; }
+        lower_stmt(cg, stmt)?;
+    }
+    if !is_block_terminated(cg) {
+        cg.builder.build_unconditional_branch(merge_bb).map_err(|e| format!("{e}"))?;
+    }
+
+    cg.builder.position_at_end(merge_bb);
+    Ok(())
+}
+
+fn lower_stmt_match<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    scrutinee: &Expr,
+    arms: &[ynz_ast::nodes::MatchArm],
+    else_arm: Option<&ynz_ast::nodes::Block>,
+) -> Result<(), String> {
+    let scrutinee_ty = cg.expr_type(scrutinee).clone();
+    let scrutinee_val = lower_expr(cg, scrutinee)?;
+
+    let merge_bb = cg.append_block("match_merge");
+    let final_fallthrough_bb = if else_arm.is_some() {
+        cg.append_block("match_else")
+    } else {
+        merge_bb
+    };
+
+    for (i, arm) in arms.iter().enumerate() {
+        let arm_body_bb = cg.append_block(&format!("match_arm{i}"));
+        let next_check_bb = if i + 1 < arms.len() {
+            cg.append_block(&format!("match_check{}", i + 1))
+        } else {
+            final_fallthrough_bb
+        };
+
+        let pat_cond = match &arm.pattern.kind {
+            MatchPatternKind::Value(pat_expr) => {
+                let pat_val = lower_expr(cg, pat_expr)?;
+                match_cmp(cg, &scrutinee_ty, scrutinee_val, pat_val)?
+            }
+            // IsType/Variant: M6 deferral — parser emitted the diagnostic; typeck
+            // would have rejected the program before reaching codegen.
+            MatchPatternKind::IsType(_) | MatchPatternKind::Variant(_) => {
+                return Err("codegen: M6 pattern kind reached codegen (should be rejected by typeck)".to_string());
+            }
+        };
+
+        cg.builder.build_conditional_branch(pat_cond, arm_body_bb, next_check_bb)
+            .map_err(|e| format!("match branch: {e}"))?;
+
+        cg.builder.position_at_end(arm_body_bb);
+        for stmt in &arm.body.stmts {
+            if is_block_terminated(cg) { break; }
+            lower_stmt(cg, stmt)?;
+        }
+        if !is_block_terminated(cg) {
+            cg.builder.build_unconditional_branch(merge_bb).map_err(|e| format!("{e}"))?;
+        }
+
+        cg.builder.position_at_end(next_check_bb);
+    }
+
+    // Emit else body (current position is final_fallthrough_bb or merge_bb).
+    if let Some(else_body) = else_arm {
+        for stmt in &else_body.stmts {
+            if is_block_terminated(cg) { break; }
+            lower_stmt(cg, stmt)?;
+        }
+        if !is_block_terminated(cg) {
+            cg.builder.build_unconditional_branch(merge_bb).map_err(|e| format!("{e}"))?;
+        }
+        cg.builder.position_at_end(merge_bb);
+    }
+    // If no else_arm: current position is already merge_bb (final_fallthrough_bb == merge_bb).
+
+    Ok(())
+}
+
+/// Compare `scrutinee_val` against `pattern_val` for equality, returning `i1`.
+fn match_cmp<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    scrutinee_ty: &Type,
+    scrutinee_val: BasicValueEnum<'ctx>,
+    pattern_val: BasicValueEnum<'ctx>,
+) -> Result<inkwell::values::IntValue<'ctx>, String> {
+    match scrutinee_ty {
+        Type::Int | Type::Bool => cg.builder
+            .build_int_compare(IntPredicate::EQ, scrutinee_val.into_int_value(), pattern_val.into_int_value(), "match_eq")
+            .map_err(|e| format!("{e}")),
+        Type::Float => cg.builder
+            .build_float_compare(inkwell::FloatPredicate::OEQ, scrutinee_val.into_float_value(), pattern_val.into_float_value(), "fmatch")
+            .map_err(|e| format!("{e}")),
+        Type::String => {
+            let call = cg.builder.build_call(
+                cg.rt.string_eq,
+                &[scrutinee_val.into(), pattern_val.into()],
+                "str_eq",
+            ).map_err(|e| format!("{e}"))?;
+            let result = call.try_as_basic_value().basic().ok_or("string_eq void")?.into_int_value();
+            cg.builder.build_int_compare(IntPredicate::NE, result, cg.i32().const_int(0, false), "str_eq_bool")
+                .map_err(|e| format!("{e}"))
+        }
+        Type::Number { .. } => {
+            let c = cg.builder.build_call(cg.rt.decimal_compare, &[scrutinee_val.into(), pattern_val.into()], "dcmp")
+                .map_err(|e| format!("{e}"))?;
+            let ci = c.try_as_basic_value().basic().ok_or("dcmp void")?.into_int_value();
+            cg.builder.build_int_compare(IntPredicate::EQ, ci, cg.i32().const_int(0, false), "deq")
+                .map_err(|e| format!("{e}"))
+        }
+        other => Err(format!("codegen: match on unsupported type {:?}", other)),
+    }
+}
+
+fn lower_stmt_while<'ctx>(cg: &mut Cg<'ctx, '_>, cond: &Expr, body: &ynz_ast::nodes::Block) -> Result<(), String> {
+    let header_bb = cg.append_block("while_header");
+    let body_bb   = cg.append_block("while_body");
+    let exit_bb   = cg.append_block("while_exit");
+
+    cg.builder.build_unconditional_branch(header_bb).map_err(|e| format!("{e}"))?;
+
+    cg.builder.position_at_end(header_bb);
+    let cond_val = lower_expr(cg, cond)?.into_int_value();
+    cg.builder.build_conditional_branch(cond_val, body_bb, exit_bb).map_err(|e| format!("{e}"))?;
+
+    cg.builder.position_at_end(body_bb);
+    for stmt in &body.stmts {
+        if is_block_terminated(cg) { break; }
+        lower_stmt(cg, stmt)?;
+    }
+    if !is_block_terminated(cg) {
+        cg.builder.build_unconditional_branch(header_bb).map_err(|e| format!("{e}"))?;
+    }
+
+    cg.builder.position_at_end(exit_bb);
+    Ok(())
+}
+
+fn lower_stmt_for<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    var: &str,
+    iter: &Expr,
+    body: &ynz_ast::nodes::Block,
+) -> Result<(), String> {
+    let (start_val, end_val) = extract_range_bounds(cg, iter)?;
+
+    let counter_slot = cg.builder.build_alloca(cg.i64(), "for_ctr").map_err(|e| format!("{e}"))?;
+    let end_slot     = cg.builder.build_alloca(cg.i64(), "for_end").map_err(|e| format!("{e}"))?;
+    cg.builder.build_store(counter_slot, start_val).map_err(|e| format!("{e}"))?;
+    cg.builder.build_store(end_slot, end_val).map_err(|e| format!("{e}"))?;
+
+    // Loop variable alloca — loop var is typed as int.
+    let var_slot = cg.builder.build_alloca(cg.i64(), var).map_err(|e| format!("{e}"))?;
+    cg.locals.insert(var.to_string(), var_slot);
+
+    let header_bb = cg.append_block("for_header");
+    let body_bb   = cg.append_block("for_body");
+    let exit_bb   = cg.append_block("for_exit");
+
+    cg.builder.build_unconditional_branch(header_bb).map_err(|e| format!("{e}"))?;
+
+    // Header: check counter < end.
+    cg.builder.position_at_end(header_bb);
+    let ctr = cg.builder.build_load(cg.i64(), counter_slot, "ctr").map_err(|e| format!("{e}"))?.into_int_value();
+    let end = cg.builder.build_load(cg.i64(), end_slot, "end").map_err(|e| format!("{e}"))?.into_int_value();
+    let in_range = cg.builder.build_int_compare(IntPredicate::SLT, ctr, end, "for_cond").map_err(|e| format!("{e}"))?;
+    cg.builder.build_conditional_branch(in_range, body_bb, exit_bb).map_err(|e| format!("{e}"))?;
+
+    // Body: bind loop var, emit stmts, increment, back-edge.
+    cg.builder.position_at_end(body_bb);
+    let ctr_bind = cg.builder.build_load(cg.i64(), counter_slot, "ctr_bind").map_err(|e| format!("{e}"))?;
+    cg.builder.build_store(var_slot, ctr_bind).map_err(|e| format!("{e}"))?;
+
+    for stmt in &body.stmts {
+        if is_block_terminated(cg) { break; }
+        lower_stmt(cg, stmt)?;
+    }
+    if !is_block_terminated(cg) {
+        let ctr_cur = cg.builder.build_load(cg.i64(), counter_slot, "ctr_cur").map_err(|e| format!("{e}"))?.into_int_value();
+        let one = cg.i64().const_int(1, false);
+        let ctr_next = cg.builder.build_int_add(ctr_cur, one, "ctr_next").map_err(|e| format!("{e}"))?;
+        cg.builder.build_store(counter_slot, ctr_next).map_err(|e| format!("{e}"))?;
+        cg.builder.build_unconditional_branch(header_bb).map_err(|e| format!("{e}"))?;
+    }
+
+    cg.builder.position_at_end(exit_bb);
+    cg.locals.remove(var);
+    Ok(())
+}
+
+fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Result<(), String> {
+    if cg.is_main {
+        cg.builder.build_return(Some(&cg.i32().const_int(0, false)))
+            .map_err(|e| format!("main ret: {e}"))?;
+        return Ok(());
+    }
+    match value {
+        None => {
+            cg.builder.build_return(None).map_err(|e| format!("void ret: {e}"))?;
+        }
+        Some(expr) => {
+            let val = lower_expr(cg, expr)?;
+            cg.builder.build_return(Some(&val)).map_err(|e| format!("ret: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Extract the start and end `i64` values from a `range(end)` or `range(start, end)` call.
+fn extract_range_bounds<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    iter: &Expr,
+) -> Result<(inkwell::values::IntValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
+    let Expr::Call(call) = iter else {
+        return Err("for-loop iter is not a call expression".to_string());
+    };
+    let Expr::Ident(name, _) = &call.callee else {
+        return Err("for-loop iter callee is not an identifier".to_string());
+    };
+    if name != "range" {
+        return Err(format!("for-loop iter calls `{name}`, expected `range`"));
+    }
+    match call.args.len() {
+        1 => {
+            let end = lower_expr(cg, &call.args[0])?.into_int_value();
+            Ok((cg.i64().const_int(0, false), end))
+        }
+        2 => {
+            let start = lower_expr(cg, &call.args[0])?.into_int_value();
+            let end   = lower_expr(cg, &call.args[1])?.into_int_value();
+            Ok((start, end))
+        }
+        n => Err(format!("range takes 1 or 2 args, got {n}")),
+    }
 }
 
 
@@ -282,15 +668,38 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         }
 
         Expr::Call(call) => {
-            if let Expr::Ident(name, _) = &call.callee {
-                if name == "print" && call.args.len() == 1 {
+            let Expr::Ident(fn_name, _) = &call.callee else {
+                return Err("codegen: call to non-identifier callee".to_string());
+            };
+            let fn_name = fn_name.clone();
+            match fn_name.as_str() {
+                "print" if call.args.len() == 1 => {
                     let ty = cg.expr_type(&call.args[0]).clone();
                     let val = lower_expr(cg, &call.args[0])?;
                     lower_print(cg, val, &ty)?;
-                    return Ok(cg.i32().const_int(0, false).into());
+                    Ok(cg.i32().const_int(0, false).into())
+                }
+                "range" => {
+                    // range() only appears as the iter in Stmt::For, handled by extract_range_bounds.
+                    // Reaching here means it appeared in expression position — a typeck bug.
+                    Err("codegen: range() in expression position (should be caught by typeck)".to_string())
+                }
+                name => {
+                    let fn_val = cg.module.get_function(name)
+                        .ok_or_else(|| format!("codegen: function `{name}` not found in module"))?;
+                    let mut args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
+                    for arg in &call.args {
+                        let val = lower_expr(cg, arg)?;
+                        args.push(val.into());
+                    }
+                    let call_site = cg.builder.build_call(fn_val, &args, "call")
+                        .map_err(|e| format!("call {name}: {e}"))?;
+                    match call_site.try_as_basic_value().basic() {
+                        Some(val) => Ok(val),
+                        None => Ok(cg.i32().const_int(0, false).into()),
+                    }
                 }
             }
-            Err("codegen: unsupported call".to_string())
         }
 
         Expr::MethodCall { receiver, method, args, .. } => {

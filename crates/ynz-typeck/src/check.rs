@@ -1,11 +1,14 @@
 use ynz_ast::nodes::{
-    BinOpKind, CallExpr, Expr, FunctionDecl, Item, Module, Stmt, Type as AstType, UnaryOpKind,
+    BinOpKind, Block, CallExpr, Expr, FunctionDecl, Item, MatchArm, MatchPatternKind, Module,
+    Stmt, Type as AstType, UnaryOpKind,
 };
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 use crate::{
     intrinsics::PrimitiveIntrinsicTable,
+    return_paths::analyze_return_paths,
     scope::{Scope, ScopeEntry},
+    signatures::SignatureTable,
     types::{type_name, Type},
 };
 
@@ -21,16 +24,24 @@ pub struct TypedModule {
     pub expr_types: std::collections::HashMap<(usize, usize), Type>,
 }
 
-/// Run the M2 type checker.
+/// Run the M3 type checker over all function bodies.
+///
+/// The `sig_table` must already contain all function signatures (from the
+/// `module_signatures` salsa query). Body checking depends on it for:
+/// - Resolving call-site argument/return types
+/// - Knowing the current function's return type for `return` statement checking
 pub fn check(
     module: &Module,
+    sig_table: &SignatureTable,
     intrinsics: &PrimitiveIntrinsicTable,
 ) -> (TypedModule, DiagnosticBucket) {
     let mut checker = Checker {
         intrinsics,
+        sig_table,
         expr_types: std::collections::HashMap::new(),
         diags: DiagnosticBucket::new(),
         scope: Scope::new(),
+        current_fn_ret: Type::Nothing,
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -42,28 +53,19 @@ pub fn check(
 
 struct Checker<'b> {
     intrinsics: &'b PrimitiveIntrinsicTable,
+    sig_table: &'b SignatureTable,
     expr_types: std::collections::HashMap<(usize, usize), Type>,
     diags: DiagnosticBucket,
     scope: Scope,
+    /// Return type of the function currently being checked.
+    current_fn_ret: Type,
 }
 
 impl<'b> Checker<'b> {
 
     fn check_module(&mut self, module: &Module) {
-        let main_decl = module.items.iter().find_map(|item| match item {
-            Item::Function(f) if f.name == "main" => Some(f),
-            _ => None,
-        });
-
-        if main_decl.is_none() {
-            self.diags.push(Diagnostic::error(
-                module.span.clone(),
-                "This file has no `main` function.",
-                "Add a main function:\n  function main() -> nothing {\n    ...\n  }",
-                "Every Yinz program needs a `main` function — that is where execution starts.",
-            ));
-        }
-
+        // `main` existence and signature are validated in `collect_signatures`.
+        // Body checking just iterates all functions with the signature table available.
         for item in &module.items {
             match item {
                 Item::Function(f) => self.check_function(f),
@@ -72,32 +74,57 @@ impl<'b> Checker<'b> {
     }
 
     fn check_function(&mut self, f: &FunctionDecl) {
-        if f.name == "main" {
-            match &f.return_type {
-                AstType::Nothing => {}
-                AstType::Error => {}
-                other => {
-                    self.diags.push(Diagnostic::error(
-                        f.span.clone(),
-                        format!(
-                            "`main` must return `nothing`, but this says it returns `{}`.",
-                            ast_type_display(other)
-                        ),
-                        "Change the return type to `nothing`: `function main() -> nothing`",
-                        "`main` is the entry point of the program. It does not return a value — \
-                         it runs and then the program ends.",
-                    ));
-                }
-            }
-        }
-
         if f.return_type == AstType::Error || body_has_error_node(&f.body.stmts) {
             return;
         }
 
+        let ret_ty = self.ast_type_to_type(&f.return_type);
+        self.current_fn_ret = ret_ty.clone();
+
         self.scope.push();
+
+        // Register parameters as read-only scope entries.
+        for param in &f.params {
+            let param_ty = self.ast_type_to_type(&param.ty);
+            self.scope.insert(
+                param.name.clone(),
+                ScopeEntry {
+                    ty: param_ty,
+                    is_const: false,
+                    is_param: true,
+                    is_loop_var: false,
+                    defined_at: param.name_span.clone(),
+                },
+            );
+        }
+
         self.check_stmts(&f.body.stmts);
         self.scope.pop();
+
+        // Return-path analysis for non-nothing functions.
+        if ret_ty != Type::Nothing && ret_ty != Type::Error {
+            let analysis = analyze_return_paths(&f.body);
+            if !analysis.all_paths_return {
+                self.diags.push(Diagnostic::error(
+                    f.span.clone(),
+                    format!(
+                        "`{}` must return a `{}` on every path, but some paths fall off the end without returning.",
+                        f.name,
+                        type_name(&ret_ty)
+                    ),
+                    "Add `return value` at the end of the function, or add an `else =>` catch-all to any multi-case `if` that needs to return.",
+                    "Every path through the function must produce a value. A path that falls off the end produces no value, which is a bug.",
+                ));
+            }
+            for dead_span in analysis.dead_code {
+                self.diags.push(Diagnostic::warning(
+                    dead_span,
+                    "This code will never run.",
+                    "Remove the unreachable code, or move the `return` statement after it.",
+                    "A `return` statement ends the function immediately. Any code after it in the same block is never reached.",
+                ));
+            }
+        }
     }
 
 
@@ -107,23 +134,26 @@ impl<'b> Checker<'b> {
                 Stmt::Expr(expr) => {
                     self.infer_expr(expr, None);
                 }
-                Stmt::Let {
-                    is_const,
-                    name,
-                    name_span,
-                    ty,
-                    value,
-                    span: _,
-                } => {
+                Stmt::Let { is_const, name, name_span, ty, value, span: _ } => {
                     self.check_let(*is_const, name, name_span, ty.as_ref(), value);
                 }
-                Stmt::Assign {
-                    target,
-                    target_span,
-                    value,
-                    span: _,
-                } => {
+                Stmt::Assign { target, target_span, value, span: _ } => {
                     self.check_assign(target, target_span, value);
+                }
+                Stmt::If { cond, body, .. } => {
+                    self.check_stmt_if(cond, body);
+                }
+                Stmt::Match { scrutinee, arms, else_arm, .. } => {
+                    self.check_stmt_match(scrutinee, arms, else_arm.as_ref());
+                }
+                Stmt::While { cond, body, .. } => {
+                    self.check_stmt_while(cond, body);
+                }
+                Stmt::For { var, var_span, iter, body, .. } => {
+                    self.check_stmt_for(var, var_span, iter, body);
+                }
+                Stmt::Return { value, span } => {
+                    self.check_stmt_return(value.as_ref(), span);
                 }
             }
         }
@@ -138,9 +168,25 @@ impl<'b> Checker<'b> {
         value: &Expr,
     ) {
         let annotated_ty = annotation.map(|t| self.ast_type_to_type(t));
-
-        // Infer value type, passing the annotation as a literal-retyping hint.
         let value_ty = self.infer_expr(value, annotated_ty.as_ref());
+
+        // Range values cannot be stored in let bindings (M7 deferral).
+        if matches!(value_ty, Type::Range { .. }) {
+            self.diags.push(Diagnostic::error(
+                value.span().clone(),
+                "A `range(...)` value cannot be stored in a variable.",
+                "Use `range(...)` directly in a `for` loop: `for (i in range(0, 10)) { ... }`",
+                "Range values can only appear as the iterable in a `for` loop in M3. Storing, passing, or returning them arrives in v0.1 milestone 7.",
+            ));
+            self.scope.insert(name.to_string(), ScopeEntry {
+                ty: Type::Error,
+                is_const,
+                is_param: false,
+                is_loop_var: false,
+                defined_at: name_span.clone(),
+            });
+            return;
+        }
 
         let binding_ty = if let Some(ann_ty) = &annotated_ty {
             if value_ty == Type::Error || *ann_ty == Type::Error {
@@ -173,6 +219,8 @@ impl<'b> Checker<'b> {
             ScopeEntry {
                 ty: binding_ty,
                 is_const,
+                is_param: false,
+                is_loop_var: false,
                 defined_at: name_span.clone(),
             },
         );
@@ -183,8 +231,9 @@ impl<'b> Checker<'b> {
 
         match self.scope.lookup(target) {
             None => {
-                let names = self.scope.all_names();
-                let suggestion = find_closest_name(target, &names);
+                let mut candidates: Vec<&str> = self.scope.all_names();
+                candidates.extend(self.sig_table.all_names());
+                let suggestion = find_closest_name(target, &candidates);
                 let what_instead = match suggestion {
                     Some(close) => format!("Did you mean `{close}`?"),
                     None => format!("Declare it first: `let {target} = ...`"),
@@ -194,6 +243,22 @@ impl<'b> Checker<'b> {
                     format!("`{target}` is not defined."),
                     what_instead,
                     "You can only assign to variables that have been declared with `let`.",
+                ));
+            }
+            Some(entry) if entry.is_param => {
+                self.diags.push(Diagnostic::error(
+                    target_span.clone(),
+                    format!("`{target}` is a parameter — parameters cannot be reassigned."),
+                    format!("To work with a modified value, declare a new variable: `let my_{target} = {target}`"),
+                    "Yinz ownership modifiers that allow parameter mutation (`lend`) arrive in v0.1 milestone 4. Until then, parameters are read-only.",
+                ));
+            }
+            Some(entry) if entry.is_loop_var => {
+                self.diags.push(Diagnostic::error(
+                    target_span.clone(),
+                    format!("`{target}` is the loop variable — it cannot be changed inside the loop body."),
+                    format!("Declare a separate variable if you need a counter: `let count = {target}`"),
+                    "The loop variable steps through values automatically each iteration. Changing it inside the body would cause confusing behavior.",
                 ));
             }
             Some(entry) if entry.is_const => {
@@ -231,6 +296,157 @@ impl<'b> Checker<'b> {
         }
     }
 
+    fn check_stmt_if(&mut self, cond: &Expr, body: &Block) {
+        let cond_ty = self.infer_expr(cond, None);
+        if cond_ty != Type::Error && cond_ty != Type::Bool {
+            self.diags.push(Diagnostic::error(
+                cond.span().clone(),
+                format!("The condition of an `if` must be `bool`, but this is `{}`.", type_name(&cond_ty)),
+                "Write a comparison that produces `true` or `false`, e.g. `x > 0`.",
+                "`if` branches on whether the condition is `true` or `false`. Any other type cannot be used as a condition.",
+            ));
+        }
+        self.scope.push();
+        self.check_stmts(&body.stmts);
+        self.scope.pop();
+    }
+
+    fn check_stmt_match(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+        else_arm: Option<&Block>,
+    ) {
+        let scrutinee_ty = self.infer_expr(scrutinee, None);
+
+        for arm in arms {
+            match &arm.pattern.kind {
+                MatchPatternKind::Value(pat_expr) => {
+                    let pat_ty = self.infer_expr(pat_expr, Some(&scrutinee_ty));
+                    if pat_ty != Type::Error && scrutinee_ty != Type::Error && pat_ty != scrutinee_ty {
+                        self.diags.push(Diagnostic::error(
+                            pat_expr.span().clone(),
+                            format!(
+                                "This arm pattern is `{}`, but the matched value is `{}`.",
+                                type_name(&pat_ty),
+                                type_name(&scrutinee_ty)
+                            ),
+                            format!("Use a `{}` literal or expression as the pattern.", type_name(&scrutinee_ty)),
+                            "Each arm pattern must have the same type as the value being matched.",
+                        ));
+                    }
+                }
+                // IsType and Variant: M6 deferrals already emitted by the parser.
+                MatchPatternKind::IsType(_) | MatchPatternKind::Variant(_) => {}
+            }
+            self.scope.push();
+            self.check_stmts(&arm.body.stmts);
+            self.scope.pop();
+        }
+
+        if let Some(else_body) = else_arm {
+            self.scope.push();
+            self.check_stmts(&else_body.stmts);
+            self.scope.pop();
+        }
+    }
+
+    fn check_stmt_while(&mut self, cond: &Expr, body: &Block) {
+        let cond_ty = self.infer_expr(cond, None);
+        if cond_ty != Type::Error && cond_ty != Type::Bool {
+            self.diags.push(Diagnostic::error(
+                cond.span().clone(),
+                format!("The condition of a `while` loop must be `bool`, but this is `{}`.", type_name(&cond_ty)),
+                "Write a comparison that produces `true` or `false`, e.g. `x > 0`.",
+                "`while` loops until the condition becomes `false`. Any other type cannot be used as a condition.",
+            ));
+        }
+        self.scope.push();
+        self.check_stmts(&body.stmts);
+        self.scope.pop();
+    }
+
+    fn check_stmt_for(
+        &mut self,
+        var: &str,
+        var_span: &SourceSpan,
+        iter: &Expr,
+        body: &Block,
+    ) {
+        let iter_ty = self.infer_expr(iter, None);
+
+        let elem_ty = match &iter_ty {
+            Type::Range { element, .. } => *element.clone(),
+            Type::Error => Type::Error,
+            other => {
+                self.diags.push(Diagnostic::error(
+                    iter.span().clone(),
+                    format!("`for` loops require `range(start, end)` as the collection in M3, but got `{}`.", type_name(other)),
+                    "Use `range(...)`: `for (i in range(0, 10)) { ... }`",
+                    "Full iteration over arrays, maps, and custom types arrives in v0.1 milestone 7 with the `Iterable[T]` protocol.",
+                ));
+                Type::Error
+            }
+        };
+
+        self.scope.push();
+        self.scope.insert(
+            var.to_string(),
+            ScopeEntry {
+                ty: elem_ty,
+                is_const: false,
+                is_param: false,
+                is_loop_var: true,
+                defined_at: var_span.clone(),
+            },
+        );
+        self.check_stmts(&body.stmts);
+        self.scope.pop();
+    }
+
+    fn check_stmt_return(&mut self, value: Option<&Expr>, span: &SourceSpan) {
+        let expected = self.current_fn_ret.clone();
+        match (value, &expected) {
+            (None, Type::Nothing) => {}
+            (None, Type::Error) => {}
+            (None, ret) => {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("`return` without a value, but this function must return `{}`.", type_name(ret)),
+                    "Add a return value: `return expr`",
+                    "A non-`nothing` function must return a value on every path that exits.",
+                ));
+            }
+            (Some(expr), Type::Nothing) => {
+                self.infer_expr(expr, None);
+                self.diags.push(Diagnostic::error(
+                    expr.span().clone(),
+                    "`return` with a value in a `-> nothing` function.",
+                    "Remove the value: write `return` with no expression.",
+                    "Functions declared `-> nothing` do not produce a value. A `return` inside them ends the function — no value allowed.",
+                ));
+            }
+            (Some(expr), ret) => {
+                let val_ty = self.infer_expr(expr, Some(ret));
+                if val_ty != Type::Error && *ret != Type::Error && val_ty != *ret {
+                    self.diags.push(Diagnostic::error(
+                        expr.span().clone(),
+                        format!(
+                            "`return` produces `{}`, but this function must return `{}`.",
+                            type_name(&val_ty),
+                            type_name(ret)
+                        ),
+                        format!("Return a `{}` value instead.", type_name(ret)),
+                        format!(
+                            "The function's declared return type is `{}`. Every `return` must produce a value of that type.",
+                            type_name(ret)
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
 
     /// Infer the type of `expr`.
     ///
@@ -247,22 +463,18 @@ impl<'b> Checker<'b> {
                 return Type::Error;
             }
 
-
-            // `IntLit` infers as `int` unless the binding context says `number` or `float`.
             Expr::IntLit(_, _) => match hint {
                 Some(Type::Number { precision: 34 }) => Type::Number { precision: 34 },
                 Some(Type::Float) => Type::Float,
                 _ => Type::Int,
             },
 
-            // `NumberLit` infers as `number` unless the binding context says `float`.
             Expr::NumberLit(_, _) => match hint {
                 Some(Type::Float) => Type::Float,
                 _ => Type::Number { precision: 34 },
             },
 
             Expr::BoolLit(_, _) => Type::Bool,
-
 
             Expr::BinOp { op, lhs, rhs, span } => {
                 let lhs_ty = self.infer_expr(lhs, None);
@@ -275,14 +487,7 @@ impl<'b> Checker<'b> {
                 self.check_unaryop(op, &operand_ty, span)
             }
 
-
-            Expr::MethodCall {
-                receiver,
-                method,
-                method_span,
-                args,
-                ..
-            } => {
+            Expr::MethodCall { receiver, method, method_span, args, .. } => {
                 let receiver_ty = self.infer_expr(receiver, None);
                 for arg in args.iter() {
                     self.infer_expr(arg, None);
@@ -301,8 +506,10 @@ impl<'b> Checker<'b> {
             return entry.ty.clone();
         }
 
-        let names = self.scope.all_names();
-        let suggestion = find_closest_name(name, &names);
+        let mut candidates: Vec<&str> = self.scope.all_names();
+        candidates.extend(self.sig_table.all_names());
+        candidates.extend(["print", "range"]);
+        let suggestion = find_closest_name(name, &candidates);
         let what_instead = match suggestion {
             Some(close) => format!("Did you mean `{close}`?"),
             None => format!("Check the spelling, or declare it: `let {name} = ...`"),
@@ -320,7 +527,7 @@ impl<'b> Checker<'b> {
 
     fn check_call(&mut self, call: &CallExpr) -> Type {
         let callee_name = match &call.callee {
-            Expr::Ident(name, _) => name.as_str(),
+            Expr::Ident(name, _) => name.clone(),
             _ => {
                 self.infer_expr(&call.callee, None);
                 return Type::Error;
@@ -329,22 +536,36 @@ impl<'b> Checker<'b> {
 
         // Test-only functions (only compiled in test builds).
         #[cfg(test)]
-        if let Some(sig) = self.intrinsics.lookup_test_fn(callee_name) {
+        if let Some(sig) = self.intrinsics.lookup_test_fn(&callee_name) {
             let sig = sig.clone();
-            return self.check_test_fn_call(call, callee_name, &sig);
+            return self.check_test_fn_call(call, &callee_name, &sig);
         }
 
-        match callee_name {
+        match callee_name.as_str() {
             "print" => self.check_print_call(call),
-            _ => {
+            "range" => self.check_range_call(call),
+            name => {
+                // User-defined function?
+                if let Some(sig) = self.sig_table.fns.get(name) {
+                    let params = sig.params.clone();
+                    let ret = sig.ret.clone();
+                    return self.check_user_fn_call(call, name, &params, ret);
+                }
+                // Unknown
+                let mut candidates: Vec<&str> = self.sig_table.all_names();
+                candidates.extend(["print", "range"]);
+                let suggestion = find_closest_name(name, &candidates);
+                let what_instead = match suggestion {
+                    Some(close) => format!("Did you mean `{close}`?"),
+                    None => format!("Define `{name}` as a function or check the spelling."),
+                };
                 self.diags.push(Diagnostic::error(
                     call.callee.span().clone(),
-                    format!("`{callee_name}` is not defined."),
-                    format!(
-                        "Check the spelling, or define `{callee_name}` as a function."
-                    ),
-                    "The compiler looks up every name you use. If a name doesn't exist, the program can't run.",
+                    format!("`{name}` is not defined."),
+                    what_instead,
+                    "The compiler looks up every name you call. If a name doesn't exist, the program can't run.",
                 ));
+                for arg in &call.args { self.infer_expr(arg, None); }
                 Type::Error
             }
         }
@@ -354,19 +575,13 @@ impl<'b> Checker<'b> {
         if call.args.len() != 1 {
             self.diags.push(Diagnostic::error(
                 call.span.clone(),
-                format!(
-                    "`print` takes 1 argument, but {} were given.",
-                    call.args.len()
-                ),
+                format!("`print` takes 1 argument, but {} were given.", call.args.len()),
                 "Call it with one value: `print(value)`",
                 "To display multiple values, use multiple `print` calls on separate lines.",
             ));
-            for arg in &call.args {
-                self.infer_expr(arg, None);
-            }
+            for arg in &call.args { self.infer_expr(arg, None); }
             return Type::Error;
         }
-
         let arg_ty = self.infer_expr(&call.args[0], None);
         if arg_ty != Type::Error && !self.intrinsics.is_print_type(&arg_ty) {
             self.diags.push(Diagnostic::error(
@@ -377,8 +592,90 @@ impl<'b> Checker<'b> {
             ));
             return Type::Error;
         }
-
         Type::Nothing
+    }
+
+    fn check_range_call(&mut self, call: &CallExpr) -> Type {
+        match call.args.len() {
+            1 | 2 => {
+                for (i, arg) in call.args.iter().enumerate() {
+                    let ty = self.infer_expr(arg, Some(&Type::Int));
+                    if ty != Type::Int && ty != Type::Error {
+                        self.diags.push(Diagnostic::error(
+                            arg.span().clone(),
+                            format!("Argument {} of `range` must be `int`, but got `{}`.", i + 1, type_name(&ty)),
+                            "Pass an `int` value, e.g. `range(0, 10)`.",
+                            "`range` produces integer sequences — its start and end must both be `int`.",
+                        ));
+                    }
+                }
+                Type::Range { element: Box::new(Type::Int), end_inclusive: false }
+            }
+            n => {
+                self.diags.push(Diagnostic::error(
+                    call.span.clone(),
+                    format!("`range` takes 1 or 2 arguments, but {} were given.", n),
+                    "Use `range(end)` for 0..end or `range(start, end)` for start..end.",
+                    "`range(end)` counts from 0 up to (but not including) end. `range(start, end)` starts at a specific value.",
+                ));
+                for arg in &call.args { self.infer_expr(arg, None); }
+                Type::Error
+            }
+        }
+    }
+
+    fn check_user_fn_call(
+        &mut self,
+        call: &CallExpr,
+        name: &str,
+        params: &[(String, Type)],
+        ret: Type,
+    ) -> Type {
+        if call.args.len() != params.len() {
+            self.diags.push(Diagnostic::error(
+                call.span.clone(),
+                format!(
+                    "`{name}` takes {} argument(s), but {} were given.",
+                    params.len(),
+                    call.args.len()
+                ),
+                format!("Call it with {} argument(s).", params.len()),
+                "Every function call must match the number of arguments the function declares.",
+            ));
+            for arg in &call.args { self.infer_expr(arg, None); }
+            return Type::Error;
+        }
+        for (arg, (_, expected_ty)) in call.args.iter().zip(params.iter()) {
+            let actual_ty = self.infer_expr(arg, Some(expected_ty));
+            if matches!(actual_ty, Type::Range { .. }) {
+                self.diags.push(Diagnostic::error(
+                    arg.span().clone(),
+                    "A `range(...)` value cannot be passed as a function argument.",
+                    "Use `range(...)` directly in a `for` loop instead.",
+                    "Range values can only appear as the iterable in a `for` loop in M3. Passing them arrives in v0.1 milestone 7.",
+                ));
+            } else if actual_ty != Type::Error && actual_ty != *expected_ty {
+                self.diags.push(Diagnostic::error(
+                    arg.span().clone(),
+                    format!(
+                        "This argument is `{}`, but `{name}` expects `{}` here.",
+                        type_name(&actual_ty),
+                        type_name(expected_ty)
+                    ),
+                    format!("Pass a `{}` value.", type_name(expected_ty)),
+                    format!(
+                        "`{name}` declared this parameter as `{}`. Passing a `{}` would be a type mismatch.",
+                        type_name(expected_ty),
+                        type_name(&actual_ty)
+                    ),
+                ));
+            }
+        }
+        // Reject Range return values (shouldn't be in sig_table, but guard anyway)
+        if matches!(ret, Type::Range { .. }) {
+            return Type::Error;
+        }
+        ret
     }
 
 
@@ -398,9 +695,7 @@ impl<'b> Checker<'b> {
             Add | Sub | Mul | Div => match (lhs, rhs) {
                 (Type::Int, Type::Int) => Type::Int,
                 (Type::Float, Type::Float) => Type::Float,
-                (Type::Number { .. }, Type::Number { .. }) => {
-                    Type::Number { precision: 34 }
-                }
+                (Type::Number { .. }, Type::Number { .. }) => Type::Number { precision: 34 },
                 _ => {
                     self.emit_binop_mismatch(op, lhs, rhs, span);
                     Type::Error
@@ -415,8 +710,7 @@ impl<'b> Checker<'b> {
                         span.clone(),
                         "`%` is not available for `number`.",
                         "Use the `math` module's `.rem()` method (arriving in v0.7).",
-                        "Remainder on decimal numbers requires careful rounding semantics \
-                         that the `math` module provides.",
+                        "Remainder on decimal numbers requires careful rounding semantics that the `math` module provides.",
                     ));
                     Type::Error
                 }
@@ -466,16 +760,10 @@ impl<'b> Checker<'b> {
         }
     }
 
-    fn check_unaryop(
-        &mut self,
-        op: &UnaryOpKind,
-        operand: &Type,
-        span: &SourceSpan,
-    ) -> Type {
+    fn check_unaryop(&mut self, op: &UnaryOpKind, operand: &Type, span: &SourceSpan) -> Type {
         if *operand == Type::Error {
             return Type::Error;
         }
-
         match op {
             UnaryOpKind::Neg => match operand {
                 Type::Int | Type::Float | Type::Number { .. } => operand.clone(),
@@ -525,13 +813,12 @@ impl<'b> Checker<'b> {
         if *receiver_ty == Type::Error {
             return Type::Error;
         }
-
         match self.intrinsics.lookup_method(receiver_ty, method) {
             Some(ret_ty) => ret_ty,
             None => {
                 let available = self.intrinsics.methods_for_type(receiver_ty);
                 let what_instead = if available.is_empty() {
-                    format!("`{}` has no methods in M2.", type_name(receiver_ty))
+                    format!("`{}` has no methods in M3.", type_name(receiver_ty))
                 } else {
                     format!(
                         "Available on `{}`: {}",
@@ -541,10 +828,7 @@ impl<'b> Checker<'b> {
                 };
                 self.diags.push(Diagnostic::error(
                     method_span.clone(),
-                    format!(
-                        "`{}` does not have a method called `{method}`.",
-                        type_name(receiver_ty)
-                    ),
+                    format!("`{}` does not have a method called `{method}`.", type_name(receiver_ty)),
                     what_instead,
                     "Method calls are checked at compile time. Only the listed methods exist on this type.",
                 ));
@@ -554,15 +838,12 @@ impl<'b> Checker<'b> {
     }
 
 
-    /// Convert a syntactic AST type to the typeck type.
     fn ast_type_to_type(&mut self, ast_ty: &AstType) -> Type {
         match ast_ty {
             AstType::Nothing => Type::Nothing,
             AstType::Int => Type::Int,
             AstType::Float => Type::Float,
-            AstType::Number { precision } => Type::Number {
-                precision: *precision,
-            },
+            AstType::Number { precision } => Type::Number { precision: *precision },
             AstType::Bool => Type::Bool,
             AstType::Error => Type::Error,
             AstType::Named(n, _) if n == "string" => Type::String,
@@ -575,16 +856,11 @@ impl<'b> Checker<'b> {
                 ));
                 Type::Error
             }
+            AstType::Range { .. } => Type::Error,
         }
     }
 
-    fn emit_binop_mismatch(
-        &mut self,
-        op: &BinOpKind,
-        lhs: &Type,
-        rhs: &Type,
-        span: &SourceSpan,
-    ) {
+    fn emit_binop_mismatch(&mut self, op: &BinOpKind, lhs: &Type, rhs: &Type, span: &SourceSpan) {
         let what = format!(
             "`{}` cannot be used with `{}` and `{}`.",
             binop_display(op),
@@ -602,24 +878,12 @@ impl<'b> Checker<'b> {
 
 
     #[cfg(test)]
-    fn check_test_fn_call(
-        &mut self,
-        call: &CallExpr,
-        name: &str,
-        sig: &crate::intrinsics::FreeFnSig,
-    ) -> Type {
+    fn check_test_fn_call(&mut self, call: &CallExpr, name: &str, sig: &crate::intrinsics::FreeFnSig) -> Type {
         if call.args.len() != sig.params.len() {
             self.diags.push(Diagnostic::error(
                 call.span.clone(),
-                format!(
-                    "`{name}` takes {} argument(s), but {} were given.",
-                    sig.params.len(),
-                    call.args.len()
-                ),
-                format!(
-                    "Call it with {} argument(s).",
-                    sig.params.len()
-                ),
+                format!("`{name}` takes {} argument(s), but {} were given.", sig.params.len(), call.args.len()),
+                format!("Call it with {} argument(s).", sig.params.len()),
                 "Every function call must match the number of arguments the function expects.",
             ));
             return Type::Error;
@@ -629,17 +893,9 @@ impl<'b> Checker<'b> {
             if actual != *expected && actual != Type::Error {
                 self.diags.push(Diagnostic::error(
                     arg.span().clone(),
-                    format!(
-                        "Argument {} to `{name}` should be `{}`, but got `{}`.",
-                        i + 1,
-                        type_name(expected),
-                        type_name(&actual)
-                    ),
+                    format!("Argument {} to `{name}` should be `{}`, but got `{}`.", i + 1, type_name(expected), type_name(&actual)),
                     format!("Pass a `{}` here.", type_name(expected)),
-                    format!(
-                        "`{name}` expects `{}` in this position.",
-                        type_name(expected)
-                    ),
+                    format!("`{name}` expects `{}` in this position.", type_name(expected)),
                 ));
             }
         }
@@ -652,6 +908,16 @@ fn body_has_error_node(stmts: &[Stmt]) -> bool {
     stmts.iter().any(|s| match s {
         Stmt::Expr(e) => expr_has_error(e),
         Stmt::Let { value, .. } | Stmt::Assign { value, .. } => expr_has_error(value),
+        Stmt::If { cond, body, .. } => expr_has_error(cond) || body_has_error_node(&body.stmts),
+        Stmt::Match { scrutinee, arms, else_arm, .. } => {
+            expr_has_error(scrutinee)
+                || arms.iter().any(|arm| body_has_error_node(&arm.body.stmts))
+                || else_arm.as_ref().is_some_and(|b| body_has_error_node(&b.stmts))
+        }
+        Stmt::While { cond, body, .. } | Stmt::For { iter: cond, body, .. } => {
+            expr_has_error(cond) || body_has_error_node(&body.stmts)
+        }
+        Stmt::Return { value, .. } => value.as_ref().is_some_and(expr_has_error),
     })
 }
 
@@ -672,18 +938,6 @@ fn expr_has_error(expr: &Expr) -> bool {
     }
 }
 
-fn ast_type_display(t: &AstType) -> &'static str {
-    match t {
-        AstType::Nothing => "nothing",
-        AstType::Named(_, _) => "named type",
-        AstType::Error => "unknown",
-        AstType::Int => "int",
-        AstType::Float => "float",
-        AstType::Number { .. } => "number",
-        AstType::Bool => "bool",
-    }
-}
-
 fn binop_display(op: &BinOpKind) -> &'static str {
     use BinOpKind::*;
     match op {
@@ -696,90 +950,72 @@ fn binop_display(op: &BinOpKind) -> &'static str {
     }
 }
 
-/// Suggest the specific conversion method for a numeric type mismatch.
-///
-/// Picks the "widening" direction: int → number/float, float ← number.
-/// When both directions lose precision (`number` + `float`), lists both options
-/// and explains the tradeoff — this is a teaching opportunity.
 fn suggest_conversion(lhs: &Type, rhs: &Type) -> String {
     match (lhs, rhs) {
-        // int ↔ number: widen the int (no precision loss)
         (Type::Int, Type::Number { .. }) => {
             "Convert the `int` to `number`: `myInt.toNumber() + myNumber`".to_string()
         }
         (Type::Number { .. }, Type::Int) => {
             "Convert the `int` to `number`: `myNumber + myInt.toNumber()`".to_string()
         }
-        // int ↔ float: widen the int (no precision loss)
         (Type::Int, Type::Float) => {
             "Convert the `int` to `float`: `myInt.toFloat() + myFloat`".to_string()
         }
         (Type::Float, Type::Int) => {
             "Convert the `int` to `float`: `myFloat + myInt.toFloat()`".to_string()
         }
-        // number ↔ float: both lose precision — show both options
-        (Type::Number { .. }, Type::Float) => {
-            "Option A: `myNumber.toFloat() + myFloat` (converts decimal to binary — may change the value). \
-             Option B: `myNumber + myFloat.toNumber()` (converts binary to decimal — may change the value). \
-             Pick based on which type is most precise for your use case."
+        (Type::Number { .. }, Type::Float) | (Type::Float, Type::Number { .. }) => {
+            "Converting between `number` and `float` can lose precision either way. \
+             Use `.toFloat()` to convert `number` → `float` (loses decimal precision), \
+             or `.toNumber()` to convert `float` → `number` (may lose binary precision)."
                 .to_string()
         }
-        (Type::Float, Type::Number { .. }) => {
-            "Option A: `myFloat + myNumber.toFloat()` (converts decimal to binary — may change the value). \
-             Option B: `myFloat.toNumber() + myNumber` (converts binary to decimal — may change the value). \
-             Pick based on which type is most precise for your use case."
-                .to_string()
-        }
-        // Non-numeric mismatch: generic suggestion
-        _ => "Make both sides the same type before combining them.".to_string(),
+        _ => "Check that both sides have the same type.".to_string(),
     }
 }
 
-/// Simple Levenshtein distance. Returns the edit distance between `a` and `b`.
-#[allow(clippy::needless_range_loop)]
+/// Find the closest name using Levenshtein distance — for "did you mean?" suggestions.
+pub fn find_closest_name<'a>(target: &str, candidates: &[&'a str]) -> Option<&'a str> {
+    let threshold = match target.len() {
+        0..=2 => 0,
+        3..=4 => 1,
+        _ => 2,
+    };
+    candidates
+        .iter()
+        .filter_map(|&c| {
+            let dist = levenshtein(target, c);
+            if dist <= threshold { Some((dist, c)) } else { None }
+        })
+        .min_by_key(|(d, _)| *d)
+        .map(|(_, c)| c)
+}
+
 fn levenshtein(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
-    let m = a.len();
-    let n = b.len();
+    let (m, n) = (a.len(), b.len());
     let mut dp = vec![vec![0usize; n + 1]; m + 1];
-    for i in 0..=m {
-        dp[i][0] = i;
-    }
-    for j in 0..=n {
-        dp[0][j] = j;
-    }
+    (0..=m).for_each(|i| dp[i][0] = i);
+    (0..=n).for_each(|j| dp[0][j] = j);
     for i in 1..=m {
         for j in 1..=n {
             dp[i][j] = if a[i - 1] == b[j - 1] {
                 dp[i - 1][j - 1]
             } else {
-                1 + dp[i - 1][j - 1].min(dp[i - 1][j]).min(dp[i][j - 1])
+                1 + dp[i - 1][j].min(dp[i][j - 1]).min(dp[i - 1][j - 1])
             };
         }
     }
     dp[m][n]
 }
 
-/// Find the closest name in `candidates` to `target`, within a distance of 2.
-fn find_closest_name<'a>(target: &str, candidates: &[&'a str]) -> Option<&'a str> {
-    candidates
-        .iter()
-        .filter_map(|&c| {
-            let d = levenshtein(target, c);
-            if d <= 2 { Some((d, c)) } else { None }
-        })
-        .min_by_key(|(d, _)| *d)
-        .map(|(_, c)| c)
-}
-
 
 #[cfg(test)]
 mod tests {
-    use ynz_ast::nodes::{Block, CallExpr, Expr, FunctionDecl, Item, Module, Stmt, Type as AstType};
-    use ynz_diagnostics::SourceSpan;
-
     use super::*;
+    use ynz_ast::nodes::{Block, CallExpr, Expr, FunctionDecl, Item, Module, Stmt};
+    use ynz_diagnostics::SourceSpan;
 
     fn span(start: usize, end: usize) -> SourceSpan {
         SourceSpan::new("test.ynz", start, end)
@@ -792,6 +1028,7 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDecl {
                 name: "main".into(),
+                params: vec![],
                 return_type: AstType::Nothing,
                 body: Block {
                     stmts: vec![Stmt::Expr(Expr::Call(Box::new(CallExpr {
@@ -807,23 +1044,19 @@ mod tests {
             span: span(0, 57),
         };
 
-        let intrinsics = PrimitiveIntrinsicTable::m2().with_test_intrinsic(
+        let intrinsics = PrimitiveIntrinsicTable::m3().with_test_intrinsic(
             "_test_takes_nothing",
             vec![Type::Nothing],
             Type::Nothing,
         );
+        let sig_table = crate::signatures::collect_signatures(&module, &mut DiagnosticBucket::new());
+        let (_, diags) = check(&module, &sig_table, &intrinsics);
+        let diags: Vec<_> = diags.into_iter().collect();
+        assert_eq!(diags.len(), 1, "Expected 1 type-mismatch diagnostic, got: {diags:#?}");
 
-        let (_, diag_bucket) = check(&module, &intrinsics);
-        let diags: Vec<_> = diag_bucket.into_iter().collect();
-
-        assert!(!diags.is_empty(), "Type mismatch must produce a diagnostic");
-        assert!(!diags[0].what.is_empty(), "what must not be empty");
-        assert!(!diags[0].what_instead.is_empty(), "what_instead must not be empty");
-        assert!(!diags[0].why.is_empty(), "why must not be empty");
-        assert!(
-            diags[0].what.contains("nothing") || diags[0].what.contains("string"),
-            "Type-mismatch diagnostic must mention the types, got: {}",
-            diags[0].what
-        );
+        let d = &diags[0];
+        assert!(!d.what.is_empty(), "what must be non-empty");
+        assert!(!d.what_instead.is_empty(), "what_instead must be non-empty");
+        assert!(!d.why.is_empty(), "why must be non-empty");
     }
 }

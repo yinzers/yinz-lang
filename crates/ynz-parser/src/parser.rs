@@ -16,7 +16,8 @@
 /// Every AST node carries a SourceSpan so downstream stages can point
 /// diagnostics at exact source locations.
 use ynz_ast::nodes::{
-    BinOpKind, Block, CallExpr, Expr, FunctionDecl, Item, Module, Stmt, Type, UnaryOpKind,
+    BinOpKind, Block, CallExpr, Expr, FunctionDecl, Item, MatchArm, MatchPattern, MatchPatternKind,
+    Module, Param, Stmt, Type, UnaryOpKind,
 };
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
@@ -96,6 +97,10 @@ impl<'a> Parser<'a> {
                 | Token::Let
                 | Token::Const
                 | Token::Function
+                | Token::If
+                | Token::While
+                | Token::For
+                | Token::Return
         )
     }
 
@@ -181,17 +186,7 @@ impl<'a> Parser<'a> {
             return None;
         }
 
-        // M1/M2: no parameters. Immediately expect `)`.
-        if self.expect(&Token::RParen).is_none() {
-            self.diags.push(Diagnostic::error(
-                self.current_span(),
-                format!("`{name}` does not take parameters yet."),
-                format!("Use `function {name}()` with empty parentheses."),
-                "Parameters are added in Milestone 3.",
-            ));
-            self.recover_to_rbrace();
-            return None;
-        }
+        let params = self.parse_params(&name)?;
 
         // `->`
         if self.expect(&Token::Arrow).is_none() {
@@ -224,6 +219,7 @@ impl<'a> Parser<'a> {
         let end = self.current_span();
         Some(FunctionDecl {
             name,
+            params,
             return_type,
             body,
             span: SourceSpan::new(self.file, start_span.start, end.end),
@@ -360,6 +356,10 @@ impl<'a> Parser<'a> {
             Token::Identifier(_) if *self.peek_ahead(1) == Token::Eq => {
                 Some(self.parse_assign())
             }
+            Token::If => Some(self.parse_if()),
+            Token::While => Some(self.parse_while()),
+            Token::For => Some(self.parse_for()),
+            Token::Return => Some(self.parse_return()),
             _ => {
                 let expr = self.parse_expr(0);
                 Some(Stmt::Expr(expr))
@@ -453,6 +453,514 @@ impl<'a> Parser<'a> {
         }
     }
 
+
+    /// Parse a parameter list `(p1: T1, p2: T2, ...)` for a function declaration.
+    ///
+    /// Returns `None` (fatal, recovery attempted) only if `)` cannot be found
+    /// at all. Otherwise always returns `Some(params)`, which may be empty.
+    fn parse_params(&mut self, fn_name: &str) -> Option<Vec<Param>> {
+        if self.expect(&Token::RParen).is_some() {
+            return Some(Vec::new());
+        }
+
+        let mut params: Vec<Param> = Vec::new();
+        let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        loop {
+            if matches!(self.peek(), Token::RParen | Token::Eof | Token::RBrace) {
+                break;
+            }
+
+            // Ownership annotations: `share`/`lend`/`give` are M4 — skip with deferral.
+            if let Token::Identifier(kw) = self.peek().clone() {
+                if matches!(kw.as_str(), "share" | "lend" | "give")
+                    && matches!(self.peek_ahead(1), Token::Identifier(_))
+                {
+                    let kw_span = self.current_span();
+                    self.advance(); // skip ownership keyword
+                    self.diags.push(Diagnostic::error(
+                        kw_span,
+                        format!("`{kw}` ownership annotations are not available yet."),
+                        "Declare the parameter without an annotation: `name: Type`",
+                        "Yinz ownership modifiers (`share`, `lend`, `give`) land in v0.1 milestone 4. Until then, parameters are read-only.",
+                    ));
+                }
+            }
+
+            // Parse `name: Type`
+            let param_start = self.current_span().start;
+            let (param_name, name_span) = match self.peek().clone() {
+                Token::Identifier(n) => {
+                    let span = self.current_span();
+                    self.advance();
+                    (n, span)
+                }
+                _ => {
+                    self.diags.push(Diagnostic::error(
+                        self.current_span(),
+                        format!("Expected a parameter name in `{fn_name}`'s parameter list."),
+                        format!("Write `name: Type`, e.g. `function {fn_name}(x: int, y: string)`"),
+                        "Each parameter needs a name and a type so the function body can use it.",
+                    ));
+                    // Recover to `)` or `}`
+                    while !matches!(self.peek(), Token::RParen | Token::Comma | Token::RBrace | Token::Eof) {
+                        self.advance();
+                    }
+                    let _ = self.expect(&Token::Comma);
+                    continue;
+                }
+            };
+
+            if self.expect(&Token::Colon).is_none() {
+                self.diags.push(Diagnostic::error(
+                    self.current_span(),
+                    format!("Expected `:` after parameter name `{param_name}`."),
+                    format!("Write `{param_name}: Type`, e.g. `{param_name}: int`"),
+                    "The `:` separates the parameter name from its type.",
+                ));
+                while !matches!(self.peek(), Token::RParen | Token::Comma | Token::RBrace | Token::Eof) {
+                    self.advance();
+                }
+                let _ = self.expect(&Token::Comma);
+                continue;
+            }
+
+            let ty_start = self.current_span().start;
+            let ty = self.parse_type();
+            let ty_span = SourceSpan::new(self.file, ty_start, self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(ty_start));
+            let param_end = ty_span.end;
+
+            // Duplicate name check
+            if !seen_names.insert(param_name.clone()) {
+                self.diags.push(Diagnostic::error(
+                    name_span.clone(),
+                    format!("Duplicate parameter name `{param_name}` in `{fn_name}`."),
+                    "Each parameter in a function must have a unique name.",
+                    "Two parameters with the same name would make it impossible to tell them apart inside the function body.",
+                ));
+            }
+
+            params.push(Param {
+                name: param_name,
+                name_span,
+                ty,
+                ty_span,
+                span: SourceSpan::new(self.file, param_start, param_end),
+            });
+
+            // Consume optional `,` — trailing comma is allowed
+            if !matches!(self.peek(), Token::RParen) && self.expect(&Token::Comma).is_none() {
+                self.diags.push(Diagnostic::error(
+                    self.current_span(),
+                    "Expected `,` or `)` after parameter.",
+                    "Separate parameters with `,`: `function foo(a: int, b: string)`",
+                    "Each parameter must be separated by a comma.",
+                ));
+                // Recover to `)` or next identifier (another param attempt)
+                while !matches!(self.peek(), Token::RParen | Token::RBrace | Token::Eof | Token::Identifier(_)) {
+                    self.advance();
+                }
+            }
+        }
+
+        if self.expect(&Token::RParen).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                format!("Missing `)` to close `{fn_name}`'s parameter list."),
+                "Add `)` after the last parameter.",
+                "Every `(` in a function declaration must be matched with a `)`.",
+            ));
+            self.recover_to_rbrace();
+            return None;
+        }
+
+        Some(params)
+    }
+
+    /// Parse `if (cond) { body }` (simple) or `if (scrutinee) { arms }` (multi-case).
+    ///
+    /// Disambiguation: after consuming `if (cond) {`, peek at the first token:
+    /// - `}`: empty simple if
+    /// - literal or `else` followed by `=>`: multi-case
+    /// - anything else: simple if (parse statements until `}`)
+    fn parse_if(&mut self) -> Stmt {
+        let start = self.current_span().start;
+        self.advance(); // consume `if`
+
+        if self.expect(&Token::LParen).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `(` after `if`.",
+                "Write `if (condition) { ... }` with the condition in parentheses.",
+                "The condition of an `if` must be wrapped in parentheses.",
+            ));
+        }
+
+        let cond = self.parse_expr(0);
+
+        if self.expect(&Token::RParen).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `)` to close the `if` condition.",
+                "Write `if (condition) { ... }` — close the parentheses before the `{`.",
+                "Every `(` in an `if` condition must be matched with a `)`.",
+            ));
+        }
+
+        if self.expect(&Token::LBrace).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `{` to open the `if` body.",
+                "Write `if (condition) { ... }` with curly braces around the body.",
+                "Curly braces are always required in Yinz — `if (cond) stmt` without braces is not valid.",
+            ));
+            let span = SourceSpan::new(self.file, start, self.current_span().end);
+            return Stmt::If { cond, body: Block { stmts: vec![], span: span.clone() }, span };
+        }
+
+        let block_open = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.start).unwrap_or(start);
+        let _ = block_open;
+
+        // Disambiguate: is this simple-if or multi-case-if?
+        let is_multi_case = self.peek_is_match_arm_start();
+
+        if is_multi_case {
+            self.parse_match_body(cond, start)
+        } else {
+            let body = self.parse_block();
+            let end = body.span.end;
+            Stmt::If {
+                cond,
+                body,
+                span: SourceSpan::new(self.file, start, end),
+            }
+        }
+    }
+
+    /// True if the current position looks like the start of a multi-case arm:
+    /// a literal/`else` token followed by `=>`, OR an `is TypeName =>` triple.
+    fn peek_is_match_arm_start(&self) -> bool {
+        // Value arm: literal or identifier directly followed by `=>`
+        let value_arm = matches!(
+            self.peek(),
+            Token::IntLit(_)
+                | Token::NumberLit(_)
+                | Token::StringLit(_)
+                | Token::True
+                | Token::False
+                | Token::Identifier(_)
+                | Token::Else
+        ) && *self.peek_ahead(1) == Token::FatArrow;
+
+        // `is Type =>` form (three tokens): `is` identifier, type-name identifier, `=>`
+        let is_type_arm = matches!(self.peek(), Token::Identifier(kw) if kw == "is")
+            && matches!(self.peek_ahead(1), Token::Identifier(_));
+
+        value_arm || is_type_arm
+    }
+
+    /// Parse the body of a multi-case `if`: `arms [else_arm] }`.
+    ///
+    /// Called after `if (scrutinee) {` has been consumed and we've determined
+    /// the block is multi-case (first token + `=>` pattern).
+    fn parse_match_body(&mut self, scrutinee: Expr, start: usize) -> Stmt {
+        let mut arms: Vec<MatchArm> = Vec::new();
+        let mut else_arm: Option<Block> = None;
+
+        loop {
+            match self.peek() {
+                Token::RBrace | Token::Eof => break,
+                Token::Else => {
+                    // `else => { ... }` or `else => stmt`
+                    self.advance(); // consume `else`
+                    let arrow_span = self.current_span();
+                    if self.expect(&Token::FatArrow).is_none() {
+                        self.diags.push(Diagnostic::error(
+                            self.current_span(),
+                            "Expected `=>` after `else` in multi-case `if`.",
+                            "Write `else => { ... }` for the catch-all arm.",
+                            "The `else` catch-all must be followed by `=>` and a block.",
+                        ));
+                    }
+                    let body = self.parse_arm_body();
+                    let _ = arrow_span;
+                    else_arm = Some(body);
+                    // After else_arm, only `}` is valid
+                    if !matches!(self.peek(), Token::RBrace | Token::Eof) {
+                        self.diags.push(Diagnostic::error(
+                            self.current_span(),
+                            "The `else =>` arm must be the last arm in a multi-case `if`.",
+                            "Move `else => ...` to the end of the multi-case block.",
+                            "The `else` catch-all matches anything — having more arms after it would be unreachable.",
+                        ));
+                        while !matches!(self.peek(), Token::RBrace | Token::Eof) {
+                            self.advance();
+                        }
+                    }
+                    break;
+                }
+                _ if self.peek_is_match_arm_start() => {
+                    arms.push(self.parse_match_arm());
+                }
+                _ => {
+                    // Non-arm statement inside a committed multi-case block.
+                    self.diags.push(Diagnostic::error(
+                        self.current_span(),
+                        format!(
+                            "Inside a multi-case `if`, every entry must be a `pattern => body` arm, but found `{}`.",
+                            token_display(self.peek())
+                        ),
+                        "Write `value => { ... }` or `else => { ... }` for each case.",
+                        "Once the first `=>` arm is seen, all entries in the block are treated as arms.",
+                    ));
+                    // Recover: scan to next `=>` or `}`
+                    while !matches!(self.peek(), Token::FatArrow | Token::RBrace | Token::Eof) {
+                        self.advance();
+                    }
+                    if matches!(self.peek(), Token::FatArrow) {
+                        self.advance(); // consume `=>`
+                        let _ = self.parse_arm_body(); // discard recovered body
+                    }
+                }
+            }
+        }
+
+        let end = self.current_span().end;
+        if self.expect(&Token::RBrace).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Missing `}` to close the multi-case `if` block.",
+                "Add `}` at the end of the multi-case block.",
+                "Every `{` must be matched with a `}`.",
+            ));
+        }
+
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            span: SourceSpan::new(self.file, start, end),
+        }
+    }
+
+    /// Parse a single multi-case arm: `pattern => body`.
+    fn parse_match_arm(&mut self) -> MatchArm {
+        let pat_start = self.current_span().start;
+
+        // Check for deferred M6 forms: `is TypeName =>` or bare identifier-not-followed-by-`=>`
+        // `is Type =>` form
+        if let Token::Identifier(kw) = self.peek().clone() {
+            if kw == "is" {
+                let is_span = self.current_span();
+                self.advance(); // consume `is`
+                let type_name = if let Token::Identifier(n) = self.peek().clone() {
+                    let n2 = n.clone();
+                    self.advance();
+                    n2
+                } else {
+                    String::new()
+                };
+                let arrow_span = self.current_span();
+                let _ = self.expect(&Token::FatArrow);
+                self.diags.push(Diagnostic::error(
+                    is_span,
+                    format!("`is {type_name} =>` pattern matching is not available yet."),
+                    "Use value matching `1 => ...` or `else => ...` for now.",
+                    "Matching on a value's type in multi-case `if` arms (`is Circle => ...`) arrives in v0.1 milestone 6 when union types land.",
+                ));
+                let body = self.parse_arm_body();
+                let pat_span = SourceSpan::new(self.file, pat_start, arrow_span.start);
+                return MatchArm {
+                    pattern: MatchPattern { kind: MatchPatternKind::IsType(type_name), span: pat_span },
+                    body,
+                    arrow_span,
+                };
+            }
+        }
+
+        // Value pattern: literal or identifier followed by `=>`
+        let pat_span_start = self.current_span().start;
+        let pattern_expr = self.parse_expr(0);
+        let pat_span_end = pattern_expr.span().end;
+        let pat_span = SourceSpan::new(self.file, pat_span_start, pat_span_end);
+
+        let arrow_span = self.current_span();
+        if self.expect(&Token::FatArrow).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `=>` after pattern in multi-case `if`.",
+                "Write `pattern => { ... }` for each arm.",
+                "The `=>` separates the pattern from the body in a multi-case arm.",
+            ));
+        }
+
+        let body = self.parse_arm_body();
+        MatchArm {
+            pattern: MatchPattern { kind: MatchPatternKind::Value(pattern_expr), span: pat_span },
+            body,
+            arrow_span,
+        }
+    }
+
+    /// Parse the body of a multi-case arm: either `{ stmts }` or a single statement.
+    ///
+    /// The spec allows both `1 => { print(x) }` and `1 => print(x)` (single stmt).
+    fn parse_arm_body(&mut self) -> Block {
+        if matches!(self.peek(), Token::LBrace) {
+            self.advance(); // consume `{`
+            let body = self.parse_block();
+            // parse_block already consumed the `}`
+            body
+        } else {
+            // Single statement (no braces)
+            let start = self.current_span().start;
+            if let Some(stmt) = self.parse_stmt() {
+                let end = self.current_span().start;
+                Block {
+                    stmts: vec![stmt],
+                    span: SourceSpan::new(self.file, start, end),
+                }
+            } else {
+                let span = self.current_span();
+                Block { stmts: vec![], span }
+            }
+        }
+    }
+
+    fn parse_while(&mut self) -> Stmt {
+        let start = self.current_span().start;
+        self.advance(); // consume `while`
+
+        if self.expect(&Token::LParen).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `(` after `while`.",
+                "Write `while (condition) { ... }` with the condition in parentheses.",
+                "The condition of a `while` loop must be wrapped in parentheses.",
+            ));
+        }
+
+        let cond = self.parse_expr(0);
+
+        if self.expect(&Token::RParen).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `)` to close the `while` condition.",
+                "Write `while (condition) { ... }` — close the parentheses before the `{`.",
+                "Every `(` in a `while` condition must be matched with a `)`.",
+            ));
+        }
+
+        if self.expect(&Token::LBrace).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `{` to open the `while` body.",
+                "Write `while (condition) { ... }` with curly braces around the body.",
+                "Curly braces are always required in Yinz — `while (cond) stmt` without braces is not valid.",
+            ));
+            let span = SourceSpan::new(self.file, start, self.current_span().end);
+            return Stmt::While { cond, body: Block { stmts: vec![], span: span.clone() }, span };
+        }
+
+        let body = self.parse_block();
+        let end = body.span.end;
+        Stmt::While {
+            cond,
+            body,
+            span: SourceSpan::new(self.file, start, end),
+        }
+    }
+
+    fn parse_for(&mut self) -> Stmt {
+        let start = self.current_span().start;
+        self.advance(); // consume `for`
+
+        if self.expect(&Token::LParen).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `(` after `for`.",
+                "Write `for (x in collection) { ... }` with the loop variable in parentheses.",
+                "The loop header of a `for` must be wrapped in parentheses.",
+            ));
+        }
+
+        let (var, var_span) = match self.peek().clone() {
+            Token::Identifier(n) => {
+                let span = self.current_span();
+                self.advance();
+                (n, span)
+            }
+            _ => {
+                let span = self.current_span();
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    "Expected a loop variable name after `for (`.",
+                    "Write `for (i in range(0, 10)) { ... }` with a variable name before `in`.",
+                    "The loop variable holds the current item on each iteration.",
+                ));
+                ("_".to_string(), span)
+            }
+        };
+
+        if self.expect(&Token::In).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                format!("Expected `in` after loop variable `{var}`."),
+                format!("Write `for ({var} in collection) {{ ... }}`"),
+                "The `in` keyword separates the loop variable from the collection being iterated.",
+            ));
+        }
+
+        let iter = self.parse_expr(0);
+
+        if self.expect(&Token::RParen).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `)` to close the `for` loop header.",
+                "Write `for (x in collection) { ... }` — close the parentheses before the `{`.",
+                "Every `(` in a `for` header must be matched with a `)`.",
+            ));
+        }
+
+        if self.expect(&Token::LBrace).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `{` to open the `for` body.",
+                "Write `for (x in collection) { ... }` with curly braces around the body.",
+                "Curly braces are always required in Yinz.",
+            ));
+            let span = SourceSpan::new(self.file, start, self.current_span().end);
+            return Stmt::For { var, var_span, iter, body: Block { stmts: vec![], span: span.clone() }, span };
+        }
+
+        let body = self.parse_block();
+        let end = body.span.end;
+        Stmt::For {
+            var,
+            var_span,
+            iter,
+            body,
+            span: SourceSpan::new(self.file, start, end),
+        }
+    }
+
+    fn parse_return(&mut self) -> Stmt {
+        let start = self.current_span().start;
+        self.advance(); // consume `return`
+
+        // `return` alone (nothing follows that's an expression start) → return None
+        let value = if self.is_stmt_boundary() || matches!(self.peek(), Token::Eof) {
+            None
+        } else {
+            Some(self.parse_expr(0))
+        };
+
+        let end = value.as_ref().map(|e| e.span().end).unwrap_or(start + 6); // len("return")
+        Stmt::Return {
+            value,
+            span: SourceSpan::new(self.file, start, end),
+        }
+    }
 
     /// Parse an expression with the given minimum binding power.
     ///
@@ -840,5 +1348,12 @@ fn token_display(tok: &Token) -> &str {
         Token::LBracket => "[",
         Token::RBracket => "]",
         Token::Comma => ",",
+        Token::If => "if",
+        Token::Else => "else",
+        Token::While => "while",
+        Token::For => "for",
+        Token::In => "in",
+        Token::Return => "return",
+        Token::FatArrow => "=>",
     }
 }

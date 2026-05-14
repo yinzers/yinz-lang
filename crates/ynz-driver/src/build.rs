@@ -139,10 +139,26 @@ pub fn build(source_path: &Path) -> BuildResult {
             build_failed(diags, source_path)
         }
         Ok(_) => {
-            // Success — no diagnostics to render.
+            // Success — render any warnings so the user sees them even though
+            // the build succeeded. Warnings are informational; they do not
+            // change the exit code or prevent the binary from running.
+            let warnings: Vec<_> = codegen_out.diagnostics.iter()
+                .filter(|d| d.severity != ynz_diagnostics::Severity::Error)
+                .cloned()
+                .collect();
+            let stderr_output = if warnings.is_empty() {
+                String::new()
+            } else {
+                let mut bucket = DiagnosticBucket::new();
+                for w in warnings { bucket.push(w); }
+                let sources = std::fs::read_to_string(source_path)
+                    .map(|text| std::collections::HashMap::from([(file_name.clone(), text)]))
+                    .unwrap_or_default();
+                render(&bucket, &sources, false)
+            };
             BuildResult {
                 binary: Some(binary_path),
-                stderr_output: String::new(),
+                stderr_output,
                 success: true,
             }
         }

@@ -3,7 +3,6 @@
 // one-line messages that leave the developer without a "what to do instead" or
 // "why" field.
 
-use ynz_ast::nodes::Item;
 use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::{check_query, CheckOutput, Type};
 
@@ -44,11 +43,16 @@ fn assert_errors(source: &str, expected_count: usize) -> CheckOutput {
 
 
 #[test]
-fn m2_type_variant_count_locked() {
+fn m3_type_variant_count_locked() {
     // WHY: adding new types before their milestones introduces untested paths.
+    //
     // test-ratchet: M2 adds 4 variants over M1's 3.
     //   M1: Nothing(1), String(2), Error(3).
     //   M2: Int(4), Float(5), Number(6), Bool(7). Total: 7.
+    //
+    // test-ratchet: M3 adds 1 variant for the range builtin iterable type.
+    //   Range is restricted to for-loop iterable position only.
+    //   Full Iterable[T] protocol replaces it in M7. Total: 8.
     let all: &[Type] = &[
         Type::Nothing,
         Type::String,
@@ -57,8 +61,9 @@ fn m2_type_variant_count_locked() {
         Type::Float,
         Type::Number { precision: 34 },
         Type::Bool,
+        Type::Range { element: Box::new(Type::Int), end_inclusive: false },
     ];
-    assert_eq!(all.len(), 7, "Type variant count changed from 7");
+    assert_eq!(all.len(), 8, "Type variant count changed from 8 — add // test-ratchet: comment");
 }
 
 
@@ -487,4 +492,474 @@ fn check_re_runs_when_source_changes() {
 
     assert!(diag_count_before > 0, "Empty file should have diagnostics");
     assert_eq!(diag_count_after, 0, "Valid M1 program should have 0 diagnostics");
+}
+
+
+
+fn assert_warnings(source: &str, expected_count: usize) -> CheckOutput {
+    let output = run(source);
+    let warnings: Vec<_> = output
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning))
+        .collect();
+    assert_eq!(
+        warnings.len(),
+        expected_count,
+        "Expected {expected_count} warnings, got {}:\n{:#?}",
+        warnings.len(),
+        warnings
+    );
+    output
+}
+
+#[test]
+fn m3_fibonacci_type_checks_clean() {
+    // WHY: the M3 headline contract. Fibonacci uses recursion, parameters, return,
+    // and if. If any of these paths is broken, this test catches it first.
+    assert_clean(
+        r#"function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+function main() -> nothing {
+  let result = fib(10)
+  print(result)
+}"#,
+    );
+}
+
+#[test]
+fn m3_mutual_recursion_type_checks_clean() {
+    // WHY: mutual recursion requires the two-pass design — `ping` calls `pong`
+    // and vice versa. Without signature pre-pass, one call sees undefined-function.
+    assert_clean(
+        r#"function ping(n: int) -> int {
+  if (n <= 0) {
+    return 0
+  }
+  return pong(n - 1)
+}
+function pong(n: int) -> int {
+  if (n <= 0) {
+    return 0
+  }
+  return ping(n - 1)
+}
+function main() -> nothing {
+  print(ping(5))
+}"#,
+    );
+}
+
+#[test]
+fn m3_while_loop_type_checks_clean() {
+    // WHY: while loop with a bool condition must type-check clean.
+    assert_clean(
+        r#"function main() -> nothing {
+  let x: int = 5
+  while (x > 0) {
+    x = x - 1
+  }
+  print(x)
+}"#,
+    );
+}
+
+#[test]
+fn m3_for_range_loop_type_checks_clean() {
+    // WHY: `for (i in range(0, 5))` — the canonical loop form — must type-check
+    // clean with `i` typed as `int` inside the body.
+    assert_clean(
+        r#"function main() -> nothing {
+  for (i in range(0, 5)) {
+    print(i)
+  }
+}"#,
+    );
+}
+
+#[test]
+fn m3_for_range_one_arg_type_checks_clean() {
+    // WHY: `range(end)` (one-argument form) must also type-check clean.
+    assert_clean(r#"function main() -> nothing { for (i in range(5)) { print(i) } }"#);
+}
+
+#[test]
+fn m3_multi_case_int_type_checks_clean() {
+    // WHY: multi-case `if` with int arms must type-check without errors.
+    // If the scrutinee and pattern types match and the arms type-check, no errors.
+    assert_clean(
+        r#"function main() -> nothing {
+  let x: int = 2
+  if (x) {
+    1 => print("one")
+    2 => print("two")
+    else => print("other")
+  }
+}"#,
+    );
+}
+
+#[test]
+fn m3_multi_case_string_type_checks_clean() {
+    // WHY: multi-case `if` on a string scrutinee with string patterns. String
+    // comparison in multi-case ships in M3 (byte-equality via `ynz_string_eq`
+    // in codegen). Typeck just checks pattern types match the scrutinee.
+    assert_clean(
+        r#"function main() -> nothing {
+  let s = "hello"
+  if (s) {
+    "hello" => print("hi")
+    else => print("bye")
+  }
+}"#,
+    );
+}
+
+#[test]
+fn m3_return_with_correct_type_is_clean() {
+    // WHY: `return 42` in a `-> int` function — the simplest happy-path return.
+    assert_clean(r#"function answer() -> int { return 42 }
+function main() -> nothing { print(answer()) }"#);
+}
+
+#[test]
+fn m3_return_nothing_in_nothing_fn_is_clean() {
+    // WHY: bare `return` in a `-> nothing` function — valid early exit.
+    assert_clean(r#"function main() -> nothing { return }"#);
+}
+
+#[test]
+fn m3_nested_calls_type_check_clean() {
+    // WHY: `add(add(1, 2), add(3, 4))` — nested call expressions. Each call's
+    // return type must flow correctly as the arg type of the outer call.
+    assert_clean(
+        r#"function add(a: int, b: int) -> int { return a + b }
+function main() -> nothing { print(add(add(1, 2), add(3, 4))) }"#,
+    );
+}
+
+#[test]
+fn m3_multicase_fall_through_ok_for_nothing_fn() {
+    // WHY: a non-exhaustive multi-case (no else_arm) is NOT a missing-return error
+    // in a `-> nothing` function — fall-through is fine because the function
+    // doesn't need to produce a value.
+    assert_clean(
+        r#"function main() -> nothing {
+  let x: int = 3
+  if (x) {
+    1 => print("one")
+    2 => print("two")
+  }
+  print("done")
+}"#,
+    );
+}
+
+#[test]
+fn duplicate_function_name_produces_diagnostic() {
+    // WHY: two functions named `foo` must produce exactly 1 error naming both spans.
+    // Silent acceptance would mean the second definition silently overwrites the first.
+    let out = assert_errors(
+        r#"function foo() -> nothing { }
+function foo() -> nothing { }
+function main() -> nothing { }"#,
+        1,
+    );
+    assert!(out.diagnostics[0].what.contains("foo"), "diagnostic must name the duplicate function");
+}
+
+#[test]
+fn missing_main_produces_diagnostic() {
+    // WHY: guard M1's invariant — a module without main is a compile error.
+    // This must hold even with multi-function M3 modules.
+    let out = assert_errors(
+        r#"function helper() -> nothing { }"#,
+        1,
+    );
+    assert!(out.diagnostics[0].what.contains("main"));
+}
+
+#[test]
+fn main_with_parameters_produces_diagnostic() {
+    // WHY: `main` must have no parameters. The signature pre-pass catches this.
+    assert_errors(r#"function main(x: int) -> nothing { }"#, 1);
+}
+
+#[test]
+fn m3_main_with_non_nothing_return_type_produces_diagnostic() {
+    // WHY: `main() -> int` is wrong. The signature pre-pass catches this.
+    let out = assert_errors(r#"function main() -> int { return 0 }"#, 1);
+    assert!(out.diagnostics[0].what.contains("main"));
+}
+
+#[test]
+fn parameter_mutation_produces_m4_deferral() {
+    // WHY: assigning to a parameter is a compile error in M3 (ownership annotations
+    // land in M4). The error must name the parameter and mention M4 so the user
+    // knows what to expect and when.
+    let out = assert_errors(
+        r#"function foo(x: int) -> int { x = 5 return x }
+function main() -> nothing { print(foo(1)) }"#,
+        1,
+    );
+    assert!(out.diagnostics[0].what.contains("x"));
+    assert!(out.diagnostics[0].why.contains("milestone 4"));
+}
+
+#[test]
+fn loop_var_mutation_produces_diagnostic() {
+    // WHY: assigning to the for-loop variable inside the loop body is a compile error.
+    // The loop variable is the iteration counter — mutating it would make loop
+    // behavior unpredictable (skip iterations, run forever, etc.).
+    let out = assert_errors(
+        r#"function main() -> nothing { for (i in range(0, 5)) { i = 10 } }"#,
+        1,
+    );
+    assert!(out.diagnostics[0].what.contains("i"));
+}
+
+#[test]
+fn wrong_return_type_produces_diagnostic() {
+    // WHY: `return "hi"` in a `-> int` function must produce a type-mismatch
+    // diagnostic pointing at the wrong expression, not the whole function.
+    let out = assert_errors(
+        r#"function foo() -> int { return "hi" }
+function main() -> nothing { print(foo()) }"#,
+        1,
+    );
+    assert!(out.diagnostics.iter().any(|d| d.what.contains("int") || d.what.contains("string")));
+}
+
+#[test]
+fn missing_return_produces_diagnostic() {
+    // WHY: a `-> int` function with no `return` on all paths must error.
+    // Without this check, the function silently exits with an undefined value.
+    let out = assert_errors(
+        r#"function foo() -> int { print("no return") }
+function main() -> nothing { print(foo()) }"#,
+        1,
+    );
+    assert!(out.diagnostics.iter().any(|d| d.what.contains("foo")));
+}
+
+#[test]
+fn return_without_value_in_non_nothing_fn_produces_diagnostic() {
+    // WHY: bare `return` in a `-> int` function is wrong — the function
+    // promised a value but returns nothing.
+    assert_errors(
+        r#"function foo() -> int { return }
+function main() -> nothing { print(foo()) }"#,
+        1,
+    );
+}
+
+#[test]
+fn return_with_value_in_nothing_fn_produces_diagnostic() {
+    // WHY: `return 1` inside a `-> nothing` function is a contradiction —
+    // the function said it produces no value, then tries to return one.
+    assert_errors(r#"function main() -> nothing { return 1 }"#, 1);
+}
+
+#[test]
+fn dead_code_after_return_produces_warning() {
+    // WHY: `return 1; print(2)` — `print(2)` is unreachable. A warning (not error)
+    // so the function still compiles, but the user is informed. Silently ignoring
+    // dead code hides bugs (e.g. a return that was meant to be conditional).
+    let out = assert_warnings(
+        r#"function foo() -> int { return 1 print(2) }
+function main() -> nothing { print(foo()) }"#,
+        1,
+    );
+    assert!(out.diagnostics.iter().any(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning)));
+}
+
+#[test]
+fn multicase_non_exhaustive_in_non_nothing_fn_produces_diagnostic() {
+    // WHY: `function foo(x: int) -> int { if (x) { 1 => return 1 } }` —
+    // no else_arm means there's a fall-through path where no value is returned.
+    assert_errors(
+        r#"function foo(x: int) -> int {
+  if (x) {
+    1 => return 1
+    2 => return 2
+  }
+}
+function main() -> nothing { print(foo(1)) }"#,
+        1,
+    );
+}
+
+#[test]
+fn multicase_with_else_all_arms_return_is_clean() {
+    // WHY: exhaustive multi-case with else_arm — all paths return, no error.
+    assert_clean(
+        r#"function foo(x: int) -> int {
+  if (x) {
+    1 => return 1
+    else => return 0
+  }
+}
+function main() -> nothing { print(foo(1)) }"#,
+    );
+}
+
+#[test]
+fn if_condition_must_be_bool() {
+    // WHY: `if (42) { ... }` — integer condition must produce a diagnostic.
+    // JavaScript-style truthy coercion is explicitly rejected in Yinz.
+    assert_errors(
+        r#"function main() -> nothing { if (42) { print("hi") } }"#,
+        1,
+    );
+}
+
+#[test]
+fn while_condition_must_be_bool() {
+    // WHY: `while (1) { ... }` — same as if: no truthy coercion.
+    assert_errors(
+        r#"function main() -> nothing { let x: int = 1 while (x) { x = x - 1 } }"#,
+        1,
+    );
+}
+
+#[test]
+fn range_outside_for_produces_m7_deferral() {
+    // WHY: `let r = range(0, 5)` — storing a range is not allowed in M3.
+    // The error must mention M7 so the user knows when this changes.
+    let out = assert_errors(
+        r#"function main() -> nothing { let r = range(0, 5) }"#,
+        1,
+    );
+    assert!(out.diagnostics.iter().any(|d| d.why.contains("milestone 7")));
+}
+
+#[test]
+fn range_wrong_arity_produces_diagnostic() {
+    // WHY: `range(1, 2, 3)` — only 1 or 2 args accepted. Three args must error.
+    assert_errors(
+        r#"function main() -> nothing { for (i in range(0, 5, 1)) { print(i) } }"#,
+        1,
+    );
+}
+
+#[test]
+fn range_wrong_arg_type_produces_diagnostic() {
+    // WHY: `range("hi")` — range requires `int` args. A string arg must error.
+    assert_errors(
+        r#"function main() -> nothing { for (i in range("hi")) { print(i) } }"#,
+        1,
+    );
+}
+
+#[test]
+fn undefined_function_produces_diagnostic_with_levenshtein() {
+    // WHY: `unknownFn()` must produce an error. With a close enough name (`main`
+    // vs `mann`), the "did you mean" suggestion must fire.
+    let out = assert_errors(
+        r#"function main() -> nothing { mann() }"#,
+        1,
+    );
+    assert!(
+        out.diagnostics[0].what_instead.contains("main"),
+        "Levenshtein must suggest `main` for `mann`, got: {:?}",
+        out.diagnostics[0].what_instead
+    );
+}
+
+#[test]
+fn function_arg_type_mismatch_produces_diagnostic() {
+    // WHY: `function foo(x: int) -> nothing { }; foo("hi")` — string passed
+    // where int expected. Must produce exactly 1 type-mismatch diagnostic.
+    let out = assert_errors(
+        r#"function foo(x: int) -> nothing { }
+function main() -> nothing { foo("hi") }"#,
+        1,
+    );
+    assert!(out.diagnostics[0].what.contains("int") || out.diagnostics[0].what.contains("string"));
+}
+
+#[test]
+fn function_arg_arity_mismatch_produces_diagnostic() {
+    // WHY: `foo(1, 2)` when `foo` takes 1 arg must error with arity count.
+    let out = assert_errors(
+        r#"function foo(x: int) -> nothing { }
+function main() -> nothing { foo(1, 2) }"#,
+        1,
+    );
+    assert!(out.diagnostics[0].what.contains("foo"));
+}
+
+#[test]
+fn parse_error_gate_still_works_in_m3() {
+    // WHY: M1's gate: if a function body has a parse error, skip body typechecking.
+    // This must survive the M3 refactor so parse errors don't cascade into
+    // confusing "undefined identifier" errors on error-recovery nodes.
+    // `let x = $` produces: (1) lex error on `$`, (2) parse error on the
+    // missing expression. Both are lex/parse errors — typeck must not add more.
+    let out = run(r#"function main() -> nothing { let x = $ }"#);
+    let errors: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    // All errors must be parse/lex errors, not typeck errors.
+    // Typeck cascade would produce "undefined `x`" or type-mismatch errors.
+    for e in &errors {
+        assert!(
+            !e.what.contains("is not defined") && !e.what.contains("type"),
+            "typeck must not cascade after parse error, but got: {:?}",
+            e.what
+        );
+    }
+    assert!(errors.len() <= 2, "At most lex + parse error expected, got {}", errors.len());
+}
+
+#[test]
+fn while_true_with_no_break_is_missing_return_error() {
+    // WHY: `function foo() -> int { while (true) { } }` — the typeck does NOT
+    // constant-fold `true`, so while loops always look like "may-not-execute."
+    // A non-nothing function that only has a while loop must get a missing-return
+    // error. The diagnostic must guide the user to add a `return` inside the body.
+    assert_errors(
+        r#"function foo() -> int { while (true) { } }
+function main() -> nothing { print(foo()) }"#,
+        1,
+    );
+}
+
+#[test]
+fn empty_function_body_non_nothing_is_missing_return() {
+    // WHY: `function foo() -> int { }` — zero statements, no return. Must error.
+    // Edge case for `analyze_return_paths` with an empty block.
+    assert_errors(
+        r#"function foo() -> int { }
+function main() -> nothing { print(foo()) }"#,
+        1,
+    );
+}
+
+#[test]
+fn for_loop_var_is_typed_as_int() {
+    // WHY: inside `for (i in range(0, 5))`, `i` must be `int` so it can be
+    // passed to `print` without a `.toString()` call. If `i` is Error or
+    // unknown, print(i) would produce a false type error.
+    assert_clean(
+        r#"function main() -> nothing { for (i in range(0, 10)) { print(i) } }"#,
+    );
+}
+
+#[test]
+fn module_signatures_query_is_separate_from_check_query() {
+    // WHY: validates the two-pass salsa design. module_signatures_query must
+    // exist and return the same diagnostics as check_query for signature errors.
+    let db = CompilerDb::default();
+    let sf = SourceFile::new(&db, FILE.to_string(), "function helper() -> nothing { }".to_string());
+    let sig_out = ynz_typeck::module_signatures_query(&db, sf);
+    // No main → 1 error in sig pass
+    assert_eq!(sig_out.diagnostics.len(), 1, "Missing main must appear in signature output");
+    // check_query should also have the error (it includes sig diags)
+    let check_out = check_query(&db, sf);
+    assert!(check_out.diagnostics.len() >= 1, "Missing main must appear in check output");
 }

@@ -1,0 +1,17 @@
+function ping(n: int) -> int {
+  if (n <= 0) {
+    return 0
+  }
+  return pong(n - 1)
+}
+
+function pong(n: int) -> int {
+  if (n <= 0) {
+    return 0
+  }
+  return ping(n - 1)
+}
+
+function main() -> nothing {
+  print(ping(5))
+}

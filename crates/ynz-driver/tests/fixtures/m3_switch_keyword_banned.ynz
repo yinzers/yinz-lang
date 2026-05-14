@@ -1,0 +1,6 @@
+// Teaching diagnostic: `switch` is not a Yinz keyword.
+// The lexer emits a teaching diagnostic pointing to multi-case `if`.
+function main() -> nothing {
+  let x: int = 1
+  switch
+}

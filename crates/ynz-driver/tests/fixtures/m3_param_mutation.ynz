@@ -1,0 +1,10 @@
+// CATCH-UP M4: when `lend` ownership modifier lands, parameter mutation will be allowed
+// via `function foo(lend x: int)`. Until then, assignment to a param is a compile error.
+function foo(x: int) -> int {
+  x = 5
+  return x
+}
+
+function main() -> nothing {
+  print(foo(1))
+}

@@ -1,0 +1,14 @@
+function describe(x: int) -> nothing {
+  if (x) {
+    1 => print("one")
+    2 => print("two")
+    3 => print("three")
+    else => print("other")
+  }
+}
+
+function main() -> nothing {
+  describe(1)
+  describe(2)
+  describe(5)
+}
