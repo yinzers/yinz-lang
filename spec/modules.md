@@ -9,7 +9,7 @@ Every `.ynz` file is a module. Everything inside it is private by default. Add `
 ```
 // services/users.ynz
 
-export type User {
+export shape User {
   name: string
   email: string
 }
@@ -202,7 +202,7 @@ Files can import from each other. The compiler handles it automatically through 
 // services/users.ynz
 import { Order } from "services/orders"
 
-export type User {
+export shape User {
   name: string
   orders: array<Order>
 }
@@ -210,7 +210,7 @@ export type User {
 // services/orders.ynz
 import { User } from "services/users"
 
-export type Order {
+export shape Order {
   total: number
   buyer: User
 }

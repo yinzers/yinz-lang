@@ -58,6 +58,16 @@ High-level syntax compiles to the same machine code as hand-written low-level co
 
 *Why*: If convenience costs performance, developers will bypass the readable path in hot code. Zero-cost means the right choice and the fast choice are always the same choice.
 
+**Clarification — do not interpret as relaxation**:
+
+- "Zero-cost ABSTRACTIONS" means the abstraction itself adds no overhead beyond hand-written code. It does NOT mean "no features have any cost ever."
+- Features themselves (Arc reference counting, async runtime scheduler, arena allocator bookkeeping) cost what they inherently cost. Those costs apply whether the developer writes them manually or the compiler infers them.
+- Compiler inference happens at compile time → zero RUNTIME cost from the inference itself. The compiler choosing `.share` for you produces identical machine code to you writing `.share` explicitly.
+- The "hand-written low-level" benchmark is "what would a careful Rust/C++/Zig programmer write," not "the absolute theoretical minimum." Memory safety has a cost — that cost is the bar; not zero.
+- **Any future design tradeoff that costs MORE than hand-written code requires Patrick's explicit approval AND documentation in `design/decisions.md`.** This clarification block exists to prevent future drift — interpreting Rule 8 as "soften zero-cost" is wrong.
+
+This clarification was added 2026-05-14 after the design-lockdown conversation surfaced the risk that auto-inferred features (auto-Arc for cross-thread shared state, auto-wait for I/O) might be mistaken for zero-cost violations. They aren't — the cost is in the underlying feature, not the inference.
+
 ---
 
 **9. Fast to type**
@@ -75,13 +85,31 @@ The default behavior is always the most performant option. Developers opt INTO s
 ---
 
 **11. The compiler is a teacher**
-Errors explain what went wrong AND why. Suggestions explain why one approach is better than another — performance, clarity, or idiomatic Yinz. Every diagnostic answers three questions: WHAT happened, WHAT to do instead, and WHY. The compiler is not a checker — it's a senior developer mentoring a junior developer through every interaction.
+Errors and IDE teaching surfaces explain what went wrong (or what's happening) AND why. Suggestions explain why one approach is better than another — performance, clarity, or idiomatic Yinz. Every diagnostic AND every IDE tooltip answers three questions: WHAT happened (or is happening), WHAT to do instead (or how to make it explicit), and WHY. The compiler is not a checker — it's a senior developer mentoring a junior developer through every interaction.
 
 The WHY must be **specific and contextual**, not generic. The compiler knows the types, variable usage, and surrounding code — it should use that knowledge. "Avoids allocation" is generic. "scores isn't used again after this line — sortInPlace() skips the allocation because you only need the sorted version" is contextual. Generic WHYs are a fallback for when context genuinely isn't available, not the standard.
 
-*Why*: Learning happens at the moment of feedback. A developer who just hit an ownership violation is primed to understand ownership. A developer who just wrote `map<string, number>` with all-static keys is primed to learn why a `type` is faster. That's the optimal moment to teach — not in a doc they read two weeks earlier, not after the bug ships.
+**This rule applies to every teaching surface**, not just compiler diagnostics:
 
-The teaching mission is a first-class language goal — see `design/teaching-mission.md` for the full rationale, the required three-part diagnostic format, and the long-term aspiration that Yinz becomes a CS-101 teaching language.
+- Terminal compile errors and warnings
+- IDE muted-text hints (inferred types, inferred ownership, inferred wait points — see `.claude/rules/inference.md`)
+- IDE hover tooltips on muted text or any other annotated element
+- Lint suggestions (typo corrections, style hints, performance hints)
+- Doc-generation output (cargo doc-style or whatever Yinz ends up with)
+
+**Shared wording rule**: one canonical explanation per concept, used wherever it surfaces. Don't write a different explanation for the same concept in the compiler vs the IDE tooltip vs the spec. The canonical form lives in one place (the rule file or design doc) and other surfaces re-use the same text.
+
+**Canonical example** — hovering muted `.share` on a call passing a `const player`:
+
+> **WHAT**: This is inferred as `.share` because `player` is declared `const`. The function gets read-only access; you keep ownership.
+>
+> **WHAT INSTEAD**: You could write `foo(player.share)` to make it explicit. The behavior is identical.
+>
+> **WHY**: `const` bindings can only grant read-only access. If you need mutation, declare `player` with `let` instead. (Trying to write `foo(player.lend)` here would produce a compile error: "cannot lend a const binding.")
+
+*Why*: Learning happens at the moment of feedback. A developer who just hit an ownership violation is primed to understand ownership. A developer who just wrote `map<string, number>` with all-static keys is primed to learn why a `shape` is faster. That's the optimal moment to teach — not in a doc they read two weeks earlier, not after the bug ships. IDE hints extend that mentorship to every keystroke, not just error cases.
+
+The teaching mission is a first-class language goal — see `design/teaching-mission.md` for the full rationale, the required three-part diagnostic format, and the long-term aspiration that Yinz becomes a CS-101 teaching language. The inference protocol that powers IDE hints lives in `.claude/rules/inference.md`.
 
 ---
 
@@ -93,6 +121,8 @@ Scan any line of code. Capital letter = type. No capital = not a type. Modules a
 ---
 
 **12. Human-readable over programmer jargon**
-`options` not `enum`. `follows` not `implements`. `nothing` not `void`. `or` not `|`. If a non-programmer could guess a keyword's meaning, the naming is right.
+`options` not `enum`. `follows` not `implements`. `nothing` not `void`. If a non-programmer could guess a keyword's meaning, the naming is right.
 
 *Why*: The stated goal is accessibility to junior developers. Every term that requires CS background knowledge is a barrier to entry. Plain English words are memorable, guessable, and require no prior knowledge.
+
+**Exception — union syntax uses `|`, not `or`**: Yinz writes union types as `shape Result = Success | Failure`, matching TypeScript convention. The `or` keyword was considered (and previously documented here) but rejected because `or` is triple-overloaded: boolean operator (`if (a or b)`), union type syntax, and the word in prose. `|` is unambiguous as a type-syntax symbol and reads naturally to TypeScript developers. Locked 2026-05-14 per Patrick's call during the design-lockdown conversation. This is the ONE place Yinz prefers a symbol over a word — every other operator/keyword stays as a word.

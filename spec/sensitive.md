@@ -26,7 +26,7 @@ let apiKey = env.get("STRIPE_KEY").or("")
 print(apiKey)                                   // [REDACTED]
 log(`Connecting with key: ${apiKey}`)           // Connecting with key: [REDACTED]
 
-type Config {
+shape Config {
   appName: string
   apiKey: sensitive string
   port: number

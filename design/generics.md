@@ -10,12 +10,12 @@ Yinz has both **type generics** and **function generics**, both using the same b
 
 **Type generics** (already in spec):
 ```yinz
-type Pair<A, B> {
+shape Pair<A, B> {
   first: A
   second: B
 }
 
-type Box<T> {
+shape Box<T> {
   value: T
 }
 ```
@@ -104,7 +104,7 @@ This matches Rule 4 (compiler does the hard work) — jr devs don't write `<T>` 
 ```yinz
 function sort<T follows Comparable>(share items: array<T>) -> array<T> { ... }
 
-type Player { name: string, health: number }
+shape Player { name: string, health: number }
 
 let players: array<Player> = [...]
 let sorted = sort(players)

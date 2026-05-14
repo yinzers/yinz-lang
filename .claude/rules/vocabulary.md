@@ -16,7 +16,7 @@ For internal-vs-user-facing audience distinctions (e.g., `infer`/`inference` all
 | Growable list | `array<T>` | Vec, list, dynamic array |
 | Stack-allocated fixed list | `fixed<T>` | static array, stack array, fixed-size array |
 | Enum replacement | `options` | enum, enumeration |
-| A-or-B type relationship | `union` (via `or`) | sum type, variant type |
+| A-or-B type relationship | `union` (via `\|`) | sum type, variant type, `or` keyword (rejected — see Golden Rule 12 exception) |
 | Optional/maybe value | `maybe T` | Optional, Option, nullable |
 | Absent value | `none` | null, undefined, None, nil |
 | No return value | `nothing` | void, unit, () |
@@ -77,11 +77,11 @@ JavaScript conflates these (an "object" is both `{ name: "x" }` (record) and `{ 
 ### `options` vs `union`
 
 - `options Status { active, inactive, banned }` — replaces `enum`. A finite set of named constants.
-- `union` is the relationship: replaces variant types / sum types. **Open contradiction**: `.claude/rules/naming.md` says use `or` (`shape Result = Success or Failure`); CLAUDE.md Golden Rule 12 says use `|` because `or` was triple-overloaded. Phase 2 (Golden Rules update) must resolve this — pending Patrick's call.
+- `union` is the concept; **`|` is the syntax**: `shape Result = Success | Failure`. Yinz keeps `|` from TypeScript (locked by Patrick 2026-05-14). The `or` keyword was considered but rejected because it's triple-overloaded (boolean operator + union syntax + prose word). See `design/golden-rules.md` Rule 12 expanded version for the full rationale.
 
 ### `maybe T`
 
-`maybe T` is sugar for `T or none`. Use when "no value" is a normal possibility (a query that might not match; a parsed value that might fail).
+`maybe T` is sugar for `T | none`. Use when "no value" is a normal possibility (a query that might not match; a parsed value that might fail).
 
 For errors-that-the-caller-must-handle, use the `errors` keyword instead: `function readFile() -> string errors`.
 

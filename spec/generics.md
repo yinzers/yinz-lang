@@ -23,7 +23,7 @@ The `<T>` part is the generic parameter — it says what type the collection hol
 Use the same `name<T>` pattern:
 
 ```
-type Box<T> {
+shape Box<T> {
   value: T
 }
 
@@ -38,7 +38,7 @@ let numberBox: Box<number> = { value: 42 }
 ## Multiple type parameters
 
 ```
-type Pair<A, B> {
+shape Pair<A, B> {
   first: A
   second: B
 }
@@ -118,7 +118,7 @@ function process<T follows Comparable, Serializable>(share item: T) -> string {
 If you try to call the function with a type that doesn't follow the contract, the compiler tells you exactly what's missing:
 
 ```
-type Player { name: string, health: number }   // no follows clause
+shape Player { name: string, health: number }   // no follows clause
 
 let sorted = sort(players)
 // COMPILE ERROR: Type Player does not follow contract Comparable.

@@ -95,7 +95,7 @@ Stdlib modules define first-class error types with domain-specific fields — no
 Example from the db module:
 
 ```
-type DatabaseError {
+shape DatabaseError {
     summary: string             // short human-readable description
     suggestions: array<string>  // what to do about it
     code: string | null         // raw driver error code (e.g. Postgres "23505")

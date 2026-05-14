@@ -7,7 +7,7 @@ A `type` defines the shape of your data — what fields it has and what types th
 ## Defining a type
 
 ```
-type Player {
+shape Player {
   name: string
   health: number
   score: number
@@ -45,7 +45,7 @@ let player: Player = {
 Types can have functions that operate on them:
 
 ```
-type Player {
+shape Player {
   name: string
   health: number
 
@@ -71,7 +71,7 @@ player.isAlive()         // share self — this method only reads
 One type can extend another, gaining all its fields and methods:
 
 ```
-type Entity {
+shape Entity {
   name: string
   health: number
 
@@ -80,7 +80,7 @@ type Entity {
   }
 }
 
-type Warrior extends Entity {
+shape Warrior extends Entity {
   weapon: string
   armor: number
 }
@@ -104,7 +104,7 @@ Single inheritance only. A type can `extends` one other type, that's it.
 To replace a method from a parent type, use `override`:
 
 ```
-type Warrior extends Entity {
+shape Warrior extends Entity {
   weapon: string
   armor: number
 
@@ -117,7 +117,7 @@ type Warrior extends Entity {
 Forgetting `override` when the method already exists in the parent is a compile error:
 
 ```
-type Warrior extends Entity {
+shape Warrior extends Entity {
   function takeDamage(lend self, amount: number) -> nothing { ... }
   // COMPILE ERROR: takeDamage() already exists in Entity.
   // Use "override" if you intend to replace it.
@@ -127,7 +127,7 @@ type Warrior extends Entity {
 Using `override` on a method that doesn't exist in the parent is also an error:
 
 ```
-type Warrior extends Entity {
+shape Warrior extends Entity {
   override function fly(share self) -> nothing { ... }
   // COMPILE ERROR: override used but fly() does not exist in Entity. Remove "override".
 }
@@ -135,26 +135,26 @@ type Warrior extends Entity {
 
 ---
 
-## base types — not directly instantiable
+## base shapes — not directly instantiable
 
-Mark a type `base` if it's only meant to be extended, never created directly:
+Mark a shape `base` if it's only meant to be extended, never created directly:
 
 ```
-base type Entity {
+base shape Entity {
   name: string
   health: number
 }
 
 let e: Entity = { name: "test", health: 50 }
-// COMPILE ERROR: Entity is a base type — you can't create one directly.
+// COMPILE ERROR: Entity is a base shape — you can't create one directly.
 //
-//   Create a type that extends Entity instead:
-//     type Warrior extends Entity { weapon: string, armor: number }
+//   Create a shape that extends Entity instead:
+//     shape Warrior extends Entity { weapon: string, armor: number }
 //     let w: Warrior = { name: "test", health: 50, weapon: "axe", armor: 10 }
 //
-//   Why: base types describe shared behavior but aren't meant to stand alone.
+//   Why: base shapes describe shared behavior but aren't meant to stand alone.
 //        Creating one directly would give you an incomplete object. Always
-//        use a specific type that extends the base.
+//        use a specific shape that extends the base.
 
 let w: Warrior = { name: "test", health: 50, weapon: "axe", armor: 10 }   // fine
 ```
@@ -163,15 +163,15 @@ let w: Warrior = { name: "test", health: 50, weapon: "axe", armor: 10 }   // fin
 
 ## follows — behavior contracts
 
-If two unrelated types need to be used interchangeably, define a contract type and use `follows`:
+If two unrelated shapes need to be used interchangeably, define a contract shape and use `follows`:
 
 ```
-type Damageable {
+shape Damageable {
   health: number
   function takeDamage(lend self, amount: number) -> nothing
 }
 
-type Player follows Damageable {
+shape Player follows Damageable {
   name: string
   health: number
 
@@ -180,7 +180,7 @@ type Player follows Damageable {
   }
 }
 
-type Building follows Damageable {
+shape Building follows Damageable {
   address: string
   health: number
 
@@ -202,7 +202,7 @@ dealDamage(building.lend, 30)    // Building follows Damageable — works
 A type can follow multiple contracts — `extends` comes first, then `follows` with a comma-separated list:
 
 ```
-type Warrior extends Entity follows Damageable, Attackable, Renderable {
+shape Warrior extends Entity follows Damageable, Attackable, Renderable {
   ...
 }
 ```
@@ -214,7 +214,7 @@ type Warrior extends Entity follows Damageable, Attackable, Renderable {
 You don't have to name the type when returning a literal. The shape just has to match:
 
 ```
-type DivResult {
+shape DivResult {
   quotient: number
   remainder: number
 }
@@ -233,7 +233,7 @@ The compiler checks that the fields exist with the right types. No need to write
 Mark a field `hidden` to make it completely invisible to code outside the type's own methods. Hidden fields require a default value:
 
 ```
-type Player {
+shape Player {
   name: string
   health: number
   hidden damageMultiplier: number = 1.0
@@ -270,16 +270,16 @@ print(player.damageMultiplier)
 Create a new name for an existing type. Zero runtime cost — the alias is erased at compile time.
 
 ```
-type UserId = string
-type Timestamp = number
-type PlayerList = array<Player>
-type Coordinates = { x: number, y: number }
+shape UserId = string
+shape Timestamp = number
+shape PlayerList = array<Player>
+shape Coordinates = { x: number, y: number }
 ```
 
 The alias and the original type are fully interchangeable:
 
 ```
-type UserId = string
+shape UserId = string
 
 function fetchUser(id: UserId) -> maybe User errors { ... }
 

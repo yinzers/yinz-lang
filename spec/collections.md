@@ -234,7 +234,7 @@ There's one rule that determines whether to use `.` or `[]`:
 Types and collections are different concepts. Trying to use brackets on a type, or dot to access a runtime key on a map, both fail:
 
 ```
-type Player { name: string, health: number }
+shape Player { name: string, health: number }
 let p: Player = { name: "Alice", health: 100 }
 let n = p["name"]
 // COMPILE ERROR: Bracket access is for collections (array, fixed, map, string).
@@ -266,7 +266,7 @@ If you know all the keys at compile time, a `type` is faster (direct field acces
 let stats: map<string, number> = { health: 100, attack: 50 }
 
 // Faster — typed object with fixed offsets
-type Stats { health: number, attack: number }
+shape Stats { health: number, attack: number }
 let stats: Stats = { health: 100, attack: 50 }
 ```
 
@@ -283,7 +283,7 @@ Don't nest collection types inline. Name the inner shape:
 let data: map<string, map<string, number>> = { ... }
 
 // Clear — name each layer
-type PlayerScores {
+shape PlayerScores {
   kills: number
   deaths: number
   assists: number

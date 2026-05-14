@@ -128,7 +128,7 @@ Every lint diagnostic — errors, warnings, suggestions — follows the WHAT / W
 SUGGESTION: This map's keys are all compile-time string literals.
 
   Consider a type instead:
-    type Scores { alice: number, bob: number, charlie: number }
+    shape Scores { alice: number, bob: number, charlie: number }
     let scores: Scores = { alice: 90, bob: 85, charlie: 78 }
 
   Why: Type field access compiles to a direct memory offset (~1 instruction).
