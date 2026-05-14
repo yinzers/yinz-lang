@@ -90,6 +90,16 @@ pub fn build(source_path: &Path) -> BuildResult {
         .arg(&obj_path)
         .arg(format!("-L{rt_lib_dir}"))
         .arg(format!("-l{rt_lib_name}"))
+        // Modern Linux distros default `cc` to producing PIE executables, but
+        // LLVM emits object files with absolute (non-PIC) relocations for
+        // string-literal references. Linking those against a PIE template
+        // fails with "R_X86_64_32 against .rodata.str1.1 can not be used when
+        // making a PIE object." `-no-pie` tells cc to produce a position-
+        // dependent executable, which matches what the codegen emits. Until
+        // codegen is updated to emit PIC relocations (deferred to v0.2),
+        // this is the load-bearing fix. The non-PIE binary is fully functional
+        // — only loses ASLR, which Yinz programs don't currently need.
+        .arg("-no-pie")
         .arg("-o")
         .arg(&binary_path)
         .output();
