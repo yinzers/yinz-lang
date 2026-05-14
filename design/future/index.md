@@ -17,15 +17,15 @@ Each doc in this directory has a **Status header** stating one of:
 | [`panic-safety.md`](panic-safety.md) | Locked | v0.2 | Errors auto-propagate; panics auto-isolate to `background` tasks. NO try/catch ever. Drop-on-scope-exit + supervisor pattern. |
 | [`supervisor.md`](supervisor.md) | Locked | v0.2 | Stdlib supervisor helpers (`supervise.alwaysRestart`, `.withBackoff`, `.maxRestarts`, `.onPanic`). Meta-rule: any long-running stdlib loop is supervised by default. |
 
-**Phase 4b additions** (appended when Phase 4b ships):
+**v0.3+ deferred designs**:
 
 | Doc | Status | Target | One-line description |
 |-----|--------|--------|----------------------|
-| `self-references.md` | Locked (Approach A) | v0.3+ | Self-referential shapes via relative pointers (~1 cycle/access). Opt-in via `self-referential` modifier or compiler-inferred. |
-| `no-runtime-mode.md` | Locked | v0.3 | `--kernel` (or `--bare`) flag — plug-in runtime architecture for chipset/NASA targets. |
-| `arena.md` | Locked | v0.2 (A1/A2) + v0.3+ (B) | `arena {}` scope blocks ship v0.2 as the default; explicit `Arena()` + `.reset()` deferred to v0.3+. |
-| `http-framework.md` | Locked | v0.3+ | Supervision-by-default HTTP server. |
-| `packages.md` | Locked design, v0.1 binary-format reservation | v0.1 + v0.2 | Binary package format reserves space for may-block metadata, ownership signatures, kernel flags from v0.1; populated in v0.2. |
+| [`self-references.md`](self-references.md) | Locked (Approach A) | v0.3+ | Self-referential shapes via relative pointers (~1 cycle/access). Opt-in via `self-referential` modifier or compiler-inferred. |
+| [`no-runtime-mode.md`](no-runtime-mode.md) | Locked | v0.3 | `--kernel` (or `--bare`) flag — plug-in runtime architecture for chipset/NASA targets. |
+| [`arena.md`](arena.md) | Locked | v0.2 (A1/A2) + v0.3+ (B) | `arena {}` scope blocks ship v0.2 as the default; explicit `Arena()` + `.reset()` deferred to v0.3+. |
+| [`http-framework.md`](http-framework.md) | Locked | v0.3+ | Supervision-by-default HTTP server. |
+| [`packages.md`](packages.md) | Locked design, v0.1 binary-format reservation | v0.1 + v0.2 | Binary package format reserves space for may-block metadata, ownership signatures, kernel flags from v0.1; populated in v0.2. |
 
 ---
 
