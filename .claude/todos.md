@@ -7,22 +7,22 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Now (active)
 
-- [ ] **M3 plan (Opus)** — Run `/plan` for M3 (control flow + user functions). User-defined function registry is new infrastructure at every layer; LLVM basic-block branching for `if`/`else`/`while`; `range` temporary builtin design decision; early `return` with unreachable tracking. Multi-session, plan with Opus first.
+- [ ] **M4 plan (Opus)** — Plan M4: `shape` declarations, methods on shapes, ownership annotations (`share`/`lend`/`give`). Requires 5-subsection Invariants block per `.claude/rules/plan-invariants.md`. Must include: const deep-immutability invariants in Safety + Performance, `shape` keyword reservation in P1, LLVM `readonly`/`noalias` attribute emission contract. Catch-up from M3: replace read-only params with `lend`, overflow escape methods, type-attached constants.
 
 ## Soon (committed, not started)
 
-- [ ] **M3 implementation** — After plan approval: `if`/`else`, `while`, `for x in range(...)`, early `return`, user-defined functions with parameters and return types, block scoping. Depends on M3 plan.
+- [ ] **M4 implementation** — After plan approval: `shape Foo { fields }`, method dispatch, ownership annotations. Depends on M4 plan.
 
 ## Later (idea bin — not committed)
 
-- [ ] **`<>` generics syntax — compiler** — When M5 (generics) is implemented, the compiler must use `<>` not `[]` for type parameters. Docs were updated (2026-05-13). Parser, AST, typeck, and codegen must all follow `array<T>`, `map<K, V>`, `fixed<T>`, `function foo<T>()` syntax.
-- [ ] Wire up GitHub Actions CI once repo is pushed to GitHub (ci.yml already written, just needs a remote)
+- [ ] **`<>` generics syntax — compiler** — When M5 (generics) is implemented, the compiler must use `<>` not `[]` for type parameters. Parser, AST, typeck, and codegen must all follow `array<T>`, `map<K, V>`, `fixed<T>` syntax.
+- [ ] Wire up GitHub Actions CI (ci.yml already written, just needs configuration)
 - [ ] macOS CI golden hash for ynz-codegen
 
 ## Done (recent)
 
+- [x] **M3 — control flow + user functions (9653dbd, tag v0.1.0-m3)** — `if`, `while`, `for`, multi-case `if`, user functions with params/return, two-pass typeck, return-path analysis, full LLVM lowering. 310 tests. `fib(10) = 55`.
+- [x] **Design-lockdown (PRs #5 + #14)** — `shape` keyword locked, 3 rule files (inference.md, plan-invariants.md, vocabulary.md), 5 graveyard entries, Golden Rules updated.
 - [x] **M2 Phase 7 — verification sweep + tag (c39fe8a, v0.1.0-m2)** — TODO clean, 148 banners removed, CHANGELOG written.
-- [x] **M2 Phase 6 — driver integration (f089c2e)** — 8 integration tests, ABI fix.
-- [x] **M2 Phase 5 — LLVM codegen (ed6120a)** — Full M2 lowering, expr_types span-key bug fixed.
-- [x] **M2 Phases 1–4 — numerics, lexer, parser, typeck** — All on main.
+- [x] **M2 Phases 1–6** — numerics, lexer, parser, typeck, codegen, driver. All on main.
 - [x] **M1 compiler end-to-end** — `ynz run hello.ynz` → `hello, yinz`.
