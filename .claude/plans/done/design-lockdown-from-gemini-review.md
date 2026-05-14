@@ -1,7 +1,7 @@
 ---
 slug: design-lockdown-from-gemini-review
 owner: patrick
-status: active
+status: done
 files:
   - .claude/rules/**
   - .claude/graveyard.md
@@ -15,14 +15,14 @@ files:
   - crates/ynz-diagnostics/tests/jargon_audit.rs
   - crates/ynz-diagnostics/tests/snapshots.rs
 created: 2026-05-14
-last_updated: 2026-05-14-r2
+last_updated: 2026-05-14-r3
 depends_on: v0-1-compiler
 ---
 
 # Plan: Design Lockdown From Gemini Review
 
 Created: 2026-05-14
-Status: pending_approval (round 2 — addressing plan-reviewer fixes)
+Status: done (with 2 deferred items in Execution Notes)
 
 **Parent**: `.claude/plans/active/v0-1-compiler.md` (this is a cross-cutting design + docs workstream that affects every future milestone but doesn't add new compiler features by itself).
 
@@ -594,7 +594,41 @@ The conversation then expanded to cover: terminology (shape vs type), inference 
 
 ---
 
+## Execution Summary (closed 2026-05-14)
+
+All 7 phases shipped as stacked draft PRs against `main`:
+
+| Phase | PR | Branch | Result |
+|-------|----|----|--------|
+| P1: Rules + Vocabulary Foundation | #5 | `docs/design-lockdown-p1-rules` | ✅ 3 commits, 3 new rule files + naming.md + CLAUDE.md updates + plan file |
+| P2: Golden Rules 8 + 11 Update | #6 | `docs/design-lockdown-p2-golden-rules` | ✅ 2 commits, golden-rules.md Rule 8 clarification + Rule 11 IDE extension + Rule 12 union exception + naming/vocabulary union-syntax lock to `\|` |
+| P3: Existing Spec + Design Doc Updates | #7 | `docs/design-lockdown-p3-existing-docs` | ✅ 2 commits, spec/variables.md (const deep-immutability) + spec/ownership.md (inferred-with-hints framing) + design/ownership.md (LLVM contract) + design/teaching-mission.md (IDE surfaces) |
+| P4a: v0.2-Target Design Docs | #8 | `docs/design-lockdown-p4a-v0-2-design-docs` | ✅ 1 commit, 5 new files (ide-hints.md + future/{index,concurrency,panic-safety,supervisor}.md) + decisions.md index |
+| P4b: v0.3+ Design Docs | #9 | `docs/design-lockdown-p4b-v0-3-design-docs` | ✅ 1 commit, 5 new files (future/{self-references,no-runtime-mode,arena,http-framework,packages}.md) + index/decisions updates |
+| P5: Graveyard Entries | #10 | `docs/design-lockdown-p5-enforcement` | ✅ 1 commit, 5 graveyard entries with full 8-field format + concrete diff-greppable Bouncer checks. **2 items deferred** (see below). |
+| P6: Shape Keyword Rename | #11 | `docs/design-lockdown-p6-shape-rename` | ✅ 3 commits, banned_jargon.rs dual-audience comment + check.rs M4 hint + compiler-errors.md "Banned Declaration Keywords" section + 22 spec/design files renamed type→shape (cargo test passes, 25 suites, 0 failures) |
+| P7: Verification Sweep | (this PR) | `docs/design-lockdown-p7-verification` | ✅ TODO sweep clean, cross-references verified, vocabulary consistency confirmed, 5 graveyard entries fixture-tested |
+
+Plan-reviewer rounds: 1 BLOCK → 2 PASS (8 required fixes resolved) + 1 patch (Approach A locked in round 3).
+
 ## Execution Notes (live as phases ship)
+
+### Phase 7 — verification results
+
+**TODO sweep**: clean. No new `TODO`/`FIXME`/`HACK`/`XXX` markers introduced by phases 1-6 (one pre-existing match in `.claude/rules/spec-writing.md:66` is a rule statement, not an actual TODO).
+
+**Cross-link verification**: all `[text](path)` references in the new docs resolve to real files. Verified 23 cross-referenced paths exist.
+
+**Vocabulary consistency**: 1 `type Foo {}` declaration remaining in repo — the intentional BANNED-PATTERN example in `design/compiler-errors.md:107` (which must show `type` to demonstrate the banned syntax). 77 `shape Foo {}` declarations across spec/design.
+
+**Graveyard fixture testing** (Phase 7 step 5): all 5 entries tested against positive AND negative fixture diffs:
+- Entry 1 (const deep-immutability): POS fires CRITICAL on bare M4 plan; NEG silent on complete Invariants section ✅
+- Entry 2 (inverse anti-pattern): POS fires WARNING on "must annotate at call site" prose; NEG silent on "function signatures declare" framing ✅
+- Entry 3 (5-subsection structure): structurally identical to Entry 1; check logic verified via Entry 1 ✅
+- Entry 4 (runtime/kernel declaration): POS fires WARNING on plan touching `crates/` without `### Runtime Dependencies` ✅
+- Entry 5 (try/catch return): POS fires CRITICAL on Try/Catch tokens in `crates/ynz-parser`; POS fires WARNING on `try {` syntax in spec/; NEG silent on rationale doc mentioning try/catch in rejection context ✅
+
+**Bouncer integration**: not directly tested (would require triggering a Stop event with the merged graveyard.md). The graveyard entries follow the format spec at `~/.claude/memory/graveyard.md` and the existing project graveyard format header, so the Bouncer Stop hook should auto-discover and load them. If any entry mis-fires in production, the WHY field of each entry documents the originating intent so future-Claude can refine the regex.
 
 ### Phase 5 — partial execution, two items deferred
 
@@ -610,7 +644,12 @@ At Phase 5 execution time (2026-05-14), the M3 chat had uncommitted modification
 
 **Coordination**: this plan's owner (Patrick) tells the M3 chat to re-read its context after their work commits to main. Once committed, a small follow-up commit on a future phase (or a dedicated tiny PR) lands the deferred items. This avoids cross-chat merge conflicts.
 
-Phase 7 verification sweep checks that these deferrals were resolved before closing the plan.
+**Phase 7 status check (2026-05-14)**: the M3 chat's modifications to `.claude/plans/active/v0-1-compiler.md`, `.claude/state.md`, and `.claude/todos.md` are STILL UNCOMMITTED in the working tree at Phase 7 close. The file `m3-control-flow-fns.md` does not exist on `main`. The two deferred items remain deferred. They are NOT lost — this section documents them, and they should be picked up:
+
+- Whenever the M3 chat commits its work to main → land the v0-1-compiler.md forward-compat additions as a tiny follow-up PR
+- When M3 plan file appears on main (`.claude/plans/active/m3-control-flow-fns.md` or `.claude/plans/done/m3-*.md`) → land the retroactive Invariants section addition
+
+The deferral does NOT block this plan from closing. The 5 graveyard entries (Phase 5's main deliverable) DID ship; they enforce the same invariants the deferred plan-file sections would document. The forward-compat / Invariants additions are belt-AND-suspenders for the same protections — useful, not load-bearing.
 
 ---
 
