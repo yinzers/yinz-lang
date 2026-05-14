@@ -48,10 +48,20 @@ Every design topic has its own file. This is the index. One line per topic, link
 
 | Topic | File | What's in it |
 |-------|------|--------------|
-| Golden rules | `design/golden-rules.md` | All 13 rules with full reasoning. Rule 11 expanded — teaching mission. |
-| Teaching mission | `design/teaching-mission.md` | First-class language goal — compiler as mentor, three-part diagnostic format, university-adoption aspiration |
+| Golden rules | `design/golden-rules.md` | All 13 rules with full reasoning. Rule 11 expanded — teaching mission. Rule 8 clarification block (zero-cost meaning). Rule 12 union-syntax exception (`\|` not `or`). |
+| Teaching mission | `design/teaching-mission.md` | First-class language goal — compiler as mentor, three-part diagnostic format, IDE as a teaching surface (muted-hint protocol), university-adoption aspiration |
+| IDE hints protocol | `design/ide-hints.md` | Muted-text protocol for the v0.2 LSP — what gets hinted, styling rules, tooltip format, the click-to-make-explicit guarantee |
 | Open questions | `design/open-questions.md` | Unresolved design decisions |
 | Deferrals | `design/deferrals.md` | Features intentionally not in v0.1 — with substitute and trigger conditions |
+
+## Future Designs (locked, awaiting implementation milestone)
+
+| Topic | File | What's in it |
+|-------|------|--------------|
+| Future index | `design/future/index.md` | TOC for all future-locked designs + parking lot for ideas not yet committed |
+| Concurrency (no function coloring) | `design/future/concurrency.md` | v0.2 — whole-program may-block analysis, auto-inserted `wait`, FFI annotation, stackless state machines |
+| Panic safety | `design/future/panic-safety.md` | v0.2 — task-isolated panics, no try/catch, no mutex poisoning, drop-on-scope-exit cleanup, supervisor pattern |
+| Supervisor helpers | `design/future/supervisor.md` | v0.2 — stdlib `supervise.alwaysRestart` / `.withBackoff` / `.maxRestarts`, default-supervision meta-rule for stdlib long-running loops |
 
 ## Standard Library
 
