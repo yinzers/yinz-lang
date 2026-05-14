@@ -66,7 +66,7 @@ print(nickname.value)
 ## In function signatures
 
 ```
-function findPlayer(share roster: fixed[Player], name: string) -> maybe Player {
+function findPlayer(share roster: fixed<Player>, name: string) -> maybe Player {
   return roster.find(p => p.name == name)    // .find() returns maybe T
 }
 ```

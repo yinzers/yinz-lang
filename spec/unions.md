@@ -18,7 +18,7 @@ type Shape = Circle | Square | Triangle
 
 ---
 
-## Checking which type it is — `is` narrows the type automatically
+## Checking which type it is — `is` tells the compiler which kind
 
 ```
 function getArea(share shape: Shape) -> number {
@@ -40,7 +40,7 @@ In a union, `is` matches the exact runtime type. Inheritance doesn't change this
 
 ```
 type User { name: string, email: string }
-type Admin extends User { permissions: fixed[string] }
+type Admin extends User { permissions: fixed<string> }
 
 type AnyUser = Admin | User
 
@@ -75,7 +75,7 @@ The rule: `is` inside a union = exact type match. Inheritance outside unions = n
 
 ```
 type User { name: string, email: string }
-type Admin extends User { permissions: fixed[string], role: string }
+type Admin extends User { permissions: fixed<string>, role: string }
 type Guest extends User { expiresAt: number }
 
 type AnyUser = Admin | Guest | User

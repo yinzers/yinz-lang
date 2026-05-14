@@ -1,0 +1,30 @@
+---
+source: crates/ynz-parser/tests/parse.rs
+expression: output.diagnostics
+---
+[
+    Diagnostic {
+        severity: Error,
+        span: SourceSpan {
+            file: "test.ynz",
+            start: 16,
+            end: 23,
+        },
+        what: "Missing return type on `main`.",
+        what_instead: "Add `-> nothing` after the parentheses: `function main() -> nothing`",
+        why: "Every function in Yinz declares what it returns. Use `-> nothing` for functions that don't return a value.",
+        related: [],
+    },
+    Diagnostic {
+        severity: Error,
+        span: SourceSpan {
+            file: "test.ynz",
+            start: 26,
+            end: 27,
+        },
+        what: "Unexpected `}` at the top level.",
+        what_instead: "Top-level code must be inside a `function` declaration.",
+        why: "Yinz programs are made of functions. Only `function` declarations are allowed at the top level.",
+        related: [],
+    },
+]

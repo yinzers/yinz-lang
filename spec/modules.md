@@ -133,7 +133,19 @@ let user = getUser(id)
 let admin = getAdminUser(id)
 ```
 
-Module imports naturally avoid conflicts without aliasing:
+Aliasing also works on namespace imports:
+
+```
+import math as advancedMath from "math"
+import math from "vendor/math-legacy"
+// COMPILE ERROR — the second 'math' collides with the first.
+//                 Rename one:
+//
+//     import math as advancedMath from "math"
+//     import math from "vendor/math-legacy"     ← OK because the other was renamed
+```
+
+Module imports naturally avoid conflicts without aliasing — the module name itself is the discriminator:
 
 ```
 import users from "services/users"
@@ -142,6 +154,24 @@ import admins from "services/admins"
 let user = users.fetchUser(id)
 let admin = admins.fetchUser(id)    // no conflict — the module name makes it clear
 ```
+
+**If you forget to alias a collision, the compiler refuses to guess.** Last-import-wins (the JavaScript / TypeScript behavior) would silently change which value is used when imports are reordered — that's a bug factory. Yinz errors at the import site and forces you to pick:
+
+```
+import { Player } from "models/game"
+import { Player } from "external/legacy"
+// COMPILE ERROR: 'Player' is imported from two places.
+//
+//   Line 1: from "models/game"
+//   Line 2: from "external/legacy"
+//
+//   These can't both use the name 'Player' in the same file. Rename one:
+//
+//     import { Player } from "models/game"
+//     import { Player as LegacyPlayer } from "external/legacy"
+```
+
+The same rule applies if a local module collides with a standard library name (e.g., a local `math.ynz` file colliding with the built-in `math` module). There's no precedence — alias one or the other.
 
 ---
 
@@ -174,7 +204,7 @@ import { Order } from "services/orders"
 
 export type User {
   name: string
-  orders: array[Order]
+  orders: array<Order>
 }
 
 // services/orders.ynz

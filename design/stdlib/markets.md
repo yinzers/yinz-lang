@@ -2,7 +2,7 @@
 
 Technical analysis indicators. Part of the standard library — tree shaking ensures unused indicators cost nothing in the compiled binary.
 
-Indicators are methods on `fixed[number]` / `array[number]` for close-price indicators, and on `fixed[Bar]` / `array[Bar]` for indicators that need full OHLCV data.
+Indicators are methods on `fixed<number>` / `array<number>` for close-price indicators, and on `fixed<Bar>` / `array<Bar>` for indicators that need full OHLCV data.
 
 ---
 
@@ -21,14 +21,14 @@ type Bar {
 }
 ```
 
-Close-only indicators can work directly on a `fixed[number]`, or you can extract closes from bars:
+Close-only indicators can work directly on a `fixed<number>`, or you can extract closes from bars:
 
 ```
-let bars: fixed[Bar] = loadBars()
+let bars: fixed<Bar> = loadBars()
 let closes = bars.map(b => b.close)
 
 let sma20 = closes.sma(period: 20)
-let atr14 = bars.atr(period: 14)       // needs high/low/close — works on fixed[Bar]
+let atr14 = bars.atr(period: 14)       // needs high/low/close — works on fixed<Bar>
 ```
 
 ---
@@ -42,12 +42,12 @@ All indicators accept an optional `skipWarmup` boolean:
 ```
 // Default — full-length output, none for warmup bars
 let sma = closes.sma(period: 20)
-// -> fixed[maybe number], same length as closes
+// -> fixed<maybe number>, same length as closes
 // first 19 values are none, rest are valid numbers
 
 // skipWarmup: true — only valid values, shorter output
 let sma = closes.sma(period: 20, skipWarmup: true)
-// -> fixed[number], length is closes.count() - 19
+// -> fixed<number>, length is closes.count() - 19
 // every value is guaranteed valid
 ```
 
@@ -65,7 +65,7 @@ let sma200 = closes.sma(period: 200)
 let sma20 = closes.sma(period: 20, skipWarmup: true)
 ```
 
-Returns `fixed[maybe number]` by default, `fixed[number]` with `skipWarmup: true`.
+Returns `fixed<maybe number>` by default, `fixed<number>` with `skipWarmup: true`.
 
 ---
 
@@ -80,7 +80,7 @@ let ema200 = closes.ema(period: 200)
 let ema20 = closes.ema(period: 20, skipWarmup: true)
 ```
 
-Returns `fixed[maybe number]` by default, `fixed[number]` with `skipWarmup: true`.
+Returns `fixed<maybe number>` by default, `fixed<number>` with `skipWarmup: true`.
 
 ---
 
@@ -90,15 +90,15 @@ Three outputs: MACD line, signal line, histogram.
 
 ```
 type MacdResult {
-  macd: fixed[maybe number]
-  signal: fixed[maybe number]
-  histogram: fixed[maybe number]
+  macd: fixed<maybe number>
+  signal: fixed<maybe number>
+  histogram: fixed<maybe number>
 }
 
 type MacdResultTrimmed {
-  macd: fixed[number]
-  signal: fixed[number]
-  histogram: fixed[number]
+  macd: fixed<number>
+  signal: fixed<number>
+  histogram: fixed<number>
 }
 
 let result = closes.macd(fast: 12, slow: 26, signal: 9)
@@ -128,7 +128,7 @@ if (current > 70) {
 }
 ```
 
-Returns `fixed[maybe number]` by default, `fixed[number]` with `skipWarmup: true`.
+Returns `fixed<maybe number>` by default, `fixed<number>` with `skipWarmup: true`.
 
 ---
 
@@ -138,15 +138,15 @@ Upper band, middle (SMA), and lower band. Bands are N standard deviations from t
 
 ```
 type BollingerResult {
-  upper: fixed[maybe number]
-  middle: fixed[maybe number]
-  lower: fixed[maybe number]
+  upper: fixed<maybe number>
+  middle: fixed<maybe number>
+  lower: fixed<maybe number>
 }
 
 type BollingerResultTrimmed {
-  upper: fixed[number]
-  middle: fixed[number]
-  lower: fixed[number]
+  upper: fixed<number>
+  middle: fixed<number>
+  lower: fixed<number>
 }
 
 let bb = closes.bollinger(period: 20, stdDev: 2.0)
@@ -163,20 +163,20 @@ if (lastClose > upperBand) {
 
 ## ATR — Average True Range
 
-Volatility measure. Needs high, low, close — operates on `fixed[Bar]`.
+Volatility measure. Needs high, low, close — operates on `fixed<Bar>`.
 
 ```
 let atr14 = bars.atr(period: 14)
 let atr14 = bars.atr(period: 14, skipWarmup: true)
 ```
 
-Returns `fixed[maybe number]` by default, `fixed[number]` with `skipWarmup: true`.
+Returns `fixed<maybe number>` by default, `fixed<number>` with `skipWarmup: true`.
 
 ---
 
 ## VWAP — Volume Weighted Average Price
 
-Price weighted by volume. Needs close and volume — operates on `fixed[Bar]`.
+Price weighted by volume. Needs close and volume — operates on `fixed<Bar>`.
 Commonly used as an intraday benchmark. No warmup period — valid from bar 1.
 
 ```
@@ -189,7 +189,7 @@ if (lastClose > lastVwap) {
 }
 ```
 
-Returns `fixed[number]` (no `maybe` — no warmup period).
+Returns `fixed<number>` (no `maybe` — no warmup period).
 
 ---
 
@@ -208,7 +208,7 @@ if (current > 2.0) {
 }
 ```
 
-Returns `fixed[maybe number]` by default, `fixed[number]` with `skipWarmup: true`.
+Returns `fixed<maybe number>` by default, `fixed<number>` with `skipWarmup: true`.
 
 ---
 
@@ -221,7 +221,7 @@ let roc10 = closes.roc(period: 10)
 let roc10 = closes.roc(period: 10, skipWarmup: true)
 ```
 
-Returns `fixed[maybe number]` by default, `fixed[number]` with `skipWarmup: true`.
+Returns `fixed<maybe number>` by default, `fixed<number>` with `skipWarmup: true`.
 
 ---
 
@@ -241,7 +241,7 @@ let low20 = bars.rollingLow(period: 20)      // uses bar.low
 let high20 = closes.rollingHigh(period: 20, skipWarmup: true)
 ```
 
-Returns `fixed[maybe number]` by default, `fixed[number]` with `skipWarmup: true`.
+Returns `fixed<maybe number>` by default, `fixed<number>` with `skipWarmup: true`.
 
 ---
 
@@ -254,7 +254,7 @@ let stdDev20 = closes.stdDev(period: 20)
 let stdDev20 = closes.stdDev(period: 20, skipWarmup: true)
 ```
 
-Returns `fixed[maybe number]` by default, `fixed[number]` with `skipWarmup: true`.
+Returns `fixed<maybe number>` by default, `fixed<number>` with `skipWarmup: true`.
 
 ---
 

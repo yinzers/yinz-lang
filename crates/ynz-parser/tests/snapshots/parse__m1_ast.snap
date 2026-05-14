@@ -1,0 +1,79 @@
+---
+source: crates/ynz-parser/tests/parse.rs
+expression: output.module
+---
+Module {
+    items: [
+        Function(
+            FunctionDecl {
+                name: "main",
+                return_type: Nothing,
+                body: Block {
+                    stmts: [
+                        Expr(
+                            Call(
+                                CallExpr {
+                                    callee: Ident(
+                                        "print",
+                                        SourceSpan {
+                                            file: "test.ynz",
+                                            start: 29,
+                                            end: 34,
+                                        },
+                                    ),
+                                    args: [
+                                        StringLit(
+                                            [
+                                                104,
+                                                101,
+                                                108,
+                                                108,
+                                                111,
+                                                44,
+                                                32,
+                                                121,
+                                                105,
+                                                110,
+                                                122,
+                                            ],
+                                            SourceSpan {
+                                                file: "test.ynz",
+                                                start: 35,
+                                                end: 48,
+                                            },
+                                        ),
+                                    ],
+                                    span: SourceSpan {
+                                        file: "test.ynz",
+                                        start: 29,
+                                        end: 49,
+                                    },
+                                },
+                            ),
+                        ),
+                    ],
+                    span: SourceSpan {
+                        file: "test.ynz",
+                        start: 29,
+                        end: 51,
+                    },
+                },
+                span: SourceSpan {
+                    file: "test.ynz",
+                    start: 0,
+                    end: 51,
+                },
+                name_span: SourceSpan {
+                    file: "test.ynz",
+                    start: 9,
+                    end: 13,
+                },
+            },
+        ),
+    ],
+    span: SourceSpan {
+        file: "test.ynz",
+        start: 0,
+        end: 51,
+    },
+}

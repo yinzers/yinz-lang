@@ -1,0 +1,13 @@
+---
+source: crates/ynz-driver/tests/integration.rs
+expression: stderr
+---
+Error: `number[100]` is not available yet.
+   ╭─[ /workspaces/ynz/crates/ynz-driver/tests/fixtures/m2_bignum_deferral.ynz:2:22 ]
+   │
+ 2 │   let x: number[100] = 1.0
+   │                      ┬  
+   │                      ╰── Use `number` (34 decimal digits) for now.
+   │ 
+   │ Note: Why: `number[N]` for N other than 34 (bignum support) arrives in v0.8.
+───╯

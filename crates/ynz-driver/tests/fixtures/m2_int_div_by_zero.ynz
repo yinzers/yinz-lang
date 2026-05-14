@@ -1,0 +1,6 @@
+function main() -> nothing {
+  let x: int = 10
+  let y: int = 0
+  let z = x / y
+  print(z)
+}

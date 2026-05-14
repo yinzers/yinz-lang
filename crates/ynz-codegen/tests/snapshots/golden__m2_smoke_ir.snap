@@ -1,0 +1,118 @@
+---
+source: crates/ynz-codegen/tests/golden.rs
+expression: artifact.ir_text
+---
+; ModuleID = 'ynz-m2_smoke.ynz'
+source_filename = "ynz-m2_smoke.ynz"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-linux-gnu"
+
+@.str.true = private unnamed_addr constant [5 x i8] c"true\00"
+@.str.false = private unnamed_addr constant [6 x i8] c"false\00"
+@.dec.zero = private unnamed_addr constant i128 45235290231555418299757684020165476352
+@.panic.iadd = private unnamed_addr constant [20 x i8] c"int overflow in '+'\00"
+@.panic.isub = private unnamed_addr constant [20 x i8] c"int overflow in '-'\00"
+@.panic.imul = private unnamed_addr constant [20 x i8] c"int overflow in '*'\00"
+@.panic.idiv = private unnamed_addr constant [23 x i8] c"division by zero (int)\00"
+@.panic.irem = private unnamed_addr constant [24 x i8] c"remainder by zero (int)\00"
+@.panic.ddiv = private unnamed_addr constant [26 x i8] c"division by zero (number)\00"
+@.panic.drem = private unnamed_addr constant [27 x i8] c"remainder by zero (number)\00"
+
+declare i32 @puts(ptr)
+
+declare void @ynz_decimal_add(ptr, ptr, ptr)
+
+declare void @ynz_decimal_sub(ptr, ptr, ptr)
+
+declare void @ynz_decimal_mul(ptr, ptr, ptr)
+
+declare void @ynz_decimal_div(ptr, ptr, ptr)
+
+declare i32 @ynz_decimal_compare(ptr, ptr)
+
+declare void @ynz_decimal_from_int(i64, ptr)
+
+declare void @ynz_decimal_from_float(double, ptr)
+
+declare ptr @ynz_decimal_to_string(ptr)
+
+declare ptr @ynz_int_to_string(i64)
+
+declare ptr @ynz_float_to_string(double)
+
+declare void @ynz_panic_overflow(ptr)
+
+declare void @ynz_panic_div_by_zero(ptr)
+
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64) #0
+
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64) #0
+
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64) #0
+
+define i32 @main() {
+entry:
+  %dec_lit = alloca i128, align 16
+  store i128 45233992157340784592850551396083171329, ptr %dec_lit, align 16
+  %dec_lit1 = alloca i128, align 16
+  store i128 45233992157340784592850551396083171330, ptr %dec_lit1, align 16
+  %dadd = alloca i128, align 16
+  call void @ynz_decimal_add(ptr %dec_lit, ptr %dec_lit1, ptr %dadd)
+  %price = alloca i128, align 16
+  %dec_bits = load i128, ptr %dadd, align 16
+  store i128 %dec_bits, ptr %price, align 16
+  %count = alloca i64, align 8
+  store i64 42, ptr %count, align 8
+  %active = alloca i1, align 1
+  store i1 true, ptr %active, align 1
+  %dec_ld = load i128, ptr %price, align 16
+  %price2 = alloca i128, align 16
+  store i128 %dec_ld, ptr %price2, align 16
+  %dec_str = call ptr @ynz_decimal_to_string(ptr %price2)
+  %puts = call i32 @puts(ptr %dec_str)
+  %count3 = load i64, ptr %count, align 8
+  %count4 = load i64, ptr %count, align 8
+  %ov_res = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %count3, i64 %count4)
+  %sum = extractvalue { i64, i1 } %ov_res, 0
+  %ov = extractvalue { i64, i1 } %ov_res, 1
+  br i1 %ov, label %ov_panic, label %ov_ok
+
+ov_ok:                                            ; preds = %entry
+  %ov_res5 = call { i64, i1 } @llvm.ssub.with.overflow.i64(i64 %sum, i64 1)
+  %sum6 = extractvalue { i64, i1 } %ov_res5, 0
+  %ov7 = extractvalue { i64, i1 } %ov_res5, 1
+  br i1 %ov7, label %ov_panic9, label %ov_ok8
+
+ov_panic:                                         ; preds = %entry
+  call void @ynz_panic_overflow(ptr @.panic.imul)
+  unreachable
+
+ov_ok8:                                           ; preds = %ov_ok
+  %int_str = call ptr @ynz_int_to_string(i64 %sum6)
+  %puts10 = call i32 @puts(ptr %int_str)
+  %active11 = load i1, ptr %active, align 1
+  br i1 %active11, label %and_rhs, label %and_short
+
+ov_panic9:                                        ; preds = %ov_ok
+  call void @ynz_panic_overflow(ptr @.panic.isub)
+  unreachable
+
+and_rhs:                                          ; preds = %ov_ok8
+  %count12 = load i64, ptr %count, align 8
+  %igt = icmp sgt i64 %count12, 0
+  br label %and_merge
+
+and_short:                                        ; preds = %ov_ok8
+  br label %and_merge
+
+and_merge:                                        ; preds = %and_short, %and_rhs
+  %and_r = phi i1 [ %igt, %and_rhs ], [ false, %and_short ]
+  %bstr = select i1 %and_r, ptr @.str.true, ptr @.str.false
+  %puts13 = call i32 @puts(ptr %bstr)
+  ret i32 0
+}
+
+attributes #0 = { nocallback nofree nosync nounwind speculatable willreturn memory(none) }

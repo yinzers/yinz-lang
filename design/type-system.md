@@ -54,11 +54,11 @@ Shape matching like TypeScript. If the fields match the type, the value is valid
 
 ---
 
-## Generics — `name[T]` Syntax
+## Generics — `name<T>` Syntax
 
-`type Box[T] { value: T }` — square bracket generics, same pattern as built-in collections.
+`type Box<T> { value: T }` — angle bracket generics, same pattern as built-in collections.
 
-**Why**: Consistent with `array[Player]`, `map[string, number]`, `fixed[string]`. One `name[type]` pattern covers both built-in and user-defined generic types. No special cases, no angle brackets.
+**Why**: Consistent with `array<Player>`, `map<string, number>`, `fixed<string>`. One `name<type>` pattern covers both built-in and user-defined generic types. No special cases.
 
 ---
 
@@ -90,7 +90,7 @@ No `null`. No `undefined`. Absence is expressed as `none` and tracked by the typ
 type Player {
   name: string
   hidden damageMultiplier: number = 1.0
-  hidden internalCache: map[string, number] = {}
+  hidden internalCache: map<string, number> = {}
 }
 ```
 

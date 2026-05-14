@@ -1,0 +1,14 @@
+[package]
+name = "ynz-numerics"
+description = "IEEE 754 decimal128 implementation for the Yinz compiler — no external crates, validated against the IBM Hursley conformance corpus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# No runtime dependencies — correctness and isolation require this
+
+[dev-dependencies]
+proptest = { workspace = true }

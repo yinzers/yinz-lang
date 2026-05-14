@@ -114,7 +114,7 @@ if (status) {
 }
 ```
 
-**Matching on union types — `is` narrows the type automatically:**
+**Matching on union types — `is` tells the compiler which kind it is:**
 
 ```
 if (shape) {

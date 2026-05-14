@@ -41,7 +41,7 @@ let padded = "42".padLeft(5, "0")              // "00042"
 
 ```
 let match = email.matches("[a-z]+@[a-z]+\\.[a-z]+")    // -> bool
-let found = text.findAll("[0-9]+")                      // -> array[string]
+let found = text.findAll("[0-9]+")                      // -> array<string>
 ```
 
 ---

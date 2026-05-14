@@ -24,7 +24,7 @@ function main() -> nothing errors {
 }
 ```
 
-Errors that aren't handled propagate to the default error handler — it prints a clean call trace and exits with code 1.
+Errors that aren't handled cascade all the way up to the default error handler — it prints a clean call trace and exits with code 1.
 
 ---
 
@@ -46,7 +46,7 @@ Arguments come from the standard library, not from `main`'s parameters:
 
 ```
 function main() -> nothing {
-  let args = cli.args()                    // all arguments → array[string]
+  let args = cli.args()                    // all arguments → array<string>
   let verbose = cli.flag("verbose")        // --verbose flag → bool
   let port = cli.option("port", "3000")   // --port option → string with default
 }

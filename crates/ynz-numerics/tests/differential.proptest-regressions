@@ -1,0 +1,15 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 4f12b7dcad561b734e0011c4969f77dfe7b155d9cec2bb0a29269925d7775ca0 # shrinks to (a_str, b_str) = ("1e10", "1")
+cc 0e5a525baa13e32676a0262edd6febf8b8eb91c0576c5d20d1e32a8d16dee699 # shrinks to (a_str, b_str) = ("1e10", "0")
+cc 60c5b41917245ae6d81c9ecf91f007f2964e86d4b8dc4b2792ca901466f41089 # shrinks to (a_str, b_str) = ("0.3333333333333333333333333333333333", "10")
+cc a090ee4da4a138f5c34a891ef74716c50f3cc97d0943aeac8dbc038de15f325e # shrinks to (a_str, b_str) = ("9999999999999999999999999999999999", "0.5")
+cc 9501b746e478ed94189f91b5e5a20787bb0f9676701215dae4f39181d422bfbe # shrinks to (a_str, b_str) = ("0.3333333333333333333333333333333333", "-1")
+cc 0b7a257b38e29aa42ee4f58148453c085cdf99ceb378749f0935c8c59e2123d7 # shrinks to (a_str, b_str) = ("1e10", "1e10")
+cc 8842da98ebc7fa615af90d43c6ce60fc9c021cf5f86bf626c175dfb53ccc7d27 # shrinks to (a_str, b_str) = ("0.5", "9999999999999999999999999999999999")
+cc e85386d8c81f4ac456489f2f3311b2deecd13a71ae0d81dce55c9d015a6b9115 # shrinks to (a_str, b_str) = ("1.5", "0.3333333333333333333333333333333333")
+cc 5edc9a492c04c66d5a4f087ed590b034f9d5901f6a295a3fe930c5159e224583 # shrinks to (a_str, b_str) = ("9999999999999999999999999999999999", "3.14159")

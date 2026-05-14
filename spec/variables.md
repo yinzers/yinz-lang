@@ -45,7 +45,7 @@ Use `const` by default. Reach for `let` only when you need to update the value.
 Inside a function body, you don't have to write the type when it's obvious:
 
 ```
-let x = 42              // compiler knows: number
+let x = 42              // compiler knows: int
 let name = "Patrick"    // compiler knows: string
 let active = true       // compiler knows: bool
 ```

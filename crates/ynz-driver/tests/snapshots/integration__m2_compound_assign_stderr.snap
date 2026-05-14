@@ -1,0 +1,13 @@
+---
+source: crates/ynz-driver/tests/integration.rs
+expression: stderr
+---
+Error: `+=` is not supported in Yinz.
+   ╭─[ /workspaces/ynz/crates/ynz-driver/tests/fixtures/m2_compound_assign.ynz:3:5 ]
+   │
+ 3 │   x += 1
+   │     ─┬  
+   │      ╰── Use `x = x + n` instead.
+   │ 
+   │ Note: Why: Compound assignment and increment operators are not part of the Yinz language. Step-by-step assignment on its own line makes the intent explicit.
+───╯

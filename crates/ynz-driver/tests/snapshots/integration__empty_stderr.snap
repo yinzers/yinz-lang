@@ -1,0 +1,16 @@
+---
+source: crates/ynz-driver/tests/integration.rs
+expression: stderr
+---
+Error: This file has no `main` function.
+   ╭─[ /workspaces/ynz/crates/ynz-driver/tests/fixtures/empty.ynz:1:1 ]
+   │
+ 1 │ 
+   │ │ 
+   │ ╰─ Add a main function:
+  function main() -> nothing {
+    ...
+  }
+   │ 
+   │ Note: Why: Every Yinz program needs a `main` function — that is where execution starts.
+───╯

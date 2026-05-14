@@ -145,7 +145,17 @@ base type Entity {
   health: number
 }
 
-let e: Entity = { name: "test", health: 50 }    // COMPILE ERROR: Entity is a base type
+let e: Entity = { name: "test", health: 50 }
+// COMPILE ERROR: Entity is a base type — you can't create one directly.
+//
+//   Create a type that extends Entity instead:
+//     type Warrior extends Entity { weapon: string, armor: number }
+//     let w: Warrior = { name: "test", health: 50, weapon: "axe", armor: 10 }
+//
+//   Why: base types describe shared behavior but aren't meant to stand alone.
+//        Creating one directly would give you an incomplete object. Always
+//        use a specific type that extends the base.
+
 let w: Warrior = { name: "test", health: 50, weapon: "axe", armor: 10 }   // fine
 ```
 
@@ -227,7 +237,7 @@ type Player {
   name: string
   health: number
   hidden damageMultiplier: number = 1.0
-  hidden internalCache: map[string, number] = {}
+  hidden internalCache: map<string, number> = {}
 
   function takeDamage(lend self, amount: number) -> nothing {
     let actual = amount * self.damageMultiplier    // accessible inside Player's methods
@@ -262,7 +272,7 @@ Create a new name for an existing type. Zero runtime cost — the alias is erase
 ```
 type UserId = string
 type Timestamp = number
-type PlayerList = array[Player]
+type PlayerList = array<Player>
 type Coordinates = { x: number, y: number }
 ```
 

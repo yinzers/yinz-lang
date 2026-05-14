@@ -6,7 +6,7 @@
 
 ```
 // Arithmetic
-+    -    *    /
++    -    *    /    %
 
 // Comparison
 ==    !=    <    >    <=    >=
@@ -109,7 +109,7 @@ One assignment operator: `=`. Makes mutations visible and explicit.
 ```
 1.  ()                   // parentheses
 2.  !  ~                 // NOT operators
-3.  *  /                 // multiplication, division
+3.  *  /  %              // multiplication, division, remainder
 4.  +  -                 // addition, subtraction
 5.  <<  >>               // bit shifts
 6.  <  >  <=  >=         // comparison

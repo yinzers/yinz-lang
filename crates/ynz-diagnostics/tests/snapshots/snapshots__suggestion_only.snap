@@ -1,0 +1,13 @@
+---
+source: crates/ynz-diagnostics/tests/snapshots.rs
+expression: output
+---
+[39mSUGGESTION:[0m All fields in this type are known at compile time.
+   ╭─[ test.ynz:1:1 ]
+   │
+ 1 │ function main() -> nothing {
+   │ ────┬───  
+   │     ╰───── Consider using a `type` instead of a `map` for direct field access.
+   │ 
+   │ Note: Why: Type field access is a single memory lookup. Map access requires a hash lookup.
+───╯

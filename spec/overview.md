@@ -18,7 +18,7 @@ type Player {
   }
 }
 
-function getTopPlayers(share players: fixed[Player], count: number) -> array[string] {
+function getTopPlayers(share players: fixed<Player>, count: number) -> array<string> {
   let active = players.filter(p => p.health > 0)
 
   if (active.count() == 0) {
@@ -62,6 +62,7 @@ Each section covers one part of the language. They're self-contained — start w
 - [Functions](functions.md) — defining and calling functions
 - [Ownership](ownership.md) — how memory works without a garbage collector
 - [Types](types.md) — defining your own data shapes
+- [Numeric Types](numeric-types.md) — `number`, `float`, `int`, and `number<N>` for high precision
 - [Options](options.md) — named value sets (like enums, but readable)
 - [Collections](collections.md) — fixed arrays, growable arrays, and maps
 - [Maybe Types](maybe.md) — values that might not exist

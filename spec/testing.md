@@ -50,6 +50,96 @@ Each test is independent. The description is a plain English sentence — it bec
 
 ---
 
+## Setup and teardown
+
+Use `setup` and `teardown` blocks to share initialization between tests.
+
+```
+// Runs once before any test in this file
+setup file {
+  db.connect("test-database")
+}
+
+// Runs once after all tests in this file
+teardown file {
+  db.disconnect()
+}
+
+// Runs before each test in this file
+setup {
+  db.clearTables()
+}
+
+// Runs after each test in this file
+teardown {
+  // any per-test cleanup
+}
+
+test "creates a user" {
+  let user = createUser({ name: "Alice" })
+  assert(user.id != "")
+}
+```
+
+Two scopes:
+
+- **`setup`** (no modifier) — runs before each test (per-test)
+- **`setup file`** — runs once before all tests (per-file)
+
+Same applies to `teardown`. Teardown runs in reverse order of setup.
+
+---
+
+## Grouping tests
+
+Use `group "name" { ... }` to organize related tests inside a file. Each group can have its own setup/teardown.
+
+```
+group "user creation" {
+  setup {
+    db.clearTables()
+  }
+
+  test "creates a user with valid input" {
+    let user = createUser({ name: "Alice", email: "alice@test.com" })
+    assert(user.name == "Alice")
+  }
+
+  test "rejects invalid email" {
+    assertFails(createUser({ name: "Bob", email: "not-an-email" }))
+  }
+}
+
+group "user queries" {
+  setup {
+    db.clearTables()
+    db.seed("users", testFixtures)
+  }
+
+  test "finds user by id" {
+    let user = findUser("user-1")
+    assert(user.exists())
+  }
+}
+
+// Tests outside any group still use the file-level setup
+test "schema validation passes" {
+  // ...
+}
+```
+
+**Groups can't be nested.** One level only. If you need more structure, split into multiple files.
+
+```
+group "outer" {
+  group "inner" {        // COMPILE ERROR: Cannot nest groups.
+    // ...               //                Use one level per file. Split into
+  }                      //                multiple test files if needed.
+}
+```
+
+---
+
 ## Built-in assertions
 
 ```
@@ -59,8 +149,25 @@ assertNotEqual(actual, expected)      // fails if equal
 assertGreaterThan(actual, expected)   // fails if actual <= expected
 assertLessThan(actual, expected)      // fails if actual >= expected
 assertContains(collection, item)      // fails if collection doesn't have item
-assertFails(expression)               // fails if expression does NOT error
+assertFails(expression)               // fails if expression does NOT trigger an error
+assertPanics(expression)              // fails if expression does NOT panic
 ```
+
+**`assertFails` and `assertPanics` are separate** because they catch different kinds of failure:
+
+```
+// assertFails — catches ONLY errors-system failures
+let error = assertFails(createUser({ email: "not-an-email" }))
+assert(error.message.contains("invalid email"))
+
+// assertPanics — catches ONLY panics
+let panic = assertPanics(processUnchecked(badInput))
+assert(panic.message.contains("null"))
+```
+
+Why the separation: if a single `assertFails` caught both errors AND panics, a typo in your test code that causes a panic would be silently counted as "yes it failed as expected" — and the test would pass for the wrong reason. With separate functions, panics from test bugs always cascade up to the test runner with full stack trace. You see exactly where the test broke.
+
+Both `assertFails` and `assertPanics` return the captured failure for inspection. The returned value has `.message`, `.trace`, and `.source` (`{ file, line }`).
 
 ---
 
@@ -69,21 +176,28 @@ assertFails(expression)               // fails if expression does NOT error
 ```
 ynz test
 
-✓ new player has full health
-✓ healing doesn't exceed max health
-✗ damage reduces health
+users.test.ynz
+  user creation
+    ✓ creates a user with valid input         (3ms)
+    ✓ rejects invalid email                   (1ms)
+  user queries
+    ✓ finds user by id                        (2ms)
+  ✗ schema validation passes                  (1ms)
 
-  FAILED: damage reduces health
-    Expected: player.health == 70
-    Actual:   player.health == 100
+    FAILED: schema validation passes
 
-    player.test.ynz line 18:
-      player.takeDamage(30)
-      assert(player.health == 70)
+      Expected: schema.valid() == true
+      Actual:   schema.valid() == false
 
-    Hint: takeDamage takes (lend self) — did you pass the player correctly?
+      users.test.ynz line 42:
+        let schema = loadSchema("users")
+        assert(schema.valid() == true)
 
-1 failed, 2 passed
+      Hint: loadSchema() returned a schema that failed validation —
+            check the test fixture or the schema file itself.
+
+Tests: 46 passed, 1 failed, 47 total
+Time:  0.4s
 ```
 
 Plain English. Points to the exact line. Suggests what might be wrong. Same philosophy as compiler error messages.
@@ -94,6 +208,10 @@ Plain English. Points to the exact line. Suggests what might be wrong. Same phil
 
 ```
 ynz test                    // run all tests in the project
-ynz test players            // run tests whose description matches "players"
+ynz test players            // run tests matching "players" (in file path, group name, or description)
 ynz test --watch            // rerun automatically on file change
+ynz test --serial           // force all-serial execution (debug flaky tests)
+ynz test --parallel N       // cap parallel files at N (default: CPU count)
 ```
+
+By default, **files run in parallel** with each other for speed, and **tests within a file run sequentially** because they often share setup/teardown ordering. If you want to confirm a test is flaky or a race condition is involved, run with `--serial` to force sequential execution.

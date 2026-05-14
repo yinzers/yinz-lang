@@ -1,0 +1,21 @@
+[package]
+name = "ynz-codegen"
+description = "LLVM code generation for the ynz compiler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+inkwell         = { workspace = true }
+salsa           = { workspace = true }
+ynz-diagnostics = { workspace = true }
+ynz-ast         = { workspace = true }
+ynz-numerics    = { path = "../ynz-numerics" }
+ynz-parser      = { workspace = true }
+ynz-typeck      = { workspace = true }
+
+[dev-dependencies]
+insta    = { workspace = true }
+inkwell  = { workspace = true }

@@ -23,7 +23,7 @@ Keep the foreign boundary as small as possible. Declare the foreign function, th
 foreign function c_read(fd: int, buffer: int, size: int) -> int from "libc"
 
 // The safe wrapper — this is what everyone else calls
-export function readBinaryFile(path: string) -> array[byte] errors {
+export function readBinaryFile(path: string) -> array<byte> errors {
   // all the unsafe stuff is contained here
   // callers see safe Yinz types and the errors system
 }

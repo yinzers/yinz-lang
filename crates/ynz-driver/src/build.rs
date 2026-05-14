@@ -1,0 +1,155 @@
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+use ynz_codegen::codegen_query;
+use ynz_diagnostics::{render, DiagnosticBucket, SourceSpan};
+use ynz_parser::{CompilerDb, SourceFile};
+
+use crate::load::load_source;
+
+/// Outcome of a `build` invocation.
+pub struct BuildResult {
+    /// Path to the produced binary, if compilation succeeded.
+    pub binary: Option<PathBuf>,
+    /// The rendered diagnostic output (may be empty if everything succeeded).
+    pub stderr_output: String,
+    /// `true` if there were no errors.
+    pub success: bool,
+}
+
+/// Compile `source_path` to a native binary next to the source file.
+///
+/// Returns a `BuildResult` describing the outcome. The caller decides how to
+/// render it — the driver's `main` calls `eprintln!(stderr_output)` and
+/// exits with the appropriate code.
+pub fn build(source_path: &Path) -> BuildResult {
+    let mut diags = DiagnosticBucket::new();
+
+    // 1. Load source.
+    let source_text = match load_source(source_path, &mut diags) {
+        Some(t) => t,
+        None => {
+            return build_failed(diags, source_path);
+        }
+    };
+
+    let file_name = source_path.display().to_string();
+
+    // 2. Run the salsa pipeline.
+    let db = CompilerDb::default();
+    let sf = SourceFile::new(&db, file_name.clone(), source_text);
+    let codegen_out = codegen_query(&db, sf);
+
+    if codegen_out
+        .diagnostics
+        .iter()
+        .any(|d| d.severity == ynz_diagnostics::Severity::Error)
+    {
+        let mut bucket = DiagnosticBucket::new();
+        for d in &codegen_out.diagnostics {
+            bucket.push(d.clone());
+        }
+        return build_failed(bucket, source_path);
+    }
+
+    let object_bytes = &codegen_out.artifact.object_bytes;
+    if object_bytes.is_empty() {
+        diags.push(ynz_diagnostics::Diagnostic::error(
+            SourceSpan::new(&file_name, 0, 0),
+            "Codegen produced no output.",
+            "This is a compiler bug. Please report it.",
+            "The compiler should always emit object bytes for a valid program.",
+        ));
+        return build_failed(diags, source_path);
+    }
+
+    // 3. Write object file to a temp path.
+    let obj_path = source_path.with_extension("o");
+    if let Err(e) = std::fs::write(&obj_path, object_bytes) {
+        diags.push(ynz_diagnostics::Diagnostic::error(
+            SourceSpan::new(&file_name, 0, 0),
+            format!("Could not write object file `{}`: {e}", obj_path.display()),
+            "Check that you have write permission in the directory.",
+            "The compiler writes a temporary object file while linking.",
+        ));
+        return build_failed(diags, source_path);
+    }
+
+    // 4. Link with system `cc`, including the Yinz runtime library.
+    //
+    // YNZ_RT_LIB_DIR and YNZ_RT_LIB_NAME are emitted by crates/ynz-driver/build.rs
+    // at compile time and resolve to the target/{profile}/ directory where cargo
+    // places the ynz-runtime staticlib.
+    let rt_lib_dir = env!("YNZ_RT_LIB_DIR");
+    let rt_lib_name = env!("YNZ_RT_LIB_NAME");
+
+    let binary_path = source_path.with_extension("");
+    let cc_result = Command::new("cc")
+        .arg(&obj_path)
+        .arg(format!("-L{rt_lib_dir}"))
+        .arg(format!("-l{rt_lib_name}"))
+        .arg("-o")
+        .arg(&binary_path)
+        .output();
+
+    // Clean up object file regardless of link outcome.
+    let _ = std::fs::remove_file(&obj_path);
+
+    match cc_result {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            diags.push(ynz_diagnostics::Diagnostic::error(
+                SourceSpan::new(&file_name, 0, 0),
+                "The system linker (`cc`) was not found.",
+                "Install a C toolchain: on Ubuntu: `sudo apt-get install build-essential`; \
+                 on macOS: `xcode-select --install`.",
+                "`ynz build` links your program against the system C library. \
+                 A C toolchain must be installed for this step.",
+            ));
+            build_failed(diags, source_path)
+        }
+        Err(e) => {
+            diags.push(ynz_diagnostics::Diagnostic::error(
+                SourceSpan::new(&file_name, 0, 0),
+                format!("The linker (`cc`) failed to start: {e}"),
+                "This is unexpected. Check your PATH and C toolchain installation.",
+                "The compiler invokes the system linker to produce the final binary.",
+            ));
+            build_failed(diags, source_path)
+        }
+        Ok(output) if !output.status.success() => {
+            let linker_stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            diags.push(ynz_diagnostics::Diagnostic::error(
+                SourceSpan::new(&file_name, 0, 0),
+                "The linker failed.",
+                "This is a compiler bug. Please report it with the output below.",
+                format!("Linker stderr:\n{linker_stderr}"),
+            ));
+            build_failed(diags, source_path)
+        }
+        Ok(_) => {
+            // Success — no diagnostics to render.
+            BuildResult {
+                binary: Some(binary_path),
+                stderr_output: String::new(),
+                success: true,
+            }
+        }
+    }
+}
+
+fn build_failed(diags: DiagnosticBucket, source_path: &Path) -> BuildResult {
+    let file_name = source_path.display().to_string();
+    // Build the source map for rendering (empty if the file couldn't be read).
+    let sources = std::fs::read_to_string(source_path)
+        .map(|text| std::collections::HashMap::from([(file_name.clone(), text)]))
+        .unwrap_or_default();
+
+    let stderr_output = render(&diags, &sources, false);
+    BuildResult {
+        binary: None,
+        stderr_output,
+        success: false,
+    }
+}

@@ -1,0 +1,16 @@
+[package]
+name = "ynz-runtime"
+description = "C-ABI runtime shims for Yinz-compiled binaries — panic handlers, decimal128 bridge, int/float formatting"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# staticlib: produces libynz_rt.a for linking into Yinz-compiled binaries.
+# rlib:      lets ynz-driver (build.rs) query the archive path at compile time.
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+ynz-numerics = { workspace = true }

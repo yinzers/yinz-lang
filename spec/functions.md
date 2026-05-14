@@ -60,7 +60,15 @@ Returning a value from a `nothing` function is a compile error:
 ```
 function logMessage(share msg: string) -> nothing {
   return msg
-  // COMPILE ERROR: logMessage returns nothing — cannot return a value.
+  // COMPILE ERROR: logMessage is declared to return nothing — it cannot return a value.
+  //
+  //   Either remove the return value:
+  //     return
+  //   Or change the function's return type:
+  //     function logMessage(share msg: string) -> string { return msg }
+  //
+  //   Why: -> nothing means the function does its work and returns no value
+  //        to the caller. Returning a value would contradict that promise.
 }
 ```
 
