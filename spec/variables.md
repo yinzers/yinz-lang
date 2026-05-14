@@ -38,6 +38,25 @@ maxPlayers = 20
 
 Use `const` by default. Reach for `let` only when you need to update the value.
 
+### What const blocks — the full picture
+
+`const` means "this value never changes, in any way." That covers:
+
+- **Reassignment**: `maxPlayers = 20` — blocked (the example above)
+- **Field mutation** (when types land): `player.health = 50` on a `const player` is blocked
+- **Mutable borrows** (when ownership lands): you can't pass a `const` value where the function needs to modify it — `.lend` and `.give` are rejected at compile time
+
+```
+const player = Player { name: "Patrick", health: 100 }
+player.health = 50            // COMPILE ERROR: player is const — fields can't change.
+healPlayer(player.lend)        // COMPILE ERROR: player is const — can't grant write access.
+                               //   Declare with `let` if the function needs to modify it.
+```
+
+The compiler rejects all three at compile time. `const` is a complete promise — no exceptions.
+
+**Why this matters**: when you mark a value `const`, the compiler can optimize more aggressively (it knows the value never changes, so it can keep it in a register, share it across threads safely, and skip certain checks). The full picture lives in [Ownership](ownership.md) — `const` and the ownership system work together to give you both safety AND performance.
+
 ---
 
 ## Type inference — skip the obvious type
