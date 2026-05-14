@@ -86,6 +86,39 @@ If a word is the official name of a Yinz feature, use it. The ban-list applies t
 
 ---
 
+## Banned Declaration Keywords (Lexer-Level Enforcement)
+
+These are different from the jargon ban-list above. The jargon ban-list catches WORDS in user-facing diagnostic STRINGS (enforced by `crates/ynz-diagnostics/tests/jargon_audit.rs`). Banned declaration keywords catch SYNTAX in user SOURCE — when the user writes the banned keyword in their own Yinz code, the lexer emits a three-part teaching error pointing to the Yinz keyword.
+
+| Banned keyword (in user source) | Yinz keyword | Lands |
+|---------------------------------|---------------|-------|
+| `type Foo { ... }` | `shape Foo { ... }` | M4 lexer when shape is reserved |
+| `struct Foo { ... }` | `shape Foo { ... }` | M4 lexer |
+| `class Foo { ... }` | `shape Foo { ... }` | M4 lexer |
+| `interface Foo { ... }` | `shape Foo { ... }` (or `follows` for contracts) | M4 lexer |
+| `enum Status { ... }` | `options Status { ... }` | M4 lexer |
+| `fn name() { ... }` | `function name() { ... }` | M3 lexer (already reserved as a banned keyword) |
+
+**Important distinction**: this is NOT a BANNED_JARGON entry. The word `type` appears legitimately in many diagnostic strings (`"named type"`, `"return type"`, `"type annotation"`, `"this type"`) — banning it as a whole-word check in diagnostics would produce false positives everywhere. The ban is at the LEXER level for user-written source code only.
+
+When M4 reserves the `shape` keyword in the lexer, it ALSO adds `type`, `struct`, `class`, `interface` as banned-keyword tokens with three-part teaching diagnostics. The teaching error format:
+
+```
+type Foo { name: string }
+^^^^
+COMPILE ERROR: Yinz uses `shape` to declare a data structure, not `type`.
+
+  Replace `type Foo { ... }` with `shape Foo { ... }`.
+
+  `type` is overloaded — it's also the everyday word for "what kind of thing this is."
+  `shape` is unambiguous: a shape is the structure of your data. (Golden Rule 2:
+  self-documenting syntax.)
+```
+
+This pattern (banned-keyword as lexer diagnostic) was already used for `fn` in M3 — see `crates/ynz-parser/src/lexer.rs:664` for the existing implementation pattern.
+
+---
+
 ## Tone Guide
 
 - **Direct, not condescending.** "You can't add to a fixed array" is fine. "Oh no! It looks like you tried to..." is too cute.
@@ -149,7 +182,7 @@ RUNTIME ERROR: integer overflow at line 12.
 SUGGESTION: All keys in this map are compile-time strings.
 
   Consider a type instead — gives you direct field access:
-    type Scores { alice: number, bob: number, charlie: number }
+    shape Scores { alice: number, bob: number, charlie: number }
     let scores: Scores = { alice: 90, bob: 85, charlie: 78 }
 
   Why: Type field access compiles to a single memory lookup (~1 CPU
