@@ -8,7 +8,7 @@ Every design topic has its own file. This is the index. One line per topic, link
 
 | Topic | File | What's in it |
 |-------|------|--------------|
-| Type system | `design/type-system.md` | `type`, `base`, `extends`, `follows`, `override`, structural typing, `or`, `maybe`, `options`, `hidden`, type aliases |
+| Type system | `design/type-system.md` | `shape`, `base`, `extends`, `follows`, `override`, structural typing, `\|` (unions), `maybe`, `options`, `hidden`, shape aliases |
 | Generics | `design/generics.md` | Type generics `<T>`, function generics, `follows` constraints inline, type inference at call sites |
 | Ownership | `design/ownership.md` | `.share`/`.lend`/`.give`/`.copy`/`.freeze`, no direct array indexing |
 | Collections | `design/collections.md` | `fixed`/`array`/`map`, no chaining, method naming, bracket sugar for `.get()`/`.set()`, string indexing methods |

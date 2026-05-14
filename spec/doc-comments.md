@@ -21,7 +21,7 @@ export function fetchUser(id: UserId) -> maybe User errors {
 
 ```
 /// Represents a player in the game world.
-export type Player {
+export shape Player {
   /// The player's display name.
   name: string
   /// Current health points, clamped to 0-100.

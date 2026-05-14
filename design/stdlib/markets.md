@@ -11,7 +11,7 @@ Indicators are methods on `fixed<number>` / `array<number>` for close-price indi
 Indicators that need more than just closes (ATR, VWAP, Bollinger Bands) operate on `Bar`:
 
 ```
-type Bar {
+shape Bar {
   open: number
   high: number
   low: number
@@ -89,13 +89,13 @@ Returns `fixed<maybe number>` by default, `fixed<number>` with `skipWarmup: true
 Three outputs: MACD line, signal line, histogram.
 
 ```
-type MacdResult {
+shape MacdResult {
   macd: fixed<maybe number>
   signal: fixed<maybe number>
   histogram: fixed<maybe number>
 }
 
-type MacdResultTrimmed {
+shape MacdResultTrimmed {
   macd: fixed<number>
   signal: fixed<number>
   histogram: fixed<number>
@@ -137,13 +137,13 @@ Returns `fixed<maybe number>` by default, `fixed<number>` with `skipWarmup: true
 Upper band, middle (SMA), and lower band. Bands are N standard deviations from the SMA.
 
 ```
-type BollingerResult {
+shape BollingerResult {
   upper: fixed<maybe number>
   middle: fixed<maybe number>
   lower: fixed<maybe number>
 }
 
-type BollingerResultTrimmed {
+shape BollingerResultTrimmed {
   upper: fixed<number>
   middle: fixed<number>
   lower: fixed<number>

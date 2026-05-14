@@ -144,19 +144,19 @@ Types can implement operators through `follows` contracts from the standard libr
 The standard library defines contracts for operators. Follow the contract, implement the method:
 
 ```
-type Addable {
+shape Addable {
   function add(share self, share other: Self) -> Self
 }
 
-type Equatable {
+shape Equatable {
   function equals(share self, share other: Self) -> bool
 }
 
-type Comparable follows Equatable {
+shape Comparable follows Equatable {
   function compareTo(share self, share other: Self) -> int
 }
 
-type Printable {
+shape Printable {
   function toString(share self) -> string
 }
 ```
@@ -166,7 +166,7 @@ type Printable {
 **Example:**
 
 ```
-type Vector2D follows Addable, Equatable, Printable {
+shape Vector2D follows Addable, Equatable, Printable {
   x: number
   y: number
 

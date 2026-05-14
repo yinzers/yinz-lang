@@ -142,7 +142,7 @@ When to use which form:
 If you need to return multiple values, define a type. Named fields are always clearer than positional slots:
 
 ```
-type DivResult {
+shape DivResult {
   quotient: number
   remainder: number
 }

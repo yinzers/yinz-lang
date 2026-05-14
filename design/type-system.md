@@ -20,11 +20,11 @@ Single inheritance only. No multiple inheritance.
 
 ---
 
-## `base` for Non-Instantiable Types
+## `base` for Non-Instantiable Shapes
 
-`base type Entity` instead of `abstract class Entity`.
+`base shape Entity` instead of `abstract class Entity`.
 
-**Why**: "Base type" reads like English — "this is a base you build on." `abstract` requires knowing what abstraction means in OOP. Golden Rule 12.
+**Why**: "Base shape" reads like English — "this is a base you build on." `abstract` requires knowing what abstraction means in OOP. Golden Rule 12.
 
 ---
 
@@ -87,7 +87,7 @@ No `null`. No `undefined`. Absence is expressed as `none` and tracked by the typ
 `hidden` fields are completely invisible outside the type's own methods. They require a default value:
 
 ```
-type Player {
+shape Player {
   name: string
   hidden damageMultiplier: number = 1.0
   hidden internalCache: map<string, number> = {}
