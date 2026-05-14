@@ -187,6 +187,26 @@ pub extern "C" fn ynz_float_to_string(x: f64) -> *const u8 {
 }
 
 
+/// Compare two null-terminated UTF-8 strings for byte equality.
+///
+/// Returns 1 if identical, 0 otherwise. Used by codegen for multi-case `if`
+/// on string scrutinees.
+///
+/// REPLACE-AT M7: swap for Unicode canonical equivalence — M3 programs do not
+/// produce NFD strings, so byte-equality is correct for all current programs.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_eq(a: *const u8, b: *const u8) -> i32 {
+    // SAFETY: caller guarantees both pointers are valid null-terminated C strings.
+    let mut i = 0;
+    loop {
+        let ca = *a.add(i);
+        let cb = *b.add(i);
+        if ca != cb { return 0; }
+        if ca == 0 { return 1; }
+        i += 1;
+    }
+}
+
 unsafe fn cstr_to_str<'a>(p: *const u8) -> &'a str {
     if p.is_null() {
         return "<unknown operation>";

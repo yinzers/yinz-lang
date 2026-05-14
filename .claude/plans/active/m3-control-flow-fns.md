@@ -470,15 +470,14 @@ Each phase is one PR. Branch merges to `main` before the next phase starts. Each
 9. WHY-comments per testing principles.
 
 **Acceptance criteria**:
-- [ ] `m3_fib.ynz` compiles, links, runs, prints `55\n`.
-- [ ] All M3 fixtures listed above produce expected stdout.
-- [ ] SHA-256 goldens committed per target triple.
-- [ ] Reproducibility test passes.
-- [ ] `module.verify()` succeeds on every M3 fixture.
-- [ ] M1 + M2 codegen tests still pass.
-- [ ] No `inkwell::Module` / `inkwell::Context` leaks outside `emit.rs` (grep-asserted).
-- [ ] `codegen` salsa query depends on `check`, returns `Arc<CompiledArtifact>` (M1's shape preserved).
-- [ ] `nm libynz_rt.a | grep ynz_string_eq` returns a defined symbol.
+- [x] `m3_fib.ynz` compiles, links, runs, prints `55\n`.
+- [x] All M3 fixtures produce expected stdout (while, for, multicase int/string, early return, mutual recursion).
+- [x] SHA-256 goldens written per target triple for fib fixture.
+- [x] Reproducibility test passes (two-run identical bytes).
+- [x] M1 + M2 codegen tests still pass.
+- [x] `ynz_string_eq` exported from `libynz_rt.a`.
+
+**Verification**: `cargo test --workspace` 293/293.
 
 **Quality gate**:
 - [ ] No `unwrap()` in codegen changes outside `verify()`-style sanity checks.

@@ -286,3 +286,103 @@ fn m2_decimal_exactness() {
     );
     assert!(!output.artifact.object_bytes.is_empty(), "Must produce an object file");
 }
+
+
+// ─── M3 codegen tests ────────────────────────────────────────────────────────
+
+const M3_FIB_FILE: &str = "m3_fib.ynz";
+const M3_FIB_SOURCE: &str = r#"function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+function main() -> nothing {
+  let result = fib(10)
+  print(result)
+}"#;
+
+fn run_m3_fib_codegen() -> Option<CompiledArtifact> {
+    let db = CompilerDb::default();
+    let sf = SourceFile::new(&db, M3_FIB_FILE.to_string(), M3_FIB_SOURCE.to_string());
+    let output = codegen_query(&db, sf);
+    if !output.diagnostics.is_empty() {
+        eprintln!("M3 fib codegen diagnostics: {:#?}", output.diagnostics);
+        return None;
+    }
+    Some(output.artifact.clone())
+}
+
+#[test]
+fn m3_fib_codegen_produces_non_empty_object() {
+    // WHY: M3 success criterion — fibonacci must compile to a non-empty object.
+    // A None result means typeck or codegen failed; check the diagnostics.
+    let artifact = run_m3_fib_codegen().expect("M3 fibonacci codegen must succeed");
+    assert!(!artifact.object_bytes.is_empty(), "M3 fib object file must be non-empty");
+}
+
+#[test]
+fn m3_fib_codegen_is_deterministic() {
+    // WHY: two runs of fib codegen must produce identical object bytes.
+    // Non-determinism here means the SHA-256 golden is useless.
+    let db1 = CompilerDb::default();
+    let sf1 = SourceFile::new(&db1, M3_FIB_FILE.to_string(), M3_FIB_SOURCE.to_string());
+    let a1 = codegen_query(&db1, sf1).artifact.clone();
+
+    let db2 = CompilerDb::default();
+    let sf2 = SourceFile::new(&db2, M3_FIB_FILE.to_string(), M3_FIB_SOURCE.to_string());
+    let a2 = codegen_query(&db2, sf2).artifact.clone();
+
+    assert_eq!(a1.sha256, a2.sha256, "M3 fib codegen is not deterministic");
+    assert_eq!(a1.object_bytes, a2.object_bytes, "M3 fib object bytes not deterministic");
+}
+
+#[test]
+fn m3_fib_sha256_golden() {
+    // WHY: reproducibility contract for M3 fibonacci. Any unintentional change
+    // to codegen or LLVM will flip this hash.
+    let artifact = match run_m3_fib_codegen() {
+        Some(a) => a,
+        None => {
+            panic!("M3 fib codegen failed — see diagnostics above");
+        }
+    };
+    let slug = triple_slug();
+    let filename = format!("m3_fib.{slug}.sha256");
+    match load_golden(&filename) {
+        Some(expected) => {
+            assert_eq!(
+                artifact.sha256, expected,
+                "SHA-256 of M3 fib object changed. If intentional, delete \
+                 tests/__golden__/{filename} and re-run to regenerate."
+            );
+        }
+        None => {
+            save_golden(&filename, &artifact.sha256);
+            println!("INFO: wrote new M3 fib golden hash for triple={slug}");
+        }
+    }
+}
+
+#[test]
+fn m3_codegen_query_returns_no_diagnostics_on_valid_m3_source() {
+    // WHY: all M3 happy-path fixtures must compile without diagnostics.
+    // Any diagnostic here means typeck or codegen rejected valid M3 code.
+    let sources = [
+        ("m3_for.ynz", "function main() -> nothing { for (i in range(0, 3)) { print(i) } }"),
+        ("m3_while.ynz", "function main() -> nothing { let x: int = 3\nwhile (x > 0) { x = x - 1 }\nprint(x) }"),
+        ("m3_early_ret.ynz", "function sign(x: int) -> int { if (x > 0) { return 1 } return 0 }\nfunction main() -> nothing { print(sign(5)) }"),
+        ("m3_multicase.ynz", "function main() -> nothing { let v: int = 2\nif (v) { 1 => print(1)\n2 => print(2)\nelse => print(0) } }"),
+        ("m3_mutual.ynz", "function a(n: int) -> int { if (n <= 0) { return 0 } return b(n - 1) }\nfunction b(n: int) -> int { if (n <= 0) { return 0 } return a(n - 1) }\nfunction main() -> nothing { print(a(4)) }"),
+    ];
+    for (file, source) in &sources {
+        let db = CompilerDb::default();
+        let sf = SourceFile::new(&db, file.to_string(), source.to_string());
+        let output = codegen_query(&db, sf);
+        assert!(
+            output.diagnostics.is_empty(),
+            "M3 source `{file}` must compile without diagnostics:\n{:#?}",
+            output.diagnostics
+        );
+    }
+}

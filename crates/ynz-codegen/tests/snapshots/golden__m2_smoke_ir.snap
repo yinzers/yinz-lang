@@ -53,6 +53,8 @@ declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64) #0
 ; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
 declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64) #0
 
+declare i32 @ynz_string_eq(ptr, ptr)
+
 define i32 @main() {
 entry:
   %dec_lit = alloca i128, align 16

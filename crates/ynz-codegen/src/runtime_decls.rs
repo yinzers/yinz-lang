@@ -35,6 +35,9 @@ pub struct RuntimeDecls<'ctx> {
     pub sadd_overflow: FunctionValue<'ctx>,
     pub ssub_overflow: FunctionValue<'ctx>,
     pub smul_overflow: FunctionValue<'ctx>,
+
+    // String equality for multi-case match on strings: (ptr a, ptr b) → i32 (1=equal, 0=not)
+    pub string_eq: FunctionValue<'ctx>,
 }
 
 impl<'ctx> RuntimeDecls<'ctx> {
@@ -127,6 +130,11 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 module,
                 "llvm.smul.with.overflow.i64",
                 i64_i1.fn_type(&[i64.into(), i64.into()], false),
+            ),
+            string_eq: declare_fn(
+                module,
+                "ynz_string_eq",
+                i32.fn_type(&[ptr.into(), ptr.into()], false),
             ),
         }
     }

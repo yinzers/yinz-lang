@@ -271,3 +271,68 @@ fn m2_int_div_by_zero_panics_and_exits_nonzero() {
         "div-by-zero must print a runtime error message"
     );
 }
+
+
+// ─── M3 integration tests ────────────────────────────────────────────────────
+
+#[test]
+fn m3_fib_prints_55() {
+    // WHY: M3 success criterion. fib(10) = 55. If this is wrong, recursion,
+    // parameters, or return-value lowering is broken.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_fib.ynz"));
+    assert_eq!(code, 0, "exit code must be 0; stderr:\n{stderr}");
+    assert_eq!(stdout, "55\n", "fib(10) must print 55");
+}
+
+#[test]
+fn m3_mutual_recursion_prints_0() {
+    // WHY: mutual recursion requires forward declarations at the LLVM level.
+    // ping(5) ping-pongs until n=0 and returns 0.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_mutual_recursion.ynz"));
+    assert_eq!(code, 0, "exit code must be 0; stderr:\n{stderr}");
+    assert_eq!(stdout, "0\n", "ping(5) must print 0");
+}
+
+#[test]
+fn m3_while_countdown_prints_5_to_1() {
+    // WHY: while loop with mutation must decrement correctly.
+    // 5,4,3,2,1 on separate lines.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_while_countdown.ynz"));
+    assert_eq!(code, 0, "exit code must be 0; stderr:\n{stderr}");
+    assert_eq!(stdout, "5\n4\n3\n2\n1\n");
+}
+
+#[test]
+fn m3_for_range_prints_0_to_4() {
+    // WHY: for (i in range(0, 5)) must print 0,1,2,3,4.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_for_range.ynz"));
+    assert_eq!(code, 0, "exit code must be 0; stderr:\n{stderr}");
+    assert_eq!(stdout, "0\n1\n2\n3\n4\n");
+}
+
+#[test]
+fn m3_multicase_int_prints_correct_arms() {
+    // WHY: multi-case if on int scrutinee must dispatch to the right arm.
+    // describe(1)=one, describe(2)=two, describe(5)=other (else arm).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_multicase_int.ynz"));
+    assert_eq!(code, 0, "exit code must be 0; stderr:\n{stderr}");
+    assert_eq!(stdout, "one\ntwo\nother\n");
+}
+
+#[test]
+fn m3_multicase_string_matches_hello() {
+    // WHY: multi-case if on string scrutinee uses ynz_string_eq (byte equality).
+    // "hello" matches the first arm; must print "got hello".
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_multicase_string.ynz"));
+    assert_eq!(code, 0, "exit code must be 0; stderr:\n{stderr}");
+    assert_eq!(stdout, "got hello\n");
+}
+
+#[test]
+fn m3_early_return_prints_sign_values() {
+    // WHY: early return inside an `if` body must terminate the function path.
+    // sign(42)=1, sign(-7)=-1, sign(0)=0.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_early_return.ynz"));
+    assert_eq!(code, 0, "exit code must be 0; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n-1\n0\n");
+}
