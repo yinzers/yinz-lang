@@ -1,0 +1,8 @@
+function foo() -> int {
+  return 1
+  print("never runs")
+}
+
+function main() -> nothing {
+  print(foo())
+}

@@ -234,6 +234,7 @@ fn lower_function<'ctx, 'g>(
 
     let ret_ty = ast_type_to_typeck_type(&f.return_type);
     let is_main = f.name == "main";
+    let ret_is_nothing = matches!(ret_ty, Type::Nothing);
 
     let mut cg = Cg {
         ctx,
@@ -264,14 +265,23 @@ fn lower_function<'ctx, 'g>(
         lower_stmt(&mut cg, stmt)?;
     }
 
-    // Implicit terminator: void return (or i32 0 for main) if not terminated.
+    // Implicit terminator if the current block has no terminator yet.
+    //
+    // - main: always ret i32 0 (C ABI entry point).
+    // - nothing-returning functions: ret void (legitimate fall-off-the-end).
+    // - non-nothing functions: unreachable — either the typeck confirmed all
+    //   paths return (so this block is dead code after an exhaustive match) or
+    //   it's a typeck bug. Either way, ret void would fail LLVM verify.
     if !is_block_terminated(&cg) {
         if is_main {
             cg.builder.build_return(Some(&ctx.i32_type().const_int(0, false)))
                 .map_err(|e| format!("implicit main ret: {e}"))?;
-        } else {
+        } else if ret_is_nothing {
             cg.builder.build_return(None)
                 .map_err(|e| format!("implicit void ret: {e}"))?;
+        } else {
+            cg.builder.build_unreachable()
+                .map_err(|e| format!("implicit unreachable: {e}"))?;
         }
     }
     Ok(())

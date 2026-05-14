@@ -1,0 +1,9 @@
+// CATCH-UP M6: `is TypeName =>` pattern matching lands when union types land.
+// Until then the parser emits a deferral diagnostic pointing at M6.
+function main() -> nothing {
+  let shape = "circle"
+  if (shape) {
+    is Circle => print("circle")
+    else => print("other")
+  }
+}

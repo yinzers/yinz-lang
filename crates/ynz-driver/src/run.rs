@@ -11,6 +11,11 @@ pub fn run(source_path: &Path) -> i32 {
         return 1;
     }
 
+    // Emit warnings even on success so users see them.
+    if !result.stderr_output.is_empty() {
+        eprint!("{}", result.stderr_output);
+    }
+
     let binary = result.binary.expect("success implies binary is set");
 
     let status = process::Command::new(&binary).status().unwrap_or_else(|e| {

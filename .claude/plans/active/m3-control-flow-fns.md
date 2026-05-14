@@ -541,12 +541,15 @@ Each phase is one PR. Branch merges to `main` before the next phase starts. Each
 5. WHY-comments on every test.
 
 **Acceptance criteria**:
-- [ ] Every M3 fixture produces the expected stdout / stderr.
-- [ ] Headline fixtures (`m3_fib`, `m3_mutual_recursion`, `m3_while_countdown`, `m3_for_range`, multi-case happy paths) exit 0.
-- [ ] Every negative fixture exits non-zero with the expected stderr.
-- [ ] Catch-up fixtures are clearly marked.
-- [ ] M1 + M2 integration tests still pass.
-- [ ] Banned-jargon audit passes on every M3 diagnostic.
+- [x] Every M3 fixture produces the expected stdout / stderr.
+- [x] Headline fixtures (`m3_fib`, `m3_mutual_recursion`, `m3_while_countdown`, `m3_for_range`, multi-case happy paths) exit 0.
+- [x] Every negative fixture exits non-zero with the expected stderr.
+- [x] Catch-up fixtures are clearly marked with `// CATCH-UP <milestone>` comments.
+- [x] M1 + M2 integration tests still pass.
+- [x] Banned-jargon audit passes on every M3 diagnostic.
+- [x] Dead-code warnings render to stderr on successful builds.
+
+**Verification**: `cargo test --workspace` 310/310.
 
 **Quality gate**:
 - [ ] No `unwrap()` in driver changes.

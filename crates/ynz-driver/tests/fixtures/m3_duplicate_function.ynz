@@ -1,0 +1,11 @@
+function foo() -> nothing {
+  print("first")
+}
+
+function foo() -> nothing {
+  print("second")
+}
+
+function main() -> nothing {
+  foo()
+}
