@@ -39,9 +39,13 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 
 | File | Load when |
 |------|-----------|
-| `.claude/rules/naming.md` | Any time renamed concepts come up (`options` vs `enum`, etc.) |
+| `.claude/rules/vocabulary.md` | Any docs work — authoritative reference for Yinz user-facing terms (shape, value, map, options, etc.) |
+| `.claude/rules/naming.md` | Capital-letter-=-type rule, module/type case distinctions, renamed-concepts table |
+| `.claude/rules/inference.md` | Designing IDE behavior, ownership UI, type-inference UI, any teaching surface where the compiler figures things out automatically |
+| `.claude/rules/plan-invariants.md` | Writing or reviewing milestone plans (M4 onward must include the 5-subsection Invariants block) |
 | `.claude/rules/spec-writing.md` | Writing or editing `/spec/` files |
 | `.claude/rules/language-design.md` | Making or reviewing language design decisions |
+| `.claude/rules/docs-checklist.md` | Adding new design docs, future-list ideas, or spec sections |
 
 ---
 

@@ -68,7 +68,7 @@ options Comparison {
 
 ```
 options Status { active, inactive, banned }    // named states — same underlying type
-type Shape = Circle | Square | Triangle      // different types — each has different fields
+shape Shape = Circle | Square | Triangle      // different types — each has different fields
 ```
 
 Use `options` when the variants are just labels. Use `or` when they have different data shapes. See [Unions](unions.md).

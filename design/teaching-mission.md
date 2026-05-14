@@ -118,6 +118,42 @@ function takeDamage(share player: Player, amount: number) -> nothing {
 
 ---
 
+## IDE as a Teaching Surface (Muted-Hint Protocol)
+
+The IDE is not just a coding environment — it is a load-bearing teaching surface, equal in importance to compiler error messages. Per the [uniform inference rule](../.claude/rules/inference.md), every semantic the compiler figures out automatically gets shown in the IDE as muted text the developer can read, click to make explicit, and hover for a three-part explanation.
+
+This means a developer is being taught even when their code is **completely correct**:
+
+```yinz
+let x = 42                    // IDE shows muted ": int" → teaches type inference
+foo(player)                   // IDE shows muted ".share" → teaches ownership at call sites
+db.fetch("users")             // IDE shows muted "wait" → teaches I/O suspension
+arena scratch {
+  let temp = array<int>()     // IDE shows muted ".in(scratch)" → teaches arena allocation
+}
+```
+
+Each muted hint is hover-active. The tooltip uses the same WHAT / WHAT-INSTEAD / WHY format as compiler diagnostics — and uses the same canonical wording so the explanation is consistent whether the dev encounters it as an inferred hint or as a compile error.
+
+**Why this matters for the teaching mission**:
+
+- **Reactive teaching (compiler errors)** kicks in when you write something wrong. Useful, but happens after the mistake.
+- **Proactive teaching (IDE muted hints)** kicks in on every keystroke of valid code. The developer learns the model by reading their own code annotated with what the compiler decided.
+
+Both are required. Reactive teaching catches misunderstandings; proactive teaching prevents them.
+
+**Visual styling**:
+
+- Neutral muted (gray): benign inference — types, lifetimes, allocators
+- Cautionary muted (red-tinted): inference with mutation or ownership implications — `.lend`, `.give`, auto-`Arc` for cross-thread shared state
+- Compile errors use standard error styling (red squiggly + diagnostic panel) — distinct from muted hints
+
+The full protocol lives in `design/ide-hints.md` (v0.2 LSP implementation target). The principle is locked into Yinz's identity now so v0.2 doesn't redesign it.
+
+**Shared wording across surfaces**: one canonical explanation per concept. A compile error explaining "cannot lend a const binding" uses the same wording as the IDE tooltip explaining why `.share` was inferred on a const value. The explanation lives in one place (the rule file or design doc) and every surface re-uses it. This prevents the "doc says X, error says Y, tooltip says Z" drift that plagues every IDE-language ecosystem.
+
+---
+
 ## The What/What-Instead/Why Format — Required for All Diagnostics
 
 Every error, warning, and suggestion in the Yinz compiler MUST follow this structure. The format is mandatory.

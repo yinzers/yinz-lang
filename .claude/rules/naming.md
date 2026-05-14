@@ -18,7 +18,7 @@ function fetchUser(), function processOrder()
 let userName, let playerCount
 
 // Keywords — lowercase
-function, let, const, type, wait, background, options, follows, extends
+function, let, const, shape, wait, background, options, follows, extends
 ```
 
 Scan any line. Capital letter = type. No capital = not a type. Zero ambiguity.
@@ -41,12 +41,12 @@ Always use Yinz terms. Never use the traditional term in spec files or user-faci
 |---|---|---|
 | `void` | `nothing` | Functions that don't return use `-> nothing` |
 | `null` / `undefined` / `None` | `none` | The built-in absent value |
-| `Optional<T>` | `maybe T` | Sugar for `T or none` — interchangeable |
-| `struct` / `class` / `interface` | `type` | One keyword for all shapes |
+| `Optional<T>` | `maybe T` | Sugar for `T \| none` — interchangeable |
+| `struct` / `class` / `interface` / `type` | `shape` | One keyword for all data structures. `type` is banned because it's overloaded with the generic concept of "type." |
 | `enum` | `options` | `options Status { active, inactive, banned }` |
-| `abstract class` | `base type` | Cannot be instantiated directly |
-| `implements` | `follows` | `type Player follows Damageable` |
-| `\|` (union syntax) | `or` | `type Shape = Circle or Square or Triangle` |
+| `abstract class` | `base shape` | Cannot be instantiated directly |
+| `implements` | `follows` | `shape Player follows Damageable` |
+| `Either<A, B>` / `A \| B` (TS union) | `\|` | `shape Result = Success \| Failure` — Yinz keeps `\|` for unions; one exception to "prefer words over symbols" (see Golden Rule 12 expanded version). |
 | `typeof` / `instanceof` / type guards | `is` | `if (shape is Circle)` |
 | `fn` | `function` | Always spell it out |
 | `&T` (shared reference) | `.share` | Dot modifier on value |
