@@ -594,6 +594,26 @@ The conversation then expanded to cover: terminology (shape vs type), inference 
 
 ---
 
+## Execution Notes (live as phases ship)
+
+### Phase 5 — partial execution, two items deferred
+
+Phase 5 originally planned three actions: (a) add 5 graveyard entries, (b) add `## Forward-Compatibility Constraints` section to `.claude/plans/active/v0-1-compiler.md`, (c) add retroactive `## Invariants This Milestone Must Preserve` section to `.claude/plans/active/m3-control-flow-fns.md`.
+
+At Phase 5 execution time (2026-05-14), the M3 chat had uncommitted modifications to `v0-1-compiler.md` (restructuring it into the umbrella-with-milestones format) and the file `m3-control-flow-fns.md` does not yet exist on `main` (it's on the `feat/m3-codegen` branch). Touching either file from this plan's chat would entangle Claude with the M3 chat's in-flight work and cause merge conflicts.
+
+**Shipped in Phase 5**: 5 graveyard entries in `.claude/graveyard.md` (load-bearing — the enforcement that makes the prior phases real).
+
+**Deferred to a follow-up commit/PR after the M3 chat commits**:
+- Add `## Forward-Compatibility Constraints` section to `.claude/plans/active/v0-1-compiler.md`
+- Add retroactive `## Invariants This Milestone Must Preserve` section to `.claude/plans/active/m3-control-flow-fns.md`
+
+**Coordination**: this plan's owner (Patrick) tells the M3 chat to re-read its context after their work commits to main. Once committed, a small follow-up commit on a future phase (or a dedicated tiny PR) lands the deferred items. This avoids cross-chat merge conflicts.
+
+Phase 7 verification sweep checks that these deferrals were resolved before closing the plan.
+
+---
+
 ## Reviewer Disputes
 
 ### Round 1 — Plan-reviewer flagged 8 required fixes; resolutions:
