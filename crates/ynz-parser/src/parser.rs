@@ -186,11 +186,7 @@ impl<'a> Parser<'a> {
             return None;
         }
 
-        let params = self.parse_params(&name);
-        if params.is_none() {
-            return None;
-        }
-        let params = params.unwrap();
+        let params = self.parse_params(&name)?;
 
         // `->`
         if self.expect(&Token::Arrow).is_none() {
@@ -485,7 +481,7 @@ impl<'a> Parser<'a> {
                     self.diags.push(Diagnostic::error(
                         kw_span,
                         format!("`{kw}` ownership annotations are not available yet."),
-                        format!("Declare the parameter without an annotation: `name: Type`"),
+                        "Declare the parameter without an annotation: `name: Type`",
                         "Yinz ownership modifiers (`share`, `lend`, `give`) land in v0.1 milestone 4. Until then, parameters are read-only.",
                     ));
                 }
@@ -539,7 +535,7 @@ impl<'a> Parser<'a> {
                 self.diags.push(Diagnostic::error(
                     name_span.clone(),
                     format!("Duplicate parameter name `{param_name}` in `{fn_name}`."),
-                    format!("Each parameter in a function must have a unique name."),
+                    "Each parameter in a function must have a unique name.",
                     "Two parameters with the same name would make it impossible to tell them apart inside the function body.",
                 ));
             }
@@ -553,18 +549,16 @@ impl<'a> Parser<'a> {
             });
 
             // Consume optional `,` — trailing comma is allowed
-            if !matches!(self.peek(), Token::RParen) {
-                if self.expect(&Token::Comma).is_none() {
-                    self.diags.push(Diagnostic::error(
-                        self.current_span(),
-                        "Expected `,` or `)` after parameter.",
-                        "Separate parameters with `,`: `function foo(a: int, b: string)`",
-                        "Each parameter must be separated by a comma.",
-                    ));
-                    // Recover to `)` or next identifier (another param attempt)
-                    while !matches!(self.peek(), Token::RParen | Token::RBrace | Token::Eof | Token::Identifier(_)) {
-                        self.advance();
-                    }
+            if !matches!(self.peek(), Token::RParen) && self.expect(&Token::Comma).is_none() {
+                self.diags.push(Diagnostic::error(
+                    self.current_span(),
+                    "Expected `,` or `)` after parameter.",
+                    "Separate parameters with `,`: `function foo(a: int, b: string)`",
+                    "Each parameter must be separated by a comma.",
+                ));
+                // Recover to `)` or next identifier (another param attempt)
+                while !matches!(self.peek(), Token::RParen | Token::RBrace | Token::Eof | Token::Identifier(_)) {
+                    self.advance();
                 }
             }
         }
@@ -573,7 +567,7 @@ impl<'a> Parser<'a> {
             self.diags.push(Diagnostic::error(
                 self.current_span(),
                 format!("Missing `)` to close `{fn_name}`'s parameter list."),
-                format!("Add `)` after the last parameter."),
+                "Add `)` after the last parameter.",
                 "Every `(` in a function declaration must be matched with a `)`.",
             ));
             self.recover_to_rbrace();

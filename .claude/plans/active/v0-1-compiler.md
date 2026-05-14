@@ -1363,3 +1363,41 @@ If you find yourself adding code that touches any item above, STOP and either re
 ## Reviewer Disputes
 
 (none yet — populated during Step 7 review iterations if/when planner pushes back)
+
+---
+
+## Forward-Compatibility Constraints
+
+These constraints apply to every milestone from M3 onward. They exist to prevent
+decisions made under time pressure from compounding into retroactive rewrites.
+
+1. **Binary format must reserve space for compiler metadata.** Every compiled
+   `.ynz` object must include a reserved metadata section for: may-block analysis
+   result (`mayBlock` flag — not `inferred*`, which collides with banned jargon),
+   ownership signature digest, kernel-mode compatibility flag. Even if unused in
+   v0.1, the section header must exist so v0.2+ can populate it without breaking
+   existing binaries. See `design/future/packages.md` for the locked binary format
+   design.
+
+2. **Every feature from M3 onward must declare its runtime dependencies and
+   kernel-mode behavior in its milestone plan.** The declaration goes in the
+   `## Invariants This Milestone Must Preserve` section's `### Runtime Dependencies`
+   and `### Kernel-Mode Behavior` subsections. See `.claude/rules/plan-invariants.md`
+   for the required format. Kernel-mode (v0.3+) must be able to disable features
+   that require the allocator, scheduler, or OS I/O at compile time without
+   rewriting those features.
+
+3. **Every M4+ feature touching ownership must enumerate the const invariants in
+   the plan's Invariants section AND emit corresponding LLVM attributes in codegen.**
+   Specifically: `const` bindings passed to functions must emit LLVM `readonly`
+   attribute; `lend` parameters must emit `noalias` + writable. The invariant chain
+   (no reassignment, no `.lend`, no `.give`, no field mutation) must be stated in
+   `### Safety`. The LLVM attribute contract must be stated in `### Performance`.
+   See `.claude/graveyard.md` Entry 1 (const deep-immutability) for the Bouncer
+   checks that enforce this.
+
+4. **`shape` is the reserved keyword for M4 type declarations, not `type`.** The
+   lexer must reserve `shape` in M4's P1 (lexer phase) and add `type` as a
+   banned-keyword diagnostic (following the M3 pattern for `match`/`switch` —
+   teaching diagnostic + Identifier recovery token). The banned-jargon entry for
+   `type` lands in M4 P1 alongside the lexer change.

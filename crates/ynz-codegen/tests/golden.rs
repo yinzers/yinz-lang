@@ -288,7 +288,6 @@ fn m2_decimal_exactness() {
 }
 
 
-// ─── M3 codegen tests ────────────────────────────────────────────────────────
 
 const M3_FIB_FILE: &str = "m3_fib.ynz";
 const M3_FIB_SOURCE: &str = r#"function fib(n: int) -> int {

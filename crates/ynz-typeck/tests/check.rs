@@ -495,7 +495,6 @@ fn check_re_runs_when_source_changes() {
 }
 
 
-// ─── M3 tests ────────────────────────────────────────────────────────────────
 
 fn assert_warnings(source: &str, expected_count: usize) -> CheckOutput {
     let output = run(source);

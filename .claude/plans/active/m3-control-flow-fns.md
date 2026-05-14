@@ -694,3 +694,75 @@ If a phase below feels like it's drifting into any of the above, STOP and re-pla
 ## Reviewer Disputes
 
 (none yet — populated during Step 7 review iterations if/when the reviewer pushes back)
+
+---
+
+## Invariants This Milestone Must Preserve
+
+Retroactive section added per `.claude/rules/plan-invariants.md` as a template
+reference for M4+ plan authors. M3 is the first milestone with non-trivial control
+flow; these invariants establish the baseline codegen and typeck contracts.
+
+### Safety
+
+- `const` bindings cannot be reassigned inside any control-flow body — enforced by
+  existing `check_assign` at `crates/ynz-typeck/src/check.rs` via `entry.is_const`.
+  This applies inside `if`, `while`, `for`, and `match` bodies without exception.
+- For-loop variables (`for (i in range(...))`) are immutable inside the body —
+  enforced by `entry.is_loop_var` flag (M3 addition to `ScopeEntry`). Assigning to
+  a loop variable is a compile error naming the variable and explaining why.
+- Function parameters are read-only in M3 — enforced by `entry.is_param` flag.
+  Assignment to a parameter emits an M4-deferral diagnostic; it does not compile.
+- No new mutation path was introduced by M3 control flow. The const-deep-immutability
+  invariant (no reassignment, no lend, no give, no field mutation) is unchanged from
+  M2. Field mutation is not in the M3 AST (`FieldAssign` is an M4 variant), so no
+  enforcement gap exists.
+
+### Performance
+
+- Control-flow lowering produces branch/merge basic-block sequences with no
+  function-call overhead vs hand-written LLVM IR. `if`/`while`/`for` lower to
+  conditional branches + unconditional back-edges with zero runtime dispatch cost.
+- `range(...)` for-loops lower to a counter loop (alloca + icmp slt + increment) —
+  equivalent to a C `for (int i = 0; i < n; i++)` loop at the IR level.
+- Multi-function modules use forward-declaration + body-emit two-pass. Each user
+  function is a native LLVM function with the same call overhead as a C function.
+- No new allocations in the M3 compiled output. All M3 locals (including loop
+  counters) live on the stack via alloca; LLVM's mem2reg promotes them to SSA.
+
+### Teaching
+
+- All M3 control-flow diagnostics follow WHAT/WHAT-INSTEAD/WHY three-part format —
+  enforced by the `Diagnostic` constructor's three-non-empty-field assertion.
+- Deferred-feature diagnostics name the target milestone (M4 for ownership
+  annotations, M6 for `is Type` narrowing, M7 for Range as a first-class value).
+- Dead-code after a definite return emits a Warning (not Error) so the program
+  still compiles. The warning explains exactly why the code is unreachable.
+- `match` and `switch` banned-keyword diagnostics are Warnings (not Errors) because
+  the identifiers are valid in other positions; the teaching message redirects to
+  multi-case `if`.
+
+### Runtime Dependencies
+
+- None. All M3 control flow is pure stack-based language — no heap allocation,
+  no OS I/O, no scheduler interaction.
+- `range(...)` is a compiler builtin that lowers to a counter loop; it has no
+  runtime library entry. It is NOT in `libynz_rt.a`.
+- `ynz_string_eq` was added to `libynz_rt.a` for string multi-case comparison.
+  It calls no allocator and uses only pointer arithmetic. Its runtime dependency
+  is: valid null-terminated C strings (caller's responsibility).
+- Dead-code warnings and missing-return errors are compile-time only — no runtime
+  overhead.
+
+### Kernel-Mode Behavior
+
+- All branching (`if`, `match`) and looping (`while`, `for`) constructs work in
+  `--kernel` mode without modification. They compile to stack-based LLVM branches
+  with no allocator or scheduler dependency.
+- `ynz_string_eq` works in `--kernel` mode — it uses only pointer arithmetic and
+  no OS calls. The `# Safety` contract (valid null-terminated C strings) applies
+  in kernel mode identically to user mode.
+- `range(...)` works in `--kernel` mode — it lowers to a counter loop with no
+  allocator dependency.
+- User-defined functions work in `--kernel` mode — they compile to native LLVM
+  functions with C-ABI calling convention. No scheduler or heap needed.

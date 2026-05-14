@@ -413,7 +413,7 @@ impl<'b> Checker<'b> {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
                     format!("`return` without a value, but this function must return `{}`.", type_name(ret)),
-                    format!("Add a return value: `return expr`"),
+                    "Add a return value: `return expr`",
                     "A non-`nothing` function must return a value on every path that exits.",
                 ));
             }
@@ -912,12 +912,12 @@ fn body_has_error_node(stmts: &[Stmt]) -> bool {
         Stmt::Match { scrutinee, arms, else_arm, .. } => {
             expr_has_error(scrutinee)
                 || arms.iter().any(|arm| body_has_error_node(&arm.body.stmts))
-                || else_arm.as_ref().map_or(false, |b| body_has_error_node(&b.stmts))
+                || else_arm.as_ref().is_some_and(|b| body_has_error_node(&b.stmts))
         }
         Stmt::While { cond, body, .. } | Stmt::For { iter: cond, body, .. } => {
             expr_has_error(cond) || body_has_error_node(&body.stmts)
         }
-        Stmt::Return { value, .. } => value.as_ref().map_or(false, expr_has_error),
+        Stmt::Return { value, .. } => value.as_ref().is_some_and(expr_has_error),
     })
 }
 
@@ -996,8 +996,8 @@ fn levenshtein(a: &str, b: &str) -> usize {
     let b: Vec<char> = b.chars().collect();
     let (m, n) = (a.len(), b.len());
     let mut dp = vec![vec![0usize; n + 1]; m + 1];
-    for i in 0..=m { dp[i][0] = i; }
-    for j in 0..=n { dp[0][j] = j; }
+    (0..=m).for_each(|i| dp[i][0] = i);
+    (0..=n).for_each(|j| dp[0][j] = j);
     for i in 1..=m {
         for j in 1..=n {
             dp[i][j] = if a[i - 1] == b[j - 1] {

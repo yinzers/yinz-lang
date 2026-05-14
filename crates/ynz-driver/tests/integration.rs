@@ -273,7 +273,6 @@ fn m2_int_div_by_zero_panics_and_exits_nonzero() {
 }
 
 
-// ─── M3 integration tests ────────────────────────────────────────────────────
 
 #[test]
 fn m3_fib_prints_55() {
@@ -357,7 +356,6 @@ fn m3_multicase_else_arm_dispatches_correctly() {
     assert_eq!(stdout, "10\n20\n0\n");
 }
 
-// ─── M3 error fixtures ───────────────────────────────────────────────────────
 
 #[test]
 fn m3_param_mutation_produces_m4_deferral_diagnostic() {
@@ -493,7 +491,6 @@ fn m3_loop_var_mutation_produces_diagnostic() {
     );
 }
 
-// ─── M3 catch-up / deferral fixtures ────────────────────────────────────────
 
 #[test]
 fn m3_is_type_arm_produces_m6_deferral() {

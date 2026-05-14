@@ -194,6 +194,12 @@ pub extern "C" fn ynz_float_to_string(x: f64) -> *const u8 {
 ///
 /// REPLACE-AT M7: swap for Unicode canonical equivalence — M3 programs do not
 /// produce NFD strings, so byte-equality is correct for all current programs.
+///
+/// # Safety
+///
+/// Both `a` and `b` must be valid pointers to null-terminated C strings.
+/// Dereferencing either before the null byte is undefined behavior if the
+/// pointer is invalid or not null-terminated.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_eq(a: *const u8, b: *const u8) -> i32 {
     // SAFETY: caller guarantees both pointers are valid null-terminated C strings.
