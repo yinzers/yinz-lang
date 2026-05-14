@@ -41,12 +41,12 @@ Always use Yinz terms. Never use the traditional term in spec files or user-faci
 |---|---|---|
 | `void` | `nothing` | Functions that don't return use `-> nothing` |
 | `null` / `undefined` / `None` | `none` | The built-in absent value |
-| `Optional<T>` | `maybe T` | Sugar for `T or none` — interchangeable |
+| `Optional<T>` | `maybe T` | Sugar for `T \| none` — interchangeable |
 | `struct` / `class` / `interface` / `type` | `shape` | One keyword for all data structures. `type` is banned because it's overloaded with the generic concept of "type." |
 | `enum` | `options` | `options Status { active, inactive, banned }` |
 | `abstract class` | `base shape` | Cannot be instantiated directly |
 | `implements` | `follows` | `shape Player follows Damageable` |
-| `\|` (union syntax) | `or` | `shape Result = Success or Failure` |
+| `Either<A, B>` / `A \| B` (TS union) | `\|` | `shape Result = Success \| Failure` — Yinz keeps `\|` for unions; one exception to "prefer words over symbols" (see Golden Rule 12 expanded version). |
 | `typeof` / `instanceof` / type guards | `is` | `if (shape is Circle)` |
 | `fn` | `function` | Always spell it out |
 | `&T` (shared reference) | `.share` | Dot modifier on value |

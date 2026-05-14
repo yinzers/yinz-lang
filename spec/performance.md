@@ -21,8 +21,8 @@ Memory is freed when the owner goes out of scope. Ownership is tracked at compil
 When you define a `type`, fields are laid out contiguous in memory. Nested types are embedded inline — not scattered as pointers to other parts of the heap:
 
 ```
-type Position { x: number, y: number }
-type Player { name: string, health: number, position: Position }
+shape Position { x: number, y: number }
+shape Player { name: string, health: number, position: Position }
 ```
 
 `position` lives directly inside `Player` — not a pointer to somewhere else. When you access `player.position.x`, the CPU finds it in the same cache line. On data-heavy workloads, this is 10-50x faster than pointer-chasing.

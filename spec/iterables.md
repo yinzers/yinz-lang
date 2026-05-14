@@ -21,11 +21,11 @@ The compiler calls `.next()` on `players` repeatedly until it returns `none`. Th
 Most iterables can never fail mid-step. Some iterables (reading a file, paging through an API) can — disk errors, network timeouts, etc. Yinz has a contract for each:
 
 ```
-type Iterable<T> {
+shape Iterable<T> {
   function next(lend self) -> maybe T
 }
 
-type FallibleIterable<T> {
+shape FallibleIterable<T> {
   function next(lend self) -> maybe T errors
 }
 ```
@@ -104,7 +104,7 @@ With either adapter, the enclosing function no longer needs to be `errors`.
 Implement `follows Iterable<T>` with a `next(lend self) -> maybe T` method. Use `hidden` fields with defaults to track internal state:
 
 ```
-type CountDown follows Iterable<int> {
+shape CountDown follows Iterable<int> {
   end: int
   hidden current: int = 0
 
@@ -127,7 +127,7 @@ for (num in counter) {
 If your iteration step can fail (I/O, network), follow the fallible contract instead:
 
 ```
-type ApiPager<T> follows FallibleIterable<T> {
+shape ApiPager<T> follows FallibleIterable<T> {
   baseUrl: string
   hidden cursor: maybe string = none
   hidden done: bool = false

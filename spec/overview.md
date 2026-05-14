@@ -9,7 +9,7 @@ You write clean, simple code. The compiler turns it into fast, safe machine code
 ## A taste of Yinz
 
 ```
-type Player {
+shape Player {
   name: string
   health: number
 

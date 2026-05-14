@@ -571,7 +571,7 @@ impl<'b> Checker<'b> {
                     span.clone(),
                     format!("`{n}` is not a known type."),
                     "Use a built-in type: `int`, `float`, `number`, `bool`, or `string`.",
-                    "Custom types are defined with the `type` keyword, available in M4.",
+                    "Custom data structures are defined with the `shape` keyword, available in M4.",
                 ));
                 Type::Error
             }

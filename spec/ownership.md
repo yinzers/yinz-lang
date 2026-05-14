@@ -22,21 +22,27 @@ All of these appear in autocomplete when you type `.` after a variable.
 
 ---
 
-## Smart defaults — you usually don't need to write anything
+## You don't usually type the dot modifier — the compiler figures it out
 
-Most functions just read their inputs. The compiler assumes `.share` when you don't annotate:
+When the compiler can tell what you want from context, you don't have to type it. The IDE shows what was inferred as muted text, so you can SEE what's happening without typing it:
 
 ```
-greet(name)           // same as: greet(name.share)
-print(message)        // same as: print(message.share)
+greet(name)           // IDE shows muted ".share" after name — read-only access inferred
+print(message)        // IDE shows muted ".share" — same idea
+rename(player)        // IDE shows muted ".lend" (red-tinted) — function needs write access
+consume(data)         // IDE shows muted ".give" (red-tinted) — function takes ownership
 ```
 
-Only annotate at the call site when you're escalating beyond reading:
+You can still type the modifier explicitly when you want it visible in code (some teams prefer that for high-stakes operations):
 
 ```
 rename(player.lend)   // explicit — granting write access
-consume(data.give)    // explicit — giving it away
+consume(data.give)    // explicit — handing it over
 ```
+
+Hovering over any muted hint shows a tooltip explaining WHAT it means, WHAT INSTEAD you'd write to make it explicit, and WHY the compiler chose it. That's the teaching part — the IDE helps you learn ownership by reading your own code.
+
+`const` bindings get special treatment: the compiler will only infer `.share` (read-only). It refuses to infer `.lend` or `.give` because a `const` value can't grant write access or transfer ownership. If a function needs `.lend` and you pass a `const`, that's a compile error pointing you toward declaring with `let` instead.
 
 ---
 

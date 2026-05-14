@@ -27,7 +27,7 @@ Custom iteration uses the existing `follows` contract system. No special iterato
 Iterator state (current position, buffers, page numbers) is tracked with `hidden` fields with defaults. This is what `hidden` was designed for — implementation details that the caller shouldn't see or set.
 
 ```
-type Range follows Iterable<int> {
+shape Range follows Iterable<int> {
   start: int
   end: int
   hidden current: int = 0    // iterator state — caller never sets this
@@ -42,11 +42,11 @@ type Range follows Iterable<int> {
 Resolved: two separate contracts. In-memory iteration uses `Iterable<T>`; iteration over I/O sources (files, network, paginated APIs) uses `FallibleIterable<T>`. The user almost never sees the distinction directly — the compiler infers it from the iterator's type and propagates errors only when needed.
 
 ```yinz
-type Iterable<T> {
+shape Iterable<T> {
   function next(lend self) -> maybe T
 }
 
-type FallibleIterable<T> {
+shape FallibleIterable<T> {
   function next(lend self) -> maybe T errors
 }
 ```
@@ -97,7 +97,7 @@ Violates Yinz's core error principle: failures are visible and structured. A `fo
 
 ```yinz
 // In-memory data — implements the infallible contract
-type CircularBuffer<T> follows Iterable<T> {
+shape CircularBuffer<T> follows Iterable<T> {
   items: array<T>
   hidden position: int = 0
 
@@ -110,7 +110,7 @@ type CircularBuffer<T> follows Iterable<T> {
 }
 
 // I/O data — implements the fallible contract
-type ApiPager<T> follows FallibleIterable<T> {
+shape ApiPager<T> follows FallibleIterable<T> {
   cursor: maybe string
   hidden done: bool = false
 

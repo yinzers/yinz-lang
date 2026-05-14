@@ -326,7 +326,7 @@ function findUser(id: number) -> User errors DatabaseError
 `DatabaseError` is a first-class type in the stdlib:
 
 ```
-type DatabaseError {
+shape DatabaseError {
     summary: string             // short human-readable: "Unique constraint violated on quotes.symbol"
     suggestions: array<string>  // ["Check for duplicates before inserting", "Use upsert instead"]
     code: string | null         // raw DB error code ("23505", "08006", etc.)

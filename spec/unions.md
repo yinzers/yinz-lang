@@ -7,11 +7,11 @@ A union type is a value that can be one of several different types.
 ## Defining a union
 
 ```
-type Circle { radius: number }
-type Square { side: number }
-type Triangle { base: number, height: number }
+shape Circle { radius: number }
+shape Square { side: number }
+shape Triangle { base: number, height: number }
 
-type Shape = Circle | Square | Triangle
+shape Shape = Circle | Square | Triangle
 ```
 
 `|` separates the variants. Same as TypeScript. Reads as "Circle | Square | Triangle."
@@ -39,10 +39,10 @@ After `is Circle`, the compiler knows `shape` is a `Circle`. Access `.radius` di
 In a union, `is` matches the exact runtime type. Inheritance doesn't change this:
 
 ```
-type User { name: string, email: string }
-type Admin extends User { permissions: fixed<string> }
+shape User { name: string, email: string }
+shape Admin extends User { permissions: fixed<string> }
 
-type AnyUser = Admin | User
+shape AnyUser = Admin | User
 
 function describe(share user: AnyUser) -> string {
   if (user) {
@@ -74,11 +74,11 @@ The rule: `is` inside a union = exact type match. Inheritance outside unions = n
 ## Unions with inheritance — shared variants
 
 ```
-type User { name: string, email: string }
-type Admin extends User { permissions: fixed<string>, role: string }
-type Guest extends User { expiresAt: number }
+shape User { name: string, email: string }
+shape Admin extends User { permissions: fixed<string>, role: string }
+shape Guest extends User { expiresAt: number }
 
-type AnyUser = Admin | Guest | User
+shape AnyUser = Admin | Guest | User
 
 function getAccess(share user: AnyUser) -> string {
   if (user) {
@@ -100,6 +100,6 @@ function getAccess(share user: AnyUser) -> string {
 ## `|` not words
 
 ```
-type Shape = Circle | Square | Triangle    // correct
-type Shape = Circle | Square | Triangle  // COMPILE ERROR: use | for union types
+shape Shape = Circle | Square | Triangle    // correct
+shape Shape = Circle | Square | Triangle  // COMPILE ERROR: use | for union types
 ```

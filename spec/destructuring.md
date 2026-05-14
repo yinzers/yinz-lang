@@ -32,8 +32,8 @@ Use `as` when the field name would conflict with an existing variable or when a 
 ## Nested destructuring
 
 ```
-type Position { x: number, y: number }
-type Player { name: string, health: number, position: Position }
+shape Position { x: number, y: number }
+shape Player { name: string, health: number, position: Position }
 
 let { name, position: { x, y } } = player
 print(x)    // player.position.x
