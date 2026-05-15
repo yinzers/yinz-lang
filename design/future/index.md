@@ -25,6 +25,7 @@ Each doc in this directory has a **Status header** stating one of:
 | [`no-runtime-mode.md`](no-runtime-mode.md) | Locked | v0.3 | `--kernel` (or `--bare`) flag — plug-in runtime architecture for chipset/NASA targets. |
 | [`arena.md`](arena.md) | Locked | v0.2 (A1/A2) + v0.3+ (B) | `arena {}` scope blocks ship v0.2 as the default; explicit `Arena()` + `.reset()` deferred to v0.3+. |
 | [`http-framework.md`](http-framework.md) | Locked | v0.3+ | Supervision-by-default HTTP server. |
+| [`auto-soa.md`](auto-soa.md) | Locked (commitment) | v0.3+ | Compiler auto-transforms `array<shape>` to Struct-of-Arrays layout for hot loops accessing 1-2 fields. User code unchanged; IDE shows the transform as muted hint. |
 | [`packages.md`](packages.md) | Locked design, v0.1 binary-format reservation | v0.1 + v0.2 | Binary package format reserves space for may-block metadata, ownership signatures, kernel flags from v0.1; populated in v0.2. |
 
 ---
@@ -53,6 +54,5 @@ These came up in conversation but were not committed to a design. They live here
 ## Cross-references
 
 - `design/decisions.md` (the main design index that links to these)
-- `design/mvp-scope.md` (the milestone sequence — what's in v0.1, v0.2, etc.)
-- `design/deferrals.md` (features deferred from v0.1 with explicit substitute + trigger — older format, partly overlaps with the parking lot here)
+- `design/mvp-scope.md` (the milestone sequence — what's in v0.1, v0.2, etc., including deferred features with substitutes and triggers)
 - `.claude/rules/plan-invariants.md` (M4+ plans must reference relevant future docs in their `### Runtime Dependencies` section)

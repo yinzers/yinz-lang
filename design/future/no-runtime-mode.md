@@ -68,7 +68,7 @@ runtime.setPanicHandler((info: PanicInfo) -> nothing {
 })
 
 // Once configured, normal Yinz code works
-let buffer = array<int>()              // uses MyKernelAllocator
+let buffer: array<int> = []              // uses MyKernelAllocator
 println("kernel booting")              // uses MySerialWriter
 ```
 

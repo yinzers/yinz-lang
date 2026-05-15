@@ -31,17 +31,56 @@ Click-to-make-explicit must produce real Yinz syntax. The muted hint is what the
 
 The compiler infers across these domains; the IDE shows muted hints in all of them:
 
-| Domain | Example | Muted hint shows |
-|---|---|---|
-| Variable types | `let x = 42` | `: int` after `x` |
-| Function param types (where context allows) | TBD per case | the inferred type |
-| Ownership at call sites | `foo(player)` | `.share` or `.lend` based on signature |
-| Wait points on I/O | `db.fetch()` | `wait` keyword before the call |
-| Lifetimes | always inferred | the lifetime (only shown on request) |
-| Allocators | `let temp = array<int>()` inside an arena block | the active arena |
-| Copy points (trivially-copyable types) | implicit copy | `.copy` where the copy happens |
+Each row shows the muted text the IDE renders directly inline. The text is informative-at-a-glance: enough context for the dev to understand WHAT was inferred and WHY without hovering, while staying concise enough not to clutter the editor. Hover tooltips go deeper (full WHAT/WHAT-INSTEAD/WHY per Golden Rule 11 — see "Hover Tooltip Format" below).
 
-If a new domain emerges (e.g., effect annotations, capability tracking), it joins this list.
+| Domain | Example source | Muted hint rendered inline (informative at a glance) |
+|---|---|---|
+| Variable types | `let x = 42` | `: int (from 42)` after `x` — shows the type AND what the compiler inferred it from |
+| Function param types (where context allows) | `foo(x => x + 1)` where `foo: (int) -> int` is known | `: int` on `x` — shows the type the call site requires |
+| Ownership at call sites | `foo(player)` where `player` is `const` and signature is `share` | `.share (read-only — player is const)` after `player` — shows the modifier AND why this one was picked |
+| Ownership at call sites — mutation | `bar(player)` where `player` is `let` and signature is `lend` | `.lend (function will mutate — see bar's signature)` after `player` — same pattern, cautionary styling |
+| Wait points on I/O | `db.fetch("users")` | `wait (db.fetch may suspend on I/O)` before the call — shows the keyword AND why suspension happens here |
+| Lifetimes | always inferred (only shown on user request) | `'request_scope` — shows the lifetime; on request because lifetime hints are usually noise |
+| Allocators | `let temp: array<int> = []` inside `arena scratch { ... }` | `.in(scratch) — current arena` after the constructor — shows the allocator AND that it's the active scope's arena |
+| Copy points (trivially-copyable types) | implicit copy at a call site, e.g., passing `let n: int` to two functions | `.copy (8 bytes, trivially copyable)` — shows the action AND why it's free |
+| `array<T>` → `fixed<T>` promotion | `let nums: array<int> = [1, 2, 3]` (never grown) | `// promoted to fixed<int, 3> — never grown` after the binding; click rewrites annotation to `fixed<int>` |
+| `let` → `const` (binding never reassigned/mutated/lent) | `let count = 5` (never written after) | `// effectively const — never reassigned` after the binding; click rewrites `let` to `const` |
+
+If a new domain emerges (e.g., effect annotations, capability tracking), it joins this list. Each new entry must follow the same "informative at a glance" pattern: show what the compiler decided AND a one-clause "why" that the dev can read without hovering.
+
+---
+
+## Two Surfaces for the Same Decision (Hybrid Model)
+
+Some auto-promotions surface in BOTH the muted-hint protocol (this file) AND the Tier 3 lint protocol (`design/linting.md`). They're different surfaces with different teaching jobs:
+
+| Surface | Purpose | Always-on? | Action required? |
+|---|---|---|---|
+| **Muted hint** (this protocol) | Show what the compiler decided. Click to make explicit produces typeable source. | Yes — every keystroke | No — informational |
+| **Tier 3 lint suggestion** (yellow squiggle) | Teach best practice. Recommends user rewrite for source-level clarity. | Yes — visible in IDE + compile output | Suggestion — user can ignore |
+
+For `array<T>` → `fixed<T>` and `let` → `const`, BOTH apply: the muted hint shows the inference happened AND the lint suggestion teaches the explicit-form best practice. Both pay off:
+- The muted hint surfaces the perf decision the compiler made (so the user knows the optimization happened, doesn't think they're paying for the slower form).
+- The lint suggestion teaches the explicit form (so reviewers see intent in source and a future `.add()` becomes a compile error rather than a silent codegen change).
+
+### Auto-promotions that get BOTH surfaces
+
+The criterion for using both is: **the explicit form is typeable Yinz syntax**. If the user could write the stricter form in source by hand, both surfaces apply.
+
+- `array<T>` → `fixed<T>` ✓ (`fixed<T>` IS typeable)
+- `let` → `const` ✓ (`const` IS typeable)
+
+### Auto-promotions that get ONLY the Tier 3 lint surface
+
+When the explicit form has no typeable syntax, the muted-hint protocol does NOT apply (it requires click-to-make-explicit to produce real Yinz). Use Tier 3 lint suggestion alone in those cases.
+
+- **Auto-SoA layout transform** (`design/future/auto-soa.md`): no source-level syntax for SoA exists. Tier 3 lint suggestion only; no muted hint.
+
+### Rule of thumb
+
+Compiler made a decision the user could have made themselves in source → both surfaces. Compiler made a decision with no equivalent user-typeable form → Tier 3 lint only.
+
+See `design/collections.md` "Auto-promotion: `array<T>` → `fixed<T>`" section for the canonical hybrid-model rationale.
 
 ---
 

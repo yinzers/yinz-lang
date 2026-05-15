@@ -147,4 +147,4 @@ let x = identity()
 
 **Associated types:** A type contract that requires another type as part of the contract. Not in v0.1. Workaround: use explicit type parameters when needed.
 
-These deferrals don't get entries in `design/deferrals.md` because users won't notice their absence in v0.1 — they're language-design features for advanced cases.
+These deferrals are not documented in `design/mvp-scope.md` because users won't notice their absence in v0.1 — they're language-design features for advanced cases.

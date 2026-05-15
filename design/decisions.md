@@ -30,6 +30,7 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Destructuring | `design/destructuring.md` | Object only, no array, `as` rename, parameter destructuring |
 | Type conversion | `design/type-conversion.md` | Dot methods, no `as` keyword, safe vs unsafe split, no ternary |
 | Concurrency | `design/concurrency.md` | Auto-parallelization, `wait`, `background`, ownership with tasks (optimization DEFERRED to v0.3) |
+| Strings (internal) | `design/strings.md` | UTF-8 internal encoding locked, UTF-8 file I/O default, SIMD-accelerated validation/traversal target |
 | Modules | `design/modules.md` | `import`/`export`, no defaults, no wildcards, root-relative paths, stdlib auto-import |
 | Configuration | `design/config.md` | Three layers, TOML choice, no env splitting, `set` functions |
 | Linting & build | `design/linting.md` | "Compiler IS the linter" — three-tier diagnostics (errors/warnings/suggestions), curated v0.4 rule list, three-part WHAT/INSTEAD/WHY format, customization v1.x |
@@ -52,7 +53,7 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Teaching mission | `design/teaching-mission.md` | First-class language goal — compiler as mentor, three-part diagnostic format, IDE as a teaching surface (muted-hint protocol), university-adoption aspiration |
 | IDE hints protocol | `design/ide-hints.md` | Muted-text protocol for the v0.2 LSP — what gets hinted, styling rules, tooltip format, the click-to-make-explicit guarantee |
 | Open questions | `design/open-questions.md` | Unresolved design decisions |
-| Deferrals | `design/deferrals.md` | Features intentionally not in v0.1 — with substitute and trigger conditions |
+| MVP Scope | `design/mvp-scope.md` | Per-version feature breakdown v0.1–v1.2 + v2+, including deferred features with substitutes and triggers |
 
 ## Future Designs (locked, awaiting implementation milestone)
 

@@ -82,6 +82,8 @@ The default behavior is always the most performant option. Developers opt INTO s
 
 *Why*: Junior developers don't know which choices are fast. If fixed arrays are default, map lookups have a visible type change, and the compiler suggests typed objects over maps — junior code is fast by default. Experienced developers can always opt in to dynamic behavior when they need it.
 
+**Corollary — Auto-Promotion**: when the compiler can prove that a stricter or faster form of code fits the user's actual usage, it picks that form automatically AND surfaces the choice through teaching surfaces. Three things happen: (1) codegen auto-promotes silently for the perf win, (2) a muted IDE hint shows what was decided (when the explicit form is typeable), (3) a Tier 3 lint suggestion teaches the user to write the explicit form. Examples: `array<T>` never grown → `fixed<T>` codegen; `let` never reassigned → `const` enforcement; auto-SoA layout for hot field-access loops; auto-Arc for cross-thread shared state. Yinz's commitment to "fast by design even for inexperienced developers" depends on this pattern. Auto-promotion without teaching is magic; lint-suggestion without auto-promotion punishes laziness — Yinz does both. Full rule + project-creation checklist in `.claude/rules/auto-promotion.md`.
+
 ---
 
 **11. The compiler is a teacher**

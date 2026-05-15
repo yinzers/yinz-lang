@@ -108,11 +108,11 @@ Patterns from Erlang/BEAM and BullMQ. The parent of a `background` task gets not
 
 ```yinz
 let task = background processOrder(order)
-task.onPanic = (e: Panic) => {
+task.onPanic((e: Panic) => {
   log.error("order processing crashed: ${e.message}")
   metrics.bump("order.panic")
   // task is already dead; we just observed and logged
-}
+})
 
 // OR: use stdlib supervisor helpers
 supervise.alwaysRestart(processOrders, onPanic: (e) => log.error(e))
@@ -120,6 +120,71 @@ supervise.alwaysRestart(processOrders, onPanic: (e) => log.error(e))
 ```
 
 The supervisor doesn't "catch" the panic — the panic has already killed the task. The supervisor is notified AFTER cleanup and decides what to do next (log, restart, escalate, ignore).
+
+---
+
+## Background Task Error Observability — Never Silent
+
+A `background` task can fail in two ways: it can panic (covered above) OR it can return an error from its `errors` signature. The panic case is handled by supervisor + `onPanic`. The errors case needs its own contract — and this is where C# `async void`, Go fire-and-forget goroutines, and Node.js unhandled-promise-rejection got it wrong.
+
+### The mistake other languages made
+
+C# `async void` event handlers throw exceptions that propagate to the `SynchronizationContext` and crash the process — there's no caller to catch them. Go goroutines that panic without `recover` take down the whole process; goroutines that just return an error and exit silently lose the error entirely. Node.js unhandled promise rejections were silent for 9 years (until Node 15 made them crash the process).
+
+The pattern: a fire-and-forget task hits an error, no one is waiting to observe it, the error vanishes. Production bug class: "we deployed a new version, errors started happening, we never saw them in logs, customer complained two days later."
+
+### The Yinz contract
+
+When a `background` task's body returns an error (or the task panics), the runtime ALWAYS does ONE of these — never silent:
+
+1. **The handle is observed**: if the spawning code retains the `background` handle and reads from it (`task.waitForResult()`, `task.failed()`, etc.), the error/panic is delivered to that observer normally.
+
+2. **The handle is dropped (fire-and-forget) AND a supervisor is attached**: `onPanic` fires for panics; an analogous `onError` fires for errors. The supervisor decides what to do (log, restart, escalate).
+
+3. **The handle is dropped AND no supervisor is attached**: the runtime emits a structured event to stderr by default. The output format default is plaintext when stderr is a TTY, JSON when stderr is non-TTY (piped to a file, container logs, etc.) — this format-by-destination rule is a NEW decision being locked here for the v0.2 background-task error path; the v0.11 `log` module will adopt the same convention when it ships, but until then this is a runtime-side decision specific to background-task error events. Event includes: task ID, spawn site (file + line), error message, full trace. This is the "never silent" floor — even maximally lazy code that does `background doThing()` and forgets about it gets the error logged.
+
+The v0.2 default behavior (always log to stderr, no reconfiguration) is hardcoded. **Programmatic reconfiguration of the handler ships in v0.8** alongside the `process` module — `process.setBackgroundErrorHandler(...)` and a `process.diagnostics()` query API are v0.8 ADDITIONS to the `process` scope (which currently lists `process.exit/.pid/.startedAt/.uptime/.args/.workingDirectory/.onShutdown/.isRunning` per `design/mvp-scope.md` v0.8 — these two methods join that list). v0.2 ships only the hardcoded default; v0.8 adds the configurability.
+
+The contract holds across both versions: errors are visible, period. Even with a custom handler set in v0.8, the runtime tracks the error count internally — the only thing v0.8 lets you do is REDIRECT where the events go, never SILENCE them.
+
+### Step-by-step pattern (no method chaining)
+
+Per Golden Rule 7 (no method chaining), background error handling uses step-by-step syntax:
+
+```yinz
+// Fire-and-forget — error logged to stderr by default
+background processOrder(order)
+
+// Observed result — caller reads explicitly
+let task = background processOrder(order)
+let result = task.waitForResult()       // blocks until done; returns T errors
+if (result.failed()) {
+  log.warn("order failed: ${result.message}")
+}
+
+// Supervised — onPanic and onError attached as separate method calls, not chained
+let task = background processOrder(order)
+task.onPanic((e) => log.error("panic: ${e.message}"))
+task.onError((e) => log.warn("error: ${e.message}"))
+
+// OR via stdlib supervisor helpers (see design/future/supervisor.md)
+supervise.alwaysRestart(processOrder, onError: (e) => log.warn(e))
+```
+
+NEVER `background fn().onError(...)` chained — that violates Rule 7. Always assign to a handle, then attach handlers as separate statements.
+
+### Why "always log when fire-and-forget" is the right default
+
+The alternative defaults all fail in production:
+- **Silent (Go-style)**: errors vanish, debugging takes days
+- **Crash the process (Node post-15-style)**: one failed background job takes down the server
+- **Require explicit handler at every spawn site (Rust-strict-style)**: too noisy, devs disable lints
+
+Logging to stderr is the boring correct middle: errors are visible, but a single failure doesn't take down the whole process. Production observability (Datadog, Splunk, Loki) picks them up via stderr ingestion.
+
+### Implementation note
+
+The runtime tracks an `(spawn_site, error_count)` map per process. Each `background` call records its spawn site (file + line) when it returns an unobserved error. `process.diagnostics()` exposes this for monitoring tools. The map is bounded — old entries get evicted with their counts rolled into a "long-tail" bucket — to prevent the diagnostics table itself from leaking memory.
 
 ---
 

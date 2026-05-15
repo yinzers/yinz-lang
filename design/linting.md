@@ -79,7 +79,7 @@ Real problems that don't break immediately but indicate bugs.
 | `dead-code` | Compiler-provable unreachable paths |
 | `unreachable-after-return` | Code after a definite `return` |
 | `shadowed-variables` | Re-declaring a name in nested scope |
-| `mutable-when-const-suffices` | `let x = ...` where `x` is never reassigned — suggest `const` |
+| `mutable-when-const-suffices` | `let x = ...` where `x` is never reassigned/mutated/lent — compiler already treats the binding as read-only for optimization purposes; lint suggests writing `const` explicitly for source clarity. Same hybrid model as `prefer-fixed-when-immutable` |
 | `unused-follows` | Type declares `follows X` but uses no contract methods |
 | `assignment-in-condition` | `if (x = 5)` — almost always a typo for `==` |
 | `empty-error-handling` | Catching `.failed()` and doing nothing — silent failure |
@@ -95,8 +95,8 @@ The "compiler-as-teacher" tier. About code quality, performance, and pedagogy, n
 |------|----------|
 | `use-int-for-whole-numbers` | `let count: number = 0` for a counter — suggest `int` (faster) |
 | `avoid-float-for-finance` | `let price: float = 19.99` — suggest `number` (exact decimal) |
-| `use-type-for-static-keys` | `map<string, V>` literal with all-string-literal keys — suggest a `type` |
-| `prefer-fixed-when-immutable` | `array<T>` that never calls `.add()` or `.remove()` — suggest `fixed<T>` |
+| `use-shape-for-static-keys` | `map<string, V>` literal with all-string-literal keys — suggest a `shape` |
+| `prefer-fixed-when-immutable` | `array<T>` that never calls `.add()` or `.remove()` — compiler auto-promotes to `fixed<T>` codegen silently; lint suggests writing `fixed<T>` explicitly for source clarity. Hybrid model — see `design/collections.md` "Auto-promotion" section |
 | `max-function-length` | Functions over 50 lines (default, configurable) — suggest splitting |
 | `max-nesting-depth` | More than 4 levels of nesting (configurable) — suggest restructuring |
 | `long-parameter-list` | 5+ params (configurable) — suggest options object pattern |

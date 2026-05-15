@@ -71,7 +71,8 @@ let chaotic: number<200> = initialCondition
 ```
 let huge: number<5000> = 0.001
 // COMPILE ERROR: number<N> precision is capped at 4096 in v0.1.
-//                If you genuinely need unbounded precision, see design/deferrals.md.
+//                If you genuinely need unbounded precision, see
+//                design/mvp-scope.md#v2--deferred-features (arbitrary-precision-decimal).
 //                File an issue with your workload — the cap is intentional and
 //                we want to know about real cases that exceed it.
 ```
@@ -106,7 +107,7 @@ let angle: float = math.sin(1.5)    // graphics/physics — speed over precision
 
 Use `float` when:
 - You're doing graphics, physics, or simulations
-- You're working with machine learning or tensors (once those land — see design/deferrals.md)
+- You're working with machine learning or tensors (once those land — see design/mvp-scope.md#v2--deferred-features)
 - You've measured that `number` is a bottleneck and a tiny rounding error is acceptable
 
 The IDE warns you if `float` looks wrong:

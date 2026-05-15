@@ -53,7 +53,8 @@ let chaotic: number<200> = startingCondition // 200 digits
 ```
 let huge: number<5000> = 0.001
 // COMPILE ERROR: number<N> precision is capped at 4096 in v0.1.
-//                See design/deferrals.md for the arbitrary-precision deferral.
+//                See design/mvp-scope.md#v2--deferred-features for the
+//                arbitrary-precision deferral.
 ```
 
 **Why 4096:**
@@ -85,7 +86,7 @@ Standard double precision. Same as JS `number`, Rust `f64`, C `double`. Hardware
 
 **Why binary float still has rounding errors** (and why we keep them): `float` is the IEEE 754 binary representation by design. The errors are a property of the format, not bugs. Users opt in to `float` precisely when they want hardware-speed and accept the rounding (graphics, physics, ML). The errors must reproduce IEEE behavior exactly — if Rust's `f64` says `0.1 + 0.2 = 0.30000000000000004`, ours must say the same.
 
-**Sized variants (`f32`):** Deferred to v2+ — see `design/deferrals.md`.
+**Sized variants (`f32`):** Deferred to v2+ — see `design/mvp-scope.md#v2--deferred-features`.
 
 ---
 
@@ -112,4 +113,4 @@ count = count + 1
 
 **Why panic over wrap:** Wrapping is almost always a bug, not a feature. Making the bug loud at the call site is better than silent corruption downstream. Users who genuinely want wrap (rare — usually cryptography, hashing) get to ask for it explicitly with `.wrappingAdd()`. That visibility is good — code review can spot it.
 
-**Sized variants (`int<N>`, `uint<N>`):** Deferred to v2+ — see `design/deferrals.md`.
+**Sized variants (`int<N>`, `uint<N>`):** Deferred to v2+ — see `design/mvp-scope.md#v2--deferred-features`.

@@ -39,13 +39,26 @@ What memory-safety, type-safety, and ownership guarantees must hold after this m
 
 ### `### Performance`
 
-What codegen properties or compile-time guarantees must hold? Includes LLVM attribute emission, monomorphization, optimization-pass requirements.
+What codegen properties or compile-time guarantees must hold? Includes LLVM attribute emission, monomorphization, optimization-pass requirements, AND auto-promotion analysis (per `.claude/rules/auto-promotion.md`).
 
 **Examples (for M4)**:
 - Function parameters with `share` declaration emit LLVM `readonly` attribute
 - Function parameters with `lend` declaration emit LLVM `noalias` + writable
 - `const` bindings passed to functions emit `readonly` regardless of explicit annotation
 - Field access on a `shape` value compiles to a direct memory offset (no indirection)
+
+**Auto-promotion analysis (mandatory subsection from M4 onward)**:
+
+For each new feature, stdlib type, or compiler optimization the milestone introduces, the plan MUST answer:
+- Is there a stricter or faster form the compiler could prove fits in some cases?
+- If yes: which surfaces apply (codegen auto-promotion / muted IDE hint / Tier 3 lint suggestion)?
+- What's the lint rule name (convention: `prefer-X-when-Y`)?
+- What does the muted hint render inline (must be informative-at-a-glance per `.claude/rules/inference.md`)?
+- What's the hover tooltip text (must follow WHAT/WHAT-INSTEAD/WHY per Golden Rule 11)?
+
+If a feature has no auto-promotion candidates, state that explicitly so reviewers know it was considered, not forgotten. Full project-creation checklist lives in `.claude/rules/auto-promotion.md`.
+
+This subsection is mandatory because Yinz's "fast by design even for inexperienced developers" positioning depends on consistently applying the auto-promotion pattern. A feature that ships without considering auto-promotion candidates either leaves perf on the table OR creates the inverse anti-pattern (user must opt in to the fast form). Either failure mode is structural, not cosmetic.
 
 ### `### Teaching`
 

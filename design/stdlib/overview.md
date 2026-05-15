@@ -71,8 +71,8 @@ Each module ships in a specific Yinz version per `design/mvp-scope.md`. The gran
 | `http.server` | **v0.21** | Builds on http client |
 | Logging framework | **v0.22** | Structured logging, sinks, filters; builds on basic `log` |
 | Process spawning | **v0.23** | `process.spawn`, pipes, signals; distinct from v0.8 `process` |
-| `ml` / `tensor` | **v2+** | DEFERRED — see [ml.md](ml.md) and `design/deferrals.md` |
-| `markets` | **v2+** | DEFERRED — see [markets.md](markets.md) |
+| `ml` / `tensor` | **v2+** | DEFERRED — see [ml.md](ml.md) and `design/mvp-scope.md#v2--deferred-features` |
+| `markets` | **v2+** | DEFERRED — see [markets.md](markets.md) and `design/mvp-scope.md#v2--deferred-features` |
 | TCP/UDP networking beyond `http` | **v2+** | DEFERRED |
 | Database drivers | **packages only** | Not in stdlib; community ships via package registry (v1.2+) |
 

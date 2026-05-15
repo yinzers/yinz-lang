@@ -4,7 +4,7 @@ Design decisions that haven't been made yet. When one is resolved, move it to it
 
 Resolved questions are NOT listed here — see `design/decisions.md` for the index of resolved topics.
 
-Deferred features (decided not to ship in v0.1) are NOT listed here either — see `design/deferrals.md` for the ledger.
+Deferred features (decided not to ship in v0.1) are documented per-version in `design/mvp-scope.md` under the version where they're planned to land.
 
 ---
 

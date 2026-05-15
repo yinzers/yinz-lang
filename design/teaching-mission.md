@@ -129,7 +129,7 @@ let x = 42                    // IDE shows muted ": int" → teaches type infere
 foo(player)                   // IDE shows muted ".share" → teaches ownership at call sites
 db.fetch("users")             // IDE shows muted "wait" → teaches I/O suspension
 arena scratch {
-  let temp = array<int>()     // IDE shows muted ".in(scratch)" → teaches arena allocation
+  let temp: array<int> = []     // IDE shows muted ".in(scratch)" → teaches arena allocation
 }
 ```
 

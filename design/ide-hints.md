@@ -33,7 +33,7 @@ Every semantic the compiler figures out from context gets a muted hint:
 | Ownership at call sites | `foo(player)` | `.share` or `.lend` after `player` |
 | Wait points on I/O | `db.fetch()` | `wait` keyword before the call |
 | Lifetimes | always figured out | the lifetime (only shown on request — usually hidden) |
-| Allocator | inside `arena scratch { let a = array<int>() }` | `.in(scratch)` after the constructor |
+| Allocator | inside `arena scratch { let a: array<int> = [] }` | `.in(scratch)` after the constructor |
 | Implicit copy points | trivially-copyable values | `.copy` where the copy happens |
 
 This list extends as new compiler-figured-out semantics emerge (effect annotations, capability tracking, etc.). New entries follow the same protocol — no exceptions.
