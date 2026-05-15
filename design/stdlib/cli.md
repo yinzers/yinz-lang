@@ -22,6 +22,10 @@ terminal.printColor("Error!", "red")
 terminal.clear()
 ```
 
+**Flush semantics**: `terminal.print()` writes to stdout without flushing the buffer. Output is flushed automatically when the buffer fills or the program exits normally. Explicit flushing is `terminal.flush()` — a separate, named call. There is no `terminal.println()` or equivalent that silently flushes.
+
+**Why**: C++'s `std::endl` flushes the output buffer on every call because it combines "newline" and "flush" in one operation. Developers who use it thinking it means "end of line" unknowingly flush on every print, degrading performance by orders of magnitude on buffered output (clang-tidy ships `performance-avoid-endl` specifically for this). Yinz names the operations separately so the cost is always visible at the call site.
+
 ---
 
 ## Interactive Input

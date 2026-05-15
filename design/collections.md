@@ -218,6 +218,126 @@ This pattern qualifies as auto-promotion (per `.claude/rules/auto-promotion.md`)
 
 ---
 
+## Sort — Compiler Auto-Picks Based on Element Type
+
+The primary API is `.sort()`. The compiler picks stable or unstable codegen based on the element type — beginners never have to think about this.
+
+| Element type | Compiler picks | Reasoning |
+|---|---|---|
+| `array<int>`, `array<float>`, `array<bool>`, `array<string>` | Unstable (fast in-place quicksort family) | Equal primitives/strings are interchangeable — there's no "original order" between two `5`s or two `"hello"`s to preserve. Pure speed and memory win. |
+| `array<Shape>` (any composite type) | Stable (TimSort or equivalent) | Equal-keyed shapes might have other fields the user wants preserved in order. Default to safe. |
+| `array<array<T>>`, `array<map<K,V>>`, `array<Entry<K,V>>` | Stable | Same — nested or composite types. |
+
+This is the auto-promotion pattern (per `.claude/rules/auto-promotion.md`):
+- **Codegen**: compiler picks per element type, always. No runtime cost to the decision.
+- **Muted IDE hint**: shows what was picked, e.g., `// unstable sort (int — equal values interchangeable)` or `// stable sort (Shape — equal keys preserve original order)`. Click does NOT have a typeable equivalent for the auto-pick itself, but the explicit override forms below ARE typeable.
+- **Tier 3 lint suggestion**: not generally applicable — the auto-pick is right for ~99% of cases.
+
+### Explicit overrides (rare, opt-in)
+
+For the cases where the auto-pick is wrong, two explicit forms:
+
+- **`.sortFast()`** — forces unstable regardless of element type. Use when the user knows equal items are interchangeable even though they're composite (e.g., `array<Shape>` where the sort key is a UUID and there are no other relevant fields).
+- **`.sortStrict()`** — forces stable regardless of element type. Use when the user knows they need stable behavior even on primitives (the canonical case: multi-step / radix sort, see "Gotcha" below).
+
+Naming follows Golden Rule 12 (human-readable over jargon): `Fast` describes user intent, `Strict` describes the property. Neither uses the word "unstable" (jargon — sounds like "broken" to a non-programmer).
+
+### Multi-step sort detection — compiler upgrades unstable to stable
+
+The compiler also detects in-function multi-step sort patterns and upgrades the auto-pick from unstable to stable. Pattern: two-or-more `.sort()` calls on the same variable, in sequence, with no intervening modifications to the array.
+
+```yinz
+let nums: array<int> = [...]
+nums.sort(n => n % 10)        // muted hint: // unstable sort (int — equal values interchangeable)
+nums.sort(n => n / 10)        // muted hint: // stable sort (multi-step pattern — preserving previous .sort() order)
+                              // Compiler upgraded the auto-pick because nums was already sorted in this function.
+```
+
+This is single-function data-flow analysis — same machinery as `array<T>` → `fixed<T>` proof. Adds the smarts where they pay off and stays out of the way otherwise.
+
+### Cross-function multi-step — explicit `.sortStrict()` needed
+
+The compiler can't easily trace multi-step patterns across function boundaries. If you sort in one function and re-sort in another, the in-function detector won't catch it:
+
+```yinz
+function sortByLow(lend nums: array<int>) {
+  nums.sort(n => n % 10)        // unstable — fine in isolation
+}
+
+function processData(lend nums: array<int>) {
+  sortByLow(nums)
+  nums.sort(n => n / 10)        // unstable — but caller intended this as step 2!
+                                // Compiler can't know — cross-function intent isn't local
+}
+```
+
+For cross-function multi-step, the user must reach for `.sortStrict()` explicitly on the second-and-later sorts. The IDE muted hint showing "unstable" is the visible warning when this matters; cross-function multi-step is rare enough that the explicit-opt-in cost is acceptable.
+
+### Why type-based auto-pick is the right default
+
+JavaScript's sort was unstable-by-spec from 1995 to ES2019 — 24 years. V8 used QuickSort for arrays >10 elements; SpiderMonkey used a different algorithm. Same code produced different sort orders across browsers AND across array sizes. Applications relying on sort order for deterministic rendering or test comparisons silently broke when array size crossed the threshold or browser changed (https://v8.dev/features/stable-sort).
+
+Java got it right by accident — `Collections.sort()` has been stable since at least JDK 1.4 because objects HAVE hidden state worth preserving. `Arrays.sort(int[])` is unstable because primitives don't. Yinz formalizes this intuition: the compiler picks based on what the type permits.
+
+### Performance characteristics
+
+- **Stable (TimSort family) on nearly-sorted data**: O(n) — detects existing runs and merges them. 16M-element benchmark: 0.15s vs 2.21s for introsort = 14× faster.
+- **Stable (TimSort family) on random data**: O(n log n) with ~20-30% overhead vs an in-place quicksort due to auxiliary memory and merge work.
+- **Unstable (introsort / dual-pivot quicksort)**: O(n log n), in-place, no auxiliary allocation, fastest on random primitive data.
+
+### Glossary — what "stable" actually means
+
+If you're not sure: when two items compare equal, **stable** keeps their original relative order. **Unstable** makes no guarantee — equal items can end up in any order, and different runs can produce different results.
+
+```yinz
+let users = [
+  { name: "Alice", age: 30 },
+  { name: "Bob",   age: 25 },
+  { name: "Carol", age: 30 },
+]
+
+users.sort(u => u.age)
+// STABLE     (always):     [Bob, Alice, Carol]   — Alice before Carol because input order said so
+// UNSTABLE   (possible):   [Bob, Alice, Carol]   — but could also be [Bob, Carol, Alice]; undefined
+```
+
+When stability matters in real code:
+
+1. **Multi-step sorting**: sort by name first, then by age. Stable keeps people alphabetical WITHIN each age group; unstable scrambles them.
+2. **UI rendering**: re-sorting a table by clicking a column header. Stable means equal-valued rows don't jump around — visually less jarring.
+3. **Test reproducibility**: stable sort gives identical output every run on every machine. JavaScript's 24-year unstable-spec window caused a generation of "test passes locally, fails in CI" bugs.
+4. **Audit trails**: sorting log entries by timestamp. Two events with the same timestamp must stay in the order they were logged.
+
+When stability doesn't matter (so unstable wins on speed AND memory):
+- Sorting primitives — equal numbers are interchangeable, no original order between two `5`s
+- Sorting then immediately discarding (e.g., `.sort().first()` to find the minimum)
+- Any collection where equal items are truly fungible
+
+The auto-promotion pattern (per `.claude/rules/auto-promotion.md`) applies: when the compiler can detect a sort target is a `fixed<T>` of a primitive type AND the sorted result isn't passed to anything depending on stability, the IDE shows a Tier 3 lint suggestion `prefer-unstable-sort-for-numeric-collections` recommending `.sortUnstable()` for the perf win. No codegen auto-swap (semantics differ — different equal-keyed element ordering); user makes the call.
+
+---
+
+## Map Literals Pre-Size at Compile Time
+
+When a `map<K, V>` is constructed with a literal initializer where the entry count is known at compile time, the compiler emits codegen that pre-sizes the internal Swiss Table to fit the literal's entries with no-resize headroom. No runtime resize storm.
+
+### Why this matters
+
+Java `HashMap` initialized with `new HashMap()` resizes ~16 times when populated with 1M entries (https://www.baeldung.com/java-hashmap-optimize-performance). Each resize copies all existing entries. Pre-sizing to the known count eliminates all resizes — pure compile-time work that beginners never do because the literal-form constructor doesn't expose a capacity parameter in most languages.
+
+### Auto-promotion (codegen-only)
+
+Per `.claude/rules/auto-promotion.md`:
+- **Codegen**: compiler counts entries in the literal initializer, allocates the Swiss Table at `ceil(N / load_factor)` buckets directly. Always applies when the count is statically knowable.
+- **Muted IDE hint**: not applicable — there is no surface syntax for "pre-sized map" (no `map<K, V>(capacity: N)` form exists in v0.1, and adding one would create a parallel API per `.claude/rules/stdlib-design.md` Rule 2). The user can't write the explicit form, so the muted-hint protocol doesn't fit.
+- **Tier 3 lint suggestion**: `prefer-presized-map` fires when a map is constructed via `.set()` calls in a loop with a known iteration count (e.g., a literal range or array length) — suggests rebuilding as a literal initializer or noting that the loop pattern misses the pre-size optimization.
+
+### Tradeoff
+
+A pre-sized map for a 3-entry literal is slightly larger than the smallest possible bucket array (typically 16 buckets even for 3 entries). The "wasted" headroom is negligible for small maps and saves real resize work for medium-to-large literals.
+
+---
+
 ## `array<T>` Growth Factor — 1.5×
 
 When `array<T>` runs out of capacity, it grows by **1.5×** (Java/Folly choice). Locked.

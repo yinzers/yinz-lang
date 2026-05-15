@@ -54,6 +54,73 @@ Specific algorithm choice (Boyer-Moore-Horspool vs SSE4.2 PCMPESTRI vs Two-Way) 
 
 ---
 
+## Small String Optimization — 23-byte Inline Threshold
+
+**This is NOT a maximum string length.** Yinz strings can be any length up to available memory (the type's length field is `int` / i64, so ~9.2 quintillion bytes — effectively unlimited). What the 23-byte threshold controls is **where the bytes physically live in memory**, transparently to user code.
+
+| String length | Storage | Access cost |
+|---|---|---|
+| ≤ 23 bytes | Inline in the 24-byte string value itself (stack or struct) | 1 cache line, no pointer chase |
+| > 23 bytes | Heap-allocated; the string value holds a pointer + length | One pointer chase to the heap |
+
+From the user's perspective, both behave identically — `.count()`, `.byteAt()`, `.contains()`, every string operation works the same way. The compiler picks the storage layout based on length; the user never has to think about it.
+
+**The threshold is fixed and documented — not implementation-defined.**
+
+### Why 23 bytes, fixed
+
+C++ `std::string` has Small String Optimization but the threshold is implementation-defined: 15 bytes on GCC libstdc++, 22 bytes on LLVM libc++. Code tuned for one threshold heap-allocates on the other (https://giodicanio.com/2023/04/26/cpp-small-string-optimization/). Worse, the threshold is part of the ABI — changing it later requires every dependent binary to be recompiled. No-SSO benchmarks show ~2× slowdown vs SSO for short-string-heavy workloads (29ms vs 14ms for 1M push_back ops on x64 i7 @3.40GHz, per https://sqlpey.com/c++/small-string-optimization-sso/).
+
+23 bytes is chosen because:
+- Fits the natural value-type size for a 24-byte string struct on 64-bit (one cache-line-eighth, fits in two registers)
+- Covers the vast majority of real-world short strings: identifiers, labels, short keys, file extensions, short user-facing text
+- Matches libc++ (22 bytes) and Rust's small string strategies — already industry-validated
+- Locking now means future Yinz binaries have a stable string ABI
+
+### Auto-promotion (codegen + muted hint)
+
+Per `.claude/rules/auto-promotion.md`:
+- **Codegen**: every short string literal (≤ 23 bytes) is stored inline. No heap allocation. Always applies.
+- **Muted IDE hint**: when the compiler can statically prove a string variable will only ever hold values ≤ 23 bytes (e.g., a `shape` field initialized only from short literals, a const string), the IDE shows `// fits inline — no heap` confirming the perf decision.
+- **Tier 3 lint suggestion**: not applicable — there's no source-level rewrite to suggest. The user wrote a string; the compiler picked the storage. No explicit form to "make explicit."
+
+### Tradeoff
+
+The 23-byte threshold is an ABI commitment. A future architecture with wider SIMD registers (e.g., AVX-512 routinely available, so a 64-byte inline could be defended) might benefit from a larger threshold — but that's an ABI break, not a swap. We accept the 23-byte ceiling as the right tradeoff for 2026 and forward-compatible with the next decade of typical workloads.
+
+---
+
+## Locale-Invariant Case Operations Default
+
+`.toLowerCase()` and `.toUpperCase()` on Yinz strings are **locale-invariant** — Unicode case-folding algorithm, NOT locale-specific. There is NO "use the system locale" default for case operations in stdlib.
+
+Locale-aware case conversion exists on a separate, explicitly-named pair of methods: `.toLowerCaseLocale(locale)` and `.toUpperCaseLocale(locale)`. The naming makes the distinction visible at every call site without requiring documentation lookup.
+
+### Why locale-invariant default — Turkish-I
+
+In Turkish locale (`tr_TR`), uppercase `I` lowercases to `ı` (dotless i) rather than `i`, and lowercase `i` uppercases to `İ` (dotted I) rather than `I`. ANY security check that normalizes case before comparison breaks silently in Turkish locale if it uses locale-sensitive case conversion.
+
+Documented production failures:
+- **OpenSSL 3.0**: cipher name matching broke in Turkish locale (https://developers.redhat.com/articles/2022/06/15/openssl-30-dealing-turkish-locale-bug)
+- **Apache Spark**: SQL keyword parsing broke (SPARK-20156, https://issues.apache.org/jira/browse/SPARK-20156)
+- **VS Code, .NET, PHP, JavaScript frameworks**: all had documented Turkish locale issues as of 2025
+- **Phil Haack's analysis**: https://haacked.com/archive/2012/07/05/turkish-i-problem-and-why-you-should-care.aspx/
+
+The pattern: a developer in en-US writes `inputName.toLowerCase() == "admin"` to allow case-insensitive role checks. Code works in dev. Customer in Turkey uses the system; their browser sends `İSTANBUL` for their location header; case-insensitive matching against `"istanbul"` fails because the locale-aware lowercase produces `i̇stanbul` (with combining mark). Authentication or data routing breaks in production for users in one locale only — extremely hard to reproduce, easy to attribute to "weird customer issue."
+
+### Why an explicit locale-aware variant exists
+
+Some legitimate i18n code DOES need locale-aware case conversion (displaying user-facing text in the user's locale). That use case is real but narrow — UI rendering, NOT security comparisons. The explicit `.toLowerCaseLocale(locale)` form serves that need and makes the locale dependency visible at the call site.
+
+This extends `.claude/rules/stdlib-design.md` Rule 3 (no silent platform-dependent defaults) to string case operations. The pattern: defaults protect the security-sensitive case; the i18n display case is opt-in with a visible parameter.
+
+### Cross-references
+
+- `.claude/rules/stdlib-design.md` Rule 3 (no platform-default config)
+- `lockin-build-and-crossplat.md` Finding #9 for the source data on Turkish-I production failures
+
+---
+
 ## What This Doc Does NOT Cover
 
 - **The user-facing API** (methods like `.split()`, `.toUpperCase()`, etc.) — that's `spec/strings.md` and the v0.6+ stdlib expansion.

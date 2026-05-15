@@ -107,3 +107,32 @@ The TOML format does not constrain install speed. Speed comes from the install m
 - **Native binary.** No Node.js startup overhead (npm's slowest 200ms).
 
 These mechanisms together get us to bun-class install times regardless of the text-format lock file.
+
+**Windows note**: hard-links work without administrator elevation on Windows (unlike symlinks). The install mechanism never uses symlinks — hard-links throughout. Before shipping Windows support, verify that the `yinz_modules/` layout does not produce paths exceeding 260 characters (Windows legacy MAX_PATH limit) for deeply nested packages. The flat cache + hard-link model shouldn't create extra nesting, but this must be tested explicitly.
+
+---
+
+## Registry Policy — Immutability and No Unpublish
+
+Published packages are **immutable and permanent**. Once a version is published to the Yinz registry, it cannot be deleted or modified.
+
+- **No unpublish.** There is no `ynz unpublish` command. A published version stays accessible forever. This is the lesson from the npm left-pad incident (March 2016): 11 lines of code that 2.5 million downloads/month depended on, deleted by its author, broke builds at Facebook, Netflix, PayPal, and Spotify within hours. The "author owns existence" model is incompatible with a reliable ecosystem.
+- **Archive instead of delete.** Package authors can mark a package as **archived** — indicating it is no longer maintained. Archived packages remain fully installable; the archive flag is a maintenance-status signal, not a removal. `ynz add` will warn when adding an archived package as a new dependency.
+- **Content-addressed storage is the enforcement mechanism.** The lock file records `checksum = "sha256:..."` per package version. The registry stores packages by content hash. There is no registry-side mutation path that could silently serve different bytes under the same version string.
+- **Semver ranges still carry risk.** The lock file + checksums guarantee bit-for-bit reproducibility for committed lock files. For fresh installs against version ranges (before the lock is committed), the registry's immutability means at least the resolved version is always the same bytes. Behavioral changes in new minor/patch versions remain the author's responsibility — the registry cannot enforce semver compliance programmatically.
+
+Full registry design (auth, publishing, search, namespacing) deferred to `design/registry.md` when v0.2+ registry work starts.
+
+---
+
+## No Install-Time Code Execution
+
+Yinz packages **cannot declare code to run at install time**. No `postinstall` scripts, no `build.rs` equivalent, no lifecycle hooks in `yinz.toml`.
+
+`ynz install` fetches tarballs, verifies checksums, and hard-links files. It never executes package-provided code. This is not configurable.
+
+**Why**: npm's `postinstall` and Cargo's `build.rs` both allow arbitrary code execution during installation. Both have been used as supply-chain attack vectors — running as the installing user with full filesystem access. The March 2026 Axios npm attack used a malicious dependency's postinstall script to deploy a cross-platform RAT. The pattern cannot be made safe while remaining permissive: pnpm v10 disabled postinstall by default in 2024; npm has not followed suit as of 2025 because too much of the ecosystem depends on it.
+
+Yinz starts from zero. There is no `postinstall` to be backward-compatible with.
+
+**FFI compilation (v2+)**: when FFI ships, native library compilation will be addressed via a sandboxed, opt-in mechanism that the consumer explicitly enables — not a publisher-declared hook that runs silently on install. The design for that mechanism lives in `design/ffi.md` when FFI is designed.

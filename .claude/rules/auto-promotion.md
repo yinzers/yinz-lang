@@ -64,6 +64,65 @@ This is the practical mechanism behind Golden Rule 10 ("efficiency first, dynami
 
 ---
 
+## Override Patterns — Consider Both Directions
+
+When the compiler auto-picks between two-or-more options, the user sometimes needs to override the choice. Evaluate BOTH directions:
+
+1. **"Force the auto-pick"** — when the compiler MIGHT pick something different but the user knows the auto-pick is right for THIS case
+2. **"Force the OTHER pick"** — when the auto-pick is wrong for THIS specific case
+
+For each direction, decide:
+
+| Question | If YES | If NO |
+|---|---|---|
+| Is there a real use case where a user needs this override? | Define an explicit form | Document the deliberate omission with rationale |
+| Does existing syntax already provide it? (e.g., `const` vs `let`, `fixed<T>` vs `array<T>`) | Document that and skip — no new API needed | Add a new explicit method, modifier, or flag |
+| Would the explicit form create a parallel API per `stdlib-design.md` Rule 2? | Skip OR redesign so it doesn't | Define it |
+| Is the auto-pick locked at the ABI level? (e.g., SSO threshold, UTF-8 encoding) | Skip — ABI lock prohibits override | N/A |
+
+### Examples — both directions present
+
+**Sort** (`design/collections.md`): auto-picks based on element type AND multi-step pattern. Both override forms exist:
+- `.sortFast()` — force unstable regardless of type
+- `.sortStrict()` — force stable regardless of type
+- The two forms are needed because real users hit cases the auto-pick gets wrong (composite type with interchangeable equal items → want fast; cross-function multi-step on primitives → want strict).
+
+**Map hashing tier** (`design/collections.md` — surface syntax TBD M4): auto-picks SipHash safe / xxhash3 fast / perfect-hash / identity-hash. Two override forms WILL be needed:
+- "Force fast" — for trusted-key workloads where the user proves keys aren't attacker-controlled
+- "Force adversarial-safe" — for the rare case where the compiler picked fast (e.g., string-literal-keyed map that ALSO accepts dynamic keys later) and the user wants to force safe
+
+When M4 implements map syntax, BOTH override forms must be designed together with consistent naming.
+
+### Examples — one direction present, one default
+
+**Static dispatch on `follows`** (`design/type-system.md`): auto-picks static when concrete type is known. Override form: `dynamic Foo` for the case where the user explicitly wants runtime-lookup dispatch on a stored value. The reverse (force static when type is unknown) is impossible — the compiler can't manufacture knowledge it doesn't have.
+
+**Auto-Arc cross-thread** (`design/future/concurrency.md`): auto-wraps in Arc when value crosses thread boundary. Override form: `.give` or `.copy` at the spawn site to avoid Arc. The reverse (force Arc when no boundary crossing) doesn't make sense — Arc has cost, and if the compiler doesn't need it, manufacturing it would be pointless.
+
+### Examples — both directions handled by existing syntax
+
+**`array<T>` → `fixed<T>` promotion** (`design/collections.md`): both directions are expressible via the type annotation itself.
+- Force fixed: write `let nums: fixed<int> = [1,2,3]` — explicit type annotation
+- Force array: write `let nums: array<int> = [1,2,3]` and use `.add()` later — type and usage both express intent
+
+No new API needed. The lint suggestion teaches users about the auto-promotion; the explicit form is just typing the type they meant.
+
+**`let` → `const` promotion** (`design/linting.md`): same pattern — both keywords already exist.
+
+### Examples — deliberate no-override
+
+**Shape field auto-reorder** (`design/collections.md`): no opt-out keyword for pure Yinz code. Rationale: the only legitimate reasons to pin layout (FFI, wire format, memory-mapped hardware) are handled at the BOUNDARY (FFI binding, serializer codegen, kernel-mode plug-in) — not in the shape declaration. A `layout: c` modifier would create work for users that the boundary already handles.
+
+**Auto-SoA layout transform** (`design/future/auto-soa.md`): same rationale. v0.3 may add an opt-in `soa array<T>` if a real use case emerges, but the default-and-only path is "compiler picks." If pressure builds, revisit.
+
+**Map literal pre-size** (`design/collections.md`): no `map<K, V>(capacity: N)` opt-in. Rationale: would create a parallel API per `stdlib-design.md` Rule 2. Pre-sizing is purely a codegen optimization that can't be observably distinguished from the user's perspective.
+
+**SSO 23-byte threshold** (`design/strings.md`): no override. Rationale: ABI-locked. Override would force every dependent binary to recompile.
+
+**UTF-8 internal encoding** (`design/strings.md`): no override. Rationale: ABI-locked AND any alternative would have its own pitfalls (UTF-16 = Java's 21-year mistake).
+
+---
+
 ## Project-Creation Checklist
 
 When designing ANY new language feature, stdlib type, or compiler optimization, add to your design doc an explicit "Auto-Promotion Analysis" subsection answering:
@@ -78,6 +137,12 @@ When designing ANY new language feature, stdlib type, or compiler optimization, 
 - [ ] **What does the muted hint render inline?** (Must be informative-at-a-glance per `.claude/rules/inference.md` "Muted hint shows" column)
 - [ ] **What does the hover tooltip say?** (Must follow WHAT/WHAT-INSTEAD/WHY per Golden Rule 11)
 - [ ] **What's the user-facing teaching error if the analysis fails the proof?** (e.g., user wrote `fixed<T>` then `.add()` — compile error must explain why and suggest `array<T>`)
+- [ ] **OVERRIDE-DIRECTION ANALYSIS** (per "Override Patterns — Consider Both Directions" above):
+  - **Force-the-auto-pick override**: is there a real use case where the user wants to FORCE the compiler's choice even though the compiler might pick differently in this context? If yes, define the explicit form. If no, document why not.
+  - **Force-the-OTHER-pick override**: is there a real use case where the auto-pick is wrong for THIS specific case and the user needs the alternative? If yes, define the explicit form. If no, document why not.
+  - **Naming consistency**: if both override forms are needed, name them consistently (e.g., `.sortFast()` and `.sortStrict()`, or `<thing>Fast()` and `<thing>Strict()`, or some other convention — pick one and stick to it).
+  - **Existing syntax check**: if both directions are already expressible via existing syntax (e.g., `fixed<T>` vs `array<T>` annotation), document that and skip adding new APIs.
+  - **ABI / parallel-API check**: if an override would break ABI (SSO threshold), violate `stdlib-design.md` Rule 2 (no parallel APIs), or have no observable difference, document the deliberate omission with rationale.
 
 If the new feature has no auto-promotion candidates (rare — most stdlib types and language features have at least one), state that explicitly so reviewers know it was considered, not forgotten.
 

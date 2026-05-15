@@ -54,6 +54,163 @@ Shape matching like TypeScript. If the fields match the type, the value is valid
 
 ---
 
+## Static Dispatch Default for `follows` Constraints
+
+When a function is generic over a `follows` constraint AND the concrete type at the call site is known to the compiler, the compiler **generates a specialized version per concrete type** and pastes the called methods directly into the loop (no function-call overhead, no runtime lookup). This is "static dispatch" — the dispatch decision is made at compile time. Dynamic dispatch (runtime lookup, no inlining) is the explicit opt-in for the case where the concrete type cannot be known until runtime.
+
+Locked: static dispatch is the default. Dynamic dispatch requires explicit syntax.
+
+> **Internal terminology note**: this technique is called *monomorphization* in compiler literature ("one shape per concrete type"). That word is BANNED from user-facing diagnostics, IDE hints, and spec docs per Golden Rule 12 — even the design doc you're reading should prefer "specialized version per type" so a jr dev contributing to Yinz isn't blocked by jargon. The internal term is documented here once and referenced in contributor-only compiler-internals docs (`crates/ynz-codegen/`); user-facing surfaces use the plain phrase.
+
+### Concrete example
+
+```yinz
+// Define a contract — any shape can follow it by implementing compare()
+shape Comparable {
+  function compare(share self, share other: Self) -> int
+}
+
+// Two shapes that follow the contract
+shape Player follows Comparable {
+  name: string
+  health: int
+
+  function compare(share self, share other: Player) -> int {
+    return self.health - other.health
+  }
+}
+
+shape Item follows Comparable {
+  name: string
+  weight: int
+
+  function compare(share self, share other: Item) -> int {
+    return self.weight - other.weight
+  }
+}
+
+// A generic function — works on anything that follows Comparable
+function findMax<T follows Comparable>(share items: array<T>) -> maybe T {
+  // ... walk the array, keep the largest per .compare()
+}
+
+// CASE A — concrete type known → STATIC DISPATCH (auto-picked, fast)
+let players: array<Player> = [...]
+let best = findMax(players)
+// Compiler generates a specialized findMax just for Player; .compare() is pasted inline.
+// Cost: ~1 CPU instruction per .compare()
+// IDE muted hint: // static dispatch (T = Player)
+
+// CASE B — heterogeneous collection → DYNAMIC DISPATCH (user opt-in via `dynamic`)
+let mixedThings: array<dynamic Comparable> = [player1, item1, player2]
+let maxThing = findMax(mixedThings)
+// Compiler can't generate a specialized version — array holds different concrete types.
+// Each .compare() = runtime lookup ("which compare() do I call for THIS element?") + indirect function call.
+// Cost: ~3 CPU instructions + likely cache miss per .compare()
+```
+
+### Why this matters
+
+Go ships with always-dynamic interface dispatch — even when only one concrete type ever satisfies an interface at a given call site, Go can't skip the runtime lookup without profile-guided optimization. Polar Signals' benchmark shows ~3× overhead in tight loops: 958 µs (interface dispatch) vs 320 µs (concrete type dispatch) per 1024 iterations (https://www.polarsignals.com/blog/posts/2023/11/24/go-interface-devirtualization-and-pgo). Yinz inherits Rust's correct model — generate a specialized version when the type is known, runtime lookup only when the user explicitly opts in via `dynamic`.
+
+### When you actually need `dynamic`
+
+Rare in practice. Real cases:
+- **Heterogeneous collections** — UI tree where leaves are buttons, sliders, text boxes (all `Drawable`), stored in `array<dynamic Drawable>` for rendering
+- **Plugin architectures** — types loaded from packages at runtime
+- **Stored callback collections** — arrays of different function-shaped values
+
+For 95% of code, the user writes generic functions and the compiler picks static dispatch automatically. `dynamic` is only needed when the heterogeneity is the actual feature.
+
+### Teaching surfaces — both directions get IDE hints
+
+Per Golden Rule 11 (compiler is teacher) and `.claude/rules/auto-promotion.md`, both dispatch cases get visible teaching at the call site, plus a lint when the user opted into dynamic unnecessarily.
+
+#### Static dispatch — neutral muted hint
+
+```yinz
+let best = findMax(players)        // muted: // static dispatch (T = Player) — .compare() inlined, ~1 cycle
+```
+
+Hover tooltip:
+- **WHAT**: A specialized version of `findMax` was generated for `Player`. The `.compare()` call is pasted directly into the loop body — no function-call jump.
+- **WHAT INSTEAD**: To explicitly force dynamic dispatch (rare — only useful for benchmarking), wrap the input as `array<dynamic Comparable>`.
+- **WHY**: The compiler knew the concrete type at this call site. Static dispatch is ~3× faster than runtime lookup in tight loops.
+
+#### Dynamic dispatch — cautionary muted hint (red-tinted per `.claude/rules/inference.md`)
+
+```yinz
+let maxThing = findMax(mixedThings)   // muted (red-tinted): // dynamic dispatch — runtime lookup per .compare(), ~3× cost
+```
+
+Hover tooltip:
+- **WHAT**: This call uses runtime lookup because `mixedThings` is `array<dynamic Comparable>` — the concrete type at each iteration isn't known at compile time.
+- **WHAT INSTEAD**: If all elements are actually the same concrete type, switch to `array<Player>` for static dispatch (~3× faster).
+- **WHY**: You wrote `dynamic Comparable` to allow heterogeneous storage. The cost is one runtime lookup + indirect call per `.compare()`.
+
+#### Tier 3 lint when dynamic could have been static
+
+```yinz
+let things: array<dynamic Comparable> = []   // yellow squiggle from `prefer-static-dispatch-when-monotype`
+things.add(player1)
+things.add(player2)
+// All elements are Player. The dynamic wrapper is unnecessary.
+```
+
+The lint fires when the compiler can prove the `dynamic` collection only ever holds one concrete type. Suggested fix: change to `array<Player>` for the perf win.
+
+#### Compile errors when contract isn't followed (Rule 11 format)
+
+```
+COMPILE ERROR: Item is not a Player.
+  Player and Item are different types — array<Player> only holds Players.
+
+  To store a mix of Comparable shapes, declare:
+    let things: array<dynamic Comparable> = []
+
+  This adds runtime dispatch cost (~3× per .compare() call) but allows mixed types.
+```
+
+```
+COMPILE ERROR: Foo does not follow Comparable.
+  findMax requires elements to follow the Comparable contract.
+
+  To make Foo work with findMax, add:
+    shape Foo follows Comparable {
+      name: string
+      function compare(share self, share other: Foo) -> int { ... }
+    }
+
+  See spec/operators.md for contract implementation patterns.
+```
+
+All four diagnostics (two muted hints + one lint + two compile errors) follow WHAT/WHAT-INSTEAD/WHY. None use jargon (`monomorphization`, `vtable`, `devirtualization` are internal compiler terms — user-facing diagnostics say "specialized version per type" and "runtime lookup").
+
+### Why this matters
+
+Go shipped with interface dispatch always being dynamic. Polar Signals' production benchmark (https://www.polarsignals.com/blog/posts/2023/11/24/go-interface-devirtualization-and-pgo) shows ~3× overhead in tight loops: ~958 µs (interface dispatch) vs ~320 µs (concrete type dispatch). Even when only one concrete type ever satisfies the interface at a given call site, Go can't skip the runtime lookup without profile-guided optimization. Yinz inherits Rust's correct model — `follows` is the contract, generating a specialized version per concrete type is the codegen — so this overhead doesn't exist by default.
+
+### Auto-promotion (per `.claude/rules/auto-promotion.md`)
+
+This pattern qualifies as auto-promotion (codegen surface only):
+- **Codegen**: when the compiler proves the concrete type at a call site, it emits the static-dispatch version. Always applies when proof is possible.
+- **Muted IDE hint**: optional — the IDE can show `// static dispatch (T = Player)` on the call to confirm what was chosen.
+- **Tier 3 lint suggestion**: not applicable — there's no source-level rewrite that improves things; the user wrote idiomatic generic code and the compiler handled it.
+
+### Dynamic dispatch — when and how
+
+Dynamic dispatch is needed when the concrete type genuinely isn't known until runtime — e.g., a heterogeneous collection of values that all satisfy a contract but are different types. Surface syntax for the opt-in is TBD at M4 implementation. Candidate: `dynamic Drawable` (matches Yinz's plain-English vocabulary; explicitly NOT `dyn Drawable` — `dyn` is Rust jargon and violates Golden Rule 12).
+
+### Tradeoff
+
+Generating a specialized version per concrete type produces more machine code than a single runtime-dispatched implementation. For very large programs with many concrete types satisfying the same contract, binary size grows proportionally. Mitigated by:
+1. Monomorphization deduplication (per `design/compiler.md` Generics & Monomorphization section) — identical instantiations share LLVM IR
+2. Opt-in dynamic dispatch (`dynamic ...` in stored-value contexts) recovers code size when that matters
+
+The default favors perf; the opt-in covers binary-size-constrained cases.
+
+---
+
 ## Generics — `name<T>` Syntax
 
 `type Box<T> { value: T }` — angle bracket generics, same pattern as built-in collections.

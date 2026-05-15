@@ -84,6 +84,91 @@ See `design/collections.md` "Auto-promotion: `array<T>` → `fixed<T>`" section 
 
 ---
 
+## Three Placement Categories — Each Has Exactly One Correct Surface
+
+Muted hints don't all use the same IDE surface. The category determines which surface the LSP MUST render. **Mixing surfaces within a category is forbidden** — consistency is what makes the protocol learnable.
+
+### Test for which category applies
+
+Ask: "could the user have typed something in source to make this explicit?"
+- **At a specific position** → Addition
+- **By replacing existing text** → Replacement
+- **No, it's a pure compiler/runtime choice** → Informational
+
+Pick once at design time. The category locks the surface.
+
+### 1. Addition — in-position muted text
+
+User could have typed the explicit form IN A SPECIFIC POSITION but didn't. The muted text appears at that exact position. Click → the text gets typed into source.
+
+```yinz
+let i = 4                              // muted `: int` between `i` and `=`
+foo(player)                            // muted `.share` after `player`
+let queue = channel<Order>()           // muted `64` INSIDE the empty parens
+db.fetch("users")                      // muted `wait` BEFORE the call
+arena scratch { let temp = array<int>() }   // muted `.in(scratch)` after the constructor
+```
+
+Zero source-vs-render ambiguity. Click-to-make-explicit is trivial — the muted bytes get inserted at the position they're rendered. Visibility is passive (you see the info while reading the file; no hover needed).
+
+### 2. Replacement — visual decoration on existing token + hover (LOCKED: Option D)
+
+User picked one form, compiler picked another. The explicit form would REPLACE source bytes, not add to them.
+
+Examples:
+- `array<T>` → `fixed<T>` promotion: source has `let nums: array<int> = ...`, alternative form is `fixed<int, 3>`
+- `let` → `const`: source has `let x = 5`, alternative form is `const`
+
+**Locked rendering**: the existing token (`let`, `array<T>`) gets a **visual decoration** — dotted underline, subtle color shift, or small marker — indicating "alternative form available." The alternative form lives in the **hover tooltip**, not as inline text.
+
+```yinz
+let count = 5
+// IDE renders `let` with a dotted underline.
+// Hover on `let`:
+//   WHAT: This `let` is treated as `const` because count is never reassigned/mutated/lent.
+//   WHAT INSTEAD: Click to convert `let` → `const` in source.
+//   WHY: const enables stronger compiler optimizations (readonly attribute) and signals
+//        intent to readers; auto-promote already happened so no perf change.
+```
+
+**Why decoration + hover, NOT inline-replace, NOT side-by-side bracket annotation, NOT comment-after**:
+- Inline-replace breaks cursor positioning (where does the cursor go in `let` vs `const`?) and creates "what I see ≠ what's in the file" confusion
+- Side-by-side bracket (`let [const] = 5`) looks like double-keyword syntax that doesn't exist
+- Side-by-side at end of line (`let count = 5  [const]`) puts the annotation far from what it modifies; gets lost on long lines
+- Comment-style is too much for one-keyword info — adds visible width without proportionate teaching value
+- Decoration matches existing IDE conventions (deprecated APIs, unused imports, lint squiggles); users already know "decoration = look here"
+
+**Fallback for editors without decoration support** (rare in 2026 — bare `vim` without LSP, etc.): the IDE may fall back to end-of-line annotation `let count = 5  [const]` or simply omit the hint. Bare-text editors (`cat`, `less`) see only the source bytes, which is correct — they're not rendering anything anyway.
+
+Visibility is ACTIVE (requires hover). For replacements, this is the right tradeoff — the info is one keyword and the user can scan for decorations.
+
+### 3. Informational — comment-style passive annotation
+
+The compiler made a decision that has NO equivalent source form the user could have written. The annotation appears as a muted comment near the relevant expression.
+
+```yinz
+findMax(players)              // muted: // static dispatch (T = Player) — .compare() inlined
+background process(data)      // muted: // routed to CPU pool — no may-block calls in call graph
+```
+
+There's no Yinz syntax for "static dispatch" or "route to CPU pool" — these are codegen and scheduler choices, not typeable forms. Comment-style is the only protocol-compatible surface.
+
+**Why comment-style for informational, NOT decoration-only**:
+- Informational decisions carry MULTI-CLAUSE info ("static dispatch (T = Player) — .compare() inlined, ~1 cycle")
+- Decoration-only would require ACTIVE hover to discover any of that text
+- The teaching mission depends on PASSIVE visibility — the dev learns by reading their own annotated code
+- Replacement's one-keyword info fits in a tooltip; informational's multi-clause info does not
+
+Visibility is PASSIVE. The whole point is the dev sees the compiler's reasoning while reading.
+
+### Consistency rule — one category, one surface
+
+If you propose a new inference domain, pick ONE category and use ONLY that category's surface. Don't mix (e.g., "use comment-style sometimes and decoration other times for the same domain"). The whole point of these three categories is the LSP implementer can write one renderer per category and apply it everywhere.
+
+If a domain seems to fit multiple categories, the test in "Test for which category applies" above resolves it. Any genuine ambiguity gets escalated and the rule gets clarified — not papered over with mixed surfaces.
+
+---
+
 ## Muted-Text Styling Rules
 
 Two visual tiers of muted text:

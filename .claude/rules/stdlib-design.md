@@ -49,6 +49,12 @@ For any stdlib method marked `errors`, the compiler already requires the caller 
 
 When stdlib modules are reviewed before each version's release, this rule is checked against the API surface: any pure-named method that calls into I/O is rejected before merge.
 
+### Corollary: Output-named operations must not silently do MORE than output
+
+The inverse of the pure-named rule: an operation whose name implies simple output (write a string, end a line) must not silently perform additional I/O. C++'s `std::endl` combines newline + buffer flush in a name that sounds like it only ends a line. clang-tidy ships `performance-avoid-endl` specifically because this costs orders of magnitude in performance on buffered output.
+
+In Yinz: `terminal.print()` writes without flushing. If you want to flush, you call `terminal.flush()`. The two operations have two names. No output method flushes silently.
+
 ---
 
 ## Rule 2: One API per Capability — No Parallel APIs

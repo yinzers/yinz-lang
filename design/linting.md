@@ -6,17 +6,20 @@ User spec: `spec/linting.md`, `spec/tooling.md`. Full compiler design: `design/c
 
 ## The Compiler IS the Linter
 
-Yinz does NOT ship a separate linter tool. The compiler's third diagnostic tier (suggestions) IS the linter. No plugin API, no rule-loading mechanism, no separate `ynz lint` command — `ynz build` and the LSP both emit suggestion-tier diagnostics during normal operation.
+Yinz does NOT ship a separate linter tool. The compiler's third diagnostic tier (suggestions) IS the linter. There is no separate `ynz lint` command — `ynz build` and the LSP both emit suggestion-tier diagnostics during normal operation.
 
 **Why this is the right design for Yinz:**
 - One source of truth for code quality. No "lint passes on my machine, fails in CI" because the lint IS the compile.
 - Zero configuration to get high-quality feedback — a v0.4+ Yinz project gets pedagogical suggestions out of the box.
-- No plugin-API surface area to maintain forever
-- Suggestions can use the full compiler IR (type info, ownership analysis, control flow) for accuracy that external tools can't match
+- Suggestions can use the full compiler IR (type info, ownership analysis, control flow) for accuracy that external tools can't match.
+- Built-in rules and custom plugin rules share the same single-pass walker — no performance penalty for adding rules.
 
-**Customization (v1.x):** The `[lint]` config in `yinz.toml` allows disabling rules, adjusting severity, tuning parameters, and defining pattern-based custom rules. Most orgs (~95%) get what they need via config.
+**Customization:** The `[lint]` config in `yinz.toml` controls severity, disables specific rules, and loads plugin packages. See below for the full config shape.
 
-**The escape valve for extreme outliers:** `[lint] enabled = false` disables built-in lint entirely. Orgs that need full AST-level custom rules can install a third-party lint package and run it as a CI check. Yinz being self-parseable + the package ecosystem IS the escape valve — no plugin API needed.
+**Layered opt-out:**
+- Disable a specific built-in rule: `[lint.rules] unused-imports = "disabled"`
+- Disable all built-in rules: `[lint] enabled = false` — plugin rules still run if installed
+- Full replacement: `[lint] enabled = false` + your own `[lint.plugins]` — you own the rule set entirely
 
 ---
 
@@ -28,23 +31,121 @@ Compiler catches problems at three levels: **errors** (won't compile), **warning
 
 ```toml
 [lint]
-enabled = true                  # set to false to disable built-in lint entirely
+enabled = true                  # set to false to disable all built-in rules
 
 [lint.rules]
 max-function-length = { severity = "warning", max-lines = 75 }
 use-int-for-whole-numbers = { severity = "suggestion" }
-unused-imports = { severity = "error" }     # promote to blocking
+unused-imports = { severity = "error" }     # promote to blocking (or "disabled" to turn off)
 
-[lint.custom-rules.no-print-in-prod]
+[lint.custom-rules.no-print-in-prod]        # simple pattern rules — no crate required
 pattern = "print("
 scope = "src/prod/**"
 message = "Use log.info() instead in production code"
 severity = "error"
+
+[lint.plugins]                              # full AST-level plugin packages
+no-internal-imports = { package = "ynz-lint-boundaries", version = "1.0" }
 ```
 
 **Philosophy**: Catch real bugs and enforce code quality. Don't police style preferences. Every rule prevents an actual problem or teaches a pattern. The developer should feel helped, not harassed.
 
 **Why suggestions are IDE-only by default**: Suggestions are the most subjective tier. Showing them in terminal output during CI would be too noisy and push developers to disable the whole system. IDE-only keeps them visible during development without friction in automated pipelines.
+
+---
+
+## Single-Walker Architecture — Performance Guarantee
+
+All lint rules — built-in and plugin — share one AST walk. The walker never traverses the tree more than once per lint pass, regardless of how many rules are registered.
+
+### How it works
+
+Each rule declares upfront which node kinds it cares about. At lint startup, the compiler builds a dispatch table once:
+
+```rust
+// built at startup, not per-file
+let mut dispatch: HashMap<NodeKind, Vec<&dyn LintPass>> = HashMap::new();
+for pass in all_passes {   // built-ins + pattern rules + plugins — same list
+    for kind in pass.interested_in() {
+        dispatch[kind].push(pass);
+    }
+}
+```
+
+The walk is then O(1) per node regardless of rule count:
+
+```rust
+for node in ast.walk() {
+    if let Some(passes) = dispatch.get(&node.kind()) {
+        for pass in passes {
+            pass.visit(&ctx, &node);
+        }
+    }
+}
+```
+
+50 rules registered = same number of AST traversals as 1 rule. This is the oxlint approach and the primary reason it's 50–100× faster than ESLint at scale.
+
+### Built-in rules have no special privileges
+
+Built-in rules are `LintPass` implementors in the same dispatch table as plugin rules. They register via `interested_in()`, get called via `visit()`, and emit diagnostics via the same `LintContext`. There is no separate fast path or internal traversal for built-ins. This has two consequences:
+
+1. The plugin API is automatically feature-complete — anything a built-in rule can check, a plugin can check.
+2. Built-in rules can be tested the same way as plugin rules.
+
+### Pattern-based custom rules
+
+`[lint.custom-rules]` entries (simple text patterns in `yinz.toml`) are compiled at build time into `LintPass` text-matchers and inserted into the same dispatch table. They go through the same walker as everything else — no second traversal mechanism.
+
+---
+
+## Plugin API — LintPass
+
+The public API for lint plugins. Versioned separately from compiler internals.
+
+### The LintPass trait
+
+```rust
+pub trait LintPass: Send + Sync {
+    fn interested_in(&self) -> Vec<NodeKind>;
+    fn visit(&self, ctx: &LintContext, node: &LintNode);
+}
+```
+
+Plugins implement `LintPass`, register interest upfront, and get called for matching nodes. The `LintContext` exposes type info, ownership info, and the diagnostic emitter. The `LintNode` types are concept-named public API — not internal compiler struct names.
+
+### LintNode — public API vs internal AST
+
+The compiler's internal AST can change freely. `LintNode` is the stable public representation, translated from internal nodes at call time. This decouples plugin authors from compiler internals.
+
+```rust
+// plugin author sees this — stable, concept-named
+pub enum LintNode<'a> {
+    Call(CallNode<'a>),
+    LetBinding(LetBindingNode<'a>),
+    FunctionDef(FunctionDefNode<'a>),
+    // ...
+}
+
+pub struct CallNode<'a> {
+    pub callee: &'a str,
+    pub args: &'a [LintNode<'a>],
+    pub span: Span,
+    // ...type info, ownership info exposed via LintContext
+}
+```
+
+Internal struct renamed → update the translation. Plugin author's code: unaffected.
+
+### Diagnostic format — plugins must follow it too
+
+Plugin diagnostics go through the same `LintContext::report()` and must follow the WHAT / WHAT-INSTEAD / WHY three-part format. The `Diagnostic` constructor enforces this — a diagnostic missing any part is a compile error in the plugin crate.
+
+### Versioning
+
+**Pre-v1.0**: `LintNode` API has no stability guarantee. Plugin authors pin to a specific Yinz version. Breaking changes are documented in the changelog.
+
+**Post-v1.0**: `LintNode` API is stable. Internal AST changes must preserve the translation layer. A change that breaks the translation is a semver-major bump.
 
 ---
 
@@ -86,6 +187,7 @@ Real problems that don't break immediately but indicate bugs.
 | `identical-branches` | Both `if` arms return the same value — condition has no effect |
 | `constant-condition` | `if (debug)` where `debug` is a known-`false` const — code never runs |
 | `unnecessary-wait` | `wait` on a call whose result feeds the next operation anyway |
+| `string-concat-in-loop` | `result = result + chunk` (or `result += chunk`) inside a `for`/`while` loop — O(n²) allocations. Suggests `strings.builder { ... }`. Per `lockin-cpu-bigo.md` Finding #2: Go benchmark shows 91× perf gap (1,994,038 ns/op with 1000 allocations vs 21,918 ns/op with 15 allocations). Compiler diagnostic: WHAT — "each `+` creates a new string, copying all previous bytes"; WHAT-INSTEAD — "use `strings.builder { ... }` to accumulate into a single buffer"; WHY — "`result` has N bytes at iteration N, so this loop copies 1+2+...+N = O(n²) total bytes." |
 
 ### Tier 3 — Suggestions (IDE-visible hints, lowest urgency)
 

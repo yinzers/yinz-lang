@@ -16,6 +16,7 @@ Global cross-workstream items only. Granular per-chat work lives in:
 ## Later (idea bin — not committed)
 
 - [ ] **`<>` generics syntax — compiler** — When M5 (generics) is implemented, the compiler must use `<>` not `[]` for type parameters. Parser, AST, typeck, and codegen must all follow `array<T>`, `map<K, V>`, `fixed<T>` syntax.
+- [ ] **Jargon-CI sweep** — add a CI script that greps `design/*.md`, `spec/*.md`, all `.claude/rules/*.md`, and crate source files for banned-jargon words (`monomorphization`, `vtable`, `devirtualization`, `dyn`, `infer`/`inference` outside the dual-audience inference.md, etc.) AND for the same words in user-facing diagnostics in `crates/ynz-diagnostics/`. Allow the words inside explicit "Internal terminology note" blocks but fail elsewhere. Per Patrick: "we can add a todo for chekcing ALL erorrs and coments and hints are non jargon but not do it now." Scope: extend `crates/ynz-diagnostics/src/banned_jargon.rs` AND add a doc-grep CI step.
 - [ ] Wire up GitHub Actions CI (ci.yml already written, just needs configuration)
 - [ ] macOS CI golden hash for ynz-codegen
 

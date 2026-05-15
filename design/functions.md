@@ -41,3 +41,17 @@ p => { ... }                    // multi-line — types inferred
 **Why**: Consistent with named functions — same structure (params → return type → body), just `=>` where the function name would be. Return type only required when the compiler can't infer it. Complex callbacks like HTTP route handlers need typed closures to define contracts explicitly.
 
 **Arrow functions are for callbacks only**: Standalone named functions use `function`. Arrow syntax is reserved for inline callbacks passed to other functions. This keeps the two uses visually distinct.
+
+---
+
+## Default Argument Values — Ownership Prevents Shared Mutable Defaults
+
+Python's mutable default argument bug (`def append(x, lst=[])` sharing one list across all callers) cannot occur in Yinz. The ownership system prevents it by construction: a default value like `= []` creates an owned value. The first call that omits the argument takes ownership — moves it in. There is nothing left for a second call to share.
+
+```yinz
+function addTo(items: array<string>, list: array<string> = []) -> array<string> {
+  ...
+}
+```
+
+The `[]` default is owned. Ownership rules handle the rest — no special "evaluate fresh per call" compiler rule needed, no performance cost from repeated evaluation of expensive defaults.
