@@ -1,6 +1,6 @@
 # Session State: ynz
 
-**Last Updated**: 2026-05-14
+**Last Updated**: 2026-05-16
 
 ---
 
@@ -9,7 +9,7 @@
 *(auto-rebuilt by SessionStart hook from `.claude/plans/active/*.md` front-matter — do not edit by hand)*
 
 <!-- RADAR-START -->
-- m4-shapes-functions-ownership (patrick) — 14 files touched — 0/117 done — 2026-05-16-r16
+- m4-shapes-functions-ownership (patrick) — 14 files touched — 0/117 done — 2026-05-16-r17
 - v0-1-compiler (patrick) — 5 files touched — 0/184 done — 2026-05-12-r4
 <!-- RADAR-END -->
 
@@ -65,6 +65,8 @@ cargo fmt --all
 - [2026-05-13] **M2 complete (tag v0.1.0-m2)**: Variables, arithmetic, all M2 types, 118+ tests. Full LLVM codegen for M2 AST.
 - [2026-05-14] **Design-lockdown (PRs #5 + #14)**: `shape` keyword locked for M4 type declarations (not `type`). 3 new rule files (inference.md, plan-invariants.md, vocabulary.md). 5 graveyard entries. Golden Rules 8/11/12 clarified. M4+ plans must include 5-subsection Invariants block.
 - [2026-05-14] **M3 complete (9653dbd, tag v0.1.0-m3)**: Control flow (`if`, `while`, `for`), multi-case `if`, user-defined functions with params + return types, two-pass typeck, return-path analysis, full LLVM lowering. 310 tests. `fib(10) = 55`. Plan: `.claude/plans/done/m3-control-flow-fns.md`.
+- [2026-05-16] **M4 Doc-PRs 1+2 complete (54521dd)**: Non-OOP model locked. `shape`/`follows`/`extends`/UFCS locked. Body-level `.share/.lend/.give` removed. Annotation-only struct literals. `override` removed. All design+spec docs rewritten. Commit message: "M4 P1 (lexer) cleared to start."
+- [2026-05-16] **M4 P1 in progress (branch feat/m4-lexer)**: 8 new tokens (49→57): `Shape`, `Follows`, `Extends`, `Base`, `Hidden`, `Dynamic`, `SelfType`, `SelfValue`. 6 banned-keyword handlers (`type`/`struct`/`class`/`interface`/`enum`/`abstract`). 20+ new lex tests. `examples/errors/m4_errors.ynz` P1 section. Awaiting `cargo test -p ynz-parser` + `cargo insta review` from Patrick's host terminal.
 
 ---
 

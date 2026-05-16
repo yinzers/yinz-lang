@@ -933,7 +933,7 @@ fn is_type_arm_produces_m6_deferral_diagnostic() {
     // WHY: `if (shape) { is Circle => ... }` is the M6 type-narrowing form.
     // In M3 the parser must emit a deferral diagnostic (not a confusing
     // "unexpected token" error) and produce a MatchArm so the parser recovers.
-    let output = parse("function main() -> nothing { if (shape) { is Circle => print(1) } }");
+    let output = parse("function main() -> nothing { if (value) { is Circle => print(1) } }");
     assert_eq!(
         output.diagnostics.len(),
         1,

@@ -36,8 +36,8 @@ fn lex_diags(source: &str) -> Vec<ynz_diagnostics::Diagnostic> {
 
 
 #[test]
-fn m3_token_variant_count_locked() {
-    // WHY: This test pins the token vocabulary to the M3 surface.
+fn m4_token_variant_count_locked() {
+    // WHY: This test pins the token vocabulary to the M4 surface.
     // If you need to add a new token for a later milestone, add an inline
     // `// test-ratchet: <reason-and-milestone>` comment on this test and update
     // the count in the Token enum's doc comment.
@@ -57,7 +57,14 @@ fn m3_token_variant_count_locked() {
     //   Keywords (6):    If, Else, While, For, In, Return
     //   Punctuation (1): FatArrow (`=>`)
     //   Total M1+M2+M3: 42 + 7 = 49
-    let expected_count = 49usize;
+    //
+    // test-ratchet: M4 adds 8 variants over M3's 49:
+    //   Shape-system keywords (8): Shape, Follows, Extends, Base, Hidden, Dynamic,
+    //                              SelfType (capital Self), SelfValue (lowercase self)
+    //   Note: Override was NOT added — the non-OOP model removed it;
+    //         function overloading by argument type replaces it.
+    //   Total M1+M2+M3+M4: 49 + 8 = 57
+    let expected_count = 57usize;
 
     use ynz_parser::Token::*;
     let all_variants: &[Token] = &[
@@ -113,6 +120,15 @@ fn m3_token_variant_count_locked() {
         In,
         Return,
         FatArrow,
+        // M4
+        Shape,
+        Follows,
+        Extends,
+        Base,
+        Hidden,
+        Dynamic,
+        SelfType,
+        SelfValue,
     ];
     assert_eq!(
         all_variants.len(),
@@ -529,7 +545,15 @@ fn token_spans_reconstruct_lexemes() {
             | Token::For
             | Token::In
             | Token::Return
-            | Token::FatArrow => {
+            | Token::FatArrow
+            | Token::Shape
+            | Token::Follows
+            | Token::Extends
+            | Token::Base
+            | Token::Hidden
+            | Token::Dynamic
+            | Token::SelfType
+            | Token::SelfValue => {
                 // Span must be non-empty for every token that has a source location.
                 assert!(
                     spanned.span.start < spanned.span.end,
@@ -681,6 +705,271 @@ fn fat_arrow_distinct_from_eq_and_gt() {
             Token::Eof,
         ]
     );
+}
+
+// ── M4 keyword tests ────────────────────────────────────────────────────────
+
+#[test]
+fn shape_keyword_lexes_correctly() {
+    // WHY: `shape` is the M4 declaration keyword for data types. If it falls
+    // through to Identifier, every shape declaration will fail to parse in P2.
+    assert_eq!(lex_tokens("shape"), vec![Token::Shape, Token::Eof]);
+}
+
+#[test]
+fn follows_keyword_lexes_correctly() {
+    // WHY: `follows` declares that a shape satisfies a contract's signatures.
+    assert_eq!(lex_tokens("follows"), vec![Token::Follows, Token::Eof]);
+}
+
+#[test]
+fn extends_keyword_lexes_correctly() {
+    // WHY: `extends` is data-only inheritance — child shape inherits parent fields.
+    assert_eq!(lex_tokens("extends"), vec![Token::Extends, Token::Eof]);
+}
+
+#[test]
+fn base_keyword_lexes_correctly() {
+    // WHY: `base` marks a shape that cannot be instantiated directly.
+    assert_eq!(lex_tokens("base"), vec![Token::Base, Token::Eof]);
+}
+
+#[test]
+fn hidden_keyword_lexes_correctly() {
+    // WHY: `hidden` marks a field as visible only within the declaring shape's functions.
+    assert_eq!(lex_tokens("hidden"), vec![Token::Hidden, Token::Eof]);
+}
+
+#[test]
+fn dynamic_keyword_lexes_correctly() {
+    // WHY: `dynamic` opts into runtime polymorphism via fat pointer + vtable.
+    assert_eq!(lex_tokens("dynamic"), vec![Token::Dynamic, Token::Eof]);
+}
+
+#[test]
+fn self_type_keyword_lexes_correctly() {
+    // WHY: `Self` (capital S) is the type keyword for the enclosing shape's concrete type
+    // (used in contract method signatures). Must be distinct from `self` (lowercase).
+    assert_eq!(lex_tokens("Self"), vec![Token::SelfType, Token::Eof]);
+}
+
+#[test]
+fn self_value_keyword_lexes_correctly() {
+    // WHY: `self` (lowercase) is the instance value keyword. Must be distinct from
+    // `Self` (SelfType). Case-sensitive lexer already handles this by exact string match.
+    assert_eq!(lex_tokens("self"), vec![Token::SelfValue, Token::Eof]);
+}
+
+#[test]
+fn self_type_and_self_value_are_distinct() {
+    // WHY: Golden Rule 13 — capital letter = type; lowercase = everything else.
+    // `Self` is the type; `self` is the value. They must lex to different tokens so
+    // the parser can enforce where each is valid.
+    let self_type = lex_tokens("Self");
+    let self_value = lex_tokens("self");
+    assert_ne!(self_type, self_value, "Self (type) and self (value) must be distinct tokens");
+    assert_eq!(self_type, vec![Token::SelfType, Token::Eof]);
+    assert_eq!(self_value, vec![Token::SelfValue, Token::Eof]);
+}
+
+#[test]
+fn m4_keywords_do_not_interfere_with_m3_keywords() {
+    // WHY: M4 keywords are new identifiers — they must not accidentally shadow or
+    // conflict with M3 keywords (if, else, while, for, in, return). Regression gate.
+    assert_eq!(lex_tokens("if"), vec![Token::If, Token::Eof]);
+    assert_eq!(lex_tokens("else"), vec![Token::Else, Token::Eof]);
+    assert_eq!(lex_tokens("while"), vec![Token::While, Token::Eof]);
+    assert_eq!(lex_tokens("for"), vec![Token::For, Token::Eof]);
+    assert_eq!(lex_tokens("in"), vec![Token::In, Token::Eof]);
+    assert_eq!(lex_tokens("return"), vec![Token::Return, Token::Eof]);
+}
+
+// ── M4 banned declaration keyword tests ─────────────────────────────────────
+
+#[test]
+fn type_keyword_produces_teaching_diagnostic() {
+    // WHY: A user coming from TypeScript may write `type Player { ... }`.
+    // The lexer redirects to `shape` with a three-part diagnostic. Token stream
+    // must still emit Identifier("type") so the parser can recover rather than
+    // cascading into meaningless parse errors.
+    let (_, diag_count) = lex_counts("type");
+    assert_eq!(diag_count, 1, "Expected exactly 1 diagnostic for `type`");
+
+    let diags = lex_diags("type");
+    assert!(
+        diags[0].what.contains("type"),
+        "Diagnostic should name the keyword, got: {:?}", diags[0].what
+    );
+    assert!(
+        diags[0].what_instead.contains("shape"),
+        "Diagnostic should point to `shape`, got: {:?}", diags[0].what_instead
+    );
+
+    let tokens = lex_tokens("type");
+    assert!(
+        tokens.contains(&Token::Identifier("type".into())),
+        "Lexer must emit Identifier(\"type\") for parser recovery"
+    );
+}
+
+#[test]
+fn struct_keyword_produces_teaching_diagnostic() {
+    // WHY: A user coming from Rust/C may write `struct Player { ... }`.
+    // Same teaching pattern — one diagnostic, identifier token for recovery.
+    let (_, diag_count) = lex_counts("struct");
+    assert_eq!(diag_count, 1, "Expected exactly 1 diagnostic for `struct`");
+
+    let diags = lex_diags("struct");
+    assert!(
+        diags[0].what.contains("struct"),
+        "Diagnostic should name the keyword, got: {:?}", diags[0].what
+    );
+    assert!(
+        diags[0].what_instead.contains("shape"),
+        "Diagnostic should point to `shape`, got: {:?}", diags[0].what_instead
+    );
+
+    let tokens = lex_tokens("struct");
+    assert!(
+        tokens.contains(&Token::Identifier("struct".into())),
+        "Lexer must emit Identifier(\"struct\") for parser recovery"
+    );
+}
+
+#[test]
+fn class_keyword_produces_teaching_diagnostic() {
+    // WHY: A user coming from Java/Swift may write `class Player { ... }`.
+    // The diagnostic must explicitly mention non-OOP framing — `shape` for data,
+    // standalone functions for behavior.
+    let (_, diag_count) = lex_counts("class");
+    assert_eq!(diag_count, 1, "Expected exactly 1 diagnostic for `class`");
+
+    let diags = lex_diags("class");
+    assert!(
+        diags[0].what.contains("class"),
+        "Diagnostic should name the keyword, got: {:?}", diags[0].what
+    );
+    assert!(
+        diags[0].what_instead.contains("shape"),
+        "Diagnostic should point to `shape`, got: {:?}", diags[0].what_instead
+    );
+
+    let tokens = lex_tokens("class");
+    assert!(
+        tokens.contains(&Token::Identifier("class".into())),
+        "Lexer must emit Identifier(\"class\") for parser recovery"
+    );
+}
+
+#[test]
+fn interface_keyword_produces_teaching_diagnostic() {
+    // WHY: A user coming from TypeScript/Java may write `interface Damageable { ... }`.
+    // The diagnostic must point to the `shape` + `follows` pattern for contracts.
+    let (_, diag_count) = lex_counts("interface");
+    assert_eq!(diag_count, 1, "Expected exactly 1 diagnostic for `interface`");
+
+    let diags = lex_diags("interface");
+    assert!(
+        diags[0].what.contains("interface"),
+        "Diagnostic should name the keyword, got: {:?}", diags[0].what
+    );
+    assert!(
+        diags[0].what_instead.contains("follows"),
+        "Diagnostic should mention `follows` for contracts, got: {:?}", diags[0].what_instead
+    );
+
+    let tokens = lex_tokens("interface");
+    assert!(
+        tokens.contains(&Token::Identifier("interface".into())),
+        "Lexer must emit Identifier(\"interface\") for parser recovery"
+    );
+}
+
+#[test]
+fn enum_keyword_produces_teaching_diagnostic() {
+    // WHY: A user coming from any typed language may write `enum Status { ... }`.
+    // Redirects to `options` — the Yinz human-readable term for named value sets.
+    let (_, diag_count) = lex_counts("enum");
+    assert_eq!(diag_count, 1, "Expected exactly 1 diagnostic for `enum`");
+
+    let diags = lex_diags("enum");
+    assert!(
+        diags[0].what.contains("enum"),
+        "Diagnostic should name the keyword, got: {:?}", diags[0].what
+    );
+    assert!(
+        diags[0].what_instead.contains("options"),
+        "Diagnostic should point to `options`, got: {:?}", diags[0].what_instead
+    );
+
+    let tokens = lex_tokens("enum");
+    assert!(
+        tokens.contains(&Token::Identifier("enum".into())),
+        "Lexer must emit Identifier(\"enum\") for parser recovery"
+    );
+}
+
+#[test]
+fn abstract_keyword_produces_teaching_diagnostic() {
+    // WHY: A user coming from Java/C# may write `abstract class Entity { ... }`.
+    // Redirects to `base shape` — the Yinz form for a non-instantiable shape.
+    let (_, diag_count) = lex_counts("abstract");
+    assert_eq!(diag_count, 1, "Expected exactly 1 diagnostic for `abstract`");
+
+    let diags = lex_diags("abstract");
+    assert!(
+        diags[0].what.contains("abstract"),
+        "Diagnostic should name the keyword, got: {:?}", diags[0].what
+    );
+    assert!(
+        diags[0].what_instead.contains("base shape"),
+        "Diagnostic should point to `base shape`, got: {:?}", diags[0].what_instead
+    );
+
+    let tokens = lex_tokens("abstract");
+    assert!(
+        tokens.contains(&Token::Identifier("abstract".into())),
+        "Lexer must emit Identifier(\"abstract\") for parser recovery"
+    );
+}
+
+#[test]
+fn banned_declaration_keywords_each_emit_exactly_one_diagnostic() {
+    // WHY: Each banned declaration keyword must produce exactly one diagnostic —
+    // no silent swallowing, no duplicate warnings for a single occurrence.
+    for keyword in &["type", "struct", "class", "interface", "enum", "abstract"] {
+        let (_, count) = lex_counts(keyword);
+        assert_eq!(
+            count, 1,
+            "Expected exactly 1 diagnostic for `{keyword}`, got {count}"
+        );
+    }
+}
+
+#[test]
+fn m4_source_produces_expected_tokens() {
+    // WHY: Snapshot locks the full M4 keyword token stream so any lexer
+    // regression is immediately visible. The source exercises all eight new
+    // token kinds in a realistic shape-declaration context.
+    let source = r#"base shape Entity {
+  name: string
+}
+
+shape Player extends Entity follows Damageable {
+  hidden cache: int
+}
+
+function greet(share self: Player) -> string {
+  return self.name
+}
+
+function example() -> nothing {
+  let p: Player = { name: "Patrick", cache: 0 }
+  let d: dynamic Damageable = p
+  print(greet(p))
+}"#;
+    let tokens = lex_tokens(source);
+    assert_debug_snapshot!("m4_token_stream", tokens);
 }
 
 #[test]

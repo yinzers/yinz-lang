@@ -299,8 +299,71 @@ impl<'src> Lexer<'src> {
             "for" => Token::For,
             "in" => Token::In,
             "return" => Token::Return,
+            // M3 banned keywords — redirect to Yinz equivalents
             "match" | "switch" => {
                 self.emit_banned_keyword(start, self.pos, text);
+                Token::Identifier(text.to_string())
+            }
+            // M4 keywords
+            "shape"   => Token::Shape,
+            "follows" => Token::Follows,
+            "extends" => Token::Extends,
+            "base"    => Token::Base,
+            "hidden"  => Token::Hidden,
+            "dynamic" => Token::Dynamic,
+            "Self"    => Token::SelfType,
+            "self"    => Token::SelfValue,
+            // M4 banned declaration keywords — redirect to Yinz equivalents
+            "type" => {
+                self.emit_banned_declaration_keyword(start, self.pos, "type",
+                    "Use `shape` to declare a data type: `shape Player { name: string, health: int }`",
+                    "`type` is common in TypeScript, but Yinz uses `shape` — one unambiguous keyword \
+                     for all data type declarations.",
+                );
+                Token::Identifier(text.to_string())
+            }
+            "struct" => {
+                self.emit_banned_declaration_keyword(start, self.pos, "struct",
+                    "Use `shape` to declare a data type: `shape Player { name: string, health: int }`",
+                    "Yinz uses `shape` for all data type declarations, whether they would be called \
+                     structs, classes, or interfaces in other languages.",
+                );
+                Token::Identifier(text.to_string())
+            }
+            "class" => {
+                self.emit_banned_declaration_keyword(start, self.pos, "class",
+                    "Use `shape` for data and standalone functions for behavior: \
+                     `shape Player { name: string }` then `function greet(share self: Player) -> string`",
+                    "Yinz is not object-oriented — there are no classes. Data lives in shapes; \
+                     behavior lives in standalone functions called via dot-call syntax.",
+                );
+                Token::Identifier(text.to_string())
+            }
+            "interface" => {
+                self.emit_banned_declaration_keyword(start, self.pos, "interface",
+                    "For contracts, declare a `shape` with bare method signatures and use `follows`: \
+                     `shape Damageable { takeDamage(lend self, amount: int) -> nothing }` \
+                     then `shape Player follows Damageable { ... }`",
+                    "Yinz uses `shape` for both data types and contracts. A contract shape holds \
+                     bare-signature declarations; implementing shapes use the `follows` keyword.",
+                );
+                Token::Identifier(text.to_string())
+            }
+            "enum" => {
+                self.emit_banned_declaration_keyword(start, self.pos, "enum",
+                    "Use `options` to declare a set of named values: \
+                     `options Status { active, inactive, banned }`",
+                    "Yinz uses human-readable keywords. `options` immediately signals a set of choices.",
+                );
+                Token::Identifier(text.to_string())
+            }
+            "abstract" => {
+                self.emit_banned_declaration_keyword(start, self.pos, "abstract",
+                    "Use `base shape` for a shape that cannot be instantiated directly: \
+                     `base shape Entity { name: string }`",
+                    "`base shape` names what the type is before saying it cannot be instantiated — \
+                     the constraint is part of the declaration, not a separate modifier.",
+                );
                 Token::Identifier(text.to_string())
             }
             other => Token::Identifier(other.to_string()),
@@ -663,6 +726,22 @@ impl<'src> Lexer<'src> {
             "Use multi-case `if` with `=>` arms: `if (value) { 1 => ...; 2 => ...; else => ... }`",
             "Yinz uses one `if` keyword for simple branches, value matching, and type narrowing. \
              One concept, one keyword.",
+        ));
+    }
+
+    fn emit_banned_declaration_keyword(
+        &mut self,
+        start: usize,
+        end: usize,
+        keyword: &str,
+        what_instead: &str,
+        why: &str,
+    ) {
+        self.diags.push(Diagnostic::warning(
+            SourceSpan::new(self.file, start, end),
+            format!("`{keyword}` is not a keyword in Yinz."),
+            what_instead,
+            why,
         ));
     }
 

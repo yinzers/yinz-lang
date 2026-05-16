@@ -1355,5 +1355,13 @@ fn token_display(tok: &Token) -> &str {
         Token::In => "in",
         Token::Return => "return",
         Token::FatArrow => "=>",
+        Token::Shape => "shape",
+        Token::Follows => "follows",
+        Token::Extends => "extends",
+        Token::Base => "base",
+        Token::Hidden => "hidden",
+        Token::Dynamic => "dynamic",
+        Token::SelfType => "Self",
+        Token::SelfValue => "self",
     }
 }

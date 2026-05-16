@@ -18,11 +18,11 @@ impl<T> Spanned<T> {
 
 /// The complete token vocabulary.
 ///
-/// Variant count is pinned by `m3_token_variant_count_locked` in the test suite.
+/// Variant count is pinned by `m4_token_variant_count_locked` in the test suite.
 /// Adding a variant requires both an inline `// test-ratchet: <reason>` marker
 /// on that test AND updating this comment with the new count.
 ///
-/// Current count: 49
+/// Current count: 57
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Token {
 
@@ -152,6 +152,26 @@ pub enum Token {
     Return,
     /// `=>` (fat arrow — multi-case arm separator in `if (value) { 1 => ... }`).
     FatArrow,
+
+
+    // ── M4: shapes, inheritance, contracts, dynamic dispatch ────────────────
+
+    /// The `shape` keyword — declares a data type.
+    Shape,
+    /// The `follows` keyword — declares that a shape satisfies a contract.
+    Follows,
+    /// The `extends` keyword — data-only inheritance (child inherits parent fields).
+    Extends,
+    /// The `base` keyword — marks a shape that cannot be instantiated directly.
+    Base,
+    /// The `hidden` keyword — marks a field visible only to the declaring shape's functions.
+    Hidden,
+    /// The `dynamic` keyword — opt-in runtime polymorphism via fat pointer + vtable.
+    Dynamic,
+    /// The `Self` keyword (capital S) — the concrete type of the enclosing shape (type position).
+    SelfType,
+    /// The `self` keyword (lowercase) — the instance value of the enclosing shape (value position).
+    SelfValue,
 }
 
 impl Token {

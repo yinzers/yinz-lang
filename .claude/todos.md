@@ -7,11 +7,18 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Now (active)
 
-- [ ] **M4 plan (Opus)** — Plan M4: `shape` declarations, methods on shapes, ownership annotations (`share`/`lend`/`give`). Requires 5-subsection Invariants block per `.claude/rules/plan-invariants.md`. Must include: const deep-immutability invariants in Safety + Performance, `shape` keyword reservation in P1, LLVM `readonly`/`noalias` attribute emission contract. Catch-up from M3: replace read-only params with `lend`, overflow escape methods, type-attached constants.
+- [ ] **M4 P1 — Lexer** — Branch `feat/m4-lexer`. All tests green (63 lex + 49 parse + 8 jargon audit). Snapshot accepted. Ready to commit + `/pr`.
 
 ## Soon (committed, not started)
 
-- [ ] **M4 implementation** — After plan approval: `shape Foo { fields }`, method dispatch, ownership annotations. Depends on M4 plan.
+- [ ] **M4 P2 — Parser** — After P1 merges. Shape declarations, field access, dot-modifiers (`.copy()`, `.freeze()`), struct literal annotation form, `dynamic` in type position.
+- [ ] **M4 P3a — Typeck shapes** — After P2. Shape table salsa query, struct literals, field access/assign, method resolution, hidden fields.
+- [ ] **M4 P3b — Inheritance + follows + dynamic** — After P3a.
+- [ ] **M4 P3c — Ownership analysis** — After P3b. Borrow-check salsa query, const deep-immutability, use-after-give.
+- [ ] **M4 P4 — Codegen** — After P3c. LLVM `readonly`/`noalias` attrs, heap alloc/drop, vtable for `dynamic`.
+- [ ] **M4 P5 — Catch-up** — Wrapping/saturating int methods + `int.max`/`int.min`/`number.epsilon`. Can start after P3a.
+- [ ] **M4 P6 — Driver + fixtures** — After P4. Full fixture suite (12 positive + 20 negative).
+- [ ] **M4 P7 — Verification + tag `v0.1.0-m4`** — After P6.
 
 ## Later (idea bin — not committed)
 

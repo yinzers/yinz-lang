@@ -196,15 +196,29 @@ Status: pending_approval
 
 After Doc-PR 3 merges, M4 P1 (lexer) starts.
 
-### Doc-PR execution status (r14, 2026-05-16)
+### Doc-PR execution status (r18, 2026-05-16)
 
 | Doc-PR | Task | Status | Files landed / pending |
 |---|---|---|---|
-| **Doc-PR 1** (Foundation) | #7 | ✅ COMPLETE | NEW `.claude/rules/non-oop.md` (283 lines), NEW `.claude/rules/dot-postfix.md` (100 lines), UPDATED `CLAUDE.md` (rule entries + non-OOP line + real-operations rule), UPDATED `design/golden-rules.md` (Cross-cutting principle section before Rule 1), UPDATED `design/decisions.md` (Cross-Cutting Architectural Principles section + forward-flagged `override` removal), UPDATED `.claude/rules/language-design.md` (OOP Drift Test section). Grep verification clean. Not yet committed — Patrick decides commit-per-doc-PR vs batch-commit at end. |
-| **Doc-PR 2** (Docs rewrite) | #8 | PENDING | Major rewrite scope per r12 grep: `design/type-system.md` (lines 70-181 + remove §`override` Keyword Required at 41-46), `spec/operators.md` (8 method-in-shape examples at lines 148-181), `design/iterables.md` + `spec/iterables.md` (method-in-shape Iterable pattern), `spec/types.md:62`, `spec/overview.md:16`, `design/ownership.md` (extensive no-parens dot-modifier examples), `spec/ownership.md` (same + REMOVE body-level `.share()/.lend()/.give()` syntax), `design/ide-hints.md` (examples at lines 33, 48, 61), `design/errors.md:27` ("method on it" wording), `.claude/rules/inference.md` (ownership-inference domain row simplification), `.claude/rules/vocabulary.md` (audit). |
-| **Doc-PR 3** (Plan rewrite) | #9 | PENDING | Rewrite this plan's phase bodies (P2/P3a/P3b/P4) for standalone+UFCS model per FINAL LOCKED DECISIONS items #29-#37. Update success criteria + invariants subsections + anti-pattern callouts. |
+| **Doc-PR 1** (Foundation) | #7 | ✅ COMPLETE | NEW `.claude/rules/non-oop.md`, NEW `.claude/rules/dot-postfix.md`, UPDATED `CLAUDE.md`, `design/golden-rules.md`, `design/decisions.md`, `.claude/rules/language-design.md`. **Committed in `54521dd`** (batch with Doc-PR 2). |
+| **Doc-PR 2** (Docs rewrite) | #8 | ✅ COMPLETE | REWRITTEN `design/type-system.md`, `design/ownership.md`, `spec/types.md`, `spec/ownership.md`, `spec/operators.md`, `spec/concurrency.md`. MEDIUM EDITS `design/iterables.md`, `spec/iterables.md`, `design/ide-hints.md`, `.claude/rules/inference.md`, `.claude/rules/vocabulary.md`. Small edits 8 more files. **Committed in `54521dd`**. Commit message says "M4 P1 (lexer) cleared to start." |
+| **Doc-PR 3** (Plan rewrite) | #9 | PENDING | Rewrite this plan's phase bodies (P2/P3a/P3b/P4) for standalone+UFCS model per FINAL LOCKED DECISIONS items #29-#37. Update success criteria + invariants subsections + anti-pattern callouts. DEFERRED — FINAL LOCKED DECISIONS section above is authoritative for implementation; plan body rewrite can happen concurrently or after P1 merges. |
 
-After Doc-PR 3 merges, M4 P1 (lexer) starts.
+P1 (lexer) is IN PROGRESS on branch `feat/m4-lexer`.
+
+### Phase execution status (r18, 2026-05-16)
+
+| Phase | Branch | Status | Notes |
+|---|---|---|---|
+| **P1** (Lexer) | `feat/m4-lexer` | 🔄 IN PROGRESS | 8 new tokens (49→57), 6 banned-keyword handlers, 20+ new tests, `examples/errors/m4_errors.ynz` P1 section. Awaiting `cargo test -p ynz-parser` + `cargo insta review` from host. |
+| **P2** (Parser) | — | NOT STARTED | After P1 merges. |
+| **P3a** (Typeck shapes) | — | NOT STARTED | After P2 merges. |
+| **P3b** (Inheritance + follows + dynamic) | — | NOT STARTED | After P3a merges. |
+| **P3c** (Ownership analysis) | — | NOT STARTED | After P3b merges. |
+| **P4** (Codegen) | — | NOT STARTED | After P3c merges. |
+| **P5** (Catch-up) | — | NOT STARTED | Independent; can start after P3a. |
+| **P6** (Driver + fixtures) | — | NOT STARTED | After P4 merges. |
+| **P7** (Verification + tag) | — | NOT STARTED | After P6 merges. |
 
 ### Historical record (superseded by above; kept for traceability)
 

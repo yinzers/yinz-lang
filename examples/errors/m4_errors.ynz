@@ -1,0 +1,54 @@
+// examples/errors/m4_errors.ynz
+//
+// Every M4 lexer-level compile error in one file (P1 scope only).
+// P2+ error classes are added by their respective phases.
+// Run: ./target/debug/ynz build examples/errors/m4_errors.ynz
+//
+// Yinz multi-errors up to 50 per compile — all diagnostics below fire in one run.
+
+// ────── M4 P1: Banned declaration keywords ──────
+
+// WHY: `type` is banned at the lexer level. M4 P1 redirects to `shape`.
+// Users from TypeScript hit this first — the diagnostic teaches `shape` as
+// the single unambiguous keyword for all data type declarations.
+type Player {
+  name: string
+}
+
+// WHY: `struct` is banned. Users from Rust/C reach for this.
+// Redirected to `shape` with a note that Yinz uses one keyword for all shapes.
+struct Enemy {
+  health: int
+}
+
+// WHY: `class` is banned. Users from Java/Swift reach for this.
+// Diagnostic explicitly mentions the non-OOP model: data in `shape`,
+// behavior in standalone functions.
+class Weapon {
+  damage: int
+}
+
+// WHY: `interface` is banned. Users from TypeScript/Java reach for this.
+// Redirected to `shape` + `follows` — the Yinz contract pattern.
+interface Damageable {
+  takeDamage(lend self, amount: int) -> nothing
+}
+
+// WHY: `enum` is banned. Users from any typed language reach for this.
+// Redirected to `options` — the Yinz human-readable term for named value sets.
+enum Status {
+  active
+  inactive
+}
+
+// WHY: `abstract` is banned. Users from Java/C# reach for this.
+// Redirected to `base shape` — the Yinz form for a non-instantiable shape.
+abstract class Entity {
+  name: string
+}
+
+// ────── (P2+ error classes added here as phases land) ──────
+// After M4 P2 (parser): struct-literal prefix form, missing self in signature, etc.
+// After M4 P3a (typeck): wrong field type, unknown field, hidden-field-outside-shape
+// After M4 P3b (inheritance): cyclic extends, base instantiation, dynamic type mismatch
+// After M4 P3c (ownership): use-after-give, const-lend, double-lend, etc.
