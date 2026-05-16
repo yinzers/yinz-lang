@@ -19,7 +19,7 @@ function main() -> nothing {
   print("M2 — variables, arithmetic, primitives:")
 
   // let vs const (M2 const-reassignment check)
-  const playerName = "Patrick"
+  const playerName = "Cheddar"
   let score: int = 0
 
   // Primitive types — int, float, number (decimal128), bool

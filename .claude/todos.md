@@ -7,7 +7,7 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Now (active)
 
-- [ ] **M4 P1 — Lexer** — Branch `feat/m4-lexer`. All tests green (63 lex + 49 parse + 8 jargon audit). Snapshot accepted. Ready to commit + `/pr`.
+- [ ] **M4 P1 — Lexer** — Branch `feat/m4-lexer` pushed (05c5296). PR ready at https://github.com/patrickrizzardi/ynz/pull/new/feat/m4-lexer — Patrick opens + merges. Then P2 starts.
 
 ## Soon (committed, not started)
 

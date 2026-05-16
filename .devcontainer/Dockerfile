@@ -37,6 +37,10 @@ RUN echo "${USER} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 USER ${USER}
 WORKDIR /home/${USER}
 
+# Rust toolchain
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
+ENV PATH="/home/${USER}/.cargo/bin:${PATH}"
+
 # Claude Code CLI
 RUN curl -fsSL https://claude.ai/install.sh | bash
 ENV PATH="/home/${USER}/.local/bin:${PATH}"
