@@ -43,7 +43,7 @@ fn assert_errors(source: &str, expected_count: usize) -> CheckOutput {
 
 
 #[test]
-fn m3_type_variant_count_locked() {
+fn m4_type_variant_count_locked() {
     // WHY: adding new types before their milestones introduces untested paths.
     //
     // test-ratchet: M2 adds 4 variants over M1's 3.
@@ -53,6 +53,9 @@ fn m3_type_variant_count_locked() {
     // test-ratchet: M3 adds 1 variant for the range builtin iterable type.
     //   Range is restricted to for-loop iterable position only.
     //   Full Iterable[T] protocol replaces it in M7. Total: 8.
+    //
+    // test-ratchet: M4 adds 1 variant for user-defined shape types.
+    //   Shape holds the shape name; field layout lives in ShapeTable. Total: 9.
     let all: &[Type] = &[
         Type::Nothing,
         Type::String,
@@ -62,8 +65,9 @@ fn m3_type_variant_count_locked() {
         Type::Number { precision: 34 },
         Type::Bool,
         Type::Range { element: Box::new(Type::Int), end_inclusive: false },
+        Type::Shape { name: "Player".into() },
     ];
-    assert_eq!(all.len(), 8, "Type variant count changed from 8 — add // test-ratchet: comment");
+    assert_eq!(all.len(), 9, "Type variant count changed from 9 — add // test-ratchet: comment");
 }
 
 
@@ -962,4 +966,195 @@ fn module_signatures_query_is_separate_from_check_query() {
     // check_query should also have the error (it includes sig diags)
     let check_out = check_query(&db, sf);
     assert!(check_out.diagnostics.len() >= 1, "Missing main must appear in check output");
+}
+
+// ── M4 P3a: shape type-checking tests ────────────────────────────────────────
+
+#[test]
+fn shape_with_struct_literal_type_checks() {
+    // WHY: The end-to-end path — `shape Player { ... }` declared, then `let p: Player = { ... }`
+    // constructed — must type-check cleanly. This is the simplest shape program that uses
+    // all of P3a's new code paths together.
+    assert_clean(r#"
+shape Player {
+  name: string
+  health: int
+}
+
+function main() -> nothing {
+  let p: Player = { name: "Patrick", health: 100 }
+  print(p.health)
+}
+"#);
+}
+
+#[test]
+fn struct_lit_missing_field_produces_error() {
+    // WHY: A struct literal that doesn't provide all required fields must error.
+    // Without this check, shapes could be partially initialized with garbage values.
+    let out = assert_errors(r#"
+shape Player { name: string health: int }
+function main() -> nothing { let p: Player = { name: "x" } }
+"#, 1);
+    let e = &out.diagnostics[0];
+    assert!(e.what.contains("health") || e.what.contains("Missing"),
+        "Error must name the missing field, got: {:?}", e.what);
+}
+
+#[test]
+fn struct_lit_wrong_field_type_produces_error() {
+    // WHY: Passing an int where a string is expected must be caught.
+    assert_errors(r#"
+shape Player { name: string }
+function main() -> nothing { let p: Player = { name: 42 } }
+"#, 1);
+}
+
+#[test]
+fn struct_lit_unknown_field_produces_error() {
+    // WHY: Providing a field that doesn't exist on the shape must error.
+    assert_errors(r#"
+shape Player { name: string }
+function main() -> nothing { let p: Player = { name: "x", age: 30 } }
+"#, 1);
+}
+
+#[test]
+fn field_access_resolves_correct_type() {
+    // WHY: `p.health` where health is `int` must produce an int — not Error.
+    // The int literal binop check below confirms the field resolved to int.
+    assert_clean(r#"
+shape Player { name: string health: int }
+function main() -> nothing {
+  let p: Player = { name: "x", health: 100 }
+  let doubled = p.health * 2
+  print(doubled)
+}
+"#);
+}
+
+#[test]
+fn field_access_unknown_field_produces_error() {
+    // WHY: `p.nonexistent` must error at the field-access site, not silently produce Error
+    // which would cascade into cascading spurious errors everywhere the value is used.
+    assert_errors(r#"
+shape Player { name: string }
+function main() -> nothing {
+  let p: Player = { name: "x" }
+  let x = p.age
+}
+"#, 1);
+}
+
+#[test]
+fn field_assignment_type_checks() {
+    // WHY: `p.health = 50` where health is `int` must check that 50 is `int`.
+    assert_clean(r#"
+shape Player { name: string health: int }
+function main() -> nothing {
+  let p: Player = { name: "x", health: 100 }
+  p.health = 50
+}
+"#);
+}
+
+#[test]
+fn field_assignment_type_mismatch_produces_error() {
+    // WHY: `p.health = "fifty"` must error — field is int, value is string.
+    assert_errors(r#"
+shape Player { name: string health: int }
+function main() -> nothing {
+  let p: Player = { name: "x", health: 100 }
+  p.health = "fifty"
+}
+"#, 1);
+}
+
+#[test]
+fn const_field_assignment_produces_error() {
+    // WHY: `const p` bindings are fully immutable — field mutation must be rejected.
+    // This is one of the five const deep-immutability paths from the plan invariants.
+    let out = assert_errors(r#"
+shape Player { name: string health: int }
+function main() -> nothing {
+  const p: Player = { name: "x", health: 100 }
+  p.health = 50
+}
+"#, 1);
+    assert!(out.diagnostics[0].what.contains("const") || out.diagnostics[0].what.contains("const"),
+        "Error must mention `const`, got: {:?}", out.diagnostics[0].what);
+}
+
+#[test]
+fn base_shape_instantiation_produces_error() {
+    // WHY: `base shape Entity` cannot be constructed via struct literal.
+    // Typeck must reject it at the construction site.
+    assert_errors(r#"
+base shape Entity { name: string }
+function main() -> nothing { let e: Entity = { name: "x" } }
+"#, 1);
+}
+
+#[test]
+fn hidden_field_outside_shape_produces_error() {
+    // WHY: `hidden` fields are visible only to functions with `self: ShapeName`.
+    // Reading them from an outside function must error.
+    assert_errors(r#"
+shape Player { name: string hidden cache: int }
+function main() -> nothing {
+  let p: Player = { name: "x" }
+  let x = p.cache
+}
+"#, 1);
+}
+
+#[test]
+fn self_parameter_resolves_to_shape_type() {
+    // WHY: A function with `share self: Player` must be able to access `self.name`
+    // and have `self` resolve to `Type::Shape { name: "Player" }`.
+    assert_clean(r#"
+shape Player { name: string health: int }
+function greet(share self: Player) -> string { return self.name }
+function main() -> nothing {
+  let p: Player = { name: "Patrick", health: 100 }
+  let g = greet(p)
+  print(g)
+}
+"#);
+}
+
+#[test]
+fn ufcs_method_call_on_shape_resolves() {
+    // WHY: `player.greet()` (UFCS sugar for `greet(player)`) must resolve the function
+    // and return its declared return type. This is the primary M4 interaction pattern.
+    assert_clean(r#"
+shape Player { name: string }
+function greet(share self: Player) -> string { return self.name }
+function main() -> nothing {
+  let p: Player = { name: "Patrick" }
+  let msg = p.greet()
+  print(msg)
+}
+"#);
+}
+
+#[test]
+fn duplicate_shape_name_produces_error() {
+    // WHY: Two shapes with the same name in one file must error — otherwise the
+    // second silently shadows the first and field lookups become nondeterministic.
+    assert_errors(r#"
+shape Player { name: string }
+shape Player { health: int }
+function main() -> nothing { }
+"#, 1);
+}
+
+#[test]
+fn struct_lit_without_annotation_produces_error() {
+    // WHY: Anonymous struct literals need a type annotation to know which shape
+    // to validate against. Without one the compiler cannot check field names.
+    assert_errors(r#"
+shape Player { name: string }
+function main() -> nothing { let p = { name: "x" } }
+"#, 1);
 }

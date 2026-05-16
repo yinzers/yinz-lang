@@ -1,7 +1,7 @@
-/// The types known to the M3 type checker.
+/// The types known to the M4 type checker.
 ///
-/// Variant count is pinned by `m3_type_variant_count_locked` in tests.
-/// Current count: 8
+/// Variant count is pinned by `m4_type_variant_count_locked` in tests.
+/// Current count: 9
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
 
@@ -39,20 +39,31 @@ pub enum Type {
         /// Always `false` in M3 (range end is exclusive).
         end_inclusive: bool,
     },
+
+    // ── M4 ───────────────────────────────────────────────────────────────────
+
+    // test-ratchet: M4 adds Shape for user-defined data types.
+    /// A user-defined shape type, identified by name.
+    ///
+    /// Field layout and method resolution use the `ShapeTable` built by the
+    /// shapes pre-pass. `extends` / `follows` resolution is P3b work.
+    Shape { name: String },
 }
 
-/// Human-readable type name used in diagnostic messages.
+/// Human-readable type name for diagnostic messages.
 ///
 /// Matches the Yinz keyword the user wrote, not internal implementation names.
-pub fn type_name(t: &Type) -> &'static str {
+/// Returns `String` (not `&'static str`) to handle dynamic shape names.
+pub fn type_name(t: &Type) -> String {
     match t {
-        Type::Nothing => "nothing",
-        Type::String => "string",
-        Type::Error => "unknown",
-        Type::Int => "int",
-        Type::Float => "float",
-        Type::Number { .. } => "number",
-        Type::Bool => "bool",
-        Type::Range { .. } => "range",
+        Type::Nothing => "nothing".into(),
+        Type::String => "string".into(),
+        Type::Error => "unknown".into(),
+        Type::Int => "int".into(),
+        Type::Float => "float".into(),
+        Type::Number { .. } => "number".into(),
+        Type::Bool => "bool".into(),
+        Type::Range { .. } => "range".into(),
+        Type::Shape { name } => name.clone(),
     }
 }

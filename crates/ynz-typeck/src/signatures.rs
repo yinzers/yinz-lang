@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use ynz_ast::nodes::{Item, Module, Type as AstType};
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
-use crate::types::Type;
+use crate::{shapes::ShapeTable, types::Type};
 
 /// The resolved signature of a user-defined function.
 #[derive(Clone, Debug)]
@@ -37,7 +37,11 @@ impl SignatureTable {
 /// - Duplicate function name
 /// - Missing `main`
 /// - `main` with non-`() -> nothing` signature
-pub fn collect_signatures(module: &Module, diags: &mut DiagnosticBucket) -> SignatureTable {
+pub fn collect_signatures(
+    module: &Module,
+    diags: &mut DiagnosticBucket,
+    shape_table: &ShapeTable,
+) -> SignatureTable {
     let mut table = SignatureTable::empty();
     let mut main_checked = false;
 
@@ -49,9 +53,9 @@ pub fn collect_signatures(module: &Module, diags: &mut DiagnosticBucket) -> Sign
                 let params: Vec<(String, Type)> = f
                     .params
                     .iter()
-                    .map(|p| (p.name.clone(), sig_ast_type_to_type(&p.ty)))
+                    .map(|p| (p.name.clone(), sig_ast_type_to_type(&p.ty, shape_table)))
                     .collect();
-                let ret = sig_ast_type_to_type(&f.return_type);
+                let ret = sig_ast_type_to_type(&f.return_type, shape_table);
 
                 if let Some(existing) = table.fns.get(&f.name) {
                     diags.push(
@@ -113,16 +117,6 @@ pub fn collect_signatures(module: &Module, diags: &mut DiagnosticBucket) -> Sign
 ///
 /// No diagnostic emission — the parser already caught unknown types.
 /// Unknown / error types map to `Type::Error` so the signature table is always complete.
-pub fn sig_ast_type_to_type(ast_ty: &AstType) -> Type {
-    match ast_ty {
-        AstType::Nothing => Type::Nothing,
-        AstType::Int => Type::Int,
-        AstType::Float => Type::Float,
-        AstType::Number { .. } => Type::Number { precision: 34 },
-        AstType::Bool => Type::Bool,
-        AstType::Named(n, _) if n == "string" => Type::String,
-        AstType::Error | AstType::Named(_, _) | AstType::Range { .. } => Type::Error,
-        // M4 P3a: shape types — not yet resolved.
-        AstType::Dynamic { .. } | AstType::SelfType { .. } => Type::Error,
-    }
+pub fn sig_ast_type_to_type(ast_ty: &AstType, shape_table: &ShapeTable) -> Type {
+    shape_table.resolve_ast_type(ast_ty)
 }

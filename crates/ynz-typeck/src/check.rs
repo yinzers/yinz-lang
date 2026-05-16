@@ -1,6 +1,6 @@
 use ynz_ast::nodes::{
     BinOpKind, Block, CallExpr, Expr, FunctionDecl, Item, MatchArm, MatchPatternKind, Module,
-    Stmt, Type as AstType, UnaryOpKind,
+    PostfixOpKind, Stmt, StructLitField, Type as AstType, UnaryOpKind,
 };
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
@@ -8,6 +8,7 @@ use crate::{
     intrinsics::PrimitiveIntrinsicTable,
     return_paths::analyze_return_paths,
     scope::{Scope, ScopeEntry},
+    shapes::ShapeTable,
     signatures::SignatureTable,
     types::{type_name, Type},
 };
@@ -24,24 +25,25 @@ pub struct TypedModule {
     pub expr_types: std::collections::HashMap<(usize, usize), Type>,
 }
 
-/// Run the M3 type checker over all function bodies.
+/// Run the M4 type checker over all function bodies.
 ///
-/// The `sig_table` must already contain all function signatures (from the
-/// `module_signatures` salsa query). Body checking depends on it for:
-/// - Resolving call-site argument/return types
-/// - Knowing the current function's return type for `return` statement checking
+/// Depends on both `sig_table` (function signatures) and `shape_table`
+/// (shape declarations and their field layouts) produced by the pre-passes.
 pub fn check(
     module: &Module,
     sig_table: &SignatureTable,
+    shape_table: &ShapeTable,
     intrinsics: &PrimitiveIntrinsicTable,
 ) -> (TypedModule, DiagnosticBucket) {
     let mut checker = Checker {
         intrinsics,
         sig_table,
+        shape_table,
         expr_types: std::collections::HashMap::new(),
         diags: DiagnosticBucket::new(),
         scope: Scope::new(),
         current_fn_ret: Type::Nothing,
+        current_shape: None,
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -54,11 +56,15 @@ pub fn check(
 struct Checker<'b> {
     intrinsics: &'b PrimitiveIntrinsicTable,
     sig_table: &'b SignatureTable,
+    shape_table: &'b ShapeTable,
     expr_types: std::collections::HashMap<(usize, usize), Type>,
     diags: DiagnosticBucket,
     scope: Scope,
     /// Return type of the function currently being checked.
     current_fn_ret: Type,
+    /// Name of the shape whose method we're currently checking (for `self`/`Self` resolution
+    /// and hidden-field visibility). `None` when checking a free function.
+    current_shape: Option<String>,
 }
 
 impl<'b> Checker<'b> {
@@ -85,9 +91,16 @@ impl<'b> Checker<'b> {
 
         self.scope.push();
 
-        // Register parameters as read-only scope entries.
-        for param in &f.params {
+        // Register parameters. If the first param is named `self` and has a Shape type,
+        // record the enclosing shape for hidden-field visibility and Self resolution.
+        self.current_shape = None;
+        for (i, param) in f.params.iter().enumerate() {
             let param_ty = self.ast_type_to_type(&param.ty);
+            if i == 0 && param.name == "self" {
+                if let Type::Shape { name } = &param_ty {
+                    self.current_shape = Some(name.clone());
+                }
+            }
             self.scope.insert(
                 param.name.clone(),
                 ScopeEntry {
@@ -157,8 +170,9 @@ impl<'b> Checker<'b> {
                 Stmt::Return { value, span } => {
                     self.check_stmt_return(value.as_ref(), span);
                 }
-                // M4 P3a: field assignment type-checking not yet implemented.
-                Stmt::FieldAssign { .. } => {}
+                Stmt::FieldAssign { target, value, span } => {
+                    self.check_field_assign(target, value, span);
+                }
             }
         }
     }
@@ -499,20 +513,29 @@ impl<'b> Checker<'b> {
                 self.check_method_call(&receiver_ty, method, method_span)
             }
 
-            // M4 P3a: shape-related expressions — type-checking not yet implemented.
-            Expr::FieldAccess { receiver, .. } => {
-                let _ = self.infer_expr(receiver, None);
-                Type::Error
+            Expr::FieldAccess { receiver, field, field_span, .. } => {
+                self.infer_field_access(receiver, field, field_span)
             }
-            Expr::StructLit { fields, .. } => {
-                for f in fields { self.infer_expr(&f.value, None); }
-                Type::Error
+            Expr::StructLit { fields, span } => {
+                self.check_struct_lit(fields, hint, span)
             }
-            Expr::PostfixOp { receiver, .. } => {
-                let _ = self.infer_expr(receiver, None);
-                Type::Error
+            Expr::PostfixOp { receiver, op, span } => {
+                self.check_postfix_op(receiver, op, span)
             }
-            Expr::SelfValue { .. } => Type::Error,
+            Expr::SelfValue { span } => {
+                match self.scope.lookup("self") {
+                    Some(entry) => entry.ty.clone(),
+                    None => {
+                        self.diags.push(Diagnostic::error(
+                            span.clone(),
+                            "`self` can only be used inside a function whose first parameter is named `self`.",
+                            "Add `share self: ShapeName` as the first parameter of this function.",
+                            "`self` refers to the value the function was called on. It must be declared as the first parameter.",
+                        ));
+                        Type::Error
+                    }
+                }
+            }
         };
 
         self.expr_types.insert((expr.span().start, expr.span().end), ty.clone());
@@ -832,28 +855,60 @@ impl<'b> Checker<'b> {
         if *receiver_ty == Type::Error {
             return Type::Error;
         }
-        match self.intrinsics.lookup_method(receiver_ty, method) {
-            Some(ret_ty) => ret_ty,
-            None => {
-                let available = self.intrinsics.methods_for_type(receiver_ty);
-                let what_instead = if available.is_empty() {
-                    format!("`{}` has no methods in M3.", type_name(receiver_ty))
-                } else {
-                    format!(
-                        "Available on `{}`: {}",
-                        type_name(receiver_ty),
-                        available.join(", ")
-                    )
-                };
+
+        // Primitive intrinsic methods (M2/M3 — toString, toFloat, etc.)
+        if let Some(ret_ty) = self.intrinsics.lookup_method(receiver_ty, method) {
+            return ret_ty;
+        }
+
+        // Shape receiver — try UFCS: look for a standalone function `method` whose
+        // first parameter type matches `receiver_ty`. Return type is the function's
+        // return type; arg count / types are checked at the call site.
+        if let Type::Shape { name } = receiver_ty {
+            if let Some(sig) = self.sig_table.fns.get(method) {
+                // Check that first param type matches receiver
+                if let Some((_, first_ty)) = sig.params.first() {
+                    if first_ty == receiver_ty || *first_ty == Type::Error {
+                        return sig.ret.clone();
+                    }
+                }
+                // Function exists but first param doesn't match
                 self.diags.push(Diagnostic::error(
                     method_span.clone(),
-                    format!("`{}` does not have a method called `{method}`.", type_name(receiver_ty)),
-                    what_instead,
-                    "Method calls are checked at compile time. Only the listed methods exist on this type.",
+                    format!("No function `{method}` takes a `{name}` as its first argument."),
+                    format!("Define `function {method}(share self: {name}) -> ...` to call it as `value.{method}()`."),
+                    "In Yinz, `value.method()` is sugar for `method(value)` — the function's first parameter must match the receiver's type.",
                 ));
-                Type::Error
+                return Type::Error;
             }
+            // No function named `method` at all
+            self.diags.push(Diagnostic::error(
+                method_span.clone(),
+                format!("No function `{method}` is defined for `{name}` values."),
+                format!("Define `function {method}(share self: {name}) -> ...` then call it as `value.{method}()`."),
+                "In Yinz, `value.method()` is sugar for `method(value)` (UFCS). Both call forms work — define the function first.",
+            ));
+            return Type::Error;
         }
+
+        // Primitive type with unknown method
+        let available = self.intrinsics.methods_for_type(receiver_ty);
+        let what_instead = if available.is_empty() {
+            format!("`{}` has no built-in methods.", type_name(receiver_ty))
+        } else {
+            format!(
+                "Available on `{}`: {}",
+                type_name(receiver_ty),
+                available.join(", ")
+            )
+        };
+        self.diags.push(Diagnostic::error(
+            method_span.clone(),
+            format!("`{}` does not have a method called `{method}`.", type_name(receiver_ty)),
+            what_instead,
+            "Method calls are checked at compile time. Only the listed methods exist on this type.",
+        ));
+        Type::Error
     }
 
 
@@ -866,18 +921,35 @@ impl<'b> Checker<'b> {
             AstType::Bool => Type::Bool,
             AstType::Error => Type::Error,
             AstType::Named(n, _) if n == "string" => Type::String,
+            AstType::Named(n, _) if self.shape_table.contains(n) => {
+                Type::Shape { name: n.clone() }
+            }
             AstType::Named(n, span) => {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
                     format!("`{n}` is not a known type."),
-                    "Use a built-in type: `int`, `float`, `number`, `bool`, or `string`.",
-                    "Custom data structures are defined with the `shape` keyword, available in M4.",
+                    "Use a built-in type (`int`, `float`, `number`, `bool`, `string`) or a `shape` name defined in this file.",
+                    "Types must be declared before use. If `{n}` is a shape, make sure the `shape {n} {{ ... }}` declaration is in this file.",
                 ));
                 Type::Error
             }
             AstType::Range { .. } => Type::Error,
-            // M4 P3a: shape types — resolution not yet implemented.
-            AstType::Dynamic { .. } | AstType::SelfType { .. } => Type::Error,
+            AstType::SelfType { span } => {
+                match &self.current_shape {
+                    Some(name) => Type::Shape { name: name.clone() },
+                    None => {
+                        self.diags.push(Diagnostic::error(
+                            span.clone(),
+                            "`Self` can only be used inside a function that operates on a shape.",
+                            "Use the concrete shape name instead, e.g. `Player`.",
+                            "`Self` refers to the type of the enclosing shape — it only makes sense inside functions with a `self` receiver parameter.",
+                        ));
+                        Type::Error
+                    }
+                }
+            }
+            // P3b: dynamic dispatch type resolution.
+            AstType::Dynamic { .. } => Type::Error,
         }
     }
 
@@ -921,6 +993,216 @@ impl<'b> Checker<'b> {
             }
         }
         sig.ret.clone()
+    }
+
+    // ── M4 P3a: shape type-checking ──────────────────────────────────────────
+
+    /// Infer the type of a field access `receiver.field`.
+    fn infer_field_access(&mut self, receiver: &Expr, field: &str, field_span: &SourceSpan) -> Type {
+        let receiver_ty = self.infer_expr(receiver, None);
+        let Type::Shape { name } = &receiver_ty else {
+            if receiver_ty != Type::Error {
+                self.diags.push(Diagnostic::error(
+                    field_span.clone(),
+                    format!("`{}` values do not have fields.", type_name(&receiver_ty)),
+                    "Field access is only available on shape values.",
+                    "Shapes are the only Yinz types with named fields. Primitive types like `int` and `string` use methods instead.",
+                ));
+            }
+            return Type::Error;
+        };
+        let shape_name = name.clone();
+        let Some(shape_def) = self.shape_table.get(&shape_name) else {
+            return Type::Error; // shape not in table — already errored at pre-pass
+        };
+        let Some(field_def) = shape_def.field(field) else {
+            let available: Vec<&str> = shape_def.fields.iter().map(|f| f.name.as_str()).collect();
+            let suggestion = find_closest_name(field, &available);
+            let what_instead = match suggestion {
+                Some(close) => format!("Did you mean `{close}`?"),
+                None => format!("`{shape_name}` has these fields: {}", available.join(", ")),
+            };
+            self.diags.push(Diagnostic::error(
+                field_span.clone(),
+                format!("`{shape_name}` does not have a field called `{field}`.", ),
+                what_instead,
+                "Field names must match exactly what was declared in the `shape` body.",
+            ));
+            return Type::Error;
+        };
+        // Hidden field visibility: only accessible inside the declaring shape's functions.
+        if field_def.is_hidden {
+            let inside_shape = self.current_shape.as_deref() == Some(&shape_name);
+            if !inside_shape {
+                self.diags.push(Diagnostic::error(
+                    field_span.clone(),
+                    format!("`{field}` is a hidden field of `{shape_name}` and cannot be read here."),
+                    format!("Move this access inside a function whose first parameter is `self: {shape_name}`."),
+                    "Hidden fields are only accessible to functions that explicitly operate on that shape — they cannot be read by outside code.",
+                ));
+                return Type::Error;
+            }
+        }
+        field_def.ty.clone()
+    }
+
+    /// Type-check a struct literal `{ name: "x", health: 100 }` against the hint type.
+    fn check_struct_lit(&mut self, fields: &[StructLitField], hint: Option<&Type>, span: &SourceSpan) -> Type {
+        let shape_name = match hint {
+            Some(Type::Shape { name }) => name.clone(),
+            Some(other) if *other != Type::Error => {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("A struct literal `{{ ... }}` cannot produce a `{}` value.", type_name(other)),
+                    "Annotate the binding with a `shape` name: `let p: Player = { ... }`",
+                    "Struct literals create shape values — the annotation must name a shape, not a primitive type.",
+                ));
+                for f in fields { self.infer_expr(&f.value, None); }
+                return Type::Error;
+            }
+            _ => {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    "This struct literal needs a type annotation to know which shape to create.",
+                    "Add a type annotation: `let p: Player = { ... }`",
+                    "Struct literals are anonymous — the `shape` type comes from the surrounding annotation. Without it, the compiler cannot check the field names or types.",
+                ));
+                for f in fields { self.infer_expr(&f.value, None); }
+                return Type::Error;
+            }
+        };
+
+        let Some(shape_def) = self.shape_table.get(&shape_name) else {
+            for f in fields { self.infer_expr(&f.value, None); }
+            return Type::Error;
+        };
+
+        // base shapes cannot be instantiated
+        if shape_def.is_base {
+            self.diags.push(Diagnostic::error(
+                span.clone(),
+                format!("`{shape_name}` is a `base shape` and cannot be constructed directly."),
+                format!("Create a shape that extends `{shape_name}`, then construct that instead."),
+                "`base shape` declarations are meant to be extended — they provide shared fields for child shapes but cannot be instantiated on their own.",
+            ));
+            for f in fields { self.infer_expr(&f.value, None); }
+            return Type::Error;
+        }
+
+        // Check every required (non-hidden, no-default) field is present.
+        for shape_field in &shape_def.fields.clone() {
+            if shape_field.is_hidden {
+                continue; // hidden fields are not provided at construction
+            }
+            let provided = fields.iter().any(|f| f.name == shape_field.name);
+            if !provided {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("Missing field `{}` in `{shape_name}` construction.", shape_field.name),
+                    format!("Add `{}: value` to the struct literal.", shape_field.name),
+                    "Every visible field of a shape must be provided when constructing a value — the compiler cannot fill them in for you.",
+                ));
+            }
+        }
+
+        // Check each provided field: name must exist and value type must match.
+        for lit_field in fields {
+            let expected_ty = shape_def.fields.iter()
+                .find(|f| f.name == lit_field.name)
+                .map(|f| f.ty.clone());
+            match expected_ty {
+                None => {
+                    let available: Vec<&str> = shape_def.fields.iter()
+                        .filter(|f| !f.is_hidden)
+                        .map(|f| f.name.as_str())
+                        .collect();
+                    let suggestion = find_closest_name(&lit_field.name, &available);
+                    let what_instead = match suggestion {
+                        Some(close) => format!("Did you mean `{close}`?"),
+                        None => format!("`{shape_name}` has these fields: {}", available.join(", ")),
+                    };
+                    self.diags.push(Diagnostic::error(
+                        lit_field.name_span.clone(),
+                        format!("`{shape_name}` does not have a field called `{}`.", lit_field.name),
+                        what_instead,
+                        "Struct literals can only set fields that are declared on the shape.",
+                    ));
+                    self.infer_expr(&lit_field.value, None);
+                }
+                Some(expected) => {
+                    let actual = self.infer_expr(&lit_field.value, Some(&expected));
+                    if actual != Type::Error && expected != Type::Error && actual != expected {
+                        self.diags.push(Diagnostic::error(
+                            lit_field.name_span.clone(),
+                            format!("Field `{}` expects `{}`, but got `{}`.", lit_field.name, type_name(&expected), type_name(&actual)),
+                            format!("Pass a `{}` value for `{}`.", type_name(&expected), lit_field.name),
+                            format!("`{shape_name}.{}` was declared as `{}`.", lit_field.name, type_name(&expected)),
+                        ));
+                    }
+                }
+            }
+        }
+
+        Type::Shape { name: shape_name }
+    }
+
+    /// Type-check a field assignment `target.field = value`.
+    fn check_field_assign(&mut self, target: &Expr, value: &Expr, span: &SourceSpan) {
+        let Expr::FieldAccess { receiver, field, field_span, .. } = target else {
+            // Parser only produces FieldAssign when target is a FieldAccess, but be defensive.
+            self.infer_expr(target, None);
+            self.infer_expr(value, None);
+            return;
+        };
+
+        // The receiver must be a mutable (let-bound, non-const) shape value.
+        // Walk the receiver chain to find the root binding and check it.
+        if let Some(root_name) = root_binding_name(receiver) {
+            if let Some(entry) = self.scope.lookup(root_name) {
+                if entry.is_const {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        format!("`{root_name}` is `const` and its fields cannot be changed."),
+                        format!("Declare it with `let` instead: `let {root_name}: ShapeType = {{ ... }}`"),
+                        "`const` bindings are fully read-only — no reassignment, no field mutation. Use `let` for values that need to change.",
+                    ));
+                    self.infer_expr(value, None);
+                    return;
+                }
+            }
+        }
+
+        // Resolve the field and check the value type.
+        let field_ty = self.infer_field_access(receiver, field, field_span);
+        let value_ty = self.infer_expr(value, Some(&field_ty));
+
+        if field_ty != Type::Error && value_ty != Type::Error && field_ty != value_ty {
+            self.diags.push(Diagnostic::error(
+                span.clone(),
+                format!("Cannot assign `{}` to field `{field}` which has type `{}`.", type_name(&value_ty), type_name(&field_ty)),
+                format!("Pass a `{}` value.", type_name(&field_ty)),
+                format!("The field `{field}` was declared as `{}`.", type_name(&field_ty)),
+            ));
+        }
+    }
+
+    /// Type-check a dot-postfix body operation (`.copy()` or `.freeze()`).
+    fn check_postfix_op(&mut self, receiver: &Expr, op: &PostfixOpKind, span: &SourceSpan) -> Type {
+        let receiver_ty = self.infer_expr(receiver, None);
+        match op {
+            PostfixOpKind::Copy => {
+                // P3c will enforce trivially-copyable requirement.
+                // P3a: just return the receiver type.
+                if receiver_ty == Type::Error { return Type::Error; }
+                receiver_ty
+            }
+            PostfixOpKind::Freeze => {
+                // P3c will flip the binding's mutability.
+                // P3a: no-op semantically, returns nothing.
+                let _ = span;
+                Type::Nothing
+            }
+        }
     }
 }
 
@@ -1037,6 +1319,20 @@ fn levenshtein(a: &str, b: &str) -> usize {
     dp[m][n]
 }
 
+/// Walk a field-access chain to find the root binding name.
+///
+/// `player.inner.health` → `Some("player")`
+/// `self.field` → `Some("self")`
+/// Anything not rooted in a simple identifier → `None`.
+fn root_binding_name(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Ident(name, _) => Some(name.as_str()),
+        Expr::SelfValue { .. } => Some("self"),
+        Expr::FieldAccess { receiver, .. } => root_binding_name(receiver),
+        _ => None,
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -1076,8 +1372,9 @@ mod tests {
             vec![Type::Nothing],
             Type::Nothing,
         );
-        let sig_table = crate::signatures::collect_signatures(&module, &mut DiagnosticBucket::new());
-        let (_, diags) = check(&module, &sig_table, &intrinsics);
+        let shape_table = crate::shapes::collect_shapes(&module, &mut DiagnosticBucket::new());
+        let sig_table = crate::signatures::collect_signatures(&module, &mut DiagnosticBucket::new(), &shape_table);
+        let (_, diags) = check(&module, &sig_table, &shape_table, &intrinsics);
         let diags: Vec<_> = diags.into_iter().collect();
         assert_eq!(diags.len(), 1, "Expected 1 type-mismatch diagnostic, got: {diags:#?}");
 

@@ -63,7 +63,33 @@ shape BadShape {
   }
 }
 
-// ────── (P3+ error classes added here as phases land) ──────
-// After M4 P3a (typeck): wrong field type, unknown field, hidden-field-outside-shape
-// After M4 P3b (inheritance): cyclic extends, base instantiation, dynamic type mismatch
-// After M4 P3c (ownership): use-after-give, const-lend, double-lend, etc.
+// ────── M4 P3a: Typeck errors ──────
+
+// WHY: Struct literal missing a required field.
+//      P3a check_struct_lit validates all visible fields are present.
+shape Player { name: string health: int }
+function missingField() -> nothing {
+  let p: Player = { name: "Patrick" }
+}
+
+// WHY: Field type mismatch — health expects int, got string.
+function wrongFieldType() -> nothing {
+  let p: Player = { name: "Patrick", health: "one hundred" }
+}
+
+// WHY: `base shape` cannot be instantiated directly.
+base shape Entity { name: string }
+function instantiateBase() -> nothing {
+  let e: Entity = { name: "ghost" }
+}
+
+// WHY: `const` binding — field mutation rejected.
+//      Demonstrates const deep-immutability (one of the five const paths from plan invariants).
+function constFieldMutation() -> nothing {
+  const p: Player = { name: "Patrick", health: 100 }
+  p.health = 50
+}
+
+// ────── (P3b+ error classes added here as phases land) ──────
+// After M4 P3b: cyclic extends, dynamic type mismatch, follows contract violation
+// After M4 P3c: use-after-give, const-lend, double-lend, mutable-while-shared

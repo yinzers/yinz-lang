@@ -7,11 +7,11 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Now (active)
 
-- [ ] **M4 P1 — Lexer** — Branch `feat/m4-lexer` pushed (05c5296). PR ready at https://github.com/patrickrizzardi/ynz/pull/new/feat/m4-lexer — Patrick opens + merges. Then P2 starts.
+- [ ] **M4 P2 — Parser** — Branch `feat/m4-parser` pushed (84db1d2). PR at https://github.com/patrickrizzardi/ynz/pull/new/feat/m4-parser — Patrick opens + merges. P3a blocked until merged.
 
 ## Soon (committed, not started)
 
-- [ ] **M4 P2 — Parser** — After P1 merges. Shape declarations, field access, dot-modifiers (`.copy()`, `.freeze()`), struct literal annotation form, `dynamic` in type position.
+- [x] **M4 P2 — Parser** — DONE (84db1d2, branch feat/m4-parser). ShapeDecl AST, FieldAccess, StructLit, PostfixOp, SelfValue, FieldAssign, Dynamic/SelfType types, ownership modifiers parse, 68 parse tests green.
 - [ ] **M4 P3a — Typeck shapes** — After P2. Shape table salsa query, struct literals, field access/assign, method resolution, hidden fields.
 - [ ] **M4 P3b — Inheritance + follows + dynamic** — After P3a.
 - [ ] **M4 P3c — Ownership analysis** — After P3b. Borrow-check salsa query, const deep-immutability, use-after-give.

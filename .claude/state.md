@@ -66,7 +66,8 @@ cargo fmt --all
 - [2026-05-14] **Design-lockdown (PRs #5 + #14)**: `shape` keyword locked for M4 type declarations (not `type`). 3 new rule files (inference.md, plan-invariants.md, vocabulary.md). 5 graveyard entries. Golden Rules 8/11/12 clarified. M4+ plans must include 5-subsection Invariants block.
 - [2026-05-14] **M3 complete (9653dbd, tag v0.1.0-m3)**: Control flow (`if`, `while`, `for`), multi-case `if`, user-defined functions with params + return types, two-pass typeck, return-path analysis, full LLVM lowering. 310 tests. `fib(10) = 55`. Plan: `.claude/plans/done/m3-control-flow-fns.md`.
 - [2026-05-16] **M4 Doc-PRs 1+2 complete (54521dd)**: Non-OOP model locked. `shape`/`follows`/`extends`/UFCS locked. Body-level `.share/.lend/.give` removed. Annotation-only struct literals. `override` removed. All design+spec docs rewritten. Commit message: "M4 P1 (lexer) cleared to start."
-- [2026-05-16] **M4 P1 complete (05c5296, branch feat/m4-lexer, PR open)**: 8 new tokens (49→57): `Shape`, `Follows`, `Extends`, `Base`, `Hidden`, `Dynamic`, `SelfType`, `SelfValue`. 6 banned-keyword handlers. 63 lex + 49 parse + 8 jargon audit tests green. Snapshot committed. Branch pushed. Patrick opens PR at https://github.com/patrickrizzardi/ynz/pull/new/feat/m4-lexer.
+- [2026-05-16] **M4 P1 complete (05c5296, merged to main)**: 8 new tokens (49→57). 6 banned-keyword handlers. All tests green.
+- [2026-05-16] **M4 P2 complete (84db1d2, branch feat/m4-parser, PR open)**: AST + parser for shapes. 4 new Expr variants (FieldAccess, StructLit, PostfixOp, SelfValue), 1 Stmt (FieldAssign), 2 Type (Dynamic, SelfType), full ShapeDecl. Ownership modifiers (`share`/`lend`/`give`) now parse (replaced M3 deferral). 68 parse tests green. PR: https://github.com/patrickrizzardi/ynz/pull/new/feat/m4-parser
 
 ---
 

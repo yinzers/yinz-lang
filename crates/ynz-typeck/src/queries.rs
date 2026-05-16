@@ -6,6 +6,7 @@ use ynz_parser::{parse_query, SourceFile};
 use crate::{
     check::{check, TypedModule},
     intrinsics::PrimitiveIntrinsicTable,
+    shapes::{collect_shapes, ShapeTable},
     signatures::{collect_signatures, SignatureTable},
 };
 
@@ -13,6 +14,7 @@ use crate::{
 #[derive(Clone, Debug, PartialEq)]
 pub struct SignatureOutput {
     pub sig_table: SignatureTable,
+    pub shape_table: ShapeTable,
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -33,6 +35,14 @@ impl PartialEq for SignatureTable {
     }
 }
 
+/// Allow ShapeTable to derive PartialEq for salsa (coarse: same shape names).
+impl PartialEq for ShapeTable {
+    fn eq(&self, other: &Self) -> bool {
+        self.shapes.len() == other.shapes.len()
+            && self.shapes.keys().all(|k| other.shapes.contains_key(k))
+    }
+}
+
 /// The output of the type-check pass.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CheckOutput {
@@ -40,22 +50,25 @@ pub struct CheckOutput {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// Pass 1: collect all function signatures from the module.
+/// Pass 1: collect all shape declarations and function signatures from the module.
 ///
 /// Validates:
+/// - Duplicate shape names, duplicate field names, field type cycles
 /// - Duplicate function names
 /// - `main` exists with `() -> nothing` signature
 ///
-/// This is a separate salsa query so body-only changes don't re-run the
-/// signature pass, and signature changes correctly cascade to body checks
-/// of all callers.
+/// Shapes are collected before signatures so function signatures can reference
+/// shape types (e.g. `function greet(share self: Player) -> string`).
 #[salsa::tracked]
 pub fn module_signatures_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<SignatureOutput> {
     let parse = parse_query(db, source);
     let mut diag_bucket = ynz_diagnostics::DiagnosticBucket::new();
-    let sig_table = collect_signatures(&parse.module, &mut diag_bucket);
+    // Shapes first — function signatures need them for type resolution.
+    let shape_table = collect_shapes(&parse.module, &mut diag_bucket);
+    let sig_table = collect_signatures(&parse.module, &mut diag_bucket, &shape_table);
     Arc::new(SignatureOutput {
         sig_table,
+        shape_table,
         diagnostics: diag_bucket.into_iter().collect(),
     })
 }
@@ -75,6 +88,7 @@ pub fn check_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<CheckOut
     let (typed, check_diags) = check(
         &parse.module,
         &sig_output.sig_table,
+        &sig_output.shape_table,
         &PrimitiveIntrinsicTable::m3(),
     );
     all_diags.extend(check_diags.into_iter());
