@@ -95,15 +95,15 @@ function main() -> nothing {
   print(isOdd(7))     // true
 
   // ────── M4: shapes + functions + ownership ──────
-  // ADDED BY M4 PHASES — see .claude/plans/active/m4-shapes-functions-ownership.md
-  // After M4 P2 (parser): shape declarations parse
-  // After M4 P3a (typeck shapes): struct literals type-check
-  // After M4 P3b (inheritance + dynamic): extends + follows + dynamic work
-  // After M4 P3c (ownership): full borrow-check enforced
+  // P2 (parser) shipped: shape declarations, field access, struct literals,
+  //   .copy()/.freeze() postfix ops, dynamic types, ownership modifiers on params.
+  // After M4 P3a (typeck): struct literals type-check against annotated shape
+  // After M4 P3b (typeck): extends + follows + dynamic dispatch work
+  // After M4 P3c (typeck): full borrow-check enforced
   // After M4 P4 (codegen): end-to-end compile + run
   // After M4 P5 (catch-up): int.max, int.min, number.epsilon, .wrappingAdd() etc.
   print("")
-  print("M4+ sections land as each phase ships — see plan.")
+  print("M4 P2 (parser) shipped — typeck + codegen phases to follow.")
 
   // ────── Deferred features (v0.2+) ──────
   // arena scratch { let temp: array<int> = [...] }  // v0.2 — design/future/arena.md

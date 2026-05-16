@@ -1,0 +1,398 @@
+---
+source: crates/ynz-parser/tests/parse.rs
+expression: output.module
+---
+Module {
+    items: [
+        ShapeDecl(
+            ShapeDecl {
+                name: "Player",
+                name_span: SourceSpan {
+                    file: "test.ynz",
+                    start: 6,
+                    end: 12,
+                },
+                is_base: false,
+                extends: None,
+                follows: [],
+                fields: [
+                    FieldDecl {
+                        name: "name",
+                        name_span: SourceSpan {
+                            file: "test.ynz",
+                            start: 17,
+                            end: 21,
+                        },
+                        ty: Named(
+                            "string",
+                            SourceSpan {
+                                file: "test.ynz",
+                                start: 23,
+                                end: 29,
+                            },
+                        ),
+                        ty_span: SourceSpan {
+                            file: "test.ynz",
+                            start: 23,
+                            end: 29,
+                        },
+                        is_hidden: false,
+                        default: None,
+                        span: SourceSpan {
+                            file: "test.ynz",
+                            start: 17,
+                            end: 29,
+                        },
+                    },
+                    FieldDecl {
+                        name: "health",
+                        name_span: SourceSpan {
+                            file: "test.ynz",
+                            start: 32,
+                            end: 38,
+                        },
+                        ty: Int,
+                        ty_span: SourceSpan {
+                            file: "test.ynz",
+                            start: 40,
+                            end: 43,
+                        },
+                        is_hidden: false,
+                        default: None,
+                        span: SourceSpan {
+                            file: "test.ynz",
+                            start: 32,
+                            end: 43,
+                        },
+                    },
+                    FieldDecl {
+                        name: "cache",
+                        name_span: SourceSpan {
+                            file: "test.ynz",
+                            start: 53,
+                            end: 58,
+                        },
+                        ty: Int,
+                        ty_span: SourceSpan {
+                            file: "test.ynz",
+                            start: 60,
+                            end: 63,
+                        },
+                        is_hidden: true,
+                        default: None,
+                        span: SourceSpan {
+                            file: "test.ynz",
+                            start: 46,
+                            end: 63,
+                        },
+                    },
+                ],
+                contract_sigs: [],
+                span: SourceSpan {
+                    file: "test.ynz",
+                    start: 0,
+                    end: 65,
+                },
+            },
+        ),
+        Function(
+            FunctionDecl {
+                name: "greet",
+                params: [
+                    Param {
+                        name: "self",
+                        name_span: SourceSpan {
+                            file: "test.ynz",
+                            start: 88,
+                            end: 92,
+                        },
+                        ownership: Some(
+                            Share,
+                        ),
+                        ty: Named(
+                            "Player",
+                            SourceSpan {
+                                file: "test.ynz",
+                                start: 94,
+                                end: 100,
+                            },
+                        ),
+                        ty_span: SourceSpan {
+                            file: "test.ynz",
+                            start: 94,
+                            end: 100,
+                        },
+                        span: SourceSpan {
+                            file: "test.ynz",
+                            start: 88,
+                            end: 100,
+                        },
+                    },
+                ],
+                return_type: Named(
+                    "string",
+                    SourceSpan {
+                        file: "test.ynz",
+                        start: 105,
+                        end: 111,
+                    },
+                ),
+                body: Block {
+                    stmts: [
+                        Return {
+                            value: Some(
+                                FieldAccess {
+                                    receiver: SelfValue {
+                                        span: SourceSpan {
+                                            file: "test.ynz",
+                                            start: 123,
+                                            end: 127,
+                                        },
+                                    },
+                                    field: "name",
+                                    field_span: SourceSpan {
+                                        file: "test.ynz",
+                                        start: 128,
+                                        end: 132,
+                                    },
+                                    span: SourceSpan {
+                                        file: "test.ynz",
+                                        start: 123,
+                                        end: 132,
+                                    },
+                                },
+                            ),
+                            span: SourceSpan {
+                                file: "test.ynz",
+                                start: 116,
+                                end: 132,
+                            },
+                        },
+                    ],
+                    span: SourceSpan {
+                        file: "test.ynz",
+                        start: 116,
+                        end: 134,
+                    },
+                },
+                span: SourceSpan {
+                    file: "test.ynz",
+                    start: 67,
+                    end: 144,
+                },
+                name_span: SourceSpan {
+                    file: "test.ynz",
+                    start: 76,
+                    end: 81,
+                },
+            },
+        ),
+        Function(
+            FunctionDecl {
+                name: "main",
+                params: [],
+                return_type: Nothing,
+                body: Block {
+                    stmts: [
+                        Let {
+                            is_const: false,
+                            name: "p",
+                            name_span: SourceSpan {
+                                file: "test.ynz",
+                                start: 171,
+                                end: 172,
+                            },
+                            ty: Some(
+                                Named(
+                                    "Player",
+                                    SourceSpan {
+                                        file: "test.ynz",
+                                        start: 174,
+                                        end: 180,
+                                    },
+                                ),
+                            ),
+                            value: StructLit {
+                                fields: [
+                                    StructLitField {
+                                        name: "name",
+                                        name_span: SourceSpan {
+                                            file: "test.ynz",
+                                            start: 185,
+                                            end: 189,
+                                        },
+                                        value: StringLit(
+                                            [
+                                                80,
+                                                97,
+                                                116,
+                                                114,
+                                                105,
+                                                99,
+                                                107,
+                                            ],
+                                            SourceSpan {
+                                                file: "test.ynz",
+                                                start: 191,
+                                                end: 200,
+                                            },
+                                        ),
+                                    },
+                                    StructLitField {
+                                        name: "health",
+                                        name_span: SourceSpan {
+                                            file: "test.ynz",
+                                            start: 202,
+                                            end: 208,
+                                        },
+                                        value: IntLit(
+                                            100,
+                                            SourceSpan {
+                                                file: "test.ynz",
+                                                start: 210,
+                                                end: 213,
+                                            },
+                                        ),
+                                    },
+                                ],
+                                span: SourceSpan {
+                                    file: "test.ynz",
+                                    start: 183,
+                                    end: 215,
+                                },
+                            },
+                            span: SourceSpan {
+                                file: "test.ynz",
+                                start: 167,
+                                end: 215,
+                            },
+                        },
+                        FieldAssign {
+                            target: FieldAccess {
+                                receiver: Ident(
+                                    "p",
+                                    SourceSpan {
+                                        file: "test.ynz",
+                                        start: 218,
+                                        end: 219,
+                                    },
+                                ),
+                                field: "health",
+                                field_span: SourceSpan {
+                                    file: "test.ynz",
+                                    start: 220,
+                                    end: 226,
+                                },
+                                span: SourceSpan {
+                                    file: "test.ynz",
+                                    start: 218,
+                                    end: 226,
+                                },
+                            },
+                            value: IntLit(
+                                90,
+                                SourceSpan {
+                                    file: "test.ynz",
+                                    start: 229,
+                                    end: 231,
+                                },
+                            ),
+                            span: SourceSpan {
+                                file: "test.ynz",
+                                start: 218,
+                                end: 231,
+                            },
+                        },
+                        Let {
+                            is_const: false,
+                            name: "h",
+                            name_span: SourceSpan {
+                                file: "test.ynz",
+                                start: 238,
+                                end: 239,
+                            },
+                            ty: None,
+                            value: FieldAccess {
+                                receiver: Ident(
+                                    "p",
+                                    SourceSpan {
+                                        file: "test.ynz",
+                                        start: 242,
+                                        end: 243,
+                                    },
+                                ),
+                                field: "health",
+                                field_span: SourceSpan {
+                                    file: "test.ynz",
+                                    start: 244,
+                                    end: 250,
+                                },
+                                span: SourceSpan {
+                                    file: "test.ynz",
+                                    start: 242,
+                                    end: 250,
+                                },
+                            },
+                            span: SourceSpan {
+                                file: "test.ynz",
+                                start: 234,
+                                end: 250,
+                            },
+                        },
+                        Let {
+                            is_const: false,
+                            name: "b",
+                            name_span: SourceSpan {
+                                file: "test.ynz",
+                                start: 257,
+                                end: 258,
+                            },
+                            ty: None,
+                            value: PostfixOp {
+                                receiver: Ident(
+                                    "p",
+                                    SourceSpan {
+                                        file: "test.ynz",
+                                        start: 261,
+                                        end: 262,
+                                    },
+                                ),
+                                op: Copy,
+                                span: SourceSpan {
+                                    file: "test.ynz",
+                                    start: 261,
+                                    end: 269,
+                                },
+                            },
+                            span: SourceSpan {
+                                file: "test.ynz",
+                                start: 253,
+                                end: 269,
+                            },
+                        },
+                    ],
+                    span: SourceSpan {
+                        file: "test.ynz",
+                        start: 167,
+                        end: 271,
+                    },
+                },
+                span: SourceSpan {
+                    file: "test.ynz",
+                    start: 136,
+                    end: 271,
+                },
+                name_span: SourceSpan {
+                    file: "test.ynz",
+                    start: 145,
+                    end: 149,
+                },
+            },
+        ),
+    ],
+    span: SourceSpan {
+        file: "test.ynz",
+        start: 0,
+        end: 271,
+    },
+}

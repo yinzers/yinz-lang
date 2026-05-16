@@ -67,6 +67,8 @@ fn analyze_stmts(stmts: &[Stmt]) -> ReturnAnalysis {
                 dead.extend(inner.dead_code);
             }
             Stmt::Expr(_) | Stmt::Let { .. } | Stmt::Assign { .. } => {}
+            // M4: field assignment — same as a bare expression for return-path purposes.
+            Stmt::FieldAssign { .. } => {}
         }
     }
 
@@ -82,7 +84,8 @@ fn stmt_span(stmt: &Stmt) -> SourceSpan {
         | Stmt::Match { span, .. }
         | Stmt::While { span, .. }
         | Stmt::For { span, .. }
-        | Stmt::Return { span, .. } => span.clone(),
+        | Stmt::Return { span, .. }
+        | Stmt::FieldAssign { span, .. } => span.clone(),
     }
 }
 

@@ -69,6 +69,8 @@ impl<'b> Checker<'b> {
         for item in &module.items {
             match item {
                 Item::Function(f) => self.check_function(f),
+                // M4 P3a: shape type-checking not yet implemented.
+                Item::ShapeDecl(_) => {}
             }
         }
     }
@@ -155,6 +157,8 @@ impl<'b> Checker<'b> {
                 Stmt::Return { value, span } => {
                     self.check_stmt_return(value.as_ref(), span);
                 }
+                // M4 P3a: field assignment type-checking not yet implemented.
+                Stmt::FieldAssign { .. } => {}
             }
         }
     }
@@ -494,6 +498,21 @@ impl<'b> Checker<'b> {
                 }
                 self.check_method_call(&receiver_ty, method, method_span)
             }
+
+            // M4 P3a: shape-related expressions — type-checking not yet implemented.
+            Expr::FieldAccess { receiver, .. } => {
+                let _ = self.infer_expr(receiver, None);
+                Type::Error
+            }
+            Expr::StructLit { fields, .. } => {
+                for f in fields { self.infer_expr(&f.value, None); }
+                Type::Error
+            }
+            Expr::PostfixOp { receiver, .. } => {
+                let _ = self.infer_expr(receiver, None);
+                Type::Error
+            }
+            Expr::SelfValue { .. } => Type::Error,
         };
 
         self.expr_types.insert((expr.span().start, expr.span().end), ty.clone());
@@ -857,6 +876,8 @@ impl<'b> Checker<'b> {
                 Type::Error
             }
             AstType::Range { .. } => Type::Error,
+            // M4 P3a: shape types — resolution not yet implemented.
+            AstType::Dynamic { .. } | AstType::SelfType { .. } => Type::Error,
         }
     }
 
@@ -918,6 +939,8 @@ fn body_has_error_node(stmts: &[Stmt]) -> bool {
             expr_has_error(cond) || body_has_error_node(&body.stmts)
         }
         Stmt::Return { value, .. } => value.as_ref().is_some_and(expr_has_error),
+        // M4 P3a: field assignment — not yet type-checked.
+        Stmt::FieldAssign { target, value, .. } => expr_has_error(target) || expr_has_error(value),
     })
 }
 
@@ -934,7 +957,11 @@ fn expr_has_error(expr: &Expr) -> bool {
         | Expr::StringLit(_, _)
         | Expr::IntLit(_, _)
         | Expr::NumberLit(_, _)
-        | Expr::BoolLit(_, _) => false,
+        | Expr::BoolLit(_, _)
+        | Expr::SelfValue { .. } => false,
+        // M4 P3a: shape expressions — propagate error check into sub-expressions.
+        Expr::FieldAccess { receiver, .. } | Expr::PostfixOp { receiver, .. } => expr_has_error(receiver),
+        Expr::StructLit { fields, .. } => fields.iter().any(|f| expr_has_error(&f.value)),
     }
 }
 

@@ -8,9 +8,14 @@ pub struct Module {
 }
 
 /// A top-level item in a module.
+///
+/// Variant count is pinned by `m4_item_variant_count_locked` in the test suite.
+/// Current count: 2.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
     Function(FunctionDecl),
+    // test-ratchet: M4 adds ShapeDecl for user-defined data types.
+    ShapeDecl(ShapeDecl),
 }
 
 /// A function declaration: `function name(params) -> return_type { body }`.
@@ -25,13 +30,24 @@ pub struct FunctionDecl {
     pub name_span: SourceSpan,
 }
 
-/// A single function parameter: `name: Type`.
+/// Ownership modifier on a function parameter signature.
 ///
-/// No ownership annotations in M3 — those arrive in M4 (`share`, `lend`, `give`).
+/// `share self` / `lend self` / `give self` in contract method signatures (required);
+/// optional on free function signatures (inferred from body usage when omitted).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OwnershipModifier {
+    Share,
+    Lend,
+    Give,
+}
+
+/// A single function parameter: `[share|lend|give] name: Type`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Param {
     pub name: String,
     pub name_span: SourceSpan,
+    /// Explicit ownership modifier — `None` for free functions (inferred by typeck from body).
+    pub ownership: Option<OwnershipModifier>,
     pub ty: Type,
     pub ty_span: SourceSpan,
     pub span: SourceSpan,
@@ -121,6 +137,19 @@ pub enum Stmt {
     /// An early `return [value]`.
     Return {
         value: Option<Expr>,
+        span: SourceSpan,
+    },
+
+    // ── M4 ───────────────────────────────────────────────────────────────────
+
+    // test-ratchet: M4 adds FieldAssign for `receiver.field = value`.
+    /// Field assignment: `receiver.field = value`.
+    ///
+    /// `target` is the full `Expr::FieldAccess` LHS (typeck deconstructs it);
+    /// `value` is the RHS expression.
+    FieldAssign {
+        target: Box<Expr>,
+        value: Expr,
         span: SourceSpan,
     },
 }
@@ -242,6 +271,59 @@ pub enum Expr {
         args: Vec<Expr>,
         span: SourceSpan,
     },
+
+    // ── M4 ───────────────────────────────────────────────────────────────────
+
+    // test-ratchet: M4 adds FieldAccess, StructLit, PostfixOp.
+
+    /// Field access: `receiver.field` (no parens — pure read per dot-postfix rule).
+    FieldAccess {
+        receiver: Box<Expr>,
+        field: String,
+        field_span: SourceSpan,
+        span: SourceSpan,
+    },
+
+    /// Anonymous struct literal: `{ name: "Patrick", health: 100 }`.
+    ///
+    /// No type-name prefix — the type is resolved from the surrounding annotation
+    /// (e.g. `let p: Player = { ... }`) at typeck time.
+    StructLit {
+        fields: Vec<StructLitField>,
+        span: SourceSpan,
+    },
+
+    /// Dot-postfix body operation: `value.copy()` or `value.freeze()`.
+    ///
+    /// Actions (Golden Rule 2 — parens for actions). Only `.copy()` and `.freeze()`
+    /// are body-level operations; `.share`/`.lend`/`.give` are inferred at call
+    /// sites and have no body syntax.
+    PostfixOp {
+        receiver: Box<Expr>,
+        op: PostfixOpKind,
+        span: SourceSpan,
+    },
+
+    /// The `self` value keyword (lowercase) — the receiver instance inside a
+    /// function whose first parameter is `share self` / `lend self` / `give self`.
+    SelfValue {
+        span: SourceSpan,
+    },
+}
+
+/// The kind of dot-postfix body operation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PostfixOpKind {
+    Copy,
+    Freeze,
+}
+
+/// A single field initializer in an anonymous struct literal.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StructLitField {
+    pub name: String,
+    pub name_span: SourceSpan,
+    pub value: Expr,
 }
 
 impl Expr {
@@ -256,7 +338,11 @@ impl Expr {
             Expr::Call(c) => &c.span,
             Expr::BinOp { span, .. }
             | Expr::UnaryOp { span, .. }
-            | Expr::MethodCall { span, .. } => span,
+            | Expr::MethodCall { span, .. }
+            | Expr::FieldAccess { span, .. }
+            | Expr::StructLit { span, .. }
+            | Expr::PostfixOp { span, .. } => span,
+            Expr::SelfValue { span } => span,
         }
     }
 
@@ -313,4 +399,96 @@ pub enum Type {
         /// Always `false` in M3 — `range(end)` and `range(start, end)` are end-exclusive.
         end_inclusive: bool,
     },
+
+    // ── M4 ───────────────────────────────────────────────────────────────────
+
+    // test-ratchet: M4 adds Dynamic and SelfType.
+
+    /// `dynamic Foo` — runtime polymorphism via fat pointer + vtable lookup.
+    ///
+    /// Opt-in only: static dispatch is the default when the concrete type is known.
+    Dynamic {
+        contract: String,
+        span: SourceSpan,
+    },
+
+    /// `Self` — the concrete type of the enclosing shape (in type position).
+    ///
+    /// Only valid inside a shape body or a function whose first parameter is `self`.
+    SelfType {
+        span: SourceSpan,
+    },
+}
+
+
+// ── M4 shape declarations ────────────────────────────────────────────────────
+
+/// Ownership modifier on the receiver `self` parameter in a contract signature.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReceiverKind {
+    /// `share self` — read-only access; caller keeps ownership.
+    Share,
+    /// `lend self` — mutable access; caller keeps ownership.
+    Lend,
+    /// `give self` — ownership transfer into the function; caller gives up the value.
+    Give,
+}
+
+/// A bare method signature inside a `shape` body (contract shapes only — no body).
+///
+/// Example: `greet(share self) -> string`
+///
+/// The `function` keyword is NOT used. Typeck verifies that a matching standalone
+/// function exists in scope when the shape is used as a contract target.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContractSig {
+    pub name: String,
+    pub name_span: SourceSpan,
+    /// The receiver kind for the implicit `self` parameter, if present.
+    pub receiver: Option<ReceiverKind>,
+    /// Additional parameters after `self`.
+    pub params: Vec<Param>,
+    pub return_type: Type,
+    pub span: SourceSpan,
+}
+
+/// A field declaration inside a `shape` body.
+///
+/// Examples:
+///   `name: string` — visible field, no default
+///   `hidden cache: int = 0` — hidden field with a constant default
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldDecl {
+    pub name: String,
+    pub name_span: SourceSpan,
+    pub ty: Type,
+    pub ty_span: SourceSpan,
+    /// `true` when declared with the `hidden` keyword.
+    pub is_hidden: bool,
+    /// Default expression for hidden fields (constants and empty literals only).
+    pub default: Option<Expr>,
+    pub span: SourceSpan,
+}
+
+/// A shape (data type) declaration.
+///
+/// Examples:
+///   `shape Player { name: string, health: int }`
+///   `base shape Entity { name: string }`
+///   `shape Warrior extends Entity follows Damageable { weapon: string }`
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShapeDecl {
+    pub name: String,
+    pub name_span: SourceSpan,
+    /// `true` when declared with the `base` keyword — cannot be instantiated directly.
+    pub is_base: bool,
+    /// Optional parent shape for data-only inheritance.
+    pub extends: Option<(String, SourceSpan)>,
+    /// Zero or more contract shapes this shape must satisfy.
+    pub follows: Vec<(String, SourceSpan)>,
+    /// Data fields.
+    pub fields: Vec<FieldDecl>,
+    /// Bare method signatures (for contract shapes).
+    pub contract_sigs: Vec<ContractSig>,
+    pub span: SourceSpan,
 }

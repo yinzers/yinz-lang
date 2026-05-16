@@ -43,6 +43,8 @@ pub fn collect_signatures(module: &Module, diags: &mut DiagnosticBucket) -> Sign
 
     for item in &module.items {
         match item {
+            // M4 P3a: shapes not yet collected into the signature table.
+            Item::ShapeDecl(_) => continue,
             Item::Function(f) => {
                 let params: Vec<(String, Type)> = f
                     .params
@@ -120,5 +122,7 @@ pub fn sig_ast_type_to_type(ast_ty: &AstType) -> Type {
         AstType::Bool => Type::Bool,
         AstType::Named(n, _) if n == "string" => Type::String,
         AstType::Error | AstType::Named(_, _) | AstType::Range { .. } => Type::Error,
+        // M4 P3a: shape types — not yet resolved.
+        AstType::Dynamic { .. } | AstType::SelfType { .. } => Type::Error,
     }
 }

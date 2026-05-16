@@ -23,8 +23,8 @@ expression: output.diagnostics
             end: 27,
         },
         what: "Unexpected `}` at the top level.",
-        what_instead: "Top-level code must be inside a `function` declaration.",
-        why: "Yinz programs are made of functions. Only `function` declarations are allowed at the top level.",
+        what_instead: "Top-level code must be inside a `function` or `shape` declaration.",
+        why: "Yinz programs are made of functions and shapes. Only declarations are allowed at the top level.",
         related: [],
     },
 ]

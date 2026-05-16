@@ -16,8 +16,9 @@
 /// Every AST node carries a SourceSpan so downstream stages can point
 /// diagnostics at exact source locations.
 use ynz_ast::nodes::{
-    BinOpKind, Block, CallExpr, Expr, FunctionDecl, Item, MatchArm, MatchPattern, MatchPatternKind,
-    Module, Param, Stmt, Type, UnaryOpKind,
+    BinOpKind, Block, CallExpr, ContractSig, Expr, FieldDecl, FunctionDecl, Item, MatchArm,
+    MatchPattern, MatchPatternKind, Module, OwnershipModifier, Param, PostfixOpKind, ReceiverKind,
+    ShapeDecl, Stmt, StructLitField, Type, UnaryOpKind,
 };
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
@@ -97,6 +98,8 @@ impl<'a> Parser<'a> {
                 | Token::Let
                 | Token::Const
                 | Token::Function
+                | Token::Shape
+                | Token::Base
                 | Token::If
                 | Token::While
                 | Token::For
@@ -128,6 +131,28 @@ impl<'a> Parser<'a> {
                         items.push(Item::Function(decl));
                     }
                 }
+                Token::Shape => {
+                    if let Some(decl) = self.parse_shape_decl(false) {
+                        items.push(Item::ShapeDecl(decl));
+                    }
+                }
+                Token::Base => {
+                    // `base shape Name { ... }` — consume `base`, then expect `shape`
+                    let base_span = self.current_span();
+                    self.advance(); // consume `base`
+                    if !matches!(self.peek(), Token::Shape) {
+                        self.diags.push(Diagnostic::error(
+                            self.current_span(),
+                            "Expected `shape` after `base`.",
+                            "Write `base shape Name { ... }` to declare a shape that cannot be instantiated directly.",
+                            "`base` is a modifier on `shape` — it must be immediately followed by the `shape` keyword.",
+                        ));
+                        let _ = base_span;
+                        self.advance();
+                    } else if let Some(decl) = self.parse_shape_decl(true) {
+                        items.push(Item::ShapeDecl(decl));
+                    }
+                }
                 _ => {
                     let span = self.current_span();
                     self.diags.push(Diagnostic::error(
@@ -136,8 +161,8 @@ impl<'a> Parser<'a> {
                             "Unexpected `{}` at the top level.",
                             token_display(self.peek())
                         ),
-                        "Top-level code must be inside a `function` declaration.",
-                        "Yinz programs are made of functions. Only `function` declarations are allowed at the top level.",
+                        "Top-level code must be inside a `function` or `shape` declaration.",
+                        "Yinz programs are made of functions and shapes. Only declarations are allowed at the top level.",
                     ));
                     self.advance();
                 }
@@ -234,6 +259,31 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Type::Nothing
             }
+            Token::Dynamic => {
+                self.advance(); // consume `dynamic`
+                let span = self.current_span();
+                match self.peek().clone() {
+                    Token::Identifier(contract) => {
+                        let contract_span = span;
+                        self.advance();
+                        Type::Dynamic { contract, span: contract_span }
+                    }
+                    _ => {
+                        self.diags.push(Diagnostic::error(
+                            self.current_span(),
+                            "Expected a contract name after `dynamic`.",
+                            "Write `dynamic Foo` where `Foo` is a shape that declares contract signatures.",
+                            "`dynamic` enables runtime dispatch — it must name the contract the value follows.",
+                        ));
+                        Type::Error
+                    }
+                }
+            }
+            Token::SelfType => {
+                let span = self.current_span();
+                self.advance();
+                Type::SelfType { span }
+            }
             Token::Identifier(name) => {
                 let span = self.current_span();
                 self.advance();
@@ -249,8 +299,8 @@ impl<'a> Parser<'a> {
                 self.diags.push(Diagnostic::error(
                     self.current_span(),
                     "Expected a type here.",
-                    "Use `nothing`, `int`, `float`, `number`, `bool`, or a type name.",
-                    "Return types tell Yinz (and the next developer reading your code) what the function produces.",
+                    "Use `nothing`, `int`, `float`, `number`, `bool`, `dynamic Foo`, `Self`, or a type name.",
+                    "Types tell Yinz what kind of value a variable holds or a function produces.",
                 ));
                 Type::Error
             }
@@ -361,7 +411,34 @@ impl<'a> Parser<'a> {
             Token::For => Some(self.parse_for()),
             Token::Return => Some(self.parse_return()),
             _ => {
+                // Parse the expression; if it resolves to a FieldAccess followed by
+                // `=`, it becomes a FieldAssign. Otherwise it's a bare expression stmt.
                 let expr = self.parse_expr(0);
+                if matches!(self.peek(), Token::Eq) {
+                    if matches!(expr, Expr::FieldAccess { .. }) {
+                        let eq_span = self.current_span();
+                        self.advance(); // consume `=`
+                        let value = self.parse_expr(0);
+                        let span = SourceSpan::new(self.file, expr.span().start, value.span().end);
+                        let _ = eq_span;
+                        return Some(Stmt::FieldAssign {
+                            target: Box::new(expr),
+                            value,
+                            span,
+                        });
+                    }
+                    // Something else followed by `=` — error
+                    let span = self.current_span();
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        "The left side of `=` must be a variable name or a field access.",
+                        "Write `name = value` for a variable or `value.field = newValue` for a field.",
+                        "Only named locations (variables and fields) can be assigned to.",
+                    ));
+                    self.advance(); // consume `=`
+                    let _ = self.parse_expr(0); // consume RHS for recovery
+                    return Some(Stmt::Expr(Expr::Error(span)));
+                }
                 Some(Stmt::Expr(expr))
             }
         }
@@ -471,29 +548,31 @@ impl<'a> Parser<'a> {
                 break;
             }
 
-            // Ownership annotations: `share`/`lend`/`give` are M4 — skip with deferral.
-            if let Token::Identifier(kw) = self.peek().clone() {
-                if matches!(kw.as_str(), "share" | "lend" | "give")
-                    && matches!(self.peek_ahead(1), Token::Identifier(_))
-                {
-                    let kw_span = self.current_span();
-                    self.advance(); // skip ownership keyword
-                    self.diags.push(Diagnostic::error(
-                        kw_span,
-                        format!("`{kw}` ownership annotations are not available yet."),
-                        "Declare the parameter without an annotation: `name: Type`",
-                        "Yinz ownership modifiers (`share`, `lend`, `give`) land in v0.1 milestone 4. Until then, parameters are read-only.",
-                    ));
+            // Optional ownership modifier: `share`, `lend`, or `give` before the param name.
+            // Also handles `share self`, `lend self`, `give self` receiver parameters.
+            let ownership = if let Token::Identifier(kw) = self.peek().clone() {
+                match kw.as_str() {
+                    "share" => { self.advance(); Some(OwnershipModifier::Share) }
+                    "lend"  => { self.advance(); Some(OwnershipModifier::Lend) }
+                    "give"  => { self.advance(); Some(OwnershipModifier::Give) }
+                    _ => None,
                 }
-            }
+            } else {
+                None
+            };
 
-            // Parse `name: Type`
+            // Parse `name: Type` — `self` (SelfValue token) is valid as the receiver name.
             let param_start = self.current_span().start;
             let (param_name, name_span) = match self.peek().clone() {
                 Token::Identifier(n) => {
                     let span = self.current_span();
                     self.advance();
                     (n, span)
+                }
+                Token::SelfValue => {
+                    let span = self.current_span();
+                    self.advance();
+                    ("self".to_string(), span)
                 }
                 _ => {
                     self.diags.push(Diagnostic::error(
@@ -543,6 +622,7 @@ impl<'a> Parser<'a> {
             params.push(Param {
                 name: param_name,
                 name_span,
+                ownership,
                 ty,
                 ty_span,
                 span: SourceSpan::new(self.file, param_start, param_end),
@@ -983,7 +1063,7 @@ impl<'a> Parser<'a> {
                     continue;
                 }
                 Token::Dot => {
-                    lhs = self.parse_method_call(lhs);
+                    lhs = self.parse_dot_postfix(lhs);
                     continue;
                 }
                 _ => {}
@@ -1082,7 +1162,29 @@ impl<'a> Parser<'a> {
             Token::Identifier(name) => {
                 let span = self.current_span();
                 self.advance();
+                // Prefix-form struct literal `Player { ... }` — banned; teaching diagnostic.
+                if matches!(self.peek(), Token::LBrace) && self.peek_is_struct_lit_start(0) {
+                    let brace_span = self.current_span();
+                    self.diags.push(Diagnostic::error(
+                        brace_span,
+                        format!("`{name} {{ ... }}` is not the Yinz struct literal syntax."),
+                        format!("Use an annotation-driven literal: `let p: {name} = {{ ... }}`"),
+                        "Yinz struct literals are anonymous — the type comes from the `let`/`const` annotation, not a prefix name. This keeps the syntax consistent with how all other literal values work.",
+                    ));
+                    // Parse and discard the body so the parser recovers cleanly.
+                    self.advance(); // consume `{`
+                    let _ = self.parse_struct_lit_fields();
+                    return Expr::Error(span);
+                }
                 Expr::Ident(name, span)
+            }
+            Token::SelfValue => {
+                let span = self.current_span();
+                self.advance();
+                Expr::SelfValue { span }
+            }
+            Token::LBrace if self.peek_is_struct_lit_start(0) => {
+                self.parse_struct_lit()
             }
             Token::LParen => {
                 self.advance(); // consume `(`
@@ -1168,12 +1270,18 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_method_call(&mut self, receiver: Expr) -> Expr {
+    /// Parse a dot-postfix expression: field access, method call, or body operation.
+    ///
+    /// Dispatches on whether `(` follows the name:
+    ///   - No `(` → `Expr::FieldAccess` (pure read, per dot-postfix rule)
+    ///   - `(` after `copy` or `freeze` → `Expr::PostfixOp`
+    ///   - `(` after anything else → `Expr::MethodCall`
+    fn parse_dot_postfix(&mut self, receiver: Expr) -> Expr {
         let start = receiver.span().start;
         self.advance(); // consume `.`
 
-        // Method name
-        let (method, method_span) = match self.peek().clone() {
+        // Name after the dot
+        let (name, name_span) = match self.peek().clone() {
             Token::Identifier(n) => {
                 let span = self.current_span();
                 self.advance();
@@ -1184,28 +1292,53 @@ impl<'a> Parser<'a> {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
                     format!(
-                        "Expected a method name after `.`, but found `{}`.",
+                        "Expected a field or method name after `.`, but found `{}`.",
                         token_display(self.peek())
                     ),
-                    "Write the method name: `value.toString()`",
-                    "The `.` is a method-call separator — it must be followed by a method name.",
+                    "Write a field name (`value.fieldName`) or method call (`value.method()`).",
+                    "The `.` is used for field access and method calls — it must be followed by a name.",
                 ));
                 return Expr::Error(span);
             }
         };
 
-        // `(`
+        // No `(` → field access (pure read, no side effects)
         if !matches!(self.peek(), Token::LParen) {
-            let span = self.current_span();
-            self.diags.push(Diagnostic::error(
-                span.clone(),
-                format!("Expected `(` after method name `{method}`."),
-                format!("Write: `value.{method}()`"),
-                "Method calls require parentheses — write the `()` even when there are no arguments.",
-            ));
-            return Expr::Error(span);
+            let end = name_span.end;
+            return Expr::FieldAccess {
+                receiver: Box::new(receiver),
+                field: name,
+                field_span: name_span,
+                span: SourceSpan::new(self.file, start, end),
+            };
         }
 
+        // `.copy()` and `.freeze()` — body operations, produce PostfixOp
+        if let Some(op) = match name.as_str() {
+            "copy"   => Some(PostfixOpKind::Copy),
+            "freeze" => Some(PostfixOpKind::Freeze),
+            _        => None,
+        } {
+            self.advance(); // consume `(`
+            if self.expect(&Token::RParen).is_none() {
+                self.diags.push(Diagnostic::error(
+                    self.current_span(),
+                    format!("`.{name}()` takes no arguments."),
+                    format!("Write `value.{name}()` with empty parentheses."),
+                    format!("`{name}` is a dot-postfix body operation — it acts on the receiver value with no extra arguments."),
+                ));
+            }
+            let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(start);
+            return Expr::PostfixOp {
+                receiver: Box::new(receiver),
+                op,
+                span: SourceSpan::new(self.file, start, end),
+            };
+        }
+
+        // Regular method call — `(` is guaranteed here (FieldAccess returned above otherwise).
+        let method = name;
+        let method_span = name_span;
         // Parse the argument list (reuses parse_call's loop logic)
         self.advance(); // consume `(`
         let mut args = Vec::new();
@@ -1243,6 +1376,459 @@ impl<'a> Parser<'a> {
         }
     }
 
+
+    // ── M4: struct literal helpers ──────────────────────────────────────────
+
+    /// True when position `offset` from current is the start of a struct literal:
+    /// - offset=0: peek at `{`; returns true if the token AFTER `{` is `Identifier Colon`.
+    /// - offset=1: peek is already `{`; checks offset+1 and offset+2.
+    fn peek_is_struct_lit_start(&self, offset: usize) -> bool {
+        // Token at `offset` should be `{`, and the two tokens after that
+        // must be `Identifier` then `Colon`.
+        let brace_pos = self.pos + offset;
+        let ident_pos = brace_pos + 1;
+        let colon_pos = brace_pos + 2;
+        matches!(self.tokens.get(brace_pos).map(|s| &s.value), Some(Token::LBrace))
+            && matches!(self.tokens.get(ident_pos).map(|s| &s.value), Some(Token::Identifier(_)))
+            && matches!(self.tokens.get(colon_pos).map(|s| &s.value), Some(Token::Colon))
+    }
+
+    /// Parse an anonymous struct literal `{ field: value, ... }`.
+    ///
+    /// Called when we know `{` is followed by `Identifier Colon` (struct literal,
+    /// not a block). Consumes the opening `{`.
+    fn parse_struct_lit(&mut self) -> Expr {
+        let start = self.current_span().start;
+        self.advance(); // consume `{`
+        let fields = self.parse_struct_lit_fields();
+        let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(start);
+        Expr::StructLit {
+            fields,
+            span: SourceSpan::new(self.file, start, end),
+        }
+    }
+
+    /// Parse the field list of a struct literal, including the closing `}`.
+    fn parse_struct_lit_fields(&mut self) -> Vec<StructLitField> {
+        let mut fields = Vec::new();
+        loop {
+            match self.peek() {
+                Token::RBrace => { self.advance(); break; }
+                Token::Eof => {
+                    self.diags.push(Diagnostic::error(
+                        self.eof_span(),
+                        "Missing `}` to close this struct literal.",
+                        "Add `}` after the last field.",
+                        "Every `{` in a struct literal must be matched with a `}`.",
+                    ));
+                    break;
+                }
+                Token::Comma => { self.advance(); continue; }
+                _ => {}
+            }
+
+            // Parse `name: value`
+            let (field_name, name_span) = match self.peek().clone() {
+                Token::Identifier(n) => {
+                    let span = self.current_span();
+                    self.advance();
+                    (n, span)
+                }
+                _ => {
+                    self.diags.push(Diagnostic::error(
+                        self.current_span(),
+                        "Expected a field name here.",
+                        "Write `{ fieldName: value, ... }` to initialize a shape value.",
+                        "Struct literals list each field by name followed by `:` and a value.",
+                    ));
+                    // Recover to `}` or `,`
+                    while !matches!(self.peek(), Token::RBrace | Token::Comma | Token::Eof) {
+                        self.advance();
+                    }
+                    continue;
+                }
+            };
+
+            if self.expect(&Token::Colon).is_none() {
+                self.diags.push(Diagnostic::error(
+                    self.current_span(),
+                    format!("Expected `:` after field name `{field_name}`."),
+                    format!("Write `{{ {field_name}: value }}`"),
+                    "The `:` separates the field name from its value in a struct literal.",
+                ));
+                while !matches!(self.peek(), Token::RBrace | Token::Comma | Token::Eof) {
+                    self.advance();
+                }
+                continue;
+            }
+
+            let value = self.parse_expr(0);
+            fields.push(StructLitField { name: field_name, name_span, value });
+
+            // Optional trailing comma
+            if !matches!(self.peek(), Token::RBrace) {
+                let _ = self.expect(&Token::Comma);
+            }
+        }
+        fields
+    }
+
+    // ── M4: shape declaration ────────────────────────────────────────────────
+
+    /// Parse a `shape Name [extends Parent] [follows C1, C2] { body }` declaration.
+    ///
+    /// `is_base` is true when the caller already consumed `base` before calling here.
+    /// Consumes the `shape` token itself.
+    fn parse_shape_decl(&mut self, is_base: bool) -> Option<ShapeDecl> {
+        let start = self.current_span().start;
+        self.advance(); // consume `shape`
+
+        // Shape name
+        let (name, name_span) = match self.peek().clone() {
+            Token::Identifier(n) => {
+                let span = self.current_span();
+                self.advance();
+                (n, span)
+            }
+            _ => {
+                self.diags.push(Diagnostic::error(
+                    self.current_span(),
+                    "Expected a shape name after `shape`.",
+                    "Write `shape Name { ... }` — the name must start with a capital letter.",
+                    "Shape names follow Yinz's capital-letter-equals-type rule (Golden Rule 13).",
+                ));
+                self.recover_to_rbrace();
+                let _ = self.expect(&Token::RBrace);
+                return None;
+            }
+        };
+
+        // Optional `extends Parent`
+        let extends = if matches!(self.peek(), Token::Extends) {
+            self.advance(); // consume `extends`
+            match self.peek().clone() {
+                Token::Identifier(parent) => {
+                    let span = self.current_span();
+                    self.advance();
+                    Some((parent, span))
+                }
+                _ => {
+                    self.diags.push(Diagnostic::error(
+                        self.current_span(),
+                        "Expected a parent shape name after `extends`.",
+                        "Write `shape Child extends Parent { ... }`.",
+                        "`extends` is data-only inheritance — the child shape inherits all of the parent's fields.",
+                    ));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Optional `follows Contract1, Contract2, ...`
+        let mut follows = Vec::new();
+        if matches!(self.peek(), Token::Follows) {
+            self.advance(); // consume `follows`
+            loop {
+                match self.peek().clone() {
+                    Token::Identifier(contract) => {
+                        let span = self.current_span();
+                        self.advance();
+                        follows.push((contract, span));
+                        if !matches!(self.peek(), Token::Comma) {
+                            break;
+                        }
+                        self.advance(); // consume `,`
+                    }
+                    _ => {
+                        self.diags.push(Diagnostic::error(
+                            self.current_span(),
+                            "Expected a contract name after `follows`.",
+                            "Write `shape Player follows Damageable { ... }`.",
+                            "`follows` lists contract shapes whose bare-signature declarations this shape satisfies.",
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+
+        // `{`
+        if self.expect(&Token::LBrace).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                format!("Expected `{{` to open `shape {name}`'s body."),
+                format!("Write `shape {name} {{ ... }}`"),
+                "Shape bodies start with `{` and end with `}`.",
+            ));
+            return None;
+        }
+
+        // Shape body: fields and contract signatures
+        let mut fields = Vec::new();
+        let mut contract_sigs = Vec::new();
+
+        loop {
+            match self.peek() {
+                Token::RBrace => { self.advance(); break; }
+                Token::Eof => {
+                    self.diags.push(Diagnostic::error(
+                        self.eof_span(),
+                        format!("Missing `}}` to close `shape {name}`."),
+                        "Add `}` at the end of the shape body.",
+                        "Every `{` must be matched with a `}`.",
+                    ));
+                    break;
+                }
+                Token::Function => {
+                    // `function` inside a shape body is a compile error in Yinz.
+                    let span = self.current_span();
+                    self.diags.push(Diagnostic::error(
+                        span,
+                        "Method bodies cannot be declared inside a shape.",
+                        "Move this function outside the shape, then call it with dot syntax: `value.method()`.",
+                        "Yinz is not object-oriented — shapes hold data and bare contract signatures only. Methods are standalone functions.",
+                    ));
+                    // Skip the whole function decl body for recovery
+                    while !matches!(self.peek(), Token::RBrace | Token::Eof) {
+                        if matches!(self.peek(), Token::LBrace) {
+                            self.advance();
+                            self.recover_to_rbrace();
+                            let _ = self.expect(&Token::RBrace);
+                        } else {
+                            self.advance();
+                        }
+                    }
+                }
+                Token::Hidden => {
+                    // `hidden fieldName: Type = default`
+                    let field_start = self.current_span().start;
+                    self.advance(); // consume `hidden`
+                    if let Some(field) = self.parse_field_decl(true, field_start) {
+                        fields.push(field);
+                    }
+                }
+                Token::Identifier(_) => {
+                    // Could be a field `name: Type` or a contract sig `name(...)  -> Type`.
+                    // Lookahead: Identifier Colon → field; Identifier LParen → contract sig.
+                    let field_start = self.current_span().start;
+                    match self.peek_ahead(1) {
+                        Token::Colon => {
+                            if let Some(field) = self.parse_field_decl(false, field_start) {
+                                fields.push(field);
+                            }
+                        }
+                        Token::LParen => {
+                            if let Some(sig) = self.parse_contract_sig() {
+                                contract_sigs.push(sig);
+                            }
+                        }
+                        _ => {
+                            let span = self.current_span();
+                            self.diags.push(Diagnostic::error(
+                                span,
+                                "Expected a field declaration (`name: Type`) or a contract signature (`name(...)  -> Type`) here.",
+                                "Shape bodies contain fields and optional bare method signatures.",
+                                "Only data fields and contract method signatures are allowed inside a shape — no implementations.",
+                            ));
+                            self.advance();
+                        }
+                    }
+                }
+                _ => {
+                    let span = self.current_span();
+                    self.diags.push(Diagnostic::error(
+                        span,
+                        format!("Unexpected `{}` inside shape body.", token_display(self.peek())),
+                        "Shape bodies contain fields (`name: Type`) and optional contract signatures.",
+                        "Only data fields and bare method signatures are allowed inside a shape.",
+                    ));
+                    self.advance();
+                }
+            }
+        }
+
+        let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(start);
+        Some(ShapeDecl {
+            name,
+            name_span,
+            is_base,
+            extends,
+            follows,
+            fields,
+            contract_sigs,
+            span: SourceSpan::new(self.file, start, end),
+        })
+    }
+
+    /// Parse a field declaration `[hidden] name: Type [= default]`.
+    fn parse_field_decl(&mut self, is_hidden: bool, field_start: usize) -> Option<FieldDecl> {
+        let (name, name_span) = match self.peek().clone() {
+            Token::Identifier(n) => {
+                let span = self.current_span();
+                self.advance();
+                (n, span)
+            }
+            _ => {
+                self.diags.push(Diagnostic::error(
+                    self.current_span(),
+                    "Expected a field name.",
+                    "Write `fieldName: Type` to declare a field.",
+                    "Fields need a name and a type.",
+                ));
+                return None;
+            }
+        };
+
+        if self.expect(&Token::Colon).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                format!("Expected `:` after field name `{name}`."),
+                format!("Write `{name}: Type`"),
+                "The `:` separates the field name from its type.",
+            ));
+            return None;
+        }
+
+        let ty_start = self.current_span().start;
+        let ty = self.parse_type();
+        let ty_end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(ty_start);
+        let ty_span = SourceSpan::new(self.file, ty_start, ty_end);
+
+        // Optional `= default` (only valid for hidden fields; typeck enforces this)
+        let default = if matches!(self.peek(), Token::Eq) {
+            self.advance(); // consume `=`
+            Some(self.parse_expr(0))
+        } else {
+            None
+        };
+
+        let end = default.as_ref().map(|e| e.span().end).unwrap_or(ty_end);
+        Some(FieldDecl {
+            name,
+            name_span,
+            ty,
+            ty_span,
+            is_hidden,
+            default,
+            span: SourceSpan::new(self.file, field_start, end),
+        })
+    }
+
+    /// Parse a bare contract method signature `name([share|lend|give] self[, params]) -> Type`.
+    ///
+    /// No `function` keyword; no body. Example: `greet(share self) -> string`
+    fn parse_contract_sig(&mut self) -> Option<ContractSig> {
+        let start = self.current_span().start;
+        let (name, name_span) = match self.peek().clone() {
+            Token::Identifier(n) => {
+                let span = self.current_span();
+                self.advance();
+                (n, span)
+            }
+            _ => return None,
+        };
+
+        if self.expect(&Token::LParen).is_none() {
+            return None;
+        }
+
+        // Optional receiver: `share self` / `lend self` / `give self`
+        let mut receiver = None;
+        let mut params = Vec::new();
+
+        if !matches!(self.peek(), Token::RParen | Token::Eof) {
+            // Check for ownership modifier + `self`
+            let ownership_kw = if let Token::Identifier(kw) = self.peek().clone() {
+                match kw.as_str() {
+                    "share" | "lend" | "give" => {
+                        let k = kw.clone();
+                        self.advance();
+                        Some(k)
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+
+            if matches!(self.peek(), Token::SelfValue) {
+                self.advance(); // consume `self`
+                receiver = ownership_kw.as_deref().map(|kw| match kw {
+                    "share" => ReceiverKind::Share,
+                    "lend"  => ReceiverKind::Lend,
+                    "give"  => ReceiverKind::Give,
+                    _       => ReceiverKind::Share,
+                });
+                // Consume optional `,` after self
+                let _ = self.expect(&Token::Comma);
+            } else {
+                // Not `self` — put back the ownership keyword as an error note
+                // and parse as a normal param list.
+                // (Edge case: user wrote `name(int)` without self — typeck catches it)
+            }
+
+            // Remaining params
+            while !matches!(self.peek(), Token::RParen | Token::Eof) {
+                let param_start = self.current_span().start;
+                let own = if let Token::Identifier(kw) = self.peek().clone() {
+                    match kw.as_str() {
+                        "share" => { self.advance(); Some(OwnershipModifier::Share) }
+                        "lend"  => { self.advance(); Some(OwnershipModifier::Lend) }
+                        "give"  => { self.advance(); Some(OwnershipModifier::Give) }
+                        _ => None,
+                    }
+                } else { None };
+
+                let (pname, pname_span) = match self.peek().clone() {
+                    Token::Identifier(n) => { let s = self.current_span(); self.advance(); (n, s) }
+                    _ => break,
+                };
+                if self.expect(&Token::Colon).is_none() { break; }
+                let ty_s = self.current_span().start;
+                let ty = self.parse_type();
+                let ty_e = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(ty_s);
+                params.push(Param {
+                    name: pname,
+                    name_span: pname_span,
+                    ownership: own,
+                    ty,
+                    ty_span: SourceSpan::new(self.file, ty_s, ty_e),
+                    span: SourceSpan::new(self.file, param_start, ty_e),
+                });
+                if !matches!(self.peek(), Token::RParen) {
+                    let _ = self.expect(&Token::Comma);
+                }
+            }
+        }
+
+        if self.expect(&Token::RParen).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                format!("Missing `)` to close contract signature `{name}`."),
+                "Add `)` after the last parameter.",
+                "Every `(` in a contract signature must be matched with a `)`.",
+            ));
+        }
+
+        // `-> ReturnType`
+        let return_type = if matches!(self.peek(), Token::Arrow) {
+            self.advance(); // consume `->`
+            self.parse_type()
+        } else {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                format!("Contract signature `{name}` is missing a return type."),
+                format!("Add `-> nothing` or `-> ReturnType`: `{name}(share self) -> nothing`"),
+                "Contract signatures must declare their return type — the compiler needs it to verify implementing functions.",
+            ));
+            Type::Error
+        };
+
+        let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(start);
+        Some(ContractSig { name, name_span, receiver, params, return_type, span: SourceSpan::new(self.file, start, end) })
+    }
 
     fn consume_bin_op(&mut self) -> BinOpKind {
         let op = match self.peek() {

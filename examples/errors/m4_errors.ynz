@@ -47,8 +47,23 @@ abstract class Entity {
   name: string
 }
 
-// ────── (P2+ error classes added here as phases land) ──────
-// After M4 P2 (parser): struct-literal prefix form, missing self in signature, etc.
+// ────── M4 P2: Parser errors ──────
+
+// WHY: Prefix-form struct literal `Player { ... }` is banned — annotation-only
+//      form is required. Parser redirects to `let p: Player = { ... }` form.
+function prefixStructLit() -> nothing {
+  let p = Player { name: "Patrick" }
+}
+
+// WHY: Method body inside a shape is banned — Yinz is not OOP.
+//      Parser emits teaching diagnostic telling user to move the function outside.
+shape BadShape {
+  function greet() -> string {
+    return "hi"
+  }
+}
+
+// ────── (P3+ error classes added here as phases land) ──────
 // After M4 P3a (typeck): wrong field type, unknown field, hidden-field-outside-shape
 // After M4 P3b (inheritance): cyclic extends, base instantiation, dynamic type mismatch
 // After M4 P3c (ownership): use-after-give, const-lend, double-lend, etc.
