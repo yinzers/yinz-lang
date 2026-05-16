@@ -1,0 +1,52 @@
+// examples/errors/m2_errors.ynz
+//
+// Every M2 compile error in one file (includes all M1 error classes too).
+// Run: ./target/debug/ynz build examples/errors/m2_errors.ynz
+
+function constReassign() -> nothing {
+  // WHY: `const` bindings cannot be reassigned. Enforced by typeck
+  //      `check_assign` at crates/ynz-typeck/src/check.rs:264.
+  //      This is the M2 const-deep-immutability foundation.
+  const maxPlayers = 10
+  maxPlayers = 20
+}
+
+function mixedTypeArithmetic() -> nothing {
+  // WHY: mixed-type arithmetic is a compile error in Yinz — no implicit
+  //      numeric coercion. Diagnostic suggests `.toNumber()` or `.toFloat()`
+  //      based on the type pair.
+  const intValue: int = 5
+  const numberValue: number = 1.5
+  const result = intValue + numberValue
+  print(result)
+}
+
+function compoundAssignBanned() -> nothing {
+  // WHY: compound assignment (`+=`, `-=`, `*=`, etc.) is banned per design/operators.md.
+  //      One assignment operator (`=`). Diagnostic shows the expanded form.
+  let count = 0
+  count += 1
+}
+
+function bignumDeferral() -> nothing {
+  // WHY: bignum `number<N>` for N > 34 is a v0.8 / M8 feature (per design/numeric-types.md).
+  //      Parser emits a deferral diagnostic for any N != 34 with a pointer to the milestone.
+  let bignum: number<100> = 0
+  print(bignum)
+}
+
+function integerOverflowAtLex() -> nothing {
+  // WHY: integer literals that exceed i64::MAX overflow at lex time.
+  //      Diagnostic at the literal's span with the overflow boundary message.
+  let huge: int = 99999999999999999999999
+  print(huge)
+}
+
+function divisionByZeroRuntime() -> nothing {
+  // WHY: integer division by zero panics at runtime (no compile-time elimination
+  //      because the divisor is variable). Test that runtime traps correctly.
+  let x: int = 10
+  let y: int = 0
+  let result = x / y
+  print(result)
+}

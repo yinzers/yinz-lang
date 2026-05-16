@@ -1,5 +1,5 @@
 ---
-slug: m4-shapes-methods-ownership
+slug: m4-shapes-functions-ownership
 owner: patrick
 status: active
 files:
@@ -18,7 +18,7 @@ files:
   - spec/ownership.md
   - spec/variables.md
 created: 2026-05-15
-last_updated: 2026-05-16-r16
+last_updated: 2026-05-16-r17
 depends_on: [v0-1-compiler]
 flag: N/A
 ---
@@ -428,6 +428,13 @@ This plan covers ONLY Milestone 4 in detail. M1–M3 are shipped (`done/`); M5�
 
 ## Phases
 
+> **READ FIRST (r17 added Demo & Error Gallery requirement)**: Per `.claude/rules/plan-invariants.md` `### Demo & Error Gallery` subsection (added 2026-05-16 per r17), every M4 phase that adds executable surface MUST also:
+> - **Extend `examples/basics/src/main.ynz`** with the new feature in context (showing it doing real work, not isolated `print(featureName())`)
+> - **Extend `examples/errors/m4_errors.ynz`** with intentional triggers for every new compile-error class added by that phase (each trigger gets a `// WHY:` comment naming the diagnostic class)
+> - Both files get `insta` stdout/stderr snapshots in the phase's verification step
+>
+> The basics demo grows M1→M8 (one project; every v0.1 feature in context). The error gallery is per-milestone (`m4_errors.ynz` builds on the patterns established in `m1_errors.ynz`/`m2_errors.ynz`/`m3_errors.ynz` which exist as the retroactive baseline). Patrick reviews each phase's UX via these files — features that ship without hands-on demo + error-experience review go un-validated until users hit them.
+>
 > **READ FIRST**: phase bodies below were written before r10-r15 and reflect the pre-non-OOP model in places (e.g., references to MethodDecl inside ShapeDecl, override keyword, body-level `.share()/.lend()/.give()` postfix-modifier parsing). The **FINAL LOCKED DECISIONS section at the top of this file is authoritative** — when implementing, items #29-37 there describe how each phase changes for the non-OOP / UFCS / standalone-functions model. Specifically:
 >
 > - **P1 (lexer)**: REMOVE Override token from variant list (override keyword doesn't exist anymore). All other lexer additions stand (shape, follows, extends, base, hidden, dynamic, Self/self).

@@ -1,0 +1,160 @@
+// examples/basics/src/main.ynz
+//
+// The Yinz v0.1 Language Showcase — grows milestone-by-milestone.
+// Compile + run with: ./target/debug/ynz run examples/basics/src/main.ynz
+//
+// See examples/basics/README.md for what each section demonstrates.
+//
+// Current coverage: M1 + M2 + M3 (shipped through v0.1.0-m3 tag).
+// M4+ sections are added by each milestone's phases per
+// .claude/rules/plan-invariants.md `### Demo & Error Gallery` requirement.
+
+function main() -> nothing {
+  // ────── M1: hello-world end-to-end ──────
+  print("Yinz v0.1 language showcase")
+  print("===========================")
+  print("")
+
+  // ────── M2: variables, arithmetic, primitives, conversions ──────
+  print("M2 — variables, arithmetic, primitives:")
+
+  // let vs const (M2 const-reassignment check)
+  const playerName = "Patrick"
+  let score: int = 0
+
+  // Primitive types — int, float, number (decimal128), bool
+  const startHealth: int = 100
+  const damageMultiplier: float = 1.5
+  const accountBalance: number = 1234.56     // decimal128, exact
+  const isActive: bool = true
+
+  // Arithmetic, comparison, boolean
+  let combo = startHealth + 25
+  combo = combo * 2
+  combo = combo - 50
+  combo = combo / 3
+
+  // Bitwise operators
+  const flagRead: int = 1
+  const flagWrite: int = 2
+  const flagExecute: int = 4
+  const perms = flagRead | flagWrite
+  const hasExecute = (perms & flagExecute) != 0
+
+  // Polymorphic print across primitive types
+  print(playerName)
+  print(combo)
+  print(damageMultiplier)
+  print(accountBalance)
+  print(isActive)
+  print(perms)
+  print(hasExecute)
+
+  // M2 conversion intrinsics — .toString(), .toNumber(), .toFloat()
+  // (These are M2 INTRINSICS that look like UFCS dispatch — under the
+  //  non-OOP model they ARE standalone functions named toString taking
+  //  receiver as first param. value.toString() is sugar for toString(value).)
+  const scoreText = score.toString()
+  const balanceFloat = accountBalance.toFloat()
+  const startHealthNum = startHealth.toNumber()
+  print(scoreText)
+  print(balanceFloat)
+  print(startHealthNum)
+
+  print("")
+
+  // ────── M3: control flow + user-defined functions ──────
+  print("M3 — control flow + user functions:")
+
+  // if + early return demoed via the helper functions below
+  print(classifyHealth(startHealth))
+  print(classifyHealth(50))
+  print(classifyHealth(10))
+
+  // Multi-case if (M3 match form with else => catch-all)
+  const grade = letterGrade(85)
+  print(grade)
+
+  // while loop
+  let countdown = 3
+  while (countdown > 0) {
+    print(countdown)
+    countdown = countdown - 1
+  }
+
+  // for + range
+  let sum = 0
+  for (i in range(1, 6)) {
+    sum = sum + i
+  }
+  print(sum)  // 1+2+3+4+5 = 15
+
+  // Recursion (mutual recursion exercised by isEven/isOdd below)
+  print(fib(10))      // 55
+  print(isEven(8))    // true
+  print(isOdd(7))     // true
+
+  // ────── M4: shapes + functions + ownership ──────
+  // ADDED BY M4 PHASES — see .claude/plans/active/m4-shapes-functions-ownership.md
+  // After M4 P2 (parser): shape declarations parse
+  // After M4 P3a (typeck shapes): struct literals type-check
+  // After M4 P3b (inheritance + dynamic): extends + follows + dynamic work
+  // After M4 P3c (ownership): full borrow-check enforced
+  // After M4 P4 (codegen): end-to-end compile + run
+  // After M4 P5 (catch-up): int.max, int.min, number.epsilon, .wrappingAdd() etc.
+  print("")
+  print("M4+ sections land as each phase ships — see plan.")
+
+  // ────── Deferred features (v0.2+) ──────
+  // arena scratch { let temp: array<int> = [...] }  // v0.2 — design/future/arena.md
+  // verified { let raw = rawMemory(64) }              // v0.3+ — vocabulary.md
+  // Self-referential shapes                           // v0.3+ — design/future/self-references.md
+}
+
+// ────── M3 helper functions ──────
+
+// Classify health into a status string. Uses early return.
+function classifyHealth(hp: int) -> string {
+  if (hp >= 75) {
+    return "healthy"
+  }
+  if (hp >= 25) {
+    return "wounded"
+  }
+  return "critical"
+}
+
+// Multi-case `if (value) { arms => ... else => ... }` for letter grading.
+function letterGrade(percent: int) -> string {
+  // Multi-case form — each arm is a value pattern; `else =>` is the catch-all
+  if (percent) {
+    100 => return "A+"
+    else => {
+      if (percent >= 90) { return "A" }
+      if (percent >= 80) { return "B" }
+      if (percent >= 70) { return "C" }
+      if (percent >= 60) { return "D" }
+      return "F"
+    }
+  }
+  return "F"  // unreachable but typeck requires every path returns
+}
+
+// Classic recursive fib — exercises user-defined function with int param + recursion.
+function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+
+// Mutual recursion — isEven calls isOdd and vice versa.
+function isEven(n: int) -> bool {
+  if (n == 0) { return true }
+  return isOdd(n - 1)
+}
+
+function isOdd(n: int) -> bool {
+  if (n == 0) { return false }
+  return isEven(n - 1)
+}

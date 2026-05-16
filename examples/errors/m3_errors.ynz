@@ -1,0 +1,85 @@
+// examples/errors/m3_errors.ynz
+//
+// Every M3 compile error in one file (includes all M1 + M2 error classes via prior milestone files).
+// Run: ./target/debug/ynz build examples/errors/m3_errors.ynz
+
+function missingReturnPath(x: int) -> int {
+  // WHY: not all code paths return a value. Typeck's return-path analysis
+  //      (M3 P3) walks the function body and reports any leaf branch that
+  //      doesn't return on a `-> int` function.
+  if (x > 0) {
+    return x
+  }
+  // missing return for the else path
+}
+
+function deadCodeAfterReturn() -> int {
+  // WHY: dead code after a definite return. Reported as a Warning (not Error)
+  //      so the program still compiles. M3 P3 return-path analysis catches this.
+  return 42
+  print("never reached")
+}
+
+function matchBannedKeyword() -> nothing {
+  // WHY: `match` keyword is banned at the lexer level. M3 P1 banned-keyword
+  //      diagnostic redirects to Yinz's multi-case `if` form. Lexer recovers
+  //      as Identifier so the parser continues.
+  let value = 5
+  match (value) {
+    1 => print("one")
+  }
+}
+
+function switchBannedKeyword() -> nothing {
+  // WHY: `switch` keyword is banned — same redirect as `match`.
+  let value = 5
+  switch (value) {
+    1 => print("one")
+  }
+}
+
+function loopVarMutation() -> nothing {
+  // WHY: for-loop variables are immutable inside the loop body. Enforced by
+  //      `entry.is_loop_var` in the M3 scope tracking. Reassigning it is a compile error.
+  for (i in range(0, 5)) {
+    i = i + 1
+    print(i)
+  }
+}
+
+function targetNoArgs() -> int {
+  return 42
+}
+
+function argArityMismatch() -> nothing {
+  // WHY: calling targetNoArgs with one argument when its signature takes zero.
+  //      M3 P3 function-call arity check.
+  let result = targetNoArgs(99)
+  print(result)
+}
+
+function takesInt(x: int) -> int {
+  return x * 2
+}
+
+function argTypeMismatch() -> nothing {
+  // WHY: calling takesInt with a string argument. M3 P3 function-call
+  //      argument-type check.
+  let result = takesInt("not an int")
+  print(result)
+}
+
+function duplicateName() -> int { return 1 }
+function duplicateName() -> int { return 2 }
+// WHY: duplicate function names in the same module are a compile error.
+//      M3 P3 signatures pre-pass catches this. Diagnostic includes both spans.
+
+function isTypePatternDeferred() -> nothing {
+  // WHY: `is TypeName =>` pattern syntax is parsed in M3 but deferred to M6
+  //      (union types + narrowing). M3 emits a deferral diagnostic pointing to M6.
+  let value = 42
+  if (value) {
+    is int => print("integer")
+    else => print("other")
+  }
+}
