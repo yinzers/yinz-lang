@@ -72,10 +72,11 @@ impl<'b> Checker<'b> {
     fn check_module(&mut self, module: &Module) {
         // `main` existence and signature are validated in `collect_signatures`.
         // Body checking just iterates all functions with the signature table available.
+        // P3b: verify follows contracts after both tables are available.
+        self.check_follows_contracts();
         for item in &module.items {
             match item {
                 Item::Function(f) => self.check_function(f),
-                // M4 P3a: shape type-checking not yet implemented.
                 Item::ShapeDecl(_) => {}
             }
         }
@@ -861,9 +862,22 @@ impl<'b> Checker<'b> {
             return ret_ty;
         }
 
-        // Shape receiver — try UFCS: look for a standalone function `method` whose
-        // first parameter type matches `receiver_ty`. Return type is the function's
-        // return type; arg count / types are checked at the call site.
+        // Shape or dynamic receiver — try UFCS.
+        if let Type::Dynamic { contract } = receiver_ty {
+            // Dynamic dispatch: look up the method on the contract shape's sigs.
+            if let Some(shape_def) = self.shape_table.get(contract) {
+                if let Some(sig) = shape_def.contract_sigs.iter().find(|s| s.name == method) {
+                    return sig.ret_ty.clone();
+                }
+            }
+            self.diags.push(Diagnostic::error(
+                method_span.clone(),
+                format!("Contract `{contract}` does not declare a method `{method}`."),
+                format!("Add `{method}(share self) -> ...` to the `shape {contract}` body."),
+                "Dynamic dispatch only routes calls to methods declared in the contract shape's body.",
+            ));
+            return Type::Error;
+        }
         if let Type::Shape { name } = receiver_ty {
             if let Some(sig) = self.sig_table.fns.get(method) {
                 // Check that first param type matches receiver
@@ -948,8 +962,19 @@ impl<'b> Checker<'b> {
                     }
                 }
             }
-            // P3b: dynamic dispatch type resolution.
-            AstType::Dynamic { .. } => Type::Error,
+            AstType::Dynamic { contract, span } => {
+                if self.shape_table.contains(contract) {
+                    Type::Dynamic { contract: contract.clone() }
+                } else {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        format!("`{contract}` is not a known shape — cannot use it as a `dynamic` contract."),
+                        format!("Declare `shape {contract} {{ ... }}` with bare method signatures first."),
+                        "`dynamic Foo` requires `Foo` to be a contract shape with bare method signature declarations.",
+                    ));
+                    Type::Error
+                }
+            }
         }
     }
 
@@ -995,23 +1020,106 @@ impl<'b> Checker<'b> {
         sig.ret.clone()
     }
 
+    // ── M4 P3b: inheritance + follows contract verification ──────────────────
+
+    /// Verify every `shape X follows Y` declaration.
+    ///
+    /// For each contract sig `method(self, params...) -> Ret` in Y, there must be
+    /// a standalone function `method` in `sig_table` whose first param is
+    /// `Type::Shape { name: X }` and whose return type matches.
+    fn check_follows_contracts(&mut self) {
+        // Collect (shape_name, follows_list) to avoid borrow conflicts.
+        let follows_list: Vec<(String, Vec<String>, Vec<crate::shapes::ContractSigDef>)> = self
+            .shape_table
+            .shapes
+            .iter()
+            .filter(|(_, def)| !def.follows.is_empty())
+            .map(|(name, def)| (name.clone(), def.follows.clone(), def.contract_sigs.clone()))
+            .collect();
+
+        for (shape_name, contracts, _own_sigs) in &follows_list {
+            let shape_ty = Type::Shape { name: shape_name.clone() };
+            for contract_name in contracts {
+                let Some(contract_def) = self.shape_table.get(contract_name) else {
+                    continue; // already errored in collect_shapes
+                };
+                let contract_sigs = contract_def.contract_sigs.clone();
+                let shape_def_span = self.shape_table.get(shape_name)
+                    .map(|s| s.defined_at.clone())
+                    .unwrap_or_else(|| SourceSpan::new("", 0, 0));
+
+                for sig in &contract_sigs {
+                    match self.sig_table.fns.get(&sig.name) {
+                        None => {
+                            self.diags.push(Diagnostic::error(
+                                shape_def_span.clone(),
+                                format!("`{shape_name}` follows `{contract_name}` but is missing function `{}`.", sig.name),
+                                format!("Add `function {}(share self: {shape_name}) -> ...` to this file.", sig.name),
+                                format!("`{contract_name}` requires a function named `{}` — define it as a standalone function whose first parameter is `self: {shape_name}`.", sig.name),
+                            ));
+                        }
+                        Some(fn_sig) => {
+                            // Check first param matches the implementing shape.
+                            match fn_sig.params.first() {
+                                Some((_, first_ty)) if *first_ty == shape_ty => {
+                                    // Return type must match.
+                                    if fn_sig.ret != sig.ret_ty
+                                        && fn_sig.ret != Type::Error
+                                        && sig.ret_ty != Type::Error
+                                    {
+                                        self.diags.push(Diagnostic::error(
+                                            shape_def_span.clone(),
+                                            format!("Function `{}` for `{shape_name}` returns `{}`, but `{contract_name}` requires `{}`.", sig.name, type_name(&fn_sig.ret), type_name(&sig.ret_ty)),
+                                            format!("Change the return type to `{}` to satisfy `{contract_name}`.", type_name(&sig.ret_ty)),
+                                            "Functions that satisfy a contract must return exactly the type the contract declares.",
+                                        ));
+                                    }
+                                }
+                                Some((_, first_ty)) => {
+                                    self.diags.push(Diagnostic::error(
+                                        shape_def_span.clone(),
+                                        format!("Function `{}` cannot satisfy `{contract_name}` for `{shape_name}` — its first parameter is `{}`, not `{shape_name}`.", sig.name, type_name(first_ty)),
+                                        format!("Change the first parameter to `share self: {shape_name}`."),
+                                        "Contract satisfaction requires the function's first parameter to be the implementing shape.",
+                                    ));
+                                }
+                                None => {
+                                    self.diags.push(Diagnostic::error(
+                                        shape_def_span.clone(),
+                                        format!("Function `{}` has no parameters but `{contract_name}` requires a `self: {shape_name}` receiver.", sig.name),
+                                        format!("Add `share self: {shape_name}` as the first parameter."),
+                                        "Contract functions must have the implementing shape as their first parameter.",
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // ── M4 P3a: shape type-checking ──────────────────────────────────────────
 
     /// Infer the type of a field access `receiver.field`.
     fn infer_field_access(&mut self, receiver: &Expr, field: &str, field_span: &SourceSpan) -> Type {
         let receiver_ty = self.infer_expr(receiver, None);
-        let Type::Shape { name } = &receiver_ty else {
-            if receiver_ty != Type::Error {
+        // Dynamic dispatch: treat the contract shape as the lookup target.
+        let shape_name = match &receiver_ty {
+            Type::Shape { name } => name.clone(),
+            Type::Dynamic { contract } => contract.clone(),
+            Type::Error => return Type::Error,
+            other => {
                 self.diags.push(Diagnostic::error(
                     field_span.clone(),
-                    format!("`{}` values do not have fields.", type_name(&receiver_ty)),
+                    format!("`{}` values do not have fields.", type_name(other)),
                     "Field access is only available on shape values.",
                     "Shapes are the only Yinz types with named fields. Primitive types like `int` and `string` use methods instead.",
                 ));
+                return Type::Error;
             }
-            return Type::Error;
         };
-        let shape_name = name.clone();
+        let shape_name = shape_name.clone();
         let Some(shape_def) = self.shape_table.get(&shape_name) else {
             return Type::Error; // shape not in table — already errored at pre-pass
         };

@@ -56,6 +56,7 @@ fn m4_type_variant_count_locked() {
     //
     // test-ratchet: M4 adds 1 variant for user-defined shape types.
     //   Shape holds the shape name; field layout lives in ShapeTable. Total: 9.
+    // (P3b added Dynamic; see type_variant_count_includes_dynamic test below)
     let all: &[Type] = &[
         Type::Nothing,
         Type::String,
@@ -66,8 +67,9 @@ fn m4_type_variant_count_locked() {
         Type::Bool,
         Type::Range { element: Box::new(Type::Int), end_inclusive: false },
         Type::Shape { name: "Player".into() },
+        Type::Dynamic { contract: "Foo".into() },
     ];
-    assert_eq!(all.len(), 9, "Type variant count changed from 9 — add // test-ratchet: comment");
+    assert_eq!(all.len(), 10, "Type variant count changed from 10 — add // test-ratchet: comment");
 }
 
 
@@ -1157,4 +1159,90 @@ fn struct_lit_without_annotation_produces_error() {
 shape Player { name: string }
 function main() -> nothing { let p = { name: "x" } }
 "#, 1);
+}
+
+// ── M4 P3b: inheritance + follows + dynamic tests ────────────────────────────
+
+#[test]
+fn extends_inherits_parent_fields() {
+    // WHY: A child shape via `extends` must be able to access all parent fields.
+    // The field is resolved through the flattened field list in ShapeDef.
+    assert_clean(r#"
+shape Entity { name: string }
+shape Player extends Entity { health: int }
+function main() -> nothing {
+  let p: Player = { name: "Patrick", health: 100 }
+  print(p.name)
+  print(p.health)
+}
+"#);
+}
+
+#[test]
+fn extends_unknown_parent_produces_error() {
+    // WHY: `shape Player extends Ghost` where Ghost is not defined must error
+    // at the extends declaration, not silently produce a broken shape.
+    assert_errors(r#"
+shape Player extends Ghost { health: int }
+function main() -> nothing { }
+"#, 1);
+}
+
+#[test]
+fn follows_satisfied_type_checks() {
+    // WHY: `shape Player follows Damageable` with a matching standalone function
+    // must type-check cleanly — the contract is satisfied.
+    assert_clean(r#"
+shape Damageable {
+  takeDamage(lend self, amount: int) -> nothing
+}
+shape Player follows Damageable { health: int }
+function takeDamage(lend self: Player, amount: int) -> nothing {
+  self.health = self.health - amount
+}
+function main() -> nothing {
+  let p: Player = { health: 100 }
+  takeDamage(p, 10)
+}
+"#);
+}
+
+#[test]
+fn follows_missing_function_produces_error() {
+    // WHY: If a shape follows a contract but the required function is missing,
+    // the compiler must catch it and name which function is absent.
+    let out = assert_errors(r#"
+shape Damageable { takeDamage(lend self, amount: int) -> nothing }
+shape Player follows Damageable { health: int }
+function main() -> nothing { }
+"#, 1);
+    assert!(out.diagnostics[0].what.contains("takeDamage") || out.diagnostics[0].what.contains("missing"),
+        "Error must name the missing function, got: {:?}", out.diagnostics[0].what);
+}
+
+#[test]
+fn follows_wrong_return_type_produces_error() {
+    // WHY: A function whose return type doesn't match the contract sig's return type
+    // must produce a clear mismatch diagnostic.
+    assert_errors(r#"
+shape Greetable { greet(share self) -> string }
+shape Player follows Greetable { name: string }
+function greet(share self: Player) -> int { return 42 }
+function main() -> nothing { }
+"#, 1);
+}
+
+#[test]
+fn type_variant_count_includes_dynamic() {
+    // WHY: Dynamic was added in P3b. Pins the count to catch accidental variant additions.
+    //
+    // test-ratchet: P3b adds Dynamic for runtime polymorphism. Count 9 → 10.
+    let all: &[Type] = &[
+        Type::Nothing, Type::String, Type::Error,
+        Type::Int, Type::Float, Type::Number { precision: 34 }, Type::Bool,
+        Type::Range { element: Box::new(Type::Int), end_inclusive: false },
+        Type::Shape { name: "Player".into() },
+        Type::Dynamic { contract: "Damageable".into() },
+    ];
+    assert_eq!(all.len(), 10, "Type variant count changed from 10 — add // test-ratchet: comment");
 }

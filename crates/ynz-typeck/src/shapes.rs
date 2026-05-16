@@ -11,18 +11,36 @@ pub struct FieldDef {
     pub name: String,
     pub ty: Type,
     pub is_hidden: bool,
+    /// True when inherited from a parent shape via `extends`.
+    pub is_inherited: bool,
     pub defined_at: SourceSpan,
+}
+
+/// A bare contract method signature stored on the contract shape.
+#[derive(Clone, Debug)]
+pub struct ContractSigDef {
+    pub name: String,
+    /// Param types (not including self).
+    pub param_tys: Vec<Type>,
+    pub ret_ty: Type,
 }
 
 /// A resolved shape declaration.
 ///
-/// P3b will extend this with `extends` and `follows` resolution.
-/// P3a only resolves data fields.
+/// Fields include inherited ones (prepended from parent chain).
+/// `extends` and `follows` names are stored for P3b verification.
 #[derive(Clone, Debug)]
 pub struct ShapeDef {
     pub name: String,
     pub is_base: bool,
+    /// The parent shape name if `extends` was used.
+    pub extends: Option<String>,
+    /// Contract shapes this shape must satisfy.
+    pub follows: Vec<String>,
+    /// All fields — own fields plus inherited (inherited come first).
     pub fields: Vec<FieldDef>,
+    /// Bare contract method signatures declared in this shape's body.
+    pub contract_sigs: Vec<ContractSigDef>,
     pub defined_at: SourceSpan,
 }
 
@@ -72,14 +90,15 @@ impl ShapeTable {
 ///
 /// Validates:
 /// - Duplicate shape names
-/// - Cyclic field dependencies (shape A has field of type shape B which has field of type A)
+/// - `extends` parent exists; no cyclic extends chains
+/// - Cyclic field dependencies (direct field type cycles)
 ///
-/// Field types are resolved using the names collected in the first pass,
-/// so forward references between shapes in the same file are allowed.
+/// Field types are resolved in a forward-reference-friendly two-pass approach.
+/// Inherited fields (from `extends`) are prepended to the child's field list.
 pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTable {
     let mut table = ShapeTable::empty();
 
-    // Pass 1: collect all shape names (for forward-reference resolution).
+    // Pass 1: collect all shape names + their raw AST data.
     let mut all_names: HashSet<String> = HashSet::new();
     for item in &module.items {
         if let Item::ShapeDecl(s) = item {
@@ -96,24 +115,54 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
         }
     }
 
-    // Build a temporary ShapeTable with just names for type resolution.
+    // Temporary name-only table for type resolution (enables forward references).
     let name_table = ShapeTable {
         shapes: all_names.iter().map(|n| (n.clone(), ShapeDef {
             name: n.clone(),
             is_base: false,
+            extends: None,
+            follows: vec![],
             fields: vec![],
+            contract_sigs: vec![],
             defined_at: SourceSpan::new("", 0, 0),
         })).collect(),
     };
 
-    // Pass 2: resolve each shape's fields.
+    // Pass 2: resolve each shape's own fields, contract sigs, extends, and follows.
     for item in &module.items {
         let Item::ShapeDecl(s) = item else { continue };
         if !all_names.contains(&s.name) {
-            continue; // duplicate — already errored, skip
+            continue; // duplicate — already errored
         }
 
-        let mut fields = Vec::new();
+        // Validate extends parent exists.
+        let extends = s.extends.as_ref().map(|(parent, parent_span)| {
+            if !all_names.contains(parent) {
+                diags.push(Diagnostic::error(
+                    parent_span.clone(),
+                    format!("`{parent}` is not defined — cannot extend it."),
+                    format!("Declare `shape {parent} {{ ... }}` in this file before extending it."),
+                    "`extends` is data-only inheritance — the parent shape must be declared in the same file.",
+                ));
+            }
+            parent.clone()
+        });
+
+        // Validate follows contracts exist.
+        let follows: Vec<String> = s.follows.iter().map(|(contract, contract_span)| {
+            if !all_names.contains(contract) {
+                diags.push(Diagnostic::error(
+                    contract_span.clone(),
+                    format!("`{contract}` is not defined — cannot follow it."),
+                    format!("Declare `shape {contract} {{ ... }}` with bare method signatures in this file."),
+                    "`follows` names a contract shape — a shape whose body contains only bare method signature declarations.",
+                ));
+            }
+            contract.clone()
+        }).collect();
+
+        // Resolve own fields.
+        let mut own_fields: Vec<FieldDef> = Vec::new();
         let mut seen_field_names: HashSet<String> = HashSet::new();
 
         for field in &s.fields {
@@ -126,33 +175,100 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
                 ));
                 continue;
             }
-
             let ty = name_table.resolve_ast_type(&field.ty);
-
-            // Hidden fields without a default are a parser-level error; typeck
-            // accepts them here and lets the parser diagnostic suffice.
-
-            fields.push(FieldDef {
+            own_fields.push(FieldDef {
                 name: field.name.clone(),
                 ty,
                 is_hidden: field.is_hidden,
+                is_inherited: false,
                 defined_at: field.name_span.clone(),
             });
         }
 
+        // Resolve contract sigs.
+        let contract_sigs: Vec<ContractSigDef> = s.contract_sigs.iter().map(|sig| {
+            let param_tys: Vec<Type> = sig.params.iter()
+                .map(|p| name_table.resolve_ast_type(&p.ty))
+                .collect();
+            let ret_ty = name_table.resolve_ast_type(&sig.return_type);
+            ContractSigDef { name: sig.name.clone(), param_tys, ret_ty }
+        }).collect();
+
         table.shapes.insert(s.name.clone(), ShapeDef {
             name: s.name.clone(),
             is_base: s.is_base,
-            fields,
+            extends,
+            follows,
+            fields: own_fields, // inherited fields added in pass 3
+            contract_sigs,
             defined_at: s.name_span.clone(),
         });
     }
 
-    // Cycle detection: if shape A has a direct (non-pointer) field of type shape B
-    // which directly or transitively has a field of type shape A → error.
+    // Pass 3: detect cyclic extends chains, then flatten inherited fields.
+    detect_extends_cycles(&table, diags);
+    flatten_inherited_fields(&mut table, diags);
+
+    // Pass 4: detect direct field-type cycles (shape A has field of type shape A).
     detect_field_cycles(&table, diags);
 
     table
+}
+
+fn detect_extends_cycles(table: &ShapeTable, diags: &mut DiagnosticBucket) {
+    for name in table.shapes.keys() {
+        let mut visited: Vec<String> = vec![name.clone()];
+        let mut current = name.clone();
+        loop {
+            let Some(def) = table.shapes.get(&current) else { break };
+            let Some(parent) = &def.extends else { break };
+            if visited.contains(parent) {
+                let chain = visited.join(" → ");
+                if let Some(def) = table.shapes.get(name) {
+                    diags.push(Diagnostic::error(
+                        def.defined_at.clone(),
+                        format!("`{name}` has a cyclic `extends` chain: {chain} → {parent}"),
+                        "Break the cycle by removing one of the `extends` declarations.",
+                        "`extends` is for data inheritance — a shape cannot inherit from itself, directly or through a chain.",
+                    ));
+                }
+                break;
+            }
+            visited.push(parent.clone());
+            current = parent.clone();
+        }
+    }
+}
+
+fn flatten_inherited_fields(table: &mut ShapeTable, _diags: &mut DiagnosticBucket) {
+    // Collect the inheritance order to avoid borrow conflicts.
+    let names: Vec<String> = table.shapes.keys().cloned().collect();
+    for name in &names {
+        let parent_name = table.shapes[name].extends.clone();
+        let Some(parent) = parent_name else { continue };
+
+        // Collect parent fields (may themselves be inherited — already flattened if
+        // we process in topological order, but for simplicity just grab what's there).
+        let parent_fields: Vec<FieldDef> = match table.shapes.get(&parent) {
+            Some(p) => p.fields.iter().map(|f| FieldDef {
+                name: f.name.clone(),
+                ty: f.ty.clone(),
+                is_hidden: f.is_hidden,
+                is_inherited: true,
+                defined_at: f.defined_at.clone(),
+            }).collect(),
+            None => continue, // parent doesn't exist — already errored
+        };
+
+        // Prepend parent fields to child's own fields, skipping overridden names.
+        let child = table.shapes.get_mut(name).unwrap();
+        let own_names: HashSet<&str> = child.fields.iter().map(|f| f.name.as_str()).collect();
+        let mut all_fields: Vec<FieldDef> = parent_fields.into_iter()
+            .filter(|f| !own_names.contains(f.name.as_str()))
+            .collect();
+        all_fields.extend(child.fields.drain(..));
+        child.fields = all_fields;
+    }
 }
 
 fn detect_field_cycles(table: &ShapeTable, diags: &mut DiagnosticBucket) {

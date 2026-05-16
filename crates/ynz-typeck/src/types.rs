@@ -42,12 +42,18 @@ pub enum Type {
 
     // ── M4 ───────────────────────────────────────────────────────────────────
 
-    // test-ratchet: M4 adds Shape for user-defined data types.
+    // test-ratchet: M4 adds Shape and Dynamic for user-defined types.
+
     /// A user-defined shape type, identified by name.
     ///
-    /// Field layout and method resolution use the `ShapeTable` built by the
-    /// shapes pre-pass. `extends` / `follows` resolution is P3b work.
+    /// Field layout and method resolution use the `ShapeTable`.
     Shape { name: String },
+
+    /// Runtime-dispatch type: `dynamic Foo` where Foo is a contract shape.
+    ///
+    /// Values of this type are fat pointers `{ data_ptr, vtable_ptr }`.
+    /// Method dispatch costs ~3× a static call — opt-in only.
+    Dynamic { contract: String },
 }
 
 /// Human-readable type name for diagnostic messages.
@@ -65,5 +71,6 @@ pub fn type_name(t: &Type) -> String {
         Type::Bool => "bool".into(),
         Type::Range { .. } => "range".into(),
         Type::Shape { name } => name.clone(),
+        Type::Dynamic { contract } => format!("dynamic {contract}"),
     }
 }
