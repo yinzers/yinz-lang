@@ -31,7 +31,7 @@ Every HTTP framework in every language eventually grows this. In Yinz, it's the 
 
 ### Basic (supervised by default)
 
-```yinz
+```ynz
 let server = http.listen(8080)
 server.handle("/users", getUsers)
 server.handle("/orders", placeOrder)
@@ -44,7 +44,7 @@ Behind the scenes:
 
 The IDE shows muted hints indicating the supervision policy:
 
-```yinz
+```ynz
 let server = http.listen(8080)
 //          ^ muted: " (supervised: per-request isolation, restart accept loop on panic)"
 //            hover-tooltip explains the default and shows how to customize
@@ -52,7 +52,7 @@ let server = http.listen(8080)
 
 ### Custom supervision policy
 
-```yinz
+```ynz
 let server = http.listen(8080, supervise: {
   onPanic: (e: Panic, request: Request) => {
     alerting.page("HTTP handler crashed", e, request.method, request.path)
@@ -66,7 +66,7 @@ The `supervise` config option overrides specific behaviors. Unspecified fields f
 
 ### Disabling supervision (advanced — strongly discouraged)
 
-```yinz
+```ynz
 let server = http.listen(8080, supervise: false)
 //                                        ^ panics now bubble up to main
 ```
@@ -103,7 +103,7 @@ In dev mode (`ynz run` not `ynz build --release`), the response includes the pan
 
 Users can override the default 500 handler:
 
-```yinz
+```ynz
 let server = http.listen(8080, on500: (e: Panic, request: Request) -> Response {
   // custom error response — log to monitoring, return a custom error page, etc.
 })

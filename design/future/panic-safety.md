@@ -23,7 +23,7 @@ The distinction is **intent and recoverability**, not "known vs unknown":
 
 ### Errors — expected, recoverable, caller has a choice
 
-```yinz
+```ynz
 function readFile(path: string) -> string errors {
   // file might not exist; caller can use a default, retry, or fail the request
 }
@@ -37,7 +37,7 @@ The function signature DECLARES the failure modes via `errors`. The caller MUST 
 
 Errors flow through normal control flow. No `try/catch` — errors auto-propagate:
 
-```yinz
+```ynz
 function loadUser(id: int) -> User errors {
   let data = readFile("user-${id}.json")   // if readFile fails, this returns the error
   let user = parseUser(data)               // same — auto-propagation
@@ -49,7 +49,7 @@ If the caller wants to handle a specific error instead of propagating, they use 
 
 ### Panics — unexpected, unrecoverable in scope, indicates a BUG
 
-```yinz
+```ynz
 panic("market data desync detected — refusing to continue")  // explicit
 let item = array.get(5)  // returns maybe T — the array might be too short
                          // (no panic; the user explicitly handles maybe)
@@ -71,7 +71,7 @@ For PANICS: **task isolation via `background`** + **supervisor pattern** + **aut
 
 ### Task isolation
 
-```yinz
+```ynz
 function main() -> nothing {
   while (true) {
     let order = getNextOrder()
@@ -106,7 +106,7 @@ This is automatic — same mechanism as scope-exit cleanup, just triggered by pa
 
 Patterns from Erlang/BEAM and BullMQ. The parent of a `background` task gets notified on child panic:
 
-```yinz
+```ynz
 let task = background processOrder(order)
 task.onPanic((e: Panic) => {
   log.error("order processing crashed: ${e.message}")
@@ -151,7 +151,7 @@ The contract holds across both versions: errors are visible, period. Even with a
 
 Per Golden Rule 7 (no method chaining), background error handling uses step-by-step syntax:
 
-```yinz
+```ynz
 // Fire-and-forget — error logged to stderr by default
 background processOrder(order)
 

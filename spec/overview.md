@@ -8,7 +8,7 @@ You write clean, simple code. The compiler turns it into fast, safe machine code
 
 ## A taste of Yinz
 
-```yinz
+```ynz
 shape Player {
   name: string
   health: number

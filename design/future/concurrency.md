@@ -48,7 +48,7 @@ Three things Rust gave up that Yinz keeps:
 
 The compiler can analyze pure Yinz code. It CANNOT analyze C code linked via FFI — we can't know whether `printf` blocks without knowing what's behind it. So FFI boundaries must declare `may-block` explicitly:
 
-```yinz
+```ynz
 foreign function printf(format: string) -> int may-block
 foreign function read(fd: int, buf: pointer, n: int) -> int may-block
 foreign function memcpy(dst: pointer, src: pointer, n: int) -> pointer    // not annotated → doesn't block
@@ -85,7 +85,7 @@ This is the auto-promotion pattern (per `.claude/rules/auto-promotion.md`):
 - **Muted IDE hint**: always shows the capacity AND whether it was default or user-set, so the bounded-ness is visible at every channel construction
 - **Explicit override**: `channel<T>(N)` when the default is wrong for this workload
 
-```yinz
+```ynz
 // Source the user wrote:
 let queue: channel<Order> = channel<Order>()
 
@@ -221,7 +221,7 @@ The maximum uninterrupted CPU time before a preemption check fires is configured
 
 The IDE muted hint at the spawn site shows the routing decision:
 
-```yinz
+```ynz
 background processOrder(order)        // muted: // routed to I/O pool — calls db.fetch (may suspend)
 background calculateRisk(positions)   // muted: // routed to CPU pool — no may-block calls in call graph
 ```

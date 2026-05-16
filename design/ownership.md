@@ -26,7 +26,7 @@ Plus two body-level operations on values:
 
 Function signatures declare ownership intent as keyword prefixes on parameters:
 
-```yinz
+```ynz
 function greet(share name: string) -> nothing { ... }      // function will only read name
 function rename(lend player: Player) -> nothing { ... }    // function will modify player
 function consume(give data: Data) -> nothing { ... }       // function takes ownership of data
@@ -46,7 +46,7 @@ The signature is the contract. Anyone reading the function knows exactly what it
 
 Call sites in Yinz follow the uniform inference rule (`.claude/rules/inference.md`): the compiler reads the callee's signature and inserts the right modifier automatically. **There is no body-level syntax for `.share()`/`.lend()`/`.give()`** — those modifiers exist only in signature position; call sites get them via compiler inference and IDE rendering.
 
-```yinz
+```ynz
 greet(name)           // compiler reads greet's signature → name is shared
 rename(player)        // compiler reads rename's signature → player is lent (mutated)
 consume(data)         // compiler reads consume's signature → data is given (consumed)
@@ -75,7 +75,7 @@ These two are the only body-level dot-postfix ownership operations. They use par
 
 ### `.copy()` — produce a new owned value
 
-```yinz
+```ynz
 const backup = original.copy()       // strict: only legal on transitively-trivially-copyable types
 saveForever(backup)                   // backup consumed (give inferred), original unchanged
 ```
@@ -84,7 +84,7 @@ Strict cheap-only per r4: `.copy()` is only legal when every field of the value'
 
 ### `.freeze()` — lock a binding from further mutation
 
-```yinz
+```ynz
 let config: ConfigBuilder = { rules: [] }
 config.addRule("a", 1)
 config.addRule("b", 2)

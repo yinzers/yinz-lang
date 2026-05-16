@@ -101,7 +101,7 @@ Pick once at design time. The category locks the surface.
 
 User could have typed the explicit form IN A SPECIFIC POSITION but didn't. The muted text appears at that exact position. Click → the text gets typed into source.
 
-```yinz
+```ynz
 let i = 4                              // muted `: int` between `i` and `=`
 foo(player)                            // muted `.share` after `player`
 let queue = channel<Order>()           // muted `64` INSIDE the empty parens
@@ -121,7 +121,7 @@ Examples:
 
 **Locked rendering**: the existing token (`let`, `array<T>`) gets a **visual decoration** — dotted underline, subtle color shift, or small marker — indicating "alternative form available." The alternative form lives in the **hover tooltip**, not as inline text.
 
-```yinz
+```ynz
 let count = 5
 // IDE renders `let` with a dotted underline.
 // Hover on `let`:
@@ -146,7 +146,7 @@ Visibility is ACTIVE (requires hover). For replacements, this is the right trade
 
 The compiler made a decision that has NO equivalent source form the user could have written. The annotation appears as a muted comment near the relevant expression.
 
-```yinz
+```ynz
 findMax(players)              // muted: // static dispatch (T = Player) — .compare() inlined
 background process(data)      // muted: // routed to CPU pool — no may-block calls in call graph
 ```

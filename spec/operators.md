@@ -143,7 +143,7 @@ Types can implement operators through `follows` contracts from the standard libr
 
 The standard library defines contracts for operators. Each contract declares the bare signature of the function the implementing shape must provide. Implementations live as standalone functions at the file/module level (Yinz is not object-oriented — see `.claude/rules/non-oop.md`).
 
-```yinz
+```ynz
 // Contracts — bare-signature form (no `function` keyword, no body)
 shape Addable {
   add(share self, share other: Self) -> Self
@@ -166,7 +166,7 @@ shape Printable {
 
 **Example:**
 
-```yinz
+```ynz
 // Shape declares data + follows clauses; no method bodies here
 shape Vector2D follows Addable, Equatable, Printable {
   x: number
@@ -215,7 +215,7 @@ The compiler looks up the function by name + first-parameter type (standard over
 
 All types are printable. Built-in types print naturally. Custom types get a default representation — type name and visible fields:
 
-```yinz
+```ynz
 print(player)    // Player { name: "Alice", health: 100 }
 ```
 

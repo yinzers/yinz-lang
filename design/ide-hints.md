@@ -57,14 +57,14 @@ Most muted hints complete to syntactically-valid Yinz the developer COULD have t
 
 Example (typeable hint — Addition category):
 
-```yinz
+```ynz
 let x = 42                    // muted ": int (from 42)" after x
                               // click → becomes `let x: int = 42`
 ```
 
 Example (informational hint — Ownership at call sites):
 
-```yinz
+```ynz
 const player: Player = { name: "Patrick", health: 100 }
 foo(player)                   // muted "share (matches foo's signature)" after player
                               // click → IDE jumps to foo's signature where `share` is declared
@@ -82,7 +82,7 @@ Every muted hint, on hover, shows a three-part tooltip in the same WHAT / WHAT-I
 ### Canonical example — inferred `share` on a `const` binding at a call site
 
 Source:
-```yinz
+```ynz
 const player: Player = { name: "Patrick", health: 100 }
 foo(player)               // muted "share (matches foo's signature)" appears after player
 ```

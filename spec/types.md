@@ -8,7 +8,7 @@ A `shape` defines the structure of your data — what fields it has and what typ
 
 ## Defining a shape
 
-```yinz
+```ynz
 shape Player {
   name: string
   health: number
@@ -24,7 +24,7 @@ Fields are laid out flat and contiguous in memory. Fast to access, CPU-cache fri
 
 Use annotation-driven literal form — declare the variable's type, then assign a `{ ... }` literal:
 
-```yinz
+```ynz
 const player: Player = {
   name: "Patrick",
   health: 100,
@@ -34,7 +34,7 @@ const player: Player = {
 
 Every field must be provided. Forgetting one is a compile error:
 
-```yinz
+```ynz
 const player: Player = {
   name: "Patrick",
   health: 100
@@ -50,7 +50,7 @@ The `let p = Player { ... }` prefix-form is NOT legal — Yinz uses structural-t
 
 In Yinz, methods are normal `function` declarations at file/module level. They take the value as the first parameter (conventionally named `self`). At the call site, you can write either `value.method()` (dot-call) or `method(value)` (function-call) — both are legal and equivalent.
 
-```yinz
+```ynz
 shape Player {
   name: string
   health: number
@@ -82,7 +82,7 @@ The IDE recognizes both call forms. Typing `player.` shows autocomplete with all
 
 `extends` reuses parent's FIELDS. Behavior comes from standalone functions; the compiler picks the most specific overload at the call site (no `override` keyword needed).
 
-```yinz
+```ynz
 shape Entity {
   name: string
   health: number
@@ -123,7 +123,7 @@ There is no `override` keyword in Yinz — write multiple `function` declaration
 
 Mark a shape `base` if it's only meant to be extended, never created directly:
 
-```yinz
+```ynz
 base shape Entity {
   name: string
   health: number
@@ -149,7 +149,7 @@ const w: Warrior = { name: "test", health: 50, weapon: "axe", armor: 10 }   // f
 
 If two unrelated shapes need to be used interchangeably, define a contract shape and use `follows`. Contracts declare method signatures in bare-signature form (no `function` keyword, no body — the implementing shape must provide a matching standalone function).
 
-```yinz
+```ynz
 shape Damageable {
   health: number
   takeDamage(lend self, amount: number) -> nothing      // bare signature — no body
@@ -187,7 +187,7 @@ dealDamage(building, 30)      // Building follows Damageable — works
 
 A shape can follow multiple contracts — `extends` comes first, then `follows` with a comma-separated list:
 
-```yinz
+```ynz
 shape Warrior extends Entity follows Damageable, Attackable, Renderable {
   weapon: string
   armor: number
@@ -202,7 +202,7 @@ shape Warrior extends Entity follows Damageable, Attackable, Renderable {
 
 You don't have to name the shape when returning a literal. The data has to match the declared return type:
 
-```yinz
+```ynz
 shape DivResult {
   quotient: number
   remainder: number
@@ -221,7 +221,7 @@ The compiler checks that the fields exist with the right types. No need to write
 
 Mark a field `hidden` to make it inaccessible to code in OTHER FILES. Hidden fields require a default value because external code can't provide them at construction.
 
-```yinz
+```ynz
 // File: player.ynz
 shape Player {
   name: string
@@ -239,7 +239,7 @@ function takeDamage(lend self: Player, amount: number) -> nothing {
 
 External callers only provide visible fields when creating the value:
 
-```yinz
+```ynz
 // File: main.ynz
 import { Player, takeDamage } from "./player"
 

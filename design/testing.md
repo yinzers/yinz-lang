@@ -38,7 +38,7 @@ Test functions use a dedicated `test` keyword with a string description, not a f
 
 Per-test setup runs before each test; per-test teardown runs after each test. Per-file scope uses the `file` modifier — runs once per file regardless of test count.
 
-```yinz
+```ynz
 setup file {
   db.connect("test-database")
 }
@@ -76,7 +76,7 @@ test "creates a user" {
 
 Tests can be grouped with `group "name" { ... }` blocks. Groups are single-level only — nesting is a compile error.
 
-```yinz
+```ynz
 group "user creation" {
   setup {
     db.clearTables()
@@ -115,7 +115,7 @@ test "schema validation passes" {           // ungrouped, at file level
 
 Two distinct assertions, each tight in what they catch:
 
-```yinz
+```ynz
 // Catches ONLY errors-system failures from the wrapped expression.
 // Panics propagate normally.
 let error = assertFails(createUser({ email: "not-an-email" }))
@@ -141,7 +141,7 @@ By separating: panics from test bugs ALWAYS propagate to the test runner with fu
 
 **Compile error for unhandled `errors` calls in tests:**
 
-```yinz
+```ynz
 test "should fail on bad input" {
   let user = createUser({ email: "bad" })   // createUser is errors
   // COMPILE ERROR: createUser() can fail but this test is not handling the error.

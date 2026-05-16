@@ -6,7 +6,7 @@
 
 ## How for loops work under the hood
 
-```yinz
+```ynz
 for (player in players) {
   print(player.name)
 }
@@ -20,7 +20,7 @@ The compiler calls `next(players)` repeatedly until it returns `none`. (Equivale
 
 Most iterables can never fail mid-step. Some iterables (reading a file, paging through an API) can — disk errors, network timeouts, etc. Yinz has a contract for each. Contracts use bare-signature form (no `function` keyword, no body — see `.claude/rules/non-oop.md`):
 
-```yinz
+```ynz
 shape Iterable<T> {
   next(lend self) -> maybe T
 }
@@ -103,7 +103,7 @@ With either adapter, the enclosing function no longer needs to be `errors`.
 
 Declare a shape that `follows Iterable<T>` (data fields + `hidden` state). Provide a standalone `next` function whose signature matches the contract — the compiler verifies the match.
 
-```yinz
+```ynz
 shape CountDown follows Iterable<int> {
   end: int
   hidden current: int = 0
@@ -126,7 +126,7 @@ for (num in counter) {
 
 If your iteration step can fail (I/O, network), follow the fallible contract instead:
 
-```yinz
+```ynz
 shape ApiPager<T> follows FallibleIterable<T> {
   baseUrl: string
   hidden cursor: maybe string = none

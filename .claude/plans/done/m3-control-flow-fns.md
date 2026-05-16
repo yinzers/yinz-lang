@@ -43,7 +43,7 @@ Status: active
 
 A multi-function fibonacci program compiles, runs, and produces the right output:
 
-```yinz
+```ynz
 function fib(n: int) -> int {
   if (n < 2) {
     return n

@@ -633,7 +633,7 @@ Full Unicode strings (`.get` for code points, `.byteAt`, `.graphemeAt`), interpo
 **Branch convention**: each phase merges to `main` before the next starts. P1 opens on `feat/numerics-runtime`. Subsequent phases use their own `feat/m2-{lexer,parser,...}` branches. No `m2` umbrella branch (per M1's anti-pattern callouts).
 
 **Headline integration test (M2 contract)**:
-```yinz
+```ynz
 function main() -> nothing {
   let price = 0.1 + 0.2          // number, exact 0.3
   let count: int = 42

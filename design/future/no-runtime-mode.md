@@ -55,7 +55,7 @@ Any language feature or stdlib API that requires the runtime becomes a COMPILE E
 
 The user provides custom primitives via runtime-injection APIs (these are stdlib functions in `--kernel` mode):
 
-```yinz
+```ynz
 // Custom kernel allocator
 runtime.setAllocator(MyKernelAllocator)
 

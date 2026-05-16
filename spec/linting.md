@@ -13,7 +13,7 @@ The philosophy: catch real bugs, enforce code quality, don't police style. Every
 These are things that would definitely break at runtime or violate a language guarantee:
 
 **Ownership violations:**
-```yinz
+```ynz
 let data = loadData()
 consume(data)            // compiler infers `give` from consume's signature
 print(data)
@@ -94,7 +94,7 @@ type player { }
 ```
 
 **Sharing with a background task:**
-```yinz
+```ynz
 background processData(data)
 // ERROR: processData's signature says `share data: Data`, but background tasks
 //        may outlive this function — sharing isn't safe across that boundary.

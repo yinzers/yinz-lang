@@ -39,7 +39,7 @@ Yinz's unique combination: **easy syntax (Python-tier learning curve) + real sys
 
 ### Pattern 1 — Data structure recommendations
 
-```yinz
+```ynz
 let scores: map<string, number> = { alice: 90, bob: 85, charlie: 78 }
 // IDE HINT: All keys here are compile-time string literals — a type
 //           is significantly faster:
@@ -54,7 +54,7 @@ let scores: map<string, number> = { alice: 90, bob: 85, charlie: 78 }
 
 ### Pattern 2 — Performance suggestions
 
-```yinz
+```ynz
 let data: array<Player> = []
 for (i in range(0, 10000)) {
   data.add({ name: `Player ${i}`, health: 100 })
@@ -70,7 +70,7 @@ for (i in range(0, 10000)) {
 
 ### Pattern 3 — Idiomatic Yinz
 
-```yinz
+```ynz
 let nums = [1, 2, 3, 4, 5]
 let sum = 0
 for (n in nums) {
@@ -86,7 +86,7 @@ for (n in nums) {
 
 ### Pattern 4 — Type system teaching
 
-```yinz
+```ynz
 let price: float = 19.99
 // IDE HINT: Using float for financial values may cause rounding errors.
 //   Consider number for exact arithmetic:
@@ -102,7 +102,7 @@ let price: float = 19.99
 
 ### Pattern 5 — Memory and lifetime teaching
 
-```yinz
+```ynz
 function takeDamage(share player: Player, amount: number) -> nothing {
   player.health = player.health - amount
   // COMPILE ERROR: Cannot modify player — it was shared (read-only access).
@@ -124,7 +124,7 @@ The IDE is not just a coding environment — it is a load-bearing teaching surfa
 
 This means a developer is being taught even when their code is **completely correct**:
 
-```yinz
+```ynz
 let x = 42                    // IDE shows muted ": int" → teaches type inference
 foo(player)                   // IDE shows muted ".share" → teaches ownership at call sites
 db.fetch("users")             // IDE shows muted "wait" → teaches I/O suspension

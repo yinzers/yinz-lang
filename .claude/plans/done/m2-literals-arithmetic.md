@@ -28,7 +28,7 @@ parent: v0-1-compiler
 **Outcome**: COMPLETE (2026-05-13) — commit c39fe8a on main, tagged `v0.1.0-m2`.
 
 **Headline integration test (M2 contract)**:
-```yinz
+```ynz
 function main() -> nothing {
   let price = 0.1 + 0.2          // number, exact 0.3
   let count: int = 42

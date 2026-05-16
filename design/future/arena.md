@@ -37,7 +37,7 @@ Arena allocation:
 
 ## A1 — Named scope (the most common pattern)
 
-```yinz
+```ynz
 arena scratch {
   let users: array<User> = []              // allocated in 'scratch'
   let nameMap: map<string, User> = {}      // allocated in 'scratch'
@@ -55,7 +55,7 @@ The IDE shows muted `.in(scratch)` after each constructor — per the [uniform i
 
 ## A2 — Anonymous scope (when you don't need to reference the arena)
 
-```yinz
+```ynz
 arena {
   let temp: array<int> = []
   let bigBuffer: string = ""
@@ -69,7 +69,7 @@ Identical to A1 except no name. Use when no code inside the scope needs to refer
 
 ## Option B (DEFERRED to v0.3+) — Explicit Arena values
 
-```yinz
+```ynz
 let scratch: Arena = Arena()                    // manually create an arena
 let users: array<User> = array<User>.in(scratch)      // explicit per-allocation
 let names: map<string, User> = map<string, User>.in(scratch)

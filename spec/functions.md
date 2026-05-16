@@ -86,7 +86,7 @@ function consume(give data: Data) -> nothing       // taking ownership
 
 The caller never types the ownership modifier — the compiler infers it from the function's signature. The IDE shows the inferred modifier as muted text:
 
-```yinz
+```ynz
 greet(playerName)    // IDE shows muted "share" — read-only access inferred
 rename(player)       // IDE shows muted "lend" (red-tinted) — function modifies player
 consume(data)        // IDE shows muted "give" (red-tinted) — function takes ownership

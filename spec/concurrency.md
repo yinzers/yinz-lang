@@ -163,7 +163,7 @@ Background tasks might outlive the current function. This changes how ownership 
 
 **A `share`-signature function cannot be called via background:**
 
-```yinz
+```ynz
 function processData(share data: Data) -> nothing { ... }
 
 background processData(data)
@@ -180,7 +180,7 @@ A shared borrow is only valid while its owner exists. A background task might st
 
 If you don't use the value after the `background` call, the compiler infers `give` (transfers ownership to the task):
 
-```yinz
+```ynz
 function processEvent(give event: WebhookEvent) -> nothing { ... }
 
 function handleWebhook(event: WebhookEvent) -> Response errors {
@@ -191,7 +191,7 @@ function handleWebhook(event: WebhookEvent) -> Response errors {
 
 If you do use the value after, you call `.copy()` to keep the original:
 
-```yinz
+```ynz
 function handleWebhook(event: WebhookEvent) -> Response errors {
   background processEvent(event.copy())      // explicit copy — original event stays usable
   log(`Queued: ${event.id}`)
@@ -201,7 +201,7 @@ function handleWebhook(event: WebhookEvent) -> Response errors {
 
 **The IDE warns about large copies:**
 
-```yinz
+```ynz
 background processData(hugeDataset.copy())
 const count = hugeDataset.count()
 // IDE WARNING: hugeDataset (~500MB) was copied for the background task.

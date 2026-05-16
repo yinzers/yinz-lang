@@ -68,7 +68,7 @@ Unused imports produce a compile warning. The IDE auto-removes them on save.
 
 Both named and namespace imports support `as` renaming, TypeScript-style:
 
-```yinz
+```ynz
 // Destructured import with rename
 import { fetchUser as getUser } from "services/users"
 
@@ -87,7 +87,7 @@ import { Player as PlayerType, Score } from "models/game"
 
 When two imports bring the same name (or namespace) into the same file, the compiler refuses to silently pick one:
 
-```yinz
+```ynz
 import { Player } from "models/game"
 import { Player } from "external/legacy"
 //

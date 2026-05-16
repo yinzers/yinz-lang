@@ -22,7 +22,7 @@ The TypeScript-readability part still holds — modern TS often uses standalone 
 
 ### Shapes hold data + (optionally) contract method-signatures ONLY
 
-```yinz
+```ynz
 shape Player {
   name: string
   health: int
@@ -43,7 +43,7 @@ shape Warrior follows Comparable {
 
 ### Functions live at file/module level
 
-```yinz
+```ynz
 function greet(share self: Player) -> string {
   return "Hello, " + self.name
 }
@@ -59,7 +59,7 @@ function compare(share a: Warrior, share b: Warrior) -> int {
 
 ### Methods are NOT inside shapes
 
-```yinz
+```ynz
 // ❌ COMPILE ERROR
 shape Player {
   name: string
@@ -86,7 +86,7 @@ shape Player {
 
 `value.method(args)` is sugar for `method(value, args)`. The compiler rewrites the dot form at parse time; both compile to the same machine code. Users pick per call site:
 
-```yinz
+```ynz
 const player: Player = { name: "Patrick", health: 100 }
 
 player.heal(20)        // dot-call — natural when there's a clear receiver
@@ -114,7 +114,7 @@ The IDE and compiler share the same function-signature lookup. The rule:
 
 End-to-end example with three shapes:
 
-```yinz
+```ynz
 shape Player   { name: string, health: int }
 shape Enemy    { name: string, health: int }
 shape Building { address: string, hp: int }
@@ -140,7 +140,7 @@ const tower:  Building   = { address: "1 Main St", hp: 500 }
 
 **Call attempts**:
 
-```yinz
+```ynz
 player.attack(goblin, 10)        // ✅ compiles — attack(Player, Enemy, int) matches
 attack(player, goblin, 10)        // ✅ compiles — same call, function-form
 tower.attack(goblin, 10)          // ❌ compile error (see diagnostic below)
@@ -181,7 +181,7 @@ COMPILE ERROR: No function `attack` accepts (Building, Enemy, int).
 
 `extends` is for data reuse only. Child shape inherits parent's fields. Behavior comes from standalone functions; the compiler picks the most specific overload at the call site.
 
-```yinz
+```ynz
 shape Entity {
   name: string
   health: int
@@ -212,7 +212,7 @@ No `override` keyword exists. No virtual dispatch table. The compiler picks `gre
 
 A shape `follows Contract` when standalone functions exist whose signatures match the contract's bare-signature declarations.
 
-```yinz
+```ynz
 shape Damageable {
   takeDamage(lend self, amount: int) -> nothing
 }

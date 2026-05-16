@@ -21,7 +21,7 @@ The parens (or lack thereof) signal what's happening at a glance. No ambiguity a
 
 ### Field access — no parens
 
-```yinz
+```ynz
 shape Player { name: string, health: int }
 const p: Player = { name: "Patrick", health: 100 }
 
@@ -31,7 +31,7 @@ p.health                   // field access — no parens
 
 ### Type-attached constants — no parens (added in M4 P5 catch-up)
 
-```yinz
+```ynz
 int.max                    // 9223372036854775807
 int.min                    // -9223372036854775808
 number.epsilon             // smallest representable positive decimal128
@@ -40,7 +40,7 @@ number.max                 // largest representable decimal128
 
 ### Method calls via UFCS — parens (M2-shipped intrinsics + M4 user-defined functions)
 
-```yinz
+```ynz
 score.toString()           // M2 intrinsic — toString on int
 val.toFloat()              // M2 intrinsic
 val.toNumber()             // M2 intrinsic
@@ -51,7 +51,7 @@ p.greet()                  // M4 user-defined — UFCS sugar for greet(p)
 
 ### Body transformations — parens (M4)
 
-```yinz
+```ynz
 const backup = original.copy()      // produces a new owned value
 configBuilder.freeze()              // locks the binding from further mutation
 ```

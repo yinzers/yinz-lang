@@ -46,7 +46,7 @@ Use `const` by default. Reach for `let` only when you need to update the value.
 - **Field mutation** (when types land): `player.health = 50` on a `const player` is blocked
 - **Mutable borrows** (when ownership lands): you can't pass a `const` value to a function whose signature declares `lend` or `give` — the compiler refuses to grant the mutable access
 
-```yinz
+```ynz
 const player: Player = { name: "Patrick", health: 100 }
 player.health = 50            // COMPILE ERROR: player is const — fields can't change.
 healPlayer(player)            // COMPILE ERROR: player is const — healPlayer's signature is

@@ -9,7 +9,7 @@ User spec: covered across `spec/generics.md` (type generics) and inline in `spec
 Yinz has both **type generics** and **function generics**, both using the same bracket-after-name syntax.
 
 **Type generics** (already in spec):
-```yinz
+```ynz
 shape Pair<A, B> {
   first: A
   second: B
@@ -21,7 +21,7 @@ shape Box<T> {
 ```
 
 **Function generics** (this decision):
-```yinz
+```ynz
 function identity<T>(give value: T) -> T {
   return value
 }
@@ -56,7 +56,7 @@ One syntax. Angle brackets everywhere for type parameters.
 
 Constraints use `follows` (the same keyword as type contracts) and are written **inline** with the type parameter:
 
-```yinz
+```ynz
 function sort<T follows Comparable>(share items: array<T>) -> array<T> { ... }
 
 function process<T follows Comparable, Serializable>(share item: T) -> string { ... }
@@ -64,7 +64,7 @@ function process<T follows Comparable, Serializable>(share item: T) -> string { 
 
 **Why inline over a separate `where` clause:**
 
-```yinz
+```ynz
 // Inline (chosen):
 function sort<T follows Comparable>(share items: array<T>) -> array<T> { ... }
 
@@ -84,7 +84,7 @@ If/when Yinz constraints become complex enough to warrant a where clause (deep i
 
 The compiler infers type parameters from argument types at the call site. Users almost never write the type parameter explicitly:
 
-```yinz
+```ynz
 // Inference (99% of calls):
 let x = identity(5)                    // T inferred as int
 let p = pair("alice", 42)              // A=string, B=int inferred
@@ -101,7 +101,7 @@ This matches Rule 4 (compiler does the hard work) — jr devs don't write `<T>` 
 
 ## Compile errors
 
-```yinz
+```ynz
 function sort<T follows Comparable>(share items: array<T>) -> array<T> { ... }
 
 shape Player { name: string, health: number }
@@ -119,7 +119,7 @@ let sorted = sort(players)
 //   Then implement the required compare() method. See spec/operators.md.
 ```
 
-```yinz
+```ynz
 let x = identity()
 //
 // COMPILE ERROR: Cannot infer type parameter T for function identity.

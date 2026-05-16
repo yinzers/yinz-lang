@@ -41,7 +41,7 @@ Several method names chosen for plain-English readability over functional progra
 
 Brackets at a value position desugar to `.get()` (read) or `.set()` (write):
 
-```yinz
+```ynz
 let p = players[3]              // sugar for players.get(3)         → maybe Player
 let s = scores["alice"]         // sugar for scores.get("alice")    → maybe number
 let c = name[0]                 // sugar for name.get(0)            → maybe string
@@ -71,7 +71,7 @@ Bracket access keeps the namespaces visually separated: `m["count"]` is unambigu
 
 **Out-of-bounds on `.set()`:**
 
-```yinz
+```ynz
 let arr: array<number> = [1, 2, 3]
 arr[10] = 99
 // RUNTIME ERROR: index 10 out of bounds (arr.count() == 3).
@@ -178,7 +178,7 @@ If a user genuinely doesn't care about iteration order and wants to skip the ove
 
 When the compiler emits the memory layout for a `shape` declaration, it auto-reorders fields for optimal packing (largest-alignment first, smallest last). User code is unaffected — `shape` access syntax (`player.health`) and field semantics stay identical. Only the in-memory byte layout changes.
 
-```yinz
+```ynz
 shape Event {
   flag: bool      // user wrote: 1 byte
   timestamp: int  // user wrote: 8 bytes
@@ -246,7 +246,7 @@ Naming follows Golden Rule 12 (human-readable over jargon): `Fast` describes use
 
 The compiler also detects in-function multi-step sort patterns and upgrades the auto-pick from unstable to stable. Pattern: two-or-more `.sort()` calls on the same variable, in sequence, with no intervening modifications to the array.
 
-```yinz
+```ynz
 let nums: array<int> = [...]
 nums.sort(n => n % 10)        // muted hint: // unstable sort (int — equal values interchangeable)
 nums.sort(n => n / 10)        // muted hint: // stable sort (multi-step pattern — preserving previous .sort() order)
@@ -259,7 +259,7 @@ This is single-function data-flow analysis — same machinery as `array<T>` → 
 
 The compiler can't easily trace multi-step patterns across function boundaries. If you sort in one function and re-sort in another, the in-function detector won't catch it:
 
-```yinz
+```ynz
 function sortByLow(lend nums: array<int>) {
   nums.sort(n => n % 10)        // unstable — fine in isolation
 }
@@ -289,7 +289,7 @@ Java got it right by accident — `Collections.sort()` has been stable since at 
 
 If you're not sure: when two items compare equal, **stable** keeps their original relative order. **Unstable** makes no guarantee — equal items can end up in any order, and different runs can produce different results.
 
-```yinz
+```ynz
 let users = [
   { name: "Alice", age: 30 },
   { name: "Bob",   age: 25 },

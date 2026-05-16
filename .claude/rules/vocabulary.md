@@ -42,7 +42,7 @@ For internal-vs-user-facing audience distinctions (e.g., `infer`/`inference` all
 
 A `shape` is the DECLARATION of a data structure. A value is an instance of data with that structure.
 
-```yinz
+```ynz
 shape Player {                    // declaration — this is a shape (data only; no methods)
   name: string
   health: int

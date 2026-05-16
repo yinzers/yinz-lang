@@ -22,7 +22,7 @@ This is genuinely better than Rust. Rust requires `Pin<T>` (Approach C in this d
 
 A shape is self-referential when one of its fields holds a pointer or reference that points INTO another field of the same shape instance. Classic example: a node that holds data and a pointer into its own data buffer.
 
-```yinz
+```ynz
 shape Node {                         // muted ".self-referential" appears here in IDE
   data: int
   ref: pointer-to-self.data          // hypothetical syntax — exact form TBD in v0.3 spec
@@ -99,7 +99,7 @@ The compiler can detect self-references automatically by looking at field types 
 
 The developer can type `self-referential` explicitly to document intent (per the [uniform inference rule](../../.claude/rules/inference.md) — every inferred attribute is also typeable):
 
-```yinz
+```ynz
 shape Node self-referential {        // explicit — same behavior as inferred
   data: int
   ref: pointer-to-self.data

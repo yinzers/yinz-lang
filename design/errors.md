@@ -28,7 +28,7 @@ Inside an `errors` function, calls to other `errors` functions return the error-
 
 **Examples:**
 
-```yinz
+```ynz
 // Happy path — auto-propagation, error-capable type invisible
 function loadConfig() -> Config errors {
   let raw = readFile("config.txt")           // raw briefly: string errors-capable
@@ -51,7 +51,7 @@ function loadConfigWithLog() -> Config errors {
 
 **Compile error when ordering is wrong:**
 
-```yinz
+```ynz
 function loadConfig() -> Config errors {
   let raw = readFile("config.txt")
   let parsed = parseConfig(raw)              // raw auto-propagated here

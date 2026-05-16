@@ -16,7 +16,7 @@ Supervisor helpers turn the [supervisor pattern](panic-safety.md#supervisor-patt
 
 ## API surface
 
-```yinz
+```ynz
 // Most basic: spawn a task and restart it forever on panic.
 supervise.alwaysRestart(processOrders)
 

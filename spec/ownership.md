@@ -10,7 +10,7 @@ The rule: every value has exactly one owner. When the owner goes out of scope, t
 
 When a function takes a value, its signature says one of three things:
 
-```yinz
+```ynz
 function greet(share name: string) -> nothing { ... }      // share — read-only; caller keeps ownership
 function rename(lend player: Player) -> nothing { ... }    // lend — function modifies it; caller keeps ownership
 function consume(give data: Data) -> nothing { ... }       // give — function takes it; caller loses it
@@ -24,7 +24,7 @@ That's the contract. Anyone reading the signature knows what happens to the valu
 
 When you call a function, you just pass the value normally. The compiler reads the callee's signature and figures out what to do — share, lend, or give. The IDE shows what was inferred as muted text so you can see what's happening:
 
-```yinz
+```ynz
 greet(name)           // IDE shows muted "share" — read-only access
 print(message)        // IDE shows muted "share" — read-only access
 rename(player)        // IDE shows muted "lend" (red-tinted) — function modifies player
@@ -41,7 +41,7 @@ There is no body-level syntax for these three modes — they exist only in signa
 
 Once a function takes ownership via `give`, you can't use the value anymore. The compiler catches this:
 
-```yinz
+```ynz
 consume(data)              // give inferred from consume's signature — data transferred
 print(data)
 // COMPILE ERROR: data was transferred to consume() on the previous line.
@@ -54,7 +54,7 @@ print(data)
 
 A `const` binding can only be shared (read). The compiler refuses to infer `lend` or `give` for a `const` value:
 
-```yinz
+```ynz
 const player: Player = { name: "Patrick", health: 100 }
 rename(player)
 // COMPILE ERROR: player is `const`, but rename's signature requires `lend`.
@@ -65,7 +65,7 @@ rename(player)
 
 ## `.copy()` — when you need to keep a copy
 
-```yinz
+```ynz
 const original: Player = { name: "Patrick", health: 100 }
 const backup = original.copy()    // produces a new owned value (cheap, trivially-copyable types only)
 saveForever(backup)                // backup is given to saveForever; original is unchanged
@@ -79,7 +79,7 @@ saveForever(backup)                // backup is given to saveForever; original i
 
 Sometimes you want to build a value step-by-step then prevent any more changes:
 
-```yinz
+```ynz
 let config: ConfigBuilder = { rules: [] }
 config.addRule("a", 1)
 config.addRule("b", 2)

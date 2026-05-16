@@ -43,7 +43,7 @@ shape Range follows Iterable<int> {
 
 Resolved: two separate contracts. In-memory iteration uses `Iterable<T>`; iteration over I/O sources (files, network, paginated APIs) uses `FallibleIterable<T>`. The user almost never sees the distinction directly — the compiler infers it from the iterator's type and propagates errors only when needed.
 
-```yinz
+```ynz
 // Contracts use bare-signature form (no `function` keyword, no body)
 shape Iterable<T> {
   next(lend self) -> maybe T
@@ -74,7 +74,7 @@ The for loop syntax is identical for both contracts. The compiler checks the ite
 
 **Stdlib adapters for ergonomic fallible-to-infallible conversion:**
 
-```yinz
+```ynz
 // Skip failed iterations silently (logs the error, continues to next item)
 let lines = file.lines(path).orSkipFailures()        // Iterable<string>
 
@@ -98,7 +98,7 @@ Violates Yinz's core error principle: failures are visible and structured. A `fo
 
 **Writing a custom iterable — the choice is clarifying:**
 
-```yinz
+```ynz
 // In-memory data — implements the infallible contract.
 // Shape declaration holds data fields only; standalone function provides the implementation.
 shape CircularBuffer<T> follows Iterable<T> {

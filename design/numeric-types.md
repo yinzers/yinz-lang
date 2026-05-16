@@ -42,7 +42,7 @@ If we ever consider switching to a crate, the test suite IS the contract — dro
 
 `number` defaults to 34 significant decimal digits (= `number<34>` = IEEE 754 decimal128). For higher-precision work (physics, scientific computing, number theory), users opt in to wider precision per-variable:
 
-```yinz
+```ynz
 let price: number = 19.99                    // 34 digits (default, fastest)
 let position: number<70> = 0.000000001       // 70 digits
 let chaotic: number<200> = startingCondition // 200 digits
@@ -70,7 +70,7 @@ let huge: number<5000> = 0.001
 
 **Mixed-precision arithmetic:** binary operators promote to the higher precision. Assignment to a narrower precision rounds half-even with a compiler warning:
 
-```yinz
+```ynz
 let a: number<34> = 1.0
 let b: number<100> = 2.0
 let c = a + b           // c is number<100> — promoted
@@ -96,7 +96,7 @@ Range: ±9.2 × 10^18. Covers any count a human writes by hand. Signed because u
 
 **Overflow behavior: panic by default, in both debug and release.**
 
-```yinz
+```ynz
 let count: int = int.max
 count = count + 1
 // RUNTIME ERROR: integer overflow at line 3.

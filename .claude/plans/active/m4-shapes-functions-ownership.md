@@ -261,7 +261,7 @@ Patrick observed in r6: putting `share`/`lend`/`give` as a keyword PREFIX on sig
 **OPEN-Q10 (NEW): Signature ownership semantics — outside-in (Rust-style explicit) vs inside-out (Yinz-inferred)?**
 
 Patrick's example (`/workspaces/ynz/temp.ts` selected in r6):
-```yinz
+```ynz
 function save(p: Player) -> nothing {
   wait db.save(p.give())
 }
@@ -300,7 +300,7 @@ Mitigation for the (−) items: v0.2 LSP shows the inferred contract prominently
 Patrick pushed back in r5: "I'm not sure YOU have thought the entire give thing out." Correct — the planner was being imprecise. Real gaps surfaced; two NEW decisions need locking before P1.
 
 **OPEN-Q7 (NEW): Partial moves out of a nested-shape field.** Scenario:
-```yinz
+```ynz
 shape Inner { count: int }
 shape Outer { inner: Inner }
 
@@ -313,7 +313,7 @@ return o.inner    // does this consume `inner` out of `o`?
 Planner-leaning: **Option X for M4**, revisit if a real use case forces it. **DECISION REQUIRED before P1**.
 
 **OPEN-Q8 (NEW): Function signatures must have explicit ownership modifier on every parameter.** Scenario:
-```yinz
+```ynz
 function save(p: Player) -> DbResult { ... }
 //             ^^^^^^^^^ no share/lend/give — what's the default?
 ```
@@ -1381,7 +1381,7 @@ Patrick's r9 question: "why would someone define a function without a body? in t
 
 2. **Contract method signatures use a different syntax — NO `function` keyword.** Since contracts need to declare method signatures without bodies (for implementors to satisfy), they use a bare-signature form:
 
-```yinz
+```ynz
 // CONTRACT — no `function` keyword; explicitly declares ownership
 shape Comparable {
   compare(share self, share other: Self) -> int     // signature declaration, not a function
@@ -1480,7 +1480,7 @@ Trade-offs Patrick is accepting:
 ### Round 6 (2026-05-15) — Patrick spotted that keyword-prefix on signature params violates the just-locked dot-postfix rule; proposed inside-out ownership inference; planner-recommends Form A (bare-only, infer from body)
 
 In r6, Patrick selected lines from a temp file showing:
-```yinz
+```ynz
 function save(p: Player) -> nothing {
   wait db.save(p.give())
 }

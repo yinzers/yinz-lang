@@ -21,7 +21,7 @@ Single inheritance only. `extends` reuses parent's DATA FIELDS — behavior come
 **Why**: Multiple inheritance creates the diamond problem (ambiguous resolution with surprising behavior). Single inheritance is simpler to reason about and almost always sufficient. `extends` is for code reuse at the DATA level; for behavior polymorphism, write a standalone function for each shape and let the compiler pick by argument-type overloading. For shared behavior contracts, `follows` handles any number of contracts. Locked r10 (2026-05-16).
 
 **Example**:
-```yinz
+```ynz
 shape Entity { name: string, health: int }
 shape Warrior extends Entity { weapon: string, armor: int }
 
@@ -68,7 +68,7 @@ There is no `override` keyword in Yinz. Method polymorphism is provided by **fun
 **Why no `override`**: methods don't live inside shapes (`.claude/rules/non-oop.md`), so there's nothing to "override" — there's no parent-method-in-shape to redeclare. The OOP `override` keyword exists to disambiguate "I'm intentionally replacing the parent's method" from "I accidentally shadowed it" — Yinz doesn't have that ambiguity because methods are always standalone functions, and the compiler's overload-resolution rules are deterministic (most-specific-first-parameter-type wins).
 
 **Example**:
-```yinz
+```ynz
 shape Entity { name: string }
 shape Warrior extends Entity { weapon: string }
 
@@ -106,7 +106,7 @@ Locked: static dispatch is the default. Dynamic dispatch requires explicit synta
 
 ### Concrete example
 
-```yinz
+```ynz
 // Define a contract — bare-signature declarations only (no `function` keyword, no body)
 shape Comparable {
   compare(share self, share other: Self) -> int
@@ -172,7 +172,7 @@ Per Golden Rule 11 (compiler is teacher) and `.claude/rules/auto-promotion.md`, 
 
 #### Static dispatch — neutral muted hint
 
-```yinz
+```ynz
 let best = findMax(players)        // muted: // static dispatch (T = Player) — .compare() inlined, ~1 cycle
 ```
 
@@ -183,7 +183,7 @@ Hover tooltip:
 
 #### Dynamic dispatch — cautionary muted hint (red-tinted per `.claude/rules/inference.md`)
 
-```yinz
+```ynz
 let maxThing = findMax(mixedThings)   // muted (red-tinted): // dynamic dispatch — runtime lookup per .compare(), ~3× cost
 ```
 
@@ -194,7 +194,7 @@ Hover tooltip:
 
 #### Tier 3 lint when dynamic could have been static
 
-```yinz
+```ynz
 let things: array<dynamic Comparable> = []   // yellow squiggle from `prefer-static-dispatch-when-monotype`
 things.add(player1)
 things.add(player2)
@@ -294,7 +294,7 @@ No `null`. No `undefined`. Absence is expressed as `none` and tracked by the typ
 
 `hidden` fields are invisible to code OUTSIDE THE SAME FILE as the shape declaration. They require a default value:
 
-```yinz
+```ynz
 shape Player {
   name: string
   hidden damageMultiplier: number = 1.0

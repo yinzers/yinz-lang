@@ -48,7 +48,7 @@ p => { ... }                    // multi-line — types inferred
 
 Python's mutable default argument bug (`def append(x, lst=[])` sharing one list across all callers) cannot occur in Yinz. The ownership system prevents it by construction: a default value like `= []` creates an owned value. The first call that omits the argument takes ownership — moves it in. There is nothing left for a second call to share.
 
-```yinz
+```ynz
 function addTo(items: array<string>, list: array<string> = []) -> array<string> {
   ...
 }
