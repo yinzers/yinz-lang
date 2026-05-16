@@ -1,12 +1,14 @@
 # Types
 
-A `type` defines the shape of your data — what fields it has and what types those fields hold.
+A `shape` defines the structure of your data — what fields it has and what types those fields hold.
+
+> Yinz is not object-oriented (see `.claude/rules/non-oop.md`). Shapes hold DATA and (optionally) CONTRACT METHOD-SIGNATURE DECLARATIONS — never method bodies. Methods are standalone `function` declarations. `value.method()` is parser-level sugar for `method(value)` — both call forms work (Uniform Function Call Syntax — UFCS).
 
 ---
 
-## Defining a type
+## Defining a shape
 
-```
+```yinz
 shape Player {
   name: string
   health: number
@@ -20,8 +22,10 @@ Fields are laid out flat and contiguous in memory. Fast to access, CPU-cache fri
 
 ## Creating an instance
 
-```
-let player: Player = {
+Use annotation-driven literal form — declare the variable's type, then assign a `{ ... }` literal:
+
+```yinz
+const player: Player = {
   name: "Patrick",
   health: 100,
   score: 0
@@ -30,54 +34,58 @@ let player: Player = {
 
 Every field must be provided. Forgetting one is a compile error:
 
-```
-let player: Player = {
+```yinz
+const player: Player = {
   name: "Patrick",
   health: 100
 }
 // COMPILE ERROR: Missing field 'score' (required by Player).
 ```
 
+The `let p = Player { ... }` prefix-form is NOT legal — Yinz uses structural-typed literals exclusively. The annotation on the binding tells the compiler what shape the literal must satisfy.
+
 ---
 
-## Methods
+## Methods are standalone functions
 
-Types can have functions that operate on them:
+In Yinz, methods are normal `function` declarations at file/module level. They take the value as the first parameter (conventionally named `self`). At the call site, you can write either `value.method()` (dot-call) or `method(value)` (function-call) — both are legal and equivalent.
 
-```
+```yinz
 shape Player {
   name: string
   health: number
-
-  function takeDamage(lend self, amount: number) -> nothing {
-    self.health = self.health - amount
-  }
-
-  function isAlive(share self) -> bool {
-    return self.health > 0
-  }
 }
 
-player.takeDamage(25)    // lend self — this method modifies player
-player.isAlive()         // share self — this method only reads
+// Methods live as standalone functions — NOT inside the shape body
+function takeDamage(lend self: Player, amount: number) -> nothing {
+  self.health = self.health - amount
+}
+
+function isAlive(share self: Player) -> bool {
+  return self.health > 0
+}
+
+const player: Player = { name: "Patrick", health: 100 }
+
+player.takeDamage(25)    // dot-call — sugar for takeDamage(player, 25)
+takeDamage(player, 25)    // function-call — same effect
+player.isAlive()          // dot-call — sugar for isAlive(player)
 ```
 
-`self` works like any other parameter. `lend self` = the method modifies the value. `share self` = read-only.
+The `lend self: Player` parameter says "this function modifies a Player." `share self: Player` says "read-only." See `spec/ownership.md`.
+
+The IDE recognizes both call forms. Typing `player.` shows autocomplete with all standalone functions whose first parameter type is `Player` — autocomplete-as-teaching for free, without methods being bound to the type.
 
 ---
 
-## Extending types — single inheritance
+## Extending shapes — data-only inheritance
 
-One type can extend another, gaining all its fields and methods:
+`extends` reuses parent's FIELDS. Behavior comes from standalone functions; the compiler picks the most specific overload at the call site (no `override` keyword needed).
 
-```
+```yinz
 shape Entity {
   name: string
   health: number
-
-  function takeDamage(lend self, amount: number) -> nothing {
-    self.health = self.health - amount
-  }
 }
 
 shape Warrior extends Entity {
@@ -85,53 +93,29 @@ shape Warrior extends Entity {
   armor: number
 }
 
-let warrior: Warrior = {
+function takeDamage(lend self: Entity, amount: number) -> nothing {
+  self.health = self.health - amount
+}
+
+// Warrior-specific version — armor absorbs damage. Same function name.
+function takeDamage(lend self: Warrior, amount: number) -> nothing {
+  self.health = self.health - (amount - self.armor)
+}
+
+const warrior: Warrior = {
   name: "Patrick",
   health: 100,
   weapon: "sword",
   armor: 15
 }
 
-warrior.takeDamage(20)    // inherited from Entity
+warrior.takeDamage(20)    // calls takeDamage(Warrior) — more specific overload wins
+// Damage applied: 20 - 15 = 5
 ```
 
-Single inheritance only. A type can `extends` one other type, that's it.
+Single inheritance only. A shape can `extends` one other shape; behavior is provided by overloaded standalone functions.
 
----
-
-## Overriding methods
-
-To replace a method from a parent type, use `override`:
-
-```
-shape Warrior extends Entity {
-  weapon: string
-  armor: number
-
-  override function takeDamage(lend self, amount: number) -> nothing {
-    self.health = self.health - (amount - self.armor)    // armor absorbs damage
-  }
-}
-```
-
-Forgetting `override` when the method already exists in the parent is a compile error:
-
-```
-shape Warrior extends Entity {
-  function takeDamage(lend self, amount: number) -> nothing { ... }
-  // COMPILE ERROR: takeDamage() already exists in Entity.
-  // Use "override" if you intend to replace it.
-}
-```
-
-Using `override` on a method that doesn't exist in the parent is also an error:
-
-```
-shape Warrior extends Entity {
-  override function fly(share self) -> nothing { ... }
-  // COMPILE ERROR: override used but fly() does not exist in Entity. Remove "override".
-}
-```
+There is no `override` keyword in Yinz — write multiple `function` declarations with the same name and different first-parameter types, and the compiler picks the most specific match. See `.claude/rules/non-oop.md` for the rationale.
 
 ---
 
@@ -139,88 +123,93 @@ shape Warrior extends Entity {
 
 Mark a shape `base` if it's only meant to be extended, never created directly:
 
-```
+```yinz
 base shape Entity {
   name: string
   health: number
 }
 
-let e: Entity = { name: "test", health: 50 }
+const e: Entity = { name: "test", health: 50 }
 // COMPILE ERROR: Entity is a base shape — you can't create one directly.
 //
 //   Create a shape that extends Entity instead:
 //     shape Warrior extends Entity { weapon: string, armor: number }
-//     let w: Warrior = { name: "test", health: 50, weapon: "axe", armor: 10 }
+//     const w: Warrior = { name: "test", health: 50, weapon: "axe", armor: 10 }
 //
-//   Why: base shapes describe shared behavior but aren't meant to stand alone.
-//        Creating one directly would give you an incomplete object. Always
+//   Why: base shapes describe shared fields but aren't meant to stand alone.
+//        Creating one directly would give you an incomplete value. Always
 //        use a specific shape that extends the base.
 
-let w: Warrior = { name: "test", health: 50, weapon: "axe", armor: 10 }   // fine
+const w: Warrior = { name: "test", health: 50, weapon: "axe", armor: 10 }   // fine
 ```
 
 ---
 
 ## follows — behavior contracts
 
-If two unrelated shapes need to be used interchangeably, define a contract shape and use `follows`:
+If two unrelated shapes need to be used interchangeably, define a contract shape and use `follows`. Contracts declare method signatures in bare-signature form (no `function` keyword, no body — the implementing shape must provide a matching standalone function).
 
-```
+```yinz
 shape Damageable {
   health: number
-  function takeDamage(lend self, amount: number) -> nothing
+  takeDamage(lend self, amount: number) -> nothing      // bare signature — no body
 }
 
 shape Player follows Damageable {
   name: string
   health: number
-
-  function takeDamage(lend self, amount: number) -> nothing {
-    self.health = self.health - amount
-  }
 }
 
 shape Building follows Damageable {
   address: string
   health: number
+}
 
-  function takeDamage(lend self, amount: number) -> nothing {
-    self.health = self.health - (amount / 2)    // buildings take half damage
-  }
+// Standalone functions provide the implementations.
+// Compiler verifies these match Damageable's signature when checking `follows`.
+function takeDamage(lend self: Player, amount: number) -> nothing {
+  self.health = self.health - amount
+}
+
+function takeDamage(lend self: Building, amount: number) -> nothing {
+  self.health = self.health - (amount / 2)    // buildings take half damage
 }
 
 function dealDamage(lend target: Damageable, amount: number) -> nothing {
-  target.takeDamage(amount)
+  target.takeDamage(amount)    // dot-call — works for any shape that follows Damageable
 }
 
-dealDamage(player.lend, 50)      // Player follows Damageable — works
-dealDamage(building.lend, 30)    // Building follows Damageable — works
+dealDamage(player, 50)        // Player follows Damageable — works
+dealDamage(building, 30)      // Building follows Damageable — works
 ```
 
-`follows` is optional — Yinz uses structural typing (if the shape matches, it works). But declaring `follows` catches mismatches at definition time rather than when you first try to use the type, and makes the relationship visible to anyone reading the code.
+`follows` is optional — Yinz uses structural typing (if the matching functions exist, the shape can be used). But declaring `follows` catches mismatches at definition time rather than at the first call site, and makes the relationship visible to readers.
 
-A type can follow multiple contracts — `extends` comes first, then `follows` with a comma-separated list:
+A shape can follow multiple contracts — `extends` comes first, then `follows` with a comma-separated list:
 
-```
+```yinz
 shape Warrior extends Entity follows Damageable, Attackable, Renderable {
-  ...
+  weapon: string
+  armor: number
 }
+// Warrior must have standalone functions matching every signature in
+// Damageable, Attackable, and Renderable.
 ```
 
 ---
 
 ## Structural typing — shape matching
 
-You don't have to name the type when returning a literal. The shape just has to match:
+You don't have to name the shape when returning a literal. The data has to match the declared return type:
 
-```
+```yinz
 shape DivResult {
   quotient: number
   remainder: number
 }
 
 function divmod(a: number, b: number) -> DivResult {
-  return { quotient: a / b, remainder: a % b }    // shape matches DivResult — valid
+  return { quotient: a / b, remainder: a % b }    // matches DivResult — valid
 }
 ```
 
@@ -228,72 +217,41 @@ The compiler checks that the fields exist with the right types. No need to write
 
 ---
 
-## Hidden fields — invisible outside the type
+## Hidden fields — invisible outside the same file
 
-Mark a field `hidden` to make it completely invisible to code outside the type's own methods. Hidden fields require a default value:
+Mark a field `hidden` to make it inaccessible to code in OTHER FILES. Hidden fields require a default value because external code can't provide them at construction.
 
-```
+```yinz
+// File: player.ynz
 shape Player {
   name: string
   health: number
   hidden damageMultiplier: number = 1.0
   hidden internalCache: map<string, number> = {}
+}
 
-  function takeDamage(lend self, amount: number) -> nothing {
-    let actual = amount * self.damageMultiplier    // accessible inside Player's methods
-    self.health = self.health - actual
-  }
+// Standalone functions in the same file CAN touch hidden fields
+function takeDamage(lend self: Player, amount: number) -> nothing {
+  const actual = amount * self.damageMultiplier    // ✅ same file, can touch hidden
+  self.health = self.health - actual
 }
 ```
 
-The caller only provides visible fields when creating the type:
+External callers only provide visible fields when creating the value:
 
-```
-let player: Player = { name: "Alice", health: 100 }
+```yinz
+// File: main.ynz
+import { Player, takeDamage } from "./player"
+
+const player: Player = { name: "Alice", health: 100 }
 // damageMultiplier starts at 1.0, internalCache starts empty
-// both defaults are visible in the type definition above
-```
+// (defaults from player.ynz)
 
-Accessing a hidden field from outside the type is a compile error:
-
-```
+takeDamage(player, 25)              // ✅ public API
 print(player.damageMultiplier)
-// COMPILE ERROR: damageMultiplier is hidden — not accessible outside Player.
+// COMPILE ERROR: damageMultiplier is hidden — not accessible outside player.ynz.
 ```
 
-`hidden` is about visibility, not mutability. Hidden fields can be both read and modified by the type's own methods. They simply don't exist to outside code.
+`hidden` is about visibility, not mutability. Hidden fields can be both read and written by standalone functions in the same file. They're invisible to imports.
 
----
-
-## Type aliases
-
-Create a new name for an existing type. Zero runtime cost — the alias is erased at compile time.
-
-```
-shape UserId = string
-shape Timestamp = number
-shape PlayerList = array<Player>
-shape Coordinates = { x: number, y: number }
-```
-
-The alias and the original type are fully interchangeable:
-
-```
-shape UserId = string
-
-function fetchUser(id: UserId) -> maybe User errors { ... }
-
-let id: UserId = "abc123"    // fine
-let id: string = "abc123"    // also fine — same type
-fetchUser(id)                 // works either way
-```
-
-Aliases are for self-documentation — they make signatures tell a story:
-
-```
-// Without alias — what does this string represent?
-function fetchUser(id: string) -> maybe User errors
-
-// With alias — immediately clear
-function fetchUser(id: UserId) -> maybe User errors
-```
+**Why this exists**: per-field visibility within an exported shape. Without `hidden`, external code could write `player.damageMultiplier = 10` bypassing whatever invariants `takeDamage` maintains. Module-level "don't export the field" doesn't work because you can't export a shape without exposing all its fields.

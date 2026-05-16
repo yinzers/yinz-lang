@@ -84,18 +84,15 @@ function rename(lend player: Player) -> nothing    // going to modify player
 function consume(give data: Data) -> nothing       // taking ownership
 ```
 
-If a function only reads, the caller doesn't need to annotate:
+The caller never types the ownership modifier — the compiler infers it from the function's signature. The IDE shows the inferred modifier as muted text:
 
-```
-greet(playerName)    // compiler infers .share — no annotation needed
+```yinz
+greet(playerName)    // IDE shows muted "share" — read-only access inferred
+rename(player)       // IDE shows muted "lend" (red-tinted) — function modifies player
+consume(data)        // IDE shows muted "give" (red-tinted) — function takes ownership
 ```
 
-Only annotate when you're escalating beyond reading:
-
-```
-rename(player.lend)    // explicit — granting write access
-consume(data.give)     // explicit — giving it away permanently
-```
+There is no body-level syntax for `.share()` / `.lend()` / `.give()` — those modifiers live only in function signatures. See [Ownership](ownership.md).
 
 ---
 

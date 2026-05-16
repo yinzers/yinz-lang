@@ -161,35 +161,39 @@ If you store the result of `background`, you get a handle you can communicate wi
 
 Background tasks might outlive the current function. This changes how ownership works.
 
-**`.share` is a compile error with background:**
+**A `share`-signature function cannot be called via background:**
 
-```
-background processData(data.share)
+```yinz
+function processData(share data: Data) -> nothing { ... }
+
+background processData(data)
 // COMPILE ERROR: Cannot share with a background task.
-// data.share is only valid while this function is alive.
-// The background task might still be running after this function returns.
-// A dangling reference would crash the program.
-// Use .give (move ownership) or .copy instead.
+// processData's signature is `share data: Data`, but background tasks
+// may outlive the current function. A shared borrow would dangle.
+// Use a function that takes `give data: Data` instead, or call .copy()
+// on data before passing to a give-signature function.
 ```
 
-A shared reference is only valid while its owner exists. A background task might still be running after the current function returns — so sharing would create a dangling reference. Only `.give` (move) or `.copy` are valid for background tasks.
+A shared borrow is only valid while its owner exists. A background task might still be running after the current function returns — so sharing would create a dangling reference. The function being called via `background` must take its parameters as `give`, OR the caller passes a `.copy()` (which creates an independent owned value).
 
-**The compiler figures out which one to use:**
+**The compiler figures out which one to use** when the function signature is `give`:
 
-If you don't use the value after the `background` call, the compiler moves ownership to the task:
+If you don't use the value after the `background` call, the compiler infers `give` (transfers ownership to the task):
 
-```
+```yinz
+function processEvent(give event: WebhookEvent) -> nothing { ... }
+
 function handleWebhook(event: WebhookEvent) -> Response errors {
-  background processEvent(event)             // event not used after — compiler moves it
+  background processEvent(event)             // event not used after — give inferred, ownership transfers
   return response.json({ status: "queued" })
 }
 ```
 
-If you do use the value after, the compiler copies it:
+If you do use the value after, you call `.copy()` to keep the original:
 
-```
+```yinz
 function handleWebhook(event: WebhookEvent) -> Response errors {
-  background processEvent(event)             // event used below — compiler copies it
+  background processEvent(event.copy())      // explicit copy — original event stays usable
   log(`Queued: ${event.id}`)
   return response.json({ status: "queued", id: event.id })
 }
@@ -197,19 +201,11 @@ function handleWebhook(event: WebhookEvent) -> Response errors {
 
 **The IDE warns about large copies:**
 
-```
-background processData(hugeDataset)
-let count = hugeDataset.count()
+```yinz
+background processData(hugeDataset.copy())
+const count = hugeDataset.count()
 // IDE WARNING: hugeDataset (~500MB) was copied for the background task.
 // Move hugeDataset.count() above the background call to avoid the copy.
-```
-
-**You can always be explicit:**
-
-```
-background processData(data.give)     // force move — you lose access to data
-background processData(data.copy)     // force copy — you keep access
-background processData(data.share)    // COMPILE ERROR — not allowed with background
 ```
 
 ---

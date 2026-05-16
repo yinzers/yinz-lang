@@ -2,31 +2,97 @@
 
 User spec: `spec/ownership.md`
 
----
-
-## Dot Modifiers over Rust Syntax
-
-Rust ownership semantics, Yinz surface syntax. `name.share`, `name.lend`, `name.give`, `name.copy`, `name.freeze` as dot modifiers instead of `&T`, `&mut T`, `move`.
-
-**Why**: Rust's `&'a mut T` syntax is the single biggest usability barrier in Rust adoption. Dot modifiers expose the same semantics through autocomplete-discoverable methods (Golden Rule 1). They appear when you type `.` on any variable — a developer can discover the entire ownership system without reading documentation.
-
-**Explicit in signatures**: Function signatures always declare intent (`share`, `lend`, `give`). The contract is visible at the definition — no surprises for callers.
+> **Read first**: Yinz is NOT object-oriented — see `.claude/rules/non-oop.md`. Ownership modifiers are SIGNATURE-level keywords (declared at function definitions); body-level `.share()/.lend()/.give()` syntax does NOT exist. The compiler infers ownership at call sites from the callee's signature and renders the result as IDE muted hints. Only `.copy()` and `.freeze()` are body-level dot-postfix operations (with parens per `.claude/rules/dot-postfix.md`). Locked r4, r10, r11.
 
 ---
 
-## Uniform Inference + IDE Hints (call sites)
+## Ownership Concepts
 
-Call sites in Yinz follow the [uniform inference rule](../.claude/rules/inference.md): if the compiler can figure out the right dot modifier from the function signature and the binding type, the developer doesn't type it. The IDE shows the inferred modifier as muted text — neutral gray for `.share` (benign read-only), red-tinted for `.lend`/`.give` (cautionary: mutation or transfer happens here).
+Rust ownership semantics, Yinz surface syntax. Three modes for passing a value into a function:
 
-Hover-tooltips on the muted text follow the three-part WHAT / WHAT-INSTEAD / WHY format from Golden Rule 11. The text completes to valid Yinz syntax — click-to-make-explicit produces real code.
+- **`share`** — read-only access. Caller keeps ownership. Multiple shares allowed simultaneously.
+- **`lend`** — mutable access. Caller keeps ownership. Only one outstanding lend at a time (no other share or lend during the borrow).
+- **`give`** — ownership transfer. Caller loses the value; receiver gains it.
+
+Plus two body-level operations on values:
+- **`.copy()`** — produce a new owned value (only on transitively-trivially-copyable types per r4).
+- **`.freeze()`** — lock a binding from further mutation for the rest of its scope.
+
+**Why English keywords instead of `&T`/`&mut T`/`move`**: Rust's `&'a mut T` syntax is the single biggest usability barrier in Rust adoption. Yinz uses plain English signature keywords (`share`/`lend`/`give`) declared at the function definition; the compiler infers them at every call site so the developer rarely types ownership at all. `.copy()` and `.freeze()` use dot-postfix-with-parens per `.claude/rules/dot-postfix.md`.
+
+---
+
+## Signature-Level Declaration (Explicit)
+
+Function signatures declare ownership intent as keyword prefixes on parameters:
+
+```yinz
+function greet(share name: string) -> nothing { ... }      // function will only read name
+function rename(lend player: Player) -> nothing { ... }    // function will modify player
+function consume(give data: Data) -> nothing { ... }       // function takes ownership of data
+```
+
+The signature is the contract. Anyone reading the function knows exactly what it does with its inputs.
+
+**REQUIRED on**:
+- Contract method signatures inside `shape` declarations (`shape Foo { method(share self, ...) -> X }`)
+- Function-type annotations (`let f: function(give Data) -> nothing`)
+
+**OPTIONAL on free functions with bodies** — the compiler infers the modifier from how the body uses the parameter (`.give()` to consume, mutation to lend, only-read to share). The author may still type the modifier explicitly for emphasis; the compiler verifies it matches the body.
+
+---
+
+## Call-Site Inference (Implicit — No `.share()`/`.lend()`/`.give()` Body Syntax)
+
+Call sites in Yinz follow the uniform inference rule (`.claude/rules/inference.md`): the compiler reads the callee's signature and inserts the right modifier automatically. **There is no body-level syntax for `.share()`/`.lend()`/`.give()`** — those modifiers exist only in signature position; call sites get them via compiler inference and IDE rendering.
+
+```yinz
+greet(name)           // compiler reads greet's signature → name is shared
+rename(player)        // compiler reads rename's signature → player is lent (mutated)
+consume(data)         // compiler reads consume's signature → data is given (consumed)
+print(data)           // COMPILE ERROR: data was consumed above; use .copy() if you need to keep it
+```
+
+The IDE renders the inferred modifier as muted text:
+- **Neutral gray** for `share` (benign read-only)
+- **Red-tinted** for `lend`/`give` (cautionary — mutation or transfer)
+
+Click-to-make-explicit on a muted hint converts the source to the explicit signature-level form for the function-decl side, NOT to a call-site syntax (which doesn't exist).
 
 **Why inferred-with-hints instead of inferred-only OR required-explicit**:
 
-- **Inferred-only** (compiler picks, no visibility): mutation becomes invisible to readers. `healPlayer(player)` looks identical whether the function mutates or not. Bad for jr devs learning the model.
-- **Required-explicit** (every call types `.share`/`.lend`/`.give`): too much noise. Developers stop reading and the marker degrades to syntactic burden. Inverse anti-pattern — see graveyard Entry 2.
-- **Inferred + muted hint** (Yinz's choice): the compiler does the work, the IDE shows what happened, hover teaches WHY. Devs learn ownership by reading their own code.
+- **Inferred-only** (compiler picks, no visibility): mutation becomes invisible to readers. `healPlayer(player)` looks identical whether the function mutates or not. Bad for jr devs.
+- **Required-explicit** (every call types ownership): too much noise; developers stop reading; the marker degrades to syntactic burden. Inverse anti-pattern — graveyard Entry 2.
+- **Inferred + muted hint** (Yinz's choice): compiler does the work; IDE shows what happened; hover teaches WHY.
 
-This is consistent with type inference, lifetime inference, wait-point inference, and allocator inference — one rule across all surfaces.
+Consistent with type inference, lifetime inference, wait-point inference, allocator inference — one rule across all surfaces.
+
+---
+
+## Body-Level Operations: `.copy()` and `.freeze()`
+
+These two are the only body-level dot-postfix ownership operations. They use parens per the dot-postfix rule.
+
+### `.copy()` — produce a new owned value
+
+```yinz
+const backup = original.copy()       // strict: only legal on transitively-trivially-copyable types
+saveForever(backup)                   // backup consumed (give inferred), original unchanged
+```
+
+Strict cheap-only per r4: `.copy()` is only legal when every field of the value's type is transitively trivially copyable. For non-trivial deep copies, the user defines a standalone function (typically also named `copy`) and calls it via normal function/UFCS syntax — Yinz prefers explicit user-defined deep-copy semantics over silent expensive copies.
+
+### `.freeze()` — lock a binding from further mutation
+
+```yinz
+let config: ConfigBuilder = { rules: [] }
+config.addRule("a", 1)
+config.addRule("b", 2)
+config.freeze()                       // lock from this point forward
+runApp(config)                         // config still usable for reads (share inferred); no further mutation
+```
+
+The freeze flag persists for the rest of the binding's scope. Useful for build-then-lock patterns where mutability is needed during construction but should be prevented afterward.
 
 ---
 
@@ -40,15 +106,15 @@ A `const` binding rejects ALL paths to mutation:
 
 1. **Reassignment** — `constVar = newValue` is a compile error (already enforced as of M2 in `crates/ynz-typeck/src/check.rs` `check_assign`)
 2. **Field mutation** — `constVar.field = x` is a compile error (enforced when field assignment lands in M4)
-3. **Mutable borrows** — `constVar.lend` at a call site is rejected; cannot pass a `const` value where the function declares `lend` (enforced in M4)
-4. **Ownership transfer** — `constVar.give` is rejected (enforced in M4)
-5. **Mutable inference** — the compiler will NEVER infer `.lend` or `.give` for a `const` binding. If a function needs `.lend` and the caller passes a `const`, that's a compile error pointing the user toward declaring with `let`.
+3. **Passing to a `lend` parameter** — the compiler refuses to infer the mutable modifier at the call site if the binding is `const`; compile error pointing to "declare with `let` if you need mutation" (enforced in M4)
+4. **Passing to a `give` parameter** — same: compiler refuses to infer the transfer; compile error (enforced in M4)
+5. **`.freeze()` is redundant** — `const` bindings are already locked; calling `.freeze()` is a no-op but allowed for stylistic uniformity
 
 ### Why this is load-bearing — Safety + Performance
 
-**Safety**: aliasing rules. If `const` can be mutated through any path, then two `const` references to the same value could observe different state, breaking the language's promise that "two reads of the same `const` always return the same value." That promise is what makes `const` shareable across threads without locks — also what makes the borrow checker tractable.
+**Safety — aliasing rules**: if `const` can be mutated through any path, then two `const` references to the same value could observe different state, breaking the language's promise that "two reads of the same `const` always return the same value." That promise is what makes `const` shareable across threads without locks — also what makes the borrow checker tractable.
 
-**Performance — the LLVM contract**: a function parameter declared `share` (or inferred from a `const` binding) emits the LLVM **`readonly`** attribute. Combined with **`noalias`** (which Yinz can guarantee from the ownership system), the optimizer gets the same aliasing information that lets Rust beat C++ in benchmarks. Specifically:
+**Performance — the LLVM contract**: a function parameter declared `share` (or inferred from a `const` binding at the call site) emits the LLVM **`readonly`** attribute. Combined with **`noalias`** (which Yinz can guarantee from the ownership system), the optimizer gets the same aliasing information that lets Rust beat C++ in benchmarks:
 
 - `readonly` → optimizer knows this pointer's pointee never changes during the call → enables loop-invariant code motion, common subexpression elimination, and skipping spurious reloads
 - `noalias` → optimizer knows no other pointer aliases this one → enables vectorization and reordering that C/C++ can't do (because any pointer might alias any other)
@@ -57,13 +123,13 @@ C has `restrict` for `noalias` but it's a programmer's promise the compiler can'
 
 ### M4 codegen contract
 
-When M4 lands (types + ownership), codegen MUST emit:
+When M4 lands, codegen MUST emit:
 
 - `readonly` on every LLVM function parameter declared as `share T`
-- `readonly` on every parameter inferred from a `const` binding at the call site (even if the signature says `lend` — though that combo should error out before codegen)
-- `noalias` on every parameter that the borrow checker has proven non-aliased (which, for `share` + ownership rules, should be most of them)
+- `readonly` on every parameter inferred from a `const` binding at the call site (even if the signature is bare and the modifier was inferred from body usage)
+- `noalias` on every parameter the borrow checker has proven non-aliased (most of them for `share`/`lend`/`give` per ownership rules)
 
-Failure to emit these attributes is a perf regression even if the program is correct. M4 plan's `### Performance` invariant subsection must explicitly assert this — and the graveyard Entry 1 catches M4 plans that omit it.
+Failure to emit these attributes is a perf regression even if the program is correct. The M4 plan's `### Performance` invariant subsection explicitly asserts this, and `.claude/graveyard.md` Entry 1 catches M4 plans that omit it.
 
 ### Forward-compatibility for shapes (M4)
 

@@ -21,9 +21,9 @@ The divergence is intentional and load-bearing:
 
 ## The Rule
 
-> **If the compiler can figure it out from context, the developer doesn't type it. The IDE shows the inferred information as muted text with a hover-tooltip explaining what was inferred AND why. The muted hint completes to syntactically-valid Yinz the developer COULD have typed.**
+> **If the compiler can figure it out from context, the developer doesn't type it. The IDE shows the inferred information as muted text with a hover-tooltip explaining what was inferred AND why. Click action: where the muted hint corresponds to typeable Yinz syntax, click-to-make-explicit inserts that source; where the inference is purely informational (no typeable equivalent), click jumps to the relevant declaration site instead.**
 
-Click-to-make-explicit must produce real Yinz syntax. The muted hint is what the dev would have typed if they typed everything.
+Most domains complete to real Yinz syntax (type annotations, allocator placement, `wait` insertion, `let`→`const` rewrite). The exception is ownership at call sites: those modifiers exist only in function signatures — there is no body-level syntax to insert. The muted hint there is informational only; click jumps to the function signature where the modifier IS visible (or can be made explicit if the signature was bare).
 
 ---
 
@@ -37,8 +37,8 @@ Each row shows the muted text the IDE renders directly inline. The text is infor
 |---|---|---|
 | Variable types | `let x = 42` | `: int (from 42)` after `x` — shows the type AND what the compiler inferred it from |
 | Function param types (where context allows) | `foo(x => x + 1)` where `foo: (int) -> int` is known | `: int` on `x` — shows the type the call site requires |
-| Ownership at call sites | `foo(player)` where `player` is `const` and signature is `share` | `.share (read-only — player is const)` after `player` — shows the modifier AND why this one was picked |
-| Ownership at call sites — mutation | `bar(player)` where `player` is `let` and signature is `lend` | `.lend (function will mutate — see bar's signature)` after `player` — same pattern, cautionary styling |
+| Ownership at call sites | `foo(player)` where `player` is `const` and signature is `share` | `share (read-only — matches foo's signature)` after `player` — shows the modifier AND why this one was picked. **Informational category** (no body-level syntax to insert — call-site ownership modifiers don't exist as Yinz source; only signatures carry the modifier; the muted hint is purely teaching). Click jumps to foo's signature. |
+| Ownership at call sites — mutation | `bar(player)` where `player` is `let` and signature is `lend` | `lend (function will mutate — see bar's signature)` after `player` — same pattern, cautionary styling. **Informational category** (same rationale as above). |
 | Wait points on I/O | `db.fetch("users")` | `wait (db.fetch may suspend on I/O)` before the call — shows the keyword AND why suspension happens here |
 | Lifetimes | always inferred (only shown on user request) | `'request_scope` — shows the lifetime; on request because lifetime hints are usually noise |
 | Allocators | `let temp: array<int> = []` inside `arena scratch { ... }` | `.in(scratch) — current arena` after the constructor — shows the allocator AND that it's the active scope's arena |

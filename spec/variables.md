@@ -44,13 +44,14 @@ Use `const` by default. Reach for `let` only when you need to update the value.
 
 - **Reassignment**: `maxPlayers = 20` — blocked (the example above)
 - **Field mutation** (when types land): `player.health = 50` on a `const player` is blocked
-- **Mutable borrows** (when ownership lands): you can't pass a `const` value where the function needs to modify it — `.lend` and `.give` are rejected at compile time
+- **Mutable borrows** (when ownership lands): you can't pass a `const` value to a function whose signature declares `lend` or `give` — the compiler refuses to grant the mutable access
 
-```
-const player = Player { name: "Patrick", health: 100 }
+```yinz
+const player: Player = { name: "Patrick", health: 100 }
 player.health = 50            // COMPILE ERROR: player is const — fields can't change.
-healPlayer(player.lend)        // COMPILE ERROR: player is const — can't grant write access.
-                               //   Declare with `let` if the function needs to modify it.
+healPlayer(player)            // COMPILE ERROR: player is const — healPlayer's signature is
+                              //   `lend player: Player` which needs mutable access.
+                              //   Declare with `let` if the function needs to modify it.
 ```
 
 The compiler rejects all three at compile time. `const` is a complete promise — no exceptions.

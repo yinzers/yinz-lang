@@ -9,7 +9,7 @@
 *(auto-rebuilt by SessionStart hook from `.claude/plans/active/*.md` front-matter — do not edit by hand)*
 
 <!-- RADAR-START -->
-- design-lockdown-from-gemini-review (patrick) — 11 files touched — 0/96 done — 2026-05-14-r2
+- m4-shapes-methods-ownership (patrick) — 14 files touched — 0/117 done — 2026-05-16-r16
 - v0-1-compiler (patrick) — 5 files touched — 0/184 done — 2026-05-12-r4
 <!-- RADAR-END -->
 

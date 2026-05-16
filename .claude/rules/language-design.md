@@ -34,6 +34,23 @@ The developer who doesn't think about performance should automatically write fas
 
 ---
 
+## The OOP Drift Test
+
+Ask: "Does this design assume object-oriented patterns?"
+
+If yes → reconsider. Yinz is data shapes + standalone functions + UFCS dot-call sugar — NOT OOP. Common drift signals:
+
+- **Methods declared inside a shape body** (`shape X { function foo(...) {...} }`) — methods are standalone functions at file/module level; shape body holds data + contract signatures only
+- **`override` keyword** — does not exist; use function overloading by argument type (`function greet(share self: Entity)` + `function greet(share self: Warrior)` — compiler picks the most specific overload at the call site)
+- **`extends` for behavior reuse** — `extends` is DATA-only inheritance; child gets parent's fields; behavior comes from standalone functions
+- **Storing function-typed values as fields to simulate methods** — refactor to standalone functions + UFCS unless the use case genuinely needs per-instance callback semantics (rare)
+- **Spec/design language that frames Yinz as "object-oriented" or describes patterns in OOP terms** — use the non-OOP framing per `.claude/rules/non-oop.md`
+- **Reaching for `class`, `instance`, `new`, `this`, `instanceof`** — none of these exist in Yinz; their presence in your design signals OOP drift
+
+See `.claude/rules/non-oop.md` for the full model + the dual-style diagnostic format for UFCS errors. Locked r10–r13.
+
+---
+
 ## The Teaching Test
 
 Ask: "Does this teach the user something, or does it just hide complexity?"

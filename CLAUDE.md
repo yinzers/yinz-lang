@@ -39,6 +39,8 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 
 | File | Load when |
 |------|-----------|
+| `.claude/rules/non-oop.md` | **LOAD FIRST** for any feature touching shapes/methods/dispatch/inheritance/contracts. Yinz is NOT object-oriented — data shapes + standalone functions + UFCS dot-call sugar. Drift back into OOP patterns is the most common modeling mistake. |
+| `.claude/rules/dot-postfix.md` | Designing any syntax using dot-postfix (`value.x` vs `value.x()`). Parens for actions, no parens for access. |
 | `.claude/rules/vocabulary.md` | Any docs work — authoritative reference for Yinz user-facing terms (shape, value, map, options, etc.) |
 | `.claude/rules/naming.md` | Capital-letter-=-type rule, module/type case distinctions, renamed-concepts table |
 | `.claude/rules/inference.md` | Designing IDE behavior, ownership UI, type-inference UI, any teaching surface where the compiler figures things out automatically |
@@ -53,6 +55,7 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 
 ## When Working on This Project
 
+- **Yinz is NOT object-oriented.** Data shapes hold fields + contract signatures; methods are standalone functions; `value.method()` is parser-level sugar for `method(value)` (UFCS — both call forms work). NO methods inside shape declarations; NO `override` keyword; `extends` is data-only inheritance. See `.claude/rules/non-oop.md` for the full model — this is the most common modeling mistake to drift back into. Locked r10–r13 (2026-05-16).
 - Check every proposed language feature against all 12 golden rules before suggesting it
 - Always use Yinz terms — see `.claude/rules/naming.md` for the full reference
 - Spec files are written for a HS grad — short sections, example-heavy, plain English
@@ -60,6 +63,7 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 - Design decisions go in `/design/decisions.md` with the WHY captured
 - Open questions go in `/design/open-questions.md`
 - When a design decision is made, move it from open questions to decisions
+- Every example in spec/design/plan/rule files MUST use real Yinz operations from the current scope — no invented APIs for illustration (see `.claude/rules/dot-postfix.md` "Examples-must-use-real-operations rule")
 
 ---
 

@@ -4,17 +4,36 @@ The 12 rules with full reasoning. The rules themselves also live in `CLAUDE.md` 
 
 ---
 
+## Cross-cutting principle: Yinz is NOT object-oriented
+
+Before applying the 12 rules, internalize this: **Yinz is data shapes + standalone functions + UFCS dot-call sugar.** Not OOP.
+
+- Shape declarations hold data fields + (optionally) contract method-signature declarations. **NO method implementations inside shapes.**
+- Methods are standalone `function` declarations at file/module level. `value.method()` is parser-level sugar for `method(value)` (UFCS — Uniform Function Call Syntax). Both call forms are legal and equivalent.
+- `extends` is **data-only inheritance** — child shape inherits parent's fields; behavior comes from standalone functions; the compiler picks the most specific overload at the call site.
+- **`override` keyword does not exist.** Function overloading by argument type is the dispatch mechanism.
+- `follows` is checked by **structural function-signature matching** — a shape follows a contract when standalone functions with matching signatures exist.
+- `dynamic Foo` provides runtime polymorphism via a per-(shape, contract) function-pointer table; static dispatch when concrete type is known.
+
+This is a deliberate alignment with Rust/Go (zero per-instance method storage; ownership tracking simpler) and away from Java/Swift (no implicit `this` binding; no virtual dispatch by default). The TypeScript-friendly part is preserved by UFCS — `player.heal(20)` reads like a TS method call but compiles to the standalone function `heal(player, 20)`.
+
+Locked r10–r13 (2026-05-16). Full discussion: `.claude/plans/active/m4-shapes-methods-ownership.md` Reviewer Disputes rounds 10–13. Canonical rule: `.claude/rules/non-oop.md`.
+
+When the 12 rules below mention "method" or "dispatch," apply them with the non-OOP interpretation: methods are functions; dispatch is overload resolution by argument type (plus contract-table lookup for `dynamic Foo`).
+
+---
+
 **1. Dot-first design**
 If something can be `.method()` with autocomplete, it should be. No cryptic symbols, no keywords to memorize.
 
-*Why*: Autocomplete teaches the language. A developer who types `.` and sees their options doesn't need documentation. Rust's `&'a mut` requires memorization; `name.lend` shows up when you type `.`.
+*Why*: Autocomplete teaches the language. A developer who types `.` after a value sees all functions whose first parameter type matches that value (UFCS sugar — see `.claude/rules/non-oop.md`). No documentation lookup needed. Rust's `&'a mut` requires memorization; `player.heal(20)` (UFCS sugar for `heal(player, 20)`) shows up when you type `.` on a Player.
 
 ---
 
 **2. Self-documenting syntax**
 Every keyword, function, and pattern should be readable by a junior developer who has never seen Yinz. If someone needs docs to understand what a line does, the design failed.
 
-*Why*: The single biggest barrier to Rust adoption is its syntax. `name.lend` vs `&mut name`. Both express the same concept — one is guessable, one isn't. Every design decision should aim for guessable.
+*Why*: The single biggest barrier to Rust adoption is its syntax. Yinz's `lend` keyword in a signature vs Rust's `&mut name`. Both express the same concept — one is guessable, one isn't. Every design decision should aim for guessable.
 
 ---
 
@@ -62,7 +81,7 @@ High-level syntax compiles to the same machine code as hand-written low-level co
 
 - "Zero-cost ABSTRACTIONS" means the abstraction itself adds no overhead beyond hand-written code. It does NOT mean "no features have any cost ever."
 - Features themselves (Arc reference counting, async runtime scheduler, arena allocator bookkeeping) cost what they inherently cost. Those costs apply whether the developer writes them manually or the compiler infers them.
-- Compiler inference happens at compile time → zero RUNTIME cost from the inference itself. The compiler choosing `.share` for you produces identical machine code to you writing `.share` explicitly.
+- Compiler inference happens at compile time → zero RUNTIME cost from the inference itself. The compiler choosing `share` for a call site produces identical machine code to declaring the function's signature explicitly.
 - The "hand-written low-level" benchmark is "what would a careful Rust/C++/Zig programmer write," not "the absolute theoretical minimum." Memory safety has a cost — that cost is the bar; not zero.
 - **Any future design tradeoff that costs MORE than hand-written code requires Patrick's explicit approval AND documentation in `design/decisions.md`.** This clarification block exists to prevent future drift — interpreting Rule 8 as "soften zero-cost" is wrong.
 

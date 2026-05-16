@@ -30,7 +30,7 @@ Every semantic the compiler figures out from context gets a muted hint:
 |---|---|---|
 | Variable type inference | `let x = 42` | `: int` after `x` |
 | Function param types (where context allows) | depends on call site | the figured-out type |
-| Ownership at call sites | `foo(player)` | `.share` or `.lend` after `player` |
+| Ownership at call sites (informational only — no body-level syntax) | `foo(player)` | `share` or `lend` keyword after `player` — purely teaching; click jumps to foo's signature where the modifier IS declared |
 | Wait points on I/O | `db.fetch()` | `wait` keyword before the call |
 | Lifetimes | always figured out | the lifetime (only shown on request — usually hidden) |
 | Allocator | inside `arena scratch { let a: array<int> = [] }` | `.in(scratch)` after the constructor |
@@ -45,25 +45,33 @@ This list extends as new compiler-figured-out semantics emerge (effect annotatio
 Two tiers of muted text, distinguished by danger:
 
 - **Neutral muted (gray)**: benign hints — type inference, lifetime inference, allocator inference. These add NO new behavior; they just show what's already happening.
-- **Cautionary muted (red-tinted)**: hints involving mutation, ownership transfer, or thread crossing. Examples: `.lend` on a `let` binding (mutation happens through this call), `.give` (ownership transfer is permanent), auto-`Arc` for cross-thread shared state (reference counting added).
+- **Cautionary muted (red-tinted)**: hints involving mutation, ownership transfer, or thread crossing. Examples: inferred `lend` at a call site (mutation happens through this call), inferred `give` (ownership transfer is permanent), auto-`Arc` for cross-thread shared state (reference counting added).
 
 The styling is part of the teaching: cautionary hints visually flag "something more is happening here than just inference; pay attention." Compile errors use a third, completely separate styling (red squiggly + error panel) and are NEVER expressed as muted hints.
 
 ---
 
-## Hint text must mirror typeable syntax
+## Hint text + click action
 
-The muted text MUST complete to syntactically-valid Yinz the developer COULD have typed. Click-to-make-explicit produces real code.
+Most muted hints complete to syntactically-valid Yinz the developer COULD have typed — click-to-make-explicit inserts that source. The exception is ownership-at-call-sites, which is purely informational (no body-level syntax exists for `share`/`lend`/`give` — those modifiers only appear in signatures); click there JUMPS to the function's signature instead.
 
-Example:
+Example (typeable hint — Addition category):
 
 ```yinz
-foo(player)                   // muted ".share" after player
-                              // click → becomes foo(player.share)
-                              // which is valid Yinz and equivalent
+let x = 42                    // muted ": int (from 42)" after x
+                              // click → becomes `let x: int = 42`
 ```
 
-The hint is what the dev would have typed if they typed everything. It is NOT an arbitrary annotation that doesn't appear in the source language.
+Example (informational hint — Ownership at call sites):
+
+```yinz
+const player: Player = { name: "Patrick", health: 100 }
+foo(player)                   // muted "share (matches foo's signature)" after player
+                              // click → IDE jumps to foo's signature where `share` is declared
+                              // (or could be made explicit if foo's signature was bare)
+```
+
+The hint always documents what's happening. The click action varies by category — see `.claude/rules/inference.md` for the three categories (Addition, Replacement, Informational).
 
 ---
 
@@ -71,29 +79,29 @@ The hint is what the dev would have typed if they typed everything. It is NOT an
 
 Every muted hint, on hover, shows a three-part tooltip in the same WHAT / WHAT-INSTEAD / WHY format Golden Rule 11 requires for compiler diagnostics.
 
-### Canonical example — `.share` on a `const` binding
+### Canonical example — inferred `share` on a `const` binding at a call site
 
 Source:
 ```yinz
-const player = Player { name: "Patrick", health: 100 }
-foo(player)               // muted ".share" appears after player
+const player: Player = { name: "Patrick", health: 100 }
+foo(player)               // muted "share (matches foo's signature)" appears after player
 ```
 
-Hover tooltip on the muted `.share`:
+Hover tooltip on the muted `share`:
 
-> **WHAT**: This is figured out as `.share` because `player` is declared `const`. The function gets read-only access; you keep ownership.
+> **WHAT**: The compiler inferred `share` at this call site. `foo`'s signature declares its parameter as `share`, and `player` is `const` (which can only be shared, never lent or given). The function gets read-only access; you keep ownership.
 >
-> **WHAT INSTEAD**: You could write `foo(player.share)` to make it explicit. The behavior is identical.
+> **WHAT INSTEAD**: To see the contract, view `foo`'s signature — `function foo(share p: Player)`. There is no body-level syntax for ownership modifiers at call sites; the signature is the explicit form.
 >
-> **WHY**: `const` bindings can only grant read-only access. If you need mutation, declare `player` with `let` instead. (Trying to write `foo(player.lend)` here would produce a compile error: "cannot lend a const binding.")
+> **WHY**: `const` bindings can only grant read-only access. If you need a function that mutates `player`, declare `player` with `let` AND change `foo`'s signature to `lend p: Player`. (Trying to call a function whose signature is `lend p: Player` with a `const` player here would produce a compile error: "cannot infer lend for a const binding.")
 
 ### Shared wording rule
 
 The same canonical text MUST be used wherever this concept surfaces:
-- Compiler error: "cannot lend a const binding"
-- IDE tooltip on the muted `.share`: explains WHY const can't be lent
+- Compiler error: "cannot infer lend for a const binding"
+- IDE tooltip on the muted inferred-`share`: explains WHY const can't be lent
 - Spec example in `spec/ownership.md` explaining const's behavior at call sites
-- Design rationale in `design/ownership.md` `const Deep Immutability` section
+- Design rationale in `design/ownership.md` §`const` Deep Immutability section
 
 One canonical explanation lives in one source (typically the rule file or design doc) and every surface re-uses it. This prevents the "doc says X, error says Y, tooltip says Z" drift that plagues every IDE-language ecosystem.
 

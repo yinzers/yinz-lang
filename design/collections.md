@@ -350,7 +350,7 @@ When `array<T>` runs out of capacity, it grows by **1.5×** (Java/Folly choice).
 
 ### Auto-promotion: `array<T>` → `fixed<T>` (hybrid model — three things happen)
 
-When the compiler can prove an `array<T>` declaration is never grown (no `.add()`, `.remove()`, `.resize()`, no `.lend` to a function with a may-grow signature), THREE things happen:
+When the compiler can prove an `array<T>` declaration is never grown (no `.add()`, `.remove()`, `.resize()`, no call to a function whose signature declares `lend` AND may grow the array), THREE things happen:
 
 1. **Codegen auto-promotion (silent perf win)**: the compiler emits `fixed<T, N>` codegen for the binding — stack-allocated, no heap, no growth tracking. The user gets the perf benefit automatically without rewriting source.
 

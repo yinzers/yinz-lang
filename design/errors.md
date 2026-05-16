@@ -24,7 +24,7 @@ Inside an `errors` function, calls to other `errors` functions return the error-
 
 **The rule:**
 - If the user calls `.failed()`, `.message`, or other error-inspection methods on the variable BEFORE using the success value, auto-propagation is suppressed for that variable — the user has taken responsibility.
-- If the user uses the success value (passes it to another function, reads a field, calls a method on it) WITHOUT first checking the error state, the compiler inserts auto-propagation at that point and narrows the variable to its success type from there forward.
+- If the user uses the success value (passes it to another function, reads a field, calls a function on it via UFCS) WITHOUT first checking the error state, the compiler inserts auto-propagation at that point and narrows the variable to its success type from there forward.
 
 **Examples:**
 

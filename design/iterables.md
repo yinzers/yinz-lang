@@ -14,11 +14,13 @@ Custom iteration uses the existing `follows` contract system. No special iterato
 
 ## `next(lend self) -> maybe T` — Ownership and Maybe
 
-`next()` takes `lend self` (it modifies the iterator's internal state — current position, buffer, etc.) and returns `maybe T` (`none` signals end-of-sequence).
+The `next` function takes `lend self` (it modifies the iterator's internal state — current position, buffer, etc.) and returns `maybe T` (`none` signals end-of-sequence).
 
 **Why `maybe T` over a separate sentinel**: `maybe T` is the language's universal way to express "this might not exist." Using it for end-of-sequence is consistent. `none` = no more items = natural English.
 
-**Why `lend self`**: Iterators are stateful by nature — they track a current position. `lend self` is the correct ownership annotation for a method that modifies the instance.
+**Why `lend self`**: Iterators are stateful by nature — they track a current position. `lend self` is the correct ownership modifier for a function that modifies the iterator value.
+
+Per the non-OOP model (`.claude/rules/non-oop.md`), `next` is a STANDALONE FUNCTION — not a method inside the iterator shape. The contract declares its bare signature; each iterator's implementation lives as a standalone `function next(lend self: MyIterator) -> maybe T { ... }`.
 
 ---
 
@@ -42,12 +44,13 @@ shape Range follows Iterable<int> {
 Resolved: two separate contracts. In-memory iteration uses `Iterable<T>`; iteration over I/O sources (files, network, paginated APIs) uses `FallibleIterable<T>`. The user almost never sees the distinction directly — the compiler infers it from the iterator's type and propagates errors only when needed.
 
 ```yinz
+// Contracts use bare-signature form (no `function` keyword, no body)
 shape Iterable<T> {
-  function next(lend self) -> maybe T
+  next(lend self) -> maybe T
 }
 
 shape FallibleIterable<T> {
-  function next(lend self) -> maybe T errors
+  next(lend self) -> maybe T errors
 }
 ```
 
@@ -96,32 +99,35 @@ Violates Yinz's core error principle: failures are visible and structured. A `fo
 **Writing a custom iterable — the choice is clarifying:**
 
 ```yinz
-// In-memory data — implements the infallible contract
+// In-memory data — implements the infallible contract.
+// Shape declaration holds data fields only; standalone function provides the implementation.
 shape CircularBuffer<T> follows Iterable<T> {
   items: array<T>
   hidden position: int = 0
-
-  function next(lend self) -> maybe T {
-    if (self.items.count() == 0) { return none }
-    let value = self.items[self.position]
-    self.position = (self.position + 1) % self.items.count()
-    return value
-  }
 }
 
-// I/O data — implements the fallible contract
+function next(lend self: CircularBuffer<T>) -> maybe T {
+  if (self.items.count() == 0) { return none }
+  const value = self.items[self.position]
+  self.position = (self.position + 1) % self.items.count()
+  return value
+}
+
+// I/O data — implements the fallible contract.
 shape ApiPager<T> follows FallibleIterable<T> {
   cursor: maybe string
   hidden done: bool = false
+}
 
-  function next(lend self) -> maybe T errors {
-    if (self.done) { return none }
-    let response = http.get(self.buildUrl())   // can fail
-    self.cursor = response.nextCursor
-    self.done = response.nextCursor.exists() == false
-    return response.item
-  }
+function next(lend self: ApiPager<T>) -> maybe T errors {
+  if (self.done) { return none }
+  const response = http.get(self.buildUrl())   // can fail
+  self.cursor = response.nextCursor
+  self.done = response.nextCursor.exists() == false
+  return response.item
 }
 ```
 
 The implementor answers ONE clarifying question — "can my iteration step fail?" — and picks the matching contract. It's a forcing function for thinking about failure modes, not a burden.
+
+Each standalone `next` function is found by the compiler when verifying `follows Iterable<T>` (or `FallibleIterable<T>`) — see `.claude/rules/non-oop.md` for the structural-function-signature-matching mechanism.

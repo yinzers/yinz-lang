@@ -8,14 +8,15 @@ You write clean, simple code. The compiler turns it into fast, safe machine code
 
 ## A taste of Yinz
 
-```
+```yinz
 shape Player {
   name: string
   health: number
+}
 
-  function takeDamage(lend self, amount: number) -> nothing {
-    self.health = self.health - amount
-  }
+// Methods are standalone functions; value.method() is sugar for method(value) (UFCS)
+function takeDamage(lend self: Player, amount: number) -> nothing {
+  self.health = self.health - amount
 }
 
 function getTopPlayers(share players: fixed<Player>, count: number) -> array<string> {

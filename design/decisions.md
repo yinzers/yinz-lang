@@ -4,11 +4,21 @@ Every design topic has its own file. This is the index. One line per topic, link
 
 ---
 
+## Cross-Cutting Architectural Principles (apply to every design decision)
+
+| Principle | Canonical file | What's in it |
+|-----------|----------------|--------------|
+| **Non-OOP model** | `.claude/rules/non-oop.md` | Locked r10–r13 (2026-05-16). Data shapes + standalone functions + UFCS dot-call sugar. NO methods inside shapes. NO `override` keyword. `extends` is data-only inheritance. `follows` checked by structural function-signature matching. `dynamic Foo` for runtime polymorphism. Drift back into OOP is the most common modeling mistake. |
+| **Dot-postfix rule** | `.claude/rules/dot-postfix.md` | Locked r4 (2026-05-15). `value.field` (no parens) = data access; `value.method()` (parens) = action. Applies to UFCS method calls, `.copy()`, `.freeze()`, intrinsics, type-attached constants. Does NOT apply to ownership modifiers (compiler-inferred at call sites only). |
+| **Examples use real operations** | `.claude/rules/dot-postfix.md` | Every example in spec/design/plan/rule files MUST use real Yinz operations from the current scope — no invented APIs for illustration. |
+
 ## Language Design
+
+> **NOTE**: rows below predate the r10–r13 non-OOP lockdown. Doc-PR 2 (Task #8) rewrites `design/type-system.md`, `spec/types.md`, `design/ownership.md`, `spec/ownership.md`, `spec/operators.md`, `design/iterables.md`, `spec/iterables.md`, and `spec/overview.md` to remove methods-inside-shapes, remove `override`, redocument `extends` as data-only, remove body-level `.share()/.lend()/.give()` syntax, and update all examples. Index rows here will be updated when those rewrites land.
 
 | Topic | File | What's in it |
 |-------|------|--------------|
-| Type system | `design/type-system.md` | `shape`, `base`, `extends`, `follows`, `override`, structural typing, `\|` (unions), `maybe`, `options`, `hidden`, shape aliases |
+| Type system | `design/type-system.md` | `shape`, `base`, `extends` (data-only inheritance), `follows` (structural function-signature matching), structural typing, `\|` (unions), `maybe`, `options`, `hidden` (per-field visibility within exported shapes). ⚠️ Removed by r10-r15: `override` keyword (function overloading by argument type), type aliases (`shape UserId = string` — pure documentation sugar; parameter names + comments do the job). Doc-PR 2 (Task #8) updates this file. |
 | Generics | `design/generics.md` | Type generics `<T>`, function generics, `follows` constraints inline, type inference at call sites |
 | Ownership | `design/ownership.md` | `.share`/`.lend`/`.give`/`.copy`/`.freeze`, no direct array indexing |
 | Collections | `design/collections.md` | `fixed`/`array`/`map`, no chaining, method naming, bracket sugar for `.get()`/`.set()`, string indexing methods |

@@ -110,7 +110,7 @@ The Yinz compiler authors implement these translations once per supported databa
 The goal is ergonomic CRUD with none of the allocation overhead. These are not in conflict — the convenience layer is a compiler problem, not a runtime problem.
 
 ```
-let quote = Quote { symbol: "AAPL", price: 189.50, timestamp: date.now() }
+const quote: Quote = { symbol: "AAPL", price: 189.50, timestamp: date.now() }
 quote.save()
 quote.destroy()
 

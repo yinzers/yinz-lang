@@ -6,31 +6,31 @@
 
 ## How for loops work under the hood
 
-```
+```yinz
 for (player in players) {
   print(player.name)
 }
 ```
 
-The compiler calls `.next()` on `players` repeatedly until it returns `none`. That's the entire `Iterable` contract.
+The compiler calls `next(players)` repeatedly until it returns `none`. (Equivalent to `players.next()` via UFCS — both forms work the same.) That's the entire `Iterable` contract.
 
 ---
 
 ## Two contracts — infallible and fallible
 
-Most iterables can never fail mid-step. Some iterables (reading a file, paging through an API) can — disk errors, network timeouts, etc. Yinz has a contract for each:
+Most iterables can never fail mid-step. Some iterables (reading a file, paging through an API) can — disk errors, network timeouts, etc. Yinz has a contract for each. Contracts use bare-signature form (no `function` keyword, no body — see `.claude/rules/non-oop.md`):
 
-```
+```yinz
 shape Iterable<T> {
-  function next(lend self) -> maybe T
+  next(lend self) -> maybe T
 }
 
 shape FallibleIterable<T> {
-  function next(lend self) -> maybe T errors
+  next(lend self) -> maybe T errors
 }
 ```
 
-Return the next value or `none` when there are no more. For `FallibleIterable`, `next()` can also fail.
+Return the next value or `none` when there are no more. For `FallibleIterable`, `next` can also fail.
 
 You almost never think about which contract is which — the compiler picks based on the iterator you're using:
 
@@ -101,24 +101,24 @@ With either adapter, the enclosing function no longer needs to be `errors`.
 
 ## Building a custom iterable
 
-Implement `follows Iterable<T>` with a `next(lend self) -> maybe T` method. Use `hidden` fields with defaults to track internal state:
+Declare a shape that `follows Iterable<T>` (data fields + `hidden` state). Provide a standalone `next` function whose signature matches the contract — the compiler verifies the match.
 
-```
+```yinz
 shape CountDown follows Iterable<int> {
   end: int
   hidden current: int = 0
-
-  function next(lend self) -> maybe int {
-    if (self.current > self.end) {
-      return none
-    }
-    let value = self.end - self.current
-    self.current = self.current + 1
-    return value
-  }
 }
 
-let counter: CountDown = { end: 5 }
+function next(lend self: CountDown) -> maybe int {
+  if (self.current > self.end) {
+    return none
+  }
+  const value = self.end - self.current
+  self.current = self.current + 1
+  return value
+}
+
+const counter: CountDown = { end: 5 }
 for (num in counter) {
   print(num)    // 5, 4, 3, 2, 1, 0
 }
@@ -126,25 +126,27 @@ for (num in counter) {
 
 If your iteration step can fail (I/O, network), follow the fallible contract instead:
 
-```
+```yinz
 shape ApiPager<T> follows FallibleIterable<T> {
   baseUrl: string
   hidden cursor: maybe string = none
   hidden done: bool = false
+}
 
-  function next(lend self) -> maybe T errors {
-    if (self.done) {
-      return none
-    }
-    let response = http.get(self.buildUrl())   // can fail — errors propagates
-    self.cursor = response.nextCursor
-    self.done = response.nextCursor.exists() == false
-    return response.item
+function next(lend self: ApiPager<T>) -> maybe T errors {
+  if (self.done) {
+    return none
   }
+  const response = http.get(self.buildUrl())   // can fail — errors propagates
+  self.cursor = response.nextCursor
+  self.done = response.nextCursor.exists() == false
+  return response.item
 }
 ```
 
-The choice — `Iterable<T>` vs `FallibleIterable<T>` — comes down to one question: can a single step fail at runtime? If yes, use `FallibleIterable<T>`. If no, use `Iterable<T>`. The compiler will catch you trying to do I/O inside an infallible `next()`.
+The choice — `Iterable<T>` vs `FallibleIterable<T>` — comes down to one question: can a single step fail at runtime? If yes, use `FallibleIterable<T>`. If no, use `Iterable<T>`. The compiler will catch you trying to do I/O inside an infallible `next`.
+
+Note: Yinz is not object-oriented — `next` is a standalone function, not a method "on" the iterator. The for-loop machinery calls `next(iterator)` (or equivalently `iterator.next()` via UFCS dot-call sugar).
 
 ---
 

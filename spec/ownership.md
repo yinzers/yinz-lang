@@ -6,100 +6,97 @@ The rule: every value has exactly one owner. When the owner goes out of scope, t
 
 ---
 
-## The dot modifiers
+## The three modes
 
-When you pass a value to a function, you tell the compiler how you're sharing it:
+When a function takes a value, its signature says one of three things:
 
-```
-name.share     // I'm letting you read it — I keep ownership
-name.lend      // I'm letting you modify it — I get it back when done
-name.give      // I'm handing it over permanently — I lose it
-name.copy      // Make a full copy — you get the copy, I keep the original
-name.freeze    // Make it permanently read-only
+```yinz
+function greet(share name: string) -> nothing { ... }      // share — read-only; caller keeps ownership
+function rename(lend player: Player) -> nothing { ... }    // lend — function modifies it; caller keeps ownership
+function consume(give data: Data) -> nothing { ... }       // give — function takes it; caller loses it
 ```
 
-All of these appear in autocomplete when you type `.` after a variable.
+That's the contract. Anyone reading the signature knows what happens to the value.
 
 ---
 
-## You don't usually type the dot modifier — the compiler figures it out
+## You don't type the mode at the call site
 
-When the compiler can tell what you want from context, you don't have to type it. The IDE shows what was inferred as muted text, so you can SEE what's happening without typing it:
+When you call a function, you just pass the value normally. The compiler reads the callee's signature and figures out what to do — share, lend, or give. The IDE shows what was inferred as muted text so you can see what's happening:
 
-```
-greet(name)           // IDE shows muted ".share" after name — read-only access inferred
-print(message)        // IDE shows muted ".share" — same idea
-rename(player)        // IDE shows muted ".lend" (red-tinted) — function needs write access
-consume(data)         // IDE shows muted ".give" (red-tinted) — function takes ownership
-```
-
-You can still type the modifier explicitly when you want it visible in code (some teams prefer that for high-stakes operations):
-
-```
-rename(player.lend)   // explicit — granting write access
-consume(data.give)    // explicit — handing it over
+```yinz
+greet(name)           // IDE shows muted "share" — read-only access
+print(message)        // IDE shows muted "share" — read-only access
+rename(player)        // IDE shows muted "lend" (red-tinted) — function modifies player
+consume(data)         // IDE shows muted "give" (red-tinted) — function takes ownership
 ```
 
-Hovering over any muted hint shows a tooltip explaining WHAT it means, WHAT INSTEAD you'd write to make it explicit, and WHY the compiler chose it. That's the teaching part — the IDE helps you learn ownership by reading your own code.
+Hovering on any muted hint shows a tooltip explaining WHAT it means, WHAT INSTEAD you'd write to make it explicit (on the function signature, not the call site), and WHY the compiler chose it.
 
-`const` bindings get special treatment: the compiler will only infer `.share` (read-only). It refuses to infer `.lend` or `.give` because a `const` value can't grant write access or transfer ownership. If a function needs `.lend` and you pass a `const`, that's a compile error pointing you toward declaring with `let` instead.
+There is no body-level syntax for these three modes — they exist only in signatures. You never type `.share()` / `.lend()` / `.give()` in source.
 
 ---
 
-## Function signatures always declare intent explicitly
+## What happens after the value is given away
 
-Even though callers can omit `.share`, function signatures always say what they need:
+Once a function takes ownership via `give`, you can't use the value anymore. The compiler catches this:
 
-```
-function greet(share name: string) -> nothing     // I just need to read this
-function rename(lend player: Player) -> nothing   // I'm going to modify this
-function consume(give data: Data) -> nothing      // I'm taking this, you lose it
-```
-
-The signature is a contract. Anyone reading the function knows exactly what it does with its inputs.
-
----
-
-## What happens after .give
-
-Once you give a value away, you can't use it anymore. The compiler catches this:
-
-```
-consume(data.give)
+```yinz
+consume(data)              // give inferred from consume's signature — data transferred
 print(data)
-// COMPILE ERROR: data was transferred via .give() on the previous line.
-// It no longer exists here. Use .copy() if you need to keep it.
+// COMPILE ERROR: data was transferred to consume() on the previous line.
+// It no longer exists here. Use .copy() if you need to keep a copy.
 ```
 
 ---
 
-## .copy — when you need to keep the original
+## `const` bindings get extra protection
 
-```
-let backup = original.copy    // full deep copy — original is unchanged
-consume(backup.give)          // give away the copy, keep the original
-```
+A `const` binding can only be shared (read). The compiler refuses to infer `lend` or `give` for a `const` value:
 
----
-
-## .lend — temporary write access
-
-After a `.lend`, you get the value back when the function returns:
-
-```
-function addBonus(lend player: Player, amount: number) -> nothing {
-  player.score = player.score + amount
-}
-
-addBonus(player.lend, 50)    // explicit — granting write access
-print(player.score)          // player is still yours — .lend returns it
+```yinz
+const player: Player = { name: "Patrick", health: 100 }
+rename(player)
+// COMPILE ERROR: player is `const`, but rename's signature requires `lend`.
+// To allow modification, declare player with `let` instead.
 ```
 
 ---
 
-## .freeze — make a value permanently read-only
+## `.copy()` — when you need to keep a copy
 
+```yinz
+const original: Player = { name: "Patrick", health: 100 }
+const backup = original.copy()    // produces a new owned value (cheap, trivially-copyable types only)
+saveForever(backup)                // backup is given to saveForever; original is unchanged
 ```
-let config = loadConfig()
-let safe = config.freeze    // safe can now be passed anywhere without risk of modification
+
+`.copy()` is only allowed when every field of the value's type is trivially copyable (primitives all the way down). For shapes containing arrays, maps, or other heap-owned data, you write a standalone `copy()` function that does the deep copy explicitly and call it as a normal function. This prevents silent expensive copies.
+
+---
+
+## `.freeze()` — lock a value from further changes
+
+Sometimes you want to build a value step-by-step then prevent any more changes:
+
+```yinz
+let config: ConfigBuilder = { rules: [] }
+config.addRule("a", 1)
+config.addRule("b", 2)
+config.freeze()                    // lock from this point forward
+runApp(config)                      // config can still be read; further mutation is a compile error
 ```
+
+After `.freeze()`, the binding behaves like `const` for the rest of its scope. This is useful for build-then-lock patterns where you need mutability during construction but want to prevent accidental modification afterward.
+
+---
+
+## Summary
+
+| What | Where it lives | When you type it |
+|---|---|---|
+| `share` / `lend` / `give` | Function signatures only | Always at signatures; never at call sites (compiler infers there) |
+| `.copy()` | Body expression | When you want a cheap independent copy of a trivially-copyable value |
+| `.freeze()` | Body expression | When you want to lock a binding from further mutation mid-function |
+
+The compiler does the heavy lifting at call sites. The IDE shows what was inferred. You learn ownership by reading your own code with hints turned on.

@@ -4,19 +4,38 @@ User spec: `spec/types.md`, `spec/maybe.md`, `spec/unions.md`, `spec/options.md`
 
 ---
 
-## One Keyword: `type`
+## One Keyword: `shape`
 
-`type` is the only keyword for defining shapes. No `interface`, `struct`, `class`.
+`shape` is the only declaration keyword. No `interface`, `struct`, `class`, `type`.
 
-**Why**: Three keywords for three overlapping concepts confuses junior developers. `type` handles all cases: plain data shapes, shapes with methods, shapes used as contracts, shapes that extend other shapes. One concept, one word.
+**Why**: Three keywords for three overlapping concepts confuses junior developers. `shape` handles all cases: plain data shapes, shapes used as contracts (with bare-signature declarations only — no bodies), shapes that extend other shapes for data reuse. One concept, one word. The word `type` is banned at the lexer level (declaration-keyword diagnostic redirects to `shape`) because "type" is also the generic English word for a category — keeping it as a keyword would constantly conflict with that broader usage. Locked in design-lockdown (2026-05-14).
+
+> Yinz is **NOT object-oriented** — see `.claude/rules/non-oop.md`. Shapes hold DATA + (optionally) CONTRACT METHOD-SIGNATURE DECLARATIONS only. Method implementations live as standalone `function` declarations at file/module level. `value.method()` is parser-level sugar for `method(value)` (UFCS — Uniform Function Call Syntax). The sections below describe the type system within this non-OOP model.
 
 ---
 
-## Single Inheritance with `extends`
+## Single Inheritance with `extends` (data-only)
 
-Single inheritance only. No multiple inheritance.
+Single inheritance only. `extends` reuses parent's DATA FIELDS — behavior comes from standalone functions, not from inherited methods (because there are no methods on shapes to inherit). No multiple inheritance.
 
-**Why**: Multiple inheritance creates the diamond problem — ambiguous method resolution with surprising behavior. Single inheritance is simpler to reason about and almost always sufficient. For sharing behavior across unrelated types, `follows` handles multiple contracts (no limit on how many a type can follow).
+**Why**: Multiple inheritance creates the diamond problem (ambiguous resolution with surprising behavior). Single inheritance is simpler to reason about and almost always sufficient. `extends` is for code reuse at the DATA level; for behavior polymorphism, write a standalone function for each shape and let the compiler pick by argument-type overloading. For shared behavior contracts, `follows` handles any number of contracts. Locked r10 (2026-05-16).
+
+**Example**:
+```yinz
+shape Entity { name: string, health: int }
+shape Warrior extends Entity { weapon: string, armor: int }
+
+function greet(share self: Entity) -> string {
+  return "Hello, I am " + self.name
+}
+
+function greet(share self: Warrior) -> string {
+  return "Hello, I am " + self.name + " the warrior, wielding " + self.weapon
+}
+
+const w: Warrior = { name: "Aragorn", health: 100, weapon: "sword", armor: 50 }
+w.greet()    // calls greet(Warrior) — more specific overload wins
+```
 
 ---
 
@@ -24,25 +43,48 @@ Single inheritance only. No multiple inheritance.
 
 `base shape Entity` instead of `abstract class Entity`.
 
-**Why**: "Base shape" reads like English — "this is a base you build on." `abstract` requires knowing what abstraction means in OOP. Golden Rule 12.
+**Why**: "Base shape" reads like English — "this is a base you build on." `abstract` requires knowing what abstraction means in object-oriented design. Yinz isn't OOP and avoids the term. Golden Rule 12.
+
+`base` shapes cannot be instantiated via struct literal — attempting `let e: Entity = { ... }` on a `base shape Entity` is a compile error. They exist purely to be extended.
 
 ---
 
 ## `follows` for Contracts
 
-`follows` instead of `implements`. Optional in structurally-typed code but recommended.
+`follows` instead of `implements`. Optional in structurally-typed code but recommended for catching contract mismatches at definition time.
 
-**Why**: "Player follows Damageable" reads like a sentence. `implements` is CS jargon. Structural typing means `follows` isn't required for compatibility — but it catches contract mismatches at definition time rather than usage site, and makes intent explicit.
+**Why**: "Player follows Damageable" reads like a sentence. `implements` is CS jargon. Structural typing means `follows` isn't required for compatibility — but writing it catches missing-method errors at the shape-declaration site rather than at the first call site, and makes the relationship visible to readers.
 
-**Multiple allowed**: `type Warrior extends Entity follows Damageable, Attackable` — single `extends`, any number of `follows`.
+**Contract verification**: when a shape declares `follows Foo`, the compiler verifies that standalone functions exist whose signatures match each of Foo's bare-signature method declarations. No method implementations live inside the contract OR the implementing shape — both sides declare signatures; standalone functions provide the behavior.
+
+**Multiple allowed**: `shape Warrior extends Entity follows Damageable, Attackable` — single `extends`, any number of `follows`.
 
 ---
 
-## `override` Keyword Required
+## Function Overloading by Argument Type (no `override` keyword)
 
-Overriding a parent method requires the `override` keyword. Compiler errors in both directions — missing `override` when parent has the method, and using `override` when parent doesn't.
+There is no `override` keyword in Yinz. Method polymorphism is provided by **function overloading by argument type** — write multiple standalone functions with the same name but different first-parameter types; the compiler picks the most specific match at every call site.
 
-**Why**: Accidental method shadowing is a silent bug. The two-direction check prevents both "I didn't mean to override this" and "I typed the method name wrong and thought I was overriding."
+**Why no `override`**: methods don't live inside shapes (`.claude/rules/non-oop.md`), so there's nothing to "override" — there's no parent-method-in-shape to redeclare. The OOP `override` keyword exists to disambiguate "I'm intentionally replacing the parent's method" from "I accidentally shadowed it" — Yinz doesn't have that ambiguity because methods are always standalone functions, and the compiler's overload-resolution rules are deterministic (most-specific-first-parameter-type wins).
+
+**Example**:
+```yinz
+shape Entity { name: string }
+shape Warrior extends Entity { weapon: string }
+
+function attack(share self: Entity) -> string { return self.name + " attacks!" }
+function attack(share self: Warrior) -> string { return self.name + " swings " + self.weapon + "!" }
+
+const e: Entity = { name: "Orc" }
+const w: Warrior = { name: "Aragorn", weapon: "Andúril" }
+
+e.attack()    // calls attack(Entity) — "Orc attacks!"
+w.attack()    // calls attack(Warrior) — "Aragorn swings Andúril!" (more specific match)
+```
+
+**Diagnostic for shadow-without-overload**: if you write a function with the same name as one in a parent's overload set but with a less-specific signature, the compiler accepts it (it's still callable for the parent type's values); shadowing-detection is not needed because OOP's "did I mean to override?" problem doesn't apply when there's no method-on-instance binding.
+
+Locked r10 (2026-05-16). Replaces the previously-locked `override` keyword which is now removed entirely.
 
 ---
 
@@ -65,33 +107,35 @@ Locked: static dispatch is the default. Dynamic dispatch requires explicit synta
 ### Concrete example
 
 ```yinz
-// Define a contract — any shape can follow it by implementing compare()
+// Define a contract — bare-signature declarations only (no `function` keyword, no body)
 shape Comparable {
-  function compare(share self, share other: Self) -> int
+  compare(share self, share other: Self) -> int
 }
 
-// Two shapes that follow the contract
+// Two shapes that follow the contract — data fields only
 shape Player follows Comparable {
   name: string
   health: int
-
-  function compare(share self, share other: Player) -> int {
-    return self.health - other.health
-  }
 }
 
 shape Item follows Comparable {
   name: string
   weight: int
+}
 
-  function compare(share self, share other: Item) -> int {
-    return self.weight - other.weight
-  }
+// Standalone functions provide the implementations.
+// Compiler verifies these match Comparable's signature when checking `follows`.
+function compare(share self: Player, share other: Player) -> int {
+  return self.health - other.health
+}
+
+function compare(share self: Item, share other: Item) -> int {
+  return self.weight - other.weight
 }
 
 // A generic function — works on anything that follows Comparable
 function findMax<T follows Comparable>(share items: array<T>) -> maybe T {
-  // ... walk the array, keep the largest per .compare()
+  // ... walk the array, keep the largest per compare()
 }
 
 // CASE A — concrete type known → STATIC DISPATCH (auto-picked, fast)
@@ -175,13 +219,20 @@ COMPILE ERROR: Item is not a Player.
 COMPILE ERROR: Foo does not follow Comparable.
   findMax requires elements to follow the Comparable contract.
 
-  To make Foo work with findMax, add:
-    shape Foo follows Comparable {
-      name: string
-      function compare(share self, share other: Foo) -> int { ... }
-    }
+  To make Foo work with findMax:
 
-  See spec/operators.md for contract implementation patterns.
+    1. Declare Foo follows Comparable:
+       shape Foo follows Comparable {
+         name: string
+       }
+
+    2. Provide a standalone compare function matching Comparable's signature:
+       function compare(share self: Foo, share other: Foo) -> int {
+         // ... return negative, zero, or positive
+       }
+
+  Yinz is not object-oriented — contract implementations are standalone
+  functions, not methods inside the shape. See spec/operators.md.
 ```
 
 All four diagnostics (two muted hints + one lint + two compile errors) follow WHAT/WHAT-INSTEAD/WHY. None use jargon (`monomorphization`, `vtable`, `devirtualization` are internal compiler terms — user-facing diagnostics say "specialized version per type" and "runtime lookup").
@@ -213,7 +264,7 @@ The default favors perf; the opt-in covers binary-size-constrained cases.
 
 ## Generics — `name<T>` Syntax
 
-`type Box<T> { value: T }` — angle bracket generics, same pattern as built-in collections.
+`shape Box<T> { value: T }` — angle bracket generics, same pattern as built-in collections.
 
 **Why**: Consistent with `array<Player>`, `map<string, number>`, `fixed<string>`. One `name<type>` pattern covers both built-in and user-defined generic types. No special cases.
 
@@ -221,7 +272,7 @@ The default favors perf; the opt-in covers binary-size-constrained cases.
 
 ## Union Types with `|`
 
-`type Shape = Circle | Square | Triangle` with `is` for type checking and narrowing.
+`shape DrawableShape = Circle | Square | Triangle` with `is` for type checking and narrowing.
 
 **Why `|` over `or`**: Consistency — all operators are symbols in Yinz. JS/TS developers already know `|` for union types. `or` was triple-overloaded (union types, boolean OR, `.or()` method) — switching union types to `|` eliminates the overload entirely. `is` matches plain English — "if shape is Circle."
 
@@ -241,9 +292,9 @@ No `null`. No `undefined`. Absence is expressed as `none` and tracked by the typ
 
 ## Hidden Fields — `hidden` Keyword
 
-`hidden` fields are completely invisible outside the type's own methods. They require a default value:
+`hidden` fields are invisible to code OUTSIDE THE SAME FILE as the shape declaration. They require a default value:
 
-```
+```yinz
 shape Player {
   name: string
   hidden damageMultiplier: number = 1.0
@@ -255,17 +306,9 @@ shape Player {
 
 **Why require defaults**: Without a default, the caller would need to provide the hidden field during construction — which would require knowing the field name, defeating the purpose of hiding it. Requiring defaults makes the initial state explicit and visible in the type definition (Golden Rule 2 — self-documenting). The caller only provides visible fields.
 
-**Hidden vs `share`/`lend`**: These are different concepts. `share`/`lend` control mutability in a given context. `hidden` controls visibility — hidden fields simply do not exist to code outside the type. A hidden field can be both read and written by the type's methods.
+**Visibility scope (non-OOP framing)**: Yinz isn't object-oriented — fields don't belong to instances; functions don't live inside shapes. `hidden` means "this field is only accessible to standalone functions declared in the same file as the shape." A `hidden` field can be read and written by functions in the file; it's invisible to imports and to functions in other files. Default values cover construction (the only way an outside caller could touch a hidden field would be at construction — defaults make that path go through the shape's file).
 
----
-
-## Type Aliases
-
-`type Name = ExistingType` creates a documentation alias. Zero runtime cost — erased at compile time. The alias and original type are fully interchangeable.
-
-**Why**: Self-documenting function signatures. `fetchUser(id: UserId)` tells a clearer story than `fetchUser(id: string)`. The compiler enforces nothing extra — `UserId` IS `string` — but the name communicates intent to human readers.
-
-**Not nominal typing**: Aliases don't create new types. A function expecting `UserId` accepts a `string`. This is consistent with structural typing throughout the language.
+**Hidden vs ownership modifiers**: these are different concepts. `share`/`lend`/`give` are SIGNATURE-level ownership declarations (or compiler-inferred at call sites). `hidden` is a FIELD-level visibility modifier. They don't interact.
 
 ---
 

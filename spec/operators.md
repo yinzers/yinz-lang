@@ -141,23 +141,24 @@ Types can implement operators through `follows` contracts from the standard libr
 
 ## Overloading
 
-The standard library defines contracts for operators. Follow the contract, implement the method:
+The standard library defines contracts for operators. Each contract declares the bare signature of the function the implementing shape must provide. Implementations live as standalone functions at the file/module level (Yinz is not object-oriented — see `.claude/rules/non-oop.md`).
 
-```
+```yinz
+// Contracts — bare-signature form (no `function` keyword, no body)
 shape Addable {
-  function add(share self, share other: Self) -> Self
+  add(share self, share other: Self) -> Self
 }
 
 shape Equatable {
-  function equals(share self, share other: Self) -> bool
+  equals(share self, share other: Self) -> bool
 }
 
 shape Comparable follows Equatable {
-  function compareTo(share self, share other: Self) -> int
+  compareTo(share self, share other: Self) -> int
 }
 
 shape Printable {
-  function toString(share self) -> string
+  toString(share self) -> string
 }
 ```
 
@@ -165,43 +166,48 @@ shape Printable {
 
 **Example:**
 
-```
+```yinz
+// Shape declares data + follows clauses; no method bodies here
 shape Vector2D follows Addable, Equatable, Printable {
   x: number
   y: number
-
-  function add(share self, share other: Vector2D) -> Vector2D {
-    return { x: self.x + other.x, y: self.y + other.y }
-  }
-
-  function equals(share self, share other: Vector2D) -> bool {
-    return self.x == other.x && self.y == other.y
-  }
-
-  function toString(share self) -> string {
-    return `(${self.x}, ${self.y})`
-  }
 }
 
-let a: Vector2D = { x: 1, y: 2 }
-let b: Vector2D = { x: 3, y: 4 }
+// Standalone functions provide the implementations
+// Compiler verifies these match each contract's signature when checking `follows`
+function add(share self: Vector2D, share other: Vector2D) -> Vector2D {
+  return { x: self.x + other.x, y: self.y + other.y }
+}
 
-let c = a + b           // calls a.add(b)
-let same = a == b        // calls a.equals(b)
-print(a)                 // calls a.toString()
+function equals(share self: Vector2D, share other: Vector2D) -> bool {
+  return self.x == other.x && self.y == other.y
+}
+
+function toString(share self: Vector2D) -> string {
+  return `(${self.x}, ${self.y})`
+}
+
+const a: Vector2D = { x: 1, y: 2 }
+const b: Vector2D = { x: 3, y: 4 }
+
+const c = a + b          // calls add(a, b) — operator overload resolves to the standalone function
+const same = a == b      // calls equals(a, b)
+print(a)                 // calls toString(a)
 ```
 
-**Operator to method mapping:**
+**Operator to function mapping:**
 
-| Operator | Contract | Method |
+| Operator | Contract | Standalone function name |
 |----------|----------|--------|
-| `+` | `Addable` | `add()` |
-| `-` | `Subtractable` | `subtract()` |
-| `*` | `Multipliable` | `multiply()` |
-| `/` | `Divisible` | `divide()` |
-| `==` | `Equatable` | `equals()` |
-| `<` `>` `<=` `>=` | `Comparable` | `compareTo()` |
-| `print(x)` | `Printable` | `toString()` |
+| `+` | `Addable` | `add` |
+| `-` | `Subtractable` | `subtract` |
+| `*` | `Multipliable` | `multiply` |
+| `/` | `Divisible` | `divide` |
+| `==` | `Equatable` | `equals` |
+| `<` `>` `<=` `>=` | `Comparable` | `compareTo` |
+| `print(x)` | `Printable` | `toString` |
+
+The compiler looks up the function by name + first-parameter type (standard overload resolution) when the operator is used. `a + b` desugars to `add(a, b)`.
 
 ---
 
@@ -209,11 +215,11 @@ print(a)                 // calls a.toString()
 
 All types are printable. Built-in types print naturally. Custom types get a default representation — type name and visible fields:
 
-```
+```yinz
 print(player)    // Player { name: "Alice", health: 100 }
 ```
 
-Follow `Printable` to customize the format.
+Declare your shape `follows Printable` and provide a standalone `toString(share self: YourShape) -> string` to customize the format.
 
 ---
 

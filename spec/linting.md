@@ -13,11 +13,12 @@ The philosophy: catch real bugs, enforce code quality, don't police style. Every
 These are things that would definitely break at runtime or violate a language guarantee:
 
 **Ownership violations:**
-```
+```yinz
 let data = loadData()
-consume(data.give)
+consume(data)            // compiler infers `give` from consume's signature
 print(data)
-// ERROR: data was transferred via .give() and no longer exists here.
+// ERROR: data was transferred to consume() above (consume takes `give data: Data`).
+//        It no longer exists here. Use .copy() if you need to keep it.
 ```
 
 **Missing return paths:**
@@ -93,10 +94,12 @@ type player { }
 ```
 
 **Sharing with a background task:**
-```
-background processData(data.share)
-// ERROR: Cannot share with a background task.
-// The task might outlive this function. Use .give or .copy instead.
+```yinz
+background processData(data)
+// ERROR: processData's signature says `share data: Data`, but background tasks
+//        may outlive this function — sharing isn't safe across that boundary.
+//        Change processData to take `give data: Data` (it will own the value)
+//        OR call data.copy() to give it an independent copy.
 ```
 
 ---

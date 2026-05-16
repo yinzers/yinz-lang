@@ -23,11 +23,11 @@ For internal-vs-user-facing audience distinctions (e.g., `infer`/`inference` all
 | Function declaration | `function` | fn, func, def, method |
 | The implementing type (in `follows`) | `Self` | self, this (capital S only for the type) |
 | The instance (lowercase) | `self` | this, instance |
-| Read-only borrow | `.share` | &T, shared ref, immutable borrow |
-| Mutable borrow | `.lend` | &mut T, mutable ref |
-| Ownership transfer | `.give` | move, std::move |
-| Copy a value | `.copy` | clone, deep copy |
-| Freeze to read-only | `.freeze` | (no direct equivalent) |
+| Read-only borrow (signature only) | `share` keyword in signature; compiler-inferred at call sites | &T, shared ref, immutable borrow. NO body-level `.share()` syntax. |
+| Mutable borrow (signature only) | `lend` keyword in signature; compiler-inferred at call sites | &mut T, mutable ref. NO body-level `.lend()` syntax. |
+| Ownership transfer (signature only) | `give` keyword in signature; compiler-inferred at call sites | move, std::move. NO body-level `.give()` syntax. |
+| Copy a value | `.copy()` (body operation, parens per dot-postfix rule) | clone, deep copy |
+| Freeze to read-only | `.freeze()` (body operation, parens) | (no direct equivalent) |
 | Error type / fallible | `errors` keyword | Result<T, E>, throws, exceptions |
 | Type narrowing | `is` | typeof, instanceof, type guards |
 | Async wait point | `wait` | await, async/await |
@@ -40,19 +40,21 @@ For internal-vs-user-facing audience distinctions (e.g., `infer`/`inference` all
 
 ### `shape` vs value
 
-A `shape` is the DECLARATION of a structure. A value is an INSTANCE with that structure.
+A `shape` is the DECLARATION of a data structure. A value is an instance of data with that structure.
 
 ```yinz
-shape Player {                    // declaration — this is a shape
+shape Player {                    // declaration — this is a shape (data only; no methods)
   name: string
   health: int
 }
 
-let p = Player { name: "Patrick", health: 100 }   // creating a value
-//  ^ "p" is "a Player value" or just "a Player"
+const p: Player = { name: "Patrick", health: 100 }   // creating a value (annotation-driven literal)
+//    ^ "p" is "a Player value" or just "a Player"
 ```
 
 When writing prose: "Players" or "a Player value" — never "a Player object" or "a Player instance" or "a Player struct."
+
+Yinz is not object-oriented — see `.claude/rules/non-oop.md`. Methods are standalone functions, not bound to shape declarations. `value.method()` is parser-level sugar for `method(value)` (UFCS — Uniform Function Call Syntax).
 
 ### `shape` vs `map<K, V>`
 
@@ -115,7 +117,7 @@ The Yinz compiler bans these legacy terms in user-facing diagnostics via `crates
 > "Declare a `type` called Player. Player is a struct with two fields. Create a new instance of Player by calling its constructor."
 
 ✅ **Correct**:
-> "Declare a `shape` called Player. Player has two fields (name and health). Create a Player value by writing `Player { name: ..., health: ... }`."
+> "Declare a `shape` called Player. Player has two fields (name and health). Create a Player value by writing `const p: Player = { name: ..., health: ... }` (annotation-driven literal — Yinz uses structural typing)."
 
 ❌ **Incorrect**:
 > "The function returns Optional<User> or null."
