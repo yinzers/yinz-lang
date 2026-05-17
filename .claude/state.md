@@ -1,6 +1,6 @@
 # Session State: ynz
 
-**Last Updated**: 2026-05-17 (M5 P1 shipped on feat/m5-lexer-ast, awaiting merge)
+**Last Updated**: 2026-05-17 (M5 SHIPPED — tag v0.1.0-m5, 574 tests, 6 phases P0-P6 all done)
 
 ---
 
