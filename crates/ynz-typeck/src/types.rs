@@ -54,6 +54,26 @@ pub enum Type {
     /// Values of this type are fat pointers `{ data_ptr, vtable_ptr }`.
     /// Method dispatch costs ~3× a static call — opt-in only.
     Dynamic { contract: String },
+
+    // ── M5 ───────────────────────────────────────────────────────────────────
+
+    // test-ratchet: M5 P3a adds TypeParam and Generic for the generics engine.
+
+    /// A type parameter placeholder inside a generic function or shape body.
+    ///
+    /// `function identity<T>(give value: T) -> T` — the two `T` references in the
+    /// signature produce `TypeParam { name: "T" }`. Resolved to a concrete type
+    /// by the generics engine at each call site.
+    TypeParam { name: String },
+
+    /// A concrete generic instantiation: `Pair<int, string>`, `array<Player>`, etc.
+    ///
+    /// `name` is the type constructor (user-defined generic shape or built-in).
+    /// `args` are the concrete type arguments, already resolved.
+    ///
+    /// P3a uses this for user-defined generic shapes only.
+    /// P3b extends it to built-in collections (`array`, `fixed`, `map`, `maybe`).
+    Generic { name: String, args: Vec<Type> },
 }
 
 /// Human-readable type name for diagnostic messages.
@@ -72,5 +92,10 @@ pub fn type_name(t: &Type) -> String {
         Type::Range { .. } => "range".into(),
         Type::Shape { name } => name.clone(),
         Type::Dynamic { contract } => format!("dynamic {contract}"),
+        Type::TypeParam { name } => name.clone(),
+        Type::Generic { name, args } => {
+            let arg_str = args.iter().map(type_name).collect::<Vec<_>>().join(", ");
+            format!("{name}<{arg_str}>")
+        }
     }
 }

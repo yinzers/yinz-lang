@@ -3,7 +3,10 @@ use std::collections::{HashMap, HashSet};
 use ynz_ast::nodes::{Item, Module, Type as AstType};
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
-use crate::types::Type;
+use crate::{
+    generics::{GenericShapeDef, GenericShapeTable},
+    types::Type,
+};
 
 /// A resolved field on a shape.
 #[derive(Clone, Debug)]
@@ -82,8 +85,19 @@ impl ShapeTable {
             AstType::Error | AstType::Named(_, _) | AstType::Range { .. } => Type::Error,
             // P3b: dynamic dispatch and Self type resolution.
             AstType::Dynamic { .. } | AstType::SelfType { .. } => Type::Error,
-            // M5 P3a / P3b: generics engine + built-in collections.
-            AstType::TypeParam { .. } | AstType::Generic { .. } | AstType::Maybe { .. } => Type::Error,
+            // TypeParam: must be resolved in context (Checker::ast_type_to_type handles this).
+            AstType::TypeParam { .. } => Type::Error,
+            // Generic instantiation: P3a handles user-defined generics; P3b handles built-ins.
+            AstType::Generic { name, args, .. } => {
+                let resolved_args: Vec<Type> = args.iter().map(|a| self.resolve_ast_type(a)).collect();
+                if self.contains(name) {
+                    Type::Generic { name: name.clone(), args: resolved_args }
+                } else {
+                    Type::Error
+                }
+            }
+            // maybe<T>: P3b.
+            AstType::Maybe { .. } => Type::Error,
         }
     }
 }
@@ -309,4 +323,87 @@ fn has_cycle(
         }
     }
     false
+}
+
+// ── Generic shape collection (M5 P3a) ────────────────────────────────────────
+
+/// Collect all generic shape declarations (`shape Pair<A, B> { ... }`) into a
+/// `GenericShapeTable`.
+///
+/// Called from the same pre-pass as `collect_shapes`. Generic shapes are kept
+/// separate because their field types contain `TypeParam` placeholders — they
+/// cannot be stored in `ShapeTable` (which only holds concrete types).
+pub fn collect_generic_shapes(module: &Module, diags: &mut DiagnosticBucket) -> GenericShapeTable {
+    let mut table = GenericShapeTable::default();
+
+    for item in &module.items {
+        let Item::ShapeDecl(s) = item else { continue };
+        if s.generics.is_empty() {
+            continue; // non-generic — handled by collect_shapes
+        }
+
+        if table.contains(&s.name) {
+            diags.push(Diagnostic::error(
+                s.name_span.clone(),
+                format!("A generic shape named `{}` is already defined in this file.", s.name),
+                "Rename one of the two shapes.",
+                "Yinz does not allow two shapes with the same name in the same file.",
+            ));
+            continue;
+        }
+
+        let type_params: Vec<String> = s.generics.iter().map(|gp| gp.name.clone()).collect();
+
+        // Resolve field types — TypeParam references stay as TypeParam.
+        let mut fields: Vec<FieldDef> = Vec::new();
+        for field in &s.fields {
+            let ty = resolve_field_type_in_generic_shape(&field.ty, &type_params);
+            fields.push(FieldDef {
+                name: field.name.clone(),
+                ty,
+                is_hidden: field.is_hidden,
+                is_inherited: false,
+                defined_at: field.name_span.clone(),
+            });
+        }
+
+        let follows: Vec<String> = s.follows.iter().map(|(c, _)| c.clone()).collect();
+
+        table.shapes.insert(
+            s.name.clone(),
+            GenericShapeDef {
+                name: s.name.clone(),
+                type_params,
+                fields,
+                follows,
+                defined_at: s.name_span.clone(),
+            },
+        );
+    }
+
+    table
+}
+
+/// Resolve a field type annotation inside a generic shape body.
+///
+/// Names that appear in `type_params` become `Type::TypeParam`; all other names
+/// follow normal resolution (built-in primitives only at P3a — concrete shapes
+/// in generic field positions are P3b+).
+fn resolve_field_type_in_generic_shape(ast_ty: &AstType, type_params: &[String]) -> Type {
+    match ast_ty {
+        AstType::Nothing => Type::Nothing,
+        AstType::Int => Type::Int,
+        AstType::Float => Type::Float,
+        AstType::Number { .. } => Type::Number { precision: 34 },
+        AstType::Bool => Type::Bool,
+        AstType::Named(n, _) if n == "string" => Type::String,
+        AstType::Named(n, _) if type_params.contains(n) => Type::TypeParam { name: n.clone() },
+        AstType::Generic { name, args, .. } => {
+            let resolved_args = args.iter()
+                .map(|a| resolve_field_type_in_generic_shape(a, type_params))
+                .collect();
+            Type::Generic { name: name.clone(), args: resolved_args }
+        }
+        _ => Type::Error,
+    }
 }
