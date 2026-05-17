@@ -7,12 +7,13 @@ pub struct FreeFnSig {
     pub ret: Type,
 }
 
-/// The table of primitive intrinsics available in M3.
+/// The table of primitive intrinsics available in M4.
 ///
-/// Three categories:
+/// Four categories:
 ///   1. Free-standing polymorphic calls — `print` (accepts all primitive types).
 ///   2. Fixed-signature free-standing calls — `range` (checked via `free_fns`).
-///   3. Method calls — `.toNumber()`, `.toFloat()`, `.toString()` on primitive types.
+///   3. Zero-arg method calls — `.toNumber()`, `.toFloat()`, `.toString()` on primitive types.
+///   4. One-arg method calls — `.wrappingAdd()`, `.saturatingAdd()`, etc. on `int` (M4 P5).
 ///
 /// Single source of truth: no scattered hardcoded function-name lists exist
 /// anywhere else in the type checker.
@@ -22,8 +23,10 @@ pub struct PrimitiveIntrinsicTable {
     /// Fixed-signature free-standing functions: (name, sig).
     /// Multiple entries with the same name represent overloads (e.g. `range` with 1 or 2 args).
     pub free_fns: Vec<(&'static str, FreeFnSig)>,
-    /// Method dispatch: `(receiver_type, method_name)` → return type.
+    /// Zero-arg method dispatch: `(receiver_type, method_name)` → return type.
     methods: Vec<(Type, &'static str, Type)>,
+    /// One-arg method dispatch: `(receiver_type, method_name, arg_type)` → return type.
+    methods_1arg: Vec<(Type, &'static str, Type, Type)>,
     /// Test-only free-standing functions added via `with_test_intrinsic`.
     #[cfg(test)]
     test_fns: Vec<(&'static str, FreeFnSig)>,
@@ -64,6 +67,16 @@ impl PrimitiveIntrinsicTable {
                 // bool conversion
                 (Type::Bool, "toString", Type::String),
             ],
+            // M4 P5: wrapping and saturating arithmetic on int.
+            // All take one `int` argument and return `int`.
+            methods_1arg: vec![
+                (Type::Int, "wrappingAdd",   Type::Int, Type::Int),
+                (Type::Int, "wrappingSub",   Type::Int, Type::Int),
+                (Type::Int, "wrappingMul",   Type::Int, Type::Int),
+                (Type::Int, "saturatingAdd", Type::Int, Type::Int),
+                (Type::Int, "saturatingSub", Type::Int, Type::Int),
+                (Type::Int, "saturatingMul", Type::Int, Type::Int),
+            ],
             #[cfg(test)]
             test_fns: Vec::new(),
         }
@@ -93,7 +106,7 @@ impl PrimitiveIntrinsicTable {
         self.print_types.contains(ty)
     }
 
-    /// Look up a method call: `receiver_type.method_name()`.
+    /// Look up a zero-arg method call: `receiver_type.method_name()`.
     ///
     /// Returns the return type if found, `None` if the method doesn't exist on this type.
     pub fn lookup_method(&self, receiver: &Type, name: &str) -> Option<Type> {
@@ -101,6 +114,16 @@ impl PrimitiveIntrinsicTable {
             .iter()
             .find(|(r, n, _)| r == receiver && *n == name)
             .map(|(_, _, ret)| ret.clone())
+    }
+
+    /// Look up a one-arg method call: `receiver_type.method_name(arg)`.
+    ///
+    /// Returns `(expected_arg_type, return_type)` if found.
+    pub fn lookup_method_1arg(&self, receiver: &Type, name: &str) -> Option<(&Type, Type)> {
+        self.methods_1arg
+            .iter()
+            .find(|(r, n, _, _)| r == receiver && *n == name)
+            .map(|(_, _, arg_ty, ret_ty)| (arg_ty, ret_ty.clone()))
     }
 
     /// All method names available on `ty`, used in "did you mean" suggestions.

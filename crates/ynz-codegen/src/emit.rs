@@ -29,7 +29,7 @@ use ynz_ast::nodes::{
     BinOpKind, Expr, FunctionDecl, Item, MatchPatternKind, OwnershipModifier, Stmt, UnaryOpKind,
 };
 use ynz_numerics; // parse(s: &str) -> Option<u128>
-use ynz_typeck::{ShapeTable, SignatureTable, Type, TypedModule};
+use ynz_typeck::{type_attached_const_type, ShapeTable, SignatureTable, Type, TypedModule};
 
 use crate::{
     artifact::{sha256, CompiledArtifact},
@@ -811,17 +811,28 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     lower_ufcs_call(cg, recv_val, &name, method, args)
                 }
                 Type::Dynamic { .. } => {
-                    // Dynamic dispatch via vtable — P4 deferred: fat-pointer creation at
-                    // call sites (coercion from concrete Shape to dynamic Foo) lands after
-                    // P5 catch-up. The vtable globals and fat-ptr struct are emitted; only
-                    // the call-site coercion helper is absent.
+                    // Dynamic dispatch via vtable — deferred post-P5.
                     Err("codegen: dynamic dispatch call sites not yet lowered in M4 P4".to_string())
                 }
-                _ => lower_method_call(cg, recv_val, &recv_ty, method),
+                _ => {
+                    // M4 P5: one-arg primitive intrinsics (wrapping/saturating arithmetic).
+                    if args.len() == 1 && is_1arg_intrinsic(&recv_ty, method) {
+                        let arg_val = lower_expr(cg, &args[0])?;
+                        lower_method_call_1arg(cg, recv_val, &recv_ty, method, arg_val)
+                    } else {
+                        lower_method_call(cg, recv_val, &recv_ty, method)
+                    }
+                }
             }
         }
 
         Expr::FieldAccess { receiver, field, .. } => {
+            // M4 P5: type-attached constants (int.max, number.epsilon, etc.)
+            if let Expr::Ident(type_name, _) = receiver.as_ref() {
+                if type_attached_const_type(type_name, field).is_some() {
+                    return emit_type_const(cg, type_name, field);
+                }
+            }
             lower_field_access(cg, receiver, field)
         }
 
@@ -1291,6 +1302,105 @@ fn lower_postfix_op<'ctx>(
 }
 
 
+
+/// Emit a type-attached constant such as `int.max` or `number.epsilon`.
+fn emit_type_const<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    type_name: &str,
+    const_name: &str,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    match (type_name, const_name) {
+        ("int", "max") => Ok(cg.i64().const_int(i64::MAX as u64, false).into()),
+        ("int", "min") => Ok(cg.i64().const_int(i64::MIN as u64, true).into()),
+        ("float", "max") => Ok(cg.f64().const_float(f64::MAX).into()),
+        ("float", "min") => Ok(cg.f64().const_float(f64::MIN).into()),
+        ("float", "epsilon") => Ok(cg.f64().const_float(f64::EPSILON).into()),
+        ("number", "max") | ("number", "min") | ("number", "epsilon") => {
+            let s = match (type_name, const_name) {
+                ("number", "max")     => "9.999999999999999999999999999999999e+6144",
+                ("number", "min")     => "1e-6143",
+                ("number", "epsilon") => "1e-33",
+                _ => unreachable!(),
+            };
+            let bits = ynz_numerics::parse(s)
+                .ok_or_else(|| format!("failed to parse decimal128 constant `{s}`"))?;
+            let slot = cg.builder.build_alloca(cg.i128(), const_name).map_err(|e| format!("{e}"))?;
+            let val = cg.i128().const_int_arbitrary_precision(&[
+                (bits & 0xFFFF_FFFF_FFFF_FFFF) as u64,
+                (bits >> 64) as u64,
+            ]);
+            cg.builder.build_store(slot, val).map_err(|e| format!("{e}"))?;
+            Ok(slot.into())
+        }
+        _ => Err(format!("codegen: unknown type-attached constant `{type_name}.{const_name}`")),
+    }
+}
+
+/// True for method calls that take one primitive argument (dispatched via `lower_method_call_1arg`).
+fn is_1arg_intrinsic(recv_ty: &Type, method: &str) -> bool {
+    matches!(
+        (recv_ty, method),
+        (Type::Int, "wrappingAdd")
+            | (Type::Int, "wrappingSub")
+            | (Type::Int, "wrappingMul")
+            | (Type::Int, "saturatingAdd")
+            | (Type::Int, "saturatingSub")
+            | (Type::Int, "saturatingMul")
+    )
+}
+
+/// Lower a one-arg primitive intrinsic method call.
+fn lower_method_call_1arg<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    recv: BasicValueEnum<'ctx>,
+    recv_ty: &Type,
+    method: &str,
+    arg: BasicValueEnum<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let a = recv.into_int_value();
+    let b = arg.into_int_value();
+    match (recv_ty, method) {
+        // Wrapping: plain LLVM add/sub/mul — two's complement overflow is the default.
+        (Type::Int, "wrappingAdd") =>
+            cg.builder.build_int_add(a, b, "wadd").map(|v| v.into()).map_err(|e| format!("{e}")),
+        (Type::Int, "wrappingSub") =>
+            cg.builder.build_int_sub(a, b, "wsub").map(|v| v.into()).map_err(|e| format!("{e}")),
+        (Type::Int, "wrappingMul") =>
+            cg.builder.build_int_mul(a, b, "wmul").map(|v| v.into()).map_err(|e| format!("{e}")),
+        // Saturating: LLVM `sadd.sat` / `ssub.sat` / `smul.fix.sat` (scale=0) intrinsics.
+        (Type::Int, "saturatingAdd") => {
+            let f = declare_sat_intrinsic(cg.module, cg.ctx, "llvm.sadd.sat.i64",
+                cg.i64().fn_type(&[cg.i64().into(), cg.i64().into()], false));
+            let r = cg.builder.build_call(f, &[a.into(), b.into()], "sadd_sat").map_err(|e| format!("{e}"))?;
+            Ok(r.try_as_basic_value().basic().ok_or("sadd.sat void")?)
+        }
+        (Type::Int, "saturatingSub") => {
+            let f = declare_sat_intrinsic(cg.module, cg.ctx, "llvm.ssub.sat.i64",
+                cg.i64().fn_type(&[cg.i64().into(), cg.i64().into()], false));
+            let r = cg.builder.build_call(f, &[a.into(), b.into()], "ssub_sat").map_err(|e| format!("{e}"))?;
+            Ok(r.try_as_basic_value().basic().ok_or("ssub.sat void")?)
+        }
+        (Type::Int, "saturatingMul") => {
+            // `llvm.smul.fix.sat.i64(a, b, scale=0)` gives saturating signed integer mul.
+            let fn_ty = cg.i64().fn_type(&[cg.i64().into(), cg.i64().into(), cg.i32().into()], false);
+            let f = declare_sat_intrinsic(cg.module, cg.ctx, "llvm.smul.fix.sat.i64", fn_ty);
+            let scale = cg.i32().const_int(0, false);
+            let r = cg.builder.build_call(f, &[a.into(), b.into(), scale.into()], "smul_sat").map_err(|e| format!("{e}"))?;
+            Ok(r.try_as_basic_value().basic().ok_or("smul.fix.sat void")?)
+        }
+        _ => Err(format!("codegen: no 1-arg intrinsic for {recv_ty:?}.{method}")),
+    }
+}
+
+fn declare_sat_intrinsic<'ctx>(
+    module: &inkwell::module::Module<'ctx>,
+    ctx: &'ctx inkwell::context::Context,
+    name: &str,
+    fn_ty: inkwell::types::FunctionType<'ctx>,
+) -> inkwell::values::FunctionValue<'ctx> {
+    let _ = ctx; // ctx not needed — type already constructed
+    module.get_function(name).unwrap_or_else(|| module.add_function(name, fn_ty, None))
+}
 
 fn lower_method_call<'ctx>(
     cg: &mut Cg<'ctx, '_>,

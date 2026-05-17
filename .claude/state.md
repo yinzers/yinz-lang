@@ -1,6 +1,6 @@
 # Session State: ynz
 
-**Last Updated**: 2026-05-16
+**Last Updated**: 2026-05-17
 
 ---
 
@@ -37,8 +37,11 @@ cargo fmt --all
 ./target/debug/ynz run crates/ynz-driver/tests/fixtures/m3_fib.ynz
 # → 55
 
-# Current branch: main (M3 shipped, tagged v0.1.0-m3)
-# Next: /plan M4 (shape declarations, methods, ownership annotations)
+./target/debug/ynz run crates/ynz-driver/tests/fixtures/m4_player.ynz
+# → Patrick / 120 / Patrick  (M4 P4 success-criteria fixture)
+
+# Current branch: feat/m4-codegen (M4 P4 committed: 05bb47d)
+# M4 status: P1-P4 done; P5 (catch-up numerics) is next
 ```
 
 ---

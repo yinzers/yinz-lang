@@ -512,14 +512,44 @@ impl<'b> Checker<'b> {
 
             Expr::MethodCall { receiver, method, method_span, args, .. } => {
                 let receiver_ty = self.infer_expr(receiver, None);
-                for arg in args.iter() {
-                    self.infer_expr(arg, None);
+                // M4 P5: one-arg intrinsic methods (wrapping/saturating arithmetic).
+                // Must NOT use `return` here — the match value feeds expr_types.insert below.
+                if args.len() == 1 {
+                    if let Some((expected_arg_ty, ret_ty)) = self.intrinsics.lookup_method_1arg(&receiver_ty, method) {
+                        let expected = expected_arg_ty.clone();
+                        let actual = self.infer_expr(&args[0], Some(&expected));
+                        if actual != expected && actual != Type::Error {
+                            self.diags.push(ynz_diagnostics::Diagnostic::error(
+                                args[0].span().clone(),
+                                format!("`.{method}()` expects `{}` but got `{}`.", crate::types::type_name(&expected), crate::types::type_name(&actual)),
+                                format!("Pass an `{}` value.", crate::types::type_name(&expected)),
+                                format!("`.{method}()` is a primitive arithmetic operation that only works on `{}`.", crate::types::type_name(&expected)),
+                            ));
+                        }
+                        ret_ty
+                    } else {
+                        for arg in args.iter() { self.infer_expr(arg, None); }
+                        self.check_method_call(&receiver_ty, method, method_span)
+                    }
+                } else {
+                    for arg in args.iter() { self.infer_expr(arg, None); }
+                    self.check_method_call(&receiver_ty, method, method_span)
                 }
-                self.check_method_call(&receiver_ty, method, method_span)
             }
 
             Expr::FieldAccess { receiver, field, field_span, .. } => {
-                self.infer_field_access(receiver, field, field_span)
+                // M4 P5: type-attached constants (e.g. `int.max`, `number.epsilon`).
+                // Intercept before inferring receiver type to avoid "undefined `int`" error.
+                // Must NOT use `return` here — the match value feeds expr_types.insert below.
+                if let Expr::Ident(type_name, _) = receiver.as_ref() {
+                    if let Some(const_ty) = type_attached_const_type(type_name, field) {
+                        const_ty
+                    } else {
+                        self.infer_field_access(receiver, field, field_span)
+                    }
+                } else {
+                    self.infer_field_access(receiver, field, field_span)
+                }
             }
             Expr::StructLit { fields, span } => {
                 self.check_struct_lit(fields, hint, span)
@@ -1369,6 +1399,18 @@ impl<'b> Checker<'b> {
     }
 }
 
+
+/// Return the typeck `Type` for a type-attached constant like `int.max` or `number.epsilon`.
+///
+/// Returns `None` if the (type_name, const_name) pair is not a known constant.
+pub fn type_attached_const_type(type_name: &str, const_name: &str) -> Option<Type> {
+    match (type_name, const_name) {
+        ("int",    "max") | ("int",    "min") => Some(Type::Int),
+        ("float",  "max") | ("float",  "min") | ("float",  "epsilon") => Some(Type::Float),
+        ("number", "max") | ("number", "min") | ("number", "epsilon") => Some(Type::Number { precision: 34 }),
+        _ => None,
+    }
+}
 
 fn body_has_error_node(stmts: &[Stmt]) -> bool {
     stmts.iter().any(|s| match s {

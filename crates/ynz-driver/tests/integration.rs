@@ -286,6 +286,28 @@ fn m3_fib_prints_55() {
 // ── M4 integration tests ─────────────────────────────────────────────────────
 
 #[test]
+fn m4_p5_wrapping_add_closes_m2_catchup() {
+    // WHY: M4 P5 closes the M2 catch-up obligation for overflow escape methods.
+    // int.max.wrappingAdd(1) must produce int.min, not panic. If it panics, the
+    // wrapping intrinsic lowering or LLVM overflow-check bypass is broken.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m2_wrapping_add_deferred.ynz"));
+    assert_eq!(code, 0, "wrapping add must succeed; stderr:\n{stderr}");
+    assert_eq!(stdout, "-9223372036854775808\n", "int.max + 1 must wrap to int.min");
+}
+
+#[test]
+fn m4_p5_int_max_constant_closes_m2_catchup() {
+    // WHY: M4 P5 closes the M2 catch-up for type-attached constants.
+    // `int.max` and `int.min` must compile to the correct i64 immediate values.
+    // If the type-attached constant interception in typeck/codegen is broken,
+    // this produces a compile error ("int is not defined").
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m2_int_max_deferred.ynz"));
+    assert_eq!(code, 0, "int.max constant must compile; stderr:\n{stderr}");
+    assert_eq!(stdout, "9223372036854775807\n-9223372036854775808\n",
+        "int.max and int.min must print the correct i64 extremes");
+}
+
+#[test]
 fn m4_player_shape_compiles_and_produces_correct_output() {
     // WHY: M4 P4 success criterion. Exercises shape struct literals, field access,
     // UFCS dispatch (share/lend/give self), and lend mutation. If any codegen path

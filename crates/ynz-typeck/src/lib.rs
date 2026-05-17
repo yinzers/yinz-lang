@@ -7,7 +7,7 @@ pub mod shapes;
 pub mod signatures;
 pub mod types;
 
-pub use check::{check, TypedModule};
+pub use check::{check, type_attached_const_type, TypedModule};
 pub use intrinsics::PrimitiveIntrinsicTable;
 pub use queries::{check_query, module_signatures_query, CheckOutput, SignatureOutput};
 pub use shapes::{ShapeDef, ShapeTable};

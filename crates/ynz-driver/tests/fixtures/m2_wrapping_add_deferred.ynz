@@ -1,0 +1,7 @@
+// M4 P5 catch-up: wrapping arithmetic on int — ships M4, was deferred from M2.
+// int.max + 1 wraps to int.min (two's complement). No panic, no error.
+function main() -> nothing {
+  let x: int = 9223372036854775807
+  let y = x.wrappingAdd(1)
+  print(y)
+}
