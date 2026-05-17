@@ -2104,15 +2104,13 @@ impl<'b> Checker<'b> {
             }
         }
 
-        if key_ty == Type::Error || val_ty == Type::Error {
-            if entries.is_empty() {
-                self.diags.push(Diagnostic::error(
-                    span.clone(),
-                    "Cannot work out the key and value types of this empty map literal.",
-                    "Add a type annotation: `let m: map<string, int> = {}`.",
-                    "Without an annotation, the compiler cannot determine what type of keys and values this map holds.",
-                ));
-            }
+        if (key_ty == Type::Error || val_ty == Type::Error) && entries.is_empty() {
+            self.diags.push(Diagnostic::error(
+                span.clone(),
+                "Cannot work out the key and value types of this empty map literal.",
+                "Add a type annotation: `let m: map<string, int> = {}`.",
+                "Without an annotation, the compiler cannot determine what type of keys and values this map holds.",
+            ));
         }
 
         Type::BuiltinMap { key: Box::new(key_ty), val: Box::new(val_ty) }
