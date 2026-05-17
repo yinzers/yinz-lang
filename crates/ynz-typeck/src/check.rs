@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ynz_ast::nodes::{
     BinOpKind, Block, CallExpr, Expr, FunctionDecl, Item, MatchArm, MatchPatternKind, Module,
@@ -7,6 +7,7 @@ use ynz_ast::nodes::{
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 use crate::{
+    builtins::{array_method_return, fixed_method_return, maybe_method_return},
     generics::{
         apply_substitution, unify_param, GenericFnSig, GenericFnTable, GenericShapeTable,
         MonoSignature, MonomorphizationTable, Substitution,
@@ -55,6 +56,7 @@ pub fn check(
         current_shape: None,
         type_param_scope: HashMap::new(),
         mono_table: MonomorphizationTable::default(),
+        maybe_non_none: HashSet::new(),
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -83,6 +85,8 @@ struct Checker<'b> {
     type_param_scope: HashMap<String, ()>,
     /// Accumulated monomorphization entries for all generic call sites in this module.
     mono_table: MonomorphizationTable,
+    /// Flow-sensitive tracking: binding names known to be non-none inside an `.exists()` guard.
+    maybe_non_none: HashSet<String>,
 }
 
 impl<'b> Checker<'b> {
@@ -233,11 +237,8 @@ impl<'b> Checker<'b> {
                 Stmt::FieldAssign { target, value, span } => {
                     self.check_field_assign(target, value, span);
                 }
-                Stmt::IndexAssign { .. } => {
-                    // M5 P3b implements bracket-sugar desugar to `.set(index, value)`.
-                    // P1 ships only the AST shape; the parser does not construct this
-                    // variant in M5 P1, so reaching here means an out-of-sequence
-                    // change — fall through silently rather than emit a noisy stub.
+                Stmt::IndexAssign { receiver, index, value, span } => {
+                    self.check_index_assign(receiver, index, value, span);
                 }
             }
         }
@@ -276,7 +277,7 @@ impl<'b> Checker<'b> {
         let binding_ty = if let Some(ann_ty) = &annotated_ty {
             if value_ty == Type::Error || *ann_ty == Type::Error {
                 Type::Error
-            } else if *ann_ty != value_ty {
+            } else if !types_compatible(ann_ty, &value_ty) {
                 self.diags.push(Diagnostic::error(
                     value.span().clone(),
                     format!(
@@ -293,7 +294,8 @@ impl<'b> Checker<'b> {
                 ));
                 Type::Error
             } else {
-                ann_ty.clone()
+                // Use the value_ty to preserve size information from ArrayLit inference.
+                value_ty
             }
         } else {
             value_ty
@@ -392,9 +394,37 @@ impl<'b> Checker<'b> {
                 "`if` branches on whether the condition is `true` or `false`. Any other type cannot be used as a condition.",
             ));
         }
+
+        // Flow-sensitive narrowing: if condition is `m.exists()`, mark `m` as known-non-none
+        // inside the if body so `.value` is allowed without another guard.
+        let narrowed = self.extract_exists_binding(cond);
+        for name in &narrowed {
+            self.maybe_non_none.insert(name.clone());
+        }
+
         self.scope.push();
         self.check_stmts(&body.stmts);
         self.scope.pop();
+
+        // Remove narrowing flags after the block exits.
+        for name in &narrowed {
+            self.maybe_non_none.remove(name.as_str());
+        }
+    }
+
+    /// Extract the binding name from an `.exists()` condition for flow-sensitive narrowing.
+    ///
+    /// Matches `m.exists()` → `vec!["m"]` so the if-body can use `m.value`.
+    /// Any other form returns an empty vec.
+    fn extract_exists_binding(&self, cond: &Expr) -> Vec<String> {
+        if let Expr::MethodCall { receiver, method, args, .. } = cond {
+            if method == "exists" && args.is_empty() {
+                if let Expr::Ident(name, _) = receiver.as_ref() {
+                    return vec![name.clone()];
+                }
+            }
+        }
+        Vec::new()
     }
 
     fn check_stmt_match(
@@ -463,13 +493,15 @@ impl<'b> Checker<'b> {
 
         let elem_ty = match &iter_ty {
             Type::Range { element, .. } => *element.clone(),
+            Type::BuiltinArray { elem } => *elem.clone(),
+            Type::BuiltinFixed { elem, .. } => *elem.clone(),
             Type::Error => Type::Error,
             other => {
                 self.diags.push(Diagnostic::error(
                     iter.span().clone(),
-                    format!("`for` loops require `range(start, end)` as the collection in M3, but got `{}`.", type_name(other)),
-                    "Use `range(...)`: `for (i in range(0, 10)) { ... }`",
-                    "Full iteration over arrays, maps, and custom types arrives in v0.1 milestone 7 with the `Iterable[T]` protocol.",
+                    format!("`for` loops over `{}` are not yet supported.", type_name(other)),
+                    "Use `range(...)`: `for (i in range(0, 10)) { ... }`, or iterate over `array<T>` or `fixed<T>`.",
+                    "Full iteration over maps and custom types arrives in v0.1 milestone 7 with the `Iterable[T]` protocol.",
                 ));
                 Type::Error
             }
@@ -635,19 +667,54 @@ impl<'b> Checker<'b> {
                     }
                 }
             }
-            Expr::NoneLit { .. } => {
-                // M5 P3b implements `maybe<T>` and `none` typing. P1 ships the AST
-                // variant only; the parser does not construct this in M5 P1, so
-                // reaching this branch returns Type::Error harmlessly.
-                Type::Error
+            Expr::NoneLit { span } => {
+                match hint {
+                    Some(Type::Maybe { .. }) => hint.unwrap().clone(),
+                    // When hint is Type::Error, an upstream annotation error was already emitted —
+                    // suppress the cascade by returning Error silently.
+                    Some(Type::Error) => Type::Error,
+                    None => {
+                        self.diags.push(Diagnostic::error(
+                            span.clone(),
+                            "Cannot work out which type `none` should be here.",
+                            "Annotate the binding: `let x: maybe<int> = none`.",
+                            "`none` is the absent value of `maybe<T>` for some T. The compiler needs the annotation to know which T.",
+                        ));
+                        Type::Error
+                    }
+                    Some(other) => {
+                        let other_name = type_name(other);
+                        self.diags.push(Diagnostic::error(
+                            span.clone(),
+                            format!("`none` cannot be a `{other_name}` value."),
+                            "Use `maybe<T>` for optional values: `let x: maybe<int> = none`.",
+                            "`none` is only valid as the absent value of `maybe<T>`. It cannot be used where a concrete type is expected.",
+                        ));
+                        Type::Error
+                    }
+                }
             }
-            Expr::IndexAccess { receiver, index, .. } => {
-                // M5 P3b implements bracket-sugar desugar to `.get(index)`.
-                // P1 ships AST only; still type-check sub-expressions so any
-                // future construction-site bug doesn't silently skip them.
-                let _ = self.infer_expr(receiver, None);
-                let _ = self.infer_expr(index, None);
-                Type::Error
+            Expr::IndexAccess { receiver, index, span } => {
+                let recv_ty = self.infer_expr(receiver, None);
+                let _idx_ty = self.infer_expr(index, Some(&Type::Int));
+                match &recv_ty {
+                    Type::BuiltinArray { elem } | Type::BuiltinFixed { elem, .. } => {
+                        Type::Maybe { inner: elem.clone() }
+                    }
+                    Type::Error => Type::Error,
+                    other => {
+                        self.diags.push(Diagnostic::error(
+                            span.clone(),
+                            format!("`{}` does not support bracket access.", type_name(other)),
+                            "Bracket access works on `array<T>`, `fixed<T>`, and `map<K, V>`.",
+                            "Use `.get(index)` on built-in collections or access shape fields with dot notation.",
+                        ));
+                        Type::Error
+                    }
+                }
+            }
+            Expr::ArrayLit { elements, span } => {
+                self.check_array_lit(elements, hint, span)
             }
         };
 
@@ -1173,6 +1240,50 @@ impl<'b> Checker<'b> {
             return ret_ty;
         }
 
+        // M5 P3b: built-in collection method dispatch.
+        if let Type::BuiltinArray { elem } = receiver_ty {
+            let elem = elem.as_ref().clone();
+            return if let Some(ret) = array_method_return(method, &elem) {
+                ret
+            } else {
+                self.diags.push(Diagnostic::error(
+                    method_span.clone(),
+                    format!("`array<{}>` does not have a method called `{method}`.", type_name(&elem)),
+                    "Available methods: add, remove, get, set, count, first, last, contains, sort, filter, find, map, concat.",
+                    "These are the built-in methods on `array<T>`. Check the spelling.",
+                ));
+                Type::Error
+            };
+        }
+        if let Type::BuiltinFixed { elem, .. } = receiver_ty {
+            let elem = elem.as_ref().clone();
+            return if let Some(ret) = fixed_method_return(method, &elem) {
+                ret
+            } else {
+                self.diags.push(Diagnostic::error(
+                    method_span.clone(),
+                    format!("`fixed<{}>` does not have a method called `{method}`.", type_name(&elem)),
+                    "Available methods: get, set, count, first, last, contains, sort, filter, find, concat.",
+                    "`fixed<T>` is a size-locked array — it does not have `.add()` or `.remove()`. Use `array<T>` for growable collections.",
+                ));
+                Type::Error
+            };
+        }
+        if let Type::Maybe { inner } = receiver_ty {
+            let inner = inner.as_ref().clone();
+            return if let Some(ret) = maybe_method_return(method, &inner) {
+                ret
+            } else {
+                self.diags.push(Diagnostic::error(
+                    method_span.clone(),
+                    format!("`maybe<{}>` does not have a method called `{method}`.", type_name(&inner)),
+                    "Available methods: exists(), or(default).",
+                    "`maybe<T>` values can only be checked with `.exists()` or given a default with `.or(default)`. Access the value with `.value` (after checking `.exists()`).",
+                ));
+                Type::Error
+            };
+        }
+
         // Shape or dynamic receiver — try UFCS.
         if let Type::Dynamic { contract } = receiver_ty {
             // Dynamic dispatch: look up the method on the contract shape's sigs.
@@ -1258,6 +1369,15 @@ impl<'b> Checker<'b> {
             AstType::Named(n, _) if self.shape_table.contains(n) => {
                 Type::Shape { name: n.clone() }
             }
+            AstType::Named(n, span) if matches!(n.as_str(), "array" | "fixed" | "maybe") => {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("`{n}` requires a type argument."),
+                    format!("Write `{n}<T>` — for example, `{n}<int>` or `{n}<Player>`.", n = n),
+                    format!("`{n}` is a built-in generic type. It must have exactly one type argument.", n = n),
+                ));
+                Type::Error
+            }
             AstType::Named(n, _) if self.generic_shape_table.contains(n) => {
                 // Bare generic shape name without type args — invalid in non-generic context.
                 Type::Error
@@ -1308,15 +1428,28 @@ impl<'b> Checker<'b> {
             }
             AstType::Generic { name, args, .. } => {
                 let resolved_args: Vec<Type> = args.iter().map(|a| self.ast_type_to_type(a)).collect();
-                if self.generic_shape_table.contains(name) {
-                    Type::Generic { name: name.clone(), args: resolved_args }
-                } else {
-                    // P3b handles built-in collection names (array, fixed, map, maybe).
-                    Type::Error
+                match name.as_str() {
+                    "array" => {
+                        let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
+                        Type::BuiltinArray { elem: Box::new(elem) }
+                    }
+                    "fixed" => {
+                        let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
+                        Type::BuiltinFixed { elem: Box::new(elem), size: None }
+                    }
+                    _ => {
+                        if self.generic_shape_table.contains(name) {
+                            Type::Generic { name: name.clone(), args: resolved_args }
+                        } else {
+                            Type::Error
+                        }
+                    }
                 }
             }
-            // maybe<T>: P3b.
-            AstType::Maybe { .. } => Type::Error,
+            AstType::Maybe { inner, .. } => {
+                let inner_ty = self.ast_type_to_type(inner);
+                Type::Maybe { inner: Box::new(inner_ty) }
+            }
         }
     }
 
@@ -1446,6 +1579,37 @@ impl<'b> Checker<'b> {
     /// Infer the type of a field access `receiver.field`.
     fn infer_field_access(&mut self, receiver: &Expr, field: &str, field_span: &SourceSpan) -> Type {
         let receiver_ty = self.infer_expr(receiver, None);
+
+        // M5 P3b: `maybe<T>.value` — flow-sensitive field access.
+        if let Type::Maybe { inner } = &receiver_ty {
+            if field == "value" {
+                let inner = inner.as_ref().clone();
+                // Check if the binding is known-non-none from a prior .exists() check.
+                let is_safe = if let Expr::Ident(name, _) = receiver {
+                    self.maybe_non_none.contains(name.as_str())
+                } else {
+                    false
+                };
+                if !is_safe {
+                    self.diags.push(Diagnostic::error(
+                        field_span.clone(),
+                        "`maybe.value` requires you to first check `m.exists()`.",
+                        "Wrap in a check: `if (m.exists()) { print(m.value) }`. Or use a default: `m.or(0)`.",
+                        "The compiler cannot prove this `maybe` has a value here. `.value` without a prior `.exists()` check is a compile error.",
+                    ));
+                    return Type::Error;
+                }
+                return inner;
+            } else {
+                self.diags.push(Diagnostic::error(
+                    field_span.clone(),
+                    format!("`maybe<{}>` does not have a field called `{field}`.", type_name(inner.as_ref())),
+                    "Use `.value` to get the value (after `.exists()` check), `.exists()` to check, or `.or(default)` for a safe fallback.",
+                    "`maybe<T>` only has the virtual field `.value` (requires prior `.exists()` guard) and the methods `.exists()` and `.or()`.",
+                ));
+                return Type::Error;
+            }
+        }
 
         // Generic shape field access: `p.first` where `p: Pair<int, string>`.
         if let Type::Generic { name, args } = &receiver_ty {
@@ -1682,8 +1846,121 @@ impl<'b> Checker<'b> {
             }
         }
     }
+
+    /// Type-check an array or fixed literal `[e1, e2, ...]`.
+    fn check_array_lit(&mut self, elements: &[Expr], hint: Option<&Type>, span: &SourceSpan) -> Type {
+        // Determine element type and whether this is a fixed literal from the hint.
+        let (hint_elem, is_fixed) = match hint {
+            Some(Type::BuiltinArray { elem }) => (Some(elem.as_ref().clone()), false),
+            Some(Type::BuiltinFixed { elem, .. }) => (Some(elem.as_ref().clone()), true),
+            Some(Type::Maybe { inner }) => {
+                // maybe<array<T>> — the inner array has an element type.
+                if let Type::BuiltinArray { elem } = inner.as_ref() {
+                    (Some(elem.as_ref().clone()), false)
+                } else {
+                    (None, false)
+                }
+            }
+            _ => (None, false),
+        };
+
+        let mut elem_ty = hint_elem.clone().unwrap_or(Type::Error);
+        for (i, elem) in elements.iter().enumerate() {
+            let ty = self.infer_expr(elem, hint_elem.as_ref());
+            if i == 0 && elem_ty == Type::Error {
+                elem_ty = ty.clone();
+            } else if ty != Type::Error && elem_ty != Type::Error && ty != elem_ty {
+                self.diags.push(Diagnostic::error(
+                    elem.span().clone(),
+                    format!("Element {} has type `{}`, but the array expects `{}`.", i + 1, type_name(&ty), type_name(&elem_ty)),
+                    format!("Use a `{}` value here, or change the annotation.", type_name(&elem_ty)),
+                    "All elements of an array or fixed literal must have the same type.",
+                ));
+            }
+        }
+
+        let hint_is_error = matches!(hint, Some(Type::Error));
+        if elem_ty == Type::Error && elements.is_empty() && !hint_is_error {
+            // Only emit the "cannot work out element type" diagnostic when there's no
+            // hint at all (bare `let arr = []`). When hint is Type::Error, an upstream
+            // diagnostic already captured the annotation problem — don't cascade.
+            self.diags.push(Diagnostic::error(
+                span.clone(),
+                "Cannot work out the element type of this empty array literal.",
+                "Add a type annotation: `let arr: array<int> = []`.",
+                "Without an annotation, the compiler cannot determine what type of elements this array holds.",
+            ));
+        }
+
+        let size = elements.len();
+        if is_fixed {
+            Type::BuiltinFixed { elem: Box::new(elem_ty), size: Some(size) }
+        } else {
+            Type::BuiltinArray { elem: Box::new(elem_ty) }
+        }
+    }
+
+    /// Type-check an index assignment `receiver[index] = value`.
+    fn check_index_assign(&mut self, receiver: &Expr, index: &Expr, value: &Expr, span: &SourceSpan) {
+        let recv_ty = self.infer_expr(receiver, None);
+        let _idx_ty = self.infer_expr(index, Some(&Type::Int));
+        match &recv_ty {
+            Type::BuiltinArray { elem } => {
+                let expected = elem.as_ref().clone();
+                let val_ty = self.infer_expr(value, Some(&expected));
+                if val_ty != Type::Error && expected != Type::Error && val_ty != expected {
+                    self.diags.push(Diagnostic::error(
+                        value.span().clone(),
+                        format!("This value is `{}`, but the array holds `{}`.", type_name(&val_ty), type_name(&expected)),
+                        format!("Assign a `{}` value.", type_name(&expected)),
+                        "Index assignment must match the array's element type.",
+                    ));
+                }
+            }
+            Type::BuiltinFixed { elem, .. } => {
+                let expected = elem.as_ref().clone();
+                let val_ty = self.infer_expr(value, Some(&expected));
+                if val_ty != Type::Error && expected != Type::Error && val_ty != expected {
+                    self.diags.push(Diagnostic::error(
+                        value.span().clone(),
+                        format!("This value is `{}`, but the fixed array holds `{}`.", type_name(&val_ty), type_name(&expected)),
+                        format!("Assign a `{}` value.", type_name(&expected)),
+                        "Index assignment must match the fixed array's element type.",
+                    ));
+                }
+            }
+            Type::Error => { self.infer_expr(value, None); }
+            other => {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("`{}` does not support index assignment.", type_name(other)),
+                    "Index assignment works on `array<T>`, `fixed<T>`, and `map<K, V>`.",
+                    "Only built-in collection types support `collection[index] = value` syntax.",
+                ));
+                self.infer_expr(value, None);
+            }
+        }
+    }
 }
 
+
+/// Check whether two types are compatible for assignment.
+///
+/// This is mostly structural equality, with one exception: `BuiltinFixed` ignores the
+/// `size` field so that `let f: fixed<int> = [1, 2, 3]` does not fail (annotation has
+/// `size: None`; the literal infers `size: Some(3)`).
+fn types_compatible(a: &Type, b: &Type) -> bool {
+    match (a, b) {
+        (Type::BuiltinFixed { elem: ea, .. }, Type::BuiltinFixed { elem: eb, .. }) => {
+            types_compatible(ea, eb)
+        }
+        (Type::BuiltinArray { elem: ea }, Type::BuiltinArray { elem: eb }) => {
+            types_compatible(ea, eb)
+        }
+        (Type::Maybe { inner: ia }, Type::Maybe { inner: ib }) => types_compatible(ia, ib),
+        _ => a == b,
+    }
+}
 
 /// Return the typeck `Type` for a type-attached constant like `int.max` or `number.epsilon`.
 ///
@@ -1742,6 +2019,8 @@ fn expr_has_error(expr: &Expr) -> bool {
         Expr::StructLit { fields, .. } => fields.iter().any(|f| expr_has_error(&f.value)),
         // M5 P1: bracket-index — propagate error check into receiver + index.
         Expr::IndexAccess { receiver, index, .. } => expr_has_error(receiver) || expr_has_error(index),
+        // M5 P3b: array literal — propagate error check into all elements.
+        Expr::ArrayLit { elements, .. } => elements.iter().any(expr_has_error),
     }
 }
 

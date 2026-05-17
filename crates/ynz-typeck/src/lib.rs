@@ -1,3 +1,4 @@
+pub mod builtins;
 pub mod check;
 pub mod generics;
 pub mod intrinsics;

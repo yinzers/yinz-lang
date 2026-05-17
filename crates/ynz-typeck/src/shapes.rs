@@ -90,14 +90,29 @@ impl ShapeTable {
             // Generic instantiation: P3a handles user-defined generics; P3b handles built-ins.
             AstType::Generic { name, args, .. } => {
                 let resolved_args: Vec<Type> = args.iter().map(|a| self.resolve_ast_type(a)).collect();
-                if self.contains(name) {
-                    Type::Generic { name: name.clone(), args: resolved_args }
-                } else {
-                    Type::Error
+                match name.as_str() {
+                    "array" => {
+                        let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
+                        Type::BuiltinArray { elem: Box::new(elem) }
+                    }
+                    "fixed" => {
+                        let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
+                        Type::BuiltinFixed { elem: Box::new(elem), size: None }
+                    }
+                    _ => {
+                        if self.contains(name) {
+                            Type::Generic { name: name.clone(), args: resolved_args }
+                        } else {
+                            Type::Error
+                        }
+                    }
                 }
             }
             // maybe<T>: P3b.
-            AstType::Maybe { .. } => Type::Error,
+            AstType::Maybe { inner, .. } => {
+                let inner_ty = self.resolve_ast_type(inner);
+                Type::Maybe { inner: Box::new(inner_ty) }
+            }
         }
     }
 }
