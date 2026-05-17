@@ -22,7 +22,7 @@ files:
   - spec/collections.md
   - .claude/plans/active/v0-1-compiler.md
 created: 2026-05-17
-last_updated: 2026-05-17-r2
+last_updated: 2026-05-17-r3
 depends_on: v0-1-compiler
 ---
 
@@ -38,7 +38,7 @@ Status: approved (Patrick OK 2026-05-17) — Phase 0 SHIPPED (commit `524ca2e`, 
 | P0 — Doc lockdown | SHIPPED on main | `524ca2e` + `b2c528e` + `cf53ad5` merged 2026-05-17 | master plan M5/M6/M7 paragraphs updated to `<>`; `design/maybe.md` created with locked tables; `spec/maybe.md` syntax-updated; `design/generics.md` cross-ref; M5 plan landed |
 | P1 — Lexer + AST scaffolding | SHIPPED on main | `49940c9` + `3c18a62` merged 2026-05-17 | Tok::None + lexer keyword `none`; 3 Type variants (TypeParam, Generic, Maybe); 2 Expr variants (NoneLit, IndexAccess); 1 Stmt variant (IndexAssign); GenericParam struct; FunctionDecl/ShapeDecl `generics` field; CallExpr.type_args field; 4 m5_*_variant_count_locked tests + m5_none_keyword_lexes; stale M3/M4 doc comments collateral-fixed; typeck + codegen + return_paths stub match arms; 4 snapshot files additively updated. 401 tests green. |
 | P2 — Parser | IN PROGRESS — PR open | `faaf13e`, branch `feat/m5-parser`, PR #18 | parse_generic_params (decl `<T>`, `<T follows C>`, `<T,U>`); parse_type_with_depth (maybe<T>, Generic, depth cap 16); Token::None → NoneLit; `[` postfix → IndexAccess; IndexAssign; try_parse_type_args (speculative `<`, 32-token budget, backtrack); 34 new parse tests; 438 tests green. |
-| P3a — Typeck generics engine | NOT STARTED | — | — |
+| P3a — Typeck generics engine | IN PROGRESS — PR open | `a4bffb1`, branch `feat/m5-typeck-generics`, PR #19 | generics.rs (Substitution, unify_param, apply_substitution, MonomorphizationTable, GenericFnTable, GenericShapeTable); Type::TypeParam + Type::Generic; collect_generic_shapes + collect_generic_signatures; check_generic_function_body + check_generic_fn_call (inference + constraint + ownership + mono recording); field access through Type::Generic. 27 new tests. 465 tests green. |
 | P3b — Typeck array/fixed/maybe | NOT STARTED | — | — |
 | P3c — Typeck map | NOT STARTED | — | — |
 | P4a — Codegen mono + array/fixed/maybe | NOT STARTED | — | — |
