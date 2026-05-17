@@ -22,14 +22,29 @@ files:
   - spec/collections.md
   - .claude/plans/active/v0-1-compiler.md
 created: 2026-05-17
-last_updated: 2026-05-17
+last_updated: 2026-05-17-r1
 depends_on: v0-1-compiler
 ---
 
 # Plan: M5 — Generics + Collections + Maybe
 
 Created: 2026-05-17
-Status: approved (Patrick OK 2026-05-17) — Phase 0 in progress
+Status: approved (Patrick OK 2026-05-17) — Phase 0 SHIPPED (commit `524ca2e`, branch `chore/m5-doc-lockdown` pushed, awaiting merge to main)
+
+## Phase Execution Status
+
+| Phase | Status | Commit / Branch | Notes |
+|---|---|---|---|
+| P0 — Doc lockdown | SHIPPED (awaiting merge) | `524ca2e` on `chore/m5-doc-lockdown` | master plan M5/M6/M7 paragraphs updated to `<>`; `design/maybe.md` created with locked tables; `spec/maybe.md` syntax-updated; `design/generics.md` cross-ref; M5 plan landed |
+| P1 — Lexer + AST scaffolding | NOT STARTED | — | Awaiting P0 merge to main OR stacked-on-P0 branch per user pref |
+| P2 — Parser | NOT STARTED | — | — |
+| P3a — Typeck generics engine | NOT STARTED | — | — |
+| P3b — Typeck array/fixed/maybe | NOT STARTED | — | — |
+| P3c — Typeck map | NOT STARTED | — | — |
+| P4a — Codegen mono + array/fixed/maybe | NOT STARTED | — | — |
+| P4b — Codegen map | NOT STARTED | — | — |
+| P5 — Driver + fixtures + examples | NOT STARTED | — | — |
+| P6 — Verification + tag `v0.1.0-m5` | NOT STARTED | — | — |
 
 ## Context & Why
 
