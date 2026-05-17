@@ -43,6 +43,14 @@ pub struct RuntimeDecls<'ctx> {
     pub ynz_alloc: FunctionValue<'ctx>,
     // Heap deallocator (M4): (ptr: *mut u8, size: usize) → void
     pub ynz_free: FunctionValue<'ctx>,
+
+    // Array runtime (M5 P4a) — all operate on the heap YnzArray header pointer.
+    pub ynz_array_new: FunctionValue<'ctx>,
+    pub ynz_array_push: FunctionValue<'ctx>,
+    pub ynz_array_get: FunctionValue<'ctx>,
+    pub ynz_array_set: FunctionValue<'ctx>,
+    pub ynz_array_count: FunctionValue<'ctx>,
+    pub ynz_array_drop: FunctionValue<'ctx>,
 }
 
 impl<'ctx> RuntimeDecls<'ctx> {
@@ -152,6 +160,15 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 "ynz_free",
                 void.fn_type(&[ptr.into(), i64.into()], false),
             ),
+
+            ynz_array_new: declare_fn(module, "ynz_array_new", ptr.fn_type(&[], false)),
+            ynz_array_push: declare_fn(module, "ynz_array_push", void.fn_type(&[ptr.into(), i64.into()], false)),
+            // ynz_array_get: (ptr arr, i64 idx, ptr out) -> void
+            ynz_array_get: declare_fn(module, "ynz_array_get", void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false)),
+            // ynz_array_set: (ptr arr, i64 idx, i64 value) -> void
+            ynz_array_set: declare_fn(module, "ynz_array_set", void.fn_type(&[ptr.into(), i64.into(), i64.into()], false)),
+            ynz_array_count: declare_fn(module, "ynz_array_count", i64.fn_type(&[ptr.into()], false)),
+            ynz_array_drop: declare_fn(module, "ynz_array_drop", void.fn_type(&[ptr.into()], false)),
         }
     }
 }

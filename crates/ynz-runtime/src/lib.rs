@@ -234,6 +234,7 @@ unsafe fn cstr_to_str<'a>(p: *const u8) -> &'a str {
 
 extern "C" {
     fn malloc(size: usize) -> *mut core::ffi::c_void;
+    fn realloc(ptr: *mut core::ffi::c_void, new_size: usize) -> *mut core::ffi::c_void;
     fn free(ptr: *mut core::ffi::c_void);
 }
 
@@ -264,4 +265,102 @@ pub unsafe extern "C" fn ynz_alloc(size: usize) -> *mut u8 {
 #[no_mangle]
 pub unsafe extern "C" fn ynz_free(ptr: *mut u8, _size: usize) {
     free(ptr as *mut core::ffi::c_void);
+}
+
+
+// ── Array runtime (M5 P4a) ────────────────────────────────────────────────────
+//
+// array<T> is a heap-allocated growable list. All elements are 8 bytes wide —
+// int/float/bool stored as i64 bits; string/shape/pointer stored as i64-cast ptr.
+// The header struct lives on the heap; the data buffer is a separate allocation.
+
+#[repr(C)]
+pub struct YnzArray {
+    data: *mut u8,
+    len: i64,
+    cap: i64,
+}
+
+/// Allocate a new empty array with an initial capacity of 8 elements.
+///
+/// # Safety
+/// Returns a heap pointer. Caller must free with `ynz_array_drop`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_array_new() -> *mut YnzArray {
+    let cap: i64 = 8;
+    let data = malloc((cap as usize) * 8) as *mut u8;
+    let hdr = malloc(std::mem::size_of::<YnzArray>()) as *mut YnzArray;
+    (*hdr) = YnzArray { data, len: 0, cap };
+    hdr
+}
+
+/// Push an i64-sized element (int, float bits, bool, or pointer cast to i64).
+///
+/// Doubles the capacity when full (amortized O(1) push).
+///
+/// # Safety
+/// `arr` must be a valid pointer returned by `ynz_array_new`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_array_push(arr: *mut YnzArray, value: i64) {
+    if (*arr).len == (*arr).cap {
+        let new_cap = (*arr).cap * 2;
+        let new_data = realloc((*arr).data as *mut core::ffi::c_void, (new_cap as usize) * 8) as *mut u8;
+        (*arr).data = new_data;
+        (*arr).cap = new_cap;
+    }
+    let slot = (*arr).data.add(((*arr).len as usize) * 8) as *mut i64;
+    *slot = value;
+    (*arr).len += 1;
+}
+
+/// Get element at `idx`. Writes `[1, value]` on success or `[0, 0]` on OOB.
+///
+/// Returns via an out-pointer so codegen can pick apart the result with GEPs
+/// without needing aggregate return ABI conventions.
+///
+/// # Safety
+/// `arr` and `out` must be valid non-null pointers.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_array_get(arr: *const YnzArray, idx: i64, out: *mut [i64; 2]) {
+    if idx < 0 || idx >= (*arr).len {
+        (*out) = [0, 0];
+    } else {
+        let slot = (*arr).data.add((idx as usize) * 8) as *const i64;
+        (*out) = [1, *slot];
+    }
+}
+
+/// Set element at `idx`. Aborts if out of bounds (contract: typeck rejects literal OOB).
+///
+/// # Safety
+/// `arr` must be a valid non-null pointer. `idx` must be in [0, len).
+#[no_mangle]
+pub unsafe extern "C" fn ynz_array_set(arr: *mut YnzArray, idx: i64, value: i64) {
+    if idx < 0 || idx >= (*arr).len {
+        std::process::abort();
+    }
+    let slot = (*arr).data.add((idx as usize) * 8) as *mut i64;
+    *slot = value;
+}
+
+/// Return the number of elements in the array.
+///
+/// # Safety
+/// `arr` must be a valid non-null pointer returned by `ynz_array_new`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_array_count(arr: *const YnzArray) -> i64 {
+    (*arr).len
+}
+
+/// Free the array's data buffer and header. Does not run element destructors.
+///
+/// # Safety
+/// `arr` must be a valid non-null pointer returned by `ynz_array_new` and not yet freed.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_array_drop(arr: *mut YnzArray) {
+    if !(*arr).data.is_null() {
+        free((*arr).data as *mut core::ffi::c_void);
+        (*arr).data = std::ptr::null_mut();
+    }
+    free(arr as *mut core::ffi::c_void);
 }

@@ -36,7 +36,15 @@ pub fn codegen_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<Codege
 
     let sig_output = module_signatures_query(db, source);
     let source_path = source.path(db);
-    match emit_artifact(source_path.as_str(), &check.typed_module, &sig_output.shape_table, &sig_output.sig_table, None) {
+    match emit_artifact(
+        source_path.as_str(),
+        &check.typed_module,
+        &sig_output.shape_table,
+        &sig_output.sig_table,
+        &sig_output.generic_fn_table,
+        &check.mono_table,
+        None,
+    ) {
         Ok(artifact) => Arc::new(CodegenOutput { artifact, diagnostics }),
         Err(msg) => {
             diagnostics.push(Diagnostic::error(

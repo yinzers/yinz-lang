@@ -1,0 +1,6 @@
+function main() -> nothing {
+  let f: fixed<int> = [10, 20, 30]
+  print(f.count())
+  print(f[0].or(-1))
+  print(f[2].or(-1))
+}
