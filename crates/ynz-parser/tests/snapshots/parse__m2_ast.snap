@@ -1,5 +1,6 @@
 ---
 source: crates/ynz-parser/tests/parse.rs
+assertion_line: 660
 expression: output.module
 ---
 Module {
@@ -7,6 +8,7 @@ Module {
         Function(
             FunctionDecl {
                 name: "main",
+                generics: [],
                 params: [],
                 return_type: Nothing,
                 body: Block {
@@ -109,6 +111,7 @@ Module {
                                             end: 102,
                                         },
                                     ),
+                                    type_args: None,
                                     args: [
                                         Ident(
                                             "price",
@@ -138,6 +141,7 @@ Module {
                                             end: 117,
                                         },
                                     ),
+                                    type_args: None,
                                     args: [
                                         BinOp {
                                             op: Sub,
@@ -199,6 +203,7 @@ Module {
                                             end: 144,
                                         },
                                     ),
+                                    type_args: None,
                                     args: [
                                         BinOp {
                                             op: And,

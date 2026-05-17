@@ -1,5 +1,6 @@
 ---
 source: crates/ynz-parser/tests/parse.rs
+assertion_line: 638
 expression: output.module
 ---
 Module {
@@ -7,6 +8,7 @@ Module {
         Function(
             FunctionDecl {
                 name: "main",
+                generics: [],
                 params: [],
                 return_type: Nothing,
                 body: Block {
@@ -22,6 +24,7 @@ Module {
                                             end: 34,
                                         },
                                     ),
+                                    type_args: None,
                                     args: [
                                         StringLit(
                                             [

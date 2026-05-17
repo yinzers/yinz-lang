@@ -18,11 +18,11 @@ impl<T> Spanned<T> {
 
 /// The complete token vocabulary.
 ///
-/// Variant count is pinned by `m4_token_variant_count_locked` in the test suite.
+/// Variant count is pinned by the milestone-locked tests in the test suite.
 /// Adding a variant requires both an inline `// test-ratchet: <reason>` marker
 /// on that test AND updating this comment with the new count.
 ///
-/// Current count: 57
+/// Current count: 58 (M5 P1 added `None` for the `none` literal keyword)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Token {
 
@@ -172,6 +172,15 @@ pub enum Token {
     SelfType,
     /// The `self` keyword (lowercase) — the instance value of the enclosing shape (value position).
     SelfValue,
+
+    // ── M5: generics + maybe + none ───────────────────────────────────────────
+
+    /// The `none` keyword — the absent value of `maybe<T>`.
+    ///
+    /// `none` is only valid where typeck can resolve the type parameter T from
+    /// surrounding context (annotation, return type, parameter type, sibling
+    /// branch). See `design/maybe.md` for the full none-inference rules.
+    None,
 }
 
 impl Token {

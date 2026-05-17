@@ -140,6 +140,43 @@ fn m4_token_variant_count_locked() {
 
 
 #[test]
+fn m5_token_variant_count_locked() {
+    // WHY: pins the token vocabulary at the M5 P1 surface.
+    //
+    // test-ratchet: M5 P1 adds 1 variant over M4's 57:
+    //   Keyword (1): None (for the `none` literal value of `maybe<T>`)
+    //   Total M1+M2+M3+M4+M5: 57 + 1 = 58
+    let expected_count = 58usize;
+
+    use ynz_parser::Token::*;
+    let all_variants: &[Token] = &[
+        // M1
+        Function, Nothing, Identifier("x".into()), StringLit(vec![]),
+        LParen, RParen, LBrace, RBrace, Arrow, Eof,
+        // M2
+        Let, Const, True, False, IntLit(0), NumberLit("0.0".into()),
+        Plus, Minus, Star, Slash, Percent,
+        EqEq, NotEq, Lt, LtEq, Gt, GtEq,
+        AmpAmp, PipePipe, Bang,
+        Amp, Pipe, Caret, Tilde, LtLt, GtGt,
+        Eq, Colon, Dot, LBracket, RBracket, Comma,
+        // M3
+        If, Else, While, For, In, Return, FatArrow,
+        // M4
+        Shape, Follows, Extends, Base, Hidden, Dynamic, SelfType, SelfValue,
+        // M5
+        None,
+    ];
+    assert_eq!(
+        all_variants.len(),
+        expected_count,
+        "Token variant count changed from {expected_count} — update this test \
+         with a // test-ratchet: <reason> comment and update the Token doc comment"
+    );
+}
+
+
+#[test]
 fn m1_source_produces_expected_tokens() {
     // WHY: The M2 lexer must not break any M1 token. A regression here means
     // something in the M2 extension changed an existing token's behaviour.
@@ -553,7 +590,8 @@ fn token_spans_reconstruct_lexemes() {
             | Token::Hidden
             | Token::Dynamic
             | Token::SelfType
-            | Token::SelfValue => {
+            | Token::SelfValue
+            | Token::None => {
                 // Span must be non-empty for every token that has a source location.
                 assert!(
                     spanned.span.start < spanned.span.end,
@@ -970,6 +1008,16 @@ function example() -> nothing {
 }"#;
     let tokens = lex_tokens(source);
     assert_debug_snapshot!("m4_token_stream", tokens);
+}
+
+
+#[test]
+fn m5_none_keyword_lexes() {
+    // WHY: `none` is a reserved keyword in M5 — it produces Token::None,
+    // not an identifier. If a future change accidentally demotes it back
+    // to an identifier, every maybe<T> program silently misparses.
+    let tokens = lex_tokens("none");
+    assert_eq!(tokens, vec![Token::None, Token::Eof], "`none` must lex as Token::None, not Identifier");
 }
 
 #[test]

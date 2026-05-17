@@ -244,6 +244,7 @@ impl<'a> Parser<'a> {
         let end = self.current_span();
         Some(FunctionDecl {
             name,
+            generics: Vec::new(), // M5 P2 populates this; P1 ships the field, P2 wires parsing
             params,
             return_type,
             body,
@@ -1242,6 +1243,7 @@ impl<'a> Parser<'a> {
                     self.advance();
                     return Expr::Call(Box::new(CallExpr {
                         callee,
+                        type_args: None, // M5 P2 wires the contextual `<` disambiguation
                         args,
                         span: SourceSpan::new(self.file, start, end.end),
                     }));
@@ -1256,6 +1258,7 @@ impl<'a> Parser<'a> {
                     let end = self.current_span().end;
                     return Expr::Call(Box::new(CallExpr {
                         callee,
+                        type_args: None, // M5 P2 wires the contextual `<` disambiguation
                         args,
                         span: SourceSpan::new(self.file, start, end),
                     }));
@@ -1654,6 +1657,7 @@ impl<'a> Parser<'a> {
             name,
             name_span,
             is_base,
+            generics: Vec::new(), // M5 P2 populates this; P1 ships the field
             extends,
             follows,
             fields,
@@ -1947,5 +1951,6 @@ fn token_display(tok: &Token) -> &str {
         Token::Dynamic => "dynamic",
         Token::SelfType => "Self",
         Token::SelfValue => "self",
+        Token::None => "none",
     }
 }

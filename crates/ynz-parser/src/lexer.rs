@@ -313,6 +313,8 @@ impl<'src> Lexer<'src> {
             "dynamic" => Token::Dynamic,
             "Self"    => Token::SelfType,
             "self"    => Token::SelfValue,
+            // M5 keywords
+            "none"    => Token::None,
             // M4 banned declaration keywords — redirect to Yinz equivalents
             "type" => {
                 self.emit_banned_declaration_keyword(start, self.pos, "type",

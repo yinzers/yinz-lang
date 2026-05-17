@@ -1,5 +1,6 @@
 ---
 source: crates/ynz-parser/tests/parse.rs
+assertion_line: 1188
 expression: output.module
 ---
 Module {
@@ -7,6 +8,7 @@ Module {
         Function(
             FunctionDecl {
                 name: "fib",
+                generics: [],
                 params: [
                     Param {
                         name: "n",
@@ -103,6 +105,7 @@ Module {
                                                     end: 74,
                                                 },
                                             ),
+                                            type_args: None,
                                             args: [
                                                 BinOp {
                                                     op: Sub,
@@ -146,6 +149,7 @@ Module {
                                                     end: 87,
                                                 },
                                             ),
+                                            type_args: None,
                                             args: [
                                                 BinOp {
                                                     op: Sub,
@@ -214,6 +218,7 @@ Module {
         Function(
             FunctionDecl {
                 name: "main",
+                generics: [],
                 params: [],
                 return_type: Nothing,
                 body: Block {
@@ -237,6 +242,7 @@ Module {
                                             end: 145,
                                         },
                                     ),
+                                    type_args: None,
                                     args: [
                                         IntLit(
                                             10,
@@ -271,6 +277,7 @@ Module {
                                             end: 157,
                                         },
                                     ),
+                                    type_args: None,
                                     args: [
                                         Ident(
                                             "result",

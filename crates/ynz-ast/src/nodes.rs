@@ -10,7 +10,8 @@ pub struct Module {
 /// A top-level item in a module.
 ///
 /// Variant count is pinned by `m4_item_variant_count_locked` in the test suite.
-/// Current count: 2.
+/// Current count: 2 (M5 does not add new Item variants — generic functions and
+/// generic shapes reuse Function and ShapeDecl with the new `generics` field).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
     Function(FunctionDecl),
@@ -18,16 +19,33 @@ pub enum Item {
     ShapeDecl(ShapeDecl),
 }
 
-/// A function declaration: `function name(params) -> return_type { body }`.
+/// A function declaration: `function name<generics>(params) -> return_type { body }`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunctionDecl {
     pub name: String,
+    /// M5: type parameters declared on the function (`function foo<T, U>(...)`).
+    /// Empty Vec when the function is not generic. Populated by the parser in P2.
+    pub generics: Vec<GenericParam>,
     pub params: Vec<Param>,
     pub return_type: Type,
     pub body: Block,
     pub span: SourceSpan,
     /// Span of the function name identifier.
     pub name_span: SourceSpan,
+}
+
+/// M5: a type parameter on a generic function or generic shape.
+///
+/// Example: `<T follows Comparable>` parses to a single `GenericParam`
+/// with `name = "T"` and `constraints = [("Comparable", span)]`.
+/// Multi-constraint form `<T follows A, B>` produces `constraints` with two entries.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GenericParam {
+    pub name: String,
+    pub name_span: SourceSpan,
+    /// Zero or more `follows` constraints — each is the named contract shape's identifier.
+    pub constraints: Vec<(String, SourceSpan)>,
+    pub span: SourceSpan,
 }
 
 /// Ownership modifier on a function parameter signature.
@@ -62,8 +80,8 @@ pub struct Block {
 
 /// A single statement.
 ///
-/// Variant count is pinned by `m3_stmt_variant_count_locked` in the test suite.
-/// Current count: 8.
+/// Variant count is pinned by the milestone-locked tests in the test suite.
+/// Current count: 10 — M4 added FieldAssign(9), M5 added IndexAssign(10).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt {
     /// A bare expression used as a statement (e.g. a function call).
@@ -152,6 +170,20 @@ pub enum Stmt {
         value: Expr,
         span: SourceSpan,
     },
+
+    // ── M5 ───────────────────────────────────────────────────────────────────
+
+    // test-ratchet: M5 adds IndexAssign for `arr[i] = v` / `m[k] = v`.
+    /// Index assignment: `receiver[index] = value`.
+    ///
+    /// Bracket sugar for `.set(index, value)` on built-in collections.
+    /// Typeck desugars this to a method call on the receiver type's `.set()`.
+    IndexAssign {
+        receiver: Box<Expr>,
+        index: Box<Expr>,
+        value: Expr,
+        span: SourceSpan,
+    },
 }
 
 /// A single multi-case arm: `pattern => { body }`.
@@ -228,8 +260,9 @@ pub enum UnaryOpKind {
 
 /// An expression.
 ///
-/// Variant count is pinned by `m2_expr_variant_count_locked` in the test suite.
-/// Current count: 10.
+/// Variant count is pinned by the milestone-locked tests in the test suite.
+/// Current count: 16 — M4 added FieldAccess(11), StructLit(12), PostfixOp(13),
+/// SelfValue(14); M5 added NoneLit(15), IndexAccess(16).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
 
@@ -309,6 +342,28 @@ pub enum Expr {
     SelfValue {
         span: SourceSpan,
     },
+
+    // ── M5 ───────────────────────────────────────────────────────────────────
+
+    // test-ratchet: M5 adds NoneLit, IndexAccess.
+
+    /// The `none` literal — the absent value of `maybe<T>` for some T resolved
+    /// from context (binding annotation, return type, enclosing call's
+    /// parameter type, sibling branch). See `design/maybe.md` for the full
+    /// none-inference rules.
+    NoneLit {
+        span: SourceSpan,
+    },
+
+    /// Bracket-index access: `receiver[index]`.
+    ///
+    /// Sugar for `.get(index)` on built-in collections (array, fixed, map,
+    /// string). Returns `maybe<T>` after typeck-side desugaring.
+    IndexAccess {
+        receiver: Box<Expr>,
+        index: Box<Expr>,
+        span: SourceSpan,
+    },
 }
 
 /// The kind of dot-postfix body operation.
@@ -341,8 +396,10 @@ impl Expr {
             | Expr::MethodCall { span, .. }
             | Expr::FieldAccess { span, .. }
             | Expr::StructLit { span, .. }
-            | Expr::PostfixOp { span, .. } => span,
+            | Expr::PostfixOp { span, .. }
+            | Expr::IndexAccess { span, .. } => span,
             Expr::SelfValue { span } => span,
+            Expr::NoneLit { span } => span,
         }
     }
 
@@ -351,18 +408,23 @@ impl Expr {
     }
 }
 
-/// A call expression: `callee(args)`.
+/// A call expression: `callee(args)` or `callee<types>(args)`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CallExpr {
     pub callee: Expr,
+    /// M5: explicit type arguments at the call site (`foo<int>(x)`).
+    /// `None` when the user relies on inference (the common case — `foo(x)`).
+    /// Populated by P2's contextual `<` disambiguation.
+    pub type_args: Option<Vec<Type>>,
     pub args: Vec<Expr>,
     pub span: SourceSpan,
 }
 
 /// A type annotation.
 ///
-/// Variant count is pinned by `m3_type_variant_count_locked` in the test suite.
-/// Current count: 8.
+/// Variant count is pinned by the milestone-locked tests in the test suite.
+/// Current count: 13 — M4 added Dynamic(9), SelfType(10); M5 added
+/// TypeParam(11), Generic(12), Maybe(13).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Type {
 
@@ -416,6 +478,45 @@ pub enum Type {
     ///
     /// Only valid inside a shape body or a function whose first parameter is `self`.
     SelfType {
+        span: SourceSpan,
+    },
+
+    // ── M5 ───────────────────────────────────────────────────────────────────
+
+    // test-ratchet: M5 adds TypeParam, Generic, Maybe.
+
+    /// A type parameter reference inside a generic function or generic shape body.
+    ///
+    /// Example: in `function identity<T>(give value: T) -> T`, the two `T` uses
+    /// produce `Type::TypeParam { name: "T", ... }`. Resolved against the
+    /// enclosing function/shape's `generics` list at typeck time.
+    TypeParam {
+        name: String,
+        span: SourceSpan,
+    },
+
+    /// A generic type instantiation: `array<int>`, `Pair<A, B>`, `maybe<Player>`,
+    /// `Box<map<string, int>>`, etc.
+    ///
+    /// `name` is the type constructor (built-in like `array` / `fixed` / `map`,
+    /// or user-defined generic shape like `Pair`). `args` are the concrete
+    /// type arguments. Typeck resolves `name` against the type-name table
+    /// (built-ins + user-defined generic shapes).
+    Generic {
+        name: String,
+        name_span: SourceSpan,
+        args: Vec<Type>,
+        span: SourceSpan,
+    },
+
+    /// `maybe<T>` — the built-in optional type.
+    ///
+    /// Stored as a distinct variant (rather than as `Generic { name: "maybe", ... }`)
+    /// because `maybe<T>` has special typeck rules: flow-sensitive `.value`
+    /// enforcement, the `none` literal, and a fixed lowering decision table.
+    /// See `design/maybe.md` for the full spec.
+    Maybe {
+        inner: Box<Type>,
         span: SourceSpan,
     },
 }
@@ -476,12 +577,16 @@ pub struct FieldDecl {
 ///   `shape Player { name: string, health: int }`
 ///   `base shape Entity { name: string }`
 ///   `shape Warrior extends Entity follows Damageable { weapon: string }`
+///   `shape Pair<A, B> { first: A, second: B }`  (M5 — generic shape)
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShapeDecl {
     pub name: String,
     pub name_span: SourceSpan,
     /// `true` when declared with the `base` keyword — cannot be instantiated directly.
     pub is_base: bool,
+    /// M5: type parameters declared on the shape (`shape Pair<A, B> { ... }`).
+    /// Empty Vec when the shape is not generic. Populated by the parser in P2.
+    pub generics: Vec<GenericParam>,
     /// Optional parent shape for data-only inheritance.
     pub extends: Option<(String, SourceSpan)>,
     /// Zero or more contract shapes this shape must satisfy.

@@ -82,6 +82,8 @@ impl ShapeTable {
             AstType::Error | AstType::Named(_, _) | AstType::Range { .. } => Type::Error,
             // P3b: dynamic dispatch and Self type resolution.
             AstType::Dynamic { .. } | AstType::SelfType { .. } => Type::Error,
+            // M5 P3a / P3b: generics engine + built-in collections.
+            AstType::TypeParam { .. } | AstType::Generic { .. } | AstType::Maybe { .. } => Type::Error,
         }
     }
 }

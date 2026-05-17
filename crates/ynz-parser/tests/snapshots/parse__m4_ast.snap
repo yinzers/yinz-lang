@@ -1,5 +1,6 @@
 ---
 source: crates/ynz-parser/tests/parse.rs
+assertion_line: 624
 expression: output.module
 ---
 Module {
@@ -13,6 +14,7 @@ Module {
                     end: 12,
                 },
                 is_base: false,
+                generics: [],
                 extends: None,
                 follows: [],
                 fields: [
@@ -98,6 +100,7 @@ Module {
         Function(
             FunctionDecl {
                 name: "greet",
+                generics: [],
                 params: [
                     Param {
                         name: "self",
@@ -190,6 +193,7 @@ Module {
         Function(
             FunctionDecl {
                 name: "main",
+                generics: [],
                 params: [],
                 return_type: Nothing,
                 body: Block {

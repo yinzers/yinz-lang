@@ -175,6 +175,12 @@ impl<'b> Checker<'b> {
                 Stmt::FieldAssign { target, value, span } => {
                     self.check_field_assign(target, value, span);
                 }
+                Stmt::IndexAssign { .. } => {
+                    // M5 P3b implements bracket-sugar desugar to `.set(index, value)`.
+                    // P1 ships only the AST shape; the parser does not construct this
+                    // variant in M5 P1, so reaching here means an out-of-sequence
+                    // change — fall through silently rather than emit a noisy stub.
+                }
             }
         }
     }
@@ -570,6 +576,20 @@ impl<'b> Checker<'b> {
                         Type::Error
                     }
                 }
+            }
+            Expr::NoneLit { .. } => {
+                // M5 P3b implements `maybe<T>` and `none` typing. P1 ships the AST
+                // variant only; the parser does not construct this in M5 P1, so
+                // reaching this branch returns Type::Error harmlessly.
+                Type::Error
+            }
+            Expr::IndexAccess { receiver, index, .. } => {
+                // M5 P3b implements bracket-sugar desugar to `.get(index)`.
+                // P1 ships AST only; still type-check sub-expressions so any
+                // future construction-site bug doesn't silently skip them.
+                let _ = self.infer_expr(receiver, None);
+                let _ = self.infer_expr(index, None);
+                Type::Error
             }
         };
 
@@ -1060,6 +1080,12 @@ impl<'b> Checker<'b> {
                     Type::Error
                 }
             }
+            // M5 P3a / P3b implement these (generics engine + built-in collections).
+            // P1 ships AST scaffolding only; the parser does not construct these in
+            // M5 P1, so reaching here returns Type::Error.
+            AstType::TypeParam { .. }
+            | AstType::Generic { .. }
+            | AstType::Maybe { .. } => Type::Error,
         }
     }
 
@@ -1428,6 +1454,11 @@ fn body_has_error_node(stmts: &[Stmt]) -> bool {
         Stmt::Return { value, .. } => value.as_ref().is_some_and(expr_has_error),
         // M4 P3a: field assignment — not yet type-checked.
         Stmt::FieldAssign { target, value, .. } => expr_has_error(target) || expr_has_error(value),
+        // M5 P1: index assignment — parser does not construct in P1; reached only if
+        // out-of-sequence change happens. Walk sub-expressions for safety.
+        Stmt::IndexAssign { receiver, index, value, .. } => {
+            expr_has_error(receiver) || expr_has_error(index) || expr_has_error(value)
+        }
     })
 }
 
@@ -1445,10 +1476,13 @@ fn expr_has_error(expr: &Expr) -> bool {
         | Expr::IntLit(_, _)
         | Expr::NumberLit(_, _)
         | Expr::BoolLit(_, _)
-        | Expr::SelfValue { .. } => false,
+        | Expr::SelfValue { .. }
+        | Expr::NoneLit { .. } => false,
         // M4 P3a: shape expressions — propagate error check into sub-expressions.
         Expr::FieldAccess { receiver, .. } | Expr::PostfixOp { receiver, .. } => expr_has_error(receiver),
         Expr::StructLit { fields, .. } => fields.iter().any(|f| expr_has_error(&f.value)),
+        // M5 P1: bracket-index — propagate error check into receiver + index.
+        Expr::IndexAccess { receiver, index, .. } => expr_has_error(receiver) || expr_has_error(index),
     }
 }
 
@@ -1568,11 +1602,13 @@ mod tests {
         let module = Module {
             items: vec![Item::Function(FunctionDecl {
                 name: "main".into(),
+                generics: vec![],
                 params: vec![],
                 return_type: AstType::Nothing,
                 body: Block {
                     stmts: vec![Stmt::Expr(Expr::Call(Box::new(CallExpr {
                         callee: Expr::Ident("_test_takes_nothing".into(), span(29, 48)),
+                        type_args: None,
                         args: vec![Expr::StringLit(b"hi".to_vec(), span(49, 53))],
                         span: span(29, 54),
                     })))],

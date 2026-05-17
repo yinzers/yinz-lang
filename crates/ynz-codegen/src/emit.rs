@@ -466,6 +466,14 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
         Stmt::FieldAssign { target, value, .. } => {
             lower_stmt_field_assign(cg, target, value)?;
         }
+
+        // M5 P1: AST scaffolding only; the parser does not construct IndexAssign
+        // until P2 (parser wires bracket sugar) and codegen lowers it in P4a.
+        // Reaching here means an out-of-sequence change — return an error so it
+        // surfaces loudly rather than silently emitting wrong IR.
+        Stmt::IndexAssign { .. } => {
+            return Err("Stmt::IndexAssign reached codegen before M5 P4a — out-of-sequence AST".to_string());
+        }
     }
     Ok(())
 }
@@ -849,6 +857,16 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                 .ok_or("codegen: `self` used outside method scope")?;
             let ty = cg.expr_type(expr).clone();
             load(cg, slot, &ty, "self")
+        }
+
+        // M5 P1: AST scaffolding only; codegen for these lands in P4a (maybe<T>
+        // lowering + bracket-sugar lowering). Reaching here means an out-of-sequence
+        // change — surface as a codegen error rather than emit wrong IR.
+        Expr::NoneLit { .. } => {
+            Err("codegen: Expr::NoneLit reached codegen before M5 P4a — out-of-sequence AST".to_string())
+        }
+        Expr::IndexAccess { .. } => {
+            Err("codegen: Expr::IndexAccess reached codegen before M5 P4a — out-of-sequence AST".to_string())
         }
 
         Expr::Error(_) => Err("codegen: error node".to_string()),

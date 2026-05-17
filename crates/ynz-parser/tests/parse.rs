@@ -115,6 +115,7 @@ fn m2_expr_variant_count_locked() {
         StringLit(vec![], span(0, 0)),
         Call(Box::new(ynz_ast::nodes::CallExpr {
             callee: Ident("f".into(), span(0, 1)),
+            type_args: None,
             args: vec![],
             span: span(0, 3),
         })),
@@ -187,6 +188,7 @@ fn m4_item_variant_count_locked() {
         Item::Function(FunctionDecl {
             name: "f".into(),
             name_span: span(0, 1),
+            generics: vec![],
             params: vec![],
             return_type: Type::Nothing,
             body: empty_block,
@@ -196,6 +198,7 @@ fn m4_item_variant_count_locked() {
             name: "Foo".into(),
             name_span: span(0, 3),
             is_base: false,
+            generics: vec![],
             extends: None,
             follows: vec![],
             fields: vec![],
@@ -238,7 +241,7 @@ fn m4_expr_variant_count_locked() {
     let all_variants: &[ynz_ast::nodes::Expr] = &[
         Ident("x".into(), span(0, 1)),
         StringLit(vec![], span(0, 0)),
-        Call(Box::new(ynz_ast::nodes::CallExpr { callee: Ident("f".into(), span(0, 1)), args: vec![], span: span(0, 3) })),
+        Call(Box::new(ynz_ast::nodes::CallExpr { callee: Ident("f".into(), span(0, 1)), type_args: None, args: vec![], span: span(0, 3) })),
         Error(span(0, 0)),
         IntLit(0, span(0, 1)),
         NumberLit("0".into(), span(0, 1)),
@@ -273,6 +276,83 @@ fn m4_type_variant_count_locked() {
         SelfType { span: span(0, 4) },
     ];
     assert_eq!(all_variants.len(), 10, "Type variant count changed from 10 — add a // test-ratchet: comment");
+}
+
+// ── M5 variant-count locks ───────────────────────────────────────────────────
+
+#[test]
+fn m5_stmt_variant_count_locked() {
+    // WHY: Stmt variants beyond M5 are M6+ work. This pins the count.
+    //
+    // test-ratchet: M5 adds 1 variant over M4's 9: IndexAssign(10).
+    use ynz_ast::nodes::Stmt::*;
+    let err = ynz_ast::nodes::Expr::Error(span(0, 0));
+    let empty_block = ynz_ast::nodes::Block { stmts: vec![], span: span(0, 0) };
+    let all_variants: &[Stmt] = &[
+        Expr(err.clone()),
+        Let { is_const: false, name: String::new(), name_span: span(0, 0), ty: None, value: err.clone(), span: span(0, 0) },
+        Assign { target: String::new(), target_span: span(0, 0), value: err.clone(), span: span(0, 0) },
+        If { cond: err.clone(), body: empty_block.clone(), span: span(0, 0) },
+        Match { scrutinee: err.clone(), arms: vec![], else_arm: None, span: span(0, 0) },
+        While { cond: err.clone(), body: empty_block.clone(), span: span(0, 0) },
+        For { var: String::new(), var_span: span(0, 0), iter: err.clone(), body: empty_block.clone(), span: span(0, 0) },
+        Return { value: None, span: span(0, 0) },
+        FieldAssign { target: Box::new(err.clone()), value: err.clone(), span: span(0, 0) },
+        IndexAssign { receiver: Box::new(err.clone()), index: Box::new(err.clone()), value: err.clone(), span: span(0, 0) },
+    ];
+    assert_eq!(all_variants.len(), 10, "Stmt variant count changed from 10 — add a // test-ratchet: comment");
+}
+
+#[test]
+fn m5_expr_variant_count_locked() {
+    // WHY: Expr variants beyond M5 are M6+ work. This pins the count.
+    //
+    // test-ratchet: M5 adds 2 variants over M4's 14: NoneLit(15), IndexAccess(16).
+    use ynz_ast::nodes::{BinOpKind, Expr::*, PostfixOpKind};
+    let err = || Box::new(Error(span(0, 0)));
+    let all_variants: &[ynz_ast::nodes::Expr] = &[
+        Ident("x".into(), span(0, 1)),
+        StringLit(vec![], span(0, 0)),
+        Call(Box::new(ynz_ast::nodes::CallExpr { callee: Ident("f".into(), span(0, 1)), type_args: None, args: vec![], span: span(0, 3) })),
+        Error(span(0, 0)),
+        IntLit(0, span(0, 1)),
+        NumberLit("0".into(), span(0, 1)),
+        BoolLit(true, span(0, 4)),
+        BinOp { op: BinOpKind::Add, lhs: err(), rhs: err(), span: span(0, 0) },
+        UnaryOp { op: ynz_ast::nodes::UnaryOpKind::Neg, operand: err(), span: span(0, 0) },
+        MethodCall { receiver: err(), method: "m".into(), method_span: span(0, 1), args: vec![], span: span(0, 0) },
+        FieldAccess { receiver: err(), field: "f".into(), field_span: span(0, 1), span: span(0, 0) },
+        StructLit { fields: vec![], span: span(0, 0) },
+        PostfixOp { receiver: err(), op: PostfixOpKind::Copy, span: span(0, 0) },
+        SelfValue { span: span(0, 0) },
+        NoneLit { span: span(0, 0) },
+        IndexAccess { receiver: err(), index: err(), span: span(0, 0) },
+    ];
+    assert_eq!(all_variants.len(), 16, "Expr variant count changed from 16 — add a // test-ratchet: comment");
+}
+
+#[test]
+fn m5_type_variant_count_locked() {
+    // WHY: Type variants beyond M5 are M6+ work. This pins the count.
+    //
+    // test-ratchet: M5 adds 3 variants over M4's 10: TypeParam(11), Generic(12), Maybe(13).
+    use ynz_ast::nodes::Type::*;
+    let all_variants: &[ynz_ast::nodes::Type] = &[
+        Nothing,
+        Named("foo".into(), span(0, 3)),
+        Error,
+        Int,
+        Float,
+        Number { precision: 34 },
+        Bool,
+        Range { element: Box::new(Int), end_inclusive: false },
+        Dynamic { contract: "Foo".into(), span: span(0, 3) },
+        SelfType { span: span(0, 4) },
+        TypeParam { name: "T".into(), span: span(0, 1) },
+        Generic { name: "array".into(), name_span: span(0, 5), args: vec![Int], span: span(0, 10) },
+        Maybe { inner: Box::new(Int), span: span(0, 9) },
+    ];
+    assert_eq!(all_variants.len(), 13, "Type variant count changed from 13 — add a // test-ratchet: comment");
 }
 
 // ── M4 parse tests ───────────────────────────────────────────────────────────
