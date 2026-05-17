@@ -598,6 +598,12 @@ fn lower_function<'ctx, 'g>(
     let entry = ctx.append_basic_block(fn_val, "entry");
     cg.builder.position_at_end(entry);
 
+    // Initialize SipHash key from OS entropy before any map operations.
+    if is_main {
+        cg.builder.build_call(cg.rt.ynz_siphash_init, &[], "siphash_init")
+            .map_err(|e| format!("siphash_init: {e}"))?;
+    }
+
     // Materialize each parameter as an alloca so the "every name = alloca" invariant holds.
     for (i, param) in f.params.iter().enumerate() {
         let llvm_param = fn_val.get_nth_param(i as u32)
@@ -741,28 +747,43 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
         Stmt::IndexAssign { receiver, index, value, .. } => {
             let recv_ty = cg.expr_type(receiver);
             let recv_val = lower_expr(cg, receiver)?;
-            let idx_val = lower_expr(cg, index)?.into_int_value();
             let elem_val = lower_expr(cg, value)?;
             let elem_ty = cg.expr_type(value);
             let bits = cg.to_i64_bits(elem_val, &elem_ty)?;
-            match &recv_ty {
-                Type::BuiltinArray { .. } => {
-                    cg.builder.build_call(
-                        cg.rt.ynz_array_set,
-                        &[recv_val.into(), idx_val.into(), bits.into()],
-                        "arr_set",
-                    ).map_err(|e| format!("array_set: {e}"))?;
+
+            if let Type::BuiltinMap { key, .. } = &recv_ty {
+                let key_ty = key.as_ref().clone();
+                let key_val = lower_expr(cg, index)?;
+                if key_is_string(&key_ty) {
+                    cg.builder.build_call(cg.rt.ynz_map_set_str, &[recv_val.into(), key_val.into(), bits.into()], "mia_s")
+                        .map_err(|e| format!("{e}"))?;
+                } else {
+                    let kt = cg.expr_type(index);
+                    let kb = cg.to_i64_bits(key_val, &kt)?;
+                    cg.builder.build_call(cg.rt.ynz_map_set, &[recv_val.into(), kb.into(), bits.into()], "mia")
+                        .map_err(|e| format!("{e}"))?;
                 }
-                Type::BuiltinFixed { size, .. } => {
-                    let arr_ptr = recv_val.into_pointer_value();
-                    let gep = unsafe {
-                        cg.builder.build_gep(cg.i64(), arr_ptr, &[idx_val], "fixed_set_elem")
-                            .map_err(|e| format!("fixed_set gep: {e}"))?
-                    };
-                    cg.builder.build_store(gep, bits).map_err(|e| format!("{e}"))?;
-                    let _ = size;
+            } else {
+                let idx_val = lower_expr(cg, index)?.into_int_value();
+                match &recv_ty {
+                    Type::BuiltinArray { .. } => {
+                        cg.builder.build_call(
+                            cg.rt.ynz_array_set,
+                            &[recv_val.into(), idx_val.into(), bits.into()],
+                            "arr_set",
+                        ).map_err(|e| format!("array_set: {e}"))?;
+                    }
+                    Type::BuiltinFixed { size, .. } => {
+                        let arr_ptr = recv_val.into_pointer_value();
+                        let gep = unsafe {
+                            cg.builder.build_gep(cg.i64(), arr_ptr, &[idx_val], "fixed_set_elem")
+                                .map_err(|e| format!("fixed_set gep: {e}"))?
+                        };
+                        cg.builder.build_store(gep, bits).map_err(|e| format!("{e}"))?;
+                        let _ = size;
+                    }
+                    _ => return Err(format!("IndexAssign on unsupported type: {:?}", recv_ty)),
                 }
-                _ => return Err(format!("IndexAssign on unsupported type: {:?}", recv_ty)),
             }
         }
     }
@@ -975,6 +996,76 @@ fn lower_stmt_for<'ctx>(
         }
 
         cg.locals.remove(var);
+        cg.builder.position_at_end(after_bb);
+        return Ok(());
+    }
+
+    // Map iteration: `for (entry in m)` where m: map<K,V>.
+    // Iterates by insertion order; loop var has type MapEntry {key_bits, val_bits}.
+    if let Type::BuiltinMap { key, val } = &iter_ty {
+        let key_ty = key.as_ref().clone();
+        let _val_ty = val.as_ref().clone();
+        let map_ptr = lower_expr(cg, iter)?.into_pointer_value();
+
+        let cnt = cg.builder.build_call(cg.rt.ynz_map_count, &[map_ptr.into()], "mf_cnt")
+            .map_err(|e| format!("{e}"))?
+            .try_as_basic_value().basic()
+            .ok_or("map_count void")?
+            .into_int_value();
+
+        let i_slot = cg.builder.build_alloca(cg.i64(), "mf_i").map_err(|e| format!("{e}"))?;
+        cg.builder.build_store(i_slot, cg.i64().const_zero()).map_err(|e| format!("{e}"))?;
+
+        // Loop var slot: {i64 key_bits, i64 val_bits}
+        let entry_ty = cg.ctx.struct_type(&[cg.i64().into(), cg.i64().into()], false);
+        let entry_slot = cg.builder.build_alloca(entry_ty, var).map_err(|e| format!("{e}"))?;
+
+        let cond_bb  = cg.append_block("mfor_cond");
+        let body_bb  = cg.append_block("mfor_body");
+        let after_bb = cg.append_block("mfor_after");
+
+        cg.builder.build_unconditional_branch(cond_bb).map_err(|e| format!("{e}"))?;
+
+        cg.builder.position_at_end(cond_bb);
+        let i = cg.builder.build_load(cg.i64(), i_slot, "mf_i_v").map_err(|e| format!("{e}"))?.into_int_value();
+        let lt = cg.builder.build_int_compare(IntPredicate::SLT, i, cnt, "mf_lt").map_err(|e| format!("{e}"))?;
+        cg.builder.build_conditional_branch(lt, body_bb, after_bb).map_err(|e| format!("{e}"))?;
+
+        cg.builder.position_at_end(body_bb);
+        let triple_ty = cg.ctx.struct_type(&[cg.i64().into(), cg.i64().into(), cg.i64().into()], false);
+        let triple_slot = cg.builder.build_alloca(triple_ty, "mf_triple").map_err(|e| format!("{e}"))?;
+        if key_is_string(&key_ty) {
+            cg.builder.build_call(cg.rt.ynz_map_iter_get_str, &[map_ptr.into(), i.into(), triple_slot.into()], "mf_iter_s")
+                .map_err(|e| format!("{e}"))?;
+        } else {
+            cg.builder.build_call(cg.rt.ynz_map_iter_get, &[map_ptr.into(), i.into(), triple_slot.into()], "mf_iter")
+                .map_err(|e| format!("{e}"))?;
+        }
+        // triple = {has, key, val} — copy key[1] and val[2] into entry_slot
+        let k_src = cg.builder.build_struct_gep(triple_ty, triple_slot, 1, "mf_ks").map_err(|e| format!("{e}"))?;
+        let v_src = cg.builder.build_struct_gep(triple_ty, triple_slot, 2, "mf_vs").map_err(|e| format!("{e}"))?;
+        let k_dst = cg.builder.build_struct_gep(entry_ty, entry_slot, 0, "mf_kd").map_err(|e| format!("{e}"))?;
+        let v_dst = cg.builder.build_struct_gep(entry_ty, entry_slot, 1, "mf_vd").map_err(|e| format!("{e}"))?;
+        cg.builder.build_store(k_dst, cg.builder.build_load(cg.i64(), k_src, "mf_kv").map_err(|e| format!("{e}"))?)
+            .map_err(|e| format!("{e}"))?;
+        cg.builder.build_store(v_dst, cg.builder.build_load(cg.i64(), v_src, "mf_vv").map_err(|e| format!("{e}"))?)
+            .map_err(|e| format!("{e}"))?;
+
+        cg.locals.insert(var.to_string(), entry_slot);
+
+        for s in &body.stmts {
+            if is_block_terminated(cg) { break; }
+            lower_stmt(cg, s)?;
+        }
+
+        cg.locals.remove(var);
+
+        if !is_block_terminated(cg) {
+            let next_i = cg.builder.build_int_add(i, cg.i64().const_int(1, false), "mf_ni").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(i_slot, next_i).map_err(|e| format!("{e}"))?;
+            cg.builder.build_unconditional_branch(cond_bb).map_err(|e| format!("{e}"))?;
+        }
+
         cg.builder.position_at_end(after_bb);
         return Ok(());
     }
@@ -1193,6 +1284,11 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     let inner = inner.as_ref().clone();
                     lower_maybe_method(cg, recv_val.into_pointer_value(), &inner, method, args)
                 }
+                Type::BuiltinMap { key, val } => {
+                    let key_ty = key.as_ref().clone();
+                    let val_ty = val.as_ref().clone();
+                    lower_map_method(cg, recv_val.into_pointer_value(), &key_ty, &val_ty, method, args)
+                }
                 _ => {
                     // M4 P5: one-arg primitive intrinsics (wrapping/saturating arithmetic).
                     if args.len() == 1 && is_1arg_intrinsic(&recv_ty, method) {
@@ -1279,6 +1375,34 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         Expr::IndexAccess { receiver, index, .. } => {
             let recv_ty = cg.expr_type(receiver);
             let recv_val = lower_expr(cg, receiver)?;
+
+            // Map index access is handled separately — key may be a string (pointer).
+            if let Type::BuiltinMap { key, .. } = &recv_ty {
+                let key_ty = key.as_ref().clone();
+                let idx_val = lower_expr(cg, index)?;
+                let pair_ty = cg.ctx.struct_type(&[cg.i64().into(), cg.i64().into()], false);
+                let out = cg.builder.build_alloca(pair_ty, "mi_out").map_err(|e| format!("{e}"))?;
+                if key_is_string(&key_ty) {
+                    cg.builder.build_call(cg.rt.ynz_map_get_str, &[recv_val.into(), idx_val.into(), out.into()], "mi_gs")
+                        .map_err(|e| format!("{e}"))?;
+                } else {
+                    let kt = cg.expr_type(index);
+                    let key_bits = cg.to_i64_bits(idx_val, &kt)?;
+                    cg.builder.build_call(cg.rt.ynz_map_get, &[recv_val.into(), key_bits.into(), out.into()], "mi_g")
+                        .map_err(|e| format!("{e}"))?;
+                }
+                let maybe_slot = cg.builder.build_alloca(cg.maybe_type(), "mi_m").map_err(|e| format!("{e}"))?;
+                let h0 = cg.builder.build_struct_gep(pair_ty, out, 0, "h0").map_err(|e| format!("{e}"))?;
+                let v0 = cg.builder.build_struct_gep(pair_ty, out, 1, "v0").map_err(|e| format!("{e}"))?;
+                let h1 = cg.builder.build_struct_gep(cg.maybe_type(), maybe_slot, 0, "h1").map_err(|e| format!("{e}"))?;
+                let v1 = cg.builder.build_struct_gep(cg.maybe_type(), maybe_slot, 1, "v1").map_err(|e| format!("{e}"))?;
+                cg.builder.build_store(h1, cg.builder.build_load(cg.i64(), h0, "hv").map_err(|e| format!("{e}"))?)
+                    .map_err(|e| format!("{e}"))?;
+                cg.builder.build_store(v1, cg.builder.build_load(cg.i64(), v0, "vv").map_err(|e| format!("{e}"))?)
+                    .map_err(|e| format!("{e}"))?;
+                return Ok(maybe_slot.into());
+            }
+
             let idx_val = lower_expr(cg, index)?;
             let idx = idx_val.into_int_value();
 
@@ -1352,8 +1476,41 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
             }
         }
 
-        Expr::MapLit { .. } => {
-            Err("codegen: Expr::MapLit reached codegen before M5 P4b — out-of-sequence AST".to_string())
+        Expr::MapLit { entries, .. } => {
+            let map_ty = cg.expr_type(expr);
+            let key_ty = match &map_ty {
+                Type::BuiltinMap { key, .. } => key.as_ref().clone(),
+                _ => return Err("MapLit with non-BuiltinMap type".to_string()),
+            };
+
+            let map_ptr = cg.builder.build_call(cg.rt.ynz_map_new, &[], "map_new")
+                .map_err(|e| format!("{e}"))?
+                .try_as_basic_value().basic()
+                .ok_or("ynz_map_new returned void")?
+                .into_pointer_value();
+
+            for (key_expr, val_expr) in entries {
+                let key_val = lower_expr(cg, key_expr)?;
+                let val_val = lower_expr(cg, val_expr)?;
+                let vt = cg.expr_type(val_expr);
+                let val_bits = cg.to_i64_bits(val_val, &vt)?;
+                if key_is_string(&key_ty) {
+                    cg.builder.build_call(
+                        cg.rt.ynz_map_set_str,
+                        &[map_ptr.into(), key_val.into(), val_bits.into()],
+                        "map_set_str",
+                    ).map_err(|e| format!("{e}"))?;
+                } else {
+                    let kt = cg.expr_type(key_expr);
+                    let key_bits = cg.to_i64_bits(key_val, &kt)?;
+                    cg.builder.build_call(
+                        cg.rt.ynz_map_set,
+                        &[map_ptr.into(), key_bits.into(), val_bits.into()],
+                        "map_set",
+                    ).map_err(|e| format!("{e}"))?;
+                }
+            }
+            Ok(map_ptr.into())
         }
 
         Expr::Error(_) => Err("codegen: error node".to_string()),
@@ -1673,6 +1830,22 @@ fn lower_field_access<'ctx>(
     field_name: &str,
 ) -> Result<BasicValueEnum<'ctx>, String> {
     let recv_ty = cg.expr_type(receiver);
+
+    // MapEntry field access: entry.key → field 0, entry.value → field 1.
+    if let Type::MapEntry { key, val } = &recv_ty {
+        let entry_ty = cg.ctx.struct_type(&[cg.i64().into(), cg.i64().into()], false);
+        let entry_ptr = lower_expr(cg, receiver)?.into_pointer_value();
+        let (field_idx, field_ty) = match field_name {
+            "key" => (0u32, key.as_ref().clone()),
+            "value" => (1u32, val.as_ref().clone()),
+            f => return Err(format!("MapEntry has no field `{f}`")),
+        };
+        let gep = cg.builder.build_struct_gep(entry_ty, entry_ptr, field_idx, field_name)
+            .map_err(|e| format!("{e}"))?;
+        let bits = cg.builder.build_load(cg.i64(), gep, "me_bits")
+            .map_err(|e| format!("{e}"))?.into_int_value();
+        return cg.i64_bits_to(bits, &field_ty);
+    }
 
     // maybe<T>.value — extract value bits from the {i64,i64} alloca.
     if let Type::Maybe { inner } = &recv_ty {
@@ -2164,6 +2337,98 @@ fn lower_maybe_method<'ctx>(
                 .map_err(|e| format!("{e}"))
         }
         other => Err(format!("maybe method `{other}` not yet lowered in P4a")),
+    }
+}
+
+// ── Helper: test if a map key type is String ──────────────────────────────────
+
+fn key_is_string(key_ty: &Type) -> bool {
+    matches!(key_ty, Type::String)
+}
+
+// ── Map method dispatch (M5 P4b) ──────────────────────────────────────────────
+
+fn lower_map_method<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    map: PointerValue<'ctx>,
+    key_ty: &Type,
+    val_ty: &Type,
+    method: &str,
+    args: &[Expr],
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let is_str = key_is_string(key_ty);
+    match method {
+        "count" => {
+            let n = cg.builder.build_call(cg.rt.ynz_map_count, &[map.into()], "mc")
+                .map_err(|e| format!("{e}"))?
+                .try_as_basic_value().basic()
+                .ok_or("map_count void")?;
+            Ok(n)
+        }
+        "has" => {
+            let key_val = lower_expr(cg, &args[0])?;
+            let n = if is_str {
+                let pair_ty = cg.ctx.struct_type(&[cg.i64().into(), cg.i64().into()], false);
+                let out = cg.builder.build_alloca(pair_ty, "has_out").map_err(|e| format!("{e}"))?;
+                cg.builder.build_call(cg.rt.ynz_map_get_str, &[map.into(), key_val.into(), out.into()], "hg")
+                    .map_err(|e| format!("{e}"))?;
+                let has_gep = cg.builder.build_struct_gep(pair_ty, out, 0, "has0").map_err(|e| format!("{e}"))?;
+                cg.builder.build_load(cg.i64(), has_gep, "has_v").map_err(|e| format!("{e}"))?
+            } else {
+                let kt = cg.expr_type(&args[0]);
+                let key_bits = cg.to_i64_bits(key_val, &kt)?;
+                cg.builder.build_call(cg.rt.ynz_map_has, &[map.into(), key_bits.into()], "mhas")
+                    .map_err(|e| format!("{e}"))?
+                    .try_as_basic_value().basic()
+                    .ok_or("map_has void")?
+            };
+            let b = cg.builder.build_int_truncate(n.into_int_value(), cg.bool(), "has_b")
+                .map_err(|e| format!("{e}"))?;
+            Ok(b.into())
+        }
+        "get" => {
+            let key_val = lower_expr(cg, &args[0])?;
+            let pair_ty = cg.ctx.struct_type(&[cg.i64().into(), cg.i64().into()], false);
+            let out = cg.builder.build_alloca(pair_ty, "mget_out").map_err(|e| format!("{e}"))?;
+            if is_str {
+                cg.builder.build_call(cg.rt.ynz_map_get_str, &[map.into(), key_val.into(), out.into()], "mg_s")
+                    .map_err(|e| format!("{e}"))?;
+            } else {
+                let kt = cg.expr_type(&args[0]);
+                let key_bits = cg.to_i64_bits(key_val, &kt)?;
+                cg.builder.build_call(cg.rt.ynz_map_get, &[map.into(), key_bits.into(), out.into()], "mg")
+                    .map_err(|e| format!("{e}"))?;
+            }
+            // Copy pair {i64 has, i64 bits} into a maybe<V> slot — identical layout.
+            let maybe_slot = cg.builder.build_alloca(cg.maybe_type(), "mg_maybe").map_err(|e| format!("{e}"))?;
+            let has_src = cg.builder.build_struct_gep(pair_ty, out, 0, "hs").map_err(|e| format!("{e}"))?;
+            let val_src = cg.builder.build_struct_gep(pair_ty, out, 1, "vs").map_err(|e| format!("{e}"))?;
+            let has_v = cg.builder.build_load(cg.i64(), has_src, "hv").map_err(|e| format!("{e}"))?;
+            let val_v = cg.builder.build_load(cg.i64(), val_src, "vv").map_err(|e| format!("{e}"))?;
+            let has_dst = cg.builder.build_struct_gep(cg.maybe_type(), maybe_slot, 0, "hd").map_err(|e| format!("{e}"))?;
+            let val_dst = cg.builder.build_struct_gep(cg.maybe_type(), maybe_slot, 1, "vd").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(has_dst, has_v).map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(val_dst, val_v).map_err(|e| format!("{e}"))?;
+            let _ = val_ty;
+            Ok(maybe_slot.into())
+        }
+        "set" => {
+            let key_val = lower_expr(cg, &args[0])?;
+            let val_val = lower_expr(cg, &args[1])?;
+            let vt = cg.expr_type(&args[1]);
+            let val_bits = cg.to_i64_bits(val_val, &vt)?;
+            if is_str {
+                cg.builder.build_call(cg.rt.ynz_map_set_str, &[map.into(), key_val.into(), val_bits.into()], "ms_s")
+                    .map_err(|e| format!("{e}"))?;
+            } else {
+                let kt = cg.expr_type(&args[0]);
+                let key_bits = cg.to_i64_bits(key_val, &kt)?;
+                cg.builder.build_call(cg.rt.ynz_map_set, &[map.into(), key_bits.into(), val_bits.into()], "ms")
+                    .map_err(|e| format!("{e}"))?;
+            }
+            Ok(cg.i64().const_zero().into())
+        }
+        other => Err(format!("map method `{other}` not yet lowered in P4b")),
     }
 }
 

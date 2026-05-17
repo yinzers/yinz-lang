@@ -72,8 +72,31 @@ declare i64 @ynz_array_count(ptr)
 
 declare void @ynz_array_drop(ptr)
 
+declare void @ynz_siphash_init()
+
+declare ptr @ynz_map_new()
+
+declare void @ynz_map_get(ptr, i64, ptr)
+
+declare void @ynz_map_get_str(ptr, ptr, ptr)
+
+declare void @ynz_map_set(ptr, i64, i64)
+
+declare void @ynz_map_set_str(ptr, ptr, i64)
+
+declare i64 @ynz_map_count(ptr)
+
+declare i64 @ynz_map_has(ptr, i64)
+
+declare void @ynz_map_iter_get(ptr, i64, ptr)
+
+declare void @ynz_map_iter_get_str(ptr, i64, ptr)
+
+declare void @ynz_map_drop(ptr)
+
 define i32 @main() {
 entry:
+  call void @ynz_siphash_init()
   %puts = call i32 @puts(ptr @str)
   ret i32 0
 }

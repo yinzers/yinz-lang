@@ -51,6 +51,24 @@ pub struct RuntimeDecls<'ctx> {
     pub ynz_array_set: FunctionValue<'ctx>,
     pub ynz_array_count: FunctionValue<'ctx>,
     pub ynz_array_drop: FunctionValue<'ctx>,
+
+    // Map runtime (M5 P4b) — SipHash-2-4 + Swiss Tables.
+    pub ynz_siphash_init: FunctionValue<'ctx>,
+    pub ynz_map_new: FunctionValue<'ctx>,
+    // ynz_map_get(ptr map, i64 key, ptr out[2]) -> void
+    pub ynz_map_get: FunctionValue<'ctx>,
+    // ynz_map_get_str(ptr map, ptr key, ptr out[2]) -> void
+    pub ynz_map_get_str: FunctionValue<'ctx>,
+    // ynz_map_set(ptr map, i64 key, i64 value) -> void
+    pub ynz_map_set: FunctionValue<'ctx>,
+    // ynz_map_set_str(ptr map, ptr key, i64 value) -> void
+    pub ynz_map_set_str: FunctionValue<'ctx>,
+    pub ynz_map_count: FunctionValue<'ctx>,
+    pub ynz_map_has: FunctionValue<'ctx>,
+    // ynz_map_iter_get(ptr map, i64 pos, ptr out[3]) -> void
+    pub ynz_map_iter_get: FunctionValue<'ctx>,
+    pub ynz_map_iter_get_str: FunctionValue<'ctx>,
+    pub ynz_map_drop: FunctionValue<'ctx>,
 }
 
 impl<'ctx> RuntimeDecls<'ctx> {
@@ -169,6 +187,18 @@ impl<'ctx> RuntimeDecls<'ctx> {
             ynz_array_set: declare_fn(module, "ynz_array_set", void.fn_type(&[ptr.into(), i64.into(), i64.into()], false)),
             ynz_array_count: declare_fn(module, "ynz_array_count", i64.fn_type(&[ptr.into()], false)),
             ynz_array_drop: declare_fn(module, "ynz_array_drop", void.fn_type(&[ptr.into()], false)),
+
+            ynz_siphash_init: declare_fn(module, "ynz_siphash_init", void.fn_type(&[], false)),
+            ynz_map_new: declare_fn(module, "ynz_map_new", ptr.fn_type(&[], false)),
+            ynz_map_get: declare_fn(module, "ynz_map_get", void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false)),
+            ynz_map_get_str: declare_fn(module, "ynz_map_get_str", void.fn_type(&[ptr.into(), ptr.into(), ptr.into()], false)),
+            ynz_map_set: declare_fn(module, "ynz_map_set", void.fn_type(&[ptr.into(), i64.into(), i64.into()], false)),
+            ynz_map_set_str: declare_fn(module, "ynz_map_set_str", void.fn_type(&[ptr.into(), ptr.into(), i64.into()], false)),
+            ynz_map_count: declare_fn(module, "ynz_map_count", i64.fn_type(&[ptr.into()], false)),
+            ynz_map_has: declare_fn(module, "ynz_map_has", i64.fn_type(&[ptr.into(), i64.into()], false)),
+            ynz_map_iter_get: declare_fn(module, "ynz_map_iter_get", void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false)),
+            ynz_map_iter_get_str: declare_fn(module, "ynz_map_iter_get_str", void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false)),
+            ynz_map_drop: declare_fn(module, "ynz_map_drop", void.fn_type(&[ptr.into()], false)),
         }
     }
 }
