@@ -1,6 +1,6 @@
 # Session State: ynz
 
-**Last Updated**: 2026-05-17 (M5 P0 shipped, awaiting merge)
+**Last Updated**: 2026-05-17 (M5 P1 shipped on feat/m5-lexer-ast, awaiting merge)
 
 ---
 
@@ -77,6 +77,7 @@ cargo fmt --all
 - [2026-05-17] **M4 P3c complete (7c86f6a, branch feat/m4-ownership, PR open)**: `is_consumed` scope tracking, use-after-give, const-cannot-be-lent/given. All 5 const deep-immutability paths covered. 102 typeck tests green. PR: https://github.com/patrickrizzardi/ynz/pull/new/feat/m4-ownership
 - [2026-05-17] **M4 merged to main (direct merge by patrick)**: feat/m4-verification (P3c–P7 bundled — ownership, codegen, fixtures, v0.1.0-m4 prep) landed on main. Cargo.toml at `0.1.0-m4`. Tag `v0.1.0-m4` local.
 - [2026-05-17] **M5 plan approved + Phase 0 shipped (524ca2e, branch chore/m5-doc-lockdown)**: Generics + Collections + Maybe<T> milestone planned and plan-reviewer Round 2 PASS. Locked decisions: `maybe<T>` moves from M6 to M5 (cleanest .get() API); map = Swiss Tables + SipHash-2-4 + perfect-hash for static-key literals; for-loop over built-in collections is typeck+codegen special-case with REPLACE-AT M7 markers; auto-promotion `array<T>` → `fixed<T>` ships codegen-only in M5 (Tier 3 lint defers to v0.4, muted hint defers to v0.2). 8-phase plan (P0-P6). P0 (doc lockdown — master plan M5/M6/M7 paragraphs updated to `<>`, design/maybe.md created with 9-row LLVM lowering decision table + 10-row flow-sensitive .value rules + 9-row none-inference rules + documented v0.1 cycle-leak limitation, spec/maybe.md syntax-updated) SHIPPED on branch `chore/m5-doc-lockdown`, awaiting merge to main. Plan: `.claude/plans/active/m5-generics.md`.
+- [2026-05-17] **M5 P1 shipped (49940c9, branch feat/m5-lexer-ast)**: Lexer + AST scaffolding. Tok::None for `none` literal (token count 57→58). 3 new Type variants (TypeParam, Generic, Maybe — total 10→13). 2 new Expr variants (NoneLit, IndexAccess — total 14→16). 1 new Stmt variant (IndexAssign — total 9→10). GenericParam struct. FunctionDecl.generics / ShapeDecl.generics fields. CallExpr.type_args field. Collateral fix: stale M3/M4 doc comment counts in nodes.rs corrected. Typeck/codegen stub match arms keep build green until P2 wires parser. 4 m5_*_variant_count_locked tests + m5_none_keyword_lexes test. 4 parse snapshot files additively updated (generics: [], type_args: None). 401 tests pass (was 316 at M4 ship). Awaiting merge to main. Plan: `.claude/plans/active/m5-generics.md`.
 
 ---
 
