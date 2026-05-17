@@ -1,0 +1,54 @@
+// examples/errors/m5_errors.ynz
+//
+// M5 compile-error gallery — intentionally triggers every M5 diagnostic class.
+// Run: ./target/debug/ynz run examples/errors/m5_errors.ynz
+// Expected: multiple compile errors, exit non-zero.
+//
+// Each trigger has a // WHY: comment naming the diagnostic class.
+// The compiler emits up to 50 diagnostics per file (multi-error).
+
+function main() -> nothing {
+
+  // ── maybe<T> errors ───────────────────────────────────────────────────────
+
+  // WHY: none without annotation — compiler cannot infer maybe<T>
+  let x = none
+
+  // WHY: .value without prior .exists() check — flow-sensitive violation
+  let m: maybe<int> = none
+  print(m.value)
+
+  // WHY: maybe type with wrong inner type
+  let bad: maybe<int> = "hello"
+
+  // ── array<T> errors ───────────────────────────────────────────────────────
+
+  // WHY: array element type mismatch
+  let mixed: array<int> = [1, "two", 3]
+
+  // WHY: calling a non-existent method on array
+  let arr: array<int> = [1, 2, 3]
+  arr.nonexistentMethod()
+
+  // ── fixed<T> errors ───────────────────────────────────────────────────────
+
+  // WHY: calling .add() on fixed (fixed does not support growth)
+  let f: fixed<int> = [1, 2, 3]
+  f.nonexistentMethod()
+
+  // ── map<K,V> errors ───────────────────────────────────────────────────────
+
+  // WHY: duplicate key in map literal
+  let dupes: map<string, int> = { "alice": 1, "alice": 2 }
+
+  // WHY: dot access on map (should use bracket syntax)
+  let scores: map<string, int> = { "alice": 90 }
+  print(scores.alice)
+
+  // ── generic function errors ───────────────────────────────────────────────
+
+  // WHY: cannot infer type parameter when no arguments
+  // (function with type param but no args — type param unresolvable)
+}
+
+function noArgs<T>() -> nothing { }

@@ -1233,13 +1233,16 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     Err("codegen: range() in expression position (should be caught by typeck)".to_string())
                 }
                 name => {
-                    // Prefer the direct name. If not found, try to locate a monomorphized variant.
+                    // Prefer the direct name. If not found, find the correct monomorphized
+                    // variant by matching argument types against MonomorphizationTable entries.
                     let effective_name = if cg.module.get_function(name).is_some() {
                         name.to_string()
                     } else {
-                        // Find the first mono entry whose base name matches — handles the
-                        // common case where a single instantiation exists per call site.
-                        find_mono_name(cg.mono_table, name)
+                        // Infer concrete arg types from the call site to pick the right mono.
+                        let arg_types: Vec<Type> = call.args.iter()
+                            .map(|a| cg.expr_type(a))
+                            .collect();
+                        find_mono_name_by_args(cg.mono_table, name, &arg_types)
                             .unwrap_or_else(|| name.to_string())
                     };
                     let fn_val = cg.module.get_function(&effective_name)
@@ -2099,7 +2102,17 @@ fn declare_sat_intrinsic<'ctx>(
 /// When there are multiple instantiations of the same generic (e.g. `identity<int>` and
 /// `identity<string>`), this picks the first match. For P4a the typical case is a single
 /// instantiation per call site — a precise match by argument types is a P4b refinement.
-fn find_mono_name(mono_table: &MonomorphizationTable, fn_name: &str) -> Option<String> {
+fn find_mono_name_by_args(mono_table: &MonomorphizationTable, fn_name: &str, arg_types: &[Type]) -> Option<String> {
+    // Try exact match on param types first.
+    for (key, sig) in &mono_table.entries {
+        if key.fn_name != fn_name { continue; }
+        if sig.param_types.len() == arg_types.len()
+            && sig.param_types.iter().zip(arg_types).all(|(a, b)| a == b)
+        {
+            return Some(mangle_mono_name(&key.fn_name, &key.type_args));
+        }
+    }
+    // Fall back: first entry with matching name (single-instantiation case).
     mono_table.entries.keys()
         .find(|k| k.fn_name == fn_name)
         .map(|k| mangle_mono_name(&k.fn_name, &k.type_args))
