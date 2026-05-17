@@ -1315,7 +1315,15 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Expr::SelfValue { span }
             }
+            Token::LBrace if self.peek_is_map_lit_start() => {
+                self.parse_map_lit()
+            }
             Token::LBrace if self.peek_is_struct_lit_start(0) => {
+                self.parse_struct_lit()
+            }
+            // Empty `{}` — parse as a struct literal with no fields; typeck resolves
+            // based on the annotation (empty shape literal vs empty map literal).
+            Token::LBrace if matches!(self.peek_ahead(1), Token::RBrace) => {
                 self.parse_struct_lit()
             }
             Token::LParen => {
@@ -1737,6 +1745,18 @@ impl<'a> Parser<'a> {
 
     // ── M4: struct literal helpers ──────────────────────────────────────────
 
+    /// True when current position is the start of a map literal:
+    /// `{` followed by a string/int/number literal and then `:`.
+    fn peek_is_map_lit_start(&self) -> bool {
+        matches!(
+            self.tokens.get(self.pos + 1).map(|s| &s.value),
+            Some(Token::StringLit(_)) | Some(Token::IntLit(_)) | Some(Token::NumberLit(_))
+        ) && matches!(
+            self.tokens.get(self.pos + 2).map(|s| &s.value),
+            Some(Token::Colon)
+        )
+    }
+
     /// True when position `offset` from current is the start of a struct literal:
     /// - offset=0: peek at `{`; returns true if the token AFTER `{` is `Identifier Colon`.
     /// - offset=1: peek is already `{`; checks offset+1 and offset+2.
@@ -1829,6 +1849,59 @@ impl<'a> Parser<'a> {
             }
         }
         fields
+    }
+
+    // ── M5 P3c: map literal ──────────────────────────────────────────────────
+
+    /// Parse `{ "key": value, ... }` into `Expr::MapLit`.
+    ///
+    /// Called when we know `{` is followed by a non-identifier literal key then `:`.
+    fn parse_map_lit(&mut self) -> Expr {
+        let start = self.current_span().start;
+        self.advance(); // consume `{`
+        let mut entries: Vec<(Expr, Expr)> = Vec::new();
+        loop {
+            match self.peek() {
+                Token::RBrace => {
+                    let end = self.current_span().end;
+                    self.advance();
+                    return Expr::MapLit { entries, span: SourceSpan::new(self.file, start, end) };
+                }
+                Token::Eof => {
+                    self.diags.push(Diagnostic::error(
+                        self.eof_span(),
+                        "Missing `}` to close this map literal.",
+                        "Add `}` after the last entry.",
+                        "Every `{` in a map literal must be matched with a `}`.",
+                    ));
+                    break;
+                }
+                Token::Comma => { self.advance(); continue; }
+                _ => {
+                    let key = self.parse_expr(0);
+                    if self.expect(&Token::Colon).is_none() {
+                        self.diags.push(Diagnostic::error(
+                            self.current_span(),
+                            "Expected `:` between map key and value.",
+                            "Write `{ key: value, ... }` for a map literal.",
+                            "Map literals list key-value pairs separated by `:`.",
+                        ));
+                    }
+                    let value = self.parse_expr(0);
+                    entries.push((key, value));
+                    if !matches!(self.peek(), Token::RBrace | Token::Comma | Token::Eof) {
+                        self.diags.push(Diagnostic::error(
+                            self.current_span(),
+                            "Expected `,` or `}` after map entry.",
+                            "Separate entries with `,`: `{ \"a\": 1, \"b\": 2 }`",
+                            "Map literal entries must be separated by commas.",
+                        ));
+                    }
+                }
+            }
+        }
+        let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(start);
+        Expr::MapLit { entries, span: SourceSpan::new(self.file, start, end) }
     }
 
     // ── M4: shape declaration ────────────────────────────────────────────────

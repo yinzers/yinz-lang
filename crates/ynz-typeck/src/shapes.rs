@@ -99,6 +99,18 @@ impl ShapeTable {
                         let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
                         Type::BuiltinFixed { elem: Box::new(elem), size: None }
                     }
+                    "map" => {
+                        let mut args = resolved_args.into_iter();
+                        let key = args.next().unwrap_or(Type::Error);
+                        let val = args.next().unwrap_or(Type::Error);
+                        Type::BuiltinMap { key: Box::new(key), val: Box::new(val) }
+                    }
+                    "MapEntry" => {
+                        let mut args = resolved_args.into_iter();
+                        let key = args.next().unwrap_or(Type::Error);
+                        let val = args.next().unwrap_or(Type::Error);
+                        Type::MapEntry { key: Box::new(key), val: Box::new(val) }
+                    }
                     _ => {
                         if self.contains(name) {
                             Type::Generic { name: name.clone(), args: resolved_args }

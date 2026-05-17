@@ -1,7 +1,7 @@
 /// The types known to the M5 type checker.
 ///
 /// Variant count is pinned by `m4_type_variant_count_locked` in tests.
-/// Current count: 14 (M5 P3b adds BuiltinArray, BuiltinFixed, Maybe)
+/// Current count: 16 (M5 P3c adds BuiltinMap, MapEntry)
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
 
@@ -90,6 +90,17 @@ pub enum Type {
     /// Distinct from `Type::Generic` because `.value` has special flow-sensitive
     /// enforcement rules that built-in generic shapes do not have.
     Maybe { inner: Box<Type> },
+
+    // test-ratchet: M5 P3c adds BuiltinMap and MapEntry for map<K,V> support.
+
+    /// Built-in hash map: `map<K, V>` in source.
+    /// Uses Swiss Tables + SipHash-2-4 at runtime (M5 P4b codegen).
+    BuiltinMap { key: Box<Type>, val: Box<Type> },
+
+    /// Synthetic MapEntry<K, V> type produced during `for (entry in m)` iteration.
+    /// Not user-constructable directly — only produced by map iteration.
+    /// `entry.key: K`, `entry.value: V` field access is valid.
+    MapEntry { key: Box<Type>, val: Box<Type> },
 }
 
 /// Human-readable type name for diagnostic messages.
@@ -116,5 +127,7 @@ pub fn type_name(t: &Type) -> String {
         Type::BuiltinArray { elem } => format!("array<{}>", type_name(elem)),
         Type::BuiltinFixed { elem, .. } => format!("fixed<{}>", type_name(elem)),
         Type::Maybe { inner } => format!("maybe<{}>", type_name(inner)),
+        Type::BuiltinMap { key, val } => format!("map<{}, {}>", type_name(key), type_name(val)),
+        Type::MapEntry { key, val } => format!("MapEntry<{}, {}>", type_name(key), type_name(val)),
     }
 }

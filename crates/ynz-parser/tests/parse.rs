@@ -322,6 +322,7 @@ fn m5_expr_variant_count_locked() {
     // WHY: Expr variants beyond M5 are M6+ work. This pins the count.
     //
     // test-ratchet: M5 P3b adds 1 variant: ArrayLit(17), over P1's NoneLit(15) and IndexAccess(16).
+    // test-ratchet: M5 P3c adds 1 variant: MapLit(18), for map literal syntax.
     use ynz_ast::nodes::{BinOpKind, Expr::*, PostfixOpKind};
     let err = || Box::new(Error(span(0, 0)));
     let all_variants: &[ynz_ast::nodes::Expr] = &[
@@ -342,8 +343,9 @@ fn m5_expr_variant_count_locked() {
         NoneLit { span: span(0, 0) },
         IndexAccess { receiver: err(), index: err(), span: span(0, 0) },
         ArrayLit { elements: vec![], span: span(0, 0) },
+        MapLit { entries: vec![], span: span(0, 0) },
     ];
-    assert_eq!(all_variants.len(), 17, "Expr variant count changed from 17 — add a // test-ratchet: comment");
+    assert_eq!(all_variants.len(), 18, "Expr variant count changed from 18 — add a // test-ratchet: comment");
 }
 
 #[test]

@@ -871,6 +871,9 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         Expr::ArrayLit { .. } => {
             Err("codegen: Expr::ArrayLit reached codegen before M5 P4a — out-of-sequence AST".to_string())
         }
+        Expr::MapLit { .. } => {
+            Err("codegen: Expr::MapLit reached codegen before M5 P4b — out-of-sequence AST".to_string())
+        }
 
         Expr::Error(_) => Err("codegen: error node".to_string()),
     }
