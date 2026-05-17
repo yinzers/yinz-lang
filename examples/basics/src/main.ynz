@@ -50,16 +50,9 @@ function main() -> nothing {
   print(perms)
   print(hasExecute)
 
-  // M2 conversion intrinsics — .toString(), .toNumber(), .toFloat()
-  // (These are M2 INTRINSICS that look like UFCS dispatch — under the
-  //  non-OOP model they ARE standalone functions named toString taking
-  //  receiver as first param. value.toString() is sugar for toString(value).)
+  // M2 conversion intrinsic: .toString()
   const scoreText = score.toString()
-  const balanceFloat = accountBalance.toFloat()
-  const startHealthNum = startHealth.toNumber()
   print(scoreText)
-  print(balanceFloat)
-  print(startHealthNum)
 
   print("")
 
@@ -102,8 +95,41 @@ function main() -> nothing {
   // After M4 P3c (typeck): full borrow-check enforced
   // After M4 P4 (codegen): end-to-end compile + run
   // After M4 P5 (catch-up): int.max, int.min, number.epsilon, .wrappingAdd() etc.
+  // ────── M4: shapes + UFCS methods + ownership ──────
   print("")
-  print("M4 P2 (parser) shipped — typeck + codegen phases to follow.")
+  print("M4 — shapes + methods + ownership:")
+  let p: Player = { name: "Cheddar", health: 100 }
+  greetPlayer(p)
+  healPlayer(p, 20)
+  greetPlayer(p)
+
+  // ────── M5: generics + collections + maybe ──────
+  print("")
+  print("M5 — generics + collections:")
+
+  // Generic function — identity<T> infers T from argument
+  print(identity(42))
+  print(identity("generic"))
+
+  // array<T>: heap-growable, literal init
+  let nums: array<int> = [10, 20, 30]
+  nums.add(40)
+  print(nums.count())
+  print(nums[0].or(-1))
+
+  // fixed<T>: stack-allocated, size locked
+  let tags: fixed<int> = [100, 200, 300]
+  print(tags.count())
+  print(tags[2].or(-1))
+
+  // maybe<T>: absence without null
+  let score: maybe<int> = none
+  print(score.or(0))
+
+  // map<K,V>: hash map with string keys
+  let lookup: map<string, int> = { "alice": 90, "bob": 85 }
+  print(lookup["alice"].or(0))
+  print(lookup.count())
 
   // ────── Deferred features (v0.2+) ──────
   // arena scratch { let temp: array<int> = [...] }  // v0.2 — design/future/arena.md
@@ -157,4 +183,26 @@ function isEven(n: int) -> bool {
 function isOdd(n: int) -> bool {
   if (n == 0) { return false }
   return isEven(n - 1)
+}
+
+
+// ────── M4: shapes + UFCS methods + ownership ──────
+
+shape Player {
+  name: string
+  health: int
+}
+
+function greetPlayer(share self: Player) -> nothing {
+  print(self.name)
+}
+
+function healPlayer(lend self: Player, amount: int) -> nothing {
+  self.health = self.health + amount
+}
+
+// ────── M5: generics + collections + maybe ──────
+
+function identity<T>(give value: T) -> T {
+  return value
 }

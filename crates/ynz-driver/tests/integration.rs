@@ -753,3 +753,54 @@ fn m3_switch_keyword_produces_teaching_diagnostic() {
         "teaching diagnostic must reference switch or if, got:\n{stderr}"
     );
 }
+
+// ── M5: Generics + Collections + Maybe ───────────────────────────────────────
+
+#[test]
+fn m5_identity_generic_fn_prints_42() {
+    // WHY: M5 P4a acceptance criterion. identity<T>(give value: T) -> T is the
+    // simplest generic function. If monomorphization is broken, the call either
+    // fails to compile or produces wrong output.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_identity.ynz"));
+    assert_eq!(code, 0, "m5_identity must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "42\n");
+}
+
+#[test]
+fn m5_maybe_none_or_and_exists() {
+    // WHY: M5 P4a acceptance criterion. Exercises none literal, .or(default),
+    // and flow-sensitive .exists() guard. Wrong output means maybe<T> LLVM lowering
+    // ({i64,i64} struct) is broken.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_maybe.ynz"));
+    assert_eq!(code, 0, "m5_maybe must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "99\n99\n");
+}
+
+#[test]
+fn m5_array_add_count_get() {
+    // WHY: M5 P4a acceptance criterion. Exercises array<int> literal, .add(),
+    // .count(), and bracket index access returning maybe<int>. Wrong output means
+    // ynz_array_* runtime symbols or the array codegen path is broken.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_array.ynz"));
+    assert_eq!(code, 0, "m5_array must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "4\n1\n4\n");
+}
+
+#[test]
+fn m5_fixed_count_and_get() {
+    // WHY: M5 P4a acceptance criterion. Exercises fixed<int> stack allocation,
+    // .count() (compile-time constant), and bracket index access with bounds check.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_fixed.ynz"));
+    assert_eq!(code, 0, "m5_fixed must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "3\n10\n30\n");
+}
+
+#[test]
+fn m5_map_get_set_count() {
+    // WHY: M5 P4b acceptance criterion. Exercises map<string,int> literal, bracket
+    // read, bracket write, .count(). If SipHash init or Swiss Tables lookup is
+    // broken, values will be wrong or the binary will abort.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_map.ynz"));
+    assert_eq!(code, 0, "m5_map must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "90\n85\n95\n2\n");
+}
