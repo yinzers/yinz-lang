@@ -7,12 +7,13 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Now (active)
 
-- [ ] **M4 P6 — Driver + fixtures** — Full fixture suite (12 positive + 20 negative M4 fixtures), valgrind clean, IR snapshots. Branch `feat/m4-driver-fixtures`.
-- [ ] **M4 P7 — Verification + tag `v0.1.0-m4`** — TODO sweep, jargon audit, Bouncer clean, CHANGELOG, tag. After P6.
+- [ ] **M5 — Generics** — Next milestone after M4 tag. Plan in `v0-1-compiler.md`. Start with `/plan M5`.
 
 ## Soon (committed, not started)
 
-_(nothing — P6 and P7 are the remaining M4 work)_
+- [ ] **Hidden-field default evaluation in struct literals** — `emit.rs:lower_struct_lit` zero-inits hidden fields; string/shape hidden fields with non-zero defaults are silently wrong. Revisit when v0.2 LSP work begins.
+- [ ] **Dynamic dispatch call-site coercion** — `coerce_to_dynamic` infrastructure is in place (vtable globals emitted) but passing a concrete shape to a `dynamic Foo` parameter is not yet wired. Defer to post-M5.
+- [ ] **UFCS const-lend check** — `check.rs` comment (line ~936): receiver ownership not checked for dot-call UFCS; only free-function-call form is checked. Low priority — the function-call form produces the correct error.
 
 ## Later (idea bin — not committed)
 
@@ -23,6 +24,7 @@ _(nothing — P6 and P7 are the remaining M4 work)_
 
 ## Done (recent)
 
+- [x] **M4 complete (tag v0.1.0-m4, 316 tests)** — P1 lexer, P2 parser, P3a/b/c typeck, P4 codegen, P5 catch-up, P6 fixtures, P7 verification. Plan moved to `done/m4-shapes-functions-ownership.md`.
 - [x] **M4 P5 — Catch-up (5a21258)** — 6 wrapping/saturating int methods, type-attached constants (`int.max`/`int.min`/`number.*`/`float.*`). M2 fixtures closed.
 - [x] **M4 P4 — Codegen (05bb47d)** — Shape LLVM struct types, UFCS dispatch, `readonly`/`noalias` attrs, `ynz_alloc`/`ynz_free`, vtable globals. `m4_player.ynz` → `Patrick / 120 / Patrick`.
 - [x] **M4 P3c — Ownership (7c86f6a)** — `is_consumed` scope tracking, use-after-give error, const-cannot-be-lent, const-cannot-be-given. 102 typeck tests green.

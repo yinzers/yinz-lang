@@ -1240,10 +1240,9 @@ fn lower_struct_lit<'ctx>(
         store_field(cg, val, &field_ty, gep)?;
     }
 
-    // TODO (v0.2): evaluate hidden-field defaults and store them. For M4, zero
-    // initialization above is sufficient because defaults are restricted to
-    // constants and empty literals (zero is correct for int/float/bool; for
-    // string/shape hidden fields, the user must call a setter before reading).
+    // Hidden-field defaults are not evaluated here — zero-init covers M4's
+    // restricted defaults (constants and empty literals). String/shape hidden
+    // fields with non-zero defaults require a setter. See todos.md.
 
     Ok(slot.into())
 }

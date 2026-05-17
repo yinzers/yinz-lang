@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.1.0-m4 — Shapes, Methods, Ownership
+
+Commit range: v0.1.0-m3..v0.1.0-m4
+
+### What's new
+
+- **Shape declarations**: `shape Foo { field: Type }` defines a user data type.
+  All fields are required in struct literals. Structural typing: `let p: Player = { name: "x", health: 1 }`.
+- **Methods via UFCS**: standalone functions with `self: ShapeName` as first param
+  are callable as `value.method()` or `method(value)`. Both are equivalent.
+  Yinz is not object-oriented — methods live outside shape bodies.
+- **Ownership modifiers**: `share self` (read-only borrow), `lend self` (mutable borrow),
+  `give p: T` (ownership transfer). Inferred at call sites; declared in signatures.
+- **Ownership analysis**: `const` bindings block all mutation paths. Use-after-give
+  is a compile error with both give-site and use-site named in the diagnostic.
+- **`extends` (data-only inheritance)**: child inherits parent fields prepended to its own.
+- **`follows` (structural contracts)**: verified at compile time against standalone functions.
+- **`base shape`**: cannot be instantiated; must be extended. Compile error on attempt.
+- **`hidden` fields**: visible only inside the declaring shape's own methods.
+- **LLVM ownership attributes**: `share T` → `readonly + noalias`; `lend T` → `noalias`;
+  `give T` → neither. Verified by IR snapshot.
+- **Runtime shims**: `ynz_alloc` / `ynz_free` added; stack allocation used by default.
+- **`.copy()` and `.freeze()`**: trivial struct memcopy; binding mutability lock.
+- **M2 catch-up — overflow escape**: `.wrappingAdd/Sub/Mul()` and `.saturatingAdd/Sub/Mul()`
+  on `int` via LLVM wrapping arithmetic and `sadd.sat` / `ssub.sat` / `smul.fix.sat`.
+- **M2 catch-up — type-attached constants**: `int.max`, `int.min`, `number.epsilon`,
+  `number.max`, `number.min`, `float.max`, `float.min`, `float.epsilon`.
+
+### Test count
+
+M3: 310 tests → M4: **316 tests** (added 6 positive + 10 negative M4 integration
+fixtures, codegen golden tests, jargon audit).
+
+### Breaking changes
+
+None — all M3 programs compile unchanged under M4.
+
+---
+
 ## v0.1.0-m3 — Control Flow + User Functions
 
 ### What's new

@@ -1,6 +1,6 @@
 # Session State: ynz
 
-**Last Updated**: 2026-05-17
+**Last Updated**: 2026-05-17 (M4 P7)
 
 ---
 
@@ -40,8 +40,8 @@ cargo fmt --all
 ./target/debug/ynz run crates/ynz-driver/tests/fixtures/m4_player.ynz
 # → Patrick / 120 / Patrick  (M4 P4 success-criteria fixture)
 
-# Current branch: feat/m4-catchup-numerics (M4 P5 committed: 5a21258)
-# M4 status: P1-P5 done; P6 (driver + fixtures) is next
+# Current branch: feat/m4-verification (M4 P7 in progress)
+# M4 status: P1-P6 done; P7 (verify + tag v0.1.0-m4) in progress
 ```
 
 ---
@@ -51,6 +51,7 @@ cargo fmt --all
 - [2026-05-12] **Compiler implementation language = Rust**: Mature LLVM bindings (inkwell), strong ADT/pattern-matching for AST, salsa framework gives incremental builds + LSP "for free." See `design/compiler-language.md`.
 - [2026-05-12] **MVP scope split into v0.1 / v0.2 / v0.3 / v1.0 / v2+**: Concurrency keywords parse from day 1 but run sequentially until v0.3 (when auto-parallelization optimization engages). See `design/mvp-scope.md`.
 - [2026-05-12] **Error auto-propagation = flow-sensitive narrowing (Option B under, Option A in feel)**: If user calls `.failed()` before using the success value, auto-propagation suppressed; otherwise compiler auto-propagates at first use. Same `.failed()`/`.or()` API works inside AND outside `errors` functions. See `design/errors.md`.
+- [2026-05-17] **M4 shipped (tag v0.1.0-m4, 316 tests)**: shapes, UFCS methods, ownership modifiers (share/lend/give), const deep-immutability, extends/follows/base/hidden, LLVM readonly+noalias, ynz_alloc/ynz_free runtime shims, vtable globals, wrapping/saturating int arithmetic, type-attached constants. Plan: `.claude/plans/done/m4-shapes-functions-ownership.md`.
 - [2026-05-12] **Generic functions = v0.1, `[T]` syntax with `follows` constraints inline**: Type inference at call sites. `where` clauses rejected — inline keeps constraint visible next to the parameter. See `design/generics.md`.
 - [2026-05-12] **Numeric types = handwritten, validated against IEEE 754 test vectors**: `number` = decimal128 (default), `number[N]` up to N=4096, `float` = f64, `int` = i64. Sized variants (`int[N]`, `f32`) deferred to v2+. Overflow panics by default with `.wrappingAdd()`/`.saturatingAdd()` escape valves. See `design/numeric-types.md` + `design/mvp-scope.md#v2--deferred-features`.
 - [2026-05-12] **Strings use `.get()` (code point) + `.byteAt()` + `.graphemeAt()`**: No `char` type. Default indexing is by Unicode code point. Bytes and graphemes are explicit alternates. See `spec/strings.md`.

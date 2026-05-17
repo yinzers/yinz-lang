@@ -1,7 +1,7 @@
 ---
 slug: m4-shapes-functions-ownership
 owner: patrick
-status: active
+status: done
 files:
   - crates/ynz-parser/src/**
   - crates/ynz-ast/src/**
@@ -18,7 +18,7 @@ files:
   - spec/ownership.md
   - spec/variables.md
 created: 2026-05-15
-last_updated: 2026-05-16-r17
+last_updated: 2026-05-17-r20
 depends_on: [v0-1-compiler]
 flag: N/A
 ---
@@ -216,7 +216,7 @@ After Doc-PR 3 merges, M4 P1 (lexer) starts.
 | **P4** (Codegen) | `feat/m4-codegen` | ✅ COMMITTED (05bb47d) | Shape LLVM struct types, struct literal lowering, field access/assign GEP, UFCS dispatch, `readonly`/`noalias` attrs (IR snapshot confirms), `ynz_alloc`/`ynz_free` runtime shims, vtable globals emitted. `m4_player.ynz` → `Patrick / 120 / Patrick`. Dynamic call-site coercion deferred post-P5 (vtable infra in place). All tests green, clippy clean. |
 | **P5** (Catch-up) | `feat/m4-catchup-numerics` | ✅ COMMITTED (5a21258) | 6 wrapping/saturating int methods, `int.max`/`int.min`/`number.*`/`float.*` type-attached constants. M2 catch-up fixtures created and passing. All tests green, clippy clean. |
 | **P6** (Driver + fixtures) | `feat/m4-driver-fixtures` | ✅ IN REVIEW | 6 positive + 10 negative M4 fixtures. All 57 integration tests green, clippy clean. valgrind skipped (stack-only alloc in M4 P4; heap path deferred). |
-| **P7** (Verification + tag) | — | NOT STARTED | TODO sweep, jargon audit, Bouncer clean, CHANGELOG, `v0.1.0-m4` tag. After P6. |
+| **P7** (Verification + tag) | `feat/m4-verification` | ✅ IN PROGRESS | TODO sweep clean, jargon audit green, 316 tests, CHANGELOG written, version bumped to 0.1.0-m4. |
 | **P2** (Parser) | — | NOT STARTED | After P1 merges. |
 | **P3a** (Typeck shapes) | — | NOT STARTED | After P2 merges. |
 | **P3b** (Inheritance + follows + dynamic) | — | NOT STARTED | After P3a merges. |

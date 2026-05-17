@@ -1217,14 +1217,14 @@ checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "ynz-ast"
-version = "0.1.0-m3"
+version = "0.1.0-m4"
 dependencies = [
  "ynz-diagnostics",
 ]
 
 [[package]]
 name = "ynz-codegen"
-version = "0.1.0-m3"
+version = "0.1.0-m4"
 dependencies = [
  "inkwell",
  "insta",
@@ -1238,7 +1238,7 @@ dependencies = [
 
 [[package]]
 name = "ynz-diagnostics"
-version = "0.1.0-m3"
+version = "0.1.0-m4"
 dependencies = [
  "ariadne",
  "insta",
@@ -1246,7 +1246,7 @@ dependencies = [
 
 [[package]]
 name = "ynz-driver"
-version = "0.1.0-m3"
+version = "0.1.0-m4"
 dependencies = [
  "clap",
  "insta",
@@ -1259,14 +1259,14 @@ dependencies = [
 
 [[package]]
 name = "ynz-numerics"
-version = "0.1.0-m3"
+version = "0.1.0-m4"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "ynz-parser"
-version = "0.1.0-m3"
+version = "0.1.0-m4"
 dependencies = [
  "insta",
  "salsa",
@@ -1276,14 +1276,14 @@ dependencies = [
 
 [[package]]
 name = "ynz-runtime"
-version = "0.1.0-m3"
+version = "0.1.0-m4"
 dependencies = [
  "ynz-numerics",
 ]
 
 [[package]]
 name = "ynz-typeck"
-version = "0.1.0-m3"
+version = "0.1.0-m4"
 dependencies = [
  "insta",
  "salsa",
