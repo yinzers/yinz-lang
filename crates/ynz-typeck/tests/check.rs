@@ -1246,3 +1246,93 @@ fn type_variant_count_includes_dynamic() {
     ];
     assert_eq!(all.len(), 10, "Type variant count changed from 10 — add // test-ratchet: comment");
 }
+
+// ── M4 P3c: ownership analysis tests ─────────────────────────────────────────
+
+#[test]
+fn give_param_consumes_binding() {
+    // WHY: When a function takes a `give` parameter, the caller's binding is consumed.
+    // Using it afterward must produce a use-after-give error.
+    let out = assert_errors(r#"
+shape Player { name: string }
+function consume(give p: Player) -> nothing { }
+function main() -> nothing {
+  let p: Player = { name: "Patrick" }
+  consume(p)
+  let x = p.name
+}
+"#, 1);
+    assert!(out.diagnostics[0].what.contains("given away"),
+        "Error must mention the binding was given away, got: {:?}", out.diagnostics[0].what);
+}
+
+#[test]
+fn const_binding_cannot_be_given() {
+    // WHY: `const` blocks the `give` path — ownership cannot be transferred out
+    // of a const binding. Const deep-immutability path #3.
+    assert_errors(r#"
+shape Player { name: string }
+function consume(give p: Player) -> nothing { }
+function main() -> nothing {
+  const p: Player = { name: "Patrick" }
+  consume(p)
+}
+"#, 1);
+}
+
+#[test]
+fn const_binding_cannot_be_lent() {
+    // WHY: `const` blocks the `lend` path. Const deep-immutability path #2.
+    assert_errors(r#"
+shape Player { health: int }
+function damage(lend self: Player, amount: int) -> nothing {
+  self.health = self.health - amount
+}
+function main() -> nothing {
+  const p: Player = { health: 100 }
+  damage(p, 10)
+}
+"#, 1);
+}
+
+#[test]
+fn give_twice_is_use_after_give() {
+    // WHY: After a value is given, the second give must see it as consumed.
+    assert_errors(r#"
+shape Player { name: string }
+function consume(give p: Player) -> nothing { }
+function main() -> nothing {
+  let p: Player = { name: "Patrick" }
+  consume(p)
+  consume(p)
+}
+"#, 1);
+}
+
+#[test]
+fn share_on_const_is_allowed() {
+    // WHY: A `share` (read-only) parameter can receive a const binding.
+    assert_clean(r#"
+shape Player { name: string }
+function greet(share p: Player) -> string { return p.name }
+function main() -> nothing {
+  const p: Player = { name: "Patrick" }
+  let g = greet(p)
+  print(g)
+}
+"#);
+}
+
+#[test]
+fn unspecified_param_accepts_const() {
+    // WHY: No ownership modifier defaults to share semantics. Const bindings are fine.
+    assert_clean(r#"
+shape Player { name: string }
+function greet(p: Player) -> string { return p.name }
+function main() -> nothing {
+  const p: Player = { name: "Patrick" }
+  let g = greet(p)
+  print(g)
+}
+"#);
+}

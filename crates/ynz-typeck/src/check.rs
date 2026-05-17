@@ -109,6 +109,7 @@ impl<'b> Checker<'b> {
                     is_const: false,
                     is_param: true,
                     is_loop_var: false,
+                    is_consumed: false,
                     defined_at: param.name_span.clone(),
                 },
             );
@@ -202,6 +203,7 @@ impl<'b> Checker<'b> {
                 is_const,
                 is_param: false,
                 is_loop_var: false,
+                is_consumed: false,
                 defined_at: name_span.clone(),
             });
             return;
@@ -240,6 +242,7 @@ impl<'b> Checker<'b> {
                 is_const,
                 is_param: false,
                 is_loop_var: false,
+                is_consumed: false,
                 defined_at: name_span.clone(),
             },
         );
@@ -416,6 +419,7 @@ impl<'b> Checker<'b> {
                 is_const: false,
                 is_param: false,
                 is_loop_var: true,
+                is_consumed: false,
                 defined_at: var_span.clone(),
             },
         );
@@ -546,6 +550,15 @@ impl<'b> Checker<'b> {
 
     fn resolve_ident(&mut self, name: &str, span: &SourceSpan) -> Type {
         if let Some(entry) = self.scope.lookup(name) {
+            if entry.is_consumed {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("`{name}` was already given away and cannot be used here."),
+                    "Create a new value or use `.copy()` before passing if you need it in both places.",
+                    "When a function takes ownership of a value, the caller no longer holds it. Using it afterward would be a memory safety violation.",
+                ));
+                return Type::Error;
+            }
             return entry.ty.clone();
         }
 
@@ -591,8 +604,9 @@ impl<'b> Checker<'b> {
                 // User-defined function?
                 if let Some(sig) = self.sig_table.fns.get(name) {
                     let params = sig.params.clone();
+                    let ownerships = sig.param_ownerships.clone();
                     let ret = sig.ret.clone();
-                    return self.check_user_fn_call(call, name, &params, ret);
+                    return self.check_user_fn_call(call, name, &params, &ownerships, ret);
                 }
                 // Unknown
                 let mut candidates: Vec<&str> = self.sig_table.all_names();
@@ -672,6 +686,7 @@ impl<'b> Checker<'b> {
         call: &CallExpr,
         name: &str,
         params: &[(String, Type)],
+        ownerships: &[Option<ynz_ast::nodes::OwnershipModifier>],
         ret: Type,
     ) -> Type {
         if call.args.len() != params.len() {
@@ -688,8 +703,43 @@ impl<'b> Checker<'b> {
             for arg in &call.args { self.infer_expr(arg, None); }
             return Type::Error;
         }
-        for (arg, (_, expected_ty)) in call.args.iter().zip(params.iter()) {
+        for (i, (arg, (_, expected_ty))) in call.args.iter().zip(params.iter()).enumerate() {
+            let ownership = ownerships.get(i).and_then(|o| o.as_ref());
             let actual_ty = self.infer_expr(arg, Some(expected_ty));
+
+            // Ownership enforcement on direct identifier arguments.
+            if let Some(binding_name) = simple_ident_name(arg) {
+                match ownership {
+                    Some(ynz_ast::nodes::OwnershipModifier::Give) => {
+                        if let Some(entry) = self.scope.lookup(binding_name) {
+                            if entry.is_const {
+                                self.diags.push(Diagnostic::error(
+                                    arg.span().clone(),
+                                    format!("`{binding_name}` is `const` and cannot be given away."),
+                                    format!("Declare `{binding_name}` with `let` if you need to transfer ownership."),
+                                    "`const` bindings are fully read-only — the compiler cannot transfer ownership of a value that may not change.",
+                                ));
+                            } else if !entry.is_consumed {
+                                self.scope.consume(binding_name);
+                            }
+                        }
+                    }
+                    Some(ynz_ast::nodes::OwnershipModifier::Lend) => {
+                        if let Some(entry) = self.scope.lookup(binding_name) {
+                            if entry.is_const {
+                                self.diags.push(Diagnostic::error(
+                                    arg.span().clone(),
+                                    format!("`{binding_name}` is `const` — `{name}` needs to mutate it but `const` blocks mutation."),
+                                    format!("Declare `{binding_name}` with `let` if you need `{name}` to modify it."),
+                                    "`const` bindings cannot be lent for mutation. The `lend` modifier means the function will write to the value.",
+                                ));
+                            }
+                        }
+                    }
+                    _ => {} // share or unspecified: no restrictions
+                }
+            }
+
             if matches!(actual_ty, Type::Range { .. }) {
                 self.diags.push(Diagnostic::error(
                     arg.span().clone(),
@@ -883,6 +933,11 @@ impl<'b> Checker<'b> {
                 // Check that first param type matches receiver
                 if let Some((_, first_ty)) = sig.params.first() {
                     if first_ty == receiver_ty || *first_ty == Type::Error {
+                        // Note: receiver ownership check for UFCS is limited here —
+                        // full receiver tracking requires the call expression context.
+                        // The call site's check_user_fn_call handles arg 0's ownership
+                        // when called as a free function; UFCS receiver is checked
+                        // via the MethodCall path which doesn't have the arg list here.
                         return sig.ret.clone();
                     }
                 }
@@ -1425,6 +1480,18 @@ fn levenshtein(a: &str, b: &str) -> usize {
         }
     }
     dp[m][n]
+}
+
+/// Return the identifier name if `expr` is a bare `Ident` or `SelfValue`.
+///
+/// Used for ownership checking: ownership enforcement only applies to direct
+/// binding references, not to computed expressions like `foo()` or `a + b`.
+fn simple_ident_name(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Ident(name, _) => Some(name.as_str()),
+        Expr::SelfValue { .. } => Some("self"),
+        _ => None,
+    }
 }
 
 /// Walk a field-access chain to find the root binding name.

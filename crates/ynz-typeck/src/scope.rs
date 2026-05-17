@@ -9,10 +9,13 @@ pub struct ScopeEntry {
     pub ty: Type,
     /// True when declared with `const`; the type checker rejects reassignment.
     pub is_const: bool,
-    /// True for function parameters — reassignment emits an M4 deferral diagnostic.
+    /// True for function parameters — reassignment emits a diagnostic.
     pub is_param: bool,
     /// True for `for`-loop variables — immutable inside the loop body.
     pub is_loop_var: bool,
+    /// True after ownership was transferred via a `give` parameter.
+    /// Any subsequent use of this binding produces a use-after-give error.
+    pub is_consumed: bool,
     /// Where the binding was declared (for "previously defined here" spans).
     pub defined_at: SourceSpan,
 }
@@ -63,6 +66,16 @@ impl Scope {
             }
         }
         None
+    }
+
+    /// Mark a binding as consumed (ownership transferred). No-op if not found.
+    pub fn consume(&mut self, name: &str) {
+        for frame in self.frames.iter_mut().rev() {
+            if let Some(entry) = frame.get_mut(name) {
+                entry.is_consumed = true;
+                return;
+            }
+        }
     }
 
     /// All names currently in scope (all frames), for Levenshtein suggestions.

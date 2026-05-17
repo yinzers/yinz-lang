@@ -67,7 +67,9 @@ cargo fmt --all
 - [2026-05-14] **M3 complete (9653dbd, tag v0.1.0-m3)**: Control flow (`if`, `while`, `for`), multi-case `if`, user-defined functions with params + return types, two-pass typeck, return-path analysis, full LLVM lowering. 310 tests. `fib(10) = 55`. Plan: `.claude/plans/done/m3-control-flow-fns.md`.
 - [2026-05-16] **M4 Doc-PRs 1+2 complete (54521dd)**: Non-OOP model locked. `shape`/`follows`/`extends`/UFCS locked. Body-level `.share/.lend/.give` removed. Annotation-only struct literals. `override` removed. All design+spec docs rewritten. Commit message: "M4 P1 (lexer) cleared to start."
 - [2026-05-16] **M4 P1 complete (05c5296, merged to main)**: 8 new tokens (49→57). 6 banned-keyword handlers. All tests green.
-- [2026-05-16] **M4 P2 complete (84db1d2, branch feat/m4-parser, PR open)**: AST + parser for shapes. 4 new Expr variants (FieldAccess, StructLit, PostfixOp, SelfValue), 1 Stmt (FieldAssign), 2 Type (Dynamic, SelfType), full ShapeDecl. Ownership modifiers (`share`/`lend`/`give`) now parse (replaced M3 deferral). 68 parse tests green. PR: https://github.com/patrickrizzardi/ynz/pull/new/feat/m4-parser
+- [2026-05-16] **M4 P2 complete (84db1d2, merged)**: AST + parser for shapes. 4 new Expr variants, 1 Stmt, 2 Type variants. 68 parse tests green.
+- [2026-05-16] **M4 P3a complete (244ac6d, merged)**: ShapeTable, Type::Shape, struct-lit typeck, field access/assign, UFCS, hidden-field guard, base-shape guard. 90 typeck tests green.
+- [2026-05-16] **M4 P3b complete (3508e7b, branch feat/m4-typeck-inheritance, PR open)**: `extends` field inheritance + cycle detection, `follows` contract verification, `Type::Dynamic` + dynamic dispatch routing. 96 typeck tests green. PR: https://github.com/patrickrizzardi/ynz/pull/new/feat/m4-typeck-inheritance
 
 ---
 

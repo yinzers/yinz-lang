@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use ynz_ast::nodes::{Item, Module, Type as AstType};
+use ynz_ast::nodes::{Item, Module, OwnershipModifier, Type as AstType};
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 use crate::{shapes::ShapeTable, types::Type};
@@ -10,6 +10,8 @@ use crate::{shapes::ShapeTable, types::Type};
 pub struct FunctionSig {
     /// (parameter_name, resolved_type) pairs, in declaration order.
     pub params: Vec<(String, Type)>,
+    /// Ownership modifier for each parameter (None = share/inferred).
+    pub param_ownerships: Vec<Option<OwnershipModifier>>,
     pub ret: Type,
     pub decl_span: SourceSpan,
 }
@@ -55,6 +57,11 @@ pub fn collect_signatures(
                     .iter()
                     .map(|p| (p.name.clone(), sig_ast_type_to_type(&p.ty, shape_table)))
                     .collect();
+                let param_ownerships: Vec<Option<OwnershipModifier>> = f
+                    .params
+                    .iter()
+                    .map(|p| p.ownership.clone())
+                    .collect();
                 let ret = sig_ast_type_to_type(&f.return_type, shape_table);
 
                 if let Some(existing) = table.fns.get(&f.name) {
@@ -95,7 +102,7 @@ pub fn collect_signatures(
 
                 table.fns.insert(
                     f.name.clone(),
-                    FunctionSig { params, ret, decl_span: f.span.clone() },
+                    FunctionSig { params, param_ownerships, ret, decl_span: f.span.clone() },
                 );
             }
         }
