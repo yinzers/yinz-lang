@@ -1,4 +1,5 @@
 pub mod check;
+pub mod generics;
 pub mod intrinsics;
 pub mod queries;
 pub mod return_paths;
@@ -8,6 +9,7 @@ pub mod signatures;
 pub mod types;
 
 pub use check::{check, type_attached_const_type, TypedModule};
+pub use generics::{GenericFnTable, GenericShapeTable, MonomorphizationTable};
 pub use intrinsics::PrimitiveIntrinsicTable;
 pub use queries::{check_query, module_signatures_query, CheckOutput, SignatureOutput};
 pub use shapes::{ShapeDef, ShapeTable};

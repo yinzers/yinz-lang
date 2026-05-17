@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use ynz_ast::nodes::{
     BinOpKind, Block, CallExpr, Expr, FunctionDecl, Item, MatchArm, MatchPatternKind, Module,
     PostfixOpKind, Stmt, StructLitField, Type as AstType, UnaryOpKind,
@@ -5,6 +7,10 @@ use ynz_ast::nodes::{
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 use crate::{
+    generics::{
+        apply_substitution, unify_param, GenericFnSig, GenericFnTable, GenericShapeTable,
+        MonoSignature, MonomorphizationTable, Substitution,
+    },
     intrinsics::PrimitiveIntrinsicTable,
     return_paths::analyze_return_paths,
     scope::{Scope, ScopeEntry},
@@ -25,39 +31,46 @@ pub struct TypedModule {
     pub expr_types: std::collections::HashMap<(usize, usize), Type>,
 }
 
-/// Run the M4 type checker over all function bodies.
+/// Run the M5 type checker over all function bodies.
 ///
-/// Depends on both `sig_table` (function signatures) and `shape_table`
-/// (shape declarations and their field layouts) produced by the pre-passes.
+/// Returns the typed module, monomorphization table, and accumulated diagnostics.
 pub fn check(
     module: &Module,
     sig_table: &SignatureTable,
     shape_table: &ShapeTable,
+    generic_fn_table: &GenericFnTable,
+    generic_shape_table: &GenericShapeTable,
     intrinsics: &PrimitiveIntrinsicTable,
-) -> (TypedModule, DiagnosticBucket) {
+) -> (TypedModule, MonomorphizationTable, DiagnosticBucket) {
     let mut checker = Checker {
         intrinsics,
         sig_table,
         shape_table,
-        expr_types: std::collections::HashMap::new(),
+        generic_fn_table,
+        generic_shape_table,
+        expr_types: HashMap::new(),
         diags: DiagnosticBucket::new(),
         scope: Scope::new(),
         current_fn_ret: Type::Nothing,
         current_shape: None,
+        type_param_scope: HashMap::new(),
+        mono_table: MonomorphizationTable::default(),
     };
     checker.check_module(module);
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
     };
-    (typed, checker.diags)
+    (typed, checker.mono_table, checker.diags)
 }
 
 struct Checker<'b> {
     intrinsics: &'b PrimitiveIntrinsicTable,
     sig_table: &'b SignatureTable,
     shape_table: &'b ShapeTable,
-    expr_types: std::collections::HashMap<(usize, usize), Type>,
+    generic_fn_table: &'b GenericFnTable,
+    generic_shape_table: &'b GenericShapeTable,
+    expr_types: HashMap<(usize, usize), Type>,
     diags: DiagnosticBucket,
     scope: Scope,
     /// Return type of the function currently being checked.
@@ -65,6 +78,11 @@ struct Checker<'b> {
     /// Name of the shape whose method we're currently checking (for `self`/`Self` resolution
     /// and hidden-field visibility). `None` when checking a free function.
     current_shape: Option<String>,
+    /// Type parameters in scope for the function currently being checked.
+    /// Maps type-param name → unit; presence means the name resolves to `TypeParam`.
+    type_param_scope: HashMap<String, ()>,
+    /// Accumulated monomorphization entries for all generic call sites in this module.
+    mono_table: MonomorphizationTable,
 }
 
 impl<'b> Checker<'b> {
@@ -84,6 +102,11 @@ impl<'b> Checker<'b> {
 
     fn check_function(&mut self, f: &FunctionDecl) {
         if f.return_type == AstType::Error || body_has_error_node(&f.body.stmts) {
+            return;
+        }
+
+        if !f.generics.is_empty() {
+            self.check_generic_function_body(f);
             return;
         }
 
@@ -144,6 +167,41 @@ impl<'b> Checker<'b> {
         }
     }
 
+
+    /// Type-check the body of a generic function under its type-parameter scope.
+    ///
+    /// Generic bodies are checked with TypeParam types in scope. No return-path
+    /// analysis at P3a — the generic signature is trusted; codegen verifies per-instantiation.
+    fn check_generic_function_body(&mut self, f: &FunctionDecl) {
+        // Push type param names into the type_param_scope.
+        for gp in &f.generics {
+            self.type_param_scope.insert(gp.name.clone(), ());
+        }
+
+        let ret_ty = self.ast_type_to_type(&f.return_type);
+        self.current_fn_ret = ret_ty;
+        self.current_shape = None;
+
+        self.scope.push();
+        for param in &f.params {
+            let param_ty = self.ast_type_to_type(&param.ty);
+            self.scope.insert(param.name.clone(), ScopeEntry {
+                ty: param_ty,
+                is_const: false,
+                is_param: true,
+                is_loop_var: false,
+                is_consumed: false,
+                defined_at: param.name_span.clone(),
+            });
+        }
+        self.check_stmts(&f.body.stmts);
+        self.scope.pop();
+
+        // Clear type params when done with this function.
+        for gp in &f.generics {
+            self.type_param_scope.remove(&gp.name);
+        }
+    }
 
     fn check_stmts(&mut self, stmts: &[Stmt]) {
         for stmt in stmts {
@@ -651,15 +709,21 @@ impl<'b> Checker<'b> {
             "print" => self.check_print_call(call),
             "range" => self.check_range_call(call),
             name => {
-                // User-defined function?
+                // Non-generic user-defined function?
                 if let Some(sig) = self.sig_table.fns.get(name) {
                     let params = sig.params.clone();
                     let ownerships = sig.param_ownerships.clone();
                     let ret = sig.ret.clone();
                     return self.check_user_fn_call(call, name, &params, &ownerships, ret);
                 }
+                // Generic user-defined function?
+                if let Some(sig) = self.generic_fn_table.fns.get(name) {
+                    let sig = sig.clone();
+                    return self.check_generic_fn_call(call, name, &sig);
+                }
                 // Unknown
                 let mut candidates: Vec<&str> = self.sig_table.all_names();
+                candidates.extend(self.generic_fn_table.all_names());
                 candidates.extend(["print", "range"]);
                 let suggestion = find_closest_name(name, &candidates);
                 let what_instead = match suggestion {
@@ -947,6 +1011,153 @@ impl<'b> Checker<'b> {
         }
     }
 
+    /// Type-check a call to a generic function, performing type inference and
+    /// constraint checking, then recording the instantiation in the MonomorphizationTable.
+    fn check_generic_fn_call(&mut self, call: &CallExpr, name: &str, sig: &GenericFnSig) -> Type {
+        let non_self_params: Vec<(String, Type)> = sig.params.iter()
+            .filter(|(p, _)| p != "self")
+            .cloned()
+            .collect();
+
+        if call.args.len() != non_self_params.len() {
+            self.diags.push(Diagnostic::error(
+                call.span.clone(),
+                format!(
+                    "`{name}` takes {} argument(s), but {} were given.",
+                    non_self_params.len(),
+                    call.args.len()
+                ),
+                format!("Call it with {} argument(s).", non_self_params.len()),
+                "Every function call must match the number of arguments the function declares.",
+            ));
+            for arg in &call.args { self.infer_expr(arg, None); }
+            return Type::Error;
+        }
+
+        let mut subst: Substitution = HashMap::new();
+
+        // Explicit type args (e.g. `foo<int>(x)`) seed the substitution directly.
+        if let Some(type_args) = &call.type_args {
+            for (tp_name, ast_ty) in sig.type_params.iter().zip(type_args.iter()) {
+                let concrete = self.ast_type_to_type(ast_ty);
+                subst.insert(tp_name.clone(), concrete);
+            }
+        }
+
+        // Infer remaining type params from argument types; enforce ownership rules.
+        // Ownerships aligned with non_self_params (skip the `self` entry if present).
+        let skip = sig.params.len() - non_self_params.len();
+        let non_self_ownerships: Vec<Option<ynz_ast::nodes::OwnershipModifier>> =
+            sig.param_ownerships.iter().skip(skip).cloned().collect();
+        let mut arg_types = Vec::new();
+        for (i, (arg, (_, param_ty))) in call.args.iter().zip(non_self_params.iter()).enumerate() {
+            let actual = self.infer_expr(arg, None);
+            arg_types.push(actual.clone());
+            if actual != Type::Error {
+                let _ = unify_param(param_ty, &actual, &mut subst);
+            }
+            // Ownership enforcement (mirrors check_user_fn_call).
+            let ownership = non_self_ownerships.get(i).and_then(|o| o.as_ref());
+            if let Some(binding_name) = simple_ident_name(arg) {
+                match ownership {
+                    Some(ynz_ast::nodes::OwnershipModifier::Give) => {
+                        if let Some(entry) = self.scope.lookup(binding_name) {
+                            if entry.is_const {
+                                self.diags.push(Diagnostic::error(
+                                    arg.span().clone(),
+                                    format!("`{binding_name}` is `const` and cannot be given away."),
+                                    format!("Declare `{binding_name}` with `let` if you need to transfer ownership."),
+                                    "`const` bindings are fully read-only — the compiler cannot transfer ownership of a value that may not change.",
+                                ));
+                            } else if !entry.is_consumed {
+                                self.scope.consume(binding_name);
+                            }
+                        }
+                    }
+                    Some(ynz_ast::nodes::OwnershipModifier::Lend) => {
+                        if let Some(entry) = self.scope.lookup(binding_name) {
+                            if entry.is_const {
+                                self.diags.push(Diagnostic::error(
+                                    arg.span().clone(),
+                                    format!("`{binding_name}` is `const` — `{name}` needs to mutate it but `const` blocks mutation."),
+                                    format!("Declare `{binding_name}` with `let` if you need `{name}` to modify it."),
+                                    "`const` bindings cannot be lent for mutation.",
+                                ));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Verify all type params were resolved.
+        let mut ok = true;
+        for tp_name in &sig.type_params {
+            if !subst.contains_key(tp_name) {
+                self.diags.push(Diagnostic::error(
+                    call.span.clone(),
+                    format!("Cannot work out the type parameter `{tp_name}` for function `{name}` — pass a value or annotate explicitly."),
+                    format!("Examples: `{name}(5)` (T = int) or `{name}<int>()`"),
+                    "Yinz infers type parameters from the argument types. If there are no arguments, specify the type explicitly.",
+                ));
+                ok = false;
+            }
+        }
+        if !ok { return Type::Error; }
+
+        // Verify follows constraints.
+        for (tp_name, contracts) in &sig.constraints {
+            let Some(concrete_ty) = subst.get(tp_name) else { continue };
+            let concrete_ty = concrete_ty.clone();
+            for contract_name in contracts {
+                match &concrete_ty {
+                    Type::Shape { name: shape_name } => {
+                        let satisfies = self.shape_table.get(shape_name)
+                            .map(|def| def.follows.contains(contract_name))
+                            .unwrap_or(false);
+                        if !satisfies {
+                            self.diags.push(Diagnostic::error(
+                                call.span.clone(),
+                                format!("Type `{shape_name}` does not follow contract `{contract_name}`."),
+                                format!("To use `{shape_name}` here, add `follows {contract_name}` to its declaration AND implement the required methods."),
+                                format!("`{name}<{tp_name} follows {contract_name}>` requires the concrete type to satisfy the `{contract_name}` contract."),
+                            ));
+                            return Type::Error;
+                        }
+                    }
+                    other => {
+                        self.diags.push(Diagnostic::error(
+                            call.span.clone(),
+                            format!("Type `{}` does not follow contract `{contract_name}` — only shapes can follow contracts.", type_name(other)),
+                            format!("Use a shape type for `{tp_name}`, or remove the `follows {contract_name}` constraint."),
+                            "`follows` constraints can only be satisfied by user-defined shapes.",
+                        ));
+                        return Type::Error;
+                    }
+                }
+            }
+        }
+
+        // Compute concrete return type.
+        let concrete_ret = apply_substitution(&sig.ret, &subst);
+
+        // Record the instantiation.
+        let concrete_type_args: Vec<Type> = sig.type_params.iter()
+            .map(|tp| subst.get(tp).cloned().unwrap_or(Type::Error))
+            .collect();
+        let concrete_params: Vec<Type> = non_self_params.iter()
+            .map(|(_, ty)| apply_substitution(ty, &subst))
+            .collect();
+        self.mono_table.record(
+            name.to_string(),
+            concrete_type_args,
+            MonoSignature { param_types: concrete_params, ret_type: concrete_ret.clone() },
+        );
+
+        concrete_ret
+    }
+
     fn check_method_call(
         &mut self,
         receiver_ty: &Type,
@@ -1040,8 +1251,16 @@ impl<'b> Checker<'b> {
             AstType::Bool => Type::Bool,
             AstType::Error => Type::Error,
             AstType::Named(n, _) if n == "string" => Type::String,
+            // Type param names resolve to TypeParam when inside a generic context.
+            AstType::Named(n, _) if self.type_param_scope.contains_key(n) => {
+                Type::TypeParam { name: n.clone() }
+            }
             AstType::Named(n, _) if self.shape_table.contains(n) => {
                 Type::Shape { name: n.clone() }
+            }
+            AstType::Named(n, _) if self.generic_shape_table.contains(n) => {
+                // Bare generic shape name without type args — invalid in non-generic context.
+                Type::Error
             }
             AstType::Named(n, span) => {
                 self.diags.push(Diagnostic::error(
@@ -1080,12 +1299,24 @@ impl<'b> Checker<'b> {
                     Type::Error
                 }
             }
-            // M5 P3a / P3b implement these (generics engine + built-in collections).
-            // P1 ships AST scaffolding only; the parser does not construct these in
-            // M5 P1, so reaching here returns Type::Error.
-            AstType::TypeParam { .. }
-            | AstType::Generic { .. }
-            | AstType::Maybe { .. } => Type::Error,
+            AstType::TypeParam { name, .. } => {
+                if self.type_param_scope.contains_key(name) {
+                    Type::TypeParam { name: name.clone() }
+                } else {
+                    Type::Error
+                }
+            }
+            AstType::Generic { name, args, .. } => {
+                let resolved_args: Vec<Type> = args.iter().map(|a| self.ast_type_to_type(a)).collect();
+                if self.generic_shape_table.contains(name) {
+                    Type::Generic { name: name.clone(), args: resolved_args }
+                } else {
+                    // P3b handles built-in collection names (array, fixed, map, maybe).
+                    Type::Error
+                }
+            }
+            // maybe<T>: P3b.
+            AstType::Maybe { .. } => Type::Error,
         }
     }
 
@@ -1215,6 +1446,34 @@ impl<'b> Checker<'b> {
     /// Infer the type of a field access `receiver.field`.
     fn infer_field_access(&mut self, receiver: &Expr, field: &str, field_span: &SourceSpan) -> Type {
         let receiver_ty = self.infer_expr(receiver, None);
+
+        // Generic shape field access: `p.first` where `p: Pair<int, string>`.
+        if let Type::Generic { name, args } = &receiver_ty {
+            let name = name.clone();
+            let args = args.clone();
+            if let Some(generic_def) = self.generic_shape_table.get(&name) {
+                let subst = generic_def.make_substitution(&args);
+                return match generic_def.field_type(field, &subst) {
+                    Some(ty) => ty,
+                    None => {
+                        let available = generic_def.field_names();
+                        let suggestion = find_closest_name(field, &available);
+                        let what_instead = match suggestion {
+                            Some(close) => format!("Did you mean `{close}`?"),
+                            None => format!("`{name}` has these fields: {}", available.join(", ")),
+                        };
+                        self.diags.push(Diagnostic::error(
+                            field_span.clone(),
+                            format!("`{name}` does not have a field called `{field}`.",),
+                            what_instead,
+                            "Field names must match exactly what was declared in the `shape` body.",
+                        ));
+                        Type::Error
+                    }
+                };
+            }
+        }
+
         // Dynamic dispatch: treat the contract shape as the lookup target.
         let shape_name = match &receiver_ty {
             Type::Shape { name } => name.clone(),
@@ -1626,8 +1885,10 @@ mod tests {
             Type::Nothing,
         );
         let shape_table = crate::shapes::collect_shapes(&module, &mut DiagnosticBucket::new());
+        let generic_shape_table = crate::shapes::collect_generic_shapes(&module, &mut DiagnosticBucket::new());
         let sig_table = crate::signatures::collect_signatures(&module, &mut DiagnosticBucket::new(), &shape_table);
-        let (_, diags) = check(&module, &sig_table, &shape_table, &intrinsics);
+        let generic_fn_table = crate::signatures::collect_generic_signatures(&module, &mut DiagnosticBucket::new(), &shape_table);
+        let (_, _, diags) = check(&module, &sig_table, &shape_table, &generic_fn_table, &generic_shape_table, &intrinsics);
         let diags: Vec<_> = diags.into_iter().collect();
         assert_eq!(diags.len(), 1, "Expected 1 type-mismatch diagnostic, got: {diags:#?}");
 
