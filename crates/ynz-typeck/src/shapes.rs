@@ -219,8 +219,7 @@ fn detect_extends_cycles(table: &ShapeTable, diags: &mut DiagnosticBucket) {
     for name in table.shapes.keys() {
         let mut visited: Vec<String> = vec![name.clone()];
         let mut current = name.clone();
-        loop {
-            let Some(def) = table.shapes.get(&current) else { break };
+        while let Some(def) = table.shapes.get(&current) {
             let Some(parent) = &def.extends else { break };
             if visited.contains(parent) {
                 let chain = visited.join(" → ");
@@ -266,7 +265,7 @@ fn flatten_inherited_fields(table: &mut ShapeTable, _diags: &mut DiagnosticBucke
         let mut all_fields: Vec<FieldDef> = parent_fields.into_iter()
             .filter(|f| !own_names.contains(f.name.as_str()))
             .collect();
-        all_fields.extend(child.fields.drain(..));
+        all_fields.append(&mut child.fields);
         child.fields = all_fields;
     }
 }
@@ -279,7 +278,7 @@ fn detect_field_cycles(table: &ShapeTable, diags: &mut DiagnosticBucket) {
             diags.push(Diagnostic::error(
                 def.defined_at.clone(),
                 format!("`{}` contains a direct field cycle.", name),
-                format!("Use a separate shape that holds a reference, or redesign to break the cycle."),
+                "Use a separate shape that holds a reference, or redesign to break the cycle.".to_string(),
                 "A shape cannot directly contain itself (or a chain that leads back to itself) — \
                  that would require infinite memory. Use indirection to express recursive structures.",
             ));

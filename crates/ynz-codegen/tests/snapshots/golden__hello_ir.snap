@@ -56,6 +56,10 @@ declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64) #0
 
 declare i32 @ynz_string_eq(ptr, ptr)
 
+declare ptr @ynz_alloc(i64)
+
+declare void @ynz_free(ptr, i64)
+
 define i32 @main() {
 entry:
   %puts = call i32 @puts(ptr @str)

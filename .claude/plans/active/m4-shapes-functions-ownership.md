@@ -204,7 +204,7 @@ After Doc-PR 3 merges, M4 P1 (lexer) starts.
 | **Doc-PR 2** (Docs rewrite) | #8 | ✅ COMPLETE | REWRITTEN `design/type-system.md`, `design/ownership.md`, `spec/types.md`, `spec/ownership.md`, `spec/operators.md`, `spec/concurrency.md`. MEDIUM EDITS `design/iterables.md`, `spec/iterables.md`, `design/ide-hints.md`, `.claude/rules/inference.md`, `.claude/rules/vocabulary.md`. Small edits 8 more files. **Committed in `54521dd`**. Commit message says "M4 P1 (lexer) cleared to start." |
 | **Doc-PR 3** (Plan rewrite) | #9 | PENDING | Rewrite this plan's phase bodies (P2/P3a/P3b/P4) for standalone+UFCS model per FINAL LOCKED DECISIONS items #29-#37. Update success criteria + invariants subsections + anti-pattern callouts. DEFERRED — FINAL LOCKED DECISIONS section above is authoritative for implementation; plan body rewrite can happen concurrently or after P1 merges. |
 
-### Phase execution status (r19, 2026-05-17)
+### Phase execution status (r20, 2026-05-17)
 
 | Phase | Branch | Status | Notes |
 |---|---|---|---|
@@ -213,7 +213,7 @@ After Doc-PR 3 merges, M4 P1 (lexer) starts.
 | **P3a** (Typeck shapes) | `feat/m4-typeck-shapes` | ✅ MERGED (244ac6d) | ShapeTable, struct-lit typeck, field access/assign, UFCS, hidden-field guard, base-shape guard. 90 typeck tests green. |
 | **P3b** (Inheritance + follows + dynamic) | `feat/m4-typeck-inheritance` | ✅ MERGED (3508e7b) | `extends` field inheritance + cycle detection, `follows` contract verification, `Type::Dynamic`. 96 tests green. |
 | **P3c** (Ownership analysis) | `feat/m4-ownership` | ✅ MERGED (7c86f6a) | `is_consumed` tracking, use-after-give, const-cannot-be-lent/given. All 5 const deep-immutability paths covered. 102 tests green. |
-| **P4** (Codegen) | `feat/m4-codegen` | NOT STARTED | LLVM `readonly`/`noalias` on params, shape struct layout, heap alloc/free via `ynz_alloc`/`ynz_free`, drop-on-scope-exit, vtable for `dynamic`. Next phase. |
+| **P4** (Codegen) | `feat/m4-codegen` | ✅ IN REVIEW | Shape LLVM struct types, struct literal lowering, field access/assign GEP, UFCS dispatch, `readonly`/`noalias` attrs (verified by IR snapshot), `ynz_alloc`/`ynz_free` runtime shims, vtable globals emitted. `m4_player.ynz` runs correctly (`Patrick / 120 / Patrick`). Dynamic call-site coercion deferred to post-P5 (infrastructure in place). All tests green, clippy clean. |
 | **P5** (Catch-up) | — | NOT STARTED | `.wrappingAdd()`/`.saturatingAdd()` on `int`; `int.max`/`int.min`/`number.epsilon`/`number.max`. Independent of P4. |
 | **P6** (Driver + fixtures) | — | NOT STARTED | 12 positive + 20 negative M4 fixtures; valgrind clean; IR snapshots. After P4. |
 | **P7** (Verification + tag) | — | NOT STARTED | TODO sweep, jargon audit, Bouncer clean, CHANGELOG, `v0.1.0-m4` tag. After P6. |

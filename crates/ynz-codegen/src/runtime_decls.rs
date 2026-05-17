@@ -38,6 +38,11 @@ pub struct RuntimeDecls<'ctx> {
 
     // String equality for multi-case match on strings: (ptr a, ptr b) → i32 (1=equal, 0=not)
     pub string_eq: FunctionValue<'ctx>,
+
+    // Heap allocator (M4): (size: usize) → *mut u8
+    pub ynz_alloc: FunctionValue<'ctx>,
+    // Heap deallocator (M4): (ptr: *mut u8, size: usize) → void
+    pub ynz_free: FunctionValue<'ctx>,
 }
 
 impl<'ctx> RuntimeDecls<'ctx> {
@@ -135,6 +140,17 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 module,
                 "ynz_string_eq",
                 i32.fn_type(&[ptr.into(), ptr.into()], false),
+            ),
+
+            ynz_alloc: declare_fn(
+                module,
+                "ynz_alloc",
+                ptr.fn_type(&[i64.into()], false),
+            ),
+            ynz_free: declare_fn(
+                module,
+                "ynz_free",
+                void.fn_type(&[ptr.into(), i64.into()], false),
             ),
         }
     }

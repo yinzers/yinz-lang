@@ -1730,9 +1730,7 @@ impl<'a> Parser<'a> {
             _ => return None,
         };
 
-        if self.expect(&Token::LParen).is_none() {
-            return None;
-        }
+        self.expect(&Token::LParen)?;
 
         // Optional receiver: `share self` / `lend self` / `give self`
         let mut receiver = None;

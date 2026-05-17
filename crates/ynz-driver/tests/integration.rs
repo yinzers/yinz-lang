@@ -283,6 +283,19 @@ fn m3_fib_prints_55() {
     assert_eq!(stdout, "55\n", "fib(10) must print 55");
 }
 
+// ── M4 integration tests ─────────────────────────────────────────────────────
+
+#[test]
+fn m4_player_shape_compiles_and_produces_correct_output() {
+    // WHY: M4 P4 success criterion. Exercises shape struct literals, field access,
+    // UFCS dispatch (share/lend/give self), and lend mutation. If any codegen path
+    // for shapes is broken, this fails with a compile error or wrong stdout.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_player.ynz"));
+    assert_eq!(code, 0, "m4_player must compile and run cleanly; stderr:\n{stderr}");
+    assert_eq!(stdout, "Patrick\n120\nPatrick\n",
+        "greet prints name, health is 120 after heal, consume prints name");
+}
+
 #[test]
 fn m3_mutual_recursion_prints_0() {
     // WHY: mutual recursion requires forward declarations at the LLVM level.
@@ -507,17 +520,14 @@ fn m3_is_type_arm_produces_m6_deferral() {
 }
 
 #[test]
-fn m3_share_param_produces_m4_deferral() {
-    // WHY: ownership annotations (`share`, `lend`, `give`) on parameters are M4.
-    // The parser emits a deferral diagnostic and recovers (param still works).
-    // This fixture tests both the deferral AND the recovery (function is callable).
+fn m4_share_param_compiles_and_runs() {
+    // WHY: M4 ships ownership annotations (`share`, `lend`, `give`) on parameters.
+    // This fixture previously tested the M3 deferral; now it tests M4 success:
+    // the share param compiles cleanly and the function is callable.
+    // If this regresses to a deferral or error, the ownership system is broken.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_share_param_deferral.ynz"));
-    assert_ne!(code, 0, "share param deferral must exit non-zero");
-    assert!(stdout.is_empty());
-    assert!(
-        stderr.contains("milestone 4") || stderr.contains("M4"),
-        "deferral must name M4, got:\n{stderr}"
-    );
+    assert_eq!(code, 0, "share param must compile and run in M4; stderr:\n{stderr}");
+    assert_eq!(stdout, "world\n", "greet(n) must print `world`");
 }
 
 #[test]

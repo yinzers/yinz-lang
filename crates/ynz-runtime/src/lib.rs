@@ -224,3 +224,44 @@ unsafe fn cstr_to_str<'a>(p: *const u8) -> &'a str {
     std::str::from_utf8(unsafe { std::slice::from_raw_parts(p, len) })
         .unwrap_or("<invalid utf-8 in op name>")
 }
+
+
+// ── Heap allocator shims (M4) ─────────────────────────────────────────────────
+//
+// Thin wrappers over libc malloc/free with a consistent ABI for the LLVM backend.
+// `_size` in ynz_free is reserved for kernel-mode plug-in allocators (v0.3+)
+// that need the size at deallocation time; libc free ignores it.
+
+extern "C" {
+    fn malloc(size: usize) -> *mut core::ffi::c_void;
+    fn free(ptr: *mut core::ffi::c_void);
+}
+
+/// Allocate `size` bytes. Aborts on OOM — Yinz programs cannot recover from OOM.
+///
+/// # Safety
+///
+/// The returned pointer is valid for `size` bytes and properly aligned.
+/// The caller must free it with `ynz_free` using the same `size`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_alloc(size: usize) -> *mut u8 {
+    let ptr = malloc(size) as *mut u8;
+    if ptr.is_null() {
+        std::process::abort();
+    }
+    ptr
+}
+
+/// Free a heap allocation previously returned by `ynz_alloc`.
+///
+/// `_size` is unused in M4 (libc free doesn't need it) but is part of the
+/// allocator ABI for kernel-mode plug-in support in v0.3+.
+///
+/// # Safety
+///
+/// `ptr` must have been returned by `ynz_alloc` and not yet freed.
+/// Passing a null pointer is safe (no-op via libc free semantics).
+#[no_mangle]
+pub unsafe extern "C" fn ynz_free(ptr: *mut u8, _size: usize) {
+    free(ptr as *mut core::ffi::c_void);
+}

@@ -363,6 +363,74 @@ fn m3_fib_sha256_golden() {
     }
 }
 
+// ── M4 codegen tests ─────────────────────────────────────────────────────────
+
+const M4_PLAYER_FILE: &str = "m4_player.ynz";
+const M4_PLAYER_SOURCE: &str = r#"shape Player {
+  name: string
+  health: int
+}
+function greet(share self: Player) -> nothing {
+  print(self.name)
+}
+function heal(lend self: Player, amount: int) -> nothing {
+  self.health = self.health + amount
+}
+function consume(give p: Player) -> nothing {
+  print(p.name)
+}
+function main() -> nothing {
+  let p: Player = { name: "Patrick", health: 100 }
+  p.greet()
+  p.heal(20)
+  print(p.health.toString())
+  consume(p)
+}"#;
+
+fn run_m4_player_codegen() -> Option<CompiledArtifact> {
+    let db = CompilerDb::default();
+    let sf = SourceFile::new(&db, M4_PLAYER_FILE.to_string(), M4_PLAYER_SOURCE.to_string());
+    let output = codegen_query(&db, sf);
+    if !output.diagnostics.is_empty() {
+        eprintln!("M4 Player codegen diagnostics: {:#?}", output.diagnostics);
+        return None;
+    }
+    Some(output.artifact.clone())
+}
+
+#[test]
+fn m4_player_codegen_produces_non_empty_object() {
+    // WHY: M4 P4 success criterion. Shape struct, UFCS dispatch, ownership
+    // modifiers must all lower to a valid, non-empty object file.
+    let artifact = run_m4_player_codegen().expect("M4 Player codegen must succeed");
+    assert!(!artifact.object_bytes.is_empty(), "M4 Player object file must be non-empty");
+}
+
+#[test]
+fn m4_player_ir_has_readonly_on_share_param() {
+    // WHY: LLVM `readonly` attribute on `share T` parameters is the LLVM contract
+    // that unlocks noalias-based optimizations. If this attribute is missing,
+    // the perf invariant from design/ownership.md:51-66 is violated silently.
+    let artifact = run_m4_player_codegen().expect("M4 Player codegen must succeed");
+    let ir = &artifact.ir_text;
+    // greet(share self: Player) and consume(give p: Player) must be in the IR.
+    // The share param must have `readonly` and `noalias` (in some form).
+    assert!(
+        ir.contains("readonly") && ir.contains("noalias"),
+        "IR must contain `readonly` and `noalias` attributes for share params.\nIR snippet:\n{}",
+        ir.lines().take(60).collect::<Vec<_>>().join("\n")
+    );
+}
+
+#[test]
+fn m4_player_ir_snapshot() {
+    // WHY: IR text diffs expose M4 codegen regressions (struct layout, attribute
+    // placement, UFCS call sites). Informational — the sha256 golden is the gate.
+    if let Some(artifact) = run_m4_player_codegen() {
+        insta::assert_snapshot!("m4_player_ir", artifact.ir_text);
+    }
+}
+
 #[test]
 fn m3_codegen_query_returns_no_diagnostics_on_valid_m3_source() {
     // WHY: all M3 happy-path fixtures must compile without diagnostics.

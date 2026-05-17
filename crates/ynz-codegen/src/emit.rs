@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 
 use inkwell::{
+    attributes::{Attribute, AttributeLoc},
     basic_block::BasicBlock,
     context::Context,
     module::Module,
@@ -25,22 +26,29 @@ use inkwell::{
     AddressSpace, IntPredicate, OptimizationLevel,
 };
 use ynz_ast::nodes::{
-    BinOpKind, Expr, FunctionDecl, Item, MatchPatternKind, Stmt, UnaryOpKind,
+    BinOpKind, Expr, FunctionDecl, Item, MatchPatternKind, OwnershipModifier, Stmt, UnaryOpKind,
 };
 use ynz_numerics; // parse(s: &str) -> Option<u128>
-use ynz_typeck::{Type, TypedModule};
+use ynz_typeck::{ShapeTable, SignatureTable, Type, TypedModule};
 
-use crate::{artifact::{sha256, CompiledArtifact}, runtime_decls::RuntimeDecls};
+use crate::{
+    artifact::{sha256, CompiledArtifact},
+    runtime_decls::RuntimeDecls,
+    shape_types::{emit_shape_types, ShapeLlvmTypes},
+    vtable::emit_vtable_globals,
+};
 
 /// The file ID embedded in the LLVM module for deterministic IR and object output.
 pub fn module_identifier(source_path: &str) -> String {
     format!("ynz-{source_path}")
 }
 
-/// Emit a relocatable object file for an M2 program.
+/// Emit a relocatable object file for an M4 program.
 pub fn emit_artifact(
     source_path: &str,
     typed_module: &TypedModule,
+    shape_table: &ShapeTable,
+    _sig_table: &SignatureTable,
     target_triple: Option<&str>,
 ) -> Result<CompiledArtifact, String> {
     Target::initialize_x86(&InitializationConfig::default());
@@ -67,7 +75,7 @@ pub fn emit_artifact(
         .ok_or_else(|| "LLVM: failed to create target machine".to_string())?;
     module.set_data_layout(&machine.get_target_data().get_data_layout());
 
-    build_module(&context, &module, typed_module)?;
+    build_module(&context, &module, typed_module, shape_table)?;
 
     module.verify()
         .map_err(|e| format!("LLVM module verify failed: {}", e.to_string()))?;
@@ -100,6 +108,7 @@ fn build_module<'ctx, 'g>(
     ctx: &'ctx Context,
     module: &'g Module<'ctx>,
     typed: &'g TypedModule,
+    shape_table: &'g ShapeTable,
 ) -> Result<(), String> {
     let rt = RuntimeDecls::declare(ctx, module);
 
@@ -117,43 +126,70 @@ fn build_module<'ctx, 'g>(
         panic_dec_rem: build_string_global(ctx, module, "remainder by zero (number)", ".panic.drem"),
     };
 
-    // Pass 1 — forward-declare every function so mutual recursion resolves.
+    // Pass 0 — emit LLVM struct types for all user-defined shapes.
+    let shape_types = emit_shape_types(ctx, shape_table);
+
+    // Pass 1 — forward-declare every function so vtables and bodies can reference them.
     for item in &typed.module.items {
         match item {
-            Item::Function(f) => declare_function(ctx, module, f)?,
+            Item::Function(f) => declare_function(ctx, module, f, shape_table)?,
+            Item::ShapeDecl(_) => {}
         }
     }
+
+    // Pass 1.5 — emit vtable globals for `dynamic Foo` dispatch.
+    // Currently unused in lowering (dynamic call-site coercion lands after P5 catch-up).
+    let _vtables = emit_vtable_globals(module, shape_table);
 
     // Pass 2 — emit bodies.
     for item in &typed.module.items {
         match item {
-            Item::Function(f) => lower_function(ctx, module, &rt, &globals, typed, f)?,
+            Item::Function(f) => lower_function(ctx, module, &rt, &globals, typed, f, shape_table, &shape_types)?,
+            Item::ShapeDecl(_) => {}
         }
     }
     Ok(())
 }
 
 /// Compute the LLVM parameter types for a function declaration.
-fn llvm_param_types<'ctx>(ctx: &'ctx Context, f: &FunctionDecl) -> Vec<BasicMetadataTypeEnum<'ctx>> {
+///
+/// Primitive scalars pass by value. Everything else (string, number, shape, dynamic)
+/// passes as an opaque pointer — the callee accesses the actual data via loads/GEPs.
+fn llvm_param_types<'ctx>(
+    ctx: &'ctx Context,
+    f: &FunctionDecl,
+    shape_table: &ShapeTable,
+) -> Vec<BasicMetadataTypeEnum<'ctx>> {
     let ptr = ctx.ptr_type(AddressSpace::default());
     f.params.iter().map(|p| {
         match &p.ty {
             ynz_ast::nodes::Type::Int   => ctx.i64_type().into(),
             ynz_ast::nodes::Type::Float => ctx.f64_type().into(),
             ynz_ast::nodes::Type::Bool  => ctx.bool_type().into(),
-            // String and Number both pass as ptr
-            _                           => ptr.into(),
+            // Named shape type or self — all shapes pass as ptr
+            ynz_ast::nodes::Type::Named(n, _) if shape_table.contains(n) || n == "self" => ptr.into(),
+            ynz_ast::nodes::Type::SelfType { .. } => ptr.into(),
+            ynz_ast::nodes::Type::Dynamic { .. } => ptr.into(),
+            // String, Number, and everything else: ptr
+            _ => ptr.into(),
         }
     }).collect()
 }
 
 /// Forward-declare a function in the LLVM module (signature only, no body).
+///
+/// Also attaches LLVM `readonly` and `noalias` attributes to pointer parameters
+/// based on the declared ownership modifier:
+/// - `share` / inferred (None) → `readonly` + `noalias`
+/// - `lend` → `noalias` only
+/// - `give` → no attributes (callee owns the data, may mutate)
 fn declare_function<'ctx>(
     ctx: &'ctx Context,
     module: &Module<'ctx>,
     f: &FunctionDecl,
+    shape_table: &ShapeTable,
 ) -> Result<(), String> {
-    let params = llvm_param_types(ctx, f);
+    let params = llvm_param_types(ctx, f, shape_table);
     let fn_ty = if f.name == "main" {
         ctx.i32_type().fn_type(&params, false)
     } else {
@@ -165,8 +201,37 @@ fn declare_function<'ctx>(
             _                             => ctx.ptr_type(AddressSpace::default()).fn_type(&params, false),
         }
     };
-    module.add_function(&f.name, fn_ty, None);
+    let fn_val = module.add_function(&f.name, fn_ty, None);
+
+    // Emit LLVM ownership attributes on pointer-typed parameters.
+    let readonly_kind = Attribute::get_named_enum_kind_id("readonly");
+    let noalias_kind  = Attribute::get_named_enum_kind_id("noalias");
+
+    for (i, param) in f.params.iter().enumerate() {
+        if !is_ptr_param(&param.ty, shape_table) { continue; }
+        let ownership = param.ownership.as_ref().unwrap_or(&OwnershipModifier::Share);
+        match ownership {
+            OwnershipModifier::Share => {
+                fn_val.add_attribute(AttributeLoc::Param(i as u32), ctx.create_enum_attribute(readonly_kind, 0));
+                fn_val.add_attribute(AttributeLoc::Param(i as u32), ctx.create_enum_attribute(noalias_kind, 0));
+            }
+            OwnershipModifier::Lend => {
+                fn_val.add_attribute(AttributeLoc::Param(i as u32), ctx.create_enum_attribute(noalias_kind, 0));
+            }
+            OwnershipModifier::Give => {}
+        }
+    }
+
     Ok(())
+}
+
+/// True when the AST type will be passed as a pointer in LLVM (not a scalar value).
+fn is_ptr_param(ty: &ynz_ast::nodes::Type, shape_table: &ShapeTable) -> bool {
+    match ty {
+        ynz_ast::nodes::Type::Int | ynz_ast::nodes::Type::Float | ynz_ast::nodes::Type::Bool => false,
+        ynz_ast::nodes::Type::Named(n, _) if !shape_table.contains(n) && n != "self" && n != "string" => false,
+        _ => true,
+    }
 }
 
 
@@ -180,9 +245,12 @@ struct Cg<'ctx, 'g> {
     current_fn: FunctionValue<'ctx>,
     /// True when this function is `main` (affects return type and implicit ret).
     is_main: bool,
-    /// Return type of the current function (reserved for Phase 4 value-return lowering).
+    /// Return type of the current function.
     _current_fn_ret_ty: Type,
     locals: HashMap<String, PointerValue<'ctx>>,
+    // M4 additions:
+    shape_table: &'g ShapeTable,
+    shape_types: &'g ShapeLlvmTypes<'ctx>,
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
@@ -206,9 +274,13 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             Type::Bool           => Some(self.bool().into()),
             Type::Number { .. }  => Some(self.i128().into()),
             Type::String         => Some(self.ptr().into()),
+            // Shape and dynamic values are always passed/stored as opaque pointers.
+            Type::Shape { .. }   => Some(self.ptr().into()),
+            Type::Dynamic { .. } => Some(self.ptr().into()),
             _                    => None,
         }
     }
+
 
     fn alloca(&self, ty: &Type, name: &str) -> Result<PointerValue<'ctx>, String> {
         let llvm_ty = self.llvm_type_for(ty)
@@ -221,6 +293,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_function<'ctx, 'g>(
     ctx: &'ctx Context,
     module: &'g Module<'ctx>,
@@ -228,11 +301,13 @@ fn lower_function<'ctx, 'g>(
     globals: &'g ModuleGlobals<'ctx>,
     typed: &'g TypedModule,
     f: &FunctionDecl,
+    shape_table: &'g ShapeTable,
+    shape_types: &'g ShapeLlvmTypes<'ctx>,
 ) -> Result<(), String> {
     let fn_val = module.get_function(&f.name)
         .ok_or_else(|| format!("function `{}` was not forward-declared", f.name))?;
 
-    let ret_ty = ast_type_to_typeck_type(&f.return_type);
+    let ret_ty = ast_type_to_typeck_type(&f.return_type, shape_table);
     let is_main = f.name == "main";
     let ret_is_nothing = matches!(ret_ty, Type::Nothing);
 
@@ -247,6 +322,8 @@ fn lower_function<'ctx, 'g>(
         is_main,
         _current_fn_ret_ty: ret_ty,
         locals: HashMap::new(),
+        shape_table,
+        shape_types,
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -256,7 +333,7 @@ fn lower_function<'ctx, 'g>(
     for (i, param) in f.params.iter().enumerate() {
         let llvm_param = fn_val.get_nth_param(i as u32)
             .ok_or_else(|| format!("missing LLVM param {} for `{}`", i, f.name))?;
-        let param_ty = ast_type_to_typeck_type(&param.ty);
+        let param_ty = ast_type_to_typeck_type(&param.ty, shape_table);
         materialize_param(&mut cg, &param.name, llvm_param, &param_ty)?;
     }
 
@@ -288,31 +365,50 @@ fn lower_function<'ctx, 'g>(
 }
 
 /// Map an AST type annotation to the typeck `Type` for use in codegen decisions.
-fn ast_type_to_typeck_type(ast_ty: &ynz_ast::nodes::Type) -> Type {
+fn ast_type_to_typeck_type(ast_ty: &ynz_ast::nodes::Type, shape_table: &ShapeTable) -> Type {
     match ast_ty {
-        ynz_ast::nodes::Type::Nothing      => Type::Nothing,
-        ynz_ast::nodes::Type::Int          => Type::Int,
-        ynz_ast::nodes::Type::Float        => Type::Float,
-        ynz_ast::nodes::Type::Bool         => Type::Bool,
-        ynz_ast::nodes::Type::Number { .. }=> Type::Number { precision: 34 },
+        ynz_ast::nodes::Type::Nothing          => Type::Nothing,
+        ynz_ast::nodes::Type::Int              => Type::Int,
+        ynz_ast::nodes::Type::Float            => Type::Float,
+        ynz_ast::nodes::Type::Bool             => Type::Bool,
+        ynz_ast::nodes::Type::Number { .. }    => Type::Number { precision: 34 },
         ynz_ast::nodes::Type::Named(n, _) if n == "string" => Type::String,
-        _                                  => Type::Error,
+        ynz_ast::nodes::Type::Named(n, _) if shape_table.contains(n) => Type::Shape { name: n.clone() },
+        ynz_ast::nodes::Type::Dynamic { contract, .. } => Type::Dynamic { contract: contract.clone() },
+        // `self` parameter and SelfType: the typeck stores the concrete Shape type in
+        // expr_types; for parameter materialization we just need to know it's a ptr.
+        ynz_ast::nodes::Type::Named(n, _) if n == "self" => Type::Shape { name: String::new() },
+        ynz_ast::nodes::Type::SelfType { .. } => Type::Shape { name: String::new() },
+        _                                      => Type::Error,
     }
 }
 
 /// Materialize an LLVM function parameter as a named alloca.
 ///
-/// Scalars (int, float, bool) are stored directly. Pointer params (string, number)
-/// get a local alloca for uniform "every name = alloca" variable access.
+/// Scalars (int, float, bool) are stored directly. Pointer params (string, number,
+/// shape, dynamic) get a `ptr`-sized alloca that holds the incoming pointer, so the
+/// "every local = alloca" invariant holds. Loading from that slot gives back the ptr.
 fn materialize_param<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     name: &str,
     llvm_val: inkwell::values::BasicValueEnum<'ctx>,
     param_ty: &Type,
 ) -> Result<(), String> {
-    let slot = cg.alloca(param_ty, name)?;
-    store(cg, llvm_val, param_ty, slot)?;
-    cg.locals.insert(name.to_string(), slot);
+    match param_ty {
+        // Shape/Dynamic: incoming param is a ptr; store the ptr in a ptr-slot.
+        Type::Shape { .. } | Type::Dynamic { .. } => {
+            let slot = cg.builder.build_alloca(cg.ptr(), name)
+                .map_err(|e| format!("param alloca {name}: {e}"))?;
+            cg.builder.build_store(slot, llvm_val)
+                .map_err(|e| format!("param store {name}: {e}"))?;
+            cg.locals.insert(name.to_string(), slot);
+        }
+        _ => {
+            let slot = cg.alloca(param_ty, name)?;
+            store(cg, llvm_val, param_ty, slot)?;
+            cg.locals.insert(name.to_string(), slot);
+        }
+    }
     Ok(())
 }
 
@@ -365,6 +461,10 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
 
         Stmt::Return { value, .. } => {
             lower_stmt_return(cg, value.as_ref())?;
+        }
+
+        Stmt::FieldAssign { target, value, .. } => {
+            lower_stmt_field_assign(cg, target, value)?;
         }
     }
     Ok(())
@@ -704,9 +804,40 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
 
         Expr::MethodCall { receiver, method, args, .. } => {
             let recv_ty = cg.expr_type(receiver).clone();
-            for a in args { lower_expr(cg, a)?; }
             let recv_val = lower_expr(cg, receiver)?;
-            lower_method_call(cg, recv_val, &recv_ty, method)
+            match &recv_ty {
+                Type::Shape { name } => {
+                    let name = name.clone();
+                    lower_ufcs_call(cg, recv_val, &name, method, args)
+                }
+                Type::Dynamic { .. } => {
+                    // Dynamic dispatch via vtable — P4 deferred: fat-pointer creation at
+                    // call sites (coercion from concrete Shape to dynamic Foo) lands after
+                    // P5 catch-up. The vtable globals and fat-ptr struct are emitted; only
+                    // the call-site coercion helper is absent.
+                    Err("codegen: dynamic dispatch call sites not yet lowered in M4 P4".to_string())
+                }
+                _ => lower_method_call(cg, recv_val, &recv_ty, method),
+            }
+        }
+
+        Expr::FieldAccess { receiver, field, .. } => {
+            lower_field_access(cg, receiver, field)
+        }
+
+        Expr::StructLit { fields, .. } => {
+            lower_struct_lit(cg, expr, fields)
+        }
+
+        Expr::PostfixOp { receiver, op, .. } => {
+            lower_postfix_op(cg, receiver, op)
+        }
+
+        Expr::SelfValue { .. } => {
+            let slot = *cg.locals.get("self")
+                .ok_or("codegen: `self` used outside method scope")?;
+            let ty = cg.expr_type(expr).clone();
+            load(cg, slot, &ty, "self")
         }
 
         Expr::Error(_) => Err("codegen: error node".to_string()),
@@ -990,6 +1121,177 @@ fn to_c_string<'ctx>(cg: &mut Cg<'ctx, '_>, val: BasicValueEnum<'ctx>, ty: &Type
 }
 
 
+/// UFCS dispatch: `receiver.method(args)` → call standalone function `method(receiver, args)`.
+fn lower_ufcs_call<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    recv_val: BasicValueEnum<'ctx>,
+    _shape_name: &str,
+    method: &str,
+    extra_args: &[Expr],
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let fn_val = cg.module.get_function(method)
+        .ok_or_else(|| format!("codegen UFCS: function `{}` not found in module", method))?;
+
+    let mut args: Vec<BasicMetadataValueEnum<'ctx>> = vec![recv_val.into()];
+    for arg in extra_args {
+        let arg_val = lower_expr(cg, arg)?;
+        // If the function param expects dynamic but arg is a concrete shape, coerce.
+        args.push(arg_val.into());
+    }
+
+    let call = cg.builder.build_call(fn_val, &args, "ufcs")
+        .map_err(|e| format!("UFCS call `{method}`: {e}"))?;
+    match call.try_as_basic_value().basic() {
+        Some(v) => Ok(v),
+        None    => Ok(cg.i32().const_int(0, false).into()),
+    }
+}
+
+/// Dynamic dispatch: `d.method(args)` via vtable when receiver is `dynamic Foo`.
+/// Field access: lower `receiver.field` to the field's value.
+fn lower_field_access<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    receiver: &Expr,
+    field_name: &str,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let (field_ptr, field_ty) = field_gep(cg, receiver, field_name)?;
+    load(cg, field_ptr, &field_ty, field_name)
+}
+
+/// Get a GEP pointer to a field inside a shape value (for reads AND writes).
+fn field_gep<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    receiver: &Expr,
+    field_name: &str,
+) -> Result<(PointerValue<'ctx>, Type), String> {
+    let recv_ty = cg.expr_type(receiver).clone();
+    let shape_name = match &recv_ty {
+        Type::Shape { name } => name.clone(),
+        _ => return Err(format!("field_gep: receiver is not a Shape, got {:?}", recv_ty)),
+    };
+
+    let shape_def = cg.shape_table.get(&shape_name)
+        .ok_or_else(|| format!("field_gep: shape `{}` not in table", shape_name))?;
+    let field_idx = shape_def.fields.iter().position(|f| f.name == field_name)
+        .ok_or_else(|| format!("field_gep: field `{}` not found in shape `{}`", field_name, shape_name))?;
+    let field_ty = shape_def.fields[field_idx].ty.clone();
+
+    let struct_ty = cg.shape_types.get(&shape_name)
+        .ok_or_else(|| format!("field_gep: LLVM type for shape `{}` not found", shape_name))?;
+
+    // Lower the receiver to get a pointer to the struct.
+    let recv_ptr = lower_expr(cg, receiver)?;
+
+    let gep = cg.builder.build_struct_gep(struct_ty, recv_ptr.into_pointer_value(), field_idx as u32, field_name)
+        .map_err(|e| format!("GEP field `{}`: {e}", field_name))?;
+
+    Ok((gep, field_ty))
+}
+
+/// Lower a struct literal to a stack-allocated value; return pointer to it.
+fn lower_struct_lit<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    expr: &Expr,
+    fields: &[ynz_ast::nodes::StructLitField],
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let ty = cg.expr_type(expr).clone();
+    let Type::Shape { name: shape_name } = &ty else {
+        return Err(format!("struct literal with non-shape type {:?}", ty));
+    };
+    let shape_name = shape_name.clone();
+
+    let struct_ty = cg.shape_types.get(&shape_name)
+        .ok_or_else(|| format!("struct_lit: LLVM type for `{}` not found", shape_name))?;
+
+    // Allocate the struct on the stack.
+    let slot = cg.builder.build_alloca(struct_ty, &shape_name)
+        .map_err(|e| format!("alloca {}: {e}", shape_name))?;
+
+    // Zero-initialize — covers hidden fields that aren't provided.
+    let zero = struct_ty.const_zero();
+    cg.builder.build_store(slot, zero)
+        .map_err(|e| format!("zero-init {}: {e}", shape_name))?;
+
+    let shape_def = cg.shape_table.get(&shape_name)
+        .ok_or_else(|| format!("struct_lit: shape `{}` not in table", shape_name))?
+        .clone();
+
+    // Evaluate and store each provided field.
+    for lit_field in fields {
+        let field_idx = shape_def.fields.iter().position(|f| f.name == lit_field.name)
+            .ok_or_else(|| format!("struct_lit: unknown field `{}`", lit_field.name))?;
+        let field_ty = shape_def.fields[field_idx].ty.clone();
+
+        let gep = cg.builder.build_struct_gep(struct_ty, slot, field_idx as u32, &lit_field.name)
+            .map_err(|e| format!("struct_lit GEP `{}`: {e}", lit_field.name))?;
+
+        let val = lower_expr(cg, &lit_field.value)?;
+        store_field(cg, val, &field_ty, gep)?;
+    }
+
+    // TODO (v0.2): evaluate hidden-field defaults and store them. For M4, zero
+    // initialization above is sufficient because defaults are restricted to
+    // constants and empty literals (zero is correct for int/float/bool; for
+    // string/shape hidden fields, the user must call a setter before reading).
+
+    Ok(slot.into())
+}
+
+/// Field assignment helper: `target.field = value`.
+fn lower_stmt_field_assign<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    target: &Expr,
+    value: &Expr,
+) -> Result<(), String> {
+    // Expect target to be Expr::FieldAccess
+    let Expr::FieldAccess { receiver, field, .. } = target else {
+        return Err(format!("codegen: FieldAssign target is not FieldAccess: {:?}", target));
+    };
+
+    let (field_ptr, field_ty) = field_gep(cg, receiver, field)?;
+    let val = lower_expr(cg, value)?;
+    store_field(cg, val, &field_ty, field_ptr)
+}
+
+/// PostfixOp lowering: `.copy()` and `.freeze()`.
+fn lower_postfix_op<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    receiver: &Expr,
+    op: &ynz_ast::nodes::PostfixOpKind,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    use ynz_ast::nodes::PostfixOpKind;
+    match op {
+        PostfixOpKind::Freeze => {
+            // `.freeze()` is a typeck-only operation; no codegen change.
+            lower_expr(cg, receiver)
+        }
+        PostfixOpKind::Copy => {
+            let recv_ty = cg.expr_type(receiver).clone();
+            let recv_val = lower_expr(cg, receiver)?;
+            match &recv_ty {
+                Type::Shape { name } => {
+                    // Trivially-copyable shape: memcpy into a fresh alloca.
+                    let name = name.clone();
+                    let struct_ty = cg.shape_types.get(&name)
+                        .ok_or_else(|| format!(".copy(): LLVM type for `{}` not found", name))?;
+                    let new_slot = cg.builder.build_alloca(struct_ty, &format!("{}_copy", name))
+                        .map_err(|e| format!(".copy alloca: {e}"))?;
+                    // Load the struct value and store into the new slot.
+                    let val = cg.builder.build_load(struct_ty, recv_val.into_pointer_value(), "copy_src")
+                        .map_err(|e| format!(".copy load: {e}"))?;
+                    cg.builder.build_store(new_slot, val)
+                        .map_err(|e| format!(".copy store: {e}"))?;
+                    Ok(new_slot.into())
+                }
+                // For primitives, the value is already by-value — just return it.
+                _ => Ok(recv_val),
+            }
+        }
+    }
+}
+
+
+
 fn lower_method_call<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     recv: BasicValueEnum<'ctx>,
@@ -1038,6 +1340,31 @@ fn store<'ctx>(cg: &mut Cg<'ctx, '_>, val: BasicValueEnum<'ctx>, ty: &Type, slot
     Ok(())
 }
 
+/// Store a value into a STRUCT FIELD pointer.
+///
+/// Shape fields use `llvm_field_type` layout (number = i128 inline; everything else
+/// by value or by pointer). This differs from the variable-slot layout where number
+/// is stored as i128 in the slot but "value" is a ptr-to-i128.
+fn store_field<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+    field_ptr: PointerValue<'ctx>,
+) -> Result<(), String> {
+    match ty {
+        Type::Number { .. } => {
+            // Field stores i128 bits inline; val is ptr-to-i128.
+            let bits = cg.builder.build_load(cg.i128(), val.into_pointer_value(), "dec_field_bits")
+                .map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(field_ptr, bits).map_err(|e| format!("{e}"))?;
+        }
+        _ => {
+            cg.builder.build_store(field_ptr, val).map_err(|e| format!("{e}"))?;
+        }
+    }
+    Ok(())
+}
+
 fn load<'ctx>(cg: &mut Cg<'ctx, '_>, slot: PointerValue<'ctx>, ty: &Type, name: &str) -> Result<BasicValueEnum<'ctx>, String> {
     match ty {
         Type::Number { .. } => {
@@ -1046,6 +1373,12 @@ fn load<'ctx>(cg: &mut Cg<'ctx, '_>, slot: PointerValue<'ctx>, ty: &Type, name: 
             let tmp = cg.builder.build_alloca(cg.i128(), name).map_err(|e| format!("{e}"))?;
             cg.builder.build_store(tmp, bits).map_err(|e| format!("{e}"))?;
             Ok(tmp.into())
+        }
+        // Shapes and dynamic values: the slot holds a pointer to the struct data.
+        // Load that pointer and return it — the caller gets a ptr to the struct.
+        Type::Shape { .. } | Type::Dynamic { .. } => {
+            let lt = cg.ptr();
+            cg.builder.build_load(lt, slot, name).map_err(|e| format!("{e}"))
         }
         ty => {
             let lt = cg.llvm_type_for(ty).ok_or_else(|| format!("load: unknown type {:?}", ty))?;

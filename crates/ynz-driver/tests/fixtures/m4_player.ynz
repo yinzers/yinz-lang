@@ -1,0 +1,27 @@
+// M4 P4 success-criteria fixture.
+// Exercises: shape declaration, struct literal, field access, UFCS method calls,
+// share/lend/give ownership, LLVM readonly/noalias attributes.
+shape Player {
+  name: string
+  health: int
+}
+
+function greet(share self: Player) -> nothing {
+  print(self.name)
+}
+
+function heal(lend self: Player, amount: int) -> nothing {
+  self.health = self.health + amount
+}
+
+function consume(give p: Player) -> nothing {
+  print(p.name)
+}
+
+function main() -> nothing {
+  let p: Player = { name: "Patrick", health: 100 }
+  p.greet()
+  p.heal(20)
+  print(p.health.toString())
+  consume(p)
+}

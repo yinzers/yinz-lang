@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ynz_diagnostics::Diagnostic;
 use ynz_parser::SourceFile;
-use ynz_typeck::check_query;
+use ynz_typeck::{check_query, module_signatures_query};
 
 use crate::{artifact::CompiledArtifact, emit::emit_artifact};
 
@@ -34,8 +34,9 @@ pub fn codegen_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<Codege
         });
     }
 
+    let sig_output = module_signatures_query(db, source);
     let source_path = source.path(db);
-    match emit_artifact(source_path.as_str(), &check.typed_module, None) {
+    match emit_artifact(source_path.as_str(), &check.typed_module, &sig_output.shape_table, &sig_output.sig_table, None) {
         Ok(artifact) => Arc::new(CodegenOutput { artifact, diagnostics }),
         Err(msg) => {
             diagnostics.push(Diagnostic::error(

@@ -1,8 +1,11 @@
 // CATCH-UP M6: `is TypeName =>` pattern matching lands when union types land.
 // Until then the parser emits a deferral diagnostic pointing at M6.
+// NOTE: variable renamed from `shape` to `figure` because `shape` is now
+// a reserved keyword (M4 P1). Using keywords as identifiers is a separate bug
+// tracked in design/open-questions.md.
 function main() -> nothing {
-  let shape = "circle"
-  if (shape) {
+  let figure = "circle"
+  if (figure) {
     is Circle => print("circle")
     else => print("other")
   }

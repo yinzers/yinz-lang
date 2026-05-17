@@ -2,8 +2,8 @@
 source: crates/ynz-codegen/tests/golden.rs
 expression: artifact.ir_text
 ---
-; ModuleID = 'ynz-m2_smoke.ynz'
-source_filename = "ynz-m2_smoke.ynz"
+; ModuleID = 'ynz-m4_player.ynz'
+source_filename = "ynz-m4_player.ynz"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-linux-gnu"
 
@@ -17,6 +17,7 @@ target triple = "x86_64-pc-linux-gnu"
 @.panic.irem = private unnamed_addr constant [24 x i8] c"remainder by zero (int)\00"
 @.panic.ddiv = private unnamed_addr constant [26 x i8] c"division by zero (number)\00"
 @.panic.drem = private unnamed_addr constant [27 x i8] c"remainder by zero (number)\00"
+@str = private unnamed_addr constant [8 x i8] c"Patrick\00"
 
 declare i32 @puts(ptr)
 
@@ -59,65 +60,75 @@ declare ptr @ynz_alloc(i64)
 
 declare void @ynz_free(ptr, i64)
 
-define i32 @main() {
+define void @greet(ptr noalias readonly %0) {
 entry:
-  %dec_lit = alloca i128, align 16
-  store i128 45233992157340784592850551396083171329, ptr %dec_lit, align 16
-  %dec_lit1 = alloca i128, align 16
-  store i128 45233992157340784592850551396083171330, ptr %dec_lit1, align 16
-  %dadd = alloca i128, align 16
-  call void @ynz_decimal_add(ptr %dec_lit, ptr %dec_lit1, ptr %dadd)
-  %price = alloca i128, align 16
-  %dec_bits = load i128, ptr %dadd, align 16
-  store i128 %dec_bits, ptr %price, align 16
-  %count = alloca i64, align 8
-  store i64 42, ptr %count, align 8
-  %active = alloca i1, align 1
-  store i1 true, ptr %active, align 1
-  %dec_ld = load i128, ptr %price, align 16
-  %price2 = alloca i128, align 16
-  store i128 %dec_ld, ptr %price2, align 16
-  %dec_str = call ptr @ynz_decimal_to_string(ptr %price2)
-  %puts = call i32 @puts(ptr %dec_str)
-  %count3 = load i64, ptr %count, align 8
-  %count4 = load i64, ptr %count, align 8
-  %ov_res = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %count3, i64 %count4)
+  %self = alloca ptr, align 8
+  store ptr %0, ptr %self, align 8
+  %self1 = load ptr, ptr %self, align 8
+  %name = getelementptr inbounds { ptr, i64 }, ptr %self1, i32 0, i32 0
+  %name2 = load ptr, ptr %name, align 8
+  %puts = call i32 @puts(ptr %name2)
+  ret void
+}
+
+define void @heal(ptr noalias %0, i64 %1) {
+entry:
+  %self = alloca ptr, align 8
+  store ptr %0, ptr %self, align 8
+  %amount = alloca i64, align 8
+  store i64 %1, ptr %amount, align 8
+  %self1 = load ptr, ptr %self, align 8
+  %health = getelementptr inbounds { ptr, i64 }, ptr %self1, i32 0, i32 1
+  %self2 = load ptr, ptr %self, align 8
+  %health3 = getelementptr inbounds { ptr, i64 }, ptr %self2, i32 0, i32 1
+  %health4 = load i64, ptr %health3, align 8
+  %amount5 = load i64, ptr %amount, align 8
+  %ov_res = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %health4, i64 %amount5)
   %sum = extractvalue { i64, i1 } %ov_res, 0
   %ov = extractvalue { i64, i1 } %ov_res, 1
   br i1 %ov, label %ov_panic, label %ov_ok
 
 ov_ok:                                            ; preds = %entry
-  %ov_res5 = call { i64, i1 } @llvm.ssub.with.overflow.i64(i64 %sum, i64 1)
-  %sum6 = extractvalue { i64, i1 } %ov_res5, 0
-  %ov7 = extractvalue { i64, i1 } %ov_res5, 1
-  br i1 %ov7, label %ov_panic9, label %ov_ok8
+  store i64 %sum, ptr %health, align 8
+  ret void
 
 ov_panic:                                         ; preds = %entry
-  call void @ynz_panic_overflow(ptr @.panic.imul)
+  call void @ynz_panic_overflow(ptr @.panic.iadd)
   unreachable
+}
 
-ov_ok8:                                           ; preds = %ov_ok
-  %int_str = call ptr @ynz_int_to_string(i64 %sum6)
-  %puts10 = call i32 @puts(ptr %int_str)
-  %active11 = load i1, ptr %active, align 1
-  br i1 %active11, label %and_rhs, label %and_short
+define void @consume(ptr %0) {
+entry:
+  %p = alloca ptr, align 8
+  store ptr %0, ptr %p, align 8
+  %p1 = load ptr, ptr %p, align 8
+  %name = getelementptr inbounds { ptr, i64 }, ptr %p1, i32 0, i32 0
+  %name2 = load ptr, ptr %name, align 8
+  %puts = call i32 @puts(ptr %name2)
+  ret void
+}
 
-ov_panic9:                                        ; preds = %ov_ok
-  call void @ynz_panic_overflow(ptr @.panic.isub)
-  unreachable
-
-and_rhs:                                          ; preds = %ov_ok8
-  %count12 = load i64, ptr %count, align 8
-  %igt = icmp sgt i64 %count12, 0
-  br label %and_merge
-
-and_short:                                        ; preds = %ov_ok8
-  br label %and_merge
-
-and_merge:                                        ; preds = %and_short, %and_rhs
-  %and_r = phi i1 [ %igt, %and_rhs ], [ false, %and_short ]
-  %bstr = select i1 %and_r, ptr @.str.true, ptr @.str.false
-  %puts13 = call i32 @puts(ptr %bstr)
+define i32 @main() {
+entry:
+  %Player = alloca { ptr, i64 }, align 8
+  store { ptr, i64 } zeroinitializer, ptr %Player, align 8
+  %name = getelementptr inbounds { ptr, i64 }, ptr %Player, i32 0, i32 0
+  store ptr @str, ptr %name, align 8
+  %health = getelementptr inbounds { ptr, i64 }, ptr %Player, i32 0, i32 1
+  store i64 100, ptr %health, align 8
+  %p = alloca ptr, align 8
+  store ptr %Player, ptr %p, align 8
+  %p1 = load ptr, ptr %p, align 8
+  call void @greet(ptr %p1)
+  %p2 = load ptr, ptr %p, align 8
+  call void @heal(ptr %p2, i64 20)
+  %p3 = load ptr, ptr %p, align 8
+  %health4 = getelementptr inbounds { ptr, i64 }, ptr %p3, i32 0, i32 1
+  %health5 = load i64, ptr %health4, align 8
+  %int_str = call ptr @ynz_int_to_string(i64 %health5)
+  %puts = call i32 @puts(ptr %int_str)
+  %p6 = load ptr, ptr %p, align 8
+  call void @consume(ptr %p6)
   ret i32 0
 }
 
