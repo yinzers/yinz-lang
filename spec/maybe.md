@@ -10,14 +10,14 @@ In a lot of languages, any variable can be `null` — and you only find out at r
 
 ---
 
-## maybe T — a value that might not exist
+## maybe<T> — a value that might not exist
 
 ```
-let name: string = "Patrick"           // always has a value, guaranteed
-let nickname: maybe string = none      // might not have a value
+let name: string = "Patrick"             // always has a value, guaranteed
+let nickname: maybe<string> = none       // might not have a value
 ```
 
-`maybe string` means: this is either a `string` or it's `none`. The compiler tracks which and forces you to handle the `none` case before you use it.
+`maybe<string>` means: this is either a `string` or it's `none`. The compiler tracks which and forces you to handle the `none` case before you use it.
 
 ---
 
@@ -28,9 +28,9 @@ let nickname: maybe string = none      // might not have a value
 ```
 let name: string = none
 // COMPILE ERROR: string cannot be none.
-// Use maybe string if the value is optional.
+// Use maybe<string> if the value is optional.
 
-let name: maybe string = none    // fine
+let name: maybe<string> = none    // fine
 ```
 
 ---
@@ -57,7 +57,7 @@ let display = nickname.or("Anonymous")    // get the value or a fallback
 
 ```
 print(nickname.value)
-// COMPILE ERROR: nickname is maybe string — value might be none.
+// COMPILE ERROR: nickname is maybe<string> — value might be none.
 // Use nickname.or(default) or check nickname.exists() first.
 ```
 
@@ -66,8 +66,8 @@ print(nickname.value)
 ## In function signatures
 
 ```
-function findPlayer(share roster: fixed<Player>, name: string) -> maybe Player {
-  return roster.find(p => p.name == name)    // .find() returns maybe T
+function findPlayer(share roster: fixed<Player>, name: string) -> maybe<Player> {
+  return roster.find(p => p.name == name)    // .find() returns maybe<T>
 }
 ```
 
@@ -87,12 +87,12 @@ if (player.exists()) {
 
 ---
 
-## `maybe T` and `T | none`
+## `maybe<T>` and `T | none`
 
-`maybe string` is the same type as `string | none`. They're interchangeable:
+`maybe<string>` is the same type as `string | none`. They're interchangeable:
 
 ```
-let a: maybe string = none
+let a: maybe<string> = none
 let b: string | none = none
 // a and b are the same type — either works
 ```

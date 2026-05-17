@@ -181,20 +181,20 @@ End-to-end walking skeleton. `function main() -> nothing { print("hello, yinz") 
 **Status**: planned
 **Depends on**: M3
 
-### Milestone 5 (M5): Generics + collections — multi-session
-Function generics `function foo[T](...)` and type generics `array[T]` / `fixed[T]` / `map[K,V]`. Monomorphization. Bracket sugar (`arr[i]`, `m[k]`) desugars to `.get()` / `.set()`. `Iterable[T]` contract reserved for M7.
+### Milestone 5 (M5): Generics + collections + maybe — multi-session
+Function generics `function foo<T>(...)` and type generics `array<T>` / `fixed<T>` / `map<K, V>`. Monomorphization. Bracket sugar (`arr[i]`, `m[k]`) desugars to `.get()` / `.set()`. **`maybe<T>` primitive moved from M6 to M5** — `none` literal, `.exists()`, `.value` (flow-sensitive), `.or(default)`. Map ships Swiss Tables + SipHash-2-4 + perfect-hash for static-key literals (xxhash3 fast opt-in and identity-hash deferred). For-loop over built-in collections is a typeck+codegen special-case (REPLACE-AT M7 markers). Auto-promotion `array<T>` → `fixed<T>` codegen surface (Tier 3 lint defers to v0.4; muted IDE hint defers to v0.2 LSP). `Iterable<T>` contract reserved for M7. Syntax = `<>` everywhere (NOT `[]`). See `.claude/plans/active/m5-generics.md` and `design/maybe.md`.
 **Flag**: N/A
-**Status**: planned
+**Status**: approved 2026-05-17, Phase 0 in progress
 **Depends on**: M4
 
-### Milestone 6 (M6): Options + unions + maybe + narrowing — multi-session
-`options Status { ... }` declarations, union types `A or B`, `maybe T` sugar for `T or none`, `if (x is Type)` pattern narrowing as a flow-sensitive analysis.
+### Milestone 6 (M6): Options + unions + narrowing — multi-session
+`options Status { ... }` declarations, union types `A | B`, `if (x is Type)` pattern narrowing as a flow-sensitive analysis. (`maybe<T>` moved to M5 — see master plan note above.) Early-return narrowing for `.value` on `maybe<T>` (deferred from M5) lands here too.
 **Flag**: N/A
 **Status**: planned
 **Depends on**: M5
 
 ### Milestone 7 (M7): Strings (full) + errors + iterables — multi-session
-Full Unicode strings (`.get` for code points, `.byteAt`, `.graphemeAt`), interpolation, the `errors` keyword with flow-sensitive auto-propagation ("cascades"), `Iterable[T]` and `FallibleIterable[T]` contracts wired to `for x in iter` desugaring.
+Full Unicode strings (`.get` for code points, `.byteAt`, `.graphemeAt`), interpolation, the `errors` keyword with flow-sensitive auto-propagation ("cascades"), `Iterable<T>` and `FallibleIterable<T>` contracts wired to `for x in iter` desugaring. **Unwinds M5's REPLACE-AT M7 markers** (six total — three typeck + three codegen for the array/fixed/map for-loop special-cases + the M3 `range()` special-case + the `MapEntry<K,V>` synthesis revisit) — see M5's catch-up obligations.
 **Flag**: N/A
 **Status**: planned
 **Depends on**: M6

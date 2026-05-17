@@ -137,6 +137,12 @@ let x = identity()
 
 ---
 
+## First built-in generic: `maybe<T>`
+
+See `design/maybe.md` for `maybe<T>` — the first built-in generic primitive shipped via M5's generics engine. It's the return type of `.get()` on every built-in collection (`array<T>`, `fixed<T>`, `map<K, V>`, `string`), and demonstrates how built-in generics use the same engine that user-defined generics do. M5 ships `maybe<T>` alongside the engine itself rather than waiting for M6 — the cleanest API (`.get()` returns `maybe<T>` from day 1, no rename later).
+
+---
+
 ## What's NOT in v0.1
 
 **Higher-kinded types** (generic over generics, e.g. `Functor[F[_]]`): Not needed for v0.1. Probably never — Yinz isn't a Haskell-flavored language. Defer indefinitely.

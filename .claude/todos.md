@@ -7,7 +7,7 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Now (active)
 
-- [ ] **M5 — Generics** — Next milestone after M4 tag. Plan in `v0-1-compiler.md`. Start with `/plan M5`.
+- [ ] **M5 — Generics + Collections + Maybe** — Approved 2026-05-17. Plan in `.claude/plans/active/m5-generics.md`. Phase 0 (doc lockdown) in progress.
 
 ## Soon (committed, not started)
 
@@ -17,7 +17,6 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Later (idea bin — not committed)
 
-- [ ] **`<>` generics syntax — compiler** — When M5 (generics) is implemented, the compiler must use `<>` not `[]` for type parameters. Parser, AST, typeck, and codegen must all follow `array<T>`, `map<K, V>`, `fixed<T>` syntax.
 - [ ] **Jargon-CI sweep** — add a CI script that greps `design/*.md`, `spec/*.md`, all `.claude/rules/*.md`, and crate source files for banned-jargon words. Scope: extend `crates/ynz-diagnostics/src/banned_jargon.rs` AND add a doc-grep CI step.
 - [ ] Wire up GitHub Actions CI (ci.yml already written, just needs configuration)
 - [ ] macOS CI golden hash for ynz-codegen
