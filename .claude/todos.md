@@ -7,14 +7,12 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Now (active)
 
-- [ ] **M4 P3c — Ownership** — Branch `feat/m4-ownership` pushed (7c86f6a). PR at https://github.com/patrickrizzardi/ynz/pull/new/feat/m4-ownership — Patrick merges. P4 (codegen) next.
+- [ ] **M4 P6 — Driver + fixtures** — Full fixture suite (12 positive + 20 negative M4 fixtures), valgrind clean, IR snapshots. Branch `feat/m4-driver-fixtures`.
+- [ ] **M4 P7 — Verification + tag `v0.1.0-m4`** — TODO sweep, jargon audit, Bouncer clean, CHANGELOG, tag. After P6.
 
 ## Soon (committed, not started)
 
-- [ ] **M4 P4 — Codegen** — After P3c merges. LLVM `readonly`/`noalias` attrs on params, heap alloc (`ynz_alloc`/`ynz_free`), drop-on-scope-exit, vtable for `dynamic`. Needs LLVM 18 dev in container.
-- [ ] **M4 P5 — Catch-up** — Wrapping/saturating int methods + `int.max`/`int.min`/`number.epsilon`. Independent of P4, can start after P3c.
-- [ ] **M4 P6 — Driver + fixtures** — After P4. Full fixture suite (12 positive + 20 negative).
-- [ ] **M4 P7 — Verification + tag `v0.1.0-m4`** — After P6.
+_(nothing — P6 and P7 are the remaining M4 work)_
 
 ## Later (idea bin — not committed)
 
@@ -25,6 +23,8 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Done (recent)
 
+- [x] **M4 P5 — Catch-up (5a21258)** — 6 wrapping/saturating int methods, type-attached constants (`int.max`/`int.min`/`number.*`/`float.*`). M2 fixtures closed.
+- [x] **M4 P4 — Codegen (05bb47d)** — Shape LLVM struct types, UFCS dispatch, `readonly`/`noalias` attrs, `ynz_alloc`/`ynz_free`, vtable globals. `m4_player.ynz` → `Patrick / 120 / Patrick`.
 - [x] **M4 P3c — Ownership (7c86f6a)** — `is_consumed` scope tracking, use-after-give error, const-cannot-be-lent, const-cannot-be-given. 102 typeck tests green.
 - [x] **M4 P3b — Inheritance (3508e7b)** — `extends` field inheritance + cycle detection, `follows` contract verification, `Type::Dynamic`. 96 tests green.
 - [x] **M4 P3a — Typeck shapes (244ac6d)** — ShapeTable, struct-lit typeck, field access/assign, UFCS, hidden-field guard, base-shape guard. 90 tests green.

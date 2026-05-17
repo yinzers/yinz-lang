@@ -40,8 +40,8 @@ cargo fmt --all
 ./target/debug/ynz run crates/ynz-driver/tests/fixtures/m4_player.ynz
 # → Patrick / 120 / Patrick  (M4 P4 success-criteria fixture)
 
-# Current branch: feat/m4-codegen (M4 P4 committed: 05bb47d)
-# M4 status: P1-P4 done; P5 (catch-up numerics) is next
+# Current branch: feat/m4-catchup-numerics (M4 P5 committed: 5a21258)
+# M4 status: P1-P5 done; P6 (driver + fixtures) is next
 ```
 
 ---
