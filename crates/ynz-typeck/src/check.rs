@@ -7,7 +7,7 @@ use ynz_ast::nodes::{
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 use crate::{
-    builtins::{array_method_return, fixed_method_return, maybe_method_return},
+    builtins::{array_method_return, fixed_method_return, map_method_return, maybe_method_return},
     generics::{
         apply_substitution, unify_param, GenericFnSig, GenericFnTable, GenericShapeTable,
         MonoSignature, MonomorphizationTable, Substitution,
@@ -495,6 +495,10 @@ impl<'b> Checker<'b> {
             Type::Range { element, .. } => *element.clone(),
             Type::BuiltinArray { elem } => *elem.clone(),
             Type::BuiltinFixed { elem, .. } => *elem.clone(),
+            // REPLACE-AT M7: dispatch via Iterable<T>
+            Type::BuiltinMap { key, val } => {
+                Type::MapEntry { key: key.clone(), val: val.clone() }
+            }
             Type::Error => Type::Error,
             other => {
                 self.diags.push(Diagnostic::error(
@@ -701,6 +705,9 @@ impl<'b> Checker<'b> {
                     Type::BuiltinArray { elem } | Type::BuiltinFixed { elem, .. } => {
                         Type::Maybe { inner: elem.clone() }
                     }
+                    Type::BuiltinMap { val, .. } => {
+                        Type::Maybe { inner: val.clone() }
+                    }
                     Type::Error => Type::Error,
                     other => {
                         self.diags.push(Diagnostic::error(
@@ -715,6 +722,9 @@ impl<'b> Checker<'b> {
             }
             Expr::ArrayLit { elements, span } => {
                 self.check_array_lit(elements, hint, span)
+            }
+            Expr::MapLit { entries, span } => {
+                self.check_map_lit(entries, hint, span)
             }
         };
 
@@ -1283,6 +1293,32 @@ impl<'b> Checker<'b> {
                 Type::Error
             };
         }
+        if let Type::BuiltinMap { key, val } = receiver_ty {
+            let key = key.as_ref().clone();
+            let val = val.as_ref().clone();
+            return if let Some(ret) = map_method_return(method, &key, &val) {
+                ret
+            } else {
+                self.diags.push(Diagnostic::error(
+                    method_span.clone(),
+                    format!("`map<{}, {}>` does not have a method called `{method}`.", type_name(&key), type_name(&val)),
+                    "Available methods: get, set, has, remove, count, keys, values, entries.",
+                    "Check the spelling. Use `m[key]` for reads and `m[key] = value` for writes.",
+                ));
+                Type::Error
+            };
+        }
+        if let Type::MapEntry { key, val } = receiver_ty {
+            let key = key.as_ref().clone();
+            let val = val.as_ref().clone();
+            self.diags.push(Diagnostic::error(
+                method_span.clone(),
+                format!("`MapEntry<{}, {}>` does not have a method called `{method}`.", type_name(&key), type_name(&val)),
+                "Use `entry.key` to get the key and `entry.value` to get the value.",
+                "`MapEntry` values only have two fields: `.key` and `.value`. They have no methods.",
+            ));
+            return Type::Error;
+        }
 
         // Shape or dynamic receiver — try UFCS.
         if let Type::Dynamic { contract } = receiver_ty {
@@ -1369,12 +1405,12 @@ impl<'b> Checker<'b> {
             AstType::Named(n, _) if self.shape_table.contains(n) => {
                 Type::Shape { name: n.clone() }
             }
-            AstType::Named(n, span) if matches!(n.as_str(), "array" | "fixed" | "maybe") => {
+            AstType::Named(n, span) if matches!(n.as_str(), "array" | "fixed" | "maybe" | "map" | "MapEntry") => {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
-                    format!("`{n}` requires a type argument."),
-                    format!("Write `{n}<T>` — for example, `{n}<int>` or `{n}<Player>`.", n = n),
-                    format!("`{n}` is a built-in generic type. It must have exactly one type argument.", n = n),
+                    format!("`{n}` requires type argument(s)."),
+                    format!("Write `{n}<T>` — for example, `map<string, int>` or `array<int>`.", n = n),
+                    format!("`{n}` is a built-in generic type. It must have the required type arguments.", n = n),
                 ));
                 Type::Error
             }
@@ -1436,6 +1472,18 @@ impl<'b> Checker<'b> {
                     "fixed" => {
                         let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
                         Type::BuiltinFixed { elem: Box::new(elem), size: None }
+                    }
+                    "map" => {
+                        let mut args = resolved_args.into_iter();
+                        let key = args.next().unwrap_or(Type::Error);
+                        let val = args.next().unwrap_or(Type::Error);
+                        Type::BuiltinMap { key: Box::new(key), val: Box::new(val) }
+                    }
+                    "MapEntry" => {
+                        let mut args = resolved_args.into_iter();
+                        let key = args.next().unwrap_or(Type::Error);
+                        let val = args.next().unwrap_or(Type::Error);
+                        Type::MapEntry { key: Box::new(key), val: Box::new(val) }
                     }
                     _ => {
                         if self.generic_shape_table.contains(name) {
@@ -1580,6 +1628,35 @@ impl<'b> Checker<'b> {
     fn infer_field_access(&mut self, receiver: &Expr, field: &str, field_span: &SourceSpan) -> Type {
         let receiver_ty = self.infer_expr(receiver, None);
 
+        // M5 P3c: `MapEntry<K,V>.key` / `.value` field access.
+        if let Type::MapEntry { key, val } = &receiver_ty {
+            return match field {
+                "key" => key.as_ref().clone(),
+                "value" => val.as_ref().clone(),
+                other => {
+                    self.diags.push(Diagnostic::error(
+                        field_span.clone(),
+                        format!("`MapEntry` does not have a field called `{other}`."),
+                        "Use `.key` to get the key and `.value` to get the value.",
+                        "`MapEntry<K, V>` has exactly two fields: `key: K` and `value: V`.",
+                    ));
+                    Type::Error
+                }
+            };
+        }
+
+        // M5 P3c: dot access on map — emit "use bracket syntax" error.
+        if let Type::BuiltinMap { key, val } = &receiver_ty {
+            self.diags.push(Diagnostic::error(
+                field_span.clone(),
+                format!("Cannot use `.{field}` to look up a map key."),
+                format!("Map keys are runtime values — use `m[\"{field}\"]` to look up a key. For checking existence, use `m.has(\"{field}\")`.",),
+                "Dot access is for shape fields with compile-time-known names. Map keys are dynamic — use bracket syntax.",
+            ));
+            let _ = (key, val);
+            return Type::Error;
+        }
+
         // M5 P3b: `maybe<T>.value` — flow-sensitive field access.
         if let Type::Maybe { inner } = &receiver_ty {
             if field == "value" {
@@ -1690,6 +1767,22 @@ impl<'b> Checker<'b> {
 
     /// Type-check a struct literal `{ name: "x", health: 100 }` against the hint type.
     fn check_struct_lit(&mut self, fields: &[StructLitField], hint: Option<&Type>, span: &SourceSpan) -> Type {
+        // M5 P3c: handle `let m: map<K,V> = { }` — empty struct lit with BuiltinMap annotation.
+        // Non-empty struct lits with identifier keys are errors (should be MapLit with string keys).
+        if let Some(Type::BuiltinMap { key, val }) = hint {
+            if fields.is_empty() {
+                return Type::BuiltinMap { key: key.clone(), val: val.clone() };
+            }
+            self.diags.push(Diagnostic::error(
+                span.clone(),
+                "Map literals use string or integer keys, not field names.",
+                "Write `{ \"key\": value }` instead of `{ key: value }` for map literals.",
+                "Struct literals with identifier keys create shape values. Map literals use string or integer literal keys.",
+            ));
+            for f in fields { self.infer_expr(&f.value, None); }
+            return Type::Error;
+        }
+
         let shape_name = match hint {
             Some(Type::Shape { name }) => name.clone(),
             Some(other) if *other != Type::Error => {
@@ -1929,6 +2022,18 @@ impl<'b> Checker<'b> {
                     ));
                 }
             }
+            Type::BuiltinMap { val: map_val, .. } => {
+                let expected = map_val.as_ref().clone();
+                let val_ty = self.infer_expr(value, Some(&expected));
+                if val_ty != Type::Error && expected != Type::Error && val_ty != expected {
+                    self.diags.push(Diagnostic::error(
+                        value.span().clone(),
+                        format!("This value has type `{}`, but the map holds `{}` values.", type_name(&val_ty), type_name(&expected)),
+                        format!("Assign a `{}` value.", type_name(&expected)),
+                        "Map value assignment must match the map's value type.",
+                    ));
+                }
+            }
             Type::Error => { self.infer_expr(value, None); }
             other => {
                 self.diags.push(Diagnostic::error(
@@ -1940,6 +2045,75 @@ impl<'b> Checker<'b> {
                 self.infer_expr(value, None);
             }
         }
+    }
+
+    /// Type-check a map literal `{ "alice": 90, "bob": 85 }`.
+    fn check_map_lit(&mut self, entries: &[(Expr, Expr)], hint: Option<&Type>, span: &SourceSpan) -> Type {
+        let (hint_key, hint_val) = match hint {
+            Some(Type::BuiltinMap { key, val }) => (Some(key.as_ref().clone()), Some(val.as_ref().clone())),
+            _ => (None, None),
+        };
+
+        let mut key_ty = hint_key.clone().unwrap_or(Type::Error);
+        let mut val_ty = hint_val.clone().unwrap_or(Type::Error);
+        let mut seen_keys: std::collections::HashMap<String, ynz_diagnostics::SourceSpan> = std::collections::HashMap::new();
+
+        for (key_expr, val_expr) in entries {
+            let k = self.infer_expr(key_expr, hint_key.as_ref());
+            let v = self.infer_expr(val_expr, hint_val.as_ref());
+
+            if key_ty == Type::Error { key_ty = k.clone(); }
+            if val_ty == Type::Error { val_ty = v.clone(); }
+
+            if k != Type::Error && key_ty != Type::Error && k != key_ty {
+                self.diags.push(Diagnostic::error(
+                    key_expr.span().clone(),
+                    format!("This key has type `{}`, but the map uses `{}` keys.", type_name(&k), type_name(&key_ty)),
+                    format!("Use a `{}` key, or change the map annotation.", type_name(&key_ty)),
+                    "All keys in a map literal must have the same type.",
+                ));
+            }
+            if v != Type::Error && val_ty != Type::Error && v != val_ty {
+                self.diags.push(Diagnostic::error(
+                    val_expr.span().clone(),
+                    format!("This value has type `{}`, but the map holds `{}` values.", type_name(&v), type_name(&val_ty)),
+                    format!("Use a `{}` value, or change the map annotation.", type_name(&val_ty)),
+                    "All values in a map literal must have the same type.",
+                ));
+            }
+
+            // Duplicate-key detection for literal string/int keys.
+            let key_repr = match key_expr {
+                Expr::StringLit(bytes, _) => Some(String::from_utf8_lossy(bytes).to_string()),
+                Expr::IntLit(n, _) => Some(n.to_string()),
+                _ => None,
+            };
+            if let Some(key_str) = key_repr {
+                if let Some(first_span) = seen_keys.get(&key_str) {
+                    self.diags.push(
+                        Diagnostic::error(
+                            key_expr.span().clone(),
+                            format!("Duplicate key `\"{key_str}\"` in this map literal — the key is listed twice."),
+                            "Remove or rename one of the two entries so each key is unique.",
+                            "The compiler refuses to silently pick one — duplicate keys in a map literal are always a mistake.",
+                        ).with_related(first_span.clone(), "first occurrence here"),
+                    );
+                } else {
+                    seen_keys.insert(key_str, key_expr.span().clone());
+                }
+            }
+        }
+
+        if (key_ty == Type::Error || val_ty == Type::Error) && entries.is_empty() {
+            self.diags.push(Diagnostic::error(
+                span.clone(),
+                "Cannot work out the key and value types of this empty map literal.",
+                "Add a type annotation: `let m: map<string, int> = {}`.",
+                "Without an annotation, the compiler cannot determine what type of keys and values this map holds.",
+            ));
+        }
+
+        Type::BuiltinMap { key: Box::new(key_ty), val: Box::new(val_ty) }
     }
 }
 
@@ -2021,6 +2195,8 @@ fn expr_has_error(expr: &Expr) -> bool {
         Expr::IndexAccess { receiver, index, .. } => expr_has_error(receiver) || expr_has_error(index),
         // M5 P3b: array literal — propagate error check into all elements.
         Expr::ArrayLit { elements, .. } => elements.iter().any(expr_has_error),
+        // M5 P3c: map literal — propagate error check into all keys and values.
+        Expr::MapLit { entries, .. } => entries.iter().any(|(k, v)| expr_has_error(k) || expr_has_error(v)),
     }
 }
 

@@ -57,3 +57,26 @@ pub fn maybe_method_return(method: &str, inner: &Type) -> Option<Type> {
         _ => None,
     }
 }
+
+/// Look up the return type of a method call on `map<key, val>`.
+///
+/// Returns `None` if the method does not exist on maps.
+pub fn map_method_return(method: &str, key: &Type, val: &Type) -> Option<Type> {
+    match method {
+        "get" | "find" => Some(Type::Maybe { inner: Box::new(val.clone()) }),
+        "has" => Some(Type::Bool),
+        "set" | "remove" | "clear" => Some(Type::Nothing),
+        "count" => Some(Type::Int),
+        "keys" => Some(Type::BuiltinArray { elem: Box::new(key.clone()) }),
+        "values" => Some(Type::BuiltinArray { elem: Box::new(val.clone()) }),
+        "entries" => Some(Type::BuiltinArray {
+            elem: Box::new(Type::MapEntry { key: Box::new(key.clone()), val: Box::new(val.clone()) }),
+        }),
+        _ => None,
+    }
+}
+
+/// Check whether a method on `map<K, V>` mutates (i.e., needs `lend self`).
+pub fn map_method_is_mutating(method: &str) -> bool {
+    matches!(method, "set" | "remove" | "clear")
+}

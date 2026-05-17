@@ -261,8 +261,8 @@ pub enum UnaryOpKind {
 /// An expression.
 ///
 /// Variant count is pinned by the milestone-locked tests in the test suite.
-/// Current count: 17 — M4 added FieldAccess(11), StructLit(12), PostfixOp(13),
-/// SelfValue(14); M5 added NoneLit(15), IndexAccess(16), ArrayLit(17).
+/// Current count: 18 — M4 added FieldAccess(11), StructLit(12), PostfixOp(13),
+/// SelfValue(14); M5 added NoneLit(15), IndexAccess(16), ArrayLit(17), MapLit(18).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
 
@@ -375,6 +375,17 @@ pub enum Expr {
         elements: Vec<Expr>,
         span: SourceSpan,
     },
+
+    // test-ratchet: M5 P3c adds MapLit for { "alice": 90, "bob": 85 } map literal syntax.
+    /// Map literal: `{ "alice": 90, "bob": 85 }`.
+    ///
+    /// Keys are expressions (typically string or int literals for static-key maps).
+    /// Values are expressions. Typeck validates key/value types against the annotation
+    /// and detects duplicate literal keys.
+    MapLit {
+        entries: Vec<(Expr, Expr)>,
+        span: SourceSpan,
+    },
 }
 
 /// The kind of dot-postfix body operation.
@@ -409,7 +420,8 @@ impl Expr {
             | Expr::StructLit { span, .. }
             | Expr::PostfixOp { span, .. }
             | Expr::IndexAccess { span, .. }
-            | Expr::ArrayLit { span, .. } => span,
+            | Expr::ArrayLit { span, .. }
+            | Expr::MapLit { span, .. } => span,
             Expr::SelfValue { span } => span,
             Expr::NoneLit { span } => span,
         }
