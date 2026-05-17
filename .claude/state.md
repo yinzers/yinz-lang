@@ -69,7 +69,8 @@ cargo fmt --all
 - [2026-05-16] **M4 P1 complete (05c5296, merged to main)**: 8 new tokens (49→57). 6 banned-keyword handlers. All tests green.
 - [2026-05-16] **M4 P2 complete (84db1d2, merged)**: AST + parser for shapes. 4 new Expr variants, 1 Stmt, 2 Type variants. 68 parse tests green.
 - [2026-05-16] **M4 P3a complete (244ac6d, merged)**: ShapeTable, Type::Shape, struct-lit typeck, field access/assign, UFCS, hidden-field guard, base-shape guard. 90 typeck tests green.
-- [2026-05-16] **M4 P3b complete (3508e7b, branch feat/m4-typeck-inheritance, PR open)**: `extends` field inheritance + cycle detection, `follows` contract verification, `Type::Dynamic` + dynamic dispatch routing. 96 typeck tests green. PR: https://github.com/patrickrizzardi/ynz/pull/new/feat/m4-typeck-inheritance
+- [2026-05-16] **M4 P3b complete (3508e7b, merged)**: `extends` field inheritance + cycle detection, `follows` contract verification, `Type::Dynamic`. 96 typeck tests green.
+- [2026-05-17] **M4 P3c complete (7c86f6a, branch feat/m4-ownership, PR open)**: `is_consumed` scope tracking, use-after-give, const-cannot-be-lent/given. All 5 const deep-immutability paths covered. 102 typeck tests green. PR: https://github.com/patrickrizzardi/ynz/pull/new/feat/m4-ownership
 
 ---
 
