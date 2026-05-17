@@ -504,6 +504,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// Build an alloca holding a `maybe<T>` with `has_value = 1` and `bits = value_i64`.
+    #[allow(dead_code)]
     fn build_maybe_some(&self, value_i64: inkwell::values::IntValue<'ctx>) -> Result<PointerValue<'ctx>, String> {
         let slot = self.builder.build_alloca(self.maybe_type(), "maybe_some")
             .map_err(|e| format!("{e}"))?;
@@ -536,7 +537,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     }
 
     /// Convert an i64-bit pattern back to the concrete type representation.
-    fn from_i64_bits(&self, val: inkwell::values::IntValue<'ctx>, ty: &Type) -> Result<BasicValueEnum<'ctx>, String> {
+    fn i64_bits_to(&self, val: inkwell::values::IntValue<'ctx>, ty: &Type) -> Result<BasicValueEnum<'ctx>, String> {
         let resolved = self.resolve_type(ty);
         match &resolved {
             Type::Int => Ok(val.into()),
@@ -955,7 +956,7 @@ fn lower_stmt_for<'ctx>(
             .map_err(|e| format!("{e}"))?;
         let bits = cg.builder.build_load(cg.i64(), val_gep, "for_bits")
             .map_err(|e| format!("{e}"))?.into_int_value();
-        let elem_val = cg.from_i64_bits(bits, &elem)?;
+        let elem_val = cg.i64_bits_to(bits, &elem)?;
 
         let var_slot = cg.alloca(&elem, var)?;
         store(cg, elem_val, &elem, var_slot)?;
@@ -1681,7 +1682,7 @@ fn lower_field_access<'ctx>(
             .map_err(|e| format!("{e}"))?;
         let bits = cg.builder.build_load(cg.i64(), val_gep, "mv_bits")
             .map_err(|e| format!("{e}"))?.into_int_value();
-        return cg.from_i64_bits(bits, &inner);
+        return cg.i64_bits_to(bits, &inner);
     }
 
     let (field_ptr, field_ty) = field_gep(cg, receiver, field_name)?;
@@ -2156,7 +2157,7 @@ fn lower_maybe_method<'ctx>(
                 .map_err(|e| format!("{e}"))?;
             let bits = cg.builder.build_load(cg.i64(), val_gep, "or_bits")
                 .map_err(|e| format!("{e}"))?.into_int_value();
-            let inner_val = cg.from_i64_bits(bits, inner)?;
+            let inner_val = cg.i64_bits_to(bits, inner)?;
             let default_val = lower_expr(cg, &args[0])?;
 
             cg.builder.build_select(cond, inner_val, default_val, "or_res")
