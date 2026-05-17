@@ -1,0 +1,7 @@
+function main() -> nothing {
+  let arr: array<int> = [1, 2, 3]
+  arr.add(4)
+  print(arr.count())
+  print(arr[0].or(-1))
+  print(arr[3].or(-1))
+}

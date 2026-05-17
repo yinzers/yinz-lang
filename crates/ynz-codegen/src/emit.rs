@@ -21,7 +21,7 @@ use inkwell::{
     targets::{
         CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
     },
-    types::{BasicMetadataTypeEnum, BasicTypeEnum},
+    types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum},
     values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, GlobalValue, PointerValue},
     AddressSpace, IntPredicate, OptimizationLevel,
 };
@@ -29,7 +29,10 @@ use ynz_ast::nodes::{
     BinOpKind, Expr, FunctionDecl, Item, MatchPatternKind, OwnershipModifier, Stmt, UnaryOpKind,
 };
 use ynz_numerics; // parse(s: &str) -> Option<u128>
-use ynz_typeck::{type_attached_const_type, ShapeTable, SignatureTable, Type, TypedModule};
+use ynz_typeck::{
+    type_attached_const_type, GenericFnTable, MonomorphizationTable, ShapeTable, SignatureTable,
+    Type, TypedModule,
+};
 
 use crate::{
     artifact::{sha256, CompiledArtifact},
@@ -43,12 +46,14 @@ pub fn module_identifier(source_path: &str) -> String {
     format!("ynz-{source_path}")
 }
 
-/// Emit a relocatable object file for an M4 program.
+/// Emit a relocatable object file for an M5 program.
 pub fn emit_artifact(
     source_path: &str,
     typed_module: &TypedModule,
     shape_table: &ShapeTable,
     _sig_table: &SignatureTable,
+    generic_fn_table: &GenericFnTable,
+    mono_table: &MonomorphizationTable,
     target_triple: Option<&str>,
 ) -> Result<CompiledArtifact, String> {
     Target::initialize_x86(&InitializationConfig::default());
@@ -75,7 +80,7 @@ pub fn emit_artifact(
         .ok_or_else(|| "LLVM: failed to create target machine".to_string())?;
     module.set_data_layout(&machine.get_target_data().get_data_layout());
 
-    build_module(&context, &module, typed_module, shape_table)?;
+    build_module(&context, &module, typed_module, shape_table, generic_fn_table, mono_table)?;
 
     module.verify()
         .map_err(|e| format!("LLVM module verify failed: {}", e.to_string()))?;
@@ -109,6 +114,8 @@ fn build_module<'ctx, 'g>(
     module: &'g Module<'ctx>,
     typed: &'g TypedModule,
     shape_table: &'g ShapeTable,
+    generic_fn_table: &'g GenericFnTable,
+    mono_table: &'g MonomorphizationTable,
 ) -> Result<(), String> {
     let rt = RuntimeDecls::declare(ctx, module);
 
@@ -129,23 +136,170 @@ fn build_module<'ctx, 'g>(
     // Pass 0 — emit LLVM struct types for all user-defined shapes.
     let shape_types = emit_shape_types(ctx, shape_table);
 
-    // Pass 1 — forward-declare every function so vtables and bodies can reference them.
+    // Pass 1 — forward-declare every non-generic function so vtables and bodies can reference them.
     for item in &typed.module.items {
         match item {
-            Item::Function(f) => declare_function(ctx, module, f, shape_table)?,
-            Item::ShapeDecl(_) => {}
+            Item::Function(f) if f.generics.is_empty() => declare_function(ctx, module, f, shape_table)?,
+            Item::Function(_) | Item::ShapeDecl(_) => {}
         }
     }
 
-    // Pass 1.5 — emit vtable globals for `dynamic Foo` dispatch.
-    // Currently unused in lowering (dynamic call-site coercion lands after P5 catch-up).
+    // Pass 1.5 — forward-declare monomorphized generic functions.
+    for (key, mono_sig) in &mono_table.entries {
+        let mangled = mangle_mono_name(&key.fn_name, &key.type_args);
+        let param_llvms: Vec<BasicMetadataTypeEnum<'ctx>> = mono_sig.param_types.iter()
+            .map(|t| llvm_type_for_ctx(ctx, t).map(BasicMetadataTypeEnum::from)
+                .unwrap_or_else(|| ctx.i64_type().into()))
+            .collect();
+        let fn_ty = match llvm_type_for_ctx(ctx, &mono_sig.ret_type) {
+            Some(ret) => ret.fn_type(&param_llvms, false),
+            None => ctx.void_type().fn_type(&param_llvms, false),
+        };
+        if module.get_function(&mangled).is_none() {
+            module.add_function(&mangled, fn_ty, None);
+        }
+    }
+
+    // Pass 1.6 — emit vtable globals for `dynamic Foo` dispatch.
     let _vtables = emit_vtable_globals(module, shape_table);
 
-    // Pass 2 — emit bodies.
+    // Pass 2 — emit non-generic function bodies.
     for item in &typed.module.items {
         match item {
-            Item::Function(f) => lower_function(ctx, module, &rt, &globals, typed, f, shape_table, &shape_types)?,
-            Item::ShapeDecl(_) => {}
+            Item::Function(f) if f.generics.is_empty() => {
+                lower_function(ctx, module, &rt, &globals, typed, f, shape_table, &shape_types, mono_table)?
+            }
+            Item::Function(_) | Item::ShapeDecl(_) => {}
+        }
+    }
+
+    // Pass 2.5 — emit monomorphized generic function bodies.
+    for (key, mono_sig) in &mono_table.entries {
+        let Some(fn_decl) = typed.module.items.iter().find_map(|item| {
+            if let Item::Function(f) = item {
+                if f.name == key.fn_name && !f.generics.is_empty() {
+                    return Some(f);
+                }
+            }
+            None
+        }) else { continue };
+
+        let type_subst: HashMap<String, Type> = fn_decl.generics.iter()
+            .zip(key.type_args.iter())
+            .map(|(gp, ty)| (gp.name.clone(), ty.clone()))
+            .collect();
+
+        let mangled = mangle_mono_name(&key.fn_name, &key.type_args);
+        let Some(fn_val) = module.get_function(&mangled) else { continue };
+
+        lower_generic_function(
+            ctx, module, &rt, &globals, typed, fn_decl,
+            shape_table, &shape_types, fn_val, type_subst, mono_sig, mono_table,
+        )?;
+    }
+
+    let _ = generic_fn_table; // consumed via mono_table; kept in signature for future use
+    Ok(())
+}
+
+/// Mangle a generic function name + type args into a unique LLVM symbol name.
+fn mangle_mono_name(fn_name: &str, type_args: &[Type]) -> String {
+    let mut name = fn_name.to_string();
+    for ty in type_args {
+        name.push('_');
+        name.push_str(&mangle_type(ty));
+    }
+    name
+}
+
+fn mangle_type(ty: &Type) -> String {
+    match ty {
+        Type::Int     => "int".to_string(),
+        Type::Float   => "float".to_string(),
+        Type::Bool    => "bool".to_string(),
+        Type::String  => "string".to_string(),
+        Type::Nothing => "nothing".to_string(),
+        Type::Shape { name } => name.clone(),
+        Type::BuiltinArray { elem } => format!("array_{}", mangle_type(elem)),
+        Type::BuiltinFixed { elem, .. } => format!("fixed_{}", mangle_type(elem)),
+        Type::Maybe { inner } => format!("maybe_{}", mangle_type(inner)),
+        Type::Generic { name, args } => {
+            let arg_str = args.iter().map(mangle_type).collect::<Vec<_>>().join("_");
+            format!("{name}_{arg_str}")
+        }
+        other => format!("{other:?}").to_lowercase().replace([' ', '{', '}', '"', ':'], "_"),
+    }
+}
+
+/// Map a typeck `Type` to an LLVM basic type, given only a `Context`.
+///
+/// Used during Pass 1.5 (forward declarations) where `Cg` doesn't exist yet.
+fn llvm_type_for_ctx<'ctx>(ctx: &'ctx Context, ty: &Type) -> Option<BasicTypeEnum<'ctx>> {
+    match ty {
+        Type::Int            => Some(ctx.i64_type().into()),
+        Type::Float          => Some(ctx.f64_type().into()),
+        Type::Bool           => Some(ctx.bool_type().into()),
+        Type::Number { .. }  => Some(ctx.i128_type().into()),
+        Type::Nothing        => None,
+        _                    => Some(ctx.ptr_type(AddressSpace::default()).into()),
+    }
+}
+
+/// Lower a single monomorphized instantiation of a generic function.
+#[allow(clippy::too_many_arguments)]
+fn lower_generic_function<'ctx>(
+    ctx: &'ctx Context,
+    module: &'_ Module<'ctx>,
+    rt: &'_ RuntimeDecls<'ctx>,
+    globals: &'_ ModuleGlobals<'ctx>,
+    typed: &'_ TypedModule,
+    f: &FunctionDecl,
+    shape_table: &'_ ShapeTable,
+    shape_types: &'_ ShapeLlvmTypes<'ctx>,
+    fn_val: FunctionValue<'ctx>,
+    type_subst: HashMap<String, Type>,
+    mono_sig: &ynz_typeck::generics::MonoSignature,
+    mono_table: &'_ MonomorphizationTable,
+) -> Result<(), String> {
+    let ret_ty = mono_sig.ret_type.clone();
+    let ret_is_nothing = matches!(ret_ty, Type::Nothing);
+
+    let mut cg = Cg {
+        ctx,
+        module,
+        builder: ctx.create_builder(),
+        rt,
+        globals,
+        typed,
+        current_fn: fn_val,
+        is_main: false,
+        _current_fn_ret_ty: ret_ty,
+        locals: HashMap::new(),
+        shape_table,
+        shape_types,
+        type_subst,
+        mono_table,
+    };
+
+    let entry = ctx.append_basic_block(fn_val, "entry");
+    cg.builder.position_at_end(entry);
+
+    for (i, (param, concrete_ty)) in f.params.iter().zip(mono_sig.param_types.iter()).enumerate() {
+        let llvm_param = fn_val.get_nth_param(i as u32)
+            .ok_or_else(|| format!("missing param {} for generic `{}`", i, f.name))?;
+        materialize_param(&mut cg, &param.name, llvm_param, concrete_ty)?;
+    }
+
+    for stmt in &f.body.stmts {
+        if is_block_terminated(&cg) { break; }
+        lower_stmt(&mut cg, stmt)?;
+    }
+
+    if !is_block_terminated(&cg) {
+        if ret_is_nothing {
+            cg.builder.build_return(None).map_err(|e| format!("{e}"))?;
+        } else {
+            cg.builder.build_unreachable().map_err(|e| format!("{e}"))?;
         }
     }
     Ok(())
@@ -251,6 +405,10 @@ struct Cg<'ctx, 'g> {
     // M4 additions:
     shape_table: &'g ShapeTable,
     shape_types: &'g ShapeLlvmTypes<'ctx>,
+    // M5 P4a: type-param substitution for the current monomorphized instance.
+    // Empty for non-generic functions.
+    type_subst: HashMap<String, Type>,
+    mono_table: &'g MonomorphizationTable,
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
@@ -262,13 +420,35 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
     fn bool(&self) -> inkwell::types::IntType<'ctx>  { self.ctx.bool_type() }
     fn ptr(&self) -> inkwell::types::PointerType<'ctx> { self.ctx.ptr_type(AddressSpace::default()) }
 
-    fn expr_type<'a>(&'a self, expr: &Expr) -> &'a Type {
+    /// Apply the current type-param substitution to `ty`, returning a concrete type.
+    fn resolve_type(&self, ty: &Type) -> Type {
+        match ty {
+            Type::TypeParam { name } => {
+                self.type_subst.get(name).cloned().unwrap_or_else(|| ty.clone())
+            }
+            Type::Generic { name, args } => Type::Generic {
+                name: name.clone(),
+                args: args.iter().map(|a| self.resolve_type(a)).collect(),
+            },
+            Type::BuiltinArray { elem } => Type::BuiltinArray { elem: Box::new(self.resolve_type(elem)) },
+            Type::BuiltinFixed { elem, size } => Type::BuiltinFixed {
+                elem: Box::new(self.resolve_type(elem)), size: *size,
+            },
+            Type::Maybe { inner } => Type::Maybe { inner: Box::new(self.resolve_type(inner)) },
+            other => other.clone(),
+        }
+    }
+
+    /// Look up the typeck type for `expr` and apply the current type-param substitution.
+    fn expr_type(&self, expr: &Expr) -> Type {
         let key = (expr.span().start, expr.span().end);
-        self.typed.expr_types.get(&key).unwrap_or(&Type::Error)
+        let raw = self.typed.expr_types.get(&key).cloned().unwrap_or(Type::Error);
+        self.resolve_type(&raw)
     }
 
     fn llvm_type_for(&self, ty: &Type) -> Option<BasicTypeEnum<'ctx>> {
-        match ty {
+        let resolved = self.resolve_type(ty);
+        match &resolved {
             Type::Int            => Some(self.i64().into()),
             Type::Float          => Some(self.f64().into()),
             Type::Bool           => Some(self.bool().into()),
@@ -277,19 +457,104 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             // Shape and dynamic values are always passed/stored as opaque pointers.
             Type::Shape { .. }   => Some(self.ptr().into()),
             Type::Dynamic { .. } => Some(self.ptr().into()),
+            // Collections and maybe are all represented as opaque pointers (heap or alloca).
+            Type::BuiltinArray { .. } => Some(self.ptr().into()),
+            Type::BuiltinFixed { .. } => Some(self.ptr().into()),
+            Type::Maybe { .. }    => Some(self.ptr().into()),
+            Type::MapEntry { .. } => Some(self.ptr().into()),
+            Type::BuiltinMap { .. } => Some(self.ptr().into()),
             _                    => None,
         }
     }
 
+    /// LLVM struct type for `maybe<T>`: `{i64, i64}` where slot 0 = has_value, slot 1 = bits.
+    fn maybe_type(&self) -> inkwell::types::StructType<'ctx> {
+        self.ctx.struct_type(&[self.i64().into(), self.i64().into()], false)
+    }
 
     fn alloca(&self, ty: &Type, name: &str) -> Result<PointerValue<'ctx>, String> {
-        let llvm_ty = self.llvm_type_for(ty)
-            .ok_or_else(|| format!("cannot alloca for type {:?}", ty))?;
-        self.builder.build_alloca(llvm_ty, name).map_err(|e| format!("{e}"))
+        let resolved = self.resolve_type(ty);
+        match &resolved {
+            // Collections and maybe: the variable slot holds an opaque pointer to the
+            // actual data structure (heap YnzArray, stack [N x i64], or stack {i64,i64}).
+            // Loading the slot returns the pointer; the caller works through that pointer.
+            Type::BuiltinArray { .. } | Type::BuiltinFixed { .. } | Type::Maybe { .. }
+            | Type::BuiltinMap { .. } | Type::MapEntry { .. } => {
+                self.builder.build_alloca(self.ptr(), name).map_err(|e| format!("{e}"))
+            }
+            _ => {
+                let llvm_ty = self.llvm_type_for(&resolved)
+                    .ok_or_else(|| format!("cannot alloca for type {:?}", resolved))?;
+                self.builder.build_alloca(llvm_ty, name).map_err(|e| format!("{e}"))
+            }
+        }
     }
 
     fn append_block(&self, name: &str) -> BasicBlock<'ctx> {
         self.ctx.append_basic_block(self.current_fn, name)
+    }
+
+    /// Build an alloca holding a `maybe<T>` with `has_value = 0`.
+    fn build_maybe_none(&self) -> Result<PointerValue<'ctx>, String> {
+        let slot = self.builder.build_alloca(self.maybe_type(), "maybe_none")
+            .map_err(|e| format!("{e}"))?;
+        self.builder.build_store(slot, self.maybe_type().const_zero())
+            .map_err(|e| format!("{e}"))?;
+        Ok(slot)
+    }
+
+    /// Build an alloca holding a `maybe<T>` with `has_value = 1` and `bits = value_i64`.
+    fn build_maybe_some(&self, value_i64: inkwell::values::IntValue<'ctx>) -> Result<PointerValue<'ctx>, String> {
+        let slot = self.builder.build_alloca(self.maybe_type(), "maybe_some")
+            .map_err(|e| format!("{e}"))?;
+        let one = self.i64().const_int(1, false);
+        let has_gep = self.builder.build_struct_gep(self.maybe_type(), slot, 0, "has_gep")
+            .map_err(|e| format!("{e}"))?;
+        self.builder.build_store(has_gep, one).map_err(|e| format!("{e}"))?;
+        let val_gep = self.builder.build_struct_gep(self.maybe_type(), slot, 1, "val_gep")
+            .map_err(|e| format!("{e}"))?;
+        self.builder.build_store(val_gep, value_i64).map_err(|e| format!("{e}"))?;
+        Ok(slot)
+    }
+
+    /// Convert any BasicValueEnum to its i64-bit representation for uniform array storage.
+    fn to_i64_bits(&self, val: BasicValueEnum<'ctx>, ty: &Type) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let resolved = self.resolve_type(ty);
+        match &resolved {
+            Type::Int | Type::Bool => Ok(val.into_int_value()),
+            Type::Float => self.builder
+                .build_bit_cast(val.into_float_value(), self.i64(), "f_to_i")
+                .map(|v| v.into_int_value())
+                .map_err(|e| format!("{e}")),
+            Type::String | Type::Shape { .. } | Type::Dynamic { .. }
+            | Type::BuiltinArray { .. } | Type::BuiltinFixed { .. } | Type::Maybe { .. }
+            | Type::BuiltinMap { .. } | Type::MapEntry { .. } => self.builder
+                .build_ptr_to_int(val.into_pointer_value(), self.i64(), "ptr_to_i")
+                .map_err(|e| format!("{e}")),
+            _ => Err(format!("cannot convert {:?} to i64 bits", resolved)),
+        }
+    }
+
+    /// Convert an i64-bit pattern back to the concrete type representation.
+    fn from_i64_bits(&self, val: inkwell::values::IntValue<'ctx>, ty: &Type) -> Result<BasicValueEnum<'ctx>, String> {
+        let resolved = self.resolve_type(ty);
+        match &resolved {
+            Type::Int => Ok(val.into()),
+            Type::Bool => self.builder
+                .build_int_truncate(val, self.bool(), "i_to_b")
+                .map(|v| v.into())
+                .map_err(|e| format!("{e}")),
+            Type::Float => self.builder
+                .build_bit_cast(val, self.f64(), "i_to_f")
+                .map_err(|e| format!("{e}")),
+            Type::String | Type::Shape { .. } | Type::Dynamic { .. }
+            | Type::BuiltinArray { .. } | Type::BuiltinFixed { .. } | Type::Maybe { .. }
+            | Type::BuiltinMap { .. } | Type::MapEntry { .. } => self.builder
+                .build_int_to_ptr(val, self.ptr(), "i_to_ptr")
+                .map(|v| v.into())
+                .map_err(|e| format!("{e}")),
+            _ => Err(format!("cannot convert i64 bits to {:?}", resolved)),
+        }
     }
 }
 
@@ -303,6 +568,7 @@ fn lower_function<'ctx, 'g>(
     f: &FunctionDecl,
     shape_table: &'g ShapeTable,
     shape_types: &'g ShapeLlvmTypes<'ctx>,
+    mono_table: &'g MonomorphizationTable,
 ) -> Result<(), String> {
     let fn_val = module.get_function(&f.name)
         .ok_or_else(|| format!("function `{}` was not forward-declared", f.name))?;
@@ -324,6 +590,8 @@ fn lower_function<'ctx, 'g>(
         locals: HashMap::new(),
         shape_table,
         shape_types,
+        type_subst: HashMap::new(),
+        mono_table,
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -395,8 +663,10 @@ fn materialize_param<'ctx>(
     param_ty: &Type,
 ) -> Result<(), String> {
     match param_ty {
-        // Shape/Dynamic: incoming param is a ptr; store the ptr in a ptr-slot.
-        Type::Shape { .. } | Type::Dynamic { .. } => {
+        // Pointer-typed params: incoming LLVM value is a ptr; store the ptr in a ptr-slot.
+        Type::Shape { .. } | Type::Dynamic { .. }
+        | Type::BuiltinArray { .. } | Type::BuiltinFixed { .. } | Type::Maybe { .. }
+        | Type::BuiltinMap { .. } | Type::MapEntry { .. } => {
             let slot = cg.builder.build_alloca(cg.ptr(), name)
                 .map_err(|e| format!("param alloca {name}: {e}"))?;
             cg.builder.build_store(slot, llvm_val)
@@ -428,7 +698,7 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
         Stmt::Expr(expr) => { lower_expr(cg, expr)?; }
 
         Stmt::Let { name, value, .. } => {
-            let ty = cg.expr_type(value).clone();
+            let ty = cg.expr_type(value);
             let val = lower_expr(cg, value)?;
             let slot = cg.alloca(&ty, name)?;
             store(cg, val, &ty, slot)?;
@@ -438,7 +708,7 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
         Stmt::Assign { target, value, .. } => {
             let slot = *cg.locals.get(target.as_str())
                 .ok_or_else(|| format!("undefined `{target}` in codegen"))?;
-            let ty = cg.expr_type(value).clone();
+            let ty = cg.expr_type(value);
             let val = lower_expr(cg, value)?;
             store(cg, val, &ty, slot)?;
         }
@@ -467,12 +737,32 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
             lower_stmt_field_assign(cg, target, value)?;
         }
 
-        // M5 P1: AST scaffolding only; the parser does not construct IndexAssign
-        // until P2 (parser wires bracket sugar) and codegen lowers it in P4a.
-        // Reaching here means an out-of-sequence change — return an error so it
-        // surfaces loudly rather than silently emitting wrong IR.
-        Stmt::IndexAssign { .. } => {
-            return Err("Stmt::IndexAssign reached codegen before M5 P4a — out-of-sequence AST".to_string());
+        Stmt::IndexAssign { receiver, index, value, .. } => {
+            let recv_ty = cg.expr_type(receiver);
+            let recv_val = lower_expr(cg, receiver)?;
+            let idx_val = lower_expr(cg, index)?.into_int_value();
+            let elem_val = lower_expr(cg, value)?;
+            let elem_ty = cg.expr_type(value);
+            let bits = cg.to_i64_bits(elem_val, &elem_ty)?;
+            match &recv_ty {
+                Type::BuiltinArray { .. } => {
+                    cg.builder.build_call(
+                        cg.rt.ynz_array_set,
+                        &[recv_val.into(), idx_val.into(), bits.into()],
+                        "arr_set",
+                    ).map_err(|e| format!("array_set: {e}"))?;
+                }
+                Type::BuiltinFixed { size, .. } => {
+                    let arr_ptr = recv_val.into_pointer_value();
+                    let gep = unsafe {
+                        cg.builder.build_gep(cg.i64(), arr_ptr, &[idx_val], "fixed_set_elem")
+                            .map_err(|e| format!("fixed_set gep: {e}"))?
+                    };
+                    cg.builder.build_store(gep, bits).map_err(|e| format!("{e}"))?;
+                    let _ = size;
+                }
+                _ => return Err(format!("IndexAssign on unsupported type: {:?}", recv_ty)),
+            }
         }
     }
     Ok(())
@@ -505,7 +795,7 @@ fn lower_stmt_match<'ctx>(
     arms: &[ynz_ast::nodes::MatchArm],
     else_arm: Option<&ynz_ast::nodes::Block>,
 ) -> Result<(), String> {
-    let scrutinee_ty = cg.expr_type(scrutinee).clone();
+    let scrutinee_ty = cg.expr_type(scrutinee);
     let scrutinee_val = lower_expr(cg, scrutinee)?;
 
     let merge_bb = cg.append_block("match_merge");
@@ -631,6 +921,64 @@ fn lower_stmt_for<'ctx>(
     iter: &Expr,
     body: &ynz_ast::nodes::Block,
 ) -> Result<(), String> {
+    let iter_ty = cg.expr_type(iter);
+
+    // Array iteration: `for (x in arr)` where arr: array<T>.
+    if let Type::BuiltinArray { elem } = &iter_ty {
+        let elem = elem.as_ref().clone();
+        let arr_ptr = lower_expr(cg, iter)?.into_pointer_value();
+        let cnt = cg.builder.build_call(cg.rt.ynz_array_count, &[arr_ptr.into()], "for_cnt")
+            .map_err(|e| format!("{e}"))?
+            .try_as_basic_value().basic().ok_or("array_count void")?
+            .into_int_value();
+
+        let i_slot = cg.builder.build_alloca(cg.i64(), "for_i").map_err(|e| format!("{e}"))?;
+        cg.builder.build_store(i_slot, cg.i64().const_zero()).map_err(|e| format!("{e}"))?;
+
+        let cond_bb  = cg.append_block("for_cond");
+        let body_bb  = cg.append_block("for_body");
+        let after_bb = cg.append_block("for_after");
+
+        cg.builder.build_unconditional_branch(cond_bb).map_err(|e| format!("{e}"))?;
+
+        cg.builder.position_at_end(cond_bb);
+        let i = cg.builder.build_load(cg.i64(), i_slot, "i").map_err(|e| format!("{e}"))?.into_int_value();
+        let cmp = cg.builder.build_int_compare(IntPredicate::SLT, i, cnt, "for_lt")
+            .map_err(|e| format!("{e}"))?;
+        cg.builder.build_conditional_branch(cmp, body_bb, after_bb).map_err(|e| format!("{e}"))?;
+
+        cg.builder.position_at_end(body_bb);
+        let out = cg.builder.build_alloca(cg.maybe_type(), "for_get").map_err(|e| format!("{e}"))?;
+        cg.builder.build_call(cg.rt.ynz_array_get, &[arr_ptr.into(), i.into(), out.into()], "for_get_call")
+            .map_err(|e| format!("{e}"))?;
+        let val_gep = cg.builder.build_struct_gep(cg.maybe_type(), out, 1, "for_val")
+            .map_err(|e| format!("{e}"))?;
+        let bits = cg.builder.build_load(cg.i64(), val_gep, "for_bits")
+            .map_err(|e| format!("{e}"))?.into_int_value();
+        let elem_val = cg.from_i64_bits(bits, &elem)?;
+
+        let var_slot = cg.alloca(&elem, var)?;
+        store(cg, elem_val, &elem, var_slot)?;
+        cg.locals.insert(var.to_string(), var_slot);
+
+        for stmt in &body.stmts {
+            if is_block_terminated(cg) { break; }
+            lower_stmt(cg, stmt)?;
+        }
+
+        if !is_block_terminated(cg) {
+            let next_i = cg.builder.build_int_add(i, cg.i64().const_int(1, false), "next_i")
+                .map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(i_slot, next_i).map_err(|e| format!("{e}"))?;
+            cg.builder.build_unconditional_branch(cond_bb).map_err(|e| format!("{e}"))?;
+        }
+
+        cg.locals.remove(var);
+        cg.builder.position_at_end(after_bb);
+        return Ok(());
+    }
+
+    // Range iteration: `for (x in range(n))` — original path.
     let (start_val, end_val) = extract_range_bounds(cg, iter)?;
 
     let counter_slot = cg.builder.build_alloca(cg.i64(), "for_ctr").map_err(|e| format!("{e}"))?;
@@ -759,18 +1107,18 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         Expr::Ident(name, _) => {
             let slot = *cg.locals.get(name.as_str())
                 .ok_or_else(|| format!("undefined `{name}` in codegen"))?;
-            let ty = cg.expr_type(expr).clone();
+            let ty = cg.expr_type(expr);
             load(cg, slot, &ty, name)
         }
 
         Expr::BinOp { op, lhs, rhs, .. } => {
-            let lhs_ty = cg.expr_type(lhs).clone();
-            let rhs_ty = cg.expr_type(rhs).clone();
+            let lhs_ty = cg.expr_type(lhs);
+            let rhs_ty = cg.expr_type(rhs);
             lower_binop(cg, op, lhs, rhs, &lhs_ty, &rhs_ty)
         }
 
         Expr::UnaryOp { op, operand, .. } => {
-            let ty = cg.expr_type(operand).clone();
+            let ty = cg.expr_type(operand);
             let val = lower_expr(cg, operand)?;
             lower_unary(cg, op, val, &ty)
         }
@@ -782,7 +1130,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
             let fn_name = fn_name.clone();
             match fn_name.as_str() {
                 "print" if call.args.len() == 1 => {
-                    let ty = cg.expr_type(&call.args[0]).clone();
+                    let ty = cg.expr_type(&call.args[0]);
                     let val = lower_expr(cg, &call.args[0])?;
                     lower_print(cg, val, &ty)?;
                     Ok(cg.i32().const_int(0, false).into())
@@ -793,15 +1141,24 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     Err("codegen: range() in expression position (should be caught by typeck)".to_string())
                 }
                 name => {
-                    let fn_val = cg.module.get_function(name)
-                        .ok_or_else(|| format!("codegen: function `{name}` not found in module"))?;
+                    // Prefer the direct name. If not found, try to locate a monomorphized variant.
+                    let effective_name = if cg.module.get_function(name).is_some() {
+                        name.to_string()
+                    } else {
+                        // Find the first mono entry whose base name matches — handles the
+                        // common case where a single instantiation exists per call site.
+                        find_mono_name(cg.mono_table, name)
+                            .unwrap_or_else(|| name.to_string())
+                    };
+                    let fn_val = cg.module.get_function(&effective_name)
+                        .ok_or_else(|| format!("codegen: function `{effective_name}` not found in module"))?;
                     let mut args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
                     for arg in &call.args {
                         let val = lower_expr(cg, arg)?;
                         args.push(val.into());
                     }
                     let call_site = cg.builder.build_call(fn_val, &args, "call")
-                        .map_err(|e| format!("call {name}: {e}"))?;
+                        .map_err(|e| format!("call {effective_name}: {e}"))?;
                     match call_site.try_as_basic_value().basic() {
                         Some(val) => Ok(val),
                         None => Ok(cg.i32().const_int(0, false).into()),
@@ -811,7 +1168,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         }
 
         Expr::MethodCall { receiver, method, args, .. } => {
-            let recv_ty = cg.expr_type(receiver).clone();
+            let recv_ty = cg.expr_type(receiver);
             let recv_val = lower_expr(cg, receiver)?;
             match &recv_ty {
                 Type::Shape { name } => {
@@ -821,6 +1178,19 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                 Type::Dynamic { .. } => {
                     // Dynamic dispatch via vtable — deferred post-P5.
                     Err("codegen: dynamic dispatch call sites not yet lowered in M4 P4".to_string())
+                }
+                Type::BuiltinArray { elem } => {
+                    let elem = elem.as_ref().clone();
+                    lower_array_method(cg, recv_val.into_pointer_value(), &elem, method, args)
+                }
+                Type::BuiltinFixed { elem, size } => {
+                    let elem = elem.as_ref().clone();
+                    let sz = *size;
+                    lower_fixed_method(cg, recv_val.into_pointer_value(), &elem, sz, method, args)
+                }
+                Type::Maybe { inner } => {
+                    let inner = inner.as_ref().clone();
+                    lower_maybe_method(cg, recv_val.into_pointer_value(), &inner, method, args)
                 }
                 _ => {
                     // M4 P5: one-arg primitive intrinsics (wrapping/saturating arithmetic).
@@ -855,22 +1225,132 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         Expr::SelfValue { .. } => {
             let slot = *cg.locals.get("self")
                 .ok_or("codegen: `self` used outside method scope")?;
-            let ty = cg.expr_type(expr).clone();
+            let ty = cg.expr_type(expr);
             load(cg, slot, &ty, "self")
         }
 
-        // M5 P1: AST scaffolding only; codegen for these lands in P4a (maybe<T>
-        // lowering + bracket-sugar lowering). Reaching here means an out-of-sequence
-        // change — surface as a codegen error rather than emit wrong IR.
         Expr::NoneLit { .. } => {
-            Err("codegen: Expr::NoneLit reached codegen before M5 P4a — out-of-sequence AST".to_string())
+            let slot = cg.build_maybe_none()?;
+            Ok(slot.into())
         }
-        Expr::IndexAccess { .. } => {
-            Err("codegen: Expr::IndexAccess reached codegen before M5 P4a — out-of-sequence AST".to_string())
+
+        Expr::ArrayLit { elements, .. } => {
+            let arr_ty = cg.expr_type(expr);
+            match &arr_ty {
+                Type::BuiltinFixed { elem, size } => {
+                    let n = size.unwrap_or(elements.len()) as u32;
+                    let arr_t = cg.i64().array_type(n.max(1));
+                    let slot = cg.builder.build_alloca(arr_t, "fixed_arr")
+                        .map_err(|e| format!("{e}"))?;
+                    for (i, elem_expr) in elements.iter().enumerate() {
+                        let elem_val = lower_expr(cg, elem_expr)?;
+                        let elem_ty2 = cg.expr_type(elem_expr);
+                        let bits = cg.to_i64_bits(elem_val, &elem_ty2)?;
+                        let idx = cg.i64().const_int(i as u64, false);
+                        let gep = unsafe {
+                            cg.builder.build_gep(cg.i64(), slot, &[idx], "fixed_elem")
+                                .map_err(|e| format!("fixed gep: {e}"))?
+                        };
+                        cg.builder.build_store(gep, bits).map_err(|e| format!("{e}"))?;
+                    }
+                    let _ = elem;
+                    Ok(slot.into())
+                }
+                _ => {
+                    // BuiltinArray: heap-allocate via runtime.
+                    let arr_ptr = cg.builder.build_call(cg.rt.ynz_array_new, &[], "arr_new")
+                        .map_err(|e| format!("array_new: {e}"))?
+                        .try_as_basic_value().basic()
+                        .ok_or("ynz_array_new returned void")?
+                        .into_pointer_value();
+                    for elem_expr in elements {
+                        let elem_ty2 = cg.expr_type(elem_expr);
+                        let elem_val = lower_expr(cg, elem_expr)?;
+                        let bits = cg.to_i64_bits(elem_val, &elem_ty2)?;
+                        cg.builder.build_call(cg.rt.ynz_array_push, &[arr_ptr.into(), bits.into()], "arr_push")
+                            .map_err(|e| format!("array_push: {e}"))?;
+                    }
+                    Ok(arr_ptr.into())
+                }
+            }
         }
-        Expr::ArrayLit { .. } => {
-            Err("codegen: Expr::ArrayLit reached codegen before M5 P4a — out-of-sequence AST".to_string())
+
+        Expr::IndexAccess { receiver, index, .. } => {
+            let recv_ty = cg.expr_type(receiver);
+            let recv_val = lower_expr(cg, receiver)?;
+            let idx_val = lower_expr(cg, index)?;
+            let idx = idx_val.into_int_value();
+
+            match &recv_ty {
+                Type::BuiltinArray { .. } => {
+                    let out_slot = cg.builder.build_alloca(cg.maybe_type(), "arr_get_out")
+                        .map_err(|e| format!("{e}"))?;
+                    cg.builder.build_call(
+                        cg.rt.ynz_array_get,
+                        &[recv_val.into(), idx.into(), out_slot.into()],
+                        "arr_get",
+                    ).map_err(|e| format!("array_get: {e}"))?;
+                    Ok(out_slot.into())
+                }
+                Type::BuiltinFixed { size, .. } => {
+                    let n = size.unwrap_or(0) as u64;
+                    let maybe_slot = cg.builder.build_alloca(cg.maybe_type(), "fixed_get")
+                        .map_err(|e| format!("{e}"))?;
+
+                    let in_bounds = if n > 0 {
+                        let idx_ext = cg.builder.build_int_z_extend_or_bit_cast(idx, cg.i64(), "ie")
+                            .map_err(|e| format!("{e}"))?;
+                        cg.builder.build_int_compare(
+                            IntPredicate::ULT,
+                            idx_ext,
+                            cg.i64().const_int(n, false),
+                            "in_bounds",
+                        ).map_err(|e| format!("{e}"))?
+                    } else {
+                        cg.bool().const_int(0, false)
+                    };
+
+                    let ok_bb    = cg.append_block("fixed_ok");
+                    let oob_bb   = cg.append_block("fixed_oob");
+                    let merge_bb = cg.append_block("fixed_merge");
+                    cg.builder.build_conditional_branch(in_bounds, ok_bb, oob_bb)
+                        .map_err(|e| format!("{e}"))?;
+
+                    // ok: load element and write maybe_some
+                    cg.builder.position_at_end(ok_bb);
+                    let arr_ptr = recv_val.into_pointer_value();
+                    let gep = unsafe {
+                        cg.builder.build_gep(cg.i64(), arr_ptr, &[idx], "fixed_elem_ok")
+                            .map_err(|e| format!("fixed gep ok: {e}"))?
+                    };
+                    let elem_bits = cg.builder.build_load(cg.i64(), gep, "elem_bits")
+                        .map_err(|e| format!("{e}"))?.into_int_value();
+                    let has_ok = cg.builder.build_struct_gep(cg.maybe_type(), maybe_slot, 0, "has_ok")
+                        .map_err(|e| format!("{e}"))?;
+                    cg.builder.build_store(has_ok, cg.i64().const_int(1, false))
+                        .map_err(|e| format!("{e}"))?;
+                    let val_ok = cg.builder.build_struct_gep(cg.maybe_type(), maybe_slot, 1, "val_ok")
+                        .map_err(|e| format!("{e}"))?;
+                    cg.builder.build_store(val_ok, elem_bits).map_err(|e| format!("{e}"))?;
+                    cg.builder.build_unconditional_branch(merge_bb).map_err(|e| format!("{e}"))?;
+
+                    // oob: write maybe_none
+                    cg.builder.position_at_end(oob_bb);
+                    let has_oob = cg.builder.build_struct_gep(cg.maybe_type(), maybe_slot, 0, "has_oob")
+                        .map_err(|e| format!("{e}"))?;
+                    cg.builder.build_store(has_oob, cg.i64().const_zero()).map_err(|e| format!("{e}"))?;
+                    let val_oob = cg.builder.build_struct_gep(cg.maybe_type(), maybe_slot, 1, "val_oob")
+                        .map_err(|e| format!("{e}"))?;
+                    cg.builder.build_store(val_oob, cg.i64().const_zero()).map_err(|e| format!("{e}"))?;
+                    cg.builder.build_unconditional_branch(merge_bb).map_err(|e| format!("{e}"))?;
+
+                    cg.builder.position_at_end(merge_bb);
+                    Ok(maybe_slot.into())
+                }
+                _ => Err(format!("IndexAccess on unsupported type: {:?}", recv_ty)),
+            }
         }
+
         Expr::MapLit { .. } => {
             Err("codegen: Expr::MapLit reached codegen before M5 P4b — out-of-sequence AST".to_string())
         }
@@ -1182,13 +1662,28 @@ fn lower_ufcs_call<'ctx>(
     }
 }
 
-/// Dynamic dispatch: `d.method(args)` via vtable when receiver is `dynamic Foo`.
 /// Field access: lower `receiver.field` to the field's value.
+///
+/// Handles `maybe<T>.value` (extract the inner value from the {i64,i64} slot) and
+/// shape field GEP for user-defined shapes.
 fn lower_field_access<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     receiver: &Expr,
     field_name: &str,
 ) -> Result<BasicValueEnum<'ctx>, String> {
+    let recv_ty = cg.expr_type(receiver);
+
+    // maybe<T>.value — extract value bits from the {i64,i64} alloca.
+    if let Type::Maybe { inner } = &recv_ty {
+        let inner = inner.as_ref().clone();
+        let ptr = lower_expr(cg, receiver)?.into_pointer_value();
+        let val_gep = cg.builder.build_struct_gep(cg.maybe_type(), ptr, 1, "mv_gep")
+            .map_err(|e| format!("{e}"))?;
+        let bits = cg.builder.build_load(cg.i64(), val_gep, "mv_bits")
+            .map_err(|e| format!("{e}"))?.into_int_value();
+        return cg.from_i64_bits(bits, &inner);
+    }
+
     let (field_ptr, field_ty) = field_gep(cg, receiver, field_name)?;
     load(cg, field_ptr, &field_ty, field_name)
 }
@@ -1199,7 +1694,7 @@ fn field_gep<'ctx>(
     receiver: &Expr,
     field_name: &str,
 ) -> Result<(PointerValue<'ctx>, Type), String> {
-    let recv_ty = cg.expr_type(receiver).clone();
+    let recv_ty = cg.expr_type(receiver);
     let shape_name = match &recv_ty {
         Type::Shape { name } => name.clone(),
         _ => return Err(format!("field_gep: receiver is not a Shape, got {:?}", recv_ty)),
@@ -1229,7 +1724,7 @@ fn lower_struct_lit<'ctx>(
     expr: &Expr,
     fields: &[ynz_ast::nodes::StructLitField],
 ) -> Result<BasicValueEnum<'ctx>, String> {
-    let ty = cg.expr_type(expr).clone();
+    let ty = cg.expr_type(expr);
     let Type::Shape { name: shape_name } = &ty else {
         return Err(format!("struct literal with non-shape type {:?}", ty));
     };
@@ -1300,7 +1795,7 @@ fn lower_postfix_op<'ctx>(
             lower_expr(cg, receiver)
         }
         PostfixOpKind::Copy => {
-            let recv_ty = cg.expr_type(receiver).clone();
+            let recv_ty = cg.expr_type(receiver);
             let recv_val = lower_expr(cg, receiver)?;
             match &recv_ty {
                 Type::Shape { name } => {
@@ -1425,6 +1920,252 @@ fn declare_sat_intrinsic<'ctx>(
     module.get_function(name).unwrap_or_else(|| module.add_function(name, fn_ty, None))
 }
 
+/// Find the mangled name for a generic function call by matching the base name in the mono table.
+///
+/// When there are multiple instantiations of the same generic (e.g. `identity<int>` and
+/// `identity<string>`), this picks the first match. For P4a the typical case is a single
+/// instantiation per call site — a precise match by argument types is a P4b refinement.
+fn find_mono_name(mono_table: &MonomorphizationTable, fn_name: &str) -> Option<String> {
+    mono_table.entries.keys()
+        .find(|k| k.fn_name == fn_name)
+        .map(|k| mangle_mono_name(&k.fn_name, &k.type_args))
+}
+
+// ── BuiltinArray method dispatch ─────────────────────────────────────────────
+
+fn lower_array_method<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    arr: PointerValue<'ctx>,
+    elem: &Type,
+    method: &str,
+    args: &[Expr],
+) -> Result<BasicValueEnum<'ctx>, String> {
+    match method {
+        "count" => {
+            let n = cg.builder.build_call(cg.rt.ynz_array_count, &[arr.into()], "arr_count")
+                .map_err(|e| format!("{e}"))?
+                .try_as_basic_value().basic()
+                .ok_or("ynz_array_count returned void")?;
+            Ok(n)
+        }
+        "add" => {
+            let val = lower_expr(cg, &args[0])?;
+            let elem_ty = cg.expr_type(&args[0]);
+            let bits = cg.to_i64_bits(val, &elem_ty)?;
+            cg.builder.build_call(cg.rt.ynz_array_push, &[arr.into(), bits.into()], "arr_add")
+                .map_err(|e| format!("{e}"))?;
+            Ok(cg.i64().const_zero().into())
+        }
+        "get" => {
+            let idx = lower_expr(cg, &args[0])?.into_int_value();
+            let out = cg.builder.build_alloca(cg.maybe_type(), "get_out").map_err(|e| format!("{e}"))?;
+            cg.builder.build_call(cg.rt.ynz_array_get, &[arr.into(), idx.into(), out.into()], "arr_get_m")
+                .map_err(|e| format!("{e}"))?;
+            let _ = elem;
+            Ok(out.into())
+        }
+        "first" => {
+            let idx = cg.i64().const_zero();
+            let out = cg.builder.build_alloca(cg.maybe_type(), "first_out").map_err(|e| format!("{e}"))?;
+            cg.builder.build_call(cg.rt.ynz_array_get, &[arr.into(), idx.into(), out.into()], "arr_first")
+                .map_err(|e| format!("{e}"))?;
+            let _ = elem;
+            Ok(out.into())
+        }
+        "last" => {
+            let cnt = cg.builder.build_call(cg.rt.ynz_array_count, &[arr.into()], "cnt")
+                .map_err(|e| format!("{e}"))?
+                .try_as_basic_value().basic().ok_or("count void")?.into_int_value();
+            let idx = cg.builder.build_int_sub(cnt, cg.i64().const_int(1, false), "last_idx")
+                .map_err(|e| format!("{e}"))?;
+            let out = cg.builder.build_alloca(cg.maybe_type(), "last_out").map_err(|e| format!("{e}"))?;
+            cg.builder.build_call(cg.rt.ynz_array_get, &[arr.into(), idx.into(), out.into()], "arr_last")
+                .map_err(|e| format!("{e}"))?;
+            let _ = elem;
+            Ok(out.into())
+        }
+        "set" => {
+            let idx = lower_expr(cg, &args[0])?.into_int_value();
+            let val = lower_expr(cg, &args[1])?;
+            let elem_ty = cg.expr_type(&args[1]);
+            let bits = cg.to_i64_bits(val, &elem_ty)?;
+            cg.builder.build_call(cg.rt.ynz_array_set, &[arr.into(), idx.into(), bits.into()], "arr_set_m")
+                .map_err(|e| format!("{e}"))?;
+            Ok(cg.i64().const_zero().into())
+        }
+        "contains" => {
+            // Linear scan: bool result.
+            let cnt = cg.builder.build_call(cg.rt.ynz_array_count, &[arr.into()], "cnt")
+                .map_err(|e| format!("{e}"))?
+                .try_as_basic_value().basic().ok_or("count void")?.into_int_value();
+            let target_val = lower_expr(cg, &args[0])?;
+            let target_ty = cg.expr_type(&args[0]);
+            let target_bits = cg.to_i64_bits(target_val, &target_ty)?;
+
+            let result_slot = cg.builder.build_alloca(cg.bool(), "contains_res").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(result_slot, cg.bool().const_int(0, false)).map_err(|e| format!("{e}"))?;
+            let i_slot = cg.builder.build_alloca(cg.i64(), "ci").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(i_slot, cg.i64().const_zero()).map_err(|e| format!("{e}"))?;
+
+            let loop_bb  = cg.append_block("contains_loop");
+            let body_bb  = cg.append_block("contains_body");
+            let found_bb = cg.append_block("c_found");
+            let cont_bb  = cg.append_block("c_cont");
+            let exit_bb  = cg.append_block("contains_exit");
+
+            cg.builder.build_unconditional_branch(loop_bb).map_err(|e| format!("{e}"))?;
+            cg.builder.position_at_end(loop_bb);
+            let i = cg.builder.build_load(cg.i64(), i_slot, "i").map_err(|e| format!("{e}"))?.into_int_value();
+            let cmp = cg.builder.build_int_compare(IntPredicate::SLT, i, cnt, "lt").map_err(|e| format!("{e}"))?;
+            cg.builder.build_conditional_branch(cmp, body_bb, exit_bb).map_err(|e| format!("{e}"))?;
+
+            cg.builder.position_at_end(body_bb);
+            let out = cg.builder.build_alloca(cg.maybe_type(), "c_get").map_err(|e| format!("{e}"))?;
+            cg.builder.build_call(cg.rt.ynz_array_get, &[arr.into(), i.into(), out.into()], "c_get_call")
+                .map_err(|e| format!("{e}"))?;
+            let val_gep = cg.builder.build_struct_gep(cg.maybe_type(), out, 1, "c_val").map_err(|e| format!("{e}"))?;
+            let elem_bits = cg.builder.build_load(cg.i64(), val_gep, "c_bits").map_err(|e| format!("{e}"))?.into_int_value();
+            let eq = cg.builder.build_int_compare(IntPredicate::EQ, elem_bits, target_bits, "eq").map_err(|e| format!("{e}"))?;
+            cg.builder.build_conditional_branch(eq, found_bb, cont_bb).map_err(|e| format!("{e}"))?;
+
+            cg.builder.position_at_end(found_bb);
+            cg.builder.build_store(result_slot, cg.bool().const_int(1, false)).map_err(|e| format!("{e}"))?;
+            cg.builder.build_unconditional_branch(exit_bb).map_err(|e| format!("{e}"))?;
+
+            cg.builder.position_at_end(cont_bb);
+            let next_i = cg.builder.build_int_add(i, cg.i64().const_int(1, false), "next_i").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(i_slot, next_i).map_err(|e| format!("{e}"))?;
+            cg.builder.build_unconditional_branch(loop_bb).map_err(|e| format!("{e}"))?;
+
+            cg.builder.position_at_end(exit_bb);
+            let res = cg.builder.build_load(cg.bool(), result_slot, "res").map_err(|e| format!("{e}"))?;
+            let _ = elem;
+            Ok(res)
+        }
+        other => Err(format!("array method `{other}` not yet lowered in P4a")),
+    }
+}
+
+// ── BuiltinFixed method dispatch ──────────────────────────────────────────────
+
+fn lower_fixed_method<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    arr: PointerValue<'ctx>,
+    elem: &Type,
+    size: Option<usize>,
+    method: &str,
+    args: &[Expr],
+) -> Result<BasicValueEnum<'ctx>, String> {
+    match method {
+        "count" => {
+            let n = size.unwrap_or(0) as u64;
+            Ok(cg.i64().const_int(n, false).into())
+        }
+        "get" | "first" | "last" => {
+            let n = size.unwrap_or(0) as u64;
+            let idx = if method == "first" {
+                cg.i64().const_zero()
+            } else if method == "last" && n > 0 {
+                cg.i64().const_int(n - 1, false)
+            } else {
+                lower_expr(cg, &args[0])?.into_int_value()
+            };
+            let maybe_slot = cg.builder.build_alloca(cg.maybe_type(), "fg").map_err(|e| format!("{e}"))?;
+            let in_bounds = if n > 0 {
+                let idx_ext = cg.builder.build_int_z_extend_or_bit_cast(idx, cg.i64(), "ie")
+                    .map_err(|e| format!("{e}"))?;
+                cg.builder.build_int_compare(IntPredicate::ULT, idx_ext, cg.i64().const_int(n, false), "ib")
+                    .map_err(|e| format!("{e}"))?
+            } else {
+                cg.bool().const_int(0, false)
+            };
+            let ok_bb    = cg.append_block("fg_ok");
+            let oob_bb   = cg.append_block("fg_oob");
+            let merge_bb = cg.append_block("fg_merge");
+            cg.builder.build_conditional_branch(in_bounds, ok_bb, oob_bb).map_err(|e| format!("{e}"))?;
+
+            cg.builder.position_at_end(ok_bb);
+            let gep = unsafe {
+                cg.builder.build_gep(cg.i64(), arr, &[idx], "fg_elem")
+                    .map_err(|e| format!("{e}"))?
+            };
+            let bits = cg.builder.build_load(cg.i64(), gep, "bits")
+                .map_err(|e| format!("{e}"))?.into_int_value();
+            let has0 = cg.builder.build_struct_gep(cg.maybe_type(), maybe_slot, 0, "has_ok").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(has0, cg.i64().const_int(1, false)).map_err(|e| format!("{e}"))?;
+            let val0 = cg.builder.build_struct_gep(cg.maybe_type(), maybe_slot, 1, "val_ok").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(val0, bits).map_err(|e| format!("{e}"))?;
+            cg.builder.build_unconditional_branch(merge_bb).map_err(|e| format!("{e}"))?;
+
+            cg.builder.position_at_end(oob_bb);
+            let has1 = cg.builder.build_struct_gep(cg.maybe_type(), maybe_slot, 0, "has_oob").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(has1, cg.i64().const_zero()).map_err(|e| format!("{e}"))?;
+            let val1 = cg.builder.build_struct_gep(cg.maybe_type(), maybe_slot, 1, "val_oob").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(val1, cg.i64().const_zero()).map_err(|e| format!("{e}"))?;
+            cg.builder.build_unconditional_branch(merge_bb).map_err(|e| format!("{e}"))?;
+
+            cg.builder.position_at_end(merge_bb);
+            let _ = elem;
+            Ok(maybe_slot.into())
+        }
+        "set" => {
+            let idx = lower_expr(cg, &args[0])?.into_int_value();
+            let val = lower_expr(cg, &args[1])?;
+            let vty = cg.expr_type(&args[1]);
+            let bits = cg.to_i64_bits(val, &vty)?;
+            let gep = unsafe {
+                cg.builder.build_gep(cg.i64(), arr, &[idx], "fs_elem")
+                    .map_err(|e| format!("{e}"))?
+            };
+            cg.builder.build_store(gep, bits).map_err(|e| format!("{e}"))?;
+            let _ = elem;
+            Ok(cg.i64().const_zero().into())
+        }
+        other => Err(format!("fixed method `{other}` not yet lowered in P4a")),
+    }
+}
+
+// ── Maybe method dispatch ─────────────────────────────────────────────────────
+
+fn lower_maybe_method<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    maybe_ptr: PointerValue<'ctx>,
+    inner: &Type,
+    method: &str,
+    args: &[Expr],
+) -> Result<BasicValueEnum<'ctx>, String> {
+    match method {
+        "exists" => {
+            let has_gep = cg.builder.build_struct_gep(cg.maybe_type(), maybe_ptr, 0, "has")
+                .map_err(|e| format!("{e}"))?;
+            let has = cg.builder.build_load(cg.i64(), has_gep, "has_val")
+                .map_err(|e| format!("{e}"))?.into_int_value();
+            let b = cg.builder.build_int_truncate(has, cg.bool(), "exists_b")
+                .map_err(|e| format!("{e}"))?;
+            Ok(b.into())
+        }
+        "or" => {
+            let has_gep = cg.builder.build_struct_gep(cg.maybe_type(), maybe_ptr, 0, "or_has")
+                .map_err(|e| format!("{e}"))?;
+            let has = cg.builder.build_load(cg.i64(), has_gep, "or_hv")
+                .map_err(|e| format!("{e}"))?.into_int_value();
+            let cond = cg.builder.build_int_compare(IntPredicate::NE, has, cg.i64().const_zero(), "or_cond")
+                .map_err(|e| format!("{e}"))?;
+
+            let val_gep = cg.builder.build_struct_gep(cg.maybe_type(), maybe_ptr, 1, "or_val_gep")
+                .map_err(|e| format!("{e}"))?;
+            let bits = cg.builder.build_load(cg.i64(), val_gep, "or_bits")
+                .map_err(|e| format!("{e}"))?.into_int_value();
+            let inner_val = cg.from_i64_bits(bits, inner)?;
+            let default_val = lower_expr(cg, &args[0])?;
+
+            cg.builder.build_select(cond, inner_val, default_val, "or_res")
+                .map_err(|e| format!("{e}"))
+        }
+        other => Err(format!("maybe method `{other}` not yet lowered in P4a")),
+    }
+}
+
 fn lower_method_call<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     recv: BasicValueEnum<'ctx>,
@@ -1467,6 +2208,13 @@ fn store<'ctx>(cg: &mut Cg<'ctx, '_>, val: BasicValueEnum<'ctx>, ty: &Type, slot
             // val is a ptr to i128; load the bits then store into slot
             let bits = cg.builder.build_load(cg.i128(), val.into_pointer_value(), "dec_bits").map_err(|e| format!("{e}"))?;
             cg.builder.build_store(slot, bits).map_err(|e| format!("{e}"))?;
+        }
+        // BuiltinArray is a pointer to the heap YnzArray; store the pointer.
+        // BuiltinFixed is already stored as an alloca pointer; store the pointer.
+        // Maybe is an alloca pointer to {i64,i64}; store the pointer.
+        Type::BuiltinArray { .. } | Type::BuiltinFixed { .. } | Type::Maybe { .. }
+        | Type::BuiltinMap { .. } | Type::MapEntry { .. } => {
+            cg.builder.build_store(slot, val).map_err(|e| format!("{e}"))?;
         }
         _ => { cg.builder.build_store(slot, val).map_err(|e| format!("{e}"))?; }
     }
@@ -1512,6 +2260,13 @@ fn load<'ctx>(cg: &mut Cg<'ctx, '_>, slot: PointerValue<'ctx>, ty: &Type, name: 
         Type::Shape { .. } | Type::Dynamic { .. } => {
             let lt = cg.ptr();
             cg.builder.build_load(lt, slot, name).map_err(|e| format!("{e}"))
+        }
+        // BuiltinArray: slot stores the *mut YnzArray pointer — load and return it.
+        // BuiltinFixed: slot stores a pointer to the [N x i64] alloca — load and return.
+        // Maybe: slot stores a pointer to the {i64,i64} alloca — load and return.
+        Type::BuiltinArray { .. } | Type::BuiltinFixed { .. } | Type::Maybe { .. }
+        | Type::BuiltinMap { .. } | Type::MapEntry { .. } => {
+            cg.builder.build_load(cg.ptr(), slot, name).map_err(|e| format!("{e}"))
         }
         ty => {
             let lt = cg.llvm_type_for(ty).ok_or_else(|| format!("load: unknown type {:?}", ty))?;
