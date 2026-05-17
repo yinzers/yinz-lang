@@ -16,9 +16,9 @@
 /// Every AST node carries a SourceSpan so downstream stages can point
 /// diagnostics at exact source locations.
 use ynz_ast::nodes::{
-    BinOpKind, Block, CallExpr, ContractSig, Expr, FieldDecl, FunctionDecl, Item, MatchArm,
-    MatchPattern, MatchPatternKind, Module, OwnershipModifier, Param, PostfixOpKind, ReceiverKind,
-    ShapeDecl, Stmt, StructLitField, Type, UnaryOpKind,
+    BinOpKind, Block, CallExpr, ContractSig, Expr, FieldDecl, FunctionDecl, GenericParam, Item,
+    MatchArm, MatchPattern, MatchPatternKind, Module, OwnershipModifier, Param, PostfixOpKind,
+    ReceiverKind, ShapeDecl, Stmt, StructLitField, Type, UnaryOpKind,
 };
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
@@ -199,6 +199,9 @@ impl<'a> Parser<'a> {
             }
         };
 
+        // Optional `<T, U>` type-param list
+        let generics = self.parse_generic_params();
+
         // `(`
         if self.expect(&Token::LParen).is_none() {
             self.diags.push(Diagnostic::error(
@@ -244,7 +247,7 @@ impl<'a> Parser<'a> {
         let end = self.current_span();
         Some(FunctionDecl {
             name,
-            generics: Vec::new(), // M5 P2 populates this; P1 ships the field, P2 wires parsing
+            generics,
             params,
             return_type,
             body,
@@ -255,6 +258,20 @@ impl<'a> Parser<'a> {
 
 
     fn parse_type(&mut self) -> Type {
+        self.parse_type_with_depth(0)
+    }
+
+    fn parse_type_with_depth(&mut self, depth: u8) -> Type {
+        if depth > 16 {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Generic type nesting exceeds 16 levels.",
+                "Simplify the type — for example, break the cycle with `maybe<Node<T>>` instead of nesting further.",
+                "Deeply nested generic types are almost always caused by an accidental cycle. 16 levels is far more than any real type should need.",
+            ));
+            return Type::Error;
+        }
+
         match self.peek().clone() {
             Token::Nothing => {
                 self.advance();
@@ -293,18 +310,108 @@ impl<'a> Parser<'a> {
                     "float" => Type::Float,
                     "bool" => Type::Bool,
                     "number" => self.parse_number_type(),
-                    _ => Type::Named(name, span),
+                    "maybe" => self.parse_maybe_type(span, depth),
+                    _ => {
+                        if matches!(self.peek(), Token::Lt) {
+                            self.parse_generic_type(name, span, depth)
+                        } else {
+                            Type::Named(name, span)
+                        }
+                    }
                 }
             }
             _ => {
                 self.diags.push(Diagnostic::error(
                     self.current_span(),
                     "Expected a type here.",
-                    "Use `nothing`, `int`, `float`, `number`, `bool`, `dynamic Foo`, `Self`, or a type name.",
+                    "Use `nothing`, `int`, `float`, `number`, `bool`, `maybe<T>`, `array<T>`, `dynamic Foo`, `Self`, or a type name.",
                     "Types tell Yinz what kind of value a variable holds or a function produces.",
                 ));
                 Type::Error
             }
+        }
+    }
+
+    /// Parse `maybe<T>` — called after `maybe` identifier has been consumed.
+    fn parse_maybe_type(&mut self, maybe_start_span: SourceSpan, depth: u8) -> Type {
+        if self.expect(&Token::Lt).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "`maybe` requires a type argument.",
+                "Write `maybe<T>` — for example, `maybe<int>` or `maybe<Player>`.",
+                "`maybe<T>` is the Yinz optional type. It must have exactly one type argument.",
+            ));
+            return Type::Error;
+        }
+
+        let inner = self.parse_type_with_depth(depth + 1);
+
+        if self.expect(&Token::Gt).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Missing `>` to close `maybe<T>`.",
+                "Write `maybe<T>` — close the angle bracket after the type.",
+                "Every `<` in a `maybe<T>` must be matched with a `>`.",
+            ));
+            return Type::Error;
+        }
+
+        let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(maybe_start_span.start);
+        Type::Maybe {
+            inner: Box::new(inner),
+            span: SourceSpan::new(self.file, maybe_start_span.start, end),
+        }
+    }
+
+    /// Parse a generic type instantiation `Name<T, U, ...>` — called after the name
+    /// has been consumed and `<` is the current token.
+    fn parse_generic_type(&mut self, name: String, name_span: SourceSpan, depth: u8) -> Type {
+        self.advance(); // consume `<`
+
+        let mut args = Vec::new();
+
+        loop {
+            match self.peek() {
+                Token::Gt | Token::Eof => break,
+                Token::Comma => {
+                    self.advance();
+                }
+                _ => {
+                    args.push(self.parse_type_with_depth(depth + 1));
+                    if !matches!(self.peek(), Token::Gt | Token::Comma) {
+                        self.diags.push(Diagnostic::error(
+                            self.current_span(),
+                            "Expected `,` or `>` in generic type argument list.",
+                            "Separate type arguments with `,`: `Pair<int, string>`. Close with `>`.",
+                            "Generic type arguments are comma-separated and the list ends with `>`.",
+                        ));
+                        // Recover to `>` or something sane
+                        while !matches!(self.peek(), Token::Gt | Token::RBrace | Token::Eof | Token::LParen) {
+                            self.advance();
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        if self.expect(&Token::Gt).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                format!("Missing `>` to close `{name}<...>`.",),
+                format!("Write `{name}<T>` — close the angle bracket after the type arguments."),
+                "Every `<` in a generic type must be matched with a `>`.",
+            ));
+            return Type::Error;
+        }
+
+        let type_start = name_span.start;
+        let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(type_start);
+        Type::Generic {
+            name,
+            name_span,
+            args,
+            span: SourceSpan::new(self.file, type_start, end),
         }
     }
 
@@ -428,13 +535,19 @@ impl<'a> Parser<'a> {
                             span,
                         });
                     }
+                    if let Expr::IndexAccess { receiver, index, .. } = expr {
+                        self.advance(); // consume `=`
+                        let value = self.parse_expr(0);
+                        let span = SourceSpan::new(self.file, receiver.span().start, value.span().end);
+                        return Some(Stmt::IndexAssign { receiver, index, value, span });
+                    }
                     // Something else followed by `=` — error
                     let span = self.current_span();
                     self.diags.push(Diagnostic::error(
                         span.clone(),
-                        "The left side of `=` must be a variable name or a field access.",
-                        "Write `name = value` for a variable or `value.field = newValue` for a field.",
-                        "Only named locations (variables and fields) can be assigned to.",
+                        "The left side of `=` must be a variable name, a field access, or an index expression.",
+                        "Write `name = value`, `value.field = newValue`, or `arr[i] = newValue`.",
+                        "Only named locations (variables, fields, and indexed positions) can be assigned to.",
                     ));
                     self.advance(); // consume `=`
                     let _ = self.parse_expr(0); // consume RHS for recovery
@@ -1057,15 +1170,28 @@ impl<'a> Parser<'a> {
         let mut lhs = self.parse_prefix();
 
         loop {
-            // Postfix (highest precedence): call `(` or method `.`
+            // Postfix (highest precedence): call `(`, method `.`, index `[`, generic call `<`
             match self.peek() {
                 Token::LParen => {
-                    lhs = self.parse_call(lhs);
+                    lhs = self.parse_call(lhs, None);
                     continue;
                 }
                 Token::Dot => {
                     lhs = self.parse_dot_postfix(lhs);
                     continue;
+                }
+                Token::LBracket => {
+                    lhs = self.parse_index_access(lhs);
+                    continue;
+                }
+                Token::Lt => {
+                    // Speculatively try `<TypeArgs>(` for a generic call.
+                    // If backtrack succeeds without `(` following, fall through
+                    // to the infix handler which treats `<` as comparison.
+                    if let Some(type_args) = self.try_parse_type_args() {
+                        lhs = self.parse_call(lhs, Some(type_args));
+                        continue;
+                    }
                 }
                 _ => {}
             }
@@ -1135,6 +1261,11 @@ impl<'a> Parser<'a> {
 
     fn parse_atom(&mut self) -> Expr {
         match self.peek().clone() {
+            Token::None => {
+                let span = self.current_span();
+                self.advance();
+                Expr::NoneLit { span }
+            }
             Token::IntLit(n) => {
                 let span = self.current_span();
                 self.advance();
@@ -1231,7 +1362,7 @@ impl<'a> Parser<'a> {
     }
 
 
-    fn parse_call(&mut self, callee: Expr) -> Expr {
+    fn parse_call(&mut self, callee: Expr, type_args: Option<Vec<Type>>) -> Expr {
         let start = callee.span().start;
         self.advance(); // consume `(`
 
@@ -1243,7 +1374,7 @@ impl<'a> Parser<'a> {
                     self.advance();
                     return Expr::Call(Box::new(CallExpr {
                         callee,
-                        type_args: None, // M5 P2 wires the contextual `<` disambiguation
+                        type_args,
                         args,
                         span: SourceSpan::new(self.file, start, end.end),
                     }));
@@ -1258,7 +1389,7 @@ impl<'a> Parser<'a> {
                     let end = self.current_span().end;
                     return Expr::Call(Box::new(CallExpr {
                         callee,
-                        type_args: None, // M5 P2 wires the contextual `<` disambiguation
+                        type_args,
                         args,
                         span: SourceSpan::new(self.file, start, end),
                     }));
@@ -1271,6 +1402,195 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+    }
+
+    /// Parse `receiver[index]` into `Expr::IndexAccess`.
+    fn parse_index_access(&mut self, receiver: Expr) -> Expr {
+        let start = receiver.span().start;
+        self.advance(); // consume `[`
+
+        let index = self.parse_expr(0);
+
+        if self.expect(&Token::RBracket).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Missing `]` to close the index expression.",
+                "Write `value[index]` — close the bracket after the index.",
+                "Every `[` in an index expression must be matched with a `]`.",
+            ));
+        }
+
+        let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(start);
+        Expr::IndexAccess {
+            receiver: Box::new(receiver),
+            index: Box::new(index),
+            span: SourceSpan::new(self.file, start, end),
+        }
+    }
+
+    /// Speculatively parse a generic type-argument list `<T, U>` followed by `(`.
+    ///
+    /// Returns `Some(type_args)` and leaves the parser positioned at `(` if the
+    /// sequence `< type [, type]* > (` is found within 32 tokens.
+    /// Returns `None` and restores parser state (position + diagnostics) on any
+    /// failure — the `<` is treated as a comparison operator by the caller.
+    fn try_parse_type_args(&mut self) -> Option<Vec<Type>> {
+        debug_assert!(matches!(self.peek(), Token::Lt));
+
+        let saved_pos = self.pos;
+        let saved_diags_len = self.diags.len();
+
+        self.advance(); // consume `<`
+        let mut tokens_consumed: usize = 1;
+        let mut args = Vec::new();
+
+        loop {
+            tokens_consumed += 1;
+            if tokens_consumed > 32 {
+                self.pos = saved_pos;
+                self.diags.truncate(saved_diags_len);
+                return None;
+            }
+
+            match self.peek() {
+                Token::Gt => {
+                    self.advance();
+                    break;
+                }
+                Token::Comma => {
+                    self.advance();
+                }
+                Token::Eof | Token::RBrace | Token::RParen => {
+                    self.pos = saved_pos;
+                    self.diags.truncate(saved_diags_len);
+                    return None;
+                }
+                _ => {
+                    let pre = self.pos;
+                    let ty = self.parse_type_with_depth(0);
+                    let used = self.pos.saturating_sub(pre);
+                    tokens_consumed += used;
+                    if matches!(ty, Type::Error) {
+                        self.pos = saved_pos;
+                        self.diags.truncate(saved_diags_len);
+                        return None;
+                    }
+                    args.push(ty);
+                }
+            }
+        }
+
+        // Succeed only when `(` immediately follows — this is a generic call.
+        if !matches!(self.peek(), Token::LParen) {
+            self.pos = saved_pos;
+            self.diags.truncate(saved_diags_len);
+            return None;
+        }
+
+        Some(args)
+    }
+
+    /// Parse a `<T>` type-parameter list in a generic function or shape declaration.
+    ///
+    /// Called when the parser is positioned immediately after the declaration name.
+    /// Returns an empty Vec when `<` is not present (non-generic declaration).
+    fn parse_generic_params(&mut self) -> Vec<GenericParam> {
+        if !matches!(self.peek(), Token::Lt) {
+            return Vec::new();
+        }
+        self.advance(); // consume `<`
+
+        let mut params = Vec::new();
+
+        loop {
+            match self.peek() {
+                // Natural list terminators and hard boundaries — stop collecting params.
+                Token::Gt | Token::Eof | Token::LBrace | Token::LParen | Token::Arrow => break,
+                Token::Comma => {
+                    self.advance();
+                    continue;
+                }
+                _ => {}
+            }
+
+            let param_start = self.current_span().start;
+            let (name, name_span) = match self.peek().clone() {
+                Token::Identifier(n) => {
+                    let span = self.current_span();
+                    self.advance();
+                    (n, span)
+                }
+                _ => {
+                    self.diags.push(Diagnostic::error(
+                        self.current_span(),
+                        "Expected a type parameter name here.",
+                        "Write `<T>` or `<T follows Comparable>` for the type parameter list.",
+                        "Type parameters are names — usually a short uppercase letter like `T`, `U`, or `Key`.",
+                    ));
+                    // Consume to a safe boundary; stop at hard delimiters so we don't loop.
+                    while !matches!(self.peek(), Token::Gt | Token::Comma | Token::Eof | Token::LBrace | Token::LParen | Token::Arrow) {
+                        self.advance();
+                    }
+                    if matches!(self.peek(), Token::Comma) {
+                        self.advance(); // skip comma to try the next param
+                    }
+                    continue;
+                }
+            };
+
+            // Optional `follows Contract` — one contract per type parameter.
+            let mut constraints = Vec::new();
+            if matches!(self.peek(), Token::Follows) {
+                self.advance(); // consume `follows`
+                match self.peek().clone() {
+                    Token::Identifier(contract) => {
+                        let cspan = self.current_span();
+                        self.advance();
+                        constraints.push((contract, cspan));
+                    }
+                    _ => {
+                        self.diags.push(Diagnostic::error(
+                            self.current_span(),
+                            "Expected a contract name after `follows` in the type parameter list.",
+                            "Write `<T follows Comparable>` where `Comparable` is a shape with contract signatures.",
+                            "The `follows` constraint restricts which concrete types can fill in the type parameter.",
+                        ));
+                    }
+                }
+            }
+
+            let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(param_start);
+            params.push(GenericParam {
+                name,
+                name_span,
+                constraints,
+                span: SourceSpan::new(self.file, param_start, end),
+            });
+
+            if !matches!(self.peek(), Token::Gt | Token::Eof) && self.expect(&Token::Comma).is_none() {
+                self.diags.push(Diagnostic::error(
+                    self.current_span(),
+                    "Expected `,` or `>` after type parameter.",
+                    "Separate type parameters with `,`: `<T, U>`. Close the list with `>`.",
+                    "The type parameter list must end with `>`.",
+                ));
+                // Recover to something the parser can continue from
+                while !matches!(self.peek(), Token::Gt | Token::LParen | Token::LBrace | Token::Eof) {
+                    self.advance();
+                }
+            }
+        }
+
+        if self.expect(&Token::Gt).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Missing `>` to close the type parameter list.",
+                "Write `<T>` — close the angle bracket after the last type parameter.",
+                "Every `<` in a type parameter list must be matched with a `>`.",
+            ));
+        }
+
+        params
     }
 
     /// Parse a dot-postfix expression: field access, method call, or body operation.
@@ -1506,6 +1826,9 @@ impl<'a> Parser<'a> {
             }
         };
 
+        // Optional `<T, U>` type-param list
+        let generics = self.parse_generic_params();
+
         // Optional `extends Parent`
         let extends = if matches!(self.peek(), Token::Extends) {
             self.advance(); // consume `extends`
@@ -1657,7 +1980,7 @@ impl<'a> Parser<'a> {
             name,
             name_span,
             is_base,
-            generics: Vec::new(), // M5 P2 populates this; P1 ships the field
+            generics,
             extends,
             follows,
             fields,

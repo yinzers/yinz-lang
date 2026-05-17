@@ -62,6 +62,14 @@ impl DiagnosticBucket {
     pub fn len(&self) -> usize {
         self.diagnostics.len()
     }
+
+    /// Truncate the diagnostics list to `len` entries.
+    ///
+    /// Used by speculative parsers (e.g. contextual `<` disambiguation) to roll
+    /// back errors emitted during a failed parse attempt.
+    pub fn truncate(&mut self, len: usize) {
+        self.diagnostics.truncate(len);
+    }
 }
 
 impl IntoIterator for DiagnosticBucket {

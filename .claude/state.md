@@ -9,7 +9,7 @@
 *(auto-rebuilt by SessionStart hook from `.claude/plans/active/*.md` front-matter — do not edit by hand)*
 
 <!-- RADAR-START -->
-- m5-generics (patrick) — 18 files touched — 0/146 done — 2026-05-17-r1
+- m5-generics (patrick) — 18 files touched — 0/146 done — 2026-05-17-r2
 - v0-1-compiler (patrick) — 5 files touched — 0/184 done — 2026-05-12-r4
 <!-- RADAR-END -->
 

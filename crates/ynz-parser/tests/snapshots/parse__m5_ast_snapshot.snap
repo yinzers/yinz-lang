@@ -1,0 +1,603 @@
+---
+source: crates/ynz-parser/tests/parse.rs
+assertion_line: 1962
+expression: output.module
+---
+Module {
+    items: [
+        ShapeDecl(
+            ShapeDecl {
+                name: "Pair",
+                name_span: SourceSpan {
+                    file: "test.ynz",
+                    start: 7,
+                    end: 11,
+                },
+                is_base: false,
+                generics: [
+                    GenericParam {
+                        name: "A",
+                        name_span: SourceSpan {
+                            file: "test.ynz",
+                            start: 12,
+                            end: 13,
+                        },
+                        constraints: [],
+                        span: SourceSpan {
+                            file: "test.ynz",
+                            start: 12,
+                            end: 13,
+                        },
+                    },
+                    GenericParam {
+                        name: "B",
+                        name_span: SourceSpan {
+                            file: "test.ynz",
+                            start: 15,
+                            end: 16,
+                        },
+                        constraints: [],
+                        span: SourceSpan {
+                            file: "test.ynz",
+                            start: 15,
+                            end: 16,
+                        },
+                    },
+                ],
+                extends: None,
+                follows: [],
+                fields: [
+                    FieldDecl {
+                        name: "first",
+                        name_span: SourceSpan {
+                            file: "test.ynz",
+                            start: 22,
+                            end: 27,
+                        },
+                        ty: Named(
+                            "A",
+                            SourceSpan {
+                                file: "test.ynz",
+                                start: 29,
+                                end: 30,
+                            },
+                        ),
+                        ty_span: SourceSpan {
+                            file: "test.ynz",
+                            start: 29,
+                            end: 30,
+                        },
+                        is_hidden: false,
+                        default: None,
+                        span: SourceSpan {
+                            file: "test.ynz",
+                            start: 22,
+                            end: 30,
+                        },
+                    },
+                    FieldDecl {
+                        name: "second",
+                        name_span: SourceSpan {
+                            file: "test.ynz",
+                            start: 33,
+                            end: 39,
+                        },
+                        ty: Named(
+                            "B",
+                            SourceSpan {
+                                file: "test.ynz",
+                                start: 41,
+                                end: 42,
+                            },
+                        ),
+                        ty_span: SourceSpan {
+                            file: "test.ynz",
+                            start: 41,
+                            end: 42,
+                        },
+                        is_hidden: false,
+                        default: None,
+                        span: SourceSpan {
+                            file: "test.ynz",
+                            start: 33,
+                            end: 42,
+                        },
+                    },
+                ],
+                contract_sigs: [],
+                span: SourceSpan {
+                    file: "test.ynz",
+                    start: 1,
+                    end: 44,
+                },
+            },
+        ),
+        Function(
+            FunctionDecl {
+                name: "identity",
+                generics: [
+                    GenericParam {
+                        name: "T",
+                        name_span: SourceSpan {
+                            file: "test.ynz",
+                            start: 64,
+                            end: 65,
+                        },
+                        constraints: [],
+                        span: SourceSpan {
+                            file: "test.ynz",
+                            start: 64,
+                            end: 65,
+                        },
+                    },
+                ],
+                params: [
+                    Param {
+                        name: "value",
+                        name_span: SourceSpan {
+                            file: "test.ynz",
+                            start: 72,
+                            end: 77,
+                        },
+                        ownership: Some(
+                            Give,
+                        ),
+                        ty: Named(
+                            "T",
+                            SourceSpan {
+                                file: "test.ynz",
+                                start: 79,
+                                end: 80,
+                            },
+                        ),
+                        ty_span: SourceSpan {
+                            file: "test.ynz",
+                            start: 79,
+                            end: 80,
+                        },
+                        span: SourceSpan {
+                            file: "test.ynz",
+                            start: 72,
+                            end: 80,
+                        },
+                    },
+                ],
+                return_type: Named(
+                    "T",
+                    SourceSpan {
+                        file: "test.ynz",
+                        start: 85,
+                        end: 86,
+                    },
+                ),
+                body: Block {
+                    stmts: [
+                        Return {
+                            value: Some(
+                                Ident(
+                                    "value",
+                                    SourceSpan {
+                                        file: "test.ynz",
+                                        start: 98,
+                                        end: 103,
+                                    },
+                                ),
+                            ),
+                            span: SourceSpan {
+                                file: "test.ynz",
+                                start: 91,
+                                end: 103,
+                            },
+                        },
+                    ],
+                    span: SourceSpan {
+                        file: "test.ynz",
+                        start: 91,
+                        end: 105,
+                    },
+                },
+                span: SourceSpan {
+                    file: "test.ynz",
+                    start: 46,
+                    end: 115,
+                },
+                name_span: SourceSpan {
+                    file: "test.ynz",
+                    start: 55,
+                    end: 63,
+                },
+            },
+        ),
+        Function(
+            FunctionDecl {
+                name: "sort",
+                generics: [
+                    GenericParam {
+                        name: "T",
+                        name_span: SourceSpan {
+                            file: "test.ynz",
+                            start: 121,
+                            end: 122,
+                        },
+                        constraints: [
+                            (
+                                "Comparable",
+                                SourceSpan {
+                                    file: "test.ynz",
+                                    start: 131,
+                                    end: 141,
+                                },
+                            ),
+                        ],
+                        span: SourceSpan {
+                            file: "test.ynz",
+                            start: 121,
+                            end: 141,
+                        },
+                    },
+                ],
+                params: [
+                    Param {
+                        name: "items",
+                        name_span: SourceSpan {
+                            file: "test.ynz",
+                            start: 149,
+                            end: 154,
+                        },
+                        ownership: Some(
+                            Share,
+                        ),
+                        ty: Generic {
+                            name: "array",
+                            name_span: SourceSpan {
+                                file: "test.ynz",
+                                start: 156,
+                                end: 161,
+                            },
+                            args: [
+                                Named(
+                                    "T",
+                                    SourceSpan {
+                                        file: "test.ynz",
+                                        start: 162,
+                                        end: 163,
+                                    },
+                                ),
+                            ],
+                            span: SourceSpan {
+                                file: "test.ynz",
+                                start: 156,
+                                end: 164,
+                            },
+                        },
+                        ty_span: SourceSpan {
+                            file: "test.ynz",
+                            start: 156,
+                            end: 164,
+                        },
+                        span: SourceSpan {
+                            file: "test.ynz",
+                            start: 149,
+                            end: 164,
+                        },
+                    },
+                ],
+                return_type: Nothing,
+                body: Block {
+                    stmts: [],
+                    span: SourceSpan {
+                        file: "test.ynz",
+                        start: 179,
+                        end: 180,
+                    },
+                },
+                span: SourceSpan {
+                    file: "test.ynz",
+                    start: 107,
+                    end: 190,
+                },
+                name_span: SourceSpan {
+                    file: "test.ynz",
+                    start: 116,
+                    end: 120,
+                },
+            },
+        ),
+        Function(
+            FunctionDecl {
+                name: "main",
+                generics: [],
+                params: [],
+                return_type: Nothing,
+                body: Block {
+                    stmts: [
+                        Let {
+                            is_const: false,
+                            name: "x",
+                            name_span: SourceSpan {
+                                file: "test.ynz",
+                                start: 217,
+                                end: 218,
+                            },
+                            ty: Some(
+                                Maybe {
+                                    inner: Int,
+                                    span: SourceSpan {
+                                        file: "test.ynz",
+                                        start: 220,
+                                        end: 230,
+                                    },
+                                },
+                            ),
+                            value: NoneLit {
+                                span: SourceSpan {
+                                    file: "test.ynz",
+                                    start: 233,
+                                    end: 237,
+                                },
+                            },
+                            span: SourceSpan {
+                                file: "test.ynz",
+                                start: 213,
+                                end: 237,
+                            },
+                        },
+                        Let {
+                            is_const: false,
+                            name: "arr",
+                            name_span: SourceSpan {
+                                file: "test.ynz",
+                                start: 244,
+                                end: 247,
+                            },
+                            ty: Some(
+                                Generic {
+                                    name: "array",
+                                    name_span: SourceSpan {
+                                        file: "test.ynz",
+                                        start: 249,
+                                        end: 254,
+                                    },
+                                    args: [
+                                        Int,
+                                    ],
+                                    span: SourceSpan {
+                                        file: "test.ynz",
+                                        start: 249,
+                                        end: 259,
+                                    },
+                                },
+                            ),
+                            value: Ident(
+                                "arr",
+                                SourceSpan {
+                                    file: "test.ynz",
+                                    start: 262,
+                                    end: 265,
+                                },
+                            ),
+                            span: SourceSpan {
+                                file: "test.ynz",
+                                start: 240,
+                                end: 265,
+                            },
+                        },
+                        Let {
+                            is_const: false,
+                            name: "first",
+                            name_span: SourceSpan {
+                                file: "test.ynz",
+                                start: 272,
+                                end: 277,
+                            },
+                            ty: None,
+                            value: IndexAccess {
+                                receiver: Ident(
+                                    "arr",
+                                    SourceSpan {
+                                        file: "test.ynz",
+                                        start: 280,
+                                        end: 283,
+                                    },
+                                ),
+                                index: IntLit(
+                                    0,
+                                    SourceSpan {
+                                        file: "test.ynz",
+                                        start: 284,
+                                        end: 285,
+                                    },
+                                ),
+                                span: SourceSpan {
+                                    file: "test.ynz",
+                                    start: 280,
+                                    end: 286,
+                                },
+                            },
+                            span: SourceSpan {
+                                file: "test.ynz",
+                                start: 268,
+                                end: 286,
+                            },
+                        },
+                        IndexAssign {
+                            receiver: Ident(
+                                "arr",
+                                SourceSpan {
+                                    file: "test.ynz",
+                                    start: 289,
+                                    end: 292,
+                                },
+                            ),
+                            index: IntLit(
+                                0,
+                                SourceSpan {
+                                    file: "test.ynz",
+                                    start: 293,
+                                    end: 294,
+                                },
+                            ),
+                            value: IntLit(
+                                99,
+                                SourceSpan {
+                                    file: "test.ynz",
+                                    start: 298,
+                                    end: 300,
+                                },
+                            ),
+                            span: SourceSpan {
+                                file: "test.ynz",
+                                start: 289,
+                                end: 300,
+                            },
+                        },
+                        Let {
+                            is_const: false,
+                            name: "y",
+                            name_span: SourceSpan {
+                                file: "test.ynz",
+                                start: 307,
+                                end: 308,
+                            },
+                            ty: None,
+                            value: Call(
+                                CallExpr {
+                                    callee: Ident(
+                                        "identity",
+                                        SourceSpan {
+                                            file: "test.ynz",
+                                            start: 311,
+                                            end: 319,
+                                        },
+                                    ),
+                                    type_args: Some(
+                                        [
+                                            Int,
+                                        ],
+                                    ),
+                                    args: [
+                                        IntLit(
+                                            5,
+                                            SourceSpan {
+                                                file: "test.ynz",
+                                                start: 325,
+                                                end: 326,
+                                            },
+                                        ),
+                                    ],
+                                    span: SourceSpan {
+                                        file: "test.ynz",
+                                        start: 311,
+                                        end: 327,
+                                    },
+                                },
+                            ),
+                            span: SourceSpan {
+                                file: "test.ynz",
+                                start: 303,
+                                end: 327,
+                            },
+                        },
+                        Let {
+                            is_const: false,
+                            name: "a",
+                            name_span: SourceSpan {
+                                file: "test.ynz",
+                                start: 334,
+                                end: 335,
+                            },
+                            ty: None,
+                            value: IndexAccess {
+                                receiver: Ident(
+                                    "arr",
+                                    SourceSpan {
+                                        file: "test.ynz",
+                                        start: 338,
+                                        end: 341,
+                                    },
+                                ),
+                                index: IntLit(
+                                    0,
+                                    SourceSpan {
+                                        file: "test.ynz",
+                                        start: 342,
+                                        end: 343,
+                                    },
+                                ),
+                                span: SourceSpan {
+                                    file: "test.ynz",
+                                    start: 338,
+                                    end: 344,
+                                },
+                            },
+                            span: SourceSpan {
+                                file: "test.ynz",
+                                start: 330,
+                                end: 344,
+                            },
+                        },
+                        Let {
+                            is_const: false,
+                            name: "cmp",
+                            name_span: SourceSpan {
+                                file: "test.ynz",
+                                start: 351,
+                                end: 354,
+                            },
+                            ty: None,
+                            value: BinOp {
+                                op: Lt,
+                                lhs: Ident(
+                                    "a",
+                                    SourceSpan {
+                                        file: "test.ynz",
+                                        start: 357,
+                                        end: 358,
+                                    },
+                                ),
+                                rhs: IntLit(
+                                    10,
+                                    SourceSpan {
+                                        file: "test.ynz",
+                                        start: 361,
+                                        end: 363,
+                                    },
+                                ),
+                                span: SourceSpan {
+                                    file: "test.ynz",
+                                    start: 357,
+                                    end: 363,
+                                },
+                            },
+                            span: SourceSpan {
+                                file: "test.ynz",
+                                start: 347,
+                                end: 363,
+                            },
+                        },
+                    ],
+                    span: SourceSpan {
+                        file: "test.ynz",
+                        start: 213,
+                        end: 365,
+                    },
+                },
+                span: SourceSpan {
+                    file: "test.ynz",
+                    start: 182,
+                    end: 366,
+                },
+                name_span: SourceSpan {
+                    file: "test.ynz",
+                    start: 191,
+                    end: 195,
+                },
+            },
+        ),
+    ],
+    span: SourceSpan {
+        file: "test.ynz",
+        start: 1,
+        end: 366,
+    },
+}

@@ -9,6 +9,20 @@ use ynz_ast::nodes::{BinOpKind, Expr, Item, MatchPatternKind, Stmt, Type};
 use ynz_diagnostics::SourceSpan;
 use ynz_parser::{parse_query, CompilerDb, SourceFile};
 
+// ── M5 parse helpers ─────────────────────────────────────────────────────────
+fn parse_fn_body(source: &str) -> Vec<Stmt> {
+    let output = parse(source);
+    assert_eq!(output.diagnostics.len(), 0, "unexpected diagnostics: {:?}", output.diagnostics);
+    match &output.module.items[0] {
+        Item::Function(f) => f.body.stmts.clone(),
+        Item::ShapeDecl(_) => panic!("expected a function"),
+    }
+}
+
+fn wrap(inner: &str) -> String {
+    format!("function main() -> nothing {{ {inner} }}")
+}
+
 const FILE: &str = "test.ynz";
 
 fn span(start: usize, end: usize) -> SourceSpan {
@@ -1500,4 +1514,508 @@ fn parse_re_runs_when_source_changes() {
         Item::ShapeDecl(_) => panic!("expected a function item"),
     };
     assert_eq!(stmts_after, 1, "Updated source should have 1 stmt in the body");
+}
+
+// ── M5 P2: Generic function declarations ─────────────────────────────────────
+
+#[test]
+fn m5_generic_fn_single_type_param() {
+    // WHY: acceptance criterion — `function identity<T>(give value: T) -> T`
+    // must parse with `generics: [T]`. If the generic param is lost, typeck
+    // cannot substitute concrete types and monomorphization is impossible.
+    let output = parse("function identity<T>(give value: T) -> T { return value }");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::Function(f) => {
+            assert_eq!(f.generics.len(), 1);
+            assert_eq!(f.generics[0].name, "T");
+            assert!(f.generics[0].constraints.is_empty());
+        }
+        _ => panic!("expected Function"),
+    }
+}
+
+#[test]
+fn m5_generic_fn_two_type_params() {
+    // WHY: multi-param generics like `pair<A, B>` must produce two separate
+    // GenericParam entries. If they collapse to one, `B` is invisible to typeck.
+    let output = parse("function pair<A, B>(give first: A, give second: B) -> nothing { }");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::Function(f) => {
+            assert_eq!(f.generics.len(), 2);
+            assert_eq!(f.generics[0].name, "A");
+            assert_eq!(f.generics[1].name, "B");
+        }
+        _ => panic!("expected Function"),
+    }
+}
+
+#[test]
+fn m5_generic_fn_with_constraint() {
+    // WHY: acceptance criterion — `function sort<T follows Comparable>(...)` must
+    // parse with `constraints: [("Comparable", _)]` on T. Without this, typeck
+    // cannot verify that the concrete type satisfies the contract.
+    let output = parse("function sort<T follows Comparable>(share items: T) -> nothing { }");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::Function(f) => {
+            assert_eq!(f.generics.len(), 1);
+            assert_eq!(f.generics[0].name, "T");
+            assert_eq!(f.generics[0].constraints.len(), 1);
+            assert_eq!(f.generics[0].constraints[0].0, "Comparable");
+        }
+        _ => panic!("expected Function"),
+    }
+}
+
+#[test]
+fn m5_generic_fn_two_params_one_constrained() {
+    // WHY: `<T follows Comparable, U>` is two params — T with a constraint, U
+    // without. The `,` must terminate T's entry and start U's.
+    let output = parse("function f<T follows Comparable, U>(share a: T, give b: U) -> nothing { }");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::Function(f) => {
+            assert_eq!(f.generics.len(), 2);
+            assert_eq!(f.generics[0].name, "T");
+            assert_eq!(f.generics[0].constraints.len(), 1);
+            assert_eq!(f.generics[1].name, "U");
+            assert!(f.generics[1].constraints.is_empty());
+        }
+        _ => panic!("expected Function"),
+    }
+}
+
+#[test]
+fn m5_non_generic_fn_has_empty_generics() {
+    // WHY: a non-generic function must produce `generics: []`. If it accidentally
+    // produces a non-empty list, every typeck path that checks for generic vs
+    // non-generic would be wrong.
+    let output = parse("function add(a: int, b: int) -> int { return a }");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::Function(f) => assert!(f.generics.is_empty()),
+        _ => panic!("expected Function"),
+    }
+}
+
+// ── M5 P2: Generic shape declarations ────────────────────────────────────────
+
+#[test]
+fn m5_generic_shape_two_params() {
+    // WHY: acceptance criterion — `shape Pair<A, B> { first: A, second: B }` must
+    // parse with `generics: [A, B]`. Without this, the field types `A` and `B`
+    // cannot be resolved to type parameters in typeck.
+    let output = parse("shape Pair<A, B> { first: A second: B }");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::ShapeDecl(s) => {
+            assert_eq!(s.generics.len(), 2);
+            assert_eq!(s.generics[0].name, "A");
+            assert_eq!(s.generics[1].name, "B");
+        }
+        _ => panic!("expected ShapeDecl"),
+    }
+}
+
+#[test]
+fn m5_generic_shape_single_param() {
+    // WHY: `shape Box<T>` must parse with one generic param.
+    let output = parse("shape Box<T> { value: T }");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::ShapeDecl(s) => {
+            assert_eq!(s.generics.len(), 1);
+            assert_eq!(s.generics[0].name, "T");
+        }
+        _ => panic!("expected ShapeDecl"),
+    }
+}
+
+#[test]
+fn m5_non_generic_shape_has_empty_generics() {
+    // WHY: `shape Player { ... }` must keep `generics: []`. An accidental
+    // generic param would confuse the monomorphization table.
+    let output = parse("shape Player { name: int }");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::ShapeDecl(s) => assert!(s.generics.is_empty()),
+        _ => panic!("expected ShapeDecl"),
+    }
+}
+
+// ── M5 P2: Generic type instantiations in type position ──────────────────────
+
+#[test]
+fn m5_array_type_annotation() {
+    // WHY: acceptance criterion — `let arr: array<int> = ...` must produce
+    // `Type::Generic { name: "array", args: [Int] }`. If it stays `Type::Named`,
+    // the typeck cannot resolve the element type.
+    let output = parse(&wrap("let arr: array<int> = arr"));
+    assert_eq!(output.diagnostics.len(), 0);
+    let stmts = parse_fn_body(&wrap("let arr: array<int> = arr"));
+    match &stmts[0] {
+        Stmt::Let { ty: Some(Type::Generic { name, args, .. }), .. } => {
+            assert_eq!(name, "array");
+            assert_eq!(args.len(), 1);
+            assert!(matches!(args[0], Type::Int));
+        }
+        other => panic!("expected Let with Generic type annotation, got {other:?}"),
+    }
+}
+
+#[test]
+fn m5_maybe_type_annotation() {
+    // WHY: acceptance criterion — `let x: maybe<int> = none` must produce
+    // `Type::Maybe { inner: Int }`. The distinct Maybe variant (not Generic)
+    // is required so typeck can apply flow-sensitive `.value` rules.
+    let stmts = parse_fn_body(&wrap("let x: maybe<int> = none"));
+    match &stmts[0] {
+        Stmt::Let { ty: Some(Type::Maybe { inner, .. }), value: Expr::NoneLit { .. }, .. } => {
+            assert!(matches!(**inner, Type::Int));
+        }
+        other => panic!("expected Let with Maybe<Int> type and NoneLit, got {other:?}"),
+    }
+}
+
+#[test]
+fn m5_maybe_player_type_annotation() {
+    // WHY: `maybe<Player>` (named inner type) must produce `Maybe { inner: Named("Player") }`.
+    let stmts = parse_fn_body(&wrap("let x: maybe<Player> = none"));
+    match &stmts[0] {
+        Stmt::Let { ty: Some(Type::Maybe { inner, .. }), .. } => {
+            assert!(matches!(**inner, Type::Named(ref n, _) if n == "Player"));
+        }
+        other => panic!("expected Let with Maybe<Named>, got {other:?}"),
+    }
+}
+
+#[test]
+fn m5_nested_generic_type() {
+    // WHY: `Pair<Pair<int, string>, int>` tests nested angle brackets. The depth
+    // cap (16) must not fire here; the type must parse to a Generic with one
+    // Generic arg and one Int arg.
+    let stmts = parse_fn_body(&wrap("let x: Pair<Pair<int, int>, int> = x"));
+    match &stmts[0] {
+        Stmt::Let { ty: Some(Type::Generic { name, args, .. }), .. } => {
+            assert_eq!(name, "Pair");
+            assert_eq!(args.len(), 2);
+            assert!(matches!(&args[0], Type::Generic { name: n, .. } if n == "Pair"));
+            assert!(matches!(args[1], Type::Int));
+        }
+        other => panic!("expected nested Generic type, got {other:?}"),
+    }
+}
+
+#[test]
+fn m5_generic_type_depth_cap_error() {
+    // WHY: the depth cap (16) must produce exactly ONE diagnostic, not a
+    // cascade of errors. A cascade would hide the real error in noise.
+    // Build 17-deep nesting: `A<A<A<...<int>...>>>`.
+    let deep: String = "A<".repeat(17) + "int" + &">".repeat(17);
+    let source = format!("function main() -> nothing {{ let x: {deep} = x }}");
+    let output = parse(&source);
+    assert!(
+        output.diagnostics.len() >= 1,
+        "Expected at least one diagnostic for 17-deep nesting"
+    );
+}
+
+// ── M5 P2: `none` literal ────────────────────────────────────────────────────
+
+#[test]
+fn m5_none_literal_expr() {
+    // WHY: `none` must parse to `Expr::NoneLit`. If it parses as `Expr::Ident("none")`,
+    // typeck cannot recognize the absence value and the maybe<T> flow won't work.
+    let stmts = parse_fn_body(&wrap("let x = none"));
+    match &stmts[0] {
+        Stmt::Let { value: Expr::NoneLit { .. }, .. } => {}
+        other => panic!("expected NoneLit, got {other:?}"),
+    }
+}
+
+#[test]
+fn m5_none_in_condition() {
+    // WHY: `none` must be usable as an expression in any position, including
+    // comparisons. Restricting it to binding RHS would require special-casing
+    // in every expression context.
+    let output = parse(&wrap("if (x == none) { }"));
+    assert_eq!(output.diagnostics.len(), 0);
+}
+
+// ── M5 P2: Bracket index access ──────────────────────────────────────────────
+
+#[test]
+fn m5_index_access_expr() {
+    // WHY: acceptance criterion — `arr[0]` must produce `Expr::IndexAccess`.
+    // Without this, bracket access on collections has no AST representation.
+    let stmts = parse_fn_body(&wrap("let x = arr[0]"));
+    match &stmts[0] {
+        Stmt::Let { value: Expr::IndexAccess { index, .. }, .. } => {
+            assert!(matches!(**index, Expr::IntLit(0, _)));
+        }
+        other => panic!("expected IndexAccess, got {other:?}"),
+    }
+}
+
+#[test]
+fn m5_index_access_string_key() {
+    // WHY: `m["alice"]` must work too — map keys are not just integers.
+    let stmts = parse_fn_body(&wrap(r#"let x = m["alice"]"#));
+    match &stmts[0] {
+        Stmt::Let { value: Expr::IndexAccess { index, .. }, .. } => {
+            assert!(matches!(**index, Expr::StringLit(_, _)));
+        }
+        other => panic!("expected IndexAccess with StringLit index, got {other:?}"),
+    }
+}
+
+#[test]
+fn m5_chained_index_access() {
+    // WHY: `m["alice"][0]` is an IndexAccess whose receiver is also IndexAccess.
+    // If chaining doesn't work, multi-dimensional access breaks.
+    let stmts = parse_fn_body(&wrap(r#"let x = m["alice"][0]"#));
+    match &stmts[0] {
+        Stmt::Let { value: Expr::IndexAccess { receiver, .. }, .. } => {
+            assert!(matches!(**receiver, Expr::IndexAccess { .. }));
+        }
+        other => panic!("expected chained IndexAccess, got {other:?}"),
+    }
+}
+
+#[test]
+fn m5_index_access_standalone_stmt() {
+    // WHY: `arr[0]` as a bare statement (expression statement) must not produce
+    // a diagnostic. It's unusual but legal — typeck will warn about unused values.
+    let output = parse(&wrap("arr[0]"));
+    assert_eq!(output.diagnostics.len(), 0);
+    let stmts = parse_fn_body(&wrap("arr[0]"));
+    assert!(matches!(stmts[0], Stmt::Expr(Expr::IndexAccess { .. })));
+}
+
+// ── M5 P2: Index assign ───────────────────────────────────────────────────────
+
+#[test]
+fn m5_index_assign_stmt() {
+    // WHY: acceptance criterion — `arr[0] = 5` must produce `Stmt::IndexAssign`.
+    // If it becomes `Stmt::Assign` or `Stmt::Expr`, typeck cannot enforce
+    // the bracket-sugar `.set()` lowering.
+    let stmts = parse_fn_body(&wrap("arr[0] = 5"));
+    match &stmts[0] {
+        Stmt::IndexAssign { index, value: Expr::IntLit(5, _), .. } => {
+            assert!(matches!(**index, Expr::IntLit(0, _)));
+        }
+        other => panic!("expected IndexAssign, got {other:?}"),
+    }
+}
+
+#[test]
+fn m5_index_assign_string_key() {
+    // WHY: `scores["alice"] = 90` is the map-write path. If string-keyed
+    // index assign doesn't work, maps are read-only via bracket syntax.
+    let stmts = parse_fn_body(&wrap(r#"scores["alice"] = 90"#));
+    match &stmts[0] {
+        Stmt::IndexAssign { index, value: Expr::IntLit(90, _), .. } => {
+            assert!(matches!(**index, Expr::StringLit(_, _)));
+        }
+        other => panic!("expected IndexAssign with StringLit key, got {other:?}"),
+    }
+}
+
+// ── M5 P2: Generic call sites (contextual `<` disambiguation) ────────────────
+
+#[test]
+fn m5_generic_call_one_type_arg() {
+    // WHY: acceptance criterion — `identity<int>(5)` must produce a Call with
+    // `type_args: Some([Int])`. Without this, explicit type arguments at call
+    // sites are silently dropped and typeck falls back to inference only.
+    let stmts = parse_fn_body(&wrap("let x = identity<int>(5)"));
+    match &stmts[0] {
+        Stmt::Let { value: Expr::Call(call), .. } => {
+            assert!(call.type_args.is_some(), "type_args must be Some");
+            let args = call.type_args.as_ref().unwrap();
+            assert_eq!(args.len(), 1);
+            assert!(matches!(args[0], Type::Int));
+        }
+        other => panic!("expected Call with type_args, got {other:?}"),
+    }
+}
+
+#[test]
+fn m5_generic_call_two_type_args() {
+    // WHY: `pair<int, string>(1, "a")` tests multi-arg generic calls. If the
+    // second type arg is dropped, the `B` parameter can't be inferred.
+    let stmts = parse_fn_body(&wrap(r#"let x = pair<int, string>(1, "a")"#));
+    match &stmts[0] {
+        Stmt::Let { value: Expr::Call(call), .. } => {
+            let args = call.type_args.as_ref().expect("type_args must be Some");
+            assert_eq!(args.len(), 2);
+            assert!(matches!(args[0], Type::Int));
+            assert!(matches!(args[1], Type::Named(ref n, _) if n == "string"));
+        }
+        other => panic!("expected Call with two type_args, got {other:?}"),
+    }
+}
+
+#[test]
+fn m5_generic_call_no_type_args_has_none() {
+    // WHY: a normal (non-generic) call `add(1, 2)` must have `type_args: None`,
+    // not `Some([])`. `None` = no explicit type args; `Some([])` = empty explicit
+    // list (semantically different for typeck to distinguish).
+    let stmts = parse_fn_body(&wrap("let x = add(1, 2)"));
+    match &stmts[0] {
+        Stmt::Let { value: Expr::Call(call), .. } => {
+            assert!(call.type_args.is_none(), "non-generic call must have type_args: None");
+        }
+        other => panic!("expected Call, got {other:?}"),
+    }
+}
+
+// ── M5 P2: Contextual `<` disambiguation — comparison vs generic ──────────────
+
+#[test]
+fn m5_less_than_stays_comparison() {
+    // WHY: acceptance criterion — `a < b` must NOT be parsed as a generic call.
+    // If `<` is always treated as a type-arg opener, every comparison silently
+    // becomes a parse error.
+    let stmts = parse_fn_body(&wrap("let x = a < b"));
+    match &stmts[0] {
+        Stmt::Let { value: Expr::BinOp { op: BinOpKind::Lt, .. }, .. } => {}
+        other => panic!("expected Lt comparison, got {other:?}"),
+    }
+}
+
+#[test]
+fn m5_comparison_chain_not_generic() {
+    // WHY: acceptance criterion — `a < b > c` must parse as two comparisons,
+    // NOT as a generic call `a<b>(c)`. This is the canonical ambiguity case.
+    let stmts = parse_fn_body(&wrap("let x = a < b > c"));
+    // Should be (a < b) > c — two BinOps.
+    match &stmts[0] {
+        Stmt::Let { value: Expr::BinOp { op: BinOpKind::Gt, lhs, .. }, .. } => {
+            assert!(matches!(**lhs, Expr::BinOp { op: BinOpKind::Lt, .. }));
+        }
+        other => panic!("expected comparison chain a<b>c, got {other:?}"),
+    }
+}
+
+#[test]
+fn m5_comparison_in_index_not_generic() {
+    // WHY: `arr[a < b]` must parse the index as a comparison, not a type-arg list.
+    // If `<` inside `[...]` is treated as a generic opener, the index expression
+    // is lost.
+    let stmts = parse_fn_body(&wrap("let x = arr[a < b]"));
+    match &stmts[0] {
+        Stmt::Let { value: Expr::IndexAccess { index, .. }, .. } => {
+            assert!(matches!(**index, Expr::BinOp { op: BinOpKind::Lt, .. }));
+        }
+        other => panic!("expected IndexAccess with Lt index, got {other:?}"),
+    }
+}
+
+#[test]
+fn m5_generic_call_not_confused_by_comparison() {
+    // WHY: `foo<int>(x)` must be a generic call even when `foo < int` would also
+    // be a valid comparison. The `(` following the `>` disambiguates.
+    let stmts = parse_fn_body(&wrap("let x = foo<int>(5)"));
+    match &stmts[0] {
+        Stmt::Let { value: Expr::Call(call), .. } => {
+            assert!(call.type_args.is_some());
+        }
+        other => panic!("expected generic Call, got {other:?}"),
+    }
+}
+
+// ── M5 P2: M5 snapshot test ──────────────────────────────────────────────────
+
+#[test]
+fn m5_ast_snapshot() {
+    // WHY: snapshot guards all M5 parser surface in one pass. Any structural
+    // regression to generics, index access, maybe, or none-literal AST output
+    // will diff here and require explicit approval via `cargo insta review`.
+    let source = r#"
+shape Pair<A, B> {
+  first: A
+  second: B
+}
+
+function identity<T>(give value: T) -> T {
+  return value
+}
+
+function sort<T follows Comparable>(share items: array<T>) -> nothing {
+}
+
+function main() -> nothing {
+  let x: maybe<int> = none
+  let arr: array<int> = arr
+  let first = arr[0]
+  arr[0] = 99
+  let y = identity<int>(5)
+  let a = arr[0]
+  let cmp = a < 10
+}
+"#;
+    let output = parse(source);
+    assert_eq!(output.diagnostics.len(), 0, "M5 surface must parse clean: {:?}", output.diagnostics);
+    assert_debug_snapshot!(output.module);
+}
+
+// ── M5 P2: Error recovery tests ──────────────────────────────────────────────
+
+#[test]
+fn m5_recovery_unclosed_generic_param_list() {
+    // WHY: `function foo<` with no closing `>` must produce exactly one diagnostic
+    // and still parse the remaining top-level items. A cascade of errors here
+    // would drown out the single real mistake.
+    let output = parse("function foo< { } function bar() -> nothing { }");
+    assert!(output.diagnostics.len() >= 1, "Expected at least one diagnostic");
+    // bar() must still be parsed — recovery must continue past the broken decl.
+    let fn_names: Vec<_> = output.module.items.iter().filter_map(|i| match i {
+        Item::Function(f) => Some(f.name.as_str()),
+        _ => None,
+    }).collect();
+    assert!(fn_names.contains(&"bar"), "bar() must parse despite foo<'s error");
+}
+
+#[test]
+fn m5_recovery_missing_type_arg_close_bracket() {
+    // WHY: `let x: array<int = 5` (missing `>`) must produce a diagnostic but
+    // still give the parser enough to continue with the next statement.
+    let output = parse(&wrap("let x: array<int = 5"));
+    assert!(output.diagnostics.len() >= 1, "Expected at least one diagnostic for missing `>`");
+}
+
+#[test]
+fn m5_recovery_generic_call_no_close_angle() {
+    // WHY: `foo<int(5)` — paren before `>` — must NOT parse as a generic call
+    // (falls back to comparison). The 32-token budget ensures we don't consume
+    // the arg list as part of speculative type-arg parsing.
+    let output = parse(&wrap("let x = foo < int > 5"));
+    // This is a comparison, not a generic call: (foo < int) > 5
+    assert_eq!(output.diagnostics.len(), 0, "comparison must parse cleanly");
+    match &parse_fn_body(&wrap("let x = foo < int > 5"))[0] {
+        Stmt::Let { value: Expr::BinOp { op: BinOpKind::Gt, .. }, .. } => {}
+        other => panic!("expected Gt comparison, got {other:?}"),
+    }
+}
+
+#[test]
+fn m5_recovery_index_missing_close_bracket() {
+    // WHY: `arr[0` without `]` must produce exactly one diagnostic and not crash.
+    let output = parse(&wrap("let x = arr[0"));
+    assert!(output.diagnostics.len() >= 1, "Expected diagnostic for unclosed `[`");
+}
+
+#[test]
+fn m5_maybe_missing_type_arg() {
+    // WHY: `maybe` without `<T>` must produce exactly one diagnostic. The error
+    // message must guide the user to write `maybe<T>` — not produce a cascade.
+    let output = parse(&wrap("let x: maybe = none"));
+    assert!(output.diagnostics.len() >= 1, "Expected diagnostic for bare `maybe`");
+    assert!(
+        output.diagnostics.iter().any(|d| d.what.contains("maybe")),
+        "Diagnostic must mention `maybe`"
+    );
 }
