@@ -321,7 +321,7 @@ fn m5_stmt_variant_count_locked() {
 fn m5_expr_variant_count_locked() {
     // WHY: Expr variants beyond M5 are M6+ work. This pins the count.
     //
-    // test-ratchet: M5 adds 2 variants over M4's 14: NoneLit(15), IndexAccess(16).
+    // test-ratchet: M5 P3b adds 1 variant: ArrayLit(17), over P1's NoneLit(15) and IndexAccess(16).
     use ynz_ast::nodes::{BinOpKind, Expr::*, PostfixOpKind};
     let err = || Box::new(Error(span(0, 0)));
     let all_variants: &[ynz_ast::nodes::Expr] = &[
@@ -341,8 +341,9 @@ fn m5_expr_variant_count_locked() {
         SelfValue { span: span(0, 0) },
         NoneLit { span: span(0, 0) },
         IndexAccess { receiver: err(), index: err(), span: span(0, 0) },
+        ArrayLit { elements: vec![], span: span(0, 0) },
     ];
-    assert_eq!(all_variants.len(), 16, "Expr variant count changed from 16 — add a // test-ratchet: comment");
+    assert_eq!(all_variants.len(), 17, "Expr variant count changed from 17 — add a // test-ratchet: comment");
 }
 
 #[test]

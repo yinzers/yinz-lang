@@ -1,7 +1,7 @@
-/// The types known to the M4 type checker.
+/// The types known to the M5 type checker.
 ///
 /// Variant count is pinned by `m4_type_variant_count_locked` in tests.
-/// Current count: 9
+/// Current count: 14 (M5 P3b adds BuiltinArray, BuiltinFixed, Maybe)
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
 
@@ -74,6 +74,22 @@ pub enum Type {
     /// P3a uses this for user-defined generic shapes only.
     /// P3b extends it to built-in collections (`array`, `fixed`, `map`, `maybe`).
     Generic { name: String, args: Vec<Type> },
+
+    // test-ratchet: M5 P3b adds BuiltinArray, BuiltinFixed, Maybe for collection types.
+
+    /// Heap-allocated growable list: `array<T>` in source.
+    /// Element type is concrete at typeck time.
+    BuiltinArray { elem: Box<Type> },
+
+    /// Stack-allocated fixed-size list: `fixed<T>` in source.
+    /// `size` is `Some(n)` when the literal element count is known at typeck time
+    /// (for literal-OOB checking), `None` when only the annotation is present.
+    BuiltinFixed { elem: Box<Type>, size: Option<usize> },
+
+    /// Built-in optional type: `maybe<T>` in source.
+    /// Distinct from `Type::Generic` because `.value` has special flow-sensitive
+    /// enforcement rules that built-in generic shapes do not have.
+    Maybe { inner: Box<Type> },
 }
 
 /// Human-readable type name for diagnostic messages.
@@ -97,5 +113,8 @@ pub fn type_name(t: &Type) -> String {
             let arg_str = args.iter().map(type_name).collect::<Vec<_>>().join(", ");
             format!("{name}<{arg_str}>")
         }
+        Type::BuiltinArray { elem } => format!("array<{}>", type_name(elem)),
+        Type::BuiltinFixed { elem, .. } => format!("fixed<{}>", type_name(elem)),
+        Type::Maybe { inner } => format!("maybe<{}>", type_name(inner)),
     }
 }

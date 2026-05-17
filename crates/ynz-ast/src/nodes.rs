@@ -261,8 +261,8 @@ pub enum UnaryOpKind {
 /// An expression.
 ///
 /// Variant count is pinned by the milestone-locked tests in the test suite.
-/// Current count: 16 — M4 added FieldAccess(11), StructLit(12), PostfixOp(13),
-/// SelfValue(14); M5 added NoneLit(15), IndexAccess(16).
+/// Current count: 17 — M4 added FieldAccess(11), StructLit(12), PostfixOp(13),
+/// SelfValue(14); M5 added NoneLit(15), IndexAccess(16), ArrayLit(17).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
 
@@ -364,6 +364,17 @@ pub enum Expr {
         index: Box<Expr>,
         span: SourceSpan,
     },
+
+    // test-ratchet: M5 P3b adds ArrayLit for `[1, 2, 3]` array/fixed literal syntax.
+    /// Array or fixed literal: `[1, 2, 3]`.
+    ///
+    /// Used for both `array<T>` and `fixed<T>` literals — typeck disambiguates
+    /// based on the binding annotation. In `fixed` context, size is locked; in
+    /// `array` context, elements are pushed to a heap-allocated array.
+    ArrayLit {
+        elements: Vec<Expr>,
+        span: SourceSpan,
+    },
 }
 
 /// The kind of dot-postfix body operation.
@@ -397,7 +408,8 @@ impl Expr {
             | Expr::FieldAccess { span, .. }
             | Expr::StructLit { span, .. }
             | Expr::PostfixOp { span, .. }
-            | Expr::IndexAccess { span, .. } => span,
+            | Expr::IndexAccess { span, .. }
+            | Expr::ArrayLit { span, .. } => span,
             Expr::SelfValue { span } => span,
             Expr::NoneLit { span } => span,
         }

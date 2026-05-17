@@ -1331,6 +1331,9 @@ impl<'a> Parser<'a> {
                 }
                 inner
             }
+            Token::LBracket => {
+                self.parse_array_lit()
+            }
             _ => {
                 let span = self.current_span();
                 if self.is_stmt_boundary() {
@@ -1426,6 +1429,38 @@ impl<'a> Parser<'a> {
             index: Box::new(index),
             span: SourceSpan::new(self.file, start, end),
         }
+    }
+
+    /// Parse `[expr, expr, ...]` into `Expr::ArrayLit`.
+    fn parse_array_lit(&mut self) -> Expr {
+        let start = self.current_span().start;
+        self.advance(); // consume `[`
+        let mut elements = Vec::new();
+        loop {
+            match self.peek() {
+                Token::RBracket => {
+                    let end = self.current_span().end;
+                    self.advance();
+                    return Expr::ArrayLit {
+                        elements,
+                        span: SourceSpan::new(self.file, start, end),
+                    };
+                }
+                Token::Eof => {
+                    self.diags.push(Diagnostic::error(
+                        self.eof_span(),
+                        "Missing `]` to close this array literal.",
+                        "Add `]` after the last element.",
+                        "Every `[` in an array literal must be matched with a `]`.",
+                    ));
+                    break;
+                }
+                Token::Comma => { self.advance(); }
+                _ => { elements.push(self.parse_expr(0)); }
+            }
+        }
+        let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(start);
+        Expr::ArrayLit { elements, span: SourceSpan::new(self.file, start, end) }
     }
 
     /// Speculatively parse a generic type-argument list `<T, U>` followed by `(`.
