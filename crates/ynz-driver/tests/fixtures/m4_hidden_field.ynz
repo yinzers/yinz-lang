@@ -1,0 +1,20 @@
+shape Counter {
+  name: string
+  hidden count: int = 0
+}
+
+function increment(lend self: Counter) -> nothing {
+  self.count = self.count + 1
+}
+
+function value(share self: Counter) -> int {
+  return self.count
+}
+
+function main() -> nothing {
+  let c: Counter = { name: "clicks" }
+  c.increment()
+  c.increment()
+  c.increment()
+  print(c.value())
+}

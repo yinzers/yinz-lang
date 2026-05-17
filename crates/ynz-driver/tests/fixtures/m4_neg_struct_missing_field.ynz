@@ -1,0 +1,9 @@
+shape Player {
+  name: string
+  health: int
+}
+
+function main() -> nothing {
+  let p: Player = { name: "Alice" }
+  print(p.name)
+}

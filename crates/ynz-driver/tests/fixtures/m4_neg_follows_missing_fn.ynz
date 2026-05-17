@@ -1,0 +1,12 @@
+shape Drawable {
+  draw(share self) -> nothing
+}
+
+shape Circle follows Drawable {
+  radius: int
+}
+
+function main() -> nothing {
+  let c: Circle = { radius: 5 }
+  print(c.radius)
+}

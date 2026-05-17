@@ -307,6 +307,167 @@ fn m4_p5_int_max_constant_closes_m2_catchup() {
         "int.max and int.min must print the correct i64 extremes");
 }
 
+// ── M4 P6 positive fixtures ───────────────────────────────────────────────────
+
+#[test]
+fn m4_inheritance_extends_prepends_parent_fields() {
+    // WHY: `extends` must make parent fields accessible on the child shape.
+    // If field layout merging is broken, Dog.name (from Animal) would be
+    // missing and the print would segfault or produce garbage.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_inheritance.ynz"));
+    assert_eq!(code, 0, "inheritance fixture must compile; stderr:\n{stderr}");
+    assert_eq!(stdout, "Rex\nHusky\n");
+}
+
+#[test]
+fn m4_follows_contract_dispatch_works() {
+    // WHY: `follows` contract verification must allow calling the function
+    // via UFCS. If the follows check rejects valid code or UFCS lookup is
+    // broken for contract methods, this fails to compile.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_follows.ynz"));
+    assert_eq!(code, 0, "follows fixture must compile; stderr:\n{stderr}");
+    assert_eq!(stdout, "3\n4\n");
+}
+
+#[test]
+fn m4_hidden_field_accessible_inside_method() {
+    // WHY: hidden fields must be readable and writable inside the shape's own
+    // methods but invisible outside. This tests the read path (value()) and
+    // write path (increment()) for a field that callers can't see.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_hidden_field.ynz"));
+    assert_eq!(code, 0, "hidden field fixture must compile; stderr:\n{stderr}");
+    assert_eq!(stdout, "3\n");
+}
+
+#[test]
+fn m4_copy_produces_independent_struct() {
+    // WHY: `.copy()` on a shape with all-primitive fields must produce an
+    // independent allocation. Both values must be readable after the copy.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_copy.ynz"));
+    assert_eq!(code, 0, "copy fixture must compile; stderr:\n{stderr}");
+    assert_eq!(stdout, "10\n20\n10\n20\n");
+}
+
+#[test]
+fn m4_base_shape_blocks_direct_instantiation() {
+    // WHY: a derived shape from a `base shape` must work (base fields are
+    // inherited); only direct instantiation of the base is blocked (tested
+    // separately in the negative suite).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_base_shape.ynz"));
+    assert_eq!(code, 0, "base shape fixture must compile; stderr:\n{stderr}");
+    assert_eq!(stdout, "Rust\n120\n");
+}
+
+#[test]
+fn m4_type_constants_and_wrapping_saturation() {
+    // WHY: int.max / int.min type-attached constants + saturatingAdd must
+    // clamp at INT64_MAX and wrappingAdd must two's-complement-wrap.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_type_constants.ynz"));
+    assert_eq!(code, 0, "type constants fixture must compile; stderr:\n{stderr}");
+    assert_eq!(stdout, "9223372036854775807\n-9223372036854775808\n9223372036854775807\n-9223372036854775808\n");
+}
+
+// ── M4 P6 negative fixtures ───────────────────────────────────────────────────
+
+#[test]
+fn m4_neg_use_after_give_is_compile_error() {
+    // WHY: using a value after giving it away is a memory-safety violation.
+    // The ownership analysis must catch it at compile time — never at runtime.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_use_after_give.ynz"));
+    assert_ne!(code, 0, "use-after-give must be rejected");
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("given away"), "error must name the give site; got:\n{stderr}");
+}
+
+#[test]
+fn m4_neg_const_cannot_be_lent_for_mutation() {
+    // WHY: `const` bindings are fully immutable. Passing one to a function
+    // that declares `lend` (mutable access) must be a compile-time error.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_const_cannot_lend.ynz"));
+    assert_ne!(code, 0, "const-lend must be rejected");
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("const"), "error must mention const; got:\n{stderr}");
+}
+
+#[test]
+fn m4_neg_const_field_assign_is_compile_error() {
+    // WHY: assigning to a field of a `const` binding violates deep immutability.
+    // This specifically tests the field-write path (distinct from rebind).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_const_field_assign.ynz"));
+    assert_ne!(code, 0, "const field assign must be rejected");
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("const"), "error must mention const; got:\n{stderr}");
+}
+
+#[test]
+fn m4_neg_base_shape_cannot_be_instantiated() {
+    // WHY: `base shape` declarations are abstract — only derived shapes can
+    // be constructed. Attempting direct instantiation must be a compile error.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_base_instantiate.ynz"));
+    assert_ne!(code, 0, "base shape instantiation must be rejected");
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("base shape"), "error must name the constraint; got:\n{stderr}");
+}
+
+#[test]
+fn m4_neg_struct_missing_required_field_is_error() {
+    // WHY: every non-hidden field must be provided in a struct literal. Missing
+    // one is a compile error, not a runtime default — there are no implicit defaults.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_struct_missing_field.ynz"));
+    assert_ne!(code, 0, "missing field must be rejected");
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("health") || stderr.contains("Missing"), "error must name the field; got:\n{stderr}");
+}
+
+#[test]
+fn m4_neg_struct_wrong_field_type_is_error() {
+    // WHY: the struct literal typechecker must verify field types against the
+    // shape declaration. A string where int is expected is a type error.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_struct_wrong_type.ynz"));
+    assert_ne!(code, 0, "wrong field type must be rejected");
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("int") || stderr.contains("expects"), "error must name the expected type; got:\n{stderr}");
+}
+
+#[test]
+fn m4_neg_hidden_field_access_outside_shape_is_error() {
+    // WHY: hidden fields are encapsulation — readable only inside the declaring
+    // shape's methods. External access is a compile error, never a runtime panic.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_hidden_field_access.ynz"));
+    assert_ne!(code, 0, "hidden field access must be rejected");
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("hidden"), "error must explain the hidden constraint; got:\n{stderr}");
+}
+
+#[test]
+fn m4_neg_follows_missing_function_is_error() {
+    // WHY: `follows` is verified at compile time — if the required function
+    // isn't defined, the shape declaration itself is an error.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_follows_missing_fn.ynz"));
+    assert_ne!(code, 0, "missing contract function must be rejected");
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("missing") || stderr.contains("draw"), "error must name the missing function; got:\n{stderr}");
+}
+
+#[test]
+fn m4_neg_cyclic_extends_is_error() {
+    // WHY: cyclic inheritance (A extends B extends A) cannot be laid out in
+    // memory — it's an infinite-size type. The compiler must catch it.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_cyclic_extends.ynz"));
+    assert_ne!(code, 0, "cyclic extends must be rejected");
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("cyclic") || stderr.contains("cycle"), "error must describe the cycle; got:\n{stderr}");
+}
+
+#[test]
+fn m4_neg_banned_type_keyword_is_error() {
+    // WHY: `type` is banned in favor of `shape`. Any program using it must
+    // fail to compile — it should never silently pass as an identifier.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_banned_type_kw.ynz"));
+    assert_ne!(code, 0, "`type` keyword must be rejected; stderr:\n{stderr}");
+    assert!(stdout.is_empty());
+}
+
 #[test]
 fn m4_player_shape_compiles_and_produces_correct_output() {
     // WHY: M4 P4 success criterion. Exercises shape struct literals, field access,

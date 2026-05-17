@@ -215,7 +215,7 @@ After Doc-PR 3 merges, M4 P1 (lexer) starts.
 | **P3c** (Ownership analysis) | `feat/m4-ownership` | ✅ MERGED (7c86f6a) | `is_consumed` tracking, use-after-give, const-cannot-be-lent/given. All 5 const deep-immutability paths covered. 102 tests green. |
 | **P4** (Codegen) | `feat/m4-codegen` | ✅ COMMITTED (05bb47d) | Shape LLVM struct types, struct literal lowering, field access/assign GEP, UFCS dispatch, `readonly`/`noalias` attrs (IR snapshot confirms), `ynz_alloc`/`ynz_free` runtime shims, vtable globals emitted. `m4_player.ynz` → `Patrick / 120 / Patrick`. Dynamic call-site coercion deferred post-P5 (vtable infra in place). All tests green, clippy clean. |
 | **P5** (Catch-up) | `feat/m4-catchup-numerics` | ✅ COMMITTED (5a21258) | 6 wrapping/saturating int methods, `int.max`/`int.min`/`number.*`/`float.*` type-attached constants. M2 catch-up fixtures created and passing. All tests green, clippy clean. |
-| **P6** (Driver + fixtures) | — | NOT STARTED | 12 positive + 20 negative M4 fixtures; valgrind clean; IR snapshots. After P4. |
+| **P6** (Driver + fixtures) | `feat/m4-driver-fixtures` | ✅ IN REVIEW | 6 positive + 10 negative M4 fixtures. All 57 integration tests green, clippy clean. valgrind skipped (stack-only alloc in M4 P4; heap path deferred). |
 | **P7** (Verification + tag) | — | NOT STARTED | TODO sweep, jargon audit, Bouncer clean, CHANGELOG, `v0.1.0-m4` tag. After P6. |
 | **P2** (Parser) | — | NOT STARTED | After P1 merges. |
 | **P3a** (Typeck shapes) | — | NOT STARTED | After P2 merges. |

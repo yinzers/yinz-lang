@@ -1,0 +1,17 @@
+shape Animal {
+  name: string
+}
+
+shape Dog extends Animal {
+  breed: string
+}
+
+function describe(share self: Dog) -> nothing {
+  print(self.name)
+  print(self.breed)
+}
+
+function main() -> nothing {
+  let d: Dog = { name: "Rex", breed: "Husky" }
+  d.describe()
+}

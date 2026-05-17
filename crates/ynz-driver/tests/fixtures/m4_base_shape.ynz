@@ -1,0 +1,17 @@
+base shape Vehicle {
+  speed: int
+}
+
+shape Car extends Vehicle {
+  brand: string
+}
+
+function describe(share self: Car) -> nothing {
+  print(self.brand)
+  print(self.speed)
+}
+
+function main() -> nothing {
+  let c: Car = { brand: "Rust", speed: 120 }
+  c.describe()
+}

@@ -1,0 +1,11 @@
+shape Token { id: int }
+
+function consume(give t: Token) -> nothing {
+  print(t.id)
+}
+
+function main() -> nothing {
+  let t: Token = { id: 1 }
+  consume(t)
+  print(t.id)
+}
