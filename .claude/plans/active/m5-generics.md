@@ -36,7 +36,7 @@ Status: approved (Patrick OK 2026-05-17) — Phase 0 SHIPPED (commit `524ca2e`, 
 | Phase | Status | Commit / Branch | Notes |
 |---|---|---|---|
 | P0 — Doc lockdown | SHIPPED on main | `524ca2e` + `b2c528e` + `cf53ad5` merged 2026-05-17 | master plan M5/M6/M7 paragraphs updated to `<>`; `design/maybe.md` created with locked tables; `spec/maybe.md` syntax-updated; `design/generics.md` cross-ref; M5 plan landed |
-| P1 — Lexer + AST scaffolding | IN PROGRESS — ready to commit | branch `feat/m5-lexer-ast` | Tok::None + lexer keyword `none`; 3 Type variants (TypeParam, Generic, Maybe); 2 Expr variants (NoneLit, IndexAccess); 1 Stmt variant (IndexAssign); GenericParam struct; FunctionDecl/ShapeDecl `generics` field; CallExpr.type_args field; 4 m5_*_variant_count_locked tests + m5_none_keyword_lexes; stale M3/M4 doc comments collateral-fixed; typeck + codegen + return_paths stub match arms; 4 snapshot files additively updated. 401 tests green. |
+| P1 — Lexer + AST scaffolding | SHIPPED on main | `49940c9` + `3c18a62` merged 2026-05-17 | Tok::None + lexer keyword `none`; 3 Type variants (TypeParam, Generic, Maybe); 2 Expr variants (NoneLit, IndexAccess); 1 Stmt variant (IndexAssign); GenericParam struct; FunctionDecl/ShapeDecl `generics` field; CallExpr.type_args field; 4 m5_*_variant_count_locked tests + m5_none_keyword_lexes; stale M3/M4 doc comments collateral-fixed; typeck + codegen + return_paths stub match arms; 4 snapshot files additively updated. 401 tests green. |
 | P2 — Parser | NOT STARTED | — | — |
 | P3a — Typeck generics engine | NOT STARTED | — | — |
 | P3b — Typeck array/fixed/maybe | NOT STARTED | — | — |
