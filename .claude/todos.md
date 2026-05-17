@@ -7,7 +7,7 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Now (active)
 
-- [ ] **M5 — Generics + Collections + Maybe** — Approved 2026-05-17. Plan in `.claude/plans/active/m5-generics.md`. Phase 0 (doc lockdown) in progress.
+- [ ] **M5 — Generics + Collections + Maybe** — Approved 2026-05-17. Plan in `.claude/plans/active/m5-generics.md`. P0 (doc lockdown) SHIPPED on `chore/m5-doc-lockdown`, awaiting merge. P1 (lexer + AST scaffolding) next.
 
 ## Soon (committed, not started)
 
