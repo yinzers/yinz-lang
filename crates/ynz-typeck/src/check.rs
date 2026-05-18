@@ -2500,6 +2500,18 @@ impl<'b> Checker<'b> {
                     (None, false)
                 }
             }
+            Some(Type::Shape { name }) => {
+                // `let x: SomeShape = [...]` — shape is a single value, not a collection.
+                // Emit one targeted error and return Type::Error to suppress the downstream
+                // let-binding type mismatch, which would just be noise.
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("`[]` is an array literal, but `{name}` is a shape — a single value, not a collection."),
+                    format!("Use `array<{name}>` if you want a list: `let ... : array<{name}> = []`"),
+                    format!("`{name}` holds one value. To store multiple `{name}` values, use `array<{name}>`."),
+                ));
+                return Type::Error;
+            }
             _ => (None, false),
         };
 
