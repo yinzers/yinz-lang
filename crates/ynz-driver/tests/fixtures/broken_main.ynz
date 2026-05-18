@@ -1,3 +1,3 @@
 function main() {
-    print("missing return type")
+    print(`missing return type`)
 }

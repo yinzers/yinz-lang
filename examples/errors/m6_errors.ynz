@@ -8,8 +8,8 @@
 options Status { pending, active, banned }
 function nonExhaustiveOptions(s: Status) -> nothing {
   if (s) {
-    active  => print("active")
-    pending => print("pending")
+    active  => print(`active`)
+    pending => print(`pending`)
     // 'banned' is missing — compile error
   }
 }
@@ -44,24 +44,24 @@ shape Triangle { width: float
 shape AnyShape = Circle | Square | Triangle
 function nonExhaustiveUnion(s: AnyShape) -> nothing {
   if (s) {
-    is Circle => print("circle")
-    is Square => print("square")
+    is Circle => print(`circle`)
+    is Square => print(`square`)
     // Triangle missing — compile error
   }
 }
 
 // WHY: `is Type` on a non-union value — must produce teaching error
 function isOnString() -> nothing {
-  let msg: string = "hello"
+  let msg: string = `hello`
   if (msg) {
-    is Circle => print("never")
-    else => print("other")
+    is Circle => print(`never`)
+    else => print(`other`)
   }
 }
 
 // WHY: `.value` without narrowing on maybe<T>
 function valueWithoutCheck() -> nothing {
-  let x: maybe<int> = "bad".toInt()
+  let x: maybe<int> = `bad`.toInt()
   print(x.value.toString())
 }
 

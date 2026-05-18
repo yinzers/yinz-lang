@@ -680,6 +680,8 @@ fn ast_type_to_typeck_type(ast_ty: &ynz_ast::nodes::Type, shape_table: &ShapeTab
             let resolved: Vec<Type> = variants.iter().map(|v| ast_type_to_typeck_type(v, shape_table)).collect();
             if resolved.len() < 2 { Type::Error } else { Type::Union { variants: resolved } }
         }
+        // M7 P1: `-> T errors` — defer to the inner type for codegen purposes.
+        ynz_ast::nodes::Type::ErrorCapable { inner, .. } => ast_type_to_typeck_type(inner, shape_table),
         _                                      => Type::Error,
     }
 }
@@ -1638,6 +1640,32 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
 
         // M6: `x is Foo` — P4 implements; typeck would have rejected programs with unimplemented forms.
         Expr::Is { .. } => Err("codegen: Expr::Is not yet lowered (P4 work)".to_string()),
+
+        // M7 P1: interpolated strings — full codegen lowering arrives in M7 P2.
+        // For a plain backtick string (no interpolations), emit the literal bytes
+        // as a null-terminated global string constant (same as the old StringLit path).
+        // Strings with interpolations are deferred to P2.
+        Expr::InterpolatedString(parts, _) => {
+            let is_pure_lit = parts.iter().all(|p| matches!(p, ynz_ast::nodes::StringPart::Lit(_, _)));
+            if is_pure_lit {
+                let mut bytes: Vec<u8> = parts.iter().flat_map(|p| match p {
+                    ynz_ast::nodes::StringPart::Lit(b, _) => b.clone(),
+                    ynz_ast::nodes::StringPart::Expr(_, _) => unreachable!(),
+                }).collect();
+                bytes.push(0); // null-terminate
+                let i8t = cg.i8();
+                let arr_ty = i8t.array_type(bytes.len() as u32);
+                let arr = i8t.const_array(&bytes.iter().map(|&b| i8t.const_int(b as u64, false)).collect::<Vec<_>>());
+                let g = cg.module.add_global(arr_ty, Some(AddressSpace::default()), "bts");
+                g.set_initializer(&arr);
+                g.set_constant(true);
+                g.set_linkage(inkwell::module::Linkage::Private);
+                g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
+                Ok(g.as_pointer_value().into())
+            } else {
+                Err("codegen: interpolated strings with expressions arrive in M7 P2".to_string())
+            }
+        }
     }
 }
 

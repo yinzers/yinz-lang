@@ -1,6 +1,5 @@
 ---
 source: crates/ynz-parser/tests/parse.rs
-assertion_line: 1188
 expression: output.module
 ---
 Module {
@@ -213,6 +212,7 @@ Module {
                     start: 9,
                     end: 12,
                 },
+                errors_capable: false,
             },
         ),
         Function(
@@ -313,6 +313,7 @@ Module {
                     start: 107,
                     end: 111,
                 },
+                errors_capable: false,
             },
         ),
     ],

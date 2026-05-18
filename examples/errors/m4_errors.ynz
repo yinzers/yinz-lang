@@ -52,14 +52,14 @@ abstract class Entity {
 // WHY: Prefix-form struct literal `Player { ... }` is banned — annotation-only
 //      form is required. Parser redirects to `let p: Player = { ... }` form.
 function prefixStructLit() -> nothing {
-  let p = Player { name: "Patrick" }
+  let p = Player { name: `Patrick` }
 }
 
 // WHY: Method body inside a shape is banned — Yinz is not OOP.
 //      Parser emits teaching diagnostic telling user to move the function outside.
 shape BadShape {
   function greet() -> string {
-    return "hi"
+    return `hi`
   }
 }
 
@@ -69,24 +69,24 @@ shape BadShape {
 //      P3a check_struct_lit validates all visible fields are present.
 shape Player { name: string health: int }
 function missingField() -> nothing {
-  let p: Player = { name: "Patrick" }
+  let p: Player = { name: `Patrick` }
 }
 
 // WHY: Field type mismatch — health expects int, got string.
 function wrongFieldType() -> nothing {
-  let p: Player = { name: "Patrick", health: "one hundred" }
+  let p: Player = { name: `Patrick`, health: `one hundred` }
 }
 
 // WHY: `base shape` cannot be instantiated directly.
 base shape Entity { name: string }
 function instantiateBase() -> nothing {
-  let e: Entity = { name: "ghost" }
+  let e: Entity = { name: `ghost` }
 }
 
 // WHY: `const` binding — field mutation rejected.
 //      Demonstrates const deep-immutability (one of the five const paths from plan invariants).
 function constFieldMutation() -> nothing {
-  const p: Player = { name: "Patrick", health: 100 }
+  const p: Player = { name: `Patrick`, health: 100 }
   p.health = 50
 }
 

@@ -11,15 +11,15 @@
 
 function main() -> nothing {
   // ────── M1: hello-world end-to-end ──────
-  print("Yinz v0.1 language showcase")
-  print("===========================")
-  print("")
+  print(`Yinz v0.1 language showcase`)
+  print(`===========================`)
+  print(``)
 
   // ────── M2: variables, arithmetic, primitives, conversions ──────
-  print("M2 — variables, arithmetic, primitives:")
+  print(`M2 — variables, arithmetic, primitives:`)
 
   // let vs const (M2 const-reassignment check)
-  const playerName = "Cheddar"
+  const playerName = `Cheddar`
   let score: int = 0
 
   // Primitive types — int, float, number (decimal128), bool
@@ -54,10 +54,10 @@ function main() -> nothing {
   const scoreText = score.toString()
   print(scoreText)
 
-  print("")
+  print(``)
 
   // ────── M3: control flow + user-defined functions ──────
-  print("M3 — control flow + user functions:")
+  print(`M3 — control flow + user functions:`)
 
   // if + early return demoed via the helper functions below
   print(classifyHealth(startHealth))
@@ -96,20 +96,20 @@ function main() -> nothing {
   // After M4 P4 (codegen): end-to-end compile + run
   // After M4 P5 (catch-up): int.max, int.min, number.epsilon, .wrappingAdd() etc.
   // ────── M4: shapes + UFCS methods + ownership ──────
-  print("")
-  print("M4 — shapes + methods + ownership:")
-  let p: Player = { name: "Cheddar", health: 100 }
+  print(``)
+  print(`M4 — shapes + methods + ownership:`)
+  let p: Player = { name: `Cheddar`, health: 100 }
   greetPlayer(p)
   healPlayer(p, 20)
   greetPlayer(p)
 
   // ────── M5: generics + collections + maybe ──────
-  print("")
-  print("M5 — generics + collections:")
+  print(``)
+  print(`M5 — generics + collections:`)
 
   // Generic function — identity<T> infers T from argument
   print(identity(42))
-  print(identity("generic"))
+  print(identity(`generic`))
 
   // array<T>: heap-growable, literal init
   let nums: array<int> = [10, 20, 30]
@@ -127,20 +127,20 @@ function main() -> nothing {
   print(score.or(0))
 
   // map<K,V>: hash map with string keys
-  let lookup: map<string, int> = { "alice": 90, "bob": 85 }
-  print(lookup["alice"].or(0))
+  let lookup: map<string, int> = { `alice`: 90, `bob`: 85 }
+  print(lookup[`alice`].or(0))
   print(lookup.count())
 
   // ────── M6: options + unions + narrowing ──────
-  print("M6 — options, unions, narrowing:")
+  print(`M6 — options, unions, narrowing:`)
 
   // Options: declaration + value use + multi-case
   let status: Status = Status.active
   print(status.toString())
   if (status) {
-    active  => print("active")
-    pending => print("pending")
-    banned  => print("banned")
+    active  => print(`active`)
+    pending => print(`pending`)
+    banned  => print(`banned`)
   }
 
   // Options equality
@@ -148,7 +148,7 @@ function main() -> nothing {
   print(eq.toString())
 
   // Fallible conversions
-  let parsed: maybe<int> = "42".toInt()
+  let parsed: maybe<int> = `42`.toInt()
   print(parsed.or(0).toString())
   let fromFloat: maybe<int> = (3.14).toInt()
   print(fromFloat.or(-1).toString())
@@ -172,28 +172,28 @@ function main() -> nothing {
 // Classify health into a status string. Uses early return.
 function classifyHealth(hp: int) -> string {
   if (hp >= 75) {
-    return "healthy"
+    return `healthy`
   }
   if (hp >= 25) {
-    return "wounded"
+    return `wounded`
   }
-  return "critical"
+  return `critical`
 }
 
 // Multi-case `if (value) { arms => ... else => ... }` for letter grading.
 function letterGrade(percent: int) -> string {
   // Multi-case form — each arm is a value pattern; `else =>` is the catch-all
   if (percent) {
-    100 => return "A+"
+    100 => return `A+`
     else => {
-      if (percent >= 90) { return "A" }
-      if (percent >= 80) { return "B" }
-      if (percent >= 70) { return "C" }
-      if (percent >= 60) { return "D" }
-      return "F"
+      if (percent >= 90) { return `A` }
+      if (percent >= 80) { return `B` }
+      if (percent >= 70) { return `C` }
+      if (percent >= 60) { return `D` }
+      return `F`
     }
   }
-  return "F"  // unreachable but typeck requires every path returns
+  return `F`  // unreachable but typeck requires every path returns
 }
 
 // Classic recursive fib — exercises user-defined function with int param + recursion.
@@ -248,11 +248,11 @@ shape AccountResult = ActiveAccount | BannedAccount | PendingAccount
 
 function classifyAccount(account: AccountResult) -> string {
   if (account) {
-    is ActiveAccount  => return "OK"
-    is BannedAccount  => return "DENIED"
-    is PendingAccount => return "WAIT"
+    is ActiveAccount  => return `OK`
+    is BannedAccount  => return `DENIED`
+    is PendingAccount => return `WAIT`
   }
-  return "UNKNOWN"
+  return `UNKNOWN`
 }
 
 function firstOrDefault(share nums: array<int>) -> int {

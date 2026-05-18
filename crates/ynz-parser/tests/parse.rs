@@ -209,6 +209,8 @@ fn m4_item_variant_count_locked() {
             return_type: Type::Nothing,
             body: empty_block,
             span: span(0, 0),
+            // test-ratchet: M7 P1 adds errors_capable field to FunctionDecl
+            errors_capable: false,
         }),
         Item::ShapeDecl(ShapeDecl {
             name: "Foo".into(),
@@ -421,6 +423,8 @@ fn m6_item_variant_count_locked() {
             return_type: Type::Nothing,
             body: ynz_ast::nodes::Block { stmts: vec![], span: span(0, 0) },
             span: span(0, 0),
+            // test-ratchet: M7 P1 adds errors_capable field to FunctionDecl
+            errors_capable: false,
         }),
         ShapeDecl(ynz_ast::nodes::ShapeDecl {
             name: String::new(), name_span: span(0, 0), is_base: false, generics: vec![],
@@ -632,7 +636,8 @@ fn contract_sig_in_shape_parses() {
 fn anonymous_struct_lit_parses() {
     // WHY: `let p: Player = { name: "Patrick", health: 100 }` — the annotation-only
     // struct literal form — must produce Expr::StructLit with 2 fields.
-    let output = parse(r#"function main() -> nothing { let p: string = { name: "Patrick" } }"#);
+    // test-ratchet: M7 P1 — migrated to backtick syntax
+    let output = parse("function main() -> nothing { let p: string = { name: `Patrick` } }");
     assert_eq!(output.diagnostics.len(), 0, "Struct lit must parse cleanly");
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -737,7 +742,8 @@ fn prefix_form_struct_lit_produces_teaching_diagnostic() {
     // WHY: `Player { name: "x" }` is the banned prefix form. The parser must emit
     // a teaching diagnostic redirecting to the annotation-only form, recover cleanly,
     // and NOT produce an Expr::StructLit (since the prefix form is compile-time banned).
-    let output = parse(r#"function main() -> nothing { let x = Player { name: "Patrick" } }"#);
+    // test-ratchet: M7 P1 — migrated to backtick syntax
+    let output = parse("function main() -> nothing { let x = Player { name: `Patrick` } }");
     assert_eq!(
         output.diagnostics.len(),
         1,
@@ -754,7 +760,8 @@ fn prefix_form_struct_lit_produces_teaching_diagnostic() {
 fn method_body_inside_shape_produces_diagnostic() {
     // WHY: Yinz is not OOP — method bodies cannot be declared inside shapes.
     // The parser must emit a clear teaching diagnostic and recover.
-    let output = parse("shape Player { function greet() -> string { return \"hi\" } }");
+    // test-ratchet: M7 P1 — migrated to backtick syntax
+    let output = parse("shape Player { function greet() -> string { return `hi` } }");
     assert_eq!(
         output.diagnostics.len(),
         1,
@@ -789,22 +796,8 @@ fn self_value_in_function_body_parses() {
 fn m4_parse_snapshot() {
     // WHY: Snapshot locks the full M4 AST for a realistic shape-declaration source
     // so any parser regression shows up as an insta diff.
-    let source = r#"shape Player {
-  name: string
-  health: int
-  hidden cache: int
-}
-
-function greet(share self: Player) -> string {
-  return self.name
-}
-
-function main() -> nothing {
-  let p: Player = { name: "Patrick", health: 100 }
-  p.health = 90
-  let h = p.health
-  let b = p.copy()
-}"#;
+    // test-ratchet: M7 P1 — migrated to backtick syntax
+    let source = "shape Player {\n  name: string\n  health: int\n  hidden cache: int\n}\n\nfunction greet(share self: Player) -> string {\n  return self.name\n}\n\nfunction main() -> nothing {\n  let p: Player = { name: `Patrick`, health: 100 }\n  p.health = 90\n  let h = p.health\n  let b = p.copy()\n}";
     let output = parse(source);
     assert_eq!(output.diagnostics.len(), 0, "M4 fixture must parse with 0 diagnostics");
     assert_debug_snapshot!("m4_ast", output.module);
@@ -815,7 +808,9 @@ function main() -> nothing {
 fn m1_source_parses_to_expected_ast() {
     // WHY: the AST shape that Phase 5 type-checker depends on is locked here.
     // A silent change to this snapshot breaks the typeck layer.
-    let output = parse(r#"function main() -> nothing { print("hello, yinz") }"#);
+    //
+    // test-ratchet: M7 P1 — migrated to backtick syntax
+    let output = parse("function main() -> nothing { print(`hello, yinz`) }");
     assert_eq!(
         output.diagnostics.len(),
         0,
@@ -1335,7 +1330,8 @@ fn whitespace_and_comment_only_produces_empty_module() {
 
 #[test]
 fn wrong_return_type_parses_with_named_type() {
-    let output = parse(r#"function main() -> string { print("hi") }"#);
+    // test-ratchet: M7 P1 — migrated to backtick syntax
+    let output = parse("function main() -> string { print(`hi`) }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => {
@@ -1677,8 +1673,9 @@ fn parse_re_runs_when_source_changes() {
 
     let items_before = parse_query(&db, sf).module.items.len();
 
+    // test-ratchet: M7 P1 — migrated to backtick syntax
     sf.set_text(&mut db)
-        .to(r#"function main() -> nothing { print("hi") }"#.to_string());
+        .to("function main() -> nothing { print(`hi`) }".to_string());
 
     let items_after = parse_query(&db, sf).module.items.len();
     assert_eq!(items_before, 1);
@@ -1936,21 +1933,26 @@ fn m5_index_access_expr() {
 
 #[test]
 fn m5_index_access_string_key() {
-    // WHY: `m["alice"]` must work too — map keys are not just integers.
-    let stmts = parse_fn_body(&wrap(r#"let x = m["alice"]"#));
+    // WHY: `m[`alice`]` must work — map keys are not just integers.
+    //
+    // test-ratchet: M7 P1 — backtick strings produce InterpolatedString, not StringLit.
+    // The index token is now a BacktickString token that parses to InterpolatedString.
+    let stmts = parse_fn_body(&wrap("let x = m[`alice`]"));
     match &stmts[0] {
         Stmt::Let { value: Expr::IndexAccess { index, .. }, .. } => {
-            assert!(matches!(**index, Expr::StringLit(_, _)));
+            assert!(matches!(**index, Expr::InterpolatedString(_, _)));
         }
-        other => panic!("expected IndexAccess with StringLit index, got {other:?}"),
+        other => panic!("expected IndexAccess with InterpolatedString index, got {other:?}"),
     }
 }
 
 #[test]
 fn m5_chained_index_access() {
-    // WHY: `m["alice"][0]` is an IndexAccess whose receiver is also IndexAccess.
+    // WHY: `m[`alice`][0]` is an IndexAccess whose receiver is also IndexAccess.
     // If chaining doesn't work, multi-dimensional access breaks.
-    let stmts = parse_fn_body(&wrap(r#"let x = m["alice"][0]"#));
+    //
+    // test-ratchet: M7 P1 — migrated to backtick syntax
+    let stmts = parse_fn_body(&wrap("let x = m[`alice`][0]"));
     match &stmts[0] {
         Stmt::Let { value: Expr::IndexAccess { receiver, .. }, .. } => {
             assert!(matches!(**receiver, Expr::IndexAccess { .. }));
@@ -1987,14 +1989,16 @@ fn m5_index_assign_stmt() {
 
 #[test]
 fn m5_index_assign_string_key() {
-    // WHY: `scores["alice"] = 90` is the map-write path. If string-keyed
+    // WHY: `scores[`alice`] = 90` is the map-write path. If string-keyed
     // index assign doesn't work, maps are read-only via bracket syntax.
-    let stmts = parse_fn_body(&wrap(r#"scores["alice"] = 90"#));
+    //
+    // test-ratchet: M7 P1 — backtick strings produce InterpolatedString, not StringLit.
+    let stmts = parse_fn_body(&wrap("scores[`alice`] = 90"));
     match &stmts[0] {
         Stmt::IndexAssign { index, value: Expr::IntLit(90, _), .. } => {
-            assert!(matches!(**index, Expr::StringLit(_, _)));
+            assert!(matches!(**index, Expr::InterpolatedString(_, _)));
         }
-        other => panic!("expected IndexAssign with StringLit key, got {other:?}"),
+        other => panic!("expected IndexAssign with InterpolatedString key, got {other:?}"),
     }
 }
 
@@ -2019,9 +2023,11 @@ fn m5_generic_call_one_type_arg() {
 
 #[test]
 fn m5_generic_call_two_type_args() {
-    // WHY: `pair<int, string>(1, "a")` tests multi-arg generic calls. If the
+    // WHY: `pair<int, string>(1, `a`)` tests multi-arg generic calls. If the
     // second type arg is dropped, the `B` parameter can't be inferred.
-    let stmts = parse_fn_body(&wrap(r#"let x = pair<int, string>(1, "a")"#));
+    //
+    // test-ratchet: M7 P1 — migrated to backtick syntax
+    let stmts = parse_fn_body(&wrap("let x = pair<int, string>(1, `a`)"));
     match &stmts[0] {
         Stmt::Let { value: Expr::Call(call), .. } => {
             let args = call.type_args.as_ref().expect("type_args must be Some");

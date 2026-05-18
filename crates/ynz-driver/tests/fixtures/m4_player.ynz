@@ -19,7 +19,7 @@ function consume(give p: Player) -> nothing {
 }
 
 function main() -> nothing {
-  let p: Player = { name: "Patrick", health: 100 }
+  let p: Player = { name: `Patrick`, health: 100 }
   p.greet()
   p.heal(20)
   print(p.health.toString())

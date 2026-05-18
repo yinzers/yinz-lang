@@ -206,6 +206,7 @@ Module {
                     start: 55,
                     end: 63,
                 },
+                errors_capable: false,
             },
         ),
         Function(
@@ -301,6 +302,7 @@ Module {
                     start: 116,
                     end: 120,
                 },
+                errors_capable: false,
             },
         ),
         Function(
@@ -592,6 +594,7 @@ Module {
                     start: 191,
                     end: 195,
                 },
+                errors_capable: false,
             },
         ),
     ],

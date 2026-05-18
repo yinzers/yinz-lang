@@ -19,12 +19,12 @@ function main() -> nothing {
   print(m.value)
 
   // WHY: maybe type with wrong inner type
-  let bad: maybe<int> = "hello"
+  let bad: maybe<int> = `hello`
 
   // ── array<T> errors ───────────────────────────────────────────────────────
 
   // WHY: array element type mismatch
-  let mixed: array<int> = [1, "two", 3]
+  let mixed: array<int> = [1, `two`, 3]
 
   // WHY: calling a non-existent method on array
   let arr: array<int> = [1, 2, 3]
@@ -39,10 +39,10 @@ function main() -> nothing {
   // ── map<K,V> errors ───────────────────────────────────────────────────────
 
   // WHY: duplicate key in map literal
-  let dupes: map<string, int> = { "alice": 1, "alice": 2 }
+  let dupes: map<string, int> = { `alice`: 1, `alice`: 2 }
 
   // WHY: dot access on map (should use bracket syntax)
-  let scores: map<string, int> = { "alice": 90 }
+  let scores: map<string, int> = { `alice`: 90 }
   print(scores.alice)
 
   // ── generic function errors ───────────────────────────────────────────────

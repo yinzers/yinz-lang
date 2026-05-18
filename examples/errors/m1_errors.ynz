@@ -8,13 +8,13 @@
 // WHY: banned-keyword diagnostic for `fn` — Yinz uses `function` keyword.
 //      Tests the lexer's banned-jargon path (lexer recovers as Identifier).
 fn shouldBeFunction() -> nothing {
-  print("never reached")
+  print(`never reached`)
 }
 
 // WHY: unterminated string literal. Tests the lexer's recovery path —
 //      diagnostic at the opening quote span; lexer continues to next sensible boundary.
 function unterminated() -> nothing {
-  print("missing closing quote
+  print(`missing closing quote
 }
 
 // WHY: unknown character `$` in source. Tests the lexer's unknown-byte recovery.
@@ -25,7 +25,7 @@ function unknownChar() -> nothing {
 // WHY: type mismatch — function declares `-> nothing` but the body returns a string.
 //      Tests typeck's return-type check against function signature.
 function typeMismatch() -> nothing {
-  return "this is a string"
+  return `this is a string"
 }
 
 // WHY: missing body — `function name() -> nothing` with no `{` body.

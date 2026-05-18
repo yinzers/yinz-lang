@@ -865,6 +865,17 @@ impl<'b> Checker<'b> {
             Expr::Is { expr: inner, ty: type_path, span } => {
                 self.check_is_expr(inner, type_path, span)
             }
+            // M7 P1: interpolated string — deferred full lowering arrives in M7 P2.
+            // For now, check each interpolated sub-expression for type errors and
+            // return Type::String so callers can proceed without cascading errors.
+            Expr::InterpolatedString(parts, _) => {
+                for part in parts {
+                    if let ynz_ast::nodes::StringPart::Expr(e, _) = part {
+                        self.infer_expr(e, None);
+                    }
+                }
+                Type::String
+            }
         };
 
         self.expr_types.insert((expr.span().start, expr.span().end), ty.clone());
@@ -1705,6 +1716,8 @@ impl<'b> Checker<'b> {
                     Type::Union { variants: resolved }
                 }
             }
+            // M7 P1: `-> T errors` — resolve the inner type; full error typeck arrives in P3a.
+            AstType::ErrorCapable { inner, .. } => self.ast_type_to_type(inner),
         }
     }
 
@@ -2293,6 +2306,18 @@ impl<'b> Checker<'b> {
             let key_repr = match key_expr {
                 Expr::StringLit(bytes, _) => Some(String::from_utf8_lossy(bytes).to_string()),
                 Expr::IntLit(n, _) => Some(n.to_string()),
+                // M7: backtick strings with no interpolation are pure literals — check for duplicates.
+                Expr::InterpolatedString(parts, _) => {
+                    if parts.len() == 1 {
+                        if let ynz_ast::nodes::StringPart::Lit(bytes, _) = &parts[0] {
+                            Some(String::from_utf8_lossy(bytes).to_string())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
                 _ => None,
             };
             if let Some(key_str) = key_repr {
@@ -2581,6 +2606,11 @@ fn expr_has_error(expr: &Expr) -> bool {
         Expr::MapLit { entries, .. } => entries.iter().any(|(k, v)| expr_has_error(k) || expr_has_error(v)),
         // M6: is-expression — propagate into the scrutinee.
         Expr::Is { expr, .. } => expr_has_error(expr),
+        // M7: interpolated string — propagate into each interpolated sub-expression.
+        Expr::InterpolatedString(parts, _) => parts.iter().any(|p| match p {
+            ynz_ast::nodes::StringPart::Lit(_, _) => false,
+            ynz_ast::nodes::StringPart::Expr(e, _) => expr_has_error(e),
+        }),
     }
 }
 
@@ -2714,6 +2744,8 @@ mod tests {
                 },
                 span: span(0, 57),
                 name_span: span(9, 13),
+                // test-ratchet: M7 P1 adds errors_capable field to FunctionDecl
+                errors_capable: false,
             })],
             span: span(0, 57),
         };

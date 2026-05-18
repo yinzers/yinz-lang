@@ -21,6 +21,14 @@ struct Lexer<'src> {
     pos: usize,
     tokens: Vec<Spanned<Token>>,
     diags: DiagnosticBucket,
+    /// Brace depth per open interpolation. Pushed 0 on `${`, popped on matching `}`.
+    /// If non-empty, any `{` increments the top; any `}` either decrements the top
+    /// (inner block) or pops + emits InterpolationEnd (when top == 0).
+    interp_depth_stack: Vec<u32>,
+    /// When true, `run()` must call `lex_backtick_segment()` before the next
+    /// normal lex cycle — we just closed an interpolation and are back inside
+    /// the surrounding backtick string literal.
+    after_interp_end: bool,
 }
 
 impl<'src> Lexer<'src> {
@@ -31,11 +39,21 @@ impl<'src> Lexer<'src> {
             pos: 0,
             tokens: Vec::new(),
             diags: DiagnosticBucket::new(),
+            interp_depth_stack: Vec::new(),
+            after_interp_end: false,
         }
     }
 
     fn run(&mut self) {
         loop {
+            // After closing an interpolation, re-enter backtick string mode.
+            // The opening backtick was already consumed; we're continuing
+            // inside the same string without a fresh `\`` at the start.
+            if self.after_interp_end {
+                self.after_interp_end = false;
+                self.lex_backtick_content(); // does NOT consume an opening backtick
+                continue;
+            }
             self.skip_whitespace_and_comments();
             if self.pos >= self.src.len() {
                 self.push_token(Token::Eof, self.pos, self.pos);
@@ -84,11 +102,32 @@ impl<'src> Lexer<'src> {
             }
             b'{' => {
                 self.pos += 1;
+                // Track nesting inside active interpolations so inner `{` blocks
+                // (e.g. `if` bodies) don't accidentally close the interpolation.
+                if !self.interp_depth_stack.is_empty() {
+                    *self.interp_depth_stack.last_mut().unwrap() += 1;
+                }
                 self.push_token(Token::LBrace, start, self.pos);
             }
             b'}' => {
                 self.pos += 1;
-                self.push_token(Token::RBrace, start, self.pos);
+                match self.interp_depth_stack.last_mut() {
+                    Some(depth) if *depth > 0 => {
+                        // Inner block close — decrement nesting counter.
+                        *depth -= 1;
+                        self.push_token(Token::RBrace, start, self.pos);
+                    }
+                    Some(_) => {
+                        // depth == 0: this `}` closes the interpolation.
+                        self.interp_depth_stack.pop();
+                        self.push_token(Token::InterpolationEnd, start, self.pos);
+                        self.after_interp_end = true;
+                    }
+                    None => {
+                        // Normal block close — not inside any interpolation.
+                        self.push_token(Token::RBrace, start, self.pos);
+                    }
+                }
             }
             b'[' => {
                 self.pos += 1;
@@ -257,7 +296,9 @@ impl<'src> Lexer<'src> {
             }
 
 
-            b'"' => self.lex_string(start),
+            b'"' => self.lex_double_quote_error(start),
+
+            b'`' => self.lex_backtick_segment(),
 
 
             b'0'..=b'9' => self.lex_number(start),
@@ -318,6 +359,8 @@ impl<'src> Lexer<'src> {
             // M6 keywords
             "options" => Token::Options,
             "is"      => Token::Is,
+            // M7 keywords
+            "errors"  => Token::Errors,
             // M4 banned declaration keywords — redirect to Yinz equivalents
             "type" => {
                 self.emit_banned_declaration_keyword(start, self.pos, "type",
@@ -377,46 +420,130 @@ impl<'src> Lexer<'src> {
     }
 
 
-    fn lex_string(&mut self, start: usize) {
+    /// M7: double-quoted strings are not valid Yinz syntax. Redirect to backticks.
+    ///
+    /// Advances past the entire `"..."` content for error recovery, emits a
+    /// teaching diagnostic, then produces an empty `BacktickString` token so
+    /// downstream parsing can continue without cascading errors.
+    fn lex_double_quote_error(&mut self, start: usize) {
         self.pos += 1; // skip opening `"`
-        let content_start = self.pos;
+        // Consume the string content so we can give a recovery token after the error.
+        while self.pos < self.src.len()
+            && self.src[self.pos] != b'"'
+            && self.src[self.pos] != b'\n'
+        {
+            self.pos += 1;
+        }
+        if self.pos < self.src.len() && self.src[self.pos] == b'"' {
+            self.pos += 1; // skip closing `"`
+        }
+        self.diags.push(Diagnostic::error(
+            SourceSpan::new(self.file, start, self.pos),
+            "Double-quoted strings don't exist in Yinz.",
+            "Use backtick strings instead: `` `hello` `` or `` `Hello ${name}` ``",
+            "Yinz has one string form — backtick-quoted strings. They always support \
+             interpolation and span multiple lines without extra syntax.",
+        ));
+        // Emit an empty BacktickString so the parser sees a string token and can recover.
+        self.push_token(Token::BacktickString(vec![]), start, self.pos);
+    }
+
+    /// Entry point from `lex_one` — current position is at the opening `` ` ``.
+    /// Consumes the backtick, then delegates to `lex_backtick_content`.
+    fn lex_backtick_segment(&mut self) {
+        // Consume the opening backtick.
+        debug_assert!(self.src.get(self.pos) == Some(&b'`'), "lex_backtick_segment called without leading backtick");
+        self.pos += 1;
+        self.lex_backtick_content();
+    }
+
+    /// Lex one contiguous literal segment of a backtick string starting from
+    /// the current position (which is INSIDE the string, after the opening backtick).
+    ///
+    /// Called either from `lex_backtick_segment` (after consuming the opening `` ` ``)
+    /// or from `run()` after an interpolation closes (`after_interp_end` path).
+    ///
+    /// Exits on:
+    ///   - closing `` ` `` (end of string) — consumes it and emits `BacktickString`
+    ///   - `${` (start of interpolation) — emits `BacktickString` + `InterpolationStart`, pushes depth 0
+    ///   - EOF (unterminated string) — emits diagnostic + `BacktickString`
+    fn lex_backtick_content(&mut self) {
+        let seg_start = self.pos;
+        let mut bytes: Vec<u8> = Vec::new();
 
         loop {
             if self.pos >= self.src.len() {
                 self.diags.push(Diagnostic::error(
-                    SourceSpan::new(self.file, start, start + 1),
-                    "A string literal is missing its closing quote.",
-                    "Add `\"` at the end of the string.",
-                    "String literals must start and end with double-quote characters.",
+                    SourceSpan::new(self.file, seg_start, self.pos),
+                    "A backtick string is missing its closing backtick.",
+                    "Add a closing `` ` `` at the end of the string.",
+                    "Backtick strings start and end with `` ` ``. Multi-line strings \
+                     are fine — just make sure the string has a closing backtick.",
                 ));
-                let bytes = self.src[content_start..self.pos].to_vec();
-                self.push_token(Token::StringLit(bytes), start, self.pos);
+                self.push_token(Token::BacktickString(bytes), seg_start, self.pos);
                 return;
             }
 
             match self.src[self.pos] {
-                b'"' => {
-                    let bytes = self.src[content_start..self.pos].to_vec();
-                    self.pos += 1; // skip closing `"`
-                    self.push_token(Token::StringLit(bytes), start, self.pos);
+                b'`' => {
+                    // End of string — emit the final literal segment and consume the backtick.
+                    self.push_token(Token::BacktickString(bytes), seg_start, self.pos);
+                    self.pos += 1;
                     return;
                 }
-                b'\n' => {
-                    self.diags.push(Diagnostic::error(
-                        SourceSpan::new(self.file, start, start + 1),
-                        "A string literal is missing its closing quote.",
-                        "Add `\"` before the end of the line.",
-                        "String literals cannot span multiple lines.",
-                    ));
-                    let bytes = self.src[content_start..self.pos].to_vec();
-                    self.push_token(Token::StringLit(bytes), start, self.pos);
-                    return;
+                b'$' if self.peek(1) == Some(b'{') => {
+                    // Start of interpolation — emit what we have so far, then the marker.
+                    self.push_token(Token::BacktickString(bytes), seg_start, self.pos);
+                    let interp_start = self.pos;
+                    self.pos += 2; // skip `${`
+                    self.push_token(Token::InterpolationStart, interp_start, self.pos);
+                    self.interp_depth_stack.push(0);
+                    return; // return to normal lex mode for the interpolated expression
                 }
-                _ => {
+                b'\\' => {
+                    self.pos += 1;
+                    if self.pos >= self.src.len() {
+                        self.diags.push(Diagnostic::error(
+                            SourceSpan::new(self.file, self.pos - 1, self.pos),
+                            "A string escape sequence is incomplete.",
+                            "Add the character after `\\`, e.g. `\\n` for newline or `\\\\` for a literal backslash.",
+                            "Every `\\` in a string must be followed by an escape character: \
+                             `\\n`, `\\t`, `\\\\`, `` \\` ``, `\\${{`, `\\r`, or `\\0`.",
+                        ));
+                        break;
+                    }
+                    match self.src[self.pos] {
+                        b'`'  => { bytes.push(b'`');  self.pos += 1; }
+                        b'n'  => { bytes.push(b'\n'); self.pos += 1; }
+                        b't'  => { bytes.push(b'\t'); self.pos += 1; }
+                        b'\\' => { bytes.push(b'\\'); self.pos += 1; }
+                        b'r'  => { bytes.push(b'\r'); self.pos += 1; }
+                        b'0'  => { bytes.push(b'\0'); self.pos += 1; }
+                        b'$' if self.peek(1) == Some(b'{') => {
+                            // `\${` — literal `${` (not an interpolation)
+                            bytes.push(b'$');
+                            bytes.push(b'{');
+                            self.pos += 2;
+                        }
+                        other => {
+                            self.diags.push(Diagnostic::error(
+                                SourceSpan::new(self.file, self.pos - 1, self.pos + 1),
+                                format!("Unknown escape sequence `\\{}`.", other as char),
+                                "Valid escape sequences: `\\n`, `\\t`, `\\\\`, `` \\` ``, `\\${{`, `\\r`, `\\0`.",
+                                "Each `\\` must be followed by one of the listed characters.",
+                            ));
+                            bytes.push(other);
+                            self.pos += 1;
+                        }
+                    }
+                }
+                b => {
+                    bytes.push(b);
                     self.pos += 1;
                 }
             }
         }
+        self.push_token(Token::BacktickString(bytes), seg_start, self.pos);
     }
 
 

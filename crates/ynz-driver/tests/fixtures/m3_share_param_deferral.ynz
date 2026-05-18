@@ -5,6 +5,6 @@ function greet(share name: string) -> nothing {
 }
 
 function main() -> nothing {
-  let n = "world"
+  let n = `world`
   greet(n)
 }

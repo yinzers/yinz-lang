@@ -12,7 +12,7 @@ function value(share self: Counter) -> int {
 }
 
 function main() -> nothing {
-  let c: Counter = { name: "clicks" }
+  let c: Counter = { name: `clicks` }
   c.increment()
   c.increment()
   c.increment()

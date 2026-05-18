@@ -4,6 +4,6 @@ shape Wallet {
 }
 
 function main() -> nothing {
-  let w: Wallet = { owner: "Alice" }
+  let w: Wallet = { owner: `Alice` }
   print(w.balance)
 }

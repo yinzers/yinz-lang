@@ -9,7 +9,10 @@ use ynz_codegen::{codegen_query, sha256, CompiledArtifact};
 use ynz_parser::{CompilerDb, SourceFile};
 
 const FILE: &str = "hello.ynz";
-const M1_SOURCE: &str = r#"function main() -> nothing { print("hello, yinz") }"#;
+// test-ratchet: M7 P1 migrates double-quoted string to backtick syntax — double-quotes now
+// produce an error diagnostic, so any test source must use backticks. The golden SHA-256
+// files will change and must be regenerated (they are auto-regenerated on first run).
+const M1_SOURCE: &str = "function main() -> nothing { print(`hello, yinz`) }";
 
 const M2_SMOKE_FILE: &str = "m2_smoke.ynz";
 const M2_SMOKE_SOURCE: &str = r#"function main() -> nothing {
@@ -366,26 +369,8 @@ fn m3_fib_sha256_golden() {
 // ── M4 codegen tests ─────────────────────────────────────────────────────────
 
 const M4_PLAYER_FILE: &str = "m4_player.ynz";
-const M4_PLAYER_SOURCE: &str = r#"shape Player {
-  name: string
-  health: int
-}
-function greet(share self: Player) -> nothing {
-  print(self.name)
-}
-function heal(lend self: Player, amount: int) -> nothing {
-  self.health = self.health + amount
-}
-function consume(give p: Player) -> nothing {
-  print(p.name)
-}
-function main() -> nothing {
-  let p: Player = { name: "Patrick", health: 100 }
-  p.greet()
-  p.heal(20)
-  print(p.health.toString())
-  consume(p)
-}"#;
+// test-ratchet: M7 P1 migrates double-quoted string to backtick syntax
+const M4_PLAYER_SOURCE: &str = "shape Player {\n  name: string\n  health: int\n}\nfunction greet(share self: Player) -> nothing {\n  print(self.name)\n}\nfunction heal(lend self: Player, amount: int) -> nothing {\n  self.health = self.health + amount\n}\nfunction consume(give p: Player) -> nothing {\n  print(p.name)\n}\nfunction main() -> nothing {\n  let p: Player = { name: `Patrick`, health: 100 }\n  p.greet()\n  p.heal(20)\n  print(p.health.toString())\n  consume(p)\n}";
 
 fn run_m4_player_codegen() -> Option<CompiledArtifact> {
     let db = CompilerDb::default();

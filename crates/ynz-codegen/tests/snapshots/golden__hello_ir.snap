@@ -17,7 +17,7 @@ target triple = "x86_64-pc-linux-gnu"
 @.panic.irem = private unnamed_addr constant [24 x i8] c"remainder by zero (int)\00"
 @.panic.ddiv = private unnamed_addr constant [26 x i8] c"division by zero (number)\00"
 @.panic.drem = private unnamed_addr constant [27 x i8] c"remainder by zero (number)\00"
-@str = private unnamed_addr constant [12 x i8] c"hello, yinz\00"
+@bts = private unnamed_addr constant [12 x i8] c"hello, yinz\00"
 
 declare i32 @puts(ptr)
 
@@ -105,7 +105,7 @@ declare ptr @ynz_string_from_static(ptr, i64)
 define i32 @main() {
 entry:
   call void @ynz_siphash_init()
-  %puts = call i32 @puts(ptr @str)
+  %puts = call i32 @puts(ptr @bts)
   ret i32 0
 }
 

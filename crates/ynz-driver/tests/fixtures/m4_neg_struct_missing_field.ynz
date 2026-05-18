@@ -4,6 +4,6 @@ shape Player {
 }
 
 function main() -> nothing {
-  let p: Player = { name: "Alice" }
+  let p: Player = { name: `Alice` }
   print(p.name)
 }

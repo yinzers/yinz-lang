@@ -1,6 +1,5 @@
 ---
 source: crates/ynz-parser/tests/parse.rs
-assertion_line: 638
 expression: output.module
 ---
 Module {
@@ -26,23 +25,32 @@ Module {
                                     ),
                                     type_args: None,
                                     args: [
-                                        StringLit(
+                                        InterpolatedString(
                                             [
-                                                104,
-                                                101,
-                                                108,
-                                                108,
-                                                111,
-                                                44,
-                                                32,
-                                                121,
-                                                105,
-                                                110,
-                                                122,
+                                                Lit(
+                                                    [
+                                                        104,
+                                                        101,
+                                                        108,
+                                                        108,
+                                                        111,
+                                                        44,
+                                                        32,
+                                                        121,
+                                                        105,
+                                                        110,
+                                                        122,
+                                                    ],
+                                                    SourceSpan {
+                                                        file: "test.ynz",
+                                                        start: 36,
+                                                        end: 47,
+                                                    },
+                                                ),
                                             ],
                                             SourceSpan {
                                                 file: "test.ynz",
-                                                start: 35,
+                                                start: 36,
                                                 end: 48,
                                             },
                                         ),
@@ -72,6 +80,7 @@ Module {
                     start: 9,
                     end: 13,
                 },
+                errors_capable: false,
             },
         ),
     ],
