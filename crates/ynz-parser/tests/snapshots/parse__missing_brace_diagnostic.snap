@@ -7,6 +7,18 @@ expression: output.diagnostics
         severity: Error,
         span: SourceSpan {
             file: "test.ynz",
+            start: 35,
+            end: 39,
+        },
+        what: "Double-quoted strings don't exist in Yinz.",
+        what_instead: "Use backtick strings instead: `` `hello` `` or `` `Hello ${name}` ``",
+        why: "Yinz has one string form — backtick-quoted strings. They always support interpolation and span multiple lines without extra syntax.",
+        related: [],
+    },
+    Diagnostic {
+        severity: Error,
+        span: SourceSpan {
+            file: "test.ynz",
             start: 40,
             end: 40,
         },

@@ -1,8 +1,8 @@
 function main() -> nothing {
-  let scores: map<string, int> = { "alice": 90, "bob": 85 }
-  print(scores["alice"].or(0))
-  print(scores["bob"].or(0))
-  scores["alice"] = 95
-  print(scores["alice"].or(0))
+  let scores: map<string, int> = { `alice`: 90, `bob`: 85 }
+  print(scores[`alice`].or(0))
+  print(scores[`bob`].or(0))
+  scores[`alice`] = 95
+  print(scores[`alice`].or(0))
   print(scores.count())
 }

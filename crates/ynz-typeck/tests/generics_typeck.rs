@@ -3,6 +3,9 @@
 // checking, and field access through generic shapes. A regression in any of
 // these surfaces would silently break the codegen monomorphization pass (P4a)
 // which consumes the table without re-verifying the type-checking invariants.
+//
+// test-ratchet: M7 P1 — all double-quoted string literals in Yinz source strings
+// replaced with backtick strings. Double-quotes now produce an error diagnostic.
 
 use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::{check_query, CheckOutput, Type};
@@ -84,10 +87,10 @@ function main() -> nothing { let n = identity(5) }
 
 #[test]
 fn m5_inference_identity_string() {
-    // WHY: acceptance criterion — `identity("hello")` must record `[String]`.
+    // WHY: acceptance criterion — `identity(`hello`)` must record `[String]`.
     let out = check_no_diags(r#"
 function identity<T>(give value: T) -> T { return value }
-function main() -> nothing { let s = identity("hello") }
+function main() -> nothing { let s = identity(`hello`) }
 "#);
     let key = out.mono_table.entries.keys()
         .find(|k| k.fn_name == "identity")
@@ -97,10 +100,10 @@ function main() -> nothing { let s = identity("hello") }
 
 #[test]
 fn m5_inference_two_type_params() {
-    // WHY: acceptance criterion — `pair(5, "hello")` must record `(pair, [int, string])`.
+    // WHY: acceptance criterion — `pair(5, `hello`)` must record `(pair, [int, string])`.
     let out = check_no_diags(r#"
 function pair<A, B>(give first: A, give second: B) -> A { return first }
-function main() -> nothing { let p = pair(5, "hello") }
+function main() -> nothing { let p = pair(5, `hello`) }
 "#);
     let key = out.mono_table.entries.keys()
         .find(|k| k.fn_name == "pair")
@@ -117,7 +120,7 @@ fn m5_multiple_distinct_instantiations_both_recorded() {
 function identity<T>(give value: T) -> T { return value }
 function main() -> nothing {
   let n = identity(5)
-  let s = identity("hello")
+  let s = identity(`hello`)
 }
 "#);
     let entries: Vec<_> = out.mono_table.entries.keys()
@@ -164,7 +167,7 @@ fn m5_explicit_type_arg_string() {
     // WHY: acceptance criterion — `identity<string>("hello")` records `[string]`.
     let out = check_no_diags(r#"
 function identity<T>(give value: T) -> T { return value }
-function main() -> nothing { let s = identity<string>("hello") }
+function main() -> nothing { let s = identity<string>(`hello`) }
 "#);
     let key = out.mono_table.entries.keys()
         .find(|k| k.fn_name == "identity")
@@ -225,7 +228,7 @@ function compare(share self: Player, share other: Player) -> int {
 }
 function sort<T follows Comparable>(share item: T) -> T { return item }
 function main() -> nothing {
-  const p: Player = { name: "Alice", score: 100 }
+  const p: Player = { name: `Alice`, score: 100 }
   let q = sort(p)
 }
 "#);
@@ -244,7 +247,7 @@ shape Player {
 }
 function sort<T follows Comparable>(share item: T) -> T { return item }
 function main() -> nothing {
-  const p: Player = { name: "Alice" }
+  const p: Player = { name: `Alice` }
   let q = sort(p)
 }
 "#, 1);
@@ -261,7 +264,7 @@ shape Comparable {
 shape Player { name: string }
 function sort<T follows Comparable>(share item: T) -> T { return item }
 function main() -> nothing {
-  const p: Player = { name: "Alice" }
+  const p: Player = { name: `Alice` }
   let q = sort(p)
 }
 "#);
@@ -308,7 +311,7 @@ fn m5_field_access_through_generic_shape() {
 shape Pair<A, B> { first: A  second: B }
 function mkPair<A, B>(give first: A, give second: B) -> A { return first }
 function main() -> nothing {
-  let x = mkPair(5, "hello")
+  let x = mkPair(5, `hello`)
 }
 "#);
 }
@@ -321,7 +324,7 @@ fn m5_field_access_wrong_field_on_generic_shape_error() {
     let out = check(r#"
 shape Pair<A, B> { first: A  second: B }
 function main() -> nothing {
-  let p: Pair<int, string> = { first: 5, second: "hi" }
+  let p: Pair<int, string> = { first: 5, second: `hi` }
   let x = p.third
 }
 "#);
@@ -354,7 +357,7 @@ fn m5_non_generic_fn_still_typechecks() {
     // type-checking. This is the basic M4 regression guard.
     check_no_diags(r#"
 function greet(name: string) -> string { return name }
-function main() -> nothing { let s = greet("Alice") }
+function main() -> nothing { let s = greet(`Alice`) }
 "#);
 }
 
@@ -372,7 +375,7 @@ function takeDamage(lend self: Player, amount: int) -> nothing {
   self.health = self.health
 }
 function main() -> nothing {
-  let p: Player = { name: "Bob", health: 100 }
+  let p: Player = { name: `Bob`, health: 100 }
   p.takeDamage(10)
 }
 "#);

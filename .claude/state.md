@@ -11,6 +11,7 @@
 <!-- RADAR-START -->
 - m7-strings-errors-iterables (patrick) — 13 files touched — 12/124 done — 2026-05-18-r2
 - v0-1-compiler (patrick) — 5 files touched — 0/184 done — 2026-05-12-r4
+- v0-24-bundled-dist (patrick) — 6 files touched — 0/28 done — 2026-05-18
 <!-- RADAR-END -->
 
 ---

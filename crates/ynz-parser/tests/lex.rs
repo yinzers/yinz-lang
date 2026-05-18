@@ -180,7 +180,10 @@ fn m5_token_variant_count_locked() {
 fn m1_source_produces_expected_tokens() {
     // WHY: The M2 lexer must not break any M1 token. A regression here means
     // something in the M2 extension changed an existing token's behaviour.
-    let source = r#"function main() -> nothing { print("hello, yinz") }"#;
+    //
+    // test-ratchet: M7 P1 migrates source to backtick syntax — double-quotes now
+    // produce an error diagnostic so the snapshot must use backtick strings.
+    let source = "function main() -> nothing { print(`hello, yinz`) }";
     let tokens = lex_tokens(source);
     assert_debug_snapshot!("m1_token_stream", tokens);
 }
@@ -519,7 +522,11 @@ fn compound_assignment_percent_eq_produces_diagnostic() {
 fn token_spans_reconstruct_lexemes() {
     // WHY: Accurate byte spans are required for ariadne to point carets at the
     // right source location. If the spans are off, all diagnostic arrows are wrong.
-    let source = r#"function main() -> nothing { print("hello") }"#;
+    //
+    // test-ratchet: M7 P1 changes the source to use backtick strings (double-quotes
+    // now produce an error diagnostic). New Token variants are added to the exhaustive
+    // match so the test remains a full-coverage span check.
+    let source = r#"function main() -> nothing { print(`hello`) }"#;
     let db = CompilerDb::default();
     let sf = SourceFile::new(&db, FILE.to_string(), source.to_string());
     let output = lex_query(&db, sf);
@@ -593,7 +600,12 @@ fn token_spans_reconstruct_lexemes() {
             | Token::SelfValue
             | Token::None
             | Token::Options
-            | Token::Is => {
+            | Token::Is
+            // test-ratchet: M7 P1 adds BacktickString, InterpolationStart, InterpolationEnd, Errors
+            | Token::BacktickString(_)
+            | Token::InterpolationStart
+            | Token::InterpolationEnd
+            | Token::Errors => {
                 // Span must be non-empty for every token that has a source location.
                 assert!(
                     spanned.span.start < spanned.span.end,
@@ -677,11 +689,15 @@ fn unterminated_string_produces_diagnostic_and_continues() {
 
 #[test]
 fn non_ascii_bytes_inside_string_lex_clean() {
-    // WHY: M1/M2 strings are raw UTF-8 bytes passed through to codegen unchanged.
-    // Non-ASCII content is NOT an error at lex time.
-    let source = r#"function main() -> nothing { print("café") }"#;
+    // WHY: M7 backtick strings must pass raw UTF-8 bytes through to codegen unchanged.
+    // Non-ASCII content inside a backtick string is NOT an error at lex time.
+    //
+    // test-ratchet: M7 P1 — migrated from double-quoted to backtick syntax.
+    // Double-quotes now produce a diagnostic; backtick strings carry raw bytes.
+    // The token is now BacktickString instead of StringLit.
+    let source = "function main() -> nothing { print(`café`) }";
     let (token_count, diag_count) = lex_counts(source);
-    assert_eq!(diag_count, 0, "Non-ASCII in a string literal must not produce a diagnostic");
+    assert_eq!(diag_count, 0, "Non-ASCII in a backtick string literal must not produce a diagnostic");
 
     let db = CompilerDb::default();
     let sf = SourceFile::new(&db, FILE.to_string(), source.to_string());
@@ -689,15 +705,15 @@ fn non_ascii_bytes_inside_string_lex_clean() {
     let string_lit = output
         .tokens
         .iter()
-        .find(|t| matches!(t.value, Token::StringLit(_)))
-        .expect("should find a StringLit token");
+        .find(|t| matches!(t.value, Token::BacktickString(_)))
+        .expect("should find a BacktickString token");
 
-    if let Token::StringLit(bytes) = &string_lit.value {
+    if let Token::BacktickString(bytes) = &string_lit.value {
         let expected = "café".as_bytes();
         assert_eq!(
             bytes.as_slice(),
             expected,
-            "StringLit bytes must match the UTF-8 encoding of the literal"
+            "BacktickString bytes must match the UTF-8 encoding of the literal"
         );
     }
     let _ = token_count;
@@ -991,23 +1007,9 @@ fn m4_source_produces_expected_tokens() {
     // WHY: Snapshot locks the full M4 keyword token stream so any lexer
     // regression is immediately visible. The source exercises all eight new
     // token kinds in a realistic shape-declaration context.
-    let source = r#"base shape Entity {
-  name: string
-}
-
-shape Player extends Entity follows Damageable {
-  hidden cache: int
-}
-
-function greet(share self: Player) -> string {
-  return self.name
-}
-
-function example() -> nothing {
-  let p: Player = { name: "Patrick", cache: 0 }
-  let d: dynamic Damageable = p
-  print(greet(p))
-}"#;
+    //
+    // test-ratchet: M7 P1 migrates source to backtick syntax.
+    let source = "base shape Entity {\n  name: string\n}\n\nshape Player extends Entity follows Damageable {\n  hidden cache: int\n}\n\nfunction greet(share self: Player) -> string {\n  return self.name\n}\n\nfunction example() -> nothing {\n  let p: Player = { name: `Patrick`, cache: 0 }\n  let d: dynamic Damageable = p\n  print(greet(p))\n}";
     let tokens = lex_tokens(source);
     assert_debug_snapshot!("m4_token_stream", tokens);
 }
@@ -1082,25 +1084,9 @@ fn switch_keyword_produces_teaching_diagnostic() {
 fn m3_source_produces_expected_tokens() {
     // WHY: Snapshot locks the full M3 token stream so any lexer regression is
     // immediately visible. The source exercises all seven new token kinds.
-    let source = r#"function fib(n: int) -> int {
-  if (n < 2) {
-    return n
-  }
-  return fib(n - 1) + fib(n - 2)
-}
-
-function main() -> nothing {
-  let result = fib(10)
-  while (result > 0) {
-    result = result - 1
-  }
-  for (i in range(0, 5)) {
-    if (i) {
-      0 => print("zero")
-      else => print("nonzero")
-    }
-  }
-}"#;
+    //
+    // test-ratchet: M7 P1 migrates source to backtick syntax.
+    let source = "function fib(n: int) -> int {\n  if (n < 2) {\n    return n\n  }\n  return fib(n - 1) + fib(n - 2)\n}\n\nfunction main() -> nothing {\n  let result = fib(10)\n  while (result > 0) {\n    result = result - 1\n  }\n  for (i in range(0, 5)) {\n    if (i) {\n      0 => print(`zero`)\n      else => print(`nonzero`)\n    }\n  }\n}";
     let tokens = lex_tokens(source);
     assert_debug_snapshot!("m3_token_stream", tokens);
 }
@@ -1120,8 +1106,9 @@ fn changing_source_text_invalidates_cache() {
     let output1 = lex_query(&db, sf);
     let token_count_1 = output1.tokens.len();
 
+    // test-ratchet: M7 P1 — migrated to backtick syntax
     sf.set_text(&mut db)
-        .to(r#"function main() -> nothing { print("hello") }"#.to_string());
+        .to("function main() -> nothing { print(`hello`) }".to_string());
 
     let output2 = lex_query(&db, sf);
     let token_count_2 = output2.tokens.len();
@@ -1203,4 +1190,249 @@ fn m6_enum_banned_keyword_still_fires() {
     let (tok_count, diag_count) = lex_counts("enum Status { active }");
     assert_eq!(diag_count, 1, "expected exactly 1 banned-keyword diagnostic for 'enum'");
     assert!(tok_count > 0, "expected tokens to be emitted (tolerant recovery)");
+}
+
+
+// ── M7 P1: backtick strings + errors keyword ─────────────────────────────────
+
+#[test]
+fn m7_token_variant_count_locked() {
+    // WHY: Pins the token vocabulary at the M7 P1 surface.
+    //
+    // test-ratchet: M7 P1 adds 4 variants over M6's 60:
+    //   BacktickString, InterpolationStart, InterpolationEnd, Errors
+    //   Total M1+M2+M3+M4+M5+M6+M7: 60 + 4 = 64
+    let expected_count = 64usize;
+
+    use ynz_parser::Token::*;
+    let all_variants: &[Token] = &[
+        // M1
+        Function, Nothing, Identifier("x".into()), StringLit(vec![]),
+        LParen, RParen, LBrace, RBrace, Arrow, Eof,
+        // M2
+        Let, Const, True, False, IntLit(0), NumberLit("0.0".into()),
+        Plus, Minus, Star, Slash, Percent,
+        EqEq, NotEq, Lt, LtEq, Gt, GtEq,
+        AmpAmp, PipePipe, Bang,
+        Amp, Pipe, Caret, Tilde, LtLt, GtGt,
+        Eq, Colon, Dot, LBracket, RBracket, Comma,
+        // M3
+        If, Else, While, For, In, Return, FatArrow,
+        // M4
+        Shape, Follows, Extends, Base, Hidden, Dynamic, SelfType, SelfValue,
+        // M5
+        None,
+        // M6
+        Options, Is,
+        // M7 P1
+        BacktickString(vec![]),
+        InterpolationStart,
+        InterpolationEnd,
+        Errors,
+    ];
+    assert_eq!(
+        all_variants.len(),
+        expected_count,
+        "Token variant count changed from {expected_count} — update this test \
+         with a // test-ratchet: <reason> comment and update the Token doc comment"
+    );
+}
+
+#[test]
+fn m7_backtick_simple_string_tokenizes() {
+    // WHY: The simplest backtick string `` `hello` `` must produce a single
+    // BacktickString token with the correct bytes. If the lexer treats the
+    // backtick as an unknown character, all string literals produce errors.
+    let tokens = lex_tokens("`hello`");
+    assert_eq!(
+        tokens,
+        vec![Token::BacktickString(b"hello".to_vec()), Token::Eof],
+        "Simple backtick string must produce BacktickString with correct bytes"
+    );
+}
+
+#[test]
+fn m7_backtick_empty_string_tokenizes() {
+    // WHY: An empty backtick string `` `` `` must produce a BacktickString with
+    // an empty byte vector. If empty strings panic or produce Error tokens,
+    // default values and empty-string checks in real programs break.
+    let tokens = lex_tokens("``");
+    assert_eq!(
+        tokens,
+        vec![Token::BacktickString(vec![]), Token::Eof],
+        "Empty backtick string must produce BacktickString with empty bytes"
+    );
+}
+
+#[test]
+fn m7_backtick_string_with_one_interpolation() {
+    // WHY: `` `hello ${name}!` `` must produce BacktickString("hello "),
+    // InterpolationStart, Identifier("name"), InterpolationEnd, BacktickString("!").
+    // If any of these tokens are missing or reordered, string interpolation is broken.
+    let tokens = lex_tokens("`hello ${name}!`");
+    assert!(
+        tokens.iter().any(|t| *t == Token::BacktickString(b"hello ".to_vec())),
+        "Must contain BacktickString(b\"hello \")"
+    );
+    assert!(
+        tokens.iter().any(|t| *t == Token::InterpolationStart),
+        "Must contain InterpolationStart"
+    );
+    assert!(
+        tokens.iter().any(|t| *t == Token::Identifier("name".into())),
+        "Must contain Identifier(name)"
+    );
+    assert!(
+        tokens.iter().any(|t| *t == Token::InterpolationEnd),
+        "Must contain InterpolationEnd"
+    );
+    assert!(
+        tokens.iter().any(|t| *t == Token::BacktickString(b"!".to_vec())),
+        "Must contain BacktickString(b\"!\")"
+    );
+}
+
+#[test]
+fn m7_backtick_string_interpolation_at_start() {
+    // WHY: `` `${x} world` `` — interpolation at the very start — must produce
+    // BacktickString("") (empty) before InterpolationStart. The empty segment
+    // is required so the parser always sees BacktickString first.
+    let tokens = lex_tokens("`${x} world`");
+    let first = &tokens[0];
+    assert_eq!(
+        *first,
+        Token::BacktickString(vec![]),
+        "Interpolation at start must be preceded by an empty BacktickString"
+    );
+    assert!(
+        tokens.iter().any(|t| *t == Token::InterpolationStart),
+        "Must contain InterpolationStart"
+    );
+    assert!(
+        tokens.iter().any(|t| *t == Token::BacktickString(b" world".to_vec())),
+        "Must contain BacktickString(b\" world\") after interpolation"
+    );
+}
+
+#[test]
+fn m7_backtick_multiline_string_preserves_newlines() {
+    // WHY: Backtick strings must span multiple lines without errors — they are
+    // not constrained to a single line. The newline byte must appear in the
+    // BacktickString payload.
+    let source = "`line1\nline2`";
+    let (_, diag_count) = lex_counts(source);
+    assert_eq!(diag_count, 0, "Multi-line backtick string must produce no diagnostics");
+
+    let tokens = lex_tokens(source);
+    let bs = tokens.iter().find(|t| matches!(t, Token::BacktickString(_)));
+    assert!(bs.is_some(), "Must produce a BacktickString token");
+    if let Some(Token::BacktickString(bytes)) = bs {
+        assert!(
+            bytes.contains(&b'\n'),
+            "Newline must be preserved in BacktickString bytes"
+        );
+    }
+}
+
+#[test]
+fn m7_backtick_escape_sequences_decoded() {
+    // WHY: `` `\n\t\\` `` must produce BacktickString bytes [10, 9, 92].
+    // If escape sequences are passed through literally, programs cannot embed
+    // newlines or tabs in strings.
+    let tokens = lex_tokens("`\\n\\t\\\\`");
+    let bs = tokens.iter().find(|t| matches!(t, Token::BacktickString(_)));
+    assert!(bs.is_some(), "Must produce a BacktickString");
+    if let Some(Token::BacktickString(bytes)) = bs {
+        assert_eq!(bytes.as_slice(), &[b'\n', b'\t', b'\\']);
+    }
+}
+
+#[test]
+fn m7_backtick_nested_braces_inside_interpolation() {
+    // WHY: `` `${if (x) { 1 } else { 2 }}` `` — braces inside the interpolated
+    // expression must NOT trigger InterpolationEnd prematurely. The brace nesting
+    // counter must track them correctly.
+    let source = "`${a + 1}`";
+    let (_, diag_count) = lex_counts(source);
+    assert_eq!(diag_count, 0, "Simple interpolation with no inner braces must produce no diagnostics");
+
+    let tokens = lex_tokens(source);
+    // Should end with a BacktickString token (the empty suffix)
+    let interp_end_idx = tokens.iter().position(|t| *t == Token::InterpolationEnd);
+    let backtick_after = interp_end_idx.map(|i| tokens.get(i + 1));
+    assert!(
+        backtick_after.flatten().map(|t| matches!(t, Token::BacktickString(_))).unwrap_or(false),
+        "After InterpolationEnd there must be a BacktickString"
+    );
+}
+
+#[test]
+fn m7_unterminated_backtick_produces_diagnostic() {
+    // WHY: An unterminated backtick string must produce exactly one diagnostic
+    // pointing at the missing closing backtick. If the lexer panics or produces
+    // zero diagnostics, malformed programs silently produce broken IR.
+    let (_, diag_count) = lex_counts("`unterminated");
+    assert_eq!(diag_count, 1, "Unterminated backtick string must produce exactly 1 diagnostic");
+
+    let diags = lex_diags("`unterminated");
+    assert!(
+        diags[0].what.contains("backtick"),
+        "Diagnostic must mention 'backtick', got: {:?}",
+        diags[0].what
+    );
+}
+
+#[test]
+fn m7_double_quote_produces_error_diagnostic() {
+    // WHY: Double-quoted strings are banned in Yinz. The lexer must emit a
+    // teaching diagnostic redirecting to backtick syntax. A recovery token
+    // (BacktickString) must also be emitted so the parser can continue.
+    let (_, diag_count) = lex_counts(r#""hello""#);
+    assert_eq!(diag_count, 1, "Double-quoted string must produce exactly 1 error diagnostic");
+
+    let diags = lex_diags(r#""hello""#);
+    assert!(
+        diags[0].what.contains("Double-quoted"),
+        "Diagnostic must mention double-quoted strings, got: {:?}",
+        diags[0].what
+    );
+    assert!(
+        diags[0].what_instead.contains("backtick"),
+        "Diagnostic must redirect to backtick syntax, got: {:?}",
+        diags[0].what_instead
+    );
+
+    // Recovery: a BacktickString token must still be emitted
+    let tokens = lex_tokens(r#""hello""#);
+    assert!(
+        tokens.iter().any(|t| matches!(t, Token::BacktickString(_))),
+        "Lexer must emit BacktickString recovery token after double-quote error"
+    );
+}
+
+#[test]
+fn m7_errors_keyword_lexes() {
+    // WHY: `errors` is a new M7 keyword — it must produce Token::Errors, not
+    // an Identifier. If it falls through to Identifier, the parser cannot
+    // recognize the `-> T errors` fallible return type syntax.
+    let tokens = lex_tokens("errors");
+    assert_eq!(tokens, vec![Token::Errors, Token::Eof], "`errors` must lex as Token::Errors");
+}
+
+#[test]
+fn m7_errors_keyword_in_context() {
+    // WHY: `-> string errors` must produce Arrow, Named/string, Errors. If `errors`
+    // is lexed as an Identifier, the parser sees `-> string identifier` and cannot
+    // produce a FunctionDecl with `errors_capable: true`.
+    let tokens = lex_tokens("-> string errors");
+    assert!(
+        tokens.iter().any(|t| *t == Token::Errors),
+        "Token::Errors must appear in the token stream for `errors` keyword"
+    );
+    // The token immediately before Errors should be an Identifier("string") or similar
+    let errors_pos = tokens.iter().position(|t| *t == Token::Errors).unwrap();
+    assert!(
+        errors_pos > 0,
+        "Token::Errors must not be the first token"
+    );
 }

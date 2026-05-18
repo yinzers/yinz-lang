@@ -17,7 +17,7 @@ target triple = "x86_64-pc-linux-gnu"
 @.panic.irem = private unnamed_addr constant [24 x i8] c"remainder by zero (int)\00"
 @.panic.ddiv = private unnamed_addr constant [26 x i8] c"division by zero (number)\00"
 @.panic.drem = private unnamed_addr constant [27 x i8] c"remainder by zero (number)\00"
-@str = private unnamed_addr constant [8 x i8] c"Patrick\00"
+@bts = private unnamed_addr constant [8 x i8] c"Patrick\00"
 
 declare i32 @puts(ptr)
 
@@ -156,7 +156,7 @@ entry:
   %Player = alloca { ptr, i64 }, align 8
   store { ptr, i64 } zeroinitializer, ptr %Player, align 8
   %name = getelementptr inbounds { ptr, i64 }, ptr %Player, i32 0, i32 0
-  store ptr @str, ptr %name, align 8
+  store ptr @bts, ptr %name, align 8
   %health = getelementptr inbounds { ptr, i64 }, ptr %Player, i32 0, i32 1
   store i64 100, ptr %health, align 8
   %p = alloca ptr, align 8

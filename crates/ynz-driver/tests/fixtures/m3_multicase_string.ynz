@@ -1,8 +1,8 @@
 function main() -> nothing {
-  let s = "hello"
+  let s = `hello`
   if (s) {
-    "hello" => print("got hello")
-    "world" => print("got world")
-    else => print("got other")
+    `hello` => print(`got hello`)
+    `world` => print(`got world`)
+    else => print(`got other`)
   }
 }

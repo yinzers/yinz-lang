@@ -138,6 +138,8 @@ impl ShapeTable {
                 let resolved: Vec<crate::types::Type> = variants.iter().map(|v| self.resolve_ast_type(v)).collect();
                 if resolved.len() < 2 { crate::types::Type::Error } else { crate::types::Type::Union { variants: resolved } }
             }
+            // M7 P1: `-> T errors` — resolve to the inner type (full error typeck deferred).
+            AstType::ErrorCapable { inner, .. } => self.resolve_ast_type(inner),
         }
     }
 }

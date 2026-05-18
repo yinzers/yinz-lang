@@ -2,6 +2,9 @@
 // three-part diagnostics. Catches regressions where typeck silently degrades to
 // one-line messages that leave the developer without a "what to do instead" or
 // "why" field.
+//
+// test-ratchet: M7 P1 — all double-quoted string literals in Yinz source strings
+// replaced with backtick strings. Double-quotes now produce an error diagnostic.
 
 use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::{check_query, CheckOutput, Type};
@@ -78,7 +81,7 @@ fn m1_source_type_checks_clean() {
     // WHY: if this test breaks, the hello-world integration test (Phase 7) breaks too.
     // The string-type assertion below is load-bearing — it proves type inference actually
     // ran and stored results, not just that no diagnostics were emitted.
-    let output = run(r#"function main() -> nothing { print("hello, yinz") }"#);
+    let output = run(r#"function main() -> nothing { print(`hello, yinz`) }"#);
     assert!(
         output.diagnostics.is_empty(),
         "M1 source must type-check with zero diagnostics, got: {:#?}",
@@ -474,7 +477,7 @@ fn empty_file_missing_main_produces_diagnostic() {
 
 #[test]
 fn main_with_wrong_return_type_produces_diagnostic() {
-    let output = run(r#"function main() -> string { print("hi") }"#);
+    let output = run(r#"function main() -> string { print(`hi`) }"#);
     assert!(
         !output.diagnostics.is_empty(),
         "Wrong return type on main must produce a diagnostic"
@@ -493,7 +496,7 @@ fn check_re_runs_when_source_changes() {
     let diag_count_before = check_query(&db, sf).diagnostics.len();
 
     sf.set_text(&mut db)
-        .to(r#"function main() -> nothing { print("hi") }"#.to_string());
+        .to(r#"function main() -> nothing { print(`hi`) }"#.to_string());
     let diag_count_after = check_query(&db, sf).diagnostics.len();
 
     assert!(diag_count_before > 0, "Empty file should have diagnostics");
@@ -601,9 +604,9 @@ fn m3_multi_case_int_type_checks_clean() {
         r#"function main() -> nothing {
   let x: int = 2
   if (x) {
-    1 => print("one")
-    2 => print("two")
-    else => print("other")
+    1 => print(`one`)
+    2 => print(`two`)
+    else => print(`other`)
   }
 }"#,
     );
@@ -616,10 +619,10 @@ fn m3_multi_case_string_type_checks_clean() {
     // in codegen). Typeck just checks pattern types match the scrutinee.
     assert_clean(
         r#"function main() -> nothing {
-  let s = "hello"
+  let s = `hello`
   if (s) {
-    "hello" => print("hi")
-    else => print("bye")
+    `hello` => print(`hi`)
+    else => print(`bye`)
   }
 }"#,
     );
@@ -657,10 +660,10 @@ fn m3_multicase_fall_through_ok_for_nothing_fn() {
         r#"function main() -> nothing {
   let x: int = 3
   if (x) {
-    1 => print("one")
-    2 => print("two")
+    1 => print(`one`)
+    2 => print(`two`)
   }
-  print("done")
+  print(`done`)
 }"#,
     );
 }
@@ -730,10 +733,10 @@ fn loop_var_mutation_produces_diagnostic() {
 
 #[test]
 fn wrong_return_type_produces_diagnostic() {
-    // WHY: `return "hi"` in a `-> int` function must produce a type-mismatch
+    // WHY: `return `hi`` in a `-> int` function must produce a type-mismatch
     // diagnostic pointing at the wrong expression, not the whole function.
     let out = assert_errors(
-        r#"function foo() -> int { return "hi" }
+        r#"function foo() -> int { return `hi` }
 function main() -> nothing { print(foo()) }"#,
         1,
     );
@@ -744,9 +747,9 @@ function main() -> nothing { print(foo()) }"#,
 fn missing_return_produces_diagnostic() {
     // WHY: a `-> int` function with no `return` on all paths must error.
     // Without this check, the function silently exits with an undefined value.
+    // test-ratchet: M7 P1 — migrated to backtick syntax
     let out = assert_errors(
-        r#"function foo() -> int { print("no return") }
-function main() -> nothing { print(foo()) }"#,
+        "function foo() -> int { print(`no return`) }\nfunction main() -> nothing { print(foo()) }",
         1,
     );
     assert!(out.diagnostics.iter().any(|d| d.what.contains("foo")));
@@ -818,7 +821,7 @@ fn if_condition_must_be_bool() {
     // WHY: `if (42) { ... }` — integer condition must produce a diagnostic.
     // JavaScript-style truthy coercion is explicitly rejected in Yinz.
     assert_errors(
-        r#"function main() -> nothing { if (42) { print("hi") } }"#,
+        r#"function main() -> nothing { if (42) { print(`hi`) } }"#,
         1,
     );
 }
@@ -854,9 +857,9 @@ fn range_wrong_arity_produces_diagnostic() {
 
 #[test]
 fn range_wrong_arg_type_produces_diagnostic() {
-    // WHY: `range("hi")` — range requires `int` args. A string arg must error.
+    // WHY: `range(`hi`)` — range requires `int` args. A string arg must error.
     assert_errors(
-        r#"function main() -> nothing { for (i in range("hi")) { print(i) } }"#,
+        r#"function main() -> nothing { for (i in range(`hi`)) { print(i) } }"#,
         1,
     );
 }
@@ -878,11 +881,11 @@ fn undefined_function_produces_diagnostic_with_levenshtein() {
 
 #[test]
 fn function_arg_type_mismatch_produces_diagnostic() {
-    // WHY: `function foo(x: int) -> nothing { }; foo("hi")` — string passed
+    // WHY: `function foo(x: int) -> nothing { }; foo(`hi`)` — string passed
     // where int expected. Must produce exactly 1 type-mismatch diagnostic.
     let out = assert_errors(
         r#"function foo(x: int) -> nothing { }
-function main() -> nothing { foo("hi") }"#,
+function main() -> nothing { foo(`hi`) }"#,
         1,
     );
     assert!(out.diagnostics[0].what.contains("int") || out.diagnostics[0].what.contains("string"));
@@ -984,7 +987,7 @@ shape Player {
 }
 
 function main() -> nothing {
-  let p: Player = { name: "Patrick", health: 100 }
+  let p: Player = { name: `Patrick`, health: 100 }
   print(p.health)
 }
 "#);
@@ -996,7 +999,7 @@ fn struct_lit_missing_field_produces_error() {
     // Without this check, shapes could be partially initialized with garbage values.
     let out = assert_errors(r#"
 shape Player { name: string health: int }
-function main() -> nothing { let p: Player = { name: "x" } }
+function main() -> nothing { let p: Player = { name: `x` } }
 "#, 1);
     let e = &out.diagnostics[0];
     assert!(e.what.contains("health") || e.what.contains("Missing"),
@@ -1017,7 +1020,7 @@ fn struct_lit_unknown_field_produces_error() {
     // WHY: Providing a field that doesn't exist on the shape must error.
     assert_errors(r#"
 shape Player { name: string }
-function main() -> nothing { let p: Player = { name: "x", age: 30 } }
+function main() -> nothing { let p: Player = { name: `x`, age: 30 } }
 "#, 1);
 }
 
@@ -1028,7 +1031,7 @@ fn field_access_resolves_correct_type() {
     assert_clean(r#"
 shape Player { name: string health: int }
 function main() -> nothing {
-  let p: Player = { name: "x", health: 100 }
+  let p: Player = { name: `x`, health: 100 }
   let doubled = p.health * 2
   print(doubled)
 }
@@ -1042,7 +1045,7 @@ fn field_access_unknown_field_produces_error() {
     assert_errors(r#"
 shape Player { name: string }
 function main() -> nothing {
-  let p: Player = { name: "x" }
+  let p: Player = { name: `x` }
   let x = p.age
 }
 "#, 1);
@@ -1054,7 +1057,7 @@ fn field_assignment_type_checks() {
     assert_clean(r#"
 shape Player { name: string health: int }
 function main() -> nothing {
-  let p: Player = { name: "x", health: 100 }
+  let p: Player = { name: `x`, health: 100 }
   p.health = 50
 }
 "#);
@@ -1062,12 +1065,12 @@ function main() -> nothing {
 
 #[test]
 fn field_assignment_type_mismatch_produces_error() {
-    // WHY: `p.health = "fifty"` must error — field is int, value is string.
+    // WHY: `p.health = `fifty`` must error — field is int, value is string.
     assert_errors(r#"
 shape Player { name: string health: int }
 function main() -> nothing {
-  let p: Player = { name: "x", health: 100 }
-  p.health = "fifty"
+  let p: Player = { name: `x`, health: 100 }
+  p.health = `fifty`
 }
 "#, 1);
 }
@@ -1079,7 +1082,7 @@ fn const_field_assignment_produces_error() {
     let out = assert_errors(r#"
 shape Player { name: string health: int }
 function main() -> nothing {
-  const p: Player = { name: "x", health: 100 }
+  const p: Player = { name: `x`, health: 100 }
   p.health = 50
 }
 "#, 1);
@@ -1093,7 +1096,7 @@ fn base_shape_instantiation_produces_error() {
     // Typeck must reject it at the construction site.
     assert_errors(r#"
 base shape Entity { name: string }
-function main() -> nothing { let e: Entity = { name: "x" } }
+function main() -> nothing { let e: Entity = { name: `x` } }
 "#, 1);
 }
 
@@ -1104,7 +1107,7 @@ fn hidden_field_outside_shape_produces_error() {
     assert_errors(r#"
 shape Player { name: string hidden cache: int }
 function main() -> nothing {
-  let p: Player = { name: "x" }
+  let p: Player = { name: `x` }
   let x = p.cache
 }
 "#, 1);
@@ -1118,7 +1121,7 @@ fn self_parameter_resolves_to_shape_type() {
 shape Player { name: string health: int }
 function greet(share self: Player) -> string { return self.name }
 function main() -> nothing {
-  let p: Player = { name: "Patrick", health: 100 }
+  let p: Player = { name: `Patrick`, health: 100 }
   let g = greet(p)
   print(g)
 }
@@ -1133,7 +1136,7 @@ fn ufcs_method_call_on_shape_resolves() {
 shape Player { name: string }
 function greet(share self: Player) -> string { return self.name }
 function main() -> nothing {
-  let p: Player = { name: "Patrick" }
+  let p: Player = { name: `Patrick` }
   let msg = p.greet()
   print(msg)
 }
@@ -1157,7 +1160,7 @@ fn struct_lit_without_annotation_produces_error() {
     // to validate against. Without one the compiler cannot check field names.
     assert_errors(r#"
 shape Player { name: string }
-function main() -> nothing { let p = { name: "x" } }
+function main() -> nothing { let p = { name: `x` } }
 "#, 1);
 }
 
@@ -1171,7 +1174,7 @@ fn extends_inherits_parent_fields() {
 shape Entity { name: string }
 shape Player extends Entity { health: int }
 function main() -> nothing {
-  let p: Player = { name: "Patrick", health: 100 }
+  let p: Player = { name: `Patrick`, health: 100 }
   print(p.name)
   print(p.health)
 }
@@ -1257,7 +1260,7 @@ fn give_param_consumes_binding() {
 shape Player { name: string }
 function consume(give p: Player) -> nothing { }
 function main() -> nothing {
-  let p: Player = { name: "Patrick" }
+  let p: Player = { name: `Patrick` }
   consume(p)
   let x = p.name
 }
@@ -1274,7 +1277,7 @@ fn const_binding_cannot_be_given() {
 shape Player { name: string }
 function consume(give p: Player) -> nothing { }
 function main() -> nothing {
-  const p: Player = { name: "Patrick" }
+  const p: Player = { name: `Patrick` }
   consume(p)
 }
 "#, 1);
@@ -1302,7 +1305,7 @@ fn give_twice_is_use_after_give() {
 shape Player { name: string }
 function consume(give p: Player) -> nothing { }
 function main() -> nothing {
-  let p: Player = { name: "Patrick" }
+  let p: Player = { name: `Patrick` }
   consume(p)
   consume(p)
 }
@@ -1316,7 +1319,7 @@ fn share_on_const_is_allowed() {
 shape Player { name: string }
 function greet(share p: Player) -> string { return p.name }
 function main() -> nothing {
-  const p: Player = { name: "Patrick" }
+  const p: Player = { name: `Patrick` }
   let g = greet(p)
   print(g)
 }
@@ -1330,7 +1333,7 @@ fn unspecified_param_accepts_const() {
 shape Player { name: string }
 function greet(p: Player) -> string { return p.name }
 function main() -> nothing {
-  const p: Player = { name: "Patrick" }
+  const p: Player = { name: `Patrick` }
   let g = greet(p)
   print(g)
 }
@@ -1349,8 +1352,8 @@ shape Square { side: number }
 shape Shape = Circle | Square
 function describe(s: Shape) -> nothing {
   if (s) {
-    is Circle => print("circle")
-    is Square => print("square")
+    is Circle => print(`circle`)
+    is Square => print(`square`)
   }
 }
 function main() -> nothing {
@@ -1370,8 +1373,8 @@ shape Square { side: number }
 shape Shape = Circle | Square
 function classify(s: Shape) -> nothing {
   if (s) {
-    is Circle => print("circle")
-    is Square => print("square")
+    is Circle => print(`circle`)
+    is Square => print(`square`)
   }
 }
 function main() -> nothing { }
@@ -1389,8 +1392,8 @@ shape Triangle { width: number
 shape Shape = Circle | Square | Triangle
 function classify(s: Shape) -> nothing {
   if (s) {
-    is Circle => print("circle")
-    is Square => print("square")
+    is Circle => print(`circle`)
+    is Square => print(`square`)
   }
 }
 function main() -> nothing { }
@@ -1408,8 +1411,8 @@ shape Triangle { width: number
 shape Shape = Circle | Square | Triangle
 function classify(s: Shape) -> nothing {
   if (s) {
-    is Circle => print("circle")
-    else => print("other")
+    is Circle => print(`circle`)
+    else => print(`other`)
   }
 }
 function main() -> nothing { }
@@ -1421,9 +1424,9 @@ fn m6_is_expr_on_non_union_is_error() {
     // WHY: `is Foo` on a non-union (e.g., string) must produce a teaching error.
     assert_errors(r#"
 function main() -> nothing {
-  let s: string = "hello"
+  let s: string = `hello`
   if (s is int) {
-    print("wrong")
+    print(`wrong`)
   }
 }
 "#, 1);
@@ -1483,8 +1486,8 @@ options Status { active, inactive }
 function main() -> nothing {
   let s: Status = Status.active
   if (s) {
-    active => print("ok")
-    inactive => print("off")
+    active => print(`ok`)
+    inactive => print(`off`)
   }
 }
 "#);
@@ -1499,8 +1502,8 @@ options Status { active, inactive, banned }
 function main() -> nothing {
   let s: Status = Status.active
   if (s) {
-    active => print("ok")
-    inactive => print("off")
+    active => print(`ok`)
+    inactive => print(`off`)
   }
 }
 "#, 1);
@@ -1515,8 +1518,8 @@ options Status { active, inactive, banned }
 function main() -> nothing {
   let s: Status = Status.active
   if (s) {
-    active => print("ok")
-    else => print("other")
+    active => print(`ok`)
+    else => print(`other`)
   }
 }
 "#);
@@ -1592,7 +1595,7 @@ fn m6_string_to_int_returns_maybe() {
     // Must return `maybe<int>` so the caller handles the failure case.
     assert_clean(r#"
 function main() -> nothing {
-  let s: string = "42"
+  let s: string = `42`
   let x: maybe<int> = s.toInt()
   print(x.or(0).toString())
 }

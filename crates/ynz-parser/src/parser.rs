@@ -18,7 +18,8 @@
 use ynz_ast::nodes::{
     BinOpKind, Block, CallExpr, ContractSig, Expr, FieldDecl, FunctionDecl, GenericParam, Item,
     MatchArm, MatchPattern, MatchPatternKind, Module, OptionsDecl, OwnershipModifier, Param,
-    PostfixOpKind, ReceiverKind, ShapeDecl, Stmt, StructLitField, Type, TypePath, UnaryOpKind,
+    PostfixOpKind, ReceiverKind, ShapeDecl, Stmt, StructLitField, Type, TypePath,
+    UnaryOpKind,
 };
 // TypePath is also used for Expr::Is
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
@@ -260,6 +261,7 @@ impl<'a> Parser<'a> {
             body,
             span: SourceSpan::new(self.file, start_span.start, end.end),
             name_span,
+            errors_capable: false,
         })
     }
 
@@ -888,6 +890,8 @@ impl<'a> Parser<'a> {
             Token::IntLit(_)
                 | Token::NumberLit(_)
                 | Token::StringLit(_)
+                // test-ratchet: M7 P1 adds BacktickString as a valid match arm pattern
+                | Token::BacktickString(_)
                 | Token::True
                 | Token::False
                 | Token::Identifier(_)
@@ -1031,7 +1035,7 @@ impl<'a> Parser<'a> {
                 let arrow_span = self.current_span();
                 let _ = self.expect(&Token::FatArrow);
                 let body = self.parse_arm_body();
-                let pat_span = SourceSpan::new(self.file, pat_start, arrow_span.start);
+                let _pat_span = SourceSpan::new(self.file, pat_start, arrow_span.start);
                 return MatchArm {
                     pattern: MatchPattern { kind: MatchPatternKind::OptionName(v_name), span: SourceSpan::new(self.file, v_span.start, v_span.end) },
                     body,
@@ -1359,6 +1363,10 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Expr::StringLit(bytes, span)
             }
+            // M7 P1: backtick string literal — may contain ${...} interpolations.
+            Token::BacktickString(_) => {
+                self.parse_backtick_string()
+            }
             Token::Identifier(name) => {
                 let span = self.current_span();
                 self.advance();
@@ -1438,6 +1446,78 @@ impl<'a> Parser<'a> {
                 Expr::Error(span)
             }
         }
+    }
+
+
+    /// Parse a backtick-quoted string literal into `Expr::InterpolatedString`.
+    ///
+    /// Called when the current token is `BacktickString(...)`. Collects all
+    /// consecutive literal segments and `${...}` interpolations until the string
+    /// is complete (no more `BacktickString` / `InterpolationStart` follow).
+    ///
+    /// The token stream for `` `hello ${name}!` `` looks like:
+    ///   BacktickString("hello ") · InterpolationStart · Identifier("name") · InterpolationEnd · BacktickString("!")
+    fn parse_backtick_string(&mut self) -> Expr {
+        use ynz_ast::nodes::StringPart;
+
+        let start_span = self.current_span();
+        let mut parts: Vec<StringPart> = Vec::new();
+
+        loop {
+            match self.peek().clone() {
+                Token::BacktickString(bytes) => {
+                    let seg_span = self.current_span();
+                    self.advance();
+                    parts.push(StringPart::Lit(bytes, seg_span));
+                    // After a Lit segment the string is either done or continues with
+                    // another BacktickString (adjacent segments — shouldn't happen from
+                    // the lexer, but handle defensively) or we're done.
+                    // The next token is NOT BacktickString or InterpolationStart → done.
+                    if !matches!(self.peek(), Token::BacktickString(_) | Token::InterpolationStart) {
+                        break;
+                    }
+                }
+                Token::InterpolationStart => {
+                    let _start = self.current_span();
+                    self.advance(); // consume `${`
+                    let expr_span_start = self.current_span();
+                    let inner = self.parse_expr(0);
+                    // The lexer emits InterpolationEnd when it sees the matching `}`.
+                    // Consume it here.
+                    let expr_span_end = self.current_span();
+                    if !matches!(self.peek(), Token::InterpolationEnd) {
+                        self.diags.push(Diagnostic::error(
+                            expr_span_end.clone(),
+                            "Missing `}` to close this string interpolation.",
+                            "Add `}` after the expression: `` `Hello ${name}` ``",
+                            "Every `${` inside a backtick string must be closed with `}`.",
+                        ));
+                    } else {
+                        self.advance(); // consume `}`
+                    }
+                    let span = SourceSpan::new(
+                        &expr_span_start.file,
+                        expr_span_start.start,
+                        self.current_span().start,
+                    );
+                    parts.push(StringPart::Expr(Box::new(inner), span));
+                    // After InterpolationEnd the lexer emits the next BacktickString.
+                }
+                _ => break,
+            }
+        }
+
+        let end_span = if parts.is_empty() {
+            start_span.clone()
+        } else {
+            self.current_span()
+        };
+        let full_span = SourceSpan::new(
+            &start_span.file,
+            start_span.start,
+            end_span.start.max(start_span.end),
+        );
+        Expr::InterpolatedString(parts, full_span)
     }
 
 
@@ -1814,11 +1894,15 @@ impl<'a> Parser<'a> {
     // ── M4: struct literal helpers ──────────────────────────────────────────
 
     /// True when current position is the start of a map literal:
-    /// `{` followed by a string/int/number literal and then `:`.
+    /// `{` followed by a string/int/number literal (or backtick string) and then `:`.
     fn peek_is_map_lit_start(&self) -> bool {
         matches!(
             self.tokens.get(self.pos + 1).map(|s| &s.value),
-            Some(Token::StringLit(_)) | Some(Token::IntLit(_)) | Some(Token::NumberLit(_))
+            Some(Token::StringLit(_))
+            | Some(Token::IntLit(_))
+            | Some(Token::NumberLit(_))
+            // test-ratchet: M7 P1 adds BacktickString as a valid map literal key
+            | Some(Token::BacktickString(_))
         ) && matches!(
             self.tokens.get(self.pos + 2).map(|s| &s.value),
             Some(Token::Colon)
@@ -2534,5 +2618,10 @@ fn token_display(tok: &Token) -> &str {
         Token::None => "none",
         Token::Options => "options",
         Token::Is => "is",
+        // M7 P1: backtick strings + errors keyword
+        Token::BacktickString(_) => "string literal",
+        Token::InterpolationStart => "${",
+        Token::InterpolationEnd => "}",
+        Token::Errors => "errors",
     }
 }

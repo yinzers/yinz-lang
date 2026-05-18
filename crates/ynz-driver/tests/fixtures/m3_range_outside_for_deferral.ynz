@@ -2,5 +2,5 @@
 // arrives in milestone 7 with the full Iterable[T] protocol.
 function main() -> nothing {
   let r = range(0, 5)
-  print("done")
+  print(`done`)
 }

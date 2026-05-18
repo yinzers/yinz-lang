@@ -3,6 +3,9 @@
 // criterion: type inference, method dispatch, bracket access desugar,
 // flow-sensitive `.value`, for-loop element binding, and error paths.
 // Regressions here would silently break P4a codegen which lowers these types.
+//
+// test-ratchet: M7 P1 — all double-quoted string literals in Yinz source strings
+// replaced with backtick strings. Double-quotes now produce an error diagnostic.
 
 use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::{check_query, CheckOutput, Type};
@@ -68,7 +71,7 @@ fn m5p3b_array_string_literal_typechecks() {
     // WHY: array<string> must work the same as array<int>.
     check_no_diags(r#"
 function main() -> nothing {
-    let arr: array<string> = ["hello", "world"]
+    let arr: array<string> = [`hello`, `world`]
 }
 "#);
 }
@@ -105,11 +108,11 @@ function main() -> nothing {
 
 #[test]
 fn m5p3b_array_mismatched_element_types_errors() {
-    // WHY: `[1, "hello"]` is a type mismatch — element 2 is string, array is int.
+    // WHY: `[1, `hello`]` is a type mismatch — element 2 is string, array is int.
     // Without this check, mistyped arrays compile silently.
     check_diag_count(r#"
 function main() -> nothing {
-    let arr: array<int> = [1, "hello"]
+    let arr: array<int> = [1, `hello`]
 }
 "#, 1);
 }
@@ -222,11 +225,11 @@ function main() -> nothing {
 
 #[test]
 fn m5p3b_array_bracket_assign_wrong_type_errors() {
-    // WHY: `arr[0] = "hello"` on array<int> must error — wrong element type.
+    // WHY: `arr[0] = `hello`` on array<int> must error — wrong element type.
     check_diag_count(r#"
 function main() -> nothing {
     let arr: array<int> = [1, 2, 3]
-    arr[0] = "hello"
+    arr[0] = `hello`
 }
 "#, 1);
 }
@@ -235,11 +238,11 @@ function main() -> nothing {
 
 #[test]
 fn m5p3b_fixed_int_literal_typechecks() {
-    // WHY: acceptance criterion — `let f: fixed<string> = ["a", "b", "c"]` must
+    // WHY: acceptance criterion — `let f: fixed<string> = [`a`, `b`, `c`]` must
     // type-check. Fixed literals use the same ArrayLit AST node as array.
     check_no_diags(r#"
 function main() -> nothing {
-    let f: fixed<string> = ["a", "b", "c"]
+    let f: fixed<string> = [`a`, `b`, `c`]
 }
 "#);
 }
@@ -259,7 +262,7 @@ fn m5p3b_fixed_mismatched_element_types_errors() {
     // WHY: element type mismatch in fixed literal must error.
     check_diag_count(r#"
 function main() -> nothing {
-    let f: fixed<int> = [1, "bad"]
+    let f: fixed<int> = [1, `bad`]
 }
 "#, 1);
 }
@@ -363,7 +366,7 @@ fn m5p3b_fixed_bracket_assign_wrong_type_errors() {
     check_diag_count(r#"
 function main() -> nothing {
     let f: fixed<int> = [1, 2, 3]
-    f[0] = "bad"
+    f[0] = `bad`
 }
 "#, 1);
 }
@@ -432,7 +435,7 @@ fn m5p3b_maybe_or_returns_inner_type_string() {
     check_no_diags(r#"
 function main() -> nothing {
     let m: maybe<string> = none
-    let s: string = m.or("default")
+    let s: string = m.or(`default`)
 }
 "#);
 }
@@ -562,7 +565,7 @@ fn m5p3b_for_loop_over_fixed_typechecks() {
     // must bind x as string.
     check_no_diags(r#"
 function main() -> nothing {
-    let f: fixed<string> = ["a", "b", "c"]
+    let f: fixed<string> = [`a`, `b`, `c`]
     for (x in f) {
         let s: string = x
     }
@@ -823,7 +826,7 @@ fn m5p3b_array_last_returns_maybe() {
     // WHY: `.last()` on array<string> must return maybe<string>.
     check_no_diags(r#"
 function main() -> nothing {
-    let arr: array<string> = ["a", "b"]
+    let arr: array<string> = [`a`, `b`]
     let m: maybe<string> = arr.last()
 }
 "#);

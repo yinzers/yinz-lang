@@ -33,7 +33,7 @@ pub struct OptionsDecl {
     pub span: SourceSpan,
 }
 
-/// A function declaration: `function name<generics>(params) -> return_type { body }`.
+/// A function declaration: `function name<generics>(params) -> return_type [errors] { body }`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunctionDecl {
     pub name: String,
@@ -46,6 +46,9 @@ pub struct FunctionDecl {
     pub span: SourceSpan,
     /// Span of the function name identifier.
     pub name_span: SourceSpan,
+    /// M7: true when the return type is qualified with `errors`
+    /// (e.g. `-> string errors`). Full error-type typeck arrives in M7 P3a.
+    pub errors_capable: bool,
 }
 
 /// M5: a type parameter on a generic function or generic shape.
@@ -287,6 +290,23 @@ pub enum UnaryOpKind {
     BitNot,
 }
 
+// ── M7: interpolated strings ─────────────────────────────────────────────────
+
+/// A segment of a backtick-interpolated string.
+///
+/// An interpolated string like `` `hello ${name}!` `` produces:
+/// `[Lit(b"hello "), Expr(name), Lit(b"!")]`
+///
+/// The literal segments carry their raw bytes; the expression segments carry
+/// an arbitrary sub-expression whose value will be converted to string at runtime.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StringPart {
+    /// A raw byte sequence (static text between interpolations).
+    Lit(Vec<u8>, SourceSpan),
+    /// An interpolated expression `${...}` whose result is stringified.
+    Expr(Box<Expr>, SourceSpan),
+}
+
 /// An expression.
 ///
 /// Variant count is pinned by the milestone-locked tests in the test suite.
@@ -430,6 +450,19 @@ pub enum Expr {
         ty: TypePath,
         span: SourceSpan,
     },
+
+    // ── M7: interpolated strings ─────────────────────────────────────────────
+
+    // test-ratchet: M7 P1 adds InterpolatedString for backtick string literals with ${...} interpolation.
+    /// A backtick-quoted string, potentially with interpolated expressions.
+    ///
+    /// `` `hello ${name}!` `` → `[Lit("hello "), Expr(name), Lit("!")]`
+    ///
+    /// A plain string with no interpolations is represented as a single-element
+    /// `Vec` containing only a `StringPart::Lit`. Typeck checks that each
+    /// interpolated expression's type has a `.toString()` intrinsic.
+    /// Full codegen lowering arrives in M7 P2.
+    InterpolatedString(Vec<StringPart>, SourceSpan),
 }
 
 /// The kind of dot-postfix body operation.
@@ -466,7 +499,8 @@ impl Expr {
             | Expr::IndexAccess { span, .. }
             | Expr::ArrayLit { span, .. }
             | Expr::MapLit { span, .. }
-            | Expr::Is { span, .. } => span,
+            | Expr::Is { span, .. }
+            | Expr::InterpolatedString(_, span) => span,
             Expr::SelfValue { span } => span,
             Expr::NoneLit { span } => span,
         }
@@ -601,6 +635,20 @@ pub enum Type {
     /// See `design/unions.md` for the full decision table.
     Union {
         variants: Vec<Type>,
+        span: SourceSpan,
+    },
+
+    // ── M7: errors keyword ──────────────────────────────────────────────────
+
+    // test-ratchet: M7 P1 adds ErrorCapable for `-> T errors` fallible return types.
+    /// A fallible return type: `-> string errors`.
+    ///
+    /// The `errors` qualifier signals that the function can fail. Full
+    /// error-type typeck (error propagation, the `?` operator, error shapes)
+    /// arrives in M7 P3a. In M7 P1, this node is parsed and stored on
+    /// `FunctionDecl.errors_capable`; typeck defers to the inner type.
+    ErrorCapable {
+        inner: Box<Type>,
         span: SourceSpan,
     },
 }

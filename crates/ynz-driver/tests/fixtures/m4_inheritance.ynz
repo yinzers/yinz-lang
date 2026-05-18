@@ -12,6 +12,6 @@ function describe(share self: Dog) -> nothing {
 }
 
 function main() -> nothing {
-  let d: Dog = { name: "Rex", breed: "Husky" }
+  let d: Dog = { name: `Rex`, breed: `Husky` }
   d.describe()
 }

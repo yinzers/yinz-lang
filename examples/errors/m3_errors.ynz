@@ -17,7 +17,7 @@ function deadCodeAfterReturn() -> int {
   // WHY: dead code after a definite return. Reported as a Warning (not Error)
   //      so the program still compiles. M3 P3 return-path analysis catches this.
   return 42
-  print("never reached")
+  print(`never reached`)
 }
 
 function matchBannedKeyword() -> nothing {
@@ -26,7 +26,7 @@ function matchBannedKeyword() -> nothing {
   //      as Identifier so the parser continues.
   let value = 5
   match (value) {
-    1 => print("one")
+    1 => print(`one`)
   }
 }
 
@@ -34,7 +34,7 @@ function switchBannedKeyword() -> nothing {
   // WHY: `switch` keyword is banned — same redirect as `match`.
   let value = 5
   switch (value) {
-    1 => print("one")
+    1 => print(`one`)
   }
 }
 
@@ -65,7 +65,7 @@ function takesInt(x: int) -> int {
 function argTypeMismatch() -> nothing {
   // WHY: calling takesInt with a string argument. M3 P3 function-call
   //      argument-type check.
-  let result = takesInt("not an int")
+  let result = takesInt(`not an int`)
   print(result)
 }
 
@@ -79,7 +79,7 @@ function isTypePatternDeferred() -> nothing {
   //      (union types + narrowing). M3 emits a deferral diagnostic pointing to M6.
   let value = 42
   if (value) {
-    is int => print("integer")
-    else => print("other")
+    is int => print(`integer`)
+    else => print(`other`)
   }
 }

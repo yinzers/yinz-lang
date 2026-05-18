@@ -1,9 +1,9 @@
 function foo() -> nothing {
-  print("first")
+  print(`first`)
 }
 
 function foo() -> nothing {
-  print("second")
+  print(`second`)
 }
 
 function main() -> nothing {

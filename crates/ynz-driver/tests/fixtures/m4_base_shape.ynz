@@ -12,6 +12,6 @@ function describe(share self: Car) -> nothing {
 }
 
 function main() -> nothing {
-  let c: Car = { brand: "Rust", speed: 120 }
+  let c: Car = { brand: `Rust`, speed: 120 }
   c.describe()
 }

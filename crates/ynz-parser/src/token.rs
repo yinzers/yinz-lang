@@ -22,7 +22,7 @@ impl<T> Spanned<T> {
 /// Adding a variant requires both an inline `// test-ratchet: <reason>` marker
 /// on that test AND updating this comment with the new count.
 ///
-/// Current count: 60 (M6 P1 added `Options` and `Is` keywords)
+/// Current count: 64 (M7 P1 adds BacktickString, InterpolationStart, InterpolationEnd, Errors)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Token {
 
@@ -34,6 +34,29 @@ pub enum Token {
     Identifier(String),
     /// A string literal: the raw UTF-8 bytes between the quotes, unescaped.
     StringLit(Vec<u8>),
+
+    // ── M7: backtick strings + errors keyword ─────────────────────────────────
+
+    // test-ratchet: M7 P1 adds 4 variants — BacktickString, InterpolationStart, InterpolationEnd, Errors
+
+    /// A literal segment of a backtick-quoted string (bytes between backticks/interpolations).
+    ///
+    /// Emitted once per contiguous literal run. An empty `Vec<u8>` is valid (represents
+    /// the empty segment at the start/end of an interpolation, e.g. `` `${x}` ``).
+    BacktickString(Vec<u8>),
+    /// `` ${ `` — starts an interpolation expression inside a backtick string.
+    InterpolationStart,
+    /// `}` that closes an interpolation expression (NOT a block close).
+    ///
+    /// The lexer tracks brace nesting via `interp_depth_stack` so that `{}`
+    /// inside the interpolated expression (e.g. an `if` body) doesn't trigger
+    /// this token prematurely.
+    InterpolationEnd,
+    /// The `errors` keyword — marks a function's return type as fallible.
+    ///
+    /// `-> string errors` means the function returns `string` on success or an
+    /// error value on failure. Full error-type typeck arrives in M7 P3a.
+    Errors,
     /// `(`
     LParen,
     /// `)`

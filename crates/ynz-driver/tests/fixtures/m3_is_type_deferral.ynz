@@ -8,10 +8,10 @@ shape Figure = Circle | Square
 
 function describe(figure: Figure) -> string {
   if (figure) {
-    is Circle => return "circle"
-    is Square => return "square"
+    is Circle => return `circle`
+    is Square => return `square`
   }
-  return "unknown"
+  return `unknown`
 }
 
 function main() -> nothing {
