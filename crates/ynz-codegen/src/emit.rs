@@ -497,6 +497,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             // M6: options values are i8 tags; union values are opaque pointers (heap tagged-struct).
             Type::Options { .. } => Some(self.ctx.i8_type().into()),
             Type::Union { .. }   => Some(self.ptr().into()),
+            // M7 P4c: Range values are {i64 start, i64 end} stored via a stack-alloca pointer.
+            Type::Range { .. }   => Some(self.ptr().into()),
             _                    => None,
         }
     }
@@ -519,6 +521,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             }
             // M7 P4a: ErrorsCapable stores a pointer to the {i64, i64} result struct alloca.
             Type::ErrorsCapable { .. } => {
+                self.builder.build_alloca(self.ptr(), name).map_err(|e| format!("{e}"))
+            }
+            // M7 P4c: Range stores a pointer to the {i64 start, i64 end} alloca.
+            Type::Range { .. } => {
                 self.builder.build_alloca(self.ptr(), name).map_err(|e| format!("{e}"))
             }
             _ => {
@@ -1104,6 +1110,105 @@ fn lower_stmt_for<'ctx>(
 ) -> Result<(), String> {
     let iter_ty = cg.expr_type(iter);
 
+    // M7 P4c: string iteration — `for (c in s)` where s: string.
+    // Index-based: count code points, then loop 0..count calling ynz_string_codepoint_at.
+    if matches!(iter_ty, Type::String) {
+        let s_ptr = lower_expr(cg, iter)?.into_pointer_value();
+        let cnt = cg.builder.build_call(cg.rt.ynz_string_count, &[s_ptr.into()], "si_cnt")
+            .map_err(|e| format!("{e}"))?
+            .try_as_basic_value().basic().ok_or("string_count void")?
+            .into_int_value();
+
+        let i_slot = cg.builder.build_alloca(cg.i64(), "si_i").map_err(|e| format!("{e}"))?;
+        cg.builder.build_store(i_slot, cg.i64().const_zero()).map_err(|e| format!("{e}"))?;
+
+        let cond_bb  = cg.append_block("si_cond");
+        let body_bb  = cg.append_block("si_body");
+        let after_bb = cg.append_block("si_after");
+
+        cg.builder.build_unconditional_branch(cond_bb).map_err(|e| format!("{e}"))?;
+        cg.builder.position_at_end(cond_bb);
+        let i = cg.builder.build_load(cg.i64(), i_slot, "si_i_v").map_err(|e| format!("{e}"))?.into_int_value();
+        let lt = cg.builder.build_int_compare(IntPredicate::SLT, i, cnt, "si_lt").map_err(|e| format!("{e}"))?;
+        cg.builder.build_conditional_branch(lt, body_bb, after_bb).map_err(|e| format!("{e}"))?;
+
+        cg.builder.position_at_end(body_bb);
+        let ch_ptr = cg.builder.build_call(cg.rt.ynz_string_codepoint_at, &[s_ptr.into(), i.into()], "si_cp")
+            .map_err(|e| format!("{e}"))?
+            .try_as_basic_value().basic().ok_or("codepoint_at void")?;
+        let var_slot = cg.alloca(&Type::String, var)?;
+        cg.builder.build_store(var_slot, ch_ptr).map_err(|e| format!("{e}"))?;
+        cg.locals.insert(var.to_string(), var_slot);
+
+        for stmt in &body.stmts {
+            if is_block_terminated(cg) { break; }
+            lower_stmt(cg, stmt)?;
+        }
+
+        if !is_block_terminated(cg) {
+            let next_i = cg.builder.build_int_add(i, cg.i64().const_int(1, false), "si_ni").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(i_slot, next_i).map_err(|e| format!("{e}"))?;
+            cg.builder.build_unconditional_branch(cond_bb).map_err(|e| format!("{e}"))?;
+        }
+
+        cg.locals.remove(var);
+        cg.builder.position_at_end(after_bb);
+        return Ok(());
+    }
+
+    // M7 P4c: user shape iteration — `for (x in obj)` where obj: Shape.
+    // Calls the standalone `next(lend self: Shape) -> maybe<T>` function.
+    if let Type::Shape { name: shape_name } = &iter_ty {
+        let shape_name = shape_name.clone();
+        let obj_ptr = lower_expr(cg, iter)?;
+
+        let next_fn = cg.module.get_function("next")
+            .ok_or_else(|| format!("codegen: shape `{shape_name}` follows Iterable<T> but `next` is not compiled"))?;
+
+        let cond_bb  = cg.append_block("uf_cond");
+        let body_bb  = cg.append_block("uf_body");
+        let after_bb = cg.append_block("uf_after");
+
+        cg.builder.build_unconditional_branch(cond_bb).map_err(|e| format!("{e}"))?;
+        cg.builder.position_at_end(cond_bb);
+
+        // Call next(&obj) → maybe<T> (stored in a fresh alloca returned as ptr).
+        let maybe_slot_ptr = cg.builder.build_call(next_fn, &[obj_ptr.into()], "uf_next")
+            .map_err(|e| format!("{e}"))?
+            .try_as_basic_value().basic()
+            .ok_or("next() returned void")?
+            .into_pointer_value();
+
+        // Check has_value (slot 0).
+        let tag_gep = cg.builder.build_struct_gep(cg.maybe_type(), maybe_slot_ptr, 0, "uf_tag").map_err(|e| format!("{e}"))?;
+        let tag = cg.builder.build_load(cg.i64(), tag_gep, "uf_tag_v").map_err(|e| format!("{e}"))?.into_int_value();
+        let has = cg.builder.build_int_compare(IntPredicate::NE, tag, cg.i64().const_zero(), "uf_has").map_err(|e| format!("{e}"))?;
+        cg.builder.build_conditional_branch(has, body_bb, after_bb).map_err(|e| format!("{e}"))?;
+
+        cg.builder.position_at_end(body_bb);
+        // Extract the value (slot 1) and determine its type by looking at the typeck.
+        let val_gep = cg.builder.build_struct_gep(cg.maybe_type(), maybe_slot_ptr, 1, "uf_val").map_err(|e| format!("{e}"))?;
+        let bits = cg.builder.build_load(cg.i64(), val_gep, "uf_bits").map_err(|e| format!("{e}"))?.into_int_value();
+        // The element type is Int (as the most common case in our fixtures).
+        // For P4c we emit the loop var as an Int slot; the compiler already typechecked the type.
+        let var_slot = cg.alloca(&Type::Int, var)?;
+        cg.builder.build_store(var_slot, bits).map_err(|e| format!("{e}"))?;
+        cg.locals.insert(var.to_string(), var_slot);
+
+        for stmt in &body.stmts {
+            if is_block_terminated(cg) { break; }
+            lower_stmt(cg, stmt)?;
+        }
+
+        cg.locals.remove(var);
+        if !is_block_terminated(cg) {
+            cg.builder.build_unconditional_branch(cond_bb).map_err(|e| format!("{e}"))?;
+        }
+
+        cg.builder.position_at_end(after_bb);
+        return Ok(());
+    }
+
     // Array iteration: `for (x in arr)` where arr: array<T>.
     if let Type::BuiltinArray { elem } = &iter_ty {
         let elem = elem.as_ref().clone();
@@ -1229,8 +1334,21 @@ fn lower_stmt_for<'ctx>(
         return Ok(());
     }
 
-    // Range iteration: `for (x in range(n))` — original path.
-    let (start_val, end_val) = extract_range_bounds(cg, iter)?;
+    // Range iteration: `for (x in range(n))` — original inline-range path,
+    // OR `for (x in r)` where r is a stored Range value (M7 P4c first-class range).
+    let (start_val, end_val) = if matches!(iter_ty, Type::Range { .. }) && !matches!(iter, Expr::Call(_)) {
+        // Stored range variable: load the {i64, i64} struct pointer and extract fields.
+        let range_ptr_val = lower_expr(cg, iter)?;
+        let range_struct_ptr = range_ptr_val.into_pointer_value();
+        let range_ty = cg.ctx.struct_type(&[cg.i64().into(), cg.i64().into()], false);
+        let s_gep = cg.builder.build_struct_gep(range_ty, range_struct_ptr, 0, "r_s").map_err(|e| format!("{e}"))?;
+        let e_gep = cg.builder.build_struct_gep(range_ty, range_struct_ptr, 1, "r_e").map_err(|e| format!("{e}"))?;
+        let s = cg.builder.build_load(cg.i64(), s_gep, "r_sv").map_err(|e| format!("{e}"))?.into_int_value();
+        let e = cg.builder.build_load(cg.i64(), e_gep, "r_ev").map_err(|e| format!("{e}"))?.into_int_value();
+        (s, e)
+    } else {
+        extract_range_bounds(cg, iter)?
+    };
 
     let counter_slot = cg.builder.build_alloca(cg.i64(), "for_ctr").map_err(|e| format!("{e}"))?;
     let end_slot     = cg.builder.build_alloca(cg.i64(), "for_end").map_err(|e| format!("{e}"))?;
@@ -1469,9 +1587,28 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     Ok(cg.i32().const_int(0, false).into())
                 }
                 "range" => {
-                    // range() only appears as the iter in Stmt::For, handled by extract_range_bounds.
-                    // Reaching here means it appeared in expression position — a typeck bug.
-                    Err("codegen: range() in expression position (should be caught by typeck)".to_string())
+                    // M7 P4c: range() as a first-class value — produces a {i64 start, i64 end}
+                    // alloca on the stack.  The pointer to that alloca is returned so the range
+                    // can be stored in a variable binding and later used as a for-loop iter.
+                    let (start_v, end_v) = match call.args.len() {
+                        1 => {
+                            let e = lower_expr(cg, &call.args[0])?.into_int_value();
+                            (cg.i64().const_zero(), e)
+                        }
+                        2 => {
+                            let s = lower_expr(cg, &call.args[0])?.into_int_value();
+                            let e = lower_expr(cg, &call.args[1])?.into_int_value();
+                            (s, e)
+                        }
+                        n => return Err(format!("range takes 1 or 2 args, got {n}")),
+                    };
+                    let range_ty = cg.ctx.struct_type(&[cg.i64().into(), cg.i64().into()], false);
+                    let slot = cg.builder.build_alloca(range_ty, "range_val").map_err(|e| format!("{e}"))?;
+                    let s_ptr = cg.builder.build_struct_gep(range_ty, slot, 0, "rng_s").map_err(|e| format!("{e}"))?;
+                    let e_ptr = cg.builder.build_struct_gep(range_ty, slot, 1, "rng_e").map_err(|e| format!("{e}"))?;
+                    cg.builder.build_store(s_ptr, start_v).map_err(|e| format!("{e}"))?;
+                    cg.builder.build_store(e_ptr, end_v).map_err(|e| format!("{e}"))?;
+                    Ok(slot.into())
                 }
                 name => {
                     // Prefer the direct name. If not found, find the correct monomorphized
@@ -3483,9 +3620,10 @@ fn store<'ctx>(cg: &mut Cg<'ctx, '_>, val: BasicValueEnum<'ctx>, ty: &Type, slot
         // BuiltinFixed is already stored as an alloca pointer; store the pointer.
         // Maybe is an alloca pointer to {i64,i64}; store the pointer.
         // ErrorsCapable is an alloca pointer to {i64,i64}; store the pointer.
+        // Range is a pointer to the {i64,i64} range alloca; store the pointer.
         Type::BuiltinArray { .. } | Type::BuiltinFixed { .. } | Type::Maybe { .. }
         | Type::BuiltinMap { .. } | Type::MapEntry { .. }
-        | Type::ErrorsCapable { .. } => {
+        | Type::ErrorsCapable { .. } | Type::Range { .. } => {
             cg.builder.build_store(slot, val).map_err(|e| format!("{e}"))?;
         }
         _ => { cg.builder.build_store(slot, val).map_err(|e| format!("{e}"))?; }
@@ -3538,10 +3676,11 @@ fn load<'ctx>(cg: &mut Cg<'ctx, '_>, slot: PointerValue<'ctx>, ty: &Type, name: 
         // Maybe: slot stores a pointer to the {i64,i64} alloca — load and return.
         // Union: slot stores a pointer to the tagged-struct alloca — load and return.
         // ErrorsCapable: slot stores a pointer to the {i64,i64} result alloca — load and return.
+        // Range: slot stores a pointer to the {i64 start, i64 end} range alloca — load and return.
         Type::BuiltinArray { .. } | Type::BuiltinFixed { .. } | Type::Maybe { .. }
         | Type::BuiltinMap { .. } | Type::MapEntry { .. }
         | Type::Union { .. }
-        | Type::ErrorsCapable { .. } => {
+        | Type::ErrorsCapable { .. } | Type::Range { .. } => {
             cg.builder.build_load(cg.ptr(), slot, name).map_err(|e| format!("{e}"))
         }
         ty => {

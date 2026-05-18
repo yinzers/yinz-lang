@@ -1,0 +1,11 @@
+// WHY: validates string iteration codegen (M7 P4c). `for (c in s)` must iterate
+// over code points using ynz_string_count + ynz_string_codepoint_at. The body
+// count variable must increment once per code point (5 for "hello").
+
+function main() -> nothing {
+  let count = 0
+  for (c in `hello`) {
+    count = count + 1
+  }
+  print(count.toString())
+}
