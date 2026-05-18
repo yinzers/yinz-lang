@@ -859,7 +859,7 @@ impl<'b> Checker<'b> {
             }
             (Some(expr), ret) => {
                 let val_ty = self.infer_expr(expr, Some(ret));
-                if val_ty != Type::Error && *ret != Type::Error && val_ty != *ret {
+                if val_ty != Type::Error && *ret != Type::Error && !types_compatible(ret, &val_ty) {
                     // M7 P3a: in an errors-capable function, returning the inner success
                     // type is valid (the auto-propagation machinery wraps it at codegen).
                     let compatible = if let Type::ErrorsCapable { inner } = ret {
@@ -1458,7 +1458,7 @@ impl<'b> Checker<'b> {
                         "When a function can fail, the failure must be handled somewhere. The compiler enforces this so failures can't silently pass through.",
                     ));
                 }
-            } else if actual_ty != Type::Error && actual_ty != *expected_ty {
+            } else if actual_ty != Type::Error && !types_compatible(expected_ty, &actual_ty) {
                 self.diags.push(Diagnostic::error(
                     arg.span().clone(),
                     format!(
@@ -1492,7 +1492,10 @@ impl<'b> Checker<'b> {
             Add | Sub | Mul | Div => match (lhs, rhs) {
                 (Type::Int, Type::Int) => Type::Int,
                 (Type::Float, Type::Float) => Type::Float,
-                (Type::Number { .. }, Type::Number { .. }) => Type::Number { precision: 34 },
+                // M8 P6: mixed-precision promotion — result precision = max(lhs, rhs).
+                (Type::Number { precision: pa }, Type::Number { precision: pb }) => {
+                    Type::Number { precision: (*pa).max(*pb) }
+                }
                 _ => {
                     self.emit_binop_mismatch(op, lhs, rhs, span);
                     Type::Error
@@ -2700,14 +2703,22 @@ impl<'b> Checker<'b> {
                 return Type::Error;
             }
             Some(other) if *other != Type::Error => {
+                let what_instead = match other {
+                    Type::BuiltinMap { .. } =>
+                        "For a map literal, use quoted string keys: `{ \"key\": value, \"key2\": value2 }`".to_string(),
+                    Type::Union { .. } =>
+                        "Check the union type — if one variant is a `shape`, annotate with its name; if it's a `map`, use quoted string keys.".to_string(),
+                    _ =>
+                        "Annotate the binding with a `shape` name: `let p: Player = { ... }`".to_string(),
+                };
                 self.diags.push(Diagnostic::error(
                     span.clone(),
                     format!(
                         "A shape value `{{ ... }}` cannot produce a `{}` value.",
                         type_name(other)
                     ),
-                    "Annotate the binding with a `shape` name: `let p: Player = { ... }`",
-                    "Shape values can only be created for `shape` types, not primitive types.",
+                    what_instead,
+                    "Shape values use identifier field names (`name: value`). Map literals use quoted string keys (`\"name\": value`).",
                 ));
                 for f in fields {
                     self.infer_expr(&f.value, None);
