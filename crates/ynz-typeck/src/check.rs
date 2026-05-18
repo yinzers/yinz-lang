@@ -7,7 +7,10 @@ use ynz_ast::nodes::{
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 use crate::{
-    builtins::{array_method_return, fixed_method_return, map_method_return, maybe_method_return, string_method_return, STRING_METHODS},
+    builtins::{
+        array_method_return, fixed_method_return, map_method_return, maybe_method_return,
+        string_method_return, STRING_METHODS,
+    },
     generics::{
         apply_substitution, unify_param, GenericFnSig, GenericFnTable, GenericShapeTable,
         MonoSignature, MonomorphizationTable, Substitution,
@@ -106,7 +109,6 @@ struct Checker<'b> {
     union_aliases: HashMap<String, Type>,
 
     // ── M7 P3a: errors-capable flow tracking ─────────────────────────────────
-
     /// Flow-sensitive: binding names known to be in the success state after a
     /// `.failed() == false` check or after auto-propagation fired. These bindings
     /// have narrowed from `ErrorsCapable<T>` to `T`.
@@ -120,7 +122,6 @@ struct Checker<'b> {
 }
 
 impl<'b> Checker<'b> {
-
     fn check_module(&mut self, module: &Module) {
         // `main` existence and signature are validated in `collect_signatures`.
         // Body checking just iterates all functions with the signature table available.
@@ -192,8 +193,7 @@ impl<'b> Checker<'b> {
             Type::ErrorsCapable { inner } => *inner.clone(),
             other => other.clone(),
         };
-        if ret_ty != Type::Nothing && ret_ty != Type::Error
-            && ret_ty_for_analysis != Type::Nothing
+        if ret_ty != Type::Nothing && ret_ty != Type::Error && ret_ty_for_analysis != Type::Nothing
         {
             let analysis = analyze_return_paths(&f.body);
             if !analysis.all_paths_return {
@@ -219,7 +219,6 @@ impl<'b> Checker<'b> {
         }
     }
 
-
     /// Type-check the body of a generic function under its type-parameter scope.
     ///
     /// Generic bodies are checked with TypeParam types in scope. No return-path
@@ -237,14 +236,17 @@ impl<'b> Checker<'b> {
         self.scope.push();
         for param in &f.params {
             let param_ty = self.ast_type_to_type(&param.ty);
-            self.scope.insert(param.name.clone(), ScopeEntry {
-                ty: param_ty,
-                is_const: false,
-                is_param: true,
-                is_loop_var: false,
-                is_consumed: false,
-                defined_at: param.name_span.clone(),
-            });
+            self.scope.insert(
+                param.name.clone(),
+                ScopeEntry {
+                    ty: param_ty,
+                    is_const: false,
+                    is_param: true,
+                    is_loop_var: false,
+                    is_consumed: false,
+                    defined_at: param.name_span.clone(),
+                },
+            );
         }
         self.check_stmts(&f.body.stmts);
         self.scope.pop();
@@ -271,10 +273,22 @@ impl<'b> Checker<'b> {
                 Stmt::Expr(expr) => {
                     self.infer_expr(expr, None);
                 }
-                Stmt::Let { is_const, name, name_span, ty, value, span: _ } => {
+                Stmt::Let {
+                    is_const,
+                    name,
+                    name_span,
+                    ty,
+                    value,
+                    span: _,
+                } => {
                     self.check_let(*is_const, name, name_span, ty.as_ref(), value);
                 }
-                Stmt::Assign { target, target_span, value, span: _ } => {
+                Stmt::Assign {
+                    target,
+                    target_span,
+                    value,
+                    span: _,
+                } => {
                     // Reassignment invalidates early-return narrowing for the target binding.
                     early_return_narrowed.retain(|n| n != target);
                     self.check_assign(target, target_span, value);
@@ -291,22 +305,42 @@ impl<'b> Checker<'b> {
                     }
                     self.check_stmt_if(cond, body);
                 }
-                Stmt::Match { scrutinee, arms, else_arm, .. } => {
+                Stmt::Match {
+                    scrutinee,
+                    arms,
+                    else_arm,
+                    ..
+                } => {
                     self.check_stmt_match(scrutinee, arms, else_arm.as_ref());
                 }
                 Stmt::While { cond, body, .. } => {
                     self.check_stmt_while(cond, body);
                 }
-                Stmt::For { var, var_span, iter, body, .. } => {
+                Stmt::For {
+                    var,
+                    var_span,
+                    iter,
+                    body,
+                    ..
+                } => {
                     self.check_stmt_for(var, var_span, iter, body);
                 }
                 Stmt::Return { value, span } => {
                     self.check_stmt_return(value.as_ref(), span);
                 }
-                Stmt::FieldAssign { target, value, span } => {
+                Stmt::FieldAssign {
+                    target,
+                    value,
+                    span,
+                } => {
                     self.check_field_assign(target, value, span);
                 }
-                Stmt::IndexAssign { receiver, index, value, span } => {
+                Stmt::IndexAssign {
+                    receiver,
+                    index,
+                    value,
+                    span,
+                } => {
                     self.check_index_assign(receiver, index, value, span);
                 }
             }
@@ -490,7 +524,13 @@ impl<'b> Checker<'b> {
     /// Matches `x.failed()` → `vec!["x"]` so the if-body can use error fields
     /// and subsequent code sees `x` narrowed to its success type.
     fn extract_failed_binding(&self, cond: &Expr) -> Vec<String> {
-        if let Expr::MethodCall { receiver, method, args, .. } = cond {
+        if let Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } = cond
+        {
             if method == "failed" && args.is_empty() {
                 if let Expr::Ident(name, _) = receiver.as_ref() {
                     // Only extract when the binding is actually ErrorsCapable.
@@ -510,7 +550,13 @@ impl<'b> Checker<'b> {
     /// Matches `m.exists()` → `vec!["m"]` so the if-body can use `m.value`.
     /// Any other form returns an empty vec.
     fn extract_exists_binding(&self, cond: &Expr) -> Vec<String> {
-        if let Expr::MethodCall { receiver, method, args, .. } = cond {
+        if let Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } = cond
+        {
             if method == "exists" && args.is_empty() {
                 if let Expr::Ident(name, _) = receiver.as_ref() {
                     return vec![name.clone()];
@@ -525,25 +571,28 @@ impl<'b> Checker<'b> {
     /// Matches `!m.exists()` → `vec!["m"]` — after this if-block always returns,
     /// `m` is non-none for the rest of the enclosing block.
     fn extract_negated_exists_binding(&self, cond: &Expr) -> Vec<String> {
-        if let Expr::UnaryOp { op: ynz_ast::nodes::UnaryOpKind::Not, operand, .. } = cond {
+        if let Expr::UnaryOp {
+            op: ynz_ast::nodes::UnaryOpKind::Not,
+            operand,
+            ..
+        } = cond
+        {
             return self.extract_exists_binding(operand);
         }
         Vec::new()
     }
 
-    fn check_stmt_match(
-        &mut self,
-        scrutinee: &Expr,
-        arms: &[MatchArm],
-        else_arm: Option<&Block>,
-    ) {
+    fn check_stmt_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], else_arm: Option<&Block>) {
         let scrutinee_ty = self.infer_expr(scrutinee, None);
 
         for arm in arms {
             match &arm.pattern.kind {
                 MatchPatternKind::Value(pat_expr) => {
                     let pat_ty = self.infer_expr(pat_expr, Some(&scrutinee_ty));
-                    if pat_ty != Type::Error && scrutinee_ty != Type::Error && pat_ty != scrutinee_ty {
+                    if pat_ty != Type::Error
+                        && scrutinee_ty != Type::Error
+                        && pat_ty != scrutinee_ty
+                    {
                         self.diags.push(Diagnostic::error(
                             pat_expr.span().clone(),
                             format!(
@@ -551,7 +600,10 @@ impl<'b> Checker<'b> {
                                 type_name(&pat_ty),
                                 type_name(&scrutinee_ty)
                             ),
-                            format!("Use a `{}` literal or expression as the pattern.", type_name(&scrutinee_ty)),
+                            format!(
+                                "Use a `{}` literal or expression as the pattern.",
+                                type_name(&scrutinee_ty)
+                            ),
                             "Each arm pattern must have the same type as the value being matched.",
                         ));
                     }
@@ -564,7 +616,12 @@ impl<'b> Checker<'b> {
                     // (Full binding-name extraction is P3b — basic case: scrutinee is a direct Ident)
                     let narrowed_name = simple_ident_name(scrutinee).map(|s| s.to_string());
                     if let Some(ref name) = narrowed_name {
-                        self.union_narrowed.insert(name.clone(), Type::Shape { name: type_path.name.clone() });
+                        self.union_narrowed.insert(
+                            name.clone(),
+                            Type::Shape {
+                                name: type_path.name.clone(),
+                            },
+                        );
                     }
                     self.scope.push();
                     self.check_stmts(&arm.body.stmts);
@@ -587,11 +644,20 @@ impl<'b> Checker<'b> {
         // Exhaustiveness check for options multi-case.
         if let Type::Options { name: opts_name } = &scrutinee_ty {
             if let Some(entry) = self.options_table.get(opts_name) {
-                let covered: std::collections::HashSet<&str> = arms.iter().filter_map(|arm| {
-                    if let MatchPatternKind::OptionName(v) = &arm.pattern.kind { Some(v.as_str()) } else { None }
-                }).collect();
+                let covered: std::collections::HashSet<&str> = arms
+                    .iter()
+                    .filter_map(|arm| {
+                        if let MatchPatternKind::OptionName(v) = &arm.pattern.kind {
+                            Some(v.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
                 if else_arm.is_none() {
-                    let missing: Vec<&str> = entry.variants.iter()
+                    let missing: Vec<&str> = entry
+                        .variants
+                        .iter()
                         .filter(|v| !covered.contains(v.as_str()))
                         .map(String::as_str)
                         .collect();
@@ -615,15 +681,31 @@ impl<'b> Checker<'b> {
 
         // M6: Union exhaustiveness check for `Is` arms.
         if let Type::Union { variants } = &scrutinee_ty {
-            let covered: std::collections::HashSet<String> = arms.iter().filter_map(|arm| {
-                if let MatchPatternKind::Is(tp) = &arm.pattern.kind { Some(tp.name.clone()) } else { None }
-            }).collect();
+            let covered: std::collections::HashSet<String> = arms
+                .iter()
+                .filter_map(|arm| {
+                    if let MatchPatternKind::Is(tp) = &arm.pattern.kind {
+                        Some(tp.name.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
             if else_arm.is_none() {
-                let missing: Vec<String> = variants.iter().filter_map(|v| {
-                    if let Type::Shape { name } = v {
-                        if !covered.contains(name) { Some(name.clone()) } else { None }
-                    } else { None }
-                }).collect();
+                let missing: Vec<String> = variants
+                    .iter()
+                    .filter_map(|v| {
+                        if let Type::Shape { name } = v {
+                            if !covered.contains(name) {
+                                Some(name.clone())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
                 if !missing.is_empty() {
                     self.diags.push(Diagnostic::error(
                         scrutinee.span().clone(),
@@ -662,13 +744,7 @@ impl<'b> Checker<'b> {
         self.scope.pop();
     }
 
-    fn check_stmt_for(
-        &mut self,
-        var: &str,
-        var_span: &SourceSpan,
-        iter: &Expr,
-        body: &Block,
-    ) {
+    fn check_stmt_for(&mut self, var: &str, var_span: &SourceSpan, iter: &Expr, body: &Block) {
         let iter_ty = self.infer_expr(iter, None);
 
         // M7 P3c: Iterable<T> protocol dispatch. Each built-in collection type
@@ -678,16 +754,15 @@ impl<'b> Checker<'b> {
             Type::Range { element, .. } => *element.clone(),
             Type::BuiltinArray { elem } => *elem.clone(),
             Type::BuiltinFixed { elem, .. } => *elem.clone(),
-            Type::BuiltinMap { key, val } => {
-                Type::MapEntry { key: key.clone(), val: val.clone() }
-            }
+            Type::BuiltinMap { key, val } => Type::MapEntry {
+                key: key.clone(),
+                val: val.clone(),
+            },
             // M7 P3c: string iteration yields one code-point string per step.
             Type::String => Type::String,
             // M7 P3c: user shape iteration — requires a standalone next() function
             // whose return type is maybe<T>. The element type T is extracted from it.
-            Type::Shape { name } => {
-                self.infer_iterable_element_for_shape(name, iter.span())
-            }
+            Type::Shape { name } => self.infer_iterable_element_for_shape(name, iter.span()),
             Type::Error => Type::Error,
             other => {
                 self.diags.push(Diagnostic::error(
@@ -724,7 +799,9 @@ impl<'b> Checker<'b> {
     /// returns `Type::Error`.
     fn infer_iterable_element_for_shape(&mut self, shape_name: &str, span: &SourceSpan) -> Type {
         if let Some(sig) = self.sig_table.fns.get("next") {
-            let shape_ty = Type::Shape { name: shape_name.to_string() };
+            let shape_ty = Type::Shape {
+                name: shape_name.to_string(),
+            };
             if let Some((_, first_ty)) = sig.params.first() {
                 if *first_ty == shape_ty {
                     // next() returns maybe<T> — extract T as the element type.
@@ -760,7 +837,10 @@ impl<'b> Checker<'b> {
             (None, ret) => {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
-                    format!("`return` without a value, but this function must return `{}`.", type_name(ret)),
+                    format!(
+                        "`return` without a value, but this function must return `{}`.",
+                        type_name(ret)
+                    ),
                     "Add a return value: `return expr`",
                     "A non-`nothing` function must return a value on every path that exits.",
                 ));
@@ -807,7 +887,6 @@ impl<'b> Checker<'b> {
         }
     }
 
-
     /// Infer the type of `expr`.
     ///
     /// `hint` is an optional expected type passed from a `let` annotation.
@@ -847,12 +926,20 @@ impl<'b> Checker<'b> {
                 self.check_unaryop(op, &operand_ty, span)
             }
 
-            Expr::MethodCall { receiver, method, method_span, args, .. } => {
+            Expr::MethodCall {
+                receiver,
+                method,
+                method_span,
+                args,
+                ..
+            } => {
                 let receiver_ty = self.infer_expr(receiver, None);
                 // M4 P5: one-arg intrinsic methods (wrapping/saturating arithmetic).
                 // Must NOT use `return` here — the match value feeds expr_types.insert below.
                 if args.len() == 1 {
-                    if let Some((expected_arg_ty, ret_ty)) = self.intrinsics.lookup_method_1arg(&receiver_ty, method) {
+                    if let Some((expected_arg_ty, ret_ty)) =
+                        self.intrinsics.lookup_method_1arg(&receiver_ty, method)
+                    {
                         let expected = expected_arg_ty.clone();
                         let actual = self.infer_expr(&args[0], Some(&expected));
                         if actual != expected && actual != Type::Error {
@@ -865,16 +952,25 @@ impl<'b> Checker<'b> {
                         }
                         ret_ty
                     } else {
-                        for arg in args.iter() { self.infer_expr(arg, None); }
+                        for arg in args.iter() {
+                            self.infer_expr(arg, None);
+                        }
                         self.check_method_call(&receiver_ty, method, method_span)
                     }
                 } else {
-                    for arg in args.iter() { self.infer_expr(arg, None); }
+                    for arg in args.iter() {
+                        self.infer_expr(arg, None);
+                    }
                     self.check_method_call(&receiver_ty, method, method_span)
                 }
             }
 
-            Expr::FieldAccess { receiver, field, field_span, .. } => {
+            Expr::FieldAccess {
+                receiver,
+                field,
+                field_span,
+                ..
+            } => {
                 // M4 P5: type-attached constants (e.g. `int.max`, `number.epsilon`).
                 // Intercept before inferring receiver type to avoid "undefined `int`" error.
                 if let Expr::Ident(type_name_str, _) = receiver.as_ref() {
@@ -890,30 +986,26 @@ impl<'b> Checker<'b> {
                     self.infer_field_access(receiver, field, field_span)
                 }
             }
-            Expr::StructLit { fields, span } => {
-                self.check_struct_lit(fields, hint, span)
-            }
-            Expr::PostfixOp { receiver, op, span } => {
-                self.check_postfix_op(receiver, op, span)
-            }
-            Expr::SelfValue { span } => {
-                match self.scope.lookup("self") {
-                    Some(entry) => entry.ty.clone(),
-                    None => {
-                        self.diags.push(Diagnostic::error(
+            Expr::StructLit { fields, span } => self.check_struct_lit(fields, hint, span),
+            Expr::PostfixOp { receiver, op, span } => self.check_postfix_op(receiver, op, span),
+            Expr::SelfValue { span } => match self.scope.lookup("self") {
+                Some(entry) => entry.ty.clone(),
+                None => {
+                    self.diags.push(Diagnostic::error(
                             span.clone(),
                             "`self` can only be used inside a function whose first parameter is named `self`.",
                             "Add `share self: ShapeName` as the first parameter of this function.",
                             "`self` refers to the value the function was called on. It must be declared as the first parameter.",
                         ));
-                        Type::Error
-                    }
+                    Type::Error
                 }
-            }
+            },
             Expr::NoneLit { span } => {
                 // M7 P3a: if the hint is ErrorsCapable wrapping Maybe, unwrap to the Maybe type.
                 let effective_hint = match hint {
-                    Some(Type::ErrorsCapable { inner }) if matches!(inner.as_ref(), Type::Maybe { .. }) => {
+                    Some(Type::ErrorsCapable { inner })
+                        if matches!(inner.as_ref(), Type::Maybe { .. }) =>
+                    {
                         Some(inner.as_ref())
                     }
                     other => other,
@@ -944,20 +1036,22 @@ impl<'b> Checker<'b> {
                     }
                 }
             }
-            Expr::IndexAccess { receiver, index, span } => {
+            Expr::IndexAccess {
+                receiver,
+                index,
+                span,
+            } => {
                 let recv_ty = self.infer_expr(receiver, None);
                 let _idx_ty = self.infer_expr(index, Some(&Type::Int));
                 match &recv_ty {
-                    Type::BuiltinArray { elem } | Type::BuiltinFixed { elem, .. } => {
-                        Type::Maybe { inner: elem.clone() }
-                    }
-                    Type::BuiltinMap { val, .. } => {
-                        Type::Maybe { inner: val.clone() }
-                    }
+                    Type::BuiltinArray { elem } | Type::BuiltinFixed { elem, .. } => Type::Maybe {
+                        inner: elem.clone(),
+                    },
+                    Type::BuiltinMap { val, .. } => Type::Maybe { inner: val.clone() },
                     // M7 P3b: string bracket access desugars to .get(n) → maybe<string>
-                    Type::String => {
-                        Type::Maybe { inner: Box::new(Type::String) }
-                    }
+                    Type::String => Type::Maybe {
+                        inner: Box::new(Type::String),
+                    },
                     Type::Error => Type::Error,
                     other => {
                         self.diags.push(Diagnostic::error(
@@ -970,16 +1064,14 @@ impl<'b> Checker<'b> {
                     }
                 }
             }
-            Expr::ArrayLit { elements, span } => {
-                self.check_array_lit(elements, hint, span)
-            }
-            Expr::MapLit { entries, span } => {
-                self.check_map_lit(entries, hint, span)
-            }
+            Expr::ArrayLit { elements, span } => self.check_array_lit(elements, hint, span),
+            Expr::MapLit { entries, span } => self.check_map_lit(entries, hint, span),
             // M6: `x is Foo` type-narrowing predicate — returns bool.
-            Expr::Is { expr: inner, ty: type_path, span } => {
-                self.check_is_expr(inner, type_path, span)
-            }
+            Expr::Is {
+                expr: inner,
+                ty: type_path,
+                span,
+            } => self.check_is_expr(inner, type_path, span),
             // M7 P3b: interpolated string — validate that each ${...} expression
             // has a stringifiable type. Primitive types are always valid; shapes
             // require a standalone `toString` function.
@@ -1007,10 +1099,10 @@ impl<'b> Checker<'b> {
             }
         };
 
-        self.expr_types.insert((expr.span().start, expr.span().end), ty.clone());
+        self.expr_types
+            .insert((expr.span().start, expr.span().end), ty.clone());
         ty
     }
-
 
     fn resolve_ident(&mut self, name: &str, span: &SourceSpan) -> Type {
         // M6: if inside a union `is` arm, the binding may be narrowed to a specific variant.
@@ -1075,7 +1167,6 @@ impl<'b> Checker<'b> {
         Type::Error
     }
 
-
     fn check_call(&mut self, call: &CallExpr) -> Type {
         let callee_name = match &call.callee {
             Expr::Ident(name, _) => name.clone(),
@@ -1125,7 +1216,9 @@ impl<'b> Checker<'b> {
                     what_instead,
                     "The compiler looks up every name you call. If a name doesn't exist, the program can't run.",
                 ));
-                for arg in &call.args { self.infer_expr(arg, None); }
+                for arg in &call.args {
+                    self.infer_expr(arg, None);
+                }
                 Type::Error
             }
         }
@@ -1135,11 +1228,16 @@ impl<'b> Checker<'b> {
         if call.args.len() != 1 {
             self.diags.push(Diagnostic::error(
                 call.span.clone(),
-                format!("`print` takes 1 argument, but {} were given.", call.args.len()),
+                format!(
+                    "`print` takes 1 argument, but {} were given.",
+                    call.args.len()
+                ),
                 "Call it with one value: `print(value)`",
                 "To display multiple values, use multiple `print` calls on separate lines.",
             ));
-            for arg in &call.args { self.infer_expr(arg, None); }
+            for arg in &call.args {
+                self.infer_expr(arg, None);
+            }
             return Type::Error;
         }
         let arg_ty = self.infer_expr(&call.args[0], None);
@@ -1155,7 +1253,10 @@ impl<'b> Checker<'b> {
             } else {
                 self.diags.push(Diagnostic::error(
                     call.args[0].span().clone(),
-                    format!("`print` cannot display a `{}` value directly.", type_name(&arg_ty)),
+                    format!(
+                        "`print` cannot display a `{}` value directly.",
+                        type_name(&arg_ty)
+                    ),
                     "Convert it to a string first with `.toString()`.",
                     "`print` works with: int, float, number, bool, and string.",
                 ));
@@ -1179,7 +1280,10 @@ impl<'b> Checker<'b> {
                         ));
                     }
                 }
-                Type::Range { element: Box::new(Type::Int), end_inclusive: false }
+                Type::Range {
+                    element: Box::new(Type::Int),
+                    end_inclusive: false,
+                }
             }
             n => {
                 self.diags.push(Diagnostic::error(
@@ -1188,7 +1292,9 @@ impl<'b> Checker<'b> {
                     "Use `range(end)` for 0..end or `range(start, end)` for start..end.",
                     "`range(end)` counts from 0 up to (but not including) end. `range(start, end)` starts at a specific value.",
                 ));
-                for arg in &call.args { self.infer_expr(arg, None); }
+                for arg in &call.args {
+                    self.infer_expr(arg, None);
+                }
                 Type::Error
             }
         }
@@ -1213,7 +1319,9 @@ impl<'b> Checker<'b> {
                 format!("Call it with {} argument(s).", params.len()),
                 "Every function call must match the number of arguments the function declares.",
             ));
-            for arg in &call.args { self.infer_expr(arg, None); }
+            for arg in &call.args {
+                self.infer_expr(arg, None);
+            }
             return Type::Error;
         }
         for (i, (arg, (_, expected_ty))) in call.args.iter().zip(params.iter()).enumerate() {
@@ -1289,14 +1397,7 @@ impl<'b> Checker<'b> {
         ret
     }
 
-
-    fn check_binop(
-        &mut self,
-        op: &BinOpKind,
-        lhs: &Type,
-        rhs: &Type,
-        span: &SourceSpan,
-    ) -> Type {
+    fn check_binop(&mut self, op: &BinOpKind, lhs: &Type, rhs: &Type, span: &SourceSpan) -> Type {
         if *lhs == Type::Error || *rhs == Type::Error {
             return Type::Error;
         }
@@ -1389,18 +1490,20 @@ impl<'b> Checker<'b> {
             return Type::Error;
         }
         match op {
-            UnaryOpKind::Neg => match operand {
-                Type::Int | Type::Float | Type::Number { .. } => operand.clone(),
-                other => {
-                    self.diags.push(Diagnostic::error(
+            UnaryOpKind::Neg => {
+                match operand {
+                    Type::Int | Type::Float | Type::Number { .. } => operand.clone(),
+                    other => {
+                        self.diags.push(Diagnostic::error(
                         span.clone(),
                         format!("Unary `-` cannot be used on a `{}` value.", type_name(other)),
                         "Unary `-` only works on `int`, `float`, and `number`.",
                         "Negation flips the sign of a number — it doesn't apply to other types.",
                     ));
-                    Type::Error
+                        Type::Error
+                    }
                 }
-            },
+            }
             UnaryOpKind::Not => match operand {
                 Type::Bool => Type::Bool,
                 other => {
@@ -1431,7 +1534,9 @@ impl<'b> Checker<'b> {
     /// Type-check a call to a generic function, performing type inference and
     /// constraint checking, then recording the instantiation in the MonomorphizationTable.
     fn check_generic_fn_call(&mut self, call: &CallExpr, name: &str, sig: &GenericFnSig) -> Type {
-        let non_self_params: Vec<(String, Type)> = sig.params.iter()
+        let non_self_params: Vec<(String, Type)> = sig
+            .params
+            .iter()
             .filter(|(p, _)| p != "self")
             .cloned()
             .collect();
@@ -1447,7 +1552,9 @@ impl<'b> Checker<'b> {
                 format!("Call it with {} argument(s).", non_self_params.len()),
                 "Every function call must match the number of arguments the function declares.",
             ));
-            for arg in &call.args { self.infer_expr(arg, None); }
+            for arg in &call.args {
+                self.infer_expr(arg, None);
+            }
             return Type::Error;
         }
 
@@ -1521,16 +1628,22 @@ impl<'b> Checker<'b> {
                 ok = false;
             }
         }
-        if !ok { return Type::Error; }
+        if !ok {
+            return Type::Error;
+        }
 
         // Verify follows constraints.
         for (tp_name, contracts) in &sig.constraints {
-            let Some(concrete_ty) = subst.get(tp_name) else { continue };
+            let Some(concrete_ty) = subst.get(tp_name) else {
+                continue;
+            };
             let concrete_ty = concrete_ty.clone();
             for contract_name in contracts {
                 match &concrete_ty {
                     Type::Shape { name: shape_name } => {
-                        let satisfies = self.shape_table.get(shape_name)
+                        let satisfies = self
+                            .shape_table
+                            .get(shape_name)
                             .map(|def| def.follows.contains(contract_name))
                             .unwrap_or(false);
                         if !satisfies {
@@ -1560,16 +1673,22 @@ impl<'b> Checker<'b> {
         let concrete_ret = apply_substitution(&sig.ret, &subst);
 
         // Record the instantiation.
-        let concrete_type_args: Vec<Type> = sig.type_params.iter()
+        let concrete_type_args: Vec<Type> = sig
+            .type_params
+            .iter()
             .map(|tp| subst.get(tp).cloned().unwrap_or(Type::Error))
             .collect();
-        let concrete_params: Vec<Type> = non_self_params.iter()
+        let concrete_params: Vec<Type> = non_self_params
+            .iter()
             .map(|(_, ty)| apply_substitution(ty, &subst))
             .collect();
         self.mono_table.record(
             name.to_string(),
             concrete_type_args,
-            MonoSignature { param_types: concrete_params, ret_type: concrete_ret.clone() },
+            MonoSignature {
+                param_types: concrete_params,
+                ret_type: concrete_ret.clone(),
+            },
         );
 
         concrete_ret
@@ -1653,7 +1772,11 @@ impl<'b> Checker<'b> {
             } else {
                 self.diags.push(Diagnostic::error(
                     method_span.clone(),
-                    format!("`map<{}, {}>` does not have a method called `{method}`.", type_name(&key), type_name(&val)),
+                    format!(
+                        "`map<{}, {}>` does not have a method called `{method}`.",
+                        type_name(&key),
+                        type_name(&val)
+                    ),
                     "Available methods: get, set, has, remove, count, keys, values, entries.",
                     "Check the spelling. Use `m[key]` for reads and `m[key] = value` for writes.",
                 ));
@@ -1771,7 +1894,10 @@ impl<'b> Checker<'b> {
         };
         self.diags.push(Diagnostic::error(
             method_span.clone(),
-            format!("`{}` does not have a method called `{method}`.", type_name(receiver_ty)),
+            format!(
+                "`{}` does not have a method called `{method}`.",
+                type_name(receiver_ty)
+            ),
             what_instead,
             "Method calls are checked at compile time. Only the listed methods exist on this type.",
         ));
@@ -1799,14 +1925,22 @@ impl<'b> Checker<'b> {
                 inner.clone()
             }
             "message" => Type::String,
-            "suggestions" => Type::BuiltinArray { elem: Box::new(Type::String) },
+            "suggestions" => Type::BuiltinArray {
+                elem: Box::new(Type::String),
+            },
             "trace" => {
                 // trace returns array<Frame> — Frame is a compiler-synthesized shape.
-                Type::BuiltinArray { elem: Box::new(Type::Shape { name: "Frame".into() }) }
+                Type::BuiltinArray {
+                    elem: Box::new(Type::Shape {
+                        name: "Frame".into(),
+                    }),
+                }
             }
             "source" => {
                 // source returns SourceLoc — a compiler-synthesized shape.
-                Type::Shape { name: "SourceLoc".into() }
+                Type::Shape {
+                    name: "SourceLoc".into(),
+                }
             }
             other => {
                 self.diags.push(Diagnostic::error(
@@ -1843,7 +1977,9 @@ impl<'b> Checker<'b> {
             AstType::Nothing => Type::Nothing,
             AstType::Int => Type::Int,
             AstType::Float => Type::Float,
-            AstType::Number { precision } => Type::Number { precision: *precision },
+            AstType::Number { precision } => Type::Number {
+                precision: *precision,
+            },
             AstType::Bool => Type::Bool,
             AstType::Error => Type::Error,
             AstType::Named(n, _) if n == "string" => Type::String,
@@ -1859,18 +1995,19 @@ impl<'b> Checker<'b> {
             AstType::Named(n, _) if self.options_table.contains(n) => {
                 Type::Options { name: n.clone() }
             }
-            AstType::Named(n, _) if self.shape_table.contains(n) => {
-                Type::Shape { name: n.clone() }
-            }
+            AstType::Named(n, _) if self.shape_table.contains(n) => Type::Shape { name: n.clone() },
             // M7 P3c: built-in compiler-synthesized types — always recognized.
             AstType::Named(n, _) if matches!(n.as_str(), "Frame" | "SourceLoc") => {
                 Type::Shape { name: n.clone() }
             }
             // M7 P3c: first-class range type — `range` as a type annotation.
-            AstType::Named(n, _) if n == "range" => {
-                Type::Range { element: Box::new(Type::Int), end_inclusive: false }
-            }
-            AstType::Named(n, span) if matches!(n.as_str(), "array" | "fixed" | "maybe" | "map" | "MapEntry") => {
+            AstType::Named(n, _) if n == "range" => Type::Range {
+                element: Box::new(Type::Int),
+                end_inclusive: false,
+            },
+            AstType::Named(n, span)
+                if matches!(n.as_str(), "array" | "fixed" | "maybe" | "map" | "MapEntry") =>
+            {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
                     format!("`{n}` requires type argument(s)."),
@@ -1893,23 +2030,23 @@ impl<'b> Checker<'b> {
                 Type::Error
             }
             AstType::Range { .. } => Type::Error,
-            AstType::SelfType { span } => {
-                match &self.current_shape {
-                    Some(name) => Type::Shape { name: name.clone() },
-                    None => {
-                        self.diags.push(Diagnostic::error(
+            AstType::SelfType { span } => match &self.current_shape {
+                Some(name) => Type::Shape { name: name.clone() },
+                None => {
+                    self.diags.push(Diagnostic::error(
                             span.clone(),
                             "`Self` can only be used inside a function that operates on a shape.",
                             "Use the concrete shape name instead, e.g. `Player`.",
                             "`Self` refers to the type of the enclosing shape — it only makes sense inside functions with a `self` receiver parameter.",
                         ));
-                        Type::Error
-                    }
+                    Type::Error
                 }
-            }
+            },
             AstType::Dynamic { contract, span } => {
                 if self.shape_table.contains(contract) {
-                    Type::Dynamic { contract: contract.clone() }
+                    Type::Dynamic {
+                        contract: contract.clone(),
+                    }
                 } else {
                     self.diags.push(Diagnostic::error(
                         span.clone(),
@@ -1927,11 +2064,18 @@ impl<'b> Checker<'b> {
                     Type::Error
                 }
             }
-            AstType::Generic { name, args, name_span, .. } => {
+            AstType::Generic {
+                name,
+                args,
+                name_span,
+                ..
+            } => {
                 // Catch capitalized built-in names (Array, Fixed, Map) — Golden Rule 13:
                 // capital letter = type, everything else = lowercase. Built-ins are lowercase.
                 let lower = name.to_lowercase();
-                if name.as_str() != lower.as_str() && matches!(lower.as_str(), "array" | "fixed" | "map") {
+                if name.as_str() != lower.as_str()
+                    && matches!(lower.as_str(), "array" | "fixed" | "map")
+                {
                     self.diags.push(Diagnostic::error(
                         name_span.clone(),
                         format!("`{name}` is not a type — built-in collection types are lowercase in Yinz."),
@@ -1941,31 +2085,46 @@ impl<'b> Checker<'b> {
                     ));
                     return Type::Error;
                 }
-                let resolved_args: Vec<Type> = args.iter().map(|a| self.ast_type_to_type(a)).collect();
+                let resolved_args: Vec<Type> =
+                    args.iter().map(|a| self.ast_type_to_type(a)).collect();
                 match name.as_str() {
                     "array" => {
                         let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
-                        Type::BuiltinArray { elem: Box::new(elem) }
+                        Type::BuiltinArray {
+                            elem: Box::new(elem),
+                        }
                     }
                     "fixed" => {
                         let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
-                        Type::BuiltinFixed { elem: Box::new(elem), size: None }
+                        Type::BuiltinFixed {
+                            elem: Box::new(elem),
+                            size: None,
+                        }
                     }
                     "map" => {
                         let mut args = resolved_args.into_iter();
                         let key = args.next().unwrap_or(Type::Error);
                         let val = args.next().unwrap_or(Type::Error);
-                        Type::BuiltinMap { key: Box::new(key), val: Box::new(val) }
+                        Type::BuiltinMap {
+                            key: Box::new(key),
+                            val: Box::new(val),
+                        }
                     }
                     "MapEntry" => {
                         let mut args = resolved_args.into_iter();
                         let key = args.next().unwrap_or(Type::Error);
                         let val = args.next().unwrap_or(Type::Error);
-                        Type::MapEntry { key: Box::new(key), val: Box::new(val) }
+                        Type::MapEntry {
+                            key: Box::new(key),
+                            val: Box::new(val),
+                        }
                     }
                     _ => {
                         if self.generic_shape_table.contains(name) {
-                            Type::Generic { name: name.clone(), args: resolved_args }
+                            Type::Generic {
+                                name: name.clone(),
+                                args: resolved_args,
+                            }
                         } else {
                             Type::Error
                         }
@@ -1974,11 +2133,14 @@ impl<'b> Checker<'b> {
             }
             AstType::Maybe { inner, .. } => {
                 let inner_ty = self.ast_type_to_type(inner);
-                Type::Maybe { inner: Box::new(inner_ty) }
+                Type::Maybe {
+                    inner: Box::new(inner_ty),
+                }
             }
             // M6: Union types — resolve each variant and return Type::Union.
             AstType::Union { variants, .. } => {
-                let resolved: Vec<Type> = variants.iter().map(|v| self.ast_type_to_type(v)).collect();
+                let resolved: Vec<Type> =
+                    variants.iter().map(|v| self.ast_type_to_type(v)).collect();
                 // `T | none` is rewritten to `maybe<T>` per design/narrowing.md.
                 if resolved.len() == 2 {
                     let none_idx = resolved.iter().position(|t| *t == Type::Error); // none resolves oddly
@@ -1994,7 +2156,9 @@ impl<'b> Checker<'b> {
             // M7 P3a: `-> T errors` — resolve to ErrorsCapable wrapping the inner type.
             AstType::ErrorCapable { inner, .. } => {
                 let inner_ty = self.ast_type_to_type(inner);
-                Type::ErrorsCapable { inner: Box::new(inner_ty) }
+                Type::ErrorsCapable {
+                    inner: Box::new(inner_ty),
+                }
             }
         }
     }
@@ -2015,13 +2179,21 @@ impl<'b> Checker<'b> {
         ));
     }
 
-
     #[cfg(test)]
-    fn check_test_fn_call(&mut self, call: &CallExpr, name: &str, sig: &crate::intrinsics::FreeFnSig) -> Type {
+    fn check_test_fn_call(
+        &mut self,
+        call: &CallExpr,
+        name: &str,
+        sig: &crate::intrinsics::FreeFnSig,
+    ) -> Type {
         if call.args.len() != sig.params.len() {
             self.diags.push(Diagnostic::error(
                 call.span.clone(),
-                format!("`{name}` takes {} argument(s), but {} were given.", sig.params.len(), call.args.len()),
+                format!(
+                    "`{name}` takes {} argument(s), but {} were given.",
+                    sig.params.len(),
+                    call.args.len()
+                ),
                 format!("Call it with {} argument(s).", sig.params.len()),
                 "Every function call must match the number of arguments the function expects.",
             ));
@@ -2032,9 +2204,17 @@ impl<'b> Checker<'b> {
             if actual != *expected && actual != Type::Error {
                 self.diags.push(Diagnostic::error(
                     arg.span().clone(),
-                    format!("Argument {} to `{name}` should be `{}`, but got `{}`.", i + 1, type_name(expected), type_name(&actual)),
+                    format!(
+                        "Argument {} to `{name}` should be `{}`, but got `{}`.",
+                        i + 1,
+                        type_name(expected),
+                        type_name(&actual)
+                    ),
                     format!("Pass a `{}` here.", type_name(expected)),
-                    format!("`{name}` expects `{}` in this position.", type_name(expected)),
+                    format!(
+                        "`{name}` expects `{}` in this position.",
+                        type_name(expected)
+                    ),
                 ));
             }
         }
@@ -2059,13 +2239,17 @@ impl<'b> Checker<'b> {
             .collect();
 
         for (shape_name, contracts, _own_sigs) in &follows_list {
-            let shape_ty = Type::Shape { name: shape_name.clone() };
+            let shape_ty = Type::Shape {
+                name: shape_name.clone(),
+            };
             for contract_name in contracts {
                 let Some(contract_def) = self.shape_table.get(contract_name) else {
                     continue; // already errored in collect_shapes
                 };
                 let contract_sigs = contract_def.contract_sigs.clone();
-                let shape_def_span = self.shape_table.get(shape_name)
+                let shape_def_span = self
+                    .shape_table
+                    .get(shape_name)
                     .map(|s| s.defined_at.clone())
                     .unwrap_or_else(|| SourceSpan::new("", 0, 0));
 
@@ -2123,7 +2307,12 @@ impl<'b> Checker<'b> {
     // ── M4 P3a: shape type-checking ──────────────────────────────────────────
 
     /// Infer the type of a field access `receiver.field`.
-    fn infer_field_access(&mut self, receiver: &Expr, field: &str, field_span: &SourceSpan) -> Type {
+    fn infer_field_access(
+        &mut self,
+        receiver: &Expr,
+        field: &str,
+        field_span: &SourceSpan,
+    ) -> Type {
         let receiver_ty = self.infer_expr(receiver, None);
 
         // M7 P3a: errors-capable value property access (message, suggestions, trace, source).
@@ -2132,11 +2321,17 @@ impl<'b> Checker<'b> {
             let inner = inner.as_ref().clone();
             return match field {
                 "message" => Type::String,
-                "suggestions" => Type::BuiltinArray { elem: Box::new(Type::String) },
-                "trace" => Type::BuiltinArray {
-                    elem: Box::new(Type::Shape { name: "Frame".into() }),
+                "suggestions" => Type::BuiltinArray {
+                    elem: Box::new(Type::String),
                 },
-                "source" => Type::Shape { name: "SourceLoc".into() },
+                "trace" => Type::BuiltinArray {
+                    elem: Box::new(Type::Shape {
+                        name: "Frame".into(),
+                    }),
+                },
+                "source" => Type::Shape {
+                    name: "SourceLoc".into(),
+                },
                 other => {
                     // Not an error-property — check if it's a field on the inner type.
                     // Recurse by pretending the receiver has the inner type.
@@ -2261,7 +2456,9 @@ impl<'b> Checker<'b> {
         if shape_name == "Frame" {
             return match field {
                 "file" => Type::String,
-                "line" => Type::Maybe { inner: Box::new(Type::Int) },
+                "line" => Type::Maybe {
+                    inner: Box::new(Type::Int),
+                },
                 "function" => Type::String,
                 other => {
                     self.diags.push(Diagnostic::error(
@@ -2277,7 +2474,9 @@ impl<'b> Checker<'b> {
         if shape_name == "SourceLoc" {
             return match field {
                 "file" => Type::String,
-                "line" => Type::Maybe { inner: Box::new(Type::Int) },
+                "line" => Type::Maybe {
+                    inner: Box::new(Type::Int),
+                },
                 other => {
                     self.diags.push(Diagnostic::error(
                         field_span.clone(),
@@ -2302,7 +2501,7 @@ impl<'b> Checker<'b> {
             };
             self.diags.push(Diagnostic::error(
                 field_span.clone(),
-                format!("`{shape_name}` does not have a field called `{field}`.", ),
+                format!("`{shape_name}` does not have a field called `{field}`.",),
                 what_instead,
                 "Field names must match exactly what was declared in the `shape` body.",
             ));
@@ -2325,12 +2524,20 @@ impl<'b> Checker<'b> {
     }
 
     /// Type-check a struct literal `{ name: "x", health: 100 }` against the hint type.
-    fn check_struct_lit(&mut self, fields: &[StructLitField], hint: Option<&Type>, span: &SourceSpan) -> Type {
+    fn check_struct_lit(
+        &mut self,
+        fields: &[StructLitField],
+        hint: Option<&Type>,
+        span: &SourceSpan,
+    ) -> Type {
         // M5 P3c: handle `let m: map<K,V> = { }` — empty struct lit with BuiltinMap annotation.
         // Non-empty struct lits with identifier keys are errors (should be MapLit with string keys).
         if let Some(Type::BuiltinMap { key, val }) = hint {
             if fields.is_empty() {
-                return Type::BuiltinMap { key: key.clone(), val: val.clone() };
+                return Type::BuiltinMap {
+                    key: key.clone(),
+                    val: val.clone(),
+                };
             }
             self.diags.push(Diagnostic::error(
                 span.clone(),
@@ -2338,26 +2545,64 @@ impl<'b> Checker<'b> {
                 "Write `{ \"key\": value }` instead of `{ key: value }` for map literals.",
                 "Shape values use identifier field names. Map literals use string or integer literal keys.",
             ));
-            for f in fields { self.infer_expr(&f.value, None); }
+            for f in fields {
+                self.infer_expr(&f.value, None);
+            }
             return Type::Error;
         }
 
         let shape_name = match hint {
             Some(Type::Shape { name }) => name.clone(),
+            // `let x: array<Symbol> = { ... }` — they wrote a shape value where an array goes.
+            // Specific suggestion: wrap in brackets.
+            Some(Type::BuiltinArray { elem }) => {
+                let elem_name = type_name(elem);
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("`{{ ... }}` creates a single `{elem_name}` value, not an `array<{elem_name}>`."),
+                    format!("Put it inside `[...]` to make an array: `[{{ ... }}]`"),
+                    format!("`{{ ... }}` creates one value. `[...]` creates a collection. \
+                             Use `array<{elem_name}>` when you need multiple values."),
+                ));
+                for f in fields {
+                    self.infer_expr(&f.value, None);
+                }
+                return Type::Error;
+            }
+            Some(Type::BuiltinFixed { elem, .. }) => {
+                let elem_name = type_name(elem);
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("`{{ ... }}` creates a single `{elem_name}` value, not a `fixed<{elem_name}>`."),
+                    format!("Put it inside `[...]` to make a fixed array: `[{{ ... }}]`"),
+                    format!("`{{ ... }}` creates one value. `[...]` creates a collection."),
+                ));
+                for f in fields {
+                    self.infer_expr(&f.value, None);
+                }
+                return Type::Error;
+            }
             Some(other) if *other != Type::Error => {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
-                    format!("A shape value `{{ ... }}` cannot produce a `{}` value.", type_name(other)),
+                    format!(
+                        "A shape value `{{ ... }}` cannot produce a `{}` value.",
+                        type_name(other)
+                    ),
                     "Annotate the binding with a `shape` name: `let p: Player = { ... }`",
                     "Shape values can only be created for `shape` types, not primitive types.",
                 ));
-                for f in fields { self.infer_expr(&f.value, None); }
+                for f in fields {
+                    self.infer_expr(&f.value, None);
+                }
                 return Type::Error;
             }
             Some(Type::Error) => {
                 // Hint is Type::Error — an upstream diagnostic already explained the problem.
                 // Don't cascade with a confusing "needs a type annotation" message.
-                for f in fields { self.infer_expr(&f.value, None); }
+                for f in fields {
+                    self.infer_expr(&f.value, None);
+                }
                 return Type::Error;
             }
             _ => {
@@ -2367,13 +2612,17 @@ impl<'b> Checker<'b> {
                     "Add a type annotation: `let p: Player = { ... }`",
                     "Shape values are anonymous — the `shape` type comes from the annotation on the left. Without it, the compiler cannot check field names or types.",
                 ));
-                for f in fields { self.infer_expr(&f.value, None); }
+                for f in fields {
+                    self.infer_expr(&f.value, None);
+                }
                 return Type::Error;
             }
         };
 
         let Some(shape_def) = self.shape_table.get(&shape_name) else {
-            for f in fields { self.infer_expr(&f.value, None); }
+            for f in fields {
+                self.infer_expr(&f.value, None);
+            }
             return Type::Error;
         };
 
@@ -2385,7 +2634,9 @@ impl<'b> Checker<'b> {
                 format!("Create a shape that extends `{shape_name}`, then construct that instead."),
                 "`base shape` declarations are meant to be extended — they provide shared fields for child shapes but cannot be instantiated on their own.",
             ));
-            for f in fields { self.infer_expr(&f.value, None); }
+            for f in fields {
+                self.infer_expr(&f.value, None);
+            }
             return Type::Error;
         }
 
@@ -2407,23 +2658,32 @@ impl<'b> Checker<'b> {
 
         // Check each provided field: name must exist and value type must match.
         for lit_field in fields {
-            let expected_ty = shape_def.fields.iter()
+            let expected_ty = shape_def
+                .fields
+                .iter()
                 .find(|f| f.name == lit_field.name)
                 .map(|f| f.ty.clone());
             match expected_ty {
                 None => {
-                    let available: Vec<&str> = shape_def.fields.iter()
+                    let available: Vec<&str> = shape_def
+                        .fields
+                        .iter()
                         .filter(|f| !f.is_hidden)
                         .map(|f| f.name.as_str())
                         .collect();
                     let suggestion = find_closest_name(&lit_field.name, &available);
                     let what_instead = match suggestion {
                         Some(close) => format!("Did you mean `{close}`?"),
-                        None => format!("`{shape_name}` has these fields: {}", available.join(", ")),
+                        None => {
+                            format!("`{shape_name}` has these fields: {}", available.join(", "))
+                        }
                     };
                     self.diags.push(Diagnostic::error(
                         lit_field.name_span.clone(),
-                        format!("`{shape_name}` does not have a field called `{}`.", lit_field.name),
+                        format!(
+                            "`{shape_name}` does not have a field called `{}`.",
+                            lit_field.name
+                        ),
                         what_instead,
                         "Shape values can only set fields declared on the shape.",
                     ));
@@ -2434,9 +2694,22 @@ impl<'b> Checker<'b> {
                     if actual != Type::Error && expected != Type::Error && actual != expected {
                         self.diags.push(Diagnostic::error(
                             lit_field.name_span.clone(),
-                            format!("Field `{}` expects `{}`, but got `{}`.", lit_field.name, type_name(&expected), type_name(&actual)),
-                            format!("Pass a `{}` value for `{}`.", type_name(&expected), lit_field.name),
-                            format!("`{shape_name}.{}` was declared as `{}`.", lit_field.name, type_name(&expected)),
+                            format!(
+                                "Field `{}` expects `{}`, but got `{}`.",
+                                lit_field.name,
+                                type_name(&expected),
+                                type_name(&actual)
+                            ),
+                            format!(
+                                "Pass a `{}` value for `{}`.",
+                                type_name(&expected),
+                                lit_field.name
+                            ),
+                            format!(
+                                "`{shape_name}.{}` was declared as `{}`.",
+                                lit_field.name,
+                                type_name(&expected)
+                            ),
                         ));
                     }
                 }
@@ -2448,7 +2721,13 @@ impl<'b> Checker<'b> {
 
     /// Type-check a field assignment `target.field = value`.
     fn check_field_assign(&mut self, target: &Expr, value: &Expr, span: &SourceSpan) {
-        let Expr::FieldAccess { receiver, field, field_span, .. } = target else {
+        let Expr::FieldAccess {
+            receiver,
+            field,
+            field_span,
+            ..
+        } = target
+        else {
             // Parser only produces FieldAssign when target is a FieldAccess, but be defensive.
             self.infer_expr(target, None);
             self.infer_expr(value, None);
@@ -2479,9 +2758,16 @@ impl<'b> Checker<'b> {
         if field_ty != Type::Error && value_ty != Type::Error && field_ty != value_ty {
             self.diags.push(Diagnostic::error(
                 span.clone(),
-                format!("Cannot assign `{}` to field `{field}` which has type `{}`.", type_name(&value_ty), type_name(&field_ty)),
+                format!(
+                    "Cannot assign `{}` to field `{field}` which has type `{}`.",
+                    type_name(&value_ty),
+                    type_name(&field_ty)
+                ),
                 format!("Pass a `{}` value.", type_name(&field_ty)),
-                format!("The field `{field}` was declared as `{}`.", type_name(&field_ty)),
+                format!(
+                    "The field `{field}` was declared as `{}`.",
+                    type_name(&field_ty)
+                ),
             ));
         }
     }
@@ -2493,7 +2779,9 @@ impl<'b> Checker<'b> {
             PostfixOpKind::Copy => {
                 // P3c will enforce trivially-copyable requirement.
                 // P3a: just return the receiver type.
-                if receiver_ty == Type::Error { return Type::Error; }
+                if receiver_ty == Type::Error {
+                    return Type::Error;
+                }
                 receiver_ty
             }
             PostfixOpKind::Freeze => {
@@ -2506,7 +2794,12 @@ impl<'b> Checker<'b> {
     }
 
     /// Type-check an array or fixed literal `[e1, e2, ...]`.
-    fn check_array_lit(&mut self, elements: &[Expr], hint: Option<&Type>, span: &SourceSpan) -> Type {
+    fn check_array_lit(
+        &mut self,
+        elements: &[Expr],
+        hint: Option<&Type>,
+        span: &SourceSpan,
+    ) -> Type {
         // Determine element type and whether this is a fixed literal from the hint.
         let (hint_elem, is_fixed) = match hint {
             Some(Type::BuiltinArray { elem }) => (Some(elem.as_ref().clone()), false),
@@ -2542,8 +2835,16 @@ impl<'b> Checker<'b> {
             } else if ty != Type::Error && elem_ty != Type::Error && ty != elem_ty {
                 self.diags.push(Diagnostic::error(
                     elem.span().clone(),
-                    format!("Element {} has type `{}`, but the array expects `{}`.", i + 1, type_name(&ty), type_name(&elem_ty)),
-                    format!("Use a `{}` value here, or change the annotation.", type_name(&elem_ty)),
+                    format!(
+                        "Element {} has type `{}`, but the array expects `{}`.",
+                        i + 1,
+                        type_name(&ty),
+                        type_name(&elem_ty)
+                    ),
+                    format!(
+                        "Use a `{}` value here, or change the annotation.",
+                        type_name(&elem_ty)
+                    ),
                     "All elements of an array or fixed literal must have the same type.",
                 ));
             }
@@ -2564,14 +2865,25 @@ impl<'b> Checker<'b> {
 
         let size = elements.len();
         if is_fixed {
-            Type::BuiltinFixed { elem: Box::new(elem_ty), size: Some(size) }
+            Type::BuiltinFixed {
+                elem: Box::new(elem_ty),
+                size: Some(size),
+            }
         } else {
-            Type::BuiltinArray { elem: Box::new(elem_ty) }
+            Type::BuiltinArray {
+                elem: Box::new(elem_ty),
+            }
         }
     }
 
     /// Type-check an index assignment `receiver[index] = value`.
-    fn check_index_assign(&mut self, receiver: &Expr, index: &Expr, value: &Expr, span: &SourceSpan) {
+    fn check_index_assign(
+        &mut self,
+        receiver: &Expr,
+        index: &Expr,
+        value: &Expr,
+        span: &SourceSpan,
+    ) {
         let recv_ty = self.infer_expr(receiver, None);
         let _idx_ty = self.infer_expr(index, Some(&Type::Int));
         match &recv_ty {
@@ -2581,7 +2893,11 @@ impl<'b> Checker<'b> {
                 if val_ty != Type::Error && expected != Type::Error && val_ty != expected {
                     self.diags.push(Diagnostic::error(
                         value.span().clone(),
-                        format!("This value is `{}`, but the array holds `{}`.", type_name(&val_ty), type_name(&expected)),
+                        format!(
+                            "This value is `{}`, but the array holds `{}`.",
+                            type_name(&val_ty),
+                            type_name(&expected)
+                        ),
                         format!("Assign a `{}` value.", type_name(&expected)),
                         "Index assignment must match the array's element type.",
                     ));
@@ -2593,7 +2909,11 @@ impl<'b> Checker<'b> {
                 if val_ty != Type::Error && expected != Type::Error && val_ty != expected {
                     self.diags.push(Diagnostic::error(
                         value.span().clone(),
-                        format!("This value is `{}`, but the fixed array holds `{}`.", type_name(&val_ty), type_name(&expected)),
+                        format!(
+                            "This value is `{}`, but the fixed array holds `{}`.",
+                            type_name(&val_ty),
+                            type_name(&expected)
+                        ),
                         format!("Assign a `{}` value.", type_name(&expected)),
                         "Index assignment must match the fixed array's element type.",
                     ));
@@ -2605,13 +2925,19 @@ impl<'b> Checker<'b> {
                 if val_ty != Type::Error && expected != Type::Error && val_ty != expected {
                     self.diags.push(Diagnostic::error(
                         value.span().clone(),
-                        format!("This value has type `{}`, but the map holds `{}` values.", type_name(&val_ty), type_name(&expected)),
+                        format!(
+                            "This value has type `{}`, but the map holds `{}` values.",
+                            type_name(&val_ty),
+                            type_name(&expected)
+                        ),
                         format!("Assign a `{}` value.", type_name(&expected)),
                         "Map value assignment must match the map's value type.",
                     ));
                 }
             }
-            Type::Error => { self.infer_expr(value, None); }
+            Type::Error => {
+                self.infer_expr(value, None);
+            }
             other => {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
@@ -2625,36 +2951,62 @@ impl<'b> Checker<'b> {
     }
 
     /// Type-check a map literal `{ "alice": 90, "bob": 85 }`.
-    fn check_map_lit(&mut self, entries: &[(Expr, Expr)], hint: Option<&Type>, span: &SourceSpan) -> Type {
+    fn check_map_lit(
+        &mut self,
+        entries: &[(Expr, Expr)],
+        hint: Option<&Type>,
+        span: &SourceSpan,
+    ) -> Type {
         let (hint_key, hint_val) = match hint {
-            Some(Type::BuiltinMap { key, val }) => (Some(key.as_ref().clone()), Some(val.as_ref().clone())),
+            Some(Type::BuiltinMap { key, val }) => {
+                (Some(key.as_ref().clone()), Some(val.as_ref().clone()))
+            }
             _ => (None, None),
         };
 
         let mut key_ty = hint_key.clone().unwrap_or(Type::Error);
         let mut val_ty = hint_val.clone().unwrap_or(Type::Error);
-        let mut seen_keys: std::collections::HashMap<String, ynz_diagnostics::SourceSpan> = std::collections::HashMap::new();
+        let mut seen_keys: std::collections::HashMap<String, ynz_diagnostics::SourceSpan> =
+            std::collections::HashMap::new();
 
         for (key_expr, val_expr) in entries {
             let k = self.infer_expr(key_expr, hint_key.as_ref());
             let v = self.infer_expr(val_expr, hint_val.as_ref());
 
-            if key_ty == Type::Error { key_ty = k.clone(); }
-            if val_ty == Type::Error { val_ty = v.clone(); }
+            if key_ty == Type::Error {
+                key_ty = k.clone();
+            }
+            if val_ty == Type::Error {
+                val_ty = v.clone();
+            }
 
             if k != Type::Error && key_ty != Type::Error && k != key_ty {
                 self.diags.push(Diagnostic::error(
                     key_expr.span().clone(),
-                    format!("This key has type `{}`, but the map uses `{}` keys.", type_name(&k), type_name(&key_ty)),
-                    format!("Use a `{}` key, or change the map annotation.", type_name(&key_ty)),
+                    format!(
+                        "This key has type `{}`, but the map uses `{}` keys.",
+                        type_name(&k),
+                        type_name(&key_ty)
+                    ),
+                    format!(
+                        "Use a `{}` key, or change the map annotation.",
+                        type_name(&key_ty)
+                    ),
                     "All keys in a map literal must have the same type.",
                 ));
             }
             if v != Type::Error && val_ty != Type::Error && v != val_ty {
                 self.diags.push(Diagnostic::error(
                     val_expr.span().clone(),
-                    format!("This value has type `{}`, but the map holds `{}` values.", type_name(&v), type_name(&val_ty)),
-                    format!("Use a `{}` value, or change the map annotation.", type_name(&val_ty)),
+                    format!(
+                        "This value has type `{}`, but the map holds `{}` values.",
+                        type_name(&v),
+                        type_name(&val_ty)
+                    ),
+                    format!(
+                        "Use a `{}` value, or change the map annotation.",
+                        type_name(&val_ty)
+                    ),
                     "All values in a map literal must have the same type.",
                 ));
             }
@@ -2702,19 +3054,34 @@ impl<'b> Checker<'b> {
             ));
         }
 
-        Type::BuiltinMap { key: Box::new(key_ty), val: Box::new(val_ty) }
+        Type::BuiltinMap {
+            key: Box::new(key_ty),
+            val: Box::new(val_ty),
+        }
     }
 
     // ── M6: union + narrowing typeck ──────────────────────────────────────────
 
     /// Validate an `Is(TypePath)` arm pattern in a multi-case block.
     /// Emits a diagnostic if the named type is not a variant of the scrutinee's union.
-    fn check_is_arm_pattern(&mut self, scrutinee_ty: &Type, type_path: &ynz_ast::nodes::TypePath, span: &SourceSpan) {
+    fn check_is_arm_pattern(
+        &mut self,
+        scrutinee_ty: &Type,
+        type_path: &ynz_ast::nodes::TypePath,
+        span: &SourceSpan,
+    ) {
         match scrutinee_ty {
             Type::Union { variants } => {
-                let valid: Vec<String> = variants.iter().filter_map(|v| {
-                    if let Type::Shape { name } = v { Some(name.clone()) } else { None }
-                }).collect();
+                let valid: Vec<String> = variants
+                    .iter()
+                    .filter_map(|v| {
+                        if let Type::Shape { name } = v {
+                            Some(name.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
                 if !type_path.name.is_empty() && !valid.contains(&type_path.name) {
                     self.diags.push(Diagnostic::error(
                         type_path.span.clone(),
@@ -2747,16 +3114,28 @@ impl<'b> Checker<'b> {
     /// For the condition-form narrowing (`if (x is Foo) { ... }`), the
     /// actual narrowing fact is applied in `check_stmt_if` when it detects
     /// an `Expr::Is` condition. This method just produces the bool type.
-    fn check_is_expr(&mut self, inner: &Expr, type_path: &ynz_ast::nodes::TypePath, _span: &SourceSpan) -> Type {
+    fn check_is_expr(
+        &mut self,
+        inner: &Expr,
+        type_path: &ynz_ast::nodes::TypePath,
+        _span: &SourceSpan,
+    ) -> Type {
         let scrutinee_ty = self.infer_expr(inner, None);
         if type_path.name.is_empty() {
             return Type::Bool; // parse error already emitted
         }
         match &scrutinee_ty {
             Type::Union { variants } => {
-                let variant_names: Vec<String> = variants.iter().filter_map(|v| {
-                    if let Type::Shape { name } = v { Some(name.clone()) } else { None }
-                }).collect();
+                let variant_names: Vec<String> = variants
+                    .iter()
+                    .filter_map(|v| {
+                        if let Type::Shape { name } = v {
+                            Some(name.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
                 if !variant_names.contains(&type_path.name) {
                     self.diags.push(Diagnostic::error(
                         type_path.span.clone(),
@@ -2790,7 +3169,9 @@ impl<'b> Checker<'b> {
     fn check_options_value(&mut self, type_name: &str, variant: &str, span: &SourceSpan) -> Type {
         let entry = self.options_table.get(type_name).unwrap(); // caller verified contains()
         if entry.variants.contains(&variant.to_string()) {
-            Type::Options { name: type_name.to_string() }
+            Type::Options {
+                name: type_name.to_string(),
+            }
         } else {
             let valid: Vec<&str> = entry.variants.iter().map(String::as_str).collect();
             self.diags.push(Diagnostic::error(
@@ -2806,7 +3187,12 @@ impl<'b> Checker<'b> {
     /// Typecheck an `OptionName` arm in a multi-case `if`.
     ///
     /// Validates: scrutinee is an options type; variant name is valid for that type.
-    fn check_option_name_arm(&mut self, scrutinee_ty: &Type, variant_name: &str, span: &SourceSpan) {
+    fn check_option_name_arm(
+        &mut self,
+        scrutinee_ty: &Type,
+        variant_name: &str,
+        span: &SourceSpan,
+    ) {
         match scrutinee_ty {
             Type::Options { name: opts_name } => {
                 if let Some(entry) = self.options_table.get(opts_name) {
@@ -2835,7 +3221,6 @@ impl<'b> Checker<'b> {
     }
 }
 
-
 /// Resolve a simple AST type to a typeck Type using available table info.
 ///
 /// Used for union alias resolution before the full Checker is built.
@@ -2845,12 +3230,21 @@ fn resolve_alias_type(ast_ty: &AstType, shape_table: &crate::shapes::ShapeTable)
         AstType::Int => Type::Int,
         AstType::Float => Type::Float,
         AstType::Bool => Type::Bool,
-        AstType::Number { precision } => Type::Number { precision: *precision },
+        AstType::Number { precision } => Type::Number {
+            precision: *precision,
+        },
         AstType::Named(n, _) if n == "string" => Type::String,
         AstType::Named(n, _) if shape_table.contains(n) => Type::Shape { name: n.clone() },
         AstType::Union { variants, .. } => {
-            let resolved: Vec<Type> = variants.iter().map(|v| resolve_alias_type(v, shape_table)).collect();
-            if resolved.len() < 2 { Type::Error } else { Type::Union { variants: resolved } }
+            let resolved: Vec<Type> = variants
+                .iter()
+                .map(|v| resolve_alias_type(v, shape_table))
+                .collect();
+            if resolved.len() < 2 {
+                Type::Error
+            } else {
+                Type::Union { variants: resolved }
+            }
         }
         _ => Type::Error,
     }
@@ -2860,7 +3254,10 @@ fn resolve_alias_type(ast_ty: &AstType, shape_table: &crate::shapes::ShapeTable)
 ///
 /// These are union type aliases like `shape Shape = Circle | Square | Triangle`.
 /// The alias name maps to the resolved alias type.
-fn collect_union_aliases(module: &Module, shape_table: &crate::shapes::ShapeTable) -> HashMap<String, Type> {
+fn collect_union_aliases(
+    module: &Module,
+    shape_table: &crate::shapes::ShapeTable,
+) -> HashMap<String, Type> {
     let mut aliases = HashMap::new();
     for item in &module.items {
         if let Item::ShapeDecl(sd) = item {
@@ -2889,7 +3286,11 @@ fn types_compatible(a: &Type, b: &Type) -> bool {
         (Type::Maybe { inner: ia }, Type::Maybe { inner: ib }) => types_compatible(ia, ib),
         // M6: union type compatibility — same set of variants (order-insensitive for now).
         (Type::Union { variants: va }, Type::Union { variants: vb }) => {
-            va.len() == vb.len() && va.iter().zip(vb.iter()).all(|(a, b)| types_compatible(a, b))
+            va.len() == vb.len()
+                && va
+                    .iter()
+                    .zip(vb.iter())
+                    .all(|(a, b)| types_compatible(a, b))
         }
         // M6: assigning a concrete variant type to a union is valid.
         // e.g., `let s: Circle | Square = { radius: 5.0 }` — Circle is a valid union value.
@@ -2934,9 +3335,11 @@ fn is_stringifiable(ty: &Type, sig_table: &crate::signatures::SignatureTable) ->
 /// Returns `None` if the (type_name, const_name) pair is not a known constant.
 pub fn type_attached_const_type(type_name: &str, const_name: &str) -> Option<Type> {
     match (type_name, const_name) {
-        ("int",    "max") | ("int",    "min") => Some(Type::Int),
-        ("float",  "max") | ("float",  "min") | ("float",  "epsilon") => Some(Type::Float),
-        ("number", "max") | ("number", "min") | ("number", "epsilon") => Some(Type::Number { precision: 34 }),
+        ("int", "max") | ("int", "min") => Some(Type::Int),
+        ("float", "max") | ("float", "min") | ("float", "epsilon") => Some(Type::Float),
+        ("number", "max") | ("number", "min") | ("number", "epsilon") => {
+            Some(Type::Number { precision: 34 })
+        }
         _ => None,
     }
 }
@@ -2946,22 +3349,33 @@ fn body_has_error_node(stmts: &[Stmt]) -> bool {
         Stmt::Expr(e) => expr_has_error(e),
         Stmt::Let { value, .. } | Stmt::Assign { value, .. } => expr_has_error(value),
         Stmt::If { cond, body, .. } => expr_has_error(cond) || body_has_error_node(&body.stmts),
-        Stmt::Match { scrutinee, arms, else_arm, .. } => {
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
             expr_has_error(scrutinee)
                 || arms.iter().any(|arm| body_has_error_node(&arm.body.stmts))
-                || else_arm.as_ref().is_some_and(|b| body_has_error_node(&b.stmts))
+                || else_arm
+                    .as_ref()
+                    .is_some_and(|b| body_has_error_node(&b.stmts))
         }
-        Stmt::While { cond, body, .. } | Stmt::For { iter: cond, body, .. } => {
-            expr_has_error(cond) || body_has_error_node(&body.stmts)
-        }
+        Stmt::While { cond, body, .. }
+        | Stmt::For {
+            iter: cond, body, ..
+        } => expr_has_error(cond) || body_has_error_node(&body.stmts),
         Stmt::Return { value, .. } => value.as_ref().is_some_and(expr_has_error),
         // M4 P3a: field assignment — not yet type-checked.
         Stmt::FieldAssign { target, value, .. } => expr_has_error(target) || expr_has_error(value),
         // M5 P1: index assignment — parser does not construct in P1; reached only if
         // out-of-sequence change happens. Walk sub-expressions for safety.
-        Stmt::IndexAssign { receiver, index, value, .. } => {
-            expr_has_error(receiver) || expr_has_error(index) || expr_has_error(value)
-        }
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => expr_has_error(receiver) || expr_has_error(index) || expr_has_error(value),
     })
 }
 
@@ -2982,14 +3396,20 @@ fn expr_has_error(expr: &Expr) -> bool {
         | Expr::SelfValue { .. }
         | Expr::NoneLit { .. } => false,
         // M4 P3a: shape expressions — propagate error check into sub-expressions.
-        Expr::FieldAccess { receiver, .. } | Expr::PostfixOp { receiver, .. } => expr_has_error(receiver),
+        Expr::FieldAccess { receiver, .. } | Expr::PostfixOp { receiver, .. } => {
+            expr_has_error(receiver)
+        }
         Expr::StructLit { fields, .. } => fields.iter().any(|f| expr_has_error(&f.value)),
         // M5 P1: bracket-index — propagate error check into receiver + index.
-        Expr::IndexAccess { receiver, index, .. } => expr_has_error(receiver) || expr_has_error(index),
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => expr_has_error(receiver) || expr_has_error(index),
         // M5 P3b: array literal — propagate error check into all elements.
         Expr::ArrayLit { elements, .. } => elements.iter().any(expr_has_error),
         // M5 P3c: map literal — propagate error check into all keys and values.
-        Expr::MapLit { entries, .. } => entries.iter().any(|(k, v)| expr_has_error(k) || expr_has_error(v)),
+        Expr::MapLit { entries, .. } => entries
+            .iter()
+            .any(|(k, v)| expr_has_error(k) || expr_has_error(v)),
         // M6: is-expression — propagate into the scrutinee.
         Expr::Is { expr, .. } => expr_has_error(expr),
         // M7: interpolated string — propagate into each interpolated sub-expression.
@@ -3003,12 +3423,24 @@ fn expr_has_error(expr: &Expr) -> bool {
 fn binop_display(op: &BinOpKind) -> &'static str {
     use BinOpKind::*;
     match op {
-        Add => "+", Sub => "-", Mul => "*", Div => "/", Rem => "%",
-        Lt => "<", LtEq => "<=", Gt => ">", GtEq => ">=",
-        EqEq => "==", NotEq => "!=",
-        And => "&&", Or => "||",
-        BitAnd => "&", BitOr => "|", BitXor => "^",
-        Shl => "<<", Shr => ">>",
+        Add => "+",
+        Sub => "-",
+        Mul => "*",
+        Div => "/",
+        Rem => "%",
+        Lt => "<",
+        LtEq => "<=",
+        Gt => ">",
+        GtEq => ">=",
+        EqEq => "==",
+        NotEq => "!=",
+        And => "&&",
+        Or => "||",
+        BitAnd => "&",
+        BitOr => "|",
+        BitXor => "^",
+        Shl => "<<",
+        Shr => ">>",
     }
 }
 
@@ -3047,7 +3479,11 @@ pub fn find_closest_name<'a>(target: &str, candidates: &[&'a str]) -> Option<&'a
         .iter()
         .filter_map(|&c| {
             let dist = levenshtein(target, c);
-            if dist <= threshold { Some((dist, c)) } else { None }
+            if dist <= threshold {
+                Some((dist, c))
+            } else {
+                None
+            }
         })
         .min_by_key(|(d, _)| *d)
         .map(|(_, c)| c)
@@ -3098,7 +3534,6 @@ fn root_binding_name(expr: &Expr) -> Option<&str> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3142,12 +3577,32 @@ mod tests {
             Type::Nothing,
         );
         let shape_table = crate::shapes::collect_shapes(&module, &mut DiagnosticBucket::new());
-        let generic_shape_table = crate::shapes::collect_generic_shapes(&module, &mut DiagnosticBucket::new());
-        let sig_table = crate::signatures::collect_signatures(&module, &mut DiagnosticBucket::new(), &shape_table);
-        let generic_fn_table = crate::signatures::collect_generic_signatures(&module, &mut DiagnosticBucket::new(), &shape_table);
-        let (_, _, diags) = check(&module, &sig_table, &shape_table, &generic_fn_table, &generic_shape_table, &intrinsics);
+        let generic_shape_table =
+            crate::shapes::collect_generic_shapes(&module, &mut DiagnosticBucket::new());
+        let sig_table = crate::signatures::collect_signatures(
+            &module,
+            &mut DiagnosticBucket::new(),
+            &shape_table,
+        );
+        let generic_fn_table = crate::signatures::collect_generic_signatures(
+            &module,
+            &mut DiagnosticBucket::new(),
+            &shape_table,
+        );
+        let (_, _, diags) = check(
+            &module,
+            &sig_table,
+            &shape_table,
+            &generic_fn_table,
+            &generic_shape_table,
+            &intrinsics,
+        );
         let diags: Vec<_> = diags.into_iter().collect();
-        assert_eq!(diags.len(), 1, "Expected 1 type-mismatch diagnostic, got: {diags:#?}");
+        assert_eq!(
+            diags.len(),
+            1,
+            "Expected 1 type-mismatch diagnostic, got: {diags:#?}"
+        );
 
         let d = &diags[0];
         assert!(!d.what.is_empty(), "what must be non-empty");
