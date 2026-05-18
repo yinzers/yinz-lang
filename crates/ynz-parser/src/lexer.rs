@@ -299,6 +299,57 @@ impl<'src> Lexer<'src> {
             b'"'  => self.lex_double_quote_error(start),
             b'\'' => self.lex_single_quote_error(start),
 
+            // `#` is a comment marker in Python/shell. Consume to end of line so the
+            // rest of the line doesn't cascade into identifier/keyword parse errors.
+            b'#' => {
+                while self.pos < self.src.len() && self.src[self.pos] != b'\n' {
+                    self.pos += 1;
+                }
+                self.diags.push(Diagnostic::error(
+                    SourceSpan::new(self.file, start, self.pos),
+                    "Yinz uses `//` for comments, not `#`.",
+                    "Change `#` to `//`: `// this is a comment`",
+                    "Yinz follows the C/Rust/Java comment style. \
+                     `#` is not a valid comment or operator in Yinz.",
+                ));
+            }
+
+            // `;` is a statement terminator in JS/Rust/C. Yinz uses newlines instead.
+            b';' => {
+                self.pos += 1;
+                self.diags.push(Diagnostic::error(
+                    SourceSpan::new(self.file, start, self.pos),
+                    "Semicolons are not used in Yinz.",
+                    "Remove the `;` — Yinz uses newlines to end statements.",
+                    "In JavaScript, Rust, and C, semicolons end statements. \
+                     In Yinz, a newline is enough. Your code is correct without the `;`.",
+                ));
+            }
+
+            // `$var` is PHP/shell syntax. Variables in Yinz have no prefix.
+            b'$' => {
+                self.pos += 1;
+                self.diags.push(Diagnostic::error(
+                    SourceSpan::new(self.file, start, self.pos),
+                    "Variables in Yinz don't use a `$` prefix.",
+                    "Remove the `$`: write `x` instead of `$x`.",
+                    "In PHP and shell scripts, `$` marks a variable. \
+                     In Yinz, variable names start with a letter, no prefix needed.",
+                ));
+            }
+
+            // `T?` nullable syntax (Swift/Kotlin/TypeScript). Yinz uses `maybe<T>`.
+            b'?' => {
+                self.pos += 1;
+                self.diags.push(Diagnostic::error(
+                    SourceSpan::new(self.file, start, self.pos),
+                    "The `?` optional suffix is not valid in Yinz.",
+                    "Use `maybe<T>` instead: `maybe<int>` not `int?`.",
+                    "Swift, Kotlin, and TypeScript use `T?` for optional types. \
+                     Yinz uses `maybe<T>` — it reads the same way but is unambiguous.",
+                ));
+            }
+
             b'`' => self.lex_backtick_segment(),
 
 
