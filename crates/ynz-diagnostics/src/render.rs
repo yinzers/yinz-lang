@@ -90,5 +90,15 @@ pub fn render(
             .expect("write footer failed");
     }
 
+    let has_errors = sorted.iter().any(|d| matches!(d.severity, Severity::Error));
+    if has_errors {
+        writeln!(
+            out,
+            "\nIf any of these errors are confusing or unhelpful, please open an issue:\
+             \n  https://github.com/patrickrizzardi/ynz/issues"
+        )
+        .expect("write feedback footer failed");
+    }
+
     String::from_utf8(out).expect("ariadne output is valid UTF-8")
 }

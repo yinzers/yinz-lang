@@ -11,3 +11,6 @@ Error: `+` cannot be used with `int` and `number`.
    │ 
    │ Note: Why: Yinz does not convert between types automatically. Both sides of an expression must have the same type.
 ───╯
+
+If any of these errors are confusing or unhelpful, please open an issue:
+  https://github.com/patrickrizzardi/ynz/issues

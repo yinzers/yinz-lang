@@ -14,3 +14,6 @@ Error: This file has no `entrypoint` function.
    │ 
    │ Note: Why: Every Yinz program needs an `entrypoint` function — that is where execution starts.
 ───╯
+
+If any of these errors are confusing or unhelpful, please open an issue:
+  https://github.com/patrickrizzardi/ynz/issues

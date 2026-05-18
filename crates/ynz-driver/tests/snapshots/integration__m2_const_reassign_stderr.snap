@@ -11,3 +11,6 @@ Error: `x` cannot be changed — it was declared with `const`.
    │ 
    │ Note: Why: `const` declares a value that never changes. Use `let` when the value needs to be updated.
 ───╯
+
+If any of these errors are confusing or unhelpful, please open an issue:
+  https://github.com/patrickrizzardi/ynz/issues

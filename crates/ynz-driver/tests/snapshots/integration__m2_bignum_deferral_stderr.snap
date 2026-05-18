@@ -11,3 +11,6 @@ Error: `number[100]` is not available yet.
    │ 
    │ Note: Why: `number[N]` for N other than 34 (bignum support) arrives in v0.8.
 ───╯
+
+If any of these errors are confusing or unhelpful, please open an issue:
+  https://github.com/patrickrizzardi/ynz/issues

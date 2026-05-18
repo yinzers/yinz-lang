@@ -11,3 +11,6 @@ Error: `+=` is not supported in Yinz.
    │ 
    │ Note: Why: Compound assignment and increment operators are not part of the Yinz language. Step-by-step assignment on its own line makes the intent explicit.
 ───╯
+
+If any of these errors are confusing or unhelpful, please open an issue:
+  https://github.com/patrickrizzardi/ynz/issues

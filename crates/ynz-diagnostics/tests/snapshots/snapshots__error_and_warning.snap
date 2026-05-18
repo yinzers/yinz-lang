@@ -20,3 +20,6 @@ Warning: This function has no doc comment.
    │ 
    │ Note: Why: Doc comments are how `ynz doc` generates documentation.
 ───╯
+
+If any of these errors are confusing or unhelpful, please open an issue:
+  https://github.com/patrickrizzardi/ynz/issues
