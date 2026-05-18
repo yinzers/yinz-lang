@@ -729,6 +729,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .map(|v| v.into_int_value())
                 .map_err(|e| format!("{e}")),
             Type::String
+            | Type::Number { .. }
             | Type::Shape { .. }
             | Type::Dynamic { .. }
             | Type::BuiltinArray { .. }
@@ -762,6 +763,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .build_bit_cast(val, self.f64(), "i_to_f")
                 .map_err(|e| format!("{e}")),
             Type::String
+            | Type::Number { .. }
             | Type::Shape { .. }
             | Type::Dynamic { .. }
             | Type::BuiltinArray { .. }
@@ -3443,12 +3445,19 @@ fn to_c_string<'ctx>(
                     .builder
                     .build_struct_gep(struct_ty, shape_ptr, *field_idx as u32, field_name)
                     .map_err(|e| format!("GEP {field_name}: {e}"))?;
-                let bits = cg
-                    .builder
-                    .build_load(cg.i64(), gep, "dbg_bits")
-                    .map_err(|e| format!("{e}"))?
-                    .into_int_value();
-                let field_val = cg.i64_bits_to(bits, field_ty)?;
+                // Number (decimal128) fields are stored as i128 in the struct and
+                // must be passed as a pointer to to_c_string. All other field types
+                // are i64-wide and go through i64_bits_to.
+                let field_val: BasicValueEnum = if matches!(field_ty, Type::Number { .. }) {
+                    let i128t = cg.ctx.i128_type();
+                    let raw = cg.builder.build_load(i128t, gep, "dbg_dec_raw").map_err(|e| format!("{e}"))?;
+                    let slot = cg.builder.build_alloca(i128t, "dbg_dec_slot").map_err(|e| format!("{e}"))?;
+                    cg.builder.build_store(slot, raw).map_err(|e| format!("{e}"))?;
+                    slot.into()
+                } else {
+                    let bits = cg.builder.build_load(cg.i64(), gep, "dbg_bits").map_err(|e| format!("{e}"))?.into_int_value();
+                    cg.i64_bits_to(bits, field_ty)?
+                };
                 let field_str = to_c_string(cg, field_val, field_ty)?;
 
                 cg.builder
