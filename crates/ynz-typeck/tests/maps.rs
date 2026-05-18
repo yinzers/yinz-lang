@@ -545,17 +545,20 @@ function entrypoint() -> nothing {
 // ── struct lit with map annotation ───────────────────────────────────────────
 
 #[test]
-fn m5p3c_struct_lit_with_map_annotation_and_identifier_keys_errors() {
-    // WHY: `let m: map<string, int> = { alice: 90 }` — identifier keys in a
-    // struct-lit-looking literal when the annotation is BuiltinMap must error.
-    // Users must write `{ `alice`: 90 }` (string key) for map literals.
+fn m5p3c_struct_lit_with_map_annotation_and_identifier_keys_accepted() {
+    // WHY: `let m: map<string, int> = { alice: 90 }` — identifier keys are now
+    // accepted when the annotation is BuiltinMap. The type context disambiguates:
+    // identifier name → string key, value type-checked against the map's value type.
+    // Quoted keys (`{ "alice": 90 }`) also still work.
+    // test-ratchet: behavior changed from error to accepted — identifier-key map
+    // literals are valid when the annotation says map.
     check_diag_count(
         r#"
 function entrypoint() -> nothing {
     let m: map<string, int> = { alice: 90 }
 }
 "#,
-        1,
+        0,
     );
 }
 

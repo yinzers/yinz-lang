@@ -745,7 +745,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             | Type::BuiltinFixed { .. }
             | Type::Maybe { .. }
             | Type::BuiltinMap { .. }
-            | Type::MapEntry { .. } => self
+            | Type::MapEntry { .. }
+            | Type::Union { .. } => self
                 .builder
                 .build_ptr_to_int(val.into_pointer_value(), self.i64(), "ptr_to_i")
                 .map_err(|e| format!("{e}")),
@@ -779,7 +780,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             | Type::BuiltinFixed { .. }
             | Type::Maybe { .. }
             | Type::BuiltinMap { .. }
-            | Type::MapEntry { .. } => self
+            | Type::MapEntry { .. }
+            | Type::Union { .. } => self
                 .builder
                 .build_int_to_ptr(val, self.ptr(), "i_to_ptr")
                 .map(|v| v.into())
@@ -3839,6 +3841,130 @@ fn to_c_string<'ctx>(
                 .into_pointer_value();
 
             Ok(result)
+        }
+
+        // Map debug representation: "{ key: val, key2: val2 }" using insertion order.
+        Type::BuiltinMap { key, val: map_val_ty } if key_is_string(key) => {
+            let map_ptr = val.into_pointer_value();
+            let val_ty = map_val_ty.as_ref().clone();
+
+            let builder_val = cg.builder.build_call(cg.rt.ynz_string_builder_new, &[], "mdbg_bld")
+                .map_err(|e| format!("{e}"))?.try_as_basic_value().basic()
+                .ok_or("builder_new void")?.into_pointer_value();
+
+            let append_static = |cg: &mut Cg<'ctx, '_>, bld: PointerValue<'ctx>, s: &str| {
+                let g = build_string_global(cg.ctx, cg.module, s, "mdbg_lit");
+                cg.builder.build_call(cg.rt.ynz_string_builder_append, &[bld.into(), g.as_pointer_value().into()], "")
+                    .map_err(|e| format!("{e}")).map(|_| ())
+            };
+
+            append_static(cg, builder_val, "{ ")?;
+
+            let count = cg.builder.build_call(cg.rt.ynz_map_count, &[map_ptr.into()], "mdbg_cnt")
+                .map_err(|e| format!("{e}"))?.try_as_basic_value().basic()
+                .ok_or("map_count void")?.into_int_value();
+
+            let i_slot = cg.builder.build_alloca(cg.i64(), "mdbg_i").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(i_slot, cg.i64().const_zero()).map_err(|e| format!("{e}"))?;
+
+            let cond_bb  = cg.append_block("mdbg_cond");
+            let body_bb  = cg.append_block("mdbg_body");
+            let after_bb = cg.append_block("mdbg_after");
+            cg.builder.build_unconditional_branch(cond_bb).map_err(|e| format!("{e}"))?;
+            cg.builder.position_at_end(cond_bb);
+            let i = cg.builder.build_load(cg.i64(), i_slot, "mdbg_iv").map_err(|e| format!("{e}"))?.into_int_value();
+            let lt = cg.builder.build_int_compare(IntPredicate::SLT, i, count, "mdbg_lt").map_err(|e| format!("{e}"))?;
+            cg.builder.build_conditional_branch(lt, body_bb, after_bb).map_err(|e| format!("{e}"))?;
+
+            cg.builder.position_at_end(body_bb);
+
+            let is_first = cg.builder.build_int_compare(IntPredicate::EQ, i, cg.i64().const_zero(), "mdbg_first").map_err(|e| format!("{e}"))?;
+            let sep_bb  = cg.append_block("mdbg_sep");
+            let entry_bb = cg.append_block("mdbg_entry");
+            cg.builder.build_conditional_branch(is_first, entry_bb, sep_bb).map_err(|e| format!("{e}"))?;
+            cg.builder.position_at_end(sep_bb);
+            append_static(cg, builder_val, ", ")?;
+            cg.builder.build_unconditional_branch(entry_bb).map_err(|e| format!("{e}"))?;
+            cg.builder.position_at_end(entry_bb);
+
+            let triple_ty = cg.ctx.struct_type(&[cg.i64().into(), cg.i64().into(), cg.i64().into()], false);
+            let triple_slot = cg.builder.build_alloca(triple_ty, "mdbg_triple").map_err(|e| format!("{e}"))?;
+            cg.builder.build_call(cg.rt.ynz_map_iter_get_str, &[map_ptr.into(), i.into(), triple_slot.into()], "")
+                .map_err(|e| format!("{e}"))?;
+
+            let key_gep = cg.builder.build_struct_gep(triple_ty, triple_slot, 1, "mdbg_kgep").map_err(|e| format!("{e}"))?;
+            let key_ptr = cg.builder.build_load(cg.i64(), key_gep, "mdbg_kbits").map_err(|e| format!("{e}"))?.into_int_value();
+            let key_str = cg.builder.build_int_to_ptr(key_ptr, cg.ptr(), "mdbg_kptr").map_err(|e| format!("{e}"))?;
+            cg.builder.build_call(cg.rt.ynz_string_builder_append, &[builder_val.into(), key_str.into()], "")
+                .map_err(|e| format!("{e}"))?;
+            append_static(cg, builder_val, ": ")?;
+
+            let val_gep = cg.builder.build_struct_gep(triple_ty, triple_slot, 2, "mdbg_vgep").map_err(|e| format!("{e}"))?;
+            let val_bits = cg.builder.build_load(cg.i64(), val_gep, "mdbg_vbits").map_err(|e| format!("{e}"))?.into_int_value();
+            let val_val = cg.i64_bits_to(val_bits, &val_ty)?;
+            let val_str = to_c_string(cg, val_val, &val_ty)?;
+            cg.builder.build_call(cg.rt.ynz_string_builder_append, &[builder_val.into(), val_str.into()], "")
+                .map_err(|e| format!("{e}"))?;
+
+            let next_i = cg.builder.build_int_add(i, cg.i64().const_int(1, false), "mdbg_ni").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(i_slot, next_i).map_err(|e| format!("{e}"))?;
+            cg.builder.build_unconditional_branch(cond_bb).map_err(|e| format!("{e}"))?;
+
+            cg.builder.position_at_end(after_bb);
+            append_static(cg, builder_val, " }")?;
+
+            let result = cg.builder.build_call(cg.rt.ynz_string_builder_finalize, &[builder_val.into()], "mdbg_str")
+                .map_err(|e| format!("{e}"))?.try_as_basic_value().basic()
+                .ok_or("finalize void")?.into_pointer_value();
+            Ok(result)
+        }
+        Type::BuiltinMap { .. } => {
+            let g = build_string_global(cg.ctx, cg.module, "{ <map> }", "map_ph");
+            Ok(g.as_pointer_value())
+        }
+
+        // Union printing: for `T | nothing`, check null → "none", else print as T.
+        // For other union shapes, show a placeholder — full union introspection is future work.
+        Type::Union { variants } => {
+            let non_nothing: Vec<&Type> = variants.iter()
+                .filter(|v| !matches!(v, Type::Nothing))
+                .collect();
+
+            if non_nothing.len() == 1 {
+                let inner = non_nothing[0].clone();
+                let ptr = val.into_pointer_value();
+                let is_null = cg.builder
+                    .build_is_null(ptr, "union_null")
+                    .map_err(|e| format!("{e}"))?;
+
+                let none_bb   = cg.append_block("union_none");
+                let some_bb   = cg.append_block("union_some");
+                let merge_bb  = cg.append_block("union_merge");
+
+                cg.builder.build_conditional_branch(is_null, none_bb, some_bb).map_err(|e| format!("{e}"))?;
+
+                cg.builder.position_at_end(none_bb);
+                let none_str = build_string_global(cg.ctx, cg.module, "none", "union_none_str");
+                cg.builder.build_unconditional_branch(merge_bb).map_err(|e| format!("{e}"))?;
+
+                cg.builder.position_at_end(some_bb);
+                let some_str = to_c_string(cg, val, &inner)?;
+                cg.builder.build_unconditional_branch(merge_bb).map_err(|e| format!("{e}"))?;
+                let some_bb_end = cg.builder.get_insert_block().unwrap();
+
+                cg.builder.position_at_end(merge_bb);
+                let phi = cg.builder
+                    .build_phi(cg.ptr(), "union_str")
+                    .map_err(|e| format!("{e}"))?;
+                phi.add_incoming(&[
+                    (&none_str.as_pointer_value(), none_bb),
+                    (&some_str, some_bb_end),
+                ]);
+                Ok(phi.as_basic_value().into_pointer_value())
+            } else {
+                let g = build_string_global(cg.ctx, cg.module, "<union>", "union_placeholder");
+                Ok(g.as_pointer_value().into())
+            }
         }
 
         _ => Err(format!("codegen: cannot convert {:?} to string", ty)),

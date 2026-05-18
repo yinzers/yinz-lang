@@ -2652,10 +2652,17 @@ impl<'b> Checker<'b> {
         hint: Option<&Type>,
         span: &SourceSpan,
     ) -> Type {
-        // When the hint is a map, accept identifier-key syntax — treat field names as string keys.
+        // When the hint is a map (or a union containing a map), accept identifier-key syntax.
         // `{ name: value }` works the same as `{ "name": value }` when the type context says map.
         // Quoted keys remain valid too; this just removes the friction of requiring them.
-        if let Some(Type::BuiltinMap { key, val }) = hint {
+        let map_hint = match hint {
+            Some(Type::BuiltinMap { key, val }) => Some((key, val)),
+            Some(Type::Union { variants }) => variants.iter().find_map(|v| {
+                if let Type::BuiltinMap { key, val } = v { Some((key, val)) } else { None }
+            }),
+            _ => None,
+        };
+        if let Some((key, val)) = map_hint {
             let val = val.as_ref().clone();
             for f in fields {
                 let actual = self.infer_expr(&f.value, Some(&val));
@@ -2840,7 +2847,7 @@ impl<'b> Checker<'b> {
                 }
                 Some(expected) => {
                     let actual = self.infer_expr(&lit_field.value, Some(&expected));
-                    if actual != Type::Error && expected != Type::Error && actual != expected {
+                    if actual != Type::Error && expected != Type::Error && !types_compatible(&actual, &expected) {
                         self.diags.push(Diagnostic::error(
                             lit_field.name_span.clone(),
                             format!(
@@ -3445,6 +3452,11 @@ fn types_compatible(a: &Type, b: &Type) -> bool {
         // e.g., `let s: Circle | Square = { radius: 5.0 }` — Circle is a valid union value.
         (Type::Union { variants }, concrete) => {
             variants.iter().any(|v| types_compatible(v, concrete))
+        }
+        // Symmetric: a concrete type is compatible with a union if it matches any variant.
+        // e.g., map<string,string> is valid for map<string,string> | nothing.
+        (concrete, Type::Union { variants }) => {
+            variants.iter().any(|v| types_compatible(concrete, v))
         }
         // M7 P3a: ErrorsCapable is compatible with itself when inner types match.
         (Type::ErrorsCapable { inner: ia }, Type::ErrorsCapable { inner: ib }) => {
