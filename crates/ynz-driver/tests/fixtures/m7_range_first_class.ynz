@@ -1,0 +1,10 @@
+// WHY: validates first-class Range values (M7 P4c). A range stored in a `let`
+// binding must be iterable. If the range codegen only works for inline `range(...)`
+// calls in `for` position, this fixture fails with a codegen error.
+
+function main() -> nothing {
+  let r = range(0, 3)
+  for (i in r) {
+    print(i.toString())
+  }
+}

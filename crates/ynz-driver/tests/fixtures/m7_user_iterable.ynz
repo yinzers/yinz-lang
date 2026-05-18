@@ -1,0 +1,26 @@
+// WHY: validates user shape iteration codegen (M7 P4c). A shape with a standalone
+// `next(lend self: S) -> maybe<int>` function can be iterated with `for`. The `next`
+// function uses an internal position counter to walk a fixed array of values.
+// Expected output: 10, 20, 30 (3 iterations then none).
+
+shape SliceIter {
+  max: int
+  hidden pos: int
+}
+
+function next(lend self: SliceIter) -> maybe<int> {
+  let items: fixed<int> = [10, 20, 30]
+  if (self.pos >= self.max) {
+    return none
+  }
+  let result = items.get(self.pos)
+  self.pos = self.pos + 1
+  return result
+}
+
+function main() -> nothing {
+  let iter: SliceIter = { max: 3, pos: 0 }
+  for (v in iter) {
+    print(v.toString())
+  }
+}

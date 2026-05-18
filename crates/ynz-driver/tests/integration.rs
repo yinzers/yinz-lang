@@ -711,17 +711,15 @@ fn m4_share_param_compiles_and_runs() {
 }
 
 #[test]
-fn m3_range_outside_for_produces_m7_deferral() {
-    // WHY: `let r = range(0, 5)` is M7 (Iterable[T] protocol).
-    // The diagnostic must point at M7. This also confirms Range is restricted
-    // to the for-loop iterable position in M3.
+fn m3_range_outside_for_now_supported_in_m7() {
+    // WHY: `let r = range(0, 5)` was deferred to M7; M7 P4c ships first-class Range
+    // values. This test was previously a "deferral must error" guard; now it verifies
+    // the feature actually works. A stored range that produces no for-loop output
+    // must compile and run cleanly. If the M7 P4c range codegen is broken, this
+    // would exit non-zero or produce wrong output.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_range_outside_for_deferral.ynz"));
-    assert_ne!(code, 0, "range-outside-for deferral must exit non-zero");
-    assert!(stdout.is_empty());
-    assert!(
-        stderr.contains("milestone 7") || stderr.contains("M7"),
-        "deferral must name M7, got:\n{stderr}"
-    );
+    assert_eq!(code, 0, "range as first-class value must compile in M7; stderr:\n{stderr}");
+    assert_eq!(stdout, "done\n");
 }
 
 #[test]
@@ -913,4 +911,41 @@ fn m7_nfc_equality_same_bytes() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_nfc_equality.ynz"));
     assert_eq!(code, 0, "m7_nfc_equality must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "equal\n");
+}
+
+
+// ── M7 P4c: Iterable codegen — string iteration, first-class range, user shape ─
+
+#[test]
+fn m7_for_string_iterates_code_points() {
+    // WHY: M7 P4c acceptance criterion. `for (c in s)` must use ynz_string_count +
+    // ynz_string_codepoint_at. If only the array/range paths work but string iteration
+    // is not wired, the compiler produces a codegen error. Counting 5 chars in "hello"
+    // verifies the loop runs the correct number of times.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_for_string.ynz"));
+    assert_eq!(code, 0, "m7_for_string must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "5\n");
+}
+
+#[test]
+fn m7_range_first_class_storable_and_iterable() {
+    // WHY: M7 P4c acceptance criterion. A `range(0, 3)` stored in a `let` binding
+    // must produce a {i64, i64} alloca and be iterable in a subsequent `for`. If
+    // range() is only lowered as an inline iter expression (the M3 path), this test
+    // fails with a codegen error when the for-loop iter is an ident, not a call.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_range_first_class.ynz"));
+    assert_eq!(code, 0, "m7_range_first_class must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "0\n1\n2\n");
+}
+
+#[test]
+fn m7_user_shape_iterable_via_next_function() {
+    // WHY: M7 P4c acceptance criterion. A user shape with a standalone
+    // `next(lend self: S) -> maybe<T>` function must be iterable via `for`.
+    // Verifies that the for-loop correctly calls `next`, checks the maybe tag,
+    // and exits when next returns none. If the UFCS `next` dispatch is broken,
+    // the loop either infinite-loops or produces no output.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_user_iterable.ynz"));
+    assert_eq!(code, 0, "m7_user_iterable must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "10\n20\n30\n");
 }
