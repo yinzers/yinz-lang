@@ -1,5 +1,77 @@
 # Changelog
 
+## v0.1.0-m6 — Options + Unions + Narrowing
+
+Commit range: v0.1.0-m5..v0.1.0-m6
+
+### What's new
+
+M6 ships type-driven discrimination — the ability to declare finite sets of named
+states (`options`), work with values that can be one of several distinct shapes
+(`|` union types), and discriminate between them at compile time with exhaustiveness
+checking and flow-sensitive narrowing.
+
+M6 also closes the fallible-conversion catch-up from M2: `(float).toInt()`,
+`(number).toInt()`, `string.toInt()`, `string.toFloat()`, and `string.toNumber()`
+all return `maybe<T>` and follow locked parsing rules documented in `design/narrowing.md`.
+
+- **`options` types**: `options Status { active, inactive, banned }` declares a finite
+  set of named values. Values are `Status.active` etc.; multi-case `if` is exhaustive
+  (missing variants are compile errors naming each missing variant). Built-in:
+  `SortOrder { asc, desc }` and `Comparison { equal, greater, less }`.
+- **`options.toString()`**: returns the variant name as a string at runtime.
+- **Union types**: `shape Figure = Circle | Square | Triangle` declares a value that
+  can hold any of the listed shapes. `|` in type position. Exhaustive multi-case
+  `if` with `is TypeName =>` arms; `else =>` as catch-all.
+- **`is`-narrowing**: inside an `is Circle =>` arm, the scrutinee's type is narrowed to
+  `Circle` — field access is safe without any cast or `.value`. Works in both multi-case
+  form (`if (x) { is Foo => ... }`) and condition form (`if (x is Foo) { ... }`).
+- **Shape aliases**: `shape Figure = Circle | Square` declares a named union type using
+  the existing `shape` keyword — one keyword for all type declarations.
+- **Fallible conversions (M2 catch-up)**:
+  - `(int).toInt()` → `int` (identity, infallible)
+  - `(float).toInt()` → `maybe<int>` (NaN → none, OOR → none, truncates toward zero)
+  - `(number).toInt()` → `maybe<int>` (via decimal128 → float → range-check → truncate)
+  - `string.toInt()` → `maybe<int>` (ASCII whitespace strip; `[+-]?[0-9]+` only; no hex/decimal)
+  - `string.toFloat()` → `maybe<float>` (decimal + scientific notation; no 0x/0o/0b)
+  - `string.toNumber()` → `maybe<number>` (same rules as `.toFloat()`)
+- **Early-return narrowing (M5 catch-up)**: `if (!m.exists()) { return }` followed by
+  `m.value` is now valid — the compiler proves `m` is non-none after the early exit.
+- **M3 catch-up**: `m3_is_type_deferral.ynz` is now a runnable `Circle | Square` union
+  demo; the M3 deferral diagnostic is gone.
+
+### Design decisions locked
+
+Three new design files document every M6 decision before any code landed:
+`design/options.md` (LLVM i8 lowering, exhaustiveness, ambiguous-shorthand resolution),
+`design/unions.md` (tagged-struct layout, `is`-exact-type rule, single-variant rejection),
+`design/narrowing.md` (18-row flow-sensitive rules table, recognized-exit set, locked
+`||` non-propagation diagnostic text).
+
+### Compiler features
+
+- **`ynz-parser`**: `Token::Options`, `Token::Is` (58→60 tokens); options declaration
+  parser; union type in type position; `Is`/`OptionName` arm forms; `Expr::Is` for
+  `if (x is Foo)` condition form; `shape Name = Type` alias form; M3 deferral removed.
+- **`ynz-ast`**: `Item::OptionsDecl`, `Type::Union`, `TypePath`, `MatchPatternKind::Is`/
+  `OptionName`, `Expr::Is`, `ShapeDecl.alias_ty`.
+- **`ynz-typeck`**: `OptionsTable` (collection + validation); union alias resolution via
+  `ShapeTable.union_aliases`; options/union exhaustiveness; `is`-narrowing; early-return
+  narrowing accumulator in `check_stmts`; fallible conversion intrinsics; `check_is_expr`.
+- **`ynz-codegen`**: options i8 constants + multi-case switch + `toString` via conditional
+  branch to `ynz_string_from_static`; union `{ i64 tag, i64 data }` construction on
+  assignment; `Is`-arm tag load + compare; `(float).toInt()` locked IR sequence
+  (`fcmp uno` + range-check + raw `fptosi` — NOT `fptosi.sat`); string conversion dispatch.
+- **`ynz-runtime`**: `ynz_string_to_int/float/number` (locked parsing rules), `ynz_string_from_static`,
+  `ynz_decimal_to_float`.
+
+### Tests
+
+631 tests across 8 crates, all passing. New in M6: 24 runtime unit tests for
+string-parsing locked test vectors; 13 typeck tests for options/union semantics;
+2 new integration tests for string-conversion catch-up fixtures; 7 new parser tests.
+
+
 ## v0.1.0-m4 — Shapes, Methods, Ownership
 
 Commit range: v0.1.0-m3..v0.1.0-m4
