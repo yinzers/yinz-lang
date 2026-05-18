@@ -236,7 +236,19 @@ impl<'a> Parser<'a> {
             return None;
         }
 
-        let return_type = self.parse_type();
+        let return_type_start = self.current_span().start;
+        let inner_ty = self.parse_type();
+
+        // M7: `-> T errors` — the `errors` keyword after the return type marks
+        // this function as fallible. Wrap the inner type in Type::ErrorCapable.
+        let (return_type, errors_capable) = if matches!(self.peek(), Token::Errors) {
+            let errors_tok_span = self.current_span();
+            self.advance(); // consume `errors`
+            let full_span = SourceSpan::new(self.file, return_type_start, errors_tok_span.end);
+            (Type::ErrorCapable { inner: Box::new(inner_ty), span: full_span }, true)
+        } else {
+            (inner_ty, false)
+        };
 
         // `{`
         if self.expect(&Token::LBrace).is_none() {
@@ -261,7 +273,7 @@ impl<'a> Parser<'a> {
             body,
             span: SourceSpan::new(self.file, start_span.start, end.end),
             name_span,
-            errors_capable: false,
+            errors_capable,
         })
     }
 
@@ -1150,6 +1162,12 @@ impl<'a> Parser<'a> {
             ));
         }
 
+        // M7: `for ((k, v) in m)` tuple-destructure form for map iteration.
+        // Detect `(` immediately after the outer `(` — that's the destructure pair.
+        if matches!(self.peek(), Token::LParen) {
+            return self.parse_for_destructure(start);
+        }
+
         let (var, var_span) = match self.peek().clone() {
             Token::Identifier(n) => {
                 let span = self.current_span();
@@ -1207,6 +1225,159 @@ impl<'a> Parser<'a> {
             iter,
             body,
             span: SourceSpan::new(self.file, start, end),
+        }
+    }
+
+    /// Parse the `for ((k, v) in m) { body }` tuple-destructure form.
+    ///
+    /// Called after `for (` has been consumed and `(` is the current token (the
+    /// inner pair). Desugars to:
+    ///   `for (entry in m) { let k = entry.key; let v = entry.value; [body] }`
+    ///
+    /// The synthetic `entry` binding is exposed to the user's body stmts; k and v
+    /// are introduced as `let` bindings at the top of the desugared body.
+    fn parse_for_destructure(&mut self, start: usize) -> Stmt {
+        self.advance(); // consume inner `(`
+
+        // Parse `k`
+        let (key_name, key_span) = match self.peek().clone() {
+            Token::Identifier(n) => {
+                let s = self.current_span();
+                self.advance();
+                (n, s)
+            }
+            _ => {
+                let s = self.current_span();
+                self.diags.push(Diagnostic::error(
+                    s.clone(),
+                    "Expected the key variable name in `for ((k, v) in m)`.",
+                    "Write `for ((key, value) in m)` with two names separated by `,`.",
+                    "The first name receives the map key on each iteration.",
+                ));
+                ("_k".to_string(), s)
+            }
+        };
+
+        if self.expect(&Token::Comma).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `,` between names in `for ((k, v) in m)`.",
+                "Write `for ((key, value) in m)` — separate the two variable names with a comma.",
+                "The tuple-destructure form needs exactly two variable names.",
+            ));
+        }
+
+        // Parse `v`
+        let (val_name, val_span) = match self.peek().clone() {
+            Token::Identifier(n) => {
+                let s = self.current_span();
+                self.advance();
+                (n, s)
+            }
+            _ => {
+                let s = self.current_span();
+                self.diags.push(Diagnostic::error(
+                    s.clone(),
+                    "Expected the value variable name in `for ((k, v) in m)`.",
+                    "Write `for ((key, value) in m)` with two names separated by `,`.",
+                    "The second name receives the map value on each iteration.",
+                ));
+                ("_v".to_string(), s)
+            }
+        };
+
+        if self.expect(&Token::RParen).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `)` to close the destructure pair in `for ((k, v) in m)`.",
+                "Write `for ((key, value) in m)` — close the inner `(` with `)`.",
+                "The inner pair needs a closing `)`.",
+            ));
+        }
+
+        if self.expect(&Token::In).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `in` after `(k, v)` in map for-loop.",
+                "Write `for ((key, value) in m)` — put the collection after `in`.",
+                "The `in` keyword separates the destructure pattern from the collection.",
+            ));
+        }
+
+        let iter = self.parse_expr(0);
+
+        if self.expect(&Token::RParen).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `)` to close the `for` loop header.",
+                "Write `for ((k, v) in m) { ... }` — close the outer `(` with `)`.",
+                "Every `(` in a `for` header must be matched with a `)`.",
+            ));
+        }
+
+        if self.expect(&Token::LBrace).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `{` to open the `for` body.",
+                "Write `for ((k, v) in m) { ... }` with curly braces around the body.",
+                "Curly braces are always required in Yinz.",
+            ));
+            let span = SourceSpan::new(self.file, start, self.current_span().end);
+            // Synthetic entry binding for error recovery
+            let entry_span = key_span.clone();
+            return Stmt::For {
+                var: "__entry".to_string(),
+                var_span: entry_span.clone(),
+                iter,
+                body: Block { stmts: vec![], span: span.clone() },
+                span,
+            };
+        }
+
+        let user_body = self.parse_block();
+        let body_end = user_body.span.end;
+        let body_span = user_body.span.clone();
+
+        // Desugar: inject `let k = __entry.key` and `let v = __entry.value` at the
+        // top of the body, then append the user's statements.
+        let entry_span = key_span.clone();
+        let key_binding = Stmt::Let {
+            is_const: false,
+            name: key_name.clone(),
+            name_span: key_span.clone(),
+            ty: None,
+            value: Expr::FieldAccess {
+                receiver: Box::new(Expr::Ident("__entry".to_string(), entry_span.clone())),
+                field: "key".to_string(),
+                field_span: entry_span.clone(),
+                span: entry_span.clone(),
+            },
+            span: key_span.clone(),
+        };
+        let val_binding = Stmt::Let {
+            is_const: false,
+            name: val_name.clone(),
+            name_span: val_span.clone(),
+            ty: None,
+            value: Expr::FieldAccess {
+                receiver: Box::new(Expr::Ident("__entry".to_string(), entry_span.clone())),
+                field: "value".to_string(),
+                field_span: entry_span.clone(),
+                span: entry_span.clone(),
+            },
+            span: val_span.clone(),
+        };
+
+        let mut desugared_stmts = vec![key_binding, val_binding];
+        desugared_stmts.extend(user_body.stmts);
+
+        let full_span = SourceSpan::new(self.file, start, body_end);
+        Stmt::For {
+            var: "__entry".to_string(),
+            var_span: entry_span,
+            iter,
+            body: Block { stmts: desugared_stmts, span: body_span },
+            span: full_span,
         }
     }
 
