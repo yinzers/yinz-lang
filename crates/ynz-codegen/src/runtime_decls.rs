@@ -81,6 +81,20 @@ pub struct RuntimeDecls<'ctx> {
     // M6: create a heap-owned string copy from a static byte literal.
     // ABI: (ptr: *const u8, len: i64) → *const u8 (null-terminated)
     pub ynz_string_from_static: FunctionValue<'ctx>,
+
+    // M7 P4a: errors runtime — frame stack + error allocation.
+    // ynz_frame_push(file: ptr, line: i64, function: ptr) → void
+    pub ynz_frame_push: FunctionValue<'ctx>,
+    // ynz_frame_pop() → void
+    pub ynz_frame_pop: FunctionValue<'ctx>,
+    // ynz_error_new(message: ptr) → *mut YnzError  (ptr to heap-allocated error)
+    pub ynz_error_new: FunctionValue<'ctx>,
+    // ynz_error_drop(err: ptr) → void
+    pub ynz_error_drop: FunctionValue<'ctx>,
+    // ynz_error_message(err: ptr) → *const u8
+    pub ynz_error_message: FunctionValue<'ctx>,
+    // ynz_unhandled_error(err: ptr) → ! (noreturn: prints and exits 1)
+    pub ynz_unhandled_error: FunctionValue<'ctx>,
 }
 
 impl<'ctx> RuntimeDecls<'ctx> {
@@ -219,6 +233,15 @@ impl<'ctx> RuntimeDecls<'ctx> {
 
             // M6: (ptr, i64 len) -> ptr (null-terminated)
             ynz_string_from_static: declare_fn(module, "ynz_string_from_static", ptr.fn_type(&[ptr.into(), i64.into()], false)),
+
+            // M7 P4a: errors runtime.
+            ynz_frame_push: declare_fn(module, "ynz_frame_push", void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false)),
+            ynz_frame_pop:  declare_fn(module, "ynz_frame_pop",  void.fn_type(&[], false)),
+            ynz_error_new:  declare_fn(module, "ynz_error_new",  ptr.fn_type(&[ptr.into()], false)),
+            ynz_error_drop: declare_fn(module, "ynz_error_drop", void.fn_type(&[ptr.into()], false)),
+            ynz_error_message: declare_fn(module, "ynz_error_message", ptr.fn_type(&[ptr.into()], false)),
+            // ynz_unhandled_error is noreturn; LLVM void return + unreachable after call.
+            ynz_unhandled_error: declare_fn(module, "ynz_unhandled_error", void.fn_type(&[ptr.into()], false)),
         }
     }
 }

@@ -1,0 +1,18 @@
+// WHY: tests .failed() method on an errors-capable result. readConfig always succeeds,
+// so .failed() must return false (0) and the if body must NOT execute.
+// After the failed() check, `result` is narrowed to success type (string) by typeck.
+// If error-bit extraction is broken, .failed() would return true and `error!` would print.
+
+function readConfig() -> string errors {
+  return `hello`
+}
+
+function main() -> nothing {
+  let result = readConfig()
+  if (result.failed()) {
+    print(`error!`)
+  }
+  // After the failed() check, result is narrowed to the success type.
+  // typeck narrows x to string after the if (x.failed()) block.
+  print(result)
+}

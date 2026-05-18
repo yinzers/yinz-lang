@@ -285,6 +285,9 @@ fn lower_generic_function<'ctx>(
         type_subst,
         mono_table,
         options_table,
+        // Generic functions are not errors-capable in M7 (no `-> T errors` on generics yet).
+        is_errors_capable: false,
+        errors_capable_locals: std::collections::HashSet::new(),
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -352,6 +355,12 @@ fn declare_function<'ctx>(
     let params = llvm_param_types(ctx, f, shape_table);
     let fn_ty = if f.name == "main" {
         ctx.i32_type().fn_type(&params, false)
+    } else if f.errors_capable {
+        // M7 P4a: errors-capable functions return `{i64 error_ptr, i64 success_val}`.
+        // field 0 = error pointer (0 = success, non-zero = *YnzError)
+        // field 1 = success value as i64 (valid only when field 0 = 0)
+        let result_ty = errors_result_type(ctx);
+        result_ty.fn_type(&params, false)
     } else {
         match &f.return_type {
             ynz_ast::nodes::Type::Nothing => ctx.void_type().fn_type(&params, false),
@@ -383,6 +392,14 @@ fn declare_function<'ctx>(
     }
 
     Ok(())
+}
+
+/// LLVM struct type for errors-capable return values: `{i64, i64}`.
+///
+/// field 0 = error pointer as i64 (0 = success, non-zero = *YnzError on heap)
+/// field 1 = success value as i64 bits (valid only when field 0 = 0)
+fn errors_result_type(ctx: &Context) -> inkwell::types::StructType<'_> {
+    ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false)
 }
 
 /// True when the AST type will be passed as a pointer in LLVM (not a scalar value).
@@ -417,6 +434,12 @@ struct Cg<'ctx, 'g> {
     mono_table: &'g MonomorphizationTable,
     // M6: options table for variant tag lookup.
     options_table: &'g ynz_typeck::options_table::OptionsTable,
+    // M7 P4a: true when the current function declared `-> T errors`.
+    // Affects return-type wrapping and call-site auto-propagation.
+    is_errors_capable: bool,
+    // M7 P4a: set of local names that hold errors-capable results (pointer to {i64, i64}).
+    // When one of these is first used in an errors-capable function, auto-propagation fires.
+    errors_capable_locals: std::collections::HashSet<String>,
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
@@ -492,6 +515,10 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             Type::BuiltinArray { .. } | Type::BuiltinFixed { .. } | Type::Maybe { .. }
             | Type::BuiltinMap { .. } | Type::MapEntry { .. }
             | Type::Union { .. } => {
+                self.builder.build_alloca(self.ptr(), name).map_err(|e| format!("{e}"))
+            }
+            // M7 P4a: ErrorsCapable stores a pointer to the {i64, i64} result struct alloca.
+            Type::ErrorsCapable { .. } => {
                 self.builder.build_alloca(self.ptr(), name).map_err(|e| format!("{e}"))
             }
             _ => {
@@ -590,6 +617,7 @@ fn lower_function<'ctx, 'g>(
     let ret_ty = ast_type_to_typeck_type(&f.return_type, shape_table);
     let is_main = f.name == "main";
     let ret_is_nothing = matches!(ret_ty, Type::Nothing);
+    let is_errors_capable = f.errors_capable;
 
     let mut cg = Cg {
         ctx,
@@ -607,6 +635,8 @@ fn lower_function<'ctx, 'g>(
         type_subst: HashMap::new(),
         mono_table,
         options_table,
+        is_errors_capable,
+        errors_capable_locals: std::collections::HashSet::new(),
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -616,6 +646,17 @@ fn lower_function<'ctx, 'g>(
     if is_main {
         cg.builder.build_call(cg.rt.ynz_siphash_init, &[], "siphash_init")
             .map_err(|e| format!("siphash_init: {e}"))?;
+    }
+
+    // M7 P4a: errors-capable functions push a frame on entry for the call trace.
+    if is_errors_capable {
+        let file_g = build_string_global(ctx, module, f.name.as_str(), ".ec.file");
+        let fn_g   = build_string_global(ctx, module, f.name.as_str(), ".ec.fn");
+        cg.builder.build_call(
+            cg.rt.ynz_frame_push,
+            &[file_g.as_pointer_value().into(), cg.i64().const_int(0, false).into(), fn_g.as_pointer_value().into()],
+            "ec_push",
+        ).map_err(|e| format!("frame_push: {e}"))?;
     }
 
     // Materialize each parameter as an alloca so the "every name = alloca" invariant holds.
@@ -635,13 +676,21 @@ fn lower_function<'ctx, 'g>(
     //
     // - main: always ret i32 0 (C ABI entry point).
     // - nothing-returning functions: ret void (legitimate fall-off-the-end).
-    // - non-nothing functions: unreachable — either the typeck confirmed all
-    //   paths return (so this block is dead code after an exhaustive match) or
-    //   it's a typeck bug. Either way, ret void would fail LLVM verify.
+    // - errors-capable: implicit success return of zero value (typeck ensures all
+    //   paths have explicit returns, so this block should be dead code; emit a
+    //   safe zeroed success result instead of unreachable to help debugging).
+    // - non-nothing functions: unreachable — typeck confirmed exhaustive paths.
     if !is_block_terminated(&cg) {
         if is_main {
             cg.builder.build_return(Some(&ctx.i32_type().const_int(0, false)))
                 .map_err(|e| format!("implicit main ret: {e}"))?;
+        } else if is_errors_capable {
+            // Implicit success with zero-valued success field.
+            cg.builder.build_call(cg.rt.ynz_frame_pop, &[], "ec_pop_implicit")
+                .map_err(|e| format!("frame_pop: {e}"))?;
+            let zero_result = errors_result_type(ctx).const_zero();
+            cg.builder.build_return(Some(&zero_result))
+                .map_err(|e| format!("implicit ec ret: {e}"))?;
         } else if ret_is_nothing {
             cg.builder.build_return(None)
                 .map_err(|e| format!("implicit void ret: {e}"))?;
@@ -776,6 +825,10 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 let slot = cg.alloca(&val_ty, name)?;
                 store(cg, val, &val_ty, slot)?;
                 cg.locals.insert(name.clone(), slot);
+                // M7 P4a: track bindings that hold errors-capable results.
+                if matches!(val_ty, Type::ErrorsCapable { .. }) {
+                    cg.errors_capable_locals.insert(name.clone());
+                }
             }
         }
 
@@ -1229,6 +1282,39 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
             .map_err(|e| format!("main ret: {e}"))?;
         return Ok(());
     }
+    if cg.is_errors_capable {
+        // M7 P4a: errors-capable return wraps the success value in {0, success_bits}.
+        // Always pop the frame before returning.
+        cg.builder.build_call(cg.rt.ynz_frame_pop, &[], "ec_pop")
+            .map_err(|e| format!("frame_pop on return: {e}"))?;
+        match value {
+            None => {
+                // `-> nothing errors` function returning without a value.
+                let zero_result = errors_result_type(cg.ctx).const_zero();
+                cg.builder.build_return(Some(&zero_result))
+                    .map_err(|e| format!("ec void ret: {e}"))?;
+            }
+            Some(expr) => {
+                let val = lower_expr(cg, expr)?;
+                let val_ty = cg.expr_type(expr);
+                let success_bits = cg.to_i64_bits(val, &val_ty)
+                    .unwrap_or_else(|_| cg.i64().const_int(0, false));
+                let result_ty = errors_result_type(cg.ctx);
+                let mut result = result_ty.const_zero();
+                result = cg.builder
+                    .build_insert_value(result, cg.i64().const_int(0, false), 0, "ec_err0")
+                    .map_err(|e| format!("ec insert err: {e}"))?
+                    .into_struct_value();
+                result = cg.builder
+                    .build_insert_value(result, success_bits, 1, "ec_val")
+                    .map_err(|e| format!("ec insert val: {e}"))?
+                    .into_struct_value();
+                cg.builder.build_return(Some(&result))
+                    .map_err(|e| format!("ec success ret: {e}"))?;
+            }
+        }
+        return Ok(());
+    }
     match value {
         None => {
             cg.builder.build_return(None).map_err(|e| format!("void ret: {e}"))?;
@@ -1306,6 +1392,55 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
             let slot = *cg.locals.get(name.as_str())
                 .ok_or_else(|| format!("undefined `{name}` in codegen"))?;
             let ty = cg.expr_type(expr);
+
+            // M7 P4a: handle errors-capable locals.
+            //
+            // A local in `errors_capable_locals` holds a pointer to {i64, i64} result struct.
+            // The typeck's expr_type may be:
+            //   - `ErrorsCapable { inner }` — still unhandled; load ptr for .or()/.failed()
+            //   - inner type (String, int, etc.) — typeck narrowed it; extract success value
+            //
+            // Auto-propagation fires here when the caller IS errors-capable AND the type
+            // is still ErrorsCapable (typeck hasn't narrowed it yet).
+            if cg.errors_capable_locals.contains(name.as_str()) {
+                if matches!(ty, Type::ErrorsCapable { .. }) && cg.is_errors_capable {
+                    // Auto-propagation: load struct, check error, early-return or yield success.
+                    let ec_ptr = cg.builder.build_load(cg.ptr(), slot, "ec_id_ptr")
+                        .map_err(|e| format!("ec ident load: {e}"))?.into_pointer_value();
+                    let result_ty = errors_result_type(cg.ctx);
+                    let result_struct = cg.builder.build_load(result_ty, ec_ptr, "ec_id_struct")
+                        .map_err(|e| format!("ec ident struct load: {e}"))?.into_struct_value();
+                    cg.errors_capable_locals.remove(name.as_str());
+                    let inner_ty = if let Type::ErrorsCapable { inner } = &ty {
+                        *inner.clone()
+                    } else { ty.clone() };
+                    let success_val = lower_ec_auto_propagate(cg, result_struct, &inner_ty)?;
+                    let new_slot = cg.alloca(&inner_ty, &format!("{name}_ec_inner"))?;
+                    store(cg, success_val, &inner_ty, new_slot)?;
+                    cg.locals.insert(name.to_string(), new_slot);
+                    return Ok(success_val);
+                } else if !matches!(ty, Type::ErrorsCapable { .. }) {
+                    // Typeck narrowed the binding to the inner type (after a .failed() check).
+                    // Extract the success value from the stored struct and update the slot.
+                    let ec_ptr = cg.builder.build_load(cg.ptr(), slot, "ec_id_ptr")
+                        .map_err(|e| format!("ec ident narrow load: {e}"))?.into_pointer_value();
+                    let result_ty = errors_result_type(cg.ctx);
+                    let success_gep = cg.builder.build_struct_gep(result_ty, ec_ptr, 1, "ec_narrow_val")
+                        .map_err(|e| format!("ec narrow gep: {e}"))?;
+                    let bits = cg.builder.build_load(cg.i64(), success_gep, "ec_narrow_bits")
+                        .map_err(|e| format!("ec narrow bits: {e}"))?.into_int_value();
+                    let success_val = cg.i64_bits_to(bits, &ty)?;
+                    // Update the slot so future uses don't do this extraction again.
+                    cg.errors_capable_locals.remove(name.as_str());
+                    let new_slot = cg.alloca(&ty, &format!("{name}_ec_narrowed"))?;
+                    store(cg, success_val, &ty, new_slot)?;
+                    cg.locals.insert(name.to_string(), new_slot);
+                    return Ok(success_val);
+                }
+                // If ErrorsCapable AND not errors-capable caller: fall through to load
+                // which returns the ptr for .or()/.failed() method dispatch.
+            }
+
             load(cg, slot, &ty, name)
         }
 
@@ -1353,13 +1488,23 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     };
                     let fn_val = cg.module.get_function(&effective_name)
                         .ok_or_else(|| format!("codegen: function `{effective_name}` not found in module"))?;
-                    let mut args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
+                    let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
                     for arg in &call.args {
                         let val = lower_expr(cg, arg)?;
-                        args.push(val.into());
+                        call_args.push(val.into());
                     }
-                    let call_site = cg.builder.build_call(fn_val, &args, "call")
+                    let call_site = cg.builder.build_call(fn_val, &call_args, "call")
                         .map_err(|e| format!("call {effective_name}: {e}"))?;
+
+                    // M7 P4a: if callee is errors-capable, handle the {i64, i64} result.
+                    let callee_is_ec = is_errors_capable_fn(cg.typed, &effective_name);
+                    if callee_is_ec {
+                        let result_struct = call_site.try_as_basic_value().basic()
+                            .ok_or_else(|| format!("errors-capable call `{effective_name}` returned void"))?
+                            .into_struct_value();
+                        return lower_errors_capable_call_result(cg, result_struct, &effective_name);
+                    }
+
                     match call_site.try_as_basic_value().basic() {
                         Some(val) => Ok(val),
                         None => Ok(cg.i32().const_int(0, false).into()),
@@ -1405,6 +1550,13 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     } else {
                         Err(format!("codegen: unknown method `{method}` on options type `{opts_name}`"))
                     }
+                }
+                // M7 P4a: ErrorsCapable — .failed() and .or(default).
+                // The receiver is a pointer to a heap-allocated {i64 error_ptr, i64 success_val}
+                // stored as a pointer in a local alloca.
+                Type::ErrorsCapable { inner } => {
+                    let inner = inner.as_ref().clone();
+                    lower_errors_capable_method(cg, recv_val, &inner, method, args)
                 }
                 _ => {
                     // M4 P5: one-arg primitive intrinsics (wrapping/saturating arithmetic).
@@ -2506,6 +2658,141 @@ fn lower_maybe_method<'ctx>(
     }
 }
 
+
+// ── M7 P4a: errors-capable helpers ───────────────────────────────────────────
+
+/// True when the named function in `typed_module` has `errors_capable = true`.
+fn is_errors_capable_fn(typed: &TypedModule, fn_name: &str) -> bool {
+    typed.module.items.iter().any(|item| {
+        if let ynz_ast::nodes::Item::Function(f) = item {
+            f.name == fn_name && f.errors_capable
+        } else {
+            false
+        }
+    })
+}
+
+/// Emit auto-propagation for an errors-capable result struct.
+///
+/// Emits IR that:
+/// 1. Extracts the error pointer from `result_struct`.
+/// 2. If non-null → pops the current frame, returns the error wrapped in
+///    `{error_ptr, 0}` (early-exit path).
+/// 3. If null → falls through to a "success" block and returns the success
+///    value converted to the given inner type.
+///
+/// Must only be called when `cg.is_errors_capable = true`.
+fn lower_ec_auto_propagate<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    result_struct: inkwell::values::StructValue<'ctx>,
+    inner_ty: &Type,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let result_ty = errors_result_type(cg.ctx);
+
+    let err_ptr_i64 = cg.builder.build_extract_value(result_struct, 0, "ap_err")
+        .map_err(|e| format!("ap extract err: {e}"))?.into_int_value();
+    let is_err = cg.builder.build_int_compare(
+        IntPredicate::NE, err_ptr_i64, cg.i64().const_int(0, false), "ap_is_err",
+    ).map_err(|e| format!("ap icmp: {e}"))?;
+
+    let propagate_bb = cg.append_block("ap_propagate");
+    let success_bb   = cg.append_block("ap_success");
+    cg.builder.build_conditional_branch(is_err, propagate_bb, success_bb)
+        .map_err(|e| format!("ap branch: {e}"))?;
+
+    // Propagation block: pop frame, wrap error, early-return.
+    cg.builder.position_at_end(propagate_bb);
+    cg.builder.build_call(cg.rt.ynz_frame_pop, &[], "ap_pop")
+        .map_err(|e| format!("ap pop: {e}"))?;
+    let mut prop_result = result_ty.const_zero();
+    prop_result = cg.builder.build_insert_value(prop_result, err_ptr_i64, 0, "prop_err")
+        .map_err(|e| format!("prop ins err: {e}"))?.into_struct_value();
+    prop_result = cg.builder.build_insert_value(
+        prop_result, cg.i64().const_int(0, false), 1, "prop_val",
+    ).map_err(|e| format!("prop ins val: {e}"))?.into_struct_value();
+    cg.builder.build_return(Some(&prop_result))
+        .map_err(|e| format!("ap early return: {e}"))?;
+
+    // Success block: extract the success bits and convert to the inner type.
+    cg.builder.position_at_end(success_bb);
+    let success_bits = cg.builder.build_extract_value(result_struct, 1, "ap_val")
+        .map_err(|e| format!("ap extract val: {e}"))?.into_int_value();
+    cg.i64_bits_to(success_bits, inner_ty)
+}
+
+/// Handle the `{i64 error_ptr, i64 success_val}` struct returned from an
+/// errors-capable function call.
+///
+/// Stores the result struct in a stack alloca.
+///
+/// - **In an errors-capable caller**: also emits an auto-propagation check
+///   immediately. If error: pop frame + early-return. Returns a flag in
+///   `errors_capable_locals` so the subsequent `Ident` use site knows it needs
+///   to load the success value from the struct.
+/// - **Outside an errors-capable caller**: just stores the struct; the caller
+///   handles it via `.or()` / `.failed()`.
+fn lower_errors_capable_call_result<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    result_struct: inkwell::values::StructValue<'ctx>,
+    _callee_name: &str,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let result_ty = errors_result_type(cg.ctx);
+    let slot = cg.builder.build_alloca(result_ty, "ec_result")
+        .map_err(|e| format!("ec_result alloca: {e}"))?;
+    cg.builder.build_store(slot, result_struct)
+        .map_err(|e| format!("ec_result store: {e}"))?;
+    Ok(slot.into())
+}
+
+/// Dispatch `.failed()` and `.or(default)` on an `ErrorsCapable` value.
+///
+/// The receiver is a pointer to a stack-allocated `{i64 error_ptr, i64 success_val}`.
+fn lower_errors_capable_method<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    recv_val: BasicValueEnum<'ctx>,
+    inner: &Type,
+    method: &str,
+    args: &[Expr],
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let result_ty = errors_result_type(cg.ctx);
+    let recv_ptr = recv_val.into_pointer_value();
+
+    match method {
+        "failed" => {
+            // .failed() → bool: true when error_ptr != 0.
+            let err_gep = cg.builder.build_struct_gep(result_ty, recv_ptr, 0, "ec_err_gep")
+                .map_err(|e| format!("{e}"))?;
+            let err_ptr = cg.builder.build_load(cg.i64(), err_gep, "ec_err_ptr")
+                .map_err(|e| format!("{e}"))?.into_int_value();
+            let is_failed = cg.builder.build_int_compare(
+                IntPredicate::NE, err_ptr, cg.i64().const_int(0, false), "ec_failed",
+            ).map_err(|e| format!("{e}"))?;
+            Ok(is_failed.into())
+        }
+        "or" => {
+            // .or(default) → inner_type: error_ptr == 0 ? success_val : default.
+            let err_gep = cg.builder.build_struct_gep(result_ty, recv_ptr, 0, "ec_or_err_gep")
+                .map_err(|e| format!("{e}"))?;
+            let err_ptr = cg.builder.build_load(cg.i64(), err_gep, "ec_or_err")
+                .map_err(|e| format!("{e}"))?.into_int_value();
+            let is_ok = cg.builder.build_int_compare(
+                IntPredicate::EQ, err_ptr, cg.i64().const_int(0, false), "ec_is_ok",
+            ).map_err(|e| format!("{e}"))?;
+
+            let val_gep = cg.builder.build_struct_gep(result_ty, recv_ptr, 1, "ec_or_val_gep")
+                .map_err(|e| format!("{e}"))?;
+            let bits = cg.builder.build_load(cg.i64(), val_gep, "ec_or_bits")
+                .map_err(|e| format!("{e}"))?.into_int_value();
+            let success_val = cg.i64_bits_to(bits, inner)?;
+            let default_val = lower_expr(cg, &args[0])?;
+
+            cg.builder.build_select(is_ok, success_val, default_val, "ec_or_res")
+                .map_err(|e| format!("{e}"))
+        }
+        other => Err(format!("errors-capable method `{other}` not yet implemented in M7 P4a")),
+    }
+}
+
 // ── Helper: test if a map key type is String ──────────────────────────────────
 
 fn key_is_string(key_ty: &Type) -> bool {
@@ -2914,8 +3201,10 @@ fn store<'ctx>(cg: &mut Cg<'ctx, '_>, val: BasicValueEnum<'ctx>, ty: &Type, slot
         // BuiltinArray is a pointer to the heap YnzArray; store the pointer.
         // BuiltinFixed is already stored as an alloca pointer; store the pointer.
         // Maybe is an alloca pointer to {i64,i64}; store the pointer.
+        // ErrorsCapable is an alloca pointer to {i64,i64}; store the pointer.
         Type::BuiltinArray { .. } | Type::BuiltinFixed { .. } | Type::Maybe { .. }
-        | Type::BuiltinMap { .. } | Type::MapEntry { .. } => {
+        | Type::BuiltinMap { .. } | Type::MapEntry { .. }
+        | Type::ErrorsCapable { .. } => {
             cg.builder.build_store(slot, val).map_err(|e| format!("{e}"))?;
         }
         _ => { cg.builder.build_store(slot, val).map_err(|e| format!("{e}"))?; }
@@ -2967,9 +3256,11 @@ fn load<'ctx>(cg: &mut Cg<'ctx, '_>, slot: PointerValue<'ctx>, ty: &Type, name: 
         // BuiltinFixed: slot stores a pointer to the [N x i64] alloca — load and return.
         // Maybe: slot stores a pointer to the {i64,i64} alloca — load and return.
         // Union: slot stores a pointer to the tagged-struct alloca — load and return.
+        // ErrorsCapable: slot stores a pointer to the {i64,i64} result alloca — load and return.
         Type::BuiltinArray { .. } | Type::BuiltinFixed { .. } | Type::Maybe { .. }
         | Type::BuiltinMap { .. } | Type::MapEntry { .. }
-        | Type::Union { .. } => {
+        | Type::Union { .. }
+        | Type::ErrorsCapable { .. } => {
             cg.builder.build_load(cg.ptr(), slot, name).map_err(|e| format!("{e}"))
         }
         ty => {
