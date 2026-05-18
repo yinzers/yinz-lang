@@ -1764,28 +1764,86 @@ fn m8_token_variant_count_locked() {
     use ynz_parser::Token::*;
     let all_variants: &[Token] = &[
         // M1
-        Function, Nothing, Identifier("x".into()), StringLit(vec![]),
-        LParen, RParen, LBrace, RBrace, Arrow, Eof,
+        Function,
+        Nothing,
+        Identifier("x".into()),
+        StringLit(vec![]),
+        LParen,
+        RParen,
+        LBrace,
+        RBrace,
+        Arrow,
+        Eof,
         // M2
-        Let, Const, True, False, IntLit(0), NumberLit("0.0".into()),
-        Plus, Minus, Star, Slash, Percent,
-        EqEq, NotEq, Lt, LtEq, Gt, GtEq,
-        AmpAmp, PipePipe, Bang,
-        Amp, Pipe, Caret, Tilde, LtLt, GtGt,
-        Eq, Colon, Dot, LBracket, RBracket, Comma,
+        Let,
+        Const,
+        True,
+        False,
+        IntLit(0),
+        NumberLit("0.0".into()),
+        Plus,
+        Minus,
+        Star,
+        Slash,
+        Percent,
+        EqEq,
+        NotEq,
+        Lt,
+        LtEq,
+        Gt,
+        GtEq,
+        AmpAmp,
+        PipePipe,
+        Bang,
+        Amp,
+        Pipe,
+        Caret,
+        Tilde,
+        LtLt,
+        GtGt,
+        Eq,
+        Colon,
+        Dot,
+        LBracket,
+        RBracket,
+        Comma,
         // M3
-        If, Else, While, For, In, Return, FatArrow,
+        If,
+        Else,
+        While,
+        For,
+        In,
+        Return,
+        FatArrow,
         // M4
-        Shape, Follows, Extends, Base, Hidden, Dynamic, SelfType, SelfValue,
+        Shape,
+        Follows,
+        Extends,
+        Base,
+        Hidden,
+        Dynamic,
+        SelfType,
+        SelfValue,
         // M5
         None,
         // M6
-        Options, Is,
+        Options,
+        Is,
         // M7 P1
-        BacktickString(vec![]), InterpolationStart, InterpolationEnd, Errors,
+        BacktickString(vec![]),
+        InterpolationStart,
+        InterpolationEnd,
+        Errors,
         // M8 P1
-        Import, Export, Sensitive, Wait, Background,
-        DocComment { content: String::new(), break_after: false },
+        Import,
+        Export,
+        Sensitive,
+        Wait,
+        Background,
+        DocComment {
+            content: String::new(),
+            break_after: false,
+        },
     ];
     assert_eq!(
         all_variants.len(),
@@ -1853,16 +1911,26 @@ fn m8_doc_comment_simple() {
     // an Identifier, doc-comment attachment is impossible.
     let tokens = lex_tokens("/// foo\nexport function f() -> nothing {}");
     let doc = tokens.iter().find_map(|t| {
-        if let Token::DocComment { content, break_after } = t {
+        if let Token::DocComment {
+            content,
+            break_after,
+        } = t
+        {
             Some((content.clone(), *break_after))
         } else {
             None
         }
     });
-    assert!(doc.is_some(), "DocComment token must be emitted for `/// foo`");
+    assert!(
+        doc.is_some(),
+        "DocComment token must be emitted for `/// foo`"
+    );
     let (content, break_after) = doc.unwrap();
     assert_eq!(content, "foo", "Content must be stripped of `/// ` prefix");
-    assert!(!break_after, "break_after must be false when next token follows immediately");
+    assert!(
+        !break_after,
+        "break_after must be false when next token follows immediately"
+    );
 }
 
 #[test]
@@ -1872,15 +1940,25 @@ fn m8_doc_comment_empty_line_is_break_after() {
     let src = "/// orphan\n\nexport function f() -> nothing {}";
     let tokens = lex_tokens(src);
     let doc = tokens.iter().find_map(|t| {
-        if let Token::DocComment { content, break_after } = t {
+        if let Token::DocComment {
+            content,
+            break_after,
+        } = t
+        {
             Some((content.clone(), *break_after))
         } else {
             None
         }
     });
-    assert!(doc.is_some(), "DocComment must be emitted even when break_after is true");
+    assert!(
+        doc.is_some(),
+        "DocComment must be emitted even when break_after is true"
+    );
     let (_content, break_after) = doc.unwrap();
-    assert!(break_after, "break_after must be true when a blank line separates doc from item");
+    assert!(
+        break_after,
+        "break_after must be true when a blank line separates doc from item"
+    );
 }
 
 #[test]
@@ -1890,14 +1968,26 @@ fn m8_doc_comment_regular_comment_not_a_break() {
     // Lexer must emit two DocComment tokens, both with break_after = false.
     let src = "/// line1\n// internal\n/// line2\nexport function f() -> nothing {}";
     let tokens = lex_tokens(src);
-    let docs: Vec<(String, bool)> = tokens.iter().filter_map(|t| {
-        if let Token::DocComment { content, break_after } = t {
-            Some((content.clone(), *break_after))
-        } else {
-            None
-        }
-    }).collect();
-    assert_eq!(docs.len(), 2, "Two DocComment tokens expected; got {}", docs.len());
+    let docs: Vec<(String, bool)> = tokens
+        .iter()
+        .filter_map(|t| {
+            if let Token::DocComment {
+                content,
+                break_after,
+            } = t
+            {
+                Some((content.clone(), *break_after))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(
+        docs.len(),
+        2,
+        "Two DocComment tokens expected; got {}",
+        docs.len()
+    );
     assert!(!docs[0].1, "First doc must have break_after = false");
     assert!(!docs[1].1, "Second doc must have break_after = false");
 }
@@ -1909,7 +1999,10 @@ fn m8_double_slash_still_skipped() {
     // accidentally matching `//`.
     let tokens = lex_tokens("// regular comment\nlet x = 1");
     let has_doc = tokens.iter().any(|t| matches!(t, Token::DocComment { .. }));
-    assert!(!has_doc, "Regular `//` comment must not produce DocComment token");
+    assert!(
+        !has_doc,
+        "Regular `//` comment must not produce DocComment token"
+    );
 }
 
 #[test]
@@ -1925,7 +2018,11 @@ fn m8_four_slashes_is_doc_with_slash_content() {
         }
     });
     assert!(doc.is_some(), "DocComment must be emitted for `////`");
-    assert_eq!(doc.unwrap(), "/", "Content of `////` must be `/` (fourth slash is content)");
+    assert_eq!(
+        doc.unwrap(),
+        "/",
+        "Content of `////` must be `/` (fourth slash is content)"
+    );
 }
 
 #[test]

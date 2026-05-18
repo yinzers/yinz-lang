@@ -1,0 +1,19 @@
+// services/players.ynz — exported shapes and functions for player management.
+// Demonstrates: export shape, export function, UFCS across modules.
+
+export shape Player {
+  name: string
+  health: int
+}
+
+export function newPlayer(name: string) -> Player {
+  return { name: name, health: 100 }
+}
+
+export function greet(player: Player) -> string {
+  return `Hello, ${player.name}!`
+}
+
+export function heal(player: Player, amount: int) -> Player {
+  return { name: player.name, health: player.health + amount }
+}

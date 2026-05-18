@@ -1,0 +1,16 @@
+// utils/math_extra.ynz — exported math utility functions.
+// Demonstrates: export function, standalone functions usable via UFCS.
+
+export function clamp(value: int, low: int, high: int) -> int {
+  if (value < low) {
+    return low
+  }
+  if (value > high) {
+    return high
+  }
+  return value
+}
+
+export function square(n: int) -> int {
+  return n * n
+}

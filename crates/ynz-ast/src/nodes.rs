@@ -10,7 +10,7 @@ pub struct Module {
 /// A top-level item in a module.
 ///
 /// Variant count is pinned by `m4_item_variant_count_locked` in the test suite.
-/// Current count: 3 (M6 adds OptionsDecl for `options Status { active, inactive }` declarations).
+/// Current count: 6 (M8 P2 adds ImportDecl, ConstDecl, ReExport).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
     Function(FunctionDecl),
@@ -18,6 +18,76 @@ pub enum Item {
     ShapeDecl(ShapeDecl),
     // test-ratchet: M6 adds OptionsDecl for `options` type declarations.
     OptionsDecl(OptionsDecl),
+    // test-ratchet: M8 P2 adds ImportDecl for `import { ... } from "..."` and `import ns from "..."`.
+    ImportDecl(ImportDecl),
+    // test-ratchet: M8 P2 adds ConstDecl for top-level `[export] const NAME = value`.
+    ConstDecl(ConstDecl),
+    // test-ratchet: M8 P2 adds ReExport for `export { foo } from "services/users"`.
+    ReExport(ReExport),
+}
+
+/// How an import binds names into scope.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ImportKind {
+    /// `import { name1, name2 as alias } from "path"` — named import.
+    Named(Vec<ImportItem>),
+    /// `import ns from "path"` or `import ns as alias from "path"` — namespace import.
+    Namespace {
+        local_name: String,
+        local_name_span: SourceSpan,
+    },
+}
+
+/// A single item in a named import: `name` or `name as alias`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImportItem {
+    /// The name as exported from the source module.
+    pub exported_name: String,
+    pub exported_name_span: SourceSpan,
+    /// The local binding name (same as `exported_name` unless `as alias` is used).
+    pub local_name: String,
+    pub local_name_span: SourceSpan,
+}
+
+/// `import { ... } from "path"` or `import ns from "path"`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImportDecl {
+    pub kind: ImportKind,
+    /// Project-root-relative source path (no `.ynz` suffix).
+    pub source: String,
+    pub source_span: SourceSpan,
+    pub span: SourceSpan,
+}
+
+/// Top-level `[export] const NAME: [Type] = value`.
+///
+/// M8 introduces top-level const declarations so modules can export named constants.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConstDecl {
+    pub name: String,
+    pub name_span: SourceSpan,
+    pub ty: Option<Type>,
+    pub value: Expr,
+    pub is_exported: bool,
+    pub span: SourceSpan,
+}
+
+/// A single item in a re-export: `name` or `name as alias`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReExportItem {
+    pub name: String,
+    pub name_span: SourceSpan,
+    pub alias: Option<(String, SourceSpan)>,
+}
+
+/// `export { foo, bar as baz } from "services/users"`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReExport {
+    pub items: Vec<ReExportItem>,
+    /// Project-root-relative source path.
+    pub source: String,
+    pub source_span: SourceSpan,
+    pub span: SourceSpan,
 }
 
 /// An `options` type declaration: `options Status { active, inactive, banned }`.
@@ -31,6 +101,8 @@ pub struct OptionsDecl {
     pub name_span: SourceSpan,
     pub variants: Vec<(String, SourceSpan)>,
     pub span: SourceSpan,
+    /// `true` when prefixed with `export` — visible to other modules.
+    pub is_exported: bool,
 }
 
 /// A function declaration: `function name<generics>(params) -> return_type [errors] { body }`.
@@ -49,6 +121,8 @@ pub struct FunctionDecl {
     /// M7: true when the return type is qualified with `errors`
     /// (e.g. `-> string errors`). Full error-type typeck arrives in M7 P3a.
     pub errors_capable: bool,
+    /// M8: true when prefixed with `export` — visible to other modules.
+    pub is_exported: bool,
 }
 
 /// M5: a type parameter on a generic function or generic shape.
@@ -700,4 +774,6 @@ pub struct ShapeDecl {
     /// When `Some`, `fields`, `extends`, `follows`, and `contract_sigs` are empty.
     pub alias_ty: Option<Type>,
     pub span: SourceSpan,
+    /// M8: true when prefixed with `export` — visible to other modules.
+    pub is_exported: bool,
 }

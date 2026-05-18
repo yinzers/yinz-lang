@@ -1259,12 +1259,15 @@ impl<'b> Checker<'b> {
                 ));
             } else {
                 let what_instead = match &arg_ty {
-                    Type::BuiltinArray { .. } | Type::BuiltinFixed { .. } =>
-                        "Loop and print each element: `for (item in collection) { print(item) }`".to_string(),
-                    Type::BuiltinMap { .. } =>
-                        "Loop and print each entry: `for ((k, v) in collection) { print(k) }`".to_string(),
-                    _ =>
-                        "Convert it to a string first with `.toString()`.".to_string(),
+                    Type::BuiltinArray { .. } | Type::BuiltinFixed { .. } => {
+                        "Loop and print each element: `for (item in collection) { print(item) }`"
+                            .to_string()
+                    }
+                    Type::BuiltinMap { .. } => {
+                        "Loop and print each entry: `for ((k, v) in collection) { print(k) }`"
+                            .to_string()
+                    }
+                    _ => "Convert it to a string first with `.toString()`.".to_string(),
                 };
                 self.diags.push(Diagnostic::error(
                     call.args[0].span().clone(),
@@ -1631,7 +1634,9 @@ impl<'b> Checker<'b> {
         }
 
         // Verify all type params were resolved — emit one consolidated error if multiple are missing.
-        let unresolved: Vec<&String> = sig.type_params.iter()
+        let unresolved: Vec<&String> = sig
+            .type_params
+            .iter()
             .filter(|tp| !subst.contains_key(*tp))
             .collect();
         if !unresolved.is_empty() {
@@ -1646,7 +1651,11 @@ impl<'b> Checker<'b> {
                     ));
                 }
                 n => {
-                    let list = unresolved.iter().map(|tp| format!("`{tp}`")).collect::<Vec<_>>().join(", ");
+                    let list = unresolved
+                        .iter()
+                        .map(|tp| format!("`{tp}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
                     self.diags.push(Diagnostic::error(
                         call.span.clone(),
                         format!("{n} type parameters could not be resolved for `{name}`: {list}."),
@@ -2667,7 +2676,9 @@ impl<'b> Checker<'b> {
         }
 
         // Collect all missing required fields, then emit one consolidated diagnostic.
-        let missing: Vec<&str> = shape_def.fields.iter()
+        let missing: Vec<&str> = shape_def
+            .fields
+            .iter()
             .filter(|sf| !sf.is_hidden && !fields.iter().any(|f| f.name == sf.name))
             .map(|sf| sf.name.as_str())
             .collect();
@@ -2682,8 +2693,16 @@ impl<'b> Checker<'b> {
                 ));
             }
             n => {
-                let list = missing.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ");
-                let add  = missing.iter().map(|name| format!("`{name}: value`")).collect::<Vec<_>>().join(", ");
+                let list = missing
+                    .iter()
+                    .map(|name| format!("`{name}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let add = missing
+                    .iter()
+                    .map(|name| format!("`{name}: value`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 self.diags.push(Diagnostic::error(
                     span.clone(),
                     format!("{n} fields are missing from this `{shape_name}` value: {list}."),

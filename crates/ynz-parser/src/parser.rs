@@ -16,9 +16,10 @@
 /// Every AST node carries a SourceSpan so downstream stages can point
 /// diagnostics at exact source locations.
 use ynz_ast::nodes::{
-    BinOpKind, Block, CallExpr, ContractSig, Expr, FieldDecl, FunctionDecl, GenericParam, Item,
-    MatchArm, MatchPattern, MatchPatternKind, Module, OptionsDecl, OwnershipModifier, Param,
-    PostfixOpKind, ReceiverKind, ShapeDecl, Stmt, StructLitField, Type, TypePath, UnaryOpKind,
+    BinOpKind, Block, CallExpr, ConstDecl, ContractSig, Expr, FieldDecl, FunctionDecl,
+    GenericParam, ImportDecl, ImportItem, ImportKind, Item, MatchArm, MatchPattern,
+    MatchPatternKind, Module, OptionsDecl, OwnershipModifier, Param, PostfixOpKind, ReExport,
+    ReExportItem, ReceiverKind, ShapeDecl, Stmt, StructLitField, Type, TypePath, UnaryOpKind,
 };
 // TypePath is also used for Expr::Is
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
@@ -126,6 +127,14 @@ impl<'a> Parser<'a> {
 
         while !matches!(self.peek(), Token::Eof) {
             match self.peek() {
+                Token::Import => {
+                    if let Some(decl) = self.parse_import_decl() {
+                        items.push(Item::ImportDecl(decl));
+                    }
+                }
+                Token::Export => {
+                    self.parse_export_item(&mut items);
+                }
                 Token::Function => {
                     if let Some(decl) = self.parse_function_decl() {
                         items.push(Item::Function(decl));
@@ -158,6 +167,10 @@ impl<'a> Parser<'a> {
                         items.push(Item::ShapeDecl(decl));
                     }
                 }
+                Token::DocComment { .. } => {
+                    // Doc-comment tokens are attached to items by P3. For now, skip them.
+                    self.advance();
+                }
                 _ => {
                     let span = self.current_span();
                     self.diags.push(Diagnostic::error(
@@ -166,7 +179,7 @@ impl<'a> Parser<'a> {
                             "Unexpected `{}` at the top level.",
                             token_display(self.peek())
                         ),
-                        "Top-level code must be inside a `function` or `shape` declaration.",
+                        "Top-level code must be inside a `function`, `shape`, `import`, or `export` declaration.",
                         "Yinz programs are made of functions and shapes. Only declarations are allowed at the top level.",
                     ));
                     self.advance();
@@ -179,6 +192,495 @@ impl<'a> Parser<'a> {
             items,
             span: SourceSpan::new(self.file, start.start, end.end),
         }
+    }
+
+    /// Parse `export function/shape/options/const/base/{ ... }` after `export` is consumed.
+    fn parse_export_item(&mut self, items: &mut Vec<Item>) {
+        let export_start = self.current_span();
+        self.advance(); // consume `export`
+
+        match self.peek().clone() {
+            Token::Function => {
+                if let Some(mut decl) = self.parse_function_decl() {
+                    decl.is_exported = true;
+                    items.push(Item::Function(decl));
+                }
+            }
+            Token::Shape => {
+                if let Some(mut decl) = self.parse_shape_decl(false) {
+                    decl.is_exported = true;
+                    items.push(Item::ShapeDecl(decl));
+                }
+            }
+            Token::Options => {
+                if let Some(mut decl) = self.parse_options_decl() {
+                    decl.is_exported = true;
+                    items.push(Item::OptionsDecl(decl));
+                }
+            }
+            Token::Base => {
+                self.advance(); // consume `base`
+                if !matches!(self.peek(), Token::Shape) {
+                    self.diags.push(Diagnostic::error(
+                        self.current_span(),
+                        "Expected `shape` after `export base`.",
+                        "Write `export base shape Name { ... }`.",
+                        "`base` must be immediately followed by the `shape` keyword.",
+                    ));
+                    self.advance();
+                } else if let Some(mut decl) = self.parse_shape_decl(true) {
+                    decl.is_exported = true;
+                    items.push(Item::ShapeDecl(decl));
+                }
+            }
+            Token::Const => {
+                if let Some(mut decl) = self.parse_const_decl() {
+                    decl.is_exported = true;
+                    items.push(Item::ConstDecl(decl));
+                }
+            }
+            Token::LBrace => {
+                // Re-export: `export { foo, bar } from "path"`
+                if let Some(re) = self.parse_reexport(export_start.start) {
+                    items.push(Item::ReExport(re));
+                }
+            }
+            Token::Identifier(kw) if kw == "default" => {
+                let span = self.current_span();
+                self.advance(); // consume `default`
+                self.diags.push(Diagnostic::error(
+                    span,
+                    "Yinz does not have default exports.",
+                    "Name the export instead: `export function foo()` or `export const PI = 3.14`.",
+                    "Yinz uses named exports only — every exported item is referred to by its name in `import { name }` statements.",
+                ));
+            }
+            _ => {
+                self.diags.push(Diagnostic::error(
+                    self.current_span(),
+                    format!("Expected a declaration after `export`, not `{}`.", token_display(self.peek())),
+                    "Write `export function foo()`, `export shape Foo { ... }`, `export options Status { ... }`, or `export { name } from \"path\"`.",
+                    "`export` makes a declaration visible to other modules.",
+                ));
+                self.advance();
+                let _ = export_start;
+            }
+        }
+    }
+
+    /// Parse `import { name1, name2 as alias } from "path"` or `import ns from "path"`.
+    fn parse_import_decl(&mut self) -> Option<ImportDecl> {
+        let start = self.current_span().start;
+        self.advance(); // consume `import`
+
+        // Banned form: `import * as X from "..."` or `import *`
+        if matches!(self.peek(), Token::Star) {
+            let span = self.current_span();
+            self.advance();
+            // Try to consume the rest for error recovery
+            while !matches!(self.peek(), Token::Eof | Token::Function | Token::Shape) {
+                self.advance();
+            }
+            self.diags.push(Diagnostic::error(
+                span,
+                "Wildcard imports are not allowed in Yinz.",
+                "Use a namespace import instead: `import utils from \"utils\"`.",
+                "Wildcard imports make it unclear where names come from. Namespace imports (`import ns from \"path\"`) give the same access with a clear prefix.",
+            ));
+            return None;
+        }
+
+        // Named import: `import { name1, name2 as alias } from "..."`
+        if matches!(self.peek(), Token::LBrace) {
+            return self.parse_named_import(start);
+        }
+
+        // Namespace import: `import ns from "..."` or `import ns as alias from "..."`
+        let (local_name, local_name_span) = match self.peek().clone() {
+            Token::Identifier(n) => {
+                let span = self.current_span();
+                self.advance();
+                (n, span)
+            }
+            _ => {
+                self.diags.push(Diagnostic::error(
+                    self.current_span(),
+                    "Expected a name or `{` after `import`.",
+                    "Write `import utils from \"utils\"` or `import { fetchUser } from \"services/users\"`.",
+                    "`import` brings names from another module into scope.",
+                ));
+                return None;
+            }
+        };
+
+        // Check for banned `import "path"` (side-effect import — must bind)
+        if matches!(self.peek(), Token::BacktickString(_)) {
+            let span = self.current_span();
+            self.diags.push(Diagnostic::error(
+                span,
+                "Import statements must bind a name.",
+                "Write `import utils from \"utils\"` to bind the module as a namespace.",
+                "Yinz does not support side-effect-only imports. Every import must name what it brings into scope.",
+            ));
+            self.advance();
+            return None;
+        }
+
+        // `as alias` (optional)
+        let final_local_name = if matches!(self.peek(), Token::Identifier(n) if n == "as") {
+            self.advance(); // consume `as`
+            match self.peek().clone() {
+                Token::Identifier(alias) => {
+                    let alias_span = self.current_span();
+                    self.advance();
+                    ImportItem {
+                        exported_name: local_name.clone(),
+                        exported_name_span: local_name_span.clone(),
+                        local_name: alias,
+                        local_name_span: alias_span,
+                    }
+                }
+                _ => {
+                    self.diags.push(Diagnostic::error(
+                        self.current_span(),
+                        "Expected an alias name after `as`.",
+                        "Write `import ns as alias from \"path\"`.",
+                        "`as` renames the namespace import to a different local name.",
+                    ));
+                    return None;
+                }
+            }
+        } else {
+            // No alias — namespace name is the local name
+            ImportItem {
+                exported_name: local_name.clone(),
+                exported_name_span: local_name_span.clone(),
+                local_name: local_name.clone(),
+                local_name_span: local_name_span.clone(),
+            }
+        };
+
+        // Expect `from`
+        if !matches!(self.peek(), Token::Identifier(n) if n == "from") {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `from` after the import name.",
+                "Write `import utils from \"services/utils\"`.",
+                "`from` specifies which module to import from.",
+            ));
+            return None;
+        }
+        self.advance(); // consume `from`
+
+        let (source, source_span) = self.parse_import_path()?;
+
+        let end = self.current_span().end;
+        Some(ImportDecl {
+            kind: ImportKind::Namespace {
+                local_name: final_local_name.local_name,
+                local_name_span: final_local_name.local_name_span,
+            },
+            source,
+            source_span,
+            span: SourceSpan::new(self.file, start, end),
+        })
+    }
+
+    /// Parse `{ name1, name2 as alias } from "path"` — called after `import` consumed.
+    fn parse_named_import(&mut self, start: usize) -> Option<ImportDecl> {
+        self.advance(); // consume `{`
+        let mut import_items = Vec::new();
+
+        loop {
+            if matches!(self.peek(), Token::RBrace | Token::Eof) {
+                break;
+            }
+            // Check for wildcard (banned)
+            if matches!(self.peek(), Token::Star) {
+                let span = self.current_span();
+                self.advance();
+                self.diags.push(Diagnostic::error(
+                    span,
+                    "Wildcard imports inside `{` are not allowed.",
+                    "List names explicitly: `import { fetchUser, createUser } from \"path\"`.",
+                    "Wildcard imports make it unclear where names come from. List what you need.",
+                ));
+                // Recover to `}`
+                while !matches!(self.peek(), Token::RBrace | Token::Eof) {
+                    self.advance();
+                }
+                break;
+            }
+
+            let (exported_name, exported_name_span) = match self.peek().clone() {
+                Token::Identifier(n) => {
+                    let span = self.current_span();
+                    self.advance();
+                    (n, span)
+                }
+                _ => {
+                    self.diags.push(Diagnostic::error(
+                        self.current_span(),
+                        "Expected a name inside `import { ... }`.",
+                        "Write `import { fetchUser, createUser } from \"path\"`.",
+                        "Named imports list the specific names to bring into scope.",
+                    ));
+                    while !matches!(self.peek(), Token::RBrace | Token::Comma | Token::Eof) {
+                        self.advance();
+                    }
+                    if matches!(self.peek(), Token::Comma) {
+                        self.advance();
+                    }
+                    continue;
+                }
+            };
+
+            // Optional `as alias`
+            let (local_name, local_name_span) = if matches!(self.peek(), Token::Identifier(n) if n == "as")
+            {
+                self.advance(); // consume `as`
+                match self.peek().clone() {
+                    Token::Identifier(alias) => {
+                        let span = self.current_span();
+                        self.advance();
+                        (alias, span)
+                    }
+                    _ => {
+                        self.diags.push(Diagnostic::error(
+                            self.current_span(),
+                            "Expected an alias name after `as`.",
+                            "Write `import { fetchUser as getUser } from \"path\"`.",
+                            "`as` renames the imported name to a different local name.",
+                        ));
+                        (exported_name.clone(), exported_name_span.clone())
+                    }
+                }
+            } else {
+                (exported_name.clone(), exported_name_span.clone())
+            };
+
+            import_items.push(ImportItem {
+                exported_name,
+                exported_name_span,
+                local_name,
+                local_name_span,
+            });
+
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        self.expect(&Token::RBrace);
+
+        // Expect `from`
+        if !matches!(self.peek(), Token::Identifier(n) if n == "from") {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `from` after `import { ... }`.",
+                "Write `import { fetchUser } from \"services/users\"`.",
+                "`from` specifies which module to import from.",
+            ));
+            return None;
+        }
+        self.advance(); // consume `from`
+
+        let (source, source_span) = self.parse_import_path()?;
+
+        let end = self.current_span().end;
+        Some(ImportDecl {
+            kind: ImportKind::Named(import_items),
+            source,
+            source_span,
+            span: SourceSpan::new(self.file, start, end),
+        })
+    }
+
+    /// Parse the path string after `from`. Validates: no relative paths, backtick form.
+    fn parse_import_path(&mut self) -> Option<(String, SourceSpan)> {
+        // Yinz import paths use backtick strings: `import { foo } from `services/users``
+        // Accept either backtick or a simple identifier-like string.
+        match self.peek().clone() {
+            Token::BacktickString(bytes) => {
+                let span = self.current_span();
+                self.advance();
+                let path = String::from_utf8_lossy(&bytes).to_string();
+                // Reject relative paths
+                if path.starts_with("./") || path.starts_with("../") {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        "Import paths must be project-root relative, not relative paths.",
+                        format!(
+                            "Write `{}` instead of `{}`.",
+                            path.trim_start_matches("./").trim_start_matches("../"),
+                            path
+                        ),
+                        "Yinz uses project-root paths so moving a file never breaks imports.",
+                    ));
+                    return None;
+                }
+                Some((path, span))
+            }
+            Token::StringLit(bytes) => {
+                let span = self.current_span();
+                self.advance();
+                let path = String::from_utf8_lossy(&bytes).to_string();
+                if path.starts_with("./") || path.starts_with("../") {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        "Import paths must be project-root relative, not relative paths.",
+                        format!(
+                            "Write `{}` instead of `{}`.",
+                            path.trim_start_matches("./").trim_start_matches("../"),
+                            path
+                        ),
+                        "Yinz uses project-root paths so moving a file never breaks imports.",
+                    ));
+                    return None;
+                }
+                Some((path, span))
+            }
+            _ => {
+                self.diags.push(Diagnostic::error(
+                    self.current_span(),
+                    "Expected a path string after `from`.",
+                    "Write the module path: `import { foo } from `services/users``.",
+                    "The path is the project-root-relative location of the module file (without `.ynz`).",
+                ));
+                None
+            }
+        }
+    }
+
+    /// Parse `export { foo, bar as baz } from "path"`.
+    fn parse_reexport(&mut self, start: usize) -> Option<ReExport> {
+        self.advance(); // consume `{`
+        let mut re_items = Vec::new();
+
+        loop {
+            if matches!(self.peek(), Token::RBrace | Token::Eof) {
+                break;
+            }
+            let (name, name_span) = match self.peek().clone() {
+                Token::Identifier(n) => {
+                    let span = self.current_span();
+                    self.advance();
+                    (n, span)
+                }
+                _ => {
+                    self.diags.push(Diagnostic::error(
+                        self.current_span(),
+                        "Expected a name in `export { ... }`.",
+                        "Write `export { fetchUser, createUser } from \"services/users\"`.",
+                        "Re-exports list the names to expose from a source module.",
+                    ));
+                    while !matches!(self.peek(), Token::RBrace | Token::Comma | Token::Eof) {
+                        self.advance();
+                    }
+                    if matches!(self.peek(), Token::Comma) {
+                        self.advance();
+                    }
+                    continue;
+                }
+            };
+            let alias = if matches!(self.peek(), Token::Identifier(n) if n == "as") {
+                self.advance();
+                match self.peek().clone() {
+                    Token::Identifier(a) => {
+                        let s = self.current_span();
+                        self.advance();
+                        Some((a, s))
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            re_items.push(ReExportItem {
+                name,
+                name_span,
+                alias,
+            });
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        self.expect(&Token::RBrace);
+
+        if !matches!(self.peek(), Token::Identifier(n) if n == "from") {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `from` after `export { ... }`.",
+                "Write `export { fetchUser } from \"services/users\"`.",
+                "`from` specifies which module to re-export names from.",
+            ));
+            return None;
+        }
+        self.advance(); // consume `from`
+
+        let (source, source_span) = self.parse_import_path()?;
+        let end = self.current_span().end;
+        Some(ReExport {
+            items: re_items,
+            source,
+            source_span,
+            span: SourceSpan::new(self.file, start, end),
+        })
+    }
+
+    /// Parse `const NAME [: Type] = value` (top-level, no `let`).
+    fn parse_const_decl(&mut self) -> Option<ConstDecl> {
+        let start = self.current_span().start;
+        self.advance(); // consume `const`
+
+        let (name, name_span) = match self.peek().clone() {
+            Token::Identifier(n) => {
+                let span = self.current_span();
+                self.advance();
+                (n, span)
+            }
+            _ => {
+                self.diags.push(Diagnostic::error(
+                    self.current_span(),
+                    "Expected a constant name after `const`.",
+                    "Write `const MAX_HEALTH = 100` or `export const MAX_HEALTH = 100`.",
+                    "Top-level constants must have a name.",
+                ));
+                return None;
+            }
+        };
+
+        let ty = if matches!(self.peek(), Token::Colon) {
+            self.advance(); // consume `:`
+            Some(self.parse_type())
+        } else {
+            None
+        };
+
+        if self.expect(&Token::Eq).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `=` after the constant name.",
+                "Write `const MAX_HEALTH = 100`.",
+                "Constants must have a value assigned with `=`.",
+            ));
+            return None;
+        }
+
+        let value = self.parse_expr(0);
+        let end = self.current_span().end;
+        Some(ConstDecl {
+            name,
+            name_span,
+            ty,
+            value,
+            is_exported: false, // set to true by parse_export_item
+            span: SourceSpan::new(self.file, start, end),
+        })
     }
 
     fn parse_function_decl(&mut self) -> Option<FunctionDecl> {
@@ -277,6 +779,7 @@ impl<'a> Parser<'a> {
             span: SourceSpan::new(self.file, start_span.start, end.end),
             name_span,
             errors_capable,
+            is_exported: false, // set to true by parse_module when `export` precedes
         })
     }
 
@@ -2466,6 +2969,7 @@ impl<'a> Parser<'a> {
             name_span,
             variants,
             span: SourceSpan::new(self.file, start, end),
+            is_exported: false, // set to true by parse_module when `export` precedes
         })
     }
 
@@ -2518,6 +3022,7 @@ impl<'a> Parser<'a> {
                 contract_sigs: vec![],
                 alias_ty: Some(alias_ty),
                 span: SourceSpan::new(self.file, start, end),
+                is_exported: false, // set to true by parse_module when `export` precedes
             });
         }
 
@@ -2686,6 +3191,7 @@ impl<'a> Parser<'a> {
             contract_sigs,
             alias_ty: None,
             span: SourceSpan::new(self.file, start, end),
+            is_exported: false, // set to true by parse_module when `export` precedes
         })
     }
 

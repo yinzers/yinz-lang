@@ -59,6 +59,8 @@ pub fn collect_signatures(
             Item::ShapeDecl(_) => continue,
             // M6: options declarations — P3a registers them in OptionsTable; not needed here.
             Item::OptionsDecl(_) => continue,
+            // M8: import/export/const — not function signatures.
+            Item::ImportDecl(_) | Item::ConstDecl(_) | Item::ReExport(_) => continue,
             Item::Function(f) if !f.generics.is_empty() => {
                 // Generic functions are collected by collect_generic_signatures.
                 continue;
@@ -124,7 +126,18 @@ pub fn collect_signatures(
         }
     }
 
-    if !main_checked && !table.fns.contains_key("entrypoint") {
+    // A module file (one with `export` items or `import` declarations) is a library —
+    // no `entrypoint` required. Only a standalone file or the project's entry file
+    // requires `entrypoint`.
+    let is_module_file = module.items.iter().any(|item| match item {
+        Item::ImportDecl(_) | Item::ReExport(_) => true,
+        Item::Function(f) => f.is_exported,
+        Item::ShapeDecl(s) => s.is_exported,
+        Item::OptionsDecl(o) => o.is_exported,
+        Item::ConstDecl(c) => c.is_exported,
+    });
+
+    if !is_module_file && !main_checked && !table.fns.contains_key("entrypoint") {
         diags.push(Diagnostic::error(
             module.span.clone(),
             "This file has no `entrypoint` function.",
