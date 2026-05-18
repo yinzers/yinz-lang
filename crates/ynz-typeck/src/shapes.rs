@@ -57,11 +57,14 @@ impl ShapeDef {
 #[derive(Clone, Debug, Default)]
 pub struct ShapeTable {
     pub shapes: HashMap<String, ShapeDef>,
+    /// M6: union type aliases from `shape Shape = Circle | Square` declarations.
+    /// Keyed by alias name; value is the resolved union type.
+    pub union_aliases: HashMap<String, Type>,
 }
 
 impl ShapeTable {
     pub fn empty() -> Self {
-        Self { shapes: HashMap::new() }
+        Self { shapes: HashMap::new(), union_aliases: HashMap::new() }
     }
 
     pub fn get(&self, name: &str) -> Option<&ShapeDef> {
@@ -81,6 +84,10 @@ impl ShapeTable {
             AstType::Number { .. } => Type::Number { precision: 34 },
             AstType::Bool => Type::Bool,
             AstType::Named(n, _) if n == "string" => Type::String,
+            // M6: union type aliases.
+            AstType::Named(n, _) if self.union_aliases.contains_key(n) => {
+                self.union_aliases[n].clone()
+            }
             AstType::Named(n, _) if self.contains(n) => Type::Shape { name: n.clone() },
             AstType::Error | AstType::Named(_, _) | AstType::Range { .. } => Type::Error,
             // P3b: dynamic dispatch and Self type resolution.
@@ -125,6 +132,12 @@ impl ShapeTable {
                 let inner_ty = self.resolve_ast_type(inner);
                 Type::Maybe { inner: Box::new(inner_ty) }
             }
+            // M6: Union types in shape field/signature contexts.
+            // These are rare (shape fields of union type); resolve conservatively.
+            AstType::Union { variants, .. } => {
+                let resolved: Vec<crate::types::Type> = variants.iter().map(|v| self.resolve_ast_type(v)).collect();
+                if resolved.len() < 2 { crate::types::Type::Error } else { crate::types::Type::Union { variants: resolved } }
+            }
         }
     }
 }
@@ -145,6 +158,10 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
     let mut all_names: HashSet<String> = HashSet::new();
     for item in &module.items {
         if let Item::ShapeDecl(s) = item {
+            // M6: skip alias declarations (`shape Shape = Circle | Square`) — they're not
+            // regular shapes with fields. UnionAliasTable handles them in typeck.
+            if s.alias_ty.is_some() { continue; }
+
             if all_names.contains(&s.name) {
                 diags.push(Diagnostic::error(
                     s.name_span.clone(),
@@ -169,6 +186,7 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
             contract_sigs: vec![],
             defined_at: SourceSpan::new("", 0, 0),
         })).collect(),
+        union_aliases: HashMap::new(),
     };
 
     // Pass 2: resolve each shape's own fields, contract sigs, extends, and follows.
@@ -254,6 +272,17 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
 
     // Pass 4: detect direct field-type cycles (shape A has field of type shape A).
     detect_field_cycles(&table, diags);
+
+    // M6: collect union type aliases (shape Shape = Circle | Square).
+    // Must happen after all regular shapes are in `table` so variant types can be resolved.
+    for item in &module.items {
+        if let Item::ShapeDecl(s) = item {
+            if let Some(alias_ast_ty) = &s.alias_ty {
+                let resolved = table.resolve_ast_type(alias_ast_ty);
+                table.union_aliases.insert(s.name.clone(), resolved);
+            }
+        }
+    }
 
     table
 }

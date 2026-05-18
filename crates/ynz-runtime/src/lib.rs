@@ -787,3 +787,246 @@ pub unsafe extern "C" fn ynz_array_drop(arr: *mut YnzArray) {
     }
     free(arr as *mut core::ffi::c_void);
 }
+
+// ── M4/M5: decimal128 → f64 conversion (needed by (Number).toFloat() and (Number).toInt()) ──
+
+/// Convert a decimal128 value (stored as *const [u8;16]) to f64.
+///
+/// Used by the `.toFloat()` and `.toInt()` intrinsics on `number` values.
+/// The conversion formats the decimal128 as a string then parses as f64 —
+/// not bit-exact, but correct for any representable decimal128 value.
+///
+/// # Safety
+/// `num_ptr` must be a valid pointer to 16 bytes of decimal128 data.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_decimal_to_float(num_ptr: *const u8) -> f64 {
+    let raw: [u8; 16] = std::slice::from_raw_parts(num_ptr, 16).try_into().unwrap_or([0u8; 16]);
+    let bits = u128::from_ne_bytes(raw);
+    // Use the ynz-numerics formatter to get a string, then parse as f64.
+    let s = ynz_numerics::format(bits);
+    s.parse::<f64>().unwrap_or(0.0)
+}
+
+// ── M6: string-to-numeric fallible conversions ────────────────────────────────
+//
+// All functions return a `{ has_value: i64, value: i64 }` pair via a pointer
+// (the codegen stores the result into a stack-allocated maybe<T> struct).
+// Locked parsing rules from design/narrowing.md:
+//   a. Strip ASCII whitespace [0x20, 0x09, 0x0A, 0x0D] from both ends.
+//   b. Accept optional leading '+' or '-'.
+//   c. .toInt(): only [0-9]+ digits; no prefix, no decimal, no sci notation.
+//   d. .toFloat()/.toNumber(): accepts decimal + scientific notation.
+//   e. Any failure (empty, lone sign, non-digit chars) → none.
+
+/// ABI: `(ptr: *const u8, len: i64, out: *mut [i64; 2]) -> void`
+/// out[0] = has_value (1 or 0), out[1] = the i64 value on success.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_to_int(ptr: *const u8, len: i64, out: *mut i64) {
+    let bytes = std::slice::from_raw_parts(ptr, len as usize);
+    let result = parse_string_to_int(bytes);
+    match result {
+        Some(n) => { *out = 1; *out.add(1) = n; }
+        None    => { *out = 0; *out.add(1) = 0; }
+    }
+}
+
+/// ABI: `(ptr: *const u8, len: i64, out: *mut [i64; 2]) -> void`
+/// out[0] = has_value, out[1] = f64 bits (bit-cast from the double).
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_to_float(ptr: *const u8, len: i64, out: *mut i64) {
+    let bytes = std::slice::from_raw_parts(ptr, len as usize);
+    let result = parse_string_to_float(bytes);
+    match result {
+        Some(f) => { *out = 1; *out.add(1) = f64::to_bits(f) as i64; }
+        None    => { *out = 0; *out.add(1) = 0; }
+    }
+}
+
+/// ABI: `(ptr: *const u8, len: i64, out: *mut [i64; 3]) -> void`
+/// out[0] = has_value, out[1..3] = 16-byte decimal128 on success.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_to_number(ptr: *const u8, len: i64, out: *mut i64) {
+    let bytes = std::slice::from_raw_parts(ptr, len as usize);
+    let trimmed = trim_ascii_ws(bytes);
+    // Use ynz-numerics parse (decimal128 string parser).
+    // parse() is infallible but returns 0 on bad input; we pre-validate here.
+    match std::str::from_utf8(trimmed) {
+        Err(_) => { *out = 0; }
+        Ok(s) => {
+            if is_valid_number_str(s.as_bytes()) {
+                match parse(s) {
+                    Some(val) => {
+                        let bytes_le = val.to_ne_bytes();
+                        *out = 1;
+                        let data = out.add(1) as *mut u8;
+                        std::ptr::copy_nonoverlapping(bytes_le.as_ptr(), data, 16);
+                    }
+                    None => { *out = 0; }
+                }
+            } else {
+                *out = 0;
+            }
+        }
+    }
+}
+
+/// ABI: `(ptr: *const u8, len: i64) -> *const u8` (null-terminated string, heap-alloc'd copy).
+///
+/// Used by options .toString() to produce a heap-owned Yinz string from a static byte literal.
+/// Allocates and copies the bytes + null terminator. Caller is responsible for freeing
+/// (though in practice, toString() results are printed then dropped in the same expression).
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_from_static(ptr: *const u8, len: i64) -> *const u8 {
+    let size = len as usize + 1; // +1 for null terminator
+    let buf = malloc(size) as *mut u8;
+    if buf.is_null() { return b"\0".as_ptr(); }
+    std::ptr::copy_nonoverlapping(ptr, buf, len as usize);
+    *buf.add(len as usize) = 0;
+    buf as *const u8
+}
+
+// ── M6 helper: float → maybe<int> (locked codegen sequence from design/narrowing.md) ──
+// This is codegen-side (LLVM IR) in P4; the Rust version is for unit tests only.
+// The ACTUAL codegen emits the locked IR directly; this version validates the semantics.
+
+/// Reference implementation of `(float).toInt()` semantics — used in Rust unit tests.
+/// The actual codegen emits explicit LLVM IR (see P4 codegen, not this function).
+pub fn float_to_int_ref(x: f64) -> Option<i64> {
+    if x.is_nan() { return None; }
+    // i64::MAX (2^63-1) is not exactly representable in f64; nearest is 2^63.
+    // Upper check: x must be < 2^63 (strictly less, i.e. fits after truncation).
+    const I64_MAX_F64: f64 = 9.223372036854776e18_f64; // 2^63
+    const I64_MIN_F64: f64 = -9.223372036854776e18_f64; // -2^63
+    if x >= I64_MAX_F64 || x < I64_MIN_F64 { return None; }
+    Some(x as i64) // truncate toward zero; in-range proven above
+}
+
+// ── Private helpers ──────────────────────────────────────────────────────────
+
+fn trim_ascii_ws(bytes: &[u8]) -> &[u8] {
+    let is_ws = |b: &u8| matches!(b, 0x20 | 0x09 | 0x0A | 0x0D);
+    let start = bytes.iter().position(|b| !is_ws(b)).unwrap_or(bytes.len());
+    let end = bytes.iter().rposition(|b| !is_ws(b)).map(|i| i + 1).unwrap_or(0);
+    if start >= end { &[] } else { &bytes[start..end] }
+}
+
+fn parse_sign(bytes: &[u8]) -> (bool, &[u8]) {
+    match bytes.first() {
+        Some(b'+') => (false, &bytes[1..]),
+        Some(b'-') => (true,  &bytes[1..]),
+        _          => (false, bytes),
+    }
+}
+
+fn parse_string_to_int(bytes: &[u8]) -> Option<i64> {
+    let trimmed = trim_ascii_ws(bytes);
+    let (neg, digits) = parse_sign(trimmed);
+    if digits.is_empty() { return None; }
+    if !digits.iter().all(|b| b.is_ascii_digit()) { return None; }
+    // Parse decimal digits without any prefix.
+    let mut acc: i64 = 0;
+    for &d in digits {
+        let digit = (d - b'0') as i64;
+        acc = acc.checked_mul(10)?.checked_add(digit)?;
+    }
+    Some(if neg { acc.checked_neg()? } else { acc })
+}
+
+fn parse_string_to_float(bytes: &[u8]) -> Option<f64> {
+    let trimmed = trim_ascii_ws(bytes);
+    // Peel optional sign, validate the digit structure, then parse the full trimmed string.
+    let (_, digits_only) = parse_sign(trimmed);
+    if digits_only.is_empty() { return None; }
+    if !is_valid_float_digits(digits_only) { return None; }
+    let s = std::str::from_utf8(trimmed).ok()?;
+    let f: f64 = s.parse().ok()?; // Rust parser handles the sign
+    if f.is_infinite() { return None; }
+    Some(f)
+}
+
+fn is_valid_float_digits(bytes: &[u8]) -> bool {
+    // Accepts: [0-9]+ ([\.[0-9]+]? ([eE][+-]?[0-9]+)?
+    // Rejects: 0x prefix, 0o prefix, 0b prefix, non-digit chars
+    if bytes.starts_with(b"0x") || bytes.starts_with(b"0b") || bytes.starts_with(b"0o") {
+        return false;
+    }
+    let mut i = 0;
+    let n = bytes.len();
+    // Integer part
+    while i < n && bytes[i].is_ascii_digit() { i += 1; }
+    if i == 0 { return false; }
+    // Decimal part
+    if i < n && bytes[i] == b'.' {
+        i += 1;
+        while i < n && bytes[i].is_ascii_digit() { i += 1; }
+    }
+    // Exponent
+    if i < n && (bytes[i] == b'e' || bytes[i] == b'E') {
+        i += 1;
+        if i < n && (bytes[i] == b'+' || bytes[i] == b'-') { i += 1; }
+        let start = i;
+        while i < n && bytes[i].is_ascii_digit() { i += 1; }
+        if i == start { return false; } // exponent with no digits
+    }
+    i == n
+}
+
+fn is_valid_number_str(bytes: &[u8]) -> bool {
+    // Same rules as float — decimal128 parser uses same format
+    is_valid_float_digits(bytes)
+}
+
+// Unit tests for M6 string parsing semantics (locked test vectors from design/narrowing.md)
+#[cfg(test)]
+mod m6_string_parsing {
+    use super::*;
+
+    #[test]
+    fn int_basic() { assert_eq!(parse_string_to_int(b"42"), Some(42)); }
+    #[test]
+    fn int_whitespace_sign() { assert_eq!(parse_string_to_int(b"  +42  "), Some(42)); }
+    #[test]
+    fn int_negative() { assert_eq!(parse_string_to_int(b"-42"), Some(-42)); }
+    #[test]
+    fn int_empty() { assert_eq!(parse_string_to_int(b""), None); }
+    #[test]
+    fn int_whitespace_only() { assert_eq!(parse_string_to_int(b"  "), None); }
+    #[test]
+    fn int_lone_sign() { assert_eq!(parse_string_to_int(b"+"), None); }
+    #[test]
+    fn int_hex_prefix() { assert_eq!(parse_string_to_int(b"0x1A"), None); }
+    #[test]
+    fn int_trailing_chars() { assert_eq!(parse_string_to_int(b"42 hello"), None); }
+    #[test]
+    fn int_fractional() { assert_eq!(parse_string_to_int(b"42.5"), None); }
+    #[test]
+    fn int_scientific() { assert_eq!(parse_string_to_int(b"1e3"), None); }
+    #[test]
+    fn int_tab_lf() { assert_eq!(parse_string_to_int(b"\t42\n"), Some(42)); }
+    #[test]
+    fn int_non_breaking_space() { assert_eq!(parse_string_to_int(b"\xC2\xA042"), None); } // UTF-8 U+00A0
+    #[test]
+    fn float_basic() { assert_eq!(parse_string_to_float(b"1.5"), Some(1.5)); }
+    #[test]
+    fn float_scientific() { assert_eq!(parse_string_to_float(b"1.5e2"), Some(150.0)); }
+    #[test]
+    fn float_negative() { assert_eq!(parse_string_to_float(b"  -1.5  "), Some(-1.5)); }
+    #[test]
+    fn float_bad() { assert_eq!(parse_string_to_float(b"abc"), None); }
+    #[test]
+    fn float_double_dot() { assert_eq!(parse_string_to_float(b"1.5.5"), None); }
+    #[test]
+    fn float_to_int_nan() { assert_eq!(float_to_int_ref(f64::NAN), None); }
+    #[test]
+    fn float_to_int_inf() { assert_eq!(float_to_int_ref(f64::INFINITY), None); }
+    #[test]
+    fn float_to_int_oor() { assert_eq!(float_to_int_ref(1e30), None); }
+    #[test]
+    fn float_to_int_truncate() { assert_eq!(float_to_int_ref(2.5), Some(2)); }
+    #[test]
+    fn float_to_int_neg_truncate() { assert_eq!(float_to_int_ref(-2.5), Some(-2)); }
+    #[test]
+    fn float_to_int_boundary_upper() { assert_eq!(float_to_int_ref(9.223372036854776e18), None); }
+    #[test]
+    fn float_to_int_boundary_lower() { assert_eq!(float_to_int_ref(-9.223372036854776e18), Some(i64::MIN)); }
+}

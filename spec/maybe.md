@@ -108,3 +108,21 @@ value.exists()      // does it have a value? → bool
 value.or(default)   // get the value, or the fallback if none → T
 value.value         // get the raw value (compile error without an exists() check)
 ```
+
+---
+
+## Early-return narrowing (M6)
+
+The compiler also narrows `.value` after an early-return pattern — you don't need to nest the success path inside the `if` block:
+
+```
+function firstOr(nums: share array<int>) -> int {
+  let r = nums.first()               // maybe<int>
+  if (!r.exists()) { return -1 }     // early exit — compiler proves r has a value below
+  return r.value                     // safe: the only way to reach here is if r.exists()
+}
+```
+
+The early return must use `return`, `panic`, or an infinite `loop` — those are the only forms the compiler can prove always exit. A regular function call that returns `nothing` doesn't count.
+
+See [design/narrowing.md](../design/narrowing.md) for the full rules table.

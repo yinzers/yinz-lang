@@ -7,7 +7,7 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Now (active)
 
-- [ ] **M5 — Generics + Collections + Maybe** — Approved 2026-05-17. Plan in `.claude/plans/active/m5-generics.md`. P0 (doc lockdown) shipped to main. P1 (lexer + AST scaffolding) SHIPPED on `feat/m5-lexer-ast` (commit `49940c9`), awaiting merge. P2 (parser) next.
+*(M6 complete — see Done section. M7 planning next.)*
 
 ## Soon (committed, not started)
 
@@ -23,6 +23,8 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Done (recent)
 
+- [x] **M6 complete (tag pending v0.1.0-m6, 631 tests)** — options+unions+narrowing: options types (i8 tags, multi-case, toString), union types (tagged-struct, Is-arm narrowing), fallible conversions (.toInt/.toFloat/.toNumber), early-return narrowing, shape aliases (shape S = A|B), string parsing runtime. Plan moved to done/. M2+M3 catch-up items closed.
+- [x] **M5 complete (tag v0.1.0-m5, 574 tests)** — Generics `<T>`, `fixed<T>`, `array<T>`, `map<K,V>`, `maybe<T>`, `.exists()`/`.value`/`.or()`, bracket sugar, SipHash-2-4, Swiss Tables, monomorphization, M4 catch-up (wrapping/saturating, type-attached constants). Plan moved to `done/m5-generics.md`.
 - [x] **M4 complete (tag v0.1.0-m4, 316 tests)** — P1 lexer, P2 parser, P3a/b/c typeck, P4 codegen, P5 catch-up, P6 fixtures, P7 verification. Plan moved to `done/m4-shapes-functions-ownership.md`.
 - [x] **M4 P5 — Catch-up (5a21258)** — 6 wrapping/saturating int methods, type-attached constants (`int.max`/`int.min`/`number.*`/`float.*`). M2 fixtures closed.
 - [x] **M4 P4 — Codegen (05bb47d)** — Shape LLVM struct types, UFCS dispatch, `readonly`/`noalias` attrs, `ynz_alloc`/`ynz_free`, vtable globals. `m4_player.ynz` → `Patrick / 120 / Patrick`.

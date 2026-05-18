@@ -69,6 +69,18 @@ pub struct RuntimeDecls<'ctx> {
     pub ynz_map_iter_get: FunctionValue<'ctx>,
     pub ynz_map_iter_get_str: FunctionValue<'ctx>,
     pub ynz_map_drop: FunctionValue<'ctx>,
+
+    // M6: string-to-numeric fallible conversions.
+    // ABI: (ptr: *const u8, len: i64, out: *mut [i64; 2]) → void
+    // out[0] = has_value (1 or 0), out[1] = value bits on success.
+    pub ynz_string_to_int: FunctionValue<'ctx>,
+    pub ynz_string_to_float: FunctionValue<'ctx>,
+    // ynz_string_to_number: out[0] = has_value, out[1..3] = 16 bytes decimal128
+    pub ynz_string_to_number: FunctionValue<'ctx>,
+
+    // M6: create a heap-owned string copy from a static byte literal.
+    // ABI: (ptr: *const u8, len: i64) → *const u8 (null-terminated)
+    pub ynz_string_from_static: FunctionValue<'ctx>,
 }
 
 impl<'ctx> RuntimeDecls<'ctx> {
@@ -199,6 +211,14 @@ impl<'ctx> RuntimeDecls<'ctx> {
             ynz_map_iter_get: declare_fn(module, "ynz_map_iter_get", void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false)),
             ynz_map_iter_get_str: declare_fn(module, "ynz_map_iter_get_str", void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false)),
             ynz_map_drop: declare_fn(module, "ynz_map_drop", void.fn_type(&[ptr.into()], false)),
+
+            // M6: string-to-numeric ABI: (ptr, i64 len, ptr out) -> void
+            ynz_string_to_int:    declare_fn(module, "ynz_string_to_int",    void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false)),
+            ynz_string_to_float:  declare_fn(module, "ynz_string_to_float",  void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false)),
+            ynz_string_to_number: declare_fn(module, "ynz_string_to_number", void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false)),
+
+            // M6: (ptr, i64 len) -> ptr (null-terminated)
+            ynz_string_from_static: declare_fn(module, "ynz_string_from_static", ptr.fn_type(&[ptr.into(), i64.into()], false)),
         }
     }
 }

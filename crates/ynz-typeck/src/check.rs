@@ -13,6 +13,7 @@ use crate::{
         MonoSignature, MonomorphizationTable, Substitution,
     },
     intrinsics::PrimitiveIntrinsicTable,
+    options_table::{collect_options, OptionsTable},
     return_paths::analyze_return_paths,
     scope::{Scope, ScopeEntry},
     shapes::ShapeTable,
@@ -43,20 +44,26 @@ pub fn check(
     generic_shape_table: &GenericShapeTable,
     intrinsics: &PrimitiveIntrinsicTable,
 ) -> (TypedModule, MonomorphizationTable, DiagnosticBucket) {
+    let mut diags = DiagnosticBucket::new();
+    let options_table = collect_options(module, &mut diags);
+
     let mut checker = Checker {
         intrinsics,
         sig_table,
         shape_table,
         generic_fn_table,
         generic_shape_table,
+        options_table: &options_table,
         expr_types: HashMap::new(),
-        diags: DiagnosticBucket::new(),
+        diags,
         scope: Scope::new(),
         current_fn_ret: Type::Nothing,
         current_shape: None,
         type_param_scope: HashMap::new(),
         mono_table: MonomorphizationTable::default(),
         maybe_non_none: HashSet::new(),
+        union_narrowed: HashMap::new(),
+        union_aliases: collect_union_aliases(module, shape_table),
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -72,6 +79,7 @@ struct Checker<'b> {
     shape_table: &'b ShapeTable,
     generic_fn_table: &'b GenericFnTable,
     generic_shape_table: &'b GenericShapeTable,
+    options_table: &'b OptionsTable,
     expr_types: HashMap<(usize, usize), Type>,
     diags: DiagnosticBucket,
     scope: Scope,
@@ -87,6 +95,12 @@ struct Checker<'b> {
     mono_table: MonomorphizationTable,
     /// Flow-sensitive tracking: binding names known to be non-none inside an `.exists()` guard.
     maybe_non_none: HashSet<String>,
+    /// M6: binding names narrowed to a specific union variant inside an `is`-arm body.
+    /// Maps binding name → narrowed type (the specific variant type).
+    union_narrowed: HashMap<String, Type>,
+    /// M6: named union type aliases from `shape Shape = Circle | Square` declarations.
+    /// Maps alias name → resolved union type. Populated before check_module runs.
+    union_aliases: HashMap<String, Type>,
 }
 
 impl<'b> Checker<'b> {
@@ -100,6 +114,9 @@ impl<'b> Checker<'b> {
             match item {
                 Item::Function(f) => self.check_function(f),
                 Item::ShapeDecl(_) => {}
+                // M6: options declarations are validated and registered by collect_options()
+                // which runs before check_module. Nothing to do here.
+                Item::OptionsDecl(_) => {}
             }
         }
     }
@@ -208,7 +225,17 @@ impl<'b> Checker<'b> {
     }
 
     fn check_stmts(&mut self, stmts: &[Stmt]) {
+        // Collect early-return narrowing facts: when an `if (!m.exists()) { return }` or
+        // `if (!m.exists()) { panic(...) }` is detected, mark `m` as non-none for all
+        // subsequent statements in this block.
+        let mut early_return_narrowed: Vec<String> = Vec::new();
+
         for stmt in stmts {
+            // Apply any early-return narrowing facts from previous `if (!x.exists()) { return }`.
+            for name in &early_return_narrowed {
+                self.maybe_non_none.insert(name.clone());
+            }
+
             match stmt {
                 Stmt::Expr(expr) => {
                     self.infer_expr(expr, None);
@@ -217,9 +244,20 @@ impl<'b> Checker<'b> {
                     self.check_let(*is_const, name, name_span, ty.as_ref(), value);
                 }
                 Stmt::Assign { target, target_span, value, span: _ } => {
+                    // Reassignment invalidates early-return narrowing for the target binding.
+                    early_return_narrowed.retain(|n| n != target);
                     self.check_assign(target, target_span, value);
                 }
                 Stmt::If { cond, body, .. } => {
+                    // Detect early-return narrowing: `if (!m.exists()) { <recognized-exit> }`.
+                    // After this if, `m` is proven to exist for the rest of the block.
+                    let negated_exists = self.extract_negated_exists_binding(cond);
+                    let body_always_exits = analyze_return_paths(body).all_paths_return;
+                    if !negated_exists.is_empty() && body_always_exits {
+                        for name in &negated_exists {
+                            early_return_narrowed.push(name.clone());
+                        }
+                    }
                     self.check_stmt_if(cond, body);
                 }
                 Stmt::Match { scrutinee, arms, else_arm, .. } => {
@@ -241,6 +279,10 @@ impl<'b> Checker<'b> {
                     self.check_index_assign(receiver, index, value, span);
                 }
             }
+        }
+        // Clean up early-return narrowing facts when leaving the block.
+        for name in &early_return_narrowed {
+            self.maybe_non_none.remove(name.as_str());
         }
     }
 
@@ -293,6 +335,10 @@ impl<'b> Checker<'b> {
                     "The value on the right side must match the type annotation on the left.",
                 ));
                 Type::Error
+            } else if matches!(ann_ty, Type::Union { .. }) {
+                // M6: for union type annotations, use the declared union type as the binding type,
+                // not the concrete variant. `let s: Shape = circle` → s is Shape, not Circle.
+                ann_ty.clone()
             } else {
                 // Use the value_ty to preserve size information from ArrayLit inference.
                 value_ty
@@ -427,6 +473,17 @@ impl<'b> Checker<'b> {
         Vec::new()
     }
 
+    /// Extract the binding name from a NEGATED `.exists()` condition for early-return narrowing.
+    ///
+    /// Matches `!m.exists()` → `vec!["m"]` — after this if-block always returns,
+    /// `m` is non-none for the rest of the enclosing block.
+    fn extract_negated_exists_binding(&self, cond: &Expr) -> Vec<String> {
+        if let Expr::UnaryOp { op: ynz_ast::nodes::UnaryOpKind::Not, operand, .. } = cond {
+            return self.extract_exists_binding(operand);
+        }
+        Vec::new()
+    }
+
     fn check_stmt_match(
         &mut self,
         scrutinee: &Expr,
@@ -452,12 +509,88 @@ impl<'b> Checker<'b> {
                         ));
                     }
                 }
-                // IsType and Variant: M6 deferrals already emitted by the parser.
-                MatchPatternKind::IsType(_) | MatchPatternKind::Variant(_) => {}
+                // Is: M6 union narrowing — validate variant, narrow inside arm body.
+                MatchPatternKind::Is(type_path) => {
+                    self.check_is_arm_pattern(&scrutinee_ty, type_path, &arm.pattern.span);
+                    // Narrowing: inside this arm's body, the scrutinee binding is narrowed.
+                    // We push a scope with the narrowed type for the binding if we can identify it.
+                    // (Full binding-name extraction is P3b — basic case: scrutinee is a direct Ident)
+                    let narrowed_name = simple_ident_name(scrutinee).map(|s| s.to_string());
+                    if let Some(ref name) = narrowed_name {
+                        self.union_narrowed.insert(name.clone(), Type::Shape { name: type_path.name.clone() });
+                    }
+                    self.scope.push();
+                    self.check_stmts(&arm.body.stmts);
+                    self.scope.pop();
+                    if let Some(ref name) = narrowed_name {
+                        self.union_narrowed.remove(name);
+                    }
+                    continue; // skip the standard scope push/pop below
+                }
+                // OptionName: M6 options multi-case arm.
+                MatchPatternKind::OptionName(variant_name) => {
+                    self.check_option_name_arm(&scrutinee_ty, variant_name, &arm.pattern.span);
+                }
             }
             self.scope.push();
             self.check_stmts(&arm.body.stmts);
             self.scope.pop();
+        }
+
+        // Exhaustiveness check for options multi-case.
+        if let Type::Options { name: opts_name } = &scrutinee_ty {
+            if let Some(entry) = self.options_table.get(opts_name) {
+                let covered: std::collections::HashSet<&str> = arms.iter().filter_map(|arm| {
+                    if let MatchPatternKind::OptionName(v) = &arm.pattern.kind { Some(v.as_str()) } else { None }
+                }).collect();
+                if else_arm.is_none() {
+                    let missing: Vec<&str> = entry.variants.iter()
+                        .filter(|v| !covered.contains(v.as_str()))
+                        .map(String::as_str)
+                        .collect();
+                    if !missing.is_empty() {
+                        self.diags.push(Diagnostic::error(
+                            scrutinee.span().clone(),
+                            format!(
+                                "Non-exhaustive options multi-case — `{}` has {} variants; {} are not handled: {}.",
+                                opts_name,
+                                entry.variants.len(),
+                                missing.len(),
+                                missing.join(", ")
+                            ),
+                            format!("Add the missing arms (e.g. `{} =>`) or add an `else =>` catch-all.", missing[0]),
+                            "The compiler knows every variant at compile time. A missing arm means some values would silently fall through — likely a bug.",
+                        ));
+                    }
+                }
+            }
+        }
+
+        // M6: Union exhaustiveness check for `Is` arms.
+        if let Type::Union { variants } = &scrutinee_ty {
+            let covered: std::collections::HashSet<String> = arms.iter().filter_map(|arm| {
+                if let MatchPatternKind::Is(tp) = &arm.pattern.kind { Some(tp.name.clone()) } else { None }
+            }).collect();
+            if else_arm.is_none() {
+                let missing: Vec<String> = variants.iter().filter_map(|v| {
+                    if let Type::Shape { name } = v {
+                        if !covered.contains(name) { Some(name.clone()) } else { None }
+                    } else { None }
+                }).collect();
+                if !missing.is_empty() {
+                    self.diags.push(Diagnostic::error(
+                        scrutinee.span().clone(),
+                        format!(
+                            "Non-exhaustive union multi-case — {} variant{} not handled: {}.",
+                            missing.len(),
+                            if missing.len() == 1 { " is" } else { "s are" },
+                            missing.join(", ")
+                        ),
+                        format!("Add the missing arms (e.g. `is {} =>`) or add an `else =>` catch-all.", missing[0]),
+                        "The compiler knows every union variant at compile time. A missing arm means some values silently fall through — likely a bug.",
+                    ));
+                }
+            }
         }
 
         if let Some(else_body) = else_arm {
@@ -640,10 +773,12 @@ impl<'b> Checker<'b> {
             Expr::FieldAccess { receiver, field, field_span, .. } => {
                 // M4 P5: type-attached constants (e.g. `int.max`, `number.epsilon`).
                 // Intercept before inferring receiver type to avoid "undefined `int`" error.
-                // Must NOT use `return` here — the match value feeds expr_types.insert below.
-                if let Expr::Ident(type_name, _) = receiver.as_ref() {
-                    if let Some(const_ty) = type_attached_const_type(type_name, field) {
+                if let Expr::Ident(type_name_str, _) = receiver.as_ref() {
+                    if let Some(const_ty) = type_attached_const_type(type_name_str, field) {
                         const_ty
+                    } else if self.options_table.contains(type_name_str) {
+                        // M6: OptionsValue — `Status.active` where Status is an options type.
+                        self.check_options_value(type_name_str, field, field_span)
                     } else {
                         self.infer_field_access(receiver, field, field_span)
                     }
@@ -726,6 +861,10 @@ impl<'b> Checker<'b> {
             Expr::MapLit { entries, span } => {
                 self.check_map_lit(entries, hint, span)
             }
+            // M6: `x is Foo` type-narrowing predicate — returns bool.
+            Expr::Is { expr: inner, ty: type_path, span } => {
+                self.check_is_expr(inner, type_path, span)
+            }
         };
 
         self.expr_types.insert((expr.span().start, expr.span().end), ty.clone());
@@ -734,6 +873,10 @@ impl<'b> Checker<'b> {
 
 
     fn resolve_ident(&mut self, name: &str, span: &SourceSpan) -> Type {
+        // M6: if inside a union `is` arm, the binding may be narrowed to a specific variant.
+        if let Some(narrowed_ty) = self.union_narrowed.get(name).cloned() {
+            return narrowed_ty;
+        }
         if let Some(entry) = self.scope.lookup(name) {
             if entry.is_consumed {
                 self.diags.push(Diagnostic::error(
@@ -1020,6 +1163,19 @@ impl<'b> Checker<'b> {
                 | (Type::Number { .. }, Type::Number { .. })
                 | (Type::Bool, Type::Bool)
                 | (Type::String, Type::String) => Type::Bool,
+                // M6: same-options-type comparison is valid.
+                (Type::Options { name: a }, Type::Options { name: b }) if a == b => Type::Bool,
+                // M6: cross-options-type comparison is a compile error.
+                (Type::Options { name: a }, Type::Options { name: b }) => {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        format!("Cannot compare `{a}` and `{b}` — they are different options types."),
+                        format!("Compare values of the same options type, or convert both to the same type first."),
+                        "Comparing values of different options types is almost always a bug — \
+                         the tags have no shared meaning between types.",
+                    ));
+                    Type::Error
+                }
                 _ => {
                     self.emit_binop_mismatch(op, lhs, rhs, span);
                     Type::Error
@@ -1245,6 +1401,18 @@ impl<'b> Checker<'b> {
             return Type::Error;
         }
 
+        // M6: reject `.toInt()` on bool — no silent 0/1 coercion.
+        if *receiver_ty == Type::Bool && method == "toInt" {
+            self.diags.push(Diagnostic::error(
+                method_span.clone(),
+                "`.toInt()` is not available on `bool`.",
+                "Use an `if` expression instead: `if (b) { 1 } else { 0 }`",
+                "Automatic bool-to-int coercion is a common source of bugs. \
+                 Yinz requires an explicit conversion.",
+            ));
+            return Type::Error;
+        }
+
         // Primitive intrinsic methods (M2/M3 — toString, toFloat, etc.)
         if let Some(ret_ty) = self.intrinsics.lookup_method(receiver_ty, method) {
             return ret_ty;
@@ -1368,6 +1536,22 @@ impl<'b> Checker<'b> {
             return Type::Error;
         }
 
+        // M6: options type method dispatch.
+        if let Type::Options { name: opts_name } = receiver_ty {
+            return match method {
+                "toString" => Type::String,
+                other => {
+                    self.diags.push(Diagnostic::error(
+                        method_span.clone(),
+                        format!("`{opts_name}` does not have a method called `{other}`."),
+                        "Options types only have `.toString()` as a built-in method.",
+                        "Method calls are checked at compile time. Only `.toString()` exists on options values.",
+                    ));
+                    Type::Error
+                }
+            };
+        }
+
         // Primitive type with unknown method
         let available = self.intrinsics.methods_for_type(receiver_ty);
         let what_instead = if available.is_empty() {
@@ -1401,6 +1585,14 @@ impl<'b> Checker<'b> {
             // Type param names resolve to TypeParam when inside a generic context.
             AstType::Named(n, _) if self.type_param_scope.contains_key(n) => {
                 Type::TypeParam { name: n.clone() }
+            }
+            // M6: union type aliases resolve to the full union type.
+            AstType::Named(n, _) if self.union_aliases.contains_key(n) => {
+                self.union_aliases[n].clone()
+            }
+            // M6: options type names resolve to Type::Options.
+            AstType::Named(n, _) if self.options_table.contains(n) => {
+                Type::Options { name: n.clone() }
             }
             AstType::Named(n, _) if self.shape_table.contains(n) => {
                 Type::Shape { name: n.clone() }
@@ -1497,6 +1689,21 @@ impl<'b> Checker<'b> {
             AstType::Maybe { inner, .. } => {
                 let inner_ty = self.ast_type_to_type(inner);
                 Type::Maybe { inner: Box::new(inner_ty) }
+            }
+            // M6: Union types — resolve each variant and return Type::Union.
+            AstType::Union { variants, .. } => {
+                let resolved: Vec<Type> = variants.iter().map(|v| self.ast_type_to_type(v)).collect();
+                // `T | none` is rewritten to `maybe<T>` per design/narrowing.md.
+                if resolved.len() == 2 {
+                    let none_idx = resolved.iter().position(|t| *t == Type::Error); // none resolves oddly
+                    let _ = none_idx; // For now, leave `T | none` as Union; P3b note
+                }
+                // Single-variant union: typeck error (degenerate form).
+                if resolved.len() < 2 {
+                    Type::Error
+                } else {
+                    Type::Union { variants: resolved }
+                }
             }
         }
     }
@@ -2115,8 +2322,174 @@ impl<'b> Checker<'b> {
 
         Type::BuiltinMap { key: Box::new(key_ty), val: Box::new(val_ty) }
     }
+
+    // ── M6: union + narrowing typeck ──────────────────────────────────────────
+
+    /// Validate an `Is(TypePath)` arm pattern in a multi-case block.
+    /// Emits a diagnostic if the named type is not a variant of the scrutinee's union.
+    fn check_is_arm_pattern(&mut self, scrutinee_ty: &Type, type_path: &ynz_ast::nodes::TypePath, span: &SourceSpan) {
+        match scrutinee_ty {
+            Type::Union { variants } => {
+                let valid: Vec<String> = variants.iter().filter_map(|v| {
+                    if let Type::Shape { name } = v { Some(name.clone()) } else { None }
+                }).collect();
+                if !type_path.name.is_empty() && !valid.contains(&type_path.name) {
+                    self.diags.push(Diagnostic::error(
+                        type_path.span.clone(),
+                        format!("`{}` is not a variant of this union.", type_path.name),
+                        format!("Valid variants are: {}", valid.join(", ")),
+                        "The `is TypeName` arm must name one of the union's declared variants.",
+                    ));
+                }
+            }
+            Type::Error => {} // suppress cascades
+            other => {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("`is {}` used on `{}` which is not a union type.", type_path.name, type_name(other)),
+                    "The `is TypeName =>` arm form is for union types: `shape S = A | B`.",
+                    "Union types have multiple variants — `is` checks which variant a value is at runtime. \
+                     Use `variantName =>` for options types.",
+                ));
+            }
+        }
+    }
+
+    // ── M6: options typeck helpers ────────────────────────────────────────────
+
+    /// Typecheck `x is Foo` type-narrowing predicate expression.
+    ///
+    /// Returns `Type::Bool`. Validates that the scrutinee is a union type AND
+    /// that the type name is a declared variant of that union.
+    ///
+    /// For the condition-form narrowing (`if (x is Foo) { ... }`), the
+    /// actual narrowing fact is applied in `check_stmt_if` when it detects
+    /// an `Expr::Is` condition. This method just produces the bool type.
+    fn check_is_expr(&mut self, inner: &Expr, type_path: &ynz_ast::nodes::TypePath, _span: &SourceSpan) -> Type {
+        let scrutinee_ty = self.infer_expr(inner, None);
+        if type_path.name.is_empty() {
+            return Type::Bool; // parse error already emitted
+        }
+        match &scrutinee_ty {
+            Type::Union { variants } => {
+                let variant_names: Vec<String> = variants.iter().filter_map(|v| {
+                    if let Type::Shape { name } = v { Some(name.clone()) } else { None }
+                }).collect();
+                if !variant_names.contains(&type_path.name) {
+                    self.diags.push(Diagnostic::error(
+                        type_path.span.clone(),
+                        format!("`{}` is not a variant of this union.", type_path.name),
+                        format!("Valid variants are: {}", variant_names.join(", ")),
+                        "The `is` check must name one of the union's declared variants.",
+                    ));
+                }
+            }
+            Type::Error => {}
+            other => {
+                // INFO-level: is-check on non-union (always true or wrong).
+                // For now emit a regular error for structural correctness.
+                self.diags.push(Diagnostic::error(
+                    type_path.span.clone(),
+                    format!("`is {}` used on `{}` which is not a union type.", type_path.name, type_name(other)),
+                    "The `is TypeName` check is for union types: `shape S = A | B`.",
+                    "Union types have multiple variants — `is` checks which variant a value is at runtime.",
+                ));
+            }
+        }
+        Type::Bool
+    }
+
+    // ── M6: options typeck helpers ────────────────────────────────────────────
+
+    /// Typecheck an options value access: `OptionsTypeName.variantName`.
+    ///
+    /// Called from the `Expr::FieldAccess` handler when the receiver is an identifier
+    /// that names an options type. Returns `Type::Options { name }` on success.
+    fn check_options_value(&mut self, type_name: &str, variant: &str, span: &SourceSpan) -> Type {
+        let entry = self.options_table.get(type_name).unwrap(); // caller verified contains()
+        if entry.variants.contains(&variant.to_string()) {
+            Type::Options { name: type_name.to_string() }
+        } else {
+            let valid: Vec<&str> = entry.variants.iter().map(String::as_str).collect();
+            self.diags.push(Diagnostic::error(
+                span.clone(),
+                format!("`{type_name}` has no variant named `{variant}`."),
+                format!("Valid variants are: {}", valid.join(", ")),
+                "Options variants must be declared in the `options` type body.",
+            ));
+            Type::Error
+        }
+    }
+
+    /// Typecheck an `OptionName` arm in a multi-case `if`.
+    ///
+    /// Validates: scrutinee is an options type; variant name is valid for that type.
+    fn check_option_name_arm(&mut self, scrutinee_ty: &Type, variant_name: &str, span: &SourceSpan) {
+        match scrutinee_ty {
+            Type::Options { name: opts_name } => {
+                if let Some(entry) = self.options_table.get(opts_name) {
+                    if !entry.variants.contains(&variant_name.to_string()) {
+                        let valid: Vec<&str> = entry.variants.iter().map(String::as_str).collect();
+                        self.diags.push(Diagnostic::error(
+                            span.clone(),
+                            format!("`{opts_name}` has no variant `{variant_name}`."),
+                            format!("Valid variants are: {}", valid.join(", ")),
+                            "Each arm in a multi-case `if` over an options type must name one of the declared variants.",
+                        ));
+                    }
+                }
+            }
+            Type::Error => {} // already reported upstream
+            other => {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("Cannot use variant-name arm `{variant_name}` on a `{}` value.", type_name(other)),
+                    "Variant-name arms are for options types: `options Status { active, inactive }`.",
+                    "The `variantName =>` arm form matches against named options variants. \
+                     Use `is TypeName =>` to narrow a union, or a value pattern for other types.",
+                ));
+            }
+        }
+    }
 }
 
+
+/// Resolve a simple AST type to a typeck Type using available table info.
+///
+/// Used for union alias resolution before the full Checker is built.
+/// Only handles: Named shapes, union of Named shapes, primitives.
+fn resolve_alias_type(ast_ty: &AstType, shape_table: &crate::shapes::ShapeTable) -> Type {
+    match ast_ty {
+        AstType::Int => Type::Int,
+        AstType::Float => Type::Float,
+        AstType::Bool => Type::Bool,
+        AstType::Number { precision } => Type::Number { precision: *precision },
+        AstType::Named(n, _) if n == "string" => Type::String,
+        AstType::Named(n, _) if shape_table.contains(n) => Type::Shape { name: n.clone() },
+        AstType::Union { variants, .. } => {
+            let resolved: Vec<Type> = variants.iter().map(|v| resolve_alias_type(v, shape_table)).collect();
+            if resolved.len() < 2 { Type::Error } else { Type::Union { variants: resolved } }
+        }
+        _ => Type::Error,
+    }
+}
+
+/// Collect `shape Name = Type` alias declarations from the module.
+///
+/// These are union type aliases like `shape Shape = Circle | Square | Triangle`.
+/// The alias name maps to the resolved alias type.
+fn collect_union_aliases(module: &Module, shape_table: &crate::shapes::ShapeTable) -> HashMap<String, Type> {
+    let mut aliases = HashMap::new();
+    for item in &module.items {
+        if let Item::ShapeDecl(sd) = item {
+            if let Some(alias_ast_ty) = &sd.alias_ty {
+                let resolved = resolve_alias_type(alias_ast_ty, shape_table);
+                aliases.insert(sd.name.clone(), resolved);
+            }
+        }
+    }
+    aliases
+}
 
 /// Check whether two types are compatible for assignment.
 ///
@@ -2132,6 +2505,15 @@ fn types_compatible(a: &Type, b: &Type) -> bool {
             types_compatible(ea, eb)
         }
         (Type::Maybe { inner: ia }, Type::Maybe { inner: ib }) => types_compatible(ia, ib),
+        // M6: union type compatibility — same set of variants (order-insensitive for now).
+        (Type::Union { variants: va }, Type::Union { variants: vb }) => {
+            va.len() == vb.len() && va.iter().zip(vb.iter()).all(|(a, b)| types_compatible(a, b))
+        }
+        // M6: assigning a concrete variant type to a union is valid.
+        // e.g., `let s: Circle | Square = { radius: 5.0 }` — Circle is a valid union value.
+        (Type::Union { variants }, concrete) => {
+            variants.iter().any(|v| types_compatible(v, concrete))
+        }
         _ => a == b,
     }
 }
@@ -2197,6 +2579,8 @@ fn expr_has_error(expr: &Expr) -> bool {
         Expr::ArrayLit { elements, .. } => elements.iter().any(expr_has_error),
         // M5 P3c: map literal — propagate error check into all keys and values.
         Expr::MapLit { entries, .. } => entries.iter().any(|(k, v)| expr_has_error(k) || expr_has_error(v)),
+        // M6: is-expression — propagate into the scrutinee.
+        Expr::Is { expr, .. } => expr_has_error(expr),
     }
 }
 

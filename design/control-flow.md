@@ -65,6 +65,14 @@ For value matching (numbers, strings), exhaustiveness is not enforced — the se
 
 ---
 
+## Flow-Sensitive Narrowing in `if` Conditions
+
+When the condition of an `if` block proves something about a binding's type (e.g., `x is Circle`, or `m.exists()`), the compiler narrows the binding's type inside the then-block. This is flow-sensitive analysis — the narrowed type is only valid in the scope where the proof holds.
+
+The full narrowing rules table (all forms, including early-return narrowing, `&&`/`||` propagation, reassignment invalidation, and closure non-propagation) lives in `design/narrowing.md`.
+
+---
+
 ## Compiler Optimization
 
 Multi-case `if` blocks compile to jump tables internally — same performance as a traditional switch/match statement. No runtime cost for the readable syntax.

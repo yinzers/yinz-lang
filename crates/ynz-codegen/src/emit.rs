@@ -119,6 +119,10 @@ fn build_module<'ctx, 'g>(
 ) -> Result<(), String> {
     let rt = RuntimeDecls::declare(ctx, module);
 
+    // M6: collect options table for variant tag lookups during codegen.
+    let mut options_diags = ynz_diagnostics::DiagnosticBucket::new();
+    let options_table = ynz_typeck::options_table::collect_options(&typed.module, &mut options_diags);
+
     let zero_bits = ynz_numerics::parse("0").expect("decimal zero parse");
     let globals = ModuleGlobals {
         str_true:      build_string_global(ctx, module, "true",                       ".str.true"),
@@ -140,7 +144,7 @@ fn build_module<'ctx, 'g>(
     for item in &typed.module.items {
         match item {
             Item::Function(f) if f.generics.is_empty() => declare_function(ctx, module, f, shape_table)?,
-            Item::Function(_) | Item::ShapeDecl(_) => {}
+            Item::Function(_) | Item::ShapeDecl(_) | Item::OptionsDecl(_) => {}
         }
     }
 
@@ -167,9 +171,9 @@ fn build_module<'ctx, 'g>(
     for item in &typed.module.items {
         match item {
             Item::Function(f) if f.generics.is_empty() => {
-                lower_function(ctx, module, &rt, &globals, typed, f, shape_table, &shape_types, mono_table)?
+                lower_function(ctx, module, &rt, &globals, typed, f, shape_table, &shape_types, mono_table, &options_table)?
             }
-            Item::Function(_) | Item::ShapeDecl(_) => {}
+            Item::Function(_) | Item::ShapeDecl(_) | Item::OptionsDecl(_) => {}
         }
     }
 
@@ -194,7 +198,7 @@ fn build_module<'ctx, 'g>(
 
         lower_generic_function(
             ctx, module, &rt, &globals, typed, fn_decl,
-            shape_table, &shape_types, fn_val, type_subst, mono_sig, mono_table,
+            shape_table, &shape_types, fn_val, type_subst, mono_sig, mono_table, &options_table,
         )?;
     }
 
@@ -260,6 +264,7 @@ fn lower_generic_function<'ctx>(
     type_subst: HashMap<String, Type>,
     mono_sig: &ynz_typeck::generics::MonoSignature,
     mono_table: &'_ MonomorphizationTable,
+    options_table: &'_ ynz_typeck::options_table::OptionsTable,
 ) -> Result<(), String> {
     let ret_ty = mono_sig.ret_type.clone();
     let ret_is_nothing = matches!(ret_ty, Type::Nothing);
@@ -279,6 +284,7 @@ fn lower_generic_function<'ctx>(
         shape_types,
         type_subst,
         mono_table,
+        options_table,
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -409,6 +415,8 @@ struct Cg<'ctx, 'g> {
     // Empty for non-generic functions.
     type_subst: HashMap<String, Type>,
     mono_table: &'g MonomorphizationTable,
+    // M6: options table for variant tag lookup.
+    options_table: &'g ynz_typeck::options_table::OptionsTable,
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
@@ -463,6 +471,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             Type::Maybe { .. }    => Some(self.ptr().into()),
             Type::MapEntry { .. } => Some(self.ptr().into()),
             Type::BuiltinMap { .. } => Some(self.ptr().into()),
+            // M6: options values are i8 tags; union values are opaque pointers (heap tagged-struct).
+            Type::Options { .. } => Some(self.ctx.i8_type().into()),
+            Type::Union { .. }   => Some(self.ptr().into()),
             _                    => None,
         }
     }
@@ -479,7 +490,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             // actual data structure (heap YnzArray, stack [N x i64], or stack {i64,i64}).
             // Loading the slot returns the pointer; the caller works through that pointer.
             Type::BuiltinArray { .. } | Type::BuiltinFixed { .. } | Type::Maybe { .. }
-            | Type::BuiltinMap { .. } | Type::MapEntry { .. } => {
+            | Type::BuiltinMap { .. } | Type::MapEntry { .. }
+            | Type::Union { .. } => {
                 self.builder.build_alloca(self.ptr(), name).map_err(|e| format!("{e}"))
             }
             _ => {
@@ -570,6 +582,7 @@ fn lower_function<'ctx, 'g>(
     shape_table: &'g ShapeTable,
     shape_types: &'g ShapeLlvmTypes<'ctx>,
     mono_table: &'g MonomorphizationTable,
+    options_table: &'g ynz_typeck::options_table::OptionsTable,
 ) -> Result<(), String> {
     let fn_val = module.get_function(&f.name)
         .ok_or_else(|| format!("function `{}` was not forward-declared", f.name))?;
@@ -593,6 +606,7 @@ fn lower_function<'ctx, 'g>(
         shape_types,
         type_subst: HashMap::new(),
         mono_table,
+        options_table,
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -648,12 +662,24 @@ fn ast_type_to_typeck_type(ast_ty: &ynz_ast::nodes::Type, shape_table: &ShapeTab
         ynz_ast::nodes::Type::Bool             => Type::Bool,
         ynz_ast::nodes::Type::Number { .. }    => Type::Number { precision: 34 },
         ynz_ast::nodes::Type::Named(n, _) if n == "string" => Type::String,
+        // M6: union type aliases.
+        ynz_ast::nodes::Type::Named(n, _) if shape_table.union_aliases.contains_key(n) => {
+            shape_table.union_aliases[n].clone()
+        }
         ynz_ast::nodes::Type::Named(n, _) if shape_table.contains(n) => Type::Shape { name: n.clone() },
         ynz_ast::nodes::Type::Dynamic { contract, .. } => Type::Dynamic { contract: contract.clone() },
         // `self` parameter and SelfType: the typeck stores the concrete Shape type in
         // expr_types; for parameter materialization we just need to know it's a ptr.
         ynz_ast::nodes::Type::Named(n, _) if n == "self" => Type::Shape { name: String::new() },
         ynz_ast::nodes::Type::SelfType { .. } => Type::Shape { name: String::new() },
+        // M5 generic types — delegate to shape_table.resolve_ast_type for proper resolution.
+        ynz_ast::nodes::Type::Generic { .. } | ynz_ast::nodes::Type::Maybe { .. }
+        | ynz_ast::nodes::Type::TypeParam { .. } => shape_table.resolve_ast_type(ast_ty),
+        // M6: union types in parameter position.
+        ynz_ast::nodes::Type::Union { variants, .. } => {
+            let resolved: Vec<Type> = variants.iter().map(|v| ast_type_to_typeck_type(v, shape_table)).collect();
+            if resolved.len() < 2 { Type::Error } else { Type::Union { variants: resolved } }
+        }
         _                                      => Type::Error,
     }
 }
@@ -673,7 +699,9 @@ fn materialize_param<'ctx>(
         // Pointer-typed params: incoming LLVM value is a ptr; store the ptr in a ptr-slot.
         Type::Shape { .. } | Type::Dynamic { .. }
         | Type::BuiltinArray { .. } | Type::BuiltinFixed { .. } | Type::Maybe { .. }
-        | Type::BuiltinMap { .. } | Type::MapEntry { .. } => {
+        | Type::BuiltinMap { .. } | Type::MapEntry { .. }
+        // M6: union values are heap tagged-structs, passed/stored as opaque pointers.
+        | Type::Union { .. } => {
             let slot = cg.builder.build_alloca(cg.ptr(), name)
                 .map_err(|e| format!("param alloca {name}: {e}"))?;
             cg.builder.build_store(slot, llvm_val)
@@ -704,12 +732,49 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
     match stmt {
         Stmt::Expr(expr) => { lower_expr(cg, expr)?; }
 
-        Stmt::Let { name, value, .. } => {
-            let ty = cg.expr_type(value);
+        Stmt::Let { name, ty: ann_ty, value, .. } => {
+            let val_ty = cg.expr_type(value);
             let val = lower_expr(cg, value)?;
-            let slot = cg.alloca(&ty, name)?;
-            store(cg, val, &ty, slot)?;
-            cg.locals.insert(name.clone(), slot);
+
+            // M6: when annotation is a union type and value is a concrete shape variant,
+            // construct a tagged-struct { i64 tag, i64 data } on the stack.
+            let union_constructed = 'union_ctor: {
+                if let Some(ast_ann) = ann_ty.as_ref() {
+                    let resolved_ann = ast_type_to_typeck_type(ast_ann, cg.shape_table);
+                    if let Type::Union { ref variants } = resolved_ann {
+                        if let Type::Shape { name: ref shape_name } = val_ty {
+                            let tag = variants.iter().position(|v| {
+                                if let Type::Shape { name } = v { name == shape_name } else { false }
+                            });
+                            if let Some(tag_idx) = tag {
+                                let union_st = cg.ctx.struct_type(&[cg.i64().into(), cg.i64().into()], false);
+                                let union_slot = cg.builder.build_alloca(union_st, &format!("{name}_union"))
+                                    .map_err(|e| format!("{e}"))?;
+                                let tag_gep = cg.builder.build_struct_gep(union_st, union_slot, 0, "u_tag")
+                                    .map_err(|e| format!("{e}"))?;
+                                cg.builder.build_store(tag_gep, cg.i64().const_int(tag_idx as u64, false))
+                                    .map_err(|e| format!("{e}"))?;
+                                let data_gep = cg.builder.build_struct_gep(union_st, union_slot, 1, "u_data")
+                                    .map_err(|e| format!("{e}"))?;
+                                let ptr_as_i64 = cg.builder.build_ptr_to_int(val.into_pointer_value(), cg.i64(), "ptr2i")
+                                    .map_err(|e| format!("{e}"))?;
+                                cg.builder.build_store(data_gep, ptr_as_i64).map_err(|e| format!("{e}"))?;
+                                let outer_slot = cg.builder.build_alloca(cg.ptr(), name)
+                                    .map_err(|e| format!("{e}"))?;
+                                cg.builder.build_store(outer_slot, union_slot).map_err(|e| format!("{e}"))?;
+                                cg.locals.insert(name.clone(), outer_slot);
+                                break 'union_ctor true;
+                            }
+                        }
+                    }
+                }
+                false
+            };
+            if !union_constructed {
+                let slot = cg.alloca(&val_ty, name)?;
+                store(cg, val, &val_ty, slot)?;
+                cg.locals.insert(name.clone(), slot);
+            }
         }
 
         Stmt::Assign { target, value, .. } => {
@@ -840,10 +905,49 @@ fn lower_stmt_match<'ctx>(
                 let pat_val = lower_expr(cg, pat_expr)?;
                 match_cmp(cg, &scrutinee_ty, scrutinee_val, pat_val)?
             }
-            // IsType/Variant: M6 deferral — parser emitted the diagnostic; typeck
-            // would have rejected the program before reaching codegen.
-            MatchPatternKind::IsType(_) | MatchPatternKind::Variant(_) => {
-                return Err("codegen: M6 pattern kind reached codegen (should be rejected by typeck)".to_string());
+            // M6: options variant arm — compare i8 tag
+            MatchPatternKind::OptionName(variant_name) => {
+                if let Type::Options { name: opts_name } = &scrutinee_ty {
+                    if let Some(entry) = cg.options_table.options.get(opts_name.as_str()) {
+                        let tag = entry.variants.iter().position(|v| v == variant_name)
+                            .ok_or_else(|| format!("codegen: unknown variant `{variant_name}` in options `{opts_name}`"))? as u64;
+                        let tag_val = cg.ctx.i8_type().const_int(tag, false);
+                        cg.builder.build_int_compare(
+                            inkwell::IntPredicate::EQ,
+                            scrutinee_val.into_int_value(),
+                            tag_val,
+                            "opt_arm_cmp"
+                        ).map(|v| v.into()).map_err(|e| format!("{e}"))?
+                    } else {
+                        return Err(format!("codegen: unknown options type `{opts_name}`"));
+                    }
+                } else {
+                    return Err(format!("codegen: OptionName arm on non-options type {:?}", scrutinee_ty));
+                }
+            }
+            // M6: union type-narrowing arm — compare tag in { i64 tag, i64 data } struct
+            MatchPatternKind::Is(type_path) => {
+                if let Type::Union { variants } = &scrutinee_ty {
+                    let tag = variants.iter().position(|v| {
+                        if let Type::Shape { name } = v { name == &type_path.name } else { false }
+                    }).ok_or_else(|| format!("codegen: union variant `{}` not found", type_path.name))? as u64;
+                    let tag_const = cg.i64().const_int(tag, false);
+                    // Union layout: { i64 tag, i64 data }. scrutinee_val is ptr-to-struct.
+                    // (It was loaded from the slot by lower_expr, giving us the struct ptr directly.)
+                    let union_st = cg.ctx.struct_type(&[cg.i64().into(), cg.i64().into()], false);
+                    let tag_gep = cg.builder.build_struct_gep(union_st, scrutinee_val.into_pointer_value(), 0, "union_tag_gep")
+                        .map_err(|e| format!("union tag gep: {e}"))?;
+                    let tag_loaded = cg.builder.build_load(cg.i64(), tag_gep, "union_tag")
+                        .map_err(|e| format!("{e}"))?;
+                    cg.builder.build_int_compare(
+                        inkwell::IntPredicate::EQ,
+                        tag_loaded.into_int_value(),
+                        tag_const,
+                        "union_arm_cmp"
+                    ).map(|v| v.into()).map_err(|e| format!("{e}"))?
+                } else {
+                    return Err(format!("codegen: Is arm on non-union type {:?}", scrutinee_ty));
+                }
             }
         };
 
@@ -1292,6 +1396,14 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     let val_ty = val.as_ref().clone();
                     lower_map_method(cg, recv_val.into_pointer_value(), &key_ty, &val_ty, method, args)
                 }
+                // M6: options .toString()
+                Type::Options { name: opts_name } => {
+                    if method == "toString" {
+                        lower_options_to_string(cg, recv_val, &opts_name)
+                    } else {
+                        Err(format!("codegen: unknown method `{method}` on options type `{opts_name}`"))
+                    }
+                }
                 _ => {
                     // M4 P5: one-arg primitive intrinsics (wrapping/saturating arithmetic).
                     if args.len() == 1 && is_1arg_intrinsic(&recv_ty, method) {
@@ -1306,9 +1418,15 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
 
         Expr::FieldAccess { receiver, field, .. } => {
             // M4 P5: type-attached constants (int.max, number.epsilon, etc.)
-            if let Expr::Ident(type_name, _) = receiver.as_ref() {
-                if type_attached_const_type(type_name, field).is_some() {
-                    return emit_type_const(cg, type_name, field);
+            if let Expr::Ident(type_name_str, _) = receiver.as_ref() {
+                if type_attached_const_type(type_name_str, field).is_some() {
+                    return emit_type_const(cg, type_name_str, field);
+                }
+                // M6: options value access: `Status.active` → i8 tag constant.
+                if let Some(entry) = cg.options_table.options.get(type_name_str.as_str()) {
+                    if let Some(tag) = entry.variants.iter().position(|v| v == field) {
+                        return Ok(cg.ctx.i8_type().const_int(tag as u64, false).into());
+                    }
                 }
             }
             lower_field_access(cg, receiver, field)
@@ -1517,6 +1635,9 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         }
 
         Expr::Error(_) => Err("codegen: error node".to_string()),
+
+        // M6: `x is Foo` — P4 implements; typeck would have rejected programs with unimplemented forms.
+        Expr::Is { .. } => Err("codegen: Expr::Is not yet lowered (P4 work)".to_string()),
     }
 }
 
@@ -1580,6 +1701,10 @@ fn lower_binop<'ctx>(
 
         (EqEq, Type::Bool) => icmp(cg, IntPredicate::EQ, lhs, rhs, "beq"),
         (NotEq,Type::Bool) => icmp(cg, IntPredicate::NE, lhs, rhs, "bne"),
+
+        // M6: options equality — `icmp eq i8`
+        (EqEq, Type::Options { .. }) => icmp(cg, IntPredicate::EQ, lhs, rhs, "oeq"),
+        (NotEq,Type::Options { .. }) => icmp(cg, IntPredicate::NE, lhs, rhs, "one"),
 
         (BitAnd, Type::Int) => cg.builder.build_and(lhs.into_int_value(),  rhs.into_int_value(), "band").map(|v| v.into()).map_err(|e| format!("{e}")),
         (BitOr,  Type::Int) => cg.builder.build_or( lhs.into_int_value(),  rhs.into_int_value(), "bor" ).map(|v| v.into()).map_err(|e| format!("{e}")),
@@ -2445,6 +2570,264 @@ fn lower_map_method<'ctx>(
     }
 }
 
+// ── M6: options + fallible-conversion codegen helpers ────────────────────────
+
+/// Lower `options_value.toString()` → call `ynz_string_from_static` with the variant name.
+///
+/// The options_table maps variant tags to names; we use a runtime switch to call
+/// the right string. For simplicity, we build an LLVM switch with one case per variant.
+fn lower_options_to_string<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    recv: BasicValueEnum<'ctx>,
+    opts_name: &str,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let entry = cg.options_table.options.get(opts_name)
+        .ok_or_else(|| format!("codegen: unknown options type `{opts_name}`"))?
+        .clone();
+
+    // Allocate a pointer slot to hold the result string pointer.
+    let result_slot = cg.builder.build_alloca(cg.ptr(), "opts_str_slot")
+        .map_err(|e| format!("{e}"))?;
+    // Default: empty string
+    let empty_g = build_string_global(cg.ctx, cg.module, "", ".opts.str.empty");
+    cg.builder.build_store(result_slot, empty_g.as_pointer_value())
+        .map_err(|e| format!("{e}"))?;
+
+    let merge_bb = cg.append_block("opts_str_merge");
+    let tag_val = recv.into_int_value();
+
+    // For each variant, emit a conditional branch: if tag == i, store variant-name string.
+    let mut current_bb = cg.builder.get_insert_block()
+        .ok_or("opts_to_string: no insert block")?;
+
+    for (i, variant) in entry.variants.iter().enumerate() {
+        let tag_const = cg.ctx.i8_type().const_int(i as u64, false);
+        let is_this_variant = cg.builder.build_int_compare(
+            inkwell::IntPredicate::EQ, tag_val, tag_const, "ots_cmp"
+        ).map_err(|e| format!("{e}"))?;
+
+        let arm_bb = cg.append_block(&format!("opts_str_{i}"));
+        let next_bb = if i + 1 < entry.variants.len() {
+            cg.append_block(&format!("opts_str_check{}", i + 1))
+        } else {
+            merge_bb
+        };
+
+        cg.builder.build_conditional_branch(is_this_variant, arm_bb, next_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        cg.builder.position_at_end(arm_bb);
+        let g = build_string_global(cg.ctx, cg.module, variant, &format!(".opts.{opts_name}.{variant}"));
+        let len = cg.i64().const_int(variant.len() as u64, false);
+        let ptr = cg.builder.build_call(cg.rt.ynz_string_from_static, &[g.as_pointer_value().into(), len.into()], "opt_str")
+            .map_err(|e| format!("{e}"))?
+            .try_as_basic_value().basic()
+            .ok_or("ynz_string_from_static returned void")?;
+        cg.builder.build_store(result_slot, ptr).map_err(|e| format!("{e}"))?;
+        cg.builder.build_unconditional_branch(merge_bb).map_err(|e| format!("{e}"))?;
+
+        // Only position at next_bb if it's different from merge_bb.
+        // If next_bb IS merge_bb (last iteration), don't reposition — the builder
+        // is already in a terminated arm body and will fall into the next part.
+        if next_bb != merge_bb {
+            cg.builder.position_at_end(next_bb);
+        }
+        current_bb = next_bb;
+    }
+    let _ = current_bb;
+
+    // Ensure the current block (the last check/default block, or merge_bb itself)
+    // branches to merge_bb if not already terminated.
+    if !is_block_terminated(cg) {
+        cg.builder.build_unconditional_branch(merge_bb).map_err(|e| format!("{e}"))?;
+    }
+    cg.builder.position_at_end(merge_bb);
+
+    let result = cg.builder.build_load(cg.ptr(), result_slot, "opts_str")
+        .map_err(|e| format!("{e}"))?;
+    Ok(result)
+}
+
+/// Lower `(float).toInt()` → `maybe<int>` with NaN + range checks.
+/// Locked codegen sequence per design/narrowing.md P4 step 9.
+fn lower_float_to_int<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    x: inkwell::values::FloatValue<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let result_slot = cg.builder.build_alloca(cg.maybe_type(), "f2i_slot")
+        .map_err(|e| format!("{e}"))?;
+    cg.builder.build_store(result_slot, cg.maybe_type().const_zero())
+        .map_err(|e| format!("{e}"))?;
+
+    let nan_bb = cg.append_block("f2i_nan");
+    let range_bb = cg.append_block("f2i_range");
+    let low_bb = cg.append_block("f2i_low");
+    let ok_bb = cg.append_block("f2i_ok");
+    let ret_bb = cg.append_block("f2i_ret");
+
+    // NaN check: `x != x` (unordered comparison)
+    let is_nan = cg.builder.build_float_compare(
+        inkwell::FloatPredicate::UNO, x, x, "is_nan"
+    ).map_err(|e| format!("{e}"))?;
+    cg.builder.build_conditional_branch(is_nan, nan_bb, range_bb)
+        .map_err(|e| format!("{e}"))?;
+
+    // NaN → return none (slot is already zeroed)
+    cg.builder.position_at_end(nan_bb);
+    cg.builder.build_unconditional_branch(ret_bb).map_err(|e| format!("{e}"))?;
+
+    // Upper range check: x >= 2^63 (9.223372036854776e18)
+    cg.builder.position_at_end(range_bb);
+    let i64_max_f64 = cg.f64().const_float(9.223372036854776e18_f64);
+    let too_big = cg.builder.build_float_compare(
+        inkwell::FloatPredicate::OGE, x, i64_max_f64, "too_big"
+    ).map_err(|e| format!("{e}"))?;
+    cg.builder.build_conditional_branch(too_big, nan_bb, low_bb)
+        .map_err(|e| format!("{e}"))?;
+
+    // Lower range check: x < -2^63
+    cg.builder.position_at_end(low_bb);
+    let i64_min_f64 = cg.f64().const_float(-9.223372036854776e18_f64);
+    let too_small = cg.builder.build_float_compare(
+        inkwell::FloatPredicate::OLT, x, i64_min_f64, "too_small"
+    ).map_err(|e| format!("{e}"))?;
+    cg.builder.build_conditional_branch(too_small, nan_bb, ok_bb)
+        .map_err(|e| format!("{e}"))?;
+
+    // Convert: fptosi (safe — in-range proven)
+    cg.builder.position_at_end(ok_bb);
+    let int_val = cg.builder.build_float_to_signed_int(x, cg.i64(), "fptosi")
+        .map_err(|e| format!("{e}"))?;
+    let has_gep = cg.builder.build_struct_gep(cg.maybe_type(), result_slot, 0, "has_gep")
+        .map_err(|e| format!("{e}"))?;
+    cg.builder.build_store(has_gep, cg.i64().const_int(1, false))
+        .map_err(|e| format!("{e}"))?;
+    let val_gep = cg.builder.build_struct_gep(cg.maybe_type(), result_slot, 1, "val_gep")
+        .map_err(|e| format!("{e}"))?;
+    cg.builder.build_store(val_gep, int_val).map_err(|e| format!("{e}"))?;
+    cg.builder.build_unconditional_branch(ret_bb).map_err(|e| format!("{e}"))?;
+
+    cg.builder.position_at_end(ret_bb);
+    Ok(result_slot.into())
+}
+
+/// Lower `(number).toInt()` → `maybe<int>`.
+fn lower_number_to_int<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    num_ptr: inkwell::values::PointerValue<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    // Use ynz_decimal_to_float then float_to_int.
+    let f64t = cg.f64();
+    let prt = cg.ptr();
+    let fn_ty = f64t.fn_type(&[prt.into()], false);
+    let f = cg.module.get_function("ynz_decimal_to_float")
+        .unwrap_or_else(|| cg.module.add_function("ynz_decimal_to_float", fn_ty, None));
+    let f_val = cg.builder.build_call(f, &[num_ptr.into()], "d2f")
+        .map_err(|e| format!("{e}"))?
+        .try_as_basic_value().basic()
+        .ok_or("decimal_to_float void")?
+        .into_float_value();
+    lower_float_to_int(cg, f_val)
+}
+
+/// Lower `(string).toInt()` → `maybe<int>` via `ynz_string_to_int` runtime.
+fn lower_string_to_int<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    str_ptr: inkwell::values::PointerValue<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    lower_string_to_maybe_primitive(cg, str_ptr, "ynz_string_to_int", false)
+}
+
+/// Lower `(string).toFloat()` → `maybe<float>` via `ynz_string_to_float` runtime.
+fn lower_string_to_float<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    str_ptr: inkwell::values::PointerValue<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    lower_string_to_maybe_primitive(cg, str_ptr, "ynz_string_to_float", false)
+}
+
+/// Lower `(string).toNumber()` → `maybe<number>` via `ynz_string_to_number` runtime.
+fn lower_string_to_number<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    str_ptr: inkwell::values::PointerValue<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    lower_string_to_maybe_primitive(cg, str_ptr, "ynz_string_to_number", true)
+}
+
+/// Shared implementation: call a `(ptr, len, out) -> void` runtime function;
+/// the `out` buffer is `[i64; 2]` (has_value + value) or `[i64; 3]` for number.
+/// Returns a pointer to a `maybe<T>` struct.
+fn lower_string_to_maybe_primitive<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    str_ptr: inkwell::values::PointerValue<'ctx>,
+    rt_fn_name: &str,
+    is_number: bool,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    // Allocate output buffer: [3 x i64] (enough for number, fine for int/float).
+    let arr_ty = cg.i64().array_type(3);
+    let out = cg.builder.build_alloca(arr_ty, "str_conv_out")
+        .map_err(|e| format!("{e}"))?;
+    cg.builder.build_store(out, arr_ty.const_zero()).map_err(|e| format!("{e}"))?;
+
+    // Get string pointer and length from the Yinz string (null-terminated).
+    // The runtime functions take (ptr, len) where len is the byte count.
+    // For null-terminated strings, compute the length with strlen.
+    let strlen_ty = cg.i64().fn_type(&[cg.ptr().into()], false);
+    let strlen = cg.module.get_function("strlen")
+        .unwrap_or_else(|| cg.module.add_function("strlen", strlen_ty, None));
+    let len_val = cg.builder.build_call(strlen, &[str_ptr.into()], "str_len")
+        .map_err(|e| format!("{e}"))?
+        .try_as_basic_value().basic()
+        .ok_or("strlen void")?;
+
+    // Look up or declare the runtime function.
+    let fn_val = match rt_fn_name {
+        "ynz_string_to_int"    => cg.rt.ynz_string_to_int,
+        "ynz_string_to_float"  => cg.rt.ynz_string_to_float,
+        "ynz_string_to_number" => cg.rt.ynz_string_to_number,
+        _ => return Err(format!("unknown str conv fn: {rt_fn_name}")),
+    };
+
+    cg.builder.build_call(fn_val, &[str_ptr.into(), len_val.into(), out.into()], "str_conv")
+        .map_err(|e| format!("{e}"))?;
+
+    // Build a `maybe<T>` struct from the output buffer.
+    let slot = cg.builder.build_alloca(cg.maybe_type(), "str_conv_maybe")
+        .map_err(|e| format!("{e}"))?;
+    cg.builder.build_store(slot, cg.maybe_type().const_zero())
+        .map_err(|e| format!("{e}"))?;
+
+    let has_gep = unsafe { cg.builder.build_gep(cg.i64(), out, &[cg.i64().const_int(0, false)], "has_v") }
+        .map_err(|e| format!("{e}"))?;
+    let has_val = cg.builder.build_load(cg.i64(), has_gep, "has_val")
+        .map_err(|e| format!("{e}"))?;
+
+    // Store has_value
+    let has_out_gep = cg.builder.build_struct_gep(cg.maybe_type(), slot, 0, "has_out")
+        .map_err(|e| format!("{e}"))?;
+    cg.builder.build_store(has_out_gep, has_val).map_err(|e| format!("{e}"))?;
+
+    // Store value bits (index 1 for int/float, or for number we store the pointer-as-bits)
+    let val_gep_src = unsafe { cg.builder.build_gep(cg.i64(), out, &[cg.i64().const_int(1, false)], "val_v") }
+        .map_err(|e| format!("{e}"))?;
+
+    let val_out_gep = cg.builder.build_struct_gep(cg.maybe_type(), slot, 1, "val_out")
+        .map_err(|e| format!("{e}"))?;
+
+    if is_number {
+        // For number, store the pointer to the out buffer's number data as bits.
+        let ptr_bits = cg.builder.build_ptr_to_int(val_gep_src, cg.i64(), "ptr2i")
+            .map_err(|e| format!("{e}"))?;
+        cg.builder.build_store(val_out_gep, ptr_bits).map_err(|e| format!("{e}"))?;
+    } else {
+        let val = cg.builder.build_load(cg.i64(), val_gep_src, "val")
+            .map_err(|e| format!("{e}"))?;
+        cg.builder.build_store(val_out_gep, val).map_err(|e| format!("{e}"))?;
+    }
+
+    Ok(slot.into())
+}
+
 fn lower_method_call<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     recv: BasicValueEnum<'ctx>,
@@ -2476,6 +2859,18 @@ fn lower_method_call<'ctx>(
         }
         (Type::Number { .. }, "toString") => to_c_string(cg, recv, &Type::Number { precision: 34 }).map(|p| p.into()),
         (Type::Bool, "toString") => to_c_string(cg, recv, &Type::Bool).map(|p| p.into()),
+
+        // M6: fallible conversions — return maybe<T>
+        (Type::Int, "toInt") => {
+            // (int).toInt() is identity — return the int value directly (infallible).
+            Ok(recv)
+        }
+        (Type::Float, "toInt") => lower_float_to_int(cg, recv.into_float_value()),
+        (Type::Number { .. }, "toInt") => lower_number_to_int(cg, recv.into_pointer_value()),
+        (Type::String, "toInt") => lower_string_to_int(cg, recv.into_pointer_value()),
+        (Type::String, "toFloat") => lower_string_to_float(cg, recv.into_pointer_value()),
+        (Type::String, "toNumber") => lower_string_to_number(cg, recv.into_pointer_value()),
+
         _ => Err(format!("codegen: unknown method `{method}` on {:?}", recv_ty)),
     }
 }
@@ -2543,8 +2938,10 @@ fn load<'ctx>(cg: &mut Cg<'ctx, '_>, slot: PointerValue<'ctx>, ty: &Type, name: 
         // BuiltinArray: slot stores the *mut YnzArray pointer — load and return it.
         // BuiltinFixed: slot stores a pointer to the [N x i64] alloca — load and return.
         // Maybe: slot stores a pointer to the {i64,i64} alloca — load and return.
+        // Union: slot stores a pointer to the tagged-struct alloca — load and return.
         Type::BuiltinArray { .. } | Type::BuiltinFixed { .. } | Type::Maybe { .. }
-        | Type::BuiltinMap { .. } | Type::MapEntry { .. } => {
+        | Type::BuiltinMap { .. } | Type::MapEntry { .. }
+        | Type::Union { .. } => {
             cg.builder.build_load(cg.ptr(), slot, name).map_err(|e| format!("{e}"))
         }
         ty => {

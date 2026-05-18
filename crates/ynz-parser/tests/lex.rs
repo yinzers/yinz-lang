@@ -591,7 +591,9 @@ fn token_spans_reconstruct_lexemes() {
             | Token::Dynamic
             | Token::SelfType
             | Token::SelfValue
-            | Token::None => {
+            | Token::None
+            | Token::Options
+            | Token::Is => {
                 // Span must be non-empty for every token that has a source location.
                 assert!(
                     spanned.span.start < spanned.span.end,
@@ -1128,4 +1130,77 @@ fn changing_source_text_invalidates_cache() {
         token_count_1, token_count_2,
         "Token count should differ after source text change"
     );
+}
+
+
+// ── M6: options + is ─────────────────────────────────────────────────────────
+
+#[test]
+fn m6_token_variant_count_locked() {
+    // WHY: pins the token vocabulary at the M6 P1 surface.
+    //
+    // test-ratchet: M6 P1 adds 2 variants over M5's 58:
+    //   Keyword (2): Options (`options` declaration keyword), Is (`is` type-narrowing keyword)
+    //   Total M1+M2+M3+M4+M5+M6: 58 + 2 = 60
+    let expected_count = 60usize;
+
+    use ynz_parser::Token::*;
+    let all_variants: &[Token] = &[
+        // M1
+        Function, Nothing, Identifier("x".into()), StringLit(vec![]),
+        LParen, RParen, LBrace, RBrace, Arrow, Eof,
+        // M2
+        Let, Const, True, False, IntLit(0), NumberLit("0.0".into()),
+        Plus, Minus, Star, Slash, Percent,
+        EqEq, NotEq, Lt, LtEq, Gt, GtEq,
+        AmpAmp, PipePipe, Bang,
+        Amp, Pipe, Caret, Tilde, LtLt, GtGt,
+        Eq, Colon, Dot, LBracket, RBracket, Comma,
+        // M3
+        If, Else, While, For, In, Return, FatArrow,
+        // M4
+        Shape, Follows, Extends, Base, Hidden, Dynamic, SelfType, SelfValue,
+        // M5
+        None,
+        // M6
+        Options,
+        Is,
+    ];
+    assert_eq!(
+        all_variants.len(),
+        expected_count,
+        "Token variant count changed from {expected_count} — update this test \
+         with a // test-ratchet: <reason> comment and update the Token doc comment"
+    );
+}
+
+#[test]
+fn m6_options_keyword_lexes() {
+    // WHY: `options` must produce Token::Options, not Token::Identifier("options").
+    // If this fails, every options-declaration parse test will see an identifier
+    // where the parser expects the keyword, producing cascading parse errors.
+    let tokens = lex_tokens("options Status { active }");
+    assert_eq!(tokens[0], Token::Options, "expected Token::Options for 'options'");
+    assert_eq!(tokens[1], Token::Identifier("Status".into()), "expected identifier after options");
+}
+
+#[test]
+fn m6_is_keyword_lexes() {
+    // WHY: `is` must produce Token::Is, not Token::Identifier("is").
+    // If this fails, the parser cannot produce Is-arm AST nodes in multi-case blocks,
+    // and union narrowing is completely non-functional.
+    let tokens = lex_tokens("if (x) { is Circle => print(\"hit\") }");
+    let is_pos = tokens.iter().position(|t| *t == Token::Is);
+    assert!(is_pos.is_some(), "expected Token::Is in the token stream for 'is'");
+}
+
+#[test]
+fn m6_enum_banned_keyword_still_fires() {
+    // WHY: The `enum` banned-keyword diagnostic must still fire after adding
+    // Token::Options — the ban redirects to `options`, and Options is now a
+    // real keyword. Both the diagnostic and the fallback identifier behavior
+    // must coexist correctly.
+    let (tok_count, diag_count) = lex_counts("enum Status { active }");
+    assert_eq!(diag_count, 1, "expected exactly 1 banned-keyword diagnostic for 'enum'");
+    assert!(tok_count > 0, "expected tokens to be emitted (tolerant recovery)");
 }

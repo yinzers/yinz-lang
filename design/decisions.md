@@ -26,6 +26,9 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Functions | `design/functions.md` | `function` keyword, `-> nothing`, no tuples, closure syntax |
 | Numeric types | `design/numeric-types.md` | `number`/`float`/`int`, `number<N>` parameterized precision (cap 4096), handwritten impls, overflow methods |
 | Naming | `design/naming.md` | Human-readable keywords, capital = type rule, comments syntax |
+| Options types | `design/options.md` | `options` keyword (replaces `enum`), LLVM i8 lowering, exhaustiveness enforcement, ambiguous-shorthand resolution, function-vs-shorthand priority, single/empty-variant rejection, `.toString()` via global variant-name table |
+| Union types | `design/unions.md` | `\|` union syntax, LLVM lowering decision table (pointer-niche vs tagged-struct), `is`-exact-type rule (no subtype), exhaustiveness enforcement, single-variant rejection, no user-layout-override rationale |
+| Flow-sensitive narrowing | `design/narrowing.md` | Full rules table for `.value` and `is` narrowing: positive/negative forms, `&&` propagation, `\|\|` non-propagation (locked diagnostic text), early-return narrowing (recognized-exit set), reassignment invalidation, lend-call invalidation, closure non-propagation, v0.2 LSP hint obligations |
 | Control flow | `design/control-flow.md` | No standalone `else`, multi-case `if`, exhaustiveness, jump table optimization |
 | Scope | `design/scope.md` | Block scoping, no mutable globals, const expressions, export for sharing |
 | Main entry | `design/main-entry.md` | `function main()`, file from yinz.toml, args from stdlib, errors to default handler |

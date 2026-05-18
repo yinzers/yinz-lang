@@ -1336,3 +1336,265 @@ function main() -> nothing {
 }
 "#);
 }
+
+// ── M6: union typeck (P3b) ───────────────────────────────────────────────────
+
+#[test]
+fn m6_union_type_annotation_works() {
+    // WHY: A union type `let s: Circle | Square = c` must parse and typecheck without errors.
+    // Assigning a concrete variant (Circle) to a union type must be valid.
+    assert_clean(r#"
+shape Circle { radius: number }
+shape Square { side: number }
+shape Shape = Circle | Square
+function describe(s: Shape) -> nothing {
+  if (s) {
+    is Circle => print("circle")
+    is Square => print("square")
+  }
+}
+function main() -> nothing {
+  let c: Circle = { radius: 5.0 }
+  let s: Shape = c
+  describe(s)
+}
+"#);
+}
+
+#[test]
+fn m6_union_multicase_exhaustive_clean() {
+    // WHY: A fully-covered union multi-case must typecheck cleanly.
+    assert_clean(r#"
+shape Circle { radius: number }
+shape Square { side: number }
+shape Shape = Circle | Square
+function classify(s: Shape) -> nothing {
+  if (s) {
+    is Circle => print("circle")
+    is Square => print("square")
+  }
+}
+function main() -> nothing { }
+"#);
+}
+
+#[test]
+fn m6_union_multicase_nonexhaustive_is_error() {
+    // WHY: A missing `is Foo` arm in a union multi-case must produce an error.
+    assert_errors(r#"
+shape Circle { radius: number }
+shape Square { side: number }
+shape Triangle { width: number
+  height: number }
+shape Shape = Circle | Square | Triangle
+function classify(s: Shape) -> nothing {
+  if (s) {
+    is Circle => print("circle")
+    is Square => print("square")
+  }
+}
+function main() -> nothing { }
+"#, 1);
+}
+
+#[test]
+fn m6_union_multicase_with_else_is_clean() {
+    // WHY: `else =>` covers all remaining variants — must typecheck clean.
+    assert_clean(r#"
+shape Circle { radius: number }
+shape Square { side: number }
+shape Triangle { width: number
+  height: number }
+shape Shape = Circle | Square | Triangle
+function classify(s: Shape) -> nothing {
+  if (s) {
+    is Circle => print("circle")
+    else => print("other")
+  }
+}
+function main() -> nothing { }
+"#);
+}
+
+#[test]
+fn m6_is_expr_on_non_union_is_error() {
+    // WHY: `is Foo` on a non-union (e.g., string) must produce a teaching error.
+    assert_errors(r#"
+function main() -> nothing {
+  let s: string = "hello"
+  if (s is int) {
+    print("wrong")
+  }
+}
+"#, 1);
+}
+
+// ── M6: options typeck ────────────────────────────────────────────────────────
+
+#[test]
+fn m6_options_value_typechecks() {
+    // WHY: `Status.active` must resolve to Type::Options { name: "Status" }, not Error.
+    // If this fails, every options-typed variable is mistyped and comparisons fail.
+    assert_clean(r#"
+options Status { active, inactive, banned }
+function main() -> nothing {
+  let s: Status = Status.active
+  print(s.toString())
+}
+"#);
+}
+
+#[test]
+fn m6_options_unknown_variant_is_error() {
+    // WHY: Accessing a non-existent variant must produce an error, not silently type as Error.
+    // A typo like `Status.activ` should be caught at compile time.
+    assert_errors(r#"
+options Status { active, inactive, banned }
+function main() -> nothing {
+  let s: Status = Status.activ
+}
+"#, 1);
+}
+
+#[test]
+fn m6_options_empty_body_is_error() {
+    // WHY: An options type with no variants can never hold a value — the compiler must reject it.
+    assert_errors(r#"
+options Empty { }
+function main() -> nothing { }
+"#, 1);
+}
+
+#[test]
+fn m6_options_single_variant_is_error() {
+    // WHY: Single-variant options types carry no information — symmetric with single-variant union rejection.
+    assert_errors(r#"
+options Single { only }
+function main() -> nothing { }
+"#, 1);
+}
+
+#[test]
+fn m6_options_multicase_exhaustive_clean() {
+    // WHY: A fully-covered options multi-case must typecheck with zero errors.
+    // If this fails, correct options code is incorrectly rejected.
+    assert_clean(r#"
+options Status { active, inactive }
+function main() -> nothing {
+  let s: Status = Status.active
+  if (s) {
+    active => print("ok")
+    inactive => print("off")
+  }
+}
+"#);
+}
+
+#[test]
+fn m6_options_multicase_nonexhaustive_is_error() {
+    // WHY: A multi-case with a missing arm must produce an error naming the missing variant.
+    // Missing variants silently fall through without this check — a latent bug class.
+    assert_errors(r#"
+options Status { active, inactive, banned }
+function main() -> nothing {
+  let s: Status = Status.active
+  if (s) {
+    active => print("ok")
+    inactive => print("off")
+  }
+}
+"#, 1);
+}
+
+#[test]
+fn m6_options_multicase_with_else_arm_is_clean() {
+    // WHY: An `else =>` arm covers all remaining variants — must typecheck clean even if
+    // individual variants are not all listed.
+    assert_clean(r#"
+options Status { active, inactive, banned }
+function main() -> nothing {
+  let s: Status = Status.active
+  if (s) {
+    active => print("ok")
+    else => print("other")
+  }
+}
+"#);
+}
+
+#[test]
+fn m6_same_options_comparison_clean() {
+    // WHY: Comparing two values of the same options type with `==` must succeed.
+    assert_clean(r#"
+options Status { active, inactive }
+function main() -> nothing {
+  let a: Status = Status.active
+  let b: Status = Status.inactive
+  let eq = a == b
+  print(eq.toString())
+}
+"#);
+}
+
+#[test]
+fn m6_cross_options_comparison_is_error() {
+    // WHY: Comparing values of different options types is almost always a bug —
+    // the tags have no shared meaning between types.
+    assert_errors(r#"
+options Status { active, inactive }
+options Visibility { visible, invisible }
+function main() -> nothing {
+  let s: Status = Status.active
+  let v: Visibility = Visibility.visible
+  let eq = s == v
+}
+"#, 1);
+}
+
+#[test]
+fn m6_bool_to_int_is_error() {
+    // WHY: `.toInt()` on bool must be rejected — no silent 0/1 coercion.
+    assert_errors(r#"
+function main() -> nothing {
+  let x = true.toInt()
+}
+"#, 1);
+}
+
+#[test]
+fn m6_int_to_int_is_clean() {
+    // WHY: `.toInt()` on int must be the identity and return `int` directly (not `maybe<int>`).
+    assert_clean(r#"
+function main() -> nothing {
+  let x: int = 42
+  let y: int = x.toInt()
+  print(y.toString())
+}
+"#);
+}
+
+#[test]
+fn m6_float_to_int_returns_maybe() {
+    // WHY: `.toInt()` on float is fallible — must return `maybe<int>`, not bare `int`.
+    // If this returns int, NaN and OOR cases silently produce wrong values at runtime.
+    assert_clean(r#"
+function main() -> nothing {
+  let x: float = 3.14
+  let y: maybe<int> = x.toInt()
+  print(y.or(0).toString())
+}
+"#);
+}
+
+#[test]
+fn m6_string_to_int_returns_maybe() {
+    // WHY: `"42".toInt()` is fallible — the string might not be a valid integer.
+    // Must return `maybe<int>` so the caller handles the failure case.
+    assert_clean(r#"
+function main() -> nothing {
+  let s: string = "42"
+  let x: maybe<int> = s.toInt()
+  print(x.or(0).toString())
+}
+"#);
+}

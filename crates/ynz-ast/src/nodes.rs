@@ -10,13 +10,27 @@ pub struct Module {
 /// A top-level item in a module.
 ///
 /// Variant count is pinned by `m4_item_variant_count_locked` in the test suite.
-/// Current count: 2 (M5 does not add new Item variants — generic functions and
-/// generic shapes reuse Function and ShapeDecl with the new `generics` field).
+/// Current count: 3 (M6 adds OptionsDecl for `options Status { active, inactive }` declarations).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
     Function(FunctionDecl),
     // test-ratchet: M4 adds ShapeDecl for user-defined data types.
     ShapeDecl(ShapeDecl),
+    // test-ratchet: M6 adds OptionsDecl for `options` type declarations.
+    OptionsDecl(OptionsDecl),
+}
+
+/// An `options` type declaration: `options Status { active, inactive, banned }`.
+///
+/// Lowers to an `i8` tag at codegen time. Variants are assigned sequential
+/// integer tags (0, 1, 2, …) in declaration order.
+/// Typeck rejects: empty variants, single variant, ≥256 variants, duplicate names.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OptionsDecl {
+    pub name: String,
+    pub name_span: SourceSpan,
+    pub variants: Vec<(String, SourceSpan)>,
+    pub span: SourceSpan,
 }
 
 /// A function declaration: `function name<generics>(params) -> return_type { body }`.
@@ -201,6 +215,16 @@ pub struct MatchPattern {
     pub span: SourceSpan,
 }
 
+/// A single-segment type path used in `is TypeName =>` arms.
+///
+/// In M6, union variant names are single identifiers. The `TypePath` wrapper
+/// carries the name and its source span for diagnostics.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypePath {
+    pub name: String,
+    pub span: SourceSpan,
+}
+
 /// The kind of a multi-case arm pattern.
 ///
 /// Variant count is pinned by `m3_match_pattern_kind_variant_count` in the test suite.
@@ -209,12 +233,17 @@ pub struct MatchPattern {
 pub enum MatchPatternKind {
     /// A value literal or expression: `1 => ...`, `"hello" => ...`.
     Value(Expr),
-    /// `is TypeName =>` — type-narrowing form, deferred to M6.
-    // REPLACE-AT M6: widen String to TypePath for narrowing
-    IsType(String),
-    /// `variant_name =>` — options-variant form, deferred to M6.
-    // REPLACE-AT M6: widen String to VariantPath for options exhaustiveness
-    Variant(String),
+    /// `is TypeName =>` — type-narrowing form (M6).
+    ///
+    /// Widened from the M3 stub `IsType(String)`. Typeck resolves the
+    /// TypePath against the types-only namespace and validates it is a
+    /// variant of the scrutinee's union type.
+    Is(TypePath),
+    /// `VariantName =>` — bare options-variant form (M6).
+    ///
+    /// Widened from the M3 stub `Variant(String)`. Typeck resolves the
+    /// name against the scrutinee's options type's variant list.
+    OptionName(String),
 }
 
 /// Binary operator kinds.
@@ -261,8 +290,9 @@ pub enum UnaryOpKind {
 /// An expression.
 ///
 /// Variant count is pinned by the milestone-locked tests in the test suite.
-/// Current count: 18 — M4 added FieldAccess(11), StructLit(12), PostfixOp(13),
-/// SelfValue(14); M5 added NoneLit(15), IndexAccess(16), ArrayLit(17), MapLit(18).
+/// Current count: 19 — M4 added FieldAccess(11), StructLit(12), PostfixOp(13),
+/// SelfValue(14); M5 added NoneLit(15), IndexAccess(16), ArrayLit(17), MapLit(18);
+/// M6 added Is(19) for `if (x is Foo)` type-narrowing condition.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
 
@@ -386,6 +416,20 @@ pub enum Expr {
         entries: Vec<(Expr, Expr)>,
         span: SourceSpan,
     },
+
+    // test-ratchet: M6 adds Is for `expr is TypeName` type-narrowing condition form.
+    /// Type-narrowing predicate: `x is Circle`.
+    ///
+    /// Used in if-condition position: `if (x is Circle) { ... }`.
+    /// Inside the then-block, `x` is narrowed to `Circle`. Typeck validates
+    /// that the named type is a variant of `x`'s union type.
+    /// `is` looks up the type in the types-only namespace — same-name value
+    /// bindings do NOT shadow the type lookup.
+    Is {
+        expr: Box<Expr>,
+        ty: TypePath,
+        span: SourceSpan,
+    },
 }
 
 /// The kind of dot-postfix body operation.
@@ -421,7 +465,8 @@ impl Expr {
             | Expr::PostfixOp { span, .. }
             | Expr::IndexAccess { span, .. }
             | Expr::ArrayLit { span, .. }
-            | Expr::MapLit { span, .. } => span,
+            | Expr::MapLit { span, .. }
+            | Expr::Is { span, .. } => span,
             Expr::SelfValue { span } => span,
             Expr::NoneLit { span } => span,
         }
@@ -447,8 +492,8 @@ pub struct CallExpr {
 /// A type annotation.
 ///
 /// Variant count is pinned by the milestone-locked tests in the test suite.
-/// Current count: 13 — M4 added Dynamic(9), SelfType(10); M5 added
-/// TypeParam(11), Generic(12), Maybe(13).
+/// Current count: 14 — M4 added Dynamic(9), SelfType(10); M5 added
+/// TypeParam(11), Generic(12), Maybe(13); M6 added Union(14).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Type {
 
@@ -543,6 +588,21 @@ pub enum Type {
         inner: Box<Type>,
         span: SourceSpan,
     },
+
+    // ── M6 ───────────────────────────────────────────────────────────────────
+
+    // test-ratchet: M6 adds Union for `A | B | C` union type declarations.
+
+    /// A union type: `Circle | Square | Triangle` in type position.
+    ///
+    /// Typeck validates: ≥2 variants, no duplicate names, no `T | none` form
+    /// (rewritten to `maybe<T>`), no single-variant degenerate form.
+    /// LLVM lowering is chosen per variant set at codegen time.
+    /// See `design/unions.md` for the full decision table.
+    Union {
+        variants: Vec<Type>,
+        span: SourceSpan,
+    },
 }
 
 
@@ -619,5 +679,9 @@ pub struct ShapeDecl {
     pub fields: Vec<FieldDecl>,
     /// Bare method signatures (for contract shapes).
     pub contract_sigs: Vec<ContractSig>,
+    /// M6: when set, this is a union type alias declaration: `shape Shape = Circle | Square`.
+    /// The type is stored as a `Type::Union` (or any other type alias).
+    /// When `Some`, `fields`, `extends`, `follows`, and `contract_sigs` are empty.
+    pub alias_ty: Option<Type>,
     pub span: SourceSpan,
 }

@@ -131,10 +131,40 @@ function main() -> nothing {
   print(lookup["alice"].or(0))
   print(lookup.count())
 
+  // ────── M6: options + unions + narrowing ──────
+  print("M6 — options, unions, narrowing:")
+
+  // Options: declaration + value use + multi-case
+  let status: Status = Status.active
+  print(status.toString())
+  if (status) {
+    active  => print("active")
+    pending => print("pending")
+    banned  => print("banned")
+  }
+
+  // Options equality
+  let eq = status == Status.active
+  print(eq.toString())
+
+  // Fallible conversions
+  let parsed: maybe<int> = "42".toInt()
+  print(parsed.or(0).toString())
+  let fromFloat: maybe<int> = (3.14).toInt()
+  print(fromFloat.or(-1).toString())
+  let fromInt: int = (99).toInt()
+  print(fromInt.toString())
+
+  // Early-return narrowing on maybe<T>
+  let nums: array<int> = [10, 20, 30]
+  let first = firstOrDefault(nums)
+  print(first.toString())
+
   // ────── Deferred features (v0.2+) ──────
   // arena scratch { let temp: array<int> = [...] }  // v0.2 — design/future/arena.md
   // verified { let raw = rawMemory(64) }              // v0.3+ — vocabulary.md
   // Self-referential shapes                           // v0.3+ — design/future/self-references.md
+  // Union codegen (classifyAccount) — requires P4 codegen
 }
 
 // ────── M3 helper functions ──────
@@ -205,4 +235,28 @@ function healPlayer(lend self: Player, amount: int) -> nothing {
 
 function identity<T>(give value: T) -> T {
   return value
+}
+
+// ────── M6: options + unions + narrowing ──────
+
+options Status { pending, active, banned }
+
+shape ActiveAccount { name: string }
+shape BannedAccount { reason: string }
+shape PendingAccount { email: string }
+shape AccountResult = ActiveAccount | BannedAccount | PendingAccount
+
+function classifyAccount(account: AccountResult) -> string {
+  if (account) {
+    is ActiveAccount  => return "OK"
+    is BannedAccount  => return "DENIED"
+    is PendingAccount => return "WAIT"
+  }
+  return "UNKNOWN"
+}
+
+function firstOrDefault(share nums: array<int>) -> int {
+  let r = nums.first()
+  if (!r.exists()) { return -1 }
+  return r.value
 }

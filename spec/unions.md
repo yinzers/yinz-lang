@@ -91,6 +91,30 @@ function getAccess(share user: AnyUser) -> string {
 
 ---
 
+## Exhaustiveness — all variants must be handled
+
+When using multi-case `if` on a union, you must cover every variant — or include `else =>`:
+
+```
+function getArea(share shape: Shape) -> number {
+  if (shape) {
+    is Circle   => return math.PI * shape.radius * shape.radius
+    is Square   => return shape.side * shape.side
+    is Triangle => return (shape.base * shape.height) / 2
+  }
+}
+```
+
+Missing a variant is a compile error. The compiler names which ones are missing:
+
+```
+// COMPILE ERROR: Non-exhaustive union multi-case — Shape has 3 variants; only 2 are handled.
+// Missing variant: Triangle
+// Add: is Triangle => ...  or add: else => ...
+```
+
+---
+
 ## `maybe T` is a union
 
 `maybe string` is the same type as `string | none`. Every `maybe` type is a union. See [Maybe Types](maybe.md).
