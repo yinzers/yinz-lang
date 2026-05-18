@@ -5372,6 +5372,10 @@ fn lower_options_to_string<'ctx>(
         .ok_or("opts_to_string: no insert block")?;
 
     for (i, variant) in entry.variants.iter().enumerate() {
+        // Use the display string if provided, otherwise fall back to the variant name.
+        let display = entry.display_strings.get(i)
+            .and_then(|d| d.as_deref())
+            .unwrap_or(variant.as_str());
         let tag_const = cg.ctx.i8_type().const_int(i as u64, false);
         let is_this_variant = cg
             .builder
@@ -5393,10 +5397,10 @@ fn lower_options_to_string<'ctx>(
         let g = build_string_global(
             cg.ctx,
             cg.module,
-            variant,
+            display,
             &format!(".opts.{opts_name}.{variant}"),
         );
-        let len = cg.i64().const_int(variant.len() as u64, false);
+        let len = cg.i64().const_int(display.len() as u64, false);
         let ptr = cg
             .builder
             .build_call(

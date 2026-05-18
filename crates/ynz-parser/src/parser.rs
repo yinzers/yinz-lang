@@ -3129,8 +3129,30 @@ impl<'a> Parser<'a> {
                     let v_span = self.current_span();
                     let v_name = v.clone();
                     self.advance();
-                    variants.push((v_name, v_span));
-                    // Optional trailing comma
+                    // Optional display string: `variantName: \`Display Value\``
+                    let display = if matches!(self.peek(), Token::Colon) {
+                        self.advance(); // consume `:`
+                        match self.peek().clone() {
+                            Token::BacktickString(bytes) => {
+                                let s = std::str::from_utf8(&bytes).unwrap_or("").to_string();
+                                self.advance();
+                                Some(s)
+                            }
+                            _ => {
+                                self.diags.push(Diagnostic::error(
+                                    self.current_span(),
+                                    format!("Expected a display string after `{v_name}:`."),
+                                    format!("Write `{v_name}: \\`Display Value\\``"),
+                                    "The display string is what `.toString()` returns for this variant.",
+                                ));
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    variants.push((v_name, v_span, display));
+                    // Optional trailing comma or newline-separated (no comma needed)
                     if matches!(self.peek(), Token::Comma) {
                         self.advance();
                     }

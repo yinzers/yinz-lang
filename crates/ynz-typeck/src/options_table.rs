@@ -7,6 +7,9 @@ use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 pub struct OptionsEntry {
     /// Variant names in declaration order. Tags are assigned as 0, 1, 2, … in this order.
     pub variants: Vec<String>,
+    /// Optional display strings per variant (`variant: \`Display Value\``).
+    /// Same length as `variants`. `None` means use the variant name itself.
+    pub display_strings: Vec<Option<String>>,
     /// Source span of the options declaration, for diagnostics.
     pub decl_span: SourceSpan,
 }
@@ -30,6 +33,7 @@ impl OptionsTable {
             "SortOrder".into(),
             OptionsEntry {
                 variants: vec!["asc".into(), "desc".into()],
+                display_strings: vec![None, None],
                 decl_span: SourceSpan::new("<stdlib>", 0, 0),
             },
         );
@@ -37,6 +41,7 @@ impl OptionsTable {
             "Comparison".into(),
             OptionsEntry {
                 variants: vec!["equal".into(), "greater".into(), "less".into()],
+                display_strings: vec![None, None, None],
                 decl_span: SourceSpan::new("<stdlib>", 0, 0),
             },
         );
@@ -163,7 +168,7 @@ pub fn collect_options(module: &Module, diags: &mut DiagnosticBucket) -> Options
         // Duplicate variant names.
         let mut seen: HashMap<String, ()> = HashMap::new();
         let mut has_dup = false;
-        for (v_name, v_span) in &opt.variants {
+        for (v_name, v_span, _display) in &opt.variants {
             if seen.contains_key(v_name) {
                 diags.push(Diagnostic::error(
                     v_span.clone(),
@@ -194,7 +199,8 @@ pub fn collect_options(module: &Module, diags: &mut DiagnosticBucket) -> Options
         table.options.insert(
             opt.name.clone(),
             OptionsEntry {
-                variants: opt.variants.iter().map(|(v, _)| v.clone()).collect(),
+                variants: opt.variants.iter().map(|(v, _, _)| v.clone()).collect(),
+                display_strings: opt.variants.iter().map(|(_, _, d)| d.clone()).collect(),
                 decl_span: opt.span.clone(),
             },
         );
