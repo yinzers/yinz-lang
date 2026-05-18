@@ -2219,8 +2219,8 @@ mod m7_string_runtime {
 // callers are responsible for eventual cleanup (deferred to v0.2 arena).
 
 use ynz_numerics::decimal_n::{
-    add as bignum_add_op, div as bignum_div_op, format_bignum, mul as bignum_mul_op,
-    parse_bignum, sub as bignum_sub_op,
+    add as bignum_add_op, div as bignum_div_op, format_bignum, mul as bignum_mul_op, parse_bignum,
+    sub as bignum_sub_op,
 };
 use ynz_numerics::BigNum;
 
@@ -2277,7 +2277,6 @@ unsafe fn bignum_binop(
     let bn_val = parse_bignum(b_str, precision).unwrap_or_else(|| BigNum::zero(precision));
     let result = op(&an, &bn_val);
     let s = format_bignum(&result);
-    let cstr =
-        std::ffi::CString::new(s).unwrap_or_else(|_| std::ffi::CString::new("0").unwrap());
+    let cstr = std::ffi::CString::new(s).unwrap_or_else(|_| std::ffi::CString::new("0").unwrap());
     cstr.into_raw()
 }

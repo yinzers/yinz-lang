@@ -2478,7 +2478,32 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
             lower_field_access(cg, receiver, field)
         }
 
-        Expr::StructLit { fields, .. } => lower_struct_lit(cg, expr, fields),
+        Expr::StructLit { fields, .. } => {
+            // When typeck resolved this to a BuiltinMap, the user wrote `{ key: value }` syntax
+            // with a map annotation — lower identifier names as string literal keys.
+            if let Type::BuiltinMap { val, .. } = cg.expr_type(expr) {
+                let map_ptr = cg
+                    .builder
+                    .build_call(cg.rt.ynz_map_new, &[], "map_new")
+                    .map_err(|e| format!("{e}"))?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or("ynz_map_new returned void")?
+                    .into_pointer_value();
+                for f in fields {
+                    let key_global = build_string_global(cg.ctx, cg.module, &f.name, "imap_key");
+                    let key_ptr = key_global.as_pointer_value();
+                    let val_val = lower_expr(cg, &f.value)?;
+                    let val_bits = cg.to_i64_bits(val_val, &val)?;
+                    cg.builder
+                        .build_call(cg.rt.ynz_map_set_str, &[map_ptr.into(), key_ptr.into(), val_bits.into()], "imap_set")
+                        .map_err(|e| format!("{e}"))?;
+                }
+                Ok(map_ptr.into())
+            } else {
+                lower_struct_lit(cg, expr, fields)
+            }
+        }
 
         Expr::PostfixOp { receiver, op, .. } => lower_postfix_op(cg, receiver, op),
 
@@ -2956,9 +2981,14 @@ fn lower_binop<'ctx>(
             cg.rt.decimal_add,
             "dadd",
         ),
-        (Add, Type::Number { precision }) => {
-            bignum_binop(cg, lhs.into_pointer_value(), rhs.into_pointer_value(), *precision, cg.rt.ynz_bignum_add, "bnadd")
-        }
+        (Add, Type::Number { precision }) => bignum_binop(
+            cg,
+            lhs.into_pointer_value(),
+            rhs.into_pointer_value(),
+            *precision,
+            cg.rt.ynz_bignum_add,
+            "bnadd",
+        ),
         (Sub, Type::Number { precision }) if *precision <= 34 => decimal_binop(
             cg,
             lhs.into_pointer_value(),
@@ -2966,9 +2996,14 @@ fn lower_binop<'ctx>(
             cg.rt.decimal_sub,
             "dsub",
         ),
-        (Sub, Type::Number { precision }) => {
-            bignum_binop(cg, lhs.into_pointer_value(), rhs.into_pointer_value(), *precision, cg.rt.ynz_bignum_sub, "bnsub")
-        }
+        (Sub, Type::Number { precision }) => bignum_binop(
+            cg,
+            lhs.into_pointer_value(),
+            rhs.into_pointer_value(),
+            *precision,
+            cg.rt.ynz_bignum_sub,
+            "bnsub",
+        ),
         (Mul, Type::Number { precision }) if *precision <= 34 => decimal_binop(
             cg,
             lhs.into_pointer_value(),
@@ -2976,12 +3011,22 @@ fn lower_binop<'ctx>(
             cg.rt.decimal_mul,
             "dmul",
         ),
-        (Mul, Type::Number { precision }) => {
-            bignum_binop(cg, lhs.into_pointer_value(), rhs.into_pointer_value(), *precision, cg.rt.ynz_bignum_mul, "bnmul")
-        }
-        (Div, Type::Number { precision }) if *precision > 34 => {
-            bignum_binop(cg, lhs.into_pointer_value(), rhs.into_pointer_value(), *precision, cg.rt.ynz_bignum_div, "bndiv")
-        }
+        (Mul, Type::Number { precision }) => bignum_binop(
+            cg,
+            lhs.into_pointer_value(),
+            rhs.into_pointer_value(),
+            *precision,
+            cg.rt.ynz_bignum_mul,
+            "bnmul",
+        ),
+        (Div, Type::Number { precision }) if *precision > 34 => bignum_binop(
+            cg,
+            lhs.into_pointer_value(),
+            rhs.into_pointer_value(),
+            *precision,
+            cg.rt.ynz_bignum_div,
+            "bndiv",
+        ),
         (Div, Type::Number { .. }) => {
             decimal_div(cg, lhs.into_pointer_value(), rhs.into_pointer_value())
         }
@@ -5822,14 +5867,20 @@ fn store<'ctx>(
     slot: PointerValue<'ctx>,
 ) -> Result<(), String> {
     match ty {
-        Type::Number { .. } => {
-            // val is a ptr to i128; load the bits then store into slot
+        Type::Number { precision } if *precision <= 34 => {
+            // Hardware decimal128: val is a ptr to i128; load the bits then store into slot.
             let bits = cg
                 .builder
                 .build_load(cg.i128(), val.into_pointer_value(), "dec_bits")
                 .map_err(|e| format!("{e}"))?;
             cg.builder
                 .build_store(slot, bits)
+                .map_err(|e| format!("{e}"))?;
+        }
+        // M8 P6: bignum (N > 34) — val is a ptr to the string; store the pointer.
+        Type::Number { .. } => {
+            cg.builder
+                .build_store(slot, val)
                 .map_err(|e| format!("{e}"))?;
         }
         // BuiltinArray is a pointer to the heap YnzArray; store the pointer.
@@ -5895,8 +5946,8 @@ fn load<'ctx>(
     name: &str,
 ) -> Result<BasicValueEnum<'ctx>, String> {
     match ty {
-        Type::Number { .. } => {
-            // Load i128 bits from slot, copy into fresh alloca, return ptr
+        Type::Number { precision } if *precision <= 34 => {
+            // Hardware decimal128: load i128 bits from slot, copy into fresh alloca, return ptr.
             let bits = cg
                 .builder
                 .build_load(cg.i128(), slot, "dec_ld")
@@ -5910,6 +5961,11 @@ fn load<'ctx>(
                 .map_err(|e| format!("{e}"))?;
             Ok(tmp.into())
         }
+        // M8 P6: bignum (N > 34) — slot stores a pointer to the decimal string.
+        Type::Number { .. } => cg
+            .builder
+            .build_load(cg.ptr(), slot, name)
+            .map_err(|e| format!("{e}")),
         // Shapes and dynamic values: the slot holds a pointer to the struct data.
         // Load that pointer and return it — the caller gets a ptr to the struct.
         Type::Shape { .. } | Type::Dynamic { .. } => {

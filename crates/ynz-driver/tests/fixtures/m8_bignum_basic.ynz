@@ -1,0 +1,8 @@
+// M8 P6: bignum basic test — number<100> arithmetic.
+// 0.1 + 0.2 must equal exactly 0.3 (not the binary float approximation).
+function entrypoint() -> nothing {
+  let a: number<100> = 0.1
+  let b: number<100> = 0.2
+  let c: number<100> = a + b
+  print(c)
+}

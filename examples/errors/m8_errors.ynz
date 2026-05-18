@@ -63,6 +63,14 @@ function p5_background_handle_rejected() -> nothing {
     // function test() -> nothing { let h = background op() }
 }
 
+// ────── P6: bignum errors ──────
+
+// WHY: number<5000> exceeds the 4096-digit cap. Parser must reject with error.
+function p6_number_over_cap() -> nothing {
+    // Uncomment to trigger (parser rejects above 4096):
+    // let x: number<5000> = 0.0
+}
+
 // ────── P4: sensitive type errors ──────
 
 // WHY: The .reveal() method in a print context should (in future) emit a Tier 3

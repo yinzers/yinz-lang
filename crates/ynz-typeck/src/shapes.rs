@@ -301,8 +301,19 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
                 continue;
             }
             let ty = name_table.resolve_ast_type(&field.ty);
+            // Collect the shape's own type parameter names so the diagnostic
+            // function can skip them (type params resolve to Type::Error in the
+            // shape table but are not unknown types — they're substituted at use site).
+            let type_param_names: Vec<&str> = s.generics.iter().map(|g| g.name.as_str()).collect();
             // Scan the type annotation for unknown named types and emit targeted diagnostics.
-            emit_unknown_field_type_diag(&field.ty, &field.name, &s.name, &name_table, diags);
+            emit_unknown_field_type_diag(
+                &field.ty,
+                &field.name,
+                &s.name,
+                &name_table,
+                &type_param_names,
+                diags,
+            );
             own_fields.push(FieldDef {
                 name: field.name.clone(),
                 ty,
@@ -564,13 +575,25 @@ fn emit_unknown_field_type_diag(
     field_name: &str,
     shape_name: &str,
     name_table: &ShapeTable,
+    type_params: &[&str],
     diags: &mut DiagnosticBucket,
 ) {
     let known = |n: &str| -> bool {
-        matches!(n, "int" | "float" | "number" | "bool" | "string"
-                  | "nothing" | "none" | "range" | "Frame" | "SourceLoc")
-            || name_table.contains(n)
+        matches!(
+            n,
+            "int"
+                | "float"
+                | "number"
+                | "bool"
+                | "string"
+                | "nothing"
+                | "none"
+                | "range"
+                | "Frame"
+                | "SourceLoc"
+        ) || name_table.contains(n)
             || name_table.union_aliases.contains_key(n)
+            || type_params.contains(&n) // type params are not unknown
     };
 
     match ast_ty {
@@ -584,15 +607,36 @@ fn emit_unknown_field_type_diag(
         }
         AstType::Union { variants, .. } => {
             for v in variants {
-                emit_unknown_field_type_diag(v, field_name, shape_name, name_table, diags);
+                emit_unknown_field_type_diag(
+                    v,
+                    field_name,
+                    shape_name,
+                    name_table,
+                    type_params,
+                    diags,
+                );
             }
         }
         AstType::Maybe { inner, .. } => {
-            emit_unknown_field_type_diag(inner, field_name, shape_name, name_table, diags);
+            emit_unknown_field_type_diag(
+                inner,
+                field_name,
+                shape_name,
+                name_table,
+                type_params,
+                diags,
+            );
         }
         AstType::Generic { args, .. } => {
             for a in args {
-                emit_unknown_field_type_diag(a, field_name, shape_name, name_table, diags);
+                emit_unknown_field_type_diag(
+                    a,
+                    field_name,
+                    shape_name,
+                    name_table,
+                    type_params,
+                    diags,
+                );
             }
         }
         _ => {}

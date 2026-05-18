@@ -220,7 +220,11 @@ fn m8_bignum_number100_runs() {
     // The fixture (m2_bignum_deferral.ynz) contains `let x: number<100> = 1.0; print(x)`.
     let (stdout, _stderr, code) = ynz_run_stdout(&fixture("m2_bignum_deferral.ynz"));
     assert_eq!(code, 0, "number<100> must compile and run in M8");
-    assert!(!stdout.is_empty(), "number<100> print must produce output");
+    assert_eq!(
+        stdout.trim(),
+        "1.0",
+        "number<100> literal 1.0 must print 1.0"
+    );
 }
 
 #[test]
@@ -1229,4 +1233,19 @@ fn m8_background_runs_sequentially() {
         stdout, "side effect ran\nafter background\n",
         "background must run before the subsequent print"
     );
+}
+
+// ── M8 P6: bignum — number<N> for N > 34 ─────────────────────────────────────
+// (m8_bignum_number100_runs above covers the literal print case)
+
+#[test]
+fn m8_bignum_point1_plus_point2_equals_point3() {
+    // WHY: 0.1 + 0.2 = 0.3 with exact decimal arithmetic — the classic binary-float
+    // trap. If bignum uses binary-float internally, this would produce 0.30000...
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m8_bignum_basic.ynz"));
+    assert_eq!(
+        code, 0,
+        "bignum add must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(stdout.trim(), "0.3", "0.1 + 0.2 must equal exactly 0.3");
 }

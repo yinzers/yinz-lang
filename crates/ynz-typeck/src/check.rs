@@ -914,7 +914,9 @@ impl<'b> Checker<'b> {
             Expr::NumberLit(_, _) => match hint {
                 Some(Type::Float) => Type::Float,
                 // M8 P6: use the annotated precision when a number annotation is present.
-                Some(Type::Number { precision }) => Type::Number { precision: *precision },
+                Some(Type::Number { precision }) => Type::Number {
+                    precision: *precision,
+                },
                 _ => Type::Number { precision: 34 },
             },
 
@@ -1493,9 +1495,9 @@ impl<'b> Checker<'b> {
                 (Type::Int, Type::Int) => Type::Int,
                 (Type::Float, Type::Float) => Type::Float,
                 // M8 P6: mixed-precision promotion — result precision = max(lhs, rhs).
-                (Type::Number { precision: pa }, Type::Number { precision: pb }) => {
-                    Type::Number { precision: (*pa).max(*pb) }
-                }
+                (Type::Number { precision: pa }, Type::Number { precision: pb }) => Type::Number {
+                    precision: (*pa).max(*pb),
+                },
                 _ => {
                     self.emit_binop_mismatch(op, lhs, rhs, span);
                     Type::Error
@@ -2650,25 +2652,23 @@ impl<'b> Checker<'b> {
         hint: Option<&Type>,
         span: &SourceSpan,
     ) -> Type {
-        // M5 P3c: handle `let m: map<K,V> = { }` — empty struct lit with BuiltinMap annotation.
-        // Non-empty struct lits with identifier keys are errors (should be MapLit with string keys).
+        // When the hint is a map, accept identifier-key syntax — treat field names as string keys.
+        // `{ name: value }` works the same as `{ "name": value }` when the type context says map.
+        // Quoted keys remain valid too; this just removes the friction of requiring them.
         if let Some(Type::BuiltinMap { key, val }) = hint {
-            if fields.is_empty() {
-                return Type::BuiltinMap {
-                    key: key.clone(),
-                    val: val.clone(),
-                };
-            }
-            self.diags.push(Diagnostic::error(
-                span.clone(),
-                "Map literals use string or integer keys, not field names.",
-                "Write `{ \"key\": value }` instead of `{ key: value }` for map literals.",
-                "Shape values use identifier field names. Map literals use string or integer literal keys.",
-            ));
+            let val = val.as_ref().clone();
             for f in fields {
-                self.infer_expr(&f.value, None);
+                let actual = self.infer_expr(&f.value, Some(&val));
+                if actual != Type::Error && val != Type::Error && actual != val {
+                    self.diags.push(Diagnostic::error(
+                        f.value.span().clone(),
+                        format!("Map value for key `{}` is `{}`, but this map holds `{}`.", f.name, type_name(&actual), type_name(&val)),
+                        format!("Pass a `{}` value.", type_name(&val)),
+                        "All values in a map must be the same type.",
+                    ));
+                }
             }
-            return Type::Error;
+            return Type::BuiltinMap { key: key.clone(), val: Box::new(val) };
         }
 
         let shape_name = match hint {
