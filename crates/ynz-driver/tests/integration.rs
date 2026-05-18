@@ -878,3 +878,39 @@ fn m7_errors_int_return_type() {
     assert_eq!(code, 0, "m7_errors_int must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "42\n");
 }
+
+
+// ── M7 P4b: string runtime + codegen integration tests ───────────────────────
+
+#[test]
+fn m7_string_methods_tolower_toupper_split() {
+    // WHY: M7 P4b acceptance criterion. toLowerCase, toUpperCase, and split must all
+    // emit correct runtime calls. If any of the three string method runtime functions
+    // (ynz_string_to_lower, ynz_string_to_upper, ynz_string_split + ynz_array_count)
+    // have a codegen or ABI bug, the output will differ.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_string_methods.ynz"));
+    assert_eq!(code, 0, "m7_string_methods must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "hello, world!\nHELLO, WORLD!\n2\n");
+}
+
+#[test]
+fn m7_string_interpolation_with_expressions() {
+    // WHY: M7 P4b acceptance criterion. String interpolation with ${expr} parts must
+    // use the ynz_string_builder_* runtime sequence (new, N×append, finalize).
+    // If the builder codegen is wrong, the output will be missing segments, garbled,
+    // or segfault. The expected output has literal text and two interpolated values.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_string_interpolation.ynz"));
+    assert_eq!(code, 0, "m7_string_interpolation must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "Hello Alice, your score is 42!\n");
+}
+
+#[test]
+fn m7_nfc_equality_same_bytes() {
+    // WHY: M7 P4b / M3 catch-up. ynz_string_eq must use NFC normalization.
+    // For same-bytes ASCII strings (the fast path), equality must hold.
+    // If ynz_string_eq is not called at all (e.g., if == falls through to a missing
+    // codegen path), the program would either crash or skip the branch.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_nfc_equality.ynz"));
+    assert_eq!(code, 0, "m7_nfc_equality must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "equal\n");
+}

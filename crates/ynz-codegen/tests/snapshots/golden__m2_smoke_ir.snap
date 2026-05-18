@@ -113,6 +113,50 @@ declare ptr @ynz_error_message(ptr)
 
 declare void @ynz_unhandled_error(ptr)
 
+declare i32 @ynz_string_validate_utf8(ptr, i64)
+
+declare ptr @ynz_string_concat(ptr, ptr)
+
+declare i64 @ynz_string_count(ptr)
+
+declare i64 @ynz_string_byte_count(ptr)
+
+declare ptr @ynz_string_codepoint_at(ptr, i64)
+
+declare i64 @ynz_string_byte_at(ptr, i64)
+
+declare i32 @ynz_string_contains(ptr, ptr)
+
+declare i64 @ynz_string_index_of(ptr, ptr)
+
+declare i32 @ynz_string_starts_with(ptr, ptr)
+
+declare i32 @ynz_string_ends_with(ptr, ptr)
+
+declare ptr @ynz_string_to_upper(ptr)
+
+declare ptr @ynz_string_to_lower(ptr)
+
+declare ptr @ynz_string_substring(ptr, i64, i64)
+
+declare ptr @ynz_string_trim(ptr)
+
+declare i64 @ynz_string_grapheme_count(ptr)
+
+declare ptr @ynz_string_grapheme_at(ptr, i64)
+
+declare ptr @ynz_string_split(ptr, ptr)
+
+declare ptr @ynz_string_replace(ptr, ptr, ptr)
+
+declare ptr @ynz_string_builder_new()
+
+declare void @ynz_string_builder_append(ptr, ptr)
+
+declare ptr @ynz_string_builder_finalize(ptr)
+
+declare void @ynz_string_builder_drop(ptr)
+
 define i32 @main() {
 entry:
   call void @ynz_siphash_init()

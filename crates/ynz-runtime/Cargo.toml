@@ -14,3 +14,8 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 ynz-numerics = { workspace = true }
+simdutf8 = "=0.1.4"
+unicode-normalization = "=0.1.24"
+memchr = "=2.7.4"
+unicase = "=2.7.0"
+unicode-segmentation = { workspace = true }

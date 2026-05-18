@@ -1558,6 +1558,10 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     let inner = inner.as_ref().clone();
                     lower_errors_capable_method(cg, recv_val, &inner, method, args)
                 }
+                // M7 P4b: string methods — dispatched through the string runtime.
+                Type::String => {
+                    lower_string_method(cg, recv_val.into_pointer_value(), method, args)
+                }
                 _ => {
                     // M4 P5: one-arg primitive intrinsics (wrapping/saturating arithmetic).
                     if args.len() == 1 && is_1arg_intrinsic(&recv_ty, method) {
@@ -1793,10 +1797,14 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         // M6: `x is Foo` — P4 implements; typeck would have rejected programs with unimplemented forms.
         Expr::Is { .. } => Err("codegen: Expr::Is not yet lowered (P4 work)".to_string()),
 
-        // M7 P1: interpolated strings — full codegen lowering arrives in M7 P2.
-        // For a plain backtick string (no interpolations), emit the literal bytes
-        // as a null-terminated global string constant (same as the old StringLit path).
-        // Strings with interpolations are deferred to P2.
+        // M7 P4b: interpolated string codegen.
+        //
+        // Pure-literal backtick strings (no `${}` parts): emit as a null-terminated
+        // global byte array (same as the prior M7 P1 path).
+        //
+        // Strings with `${}` expressions: use the string builder API. Each part is
+        // appended in sequence; the builder is finalized to a single heap string.
+        // One allocation per interpolated string expression, regardless of part count.
         Expr::InterpolatedString(parts, _) => {
             let is_pure_lit = parts.iter().all(|p| matches!(p, ynz_ast::nodes::StringPart::Lit(_, _)));
             if is_pure_lit {
@@ -1815,7 +1823,51 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                 g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
                 Ok(g.as_pointer_value().into())
             } else {
-                Err("codegen: interpolated strings with expressions arrive in M7 P2".to_string())
+                // Interpolated string: build via ynz_string_builder_*.
+                let builder = cg.builder
+                    .build_call(cg.rt.ynz_string_builder_new, &[], "istr_bld")
+                    .map_err(|e| format!("{e}"))?
+                    .try_as_basic_value().basic()
+                    .ok_or("ynz_string_builder_new void")?
+                    .into_pointer_value();
+
+                for part in parts.iter() {
+                    match part {
+                        ynz_ast::nodes::StringPart::Lit(bytes, _) => {
+                            // Emit the literal bytes as a global and append.
+                            let mut b = bytes.clone();
+                            b.push(0);
+                            let i8t = cg.i8();
+                            let arr_ty = i8t.array_type(b.len() as u32);
+                            let arr = i8t.const_array(&b.iter().map(|&x| i8t.const_int(x as u64, false)).collect::<Vec<_>>());
+                            let g = cg.module.add_global(arr_ty, Some(AddressSpace::default()), "istr_lit");
+                            g.set_initializer(&arr);
+                            g.set_constant(true);
+                            g.set_linkage(inkwell::module::Linkage::Private);
+                            g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
+                            cg.builder.build_call(cg.rt.ynz_string_builder_append,
+                                &[builder.into(), g.as_pointer_value().into()], "")
+                                .map_err(|e| format!("{e}"))?;
+                        }
+                        ynz_ast::nodes::StringPart::Expr(sub_expr, _) => {
+                            // Evaluate the expression and convert to string via toString().
+                            let val = lower_expr(cg, sub_expr)?;
+                            let sub_ty = cg.expr_type(sub_expr);
+                            // Produce a null-terminated string from the expression value.
+                            let s_ptr = expr_to_cstring(cg, val, &sub_ty)?;
+                            cg.builder.build_call(cg.rt.ynz_string_builder_append,
+                                &[builder.into(), s_ptr.into()], "")
+                                .map_err(|e| format!("{e}"))?;
+                        }
+                    }
+                }
+
+                let result = cg.builder
+                    .build_call(cg.rt.ynz_string_builder_finalize, &[builder.into()], "istr_fin")
+                    .map_err(|e| format!("{e}"))?
+                    .try_as_basic_value().basic()
+                    .ok_or("ynz_string_builder_finalize void")?;
+                Ok(result)
             }
         }
     }
@@ -1885,6 +1937,24 @@ fn lower_binop<'ctx>(
         // M6: options equality — `icmp eq i8`
         (EqEq, Type::Options { .. }) => icmp(cg, IntPredicate::EQ, lhs, rhs, "oeq"),
         (NotEq,Type::Options { .. }) => icmp(cg, IntPredicate::NE, lhs, rhs, "one"),
+
+        // M7 P4b: string equality/inequality via ynz_string_eq (NFC normalized).
+        (EqEq, Type::String) => {
+            let call = cg.builder.build_call(cg.rt.string_eq, &[lhs.into(), rhs.into()], "s_eq")
+                .map_err(|e| format!("{e}"))?;
+            let r = call.try_as_basic_value().basic().ok_or("string_eq void")?.into_int_value();
+            // ynz_string_eq returns i32; convert to i1 for bool.
+            cg.builder.build_int_compare(IntPredicate::NE, r, cg.i32().const_int(0, false), "s_eq_b")
+                .map(|v| v.into()).map_err(|e| format!("{e}"))
+        }
+        (NotEq, Type::String) => {
+            let call = cg.builder.build_call(cg.rt.string_eq, &[lhs.into(), rhs.into()], "s_ne")
+                .map_err(|e| format!("{e}"))?;
+            let r = call.try_as_basic_value().basic().ok_or("string_eq void")?.into_int_value();
+            // Invert: EQ → 0 means not-equal.
+            cg.builder.build_int_compare(IntPredicate::EQ, r, cg.i32().const_int(0, false), "s_ne_b")
+                .map(|v| v.into()).map_err(|e| format!("{e}"))
+        }
 
         (BitAnd, Type::Int) => cg.builder.build_and(lhs.into_int_value(),  rhs.into_int_value(), "band").map(|v| v.into()).map_err(|e| format!("{e}")),
         (BitOr,  Type::Int) => cg.builder.build_or( lhs.into_int_value(),  rhs.into_int_value(), "bor" ).map(|v| v.into()).map_err(|e| format!("{e}")),
@@ -2098,6 +2168,24 @@ fn to_c_string<'ctx>(cg: &mut Cg<'ctx, '_>, val: BasicValueEnum<'ctx>, ty: &Type
             Ok(c.try_as_basic_value().basic().ok_or("decimal_to_string returned void")?.into_pointer_value())
         }
         _ => Err(format!("codegen: cannot convert {:?} to string", ty)),
+    }
+}
+
+
+/// Convert any Yinz value to a null-terminated C string pointer for interpolation.
+///
+/// Delegates to `to_c_string` for the types it knows. For Options types, emits a call
+/// to the options toString runtime helper. For all other types, defers to `to_c_string`.
+fn expr_to_cstring<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+) -> Result<inkwell::values::PointerValue<'ctx>, String> {
+    match ty {
+        Type::Options { name } => {
+            lower_options_to_string(cg, val, name).map(|v| v.into_pointer_value())
+        }
+        _ => to_c_string(cg, val, ty),
     }
 }
 
@@ -3142,6 +3230,199 @@ fn lower_string_to_maybe_primitive<'ctx>(
 
     Ok(slot.into())
 }
+
+// ── String method dispatch (M7 P4b) ──────────────────────────────────────────
+
+fn lower_string_method<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    s_ptr: inkwell::values::PointerValue<'ctx>,
+    method: &str,
+    args: &[ynz_ast::nodes::Expr],
+) -> Result<BasicValueEnum<'ctx>, String> {
+    match method {
+        // Zero-arg methods returning a string.
+        "toUpperCase" => {
+            let r = cg.builder.build_call(cg.rt.ynz_string_to_upper, &[s_ptr.into()], "s_upper")
+                .map_err(|e| format!("{e}"))?;
+            Ok(r.try_as_basic_value().basic().ok_or("ynz_string_to_upper void")?)
+        }
+        "toLowerCase" => {
+            let r = cg.builder.build_call(cg.rt.ynz_string_to_lower, &[s_ptr.into()], "s_lower")
+                .map_err(|e| format!("{e}"))?;
+            Ok(r.try_as_basic_value().basic().ok_or("ynz_string_to_lower void")?)
+        }
+        "trim" => {
+            let r = cg.builder.build_call(cg.rt.ynz_string_trim, &[s_ptr.into()], "s_trim")
+                .map_err(|e| format!("{e}"))?;
+            Ok(r.try_as_basic_value().basic().ok_or("ynz_string_trim void")?)
+        }
+        // Zero-arg methods returning int.
+        "count" => {
+            let r = cg.builder.build_call(cg.rt.ynz_string_count, &[s_ptr.into()], "s_count")
+                .map_err(|e| format!("{e}"))?;
+            Ok(r.try_as_basic_value().basic().ok_or("ynz_string_count void")?)
+        }
+        "byteCount" => {
+            let r = cg.builder.build_call(cg.rt.ynz_string_byte_count, &[s_ptr.into()], "s_bcount")
+                .map_err(|e| format!("{e}"))?;
+            Ok(r.try_as_basic_value().basic().ok_or("ynz_string_byte_count void")?)
+        }
+        "graphemeCount" => {
+            let r = cg.builder.build_call(cg.rt.ynz_string_grapheme_count, &[s_ptr.into()], "s_gcount")
+                .map_err(|e| format!("{e}"))?;
+            Ok(r.try_as_basic_value().basic().ok_or("ynz_string_grapheme_count void")?)
+        }
+        // One-arg predicate methods returning bool.
+        "contains" => {
+            let arg_ptr = lower_expr(cg, &args[0])?.into_pointer_value();
+            let r = cg.builder.build_call(cg.rt.ynz_string_contains, &[s_ptr.into(), arg_ptr.into()], "s_contains")
+                .map_err(|e| format!("{e}"))?
+                .try_as_basic_value().basic().ok_or("ynz_string_contains void")?.into_int_value();
+            // Convert i32 → i1 (bool).
+            let b = cg.builder.build_int_truncate(r, cg.bool(), "s_contains_b").map_err(|e| format!("{e}"))?;
+            Ok(b.into())
+        }
+        "startsWith" => {
+            let arg_ptr = lower_expr(cg, &args[0])?.into_pointer_value();
+            let r = cg.builder.build_call(cg.rt.ynz_string_starts_with, &[s_ptr.into(), arg_ptr.into()], "s_sw")
+                .map_err(|e| format!("{e}"))?
+                .try_as_basic_value().basic().ok_or("ynz_string_starts_with void")?.into_int_value();
+            let b = cg.builder.build_int_truncate(r, cg.bool(), "s_sw_b").map_err(|e| format!("{e}"))?;
+            Ok(b.into())
+        }
+        "endsWith" => {
+            let arg_ptr = lower_expr(cg, &args[0])?.into_pointer_value();
+            let r = cg.builder.build_call(cg.rt.ynz_string_ends_with, &[s_ptr.into(), arg_ptr.into()], "s_ew")
+                .map_err(|e| format!("{e}"))?
+                .try_as_basic_value().basic().ok_or("ynz_string_ends_with void")?.into_int_value();
+            let b = cg.builder.build_int_truncate(r, cg.bool(), "s_ew_b").map_err(|e| format!("{e}"))?;
+            Ok(b.into())
+        }
+        // One-arg indexed access returning maybe<string>.
+        "get" | "graphemeAt" => {
+            let idx = lower_expr(cg, &args[0])?.into_int_value();
+            let raw_ptr = if method == "graphemeAt" {
+                cg.builder.build_call(cg.rt.ynz_string_grapheme_at, &[s_ptr.into(), idx.into()], "s_gat")
+                    .map_err(|e| format!("{e}"))?
+                    .try_as_basic_value().basic().ok_or("ynz_string_grapheme_at void")?
+                    .into_pointer_value()
+            } else {
+                cg.builder.build_call(cg.rt.ynz_string_codepoint_at, &[s_ptr.into(), idx.into()], "s_cpat")
+                    .map_err(|e| format!("{e}"))?
+                    .try_as_basic_value().basic().ok_or("ynz_string_codepoint_at void")?
+                    .into_pointer_value()
+            };
+            // Null pointer → none (tag=0); non-null → some (tag=1, value=ptr as i64).
+            let result_slot = cg.builder.build_alloca(cg.maybe_type(), "s_get_res").map_err(|e| format!("{e}"))?;
+            let is_null = cg.builder.build_is_null(raw_ptr, "is_null").map_err(|e| format!("{e}"))?;
+            let some_bb = cg.append_block("s_get_some");
+            let none_bb = cg.append_block("s_get_none");
+            let done_bb = cg.append_block("s_get_done");
+            cg.builder.build_conditional_branch(is_null, none_bb, some_bb).map_err(|e| format!("{e}"))?;
+            cg.builder.position_at_end(none_bb);
+            let tag_ptr = cg.builder.build_struct_gep(cg.maybe_type(), result_slot, 0, "s_tag_n").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(tag_ptr, cg.i64().const_zero()).map_err(|e| format!("{e}"))?;
+            cg.builder.build_unconditional_branch(done_bb).map_err(|e| format!("{e}"))?;
+            cg.builder.position_at_end(some_bb);
+            let tag_ptr2 = cg.builder.build_struct_gep(cg.maybe_type(), result_slot, 0, "s_tag_s").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(tag_ptr2, cg.i64().const_int(1, false)).map_err(|e| format!("{e}"))?;
+            let val_ptr = cg.builder.build_struct_gep(cg.maybe_type(), result_slot, 1, "s_val").map_err(|e| format!("{e}"))?;
+            let ptr_as_i64 = cg.builder.build_ptr_to_int(raw_ptr, cg.i64(), "ptr_i64").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(val_ptr, ptr_as_i64).map_err(|e| format!("{e}"))?;
+            cg.builder.build_unconditional_branch(done_bb).map_err(|e| format!("{e}"))?;
+            cg.builder.position_at_end(done_bb);
+            Ok(result_slot.into())
+        }
+        // One-arg: byteAt returns maybe<int>.
+        "byteAt" => {
+            let idx = lower_expr(cg, &args[0])?.into_int_value();
+            let raw = cg.builder.build_call(cg.rt.ynz_string_byte_at, &[s_ptr.into(), idx.into()], "s_bat")
+                .map_err(|e| format!("{e}"))?
+                .try_as_basic_value().basic().ok_or("ynz_string_byte_at void")?
+                .into_int_value();
+            // -1 means OOB → none; else → some(value).
+            let result_slot = cg.builder.build_alloca(cg.maybe_type(), "s_bat_res").map_err(|e| format!("{e}"))?;
+            let minus_one = cg.i64().const_int(u64::MAX, true); // -1 as i64
+            let is_oob = cg.builder.build_int_compare(inkwell::IntPredicate::EQ, raw, minus_one, "bat_oob")
+                .map_err(|e| format!("{e}"))?;
+            let some_bb = cg.append_block("bat_some");
+            let none_bb = cg.append_block("bat_none");
+            let done_bb = cg.append_block("bat_done");
+            cg.builder.build_conditional_branch(is_oob, none_bb, some_bb).map_err(|e| format!("{e}"))?;
+            cg.builder.position_at_end(none_bb);
+            let tp_n = cg.builder.build_struct_gep(cg.maybe_type(), result_slot, 0, "bat_tn").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(tp_n, cg.i64().const_zero()).map_err(|e| format!("{e}"))?;
+            cg.builder.build_unconditional_branch(done_bb).map_err(|e| format!("{e}"))?;
+            cg.builder.position_at_end(some_bb);
+            let tp_s = cg.builder.build_struct_gep(cg.maybe_type(), result_slot, 0, "bat_ts").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(tp_s, cg.i64().const_int(1, false)).map_err(|e| format!("{e}"))?;
+            let vp = cg.builder.build_struct_gep(cg.maybe_type(), result_slot, 1, "bat_v").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(vp, raw).map_err(|e| format!("{e}"))?;
+            cg.builder.build_unconditional_branch(done_bb).map_err(|e| format!("{e}"))?;
+            cg.builder.position_at_end(done_bb);
+            Ok(result_slot.into())
+        }
+        // One-arg: indexOf returns maybe<int>.
+        "indexOf" => {
+            let arg_ptr = lower_expr(cg, &args[0])?.into_pointer_value();
+            let raw = cg.builder.build_call(cg.rt.ynz_string_index_of, &[s_ptr.into(), arg_ptr.into()], "s_iof")
+                .map_err(|e| format!("{e}"))?
+                .try_as_basic_value().basic().ok_or("ynz_string_index_of void")?
+                .into_int_value();
+            let result_slot = cg.builder.build_alloca(cg.maybe_type(), "s_iof_res").map_err(|e| format!("{e}"))?;
+            let minus_one = cg.i64().const_int(u64::MAX, true);
+            let is_missing = cg.builder.build_int_compare(inkwell::IntPredicate::EQ, raw, minus_one, "iof_miss")
+                .map_err(|e| format!("{e}"))?;
+            let some_bb = cg.append_block("iof_some");
+            let none_bb = cg.append_block("iof_none");
+            let done_bb = cg.append_block("iof_done");
+            cg.builder.build_conditional_branch(is_missing, none_bb, some_bb).map_err(|e| format!("{e}"))?;
+            cg.builder.position_at_end(none_bb);
+            let tp_n = cg.builder.build_struct_gep(cg.maybe_type(), result_slot, 0, "iof_tn").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(tp_n, cg.i64().const_zero()).map_err(|e| format!("{e}"))?;
+            cg.builder.build_unconditional_branch(done_bb).map_err(|e| format!("{e}"))?;
+            cg.builder.position_at_end(some_bb);
+            let tp_s = cg.builder.build_struct_gep(cg.maybe_type(), result_slot, 0, "iof_ts").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(tp_s, cg.i64().const_int(1, false)).map_err(|e| format!("{e}"))?;
+            let vp = cg.builder.build_struct_gep(cg.maybe_type(), result_slot, 1, "iof_v").map_err(|e| format!("{e}"))?;
+            cg.builder.build_store(vp, raw).map_err(|e| format!("{e}"))?;
+            cg.builder.build_unconditional_branch(done_bb).map_err(|e| format!("{e}"))?;
+            cg.builder.position_at_end(done_bb);
+            Ok(result_slot.into())
+        }
+        // Two-arg: substring(start: int, end: int) → string.
+        "substring" => {
+            let start = lower_expr(cg, &args[0])?.into_int_value();
+            let end   = lower_expr(cg, &args[1])?.into_int_value();
+            let r = cg.builder.build_call(cg.rt.ynz_string_substring, &[s_ptr.into(), start.into(), end.into()], "s_sub")
+                .map_err(|e| format!("{e}"))?;
+            Ok(r.try_as_basic_value().basic().ok_or("ynz_string_substring void")?)
+        }
+        // One-arg: split(sep: string) → array<string>.
+        "split" => {
+            let sep_ptr = lower_expr(cg, &args[0])?.into_pointer_value();
+            let r = cg.builder.build_call(cg.rt.ynz_string_split, &[s_ptr.into(), sep_ptr.into()], "s_split")
+                .map_err(|e| format!("{e}"))?;
+            Ok(r.try_as_basic_value().basic().ok_or("ynz_string_split void")?)
+        }
+        // Two-arg: replace(from: string, to: string) → string.
+        "replace" => {
+            let from_ptr = lower_expr(cg, &args[0])?.into_pointer_value();
+            let to_ptr   = lower_expr(cg, &args[1])?.into_pointer_value();
+            let r = cg.builder.build_call(cg.rt.ynz_string_replace, &[s_ptr.into(), from_ptr.into(), to_ptr.into()], "s_rep")
+                .map_err(|e| format!("{e}"))?;
+            Ok(r.try_as_basic_value().basic().ok_or("ynz_string_replace void")?)
+        }
+        // toString() on string is identity.
+        "toString" => Ok(s_ptr.into()),
+        // Fallible conversions — forwarded to lower_method_call.
+        "toInt" => lower_string_to_int(cg, s_ptr),
+        "toFloat" => lower_string_to_float(cg, s_ptr),
+        "toNumber" => lower_string_to_number(cg, s_ptr),
+        other => Err(format!("codegen: unknown string method `{other}`")),
+    }
+}
+
 
 fn lower_method_call<'ctx>(
     cg: &mut Cg<'ctx, '_>,

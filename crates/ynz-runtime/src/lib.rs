@@ -14,6 +14,7 @@
 /// on the same thread.  This is safe for M2's single-threaded programs; it is NOT
 /// safe for multi-threaded use.  A comment at each function marks this limitation.
 use ynz_numerics::{abs, add, compare, div, format, mul, neg, parse, sub};
+use unicode_normalization::UnicodeNormalization;
 
 
 /// Raw decimal128 storage: 16 bytes = 128 bits, BID encoding.
@@ -187,31 +188,31 @@ pub extern "C" fn ynz_float_to_string(x: f64) -> *const u8 {
 }
 
 
-/// Compare two null-terminated UTF-8 strings for byte equality.
+/// Compare two null-terminated UTF-8 strings for NFC canonical equivalence.
 ///
-/// Returns 1 if identical, 0 otherwise. Used by codegen for multi-case `if`
-/// on string scrutinees.
+/// Returns 1 if NFC-normalized forms are equal, 0 otherwise. Used by codegen for
+/// multi-case `if` on string scrutinees and `==` on strings.
 ///
-/// NFC normalization for Unicode canonical equivalence is targeted for M7 P4b
-/// (string codegen). Current programs only produce NFC strings from source
-/// literals, so byte-equality is correct. P4b will swap this for NFC comparison.
+/// Fast path: pointer equality or ASCII-only inputs (ASCII is always NFC). Slow path:
+/// normalize both to NFC then compare — closes the M3 catch-up obligation for Unicode
+/// canonical equivalence (e.g., precomposed `é` == decomposed `e` + combining accent).
 ///
 /// # Safety
 ///
 /// Both `a` and `b` must be valid pointers to null-terminated C strings.
-/// Dereferencing either before the null byte is undefined behavior if the
-/// pointer is invalid or not null-terminated.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_eq(a: *const u8, b: *const u8) -> i32 {
-    // SAFETY: caller guarantees both pointers are valid null-terminated C strings.
-    let mut i = 0;
-    loop {
-        let ca = *a.add(i);
-        let cb = *b.add(i);
-        if ca != cb { return 0; }
-        if ca == 0 { return 1; }
-        i += 1;
+    if a == b { return 1; }
+    let a_str = unsafe { std::ffi::CStr::from_ptr(a as *const i8) }.to_str().unwrap_or("");
+    let b_str = unsafe { std::ffi::CStr::from_ptr(b as *const i8) }.to_str().unwrap_or("");
+    // Fast path: ASCII-only strings are always NFC; byte comparison is sufficient.
+    if a_str.is_ascii() && b_str.is_ascii() {
+        return (a_str == b_str) as i32;
     }
+    // Slow path: normalize both strings to NFC then compare.
+    let a_nfc: String = a_str.nfc().collect();
+    let b_nfc: String = b_str.nfc().collect();
+    (a_nfc == b_nfc) as i32
 }
 
 unsafe fn cstr_to_str<'a>(p: *const u8) -> &'a str {
@@ -978,6 +979,358 @@ fn is_valid_number_str(bytes: &[u8]) -> bool {
 }
 
 
+// ── M7 P4b: string runtime — UTF-8 validation, methods, builder ──────────────
+//
+// All string functions operate on null-terminated UTF-8 C strings (`*const u8`).
+// Functions that return new strings allocate on the heap via `malloc`; callers are
+// responsible for freeing the returned pointer (though in practice, short-lived string
+// results are consumed by `puts` or another call and the pointer is dropped).
+// The SSO 24-byte struct layout is a v0.2 optimization; M7 uses null-terminated UTF-8
+// everywhere as the ABI wire format.
+
+/// Validate that `len` bytes starting at `ptr` are valid UTF-8.
+///
+/// Uses SIMD-accelerated validation via the `simdutf8` crate on supported architectures,
+/// with a scalar fallback on unsupported targets.
+///
+/// Returns 1 if valid UTF-8, 0 otherwise.
+///
+/// # Safety
+/// `ptr` must be valid for `len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_validate_utf8(ptr: *const u8, len: usize) -> i32 {
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    (simdutf8::basic::from_utf8(bytes).is_ok()) as i32
+}
+
+/// Concatenate two null-terminated strings, returning a new heap-allocated null-terminated string.
+///
+/// # Safety
+/// Both `a` and `b` must be valid pointers to null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_concat(a: *const u8, b: *const u8) -> *const u8 {
+    let a_str = unsafe { std::ffi::CStr::from_ptr(a as *const i8) }.to_bytes();
+    let b_str = unsafe { std::ffi::CStr::from_ptr(b as *const i8) }.to_bytes();
+    let total = a_str.len() + b_str.len() + 1;
+    let buf = malloc(total) as *mut u8;
+    if buf.is_null() { return b"\0".as_ptr(); }
+    std::ptr::copy_nonoverlapping(a_str.as_ptr(), buf, a_str.len());
+    std::ptr::copy_nonoverlapping(b_str.as_ptr(), buf.add(a_str.len()), b_str.len());
+    *buf.add(a_str.len() + b_str.len()) = 0;
+    buf as *const u8
+}
+
+/// Count Unicode code points in a null-terminated UTF-8 string.
+///
+/// # Safety
+/// `s` must be a valid pointer to a null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_count(s: *const u8) -> i64 {
+    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_str().unwrap_or("");
+    s_str.chars().count() as i64
+}
+
+/// Return the byte length (strlen) of a null-terminated string.
+///
+/// # Safety
+/// `s` must be a valid pointer to a null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_byte_count(s: *const u8) -> i64 {
+    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_bytes();
+    s_str.len() as i64
+}
+
+/// Return the Unicode code point at index `n` (0-based) as a new null-terminated string.
+///
+/// Returns null if `n` is out of bounds.
+///
+/// # Safety
+/// `s` must be a valid pointer to a null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_codepoint_at(s: *const u8, n: i64) -> *const u8 {
+    if n < 0 { return std::ptr::null(); }
+    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_str().unwrap_or("");
+    match s_str.chars().nth(n as usize) {
+        None => std::ptr::null(),
+        Some(ch) => {
+            let mut buf = [0u8; 5];
+            let encoded = ch.encode_utf8(&mut buf[..4]);
+            let len = encoded.len();
+            let heap = malloc(len + 1) as *mut u8;
+            if heap.is_null() { return std::ptr::null(); }
+            std::ptr::copy_nonoverlapping(encoded.as_ptr(), heap, len);
+            *heap.add(len) = 0;
+            heap as *const u8
+        }
+    }
+}
+
+/// Return the byte value at index `n` (0-based), or -1 if out of bounds.
+///
+/// # Safety
+/// `s` must be a valid pointer to a null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_byte_at(s: *const u8, n: i64) -> i64 {
+    if n < 0 { return -1; }
+    let s_bytes = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_bytes();
+    match s_bytes.get(n as usize) {
+        Some(&b) => b as i64,
+        None => -1,
+    }
+}
+
+/// Test whether `s` contains `substr` as a substring.
+///
+/// Uses SIMD-accelerated search via the `memchr` crate's `memmem::find`.
+///
+/// Returns 1 if found, 0 otherwise.
+///
+/// # Safety
+/// Both pointers must be valid null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_contains(s: *const u8, substr: *const u8) -> i32 {
+    let haystack = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_bytes();
+    let needle   = unsafe { std::ffi::CStr::from_ptr(substr as *const i8) }.to_bytes();
+    if needle.is_empty() { return 1; }
+    (memchr::memmem::find(haystack, needle).is_some()) as i32
+}
+
+/// Return the byte offset of the first occurrence of `substr` in `s`, or -1 if not found.
+///
+/// # Safety
+/// Both pointers must be valid null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_index_of(s: *const u8, substr: *const u8) -> i64 {
+    let haystack = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_bytes();
+    let needle   = unsafe { std::ffi::CStr::from_ptr(substr as *const i8) }.to_bytes();
+    if needle.is_empty() { return 0; }
+    match memchr::memmem::find(haystack, needle) {
+        Some(offset) => offset as i64,
+        None => -1,
+    }
+}
+
+/// Test whether `s` starts with `prefix`.
+///
+/// Returns 1 if true, 0 otherwise.
+///
+/// # Safety
+/// Both pointers must be valid null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_starts_with(s: *const u8, prefix: *const u8) -> i32 {
+    let s_bytes = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_bytes();
+    let p_bytes = unsafe { std::ffi::CStr::from_ptr(prefix as *const i8) }.to_bytes();
+    s_bytes.starts_with(p_bytes) as i32
+}
+
+/// Test whether `s` ends with `suffix`.
+///
+/// Returns 1 if true, 0 otherwise.
+///
+/// # Safety
+/// Both pointers must be valid null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_ends_with(s: *const u8, suffix: *const u8) -> i32 {
+    let s_bytes = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_bytes();
+    let sfx_bytes = unsafe { std::ffi::CStr::from_ptr(suffix as *const i8) }.to_bytes();
+    s_bytes.ends_with(sfx_bytes) as i32
+}
+
+/// Convert a null-terminated UTF-8 string to uppercase using locale-invariant Unicode rules.
+///
+/// Returns a new heap-allocated null-terminated string.
+///
+/// # Safety
+/// `s` must be a valid pointer to a null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_to_upper(s: *const u8) -> *const u8 {
+    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_str().unwrap_or("");
+    // unicase::UniCase provides locale-invariant case conversion; we use the standard
+    // Unicode uppercase mapping directly since UniCase focuses on case folding.
+    let upper: String = s_str.chars().flat_map(|c| c.to_uppercase()).collect();
+    heap_string_from_str(&upper)
+}
+
+/// Convert a null-terminated UTF-8 string to lowercase using locale-invariant Unicode rules.
+///
+/// Returns a new heap-allocated null-terminated string.
+///
+/// # Safety
+/// `s` must be a valid pointer to a null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_to_lower(s: *const u8) -> *const u8 {
+    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_str().unwrap_or("");
+    // Use locale-invariant Unicode lowercase mapping (avoids Turkish I problem).
+    let lower: String = s_str.chars().flat_map(|c| c.to_lowercase()).collect();
+    heap_string_from_str(&lower)
+}
+
+/// Return a substring of `s` from code-point index `start` (inclusive) to `end` (exclusive).
+///
+/// Clamps indices to valid range. Returns a new heap-allocated null-terminated string.
+///
+/// # Safety
+/// `s` must be a valid pointer to a null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_substring(s: *const u8, start: i64, end: i64) -> *const u8 {
+    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_str().unwrap_or("");
+    let len = s_str.chars().count() as i64;
+    let start = start.max(0).min(len) as usize;
+    let end   = end.max(0).min(len) as usize;
+    let slice: String = s_str.chars().skip(start).take(end.saturating_sub(start)).collect();
+    heap_string_from_str(&slice)
+}
+
+/// Trim leading and trailing ASCII whitespace from `s`.
+///
+/// Returns a new heap-allocated null-terminated string.
+///
+/// # Safety
+/// `s` must be a valid pointer to a null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_trim(s: *const u8) -> *const u8 {
+    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_str().unwrap_or("");
+    heap_string_from_str(s_str.trim())
+}
+
+/// Count Unicode grapheme clusters in a null-terminated UTF-8 string.
+///
+/// # Safety
+/// `s` must be a valid pointer to a null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_grapheme_count(s: *const u8) -> i64 {
+    use unicode_segmentation::UnicodeSegmentation;
+    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_str().unwrap_or("");
+    s_str.graphemes(true).count() as i64
+}
+
+/// Return the grapheme cluster at index `n` (0-based) as a new heap-allocated null-terminated string.
+///
+/// Returns null if `n` is out of bounds.
+///
+/// # Safety
+/// `s` must be a valid pointer to a null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_grapheme_at(s: *const u8, n: i64) -> *const u8 {
+    use unicode_segmentation::UnicodeSegmentation;
+    if n < 0 { return std::ptr::null(); }
+    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_str().unwrap_or("");
+    match s_str.graphemes(true).nth(n as usize) {
+        None => std::ptr::null(),
+        Some(g) => heap_string_from_str(g),
+    }
+}
+
+/// Split `s` on every occurrence of `sep`, returning a heap-allocated `YnzArray` of string pointers.
+///
+/// Each string in the array is a heap-allocated null-terminated copy.
+///
+/// # Safety
+/// Both pointers must be valid null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_split(s: *const u8, sep: *const u8) -> *mut YnzArray {
+    let s_str   = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_str().unwrap_or("");
+    let sep_str = unsafe { std::ffi::CStr::from_ptr(sep as *const i8) }.to_str().unwrap_or("");
+    let arr = ynz_array_new();
+    if sep_str.is_empty() {
+        // Split into individual code-point strings.
+        for ch in s_str.chars() {
+            let mut buf = [0u8; 5];
+            let enc = ch.encode_utf8(&mut buf[..4]);
+            let ptr = heap_string_from_str(enc);
+            ynz_array_push(arr, ptr as i64);
+        }
+    } else {
+        for part in s_str.split(sep_str) {
+            let ptr = heap_string_from_str(part);
+            ynz_array_push(arr, ptr as i64);
+        }
+    }
+    arr
+}
+
+/// Replace all occurrences of `from` in `s` with `to`.
+///
+/// Returns a new heap-allocated null-terminated string.
+///
+/// # Safety
+/// All pointers must be valid null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_replace(s: *const u8, from: *const u8, to: *const u8) -> *const u8 {
+    let s_str    = unsafe { std::ffi::CStr::from_ptr(s    as *const i8) }.to_str().unwrap_or("");
+    let from_str = unsafe { std::ffi::CStr::from_ptr(from as *const i8) }.to_str().unwrap_or("");
+    let to_str   = unsafe { std::ffi::CStr::from_ptr(to   as *const i8) }.to_str().unwrap_or("");
+    if from_str.is_empty() { return ynz_string_from_static(s, ynz_string_byte_count(s)); }
+    let result = s_str.replace(from_str, to_str);
+    heap_string_from_str(&result)
+}
+
+// ── String interpolation builder ──────────────────────────────────────────────
+//
+// The builder accumulates segments into a growable Vec<u8>, then finalizes into
+// a null-terminated heap string. Represented as a `Box<Vec<u8>>` passed as `*mut u8`.
+
+/// Create a new string builder. Returns an opaque `*mut u8` handle.
+///
+/// The caller must eventually call `ynz_string_builder_finalize` or
+/// `ynz_string_builder_drop` to free the builder's memory.
+#[no_mangle]
+pub extern "C" fn ynz_string_builder_new() -> *mut u8 {
+    Box::into_raw(Box::new(Vec::<u8>::new())) as *mut u8
+}
+
+/// Append a null-terminated string to the builder.
+///
+/// # Safety
+/// `builder` must be a valid handle returned by `ynz_string_builder_new`.
+/// `s` must be a valid pointer to a null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_builder_append(builder: *mut u8, s: *const u8) {
+    let vec = unsafe { &mut *(builder as *mut Vec<u8>) };
+    let bytes = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_bytes();
+    vec.extend_from_slice(bytes);
+}
+
+/// Finalize the builder into a new heap-allocated null-terminated string.
+///
+/// The builder handle is consumed (freed) by this call.
+///
+/// # Safety
+/// `builder` must be a valid handle returned by `ynz_string_builder_new`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_builder_finalize(builder: *mut u8) -> *const u8 {
+    let mut vec = unsafe { *Box::from_raw(builder as *mut Vec<u8>) };
+    vec.push(0); // null-terminate
+    let len = vec.len();
+    let buf = malloc(len) as *mut u8;
+    if buf.is_null() { return b"\0".as_ptr(); }
+    std::ptr::copy_nonoverlapping(vec.as_ptr(), buf, len);
+    buf as *const u8
+}
+
+/// Free the builder without producing a string.
+///
+/// # Safety
+/// `builder` must be a valid handle returned by `ynz_string_builder_new`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_string_builder_drop(builder: *mut u8) {
+    drop(unsafe { Box::from_raw(builder as *mut Vec<u8>) });
+}
+
+/// Internal helper: allocate a heap null-terminated copy of a Rust `&str`.
+fn heap_string_from_str(s: &str) -> *const u8 {
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let buf = unsafe { malloc(len + 1) as *mut u8 };
+    if buf.is_null() { return b"\0".as_ptr(); }
+    if len > 0 {
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, len); }
+    }
+    unsafe { *buf.add(len) = 0; }
+    buf as *const u8
+}
+
+
 // ── M7 P4a: errors runtime — YnzError, YnzFrame, frame stack ─────────────────
 //
 // Error struct carries a message and a snapshot of the call-chain at the moment
@@ -1365,6 +1718,263 @@ mod m7_errors_runtime {
             assert_eq!(len, FRAME_STACK_LIMIT);
             // Clean up.
             FRAME_STACK.with(|s| s.borrow_mut().clear());
+        }
+    }
+}
+
+
+// ── M7 P4b: string runtime tests ──────────────────────────────────────────────
+#[cfg(test)]
+mod m7_string_runtime {
+    use super::*;
+
+    unsafe fn c(s: &'static [u8]) -> *const u8 { s.as_ptr() }
+    unsafe fn str_from_ptr(p: *const u8) -> &'static str {
+        std::ffi::CStr::from_ptr(p as *const i8).to_str().unwrap()
+    }
+
+    #[test]
+    fn nfc_equality_ascii_fast_path() {
+        // WHY: ASCII strings must go through the fast path (byte comparison).
+        // If ASCII strings disagree despite being byte-equal, the fast path is broken.
+        unsafe {
+            assert_eq!(ynz_string_eq(c(b"hello\0"), c(b"hello\0")), 1);
+            assert_eq!(ynz_string_eq(c(b"hello\0"), c(b"world\0")), 0);
+        }
+    }
+
+    #[test]
+    fn nfc_equality_pointer_identity() {
+        // WHY: two pointers to the same address must be equal without normalizing.
+        // Pointer identity fast path must fire before any normalization.
+        unsafe {
+            let s = b"hello\0";
+            assert_eq!(ynz_string_eq(c(s), c(s)), 1);
+        }
+    }
+
+    #[test]
+    fn nfc_equality_precomposed_vs_decomposed() {
+        // WHY: NFC normalization closes the canonical-equivalence obligation from M3.
+        // Precomposed é (U+00E9) and decomposed e + combining accent (U+0065 U+0301)
+        // must compare as equal. Without NFC normalization, byte comparison returns 0.
+        unsafe {
+            // U+00E9 = precomposed é (UTF-8 bytes: 0xC3 0xA9)
+            let precomposed = b"\xC3\xA9\0";
+            // U+0065 + U+0301 = e (0x65) + combining acute accent (UTF-8: 0xCC 0x81)
+            let decomposed = b"\x65\xCC\x81\0";
+            assert_eq!(ynz_string_eq(c(precomposed), c(decomposed)), 1,
+                "NFC: precomposed e-acute must equal decomposed e + combining accent");
+        }
+    }
+
+    #[test]
+    fn string_concat_produces_null_terminated() {
+        // WHY: concatenation must produce a null-terminated result that can be passed
+        // to puts() or any other C string function without corruption.
+        unsafe {
+            let result = ynz_string_concat(c(b"Hello\0"), c(b" World\0"));
+            assert!(!result.is_null());
+            assert_eq!(str_from_ptr(result), "Hello World");
+            free(result as *mut core::ffi::c_void);
+        }
+    }
+
+    #[test]
+    fn string_concat_empty_strings() {
+        // WHY: concatenating two empty strings must produce an empty null-terminated string.
+        unsafe {
+            let r = ynz_string_concat(c(b"\0"), c(b"\0"));
+            assert!(!r.is_null());
+            assert_eq!(str_from_ptr(r), "");
+            free(r as *mut core::ffi::c_void);
+        }
+    }
+
+    #[test]
+    fn string_count_handles_multibyte() {
+        // WHY: code point count must count code points, not bytes.
+        // "café" is 4 code points but 5 bytes (é = 2 UTF-8 bytes).
+        unsafe {
+            // café: c-a-f-é (4 code points, 5 bytes). é = UTF-8 bytes 0xC3 0xA9.
+            let s = b"caf\xC3\xA9\0";
+            assert_eq!(ynz_string_count(c(s)), 4);
+        }
+    }
+
+    #[test]
+    fn string_byte_count_vs_code_point_count() {
+        // WHY: byteCount must return the byte count, not the code-point count.
+        unsafe {
+            let s = b"caf\xC3\xA9\0"; // 4 code points, 5 bytes (+ null terminator)
+            assert_eq!(ynz_string_byte_count(c(s)), 5);
+            assert_eq!(ynz_string_count(c(s)), 4);
+        }
+    }
+
+    #[test]
+    fn string_codepoint_at_ascii() {
+        // WHY: codepoint_at on ASCII must return each character as a 1-byte string.
+        unsafe {
+            let s = b"hello\0";
+            let ch = ynz_string_codepoint_at(c(s), 1); // 'e'
+            assert!(!ch.is_null());
+            assert_eq!(str_from_ptr(ch), "e");
+            free(ch as *mut core::ffi::c_void);
+        }
+    }
+
+    #[test]
+    fn string_codepoint_at_oob_returns_null() {
+        // WHY: out-of-bounds index must return null, not garbage or a panic.
+        unsafe {
+            let s = b"hi\0";
+            assert!(ynz_string_codepoint_at(c(s), 10).is_null());
+            assert!(ynz_string_codepoint_at(c(s), -1).is_null());
+        }
+    }
+
+    #[test]
+    fn string_contains_basic() {
+        // WHY: contains must correctly find a substring.
+        unsafe {
+            assert_eq!(ynz_string_contains(c(b"Hello World\0"), c(b"World\0")), 1);
+            assert_eq!(ynz_string_contains(c(b"Hello World\0"), c(b"xyz\0")), 0);
+            assert_eq!(ynz_string_contains(c(b"Hello\0"), c(b"\0")), 1); // empty string
+        }
+    }
+
+    #[test]
+    fn string_starts_with_ends_with() {
+        // WHY: startsWith and endsWith must match the prefix/suffix exactly.
+        unsafe {
+            assert_eq!(ynz_string_starts_with(c(b"Hello World\0"), c(b"Hello\0")), 1);
+            assert_eq!(ynz_string_starts_with(c(b"Hello World\0"), c(b"World\0")), 0);
+            assert_eq!(ynz_string_ends_with(c(b"Hello World\0"), c(b"World\0")), 1);
+            assert_eq!(ynz_string_ends_with(c(b"Hello World\0"), c(b"Hello\0")), 0);
+        }
+    }
+
+    #[test]
+    fn string_to_upper_lower() {
+        // WHY: locale-invariant case conversion must not be affected by the system locale.
+        // The Turkish-I problem (where 'i'.toUpperCase() = 'İ') must not occur.
+        unsafe {
+            let upper = ynz_string_to_upper(c(b"hello\0"));
+            assert!(!upper.is_null());
+            assert_eq!(str_from_ptr(upper), "HELLO");
+            free(upper as *mut core::ffi::c_void);
+
+            let lower = ynz_string_to_lower(c(b"HELLO\0"));
+            assert!(!lower.is_null());
+            assert_eq!(str_from_ptr(lower), "hello");
+            free(lower as *mut core::ffi::c_void);
+        }
+    }
+
+    #[test]
+    fn string_trim_removes_whitespace() {
+        // WHY: trim must remove leading and trailing whitespace, not interior whitespace.
+        unsafe {
+            let trimmed = ynz_string_trim(c(b"  hello  \0"));
+            assert!(!trimmed.is_null());
+            assert_eq!(str_from_ptr(trimmed), "hello");
+            free(trimmed as *mut core::ffi::c_void);
+        }
+    }
+
+    #[test]
+    fn string_substring_basic() {
+        // WHY: substring must slice by code-point index, not byte index.
+        unsafe {
+            let sub = ynz_string_substring(c(b"hello\0"), 1, 4); // "ell"
+            assert!(!sub.is_null());
+            assert_eq!(str_from_ptr(sub), "ell");
+            free(sub as *mut core::ffi::c_void);
+        }
+    }
+
+    #[test]
+    fn string_grapheme_count_combining() {
+        // WHY: grapheme count must count grapheme clusters, not code points.
+        // 'a' + combining acute accent (U+0301) = 1 grapheme cluster, 2 code points.
+        unsafe {
+            // 'a' = 0x61, U+0301 combining acute = UTF-8 0xCC 0x81
+            let s = b"a\xCC\x81\0";
+            assert_eq!(ynz_string_grapheme_count(c(s)), 1);
+            assert_eq!(ynz_string_count(c(s)), 2); // 2 code points
+        }
+    }
+
+    #[test]
+    fn string_builder_round_trip() {
+        // WHY: the builder must correctly assemble multiple segments into a single string.
+        // Used by interpolated string codegen: builder_new, N×builder_append, builder_finalize.
+        unsafe {
+            let b = ynz_string_builder_new();
+            ynz_string_builder_append(b, c(b"Hello\0"));
+            ynz_string_builder_append(b, c(b", \0"));
+            ynz_string_builder_append(b, c(b"World!\0"));
+            let result = ynz_string_builder_finalize(b);
+            assert!(!result.is_null());
+            assert_eq!(str_from_ptr(result), "Hello, World!");
+            free(result as *mut core::ffi::c_void);
+        }
+    }
+
+    #[test]
+    fn string_builder_drop_cleans_up() {
+        // WHY: builder_drop must not leak memory. Valgrind-clean programs depend on this.
+        // We can't test for leaks directly, but we can assert no panic occurs.
+        let b = ynz_string_builder_new();
+        unsafe { ynz_string_builder_drop(b); }
+    }
+
+    #[test]
+    fn string_split_basic() {
+        // WHY: split must produce the correct number of segments for a known separator.
+        unsafe {
+            let parts = ynz_string_split(c(b"a,b,c\0"), c(b",\0"));
+            assert!(!parts.is_null());
+            assert_eq!(ynz_array_count(parts), 3);
+            let mut out = [0i64; 2];
+            ynz_array_get(parts, 0, &mut out);
+            assert_eq!(out[0], 1);
+            assert_eq!(str_from_ptr(out[1] as *const u8), "a");
+            ynz_array_drop(parts);
+        }
+    }
+
+    #[test]
+    fn string_replace_basic() {
+        // WHY: replace must substitute all occurrences of `from` with `to`.
+        unsafe {
+            let result = ynz_string_replace(c(b"hello world\0"), c(b"world\0"), c(b"Yinz\0"));
+            assert!(!result.is_null());
+            assert_eq!(str_from_ptr(result), "hello Yinz");
+            free(result as *mut core::ffi::c_void);
+        }
+    }
+
+    #[test]
+    fn string_index_of_found_and_not_found() {
+        // WHY: indexOf must return the byte offset on hit and -1 on miss.
+        unsafe {
+            assert_eq!(ynz_string_index_of(c(b"hello world\0"), c(b"world\0")), 6);
+            assert_eq!(ynz_string_index_of(c(b"hello world\0"), c(b"xyz\0")), -1);
+        }
+    }
+
+    #[test]
+    fn string_validate_utf8_valid_and_invalid() {
+        // WHY: UTF-8 validation must accept well-formed UTF-8 and reject ill-formed sequences.
+        unsafe {
+            // Valid UTF-8: ASCII
+            assert_eq!(ynz_string_validate_utf8(b"hello".as_ptr(), 5), 1);
+            // Valid UTF-8: 2-byte sequence é
+            assert_eq!(ynz_string_validate_utf8(b"\xC3\xA9".as_ptr(), 2), 1);
+            // Invalid: orphan continuation byte
+            assert_eq!(ynz_string_validate_utf8(b"\x80".as_ptr(), 1), 0);
         }
     }
 }

@@ -95,6 +95,53 @@ pub struct RuntimeDecls<'ctx> {
     pub ynz_error_message: FunctionValue<'ctx>,
     // ynz_unhandled_error(err: ptr) → ! (noreturn: prints and exits 1)
     pub ynz_unhandled_error: FunctionValue<'ctx>,
+
+    // M7 P4b: string runtime — methods and builder.
+    // ynz_string_validate_utf8(ptr, len: usize) → i32 (1=valid, 0=invalid)
+    pub ynz_string_validate_utf8: FunctionValue<'ctx>,
+    // ynz_string_concat(a: ptr, b: ptr) → ptr  (heap-alloc'd null-terminated)
+    pub ynz_string_concat: FunctionValue<'ctx>,
+    // ynz_string_count(s: ptr) → i64  (Unicode code-point count)
+    pub ynz_string_count: FunctionValue<'ctx>,
+    // ynz_string_byte_count(s: ptr) → i64  (strlen)
+    pub ynz_string_byte_count: FunctionValue<'ctx>,
+    // ynz_string_codepoint_at(s: ptr, n: i64) → ptr  (null = OOB)
+    pub ynz_string_codepoint_at: FunctionValue<'ctx>,
+    // ynz_string_byte_at(s: ptr, n: i64) → i64  (-1 = OOB)
+    pub ynz_string_byte_at: FunctionValue<'ctx>,
+    // ynz_string_contains(s: ptr, substr: ptr) → i32
+    pub ynz_string_contains: FunctionValue<'ctx>,
+    // ynz_string_index_of(s: ptr, substr: ptr) → i64  (-1 = not found)
+    pub ynz_string_index_of: FunctionValue<'ctx>,
+    // ynz_string_starts_with(s: ptr, prefix: ptr) → i32
+    pub ynz_string_starts_with: FunctionValue<'ctx>,
+    // ynz_string_ends_with(s: ptr, suffix: ptr) → i32
+    pub ynz_string_ends_with: FunctionValue<'ctx>,
+    // ynz_string_to_upper(s: ptr) → ptr  (heap-alloc'd)
+    pub ynz_string_to_upper: FunctionValue<'ctx>,
+    // ynz_string_to_lower(s: ptr) → ptr  (heap-alloc'd)
+    pub ynz_string_to_lower: FunctionValue<'ctx>,
+    // ynz_string_substring(s: ptr, start: i64, end: i64) → ptr  (heap-alloc'd)
+    pub ynz_string_substring: FunctionValue<'ctx>,
+    // ynz_string_trim(s: ptr) → ptr  (heap-alloc'd)
+    pub ynz_string_trim: FunctionValue<'ctx>,
+    // ynz_string_grapheme_count(s: ptr) → i64
+    pub ynz_string_grapheme_count: FunctionValue<'ctx>,
+    // ynz_string_grapheme_at(s: ptr, n: i64) → ptr  (null = OOB)
+    pub ynz_string_grapheme_at: FunctionValue<'ctx>,
+    // ynz_string_split(s: ptr, sep: ptr) → *mut YnzArray
+    pub ynz_string_split: FunctionValue<'ctx>,
+    // ynz_string_replace(s: ptr, from: ptr, to: ptr) → ptr  (heap-alloc'd)
+    pub ynz_string_replace: FunctionValue<'ctx>,
+    // String interpolation builder.
+    // ynz_string_builder_new() → *mut u8  (opaque handle)
+    pub ynz_string_builder_new: FunctionValue<'ctx>,
+    // ynz_string_builder_append(builder: *mut u8, s: ptr) → void
+    pub ynz_string_builder_append: FunctionValue<'ctx>,
+    // ynz_string_builder_finalize(builder: *mut u8) → *const u8  (null-terminated, builder consumed)
+    pub ynz_string_builder_finalize: FunctionValue<'ctx>,
+    // ynz_string_builder_drop(builder: *mut u8) → void
+    pub ynz_string_builder_drop: FunctionValue<'ctx>,
 }
 
 impl<'ctx> RuntimeDecls<'ctx> {
@@ -242,6 +289,30 @@ impl<'ctx> RuntimeDecls<'ctx> {
             ynz_error_message: declare_fn(module, "ynz_error_message", ptr.fn_type(&[ptr.into()], false)),
             // ynz_unhandled_error is noreturn; LLVM void return + unreachable after call.
             ynz_unhandled_error: declare_fn(module, "ynz_unhandled_error", void.fn_type(&[ptr.into()], false)),
+
+            // M7 P4b: string runtime methods and builder.
+            ynz_string_validate_utf8: declare_fn(module, "ynz_string_validate_utf8", i32.fn_type(&[ptr.into(), i64.into()], false)),
+            ynz_string_concat: declare_fn(module, "ynz_string_concat", ptr.fn_type(&[ptr.into(), ptr.into()], false)),
+            ynz_string_count: declare_fn(module, "ynz_string_count", i64.fn_type(&[ptr.into()], false)),
+            ynz_string_byte_count: declare_fn(module, "ynz_string_byte_count", i64.fn_type(&[ptr.into()], false)),
+            ynz_string_codepoint_at: declare_fn(module, "ynz_string_codepoint_at", ptr.fn_type(&[ptr.into(), i64.into()], false)),
+            ynz_string_byte_at: declare_fn(module, "ynz_string_byte_at", i64.fn_type(&[ptr.into(), i64.into()], false)),
+            ynz_string_contains: declare_fn(module, "ynz_string_contains", i32.fn_type(&[ptr.into(), ptr.into()], false)),
+            ynz_string_index_of: declare_fn(module, "ynz_string_index_of", i64.fn_type(&[ptr.into(), ptr.into()], false)),
+            ynz_string_starts_with: declare_fn(module, "ynz_string_starts_with", i32.fn_type(&[ptr.into(), ptr.into()], false)),
+            ynz_string_ends_with: declare_fn(module, "ynz_string_ends_with", i32.fn_type(&[ptr.into(), ptr.into()], false)),
+            ynz_string_to_upper: declare_fn(module, "ynz_string_to_upper", ptr.fn_type(&[ptr.into()], false)),
+            ynz_string_to_lower: declare_fn(module, "ynz_string_to_lower", ptr.fn_type(&[ptr.into()], false)),
+            ynz_string_substring: declare_fn(module, "ynz_string_substring", ptr.fn_type(&[ptr.into(), i64.into(), i64.into()], false)),
+            ynz_string_trim: declare_fn(module, "ynz_string_trim", ptr.fn_type(&[ptr.into()], false)),
+            ynz_string_grapheme_count: declare_fn(module, "ynz_string_grapheme_count", i64.fn_type(&[ptr.into()], false)),
+            ynz_string_grapheme_at: declare_fn(module, "ynz_string_grapheme_at", ptr.fn_type(&[ptr.into(), i64.into()], false)),
+            ynz_string_split: declare_fn(module, "ynz_string_split", ptr.fn_type(&[ptr.into(), ptr.into()], false)),
+            ynz_string_replace: declare_fn(module, "ynz_string_replace", ptr.fn_type(&[ptr.into(), ptr.into(), ptr.into()], false)),
+            ynz_string_builder_new: declare_fn(module, "ynz_string_builder_new", ptr.fn_type(&[], false)),
+            ynz_string_builder_append: declare_fn(module, "ynz_string_builder_append", void.fn_type(&[ptr.into(), ptr.into()], false)),
+            ynz_string_builder_finalize: declare_fn(module, "ynz_string_builder_finalize", ptr.fn_type(&[ptr.into()], false)),
+            ynz_string_builder_drop: declare_fn(module, "ynz_string_builder_drop", void.fn_type(&[ptr.into()], false)),
         }
     }
 }
