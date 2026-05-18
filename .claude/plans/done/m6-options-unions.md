@@ -1,7 +1,7 @@
 ---
 slug: m6-options-unions
 owner: patrick
-status: active
+status: shipped
 files:
   - crates/ynz-ast/**
   - crates/ynz-parser/**

@@ -1,7 +1,7 @@
 ---
 slug: m5-generics
 owner: patrick
-status: active
+status: shipped
 files:
   - Cargo.toml
   - crates/ynz-ast/**
