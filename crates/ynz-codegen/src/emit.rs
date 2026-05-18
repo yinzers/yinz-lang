@@ -165,7 +165,12 @@ fn build_module<'ctx, 'g>(
             Item::Function(f) if f.generics.is_empty() => {
                 declare_function(ctx, module, f, shape_table)?
             }
-            Item::Function(_) | Item::ShapeDecl(_) | Item::OptionsDecl(_) => {}
+            Item::Function(_)
+            | Item::ShapeDecl(_)
+            | Item::OptionsDecl(_)
+            | Item::ImportDecl(_)
+            | Item::ConstDecl(_)
+            | Item::ReExport(_) => {}
         }
     }
 
@@ -208,7 +213,12 @@ fn build_module<'ctx, 'g>(
                 mono_table,
                 &options_table,
             )?,
-            Item::Function(_) | Item::ShapeDecl(_) | Item::OptionsDecl(_) => {}
+            Item::Function(_)
+            | Item::ShapeDecl(_)
+            | Item::OptionsDecl(_)
+            | Item::ImportDecl(_)
+            | Item::ConstDecl(_)
+            | Item::ReExport(_) => {}
         }
     }
 
@@ -3373,6 +3383,101 @@ fn to_c_string<'ctx>(
                 .ok_or("decimal_to_string returned void")?
                 .into_pointer_value())
         }
+        // Default debug representation for user-defined shapes: "ShapeName { field: val, ... }"
+        // Visible fields only. Nested shapes are printed recursively.
+        Type::Shape { name } => {
+            let shape_ptr = val.into_pointer_value();
+
+            // Collect visible field names + types before borrowing cg mutably.
+            let (visible_fields, struct_ty) = {
+                let shape_def = cg
+                    .shape_table
+                    .get(name)
+                    .ok_or_else(|| format!("to_c_string: no shape `{name}`"))?;
+                let visible: Vec<(String, usize, Type)> = shape_def
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, f)| !f.is_hidden)
+                    .map(|(idx, f)| (f.name.clone(), idx, f.ty.clone()))
+                    .collect();
+                let st = cg
+                    .shape_types
+                    .get(name)
+                    .ok_or_else(|| format!("to_c_string: no LLVM type for `{name}`"))?
+                    .clone();
+                (visible, st)
+            };
+
+            let builder_val = cg
+                .builder
+                .build_call(cg.rt.ynz_string_builder_new, &[], "dbg_bld")
+                .map_err(|e| format!("{e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or("ynz_string_builder_new void")?
+                .into_pointer_value();
+
+            // Helper closure: append a static string literal to the builder.
+            let append_static = |cg: &mut Cg<'ctx, '_>, bld: PointerValue<'ctx>, s: &str| {
+                let g = build_string_global(cg.ctx, cg.module, s, "dbg_lit");
+                cg.builder
+                    .build_call(
+                        cg.rt.ynz_string_builder_append,
+                        &[bld.into(), g.as_pointer_value().into()],
+                        "",
+                    )
+                    .map_err(|e| format!("{e}"))
+                    .map(|_| ())
+            };
+
+            append_static(cg, builder_val, &format!("{name} {{ "))?;
+
+            for (i, (field_name, field_idx, field_ty)) in visible_fields.iter().enumerate() {
+                if i > 0 {
+                    append_static(cg, builder_val, ", ")?;
+                }
+                append_static(cg, builder_val, &format!("{field_name}: "))?;
+
+                let gep = cg
+                    .builder
+                    .build_struct_gep(struct_ty, shape_ptr, *field_idx as u32, field_name)
+                    .map_err(|e| format!("GEP {field_name}: {e}"))?;
+                let bits = cg
+                    .builder
+                    .build_load(cg.i64(), gep, "dbg_bits")
+                    .map_err(|e| format!("{e}"))?
+                    .into_int_value();
+                let field_val = cg.i64_bits_to(bits, field_ty)?;
+                let field_str = to_c_string(cg, field_val, field_ty)?;
+
+                cg.builder
+                    .build_call(
+                        cg.rt.ynz_string_builder_append,
+                        &[builder_val.into(), field_str.into()],
+                        "",
+                    )
+                    .map_err(|e| format!("{e}"))?;
+            }
+
+            append_static(cg, builder_val, " }")?;
+
+            let result = cg
+                .builder
+                .build_call(
+                    cg.rt.ynz_string_builder_finalize,
+                    &[builder_val.into()],
+                    "dbg_str",
+                )
+                .map_err(|e| format!("{e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or("ynz_string_builder_finalize void")?
+                .into_pointer_value();
+
+            Ok(result)
+        }
+
         _ => Err(format!("codegen: cannot convert {:?} to string", ty)),
     }
 }

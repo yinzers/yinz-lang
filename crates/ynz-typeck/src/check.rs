@@ -134,6 +134,9 @@ impl<'b> Checker<'b> {
                 // M6: options declarations are validated and registered by collect_options()
                 // which runs before check_module. Nothing to do here.
                 Item::OptionsDecl(_) => {}
+                // M8: import/export/const declarations — validated by collect_exports/imports
+                // which runs before check_module. Function-body typeck is unaffected.
+                Item::ImportDecl(_) | Item::ConstDecl(_) | Item::ReExport(_) => {}
             }
         }
     }
@@ -1241,7 +1244,11 @@ impl<'b> Checker<'b> {
             return Type::Error;
         }
         let arg_ty = self.infer_expr(&call.args[0], None);
-        if arg_ty != Type::Error && !self.intrinsics.is_print_type(&arg_ty) {
+        // Shapes are printable — the compiler emits a default "ShapeName { field: val, ... }"
+        // representation. User-defined toString() can override this.
+        let is_printable = self.intrinsics.is_print_type(&arg_ty)
+            || matches!(&arg_ty, Type::Shape { .. });
+        if arg_ty != Type::Error && !is_printable {
             // M7 P3a: give a more helpful diagnostic for ErrorsCapable values.
             if let Type::ErrorsCapable { .. } = &arg_ty {
                 self.diags.push(Diagnostic::error(
@@ -1258,7 +1265,7 @@ impl<'b> Checker<'b> {
                         type_name(&arg_ty)
                     ),
                     "Convert it to a string first with `.toString()`.",
-                    "`print` works with: int, float, number, bool, and string.",
+                    "`print` works with: int, float, number, bool, string, and any shape.",
                 ));
             }
             return Type::Error;
@@ -3589,6 +3596,8 @@ mod tests {
                 name_span: span(9, 13),
                 // test-ratchet: M7 P1 adds errors_capable field to FunctionDecl
                 errors_capable: false,
+                // test-ratchet: M8 P1 adds is_exported
+                is_exported: false,
             })],
             span: span(0, 57),
         };
