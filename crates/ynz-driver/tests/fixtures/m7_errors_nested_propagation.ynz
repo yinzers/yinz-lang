@@ -1,0 +1,23 @@
+// WHY: validates 3-level errors auto-propagation. level3 -> level2 -> level1,
+// each propagating via the errors ABI. main catches with .or(0).
+// If any level's propagation is broken, the result would be 0 (fallback) instead of 42.
+// Tests the multi-hop cascade from M7 P4a acceptance criteria.
+
+function level3() -> int errors {
+  return 42
+}
+
+function level2() -> int errors {
+  let x = level3()
+  return x
+}
+
+function level1() -> int errors {
+  let y = level2()
+  return y
+}
+
+function main() -> nothing {
+  let result = level1().or(0)
+  print(result.toString())
+}

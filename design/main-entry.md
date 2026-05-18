@@ -12,6 +12,16 @@ The entry function is always `main`. The entry file is configured in `yinz.toml`
 
 **Why the file name is flexible**: Developers organize projects differently. A web server might be `server.ynz`. A CLI tool might be `app.ynz`. Forcing `main.ynz` is arbitrary. The `entry` field in `yinz.toml` gives flexibility without giving up the fixed function name convention.
 
+### Proposed convention: `entrypoint.ynz` as the canonical default (proposed 2026-05-18 — up for discussion)
+
+Rather than defaulting to `main.ynz` in docs and examples, use `entrypoint.ynz`. The function inside is still `function main()` — that stays universal. Only the file name changes.
+
+**Rationale**: `entrypoint.ynz` is self-documenting per Golden Rule 2 — a developer unfamiliar with C conventions immediately knows what the file is. `main.ynz` carries meaning only if you already know `main` is the C entry convention. Golden Rule 12 (human-readable over programmer jargon) pushes in the same direction.
+
+**What changes if adopted**: `spec/main.md` default entry value, all docs and examples that show `main.ynz`, and the canonical basics demo (`examples/basics/src/main.ynz` → `examples/basics/src/entrypoint.ynz`). Compiler behavior is unchanged — entry file is always configurable. Pure convention/docs change.
+
+**What does NOT change**: the function name stays `function main()`. Familiar to every developer; no jargon replaced there.
+
 ---
 
 ## CLI Arguments from stdlib, Not Parameters

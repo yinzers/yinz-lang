@@ -1,0 +1,15 @@
+// WHY: validates string interpolation with arithmetic expressions inside ${...}.
+// Each ${a + b}, ${a * b} expression must evaluate the sub-expression, convert to
+// string via .toString(), and embed correctly. If the string builder codegen drops
+// an expression or the arithmetic is not evaluated before interpolation, output differs.
+
+function main() -> nothing {
+  let a = 10
+  let b = 5
+  let sum_msg = `${a} + ${b} = ${a + b}`
+  print(sum_msg)
+  let product_msg = `${a} * ${b} = ${a * b}`
+  print(product_msg)
+  let concat_msg = `prefix_${a}_suffix`
+  print(concat_msg)
+}

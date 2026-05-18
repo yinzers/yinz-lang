@@ -1,0 +1,14 @@
+// WHY: validates string out-of-bounds access returns none (not a crash or panic).
+// s.get(100) on a 5-character string must return none per the M7 P3c safety
+// invariant: "string bracket access out of bounds returns none (not panic)."
+// If the runtime panics or returns garbage, this test fails.
+
+function main() -> nothing {
+  let s = `hello`
+  let c = s.get(100)
+  print(c.or(`none`))
+  let also_oob = s.get(5)
+  print(also_oob.or(`none`))
+  let in_bounds = s.get(0)
+  print(in_bounds.or(`none`))
+}
