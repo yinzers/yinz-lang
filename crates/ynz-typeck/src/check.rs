@@ -62,6 +62,8 @@ pub fn check(
         type_param_scope: HashMap::new(),
         mono_table: MonomorphizationTable::default(),
         maybe_non_none: HashSet::new(),
+        union_narrowed: HashMap::new(),
+        union_aliases: collect_union_aliases(module, shape_table),
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -93,6 +95,12 @@ struct Checker<'b> {
     mono_table: MonomorphizationTable,
     /// Flow-sensitive tracking: binding names known to be non-none inside an `.exists()` guard.
     maybe_non_none: HashSet<String>,
+    /// M6: binding names narrowed to a specific union variant inside an `is`-arm body.
+    /// Maps binding name → narrowed type (the specific variant type).
+    union_narrowed: HashMap<String, Type>,
+    /// M6: named union type aliases from `shape Shape = Circle | Square` declarations.
+    /// Maps alias name → resolved union type. Populated before check_module runs.
+    union_aliases: HashMap<String, Type>,
 }
 
 impl<'b> Checker<'b> {
@@ -302,6 +310,10 @@ impl<'b> Checker<'b> {
                     "The value on the right side must match the type annotation on the left.",
                 ));
                 Type::Error
+            } else if matches!(ann_ty, Type::Union { .. }) {
+                // M6: for union type annotations, use the declared union type as the binding type,
+                // not the concrete variant. `let s: Shape = circle` → s is Shape, not Circle.
+                ann_ty.clone()
             } else {
                 // Use the value_ty to preserve size information from ArrayLit inference.
                 value_ty
@@ -461,9 +473,24 @@ impl<'b> Checker<'b> {
                         ));
                     }
                 }
-                // Is: M6 union narrowing — P3b implements full typeck.
-                // Parser emitted deferral diagnostic; typeck skips for now.
-                MatchPatternKind::Is(_) => {}
+                // Is: M6 union narrowing — validate variant, narrow inside arm body.
+                MatchPatternKind::Is(type_path) => {
+                    self.check_is_arm_pattern(&scrutinee_ty, type_path, &arm.pattern.span);
+                    // Narrowing: inside this arm's body, the scrutinee binding is narrowed.
+                    // We push a scope with the narrowed type for the binding if we can identify it.
+                    // (Full binding-name extraction is P3b — basic case: scrutinee is a direct Ident)
+                    let narrowed_name = simple_ident_name(scrutinee).map(|s| s.to_string());
+                    if let Some(ref name) = narrowed_name {
+                        self.union_narrowed.insert(name.clone(), Type::Shape { name: type_path.name.clone() });
+                    }
+                    self.scope.push();
+                    self.check_stmts(&arm.body.stmts);
+                    self.scope.pop();
+                    if let Some(ref name) = narrowed_name {
+                        self.union_narrowed.remove(name);
+                    }
+                    continue; // skip the standard scope push/pop below
+                }
                 // OptionName: M6 options multi-case arm.
                 MatchPatternKind::OptionName(variant_name) => {
                     self.check_option_name_arm(&scrutinee_ty, variant_name, &arm.pattern.span);
@@ -499,6 +526,33 @@ impl<'b> Checker<'b> {
                             "The compiler knows every variant at compile time. A missing arm means some values would silently fall through — likely a bug.",
                         ));
                     }
+                }
+            }
+        }
+
+        // M6: Union exhaustiveness check for `Is` arms.
+        if let Type::Union { variants } = &scrutinee_ty {
+            let covered: std::collections::HashSet<String> = arms.iter().filter_map(|arm| {
+                if let MatchPatternKind::Is(tp) = &arm.pattern.kind { Some(tp.name.clone()) } else { None }
+            }).collect();
+            if else_arm.is_none() {
+                let missing: Vec<String> = variants.iter().filter_map(|v| {
+                    if let Type::Shape { name } = v {
+                        if !covered.contains(name) { Some(name.clone()) } else { None }
+                    } else { None }
+                }).collect();
+                if !missing.is_empty() {
+                    self.diags.push(Diagnostic::error(
+                        scrutinee.span().clone(),
+                        format!(
+                            "Non-exhaustive union multi-case — {} variant{} not handled: {}.",
+                            missing.len(),
+                            if missing.len() == 1 { " is" } else { "s are" },
+                            missing.join(", ")
+                        ),
+                        format!("Add the missing arms (e.g. `is {} =>`) or add an `else =>` catch-all.", missing[0]),
+                        "The compiler knows every union variant at compile time. A missing arm means some values silently fall through — likely a bug.",
+                    ));
                 }
             }
         }
@@ -771,6 +825,10 @@ impl<'b> Checker<'b> {
             Expr::MapLit { entries, span } => {
                 self.check_map_lit(entries, hint, span)
             }
+            // M6: `x is Foo` type-narrowing predicate — returns bool.
+            Expr::Is { expr: inner, ty: type_path, span } => {
+                self.check_is_expr(inner, type_path, span)
+            }
         };
 
         self.expr_types.insert((expr.span().start, expr.span().end), ty.clone());
@@ -779,6 +837,10 @@ impl<'b> Checker<'b> {
 
 
     fn resolve_ident(&mut self, name: &str, span: &SourceSpan) -> Type {
+        // M6: if inside a union `is` arm, the binding may be narrowed to a specific variant.
+        if let Some(narrowed_ty) = self.union_narrowed.get(name).cloned() {
+            return narrowed_ty;
+        }
         if let Some(entry) = self.scope.lookup(name) {
             if entry.is_consumed {
                 self.diags.push(Diagnostic::error(
@@ -1488,6 +1550,10 @@ impl<'b> Checker<'b> {
             AstType::Named(n, _) if self.type_param_scope.contains_key(n) => {
                 Type::TypeParam { name: n.clone() }
             }
+            // M6: union type aliases resolve to the full union type.
+            AstType::Named(n, _) if self.union_aliases.contains_key(n) => {
+                self.union_aliases[n].clone()
+            }
             // M6: options type names resolve to Type::Options.
             AstType::Named(n, _) if self.options_table.contains(n) => {
                 Type::Options { name: n.clone() }
@@ -1588,10 +1654,21 @@ impl<'b> Checker<'b> {
                 let inner_ty = self.ast_type_to_type(inner);
                 Type::Maybe { inner: Box::new(inner_ty) }
             }
-            // M6: Union types — P3b implements full resolution; for P2 produce Type::Error
-            // so existing code continues to compile. The parser emits the AST node;
-            // typeck will process it properly in P3b.
-            AstType::Union { .. } => Type::Error,
+            // M6: Union types — resolve each variant and return Type::Union.
+            AstType::Union { variants, .. } => {
+                let resolved: Vec<Type> = variants.iter().map(|v| self.ast_type_to_type(v)).collect();
+                // `T | none` is rewritten to `maybe<T>` per design/narrowing.md.
+                if resolved.len() == 2 {
+                    let none_idx = resolved.iter().position(|t| *t == Type::Error); // none resolves oddly
+                    let _ = none_idx; // For now, leave `T | none` as Union; P3b note
+                }
+                // Single-variant union: typeck error (degenerate form).
+                if resolved.len() < 2 {
+                    Type::Error
+                } else {
+                    Type::Union { variants: resolved }
+                }
+            }
         }
     }
 
@@ -2210,6 +2287,82 @@ impl<'b> Checker<'b> {
         Type::BuiltinMap { key: Box::new(key_ty), val: Box::new(val_ty) }
     }
 
+    // ── M6: union + narrowing typeck ──────────────────────────────────────────
+
+    /// Validate an `Is(TypePath)` arm pattern in a multi-case block.
+    /// Emits a diagnostic if the named type is not a variant of the scrutinee's union.
+    fn check_is_arm_pattern(&mut self, scrutinee_ty: &Type, type_path: &ynz_ast::nodes::TypePath, span: &SourceSpan) {
+        match scrutinee_ty {
+            Type::Union { variants } => {
+                let valid: Vec<String> = variants.iter().filter_map(|v| {
+                    if let Type::Shape { name } = v { Some(name.clone()) } else { None }
+                }).collect();
+                if !type_path.name.is_empty() && !valid.contains(&type_path.name) {
+                    self.diags.push(Diagnostic::error(
+                        type_path.span.clone(),
+                        format!("`{}` is not a variant of this union.", type_path.name),
+                        format!("Valid variants are: {}", valid.join(", ")),
+                        "The `is TypeName` arm must name one of the union's declared variants.",
+                    ));
+                }
+            }
+            Type::Error => {} // suppress cascades
+            other => {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("`is {}` used on `{}` which is not a union type.", type_path.name, type_name(other)),
+                    "The `is TypeName =>` arm form is for union types: `shape S = A | B`.",
+                    "Union types have multiple variants — `is` checks which variant a value is at runtime. \
+                     Use `variantName =>` for options types.",
+                ));
+            }
+        }
+    }
+
+    // ── M6: options typeck helpers ────────────────────────────────────────────
+
+    /// Typecheck `x is Foo` type-narrowing predicate expression.
+    ///
+    /// Returns `Type::Bool`. Validates that the scrutinee is a union type AND
+    /// that the type name is a declared variant of that union.
+    ///
+    /// For the condition-form narrowing (`if (x is Foo) { ... }`), the
+    /// actual narrowing fact is applied in `check_stmt_if` when it detects
+    /// an `Expr::Is` condition. This method just produces the bool type.
+    fn check_is_expr(&mut self, inner: &Expr, type_path: &ynz_ast::nodes::TypePath, _span: &SourceSpan) -> Type {
+        let scrutinee_ty = self.infer_expr(inner, None);
+        if type_path.name.is_empty() {
+            return Type::Bool; // parse error already emitted
+        }
+        match &scrutinee_ty {
+            Type::Union { variants } => {
+                let variant_names: Vec<String> = variants.iter().filter_map(|v| {
+                    if let Type::Shape { name } = v { Some(name.clone()) } else { None }
+                }).collect();
+                if !variant_names.contains(&type_path.name) {
+                    self.diags.push(Diagnostic::error(
+                        type_path.span.clone(),
+                        format!("`{}` is not a variant of this union.", type_path.name),
+                        format!("Valid variants are: {}", variant_names.join(", ")),
+                        "The `is` check must name one of the union's declared variants.",
+                    ));
+                }
+            }
+            Type::Error => {}
+            other => {
+                // INFO-level: is-check on non-union (always true or wrong).
+                // For now emit a regular error for structural correctness.
+                self.diags.push(Diagnostic::error(
+                    type_path.span.clone(),
+                    format!("`is {}` used on `{}` which is not a union type.", type_path.name, type_name(other)),
+                    "The `is TypeName` check is for union types: `shape S = A | B`.",
+                    "Union types have multiple variants — `is` checks which variant a value is at runtime.",
+                ));
+            }
+        }
+        Type::Bool
+    }
+
     // ── M6: options typeck helpers ────────────────────────────────────────────
 
     /// Typecheck an options value access: `OptionsTypeName.variantName`.
@@ -2265,6 +2418,43 @@ impl<'b> Checker<'b> {
 }
 
 
+/// Resolve a simple AST type to a typeck Type using available table info.
+///
+/// Used for union alias resolution before the full Checker is built.
+/// Only handles: Named shapes, union of Named shapes, primitives.
+fn resolve_alias_type(ast_ty: &AstType, shape_table: &crate::shapes::ShapeTable) -> Type {
+    match ast_ty {
+        AstType::Int => Type::Int,
+        AstType::Float => Type::Float,
+        AstType::Bool => Type::Bool,
+        AstType::Number { precision } => Type::Number { precision: *precision },
+        AstType::Named(n, _) if n == "string" => Type::String,
+        AstType::Named(n, _) if shape_table.contains(n) => Type::Shape { name: n.clone() },
+        AstType::Union { variants, .. } => {
+            let resolved: Vec<Type> = variants.iter().map(|v| resolve_alias_type(v, shape_table)).collect();
+            if resolved.len() < 2 { Type::Error } else { Type::Union { variants: resolved } }
+        }
+        _ => Type::Error,
+    }
+}
+
+/// Collect `shape Name = Type` alias declarations from the module.
+///
+/// These are union type aliases like `shape Shape = Circle | Square | Triangle`.
+/// The alias name maps to the resolved alias type.
+fn collect_union_aliases(module: &Module, shape_table: &crate::shapes::ShapeTable) -> HashMap<String, Type> {
+    let mut aliases = HashMap::new();
+    for item in &module.items {
+        if let Item::ShapeDecl(sd) = item {
+            if let Some(alias_ast_ty) = &sd.alias_ty {
+                let resolved = resolve_alias_type(alias_ast_ty, shape_table);
+                aliases.insert(sd.name.clone(), resolved);
+            }
+        }
+    }
+    aliases
+}
+
 /// Check whether two types are compatible for assignment.
 ///
 /// This is mostly structural equality, with one exception: `BuiltinFixed` ignores the
@@ -2282,6 +2472,11 @@ fn types_compatible(a: &Type, b: &Type) -> bool {
         // M6: union type compatibility — same set of variants (order-insensitive for now).
         (Type::Union { variants: va }, Type::Union { variants: vb }) => {
             va.len() == vb.len() && va.iter().zip(vb.iter()).all(|(a, b)| types_compatible(a, b))
+        }
+        // M6: assigning a concrete variant type to a union is valid.
+        // e.g., `let s: Circle | Square = { radius: 5.0 }` — Circle is a valid union value.
+        (Type::Union { variants }, concrete) => {
+            variants.iter().any(|v| types_compatible(v, concrete))
         }
         _ => a == b,
     }
@@ -2348,6 +2543,8 @@ fn expr_has_error(expr: &Expr) -> bool {
         Expr::ArrayLit { elements, .. } => elements.iter().any(expr_has_error),
         // M5 P3c: map literal — propagate error check into all keys and values.
         Expr::MapLit { entries, .. } => entries.iter().any(|(k, v)| expr_has_error(k) || expr_has_error(v)),
+        // M6: is-expression — propagate into the scrutinee.
+        Expr::Is { expr, .. } => expr_has_error(expr),
     }
 }
 

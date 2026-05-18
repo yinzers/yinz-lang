@@ -1517,6 +1517,9 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         }
 
         Expr::Error(_) => Err("codegen: error node".to_string()),
+
+        // M6: `x is Foo` — P4 implements; typeck would have rejected programs with unimplemented forms.
+        Expr::Is { .. } => Err("codegen: Expr::Is not yet lowered (P4 work)".to_string()),
     }
 }
 

@@ -689,16 +689,16 @@ fn m3_loop_var_mutation_produces_diagnostic() {
 
 
 #[test]
-fn m3_is_type_arm_produces_m6_deferral() {
-    // WHY: `is Circle =>` pattern matching is M6 work (union types).
-    // The diagnostic must point at M6 so the user knows when to expect it.
-    // If this compiles silently, we've shipped a half-baked feature.
+fn m3_is_type_arm_on_non_union_produces_error() {
+    // WHY: `is Circle =>` on a non-union scrutinee (here: `string`) must produce
+    // a teaching error explaining that `is` is for union types. M6 P3b ships this;
+    // the M3 deferral diagnostic is replaced. P5 ships a runnable replacement fixture.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_is_type_deferral.ynz"));
-    assert_ne!(code, 0, "is-type deferral must exit non-zero");
+    assert_ne!(code, 0, "is-type on non-union must exit non-zero");
     assert!(stdout.is_empty());
     assert!(
-        stderr.contains("milestone 6") || stderr.contains("M6"),
-        "deferral must name M6, got:\n{stderr}"
+        stderr.contains("not a union type") || stderr.contains("union"),
+        "expected 'not a union type' diagnostic, got:\n{stderr}"
     );
 }
 

@@ -20,6 +20,7 @@ use ynz_ast::nodes::{
     MatchArm, MatchPattern, MatchPatternKind, Module, OptionsDecl, OwnershipModifier, Param,
     PostfixOpKind, ReceiverKind, ShapeDecl, Stmt, StructLitField, Type, TypePath, UnaryOpKind,
 };
+// TypePath is also used for Expr::Is
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 use crate::token::{Spanned, Token};
@@ -811,7 +812,33 @@ impl<'a> Parser<'a> {
             ));
         }
 
-        let cond = self.parse_expr(0);
+        let mut cond = self.parse_expr(0);
+
+        // M6: `if (x is TypeName)` condition form — wrap as Expr::Is after condition parse.
+        if matches!(self.peek(), Token::Is) {
+            let is_start = cond.span().start;
+            self.advance(); // consume `is`
+            let ty_span = self.current_span();
+            let ty_name = if let Token::Identifier(n) = self.peek().clone() {
+                let n2 = n.clone();
+                self.advance();
+                n2
+            } else {
+                self.diags.push(Diagnostic::error(
+                    self.current_span(),
+                    "Expected a type name after `is`.",
+                    "Write `if (x is Circle)` where `Circle` is a union variant type.",
+                    "`is` checks which variant of a union type a value is at runtime.",
+                ));
+                String::new()
+            };
+            let is_end = self.current_span().start;
+            cond = Expr::Is {
+                expr: Box::new(cond),
+                ty: TypePath { name: ty_name, span: ty_span },
+                span: SourceSpan::new(self.file, is_start, is_end),
+            };
+        }
 
         if self.expect(&Token::RParen).is_none() {
             self.diags.push(Diagnostic::error(
@@ -964,6 +991,8 @@ impl<'a> Parser<'a> {
 
         // Check for the `is TypeName =>` arm form (M6 — Token::Is is now a real keyword).
         // P2 replaces this deferral with a real implementation; for P1 it preserves the M3 diagnostic.
+        // M6 P3b: `is TypeName =>` arm form — full implementation.
+        // No longer deferred; parser produces Is(TypePath) and typeck validates.
         if matches!(self.peek(), Token::Is) {
             let is_span = self.current_span();
             self.advance(); // consume `is`
@@ -972,16 +1001,16 @@ impl<'a> Parser<'a> {
                 self.advance();
                 n2
             } else {
+                self.diags.push(Diagnostic::error(
+                    self.current_span(),
+                    "Expected a type name after `is` in multi-case arm.",
+                    "Write `is Circle =>` where `Circle` is a union variant type.",
+                    "`is` in a multi-case arm checks which union variant a value is.",
+                ));
                 String::new()
             };
             let arrow_span = self.current_span();
             let _ = self.expect(&Token::FatArrow);
-            self.diags.push(Diagnostic::error(
-                is_span.clone(),
-                format!("`is {type_name} =>` pattern matching is not available yet."),
-                "Use value matching `1 => ...` or `else => ...` for now.",
-                "Matching on a value's type in multi-case `if` arms (`is Circle => ...`) arrives in v0.1 milestone 6 when union types land.",
-            ));
             let body = self.parse_arm_body();
             let pat_span = SourceSpan::new(self.file, pat_start, arrow_span.start);
             return MatchArm {
@@ -2043,6 +2072,19 @@ impl<'a> Parser<'a> {
         // Optional `<T, U>` type-param list
         let generics = self.parse_generic_params();
 
+        // M6: `shape Name = TypeExpr` — type alias form (union type declarations, etc.)
+        if matches!(self.peek(), Token::Eq) {
+            self.advance(); // consume `=`
+            let alias_ty = self.parse_type();
+            let end = self.current_span().start;
+            return Some(ShapeDecl {
+                name, name_span, is_base, generics,
+                extends: None, follows: vec![], fields: vec![], contract_sigs: vec![],
+                alias_ty: Some(alias_ty),
+                span: SourceSpan::new(self.file, start, end),
+            });
+        }
+
         // Optional `extends Parent`
         let extends = if matches!(self.peek(), Token::Extends) {
             self.advance(); // consume `extends`
@@ -2199,6 +2241,7 @@ impl<'a> Parser<'a> {
             follows,
             fields,
             contract_sigs,
+            alias_ty: None,
             span: SourceSpan::new(self.file, start, end),
         })
     }

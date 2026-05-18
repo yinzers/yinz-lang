@@ -290,8 +290,9 @@ pub enum UnaryOpKind {
 /// An expression.
 ///
 /// Variant count is pinned by the milestone-locked tests in the test suite.
-/// Current count: 18 — M4 added FieldAccess(11), StructLit(12), PostfixOp(13),
-/// SelfValue(14); M5 added NoneLit(15), IndexAccess(16), ArrayLit(17), MapLit(18).
+/// Current count: 19 — M4 added FieldAccess(11), StructLit(12), PostfixOp(13),
+/// SelfValue(14); M5 added NoneLit(15), IndexAccess(16), ArrayLit(17), MapLit(18);
+/// M6 added Is(19) for `if (x is Foo)` type-narrowing condition.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
 
@@ -415,6 +416,20 @@ pub enum Expr {
         entries: Vec<(Expr, Expr)>,
         span: SourceSpan,
     },
+
+    // test-ratchet: M6 adds Is for `expr is TypeName` type-narrowing condition form.
+    /// Type-narrowing predicate: `x is Circle`.
+    ///
+    /// Used in if-condition position: `if (x is Circle) { ... }`.
+    /// Inside the then-block, `x` is narrowed to `Circle`. Typeck validates
+    /// that the named type is a variant of `x`'s union type.
+    /// `is` looks up the type in the types-only namespace — same-name value
+    /// bindings do NOT shadow the type lookup.
+    Is {
+        expr: Box<Expr>,
+        ty: TypePath,
+        span: SourceSpan,
+    },
 }
 
 /// The kind of dot-postfix body operation.
@@ -450,7 +465,8 @@ impl Expr {
             | Expr::PostfixOp { span, .. }
             | Expr::IndexAccess { span, .. }
             | Expr::ArrayLit { span, .. }
-            | Expr::MapLit { span, .. } => span,
+            | Expr::MapLit { span, .. }
+            | Expr::Is { span, .. } => span,
             Expr::SelfValue { span } => span,
             Expr::NoneLit { span } => span,
         }
@@ -663,5 +679,9 @@ pub struct ShapeDecl {
     pub fields: Vec<FieldDecl>,
     /// Bare method signatures (for contract shapes).
     pub contract_sigs: Vec<ContractSig>,
+    /// M6: when set, this is a union type alias declaration: `shape Shape = Circle | Square`.
+    /// The type is stored as a `Type::Union` (or any other type alias).
+    /// When `Some`, `fields`, `extends`, `follows`, and `contract_sigs` are empty.
+    pub alias_ty: Option<Type>,
     pub span: SourceSpan,
 }

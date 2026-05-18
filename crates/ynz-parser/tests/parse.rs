@@ -219,6 +219,7 @@ fn m4_item_variant_count_locked() {
             follows: vec![],
             fields: vec![],
             contract_sigs: vec![],
+            alias_ty: None,
             span: span(0, 0),
         }),
     ];
@@ -351,6 +352,37 @@ fn m5_expr_variant_count_locked() {
 }
 
 #[test]
+fn m6_expr_variant_count_locked() {
+    // WHY: Expr variants beyond M6 are M7+ work. This pins the count.
+    //
+    // test-ratchet: M6 P3b adds Is(19) for `x is Foo` type-narrowing condition form.
+    use ynz_ast::nodes::{BinOpKind, Expr::*, PostfixOpKind};
+    let err = || Box::new(Error(span(0, 0)));
+    let all_variants: &[ynz_ast::nodes::Expr] = &[
+        Ident("x".into(), span(0, 1)),
+        StringLit(vec![], span(0, 0)),
+        Call(Box::new(ynz_ast::nodes::CallExpr { callee: Ident("f".into(), span(0, 1)), type_args: None, args: vec![], span: span(0, 3) })),
+        Error(span(0, 0)),
+        IntLit(0, span(0, 1)),
+        NumberLit("0".into(), span(0, 1)),
+        BoolLit(true, span(0, 4)),
+        BinOp { op: BinOpKind::Add, lhs: err(), rhs: err(), span: span(0, 0) },
+        UnaryOp { op: ynz_ast::nodes::UnaryOpKind::Neg, operand: err(), span: span(0, 0) },
+        MethodCall { receiver: err(), method: "m".into(), method_span: span(0, 1), args: vec![], span: span(0, 0) },
+        FieldAccess { receiver: err(), field: "f".into(), field_span: span(0, 1), span: span(0, 0) },
+        StructLit { fields: vec![], span: span(0, 0) },
+        PostfixOp { receiver: err(), op: PostfixOpKind::Copy, span: span(0, 0) },
+        SelfValue { span: span(0, 0) },
+        NoneLit { span: span(0, 0) },
+        IndexAccess { receiver: err(), index: err(), span: span(0, 0) },
+        ArrayLit { elements: vec![], span: span(0, 0) },
+        MapLit { entries: vec![], span: span(0, 0) },
+        Is { expr: err(), ty: ynz_ast::nodes::TypePath { name: "Foo".into(), span: span(0, 3) }, span: span(0, 0) },
+    ];
+    assert_eq!(all_variants.len(), 19, "Expr variant count changed from 19 — add a // test-ratchet: comment");
+}
+
+#[test]
 fn m5_type_variant_count_locked() {
     // WHY: Type variants beyond M5 are M6+ work. This pins the count.
     //
@@ -392,7 +424,7 @@ fn m6_item_variant_count_locked() {
         }),
         ShapeDecl(ynz_ast::nodes::ShapeDecl {
             name: String::new(), name_span: span(0, 0), is_base: false, generics: vec![],
-            extends: None, follows: vec![], fields: vec![], contract_sigs: vec![], span: span(0, 0),
+            extends: None, follows: vec![], fields: vec![], contract_sigs: vec![], alias_ty: None, span: span(0, 0),
         }),
         OptionsDecl(ynz_ast::nodes::OptionsDecl {
             name: "Status".into(), name_span: span(0, 6), variants: vec![], span: span(0, 20),
@@ -1562,21 +1594,24 @@ fn multi_case_else_only_parses_as_match() {
 }
 
 #[test]
-fn is_type_arm_produces_m6_deferral_diagnostic() {
-    // WHY: `if (shape) { is Circle => ... }` is the M6 type-narrowing form.
-    // In M3 the parser must emit a deferral diagnostic (not a confusing
-    // "unexpected token" error) and produce a MatchArm so the parser recovers.
+fn is_type_arm_produces_is_pattern_no_deferral() {
+    // WHY: In M6 P3b, `is Circle =>` is a real implementation — no deferral diagnostic.
+    // The parser must produce a MatchPatternKind::Is arm cleanly.
+    // (Previously this test checked for a deferral; M6 P3b removes the deferral.)
     let output = parse("function main() -> nothing { if (value) { is Circle => print(1) } }");
-    assert_eq!(
-        output.diagnostics.len(),
-        1,
-        "is-type arm must produce exactly 1 M6 deferral diagnostic"
-    );
-    assert!(
-        output.diagnostics[0].why.contains("milestone 6"),
-        "Deferral must mention milestone 6, got: {:?}",
-        output.diagnostics[0].why
-    );
+    // Parser produces 0 diagnostics — typeck handles semantic validation.
+    // (The scrutinee `value` being a string will produce a typeck error, but
+    // the PARSER itself is now clean for is-type arms.)
+    let is_arm_found = output.module.items.iter().any(|item| {
+        if let Item::Function(f) = item {
+            f.body.stmts.iter().any(|stmt| {
+                if let ynz_ast::nodes::Stmt::Match { arms, .. } = stmt {
+                    arms.iter().any(|arm| matches!(&arm.pattern.kind, MatchPatternKind::Is(_)))
+                } else { false }
+            })
+        } else { false }
+    });
+    assert!(is_arm_found, "expected Is arm in parsed AST; diagnostics: {:?}", output.diagnostics);
 }
 
 #[test]

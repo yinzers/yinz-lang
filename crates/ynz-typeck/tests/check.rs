@@ -1337,6 +1337,98 @@ function main() -> nothing {
 "#);
 }
 
+// ── M6: union typeck (P3b) ───────────────────────────────────────────────────
+
+#[test]
+fn m6_union_type_annotation_works() {
+    // WHY: A union type `let s: Circle | Square = c` must parse and typecheck without errors.
+    // Assigning a concrete variant (Circle) to a union type must be valid.
+    assert_clean(r#"
+shape Circle { radius: number }
+shape Square { side: number }
+shape Shape = Circle | Square
+function describe(s: Shape) -> nothing {
+  if (s) {
+    is Circle => print("circle")
+    is Square => print("square")
+  }
+}
+function main() -> nothing {
+  let c: Circle = { radius: 5.0 }
+  let s: Shape = c
+  describe(s)
+}
+"#);
+}
+
+#[test]
+fn m6_union_multicase_exhaustive_clean() {
+    // WHY: A fully-covered union multi-case must typecheck cleanly.
+    assert_clean(r#"
+shape Circle { radius: number }
+shape Square { side: number }
+shape Shape = Circle | Square
+function classify(s: Shape) -> nothing {
+  if (s) {
+    is Circle => print("circle")
+    is Square => print("square")
+  }
+}
+function main() -> nothing { }
+"#);
+}
+
+#[test]
+fn m6_union_multicase_nonexhaustive_is_error() {
+    // WHY: A missing `is Foo` arm in a union multi-case must produce an error.
+    assert_errors(r#"
+shape Circle { radius: number }
+shape Square { side: number }
+shape Triangle { width: number
+  height: number }
+shape Shape = Circle | Square | Triangle
+function classify(s: Shape) -> nothing {
+  if (s) {
+    is Circle => print("circle")
+    is Square => print("square")
+  }
+}
+function main() -> nothing { }
+"#, 1);
+}
+
+#[test]
+fn m6_union_multicase_with_else_is_clean() {
+    // WHY: `else =>` covers all remaining variants — must typecheck clean.
+    assert_clean(r#"
+shape Circle { radius: number }
+shape Square { side: number }
+shape Triangle { width: number
+  height: number }
+shape Shape = Circle | Square | Triangle
+function classify(s: Shape) -> nothing {
+  if (s) {
+    is Circle => print("circle")
+    else => print("other")
+  }
+}
+function main() -> nothing { }
+"#);
+}
+
+#[test]
+fn m6_is_expr_on_non_union_is_error() {
+    // WHY: `is Foo` on a non-union (e.g., string) must produce a teaching error.
+    assert_errors(r#"
+function main() -> nothing {
+  let s: string = "hello"
+  if (s is int) {
+    print("wrong")
+  }
+}
+"#, 1);
+}
+
 // ── M6: options typeck ────────────────────────────────────────────────────────
 
 #[test]
