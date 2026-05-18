@@ -1247,7 +1247,7 @@ impl<'b> Checker<'b> {
         // Shapes are printable — the compiler emits a default "ShapeName { field: val, ... }"
         // representation. User-defined toString() can override this.
         let is_printable = self.intrinsics.is_print_type(&arg_ty)
-            || matches!(&arg_ty, Type::Shape { .. });
+            || matches!(&arg_ty, Type::Shape { .. } | Type::BuiltinArray { .. });
         if arg_ty != Type::Error && !is_printable {
             // M7 P3a: give a more helpful diagnostic for ErrorsCapable values.
             if let Type::ErrorsCapable { .. } = &arg_ty {
@@ -1258,13 +1258,21 @@ impl<'b> Checker<'b> {
                     "When a function can fail, the failure must be handled somewhere. The compiler enforces this so failures can't silently pass through.",
                 ));
             } else {
+                let what_instead = match &arg_ty {
+                    Type::BuiltinArray { .. } | Type::BuiltinFixed { .. } =>
+                        "Loop and print each element: `for (item in collection) { print(item) }`".to_string(),
+                    Type::BuiltinMap { .. } =>
+                        "Loop and print each entry: `for ((k, v) in collection) { print(k) }`".to_string(),
+                    _ =>
+                        "Convert it to a string first with `.toString()`.".to_string(),
+                };
                 self.diags.push(Diagnostic::error(
                     call.args[0].span().clone(),
                     format!(
                         "`print` cannot display a `{}` value directly.",
                         type_name(&arg_ty)
                     ),
-                    "Convert it to a string first with `.toString()`.",
+                    what_instead,
                     "`print` works with: int, float, number, bool, string, and any shape.",
                 ));
             }
