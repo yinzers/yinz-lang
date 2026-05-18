@@ -54,7 +54,14 @@ impl<'src> Lexer<'src> {
                 self.lex_backtick_content(); // does NOT consume an opening backtick
                 continue;
             }
+            let before_skip = self.tokens.len();
             self.skip_whitespace_and_comments();
+            // If skip_whitespace_and_comments emitted a token (a DocComment), loop
+            // back so the NEXT call to skip_whitespace_and_comments processes what
+            // follows — do NOT call lex_one() on the next character.
+            if self.tokens.len() > before_skip {
+                continue;
+            }
             if self.pos >= self.src.len() {
                 self.push_token(Token::Eof, self.pos, self.pos);
                 break;

@@ -3625,6 +3625,8 @@ mod tests {
                 errors_capable: false,
                 // test-ratchet: M8 P1 adds is_exported
                 is_exported: false,
+                // test-ratchet: M8 P3 adds doc
+                doc: None,
             })],
             span: span(0, 57),
         };

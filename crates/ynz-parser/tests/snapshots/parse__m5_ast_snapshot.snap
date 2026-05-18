@@ -73,6 +73,7 @@ Module {
                             start: 22,
                             end: 30,
                         },
+                        doc: None,
                     },
                     FieldDecl {
                         name: "second",
@@ -101,6 +102,7 @@ Module {
                             start: 33,
                             end: 42,
                         },
+                        doc: None,
                     },
                 ],
                 contract_sigs: [],
@@ -111,6 +113,7 @@ Module {
                     end: 44,
                 },
                 is_exported: false,
+                doc: None,
             },
         ),
         Function(
@@ -209,6 +212,7 @@ Module {
                 },
                 errors_capable: false,
                 is_exported: false,
+                doc: None,
             },
         ),
         Function(
@@ -306,6 +310,7 @@ Module {
                 },
                 errors_capable: false,
                 is_exported: false,
+                doc: None,
             },
         ),
         Function(
@@ -599,6 +604,7 @@ Module {
                 },
                 errors_capable: false,
                 is_exported: false,
+                doc: None,
             },
         ),
     ],

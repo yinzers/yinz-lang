@@ -245,6 +245,8 @@ fn m4_item_variant_count_locked() {
             errors_capable: false,
             // test-ratchet: M8 P1 adds is_exported
             is_exported: false,
+            // test-ratchet: M8 P3 adds doc
+            doc: None,
         }),
         Item::ShapeDecl(ShapeDecl {
             name: "Foo".into(),
@@ -259,6 +261,8 @@ fn m4_item_variant_count_locked() {
             span: span(0, 0),
             // test-ratchet: M8 P1 adds is_exported
             is_exported: false,
+            // test-ratchet: M8 P3 adds doc
+            doc: None,
         }),
     ];
     assert_eq!(
@@ -734,6 +738,8 @@ fn m6_item_variant_count_locked() {
             errors_capable: false,
             // test-ratchet: M8 P1 adds is_exported
             is_exported: false,
+            // test-ratchet: M8 P3 adds doc
+            doc: None,
         }),
         ShapeDecl(ynz_ast::nodes::ShapeDecl {
             name: String::new(),
@@ -748,6 +754,8 @@ fn m6_item_variant_count_locked() {
             span: span(0, 0),
             // test-ratchet: M8 P1 adds is_exported
             is_exported: false,
+            // test-ratchet: M8 P3 adds doc
+            doc: None,
         }),
         OptionsDecl(ynz_ast::nodes::OptionsDecl {
             name: "Status".into(),
@@ -756,6 +764,8 @@ fn m6_item_variant_count_locked() {
             span: span(0, 20),
             // test-ratchet: M8 P1 adds is_exported
             is_exported: false,
+            // test-ratchet: M8 P3 adds doc
+            doc: None,
         }),
     ];
     assert_eq!(
@@ -3605,4 +3615,86 @@ fn m7_type_variant_count_locked() {
         15,
         "Type variant count changed from 15 — add a // test-ratchet: comment"
     );
+}
+
+// ── M8 P3: doc-comment attachment ────────────────────────────────────────────
+
+#[test]
+fn m8_doc_comment_attaches_to_function() {
+    // WHY: `/// comment\nfunction foo() -> nothing {}` must parse with doc = Some("comment")
+    // on the FunctionDecl. If break_after detection breaks or the parser discards the
+    // doc buffer too early, doc becomes None and ynz doc (v1.1) loses the information.
+    let output = parse("/// fetches a user.\nfunction entrypoint() -> nothing {}");
+    assert_eq!(
+        output.diagnostics.len(),
+        0,
+        "no diagnostics expected: {:?}",
+        output.diagnostics
+    );
+    match &output.module.items[0] {
+        Item::Function(f) => {
+            assert_eq!(
+                f.doc,
+                Some("fetches a user.".to_string()),
+                "doc must be Some with the stripped content"
+            );
+        }
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => {
+            panic!("expected Function item")
+        }
+    }
+}
+
+#[test]
+fn m8_doc_comment_multiline_joins_with_newline() {
+    // WHY: `/// line1\n/// line2\nfunction ...` must produce doc = Some("line1\nline2").
+    // If the parser only attaches the LAST doc line, multi-line docs lose content.
+    let output = parse("/// line1\n/// line2\nfunction entrypoint() -> nothing {}");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::Function(f) => {
+            assert_eq!(f.doc, Some("line1\nline2".to_string()));
+        }
+        _ => panic!("expected Function item"),
+    }
+}
+
+#[test]
+fn m8_doc_comment_blank_line_breaks_attachment() {
+    // WHY: `/// orphan\n\nfunction ...` (blank line between) must produce doc = None.
+    // The break_after flag from the lexer gates this. If the parser ignores break_after,
+    // orphaned docs silently attach to the wrong item.
+    let output = parse("/// orphan\n\nfunction entrypoint() -> nothing {}");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::Function(f) => {
+            assert_eq!(
+                f.doc, None,
+                "orphaned doc (blank line break) must not attach"
+            );
+        }
+        _ => panic!("expected Function item"),
+    }
+}
+
+#[test]
+fn m8_doc_comment_on_private_item_silently_preserved() {
+    // WHY: Per spec, doc comments on private (non-exported) items are silently preserved
+    // in M8 (no warning until v0.4 lint tier). The parser must not drop them.
+    let output = parse("/// private note\nfunction entrypoint() -> nothing {}");
+    assert_eq!(
+        output.diagnostics.len(),
+        0,
+        "no diagnostics for doc on private item in M8"
+    );
+    match &output.module.items[0] {
+        Item::Function(f) => {
+            assert_eq!(f.doc, Some("private note".to_string()));
+        }
+        _ => panic!("expected Function item"),
+    }
 }
