@@ -206,3 +206,36 @@ function healPlayer(lend self: Player, amount: int) -> nothing {
 function identity<T>(give value: T) -> T {
   return value
 }
+
+// ────── M6: options + unions + narrowing ──────
+
+options Status { pending, active, banned }
+
+function mainBody() -> nothing {
+  // Options declaration + value use
+  let current: Status = Status.active
+  print(current.toString())
+
+  // Options equality
+  let isActive = current == Status.active
+  print(isActive.toString())
+
+  // Options multi-case (exhaustive)
+  if (current) {
+    active  => print("user is active")
+    pending => print("user is pending")
+    banned  => print("user is banned")
+  }
+
+  // Fallible conversion: string → maybe<int>
+  let parsed: maybe<int> = "42".toInt()
+  print(parsed.or(0).toString())
+
+  // Fallible conversion: float → maybe<int>
+  let fromFloat: maybe<int> = (3.14).toInt()
+  print(fromFloat.or(-1).toString())
+
+  // int.toInt() is identity (infallible)
+  let fromInt: int = (99).toInt()
+  print(fromInt.toString())
+}

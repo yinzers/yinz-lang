@@ -118,7 +118,7 @@ pub fn check_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<CheckOut
         &sig_output.shape_table,
         &sig_output.generic_fn_table,
         &sig_output.generic_shape_table,
-        &PrimitiveIntrinsicTable::m3(),
+        &PrimitiveIntrinsicTable::m6(),
     );
     all_diags.extend(check_diags.into_iter());
 

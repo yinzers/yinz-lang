@@ -1,0 +1,39 @@
+// examples/errors/m6_errors.ynz
+//
+// Intentional compile-error gallery for M6: options, unions, and narrowing.
+// Every declaration below triggers a specific diagnostic class.
+// Run via the existing m{N}_errors.ynz snapshot harness in crates/ynz-driver/tests.
+
+// WHY: non-exhaustive options multi-case — missing variant named in diagnostic
+options Status { pending, active, banned }
+function nonExhaustiveOptions(s: Status) -> nothing {
+  if (s) {
+    active  => print("active")
+    pending => print("pending")
+    // 'banned' is missing — compile error
+  }
+}
+
+// WHY: single-variant options is rejected — symmetric with single-variant union
+options Single { only }
+
+// WHY: empty options is rejected — must have ≥2 variants
+options Empty { }
+
+// WHY: .toInt() on bool is rejected — no silent 0/1 coercion
+function boolToInt() -> nothing {
+  let x = true.toInt()
+}
+
+// WHY: cross-options-type comparison is rejected — different tag namespaces
+options Visibility { visible, invisible }
+function crossOptionsCompare(s: Status, v: Visibility) -> nothing {
+  let eq = s == v
+}
+
+// WHY: unknown options variant — typo caught at compile time
+function badVariant() -> nothing {
+  let s: Status = Status.activ
+}
+
+function main() -> nothing { }

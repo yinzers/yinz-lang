@@ -37,6 +37,22 @@ impl PrimitiveIntrinsicTable {
         Self::m3()
     }
 
+    pub fn m6() -> Self {
+        let mut t = Self::m3();
+        // M6 P3a: fallible numeric and string conversions.
+        // (int).toInt() is infallible — returns int directly (identity).
+        t.methods.push((Type::Int, "toInt", Type::Int));
+        // (float).toInt() is fallible — returns maybe<int>.
+        t.methods.push((Type::Float, "toInt", Type::Maybe { inner: Box::new(Type::Int) }));
+        // (number).toInt() is fallible — returns maybe<int>.
+        t.methods.push((Type::Number { precision: 34 }, "toInt", Type::Maybe { inner: Box::new(Type::Int) }));
+        // string → fallible int/float/number conversions.
+        t.methods.push((Type::String, "toInt",    Type::Maybe { inner: Box::new(Type::Int) }));
+        t.methods.push((Type::String, "toFloat",  Type::Maybe { inner: Box::new(Type::Float) }));
+        t.methods.push((Type::String, "toNumber", Type::Maybe { inner: Box::new(Type::Number { precision: 34 }) }));
+        t
+    }
+
     pub fn m3() -> Self {
         let range_ret = || Type::Range { element: Box::new(Type::Int), end_inclusive: false };
         Self {

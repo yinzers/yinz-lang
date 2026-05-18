@@ -13,6 +13,7 @@ use crate::{
         MonoSignature, MonomorphizationTable, Substitution,
     },
     intrinsics::PrimitiveIntrinsicTable,
+    options_table::{collect_options, OptionsTable},
     return_paths::analyze_return_paths,
     scope::{Scope, ScopeEntry},
     shapes::ShapeTable,
@@ -43,14 +44,18 @@ pub fn check(
     generic_shape_table: &GenericShapeTable,
     intrinsics: &PrimitiveIntrinsicTable,
 ) -> (TypedModule, MonomorphizationTable, DiagnosticBucket) {
+    let mut diags = DiagnosticBucket::new();
+    let options_table = collect_options(module, &mut diags);
+
     let mut checker = Checker {
         intrinsics,
         sig_table,
         shape_table,
         generic_fn_table,
         generic_shape_table,
+        options_table: &options_table,
         expr_types: HashMap::new(),
-        diags: DiagnosticBucket::new(),
+        diags,
         scope: Scope::new(),
         current_fn_ret: Type::Nothing,
         current_shape: None,
@@ -72,6 +77,7 @@ struct Checker<'b> {
     shape_table: &'b ShapeTable,
     generic_fn_table: &'b GenericFnTable,
     generic_shape_table: &'b GenericShapeTable,
+    options_table: &'b OptionsTable,
     expr_types: HashMap<(usize, usize), Type>,
     diags: DiagnosticBucket,
     scope: Scope,
@@ -100,8 +106,8 @@ impl<'b> Checker<'b> {
             match item {
                 Item::Function(f) => self.check_function(f),
                 Item::ShapeDecl(_) => {}
-                // M6: options declarations are registered in the OptionsTable (P3a work).
-                // For P2 (parser), the typeck just acknowledges the new Item variant.
+                // M6: options declarations are validated and registered by collect_options()
+                // which runs before check_module. Nothing to do here.
                 Item::OptionsDecl(_) => {}
             }
         }
@@ -455,13 +461,46 @@ impl<'b> Checker<'b> {
                         ));
                     }
                 }
-                // Is and OptionName: M6 arms — typeck implementation lands in P3a/P3b.
-                // Parser already emitted the deferral diagnostic; typeck skips for now.
-                MatchPatternKind::Is(_) | MatchPatternKind::OptionName(_) => {}
+                // Is: M6 union narrowing — P3b implements full typeck.
+                // Parser emitted deferral diagnostic; typeck skips for now.
+                MatchPatternKind::Is(_) => {}
+                // OptionName: M6 options multi-case arm.
+                MatchPatternKind::OptionName(variant_name) => {
+                    self.check_option_name_arm(&scrutinee_ty, variant_name, &arm.pattern.span);
+                }
             }
             self.scope.push();
             self.check_stmts(&arm.body.stmts);
             self.scope.pop();
+        }
+
+        // Exhaustiveness check for options multi-case.
+        if let Type::Options { name: opts_name } = &scrutinee_ty {
+            if let Some(entry) = self.options_table.get(opts_name) {
+                let covered: std::collections::HashSet<&str> = arms.iter().filter_map(|arm| {
+                    if let MatchPatternKind::OptionName(v) = &arm.pattern.kind { Some(v.as_str()) } else { None }
+                }).collect();
+                if else_arm.is_none() {
+                    let missing: Vec<&str> = entry.variants.iter()
+                        .filter(|v| !covered.contains(v.as_str()))
+                        .map(String::as_str)
+                        .collect();
+                    if !missing.is_empty() {
+                        self.diags.push(Diagnostic::error(
+                            scrutinee.span().clone(),
+                            format!(
+                                "Non-exhaustive options multi-case — `{}` has {} variants; {} are not handled: {}.",
+                                opts_name,
+                                entry.variants.len(),
+                                missing.len(),
+                                missing.join(", ")
+                            ),
+                            format!("Add the missing arms (e.g. `{} =>`) or add an `else =>` catch-all.", missing[0]),
+                            "The compiler knows every variant at compile time. A missing arm means some values would silently fall through — likely a bug.",
+                        ));
+                    }
+                }
+            }
         }
 
         if let Some(else_body) = else_arm {
@@ -644,10 +683,12 @@ impl<'b> Checker<'b> {
             Expr::FieldAccess { receiver, field, field_span, .. } => {
                 // M4 P5: type-attached constants (e.g. `int.max`, `number.epsilon`).
                 // Intercept before inferring receiver type to avoid "undefined `int`" error.
-                // Must NOT use `return` here — the match value feeds expr_types.insert below.
-                if let Expr::Ident(type_name, _) = receiver.as_ref() {
-                    if let Some(const_ty) = type_attached_const_type(type_name, field) {
+                if let Expr::Ident(type_name_str, _) = receiver.as_ref() {
+                    if let Some(const_ty) = type_attached_const_type(type_name_str, field) {
                         const_ty
+                    } else if self.options_table.contains(type_name_str) {
+                        // M6: OptionsValue — `Status.active` where Status is an options type.
+                        self.check_options_value(type_name_str, field, field_span)
                     } else {
                         self.infer_field_access(receiver, field, field_span)
                     }
@@ -1024,6 +1065,19 @@ impl<'b> Checker<'b> {
                 | (Type::Number { .. }, Type::Number { .. })
                 | (Type::Bool, Type::Bool)
                 | (Type::String, Type::String) => Type::Bool,
+                // M6: same-options-type comparison is valid.
+                (Type::Options { name: a }, Type::Options { name: b }) if a == b => Type::Bool,
+                // M6: cross-options-type comparison is a compile error.
+                (Type::Options { name: a }, Type::Options { name: b }) => {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        format!("Cannot compare `{a}` and `{b}` — they are different options types."),
+                        format!("Compare values of the same options type, or convert both to the same type first."),
+                        "Comparing values of different options types is almost always a bug — \
+                         the tags have no shared meaning between types.",
+                    ));
+                    Type::Error
+                }
                 _ => {
                     self.emit_binop_mismatch(op, lhs, rhs, span);
                     Type::Error
@@ -1249,6 +1303,18 @@ impl<'b> Checker<'b> {
             return Type::Error;
         }
 
+        // M6: reject `.toInt()` on bool — no silent 0/1 coercion.
+        if *receiver_ty == Type::Bool && method == "toInt" {
+            self.diags.push(Diagnostic::error(
+                method_span.clone(),
+                "`.toInt()` is not available on `bool`.",
+                "Use an `if` expression instead: `if (b) { 1 } else { 0 }`",
+                "Automatic bool-to-int coercion is a common source of bugs. \
+                 Yinz requires an explicit conversion.",
+            ));
+            return Type::Error;
+        }
+
         // Primitive intrinsic methods (M2/M3 — toString, toFloat, etc.)
         if let Some(ret_ty) = self.intrinsics.lookup_method(receiver_ty, method) {
             return ret_ty;
@@ -1372,6 +1438,22 @@ impl<'b> Checker<'b> {
             return Type::Error;
         }
 
+        // M6: options type method dispatch.
+        if let Type::Options { name: opts_name } = receiver_ty {
+            return match method {
+                "toString" => Type::String,
+                other => {
+                    self.diags.push(Diagnostic::error(
+                        method_span.clone(),
+                        format!("`{opts_name}` does not have a method called `{other}`."),
+                        "Options types only have `.toString()` as a built-in method.",
+                        "Method calls are checked at compile time. Only `.toString()` exists on options values.",
+                    ));
+                    Type::Error
+                }
+            };
+        }
+
         // Primitive type with unknown method
         let available = self.intrinsics.methods_for_type(receiver_ty);
         let what_instead = if available.is_empty() {
@@ -1405,6 +1487,10 @@ impl<'b> Checker<'b> {
             // Type param names resolve to TypeParam when inside a generic context.
             AstType::Named(n, _) if self.type_param_scope.contains_key(n) => {
                 Type::TypeParam { name: n.clone() }
+            }
+            // M6: options type names resolve to Type::Options.
+            AstType::Named(n, _) if self.options_table.contains(n) => {
+                Type::Options { name: n.clone() }
             }
             AstType::Named(n, _) if self.shape_table.contains(n) => {
                 Type::Shape { name: n.clone() }
@@ -2123,6 +2209,59 @@ impl<'b> Checker<'b> {
 
         Type::BuiltinMap { key: Box::new(key_ty), val: Box::new(val_ty) }
     }
+
+    // ── M6: options typeck helpers ────────────────────────────────────────────
+
+    /// Typecheck an options value access: `OptionsTypeName.variantName`.
+    ///
+    /// Called from the `Expr::FieldAccess` handler when the receiver is an identifier
+    /// that names an options type. Returns `Type::Options { name }` on success.
+    fn check_options_value(&mut self, type_name: &str, variant: &str, span: &SourceSpan) -> Type {
+        let entry = self.options_table.get(type_name).unwrap(); // caller verified contains()
+        if entry.variants.contains(&variant.to_string()) {
+            Type::Options { name: type_name.to_string() }
+        } else {
+            let valid: Vec<&str> = entry.variants.iter().map(String::as_str).collect();
+            self.diags.push(Diagnostic::error(
+                span.clone(),
+                format!("`{type_name}` has no variant named `{variant}`."),
+                format!("Valid variants are: {}", valid.join(", ")),
+                "Options variants must be declared in the `options` type body.",
+            ));
+            Type::Error
+        }
+    }
+
+    /// Typecheck an `OptionName` arm in a multi-case `if`.
+    ///
+    /// Validates: scrutinee is an options type; variant name is valid for that type.
+    fn check_option_name_arm(&mut self, scrutinee_ty: &Type, variant_name: &str, span: &SourceSpan) {
+        match scrutinee_ty {
+            Type::Options { name: opts_name } => {
+                if let Some(entry) = self.options_table.get(opts_name) {
+                    if !entry.variants.contains(&variant_name.to_string()) {
+                        let valid: Vec<&str> = entry.variants.iter().map(String::as_str).collect();
+                        self.diags.push(Diagnostic::error(
+                            span.clone(),
+                            format!("`{opts_name}` has no variant `{variant_name}`."),
+                            format!("Valid variants are: {}", valid.join(", ")),
+                            "Each arm in a multi-case `if` over an options type must name one of the declared variants.",
+                        ));
+                    }
+                }
+            }
+            Type::Error => {} // already reported upstream
+            other => {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("Cannot use variant-name arm `{variant_name}` on a `{}` value.", type_name(other)),
+                    "Variant-name arms are for options types: `options Status { active, inactive }`.",
+                    "The `variantName =>` arm form matches against named options variants. \
+                     Use `is TypeName =>` to narrow a union, or a value pattern for other types.",
+                ));
+            }
+        }
+    }
 }
 
 
@@ -2140,6 +2279,10 @@ fn types_compatible(a: &Type, b: &Type) -> bool {
             types_compatible(ea, eb)
         }
         (Type::Maybe { inner: ia }, Type::Maybe { inner: ib }) => types_compatible(ia, ib),
+        // M6: union type compatibility — same set of variants (order-insensitive for now).
+        (Type::Union { variants: va }, Type::Union { variants: vb }) => {
+            va.len() == vb.len() && va.iter().zip(vb.iter()).all(|(a, b)| types_compatible(a, b))
+        }
         _ => a == b,
     }
 }

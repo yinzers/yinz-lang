@@ -1,7 +1,7 @@
-/// The types known to the M5 type checker.
+/// The types known to the M6 type checker.
 ///
 /// Variant count is pinned by `m4_type_variant_count_locked` in tests.
-/// Current count: 16 (M5 P3c adds BuiltinMap, MapEntry)
+/// Current count: 18 (M6 adds Options and Union)
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
 
@@ -101,6 +101,23 @@ pub enum Type {
     /// Not user-constructable directly — only produced by map iteration.
     /// `entry.key: K`, `entry.value: V` field access is valid.
     MapEntry { key: Box<Type>, val: Box<Type> },
+
+    // ── M6 ───────────────────────────────────────────────────────────────────
+
+    // test-ratchet: M6 adds Options and Union.
+
+    /// A named options type: `options Status { active, inactive, banned }`.
+    ///
+    /// Values carry an `i8` tag; comparison is `icmp eq i8` at codegen time.
+    /// `.toString()` returns the variant name as a string.
+    Options { name: String },
+
+    /// A union type: `Circle | Square | Triangle`.
+    ///
+    /// LLVM layout chosen per variant set at codegen time (pointer-niche or
+    /// tagged-struct — see `design/unions.md`). Type narrowing via `is` arms
+    /// and `if (x is Foo)` conditions.
+    Union { variants: Vec<Type> },
 }
 
 /// Human-readable type name for diagnostic messages.
@@ -129,5 +146,9 @@ pub fn type_name(t: &Type) -> String {
         Type::Maybe { inner } => format!("maybe<{}>", type_name(inner)),
         Type::BuiltinMap { key, val } => format!("map<{}, {}>", type_name(key), type_name(val)),
         Type::MapEntry { key, val } => format!("MapEntry<{}, {}>", type_name(key), type_name(val)),
+        Type::Options { name } => name.clone(),
+        Type::Union { variants } => {
+            variants.iter().map(type_name).collect::<Vec<_>>().join(" | ")
+        }
     }
 }

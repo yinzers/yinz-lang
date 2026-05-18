@@ -991,7 +991,27 @@ impl<'a> Parser<'a> {
             };
         }
 
-        // Value pattern: literal or identifier followed by `=>`
+        // Options-variant arm: a bare identifier directly followed by `=>`.
+        // Typeck disambiguates at resolution time (options variant vs value expression).
+        // `is TypeName =>` arms are handled above; this catches `variantName =>`.
+        if let Token::Identifier(v) = self.peek().clone() {
+            if *self.peek_ahead(1) == Token::FatArrow {
+                let v_span = self.current_span();
+                let v_name = v.clone();
+                self.advance(); // consume identifier
+                let arrow_span = self.current_span();
+                let _ = self.expect(&Token::FatArrow);
+                let body = self.parse_arm_body();
+                let pat_span = SourceSpan::new(self.file, pat_start, arrow_span.start);
+                return MatchArm {
+                    pattern: MatchPattern { kind: MatchPatternKind::OptionName(v_name), span: SourceSpan::new(self.file, v_span.start, v_span.end) },
+                    body,
+                    arrow_span,
+                };
+            }
+        }
+
+        // Value pattern: literal expression followed by `=>`
         let pat_span_start = self.current_span().start;
         let pattern_expr = self.parse_expr(0);
         let pat_span_end = pattern_expr.span().end;
