@@ -163,3 +163,23 @@ Add entries via `/learn` when a project-specific mistake pattern is identified. 
 **Severity**: warning (bad UX, not a correctness bug — but the teaching mission makes this load-bearing).
 
 **Originating incident**: 2026-05-18 — user tested `ynz run` with `print('hello world')` and got 5 cryptic cascade errors. Audit by Explore agent identified `#`, `;`, `$`, `?` as additional gaps. All five fixed in one session.
+
+---
+
+## Parser Infinite Loop — Zero-Advance Recovery in Bounded Loop — 2026-05-18
+
+**Scope**: Any parser loop in `crates/ynz-parser/src/parser.rs` — specifically all `loop { ... }` constructs that contain error-recovery paths.
+
+**Cause**: Using a macro with a `continue` statement inside `loop { macro!(); break; }`. In Rust, `continue` inside a macro targets the **innermost** enclosing loop at the expansion site — the inner `loop { ... break; }`, not the outer field/element-parsing loop. When the macro's recovery path advances to a boundary token (e.g. `Eof`, `RBrace`) and then `continue`s, it re-enters the inner loop, calls the macro again, sees the same boundary token, skips the recovery loop (no advance), and `continue`s again. Infinite loop.
+
+**The invariant**: every parser loop must **advance at least one token OR exit (break/return) on every iteration**. A zero-advance path that does not `break` or `return` is always a hang.
+
+**Detection**: any `loop { some_macro_with_continue!(); break; }` pattern in parser code is suspect. The correct alternative is a real method (`fn parse_one_thing(&mut self) -> Option<T>`) that returns `None` on failure (already recovered) instead of `continue`-ing.
+
+**Root incident**: `parse_struct_lit_fields` used `loop { parse_one_field!(); break; }` in three places. The macro contained two `continue` paths. On malformed input (e.g. `` {`name:`a`} `` producing an unterminated backtick string + weird token sequence), the compiler hung indefinitely. Fixed by extracting `parse_struct_lit_one_field(&mut self) -> Option<StructLitField>` and replacing all `loop { macro!(); break; }` with `if let Some(f) = self.parse_struct_lit_one_field() { fields.push(f); }`.
+
+**Bouncer checks**:
+- [ ] For diffs touching `crates/ynz-parser/src/parser.rs`: grep added lines for `loop {` followed within 3 lines by a macro invocation ending in `!()` and `break;`. Match → WARNING: verify the macro contains no `continue` or that all `continue` paths advance at least one token first.
+- [ ] For any new parser macro (`macro_rules!`) containing `continue`: flag as high risk unless the macro is ONLY used in the outermost loop context where `continue` is intended.
+
+**Severity**: critical — parser hang means the compiler never exits, which users experience as a freeze with no diagnostic output. This is the worst possible failure mode: silent, unrecoverable, no error message.
