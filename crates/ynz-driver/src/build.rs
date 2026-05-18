@@ -88,11 +88,11 @@ pub fn build(source_path: &Path) -> BuildResult {
     let Some(linker) = find_linker() else {
         diags.push(ynz_diagnostics::Diagnostic::error(
             SourceSpan::new(&file_name, 0, 0),
-            "No C compiler found (tried: cc, gcc, g++, clang).",
-            "Install a C toolchain: on Ubuntu: `sudo apt-get install build-essential`; \
+            "No linker found (tried: clang-18, clang, cc, gcc, g++).",
+            "Install clang: on Ubuntu: `sudo apt-get install clang-18`; \
              on macOS: `xcode-select --install`.",
-            "`ynz build` links your program against the system C library. \
-             A C toolchain must be installed for this step.",
+            "`ynz build` links your program against the C runtime. \
+             `clang-18` is the lightest option — it ships with LLVM 18, which ynz already requires.",
         ));
         return build_failed(diags, source_path);
     };
@@ -167,13 +167,16 @@ pub fn build(source_path: &Path) -> BuildResult {
 }
 
 fn find_linker() -> Option<&'static str> {
-    for candidate in ["cc", "gcc", "g++", "clang"] {
+    // clang-18 first: ships with LLVM 18 (already required to run ynz),
+    // so it's the lightest install path — a few MB vs build-essential's ~200 MB GCC stack.
+    for candidate in ["clang-18", "clang", "cc", "gcc", "g++"] {
         let found = Command::new(candidate)
             .arg("--version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
-            .is_ok();
+            .map(|s| s.success())
+            .unwrap_or(false);
         if found {
             return Some(candidate);
         }
