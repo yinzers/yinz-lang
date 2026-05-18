@@ -699,6 +699,13 @@ pub enum Type {
     /// arrives in M7 P3a. In M7 P1, this node is parsed and stored on
     /// `FunctionDecl.errors_capable`; typeck defers to the inner type.
     ErrorCapable { inner: Box<Type>, span: SourceSpan },
+
+    // test-ratchet: M8 P4 adds Sensitive for `sensitive T` type modifier.
+    /// A sensitive value that auto-redacts in `print()` and interpolation.
+    ///
+    /// Only wraps `string` in v0.1 (typeck enforces this). `.reveal()` strips
+    /// the modifier and returns the underlying value.
+    Sensitive(Box<Type>),
 }
 
 // ── M4 shape declarations ────────────────────────────────────────────────────

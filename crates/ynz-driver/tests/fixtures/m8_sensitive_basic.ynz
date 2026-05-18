@@ -1,0 +1,6 @@
+// M8 P4: sensitive type basic test.
+// A sensitive string must print [REDACTED], not its value.
+function entrypoint() -> nothing {
+  let k: sensitive string = sensitive(`my-api-key-abc123`)
+  print(k)
+}

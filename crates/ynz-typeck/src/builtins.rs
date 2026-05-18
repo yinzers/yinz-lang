@@ -1,4 +1,63 @@
-use crate::types::Type;
+use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
+
+use crate::types::{type_name, Type};
+
+/// Dispatch a method call on `sensitive T`, returning the result type.
+///
+/// Implements the M8 propagation table: methods that return string from string
+/// produce `sensitive string`; scalar extractions (bool, int) return plain types.
+pub fn sensitive_method_return(
+    method: &str,
+    inner: &Type,
+    method_span: &SourceSpan,
+    diags: &mut DiagnosticBucket,
+) -> Type {
+    match method {
+        // .reveal() — strips the sensitive modifier, returns the inner type.
+        "reveal" => inner.clone(),
+
+        // Boolean predicates — result is NOT sensitive (per spec: "length isn't secret").
+        "contains" | "startsWith" | "endsWith" => Type::Bool,
+
+        // Scalar extractions — NOT sensitive.
+        "indexOf" => Type::Maybe {
+            inner: Box::new(Type::Int),
+        },
+        "byteAt" | "get" => Type::Maybe {
+            inner: Box::new(Type::Int),
+        },
+        "count" | "byteCount" | "graphemeCount" => Type::Int,
+
+        // String-returning methods — preserve sensitivity.
+        "toUpperCase" | "toLowerCase" | "trim" | "substring" | "replace" => Type::Sensitive {
+            inner: Box::new(inner.clone()),
+        },
+        "graphemeAt" => Type::Maybe {
+            inner: Box::new(Type::Sensitive {
+                inner: Box::new(inner.clone()),
+            }),
+        },
+        "split" => Type::BuiltinArray {
+            elem: Box::new(Type::Sensitive {
+                inner: Box::new(inner.clone()),
+            }),
+        },
+
+        // Unknown method — emit an error.
+        _ => {
+            diags.push(Diagnostic::error(
+                method_span.clone(),
+                format!(
+                    "`sensitive {}` does not have a method called `{method}`.",
+                    type_name(inner)
+                ),
+                "Available: `.reveal()` (returns the raw value), plus all string methods.",
+                "Sensitive values support the same methods as their inner type, plus `.reveal()`.",
+            ));
+            Type::Error
+        }
+    }
+}
 
 /// Look up the return type of a method call on `string`.
 ///

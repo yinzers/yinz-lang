@@ -932,6 +932,13 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Type::Nothing
             }
+            Token::Sensitive => {
+                // `sensitive T` — type modifier wrapping the inner type.
+                // Only wraps `string` in v0.1 (enforced by typeck, not the parser).
+                self.advance(); // consume `sensitive`
+                let inner = self.parse_type_with_depth(depth + 1);
+                Type::Sensitive(Box::new(inner))
+            }
             Token::Dynamic => {
                 self.advance(); // consume `dynamic`
                 let span = self.current_span();
@@ -2311,6 +2318,36 @@ impl<'a> Parser<'a> {
                 inner
             }
             Token::LBracket => self.parse_array_lit(),
+            // M8 P4: `sensitive(expr)` — constructor form.
+            // `sensitive` is a keyword token in type position; in expression position
+            // it looks like a function call: `sensitive(`value`)`.
+            Token::Sensitive => {
+                let start = self.current_span().start;
+                self.advance(); // consume `sensitive`
+                                // Parse as a function-call-like form.
+                let callee_span = SourceSpan::new(self.file, start, self.current_span().start);
+                let callee = Expr::Ident("sensitive".to_string(), callee_span);
+                if matches!(self.peek(), Token::LParen) {
+                    self.advance(); // consume `(`
+                    let arg = self.parse_expr(0);
+                    let end = self.current_span().end;
+                    let _ = self.expect(&Token::RParen);
+                    Expr::Call(Box::new(CallExpr {
+                        callee,
+                        type_args: None,
+                        args: vec![arg],
+                        span: SourceSpan::new(self.file, start, end),
+                    }))
+                } else {
+                    self.diags.push(Diagnostic::error(
+                        self.current_span(),
+                        "Expected `(` after `sensitive`.",
+                        "Write `sensitive(`my secret`)`.",
+                        "`sensitive` marks a string value as sensitive so it auto-redacts in print output.",
+                    ));
+                    Expr::Error(SourceSpan::new(self.file, start, self.current_span().end))
+                }
+            }
             _ => {
                 let span = self.current_span();
                 if self.is_stmt_boundary() {

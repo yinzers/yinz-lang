@@ -1,0 +1,5 @@
+// M8 P4: .reveal() strips the sensitive modifier and prints the raw value.
+function entrypoint() -> nothing {
+  let k: sensitive string = sensitive(`secret-value`)
+  print(k.reveal())
+}

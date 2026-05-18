@@ -112,6 +112,8 @@ pub fn emit_artifact(
 struct ModuleGlobals<'ctx> {
     str_true: GlobalValue<'ctx>,
     str_false: GlobalValue<'ctx>,
+    /// Static "[REDACTED]" string for sensitive value print output (M8 P4).
+    str_redacted: GlobalValue<'ctx>,
     dec_zero: GlobalValue<'ctx>,
     panic_int_add: GlobalValue<'ctx>,
     panic_int_sub: GlobalValue<'ctx>,
@@ -141,6 +143,7 @@ fn build_module<'ctx, 'g>(
     let globals = ModuleGlobals {
         str_true: build_string_global(ctx, module, "true", ".str.true"),
         str_false: build_string_global(ctx, module, "false", ".str.false"),
+        str_redacted: build_string_global(ctx, module, "[REDACTED]", ".str.redacted"),
         dec_zero: build_decimal_global(ctx, module, zero_bits, ".dec.zero"),
         panic_int_add: build_string_global(ctx, module, "int overflow in '+'", ".panic.iadd"),
         panic_int_sub: build_string_global(ctx, module, "int overflow in '-'", ".panic.isub"),
@@ -624,6 +627,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             Type::Union { .. } => Some(self.ptr().into()),
             // M7 P4c: Range values are {i64 start, i64 end} stored via a stack-alloca pointer.
             Type::Range { .. } => Some(self.ptr().into()),
+            // M8 P4: sensitive values have the same ABI as their inner type (string ptr).
+            Type::Sensitive { .. } => Some(self.ptr().into()),
             _ => None,
         }
     }
@@ -2249,6 +2254,13 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     lower_print(cg, val, &ty)?;
                     Ok(cg.i32().const_int(0, false).into())
                 }
+                // M8 P4: `sensitive(value)` — identity at the ABI level (string ptr passes through).
+                // The type system already marked the return type as Sensitive; codegen just returns
+                // the underlying value unchanged.
+                "sensitive" if call.args.len() == 1 => {
+                    let val = lower_expr(cg, &call.args[0])?;
+                    Ok(val)
+                }
                 "range" => {
                     // M7 P4c: range() as a first-class value — produces a {i64 start, i64 end}
                     // alloca on the stack.  The pointer to that alloca is returned so the range
@@ -2400,6 +2412,19 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                 // M7 P4b: string methods — dispatched through the string runtime.
                 Type::String => {
                     lower_string_method(cg, recv_val.into_pointer_value(), method, args)
+                }
+                // M8 P4: sensitive methods.
+                // `.reveal()` → return the underlying string pointer (identity).
+                // All other methods delegate to the string runtime (same ABI).
+                Type::Sensitive { .. } => {
+                    let ptr = recv_val.into_pointer_value();
+                    if method == "reveal" {
+                        // reveal() strips the sensitive wrapper — just return the pointer.
+                        Ok(ptr.into())
+                    } else {
+                        // All string methods work on the underlying pointer.
+                        lower_string_method(cg, ptr, method, args)
+                    }
                 }
                 _ => {
                     // M4 P5: one-arg primitive intrinsics (wrapping/saturating arithmetic).
@@ -3342,6 +3367,9 @@ fn to_c_string<'ctx>(
 ) -> Result<PointerValue<'ctx>, String> {
     match ty {
         Type::String => Ok(val.into_pointer_value()),
+
+        // M8 P4: sensitive string → always prints [REDACTED].
+        Type::Sensitive { .. } => Ok(cg.globals.str_redacted.as_pointer_value()),
 
         Type::Bool => cg
             .builder

@@ -179,6 +179,13 @@ impl ShapeTable {
                     inner: Box::new(inner_ty),
                 }
             }
+            // M8 P4: `sensitive T` — resolve to Sensitive.
+            AstType::Sensitive(inner) => {
+                let inner_ty = self.resolve_ast_type(inner);
+                crate::types::Type::Sensitive {
+                    inner: Box::new(inner_ty),
+                }
+            }
         }
     }
 }

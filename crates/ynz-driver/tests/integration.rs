@@ -1184,3 +1184,27 @@ fn m8_single_file_fallback_still_works_in_project() {
     assert_eq!(code, 0, "single-file fallback must still work");
     assert_eq!(stdout, "hello, yinz\n");
 }
+
+// ── M8 P4: sensitive type modifier ───────────────────────────────────────────
+
+#[test]
+fn m8_sensitive_print_redacts() {
+    // WHY: `print(k)` where `k` is `sensitive string` must print `[REDACTED]`,
+    // not the underlying value. Guards the auto-redaction invariant.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m8_sensitive_basic.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        stdout, "[REDACTED]\n",
+        "sensitive value must print [REDACTED]"
+    );
+}
+
+#[test]
+fn m8_sensitive_reveal_prints_raw() {
+    // WHY: `.reveal()` on a sensitive value must return the underlying type
+    // (string) and print the raw value. If reveal() doesn't strip the wrapper,
+    // it either still redacts (wrong) or panics (crash).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m8_sensitive_reveal.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "secret-value\n", "reveal() must print raw value");
+}
