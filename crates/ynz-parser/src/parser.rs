@@ -920,8 +920,8 @@ impl<'a> Parser<'a> {
                         self.diags.push(Diagnostic::error(
                             self.current_span(),
                             "Expected `=>` after `else` in multi-case `if`.",
-                            "Write `else => { ... }` for the catch-all arm.",
-                            "The `else` catch-all must be followed by `=>` and a block.",
+                            "Write `else => { ... }` for the default arm.",
+                            "The `else` default arm must be followed by `=>` and a block.",
                         ));
                     }
                     let body = self.parse_arm_body();
@@ -933,7 +933,7 @@ impl<'a> Parser<'a> {
                             self.current_span(),
                             "The `else =>` arm must be the last arm in a multi-case `if`.",
                             "Move `else => ...` to the end of the multi-case block.",
-                            "The `else` catch-all matches anything — having more arms after it would be unreachable.",
+                            "The `else` default arm matches anything — having more arms after it would be unreachable.",
                         ));
                         while !matches!(self.peek(), Token::RBrace | Token::Eof) {
                             self.advance();

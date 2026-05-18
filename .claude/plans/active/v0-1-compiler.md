@@ -194,9 +194,13 @@ Function generics `function foo<T>(...)` and type generics `array<T>` / `fixed<T
 **Depends on**: M5
 
 ### Milestone 7 (M7): Strings (full) + errors + iterables — multi-session
-Full Unicode strings (`.get` for code points, `.byteAt`, `.graphemeAt`), interpolation, the `errors` keyword with flow-sensitive auto-propagation ("cascades"), `Iterable<T>` and `FallibleIterable<T>` contracts wired to `for x in iter` desugaring. **Unwinds M5's REPLACE-AT M7 markers** (six total — three typeck + three codegen for the array/fixed/map for-loop special-cases + the M3 `range()` special-case + the `MapEntry<K,V>` synthesis revisit) — see M5's catch-up obligations.
+Full Unicode strings with SSO (23-byte inline, 24-byte struct) + SIMD UTF-8 validation via `simdutf8` + NFC canonical equality via `unicode-normalization`. ONE string form: backtick-quoted (removed double-quote form). Escape table: `` \` ``, `\${`, `\n`, `\t`, `\\`, `\r`, `\0`. Methods: `.contains`, `.indexOf`, `.startsWith`, `.endsWith`, `.toUpperCase`, `.toLowerCase`, `.substring`, `.trim`, `.split`, `.replace`, `.byteAt`, `.get`, `.graphemeAt`, `.count`, `.byteCount`, `.graphemeCount`. Case folding via `unicase` crate. String iteration = code points (`StringCodePointIter`).
+
+`errors` keyword with flow-sensitive auto-propagation ("cascades"). Base error shape: `.message: string`, `.suggestions: array<string>`, `.trace: array<Frame>`, `.source: SourceLoc`. `Frame { file: string, line: maybe int, function: string }` (one-based line, `none` for truncation sentinel). `SourceLoc { file: string, line: maybe int }`. Frame stack = thread-local cap-1024; compile-time-emitted frame data (NOT libunwind). Auto-propagation = flow-sensitive narrowing on errors-capable bindings (extends M6's NarrowingTable). `.message`/`.suggestions`/`.trace`/`.source` access gated by "failed" narrowing proof.
+
+`Iterable<T>` + `FallibleIterable<T>` protocol dispatch. Synthesized wrapper shapes: `ArrayIter<T>`, `FixedIter<T, N>`, `MapIter<K, V>`, `StringCodePointIter`, `Range` (self-wrapping). User shapes follow `Iterable<T>` with standalone `next(lend self) -> maybe T`. For-loop uniform dispatch. `range()` first-class (storable/passable/returnable). MapEntry destructuring: `for ((k, v) in m)` tuple form + single-binding form. Adapters: `.orSkipFailures()` (PURE — no I/O), `.logSkippedFailuresTo(sink)`, `.withErrors()` (returns `Iterable<maybe T errors>`). LogSink contract ships with `terminal.stderr` + `terminal.stdout`. `file.lines(path)` stub (`FallibleIterable<string>`). **Unwinds M5's REPLACE-AT M7 markers** (7 sites — AST/typeck/runtime + 3 codegen for-loop special-cases + M3 range first-class typeck site). Banned-jargon additions: `monad`, `lift`, `wrap`, `Result`, `Option`, `Either`, `exception`, `try`, `catch`, `throw`, `UTF-16`. Pinned crates: `simdutf8 = "=0.1.4"`, `unicode-normalization = "=0.1.24"`, `memchr = "=2.7.4"`, `unicase = "=2.7.0"`.
 **Flag**: N/A
-**Status**: planned
+**Status**: active — P0 doc lockdown in progress (branch chore/m7-doc-lockdown)
 **Depends on**: M6
 
 ### Milestone 8 (M8): Modules + remaining + v0.1 tag — multi-session

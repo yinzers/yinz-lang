@@ -173,7 +173,7 @@ impl<'b> Checker<'b> {
                         f.name,
                         type_name(&ret_ty)
                     ),
-                    "Add `return value` at the end of the function, or add an `else =>` catch-all to any multi-case `if` that needs to return.",
+                    "Add `return value` at the end of the function, or add an `else =>` default arm to any multi-case `if` that needs to return.",
                     "Every path through the function must produce a value. A path that falls off the end produces no value, which is a bug.",
                 ));
             }
@@ -329,7 +329,7 @@ impl<'b> Checker<'b> {
                         type_name(ann_ty)
                     ),
                     format!(
-                        "Either change the annotation to `{}`, or use a different value.",
+                        "Change the annotation to `{}`, or use a different value.",
                         type_name(&value_ty)
                     ),
                     "The value on the right side must match the type annotation on the left.",
@@ -558,7 +558,7 @@ impl<'b> Checker<'b> {
                                 missing.len(),
                                 missing.join(", ")
                             ),
-                            format!("Add the missing arms (e.g. `{} =>`) or add an `else =>` catch-all.", missing[0]),
+                            format!("Add the missing arms (e.g. `{} =>`) or add an `else =>` default arm.", missing[0]),
                             "The compiler knows every variant at compile time. A missing arm means some values would silently fall through — likely a bug.",
                         ));
                     }
@@ -586,7 +586,7 @@ impl<'b> Checker<'b> {
                             if missing.len() == 1 { " is" } else { "s are" },
                             missing.join(", ")
                         ),
-                        format!("Add the missing arms (e.g. `is {} =>`) or add an `else =>` catch-all.", missing[0]),
+                        format!("Add the missing arms (e.g. `is {} =>`) or add an `else =>` default arm.", missing[0]),
                         "The compiler knows every union variant at compile time. A missing arm means some values silently fall through — likely a bug.",
                     ));
                 }
@@ -1878,7 +1878,7 @@ impl<'b> Checker<'b> {
                     self.diags.push(Diagnostic::error(
                         field_span.clone(),
                         "`maybe.value` requires you to first check `m.exists()`.",
-                        "Wrap in a check: `if (m.exists()) { print(m.value) }`. Or use a default: `m.or(0)`.",
+                        "Add a check: `if (m.exists()) { print(m.value) }`. Or use a default: `m.or(0)`.",
                         "The compiler cannot prove this `maybe` has a value here. `.value` without a prior `.exists()` check is a compile error.",
                     ));
                     return Type::Error;

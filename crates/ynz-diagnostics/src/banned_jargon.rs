@@ -51,4 +51,17 @@ pub const BANNED_JARGON: &[&str] = &[
     // Acronyms
     "ADT",
     "AST",
+    // M7 additions — errors/iterables jargon (2026-05-18)
+    "monad",
+    "lift",
+    "wrap",
+    "unwrap",
+    "Result",
+    "Option",
+    "Either",
+    "exception",
+    "try",
+    "catch",
+    "throw",
+    "UTF-16",
 ];

@@ -81,10 +81,65 @@ When an error reaches a custom handler (`setErrorHandler`) or propagates to the 
 
 - `.message` — human-readable description (string)
 - `.suggestions` — array of human-readable next steps (array<string>, may be empty)
-- `.trace` — call path as structured data (array of frames, each with file + line + function name)
-- `.source` — `{ file, line }` of the originating failure
+- `.trace` — call path as structured data (`array<Frame>`)
+- `.source` — a `SourceLoc` value (`{ file: string, line: maybe int }`) of the originating failure
 
 `suggestions` is part of the base shape because the teaching-compiler philosophy applies at runtime too — not just compile time. An error that can tell you what to do next is better than one that just tells you what went wrong. Stdlib modules are expected to populate suggestions where the cause is known. User-defined errors may leave it empty.
+
+---
+
+## M7 Frame Shape (Locked)
+
+```ynz
+shape Frame {
+  file: string
+  line: maybe int
+  function: string
+}
+```
+
+**`line` is `maybe int`** — real frames carry a one-based positive int; the truncation-sentinel frame uses `none` to avoid a magic-number sentinel. ONE-BASED: matches compiler diagnostic line numbering exactly. Tools integrating with `.trace` must treat this as one-based; convert to zero-based at the tool boundary (e.g., LSP) rather than in the Frame value.
+
+**Truncation sentinel**: when the frame stack overflows 1024 entries, an additional sentinel Frame is appended: `Frame { file: "<trace truncated at depth 1024>", line: none, function: "<...>" }`. The real frames before it are still present and useful.
+
+---
+
+## M7 SourceLoc Shape (Locked)
+
+```ynz
+shape SourceLoc {
+  file: string
+  line: maybe int
+}
+```
+
+`SourceLoc` answers "where did this specific failure originate" — the leaf call site. `Frame` (with its additional `function` field) answers "who was in the call chain." They're distinct because `.source` is a single origin point; `.trace[0..N]` is the full path. `.source` doesn't carry a function name because that context is already available as `.trace[0].function` (the outermost frame's function).
+
+---
+
+## M7 Frame Stack Mechanism (Locked)
+
+**Thread-local `array<Frame>` capped at 1024 frames.**
+
+At the start of every `errors` function body: `ynz_frame_push(file, line, function_name)`.
+Before every return path (success or early return): `ynz_frame_pop()`.
+At `ynz_error_new()`: snapshot the current thread-local frame stack into the error's `.trace` array.
+
+Auto-propagation re-uses the snapshot — no re-capture at each propagation site. The error carries the trace from where it was created.
+
+**Overflow behavior:** the 1024th push records the last useful frame. The 1025th push and onward are dropped. When the error surfaces, an additional sentinel Frame with `line: none` is appended marking the truncation point. Silent truncation — the user still sees the top and bottom of the stack.
+
+**Trace capture is compile-time emitted, NOT libunwind.** Each `errors` function gets a `static FRAME_INFO: FrameInfo = { file: __FILE__, line: __LINE__, function: __NAME__ }` global at the IR level; entry emits `ynz_frame_push(&FRAME_INFO)`. This keeps M7 hermetic from the system unwinder ABI.
+
+**LLVM IR representation of Frame:** `{ file: *u8, line: { tag: i8, padding: 7 bytes, value: i64 }, function: *u8 }` = 32 bytes total (16-byte aligned). Uses M5's existing `maybe<int>` lowering `{ tag: i8, padding: 7 bytes, value: i64 }` — no new representation.
+
+---
+
+## M7 `.message` Access Guard (Safety Invariant)
+
+`.message` (and `.suggestions`, `.trace`, `.source`) access requires the binding to be flow-narrowed to the "failed" state — i.e., inside the true-branch of an `if (x.failed())` check, or after an early-return on `!x.failed()`. Direct `err.message` without flow-narrowing is a compile error.
+
+This uses M6's narrowing infrastructure extended with a new "errors-capable" narrowing fact (parallel to `maybe<T>`'s exists-fact). See `design/narrowing.md` for the added rows.
 
 ---
 

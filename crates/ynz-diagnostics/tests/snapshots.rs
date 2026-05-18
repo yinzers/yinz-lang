@@ -27,7 +27,7 @@ fn single_error_with_span() {
     bucket.push(Diagnostic::error(
         span(36, 38),
         "`print` was given a number, but it expects a string.",
-        "Wrap it in quotes: print(\"42\")",
+        "Add quotes: print(\"42\")",
         "`print` always writes text. Numbers have to be turned into text first.",
     ));
 
@@ -44,7 +44,7 @@ fn two_errors_same_file() {
     bucket.push(Diagnostic::error(
         span(36, 38),
         "`print` was given a number, but it expects a string.",
-        "Wrap it in quotes: print(\"42\")",
+        "Add quotes: print(\"42\")",
         "`print` always writes text. Numbers have to be turned into text first.",
     ));
     bucket.push(Diagnostic::error(
@@ -73,7 +73,7 @@ fn error_and_warning() {
     bucket.push(Diagnostic::error(
         span(36, 38),
         "`print` was given a number, but it expects a string.",
-        "Wrap it in quotes: print(\"42\")",
+        "Add quotes: print(\"42\")",
         "`print` always writes text. Numbers have to be turned into text first.",
     ));
 

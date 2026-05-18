@@ -16,7 +16,7 @@ The compiler calls `next(players)` repeatedly until it returns `none`. (Equivale
 
 ---
 
-## Two contracts — infallible and fallible
+## Two contracts — in-memory and fallible
 
 Most iterables can never fail mid-step. Some iterables (reading a file, paging through an API) can — disk errors, network timeouts, etc. Yinz has a contract for each. Contracts use bare-signature form (no `function` keyword, no body — see `.claude/rules/non-oop.md`):
 
@@ -79,10 +79,15 @@ function findErrors(path: string) -> array<string> errors {
 
 If you want to keep reading past failures (for example, log them and continue), use one of the adapters:
 
-```
-// Skip lines that failed to read — silently logs and continues
+```ynz
+// Skip lines that failed to read — silently discards failures, continues to next
 for (line in file.lines(path).orSkipFailures()) {
-  if (line.contains("ERROR")) { print(line) }
+  if (line.contains(`ERROR`)) { print(line) }
+}
+
+// Skip and log each failure to stderr — compose .logSkippedFailuresTo() with .orSkipFailures()
+for (line in file.lines(path).logSkippedFailuresTo(terminal.stderr).orSkipFailures()) {
+  if (line.contains(`ERROR`)) { print(line) }
 }
 
 // Get each step as a success-or-failure value, decide per line
@@ -90,12 +95,16 @@ for (result in file.lines(path).withErrors()) {
   if (result.failed()) {
     log.warn(`bad line: ${result.message}`)
   } else {
-    print(result.value)
+    if (result.value.exists()) {
+      print(result.value.value)
+    }
   }
 }
 ```
 
-With either adapter, the enclosing function no longer needs to be `errors`.
+With any adapter, the enclosing function no longer needs to be `errors`.
+
+**`.orSkipFailures()` is silent** — it drops failed iterations without any I/O. If you want logging, chain `.logSkippedFailuresTo(sink)` before it. `terminal.stderr` and `terminal.stdout` are built-in log sinks. You can also pass any value that follows the `LogSink` contract (has a `.write(message)` method).
 
 ---
 

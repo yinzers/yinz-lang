@@ -121,6 +121,85 @@ This extends `.claude/rules/stdlib-design.md` Rule 3 (no silent platform-depende
 
 ---
 
+---
+
+## M7 SSO Layout — 24-Byte Struct (ABI Locked)
+
+**Locked 2026-05-18 for M7.** This is ABI-locked — any change requires a semver major bump and a recompile of all dependent binaries.
+
+A `YnzString` is exactly 24 bytes with 8-byte alignment. The tag byte lives at offset 23 and is the inline/heap discriminator.
+
+| Byte offset | Inline form (byte 23 bit 7 = 1) | Heap form (byte 23 bit 7 = 0) |
+|---|---|---|
+| 0..7 (8 bytes) | data[0..7] | `ptr: *u8` (8-byte aligned) |
+| 8..15 (8 bytes) | data[8..15] | `len: i64` |
+| 16..22 (7 bytes) | data[16..22] | low 7 bytes of `cap: i64` |
+| 23 (1 byte) | tag byte (see below) | high byte of `cap: i64`, top bit = 0 |
+
+**Tag byte breakdown (inline form, offset 23):**
+- Bit 7 (0x80): inline-discriminator flag — always 1 for inline.
+- Bit 6 (0x40): `is_nfc_known` — 1 if string is known NFC-normalized.
+- Bits 5..0 (0x1F mask): inline length, range 0..23.
+
+**Heap form `is_nfc_known`:** stored in bit 1 of the `len` field. Lengths < 2^62 leave the top 2 bits free. Bit 0 reserved for future use. This avoids a separate header byte and keeps len arithmetic clean (mask before use).
+
+**Cap budget (heap form):** cap top bit MUST be 0 to stay in 0x00..0x7F range distinguishable from inline tag (0x80..0xFF). Maximum heap capacity = 2^63-1 bytes ≈ 9.2 exabytes. Acceptable.
+
+**Worked examples:**
+- `"hi"`: inline, length 2, NFC-known. Bytes 0..1 = `h`, `i`; bytes 2..22 = zero-fill; byte 23 = `0x80 | 0x40 | 0x02 = 0xC2`.
+- 30-char ASCII literal: heap. Bytes 0..7 = ptr; bytes 8..15 = `len = 30 | (1 << 1) = 32` (NFC-known); bytes 16..23 = `cap = 30`.
+
+**Compile-time verification:** `crates/ynz-runtime/tests/string_layout.rs` asserts `mem::size_of::<YnzString>() == 24` AND `mem::align_of::<YnzString>() == 8`. Bit-pattern test constructs known inline + heap strings and asserts byte-by-byte expected patterns.
+
+---
+
+## M7 NFC-Known Propagation Table
+
+For every string-producing operation, whether the result carries `is_nfc_known = true`:
+
+| Operation | Result `is_nfc_known`? | Why |
+|---|---|---|
+| String literal (parser) | TRUE — compiler pre-normalizes at compile time | Lock the parser-side NFC pass |
+| Backtick-interpolation result | TRUE only if every segment was NFC-known | One non-NFC segment poisons the result |
+| `s1 + s2` | TRUE only if BOTH were NFC-known AND s2 doesn't start with a combining-class code point | `"e" + "́"` produces NFD even if both sides are individually NFC-normal. Conservative: force false when s2 first code point has combining class > 0. |
+| `.substring(start, end)` | TRUE if source was NFC-known AND boundaries are code-point boundaries | Substring of NFC is NFC |
+| `.trim()` | TRUE if source was NFC-known | Trim is byte-level on whitespace; preserves NFC |
+| `.split(sep)` | TRUE for each piece if source was NFC-known | Split is byte-level; preserves NFC per piece |
+| `.replace(old, new)` | TRUE only if source AND `new` were both NFC-known | Inserts `new` text |
+| `.toUpperCase()` / `.toLowerCase()` | FALSE | Case folding produces NFD code points in many cases (Turkish-I, Greek, etc.) |
+| `.toString()` on primitives | TRUE | ASCII only |
+| `.toString()` on user shape | FALSE (conservative) | User-defined formatting may produce NFD |
+| `string.fromBytes(bytes)` (v0.6+) | FALSE | Runtime byte input may not be normalized |
+| Single code point from `s.get(n)` | FALSE | A single code point in isolation cannot be verified NFC without context |
+
+**Fast path for `ynz_string_eq`:** if both strings have `is_nfc_known = true`, byte-compare directly. Slow path: normalize both via `unicode-normalization::nfc()` then byte-compare.
+
+---
+
+## M7 SIMD Crate Selection (Locked)
+
+**`simdutf8` is the chosen UTF-8 validation crate.** Rust port of simdjson's UTF-8 validator. MIT/Apache-2.0 licensed. ~700 LOC, no transitive dependencies. Runtime CPU feature detection with scalar fallback baked in.
+
+Pinned version: `simdutf8 = "=0.1.4"`.
+
+Used for: literal validation at parse time, runtime byte-to-string construction, and as a building block for `.contains` long-pattern path (≥ 16 bytes).
+
+**SIMD search for `.contains` / `.indexOf`** on patterns ≥ 16 bytes: uses `memchr` crate (SIMD-accelerated `memmem`-style scan). Pinned: `memchr = "=2.7.4"`. For patterns ≤ 15 bytes: scalar scan.
+
+**NFC normalization crate:** `unicode-normalization = "=0.1.24"`. Used in `ynz_string_eq` slow path.
+
+**Case-folding crate:** `unicase = "=2.7.0"`. Locale-invariant Unicode case-folding for `.toUpperCase()` / `.toLowerCase()`. `unicode-normalization` provides NFC/NFD only — NOT case-folding. `unicase` is small, well-maintained, MIT/Apache-2.0.
+
+All four crates are pinned with `=` to prevent surprise upgrades during implementation.
+
+---
+
+## M7 SIMD Fallback CI Requirement
+
+A second CI job is required alongside the normal x86_64 job. This job sets `RUSTFLAGS=-C target-feature=-sse4.1,-avx2` to disable SIMD intrinsics and exercise the scalar fallback path. Both jobs must pass. Cross-referenced in Risk table (SIMD portability row) and P4b acceptance criteria.
+
+---
+
 ## What This Doc Does NOT Cover
 
 - **The user-facing API** (methods like `.split()`, `.toUpperCase()`, etc.) — that's `spec/strings.md` and the v0.6+ stdlib expansion.
