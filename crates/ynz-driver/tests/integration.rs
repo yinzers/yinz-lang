@@ -689,17 +689,14 @@ fn m3_loop_var_mutation_produces_diagnostic() {
 
 
 #[test]
-fn m3_is_type_arm_on_non_union_produces_error() {
-    // WHY: `is Circle =>` on a non-union scrutinee (here: `string`) must produce
-    // a teaching error explaining that `is` is for union types. M6 P3b ships this;
-    // the M3 deferral diagnostic is replaced. P5 ships a runnable replacement fixture.
+fn m3_is_type_deferral_now_runnable_in_m6() {
+    // WHY: `m3_is_type_deferral.ynz` was a deferral fixture in M3.
+    // M6 P5 ships the runnable replacement (Circle | Square union demo).
+    // The fixture must now compile and run cleanly with correct output.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_is_type_deferral.ynz"));
-    assert_ne!(code, 0, "is-type on non-union must exit non-zero");
-    assert!(stdout.is_empty());
-    assert!(
-        stderr.contains("not a union type") || stderr.contains("union"),
-        "expected 'not a union type' diagnostic, got:\n{stderr}"
-    );
+    assert_eq!(code, 0, "union fixture must compile and run; stderr:\n{stderr}");
+    assert!(stdout.contains("circle"), "expected 'circle' in output, got: {stdout}");
+    assert!(stdout.contains("square"), "expected 'square' in output, got: {stdout}");
 }
 
 #[test]
@@ -803,4 +800,34 @@ fn m5_map_get_set_count() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_map.ynz"));
     assert_eq!(code, 0, "m5_map must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "90\n85\n95\n2\n");
+}
+
+// ── M6: options, unions, fallible conversions ──────────────────────────────────
+
+#[test]
+fn m6_string_to_int_catch_up() {
+    // WHY: M6 P5 closes the M2 catch-up obligation for string.toInt().
+    // Exercises the locked parsing rules (whitespace strip, sign accept, hex reject,
+    // fractional reject). Each line's result must match the locked test vector.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m2_string_to_int.ynz"));
+    assert_eq!(code, 0, "m2_string_to_int must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "42\n17\n-99\n-1\n-1\n-1\n-1\n");
+}
+
+#[test]
+fn m6_string_to_float_catch_up() {
+    // WHY: M6 P5 closes the M2 catch-up obligation for string.toFloat().
+    // Verifies that valid floats return some(true) and invalid inputs return none(false).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m2_string_to_float.ynz"));
+    assert_eq!(code, 0, "m2_string_to_float must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "true\nfalse\nfalse\ntrue\n");
+}
+
+#[test]
+fn m6_union_is_narrowing_runnable() {
+    // WHY: m3_is_type_deferral.ynz is now the runnable M6 union demo.
+    // Verifies that `is Circle =>` and `is Square =>` correctly narrow union values.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_is_type_deferral.ynz"));
+    assert_eq!(code, 0, "union demo must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "circle\nsquare\n");
 }

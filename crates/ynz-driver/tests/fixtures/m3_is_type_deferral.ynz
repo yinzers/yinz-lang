@@ -1,12 +1,24 @@
-// CATCH-UP M6: `is TypeName =>` pattern matching lands when union types land.
-// Until then the parser emits a deferral diagnostic pointing at M6.
-// NOTE: variable renamed from `shape` to `figure` because `shape` is now
-// a reserved keyword (M4 P1). Using keywords as identifiers is a separate bug
-// tracked in design/open-questions.md.
-function main() -> nothing {
-  let figure = "circle"
+// M6 P5 catch-up: closes the M3 is-type deferral.
+// `is TypeName =>` pattern matching now works (M6 P3b shipped it).
+// This fixture was previously a deferral diagnostic; now it's a runnable demo.
+
+shape Circle { radius: float }
+shape Square { side: float }
+shape Figure = Circle | Square
+
+function describe(figure: Figure) -> string {
   if (figure) {
-    is Circle => print("circle")
-    else => print("other")
+    is Circle => return "circle"
+    is Square => return "square"
   }
+  return "unknown"
+}
+
+function main() -> nothing {
+  let c: Circle = { radius: 5.0 }
+  let s: Square = { side: 3.0 }
+  let fig: Figure = c
+  print(describe(fig))
+  let fig2: Figure = s
+  print(describe(fig2))
 }

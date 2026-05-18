@@ -732,12 +732,49 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
     match stmt {
         Stmt::Expr(expr) => { lower_expr(cg, expr)?; }
 
-        Stmt::Let { name, value, .. } => {
-            let ty = cg.expr_type(value);
+        Stmt::Let { name, ty: ann_ty, value, .. } => {
+            let val_ty = cg.expr_type(value);
             let val = lower_expr(cg, value)?;
-            let slot = cg.alloca(&ty, name)?;
-            store(cg, val, &ty, slot)?;
-            cg.locals.insert(name.clone(), slot);
+
+            // M6: when annotation is a union type and value is a concrete shape variant,
+            // construct a tagged-struct { i64 tag, i64 data } on the stack.
+            let union_constructed = 'union_ctor: {
+                if let Some(ast_ann) = ann_ty.as_ref() {
+                    let resolved_ann = ast_type_to_typeck_type(ast_ann, cg.shape_table);
+                    if let Type::Union { ref variants } = resolved_ann {
+                        if let Type::Shape { name: ref shape_name } = val_ty {
+                            let tag = variants.iter().position(|v| {
+                                if let Type::Shape { name } = v { name == shape_name } else { false }
+                            });
+                            if let Some(tag_idx) = tag {
+                                let union_st = cg.ctx.struct_type(&[cg.i64().into(), cg.i64().into()], false);
+                                let union_slot = cg.builder.build_alloca(union_st, &format!("{name}_union"))
+                                    .map_err(|e| format!("{e}"))?;
+                                let tag_gep = cg.builder.build_struct_gep(union_st, union_slot, 0, "u_tag")
+                                    .map_err(|e| format!("{e}"))?;
+                                cg.builder.build_store(tag_gep, cg.i64().const_int(tag_idx as u64, false))
+                                    .map_err(|e| format!("{e}"))?;
+                                let data_gep = cg.builder.build_struct_gep(union_st, union_slot, 1, "u_data")
+                                    .map_err(|e| format!("{e}"))?;
+                                let ptr_as_i64 = cg.builder.build_ptr_to_int(val.into_pointer_value(), cg.i64(), "ptr2i")
+                                    .map_err(|e| format!("{e}"))?;
+                                cg.builder.build_store(data_gep, ptr_as_i64).map_err(|e| format!("{e}"))?;
+                                let outer_slot = cg.builder.build_alloca(cg.ptr(), name)
+                                    .map_err(|e| format!("{e}"))?;
+                                cg.builder.build_store(outer_slot, union_slot).map_err(|e| format!("{e}"))?;
+                                cg.locals.insert(name.clone(), outer_slot);
+                                break 'union_ctor true;
+                            }
+                        }
+                    }
+                }
+                false
+            };
+            if !union_constructed {
+                let slot = cg.alloca(&val_ty, name)?;
+                store(cg, val, &val_ty, slot)?;
+                cg.locals.insert(name.clone(), slot);
+            }
         }
 
         Stmt::Assign { target, value, .. } => {
@@ -888,19 +925,19 @@ fn lower_stmt_match<'ctx>(
                     return Err(format!("codegen: OptionName arm on non-options type {:?}", scrutinee_ty));
                 }
             }
-            // M6: union type-narrowing arm — compare tag byte in tagged-struct
+            // M6: union type-narrowing arm — compare tag in { i64 tag, i64 data } struct
             MatchPatternKind::Is(type_path) => {
                 if let Type::Union { variants } = &scrutinee_ty {
                     let tag = variants.iter().position(|v| {
                         if let Type::Shape { name } = v { name == &type_path.name } else { false }
                     }).ok_or_else(|| format!("codegen: union variant `{}` not found", type_path.name))? as u64;
-                    let tag_const = cg.ctx.i8_type().const_int(tag, false);
-                    // The union is stored as a pointer; load the tag byte (first field).
-                    let tag_gep = cg.builder.build_struct_gep(
-                        cg.ctx.struct_type(&[cg.ctx.i8_type().into()], false),
-                        scrutinee_val.into_pointer_value(), 0, "union_tag_gep"
-                    ).map_err(|e| format!("union tag gep: {e}"))?;
-                    let tag_loaded = cg.builder.build_load(cg.ctx.i8_type(), tag_gep, "union_tag")
+                    let tag_const = cg.i64().const_int(tag, false);
+                    // Union layout: { i64 tag, i64 data }. scrutinee_val is ptr-to-struct.
+                    // (It was loaded from the slot by lower_expr, giving us the struct ptr directly.)
+                    let union_st = cg.ctx.struct_type(&[cg.i64().into(), cg.i64().into()], false);
+                    let tag_gep = cg.builder.build_struct_gep(union_st, scrutinee_val.into_pointer_value(), 0, "union_tag_gep")
+                        .map_err(|e| format!("union tag gep: {e}"))?;
+                    let tag_loaded = cg.builder.build_load(cg.i64(), tag_gep, "union_tag")
                         .map_err(|e| format!("{e}"))?;
                     cg.builder.build_int_compare(
                         inkwell::IntPredicate::EQ,
