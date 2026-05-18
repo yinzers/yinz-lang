@@ -107,6 +107,8 @@ The Yinz compiler bans these legacy terms in user-facing diagnostics via `crates
 | `Result` | `errors` keyword |
 | `Option` / `Optional` | `maybe T` |
 
+**M7 additions (2026-05-18):** `monad`, `lift`, `wrap` (bare `wrap` and `unwrap` — M5/M6 already banned `unwrap`); `Result`, `Option`, `Either`, `exception`, `try`, `catch`, `throw`, `UTF-16`. These must not appear in any user-facing diagnostic. They belong to the technical-programmer jargon world Yinz's users are NOT expected to know.
+
 **Caveat for `type`**: the WORD "type" is fine in prose ("the type of x", "the type system", "type inference is a design concept"). The compile error only fires when `type` appears as a declaration keyword (`type Foo { ... }`) — that's what banned-jargon catches in compiler output.
 
 ---

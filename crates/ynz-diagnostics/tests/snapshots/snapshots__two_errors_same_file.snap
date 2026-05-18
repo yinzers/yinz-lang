@@ -16,7 +16,7 @@ Error: `print` was given a number, but it expects a string.
    │
  2 │     print(42)
    │        ─┬  
-   │         ╰── Wrap it in quotes: print("42")
+   │         ╰── Add quotes: print("42")
    │ 
    │ Note: Why: `print` always writes text. Numbers have to be turned into text first.
 ───╯

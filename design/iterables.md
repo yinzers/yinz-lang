@@ -24,6 +24,28 @@ Per the non-OOP model (`.claude/rules/non-oop.md`), `next` is a STANDALONE FUNCT
 
 ---
 
+## M7 Synthesized Iterator Wrapper Shapes (Locked)
+
+Built-in collections formally follow `Iterable<T>` through compiler-synthesized wrapper shapes. These are real shapes — they get `ShapeTable` entries and monomorphize per concrete T via M5's `MonomorphizationTable`.
+
+| Wrapper | Source | Contract-T | Stack-allocated? |
+|---|---|---|---|
+| `ArrayIter<T>` | `array<T>` | `T` | Yes — alloca, no `ynz_alloc` |
+| `FixedIter<T, N>` | `fixed<T, N>` | `T` | Yes |
+| `MapIter<K, V>` | `map<K, V>` | `MapEntry<K, V>` |  Yes |
+| `StringCodePointIter` | `string` | `string` (1 code point per step) | Yes |
+| `Range` | `range(start, end)` | `int` | Yes (Range IS the iterator — not wrapped) |
+
+**`Range`** is a user-visible shape (not synthesized). It follows `Iterable<int>` directly with hidden state fields. Storable, passable, returnable as of M7 (M3 restriction removed).
+
+**User-defined iterables** are NOT wrapped — they ARE the iterator. The shape follows the contract; the compiler verifies a matching standalone `next()` function exists.
+
+**`next()` is `alwaysinline`** for built-in wrappers in optimized builds: LLVM `alwaysinline` attribute ensures no `call @next_array_iter` remains in `-O2` IR. For-loop over built-in collection emits no heap allocation (`alloca` only for the wrapper struct).
+
+**String iteration default (locked):** `for c in "café"` steps by **code point** (not grapheme). Each `c` is a 1-character `string`. Grapheme iteration is opt-in via `.graphemes()` — deferred to v0.6+. This matches `.get(n)` default semantics.
+
+---
+
 ## Hidden Fields for Iterator State
 
 Iterator state (current position, buffers, page numbers) is tracked with `hidden` fields with defaults. This is what `hidden` was designed for — implementation details that the caller shouldn't see or set.
@@ -84,6 +106,44 @@ let results = file.lines(path).withErrors()          // Iterable<Result<string>>
 
 These let users iterate fallible sources from non-errors functions when they have a specific recovery strategy.
 
+**M7 adapter semantics (locked):**
+
+`.orSkipFailures()` is **PURE** — no I/O side effects. It silently drops failed iterations and continues. This is required by `stdlib-design.md` Rule 1 (pure-named methods must be pure). For users who want to log each skipped failure, compose with the separate `.logSkippedFailuresTo(sink)` method:
+
+```ynz
+// Silent drop of failures
+iter.orSkipFailures()
+
+// Logged failures + continue (compose explicitly)
+iter.logSkippedFailuresTo(terminal.stderr).orSkipFailures()
+```
+
+`.logSkippedFailuresTo(sink)` takes a `LogSink` value. The `LogSink` contract:
+
+```ynz
+shape LogSink {
+  write(lend self, message: string) -> nothing
+}
+```
+
+In M7, `terminal.stderr` and `terminal.stdout` follow `LogSink`. The v0.6+ stdlib expands this to file sinks and user-defined sinks.
+
+`.withErrors()` returns `Iterable<maybe T errors>` (NOT `Iterable<Result<T>>`). `Result` is on the banned-jargon list. Each iteration step yields an errors-capable maybe-value; the user inspects it with standard `.failed()` / `.message` / `.or()` machinery. Example:
+
+```ynz
+for (result in file.lines(path).withErrors()) {
+  if (result.failed()) {
+    log.warn(`bad line: ${result.message}`)
+  } else {
+    if (result.value.exists()) {
+      process(result.value.value)
+    }
+  }
+}
+```
+
+No new shape is needed — this reuses M7's own errors-capable mechanism uniformly.
+
 **Why two contracts instead of one with optional `errors`:**
 
 Yinz's `follows` contracts require method signatures to match exactly. There's no language-level mechanism for "this method returns `maybe T` OR `maybe T errors`" — adding one would complicate every `follows` contract for one feature. Two explicit contracts is simpler and matches the user's mental model: "is this iterator infallible or fallible?"
@@ -131,3 +191,53 @@ function next(lend self: ApiPager<T>) -> maybe T errors {
 The implementor answers ONE clarifying question — "can my iteration step fail?" — and picks the matching contract. It's a forcing function for thinking about failure modes, not a burden.
 
 Each standalone `next` function is found by the compiler when verifying `follows Iterable<T>` (or `FallibleIterable<T>`) — see `.claude/rules/non-oop.md` for the structural-function-signature-matching mechanism.
+
+---
+
+## M7 MapEntry Destructuring Forms (Locked)
+
+Two legal forms for map iteration:
+
+**Single-binding form:**
+```ynz
+for (entry in scores) {
+  let k = entry.key
+  let v = entry.value
+}
+```
+
+**Tuple-destructure form (desugar at parser level):**
+```ynz
+for ((k, v) in scores) {
+  // desugars to: for (entry in scores) { let k = entry.key; let v = entry.value; ... }
+}
+```
+
+Both forms desugar identically at codegen — the tuple-destructure form is parser sugar only. `MapIter<K, V>.next()` still returns `maybe MapEntry<K, V>`; the desugar step inserts the field-access bindings before the loop body.
+
+---
+
+## M7 Contract-T Resolution Table (Locked)
+
+For built-in wrappers, the `T` in `Iterable<T>` or `FallibleIterable<T>` is:
+
+| Source | Wrapper | Contract | T |
+|---|---|---|---|
+| `array<T>` | `ArrayIter<T>` | `Iterable<T>` | concrete T |
+| `fixed<T, N>` | `FixedIter<T, N>` | `Iterable<T>` | concrete T |
+| `map<K, V>` | `MapIter<K, V>` | `Iterable<MapEntry<K, V>>` | `MapEntry<K, V>` |
+| `string` | `StringCodePointIter` | `Iterable<string>` | `string` (1 code point) |
+| `range(start, end)` | `Range` (self) | `Iterable<int>` | `int` |
+| `file.lines(path)` | (user-visible) | `FallibleIterable<string>` | `string` |
+
+User shapes follow `Iterable<T>` or `FallibleIterable<T>` directly — no wrapper. The concrete `T` is whatever their `next()` function returns inside the `maybe`.
+
+---
+
+## Cross-References
+
+- `design/errors.md` — `errors` keyword semantics (required for `FallibleIterable`)
+- `.claude/rules/non-oop.md` — UFCS and standalone-function contract verification
+- `design/collections.md` — `MapEntry<K, V>` shape definition
+- `design/narrowing.md` — errors-capable narrowing (used in for-loop over `FallibleIterable`)
+- `spec/iterables.md` — user-facing surface for all the above

@@ -165,6 +165,46 @@ These hints are not emitted in M6 (LSP is v0.2 work). M6 only builds the typeck 
 
 ---
 
+## M7 — Errors-Capable Narrowing Rules
+
+M7 extends the narrowing table with `errors`-capable values (parallel to `maybe<T>`). These use the same `NarrowingTable` infrastructure as M6 — a new "errors-capable" fact per binding.
+
+| Form | Narrowing granted? | Notes |
+|---|---|---|
+| `if (e.failed()) { e.message }` | YES — inside then-block, `e` is narrowed to "failed" state; `.message` / `.suggestions` / `.trace` / `.source` accessible | Bread-and-butter case. |
+| `if (!e.failed()) { ... } else { e.message }` | YES — `e` is narrowed to "failed" state in else-block | Negative form. |
+| `if (e.failed()) { return ... } use(e)` | YES — early-return narrowing: after the if, `e` is narrowed to its success type | Same early-return machinery as `maybe<T>`. |
+| `if (e.failed()) { panic(...) } use(e)` | YES — panic is a recognized exit form | Parallel to `maybe<T>` rule. |
+| `let result = e; result.failed()` | YES for `result` (not `e`) — the narrowing tracks the binding | Assignment to a new binding re-tracks. |
+| `use(e)` without prior `.failed()` check (inside `errors` fn) | AUTO-PROPAGATION — compiler emits early return at this point; `e` is narrowed to success type after | The "eager feel" of the hybrid model. |
+| `use(e)` without prior `.failed()` check (outside `errors` fn) | COMPILE ERROR — must handle | Forces `.or()`, `.failed()` check, or caller `errors`. |
+| `if (e.failed()) { ... }` AFTER `use(e)` | COMPILE ERROR — check-after-use | `e` was already narrowed to success type at `use(e)`; `.failed()` no longer applies. Named diagnostic: "check-after-use". |
+| `e.message` without `.failed()` check in scope | COMPILE ERROR — `.message` requires "failed" narrowing proof | Access to `.message`/`.suggestions`/`.trace`/`.source` gated by narrowing. |
+| `if (e.failed() && other) { e.message }` | YES — `&&` propagates; inside body both facts hold | Same as `maybe<T>` `&&` rule. |
+| `if (e.failed() \|\| other) { e.message }` | **NO** — `\|\|` does NOT propagate single-branch narrowing | Same as `maybe<T>` `\|\|` rule. Same diagnostic wording adapted for `errors`. |
+| `e = newResult; use(e)` | AUTO-PROPAGATION tracks the new binding | Reassignment resets the narrowing fact for `e`. |
+| `if (e.failed()) { mutatingFn(e.lend); e.message }` | **NO** — `lend` call invalidates the fact | Same rule as `maybe<T>`. |
+| `if (e.failed()) { readFn(e.share); e.message }` | YES — `share` does NOT invalidate | Same rule as `maybe<T>`. |
+| `for x in fallibleIter` (inside `errors` fn) | AUTO-PROPAGATION per step — each step's failure auto-propagates to caller | `FallibleIterable` for-loop is syntactic sugar over `errors`-capable `next()` calls. |
+| `for x in fallibleIter` (outside `errors` fn without adapter) | COMPILE ERROR — fallible for-loop in non-errors context | Must use `.orSkipFailures()` / `.withErrors()` adapter OR mark caller `errors`. |
+
+**Parallel to `maybe<T>`:** the errors-capable narrowing is the same machinery, second flavor. The `NarrowingTable` stores a fact-per-binding; for `maybe<T>` the fact is "exists"; for `errors`-capable the fact is "not-failed (success) / failed / unknown (pre-check)". The early-return narrowing algorithm is identical — only the fact type changes.
+
+**"Check-after-use" diagnostic (exact wording):**
+
+> **WHAT**: `.failed()` cannot be called here. The binding `raw` was first used as a plain value on line N (in `parseConfig(raw)`). After that first use, the compiler treated `raw` as its success type.
+>
+> **WHAT INSTEAD**: Move the `.failed()` check above the first use:
+> ```ynz
+> let raw = readFile("config.txt")
+> if (raw.failed()) { return Config.default() }
+> let parsed = parseConfig(raw)
+> ```
+>
+> **WHY**: When you passed `raw` to `parseConfig()` without checking first, the compiler inserted auto-propagation at that point. Auto-propagation means: "if it failed, return the error to my caller." After that happens, `raw` is treated as a plain string — there's nothing left to check.
+
+---
+
 ## Cross-References
 
 - `spec/maybe.md` — user-facing `.value` narrowing surface

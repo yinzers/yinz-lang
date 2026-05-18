@@ -142,15 +142,72 @@ function loadConfig() -> Config {
 
 When you call an `errors` function, the result has these methods until you handle the error (or auto-propagation cascades it to the caller):
 
-```
+```ynz
 content.failed()           // did it fail? → bool
-content.message            // error description (only valid when failed)
-content.or("fallback")     // use this default if failed → T
+content.message            // error description (only valid after .failed() check)
+content.suggestions        // array<string> of next steps (may be empty)
+content.trace              // array<Frame> — the call path
+content.source             // SourceLoc — where the failure originated
+content.or(`fallback`)     // use this default if failed → T
 ```
 
 After `content.or(...)`, you get back a plain value — no more error handling needed.
 
 After `if (content.failed()) { return ... }`, the variable is treated as its plain success type in the remaining code.
+
+**`.message` and other error fields require a `.failed()` check first.** Accessing them without proof that the value failed is a compile error:
+
+```ynz
+let raw = readFile(`config.txt`)
+print(raw.message)    // COMPILE ERROR: raw hasn't been checked for failure.
+                      //   Check with raw.failed() first, or use raw.or("default").
+```
+
+Correct:
+
+```ynz
+if (raw.failed()) {
+  print(raw.message)    // ✅ safe — compiler knows this is the failed branch
+}
+```
+
+---
+
+## The error's call trace
+
+When an error propagates, it carries a full call trace. You can read it as structured data:
+
+```ynz
+let content = readFile(`config.txt`)
+
+if (content.failed()) {
+  print(`Error: ${content.message}`)
+
+  for frame in content.trace {
+    let lineInfo = frame.line.or(-1)
+    print(`  ${frame.function}  ${frame.file}  line ${lineInfo}`)
+  }
+}
+```
+
+Each `Frame` value has:
+
+```ynz
+frame.file        // string — source file path
+frame.line        // maybe int — line number (one-based), none for the truncation sentinel
+frame.function    // string — function name
+```
+
+**`content.source`** is where the failure originated — a single location:
+
+```ynz
+content.source.file    // string
+content.source.line    // maybe int
+```
+
+The trace captures the full call chain from the function where the error was created up to the current handler.
+
+**Trace truncation:** if the call chain is more than 1024 frames deep, the trace is truncated and a sentinel frame is appended with `line: none` to mark the cutoff. Real programs rarely hit this limit.
 
 ---
 
