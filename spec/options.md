@@ -111,3 +111,59 @@ shape Shape = Circle | Square | Triangle      // different types — each has di
 ```
 
 Use `options` when the variants are just labels. Use `|` when they have different data shapes. See [Unions](unions.md).
+
+---
+
+## Display strings — human-readable `.toString()` values
+
+By default, `.toString()` on an options value returns the variant identifier as a string:
+
+```ynz
+options Direction { north, south, east, west }
+Direction.north.toString()    // "north"
+```
+
+You can attach a display string to any variant using `: \`value\`` syntax:
+
+```ynz
+options Timeframe {
+    oneMinute: `One Minute`
+    fiveMinute: `Five Minute`
+    fifteenMinute: `Fifteen Minute`
+    thirtyMinute: `Thirty Minute`
+    hourly: `Hourly`
+    daily: `Daily`
+}
+
+Timeframe.fifteenMinute.toString()    // "Fifteen Minute"
+Timeframe.daily.toString()            // "Daily"
+```
+
+Variants without a display string still return the identifier:
+
+```ynz
+options Status {
+    active: `Active`
+    inactive               // no display string — toString() returns "inactive"
+    banned: `Banned`
+}
+```
+
+Display strings are useful for UI labels, log output, and any context where the identifier name alone is too terse. The variant identifier is still used for comparisons, storage, and type-checking — the display string only affects `.toString()`.
+
+---
+
+## Commas are optional
+
+Variants can be comma-separated or newline-separated — both work:
+
+```ynz
+// Comma-separated (traditional)
+options Status { active, inactive, banned }
+
+// Newline-separated (cleaner with display strings)
+options Timeframe {
+    hourly: `Hourly`
+    daily: `Daily`
+}
+```

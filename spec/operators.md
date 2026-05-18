@@ -213,13 +213,36 @@ The compiler looks up the function by name + first-parameter type (standard over
 
 ## `print()` always works
 
-All types are printable. Built-in types print naturally. Custom types get a default representation — type name and visible fields:
+All types are printable — no `Printable` contract, no `.toString()` implementation required.
+
+**Shapes** print as `ShapeName { field: value, field: value }`:
 
 ```ynz
-print(player)    // Player { name: "Alice", health: 100 }
+print(player)    // Player { name: Alice, health: 100 }
 ```
 
-Declare your shape `follows Printable` and provide a standalone `toString(share self: YourShape) -> string` to customize the format.
+**Arrays** print as `[elem1, elem2, ...]`. Large arrays are capped at 20 elements:
+
+```ynz
+print(scores)               // [82, 91, 74, 88]
+print(bigArray)             // [1, 2, 3, ..., 20, ... and 980 more]
+```
+
+**Options** print their display string if one was declared, otherwise the variant name:
+
+```ynz
+print(Timeframe.daily)      // Daily    (if declared as daily: `Daily`)
+print(Status.active)        // active   (bare variant, no display string)
+```
+
+To customize how a shape prints, write a standalone `toString(share self: YourShape) -> string` function and use string interpolation:
+
+```ynz
+function toString(share self: Player) -> string {
+    return `${self.name} (HP: ${self.health})`
+}
+print(player)    // Alice (HP: 100)
+```
 
 ---
 

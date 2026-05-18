@@ -13,7 +13,7 @@ source $HOME/.cargo/env
 
 | Milestone | Status | New features in the demo |
 |---|---|---|
-| **M1** | ✅ shipped | `function main()`, `print(string)`, string literals |
+| **M1** | ✅ shipped | `function entrypoint()`, `print(string)`, string literals |
 | **M2** | ✅ shipped | Variables (`let`/`const`), arithmetic (`+ - * / %`), comparison, boolean (`&& \|\| !`), bitwise (`& \| ^ ~ << >>`), primitives (`int`, `float`, `number`, `bool`), polymorphic `print`, `.toString()`/`.toNumber()`/`.toFloat()` intrinsics |
 | **M3** | ✅ shipped | `if`/multi-case `if`/`else =>`, `while`, `for (x in range(...))`, early `return`, user-defined functions with params + return types, mutual recursion |
 | **M4** | ✅ shipped | shapes (data + contract signatures), standalone functions taking receivers (UFCS dot-call sugar), ownership (`share`/`lend`/`give` in signatures, inferred at call sites), `.copy()`/`.freeze()`, `extends` (data-only), `follows` contracts, `hidden` fields, `dynamic Foo` runtime polymorphism, M2 catch-up (`int.max`/`int.min`/`number.epsilon`, `.wrappingAdd()`/`.saturatingAdd()`) |
