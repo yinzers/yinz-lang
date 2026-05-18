@@ -2200,3 +2200,384 @@ fn m5_maybe_missing_type_arg() {
         "Diagnostic must mention `maybe`"
     );
 }
+
+// ── M7 P2: `-> T errors` return type parsing ────────────────────────────────
+
+#[test]
+fn m7_errors_capable_string_return_type() {
+    // WHY: `-> string errors` must set errors_capable = true and wrap the return
+    // type in Type::ErrorCapable. If errors_capable stays false, the type checker
+    // can never gate propagation checks on fallible functions.
+    let output = parse("function readFile() -> string errors { }");
+    assert_eq!(output.diagnostics.len(), 0, "unexpected diagnostics: {:?}", output.diagnostics);
+    match &output.module.items[0] {
+        Item::Function(f) => {
+            assert!(f.errors_capable, "errors_capable must be true for `-> string errors`");
+            assert!(
+                matches!(f.return_type, Type::ErrorCapable { .. }),
+                "return_type must be Type::ErrorCapable, got {:?}",
+                f.return_type
+            );
+        }
+        other => panic!("expected Function, got {other:?}"),
+    }
+}
+
+#[test]
+fn m7_errors_capable_nothing_return_type() {
+    // WHY: `-> nothing errors` is valid — a function that performs a side-effectful
+    // operation and may fail but has no success value. errors_capable must be true.
+    let output = parse("function writeFile() -> nothing errors { }");
+    assert_eq!(output.diagnostics.len(), 0, "unexpected diagnostics: {:?}", output.diagnostics);
+    match &output.module.items[0] {
+        Item::Function(f) => {
+            assert!(f.errors_capable, "errors_capable must be true for `-> nothing errors`");
+            assert!(
+                matches!(f.return_type, Type::ErrorCapable { ref inner, .. } if matches!(**inner, Type::Nothing)),
+                "ErrorCapable must wrap Nothing, got {:?}",
+                f.return_type
+            );
+        }
+        other => panic!("expected Function, got {other:?}"),
+    }
+}
+
+#[test]
+fn m7_errors_capable_maybe_string_return_type() {
+    // WHY: `-> maybe<string> errors` must produce ErrorCapable wrapping a Maybe type.
+    // The two modifiers are orthogonal: maybe = absent value, errors = failure mode.
+    let output = parse("function findUser() -> maybe<string> errors { }");
+    assert_eq!(output.diagnostics.len(), 0, "unexpected diagnostics: {:?}", output.diagnostics);
+    match &output.module.items[0] {
+        Item::Function(f) => {
+            assert!(f.errors_capable, "errors_capable must be true");
+            match &f.return_type {
+                Type::ErrorCapable { inner, .. } => {
+                    assert!(
+                        matches!(**inner, Type::Maybe { .. }),
+                        "inner type must be Maybe, got {:?}",
+                        inner
+                    );
+                }
+                other => panic!("expected ErrorCapable, got {other:?}"),
+            }
+        }
+        other => panic!("expected Function, got {other:?}"),
+    }
+}
+
+#[test]
+fn m7_plain_return_type_has_errors_capable_false() {
+    // WHY: A plain `-> string` (no `errors` keyword) must leave errors_capable = false.
+    // If this flag is accidentally set to true, every function becomes fallible and
+    // the typeck gates on error propagation trigger incorrectly everywhere.
+    let output = parse("function getGreeting() -> string { }");
+    assert_eq!(output.diagnostics.len(), 0, "unexpected diagnostics: {:?}", output.diagnostics);
+    match &output.module.items[0] {
+        Item::Function(f) => {
+            assert!(!f.errors_capable, "errors_capable must be false for plain `-> string`");
+            assert!(
+                matches!(f.return_type, Type::Named(_, _)),
+                "return_type must be Named(string), got {:?}",
+                f.return_type
+            );
+        }
+        other => panic!("expected Function, got {other:?}"),
+    }
+}
+
+#[test]
+fn m7_errors_capable_inner_type_is_preserved() {
+    // WHY: The inner type of ErrorCapable must be the exact type parsed from
+    // the return annotation — not wrapped again or replaced. Regression guard for
+    // accidental double-wrapping (ErrorCapable(ErrorCapable(T))).
+    let output = parse("function compute() -> int errors { }");
+    assert_eq!(output.diagnostics.len(), 0, "unexpected diagnostics: {:?}", output.diagnostics);
+    match &output.module.items[0] {
+        Item::Function(f) => {
+            match &f.return_type {
+                Type::ErrorCapable { inner, .. } => {
+                    assert!(matches!(**inner, Type::Int), "inner must be Int, got {:?}", inner);
+                }
+                other => panic!("expected ErrorCapable, got {other:?}"),
+            }
+        }
+        other => panic!("expected Function, got {other:?}"),
+    }
+}
+
+// ── M7 P2: backtick string interpolation ─────────────────────────────────────
+
+#[test]
+fn m7_backtick_plain_literal_parses_as_interpolated_string() {
+    // WHY: A backtick string with no interpolations must produce a single Lit part.
+    // If the parser fails here, every backtick string fails — even the trivial case.
+    use ynz_ast::nodes::StringPart;
+    let stmts = parse_fn_body(&wrap("let s = `hello`"));
+    match &stmts[0] {
+        Stmt::Let { value: Expr::InterpolatedString(parts, _), .. } => {
+            assert_eq!(parts.len(), 1, "plain backtick string must have 1 part");
+            assert!(matches!(&parts[0], StringPart::Lit(b, _) if b == b"hello"), "part must be Lit(hello)");
+        }
+        other => panic!("expected Let with InterpolatedString, got {other:?}"),
+    }
+}
+
+#[test]
+fn m7_backtick_single_interpolation_produces_three_parts() {
+    // WHY: `` `hello ${name}` `` must produce exactly three parts: Lit("hello "),
+    // Expr(name), Lit(""). The trailing empty Lit is always emitted by the lexer
+    // after the last interpolation close. Without it, the round-trip from source
+    // to parts loses the tail.
+    use ynz_ast::nodes::StringPart;
+    let stmts = parse_fn_body(&wrap("let s = `hello ${name}`"));
+    match &stmts[0] {
+        Stmt::Let { value: Expr::InterpolatedString(parts, _), .. } => {
+            assert_eq!(parts.len(), 3, "expected Lit + Expr + Lit, got {}", parts.len());
+            assert!(matches!(&parts[0], StringPart::Lit(b, _) if b == b"hello "), "first part must be Lit(hello )");
+            assert!(matches!(&parts[1], StringPart::Expr(_, _)), "second part must be Expr");
+            assert!(matches!(&parts[2], StringPart::Lit(b, _) if b.is_empty()), "third part must be Lit()");
+        }
+        other => panic!("expected Let with InterpolatedString, got {other:?}"),
+    }
+}
+
+#[test]
+fn m7_backtick_two_interpolations_produces_five_parts() {
+    // WHY: `` `${a} + ${b}` `` must produce five parts: Lit(""), Expr(a), Lit(" + "),
+    // Expr(b), Lit(""). Confirms the lexer and parser agree on the segment structure
+    // when interpolations appear at both ends of the string.
+    use ynz_ast::nodes::StringPart;
+    let stmts = parse_fn_body(&wrap("let s = `${a} + ${b}`"));
+    match &stmts[0] {
+        Stmt::Let { value: Expr::InterpolatedString(parts, _), .. } => {
+            assert_eq!(parts.len(), 5, "expected 5 parts (Lit+Expr+Lit+Expr+Lit), got {}", parts.len());
+            assert!(matches!(&parts[0], StringPart::Lit(b, _) if b.is_empty()), "parts[0] must be empty Lit");
+            assert!(matches!(&parts[1], StringPart::Expr(_, _)), "parts[1] must be Expr");
+            assert!(matches!(&parts[2], StringPart::Lit(b, _) if b == b" + "), "parts[2] must be Lit( + )");
+            assert!(matches!(&parts[3], StringPart::Expr(_, _)), "parts[3] must be Expr");
+            assert!(matches!(&parts[4], StringPart::Lit(b, _) if b.is_empty()), "parts[4] must be empty Lit");
+        }
+        other => panic!("expected Let with InterpolatedString, got {other:?}"),
+    }
+}
+
+#[test]
+fn m7_backtick_interpolated_expr_is_ident() {
+    // WHY: The expression inside `${...}` must be the full expression AST, not a
+    // string. Confirms the parser calls parse_expr(0) inside the interpolation, not
+    // some reduced form that only accepts identifiers.
+    use ynz_ast::nodes::StringPart;
+    let stmts = parse_fn_body(&wrap("let s = `value=${x}`"));
+    match &stmts[0] {
+        Stmt::Let { value: Expr::InterpolatedString(parts, _), .. } => {
+            assert_eq!(parts.len(), 3, "expected Lit + Expr + Lit");
+            match &parts[1] {
+                StringPart::Expr(inner, _) => {
+                    assert!(matches!(**inner, Expr::Ident(ref n, _) if n == "x"), "expr must be Ident(x)");
+                }
+                other => panic!("expected Expr part, got {other:?}"),
+            }
+        }
+        other => panic!("expected Let with InterpolatedString, got {other:?}"),
+    }
+}
+
+#[test]
+fn m7_backtick_empty_string_is_single_empty_lit() {
+    // WHY: A completely empty backtick string (`` `` ``) must produce one Lit part
+    // with empty bytes. An empty vec of parts would break any downstream stage
+    // that assumes at least one segment always exists.
+    use ynz_ast::nodes::StringPart;
+    let stmts = parse_fn_body(&wrap("let s = ``"));
+    match &stmts[0] {
+        Stmt::Let { value: Expr::InterpolatedString(parts, _), .. } => {
+            assert_eq!(parts.len(), 1, "empty backtick string must have exactly 1 Lit part");
+            assert!(matches!(&parts[0], StringPart::Lit(b, _) if b.is_empty()), "the Lit must be empty bytes");
+        }
+        other => panic!("expected Let with InterpolatedString, got {other:?}"),
+    }
+}
+
+// ── M7 P2: for-loop tuple destructure ────────────────────────────────────────
+
+#[test]
+fn m7_for_destructure_produces_for_with_synthetic_entry() {
+    // WHY: `for ((k, v) in m)` must desugar to `for (__entry in m)` with `let k`
+    // and `let v` injected at the top of the body. If the For var is not `__entry`,
+    // the desugaring contract is broken and typeck can't resolve the FieldAccess.
+    let stmts = parse_fn_body(&wrap("for ((k, v) in myMap) { }"));
+    match &stmts[0] {
+        Stmt::For { var, body, .. } => {
+            assert_eq!(var, "__entry", "desugared for-loop var must be __entry");
+            assert!(body.stmts.len() >= 2, "body must have at least the 2 injected let bindings");
+            // First stmt is `let k = __entry.key`
+            match &body.stmts[0] {
+                Stmt::Let { name, .. } => {
+                    assert_eq!(name, "k", "first injected binding must be k");
+                }
+                other => panic!("expected Let for k, got {other:?}"),
+            }
+            // Second stmt is `let v = __entry.value`
+            match &body.stmts[1] {
+                Stmt::Let { name, .. } => {
+                    assert_eq!(name, "v", "second injected binding must be v");
+                }
+                other => panic!("expected Let for v, got {other:?}"),
+            }
+        }
+        other => panic!("expected For, got {other:?}"),
+    }
+}
+
+#[test]
+fn m7_for_destructure_preserves_user_body_stmts() {
+    // WHY: Statements in the user's `for ((k, v) in m) { body }` must appear AFTER
+    // the two injected let bindings, not discarded. If desugaring drops user stmts,
+    // the for-loop body silently becomes a no-op.
+    let stmts = parse_fn_body(&wrap("for ((k, v) in m) { print(k) }"));
+    match &stmts[0] {
+        Stmt::For { body, .. } => {
+            assert_eq!(body.stmts.len(), 3, "body must have 2 injected lets + 1 user stmt");
+            // Index 2 is the user's print(k)
+            assert!(matches!(&body.stmts[2], Stmt::Expr(_)), "third stmt must be user's expression");
+        }
+        other => panic!("expected For, got {other:?}"),
+    }
+}
+
+#[test]
+fn m7_for_single_binding_still_works() {
+    // WHY: The existing `for (x in collection)` form must continue to work after
+    // adding destructure support. The LParen-check branch must only fire for `((`
+    // sequences, not for `(x`.
+    let stmts = parse_fn_body(&wrap("for (entry in myMap) { }"));
+    match &stmts[0] {
+        Stmt::For { var, .. } => {
+            assert_eq!(var, "entry", "single-binding for-loop var must be the user's name");
+        }
+        other => panic!("expected For, got {other:?}"),
+    }
+}
+
+#[test]
+fn m7_for_destructure_key_binding_uses_field_access() {
+    // WHY: The injected `let k = __entry.key` must use Expr::FieldAccess so typeck
+    // can resolve it against the MapEntry shape. If it's an Ident or Call, typeck
+    // can't determine the type of k.
+    let stmts = parse_fn_body(&wrap("for ((k, v) in m) { }"));
+    match &stmts[0] {
+        Stmt::For { body, .. } => {
+            match &body.stmts[0] {
+                Stmt::Let { value: Expr::FieldAccess { field, .. }, .. } => {
+                    assert_eq!(field, "key", "injected key binding must access .key field");
+                }
+                other => panic!("expected Let with FieldAccess, got {other:?}"),
+            }
+        }
+        other => panic!("expected For, got {other:?}"),
+    }
+}
+
+// ── M7 P2: `errors` keyword rejection in non-return-type position ────────────
+
+#[test]
+fn m7_errors_keyword_in_expression_position_is_rejected() {
+    // WHY: `errors` is a return-type modifier, not an expression. Using it in a
+    // value position like `let x = errors` must produce a parse error diagnostic.
+    // If it silently parses, the keyword has no clear semantic and the error model
+    // is ambiguous.
+    let output = parse(&wrap("let x = errors"));
+    assert!(
+        output.diagnostics.len() >= 1,
+        "expected at least one diagnostic for `errors` in expression position, got 0"
+    );
+}
+
+#[test]
+fn m7_errors_keyword_not_after_type_is_ignored() {
+    // WHY: `errors` only applies after a return type annotation in a function decl.
+    // `let x: string errors` is not valid syntax — the parser doesn't consume `errors`
+    // in annotation position. This test guards that `errors` doesn't silently vanish
+    // from unexpected positions, producing an error diagnostic instead.
+    let output = parse(&wrap("let x: string errors = foo"));
+    // `string errors` in let-binding type position — `errors` is unexpected there.
+    // The parser produces a diagnostic about unexpected token.
+    assert!(
+        output.diagnostics.len() >= 1,
+        "expected a diagnostic for `errors` after a let-binding type annotation"
+    );
+}
+
+#[test]
+fn m7_errors_keyword_as_standalone_expression_is_rejected() {
+    // WHY: A bare `errors` statement (as if it were a no-op expression) must be
+    // rejected. It is not an identifier and not an expression-producing keyword.
+    let output = parse(&wrap("errors"));
+    assert!(
+        output.diagnostics.len() >= 1,
+        "expected at least one diagnostic for standalone `errors` statement"
+    );
+}
+
+// ── M7 P2: M7 variant-count lock ─────────────────────────────────────────────
+
+#[test]
+fn m7_expr_variant_count_locked() {
+    // WHY: InterpolatedString(20) is the only new Expr variant M7 P1 adds.
+    // Locking at 20 prevents M7 P2/P3 from accidentally adding more without a plan.
+    //
+    // test-ratchet: M7 P1 adds InterpolatedString(20) for `` `...${...}...` `` syntax.
+    use ynz_ast::nodes::{BinOpKind, Expr::*, PostfixOpKind, StringPart};
+    let err = || Box::new(Error(span(0, 0)));
+    let all_variants: &[ynz_ast::nodes::Expr] = &[
+        Ident("x".into(), span(0, 1)),
+        StringLit(vec![], span(0, 0)),
+        Call(Box::new(ynz_ast::nodes::CallExpr { callee: Ident("f".into(), span(0, 1)), type_args: None, args: vec![], span: span(0, 3) })),
+        Error(span(0, 0)),
+        IntLit(0, span(0, 1)),
+        NumberLit("0".into(), span(0, 1)),
+        BoolLit(true, span(0, 4)),
+        BinOp { op: BinOpKind::Add, lhs: err(), rhs: err(), span: span(0, 0) },
+        UnaryOp { op: ynz_ast::nodes::UnaryOpKind::Neg, operand: err(), span: span(0, 0) },
+        MethodCall { receiver: err(), method: "m".into(), method_span: span(0, 1), args: vec![], span: span(0, 0) },
+        FieldAccess { receiver: err(), field: "f".into(), field_span: span(0, 1), span: span(0, 0) },
+        StructLit { fields: vec![], span: span(0, 0) },
+        PostfixOp { receiver: err(), op: PostfixOpKind::Copy, span: span(0, 0) },
+        SelfValue { span: span(0, 0) },
+        NoneLit { span: span(0, 0) },
+        IndexAccess { receiver: err(), index: err(), span: span(0, 0) },
+        ArrayLit { elements: vec![], span: span(0, 0) },
+        MapLit { entries: vec![], span: span(0, 0) },
+        Is { expr: err(), ty: ynz_ast::nodes::TypePath { name: "Foo".into(), span: span(0, 3) }, span: span(0, 0) },
+        InterpolatedString(vec![StringPart::Lit(vec![], span(0, 0))], span(0, 0)),
+    ];
+    assert_eq!(all_variants.len(), 20, "Expr variant count changed from 20 — add a // test-ratchet: comment");
+}
+
+#[test]
+fn m7_type_variant_count_locked() {
+    // WHY: ErrorCapable(15) is the only new Type variant M7 P1 adds.
+    // Locking at 15 ensures M7 P3+ variants require a documented plan.
+    //
+    // test-ratchet: M7 P1 adds ErrorCapable(15) for `-> T errors` fallible return types.
+    use ynz_ast::nodes::Type::*;
+    let all_variants: &[Type] = &[
+        Nothing,
+        Named("foo".into(), span(0, 3)),
+        Error,
+        Int,
+        Float,
+        Number { precision: 34 },
+        Bool,
+        Range { element: Box::new(Int), end_inclusive: false },
+        Dynamic { contract: "Foo".into(), span: span(0, 3) },
+        SelfType { span: span(0, 4) },
+        TypeParam { name: "T".into(), span: span(0, 1) },
+        Generic { name: "array".into(), name_span: span(0, 5), args: vec![Int], span: span(0, 10) },
+        Maybe { inner: Box::new(Int), span: span(0, 9) },
+        Union { variants: vec![Int, Float], span: span(0, 10) },
+        ErrorCapable { inner: Box::new(Int), span: span(0, 15) },
+    ];
+    assert_eq!(all_variants.len(), 15, "Type variant count changed from 15 — add a // test-ratchet: comment");
+}
