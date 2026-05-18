@@ -3018,5 +3018,12 @@ fn token_display(tok: &Token) -> &str {
         Token::InterpolationStart => "${",
         Token::InterpolationEnd => "}",
         Token::Errors => "errors",
+        // M8 P1: modules + sensitive + concurrency keywords
+        Token::Import => "import",
+        Token::Export => "export",
+        Token::Sensitive => "sensitive",
+        Token::Wait => "wait",
+        Token::Background => "background",
+        Token::DocComment { .. } => "doc comment",
     }
 }

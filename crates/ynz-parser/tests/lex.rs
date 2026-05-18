@@ -34,7 +34,6 @@ fn lex_diags(source: &str) -> Vec<ynz_diagnostics::Diagnostic> {
     output.diagnostics.clone()
 }
 
-
 #[test]
 fn m4_token_variant_count_locked() {
     // WHY: This test pins the token vocabulary to the M4 surface.
@@ -138,7 +137,6 @@ fn m4_token_variant_count_locked() {
     );
 }
 
-
 #[test]
 fn m5_token_variant_count_locked() {
     // WHY: pins the token vocabulary at the M5 P1 surface.
@@ -151,19 +149,66 @@ fn m5_token_variant_count_locked() {
     use ynz_parser::Token::*;
     let all_variants: &[Token] = &[
         // M1
-        Function, Nothing, Identifier("x".into()), StringLit(vec![]),
-        LParen, RParen, LBrace, RBrace, Arrow, Eof,
+        Function,
+        Nothing,
+        Identifier("x".into()),
+        StringLit(vec![]),
+        LParen,
+        RParen,
+        LBrace,
+        RBrace,
+        Arrow,
+        Eof,
         // M2
-        Let, Const, True, False, IntLit(0), NumberLit("0.0".into()),
-        Plus, Minus, Star, Slash, Percent,
-        EqEq, NotEq, Lt, LtEq, Gt, GtEq,
-        AmpAmp, PipePipe, Bang,
-        Amp, Pipe, Caret, Tilde, LtLt, GtGt,
-        Eq, Colon, Dot, LBracket, RBracket, Comma,
+        Let,
+        Const,
+        True,
+        False,
+        IntLit(0),
+        NumberLit("0.0".into()),
+        Plus,
+        Minus,
+        Star,
+        Slash,
+        Percent,
+        EqEq,
+        NotEq,
+        Lt,
+        LtEq,
+        Gt,
+        GtEq,
+        AmpAmp,
+        PipePipe,
+        Bang,
+        Amp,
+        Pipe,
+        Caret,
+        Tilde,
+        LtLt,
+        GtGt,
+        Eq,
+        Colon,
+        Dot,
+        LBracket,
+        RBracket,
+        Comma,
         // M3
-        If, Else, While, For, In, Return, FatArrow,
+        If,
+        Else,
+        While,
+        For,
+        In,
+        Return,
+        FatArrow,
         // M4
-        Shape, Follows, Extends, Base, Hidden, Dynamic, SelfType, SelfValue,
+        Shape,
+        Follows,
+        Extends,
+        Base,
+        Hidden,
+        Dynamic,
+        SelfType,
+        SelfValue,
         // M5
         None,
     ];
@@ -174,7 +219,6 @@ fn m5_token_variant_count_locked() {
          with a // test-ratchet: <reason> comment and update the Token doc comment"
     );
 }
-
 
 #[test]
 fn m1_source_produces_expected_tokens() {
@@ -187,7 +231,6 @@ fn m1_source_produces_expected_tokens() {
     let tokens = lex_tokens(source);
     assert_debug_snapshot!("m1_token_stream", tokens);
 }
-
 
 #[test]
 fn m2_source_produces_expected_tokens() {
@@ -204,7 +247,6 @@ fn m2_source_produces_expected_tokens() {
     let tokens = lex_tokens(source);
     assert_debug_snapshot!("m2_token_stream", tokens);
 }
-
 
 #[test]
 fn decimal_integer_literal() {
@@ -241,7 +283,6 @@ fn binary_integer_literal() {
         vec![Token::IntLit(0b1111_0000), Token::Eof]
     );
 }
-
 
 #[test]
 fn decimal_number_literal_with_dot() {
@@ -285,14 +326,12 @@ fn integer_followed_by_dot_method_call() {
     assert_eq!(tokens[2], Token::Identifier("toString".into()));
 }
 
-
 #[test]
 fn true_and_false_keywords() {
     // WHY: `true` and `false` must produce keyword tokens, not identifiers.
     assert_eq!(lex_tokens("true"), vec![Token::True, Token::Eof]);
     assert_eq!(lex_tokens("false"), vec![Token::False, Token::Eof]);
 }
-
 
 #[test]
 fn two_char_operators_beat_single_char() {
@@ -333,7 +372,6 @@ fn minus_without_gt_is_minus() {
         ]
     );
 }
-
 
 #[test]
 fn line_comment_is_skipped() {
@@ -378,7 +416,6 @@ fn slash_not_followed_by_slash_is_division() {
         ]
     );
 }
-
 
 #[test]
 fn two_dots_in_literal_produces_diagnostic() {
@@ -454,7 +491,10 @@ fn integer_overflow_produces_diagnostic() {
     // clear message pointing at `number` as the alternative type.
     let too_big = "99999999999999999999999";
     let (_, diag_count) = lex_counts(too_big);
-    assert_eq!(diag_count, 1, "Expected exactly 1 diagnostic for overflow literal");
+    assert_eq!(
+        diag_count, 1,
+        "Expected exactly 1 diagnostic for overflow literal"
+    );
 
     let diags = lex_diags(too_big);
     assert!(
@@ -463,7 +503,6 @@ fn integer_overflow_produces_diagnostic() {
         diags[0].what
     );
 }
-
 
 #[test]
 fn compound_assignment_plus_eq_produces_diagnostic() {
@@ -516,7 +555,6 @@ fn compound_assignment_percent_eq_produces_diagnostic() {
     let (_, diag_count) = lex_counts("x %= 2");
     assert_eq!(diag_count, 1, "Expected 1 diagnostic for `%=`");
 }
-
 
 #[test]
 fn token_spans_reconstruct_lexemes() {
@@ -602,10 +640,17 @@ fn token_spans_reconstruct_lexemes() {
             | Token::Options
             | Token::Is
             // test-ratchet: M7 P1 adds BacktickString, InterpolationStart, InterpolationEnd, Errors
+            // test-ratchet: M8 P1 adds Import, Export, Sensitive, Wait, Background, DocComment
             | Token::BacktickString(_)
             | Token::InterpolationStart
             | Token::InterpolationEnd
-            | Token::Errors => {
+            | Token::Errors
+            | Token::Import
+            | Token::Export
+            | Token::Sensitive
+            | Token::Wait
+            | Token::Background
+            | Token::DocComment { .. } => {
                 // Span must be non-empty for every token that has a source location.
                 assert!(
                     spanned.span.start < spanned.span.end,
@@ -644,7 +689,6 @@ fn m2_token_spans_cover_source() {
     }
 }
 
-
 #[test]
 fn empty_source_produces_only_eof() {
     let tokens = lex_tokens("");
@@ -657,14 +701,16 @@ fn whitespace_only_source_produces_only_eof() {
     assert_eq!(tokens, vec![Token::Eof]);
 }
 
-
 #[test]
 fn unknown_char_produces_diagnostic_and_continues() {
     // WHY: The lexer must not bail on the first unknown character. A broken
     // file should show all its errors at once, not just the first.
     let source = r#"function entrypoint() -> nothing { print($) }"#;
     let (token_count, diag_count) = lex_counts(source);
-    assert_eq!(diag_count, 1, "Expected exactly 1 diagnostic for the unknown '$'");
+    assert_eq!(
+        diag_count, 1,
+        "Expected exactly 1 diagnostic for the unknown '$'"
+    );
     assert!(
         token_count > 1,
         "Lexer must produce a usable token stream after the error"
@@ -697,7 +743,10 @@ fn non_ascii_bytes_inside_string_lex_clean() {
     // The token is now BacktickString instead of StringLit.
     let source = "function entrypoint() -> nothing { print(`café`) }";
     let (token_count, diag_count) = lex_counts(source);
-    assert_eq!(diag_count, 0, "Non-ASCII in a backtick string literal must not produce a diagnostic");
+    assert_eq!(
+        diag_count, 0,
+        "Non-ASCII in a backtick string literal must not produce a diagnostic"
+    );
 
     let db = CompilerDb::default();
     let sf = SourceFile::new(&db, FILE.to_string(), source.to_string());
@@ -718,7 +767,6 @@ fn non_ascii_bytes_inside_string_lex_clean() {
     }
     let _ = token_count;
 }
-
 
 #[test]
 fn m3_keywords_lex_correctly() {
@@ -823,7 +871,10 @@ fn self_type_and_self_value_are_distinct() {
     // the parser can enforce where each is valid.
     let self_type = lex_tokens("Self");
     let self_value = lex_tokens("self");
-    assert_ne!(self_type, self_value, "Self (type) and self (value) must be distinct tokens");
+    assert_ne!(
+        self_type, self_value,
+        "Self (type) and self (value) must be distinct tokens"
+    );
     assert_eq!(self_type, vec![Token::SelfType, Token::Eof]);
     assert_eq!(self_value, vec![Token::SelfValue, Token::Eof]);
 }
@@ -854,11 +905,13 @@ fn type_keyword_produces_teaching_diagnostic() {
     let diags = lex_diags("type");
     assert!(
         diags[0].what.contains("type"),
-        "Diagnostic should name the keyword, got: {:?}", diags[0].what
+        "Diagnostic should name the keyword, got: {:?}",
+        diags[0].what
     );
     assert!(
         diags[0].what_instead.contains("shape"),
-        "Diagnostic should point to `shape`, got: {:?}", diags[0].what_instead
+        "Diagnostic should point to `shape`, got: {:?}",
+        diags[0].what_instead
     );
 
     let tokens = lex_tokens("type");
@@ -878,11 +931,13 @@ fn struct_keyword_produces_teaching_diagnostic() {
     let diags = lex_diags("struct");
     assert!(
         diags[0].what.contains("struct"),
-        "Diagnostic should name the keyword, got: {:?}", diags[0].what
+        "Diagnostic should name the keyword, got: {:?}",
+        diags[0].what
     );
     assert!(
         diags[0].what_instead.contains("shape"),
-        "Diagnostic should point to `shape`, got: {:?}", diags[0].what_instead
+        "Diagnostic should point to `shape`, got: {:?}",
+        diags[0].what_instead
     );
 
     let tokens = lex_tokens("struct");
@@ -903,11 +958,13 @@ fn class_keyword_produces_teaching_diagnostic() {
     let diags = lex_diags("class");
     assert!(
         diags[0].what.contains("class"),
-        "Diagnostic should name the keyword, got: {:?}", diags[0].what
+        "Diagnostic should name the keyword, got: {:?}",
+        diags[0].what
     );
     assert!(
         diags[0].what_instead.contains("shape"),
-        "Diagnostic should point to `shape`, got: {:?}", diags[0].what_instead
+        "Diagnostic should point to `shape`, got: {:?}",
+        diags[0].what_instead
     );
 
     let tokens = lex_tokens("class");
@@ -922,16 +979,21 @@ fn interface_keyword_produces_teaching_diagnostic() {
     // WHY: A user coming from TypeScript/Java may write `interface Damageable { ... }`.
     // The diagnostic must point to the `shape` + `follows` pattern for contracts.
     let (_, diag_count) = lex_counts("interface");
-    assert_eq!(diag_count, 1, "Expected exactly 1 diagnostic for `interface`");
+    assert_eq!(
+        diag_count, 1,
+        "Expected exactly 1 diagnostic for `interface`"
+    );
 
     let diags = lex_diags("interface");
     assert!(
         diags[0].what.contains("interface"),
-        "Diagnostic should name the keyword, got: {:?}", diags[0].what
+        "Diagnostic should name the keyword, got: {:?}",
+        diags[0].what
     );
     assert!(
         diags[0].what_instead.contains("follows"),
-        "Diagnostic should mention `follows` for contracts, got: {:?}", diags[0].what_instead
+        "Diagnostic should mention `follows` for contracts, got: {:?}",
+        diags[0].what_instead
     );
 
     let tokens = lex_tokens("interface");
@@ -951,11 +1013,13 @@ fn enum_keyword_produces_teaching_diagnostic() {
     let diags = lex_diags("enum");
     assert!(
         diags[0].what.contains("enum"),
-        "Diagnostic should name the keyword, got: {:?}", diags[0].what
+        "Diagnostic should name the keyword, got: {:?}",
+        diags[0].what
     );
     assert!(
         diags[0].what_instead.contains("options"),
-        "Diagnostic should point to `options`, got: {:?}", diags[0].what_instead
+        "Diagnostic should point to `options`, got: {:?}",
+        diags[0].what_instead
     );
 
     let tokens = lex_tokens("enum");
@@ -970,16 +1034,21 @@ fn abstract_keyword_produces_teaching_diagnostic() {
     // WHY: A user coming from Java/C# may write `abstract class Entity { ... }`.
     // Redirects to `base shape` — the Yinz form for a non-instantiable shape.
     let (_, diag_count) = lex_counts("abstract");
-    assert_eq!(diag_count, 1, "Expected exactly 1 diagnostic for `abstract`");
+    assert_eq!(
+        diag_count, 1,
+        "Expected exactly 1 diagnostic for `abstract`"
+    );
 
     let diags = lex_diags("abstract");
     assert!(
         diags[0].what.contains("abstract"),
-        "Diagnostic should name the keyword, got: {:?}", diags[0].what
+        "Diagnostic should name the keyword, got: {:?}",
+        diags[0].what
     );
     assert!(
         diags[0].what_instead.contains("base shape"),
-        "Diagnostic should point to `base shape`, got: {:?}", diags[0].what_instead
+        "Diagnostic should point to `base shape`, got: {:?}",
+        diags[0].what_instead
     );
 
     let tokens = lex_tokens("abstract");
@@ -1014,14 +1083,17 @@ fn m4_source_produces_expected_tokens() {
     assert_debug_snapshot!("m4_token_stream", tokens);
 }
 
-
 #[test]
 fn m5_none_keyword_lexes() {
     // WHY: `none` is a reserved keyword in M5 — it produces Token::None,
     // not an identifier. If a future change accidentally demotes it back
     // to an identifier, every maybe<T> program silently misparses.
     let tokens = lex_tokens("none");
-    assert_eq!(tokens, vec![Token::None, Token::Eof], "`none` must lex as Token::None, not Identifier");
+    assert_eq!(
+        tokens,
+        vec![Token::None, Token::Eof],
+        "`none` must lex as Token::None, not Identifier"
+    );
 }
 
 #[test]
@@ -1119,7 +1191,6 @@ fn changing_source_text_invalidates_cache() {
     );
 }
 
-
 // ── M6: options + is ─────────────────────────────────────────────────────────
 
 #[test]
@@ -1134,19 +1205,66 @@ fn m6_token_variant_count_locked() {
     use ynz_parser::Token::*;
     let all_variants: &[Token] = &[
         // M1
-        Function, Nothing, Identifier("x".into()), StringLit(vec![]),
-        LParen, RParen, LBrace, RBrace, Arrow, Eof,
+        Function,
+        Nothing,
+        Identifier("x".into()),
+        StringLit(vec![]),
+        LParen,
+        RParen,
+        LBrace,
+        RBrace,
+        Arrow,
+        Eof,
         // M2
-        Let, Const, True, False, IntLit(0), NumberLit("0.0".into()),
-        Plus, Minus, Star, Slash, Percent,
-        EqEq, NotEq, Lt, LtEq, Gt, GtEq,
-        AmpAmp, PipePipe, Bang,
-        Amp, Pipe, Caret, Tilde, LtLt, GtGt,
-        Eq, Colon, Dot, LBracket, RBracket, Comma,
+        Let,
+        Const,
+        True,
+        False,
+        IntLit(0),
+        NumberLit("0.0".into()),
+        Plus,
+        Minus,
+        Star,
+        Slash,
+        Percent,
+        EqEq,
+        NotEq,
+        Lt,
+        LtEq,
+        Gt,
+        GtEq,
+        AmpAmp,
+        PipePipe,
+        Bang,
+        Amp,
+        Pipe,
+        Caret,
+        Tilde,
+        LtLt,
+        GtGt,
+        Eq,
+        Colon,
+        Dot,
+        LBracket,
+        RBracket,
+        Comma,
         // M3
-        If, Else, While, For, In, Return, FatArrow,
+        If,
+        Else,
+        While,
+        For,
+        In,
+        Return,
+        FatArrow,
         // M4
-        Shape, Follows, Extends, Base, Hidden, Dynamic, SelfType, SelfValue,
+        Shape,
+        Follows,
+        Extends,
+        Base,
+        Hidden,
+        Dynamic,
+        SelfType,
+        SelfValue,
         // M5
         None,
         // M6
@@ -1167,8 +1285,16 @@ fn m6_options_keyword_lexes() {
     // If this fails, every options-declaration parse test will see an identifier
     // where the parser expects the keyword, producing cascading parse errors.
     let tokens = lex_tokens("options Status { active }");
-    assert_eq!(tokens[0], Token::Options, "expected Token::Options for 'options'");
-    assert_eq!(tokens[1], Token::Identifier("Status".into()), "expected identifier after options");
+    assert_eq!(
+        tokens[0],
+        Token::Options,
+        "expected Token::Options for 'options'"
+    );
+    assert_eq!(
+        tokens[1],
+        Token::Identifier("Status".into()),
+        "expected identifier after options"
+    );
 }
 
 #[test]
@@ -1178,7 +1304,10 @@ fn m6_is_keyword_lexes() {
     // and union narrowing is completely non-functional.
     let tokens = lex_tokens("if (x) { is Circle => print(\"hit\") }");
     let is_pos = tokens.iter().position(|t| *t == Token::Is);
-    assert!(is_pos.is_some(), "expected Token::Is in the token stream for 'is'");
+    assert!(
+        is_pos.is_some(),
+        "expected Token::Is in the token stream for 'is'"
+    );
 }
 
 #[test]
@@ -1188,10 +1317,15 @@ fn m6_enum_banned_keyword_still_fires() {
     // real keyword. Both the diagnostic and the fallback identifier behavior
     // must coexist correctly.
     let (tok_count, diag_count) = lex_counts("enum Status { active }");
-    assert_eq!(diag_count, 1, "expected exactly 1 banned-keyword diagnostic for 'enum'");
-    assert!(tok_count > 0, "expected tokens to be emitted (tolerant recovery)");
+    assert_eq!(
+        diag_count, 1,
+        "expected exactly 1 banned-keyword diagnostic for 'enum'"
+    );
+    assert!(
+        tok_count > 0,
+        "expected tokens to be emitted (tolerant recovery)"
+    );
 }
-
 
 // ── M7 P1: backtick strings + errors keyword ─────────────────────────────────
 
@@ -1207,23 +1341,71 @@ fn m7_token_variant_count_locked() {
     use ynz_parser::Token::*;
     let all_variants: &[Token] = &[
         // M1
-        Function, Nothing, Identifier("x".into()), StringLit(vec![]),
-        LParen, RParen, LBrace, RBrace, Arrow, Eof,
+        Function,
+        Nothing,
+        Identifier("x".into()),
+        StringLit(vec![]),
+        LParen,
+        RParen,
+        LBrace,
+        RBrace,
+        Arrow,
+        Eof,
         // M2
-        Let, Const, True, False, IntLit(0), NumberLit("0.0".into()),
-        Plus, Minus, Star, Slash, Percent,
-        EqEq, NotEq, Lt, LtEq, Gt, GtEq,
-        AmpAmp, PipePipe, Bang,
-        Amp, Pipe, Caret, Tilde, LtLt, GtGt,
-        Eq, Colon, Dot, LBracket, RBracket, Comma,
+        Let,
+        Const,
+        True,
+        False,
+        IntLit(0),
+        NumberLit("0.0".into()),
+        Plus,
+        Minus,
+        Star,
+        Slash,
+        Percent,
+        EqEq,
+        NotEq,
+        Lt,
+        LtEq,
+        Gt,
+        GtEq,
+        AmpAmp,
+        PipePipe,
+        Bang,
+        Amp,
+        Pipe,
+        Caret,
+        Tilde,
+        LtLt,
+        GtGt,
+        Eq,
+        Colon,
+        Dot,
+        LBracket,
+        RBracket,
+        Comma,
         // M3
-        If, Else, While, For, In, Return, FatArrow,
+        If,
+        Else,
+        While,
+        For,
+        In,
+        Return,
+        FatArrow,
         // M4
-        Shape, Follows, Extends, Base, Hidden, Dynamic, SelfType, SelfValue,
+        Shape,
+        Follows,
+        Extends,
+        Base,
+        Hidden,
+        Dynamic,
+        SelfType,
+        SelfValue,
         // M5
         None,
         // M6
-        Options, Is,
+        Options,
+        Is,
         // M7 P1
         BacktickString(vec![]),
         InterpolationStart,
@@ -1271,7 +1453,9 @@ fn m7_backtick_string_with_one_interpolation() {
     // If any of these tokens are missing or reordered, string interpolation is broken.
     let tokens = lex_tokens("`hello ${name}!`");
     assert!(
-        tokens.iter().any(|t| *t == Token::BacktickString(b"hello ".to_vec())),
+        tokens
+            .iter()
+            .any(|t| *t == Token::BacktickString(b"hello ".to_vec())),
         "Must contain BacktickString(b\"hello \")"
     );
     assert!(
@@ -1279,7 +1463,9 @@ fn m7_backtick_string_with_one_interpolation() {
         "Must contain InterpolationStart"
     );
     assert!(
-        tokens.iter().any(|t| *t == Token::Identifier("name".into())),
+        tokens
+            .iter()
+            .any(|t| *t == Token::Identifier("name".into())),
         "Must contain Identifier(name)"
     );
     assert!(
@@ -1287,7 +1473,9 @@ fn m7_backtick_string_with_one_interpolation() {
         "Must contain InterpolationEnd"
     );
     assert!(
-        tokens.iter().any(|t| *t == Token::BacktickString(b"!".to_vec())),
+        tokens
+            .iter()
+            .any(|t| *t == Token::BacktickString(b"!".to_vec())),
         "Must contain BacktickString(b\"!\")"
     );
 }
@@ -1309,7 +1497,9 @@ fn m7_backtick_string_interpolation_at_start() {
         "Must contain InterpolationStart"
     );
     assert!(
-        tokens.iter().any(|t| *t == Token::BacktickString(b" world".to_vec())),
+        tokens
+            .iter()
+            .any(|t| *t == Token::BacktickString(b" world".to_vec())),
         "Must contain BacktickString(b\" world\") after interpolation"
     );
 }
@@ -1321,10 +1511,15 @@ fn m7_backtick_multiline_string_preserves_newlines() {
     // BacktickString payload.
     let source = "`line1\nline2`";
     let (_, diag_count) = lex_counts(source);
-    assert_eq!(diag_count, 0, "Multi-line backtick string must produce no diagnostics");
+    assert_eq!(
+        diag_count, 0,
+        "Multi-line backtick string must produce no diagnostics"
+    );
 
     let tokens = lex_tokens(source);
-    let bs = tokens.iter().find(|t| matches!(t, Token::BacktickString(_)));
+    let bs = tokens
+        .iter()
+        .find(|t| matches!(t, Token::BacktickString(_)));
     assert!(bs.is_some(), "Must produce a BacktickString token");
     if let Some(Token::BacktickString(bytes)) = bs {
         assert!(
@@ -1340,7 +1535,9 @@ fn m7_backtick_escape_sequences_decoded() {
     // If escape sequences are passed through literally, programs cannot embed
     // newlines or tabs in strings.
     let tokens = lex_tokens("`\\n\\t\\\\`");
-    let bs = tokens.iter().find(|t| matches!(t, Token::BacktickString(_)));
+    let bs = tokens
+        .iter()
+        .find(|t| matches!(t, Token::BacktickString(_)));
     assert!(bs.is_some(), "Must produce a BacktickString");
     if let Some(Token::BacktickString(bytes)) = bs {
         assert_eq!(bytes.as_slice(), &[b'\n', b'\t', b'\\']);
@@ -1354,14 +1551,20 @@ fn m7_backtick_nested_braces_inside_interpolation() {
     // counter must track them correctly.
     let source = "`${a + 1}`";
     let (_, diag_count) = lex_counts(source);
-    assert_eq!(diag_count, 0, "Simple interpolation with no inner braces must produce no diagnostics");
+    assert_eq!(
+        diag_count, 0,
+        "Simple interpolation with no inner braces must produce no diagnostics"
+    );
 
     let tokens = lex_tokens(source);
     // Should end with a BacktickString token (the empty suffix)
     let interp_end_idx = tokens.iter().position(|t| *t == Token::InterpolationEnd);
     let backtick_after = interp_end_idx.map(|i| tokens.get(i + 1));
     assert!(
-        backtick_after.flatten().map(|t| matches!(t, Token::BacktickString(_))).unwrap_or(false),
+        backtick_after
+            .flatten()
+            .map(|t| matches!(t, Token::BacktickString(_)))
+            .unwrap_or(false),
         "After InterpolationEnd there must be a BacktickString"
     );
 }
@@ -1372,7 +1575,10 @@ fn m7_unterminated_backtick_produces_diagnostic() {
     // pointing at the missing closing backtick. If the lexer panics or produces
     // zero diagnostics, malformed programs silently produce broken IR.
     let (_, diag_count) = lex_counts("`unterminated");
-    assert_eq!(diag_count, 1, "Unterminated backtick string must produce exactly 1 diagnostic");
+    assert_eq!(
+        diag_count, 1,
+        "Unterminated backtick string must produce exactly 1 diagnostic"
+    );
 
     let diags = lex_diags("`unterminated");
     assert!(
@@ -1388,7 +1594,10 @@ fn m7_double_quote_produces_error_diagnostic() {
     // teaching diagnostic redirecting to backtick syntax. A recovery token
     // (BacktickString) must also be emitted so the parser can continue.
     let (_, diag_count) = lex_counts(r#""hello""#);
-    assert_eq!(diag_count, 1, "Double-quoted string must produce exactly 1 error diagnostic");
+    assert_eq!(
+        diag_count, 1,
+        "Double-quoted string must produce exactly 1 error diagnostic"
+    );
 
     let diags = lex_diags(r#""hello""#);
     assert!(
@@ -1418,7 +1627,10 @@ fn single_quote_produces_one_error_with_recovery() {
     // the same dedicated handler as double quotes: one diagnostic, one recovery token,
     // zero cascade noise.
     let (_, diag_count) = lex_counts("'hello world'");
-    assert_eq!(diag_count, 1, "Single-quoted string must produce exactly 1 diagnostic, got {diag_count}");
+    assert_eq!(
+        diag_count, 1,
+        "Single-quoted string must produce exactly 1 diagnostic, got {diag_count}"
+    );
 
     let diags = lex_diags("'hello world'");
     assert!(
@@ -1445,11 +1657,15 @@ fn hash_comment_produces_one_error_no_cascade() {
     // consumed but `this`, `is`, `a`, `comment` were still lexed as identifiers.
     // The dedicated handler must consume the whole line — guard against regression.
     let (_, diag_count) = lex_counts("# this is a comment");
-    assert_eq!(diag_count, 1, "Hash comment must produce exactly 1 diagnostic, got {diag_count}");
+    assert_eq!(
+        diag_count, 1,
+        "Hash comment must produce exactly 1 diagnostic, got {diag_count}"
+    );
     let diags = lex_diags("# this is a comment");
     assert!(
         diags[0].what_instead.contains("//"),
-        "Must redirect to `//` syntax, got: {:?}", diags[0].what_instead
+        "Must redirect to `//` syntax, got: {:?}",
+        diags[0].what_instead
     );
 }
 
@@ -1462,11 +1678,13 @@ fn semicolon_produces_teaching_error() {
     let diags = lex_diags("let x = 5;");
     assert!(
         diags[0].what.contains("Semicolons") || diags[0].what.contains("semicolon"),
-        "Must mention semicolons, got: {:?}", diags[0].what
+        "Must mention semicolons, got: {:?}",
+        diags[0].what
     );
     assert!(
         diags[0].what_instead.contains("newline") || diags[0].what_instead.contains("Remove"),
-        "Must tell user to remove it, got: {:?}", diags[0].what_instead
+        "Must tell user to remove it, got: {:?}",
+        diags[0].what_instead
     );
 }
 
@@ -1477,7 +1695,8 @@ fn dollar_prefix_produces_teaching_error() {
     assert!(!diags.is_empty(), "$ must produce a diagnostic");
     assert!(
         diags[0].what_instead.contains("$") || diags[0].what.contains("$"),
-        "Must mention the $ prefix, got: {:?}", diags[0]
+        "Must mention the $ prefix, got: {:?}",
+        diags[0]
     );
 }
 
@@ -1488,7 +1707,8 @@ fn question_mark_produces_teaching_error() {
     assert!(!diags.is_empty(), "? must produce a diagnostic");
     assert!(
         diags[0].what_instead.contains("maybe") || diags[0].why.contains("maybe"),
-        "Must redirect to maybe<T>, got: {:?}", diags[0]
+        "Must redirect to maybe<T>, got: {:?}",
+        diags[0]
     );
 }
 
@@ -1498,7 +1718,11 @@ fn m7_errors_keyword_lexes() {
     // an Identifier. If it falls through to Identifier, the parser cannot
     // recognize the `-> T errors` fallible return type syntax.
     let tokens = lex_tokens("errors");
-    assert_eq!(tokens, vec![Token::Errors, Token::Eof], "`errors` must lex as Token::Errors");
+    assert_eq!(
+        tokens,
+        vec![Token::Errors, Token::Eof],
+        "`errors` must lex as Token::Errors"
+    );
 }
 
 #[test]
@@ -1513,8 +1737,5 @@ fn m7_errors_keyword_in_context() {
     );
     // The token immediately before Errors should be an Identifier("string") or similar
     let errors_pos = tokens.iter().position(|t| *t == Token::Errors).unwrap();
-    assert!(
-        errors_pos > 0,
-        "Token::Errors must not be the first token"
-    );
+    assert!(errors_pos > 0, "Token::Errors must not be the first token");
 }

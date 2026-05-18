@@ -2640,17 +2640,28 @@ impl<'b> Checker<'b> {
             return Type::Error;
         }
 
-        // Check every required (non-hidden, no-default) field is present.
-        for shape_field in &shape_def.fields.clone() {
-            if shape_field.is_hidden {
-                continue; // hidden fields are not provided at construction
-            }
-            let provided = fields.iter().any(|f| f.name == shape_field.name);
-            if !provided {
+        // Collect all missing required fields, then emit one consolidated diagnostic.
+        let missing: Vec<&str> = shape_def.fields.iter()
+            .filter(|sf| !sf.is_hidden && !fields.iter().any(|f| f.name == sf.name))
+            .map(|sf| sf.name.as_str())
+            .collect();
+        match missing.len() {
+            0 => {}
+            1 => {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
-                    format!("Missing field `{}` in `{shape_name}` construction.", shape_field.name),
-                    format!("Add `{}: value` to the shape value.", shape_field.name),
+                    format!("Missing field `{}` in `{shape_name}` construction.", missing[0]),
+                    format!("Add `{}: value` to the shape value.", missing[0]),
+                    "Every visible field of a shape must be provided when constructing a value — the compiler cannot fill them in for you.",
+                ));
+            }
+            n => {
+                let list = missing.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ");
+                let add  = missing.iter().map(|name| format!("`{name}: value`")).collect::<Vec<_>>().join(", ");
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("{n} fields are missing from this `{shape_name}` value: {list}."),
+                    format!("Add the missing fields: {add}."),
                     "Every visible field of a shape must be provided when constructing a value — the compiler cannot fill them in for you.",
                 ));
             }
