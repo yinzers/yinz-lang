@@ -1,0 +1,7 @@
+// M8 multi-file hello: entrypoint that imports from a sibling module.
+// Cross-file CALLS ship in v0.2; this test validates the multi-file build pipeline.
+import { helper } from `helpers`
+
+function entrypoint() -> nothing {
+  print(`hello from multi-file project`)
+}

@@ -213,6 +213,7 @@ Module {
                     end: 12,
                 },
                 errors_capable: false,
+                is_exported: false,
             },
         ),
         Function(
@@ -314,6 +315,7 @@ Module {
                     end: 117,
                 },
                 errors_capable: false,
+                is_exported: false,
             },
         ),
     ],

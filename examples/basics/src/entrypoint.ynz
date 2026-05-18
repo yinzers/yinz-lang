@@ -1,13 +1,22 @@
 // examples/basics/src/entrypoint.ynz
 //
 // The Yinz v0.1 Language Showcase — grows milestone-by-milestone.
-// Compile + run with: ./target/debug/ynz run examples/basics/src/entrypoint.ynz
+// Compile + run with: ./target/debug/ynz run examples/basics/
 //
+// M8: this file is now the ENTRYPOINT of a multi-file project.
+// Companion modules: services/players.ynz, utils/math_extra.ynz
 // See examples/basics/README.md for what each section demonstrates.
 //
-// Current coverage: M1 + M2 + M3 (shipped through v0.1.0-m3 tag).
+// Current coverage: M1 + M2 + M3 + M4 + M5 + M6 + M7 + M8 (modules, doc comments,
+// sensitive, concurrency keywords, bignum).
 // M4+ sections are added by each milestone's phases per
 // .claude/rules/plan-invariants.md `### Demo & Error Gallery` requirement.
+
+// M8 module imports — bring names from companion modules into scope.
+// Cross-file symbol resolution: cross-file CALLS ship in v0.2; the syntax and
+// multi-file project structure ship here in v0.1.
+import { newPlayer, greet } from `services/players`
+import { clamp, square } from `utils/math_extra`
 
 function entrypoint() -> nothing {
   // ────── M1: hello-world end-to-end ──────
@@ -228,11 +237,24 @@ function entrypoint() -> nothing {
     print(n.toString())
   }
 
+  // ────── M8: modules (syntax demo) ──────
+  // Import statements above bring names from companion modules into scope.
+  // Cross-file CALLS (using newPlayer / clamp etc. here) ship in v0.2 when
+  // the typeck learns to resolve symbols across compilation units.
+  // In v0.1 the import/export SYNTAX is locked and the multi-file driver works
+  // (all .ynz files under src/ are compiled and linked together).
+  print(``)
+  print(`M8 — modules, multi-file project:`)
+  print(`  import { newPlayer, greet } from services/players`)
+  print(`  import { clamp, square } from utils/math_extra`)
+  print(`  Multi-file build: ALL .ynz files under src/ compiled + linked.`)
+
   // ────── Deferred features (v0.2+) ──────
   // arena scratch { let temp: array<int> = [...] }  // v0.2 — design/future/arena.md
   // verified { let raw = rawMemory(64) }              // v0.3+ — vocabulary.md
   // Self-referential shapes                           // v0.3+ — design/future/self-references.md
   // Union codegen (classifyAccount) — requires P4 codegen
+  // newPlayer("Patrick")                              // v0.2 — cross-file calls need cross-file typeck
 }
 
 // ────── M3 helper functions ──────

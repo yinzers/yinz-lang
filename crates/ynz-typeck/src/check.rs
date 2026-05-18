@@ -134,6 +134,9 @@ impl<'b> Checker<'b> {
                 // M6: options declarations are validated and registered by collect_options()
                 // which runs before check_module. Nothing to do here.
                 Item::OptionsDecl(_) => {}
+                // M8: import/export/const declarations — validated by collect_exports/imports
+                // which runs before check_module. Function-body typeck is unaffected.
+                Item::ImportDecl(_) | Item::ConstDecl(_) | Item::ReExport(_) => {}
             }
         }
     }
@@ -1241,7 +1244,11 @@ impl<'b> Checker<'b> {
             return Type::Error;
         }
         let arg_ty = self.infer_expr(&call.args[0], None);
-        if arg_ty != Type::Error && !self.intrinsics.is_print_type(&arg_ty) {
+        // Shapes are printable — the compiler emits a default "ShapeName { field: val, ... }"
+        // representation. User-defined toString() can override this.
+        let is_printable = self.intrinsics.is_print_type(&arg_ty)
+            || matches!(&arg_ty, Type::Shape { .. } | Type::BuiltinArray { .. });
+        if arg_ty != Type::Error && !is_printable {
             // M7 P3a: give a more helpful diagnostic for ErrorsCapable values.
             if let Type::ErrorsCapable { .. } = &arg_ty {
                 self.diags.push(Diagnostic::error(
@@ -1251,14 +1258,25 @@ impl<'b> Checker<'b> {
                     "When a function can fail, the failure must be handled somewhere. The compiler enforces this so failures can't silently pass through.",
                 ));
             } else {
+                let what_instead = match &arg_ty {
+                    Type::BuiltinArray { .. } | Type::BuiltinFixed { .. } => {
+                        "Loop and print each element: `for (item in collection) { print(item) }`"
+                            .to_string()
+                    }
+                    Type::BuiltinMap { .. } => {
+                        "Loop and print each entry: `for ((k, v) in collection) { print(k) }`"
+                            .to_string()
+                    }
+                    _ => "Convert it to a string first with `.toString()`.".to_string(),
+                };
                 self.diags.push(Diagnostic::error(
                     call.args[0].span().clone(),
                     format!(
                         "`print` cannot display a `{}` value directly.",
                         type_name(&arg_ty)
                     ),
-                    "Convert it to a string first with `.toString()`.",
-                    "`print` works with: int, float, number, bool, and string.",
+                    what_instead,
+                    "`print` works with: int, float, number, bool, string, and any shape.",
                 ));
             }
             return Type::Error;
@@ -1616,7 +1634,9 @@ impl<'b> Checker<'b> {
         }
 
         // Verify all type params were resolved — emit one consolidated error if multiple are missing.
-        let unresolved: Vec<&String> = sig.type_params.iter()
+        let unresolved: Vec<&String> = sig
+            .type_params
+            .iter()
             .filter(|tp| !subst.contains_key(*tp))
             .collect();
         if !unresolved.is_empty() {
@@ -1631,7 +1651,11 @@ impl<'b> Checker<'b> {
                     ));
                 }
                 n => {
-                    let list = unresolved.iter().map(|tp| format!("`{tp}`")).collect::<Vec<_>>().join(", ");
+                    let list = unresolved
+                        .iter()
+                        .map(|tp| format!("`{tp}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
                     self.diags.push(Diagnostic::error(
                         call.span.clone(),
                         format!("{n} type parameters could not be resolved for `{name}`: {list}."),
@@ -2652,7 +2676,9 @@ impl<'b> Checker<'b> {
         }
 
         // Collect all missing required fields, then emit one consolidated diagnostic.
-        let missing: Vec<&str> = shape_def.fields.iter()
+        let missing: Vec<&str> = shape_def
+            .fields
+            .iter()
             .filter(|sf| !sf.is_hidden && !fields.iter().any(|f| f.name == sf.name))
             .map(|sf| sf.name.as_str())
             .collect();
@@ -2667,8 +2693,16 @@ impl<'b> Checker<'b> {
                 ));
             }
             n => {
-                let list = missing.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ");
-                let add  = missing.iter().map(|name| format!("`{name}: value`")).collect::<Vec<_>>().join(", ");
+                let list = missing
+                    .iter()
+                    .map(|name| format!("`{name}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let add = missing
+                    .iter()
+                    .map(|name| format!("`{name}: value`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 self.diags.push(Diagnostic::error(
                     span.clone(),
                     format!("{n} fields are missing from this `{shape_name}` value: {list}."),
@@ -3589,6 +3623,8 @@ mod tests {
                 name_span: span(9, 13),
                 // test-ratchet: M7 P1 adds errors_capable field to FunctionDecl
                 errors_capable: false,
+                // test-ratchet: M8 P1 adds is_exported
+                is_exported: false,
             })],
             span: span(0, 57),
         };

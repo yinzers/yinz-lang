@@ -20,7 +20,11 @@ fn parse_fn_body(source: &str) -> Vec<Stmt> {
     );
     match &output.module.items[0] {
         Item::Function(f) => f.body.stmts.clone(),
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function"),
     }
 }
 
@@ -239,6 +243,8 @@ fn m4_item_variant_count_locked() {
             span: span(0, 0),
             // test-ratchet: M7 P1 adds errors_capable field to FunctionDecl
             errors_capable: false,
+            // test-ratchet: M8 P1 adds is_exported
+            is_exported: false,
         }),
         Item::ShapeDecl(ShapeDecl {
             name: "Foo".into(),
@@ -251,6 +257,8 @@ fn m4_item_variant_count_locked() {
             contract_sigs: vec![],
             alias_ty: None,
             span: span(0, 0),
+            // test-ratchet: M8 P1 adds is_exported
+            is_exported: false,
         }),
     ];
     assert_eq!(
@@ -724,6 +732,8 @@ fn m6_item_variant_count_locked() {
             span: span(0, 0),
             // test-ratchet: M7 P1 adds errors_capable field to FunctionDecl
             errors_capable: false,
+            // test-ratchet: M8 P1 adds is_exported
+            is_exported: false,
         }),
         ShapeDecl(ynz_ast::nodes::ShapeDecl {
             name: String::new(),
@@ -736,12 +746,16 @@ fn m6_item_variant_count_locked() {
             contract_sigs: vec![],
             alias_ty: None,
             span: span(0, 0),
+            // test-ratchet: M8 P1 adds is_exported
+            is_exported: false,
         }),
         OptionsDecl(ynz_ast::nodes::OptionsDecl {
             name: "Status".into(),
             name_span: span(0, 6),
             variants: vec![],
             span: span(0, 20),
+            // test-ratchet: M8 P1 adds is_exported
+            is_exported: false,
         }),
     ];
     assert_eq!(
@@ -1013,7 +1027,11 @@ fn anonymous_struct_lit_parses() {
     assert_eq!(output.diagnostics.len(), 0, "Struct lit must parse cleanly");
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let {
@@ -1035,7 +1053,11 @@ fn field_access_parses() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let {
@@ -1056,7 +1078,11 @@ fn field_assignment_parses() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::FieldAssign {
@@ -1080,7 +1106,11 @@ fn copy_postfix_op_parses() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let {
@@ -1102,7 +1132,11 @@ fn freeze_postfix_op_parses() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Expr(ynz_ast::nodes::Expr::PostfixOp {
@@ -1121,7 +1155,11 @@ fn dynamic_type_in_type_position_parses() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let {
@@ -1179,7 +1217,11 @@ fn self_value_in_function_body_parses() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Expr(ynz_ast::nodes::Expr::Call(c)) => {
@@ -1251,7 +1293,11 @@ fn type_annotations_parse_correctly() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let {
@@ -1269,7 +1315,11 @@ fn number_type_without_brackets_is_34_precision() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let {
@@ -1361,7 +1411,11 @@ fn mul_binds_tighter_than_add() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { value, .. } => match value {
@@ -1389,7 +1443,11 @@ fn comparison_binds_tighter_than_and() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { value, .. } => match value {
@@ -1428,7 +1486,11 @@ fn binary_ops_are_left_associative() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { value, .. } => match value {
@@ -1461,7 +1523,11 @@ fn or_binds_looser_than_and() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { value, .. } => match value {
@@ -1492,7 +1558,11 @@ fn parentheses_override_precedence() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { value, .. } => match value {
@@ -1666,7 +1736,11 @@ fn let_type_mismatch_parses_cleanly() {
     );
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let {
@@ -1707,7 +1781,11 @@ fn multi_arg_call_parses_cleanly() {
     );
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Expr(Expr::Call(c)) => {
@@ -1731,7 +1809,11 @@ fn chained_comparison_parses_as_left_associative() {
     );
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { value, .. } => match value {
@@ -1767,7 +1849,11 @@ fn assignment_parses_as_stmt_assign() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     assert!(
         matches!(&body.stmts[1], Stmt::Assign { target, .. } if target == "x"),
@@ -1783,7 +1869,11 @@ fn method_call_parses_correctly() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let {
@@ -1804,7 +1894,11 @@ fn unary_neg_parses_correctly() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let {
@@ -1880,7 +1974,11 @@ fn wrong_return_type_parses_with_named_type() {
                 f.return_type
             );
         }
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     }
 }
 
@@ -1924,7 +2022,11 @@ fn function_with_parameters_parses_correctly() {
             assert!(matches!(f.params[0].ty, Type::Int));
             assert!(matches!(f.params[1].ty, Type::Int));
         }
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     }
 }
 
@@ -1936,7 +2038,11 @@ fn function_with_no_params_still_parses() {
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => assert_eq!(f.params.len(), 0),
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     }
 }
 
@@ -1949,7 +2055,11 @@ fn trailing_comma_in_params_is_accepted() {
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => assert_eq!(f.params.len(), 1),
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     }
 }
 
@@ -1995,7 +2105,11 @@ fn ownership_annotation_on_param_parses_correctly() {
             );
             assert_eq!(f.params[0].name, "x");
         }
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     }
 }
 
@@ -2011,7 +2125,11 @@ fn simple_if_parses_correctly() {
             Stmt::If { .. } => {}
             other => panic!("Expected Stmt::If, got {other:?}"),
         },
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     }
 }
 
@@ -2026,7 +2144,11 @@ fn while_loop_parses_correctly() {
             Stmt::While { .. } => {}
             other => panic!("Expected Stmt::While, got {other:?}"),
         },
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     }
 }
 
@@ -2042,7 +2164,11 @@ fn for_loop_parses_correctly() {
             Stmt::For { var, .. } => assert_eq!(var, "i"),
             other => panic!("Expected Stmt::For, got {other:?}"),
         },
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     }
 }
 
@@ -2058,7 +2184,11 @@ fn return_with_value_parses_correctly() {
             Stmt::Return { value: Some(_), .. } => {}
             other => panic!("Expected Stmt::Return with value, got {other:?}"),
         },
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     }
 }
 
@@ -2074,7 +2204,11 @@ fn return_without_value_parses_correctly() {
             Stmt::Return { value: None, .. } => {}
             other => panic!("Expected Stmt::Return with no value, got {other:?}"),
         },
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     }
 }
 
@@ -2097,7 +2231,11 @@ fn multi_case_if_with_int_arms_parses_as_match() {
             }
             other => panic!("Expected Stmt::Match, got {other:?}"),
         },
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     }
 }
 
@@ -2120,7 +2258,11 @@ fn multi_case_if_with_else_arm() {
             }
             other => panic!("Expected Stmt::Match with else_arm, got {other:?}"),
         },
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     }
 }
 
@@ -2142,7 +2284,11 @@ fn multi_case_else_only_parses_as_match() {
             }
             other => panic!("Expected Stmt::Match with else_arm only, got {other:?}"),
         },
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     }
 }
 
@@ -2226,7 +2372,11 @@ fn nested_if_inside_for_parses_correctly() {
             },
             other => panic!("Outer stmt should be For, got {other:?}"),
         },
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     }
 }
 
@@ -2253,7 +2403,11 @@ fn parse_re_runs_when_source_changes() {
 
     let stmts_after = match &parse_query(&db, sf).module.items[0] {
         Item::Function(f) => f.body.stmts.len(),
-        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_)
+        | Item::OptionsDecl(_)
+        | Item::ImportDecl(_)
+        | Item::ConstDecl(_)
+        | Item::ReExport(_) => panic!("expected a function item"),
     };
     assert_eq!(
         stmts_after, 1,

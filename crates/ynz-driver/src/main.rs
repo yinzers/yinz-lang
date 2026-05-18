@@ -18,14 +18,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Compile a Yinz source file to a native binary.
+    /// Compile a Yinz source file or project to a native binary.
     Build {
-        /// Source file to compile.
+        /// Source file or project root directory to compile.
         file: PathBuf,
     },
-    /// Compile and immediately run a Yinz source file.
+    /// Compile and immediately run a Yinz source file or project.
     Run {
-        /// Source file to compile and run.
+        /// Source file or project root directory to compile and run.
         file: PathBuf,
     },
 }

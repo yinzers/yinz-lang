@@ -95,6 +95,7 @@ Module {
                     start: 0,
                     end: 65,
                 },
+                is_exported: false,
             },
         ),
         Function(
@@ -189,6 +190,7 @@ Module {
                     end: 81,
                 },
                 errors_capable: false,
+                is_exported: false,
             },
         ),
         Function(
@@ -402,6 +404,7 @@ Module {
                     end: 155,
                 },
                 errors_capable: false,
+                is_exported: false,
             },
         ),
     ],

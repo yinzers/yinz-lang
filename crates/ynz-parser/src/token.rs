@@ -212,7 +212,6 @@ pub enum Token {
 
     // test-ratchet: M8 P1 adds 6 variants — Import, Export, Sensitive, Wait, Background, DocComment.
     //   Count 64 → 70.
-
     /// The `import` keyword — brings names from another module into scope.
     Import,
     /// The `export` keyword — makes a declaration visible to other modules.
@@ -231,10 +230,7 @@ pub enum Token {
     /// between this line's terminating `\n` and the next non-trivia content).
     /// When `break_after` is `true`, the parser discards this comment chain — it is not
     /// attached to the following item. Regular `//` comments do NOT count as a break.
-    DocComment {
-        content: String,
-        break_after: bool,
-    },
+    DocComment { content: String, break_after: bool },
 }
 
 impl Token {

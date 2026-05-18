@@ -10,7 +10,7 @@ use ynz_codegen::codegen_query;
 use ynz_diagnostics::{render, DiagnosticBucket, SourceSpan};
 use ynz_parser::{CompilerDb, SourceFile};
 
-use crate::load::load_source;
+use crate::load::{find_project_root, load_project, load_project_config, load_source};
 
 /// Outcome of a `build` invocation.
 pub struct BuildResult {
@@ -22,12 +22,218 @@ pub struct BuildResult {
     pub success: bool,
 }
 
-/// Compile `source_path` to a native binary next to the source file.
+/// Compile `source_path` (file or project root) to a native binary.
 ///
-/// Returns a `BuildResult` describing the outcome. The caller decides how to
-/// render it — the driver's `main` calls `eprintln!(stderr_output)` and
-/// exits with the appropriate code.
+/// If `source_path` is a directory or a file inside a project with `yinz.toml`,
+/// loads all `.ynz` files under `src/` and links them together. Otherwise
+/// treats `source_path` as a single-file project (M1-compatible path).
 pub fn build(source_path: &Path) -> BuildResult {
+    // Detect project root.
+    let project_root = if source_path.is_dir() {
+        Some(source_path.to_path_buf())
+    } else {
+        find_project_root(source_path)
+    };
+
+    if let Some(root) = project_root {
+        return build_project(&root);
+    }
+
+    build_single_file(source_path)
+}
+
+/// Build a multi-file project rooted at `root`.
+fn build_project(root: &Path) -> BuildResult {
+    let mut diags = DiagnosticBucket::new();
+    let _config = load_project_config(root, &mut diags);
+    let sources = load_project(root, &mut diags);
+
+    if !diags
+        .iter()
+        .filter(|d| d.severity == ynz_diagnostics::Severity::Error)
+        .collect::<Vec<_>>()
+        .is_empty()
+    {
+        return build_failed_diags(diags, &std::collections::HashMap::new());
+    }
+
+    if sources.is_empty() {
+        diags.push(ynz_diagnostics::Diagnostic::error(
+            SourceSpan::new(root.display().to_string(), 0, 0),
+            "No `.ynz` source files found under `src/`.",
+            "Add at least one `.ynz` file to `src/`, starting with `src/entrypoint.ynz`.",
+            "Every Yinz project needs at least one source file.",
+        ));
+        return build_failed_diags(diags, &std::collections::HashMap::new());
+    }
+
+    // Parse all files and collect object bytes.
+    let db = CompilerDb::default();
+    let mut object_files: Vec<PathBuf> = Vec::new();
+    let mut all_source_texts: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut had_error = false;
+
+    for entry in &sources {
+        all_source_texts.insert(entry.path.display().to_string(), entry.text.clone());
+        let sf = SourceFile::new(&db, entry.path.display().to_string(), entry.text.clone());
+        let codegen_out = codegen_query(&db, sf);
+
+        let has_error = codegen_out
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == ynz_diagnostics::Severity::Error);
+        for d in &codegen_out.diagnostics {
+            diags.push(d.clone());
+        }
+        if has_error {
+            had_error = true;
+            continue;
+        }
+
+        let object_bytes = &codegen_out.artifact.object_bytes;
+        if object_bytes.is_empty() {
+            continue;
+        }
+
+        let obj_path = entry.path.with_extension("o");
+        if let Err(e) = std::fs::write(&obj_path, object_bytes) {
+            diags.push(ynz_diagnostics::Diagnostic::error(
+                SourceSpan::new(entry.path.display().to_string(), 0, 0),
+                format!("Could not write object file `{}`: {e}", obj_path.display()),
+                "Check that you have write permission in the directory.",
+                "The compiler writes a temporary object file while linking.",
+            ));
+            had_error = true;
+        } else {
+            object_files.push(obj_path);
+        }
+    }
+
+    if had_error {
+        for obj in &object_files {
+            let _ = std::fs::remove_file(obj);
+        }
+        return build_failed_diags(diags, &all_source_texts);
+    }
+
+    // Determine binary output path (next to yinz.toml or first source).
+    let binary_path = root.join("bin").with_extension("");
+
+    let result = link_objects(
+        &object_files,
+        &binary_path,
+        &mut diags,
+        root.display().to_string(),
+    );
+    for obj in &object_files {
+        let _ = std::fs::remove_file(obj);
+    }
+
+    match result {
+        Ok(()) => {
+            let warnings: Vec<_> = diags
+                .iter()
+                .filter(|d| d.severity != ynz_diagnostics::Severity::Error)
+                .cloned()
+                .collect();
+            let stderr_output = if warnings.is_empty() {
+                String::new()
+            } else {
+                let mut bucket = DiagnosticBucket::new();
+                for w in warnings {
+                    bucket.push(w);
+                }
+                render(&bucket, &all_source_texts, false)
+            };
+            BuildResult {
+                binary: Some(binary_path),
+                stderr_output,
+                success: true,
+            }
+        }
+        Err(()) => build_failed_diags(diags, &all_source_texts),
+    }
+}
+
+/// Link object files together with the runtime library.
+fn link_objects(
+    objects: &[PathBuf],
+    binary_path: &Path,
+    diags: &mut DiagnosticBucket,
+    file_name: String,
+) -> Result<(), ()> {
+    let rt_lib_tmp = std::env::temp_dir().join(format!("libynz_runtime_{}.a", std::process::id()));
+    if let Err(e) = std::fs::write(&rt_lib_tmp, RUNTIME_LIB_BYTES) {
+        diags.push(ynz_diagnostics::Diagnostic::error(
+            SourceSpan::new(file_name, 0, 0),
+            format!("Failed to extract runtime library to temp dir: {e}"),
+            "Check that your temp directory is writable.",
+            "ynz extracts its bundled runtime library to a temp file during linking.",
+        ));
+        return Err(());
+    }
+
+    let Some(linker) = find_linker() else {
+        let _ = std::fs::remove_file(&rt_lib_tmp);
+        diags.push(ynz_diagnostics::Diagnostic::error(
+            SourceSpan::new(file_name, 0, 0),
+            "No linker found (tried: clang-18, clang, cc, gcc, g++).",
+            "Install clang: on Ubuntu: `sudo apt-get install clang-18`.",
+            "`ynz build` links your program against the C runtime.",
+        ));
+        return Err(());
+    };
+
+    let mut cmd = Command::new(linker);
+    for obj in objects {
+        cmd.arg(obj);
+    }
+    cmd.arg(&rt_lib_tmp)
+        .arg("-no-pie")
+        .arg("-o")
+        .arg(binary_path);
+    let cc_result = cmd.output();
+    let _ = std::fs::remove_file(&rt_lib_tmp);
+
+    match cc_result {
+        Err(e) => {
+            diags.push(ynz_diagnostics::Diagnostic::error(
+                SourceSpan::new(file_name, 0, 0),
+                format!("The linker (`{linker}`) failed to start: {e}"),
+                "Check your PATH and C toolchain installation.",
+                "The compiler invokes the system linker to produce the final binary.",
+            ));
+            Err(())
+        }
+        Ok(output) if !output.status.success() => {
+            let linker_stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            diags.push(ynz_diagnostics::Diagnostic::error(
+                SourceSpan::new(file_name, 0, 0),
+                "The linker failed.",
+                "This is a compiler bug. Please report it with the output below.",
+                format!("Linker stderr:\n{linker_stderr}"),
+            ));
+            Err(())
+        }
+        Ok(_) => Ok(()),
+    }
+}
+
+fn build_failed_diags(
+    diags: DiagnosticBucket,
+    sources: &std::collections::HashMap<String, String>,
+) -> BuildResult {
+    let stderr_output = render(&diags, sources, false);
+    BuildResult {
+        binary: None,
+        stderr_output,
+        success: false,
+    }
+}
+
+/// Compile a single `.ynz` file to a native binary (M1-compatible path).
+fn build_single_file(source_path: &Path) -> BuildResult {
     let mut diags = DiagnosticBucket::new();
 
     // 1. Load source.

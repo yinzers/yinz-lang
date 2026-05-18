@@ -165,7 +165,12 @@ fn build_module<'ctx, 'g>(
             Item::Function(f) if f.generics.is_empty() => {
                 declare_function(ctx, module, f, shape_table)?
             }
-            Item::Function(_) | Item::ShapeDecl(_) | Item::OptionsDecl(_) => {}
+            Item::Function(_)
+            | Item::ShapeDecl(_)
+            | Item::OptionsDecl(_)
+            | Item::ImportDecl(_)
+            | Item::ConstDecl(_)
+            | Item::ReExport(_) => {}
         }
     }
 
@@ -208,7 +213,12 @@ fn build_module<'ctx, 'g>(
                 mono_table,
                 &options_table,
             )?,
-            Item::Function(_) | Item::ShapeDecl(_) | Item::OptionsDecl(_) => {}
+            Item::Function(_)
+            | Item::ShapeDecl(_)
+            | Item::OptionsDecl(_)
+            | Item::ImportDecl(_)
+            | Item::ConstDecl(_)
+            | Item::ReExport(_) => {}
         }
     }
 
@@ -719,6 +729,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .map(|v| v.into_int_value())
                 .map_err(|e| format!("{e}")),
             Type::String
+            | Type::Number { .. }
             | Type::Shape { .. }
             | Type::Dynamic { .. }
             | Type::BuiltinArray { .. }
@@ -752,6 +763,7 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
                 .build_bit_cast(val, self.f64(), "i_to_f")
                 .map_err(|e| format!("{e}")),
             Type::String
+            | Type::Number { .. }
             | Type::Shape { .. }
             | Type::Dynamic { .. }
             | Type::BuiltinArray { .. }
@@ -3373,6 +3385,325 @@ fn to_c_string<'ctx>(
                 .ok_or("decimal_to_string returned void")?
                 .into_pointer_value())
         }
+        // Default debug representation for user-defined shapes: "ShapeName { field: val, ... }"
+        // Visible fields only. Nested shapes are printed recursively.
+        Type::Shape { name } => {
+            let shape_ptr = val.into_pointer_value();
+
+            // Collect visible field names + types before borrowing cg mutably.
+            let (visible_fields, struct_ty) = {
+                let shape_def = cg
+                    .shape_table
+                    .get(name)
+                    .ok_or_else(|| format!("to_c_string: no shape `{name}`"))?;
+                let visible: Vec<(String, usize, Type)> = shape_def
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, f)| !f.is_hidden)
+                    .map(|(idx, f)| (f.name.clone(), idx, f.ty.clone()))
+                    .collect();
+                let st = cg
+                    .shape_types
+                    .get(name)
+                    .ok_or_else(|| format!("to_c_string: no LLVM type for `{name}`"))?
+                    .clone();
+                (visible, st)
+            };
+
+            let builder_val = cg
+                .builder
+                .build_call(cg.rt.ynz_string_builder_new, &[], "dbg_bld")
+                .map_err(|e| format!("{e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or("ynz_string_builder_new void")?
+                .into_pointer_value();
+
+            // Helper closure: append a static string literal to the builder.
+            let append_static = |cg: &mut Cg<'ctx, '_>, bld: PointerValue<'ctx>, s: &str| {
+                let g = build_string_global(cg.ctx, cg.module, s, "dbg_lit");
+                cg.builder
+                    .build_call(
+                        cg.rt.ynz_string_builder_append,
+                        &[bld.into(), g.as_pointer_value().into()],
+                        "",
+                    )
+                    .map_err(|e| format!("{e}"))
+                    .map(|_| ())
+            };
+
+            append_static(cg, builder_val, &format!("{name} {{ "))?;
+
+            for (i, (field_name, field_idx, field_ty)) in visible_fields.iter().enumerate() {
+                if i > 0 {
+                    append_static(cg, builder_val, ", ")?;
+                }
+                append_static(cg, builder_val, &format!("{field_name}: "))?;
+
+                let gep = cg
+                    .builder
+                    .build_struct_gep(struct_ty, shape_ptr, *field_idx as u32, field_name)
+                    .map_err(|e| format!("GEP {field_name}: {e}"))?;
+                // Number (decimal128) fields are stored as i128 in the struct and
+                // must be passed as a pointer to to_c_string. All other field types
+                // are i64-wide and go through i64_bits_to.
+                let field_val: BasicValueEnum = if matches!(field_ty, Type::Number { .. }) {
+                    let i128t = cg.ctx.i128_type();
+                    let raw = cg
+                        .builder
+                        .build_load(i128t, gep, "dbg_dec_raw")
+                        .map_err(|e| format!("{e}"))?;
+                    let slot = cg
+                        .builder
+                        .build_alloca(i128t, "dbg_dec_slot")
+                        .map_err(|e| format!("{e}"))?;
+                    cg.builder
+                        .build_store(slot, raw)
+                        .map_err(|e| format!("{e}"))?;
+                    slot.into()
+                } else {
+                    let bits = cg
+                        .builder
+                        .build_load(cg.i64(), gep, "dbg_bits")
+                        .map_err(|e| format!("{e}"))?
+                        .into_int_value();
+                    cg.i64_bits_to(bits, field_ty)?
+                };
+                let field_str = to_c_string(cg, field_val, field_ty)?;
+
+                cg.builder
+                    .build_call(
+                        cg.rt.ynz_string_builder_append,
+                        &[builder_val.into(), field_str.into()],
+                        "",
+                    )
+                    .map_err(|e| format!("{e}"))?;
+            }
+
+            append_static(cg, builder_val, " }")?;
+
+            let result = cg
+                .builder
+                .build_call(
+                    cg.rt.ynz_string_builder_finalize,
+                    &[builder_val.into()],
+                    "dbg_str",
+                )
+                .map_err(|e| format!("{e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or("ynz_string_builder_finalize void")?
+                .into_pointer_value();
+
+            Ok(result)
+        }
+
+        // Array debug representation: "[elem1, elem2, ..., elem20, ... and N more]"
+        // Capped at 20 elements — arrays of 10k elements should not flood output.
+        Type::BuiltinArray { elem } => {
+            const PRINT_CAP: u64 = 20;
+            let arr_ptr = val.into_pointer_value();
+            let elem = elem.as_ref().clone();
+
+            let builder_val = cg
+                .builder
+                .build_call(cg.rt.ynz_string_builder_new, &[], "arr_bld")
+                .map_err(|e| format!("{e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or("ynz_string_builder_new void")?
+                .into_pointer_value();
+
+            let append_static = |cg: &mut Cg<'ctx, '_>, bld: PointerValue<'ctx>, s: &str| {
+                let g = build_string_global(cg.ctx, cg.module, s, "arr_lit");
+                cg.builder
+                    .build_call(
+                        cg.rt.ynz_string_builder_append,
+                        &[bld.into(), g.as_pointer_value().into()],
+                        "",
+                    )
+                    .map_err(|e| format!("{e}"))
+                    .map(|_| ())
+            };
+
+            append_static(cg, builder_val, "[")?;
+
+            let count = cg
+                .builder
+                .build_call(cg.rt.ynz_array_count, &[arr_ptr.into()], "arr_cnt")
+                .map_err(|e| format!("{e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or("ynz_array_count void")?
+                .into_int_value();
+
+            let cap_const = cg.i64().const_int(PRINT_CAP, false);
+            let use_full = cg
+                .builder
+                .build_int_compare(IntPredicate::SLE, count, cap_const, "arr_use_full")
+                .map_err(|e| format!("{e}"))?;
+            let cap = cg
+                .builder
+                .build_select(use_full, count, cap_const, "arr_cap")
+                .map_err(|e| format!("{e}"))?
+                .into_int_value();
+
+            // Loop 0..cap, appending each element.
+            let i_slot = cg
+                .builder
+                .build_alloca(cg.i64(), "arr_i")
+                .map_err(|e| format!("{e}"))?;
+            cg.builder
+                .build_store(i_slot, cg.i64().const_zero())
+                .map_err(|e| format!("{e}"))?;
+
+            let cond_bb = cg.append_block("arr_cond");
+            let body_bb = cg.append_block("arr_body");
+            let after_bb = cg.append_block("arr_after");
+
+            cg.builder
+                .build_unconditional_branch(cond_bb)
+                .map_err(|e| format!("{e}"))?;
+            cg.builder.position_at_end(cond_bb);
+
+            let i = cg
+                .builder
+                .build_load(cg.i64(), i_slot, "arr_i_val")
+                .map_err(|e| format!("{e}"))?
+                .into_int_value();
+            let cmp = cg
+                .builder
+                .build_int_compare(IntPredicate::SLT, i, cap, "arr_lt")
+                .map_err(|e| format!("{e}"))?;
+            cg.builder
+                .build_conditional_branch(cmp, body_bb, after_bb)
+                .map_err(|e| format!("{e}"))?;
+
+            cg.builder.position_at_end(body_bb);
+
+            // Separator: ", " before all elements except the first.
+            let is_first = cg
+                .builder
+                .build_int_compare(IntPredicate::EQ, i, cg.i64().const_zero(), "arr_first")
+                .map_err(|e| format!("{e}"))?;
+            let sep_bb = cg.append_block("arr_sep");
+            let elem_bb = cg.append_block("arr_elem");
+            cg.builder
+                .build_conditional_branch(is_first, elem_bb, sep_bb)
+                .map_err(|e| format!("{e}"))?;
+
+            cg.builder.position_at_end(sep_bb);
+            append_static(cg, builder_val, ", ")?;
+            cg.builder
+                .build_unconditional_branch(elem_bb)
+                .map_err(|e| format!("{e}"))?;
+
+            cg.builder.position_at_end(elem_bb);
+
+            // Load element via ynz_array_get into a maybe_type() slot.
+            let out = cg
+                .builder
+                .build_alloca(cg.maybe_type(), "arr_out")
+                .map_err(|e| format!("{e}"))?;
+            cg.builder
+                .build_call(
+                    cg.rt.ynz_array_get,
+                    &[arr_ptr.into(), i.into(), out.into()],
+                    "",
+                )
+                .map_err(|e| format!("{e}"))?;
+            let val_gep = cg
+                .builder
+                .build_struct_gep(cg.maybe_type(), out, 1, "arr_vgep")
+                .map_err(|e| format!("{e}"))?;
+            let bits = cg
+                .builder
+                .build_load(cg.i64(), val_gep, "arr_bits")
+                .map_err(|e| format!("{e}"))?
+                .into_int_value();
+            let elem_val = cg.i64_bits_to(bits, &elem)?;
+            let elem_str = to_c_string(cg, elem_val, &elem)?;
+
+            cg.builder
+                .build_call(
+                    cg.rt.ynz_string_builder_append,
+                    &[builder_val.into(), elem_str.into()],
+                    "",
+                )
+                .map_err(|e| format!("{e}"))?;
+
+            // i += 1
+            let next_i = cg
+                .builder
+                .build_int_add(i, cg.i64().const_int(1, false), "arr_next_i")
+                .map_err(|e| format!("{e}"))?;
+            cg.builder
+                .build_store(i_slot, next_i)
+                .map_err(|e| format!("{e}"))?;
+            cg.builder
+                .build_unconditional_branch(cond_bb)
+                .map_err(|e| format!("{e}"))?;
+
+            cg.builder.position_at_end(after_bb);
+
+            // If count > cap, append "... and N more"
+            let truncated_bb = cg.append_block("arr_trunc");
+            let finish_bb = cg.append_block("arr_finish");
+            let was_truncated = cg
+                .builder
+                .build_int_compare(IntPredicate::SGT, count, cap_const, "arr_trunc_cmp")
+                .map_err(|e| format!("{e}"))?;
+            cg.builder
+                .build_conditional_branch(was_truncated, truncated_bb, finish_bb)
+                .map_err(|e| format!("{e}"))?;
+
+            cg.builder.position_at_end(truncated_bb);
+            let remaining = cg
+                .builder
+                .build_int_sub(count, cap_const, "arr_rem")
+                .map_err(|e| format!("{e}"))?;
+            // Convert remaining count to string and build the "... and N more" suffix.
+            let rem_str = cg
+                .builder
+                .build_call(cg.rt.int_to_string, &[remaining.into()], "arr_rem_str")
+                .map_err(|e| format!("{e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or("int_to_string void")?
+                .into_pointer_value();
+            append_static(cg, builder_val, ", ... and ")?;
+            cg.builder
+                .build_call(
+                    cg.rt.ynz_string_builder_append,
+                    &[builder_val.into(), rem_str.into()],
+                    "",
+                )
+                .map_err(|e| format!("{e}"))?;
+            append_static(cg, builder_val, " more")?;
+            cg.builder
+                .build_unconditional_branch(finish_bb)
+                .map_err(|e| format!("{e}"))?;
+
+            cg.builder.position_at_end(finish_bb);
+            append_static(cg, builder_val, "]")?;
+
+            let result = cg
+                .builder
+                .build_call(
+                    cg.rt.ynz_string_builder_finalize,
+                    &[builder_val.into()],
+                    "arr_str",
+                )
+                .map_err(|e| format!("{e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or("ynz_string_builder_finalize void")?
+                .into_pointer_value();
+
+            Ok(result)
+        }
+
         _ => Err(format!("codegen: cannot convert {:?} to string", ty)),
     }
 }

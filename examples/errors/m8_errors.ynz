@@ -8,6 +8,27 @@
 // to see every M8 diagnostic class at once (Yinz multi-errors up to 50/compile).
 // Uncomment the trigger body inside each function to activate the diagnostic.
 
+// ────── P2: module errors ──────
+
+// WHY: relative import paths must be rejected at parse time with a teaching
+// diagnostic. Guards the project-root-path convention for imports.
+function p2_relative_import() -> nothing {
+    // Uncomment to trigger "Import paths must be project-root relative, not relative paths":
+    // import { foo } from `./services/foo`
+}
+
+// WHY: wildcard imports are not allowed — must name what you bring into scope.
+function p2_wildcard_import() -> nothing {
+    // Uncomment to trigger "Wildcard imports are not allowed in Yinz":
+    // import * from `services/players`
+}
+
+// WHY: `export default` is rejected — Yinz uses named exports only.
+function p2_default_export() -> nothing {
+    // Uncomment to trigger "Yinz does not have default exports":
+    // export default function helper() -> nothing {}
+}
+
 // ────── P1: banned concurrency + visibility keywords ──────
 
 // WHY: `async` is not a Yinz keyword — the lexer must redirect it with a

@@ -271,6 +271,7 @@ Module {
                     end: 19,
                 },
                 errors_capable: false,
+                is_exported: false,
             },
         ),
     ],

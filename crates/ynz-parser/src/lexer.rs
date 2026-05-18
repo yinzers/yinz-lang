@@ -511,7 +511,9 @@ impl<'src> Lexer<'src> {
             }
             "await" => {
                 self.emit_banned_declaration_keyword(
-                    start, self.pos, "await",
+                    start,
+                    self.pos,
+                    "await",
                     "Write `wait foo()` at the call site.",
                     "Yinz uses `wait` at the call site — no function-level annotation needed.",
                 );

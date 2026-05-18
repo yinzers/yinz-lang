@@ -1,0 +1,6 @@
+// M8 multi-file hello: exported helper module.
+// Demonstrates the `export function` syntax.
+
+export function helper() -> string {
+  return `helper result`
+}

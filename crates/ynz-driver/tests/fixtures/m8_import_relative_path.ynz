@@ -1,0 +1,6 @@
+// M8 error fixture: relative import path rejected.
+import { foo } from `./services/foo`
+
+function entrypoint() -> nothing {
+  print(`should not compile`)
+}
