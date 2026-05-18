@@ -36,4 +36,33 @@ function badVariant() -> nothing {
   let s: Status = Status.activ
 }
 
+// WHY: non-exhaustive union multi-case — missing variant named in diagnostic
+shape Circle { radius: float }
+shape Square { side: float }
+shape Triangle { width: float
+  height: float }
+shape AnyShape = Circle | Square | Triangle
+function nonExhaustiveUnion(s: AnyShape) -> nothing {
+  if (s) {
+    is Circle => print("circle")
+    is Square => print("square")
+    // Triangle missing — compile error
+  }
+}
+
+// WHY: `is Type` on a non-union value — must produce teaching error
+function isOnString() -> nothing {
+  let msg: string = "hello"
+  if (msg) {
+    is Circle => print("never")
+    else => print("other")
+  }
+}
+
+// WHY: `.value` without narrowing on maybe<T>
+function valueWithoutCheck() -> nothing {
+  let x: maybe<int> = "bad".toInt()
+  print(x.value.toString())
+}
+
 function main() -> nothing { }

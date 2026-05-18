@@ -1,6 +1,6 @@
 # Session State: ynz
 
-**Last Updated**: 2026-05-18 (M5 fully shipped + plan archived to done/; next milestone = M6)
+**Last Updated**: 2026-05-18 (M6 all phases complete P0–P6; feat/m6 branch ready for PR; version bumped to 0.1.0-m6; 631 tests green)
 
 ---
 
@@ -9,7 +9,7 @@
 *(auto-rebuilt by SessionStart hook from `.claude/plans/active/*.md` front-matter — do not edit by hand)*
 
 <!-- RADAR-START -->
-- m5-generics (patrick) — 18 files touched — 0/146 done — 2026-05-17-r4
+- m6-options-unions (patrick) — 18 files touched — 12/114 done — 2026-05-18-r2
 - v0-1-compiler (patrick) — 5 files touched — 0/184 done — 2026-05-12-r4
 <!-- RADAR-END -->
 

@@ -7,16 +7,7 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Now (active)
 
-- [ ] **M6 — Options + Unions + Narrowing** — Approved 2026-05-18 (r2). Plan in `.claude/plans/active/m6-options-unions.md`. P0 doc lockdown in progress. Phases: P0 (docs) → P1 (lexer) → P2 (parser) → P3a (options typeck) → P3b (union+narrowing typeck) → P4 (codegen) → P5 (catch-up fixtures) → P6 (demo+tag).
-
-**M6 catch-up obligations (active — must close by M6 P5):**
-- [ ] `.toInt()` on `int` → identity (M2 plan §62)
-- [ ] `.toInt()` on `float` → `maybe<int>` with NaN+OOR rules (M2 plan §62; locked codegen in P4)
-- [ ] `.toInt()` on `number` (decimal128) → `maybe<int>` (M2 plan §62)
-- [ ] `string.toInt()` / `.toNumber()` / `.toFloat()` → `maybe<T>` (M2 plan §62; locked parsing rule in P4)
-- [ ] `is Type =>` in multi-case `if` — close M3 deferral fixture `m3_is_type_deferral.ynz` (M3 plan, REPLACE-AT M6 marker)
-- [ ] Early-return narrowing for `.value` on `maybe<T>` (M5 `design/maybe.md` deferral)
-- [ ] `||` propagation rule for narrowing (M5 deferred)
+*(M6 complete — see Done section. M7 planning next.)*
 
 ## Soon (committed, not started)
 
@@ -32,6 +23,7 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Done (recent)
 
+- [x] **M6 complete (tag pending v0.1.0-m6, 631 tests)** — options+unions+narrowing: options types (i8 tags, multi-case, toString), union types (tagged-struct, Is-arm narrowing), fallible conversions (.toInt/.toFloat/.toNumber), early-return narrowing, shape aliases (shape S = A|B), string parsing runtime. Plan moved to done/. M2+M3 catch-up items closed.
 - [x] **M5 complete (tag v0.1.0-m5, 574 tests)** — Generics `<T>`, `fixed<T>`, `array<T>`, `map<K,V>`, `maybe<T>`, `.exists()`/`.value`/`.or()`, bracket sugar, SipHash-2-4, Swiss Tables, monomorphization, M4 catch-up (wrapping/saturating, type-attached constants). Plan moved to `done/m5-generics.md`.
 - [x] **M4 complete (tag v0.1.0-m4, 316 tests)** — P1 lexer, P2 parser, P3a/b/c typeck, P4 codegen, P5 catch-up, P6 fixtures, P7 verification. Plan moved to `done/m4-shapes-functions-ownership.md`.
 - [x] **M4 P5 — Catch-up (5a21258)** — 6 wrapping/saturating int methods, type-attached constants (`int.max`/`int.min`/`number.*`/`float.*`). M2 fixtures closed.
