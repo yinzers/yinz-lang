@@ -1,7 +1,7 @@
 // WHY: validates basic string method codegen — toLowerCase, toUpperCase, count, split.
 // If any string method runtime call or codegen is broken, the output will differ.
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let s = `Hello, World!`
   print(s.toLowerCase())
   print(s.toUpperCase())

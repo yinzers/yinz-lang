@@ -2,7 +2,7 @@
 // binding must be iterable. If the range codegen only works for inline `range(...)`
 // calls in `for` position, this fixture fails with a codegen error.
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let r = range(0, 3)
   for (i in r) {
     print(i.toString())

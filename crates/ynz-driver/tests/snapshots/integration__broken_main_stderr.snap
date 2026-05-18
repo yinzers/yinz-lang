@@ -2,26 +2,26 @@
 source: crates/ynz-driver/tests/integration.rs
 expression: stderr
 ---
-Error: This file has no `main` function.
+Error: This file has no `entrypoint` function.
    ╭─[ /workspaces/ynz/crates/ynz-driver/tests/fixtures/broken_main.ynz:1:1 ]
    │
- 1 │ ╭─▶ function main() {
+ 1 │ ╭─▶ function entrypoint() {
    ┆ ┆   
  3 │ ├─▶ }
    │ │       
-   │ ╰─────── Add a main function:
-  function main() -> nothing {
+   │ ╰─────── Add an entrypoint function:
+  function entrypoint() -> nothing {
     ...
   }
    │     
-   │     Note: Why: Every Yinz program needs a `main` function — that is where execution starts.
+   │     Note: Why: Every Yinz program needs an `entrypoint` function — that is where execution starts.
 ───╯
-Error: Missing return type on `main`.
-   ╭─[ /workspaces/ynz/crates/ynz-driver/tests/fixtures/broken_main.ynz:1:17 ]
+Error: Missing return type on `entrypoint`.
+   ╭─[ /workspaces/ynz/crates/ynz-driver/tests/fixtures/broken_main.ynz:1:23 ]
    │
- 1 │ function main() {
-   │                 ┬  
-   │                 ╰── Add `-> nothing` after the parentheses: `function main() -> nothing`
+ 1 │ function entrypoint() {
+   │                       ┬  
+   │                       ╰── Add `-> nothing` after the parentheses: `function entrypoint() -> nothing`
    │ 
    │ Note: Why: Every function in Yinz declares what it returns. Use `-> nothing` for functions that don't return a value.
 ───╯

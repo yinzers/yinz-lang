@@ -8,7 +8,7 @@ function sign(x: int) -> int {
   return 0
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   print(sign(42))
   print(sign(-7))
   print(sign(0))

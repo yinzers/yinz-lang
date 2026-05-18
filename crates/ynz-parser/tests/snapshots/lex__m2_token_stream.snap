@@ -5,7 +5,7 @@ expression: tokens
 [
     Function,
     Identifier(
-        "main",
+        "entrypoint",
     ),
     LParen,
     RParen,

@@ -20,7 +20,7 @@ fn parse_fn_body(source: &str) -> Vec<Stmt> {
 }
 
 fn wrap(inner: &str) -> String {
-    format!("function main() -> nothing {{ {inner} }}")
+    format!("function entrypoint() -> nothing {{ {inner} }}")
 }
 
 const FILE: &str = "test.ynz";
@@ -523,7 +523,7 @@ fn m6_is_arm_produces_is_pattern() {
     // WHY: `is Circle =>` in a multi-case arm must produce MatchPatternKind::Is(TypePath),
     // not a generic Value pattern. Typeck and codegen key on this variant for union narrowing.
     let output = parse(
-        r#"function main() -> nothing {
+        r#"function entrypoint() -> nothing {
   if (x) {
     is Circle => print("circle")
     else => print("other")
@@ -637,7 +637,7 @@ fn anonymous_struct_lit_parses() {
     // WHY: `let p: Player = { name: "Patrick", health: 100 }` — the annotation-only
     // struct literal form — must produce Expr::StructLit with 2 fields.
     // test-ratchet: M7 P1 — migrated to backtick syntax
-    let output = parse("function main() -> nothing { let p: string = { name: `Patrick` } }");
+    let output = parse("function entrypoint() -> nothing { let p: string = { name: `Patrick` } }");
     assert_eq!(output.diagnostics.len(), 0, "Struct lit must parse cleanly");
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -656,7 +656,7 @@ fn anonymous_struct_lit_parses() {
 fn field_access_parses() {
     // WHY: `player.health` must produce Expr::FieldAccess (no parens = pure read
     // per dot-postfix rule). If it accidentally becomes MethodCall, codegen breaks.
-    let output = parse("function main() -> nothing { let x = player.health }");
+    let output = parse("function entrypoint() -> nothing { let x = player.health }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -674,7 +674,7 @@ fn field_access_parses() {
 fn field_assignment_parses() {
     // WHY: `player.health = 50` must produce Stmt::FieldAssign, not Stmt::Assign.
     // If it becomes Stmt::Assign, the typeck won't enforce field-mutation rules.
-    let output = parse("function main() -> nothing { player.health = 50 }");
+    let output = parse("function entrypoint() -> nothing { player.health = 50 }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -692,7 +692,7 @@ fn field_assignment_parses() {
 fn copy_postfix_op_parses() {
     // WHY: `value.copy()` must produce Expr::PostfixOp { op: Copy }. This is a
     // body operation (parens required) per the dot-postfix rule.
-    let output = parse("function main() -> nothing { let b = a.copy() }");
+    let output = parse("function entrypoint() -> nothing { let b = a.copy() }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -707,7 +707,7 @@ fn copy_postfix_op_parses() {
 #[test]
 fn freeze_postfix_op_parses() {
     // WHY: `value.freeze()` must produce Expr::PostfixOp { op: Freeze }.
-    let output = parse("function main() -> nothing { cfg.freeze() }");
+    let output = parse("function entrypoint() -> nothing { cfg.freeze() }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -723,7 +723,7 @@ fn freeze_postfix_op_parses() {
 fn dynamic_type_in_type_position_parses() {
     // WHY: `let d: dynamic Damageable = p` — `dynamic Foo` is a valid type annotation.
     // Must produce Type::Dynamic, not Type::Named.
-    let output = parse("function main() -> nothing { let d: dynamic Foo = p }");
+    let output = parse("function entrypoint() -> nothing { let d: dynamic Foo = p }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -743,7 +743,7 @@ fn prefix_form_struct_lit_produces_teaching_diagnostic() {
     // a teaching diagnostic redirecting to the annotation-only form, recover cleanly,
     // and NOT produce an Expr::StructLit (since the prefix form is compile-time banned).
     // test-ratchet: M7 P1 — migrated to backtick syntax
-    let output = parse("function main() -> nothing { let x = Player { name: `Patrick` } }");
+    let output = parse("function entrypoint() -> nothing { let x = Player { name: `Patrick` } }");
     assert_eq!(
         output.diagnostics.len(),
         1,
@@ -797,7 +797,7 @@ fn m4_parse_snapshot() {
     // WHY: Snapshot locks the full M4 AST for a realistic shape-declaration source
     // so any parser regression shows up as an insta diff.
     // test-ratchet: M7 P1 — migrated to backtick syntax
-    let source = "shape Player {\n  name: string\n  health: int\n  hidden cache: int\n}\n\nfunction greet(share self: Player) -> string {\n  return self.name\n}\n\nfunction main() -> nothing {\n  let p: Player = { name: `Patrick`, health: 100 }\n  p.health = 90\n  let h = p.health\n  let b = p.copy()\n}";
+    let source = "shape Player {\n  name: string\n  health: int\n  hidden cache: int\n}\n\nfunction greet(share self: Player) -> string {\n  return self.name\n}\n\nfunction entrypoint() -> nothing {\n  let p: Player = { name: `Patrick`, health: 100 }\n  p.health = 90\n  let h = p.health\n  let b = p.copy()\n}";
     let output = parse(source);
     assert_eq!(output.diagnostics.len(), 0, "M4 fixture must parse with 0 diagnostics");
     assert_debug_snapshot!("m4_ast", output.module);
@@ -810,7 +810,7 @@ fn m1_source_parses_to_expected_ast() {
     // A silent change to this snapshot breaks the typeck layer.
     //
     // test-ratchet: M7 P1 — migrated to backtick syntax
-    let output = parse("function main() -> nothing { print(`hello, yinz`) }");
+    let output = parse("function entrypoint() -> nothing { print(`hello, yinz`) }");
     assert_eq!(
         output.diagnostics.len(),
         0,
@@ -824,7 +824,7 @@ fn m1_source_parses_to_expected_ast() {
 fn m2_source_parses_to_expected_ast() {
     // WHY: this is the exact AST the Phase 4 type-checker depends on for M2.
     // A silent change here means typeck breaks on the M2 smoke test.
-    let source = r#"function main() -> nothing {
+    let source = r#"function entrypoint() -> nothing {
   let price = 0.1 + 0.2
   let count: int = 42
   let active = true
@@ -846,7 +846,7 @@ fn m2_source_parses_to_expected_ast() {
 fn type_annotations_parse_correctly() {
     // WHY: `let x: int = 1` needs to produce Type::Int, not Type::Named("int").
     // If primitive types are not recognized, typeck will fail to match them.
-    let output = parse("function main() -> nothing { let x: int = 1 }");
+    let output = parse("function entrypoint() -> nothing { let x: int = 1 }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -861,7 +861,7 @@ fn type_annotations_parse_correctly() {
 #[test]
 fn number_type_without_brackets_is_34_precision() {
     // WHY: `number` without `[N]` should default to 34 decimal digits.
-    let output = parse("function main() -> nothing { let x: number = 3.14 }");
+    let output = parse("function entrypoint() -> nothing { let x: number = 3.14 }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -877,7 +877,7 @@ fn number_type_without_brackets_is_34_precision() {
 fn number_n_not_34_produces_deferral_diagnostic() {
     // WHY: `number[128]` is reserved but not yet implemented. The parser must
     // emit a deferral diagnostic pointing at v0.8, not silently accept it.
-    let output = parse("function main() -> nothing { let x: number[128] = 0 }");
+    let output = parse("function entrypoint() -> nothing { let x: number[128] = 0 }");
     assert_eq!(
         output.diagnostics.len(),
         1,
@@ -895,7 +895,7 @@ fn number_n_not_34_produces_deferral_diagnostic() {
 fn mul_binds_tighter_than_add() {
     // WHY: `1 + 2 * 3` must parse as `1 + (2 * 3)`, not `(1 + 2) * 3`.
     // If * and + have the same BP, PEMDAS breaks everywhere.
-    let output = parse("function main() -> nothing { let x = 1 + 2 * 3 }");
+    let output = parse("function entrypoint() -> nothing { let x = 1 + 2 * 3 }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -917,7 +917,7 @@ fn mul_binds_tighter_than_add() {
 fn comparison_binds_tighter_than_and() {
     // WHY: `1 < 2 && 3 > 4` must parse as `(1 < 2) && (3 > 4)`.
     // Mixing comparison and boolean operators is a common source of bugs.
-    let output = parse("function main() -> nothing { let x = 1 < 2 && 3 > 4 }");
+    let output = parse("function entrypoint() -> nothing { let x = 1 < 2 && 3 > 4 }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -939,7 +939,7 @@ fn comparison_binds_tighter_than_and() {
 fn binary_ops_are_left_associative() {
     // WHY: `1 - 2 - 3` must parse as `(1 - 2) - 3`, not `1 - (2 - 3)`.
     // Right-associativity would silently produce different runtime values.
-    let output = parse("function main() -> nothing { let x = 1 - 2 - 3 }");
+    let output = parse("function entrypoint() -> nothing { let x = 1 - 2 - 3 }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -961,7 +961,7 @@ fn binary_ops_are_left_associative() {
 #[test]
 fn or_binds_looser_than_and() {
     // WHY: `a || b && c` must be `a || (b && c)`, matching standard boolean precedence.
-    let output = parse("function main() -> nothing { let x = a || b && c }");
+    let output = parse("function entrypoint() -> nothing { let x = a || b && c }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -982,7 +982,7 @@ fn or_binds_looser_than_and() {
 fn parentheses_override_precedence() {
     // WHY: `(1 + 2) * 3` must parse as `Mul(Add(1,2), 3)`, not `Add(1, Mul(2,3))`.
     // Parentheses are the user's escape valve from the precedence table.
-    let output = parse("function main() -> nothing { let x = (1 + 2) * 3 }");
+    let output = parse("function entrypoint() -> nothing { let x = (1 + 2) * 3 }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1113,7 +1113,7 @@ fn missing_rhs_produces_diagnostic_and_recovers() {
     // WHY: `let x = 1 +` must emit a diagnostic and still produce a parseable
     // AST. If the parser panics or produces no AST, all other errors in the
     // file are hidden.
-    let output = parse("function main() -> nothing { let x = 1 + }");
+    let output = parse("function entrypoint() -> nothing { let x = 1 + }");
     assert_eq!(
         output.diagnostics.len(),
         1,
@@ -1127,7 +1127,7 @@ fn missing_rhs_produces_diagnostic_and_recovers() {
 fn missing_let_identifier_produces_diagnostic_and_recovers() {
     // WHY: `let : int = 5` (missing the variable name) must emit a diagnostic
     // but not crash. The block should continue parsing.
-    let output = parse("function main() -> nothing { let : int = 5 }");
+    let output = parse("function entrypoint() -> nothing { let : int = 5 }");
     assert!(
         !output.diagnostics.is_empty(),
         "Missing variable name must produce at least 1 diagnostic"
@@ -1140,7 +1140,7 @@ fn let_type_mismatch_parses_cleanly() {
     // WHY: `let x: int = 1.5` is a TYPE error, not a PARSE error. The parser
     // must accept it without diagnostics — the type checker catches it in P4.
     // If the parser rejects it, P4 never gets to produce the teaching diagnostic.
-    let output = parse("function main() -> nothing { let x: int = 1.5 }");
+    let output = parse("function entrypoint() -> nothing { let x: int = 1.5 }");
     assert_eq!(
         output.diagnostics.len(),
         0,
@@ -1163,7 +1163,7 @@ fn unexpected_rbrace_in_expression_recovers() {
     // WHY: `let x = }` must not eat the `}` that closes the function body.
     // If the parser consumes the `}`, the enclosing block is left unclosed
     // and the rest of the file is misparsed.
-    let output = parse("function main() -> nothing { let x = }");
+    let output = parse("function entrypoint() -> nothing { let x = }");
     assert_eq!(
         output.diagnostics.len(),
         1,
@@ -1177,7 +1177,7 @@ fn multi_arg_call_parses_cleanly() {
     // WHY: `print(1, 2, 3)` has the wrong arity for M2 but the PARSER must
     // accept it — arity enforcement is typeck's job. If the parser rejects
     // multi-arg calls, the typeck teaching diagnostic about arity is unreachable.
-    let output = parse("function main() -> nothing { print(1, 2, 3) }");
+    let output = parse("function entrypoint() -> nothing { print(1, 2, 3) }");
     assert_eq!(
         output.diagnostics.len(),
         0,
@@ -1201,7 +1201,7 @@ fn chained_comparison_parses_as_left_associative() {
     // Typeck will reject this in P4 because `bool < int` is a type error.
     // The test documents that the PARSE result is deterministic — the typeck
     // diagnostic targets the outer `<`, not the inner one.
-    let output = parse("function main() -> nothing { let x = 1 < 2 < 3 }");
+    let output = parse("function entrypoint() -> nothing { let x = 1 < 2 < 3 }");
     assert_eq!(output.diagnostics.len(), 0, "Chained comparison parses clean");
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1226,7 +1226,7 @@ fn assignment_parses_as_stmt_assign() {
     // WHY: `x = 5` after a `let x = 0` must parse as Stmt::Assign, not as
     // a bare expression. If assignment is misparsed as Expr::BinOp(Eq, x, 5)
     // the type-checker would see a boolean expression in a statement position.
-    let source = "function main() -> nothing { let x = 0\nx = 5 }";
+    let source = "function entrypoint() -> nothing { let x = 0\nx = 5 }";
     let output = parse(source);
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
@@ -1244,7 +1244,7 @@ fn assignment_parses_as_stmt_assign() {
 fn method_call_parses_correctly() {
     // WHY: `count.toString()` must produce MethodCall, not a BinOp(Dot) hack.
     // If method calls are misparsed, the P4 intrinsic dispatch never fires.
-    let output = parse("function main() -> nothing { let s = count.toString() }");
+    let output = parse("function entrypoint() -> nothing { let s = count.toString() }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1263,7 +1263,7 @@ fn method_call_parses_correctly() {
 fn unary_neg_parses_correctly() {
     // WHY: `-x` must produce UnaryOp(Neg, x), not BinOp(Sub, _, x).
     // If unary minus is misparsed as subtraction, negation diagnostics are wrong.
-    let output = parse("function main() -> nothing { let x = -5 }");
+    let output = parse("function entrypoint() -> nothing { let x = -5 }");
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
@@ -1282,7 +1282,7 @@ fn unary_neg_parses_correctly() {
 #[test]
 fn missing_arrow_produces_diagnostic_and_recovers() {
     // WHY: parser must recover from a missing `->` and continue.
-    let output = parse("function main() nothing { }");
+    let output = parse("function entrypoint() nothing { }");
     assert!(
         !output.diagnostics.is_empty(),
         "Missing `->` must produce at least one diagnostic"
@@ -1292,7 +1292,7 @@ fn missing_arrow_produces_diagnostic_and_recovers() {
 
 #[test]
 fn missing_closing_brace_produces_diagnostic() {
-    let output = parse("function main() -> nothing { print(\"hi\")");
+    let output = parse("function entrypoint() -> nothing { print(\"hi\")");
     assert!(
         !output.diagnostics.is_empty(),
         "Missing `}}` must produce at least one diagnostic"
@@ -1302,7 +1302,7 @@ fn missing_closing_brace_produces_diagnostic() {
 
 #[test]
 fn trailing_garbage_after_function_produces_diagnostic() {
-    let output = parse("function main() -> nothing { } extra }");
+    let output = parse("function entrypoint() -> nothing { } extra }");
     assert!(
         !output.diagnostics.is_empty(),
         "Trailing garbage must produce at least one diagnostic"
@@ -1331,7 +1331,7 @@ fn whitespace_and_comment_only_produces_empty_module() {
 #[test]
 fn wrong_return_type_parses_with_named_type() {
     // test-ratchet: M7 P1 — migrated to backtick syntax
-    let output = parse("function main() -> string { print(`hi`) }");
+    let output = parse("function entrypoint() -> string { print(`hi`) }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => {
@@ -1357,7 +1357,7 @@ fn m3_source_parses_to_expected_ast() {
   return fib(n - 1) + fib(n - 2)
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let result = fib(10)
   print(result)
 }"#;
@@ -1393,7 +1393,7 @@ fn function_with_parameters_parses_correctly() {
 fn function_with_no_params_still_parses() {
     // WHY: Zero-parameter functions were the only form in M1/M2. This guards
     // against the M3 parameter parser accidentally requiring at least one param.
-    let output = parse("function main() -> nothing { }");
+    let output = parse("function entrypoint() -> nothing { }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => assert_eq!(f.params.len(), 0),
@@ -1461,7 +1461,7 @@ fn simple_if_parses_correctly() {
     // WHY: `if (cond) { body }` must produce Stmt::If, not Stmt::Match.
     // If disambiguation defaults to multi-case, every simple if in the codebase
     // would fail to parse.
-    let output = parse("function main() -> nothing { if (x > 0) { print(x) } }");
+    let output = parse("function entrypoint() -> nothing { if (x > 0) { print(x) } }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => match &f.body.stmts[0] {
@@ -1476,7 +1476,7 @@ fn simple_if_parses_correctly() {
 fn while_loop_parses_correctly() {
     // WHY: `while (cond) { body }` must produce Stmt::While. Regression would
     // mean loops silently become expression statements or fail to parse.
-    let output = parse("function main() -> nothing { while (x > 0) { x = x - 1 } }");
+    let output = parse("function entrypoint() -> nothing { while (x > 0) { x = x - 1 } }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => match &f.body.stmts[0] {
@@ -1492,7 +1492,7 @@ fn for_loop_parses_correctly() {
     // WHY: `for (i in range(0, 5)) { body }` must produce Stmt::For with `var`
     // set to "i" and `iter` as a Call to range. The loop variable and iterable
     // expression are both critical for typeck's `range`-as-only-iterable check.
-    let output = parse("function main() -> nothing { for (i in range(0, 5)) { print(i) } }");
+    let output = parse("function entrypoint() -> nothing { for (i in range(0, 5)) { print(i) } }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => match &f.body.stmts[0] {
@@ -1524,7 +1524,7 @@ fn return_without_value_parses_correctly() {
     // WHY: `return` alone (no expression) must produce Stmt::Return with value
     // None. This is the only valid form for `-> nothing` functions; typeck
     // uses the None/Some to determine whether a value was provided.
-    let output = parse("function main() -> nothing { return }");
+    let output = parse("function entrypoint() -> nothing { return }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => match &f.body.stmts[0] {
@@ -1540,7 +1540,7 @@ fn multi_case_if_with_int_arms_parses_as_match() {
     // WHY: `if (x) { 1 => ...; 2 => ... }` must produce Stmt::Match, not Stmt::If.
     // If the parser always picks simple-if, multi-case `if` becomes syntactically
     // impossible and the entire branching-by-value feature is dead.
-    let output = parse("function main() -> nothing { if (x) { 1 => print(1) 2 => print(2) } }");
+    let output = parse("function entrypoint() -> nothing { if (x) { 1 => print(1) 2 => print(2) } }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => match &f.body.stmts[0] {
@@ -1558,7 +1558,7 @@ fn multi_case_if_with_else_arm() {
     // WHY: `if (x) { 1 => ...; else => ... }` must produce Stmt::Match with
     // else_arm = Some(_). Typeck uses the presence of else_arm to determine
     // whether the multi-case is exhaustive for return-path analysis.
-    let output = parse("function main() -> nothing { if (x) { 1 => print(1) else => print(0) } }");
+    let output = parse("function entrypoint() -> nothing { if (x) { 1 => print(1) else => print(0) } }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => match &f.body.stmts[0] {
@@ -1576,7 +1576,7 @@ fn multi_case_else_only_parses_as_match() {
     // WHY: `if (x) { else => ... }` (only a catch-all, no value arms) is a
     // valid multi-case `if`. Typeck treats it as an exhaustive match that always
     // executes the else_arm body. Parser must not reject it as malformed.
-    let output = parse("function main() -> nothing { if (x) { else => print(0) } }");
+    let output = parse("function entrypoint() -> nothing { if (x) { else => print(0) } }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => match &f.body.stmts[0] {
@@ -1594,7 +1594,7 @@ fn is_type_arm_produces_is_pattern_no_deferral() {
     // WHY: In M6 P3b, `is Circle =>` is a real implementation — no deferral diagnostic.
     // The parser must produce a MatchPatternKind::Is arm cleanly.
     // (Previously this test checked for a deferral; M6 P3b removes the deferral.)
-    let output = parse("function main() -> nothing { if (value) { is Circle => print(1) } }");
+    let output = parse("function entrypoint() -> nothing { if (value) { is Circle => print(1) } }");
     // Parser produces 0 diagnostics — typeck handles semantic validation.
     // (The scrutinee `value` being a string will produce a typeck error, but
     // the PARSER itself is now clean for is-type arms.)
@@ -1615,7 +1615,7 @@ fn if_without_parens_produces_diagnostic() {
     // WHY: `if cond { }` (no parentheses) is a common mistake from languages like
     // Rust/Go. The parser must emit a teaching diagnostic, not silently misbehave.
     // Yinz requires `if (cond)` consistently with `while (cond)` and `for (...)`.
-    let output = parse("function main() -> nothing { if x > 0 { print(x) } }");
+    let output = parse("function entrypoint() -> nothing { if x > 0 { print(x) } }");
     assert!(
         !output.diagnostics.is_empty(),
         "Missing parens on if must produce at least 1 diagnostic"
@@ -1628,7 +1628,7 @@ fn multi_function_module_parses_correctly() {
     // must appear as separate items in the AST. If the parser stops after the
     // first function, mutual recursion and callee lookups in typeck fail silently.
     let source = r#"function add(a: int, b: int) -> int { return a }
-function main() -> nothing { let x = add(1, 2) }"#;
+function entrypoint() -> nothing { let x = add(1, 2) }"#;
     let output = parse(source);
     assert_eq!(output.diagnostics.len(), 0);
     assert_eq!(output.module.items.len(), 2, "Expected 2 function items");
@@ -1639,7 +1639,7 @@ fn nested_if_inside_for_parses_correctly() {
     // WHY: Control-flow nesting is the typical real-program pattern. If nested
     // blocks corrupt the block-end tracking, only the outermost construct works
     // and every realistic program fails to parse.
-    let source = r#"function main() -> nothing {
+    let source = r#"function entrypoint() -> nothing {
   for (i in range(0, 5)) {
     if (i > 2) {
       print(i)
@@ -1668,14 +1668,14 @@ fn parse_re_runs_when_source_changes() {
     let sf = SourceFile::new(
         &db,
         FILE.to_string(),
-        "function main() -> nothing { }".to_string(),
+        "function entrypoint() -> nothing { }".to_string(),
     );
 
     let items_before = parse_query(&db, sf).module.items.len();
 
     // test-ratchet: M7 P1 — migrated to backtick syntax
     sf.set_text(&mut db)
-        .to("function main() -> nothing { print(`hi`) }".to_string());
+        .to("function entrypoint() -> nothing { print(`hi`) }".to_string());
 
     let items_after = parse_query(&db, sf).module.items.len();
     assert_eq!(items_before, 1);
@@ -1886,7 +1886,7 @@ fn m5_generic_type_depth_cap_error() {
     // cascade of errors. A cascade would hide the real error in noise.
     // Build 17-deep nesting: `A<A<A<...<int>...>>>`.
     let deep: String = "A<".repeat(17) + "int" + &">".repeat(17);
-    let source = format!("function main() -> nothing {{ let x: {deep} = x }}");
+    let source = format!("function entrypoint() -> nothing {{ let x: {deep} = x }}");
     let output = parse(&source);
     assert!(
         output.diagnostics.len() >= 1,
@@ -2128,7 +2128,7 @@ function identity<T>(give value: T) -> T {
 function sort<T follows Comparable>(share items: array<T>) -> nothing {
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let x: maybe<int> = none
   let arr: array<int> = arr
   let first = arr[0]

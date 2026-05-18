@@ -1,4 +1,4 @@
-function main() -> nothing {
+function entrypoint() -> nothing {
   let x: int = 9223372036854775807
   let y = x + 1
   print(y)

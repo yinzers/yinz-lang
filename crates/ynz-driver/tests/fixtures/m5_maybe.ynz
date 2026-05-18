@@ -1,4 +1,4 @@
-function main() -> nothing {
+function entrypoint() -> nothing {
   let x: maybe<int> = none
   print(x.or(99))
   let y: maybe<int> = none

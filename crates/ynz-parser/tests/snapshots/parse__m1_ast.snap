@@ -6,7 +6,7 @@ Module {
     items: [
         Function(
             FunctionDecl {
-                name: "main",
+                name: "entrypoint",
                 generics: [],
                 params: [],
                 return_type: Nothing,
@@ -19,8 +19,8 @@ Module {
                                         "print",
                                         SourceSpan {
                                             file: "test.ynz",
-                                            start: 29,
-                                            end: 34,
+                                            start: 35,
+                                            end: 40,
                                         },
                                     ),
                                     type_args: None,
@@ -43,22 +43,22 @@ Module {
                                                     ],
                                                     SourceSpan {
                                                         file: "test.ynz",
-                                                        start: 36,
-                                                        end: 47,
+                                                        start: 42,
+                                                        end: 53,
                                                     },
                                                 ),
                                             ],
                                             SourceSpan {
                                                 file: "test.ynz",
-                                                start: 36,
-                                                end: 48,
+                                                start: 42,
+                                                end: 54,
                                             },
                                         ),
                                     ],
                                     span: SourceSpan {
                                         file: "test.ynz",
-                                        start: 29,
-                                        end: 49,
+                                        start: 35,
+                                        end: 55,
                                     },
                                 },
                             ),
@@ -66,19 +66,19 @@ Module {
                     ],
                     span: SourceSpan {
                         file: "test.ynz",
-                        start: 29,
-                        end: 51,
+                        start: 35,
+                        end: 57,
                     },
                 },
                 span: SourceSpan {
                     file: "test.ynz",
                     start: 0,
-                    end: 51,
+                    end: 57,
                 },
                 name_span: SourceSpan {
                     file: "test.ynz",
                     start: 9,
-                    end: 13,
+                    end: 19,
                 },
                 errors_capable: false,
             },
@@ -87,6 +87,6 @@ Module {
     span: SourceSpan {
         file: "test.ynz",
         start: 0,
-        end: 51,
+        end: 57,
     },
 }

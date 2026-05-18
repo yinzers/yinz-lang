@@ -3,6 +3,6 @@ function foo() -> int {
   print(`never runs`)
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   print(foo())
 }

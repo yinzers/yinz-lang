@@ -2,6 +2,6 @@ function foo() -> int {
   return
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   print(foo())
 }

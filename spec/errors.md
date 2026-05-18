@@ -238,7 +238,7 @@ If an error propagates all the way up without being handled, the program stops a
 ERROR: Could not read file "config.ynz"
   Reason: File not found
 
-  main()              main.ynz    line 4
+  main()              entrypoint.ynz    line 4
     → startServer()   server.ynz  line 8
       → loadConfig()  config.ynz  line 12
         → readFile()  ✖ failed here

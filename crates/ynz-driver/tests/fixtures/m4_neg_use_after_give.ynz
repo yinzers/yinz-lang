@@ -4,7 +4,7 @@ function consume(give t: Token) -> nothing {
   print(t.id)
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let t: Token = { id: 1 }
   consume(t)
   print(t.id)

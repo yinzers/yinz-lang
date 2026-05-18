@@ -1,4 +1,4 @@
-function main() -> nothing {
+function entrypoint() -> nothing {
   for (i in range(0, 5)) {
     i = 10
     print(i)

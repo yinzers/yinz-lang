@@ -4,7 +4,7 @@ function greet(share name: string) -> nothing {
   print(name)
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let n = `world`
   greet(n)
 }

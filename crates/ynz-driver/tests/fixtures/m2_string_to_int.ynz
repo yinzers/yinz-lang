@@ -2,7 +2,7 @@
 // `string.toInt()` / `.toFloat()` / `.toNumber()` return `maybe<T>` —
 // these were deferred from M2 until `maybe<T>` landed in M5 and codegen in M6.
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   // Basic success case
   let a: maybe<int> = `42`.toInt()
   print(a.or(0).toString())

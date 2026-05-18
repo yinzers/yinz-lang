@@ -6,7 +6,7 @@ A single growing project that demonstrates **every v0.1 language feature** as it
 
 ```bash
 source $HOME/.cargo/env
-./target/debug/ynz run examples/basics/src/main.ynz
+./target/debug/ynz run examples/basics/src/entrypoint.ynz
 ```
 
 ## What each milestone adds

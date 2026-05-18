@@ -15,7 +15,7 @@ The standard library follows all 12 golden rules. Everything is dot-method drive
 The compiler only includes stdlib code your program actually uses. If you never touch `Http`, `Tensor`, or `Date`, none of that code exists in your binary. Zero bloat.
 
 ```
-function main() -> nothing {
+function entrypoint() -> nothing {
   let x = math.sqrt(16)
   print(x)
 }

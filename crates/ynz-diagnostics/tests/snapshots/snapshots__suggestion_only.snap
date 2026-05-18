@@ -5,7 +5,7 @@ expression: output
 [39mSUGGESTION:[0m All fields in this type are known at compile time.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ────┬───  
    │     ╰───── Consider using a `type` instead of a `map` for direct field access.
    │ 

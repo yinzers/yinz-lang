@@ -69,7 +69,7 @@ fn m7_range_stored_in_let_is_clean() {
     // being stored. `let r = range(0, 10)` must now be valid. Regression here
     // would prevent passing ranges to functions or using them as first-class values.
     check_no_diags(
-        r#"function main() -> nothing {
+        r#"function entrypoint() -> nothing {
     let r = range(0, 10)
 }"#,
     );
@@ -83,7 +83,7 @@ fn m7_range_passed_to_function_is_clean() {
         r#"function useRange(give r: range) -> nothing {
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
     useRange(range(0, 5))
 }"#,
     );
@@ -94,7 +94,7 @@ fn m7_range_for_loop_still_works() {
     // WHY: non-regression — for-loop over range must still work after removing
     // the M3 special-case restriction. The element type must still be int.
     check_no_diags(
-        r#"function main() -> nothing {
+        r#"function entrypoint() -> nothing {
     for (i in range(0, 10)) {
         print(i)
     }
@@ -107,7 +107,7 @@ fn m7_range_wrong_arity_still_errors() {
     // WHY: removing the outside-for restriction must not accidentally remove
     // arg-count checking. range() with 3 args must still fail.
     check_diag_count(
-        r#"function main() -> nothing {
+        r#"function entrypoint() -> nothing {
     for (i in range(0, 5, 1)) { print(i) }
 }"#,
         1,
@@ -122,7 +122,7 @@ fn m7_for_loop_over_string_yields_string_element() {
     // Without this, string iteration would be unsupported and the for-loop would
     // emit a "not yet supported" error.
     check_no_diags(
-        r#"function main() -> nothing {
+        r#"function entrypoint() -> nothing {
     let word = `café`
     for (c in word) {
         print(c)
@@ -135,7 +135,7 @@ fn m7_for_loop_over_string_yields_string_element() {
 fn m7_for_loop_over_string_literal_is_clean() {
     // WHY: iterating over a string literal (not a variable) must work.
     check_no_diags(
-        r#"function main() -> nothing {
+        r#"function entrypoint() -> nothing {
     for (c in `hello`) {
         print(c)
     }
@@ -150,7 +150,7 @@ fn m7_for_loop_over_array_still_works() {
     // WHY: non-regression — Iterable<T> protocol changes must not break
     // existing for-loop dispatch over built-in collections.
     check_no_diags(
-        r#"function main() -> nothing {
+        r#"function entrypoint() -> nothing {
     let nums: array<int> = [1, 2, 3]
     for (n in nums) {
         print(n)
@@ -163,7 +163,7 @@ fn m7_for_loop_over_array_still_works() {
 fn m7_for_loop_over_fixed_still_works() {
     // WHY: non-regression for fixed<T> iteration.
     check_no_diags(
-        r#"function main() -> nothing {
+        r#"function entrypoint() -> nothing {
     let nums: fixed<int> = [1, 2, 3]
     for (n in nums) {
         print(n)
@@ -189,7 +189,7 @@ function next(lend self: Counter) -> maybe<int> {
     return none
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
     let c: Counter = { current: 0, limit: 3 }
     for (n in c) {
         print(n)
@@ -208,7 +208,7 @@ fn m7_for_loop_over_shape_without_next_fn_produces_error() {
     name: string
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
     let p: Player = { name: `Patrick` }
     for (x in p) {
         print(x)
@@ -227,7 +227,7 @@ fn m7_for_loop_shape_without_next_error_mentions_iterable() {
     id: int
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
     let w: Widget = { id: 1 }
     for (x in w) {
         print(x)
@@ -250,7 +250,7 @@ function next(lend self: BadIter) -> int {
     return self.pos
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
     let b: BadIter = { pos: 0 }
     for (x in b) {
         print(x)
@@ -273,7 +273,7 @@ function next(lend self: BadIter) -> int {
     return self.pos
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
     let b: BadIter = { pos: 0 }
     for (x in b) {
         print(x)
@@ -295,7 +295,7 @@ fn m7_frame_file_field_returns_string() {
     return frame.file
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
 }"#,
     );
 }
@@ -310,7 +310,7 @@ fn m7_frame_line_field_returns_maybe_int() {
     return frame.line
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
 }"#,
     );
 }
@@ -328,7 +328,7 @@ fn m7_frame_has_three_fields_accessible() {
     return frame.file
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
 }"#,
     );
 }
@@ -341,7 +341,7 @@ fn m7_source_loc_file_field_returns_string() {
     return loc.file
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
 }"#,
     );
 }
@@ -354,7 +354,7 @@ fn m7_source_loc_line_field_returns_maybe_int() {
     return loc.line
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
 }"#,
     );
 }
@@ -368,7 +368,7 @@ fn m7_frame_unknown_field_produces_error() {
     return frame.notAField
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
 }"#,
         1,
     );
@@ -382,7 +382,7 @@ fn m7_source_loc_unknown_field_produces_error() {
     return loc.notAField
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
 }"#,
         1,
     );
@@ -394,7 +394,7 @@ function main() -> nothing {
 fn m7_for_loop_over_map_still_works() {
     // WHY: non-regression — map iteration producing MapEntry<K,V> must still work.
     check_no_diags(
-        r#"function main() -> nothing {
+        r#"function entrypoint() -> nothing {
     let m: map<string, int> = { `a`: 1, `b`: 2 }
     for (entry in m) {
         print(entry.key)

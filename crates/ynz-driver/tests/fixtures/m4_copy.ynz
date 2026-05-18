@@ -8,7 +8,7 @@ function show(share self: Coord) -> nothing {
   print(self.y)
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let a: Coord = { x: 10, y: 20 }
   let b = a.copy()
   b.show()

@@ -6,6 +6,6 @@ function foo() -> nothing {
   print(`second`)
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   foo()
 }

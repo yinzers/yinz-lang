@@ -1,4 +1,4 @@
-function main() -> nothing {
+function entrypoint() -> nothing {
   print(int.max)
   print(int.min)
   let big: int = 9223372036854775807

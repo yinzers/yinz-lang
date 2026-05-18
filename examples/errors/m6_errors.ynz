@@ -65,4 +65,4 @@ function valueWithoutCheck() -> nothing {
   print(x.value.toString())
 }
 
-function main() -> nothing { }
+function entrypoint() -> nothing { }

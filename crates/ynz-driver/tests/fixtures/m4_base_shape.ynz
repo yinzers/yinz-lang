@@ -11,7 +11,7 @@ function describe(share self: Car) -> nothing {
   print(self.speed)
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let c: Car = { brand: `Rust`, speed: 120 }
   c.describe()
 }

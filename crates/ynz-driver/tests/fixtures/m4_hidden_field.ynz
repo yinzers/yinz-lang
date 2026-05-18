@@ -11,7 +11,7 @@ function value(share self: Counter) -> int {
   return self.count
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let c: Counter = { name: `clicks` }
   c.increment()
   c.increment()

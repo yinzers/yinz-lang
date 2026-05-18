@@ -17,7 +17,7 @@ function level1() -> int errors {
   return y
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let result = level1().or(0)
   print(result.toString())
 }

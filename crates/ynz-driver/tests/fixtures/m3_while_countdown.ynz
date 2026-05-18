@@ -1,4 +1,4 @@
-function main() -> nothing {
+function entrypoint() -> nothing {
   let x: int = 5
   while (x > 0) {
     print(x)

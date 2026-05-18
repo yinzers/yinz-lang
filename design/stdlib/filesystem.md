@@ -37,8 +37,8 @@ directory.delete("/path/to/old")                         // -> nothing errors
 ```
 let full = path.join("src", "utils", "helpers.ynz")
 let ext = path.extension("photo.jpg")                    // "jpg"
-let name = path.filename("/app/src/main.ynz")            // "main.ynz"
-let dir = path.directory("/app/src/main.ynz")            // "/app/src"
+let name = path.filename("/app/src/entrypoint.ynz")            // "main.ynz"
+let dir = path.directory("/app/src/entrypoint.ynz")            // "/app/src"
 ```
 
 ---

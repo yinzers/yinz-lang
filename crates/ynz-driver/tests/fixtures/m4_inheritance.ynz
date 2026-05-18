@@ -11,7 +11,7 @@ function describe(share self: Dog) -> nothing {
   print(self.breed)
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let d: Dog = { name: `Rex`, breed: `Husky` }
   d.describe()
 }

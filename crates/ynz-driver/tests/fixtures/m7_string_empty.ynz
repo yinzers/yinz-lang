@@ -3,7 +3,7 @@
 // conditions that are most likely to produce off-by-one errors in the string runtime.
 // Tests M7 P4b string method correctness for the zero-length edge case.
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let s = ``
   print(s.count().toString())
   print(s.contains(`x`).toString())

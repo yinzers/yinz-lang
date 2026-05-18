@@ -18,7 +18,7 @@ function consume(give p: Player) -> nothing {
   print(p.name)
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let p: Player = { name: `Patrick`, health: 100 }
   p.greet()
   p.heal(20)

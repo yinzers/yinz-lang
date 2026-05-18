@@ -307,7 +307,7 @@ Module {
         ),
         Function(
             FunctionDecl {
-                name: "main",
+                name: "entrypoint",
                 generics: [],
                 params: [],
                 return_type: Nothing,
@@ -318,30 +318,30 @@ Module {
                             name: "x",
                             name_span: SourceSpan {
                                 file: "test.ynz",
-                                start: 217,
-                                end: 218,
+                                start: 223,
+                                end: 224,
                             },
                             ty: Some(
                                 Maybe {
                                     inner: Int,
                                     span: SourceSpan {
                                         file: "test.ynz",
-                                        start: 220,
-                                        end: 230,
+                                        start: 226,
+                                        end: 236,
                                     },
                                 },
                             ),
                             value: NoneLit {
                                 span: SourceSpan {
                                     file: "test.ynz",
-                                    start: 233,
-                                    end: 237,
+                                    start: 239,
+                                    end: 243,
                                 },
                             },
                             span: SourceSpan {
                                 file: "test.ynz",
-                                start: 213,
-                                end: 237,
+                                start: 219,
+                                end: 243,
                             },
                         },
                         Let {
@@ -349,24 +349,24 @@ Module {
                             name: "arr",
                             name_span: SourceSpan {
                                 file: "test.ynz",
-                                start: 244,
-                                end: 247,
+                                start: 250,
+                                end: 253,
                             },
                             ty: Some(
                                 Generic {
                                     name: "array",
                                     name_span: SourceSpan {
                                         file: "test.ynz",
-                                        start: 249,
-                                        end: 254,
+                                        start: 255,
+                                        end: 260,
                                     },
                                     args: [
                                         Int,
                                     ],
                                     span: SourceSpan {
                                         file: "test.ynz",
-                                        start: 249,
-                                        end: 259,
+                                        start: 255,
+                                        end: 265,
                                     },
                                 },
                             ),
@@ -374,14 +374,14 @@ Module {
                                 "arr",
                                 SourceSpan {
                                     file: "test.ynz",
-                                    start: 262,
-                                    end: 265,
+                                    start: 268,
+                                    end: 271,
                                 },
                             ),
                             span: SourceSpan {
                                 file: "test.ynz",
-                                start: 240,
-                                end: 265,
+                                start: 246,
+                                end: 271,
                             },
                         },
                         Let {
@@ -389,8 +389,8 @@ Module {
                             name: "first",
                             name_span: SourceSpan {
                                 file: "test.ynz",
-                                start: 272,
-                                end: 277,
+                                start: 278,
+                                end: 283,
                             },
                             ty: None,
                             value: IndexAccess {
@@ -398,28 +398,28 @@ Module {
                                     "arr",
                                     SourceSpan {
                                         file: "test.ynz",
-                                        start: 280,
-                                        end: 283,
+                                        start: 286,
+                                        end: 289,
                                     },
                                 ),
                                 index: IntLit(
                                     0,
                                     SourceSpan {
                                         file: "test.ynz",
-                                        start: 284,
-                                        end: 285,
+                                        start: 290,
+                                        end: 291,
                                     },
                                 ),
                                 span: SourceSpan {
                                     file: "test.ynz",
-                                    start: 280,
-                                    end: 286,
+                                    start: 286,
+                                    end: 292,
                                 },
                             },
                             span: SourceSpan {
                                 file: "test.ynz",
-                                start: 268,
-                                end: 286,
+                                start: 274,
+                                end: 292,
                             },
                         },
                         IndexAssign {
@@ -427,30 +427,30 @@ Module {
                                 "arr",
                                 SourceSpan {
                                     file: "test.ynz",
-                                    start: 289,
-                                    end: 292,
+                                    start: 295,
+                                    end: 298,
                                 },
                             ),
                             index: IntLit(
                                 0,
                                 SourceSpan {
                                     file: "test.ynz",
-                                    start: 293,
-                                    end: 294,
+                                    start: 299,
+                                    end: 300,
                                 },
                             ),
                             value: IntLit(
                                 99,
                                 SourceSpan {
                                     file: "test.ynz",
-                                    start: 298,
-                                    end: 300,
+                                    start: 304,
+                                    end: 306,
                                 },
                             ),
                             span: SourceSpan {
                                 file: "test.ynz",
-                                start: 289,
-                                end: 300,
+                                start: 295,
+                                end: 306,
                             },
                         },
                         Let {
@@ -458,8 +458,8 @@ Module {
                             name: "y",
                             name_span: SourceSpan {
                                 file: "test.ynz",
-                                start: 307,
-                                end: 308,
+                                start: 313,
+                                end: 314,
                             },
                             ty: None,
                             value: Call(
@@ -468,8 +468,8 @@ Module {
                                         "identity",
                                         SourceSpan {
                                             file: "test.ynz",
-                                            start: 311,
-                                            end: 319,
+                                            start: 317,
+                                            end: 325,
                                         },
                                     ),
                                     type_args: Some(
@@ -482,22 +482,22 @@ Module {
                                             5,
                                             SourceSpan {
                                                 file: "test.ynz",
-                                                start: 325,
-                                                end: 326,
+                                                start: 331,
+                                                end: 332,
                                             },
                                         ),
                                     ],
                                     span: SourceSpan {
                                         file: "test.ynz",
-                                        start: 311,
-                                        end: 327,
+                                        start: 317,
+                                        end: 333,
                                     },
                                 },
                             ),
                             span: SourceSpan {
                                 file: "test.ynz",
-                                start: 303,
-                                end: 327,
+                                start: 309,
+                                end: 333,
                             },
                         },
                         Let {
@@ -505,8 +505,8 @@ Module {
                             name: "a",
                             name_span: SourceSpan {
                                 file: "test.ynz",
-                                start: 334,
-                                end: 335,
+                                start: 340,
+                                end: 341,
                             },
                             ty: None,
                             value: IndexAccess {
@@ -514,28 +514,28 @@ Module {
                                     "arr",
                                     SourceSpan {
                                         file: "test.ynz",
-                                        start: 338,
-                                        end: 341,
+                                        start: 344,
+                                        end: 347,
                                     },
                                 ),
                                 index: IntLit(
                                     0,
                                     SourceSpan {
                                         file: "test.ynz",
-                                        start: 342,
-                                        end: 343,
+                                        start: 348,
+                                        end: 349,
                                     },
                                 ),
                                 span: SourceSpan {
                                     file: "test.ynz",
-                                    start: 338,
-                                    end: 344,
+                                    start: 344,
+                                    end: 350,
                                 },
                             },
                             span: SourceSpan {
                                 file: "test.ynz",
-                                start: 330,
-                                end: 344,
+                                start: 336,
+                                end: 350,
                             },
                         },
                         Let {
@@ -543,8 +543,8 @@ Module {
                             name: "cmp",
                             name_span: SourceSpan {
                                 file: "test.ynz",
-                                start: 351,
-                                end: 354,
+                                start: 357,
+                                end: 360,
                             },
                             ty: None,
                             value: BinOp {
@@ -553,46 +553,46 @@ Module {
                                     "a",
                                     SourceSpan {
                                         file: "test.ynz",
-                                        start: 357,
-                                        end: 358,
+                                        start: 363,
+                                        end: 364,
                                     },
                                 ),
                                 rhs: IntLit(
                                     10,
                                     SourceSpan {
                                         file: "test.ynz",
-                                        start: 361,
-                                        end: 363,
+                                        start: 367,
+                                        end: 369,
                                     },
                                 ),
                                 span: SourceSpan {
                                     file: "test.ynz",
-                                    start: 357,
-                                    end: 363,
+                                    start: 363,
+                                    end: 369,
                                 },
                             },
                             span: SourceSpan {
                                 file: "test.ynz",
-                                start: 347,
-                                end: 363,
+                                start: 353,
+                                end: 369,
                             },
                         },
                     ],
                     span: SourceSpan {
                         file: "test.ynz",
-                        start: 213,
-                        end: 365,
+                        start: 219,
+                        end: 371,
                     },
                 },
                 span: SourceSpan {
                     file: "test.ynz",
                     start: 182,
-                    end: 366,
+                    end: 372,
                 },
                 name_span: SourceSpan {
                     file: "test.ynz",
                     start: 191,
-                    end: 195,
+                    end: 201,
                 },
                 errors_capable: false,
             },
@@ -601,6 +601,6 @@ Module {
     span: SourceSpan {
         file: "test.ynz",
         start: 1,
-        end: 366,
+        end: 372,
     },
 }

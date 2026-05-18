@@ -3,7 +3,7 @@ shape Player {
   health: int
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let p: Player = { name: `Alice` }
   print(p.name)
 }

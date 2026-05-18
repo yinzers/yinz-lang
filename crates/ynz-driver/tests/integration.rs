@@ -106,22 +106,22 @@ fn broken_main_exits_nonzero_with_diagnostic() {
     );
     // The diagnostic must mention the missing return type.
     assert!(
-        stderr.contains("main"),
-        "diagnostic must mention `main`; got:\n{stderr}"
+        stderr.contains("entrypoint"),
+        "diagnostic must mention `entrypoint`; got:\n{stderr}"
     );
     insta::assert_snapshot!("broken_main_stderr", stderr);
 }
 
 #[test]
-fn empty_source_exits_nonzero_with_missing_main_diagnostic() {
-    // WHY: an empty file must produce a clear "no main" error, not a crash or
+fn empty_source_exits_nonzero_with_missing_entrypoint_diagnostic() {
+    // WHY: an empty file must produce a clear "no entrypoint" error, not a crash or
     // an empty error message.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("empty.ynz"));
     assert_ne!(code, 0, "empty source must exit non-zero");
     assert!(stdout.is_empty(), "empty source must produce no stdout");
     assert!(
-        stderr.contains("main"),
-        "empty source diagnostic must mention `main`; got:\n{stderr}"
+        stderr.contains("entrypoint"),
+        "empty source diagnostic must mention `entrypoint`; got:\n{stderr}"
     );
     insta::assert_snapshot!("empty_stderr", stderr);
 }
@@ -151,7 +151,7 @@ fn invalid_utf8_source_exits_nonzero_with_diagnostic() {
     // WHY: a source file with invalid UTF-8 must produce a clear error,
     // not a panic or garbled output.
     let tmp = std::env::temp_dir().join("ynz-bad-utf8.ynz");
-    std::fs::write(&tmp, b"function main() -> nothing { \xff }").expect("write bad file");
+    std::fs::write(&tmp, b"function entrypoint() -> nothing { \xff }").expect("write bad file");
 
     let (_, stderr, code) = ynz_run_stdout(&tmp);
     let _ = std::fs::remove_file(&tmp);
@@ -635,15 +635,15 @@ fn m3_duplicate_function_produces_diagnostic() {
 
 #[test]
 fn m3_undefined_function_suggests_levenshtein() {
-    // WHY: `mann()` is close to `main`. The Levenshtein suggestion must fire.
+    // WHY: `entrpoint()` is distance-1 from `entrypoint`. The Levenshtein suggestion must fire.
     // Without it, the user gets a bare "not defined" with no hint of what they
     // probably meant to write.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_undefined_function.ynz"));
     assert_ne!(code, 0, "undefined function must exit non-zero");
     assert!(stdout.is_empty());
     assert!(
-        stderr.contains("main"),
-        "Levenshtein must suggest `main` for `mann`, got:\n{stderr}"
+        stderr.contains("entrypoint"),
+        "Levenshtein must suggest `entrypoint` for `entrpoint`, got:\n{stderr}"
     );
 }
 

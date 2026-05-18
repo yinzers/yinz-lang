@@ -1,6 +1,6 @@
 shape Box { value: int }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let b: Box = { value: `hello` }
   print(b.value)
 }

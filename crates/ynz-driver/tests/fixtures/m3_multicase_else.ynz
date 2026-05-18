@@ -6,7 +6,7 @@ function classify(x: int) -> int {
   }
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   print(classify(1))
   print(classify(2))
   print(classify(99))

@@ -6,7 +6,7 @@ shape Circle follows Drawable {
   radius: int
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let c: Circle = { radius: 5 }
   print(c.radius)
 }

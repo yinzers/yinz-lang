@@ -14,7 +14,7 @@ function describe(figure: Figure) -> string {
   return `unknown`
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let c: Circle = { radius: 5.0 }
   let s: Square = { side: 3.0 }
   let fig: Figure = c

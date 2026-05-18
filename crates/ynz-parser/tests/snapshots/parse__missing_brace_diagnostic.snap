@@ -7,8 +7,8 @@ expression: output.diagnostics
         severity: Error,
         span: SourceSpan {
             file: "test.ynz",
-            start: 35,
-            end: 39,
+            start: 41,
+            end: 45,
         },
         what: "Double-quoted strings don't exist in Yinz.",
         what_instead: "Use backtick strings instead: `` `hello` `` or `` `Hello ${name}` ``",
@@ -19,8 +19,8 @@ expression: output.diagnostics
         severity: Error,
         span: SourceSpan {
             file: "test.ynz",
-            start: 40,
-            end: 40,
+            start: 46,
+            end: 46,
         },
         what: "Missing closing `}` for this block.",
         what_instead: "Add `}` at the end of the function body.",

@@ -12,7 +12,7 @@ function outer() -> string errors {
   return x
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let result = outer()
   print(result.or(`fallback`))
 }

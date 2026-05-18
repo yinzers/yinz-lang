@@ -1,5 +1,5 @@
 type Player { name: string }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   print(1)
 }

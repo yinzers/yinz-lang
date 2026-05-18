@@ -5,7 +5,7 @@ expression: output
 Error: Error number 0.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -14,7 +14,7 @@ Error: Error number 0.
 Error: Error number 1.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -23,7 +23,7 @@ Error: Error number 1.
 Error: Error number 2.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -32,7 +32,7 @@ Error: Error number 2.
 Error: Error number 3.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -41,7 +41,7 @@ Error: Error number 3.
 Error: Error number 4.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -50,7 +50,7 @@ Error: Error number 4.
 Error: Error number 5.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -59,7 +59,7 @@ Error: Error number 5.
 Error: Error number 6.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -68,7 +68,7 @@ Error: Error number 6.
 Error: Error number 7.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -77,7 +77,7 @@ Error: Error number 7.
 Error: Error number 8.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -86,7 +86,7 @@ Error: Error number 8.
 Error: Error number 9.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -95,7 +95,7 @@ Error: Error number 9.
 Error: Error number 10.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -104,7 +104,7 @@ Error: Error number 10.
 Error: Error number 11.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -113,7 +113,7 @@ Error: Error number 11.
 Error: Error number 12.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -122,7 +122,7 @@ Error: Error number 12.
 Error: Error number 13.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -131,7 +131,7 @@ Error: Error number 13.
 Error: Error number 14.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -140,7 +140,7 @@ Error: Error number 14.
 Error: Error number 15.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -149,7 +149,7 @@ Error: Error number 15.
 Error: Error number 16.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -158,7 +158,7 @@ Error: Error number 16.
 Error: Error number 17.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -167,7 +167,7 @@ Error: Error number 17.
 Error: Error number 18.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -176,7 +176,7 @@ Error: Error number 18.
 Error: Error number 19.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -185,7 +185,7 @@ Error: Error number 19.
 Error: Error number 20.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -194,7 +194,7 @@ Error: Error number 20.
 Error: Error number 21.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -203,7 +203,7 @@ Error: Error number 21.
 Error: Error number 22.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -212,7 +212,7 @@ Error: Error number 22.
 Error: Error number 23.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -221,7 +221,7 @@ Error: Error number 23.
 Error: Error number 24.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -230,7 +230,7 @@ Error: Error number 24.
 Error: Error number 25.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -239,7 +239,7 @@ Error: Error number 25.
 Error: Error number 26.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -248,7 +248,7 @@ Error: Error number 26.
 Error: Error number 27.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -257,7 +257,7 @@ Error: Error number 27.
 Error: Error number 28.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -266,7 +266,7 @@ Error: Error number 28.
 Error: Error number 29.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -275,7 +275,7 @@ Error: Error number 29.
 Error: Error number 30.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -284,7 +284,7 @@ Error: Error number 30.
 Error: Error number 31.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -293,7 +293,7 @@ Error: Error number 31.
 Error: Error number 32.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -302,7 +302,7 @@ Error: Error number 32.
 Error: Error number 33.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -311,7 +311,7 @@ Error: Error number 33.
 Error: Error number 34.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -320,7 +320,7 @@ Error: Error number 34.
 Error: Error number 35.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -329,7 +329,7 @@ Error: Error number 35.
 Error: Error number 36.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -338,7 +338,7 @@ Error: Error number 36.
 Error: Error number 37.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -347,7 +347,7 @@ Error: Error number 37.
 Error: Error number 38.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -356,7 +356,7 @@ Error: Error number 38.
 Error: Error number 39.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -365,7 +365,7 @@ Error: Error number 39.
 Error: Error number 40.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -374,7 +374,7 @@ Error: Error number 40.
 Error: Error number 41.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -383,7 +383,7 @@ Error: Error number 41.
 Error: Error number 42.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -392,7 +392,7 @@ Error: Error number 42.
 Error: Error number 43.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -401,7 +401,7 @@ Error: Error number 43.
 Error: Error number 44.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -410,7 +410,7 @@ Error: Error number 44.
 Error: Error number 45.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -419,7 +419,7 @@ Error: Error number 45.
 Error: Error number 46.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -428,7 +428,7 @@ Error: Error number 46.
 Error: Error number 47.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -437,7 +437,7 @@ Error: Error number 47.
 Error: Error number 48.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 
@@ -446,7 +446,7 @@ Error: Error number 48.
 Error: Error number 49.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function main() -> nothing {
+ 1 │ function entrypoint() -> nothing {
    │ ┬  
    │ ╰── Fix it.
    │ 

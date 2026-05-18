@@ -32,7 +32,7 @@ The absolute minimum: the language compiles and runs a hello-world program. No s
 - Concurrency keywords parse + type-check (`wait`, `background`) — runs SEQUENTIALLY (auto-parallelization comes in v0.3)
 - Iterables — built-in iteration over collections (`for (x in arr)`). Custom `follows Iterable<T>` is v1.0.
 - Modules (`import`, `export`, root-relative paths, aliases with `as`, duplicate-name compile error)
-- Main entry (`function main()`)
+- Main entry (`function entrypoint()`)
 - Doc comments (`///`)
 - Sensitive type modifier (auto-redact in output)
 - Operators (built-in `+`, `-`, `*`, `/`, `%`, `&&`, `||`, `!`, comparison, bitwise). Operator overloading is v1.0.

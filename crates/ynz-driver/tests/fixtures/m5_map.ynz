@@ -1,4 +1,4 @@
-function main() -> nothing {
+function entrypoint() -> nothing {
   let scores: map<string, int> = { `alice`: 90, `bob`: 85 }
   print(scores[`alice`].or(0))
   print(scores[`bob`].or(0))

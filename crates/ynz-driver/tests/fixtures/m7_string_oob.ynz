@@ -3,7 +3,7 @@
 // invariant: "string bracket access out of bounds returns none (not panic)."
 // If the runtime panics or returns garbage, this test fails.
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let s = `hello`
   let c = s.get(100)
   print(c.or(`none`))

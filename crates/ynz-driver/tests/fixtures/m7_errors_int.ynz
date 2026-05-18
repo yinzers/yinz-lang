@@ -6,7 +6,7 @@ function getCount() -> int errors {
   return 42
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let result = getCount()
   print(result.or(0))
 }

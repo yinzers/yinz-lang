@@ -3,7 +3,7 @@ shape Wallet {
   hidden balance: int = 0
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let w: Wallet = { owner: `Alice` }
   print(w.balance)
 }

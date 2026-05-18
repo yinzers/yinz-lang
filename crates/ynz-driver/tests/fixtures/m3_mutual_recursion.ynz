@@ -12,6 +12,6 @@ function pong(n: int) -> int {
   return ping(n - 1)
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   print(ping(5))
 }

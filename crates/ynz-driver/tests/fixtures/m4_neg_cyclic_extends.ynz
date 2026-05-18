@@ -1,6 +1,6 @@
 shape A extends B { x: int }
 shape B extends A { y: int }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   print(1)
 }

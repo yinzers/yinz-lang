@@ -2,7 +2,7 @@
 // A string with ${expr} parts must use ynz_string_builder_* to concatenate
 // the literal segments and stringified expression values into one string.
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let name = `Alice`
   let score = 42
   print(`Hello ${name}, your score is ${score}!`)

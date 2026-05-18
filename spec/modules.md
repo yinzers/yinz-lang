@@ -85,7 +85,7 @@ No `./`. No `../`. Every import path is relative to your project root.
 ```
 my-project/
   yinz.toml
-  main.ynz
+  entrypoint.ynz
   services/
     users.ynz
     orders.ynz

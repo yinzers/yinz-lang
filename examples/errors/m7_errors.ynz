@@ -165,7 +165,7 @@ function splitCount() -> nothing {
 
 // main: calls only the positive reference case and the split count demo.
 // All the error triggers above are commented out — uncomment one at a time to see the diagnostic.
-function main() -> nothing {
+function entrypoint() -> nothing {
   splitCount()
   m7AllFeaturesOk()
 }

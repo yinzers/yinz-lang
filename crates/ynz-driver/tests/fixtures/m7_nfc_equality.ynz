@@ -2,7 +2,7 @@
 // Since source literals are always NFC, this tests that the fast path (same bytes)
 // works. The slow path (precomposed vs decomposed) is tested in runtime unit tests.
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let a = `hello`
   let b = `hello`
   if (a == b) {

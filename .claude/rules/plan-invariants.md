@@ -93,18 +93,18 @@ For each runtime dependency listed above: what is the behavior in `--kernel` mod
 
 Every phase that adds executable surface MUST extend two canonical files as part of its acceptance criteria:
 
-1. **`examples/basics/src/main.ynz`** — the single growing demo project covering EVERY v0.1 language feature (M1–M8). Each phase adds the new feature in context (not as an isolated snippet). By the end of M8, this one project demonstrates the entire pre-stdlib language. After v0.1 ships, stdlib modules (v0.6+) get their OWN per-module example projects — but `examples/basics/` is the v0.1 showcase.
+1. **`examples/basics/src/entrypoint.ynz`** — the single growing demo project covering EVERY v0.1 language feature (M1–M8). Each phase adds the new feature in context (not as an isolated snippet). By the end of M8, this one project demonstrates the entire pre-stdlib language. After v0.1 ships, stdlib modules (v0.6+) get their OWN per-module example projects — but `examples/basics/` is the v0.1 showcase.
 
 2. **`examples/errors/m{N}_errors.ynz`** — the per-milestone error gallery. Each phase that adds new compile-error classes adds intentional triggers to the milestone's gallery file. One run of the file produces every diagnostic Yinz can emit for that milestone (Yinz multi-errors up to 50/compile per `design/compiler-errors.md`, so a single file can demonstrate many simultaneously). Used for hands-on validation of the teaching diagnostic quality.
 
 **Why this is a milestone invariant**: features that ship without hands-on demo + error-experience review go un-validated until users hit them. Patrick reviews each phase's UX via these files — without them, the language ships diagnostics nobody human has read. The two files are the human-eyes-on layer that automated tests can't replace.
 
 **Required content per phase**:
-- New executable feature → add to `examples/basics/src/main.ynz` showing the feature in a small but realistic context (not just `print(featureName())` — show it doing real work)
+- New executable feature → add to `examples/basics/src/entrypoint.ynz` showing the feature in a small but realistic context (not just `print(featureName())` — show it doing real work)
 - New compile-error class → add to `examples/errors/m{N}_errors.ynz` as an intentional trigger with a `// WHY:` comment naming the diagnostic class
 - Both files get `insta` stdout/stderr snapshots in the phase's verification step
 
-**Deferred-feature handling**: features locked for v0.2+ (arenas per `design/future/arena.md`), v0.3+ (self-references per `design/future/self-references.md`, `verified { }` blocks per vocabulary.md), or later get a placeholder comment in `examples/basics/src/main.ynz` (`// arena scratch { ... } — v0.2 feature, see design/future/arena.md`) until they ship. When they ship, they get added to the demo for real.
+**Deferred-feature handling**: features locked for v0.2+ (arenas per `design/future/arena.md`), v0.3+ (self-references per `design/future/self-references.md`, `verified { }` blocks per vocabulary.md), or later get a placeholder comment in `examples/basics/src/entrypoint.ynz` (`// arena scratch { ... } — v0.2 feature, see design/future/arena.md`) until they ship. When they ship, they get added to the demo for real.
 
 **Cross-reference to project CLAUDE.md**: this requirement is also stated in `<project>/CLAUDE.md` "When Working on This Project" so plans drafted in fresh chats see the requirement immediately.
 

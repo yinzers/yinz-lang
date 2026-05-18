@@ -66,7 +66,7 @@ expression: tokens
     RBrace,
     Function,
     Identifier(
-        "main",
+        "entrypoint",
     ),
     LParen,
     RParen,

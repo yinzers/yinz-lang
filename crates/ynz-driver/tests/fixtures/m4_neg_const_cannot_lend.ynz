@@ -4,7 +4,7 @@ function mutate(lend b: Box) -> nothing {
   b.value = 99
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   const b: Box = { value: 1 }
   mutate(b)
 }

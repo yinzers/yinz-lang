@@ -12,10 +12,10 @@ const FILE: &str = "hello.ynz";
 // test-ratchet: M7 P1 migrates double-quoted string to backtick syntax — double-quotes now
 // produce an error diagnostic, so any test source must use backticks. The golden SHA-256
 // files will change and must be regenerated (they are auto-regenerated on first run).
-const M1_SOURCE: &str = "function main() -> nothing { print(`hello, yinz`) }";
+const M1_SOURCE: &str = "function entrypoint() -> nothing { print(`hello, yinz`) }";
 
 const M2_SMOKE_FILE: &str = "m2_smoke.ynz";
-const M2_SMOKE_SOURCE: &str = r#"function main() -> nothing {
+const M2_SMOKE_SOURCE: &str = r#"function entrypoint() -> nothing {
   let price = 0.1 + 0.2
   let count: int = 42
   let active = true
@@ -278,7 +278,7 @@ fn m2_decimal_exactness() {
     // This test compiles just the number computation (not the full smoke test)
     // and verifies the IR is produced without codegen errors. End-to-end
     // execution is Phase 6 (driver integration) which actually runs the binary.
-    let source = "function main() -> nothing { let x = 0.1 + 0.2\nprint(x) }";
+    let source = "function entrypoint() -> nothing { let x = 0.1 + 0.2\nprint(x) }";
     let db = CompilerDb::default();
     let sf = SourceFile::new(&db, "decimal_test.ynz".to_string(), source.to_string());
     let output = codegen_query(&db, sf);
@@ -299,7 +299,7 @@ const M3_FIB_SOURCE: &str = r#"function fib(n: int) -> int {
   }
   return fib(n - 1) + fib(n - 2)
 }
-function main() -> nothing {
+function entrypoint() -> nothing {
   let result = fib(10)
   print(result)
 }"#;
@@ -370,7 +370,7 @@ fn m3_fib_sha256_golden() {
 
 const M4_PLAYER_FILE: &str = "m4_player.ynz";
 // test-ratchet: M7 P1 migrates double-quoted string to backtick syntax
-const M4_PLAYER_SOURCE: &str = "shape Player {\n  name: string\n  health: int\n}\nfunction greet(share self: Player) -> nothing {\n  print(self.name)\n}\nfunction heal(lend self: Player, amount: int) -> nothing {\n  self.health = self.health + amount\n}\nfunction consume(give p: Player) -> nothing {\n  print(p.name)\n}\nfunction main() -> nothing {\n  let p: Player = { name: `Patrick`, health: 100 }\n  p.greet()\n  p.heal(20)\n  print(p.health.toString())\n  consume(p)\n}";
+const M4_PLAYER_SOURCE: &str = "shape Player {\n  name: string\n  health: int\n}\nfunction greet(share self: Player) -> nothing {\n  print(self.name)\n}\nfunction heal(lend self: Player, amount: int) -> nothing {\n  self.health = self.health + amount\n}\nfunction consume(give p: Player) -> nothing {\n  print(p.name)\n}\nfunction entrypoint() -> nothing {\n  let p: Player = { name: `Patrick`, health: 100 }\n  p.greet()\n  p.heal(20)\n  print(p.health.toString())\n  consume(p)\n}";
 
 fn run_m4_player_codegen() -> Option<CompiledArtifact> {
     let db = CompilerDb::default();
@@ -421,11 +421,11 @@ fn m3_codegen_query_returns_no_diagnostics_on_valid_m3_source() {
     // WHY: all M3 happy-path fixtures must compile without diagnostics.
     // Any diagnostic here means typeck or codegen rejected valid M3 code.
     let sources = [
-        ("m3_for.ynz", "function main() -> nothing { for (i in range(0, 3)) { print(i) } }"),
-        ("m3_while.ynz", "function main() -> nothing { let x: int = 3\nwhile (x > 0) { x = x - 1 }\nprint(x) }"),
-        ("m3_early_ret.ynz", "function sign(x: int) -> int { if (x > 0) { return 1 } return 0 }\nfunction main() -> nothing { print(sign(5)) }"),
-        ("m3_multicase.ynz", "function main() -> nothing { let v: int = 2\nif (v) { 1 => print(1)\n2 => print(2)\nelse => print(0) } }"),
-        ("m3_mutual.ynz", "function a(n: int) -> int { if (n <= 0) { return 0 } return b(n - 1) }\nfunction b(n: int) -> int { if (n <= 0) { return 0 } return a(n - 1) }\nfunction main() -> nothing { print(a(4)) }"),
+        ("m3_for.ynz", "function entrypoint() -> nothing { for (i in range(0, 3)) { print(i) } }"),
+        ("m3_while.ynz", "function entrypoint() -> nothing { let x: int = 3\nwhile (x > 0) { x = x - 1 }\nprint(x) }"),
+        ("m3_early_ret.ynz", "function sign(x: int) -> int { if (x > 0) { return 1 } return 0 }\nfunction entrypoint() -> nothing { print(sign(5)) }"),
+        ("m3_multicase.ynz", "function entrypoint() -> nothing { let v: int = 2\nif (v) { 1 => print(1)\n2 => print(2)\nelse => print(0) } }"),
+        ("m3_mutual.ynz", "function a(n: int) -> int { if (n <= 0) { return 0 } return b(n - 1) }\nfunction b(n: int) -> int { if (n <= 0) { return 0 } return a(n - 1) }\nfunction entrypoint() -> nothing { print(a(4)) }"),
     ];
     for (file, source) in &sources {
         let db = CompilerDb::default();

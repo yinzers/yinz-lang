@@ -1,4 +1,4 @@
-function main() -> nothing {
+function entrypoint() -> nothing {
   const x = 42
   x = 99
 }

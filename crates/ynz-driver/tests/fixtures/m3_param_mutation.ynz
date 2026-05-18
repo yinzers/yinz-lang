@@ -5,6 +5,6 @@ function foo(x: int) -> int {
   return x
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   print(foo(1))
 }

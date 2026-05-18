@@ -1,4 +1,4 @@
-function main() -> nothing {
+function entrypoint() -> nothing {
   let x = 5
   x += 1
   print(x)

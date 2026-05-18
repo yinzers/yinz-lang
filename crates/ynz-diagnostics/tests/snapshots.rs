@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use insta::assert_snapshot;
 use ynz_diagnostics::{render, Diagnostic, DiagnosticBucket, SourceSpan};
 
-const SOURCE: &str = "function main() -> nothing {\n    print(42)\n}\n";
+const SOURCE: &str = "function entrypoint() -> nothing {\n    print(42)\n}\n";
 const FILE: &str = "test.ynz";
 
 fn sources() -> HashMap<String, String> {

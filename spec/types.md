@@ -240,7 +240,7 @@ function takeDamage(lend self: Player, amount: number) -> nothing {
 External callers only provide visible fields when creating the value:
 
 ```ynz
-// File: main.ynz
+// File: entrypoint.ynz
 import { Player, takeDamage } from "./player"
 
 const player: Player = { name: "Alice", health: 100 }

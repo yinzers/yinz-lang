@@ -7,7 +7,7 @@
 // Each trigger has a // WHY: comment naming the diagnostic class.
 // The compiler emits up to 50 diagnostics per file (multi-error).
 
-function main() -> nothing {
+function entrypoint() -> nothing {
 
   // ── maybe<T> errors ───────────────────────────────────────────────────────
 

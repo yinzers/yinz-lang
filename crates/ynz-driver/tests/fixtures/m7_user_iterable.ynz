@@ -18,7 +18,7 @@ function next(lend self: SliceIter) -> maybe<int> {
   return result
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let iter: SliceIter = { max: 3, pos: 0 }
   for (v in iter) {
     print(v.toString())

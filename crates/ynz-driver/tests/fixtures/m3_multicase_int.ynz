@@ -7,7 +7,7 @@ function describe(x: int) -> nothing {
   }
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   describe(1)
   describe(2)
   describe(5)

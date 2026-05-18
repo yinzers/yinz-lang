@@ -353,7 +353,7 @@ fn declare_function<'ctx>(
     shape_table: &ShapeTable,
 ) -> Result<(), String> {
     let params = llvm_param_types(ctx, f, shape_table);
-    let fn_ty = if f.name == "main" {
+    let fn_ty = if f.name == "entrypoint" {
         ctx.i32_type().fn_type(&params, false)
     } else if f.errors_capable {
         // M7 P4a: errors-capable functions return `{i64 error_ptr, i64 success_val}`.
@@ -370,7 +370,9 @@ fn declare_function<'ctx>(
             _                             => ctx.ptr_type(AddressSpace::default()).fn_type(&params, false),
         }
     };
-    let fn_val = module.add_function(&f.name, fn_ty, None);
+    // `entrypoint` is the Yinz name; the C ABI entry point must be `main` for the linker.
+    let llvm_name = if f.name == "entrypoint" { "main" } else { &f.name };
+    let fn_val = module.add_function(llvm_name, fn_ty, None);
 
     // Emit LLVM ownership attributes on pointer-typed parameters.
     let readonly_kind = Attribute::get_named_enum_kind_id("readonly");
@@ -617,11 +619,12 @@ fn lower_function<'ctx, 'g>(
     mono_table: &'g MonomorphizationTable,
     options_table: &'g ynz_typeck::options_table::OptionsTable,
 ) -> Result<(), String> {
-    let fn_val = module.get_function(&f.name)
+    let llvm_name = if f.name == "entrypoint" { "main" } else { f.name.as_str() };
+    let fn_val = module.get_function(llvm_name)
         .ok_or_else(|| format!("function `{}` was not forward-declared", f.name))?;
 
     let ret_ty = ast_type_to_typeck_type(&f.return_type, shape_table);
-    let is_main = f.name == "main";
+    let is_main = f.name == "entrypoint";
     let ret_is_nothing = matches!(ret_ty, Type::Nothing);
     let is_errors_capable = f.errors_capable;
 
@@ -680,7 +683,7 @@ fn lower_function<'ctx, 'g>(
 
     // Implicit terminator if the current block has no terminator yet.
     //
-    // - main: always ret i32 0 (C ABI entry point).
+    // - entrypoint: always ret i32 0 (C ABI entry point).
     // - nothing-returning functions: ret void (legitimate fall-off-the-end).
     // - errors-capable: implicit success return of zero value (typeck ensures all
     //   paths have explicit returns, so this block should be dead code; emit a

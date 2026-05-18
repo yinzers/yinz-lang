@@ -7,7 +7,7 @@ function readConfig() -> string errors {
   return `ok`
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let result = readConfig()
   print(result.or(`fallback`))
 }

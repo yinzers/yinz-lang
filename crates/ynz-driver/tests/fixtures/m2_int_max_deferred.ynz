@@ -1,5 +1,5 @@
 // M4 P5 catch-up: type-attached constants — ships M4, was deferred from M2.
-function main() -> nothing {
+function entrypoint() -> nothing {
   print(int.max)
   print(int.min)
 }

@@ -1,4 +1,4 @@
-function main() -> nothing {
+function entrypoint() -> nothing {
   let s = `hello`
   if (s) {
     `hello` => print(`got hello`)

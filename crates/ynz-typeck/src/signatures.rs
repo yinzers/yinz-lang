@@ -89,25 +89,25 @@ pub fn collect_signatures(
                     continue;
                 }
 
-                if f.name == "main" {
+                if f.name == "entrypoint" {
                     main_checked = true;
                     if !f.params.is_empty() {
                         diags.push(Diagnostic::error(
                             f.span.clone(),
-                            "`main` must have no parameters.",
-                            "Change the declaration to `function main() -> nothing { ... }`",
-                            "`main` is the entry point. The program starts here with no arguments — use `process.args` to read command-line inputs (arriving in v0.8).",
+                            "`entrypoint` must have no parameters.",
+                            "Change the declaration to `function entrypoint() -> nothing { ... }`",
+                            "`entrypoint` is where the program starts. It takes no arguments — use `process.args` to read command-line inputs (arriving in v0.8).",
                         ));
                     }
                     if ret != Type::Nothing && ret != Type::Error {
                         diags.push(Diagnostic::error(
                             f.span.clone(),
                             format!(
-                                "`main` must return `nothing`, but this declares it returns `{}`.",
+                                "`entrypoint` must return `nothing`, but this declares it returns `{}`.",
                                 crate::types::type_name(&ret)
                             ),
-                            "Change the return type to `nothing`: `function main() -> nothing`",
-                            "`main` is the program entry point. It runs and exits — it does not return a value to a caller.",
+                            "Change the return type to `nothing`: `function entrypoint() -> nothing`",
+                            "`entrypoint` is where the program starts. It runs and exits — it does not return a value to a caller.",
                         ));
                     }
                 }
@@ -120,12 +120,12 @@ pub fn collect_signatures(
         }
     }
 
-    if !main_checked && !table.fns.contains_key("main") {
+    if !main_checked && !table.fns.contains_key("entrypoint") {
         diags.push(Diagnostic::error(
             module.span.clone(),
-            "This file has no `main` function.",
-            "Add a main function:\n  function main() -> nothing {\n    ...\n  }",
-            "Every Yinz program needs a `main` function — that is where execution starts.",
+            "This file has no `entrypoint` function.",
+            "Add an entrypoint function:\n  function entrypoint() -> nothing {\n    ...\n  }",
+            "Every Yinz program needs an `entrypoint` function — that is where execution starts.",
         ));
     }
 

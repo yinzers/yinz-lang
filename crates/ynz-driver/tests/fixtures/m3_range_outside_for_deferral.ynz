@@ -1,6 +1,6 @@
 // CATCH-UP M7: Range as a first-class value (assignable, passable, returnable)
 // arrives in milestone 7 with the full Iterable[T] protocol.
-function main() -> nothing {
+function entrypoint() -> nothing {
   let r = range(0, 5)
   print(`done`)
 }

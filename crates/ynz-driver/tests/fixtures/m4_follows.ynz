@@ -12,7 +12,7 @@ function display(share self: Point) -> nothing {
   print(self.y)
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let p: Point = { x: 3, y: 4 }
   p.display()
 }

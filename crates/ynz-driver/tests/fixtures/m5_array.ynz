@@ -1,4 +1,4 @@
-function main() -> nothing {
+function entrypoint() -> nothing {
   let arr: array<int> = [1, 2, 3]
   arr.add(4)
   print(arr.count())

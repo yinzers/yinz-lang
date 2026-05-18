@@ -101,7 +101,7 @@ Error messages that might contain sensitive data are auto-redacted:
 ## Development flag
 
 ```
-ynz run main.ynz --reveal-sensitive    // shows all sensitive values in output
+ynz run entrypoint.ynz --reveal-sensitive    // shows all sensitive values in output
 ```
 
 This flag is stripped from release builds. `ynz build --release` makes it unavailable, preventing accidental exposure in production.

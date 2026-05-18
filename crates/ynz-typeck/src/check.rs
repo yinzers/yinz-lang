@@ -3084,7 +3084,7 @@ mod tests {
         // The test uses a test-only intrinsic to avoid needing full M2 types.
         let module = Module {
             items: vec![Item::Function(FunctionDecl {
-                name: "main".into(),
+                name: "entrypoint".into(),
                 generics: vec![],
                 params: vec![],
                 return_type: AstType::Nothing,

@@ -1,7 +1,7 @@
-// examples/basics/src/main.ynz
+// examples/basics/src/entrypoint.ynz
 //
 // The Yinz v0.1 Language Showcase — grows milestone-by-milestone.
-// Compile + run with: ./target/debug/ynz run examples/basics/src/main.ynz
+// Compile + run with: ./target/debug/ynz run examples/basics/src/entrypoint.ynz
 //
 // See examples/basics/README.md for what each section demonstrates.
 //
@@ -9,7 +9,7 @@
 // M4+ sections are added by each milestone's phases per
 // .claude/rules/plan-invariants.md `### Demo & Error Gallery` requirement.
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   // ────── M1: hello-world end-to-end ──────
   print(`Yinz v0.1 language showcase`)
   print(`===========================`)

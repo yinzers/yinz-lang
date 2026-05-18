@@ -14,7 +14,7 @@ A `yinz.toml` file in your project root defines metadata, dependencies, and buil
 [project]
 name = "my-app"
 version = "1.0.0"
-entry = "main.ynz"
+entry = "entrypoint.ynz"
 
 [build]
 target = "native"           # native, wasm
@@ -84,7 +84,7 @@ setLogLevel(logLevel)
 Runtime behavior is configured in code, in your `main()` function, using `set` functions. Type `set` in autocomplete to see all available options.
 
 ```
-function main() -> nothing {
+function entrypoint() -> nothing {
   setShutdownTimeout(duration.minutes(5))
   setShutdownHandler(signal => { ... })
   setErrorHandler(e => { ... })
@@ -98,7 +98,7 @@ function main() -> nothing {
 **Why code and not a config file?** Runtime settings often depend on the environment, command-line arguments, or other conditions. Code handles this naturally:
 
 ```
-function main() -> nothing {
+function entrypoint() -> nothing {
   let env = env.get("ENV").or("development")
 
   if (env == "production") {
@@ -121,13 +121,13 @@ A static config file can't branch. Code can.
 
 ```
 // Web server — graceful shutdown, more threads
-function main() -> nothing {
+function entrypoint() -> nothing {
   setShutdownTimeout(duration.seconds(30))
   setThreadPoolSize(16)
 }
 
 // Game — fast shutdown but save first
-function main() -> nothing {
+function entrypoint() -> nothing {
   setShutdownTimeout(duration.seconds(5))
   setShutdownHandler(signal => {
     wait saveGameState()
@@ -136,7 +136,7 @@ function main() -> nothing {
 }
 
 // Long-running simulation — give it time to checkpoint
-function main() -> nothing {
+function entrypoint() -> nothing {
   setShutdownTimeout(duration.minutes(10))
   setShutdownHandler(signal => {
     log("Checkpointing simulation...")
@@ -145,7 +145,7 @@ function main() -> nothing {
 }
 
 // Quick CLI script — no graceful shutdown needed
-function main() -> nothing {
+function entrypoint() -> nothing {
   setShutdownTimeout(duration.seconds(0))
 }
 ```

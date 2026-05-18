@@ -122,7 +122,7 @@ function process() -> string errors {
   return content
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let r = process()
   let msg = r.or(`default`)
   print(msg)
@@ -142,7 +142,7 @@ function readFile() -> string errors {
   return `hello`
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let content = readFile()
   print(content)
 }
@@ -161,7 +161,7 @@ function readFile() -> string errors {
   return `ok`
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let r = readFile()
   if (r.failed()) {
     print(`failed`)
@@ -182,7 +182,7 @@ function readFile() -> string errors {
   return `hello`
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let r = readFile()
   let content = r.or(`default`)
   print(content)
@@ -202,7 +202,7 @@ function readFile() -> string errors {
   return `hello`
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let r = readFile()
   if (r.failed()) {
     print(r.message)
@@ -222,7 +222,7 @@ function readFile() -> string errors {
   return `hello`
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let r = readFile()
   if (r.failed()) {
     let hints = r.suggestions
@@ -253,7 +253,7 @@ function process() -> nothing errors {
   processContent(content)
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let r = process()
   if (r.failed()) {
     print(`process failed`)
@@ -278,7 +278,7 @@ function process() -> string errors {
   return msg
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let r = process()
   print(r.or(`failed`))
 }
@@ -297,7 +297,7 @@ function readFile() -> string errors {
   return `content`
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let content = readFile().or(`default`)
   print(content)
 }
@@ -316,7 +316,7 @@ function readFile() -> string errors {
   return `content`
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let r = readFile()
   if (r.failed()) {
     print(`error`)
@@ -337,7 +337,7 @@ function readFile() -> string errors {
   return `ok`
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let r = readFile()
   let x = r.nonExistentMethod()
 }
@@ -357,7 +357,7 @@ function divide(share a: int, share b: int) -> int errors {
   return a
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let r = divide(10, 2)
   let n = r.or(0)
   print(n.toString())
@@ -377,7 +377,7 @@ function writeFile() -> nothing errors {
   print(`written`)
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let r = writeFile()
   if (r.failed()) {
     print(`write failed`)
@@ -397,7 +397,7 @@ function tryParse(share s: string) -> int errors {
   return 42
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let n: int = tryParse(`42`).or(0)
   print(n.toString())
 }
@@ -415,7 +415,7 @@ function checkFile() -> bool errors {
   return true
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let ok = checkFile().or(false)
   print(ok.toString())
 }
@@ -444,7 +444,7 @@ function process() -> string errors {
   return content
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let r = process()
   print(r.or(`failed`))
 }
@@ -467,7 +467,7 @@ function tryGet() -> int errors {
   return 99
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let n = tryGet().or(0)
   print(n.toString())
 }
@@ -485,7 +485,7 @@ function readFile() -> string errors {
   return `ok`
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   print(readFile().or(`default`))
 }
 "#);
@@ -514,7 +514,7 @@ function pipeline() -> nothing errors {
   print(b.toString())
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let r = pipeline()
   if (r.failed()) {
     print(`pipeline failed`)
@@ -559,7 +559,7 @@ function readFile() -> string errors {
   return `ok`
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let r = readFile()
   if (r.failed()) {
     print(r.message)
@@ -579,7 +579,7 @@ function fetchName() -> string errors {
   return `Alice`
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let name = fetchName().or(`unknown`)
   print(name)
 }
@@ -607,7 +607,7 @@ function pipeline() -> string errors {
   return processed
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let r = pipeline()
   print(r.or(`err`))
 }
@@ -628,7 +628,7 @@ function readFile() -> string errors {
   return `content`
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let r = readFile()
   if (r.failed()) {
     print(`error handling`)
@@ -666,7 +666,7 @@ function readFile() -> string errors {
   return `ok`
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let content = readFile()
   print(content)
 }

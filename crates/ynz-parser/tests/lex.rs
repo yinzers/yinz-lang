@@ -183,7 +183,7 @@ fn m1_source_produces_expected_tokens() {
     //
     // test-ratchet: M7 P1 migrates source to backtick syntax — double-quotes now
     // produce an error diagnostic so the snapshot must use backtick strings.
-    let source = "function main() -> nothing { print(`hello, yinz`) }";
+    let source = "function entrypoint() -> nothing { print(`hello, yinz`) }";
     let tokens = lex_tokens(source);
     assert_debug_snapshot!("m1_token_stream", tokens);
 }
@@ -193,7 +193,7 @@ fn m1_source_produces_expected_tokens() {
 fn m2_source_produces_expected_tokens() {
     // WHY: This is the exact token stream Phase 3 (parser) depends on for the
     // M2 smoke test. A silent change here means the parser's expectations break.
-    let source = r#"function main() -> nothing {
+    let source = r#"function entrypoint() -> nothing {
   let price = 0.1 + 0.2
   let count: int = 42
   let active = true
@@ -526,7 +526,7 @@ fn token_spans_reconstruct_lexemes() {
     // test-ratchet: M7 P1 changes the source to use backtick strings (double-quotes
     // now produce an error diagnostic). New Token variants are added to the exhaustive
     // match so the test remains a full-coverage span check.
-    let source = r#"function main() -> nothing { print(`hello`) }"#;
+    let source = r#"function entrypoint() -> nothing { print(`hello`) }"#;
     let db = CompilerDb::default();
     let sf = SourceFile::new(&db, FILE.to_string(), source.to_string());
     let output = lex_query(&db, sf);
@@ -662,7 +662,7 @@ fn whitespace_only_source_produces_only_eof() {
 fn unknown_char_produces_diagnostic_and_continues() {
     // WHY: The lexer must not bail on the first unknown character. A broken
     // file should show all its errors at once, not just the first.
-    let source = r#"function main() -> nothing { print($) }"#;
+    let source = r#"function entrypoint() -> nothing { print($) }"#;
     let (token_count, diag_count) = lex_counts(source);
     assert_eq!(diag_count, 1, "Expected exactly 1 diagnostic for the unknown '$'");
     assert!(
@@ -675,7 +675,7 @@ fn unknown_char_produces_diagnostic_and_continues() {
 fn unterminated_string_produces_diagnostic_and_continues() {
     // WHY: Parser must not panic on unterminated strings — it needs a
     // complete token stream to detect all parse errors at once.
-    let source = r#"function main() -> nothing { print("oops) }"#;
+    let source = r#"function entrypoint() -> nothing { print("oops) }"#;
     let (token_count, diag_count) = lex_counts(source);
     assert_eq!(
         diag_count, 1,
@@ -695,7 +695,7 @@ fn non_ascii_bytes_inside_string_lex_clean() {
     // test-ratchet: M7 P1 — migrated from double-quoted to backtick syntax.
     // Double-quotes now produce a diagnostic; backtick strings carry raw bytes.
     // The token is now BacktickString instead of StringLit.
-    let source = "function main() -> nothing { print(`café`) }";
+    let source = "function entrypoint() -> nothing { print(`café`) }";
     let (token_count, diag_count) = lex_counts(source);
     assert_eq!(diag_count, 0, "Non-ASCII in a backtick string literal must not produce a diagnostic");
 
@@ -1086,7 +1086,7 @@ fn m3_source_produces_expected_tokens() {
     // immediately visible. The source exercises all seven new token kinds.
     //
     // test-ratchet: M7 P1 migrates source to backtick syntax.
-    let source = "function fib(n: int) -> int {\n  if (n < 2) {\n    return n\n  }\n  return fib(n - 1) + fib(n - 2)\n}\n\nfunction main() -> nothing {\n  let result = fib(10)\n  while (result > 0) {\n    result = result - 1\n  }\n  for (i in range(0, 5)) {\n    if (i) {\n      0 => print(`zero`)\n      else => print(`nonzero`)\n    }\n  }\n}";
+    let source = "function fib(n: int) -> int {\n  if (n < 2) {\n    return n\n  }\n  return fib(n - 1) + fib(n - 2)\n}\n\nfunction entrypoint() -> nothing {\n  let result = fib(10)\n  while (result > 0) {\n    result = result - 1\n  }\n  for (i in range(0, 5)) {\n    if (i) {\n      0 => print(`zero`)\n      else => print(`nonzero`)\n    }\n  }\n}";
     let tokens = lex_tokens(source);
     assert_debug_snapshot!("m3_token_stream", tokens);
 }
@@ -1100,7 +1100,7 @@ fn changing_source_text_invalidates_cache() {
     let sf = SourceFile::new(
         &db,
         FILE.to_string(),
-        "function main() -> nothing { }".to_string(),
+        "function entrypoint() -> nothing { }".to_string(),
     );
 
     let output1 = lex_query(&db, sf);
@@ -1108,7 +1108,7 @@ fn changing_source_text_invalidates_cache() {
 
     // test-ratchet: M7 P1 — migrated to backtick syntax
     sf.set_text(&mut db)
-        .to("function main() -> nothing { print(`hello`) }".to_string());
+        .to("function entrypoint() -> nothing { print(`hello`) }".to_string());
 
     let output2 = lex_query(&db, sf);
     let token_count_2 = output2.tokens.len();

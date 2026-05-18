@@ -1,4 +1,4 @@
-function main() -> nothing {
+function entrypoint() -> nothing {
   let price = 0.1 + 0.2
   let count: int = 42
   let active = true

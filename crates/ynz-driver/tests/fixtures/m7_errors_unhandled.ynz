@@ -12,6 +12,6 @@ function badCaller() -> nothing {
   print(cfg)
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   badCaller()
 }

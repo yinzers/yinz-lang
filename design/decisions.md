@@ -31,7 +31,7 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Flow-sensitive narrowing | `design/narrowing.md` | Full rules table for `.value` and `is` narrowing: positive/negative forms, `&&` propagation, `\|\|` non-propagation (locked diagnostic text), early-return narrowing (recognized-exit set), reassignment invalidation, lend-call invalidation, closure non-propagation, v0.2 LSP hint obligations |
 | Control flow | `design/control-flow.md` | No standalone `else`, multi-case `if`, exhaustiveness, jump table optimization |
 | Scope | `design/scope.md` | Block scoping, no mutable globals, const expressions, export for sharing |
-| Main entry | `design/main-entry.md` | `function main()`, file from yinz.toml, args from stdlib, errors to default handler |
+| Main entry | `design/main-entry.md` | `function entrypoint()`, file from yinz.toml, args from stdlib, errors to default handler |
 | Doc comments | `design/doc-comments.md` | `///` only, no block docs, exported items only, field documentation |
 | Testing | `design/testing.md` | Built-in `test` keyword, setup/teardown (file+per-test), single-level groups, `assertFails`/`assertPanics`, file-level parallelism |
 | Packages | `design/packages.md` | `ynz add/remove/update`, lock file, yinz_modules, tree shaking |

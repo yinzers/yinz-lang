@@ -1,6 +1,6 @@
 // M6 P5 catch-up: string.toFloat() fallible conversion.
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   // Basic float — check existence
   let a: maybe<float> = `1.5`.toFloat()
   print(a.exists().toString())

@@ -72,7 +72,7 @@ For PANICS: **task isolation via `background`** + **supervisor pattern** + **aut
 ### Task isolation
 
 ```ynz
-function main() -> nothing {
+function entrypoint() -> nothing {
   while (true) {
     let order = getNextOrder()
     background processOrder(order)  // each order runs in its own task

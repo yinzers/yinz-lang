@@ -3,7 +3,7 @@
 // string via .toString(), and embed correctly. If the string builder codegen drops
 // an expression or the arithmetic is not evaluated before interpolation, output differs.
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   let a = 10
   let b = 5
   let sum_msg = `${a} + ${b} = ${a + b}`

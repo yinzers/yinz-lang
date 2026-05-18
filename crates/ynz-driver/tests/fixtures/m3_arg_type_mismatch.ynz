@@ -2,6 +2,6 @@ function greet(name: string) -> nothing {
   print(name)
 }
 
-function main() -> nothing {
+function entrypoint() -> nothing {
   greet(42)
 }

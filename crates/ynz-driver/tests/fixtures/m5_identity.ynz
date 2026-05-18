@@ -1,4 +1,4 @@
 function identity<T>(give value: T) -> T { return value }
-function main() -> nothing {
+function entrypoint() -> nothing {
   print(identity(42))
 }
