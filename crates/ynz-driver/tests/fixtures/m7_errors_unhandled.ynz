@@ -1,0 +1,17 @@
+// WHY: calling an errors-capable function inside a non-errors context without
+// handling the result must produce a compile error. The failure is neither
+// propagated (no `errors` on caller), nor handled via `.or()` or `.failed()`.
+// Tests the "unhandled errors call" diagnostic from M7 P3a safety invariant.
+
+function readConfig() -> string errors {
+  return `config data`
+}
+
+function badCaller() -> nothing {
+  let cfg = readConfig()
+  print(cfg)
+}
+
+function main() -> nothing {
+  badCaller()
+}

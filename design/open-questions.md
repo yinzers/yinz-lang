@@ -66,9 +66,27 @@ Yinz's `follows` constraints are simpler — no blanket impls, no `impl<T: Bound
 
 ## Workspace / Multi-Package Projects (v0.5+)
 
+### Proposed model (discussed 2026-05-18 — to be formally decided at v0.5 planning)
+
+Root-relative imports + tree shaking make most of the TypeScript monorepo machinery unnecessary. The proposed model:
+
+- **Single `yinz.toml` at the project root** — one place for all dependencies. Tree shaking ensures each binary only contains what its entrypoint actually uses; dep listing all services' deps together doesn't inflate any individual binary.
+- **`[entries]` table for named entrypoints**:
+  ```toml
+  [entries]
+  users   = "services/users/entrypoint.ynz"
+  orders  = "services/orders/entrypoint.ynz"
+  gateway = "services/gateway/entrypoint.ynz"
+  ```
+- **CLI entry override**: `ynz build users` or `ynz build services/users/entrypoint.ynz` — building one service doesn't require a per-service toml.
+- **Shared code is just a folder**: `shared/`, `lib/`, or any name. Imported root-relatively from any service. No barrel files, no path mapping, no package.json workspace:* dance.
+- **Service-level dep override for the rare conflict case**: when two services genuinely need different versions of the same third-party dep, an `[entries.users.dependencies]` override table (or similar) resolves it without splitting into separate toml files.
+
+### Cargo feature-unification problem
+
 When workspace support is designed, the Cargo feature unification problem must be addressed explicitly: in Cargo, when multiple workspace members share a dependency, Cargo unifies all enabled features into one build — so a feature enabled by any member is enabled for all of them, even members that shouldn't have it. This causes unwanted build dependencies (e.g., needing cmake on machines building only a subset of the workspace) and binary size inflation.
 
-The Yinz workspace design must decide upfront: does feature resolution scope per-member or does it unify? Per-member is more correct; unified is simpler to implement. Don't default to unified without consciously choosing it.
+The single-root-toml model above sidesteps this if Yinz has no feature-flag system (v0.1 does not). If feature flags are ever added, feature resolution must scope per-entrypoint, not unify across all entries. Don't default to unified without consciously choosing it.
 
 ---
 

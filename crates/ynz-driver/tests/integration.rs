@@ -949,3 +949,70 @@ fn m7_user_shape_iterable_via_next_function() {
     assert_eq!(code, 0, "m7_user_iterable must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "10\n20\n30\n");
 }
+
+
+// ── M7 P5: adversarial fixtures ────────────────────────────────────────────────
+
+#[test]
+fn m7_errors_unhandled_is_compile_error() {
+    // WHY: M7 P5 adversarial fixture. Calling an errors-capable function in a
+    // non-errors context without .or() / .failed() / errors propagation MUST be
+    // rejected at compile time. If the compiler accepts this, unhandled failures
+    // silently pass through — the errors keyword provides no safety. Exit code 1
+    // and a non-empty stderr prove the diagnostic fires.
+    let out = run_ynz(&["build", fixture("m7_errors_unhandled.ynz").to_str().unwrap()]);
+    assert!(
+        !out.status.success(),
+        "m7_errors_unhandled must fail to compile (exit != 0)"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.is_empty(),
+        "m7_errors_unhandled must produce a diagnostic on stderr"
+    );
+}
+
+#[test]
+fn m7_errors_nested_propagation_three_levels() {
+    // WHY: M7 P5 adversarial fixture. Three-level auto-propagation chain:
+    // level3() -> level2() -> level1(), main catches with .or(0).
+    // If any level's {error_ptr, success_val} struct is mis-wired, the value
+    // leaks or the error tag is corrupted, producing 0 (fallback) instead of 42.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_errors_nested_propagation.ynz"));
+    assert_eq!(code, 0, "m7_errors_nested_propagation must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "42\n");
+}
+
+#[test]
+fn m7_string_empty_operations() {
+    // WHY: M7 P5 adversarial fixture. Empty string boundary conditions:
+    // count() must return 0; contains() must return false; startsWith/endsWith
+    // empty string must return true (a string always starts and ends with "").
+    // Off-by-one errors in the string runtime are most visible at zero length.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_string_empty.ynz"));
+    assert_eq!(code, 0, "m7_string_empty must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "0\nfalse\ntrue\ntrue\n");
+}
+
+#[test]
+fn m7_string_oob_returns_none() {
+    // WHY: M7 P5 adversarial fixture. Out-of-bounds .get() on a string must
+    // return none (not panic, not segfault, not garbage). Tests both far-OOB
+    // (index 100 on a 5-char string) and exactly-at-end (index 5 on "hello").
+    // In-bounds index 0 must return the first code point "h".
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_string_oob.ynz"));
+    assert_eq!(code, 0, "m7_string_oob must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "none\nnone\nh\n");
+}
+
+#[test]
+fn m7_interpolation_nested_expressions() {
+    // WHY: M7 P5 adversarial fixture. String interpolation with arithmetic
+    // expressions inside ${...} must evaluate the sub-expression first, convert
+    // to string, and embed correctly. Tests sum (10+5=15), product (10*5=50),
+    // and a prefix/suffix pattern. If the builder codegen evaluates expressions
+    // eagerly or the order is wrong, output differs.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_interpolation_nested.ynz"));
+    assert_eq!(code, 0, "m7_interpolation_nested must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "10 + 5 = 15\n10 * 5 = 50\nprefix_10_suffix\n");
+}

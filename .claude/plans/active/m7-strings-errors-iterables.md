@@ -1198,20 +1198,22 @@ If you find yourself adding code that touches any item above, STOP and either re
 7. Update `.claude/state.md` Active Decisions with M7 ship details.
 8. Update `.claude/todos.md`: close M7-completed items; surface M8 catch-up obligations (modules, imports, doc comments, sensitive, concurrency keyword parsing, bignum reservation).
 
-**Acceptance criteria**:
-- [ ] `examples/basics/src/main.ynz` demonstrates every M7 feature
-- [ ] `examples/errors/m7_errors.ynz` triggers every M7 compile-error class
-- [ ] Both files have insta stdout/stderr snapshots
+**Acceptance criteria** (P5 status — 2026-05-18):
+- [x] `examples/basics/src/main.ynz` demonstrates every M7 feature in context (strings, errors, iterables, user-defined iterator shape)
+- [x] `examples/errors/m7_errors.ynz` created with 19 `// WHY:` triggers covering M7 compile-error classes
+- [ ] Both files have insta stdout/stderr snapshots (deferred — requires insta harness wiring in P6)
 - [ ] Patrick reviews + signs off on both files
-- [ ] Cross-feature fixtures green
+- [x] Cross-feature adversarial fixtures green (5 new fixtures added: errors_unhandled, errors_nested_propagation, string_empty, string_oob, interpolation_nested)
 - [ ] Jargon audit passes (`cargo test -p ynz-diagnostics --test jargon_audit`)
 
-**Quality gate**:
-- [ ] Every M7 method has ≥ 1 positive fixture
-- [ ] Every M7 error class has ≥ 1 negative fixture
-- [ ] No regression on M1-M6 fixtures
+**Test count at P5 completion**: 782 (up from 777 pre-P5; 5 new adversarial integration tests added)
 
-**Verification**: `cargo test --workspace`; manual review of `examples/basics/src/main.ynz` and `examples/errors/m7_errors.ynz`.
+**Quality gate**:
+- [x] Every M7 method has ≥ 1 positive fixture
+- [x] Every M7 error class has ≥ 1 negative fixture (via m7_errors.ynz gallery + m7_errors_unhandled.ynz)
+- [x] No regression on M1-M6 fixtures (cargo test --workspace passes 782/782)
+
+**Verification**: `cargo test --workspace` (782 tests, all pass); manual review of `examples/basics/src/main.ynz` and `examples/errors/m7_errors.ynz`.
 
 ---
 

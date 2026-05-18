@@ -160,6 +160,74 @@ function main() -> nothing {
   let first = firstOrDefault(nums)
   print(first.toString())
 
+  // ────── M7: strings, errors, iterables ──────
+  print(``)
+  print(`M7 — full strings, errors, iterables:`)
+
+  // String interpolation in a real message
+  const playerName2 = `Alice`
+  const playerScore = 150
+  const msg = `Player ${playerName2} scored ${playerScore} points!`
+  print(msg)
+
+  // Multi-line string with trim
+  const announcement = `
+  Welcome to the tournament!
+  Top player: ${playerName2}
+`
+  print(announcement.trim())
+
+  // String methods
+  const bio = `  Hello, World!  `
+  print(bio.trim())
+  print(`hello`.toUpperCase())
+  print(`WORLD`.toLowerCase())
+  print(`hello`.contains(`ell`).toString())
+  print(`hello`.startsWith(`hel`).toString())
+  print(`hello`.endsWith(`lo`).toString())
+  const idx = `hello world`.indexOf(`world`)
+  print(idx.or(-1).toString())
+
+  // Code point iteration — counts 4 code points in "café"
+  let charCount = 0
+  for (c in `café`) {
+    charCount = charCount + 1
+  }
+  print(charCount.toString())
+
+  // String splitting
+  const csv = `a,b,c,d`
+  const parts = csv.split(`,`)
+  print(parts.count().toString())
+
+  // errors keyword — fallible function with .or() fallback
+  const ratio = safeDivide(10, 2).or(0)
+  print(ratio.toString())
+
+  // errors with .failed() check (function always succeeds here)
+  const ok = safeDivide(10, 5)
+  if (ok.failed()) {
+    print(`safeDivide failed`)
+  }
+  print(ok.toString())
+
+  // for loop with first-class range
+  let r = range(0, 3)
+  for (i in r) {
+    print(`range item: ${i}`)
+  }
+
+  // for loop over string characters
+  for (c in `abc`) {
+    print(`char: ${c}`)
+  }
+
+  // User-defined iterable shape — Countdown counts down from N
+  let cd: Countdown = { from: 3, current: 0 }
+  for (n in cd) {
+    print(n.toString())
+  }
+
   // ────── Deferred features (v0.2+) ──────
   // arena scratch { let temp: array<int> = [...] }  // v0.2 — design/future/arena.md
   // verified { let raw = rawMemory(64) }              // v0.3+ — vocabulary.md
@@ -259,4 +327,29 @@ function firstOrDefault(share nums: array<int>) -> int {
   let r = nums.first()
   if (!r.exists()) { return -1 }
   return r.value
+}
+
+// ────── M7: strings, errors, iterables ──────
+
+// safeDivide: an errors-capable function — caller uses .or() or .failed()
+function safeDivide(a: int, b: int) -> int errors {
+  return a / b
+}
+
+// Countdown: user-defined iterable shape — walks 3, 2, 1 sequence
+shape Countdown {
+  from: int
+  hidden current: int
+}
+
+// next: standalone function satisfying the Iterable<int> protocol for Countdown.
+// Returns the next value or none when exhausted.
+function next(lend self: Countdown) -> maybe<int> {
+  if (self.current >= self.from) {
+    return none
+  }
+  let items: fixed<int> = [3, 2, 1]
+  let result = items.get(self.current)
+  self.current = self.current + 1
+  return result
 }
