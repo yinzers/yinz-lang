@@ -9,7 +9,10 @@
 *(auto-rebuilt by SessionStart hook from `.claude/plans/active/*.md` front-matter — do not edit by hand)*
 
 <!-- RADAR-START -->
-- m7-strings-errors-iterables (patrick) — 13 files touched — 12/124 done — 2026-05-18-r2
+### Active Roadmaps
+*(no active roadmaps)*
+
+### Active Workstreams
 - v0-1-compiler (patrick) — 5 files touched — 0/184 done — 2026-05-12-r4
 <!-- RADAR-END -->
 
