@@ -2868,6 +2868,14 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                 Ok(result)
             }
         }
+        // M8 P5: wait/background — sequential semantics in M8 (both are identity at codegen).
+        // `wait foo()` → lower foo() directly.
+        // `background foo()` → lower foo(), discard return value, return i32(0).
+        Expr::Wait(inner, _) => lower_expr(cg, inner),
+        Expr::Background(inner, _) => {
+            let _ = lower_expr(cg, inner)?; // run to completion, discard result
+            Ok(cg.i32().const_int(0, false).into())
+        }
     }
 }
 

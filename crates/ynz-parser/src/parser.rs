@@ -2318,6 +2318,21 @@ impl<'a> Parser<'a> {
                 inner
             }
             Token::LBracket => self.parse_array_lit(),
+            // M8 P5: `wait expr` and `background expr` concurrency keywords.
+            Token::Wait => {
+                let start = self.current_span().start;
+                self.advance(); // consume `wait`
+                let inner = self.parse_expr(0);
+                let span = SourceSpan::new(self.file, start, inner.span().end);
+                Expr::Wait(Box::new(inner), span)
+            }
+            Token::Background => {
+                let start = self.current_span().start;
+                self.advance(); // consume `background`
+                let inner = self.parse_expr(0);
+                let span = SourceSpan::new(self.file, start, inner.span().end);
+                Expr::Background(Box::new(inner), span)
+            }
             // M8 P4: `sensitive(expr)` — constructor form.
             // `sensitive` is a keyword token in type position; in expression position
             // it looks like a function call: `sensitive(`value`)`.
@@ -2970,6 +2985,73 @@ impl<'a> Parser<'a> {
     /// Parse the field list of a struct literal, including the closing `}`.
     fn parse_struct_lit_fields(&mut self) -> Vec<StructLitField> {
         let mut fields = Vec::new();
+
+        // Empty shape value.
+        if matches!(self.peek(), Token::RBrace) {
+            self.advance();
+            return fields;
+        }
+        if matches!(self.peek(), Token::Eof) {
+            self.diags.push(Diagnostic::error(
+                self.eof_span(),
+                "Missing `}` to close this shape value.",
+                "Add `}` after the last field.",
+                "Every `{` in a shape value must be matched with a `}`.",
+            ));
+            return fields;
+        }
+
+        // Parse one field (`name: value`) and push it to fields.
+        // Returns false if recovery consumed everything and we should stop.
+        macro_rules! parse_one_field {
+            () => {{
+                let (field_name, name_span) = match self.peek().clone() {
+                    Token::Identifier(n) => {
+                        let span = self.current_span();
+                        self.advance();
+                        (n, span)
+                    }
+                    _ => {
+                        self.diags.push(Diagnostic::error(
+                            self.current_span(),
+                            "Expected a field name here.",
+                            "Write `{ fieldName: value, ... }` to initialize a shape value.",
+                            "Shape values list each field by name followed by `:` and a value.",
+                        ));
+                        while !matches!(self.peek(), Token::RBrace | Token::Comma | Token::Eof) {
+                            self.advance();
+                        }
+                        continue;
+                    }
+                };
+                if self.expect(&Token::Colon).is_none() {
+                    self.diags.push(Diagnostic::error(
+                        self.current_span(),
+                        format!("Expected `:` after field name `{field_name}`."),
+                        format!("Write `{{ {field_name}: value }}`"),
+                        "The `:` separates the field name from its value in a shape value.",
+                    ));
+                    while !matches!(self.peek(), Token::RBrace | Token::Comma | Token::Eof) {
+                        self.advance();
+                    }
+                    continue;
+                }
+                let value = self.parse_expr(0);
+                fields.push(StructLitField {
+                    name: field_name,
+                    name_span,
+                    value,
+                });
+            }};
+        }
+
+        // First field — no leading comma.
+        loop {
+            parse_one_field!();
+            break;
+        }
+
+        // Subsequent fields — comma required, trailing comma allowed.
         loop {
             match self.peek() {
                 Token::RBrace => {
@@ -2987,56 +3069,37 @@ impl<'a> Parser<'a> {
                 }
                 Token::Comma => {
                     self.advance();
-                    continue;
-                }
-                _ => {}
-            }
-
-            // Parse `name: value`
-            let (field_name, name_span) = match self.peek().clone() {
-                Token::Identifier(n) => {
-                    let span = self.current_span();
-                    self.advance();
-                    (n, span)
+                    if matches!(self.peek(), Token::RBrace) {
+                        self.advance();
+                        break;
+                    } // trailing comma
+                    if matches!(self.peek(), Token::Eof) {
+                        self.diags.push(Diagnostic::error(
+                            self.eof_span(),
+                            "Missing `}` to close this shape value.",
+                            "Add `}` after the last field.",
+                            "Every `{` in a shape value must be matched with a `}`.",
+                        ));
+                        break;
+                    }
+                    loop {
+                        parse_one_field!();
+                        break;
+                    }
                 }
                 _ => {
                     self.diags.push(Diagnostic::error(
                         self.current_span(),
-                        "Expected a field name here.",
-                        "Write `{ fieldName: value, ... }` to initialize a shape value.",
-                        "Shape values list each field by name followed by `:` and a value.",
+                        "Expected `,` between shape value fields.",
+                        "Add a comma after the previous field: `{ a: 1, b: 2 }`",
+                        "Shape value fields must be separated by commas. A trailing comma after the last field is also fine.",
                     ));
-                    // Recover to `}` or `,`
-                    while !matches!(self.peek(), Token::RBrace | Token::Comma | Token::Eof) {
-                        self.advance();
+                    // Recover: try to parse this as the next field.
+                    loop {
+                        parse_one_field!();
+                        break;
                     }
-                    continue;
                 }
-            };
-
-            if self.expect(&Token::Colon).is_none() {
-                self.diags.push(Diagnostic::error(
-                    self.current_span(),
-                    format!("Expected `:` after field name `{field_name}`."),
-                    format!("Write `{{ {field_name}: value }}`"),
-                    "The `:` separates the field name from its value in a shape value.",
-                ));
-                while !matches!(self.peek(), Token::RBrace | Token::Comma | Token::Eof) {
-                    self.advance();
-                }
-                continue;
-            }
-
-            let value = self.parse_expr(0);
-            fields.push(StructLitField {
-                name: field_name,
-                name_span,
-                value,
-            });
-
-            // Optional trailing comma
-            if !matches!(self.peek(), Token::RBrace) {
-                let _ = self.expect(&Token::Comma);
             }
         }
         fields

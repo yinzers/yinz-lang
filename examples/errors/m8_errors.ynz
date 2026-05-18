@@ -44,6 +44,25 @@ function p1_pub_banned() -> nothing {
     // pub function helper() -> nothing {}
 }
 
+// ────── P5: concurrency keyword errors ──────
+
+// WHY: `background foo()` where `foo` has a `share` parameter is a compile
+// error (shared borrows may dangle when the background task outlives the caller).
+// The type system must reject this even in M8's sequential lowering.
+function p5_background_share_rejected() -> nothing {
+    // Uncomment the function + call below to trigger:
+    // function readData(share data: string) -> nothing { print(data) }
+    // function handler(data: string) -> nothing { background readData(data) }
+}
+
+// WHY: `let h = background foo()` (handle form) is rejected in M8.
+// Background handles (.send/.receive) ship in v0.3.
+function p5_background_handle_rejected() -> nothing {
+    // Uncomment to trigger "Storing the result of `background` is not yet supported":
+    // function op() -> int { return 42 }
+    // function test() -> nothing { let h = background op() }
+}
+
 // ────── P4: sensitive type errors ──────
 
 // WHY: The .reveal() method in a print context should (in future) emit a Tier 3

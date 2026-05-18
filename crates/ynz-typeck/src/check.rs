@@ -1110,6 +1110,25 @@ impl<'b> Checker<'b> {
                     Type::String
                 }
             }
+            // M8 P5: `wait expr` — same type as the inner expression (sequential semantics).
+            Expr::Wait(inner, _) => self.infer_expr(inner, hint),
+            // M8 P5: `background expr` — must be a function call; return type is Nothing
+            // (return value is discarded). Ownership rules enforced in check_stmt.
+            Expr::Background(inner, span) => {
+                let inner_ty = self.infer_expr(inner, None);
+                // background must wrap a function call — enforce this.
+                if !matches!(inner.as_ref(), Expr::Call(_) | Expr::MethodCall { .. }) {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        "`background` must be followed by a function call.",
+                        "Write `background process(data)` to call `process` in the background.",
+                        "`background` schedules a function call to run outside the current scope. \
+                         It cannot be applied to non-call expressions.",
+                    ));
+                }
+                let _ = inner_ty;
+                Type::Nothing // background discards the return value
+            }
         };
 
         self.expr_types
@@ -3530,6 +3549,8 @@ fn expr_has_error(expr: &Expr) -> bool {
             ynz_ast::nodes::StringPart::Lit(_, _) => false,
             ynz_ast::nodes::StringPart::Expr(e, _) => expr_has_error(e),
         }),
+        // M8 P5: wait/background — propagate into inner expression.
+        Expr::Wait(inner, _) | Expr::Background(inner, _) => expr_has_error(inner),
     }
 }
 

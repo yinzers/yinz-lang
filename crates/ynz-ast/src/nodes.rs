@@ -534,6 +534,22 @@ pub enum Expr {
     /// interpolated expression's type has a `.toString()` intrinsic.
     /// Full codegen lowering arrives in M7 P2.
     InterpolatedString(Vec<StringPart>, SourceSpan),
+
+    // ── M8: concurrency keywords ─────────────────────────────────────────────
+
+    // test-ratchet: M8 P5 adds Wait and Background for concurrency keyword surface.
+    /// `wait expr` — force completion of an I/O or background operation.
+    ///
+    /// M8 sequential semantics: `wait foo()` compiles identically to `foo()`.
+    /// The keyword syntax is locked so v0.3 auto-parallelization is a pure codegen change.
+    Wait(Box<Expr>, SourceSpan),
+
+    /// `background expr` — run a function call outside the current function's lifetime.
+    ///
+    /// M8 sequential semantics: `background foo()` runs `foo()` to completion,
+    /// return value is discarded. The ownership rules (no share/lend) are enforced
+    /// even in M8 so v0.3 is a codegen-only change.
+    Background(Box<Expr>, SourceSpan),
 }
 
 /// The kind of dot-postfix body operation.
@@ -574,6 +590,7 @@ impl Expr {
             | Expr::InterpolatedString(_, span) => span,
             Expr::SelfValue { span } => span,
             Expr::NoneLit { span } => span,
+            Expr::Wait(_, span) | Expr::Background(_, span) => span,
         }
     }
 
