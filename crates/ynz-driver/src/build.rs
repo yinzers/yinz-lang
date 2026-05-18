@@ -1,6 +1,6 @@
 use std::{
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
 };
 
 use ynz_codegen::codegen_query;
@@ -77,7 +77,7 @@ pub fn build(source_path: &Path) -> BuildResult {
         return build_failed(diags, source_path);
     }
 
-    // 4. Link with system `cc`, including the Yinz runtime library.
+    // 4. Link with system C compiler, including the Yinz runtime library.
     //
     // YNZ_RT_LIB_DIR and YNZ_RT_LIB_NAME are emitted by crates/ynz-driver/build.rs
     // at compile time and resolve to the target/{profile}/ directory where cargo
@@ -85,8 +85,20 @@ pub fn build(source_path: &Path) -> BuildResult {
     let rt_lib_dir = env!("YNZ_RT_LIB_DIR");
     let rt_lib_name = env!("YNZ_RT_LIB_NAME");
 
+    let Some(linker) = find_linker() else {
+        diags.push(ynz_diagnostics::Diagnostic::error(
+            SourceSpan::new(&file_name, 0, 0),
+            "No C compiler found (tried: cc, gcc, g++, clang).",
+            "Install a C toolchain: on Ubuntu: `sudo apt-get install build-essential`; \
+             on macOS: `xcode-select --install`.",
+            "`ynz build` links your program against the system C library. \
+             A C toolchain must be installed for this step.",
+        ));
+        return build_failed(diags, source_path);
+    };
+
     let binary_path = source_path.with_extension("");
-    let cc_result = Command::new("cc")
+    let cc_result = Command::new(linker)
         .arg(&obj_path)
         .arg(format!("-L{rt_lib_dir}"))
         .arg(format!("-l{rt_lib_name}"))
@@ -108,21 +120,10 @@ pub fn build(source_path: &Path) -> BuildResult {
     let _ = std::fs::remove_file(&obj_path);
 
     match cc_result {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            diags.push(ynz_diagnostics::Diagnostic::error(
-                SourceSpan::new(&file_name, 0, 0),
-                "The system linker (`cc`) was not found.",
-                "Install a C toolchain: on Ubuntu: `sudo apt-get install build-essential`; \
-                 on macOS: `xcode-select --install`.",
-                "`ynz build` links your program against the system C library. \
-                 A C toolchain must be installed for this step.",
-            ));
-            build_failed(diags, source_path)
-        }
         Err(e) => {
             diags.push(ynz_diagnostics::Diagnostic::error(
                 SourceSpan::new(&file_name, 0, 0),
-                format!("The linker (`cc`) failed to start: {e}"),
+                format!("The linker (`{linker}`) failed to start: {e}"),
                 "This is unexpected. Check your PATH and C toolchain installation.",
                 "The compiler invokes the system linker to produce the final binary.",
             ));
@@ -163,6 +164,21 @@ pub fn build(source_path: &Path) -> BuildResult {
             }
         }
     }
+}
+
+fn find_linker() -> Option<&'static str> {
+    for candidate in ["cc", "gcc", "g++", "clang"] {
+        let found = Command::new(candidate)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok();
+        if found {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 fn build_failed(diags: DiagnosticBucket, source_path: &Path) -> BuildResult {
