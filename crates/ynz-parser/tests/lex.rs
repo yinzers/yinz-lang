@@ -1411,6 +1411,35 @@ fn m7_double_quote_produces_error_diagnostic() {
 }
 
 #[test]
+fn single_quote_produces_one_error_with_recovery() {
+    // WHY: `print('hello world')` used to produce 5 cascade errors (two invalid-char
+    // errors + two undefined-name errors + a wrong-arity error) because the generic
+    // unknown-byte handler didn't consume the string content. Single quotes must get
+    // the same dedicated handler as double quotes: one diagnostic, one recovery token,
+    // zero cascade noise.
+    let (_, diag_count) = lex_counts("'hello world'");
+    assert_eq!(diag_count, 1, "Single-quoted string must produce exactly 1 diagnostic, got {diag_count}");
+
+    let diags = lex_diags("'hello world'");
+    assert!(
+        diags[0].what.contains("Single-quoted"),
+        "Diagnostic must mention single-quoted strings, got: {:?}",
+        diags[0].what
+    );
+    assert!(
+        diags[0].what_instead.contains("backtick"),
+        "Diagnostic must redirect to backtick syntax, got: {:?}",
+        diags[0].what_instead
+    );
+
+    let tokens = lex_tokens("'hello world'");
+    assert!(
+        tokens.iter().any(|t| matches!(t, Token::BacktickString(_))),
+        "Lexer must emit BacktickString recovery token after single-quote error"
+    );
+}
+
+#[test]
 fn m7_errors_keyword_lexes() {
     // WHY: `errors` is a new M7 keyword — it must produce Token::Errors, not
     // an Identifier. If it falls through to Identifier, the parser cannot

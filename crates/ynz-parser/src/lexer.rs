@@ -296,7 +296,8 @@ impl<'src> Lexer<'src> {
             }
 
 
-            b'"' => self.lex_double_quote_error(start),
+            b'"'  => self.lex_double_quote_error(start),
+            b'\'' => self.lex_single_quote_error(start),
 
             b'`' => self.lex_backtick_segment(),
 
@@ -445,6 +446,30 @@ impl<'src> Lexer<'src> {
              interpolation and span multiple lines without extra syntax.",
         ));
         // Emit an empty BacktickString so the parser sees a string token and can recover.
+        self.push_token(Token::BacktickString(vec![]), start, self.pos);
+    }
+
+    /// Single-quoted strings are not valid Yinz syntax. Mirrors lex_double_quote_error:
+    /// consumes the whole `'...'` content for recovery, emits one teaching diagnostic,
+    /// produces an empty BacktickString token so the parser sees a string and doesn't cascade.
+    fn lex_single_quote_error(&mut self, start: usize) {
+        self.pos += 1; // skip opening `'`
+        while self.pos < self.src.len()
+            && self.src[self.pos] != b'\''
+            && self.src[self.pos] != b'\n'
+        {
+            self.pos += 1;
+        }
+        if self.pos < self.src.len() && self.src[self.pos] == b'\'' {
+            self.pos += 1; // skip closing `'`
+        }
+        self.diags.push(Diagnostic::error(
+            SourceSpan::new(self.file, start, self.pos),
+            "Single-quoted strings don't exist in Yinz.",
+            "Use backtick strings instead: `` `hello world` ``",
+            "Yinz has one string form — backtick strings. \
+             They support interpolation and span multiple lines without extra syntax.",
+        ));
         self.push_token(Token::BacktickString(vec![]), start, self.pos);
     }
 
