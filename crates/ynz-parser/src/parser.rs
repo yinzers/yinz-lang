@@ -3052,10 +3052,11 @@ impl<'a> Parser<'a> {
                         "Add a comma after the previous field: `{ a: 1, b: 2 }`",
                         "Shape value fields must be separated by commas. A trailing comma after the last field is also fine.",
                     ));
-                    // Recover: try to parse this as the next field.
-                    loop {
-                        parse_one_field!();
-                        break;
+                    // Recover: skip to the next field boundary to avoid looping.
+                    // Do NOT re-invoke parse_one_field! here — the macro's `continue`
+                    // would re-enter this inner loop on EOF/boundary, hanging forever.
+                    while !matches!(self.peek(), Token::RBrace | Token::Comma | Token::Eof) {
+                        self.advance();
                     }
                 }
             }
