@@ -93,6 +93,14 @@ declare void @ynz_map_iter_get_str(ptr, i64, ptr)
 
 declare void @ynz_map_drop(ptr)
 
+declare void @ynz_string_to_int(ptr, i64, ptr)
+
+declare void @ynz_string_to_float(ptr, i64, ptr)
+
+declare void @ynz_string_to_number(ptr, i64, ptr)
+
+declare ptr @ynz_string_from_static(ptr, i64)
+
 define i32 @main() {
 entry:
   call void @ynz_siphash_init()

@@ -225,7 +225,17 @@ impl<'b> Checker<'b> {
     }
 
     fn check_stmts(&mut self, stmts: &[Stmt]) {
+        // Collect early-return narrowing facts: when an `if (!m.exists()) { return }` or
+        // `if (!m.exists()) { panic(...) }` is detected, mark `m` as non-none for all
+        // subsequent statements in this block.
+        let mut early_return_narrowed: Vec<String> = Vec::new();
+
         for stmt in stmts {
+            // Apply any early-return narrowing facts from previous `if (!x.exists()) { return }`.
+            for name in &early_return_narrowed {
+                self.maybe_non_none.insert(name.clone());
+            }
+
             match stmt {
                 Stmt::Expr(expr) => {
                     self.infer_expr(expr, None);
@@ -234,9 +244,20 @@ impl<'b> Checker<'b> {
                     self.check_let(*is_const, name, name_span, ty.as_ref(), value);
                 }
                 Stmt::Assign { target, target_span, value, span: _ } => {
+                    // Reassignment invalidates early-return narrowing for the target binding.
+                    early_return_narrowed.retain(|n| n != target);
                     self.check_assign(target, target_span, value);
                 }
                 Stmt::If { cond, body, .. } => {
+                    // Detect early-return narrowing: `if (!m.exists()) { <recognized-exit> }`.
+                    // After this if, `m` is proven to exist for the rest of the block.
+                    let negated_exists = self.extract_negated_exists_binding(cond);
+                    let body_always_exits = analyze_return_paths(body).all_paths_return;
+                    if !negated_exists.is_empty() && body_always_exits {
+                        for name in &negated_exists {
+                            early_return_narrowed.push(name.clone());
+                        }
+                    }
                     self.check_stmt_if(cond, body);
                 }
                 Stmt::Match { scrutinee, arms, else_arm, .. } => {
@@ -258,6 +279,10 @@ impl<'b> Checker<'b> {
                     self.check_index_assign(receiver, index, value, span);
                 }
             }
+        }
+        // Clean up early-return narrowing facts when leaving the block.
+        for name in &early_return_narrowed {
+            self.maybe_non_none.remove(name.as_str());
         }
     }
 
@@ -444,6 +469,17 @@ impl<'b> Checker<'b> {
                     return vec![name.clone()];
                 }
             }
+        }
+        Vec::new()
+    }
+
+    /// Extract the binding name from a NEGATED `.exists()` condition for early-return narrowing.
+    ///
+    /// Matches `!m.exists()` → `vec!["m"]` — after this if-block always returns,
+    /// `m` is non-none for the rest of the enclosing block.
+    fn extract_negated_exists_binding(&self, cond: &Expr) -> Vec<String> {
+        if let Expr::UnaryOp { op: ynz_ast::nodes::UnaryOpKind::Not, operand, .. } = cond {
+            return self.extract_exists_binding(operand);
         }
         Vec::new()
     }

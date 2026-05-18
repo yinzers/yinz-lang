@@ -255,7 +255,7 @@ function classifyAccount(account: AccountResult) -> string {
   return "UNKNOWN"
 }
 
-function firstOrDefault(nums: share array<int>) -> int {
+function firstOrDefault(share nums: array<int>) -> int {
   let r = nums.first()
   if (!r.exists()) { return -1 }
   return r.value
