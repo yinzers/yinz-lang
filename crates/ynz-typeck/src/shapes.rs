@@ -60,6 +60,9 @@ pub struct ShapeTable {
     /// M6: union type aliases from `shape Shape = Circle | Square` declarations.
     /// Keyed by alias name; value is the resolved union type.
     pub union_aliases: HashMap<String, Type>,
+    /// Options type names from this module — allows field type resolution to
+    /// produce Type::Options for `options Foo { ... }` types used in shape fields.
+    pub options_names: HashSet<String>,
 }
 
 impl ShapeTable {
@@ -67,6 +70,7 @@ impl ShapeTable {
         Self {
             shapes: HashMap::new(),
             union_aliases: HashMap::new(),
+            options_names: HashSet::new(),
         }
     }
 
@@ -103,6 +107,10 @@ impl ShapeTable {
                 element: Box::new(Type::Int),
                 end_inclusive: false,
             },
+            // Options types declared in this module resolve to Type::Options.
+            AstType::Named(n, _) if self.options_names.contains(n) => {
+                Type::Options { name: n.clone() }
+            }
             AstType::Error | AstType::Named(_, _) | AstType::Range { .. } => Type::Error,
             // AnonShape is hoisted to a named shape before resolve_ast_type runs;
             // if we ever encounter it here, the parent/field context is unavailable.
@@ -207,6 +215,12 @@ impl ShapeTable {
 pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTable {
     let mut table = ShapeTable::empty();
 
+    // Pre-pass: collect options type names so field type resolution can recognize
+    // `options Foo { ... }` types used in shape field annotations.
+    table.options_names = module.items.iter().filter_map(|i| {
+        if let Item::OptionsDecl(o) = i { Some(o.name.clone()) } else { None }
+    }).collect();
+
     // Pre-pass: hoist AnonShape field types to named ShapeDecls so all subsequent
     // passes see only Named types. Synthetic name format: `__anon_ParentName_fieldName`.
     let mut synthetic_items: Vec<ynz_ast::nodes::ShapeDecl> = Vec::new();
@@ -271,6 +285,7 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
             })
             .collect(),
         union_aliases: HashMap::new(),
+        options_names: table.options_names.clone(),
     };
 
     // Pass 2: resolve each shape's own fields, contract sigs, extends, and follows.
@@ -690,7 +705,8 @@ fn emit_unknown_field_type_diag(
                 | "SourceLoc"
         ) || name_table.contains(n)
             || name_table.union_aliases.contains_key(n)
-            || type_params.contains(&n) // type params are not unknown
+            || name_table.options_names.contains(n)
+            || type_params.contains(&n)
     };
 
     match ast_ty {
