@@ -977,6 +977,230 @@ fn is_valid_number_str(bytes: &[u8]) -> bool {
     is_valid_float_digits(bytes)
 }
 
+
+// ── M7 P4a: errors runtime — YnzError, YnzFrame, frame stack ─────────────────
+//
+// Error struct carries a message and a snapshot of the call-chain at the moment
+// ynz_error_new was called.  The frame stack is thread-local; each errors-capable
+// function pushes a frame on entry and pops on exit (normal or early-return).
+//
+// ABI contract (locked M7 P4a):
+//   - ynz_error_new: caller owns the message pointer (usually a static string
+//     from IR). The runtime copies the frame stack snapshot but NOT the message
+//     bytes — the message must outlive the error (static string literals do).
+//   - ynz_error_drop: frees the frame snapshot. Does NOT free the message.
+//   - ynz_frame_push / ynz_frame_pop: thread-local stack; capped at 1024.
+
+/// C-ABI representation of a single call-chain frame.
+#[repr(C)]
+pub struct YnzFrame {
+    pub file: *const u8,
+    /// Source line, or -1 when not available.
+    pub line: i64,
+    pub function: *const u8,
+}
+
+/// C-ABI representation of a runtime error.
+///
+/// Layout fields 0–1 are for suggestions (not yet populated in M7 P4a —
+/// null pointer + 0 length). Fields 2–3 are the trace snapshot.
+#[repr(C)]
+pub struct YnzError {
+    /// Null-terminated UTF-8 message string. NOT owned by this struct.
+    pub message: *const u8,
+    /// Reserved: suggestion strings. Always null / 0 in M7 P4a.
+    pub suggestions_ptr: *const *const u8,
+    pub suggestions_len: i64,
+    /// Heap-allocated copy of the frame stack at ynz_error_new time.
+    pub trace_ptr: *mut YnzFrame,
+    pub trace_len: i64,
+    pub source_file: *const u8,
+    /// -1 when no source location is available.
+    pub source_line: i64,
+}
+
+const FRAME_STACK_LIMIT: usize = 1024;
+
+thread_local! {
+    static FRAME_STACK: std::cell::RefCell<Vec<(*const u8, i64, *const u8)>> =
+        std::cell::RefCell::new(Vec::with_capacity(64));
+}
+
+/// Push a frame onto the thread-local call-chain stack.
+///
+/// `file` and `function` must be valid null-terminated C strings for the duration
+/// of the call. In practice they are static string literals from the compiled IR.
+///
+/// Frames beyond the 1024-entry limit are silently dropped (truncation, not abort).
+///
+/// # Safety
+/// `file` and `function` must be valid pointers to null-terminated byte strings.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_frame_push(file: *const u8, line: i64, function: *const u8) {
+    FRAME_STACK.with(|stack| {
+        let mut s = stack.borrow_mut();
+        if s.len() < FRAME_STACK_LIMIT {
+            s.push((file, line, function));
+        }
+    });
+}
+
+/// Pop the most recent frame from the thread-local call-chain stack.
+///
+/// No-op when the stack is already empty.
+#[no_mangle]
+pub extern "C" fn ynz_frame_pop() {
+    FRAME_STACK.with(|stack| {
+        stack.borrow_mut().pop();
+    });
+}
+
+/// Allocate a new `YnzError` with the given message.
+///
+/// The current thread-local frame stack is snapshotted into the error's trace
+/// buffer. The message pointer is stored as-is (not copied) — it MUST be a
+/// static string literal (which all IR-generated error messages are).
+///
+/// # Safety
+/// `message` must be a valid pointer to a null-terminated byte string.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_error_new(message: *const u8) -> *mut YnzError {
+    let err = malloc(std::mem::size_of::<YnzError>()) as *mut YnzError;
+    if err.is_null() { std::process::abort(); }
+
+    // Snapshot the frame stack.
+    let (trace_ptr, trace_len) = FRAME_STACK.with(|stack| {
+        let s = stack.borrow();
+        let len = s.len();
+        if len == 0 {
+            return (std::ptr::null_mut::<YnzFrame>(), 0i64);
+        }
+        let frames_mem = malloc(len * std::mem::size_of::<YnzFrame>()) as *mut YnzFrame;
+        if frames_mem.is_null() { std::process::abort(); }
+        for (i, &(file, line, function)) in s.iter().enumerate() {
+            *frames_mem.add(i) = YnzFrame { file, line, function };
+        }
+        (frames_mem, len as i64)
+    });
+
+    *err = YnzError {
+        message,
+        suggestions_ptr: std::ptr::null(),
+        suggestions_len: 0,
+        trace_ptr,
+        trace_len,
+        source_file: std::ptr::null(),
+        source_line: -1,
+    };
+    err
+}
+
+/// Free an error and its trace snapshot.
+///
+/// Does NOT free the `message` pointer (it is static; owned by the IR).
+///
+/// # Safety
+/// `err` must be a valid non-null pointer returned by `ynz_error_new` and not
+/// yet freed.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_error_drop(err: *mut YnzError) {
+    if err.is_null() { return; }
+    if !(*err).trace_ptr.is_null() {
+        free((*err).trace_ptr as *mut core::ffi::c_void);
+    }
+    free(err as *mut core::ffi::c_void);
+}
+
+/// Return the message pointer from an error.
+///
+/// # Safety
+/// `err` must be a valid non-null pointer returned by `ynz_error_new`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_error_message(err: *const YnzError) -> *const u8 {
+    (*err).message
+}
+
+/// Return the number of frames in the error's trace.
+///
+/// # Safety
+/// `err` must be a valid non-null pointer returned by `ynz_error_new`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_error_trace_len(err: *const YnzError) -> i64 {
+    (*err).trace_len
+}
+
+/// Return a pointer to the frame at `idx` in the error's trace.
+///
+/// Returns null if `idx` is out of range.
+///
+/// # Safety
+/// `err` must be a valid non-null pointer returned by `ynz_error_new`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_error_trace_frame(err: *const YnzError, idx: i64) -> *const YnzFrame {
+    if idx < 0 || idx >= (*err).trace_len { return std::ptr::null(); }
+    (*err).trace_ptr.add(idx as usize) as *const YnzFrame
+}
+
+/// Return the file pointer from a frame.
+///
+/// # Safety
+/// `frame` must be a valid non-null pointer returned by `ynz_error_trace_frame`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_frame_file(frame: *const YnzFrame) -> *const u8 {
+    (*frame).file
+}
+
+/// Return the source line from a frame (-1 when not available).
+///
+/// # Safety
+/// `frame` must be a valid non-null pointer returned by `ynz_error_trace_frame`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_frame_line(frame: *const YnzFrame) -> i64 {
+    (*frame).line
+}
+
+/// Return the function name pointer from a frame.
+///
+/// # Safety
+/// `frame` must be a valid non-null pointer returned by `ynz_error_trace_frame`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_frame_function(frame: *const YnzFrame) -> *const u8 {
+    (*frame).function
+}
+
+/// Called when an errors-capable error propagates out of `main()` without being
+/// handled.  Prints the error message and trace to stderr then exits with code 1.
+///
+/// # Safety
+/// `err` must be a valid non-null pointer returned by `ynz_error_new`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_unhandled_error(err: *const YnzError) -> ! {
+    let msg = if (*err).message.is_null() {
+        "<no message>"
+    } else {
+        cstr_to_str((*err).message)
+    };
+    eprintln!("RUNTIME ERROR: unhandled error: {msg}");
+    if (*err).trace_len > 0 {
+        eprintln!("  Call trace (most recent last):");
+        for i in 0..(*err).trace_len {
+            let frame = (*err).trace_ptr.add(i as usize);
+            let fn_name = if (*frame).function.is_null() { "<unknown>" }
+                          else { cstr_to_str((*frame).function) };
+            let file = if (*frame).file.is_null() { "<unknown>" }
+                       else { cstr_to_str((*frame).file) };
+            let line = (*frame).line;
+            if line >= 0 {
+                eprintln!("    {fn_name} ({file}:{line})");
+            } else {
+                eprintln!("    {fn_name} ({file})");
+            }
+        }
+    }
+    std::process::exit(1);
+}
+
+
 // Unit tests for M6 string parsing semantics (locked test vectors from design/narrowing.md)
 #[cfg(test)]
 mod m6_string_parsing {
@@ -1030,4 +1254,117 @@ mod m6_string_parsing {
     fn float_to_int_boundary_upper() { assert_eq!(float_to_int_ref(9.223372036854776e18), None); }
     #[test]
     fn float_to_int_boundary_lower() { assert_eq!(float_to_int_ref(-9.223372036854776e18), Some(i64::MIN)); }
+}
+
+
+// ── M7 P4a: errors runtime tests ──────────────────────────────────────────────
+#[cfg(test)]
+mod m7_errors_runtime {
+    use super::*;
+
+    #[test]
+    fn frame_push_pop_round_trip() {
+        // WHY: frame push and pop must be symmetric. A push with no matching pop
+        // would leak a frame onto all subsequent error traces (silent trace corruption).
+        unsafe {
+            // Start clean — pop any frames left from other tests.
+            FRAME_STACK.with(|s| s.borrow_mut().clear());
+
+            ynz_frame_push(b"test.ynz\0".as_ptr(), 10, b"myFn\0".as_ptr());
+            let len_after_push = FRAME_STACK.with(|s| s.borrow().len());
+            assert_eq!(len_after_push, 1);
+
+            ynz_frame_pop();
+            let len_after_pop = FRAME_STACK.with(|s| s.borrow().len());
+            assert_eq!(len_after_pop, 0);
+        }
+    }
+
+    #[test]
+    fn frame_pop_on_empty_is_noop() {
+        // WHY: a pop on an empty stack must not panic or corrupt memory.
+        // Early-return paths in errors functions always call pop, even when the
+        // stack was cleared by a prior error path in the same call.
+        FRAME_STACK.with(|s| s.borrow_mut().clear());
+        ynz_frame_pop(); // must not panic
+    }
+
+    #[test]
+    fn error_new_captures_message() {
+        // WHY: ynz_error_new must store the message pointer exactly as given so
+        // ynz_error_message returns the same address. If message is null-ed out
+        // or replaced, runtime error messages print garbage.
+        FRAME_STACK.with(|s| s.borrow_mut().clear());
+        unsafe {
+            let msg = b"something went wrong\0";
+            let err = ynz_error_new(msg.as_ptr());
+            assert!(!err.is_null());
+            let retrieved = ynz_error_message(err);
+            assert_eq!(retrieved, msg.as_ptr());
+            ynz_error_drop(err);
+        }
+    }
+
+    #[test]
+    fn error_new_snapshots_frame_stack() {
+        // WHY: the error's trace must capture the frame stack AT the moment
+        // ynz_error_new is called, not later. Auto-propagation pops frames before
+        // the caller sees the error, so the snapshot must be taken first.
+        FRAME_STACK.with(|s| s.borrow_mut().clear());
+        unsafe {
+            ynz_frame_push(b"a.ynz\0".as_ptr(), 1, b"fn_a\0".as_ptr());
+            ynz_frame_push(b"b.ynz\0".as_ptr(), 2, b"fn_b\0".as_ptr());
+
+            let err = ynz_error_new(b"oops\0".as_ptr());
+            assert_eq!(ynz_error_trace_len(err), 2);
+
+            let f0 = ynz_error_trace_frame(err, 0);
+            assert!(!f0.is_null());
+            assert_eq!(ynz_frame_line(f0), 1);
+
+            let f1 = ynz_error_trace_frame(err, 1);
+            assert!(!f1.is_null());
+            assert_eq!(ynz_frame_line(f1), 2);
+
+            // Out-of-range frame must return null.
+            let f_oob = ynz_error_trace_frame(err, 5);
+            assert!(f_oob.is_null());
+
+            ynz_error_drop(err);
+            // Clean up the stack.
+            ynz_frame_pop();
+            ynz_frame_pop();
+        }
+    }
+
+    #[test]
+    fn error_new_empty_stack_gives_zero_trace() {
+        // WHY: when no frames are on the stack (e.g., a top-level errors call from
+        // main with no frame push yet), the error must have trace_len = 0 and
+        // trace_ptr = null. ynz_unhandled_error must handle this gracefully.
+        FRAME_STACK.with(|s| s.borrow_mut().clear());
+        unsafe {
+            let err = ynz_error_new(b"empty\0".as_ptr());
+            assert_eq!(ynz_error_trace_len(err), 0);
+            let f = ynz_error_trace_frame(err, 0);
+            assert!(f.is_null());
+            ynz_error_drop(err);
+        }
+    }
+
+    #[test]
+    fn frame_stack_caps_at_1024() {
+        // WHY: unbounded frame stacks would exhaust memory on deeply recursive
+        // programs. The 1024 cap must truncate silently, not abort.
+        FRAME_STACK.with(|s| s.borrow_mut().clear());
+        unsafe {
+            for i in 0..2000i64 {
+                ynz_frame_push(b"f.ynz\0".as_ptr(), i, b"deep\0".as_ptr());
+            }
+            let len = FRAME_STACK.with(|s| s.borrow().len());
+            assert_eq!(len, FRAME_STACK_LIMIT);
+            // Clean up.
+            FRAME_STACK.with(|s| s.borrow_mut().clear());
+        }
+    }
 }

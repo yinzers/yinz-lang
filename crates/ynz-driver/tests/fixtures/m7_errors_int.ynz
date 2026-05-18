@@ -1,0 +1,12 @@
+// WHY: errors-capable function returning int (not string). Verifies that the
+// success_val field (field 1) of {i64, i64} carries scalar int values correctly.
+// If only string/pointer returns work but int scalars are corrupted, this test fails.
+
+function getCount() -> int errors {
+  return 42
+}
+
+function main() -> nothing {
+  let result = getCount()
+  print(result.or(0))
+}

@@ -101,6 +101,18 @@ declare void @ynz_string_to_number(ptr, i64, ptr)
 
 declare ptr @ynz_string_from_static(ptr, i64)
 
+declare void @ynz_frame_push(ptr, i64, ptr)
+
+declare void @ynz_frame_pop()
+
+declare ptr @ynz_error_new(ptr)
+
+declare void @ynz_error_drop(ptr)
+
+declare ptr @ynz_error_message(ptr)
+
+declare void @ynz_unhandled_error(ptr)
+
 define i32 @main() {
 entry:
   call void @ynz_siphash_init()

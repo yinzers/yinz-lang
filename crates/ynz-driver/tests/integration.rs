@@ -831,3 +831,50 @@ fn m6_union_is_narrowing_runnable() {
     assert_eq!(code, 0, "union demo must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "circle\nsquare\n");
 }
+
+
+// ── M7 P4a: errors codegen ─────────────────────────────────────────────────────
+
+#[test]
+fn m7_errors_basic_success_path() {
+    // WHY: M7 P4a acceptance criterion. An errors-capable function that always
+    // succeeds must produce the success value when called with .or(). If the
+    // {error_ptr, success_val} ABI or .or() codegen is broken, output is "fallback"
+    // instead of "ok". The output "ok" proves the success bits were correctly stored
+    // and extracted.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_errors_basic.ynz"));
+    assert_eq!(code, 0, "m7_errors_basic must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "ok\n");
+}
+
+#[test]
+fn m7_errors_failed_check_false_when_success() {
+    // WHY: .failed() must return false (0) when the errors-capable function succeeds.
+    // Tests that the error-pointer extraction is correct: field 0 of {i64, i64}
+    // must be 0 for success. If .failed() returns true on success, the if body would
+    // execute and print "error!" — this test would fail with extra output.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_errors_failed_check.ynz"));
+    assert_eq!(code, 0, "m7_errors_failed_check must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "hello\n");
+}
+
+#[test]
+fn m7_errors_propagate_two_level() {
+    // WHY: two-level errors propagation. outer() calls inner() (both errors-capable).
+    // main catches with .or(). Verifies that inner()'s success value flows through
+    // outer()'s {i64, i64} return struct to main's .or() extraction.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_errors_propagate.ynz"));
+    assert_eq!(code, 0, "m7_errors_propagate must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "propagated\n");
+}
+
+#[test]
+fn m7_errors_int_return_type() {
+    // WHY: errors-capable functions returning int (not string) must also work.
+    // Verifies that the success_val field 1 of {i64, i64} correctly carries non-pointer
+    // scalars. If only string (pointer) values work but int values are broken,
+    // this test catches it.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_errors_int.ynz"));
+    assert_eq!(code, 0, "m7_errors_int must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "42\n");
+}

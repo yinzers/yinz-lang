@@ -1,0 +1,13 @@
+// WHY: simplest errors-capable function test. readConfig returns string errors and
+// always succeeds. main calls it with .or(`fallback`) and prints the result.
+// If errors-capable return ABI or .or() codegen is broken, the output would be
+// `fallback` instead of `ok`.
+
+function readConfig() -> string errors {
+  return `ok`
+}
+
+function main() -> nothing {
+  let result = readConfig()
+  print(result.or(`fallback`))
+}
