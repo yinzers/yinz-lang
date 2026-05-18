@@ -1,7 +1,7 @@
-/// The types known to the M6 type checker.
+/// The types known to the M7 type checker.
 ///
 /// Variant count is pinned by `m4_type_variant_count_locked` in tests.
-/// Current count: 18 (M6 adds Options and Union)
+/// Current count: 20 (M7 P3a adds ErrorsCapable; total 20 across M1–M7)
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
 
@@ -118,6 +118,15 @@ pub enum Type {
     /// tagged-struct — see `design/unions.md`). Type narrowing via `is` arms
     /// and `if (x is Foo)` conditions.
     Union { variants: Vec<Type> },
+
+    // ── M7 ───────────────────────────────────────────────────────────────────
+
+    // test-ratchet: M7 P3a adds ErrorsCapable for errors-keyword fallible types.
+
+    /// Return type of a function marked `errors`: carries the success value on success,
+    /// or an error value on failure. Flow-sensitive: the type narrows to `inner` after
+    /// the caller checks `.failed()` or auto-propagation fires at first use.
+    ErrorsCapable { inner: Box<Type> },
 }
 
 /// Human-readable type name for diagnostic messages.
@@ -150,5 +159,6 @@ pub fn type_name(t: &Type) -> String {
         Type::Union { variants } => {
             variants.iter().map(type_name).collect::<Vec<_>>().join(" | ")
         }
+        Type::ErrorsCapable { inner } => format!("{} errors", type_name(inner)),
     }
 }

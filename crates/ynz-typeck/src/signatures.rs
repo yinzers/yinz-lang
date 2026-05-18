@@ -72,6 +72,8 @@ pub fn collect_signatures(
                     .iter()
                     .map(|p| p.ownership.clone())
                     .collect();
+                // sig_ast_type_to_type resolves ErrorCapable → ErrorsCapable { inner }
+                // via ShapeTable::resolve_ast_type. No additional wrapping needed.
                 let ret = sig_ast_type_to_type(&f.return_type, shape_table);
 
                 if let Some(existing) = table.fns.get(&f.name) {
