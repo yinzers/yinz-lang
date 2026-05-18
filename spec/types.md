@@ -255,3 +255,49 @@ print(player.damageMultiplier)
 `hidden` is about visibility, not mutability. Hidden fields can be both read and written by standalone functions in the same file. They're invisible to imports.
 
 **Why this exists**: per-field visibility within an exported shape. Without `hidden`, external code could write `player.damageMultiplier = 10` bypassing whatever invariants `takeDamage` maintains. Module-level "don't export the field" doesn't work because you can't export a shape without exposing all its fields.
+
+---
+
+## Anonymous inline shapes — field types without a name
+
+If a field's structure is only used in one place, you can define it inline:
+
+```ynz
+shape Bar {
+    symbol: string
+    spread: {
+        bid: number
+        ask: number
+    }
+}
+```
+
+No extra keyword needed. `{` in type position always means an inline shape.
+
+Creating a value works exactly the same:
+
+```ynz
+let b: Bar = {
+    symbol: `AAPL`,
+    spread: { bid: 182.40, ask: 182.50 }
+}
+
+print(b)
+// Bar { symbol: AAPL, spread: { bid: 182.40, ask: 182.50 } }
+```
+
+**When to use a named shape instead**: if you need to reference the type elsewhere — pass a `Spread` independently, use it in another shape, or annotate a variable as that type — give it a name:
+
+```ynz
+shape Spread {
+    bid: number
+    ask: number
+}
+
+shape Bar {
+    symbol: string
+    spread: Spread
+}
+```
+
+The inline form is for truly one-off nested structure. Once you need to name it elsewhere, promote it.

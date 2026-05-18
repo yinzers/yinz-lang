@@ -321,3 +321,31 @@ shape Player {
 **Built-in options**: `SortOrder { asc, desc }`, `Comparison { equal, greater, less }`.
 
 **Shorthand**: Context-aware shorthand allowed when the expected type is known at the call site.
+
+---
+
+## Anonymous Inline Shape Types
+
+A shape field can be typed with an inline anonymous shape definition instead of requiring a separate named shape:
+
+```ynz
+shape Bar {
+    symbol: string
+    spread: {
+        bid: number
+        ask: number
+    }
+}
+```
+
+**Why no keyword**: `{` in type position is unambiguous — no other Yinz type annotation uses it. The compiler infers "this is an anonymous shape type." No extra ceremony.
+
+**How it works**: The compiler synthesizes a name (`__anon_Bar_spread`) and registers the anonymous shape as a real named shape. All downstream passes (typeck, codegen, print) see an ordinary named shape — zero special cases in the backend.
+
+**Print output**: The synthesized name is stripped from debug output. `print(b)` shows `Bar { symbol: AAPL, spread: { bid: 182.40, ask: 182.50 } }` — clean and uncluttered.
+
+**When to use vs named shapes**:
+- Anonymous: field is one-off, only used in this one shape, never referenced elsewhere
+- Named (`shape Spread { ... }`): reusable across multiple shapes, or you need to pass a `Spread` value independently
+
+The friction of a named declaration is intentional pressure toward naming things that matter. If you later need `let s: Bar.spread = ...` or want to pass the spread independently, promote it to a named shape.
