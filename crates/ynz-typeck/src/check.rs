@@ -7,7 +7,7 @@ use ynz_ast::nodes::{
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 use crate::{
-    builtins::{array_method_return, fixed_method_return, map_method_return, maybe_method_return},
+    builtins::{array_method_return, fixed_method_return, map_method_return, maybe_method_return, string_method_return, STRING_METHODS},
     generics::{
         apply_substitution, unify_param, GenericFnSig, GenericFnTable, GenericShapeTable,
         MonoSignature, MonomorphizationTable, Substitution,
@@ -925,12 +925,16 @@ impl<'b> Checker<'b> {
                     Type::BuiltinMap { val, .. } => {
                         Type::Maybe { inner: val.clone() }
                     }
+                    // M7 P3b: string bracket access desugars to .get(n) → maybe<string>
+                    Type::String => {
+                        Type::Maybe { inner: Box::new(Type::String) }
+                    }
                     Type::Error => Type::Error,
                     other => {
                         self.diags.push(Diagnostic::error(
                             span.clone(),
                             format!("`{}` does not support bracket access.", type_name(other)),
-                            "Bracket access works on `array<T>`, `fixed<T>`, and `map<K, V>`.",
+                            "Bracket access works on `array<T>`, `fixed<T>`, `map<K, V>`, and `string`.",
                             "Use `.get(index)` on built-in collections or access shape fields with dot notation.",
                         ));
                         Type::Error
@@ -947,13 +951,27 @@ impl<'b> Checker<'b> {
             Expr::Is { expr: inner, ty: type_path, span } => {
                 self.check_is_expr(inner, type_path, span)
             }
-            // M7 P1: interpolated string — deferred full lowering arrives in M7 P2.
-            // For now, check each interpolated sub-expression for type errors and
-            // return Type::String so callers can proceed without cascading errors.
+            // M7 P3b: interpolated string — validate that each ${...} expression
+            // has a stringifiable type. Primitive types are always valid; shapes
+            // require a standalone `toString` function.
             Expr::InterpolatedString(parts, _) => {
                 for part in parts {
-                    if let ynz_ast::nodes::StringPart::Expr(e, _) = part {
-                        self.infer_expr(e, None);
+                    if let ynz_ast::nodes::StringPart::Expr(e, span) = part {
+                        let part_ty = self.infer_expr(e, None);
+                        if !is_stringifiable(&part_ty, self.sig_table) {
+                            let type_name_str = type_name(&part_ty);
+                            self.diags.push(Diagnostic::error(
+                                span.clone(),
+                                format!("`{type_name_str}` cannot be used inside a string interpolation."),
+                                format!(
+                                    "Add a `.toString()` method to `{type_name_str}`: \
+                                     `function toString(share self: {type_name_str}) -> string {{ ... }}`"
+                                ),
+                                "String interpolation calls `.toString()` on each `${{}}` expression. \
+                                 Primitive types (int, float, bool, string) work automatically. \
+                                 Custom shapes need a standalone `toString` function.",
+                            ));
+                        }
                     }
                 }
                 Type::String
@@ -1698,6 +1716,22 @@ impl<'b> Checker<'b> {
                     ));
                     Type::Error
                 }
+            };
+        }
+
+        // M7 P3b: string method dispatch.
+        if receiver_ty == &Type::String {
+            return if let Some(ret) = string_method_return(method) {
+                ret
+            } else {
+                let available_list = STRING_METHODS.join(", ");
+                self.diags.push(Diagnostic::error(
+                    method_span.clone(),
+                    format!("`string` does not have a method called `{method}`."),
+                    format!("Available string methods: {available_list}."),
+                    "Check the spelling. String methods are fixed built-ins — they cannot be extended.",
+                ));
+                Type::Error
             };
         }
 
@@ -2770,6 +2804,31 @@ fn types_compatible(a: &Type, b: &Type) -> bool {
             types_compatible(ia, ib)
         }
         _ => a == b,
+    }
+}
+
+/// Return whether `ty` can appear inside a string interpolation `${}`.
+///
+/// Primitive types are always stringifiable (they have implicit `.toString()`).
+/// Shape types are stringifiable when a standalone `toString` function exists
+/// whose first parameter is that shape type. All other types are not stringifiable.
+fn is_stringifiable(ty: &Type, sig_table: &crate::signatures::SignatureTable) -> bool {
+    match ty {
+        Type::String | Type::Int | Type::Float | Type::Bool => true,
+        Type::Number { .. } => true,
+        Type::Error => true, // suppress cascade errors from upstream type failures
+        Type::Options { .. } => true, // .toString() built-in on options types
+        Type::Shape { name } => {
+            // A shape is stringifiable if there's a standalone `toString` function
+            // whose first parameter type is `Shape { name }`.
+            if let Some(sig) = sig_table.fns.get("toString") {
+                if let Some((_, first_ty)) = sig.params.first() {
+                    return first_ty == &Type::Shape { name: name.clone() };
+                }
+            }
+            false
+        }
+        _ => false,
     }
 }
 
