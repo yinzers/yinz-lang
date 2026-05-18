@@ -7,7 +7,16 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Now (active)
 
-- [ ] **M5 — Generics + Collections + Maybe** — Approved 2026-05-17. Plan in `.claude/plans/active/m5-generics.md`. P0 (doc lockdown) shipped to main. P1 (lexer + AST scaffolding) SHIPPED on `feat/m5-lexer-ast` (commit `49940c9`), awaiting merge. P2 (parser) next.
+- [ ] **M6 — Options + Unions + Narrowing** — Approved 2026-05-18 (r2). Plan in `.claude/plans/active/m6-options-unions.md`. P0 doc lockdown in progress. Phases: P0 (docs) → P1 (lexer) → P2 (parser) → P3a (options typeck) → P3b (union+narrowing typeck) → P4 (codegen) → P5 (catch-up fixtures) → P6 (demo+tag).
+
+**M6 catch-up obligations (active — must close by M6 P5):**
+- [ ] `.toInt()` on `int` → identity (M2 plan §62)
+- [ ] `.toInt()` on `float` → `maybe<int>` with NaN+OOR rules (M2 plan §62; locked codegen in P4)
+- [ ] `.toInt()` on `number` (decimal128) → `maybe<int>` (M2 plan §62)
+- [ ] `string.toInt()` / `.toNumber()` / `.toFloat()` → `maybe<T>` (M2 plan §62; locked parsing rule in P4)
+- [ ] `is Type =>` in multi-case `if` — close M3 deferral fixture `m3_is_type_deferral.ynz` (M3 plan, REPLACE-AT M6 marker)
+- [ ] Early-return narrowing for `.value` on `maybe<T>` (M5 `design/maybe.md` deferral)
+- [ ] `||` propagation rule for narrowing (M5 deferred)
 
 ## Soon (committed, not started)
 
@@ -23,6 +32,7 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Done (recent)
 
+- [x] **M5 complete (tag v0.1.0-m5, 574 tests)** — Generics `<T>`, `fixed<T>`, `array<T>`, `map<K,V>`, `maybe<T>`, `.exists()`/`.value`/`.or()`, bracket sugar, SipHash-2-4, Swiss Tables, monomorphization, M4 catch-up (wrapping/saturating, type-attached constants). Plan moved to `done/m5-generics.md`.
 - [x] **M4 complete (tag v0.1.0-m4, 316 tests)** — P1 lexer, P2 parser, P3a/b/c typeck, P4 codegen, P5 catch-up, P6 fixtures, P7 verification. Plan moved to `done/m4-shapes-functions-ownership.md`.
 - [x] **M4 P5 — Catch-up (5a21258)** — 6 wrapping/saturating int methods, type-attached constants (`int.max`/`int.min`/`number.*`/`float.*`). M2 fixtures closed.
 - [x] **M4 P4 — Codegen (05bb47d)** — Shape LLVM struct types, UFCS dispatch, `readonly`/`noalias` attrs, `ynz_alloc`/`ynz_free`, vtable globals. `m4_player.ynz` → `Patrick / 120 / Patrick`.

@@ -190,7 +190,7 @@ Function generics `function foo<T>(...)` and type generics `array<T>` / `fixed<T
 ### Milestone 6 (M6): Options + unions + narrowing — multi-session
 `options Status { ... }` declarations, union types `A | B`, `if (x is Type)` pattern narrowing as a flow-sensitive analysis. (`maybe<T>` moved to M5 — see master plan note above.) Early-return narrowing for `.value` on `maybe<T>` (deferred from M5) lands here too.
 **Flag**: N/A
-**Status**: planned
+**Status**: in progress — P0 doc lockdown shipped; plan at `.claude/plans/active/m6-options-unions.md`
 **Depends on**: M5
 
 ### Milestone 7 (M7): Strings (full) + errors + iterables — multi-session
