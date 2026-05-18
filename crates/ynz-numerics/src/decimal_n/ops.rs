@@ -23,14 +23,16 @@ fn align(a: &BigNum, b: &BigNum) -> (Vec<u8>, Vec<u8>, i64) {
     }
 }
 
-/// Add two digit arrays with the same length. Returns sum digits + carry.
+/// Add two digit arrays (right-aligned, big-endian digits). Returns sum digits + carry.
 fn add_digits(a: &[u8], b: &[u8]) -> Vec<u8> {
     let len = a.len().max(b.len());
+    let a_off = len - a.len(); // leading zero pads for a
+    let b_off = len - b.len(); // leading zero pads for b
     let mut result = vec![0u8; len + 1];
     let mut carry = 0u8;
     for i in (0..len).rev() {
-        let da = if i < a.len() { a[a.len() - len + i] } else { 0 };
-        let db = if i < b.len() { b[b.len() - len + i] } else { 0 };
+        let da = if i >= a_off { a[i - a_off] } else { 0 };
+        let db = if i >= b_off { b[i - b_off] } else { 0 };
         let sum = da + db + carry;
         result[i + 1] = sum % 10;
         carry = sum / 10;

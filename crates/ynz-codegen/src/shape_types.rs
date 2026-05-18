@@ -59,9 +59,10 @@ pub fn llvm_field_type<'ctx>(ctx: &'ctx Context, ty: &Type) -> BasicTypeEnum<'ct
         Type::Int => ctx.i64_type().into(),
         Type::Float => ctx.f64_type().into(),
         Type::Bool => ctx.bool_type().into(),
-        // Number is stored as raw i128 bits (BID encoding) to match the existing
-        // decimal128 ABI: load/store copies the 16 bytes, no extra indirection.
-        Type::Number { .. } => ctx.i128_type().into(),
+        // N ≤ 34: decimal128 stored as raw i128 bits (BID encoding).
+        // N > 34: bignum stored as a pointer to the heap decimal string.
+        Type::Number { precision } if *precision <= 34 => ctx.i128_type().into(),
+        Type::Number { .. } => ptr.into(),
         // String, Shape, Dynamic, and all else: opaque pointer.
         _ => ptr.into(),
     }

@@ -1249,3 +1249,83 @@ fn m8_bignum_point1_plus_point2_equals_point3() {
     );
     assert_eq!(stdout.trim(), "0.3", "0.1 + 0.2 must equal exactly 0.3");
 }
+
+// ── P7: end-to-end demo golden test ──────────────────────────────────────────
+
+#[test]
+fn examples_basics_runs_end_to_end() {
+    // WHY: byte-exact stdout match against the committed golden file catches any
+    // regression in the language demo — wrong output in any M-section fails here.
+    // If the demo changes intentionally, run expected_stdout.txt.regenerate.sh
+    // and commit the new golden alongside the source change.
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("examples/basics");
+    let golden = std::fs::read_to_string(project_root.join("expected_stdout.txt"))
+        .expect("examples/basics/expected_stdout.txt must exist");
+    let (stdout, stderr, code) = ynz_run_stdout(&project_root);
+    assert_eq!(
+        code, 0,
+        "examples/basics must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(stdout, golden, "stdout must match examples/basics/expected_stdout.txt");
+}
+
+// ── P7: combined-feature integration fixtures ─────────────────────────────────
+
+#[test]
+fn m8_combo_modules_sensitive_concurrency() {
+    // WHY: guards that sensitive + background work together in a multi-file project.
+    // If sensitive redaction is lost or background breaks across module boundaries,
+    // this combo test catches it before the individual-feature tests do.
+    let project_root = fixtures_dir().join("m8_combo_modules_sensitive_concurrency");
+    let (stdout, stderr, code) = ynz_run_stdout(&project_root);
+    assert_eq!(
+        code, 0,
+        "sensitive+concurrency combo must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout,
+        "[REDACTED]\nsuper-secret-key\n[REDACTED]\ndone\n",
+        "sensitive must redact in print, reveal() must show raw value, background must run"
+    );
+}
+
+#[test]
+fn m8_combo_modules_bignum_interpolation() {
+    // WHY: guards that number<100> arithmetic and string interpolation work together
+    // in a multi-file project. If bignum values are lost at module boundaries or
+    // interpolation formats them wrong, this catches it.
+    let project_root = fixtures_dir().join("m8_combo_modules_bignum_interpolation");
+    let (stdout, stderr, code) = ynz_run_stdout(&project_root);
+    assert_eq!(
+        code, 0,
+        "bignum+interpolation combo must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout,
+        "0.1 + 0.2 = 0.3\n0.1 * 0.2 = 0.02\n",
+        "bignum arithmetic must be exact and interpolate correctly"
+    );
+}
+
+#[test]
+fn m8_combo_doc_sensitive_bignum() {
+    // WHY: guards that doc comments, sensitive fields, and bignum fields coexist on
+    // the same shape. If the LLVM struct layout for mixed field types is wrong, this
+    // catches the segfault / wrong-value bug before it ships.
+    let project_root = fixtures_dir().join("m8_combo_doc_sensitive_bignum");
+    let (stdout, stderr, code) = ynz_run_stdout(&project_root);
+    assert_eq!(
+        code, 0,
+        "doc+sensitive+bignum combo must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout,
+        "[REDACTED]\napi-key-xyz\n0.3\nbudget: 0.3\n",
+        "sensitive must redact, reveal() must show raw, bignum field addition must be exact"
+    );
+}

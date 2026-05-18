@@ -1,0 +1,3 @@
+entry = "src/entrypoint.ynz"
+name = "m8_combo_modules_bignum_interpolation"
+version = "0.1.0"

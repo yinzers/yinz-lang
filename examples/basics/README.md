@@ -6,7 +6,7 @@ A single growing project that demonstrates **every v0.1 language feature** as it
 
 ```bash
 source $HOME/.cargo/env
-./target/debug/ynz run examples/basics/src/entrypoint.ynz
+./target/debug/ynz run examples/basics/
 ```
 
 ## What each milestone adds
@@ -16,11 +16,11 @@ source $HOME/.cargo/env
 | **M1** | ✅ shipped | `function main()`, `print(string)`, string literals |
 | **M2** | ✅ shipped | Variables (`let`/`const`), arithmetic (`+ - * / %`), comparison, boolean (`&& \|\| !`), bitwise (`& \| ^ ~ << >>`), primitives (`int`, `float`, `number`, `bool`), polymorphic `print`, `.toString()`/`.toNumber()`/`.toFloat()` intrinsics |
 | **M3** | ✅ shipped | `if`/multi-case `if`/`else =>`, `while`, `for (x in range(...))`, early `return`, user-defined functions with params + return types, mutual recursion |
-| **M4** | in-progress | shapes (data + contract signatures), standalone functions taking receivers (UFCS dot-call sugar), ownership (`share`/`lend`/`give` in signatures, inferred at call sites), `.copy()`/`.freeze()`, `extends` (data-only), `follows` contracts, `hidden` fields, `dynamic Foo` runtime polymorphism, M2 catch-up (`int.max`/`int.min`/`number.epsilon`, `.wrappingAdd()`/`.saturatingAdd()`) |
-| **M5** | future | generics (`<T>`), collections (`array<T>`, `fixed<T>`, `map<K,V>`), bracket sugar (`arr[i]`, `m["key"]`) |
-| **M6** | future | `options`, union types (`\|`), `maybe T`, `is` narrowing |
-| **M7** | future | full Unicode strings, interpolation, `errors` keyword + cascades, `Iterable<T>` / `FallibleIterable<T>` |
-| **M8** | future | modules (`import`/`export`), doc comments (`///`), `sensitive`, `wait`/`background` concurrency keywords, bignum `number<N>` for N > 34 |
+| **M4** | ✅ shipped | shapes (data + contract signatures), standalone functions taking receivers (UFCS dot-call sugar), ownership (`share`/`lend`/`give` in signatures, inferred at call sites), `.copy()`/`.freeze()`, `extends` (data-only), `follows` contracts, `hidden` fields, `dynamic Foo` runtime polymorphism, M2 catch-up (`int.max`/`int.min`/`number.epsilon`, `.wrappingAdd()`/`.saturatingAdd()`) |
+| **M5** | ✅ shipped | generics (`<T>`), collections (`array<T>`, `fixed<T>`, `map<K,V>`), bracket sugar (`arr[i]`, `m["key"]`) |
+| **M6** | ✅ shipped | `options`, union types (`\|`), `maybe T`, `is` narrowing |
+| **M7** | ✅ shipped | full Unicode strings, interpolation, `errors` keyword + cascades, `Iterable<T>` / `FallibleIterable<T>` |
+| **M8** | ✅ shipped | modules (`import`/`export`), doc comments (`///`), `sensitive`, `wait`/`background` concurrency keywords, bignum `number<N>` for N > 34 |
 
 ## Deferred features (placeholders in source)
 

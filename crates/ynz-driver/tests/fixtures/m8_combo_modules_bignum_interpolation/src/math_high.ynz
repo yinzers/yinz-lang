@@ -1,0 +1,7 @@
+// M8 combo: high-precision math module.
+// Cross-file CALLS ship in v0.2; this demonstrates export syntax + number<N> params.
+
+/// Multiply a high-precision value by a scale factor.
+export function scale(x: number<100>, factor: number<100>) -> number<100> {
+  return x * factor
+}

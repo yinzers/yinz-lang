@@ -84,7 +84,7 @@ impl ShapeTable {
             AstType::Nothing => Type::Nothing,
             AstType::Int => Type::Int,
             AstType::Float => Type::Float,
-            AstType::Number { .. } => Type::Number { precision: 34 },
+            AstType::Number { precision } => Type::Number { precision: *precision },
             AstType::Bool => Type::Bool,
             AstType::Named(n, _) if n == "string" => Type::String,
             // M6: union type aliases.

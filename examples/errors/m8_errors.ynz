@@ -8,6 +8,10 @@
 // to see every M8 diagnostic class at once (Yinz multi-errors up to 50/compile).
 // Uncomment the trigger body inside each function to activate the diagnostic.
 
+function entrypoint() -> nothing {
+  print(`M8 error gallery loaded (all triggers commented out — uncomment to trigger each error)`)
+}
+
 // ────── P2: module errors ──────
 
 // WHY: relative import paths must be rejected at parse time with a teaching

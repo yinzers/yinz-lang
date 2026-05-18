@@ -923,7 +923,6 @@ fn ast_type_to_typeck_type(ast_ty: &ynz_ast::nodes::Type, shape_table: &ShapeTab
         ynz_ast::nodes::Type::Int => Type::Int,
         ynz_ast::nodes::Type::Float => Type::Float,
         ynz_ast::nodes::Type::Bool => Type::Bool,
-        ynz_ast::nodes::Type::Number { .. } => Type::Number { precision: 34 },
         ynz_ast::nodes::Type::Named(n, _) if n == "string" => Type::String,
         // M6: union type aliases.
         ynz_ast::nodes::Type::Named(n, _) if shape_table.union_aliases.contains_key(n) => {
@@ -963,6 +962,17 @@ fn ast_type_to_typeck_type(ast_ty: &ynz_ast::nodes::Type, shape_table: &ShapeTab
         ynz_ast::nodes::Type::ErrorCapable { inner, .. } => {
             ast_type_to_typeck_type(inner, shape_table)
         }
+        // M8 P4: `sensitive T` — preserve the Sensitive wrapper (ABI = ptr, same as string).
+        ynz_ast::nodes::Type::Sensitive(inner) => {
+            let inner_ty = ast_type_to_typeck_type(inner, shape_table);
+            Type::Sensitive {
+                inner: Box::new(inner_ty),
+            }
+        }
+        // M8 P6: `number<N>` with explicit precision in parameter position.
+        ynz_ast::nodes::Type::Number { precision } => Type::Number {
+            precision: *precision,
+        },
         _ => Type::Error,
     }
 }
@@ -2928,13 +2938,52 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
     }
 }
 
+/// Coerce a decimal128 (N≤34) operand to a bignum C-string when the other side is
+/// bignum (N>34). Returns (lhs, rhs) with both as bignum string pointers when needed.
+fn coerce_to_bignum_pair<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+    lhs_ty: &Type,
+    rhs_ty: &Type,
+) -> Result<(BasicValueEnum<'ctx>, BasicValueEnum<'ctx>), String> {
+    let lhs_big = matches!(lhs_ty, Type::Number { precision } if *precision > 34);
+    let rhs_big = matches!(rhs_ty, Type::Number { precision } if *precision > 34);
+    if !lhs_big && !rhs_big {
+        return Ok((lhs, rhs));
+    }
+    let lhs2 = if matches!(lhs_ty, Type::Number { precision } if *precision <= 34) {
+        let s = cg
+            .builder
+            .build_call(cg.rt.decimal_to_string, &[lhs.into()], "lhs_dec2str")
+            .map_err(|e| format!("{e}"))?;
+        s.try_as_basic_value()
+            .basic()
+            .ok_or_else(|| "decimal_to_string returned void".to_string())?
+    } else {
+        lhs
+    };
+    let rhs2 = if matches!(rhs_ty, Type::Number { precision } if *precision <= 34) {
+        let s = cg
+            .builder
+            .build_call(cg.rt.decimal_to_string, &[rhs.into()], "rhs_dec2str")
+            .map_err(|e| format!("{e}"))?;
+        s.try_as_basic_value()
+            .basic()
+            .ok_or_else(|| "decimal_to_string returned void".to_string())?
+    } else {
+        rhs
+    };
+    Ok((lhs2, rhs2))
+}
+
 fn lower_binop<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     op: &BinOpKind,
     lhs_e: &Expr,
     rhs_e: &Expr,
     lhs_ty: &Type,
-    _rhs_ty: &Type,
+    rhs_ty: &Type,
 ) -> Result<BasicValueEnum<'ctx>, String> {
     use BinOpKind::*;
     if matches!(op, And | Or) {
@@ -2942,6 +2991,10 @@ fn lower_binop<'ctx>(
     }
     let lhs = lower_expr(cg, lhs_e)?;
     let rhs = lower_expr(cg, rhs_e)?;
+
+    // M8 P6: when one operand is bignum (N>34) and the other is decimal128 (N≤34),
+    // coerce the N≤34 side to a C string so both operands are bignum-compatible.
+    let (lhs, rhs) = coerce_to_bignum_pair(cg, lhs, rhs, lhs_ty, rhs_ty)?;
 
     match (op, lhs_ty) {
         (Add, Type::Int) => int_arith_overflow(cg, lhs.into_int_value(), rhs.into_int_value(), op),
@@ -6046,14 +6099,20 @@ fn store_field<'ctx>(
     field_ptr: PointerValue<'ctx>,
 ) -> Result<(), String> {
     match ty {
-        Type::Number { .. } => {
-            // Field stores i128 bits inline; val is ptr-to-i128.
+        Type::Number { precision } if *precision <= 34 => {
+            // N ≤ 34: field stores i128 bits inline; val is ptr-to-i128.
             let bits = cg
                 .builder
                 .build_load(cg.i128(), val.into_pointer_value(), "dec_field_bits")
                 .map_err(|e| format!("{e}"))?;
             cg.builder
                 .build_store(field_ptr, bits)
+                .map_err(|e| format!("{e}"))?;
+        }
+        Type::Number { .. } => {
+            // N > 34: field stores a pointer to the decimal string; val is already a ptr.
+            cg.builder
+                .build_store(field_ptr, val)
                 .map_err(|e| format!("{e}"))?;
         }
         _ => {

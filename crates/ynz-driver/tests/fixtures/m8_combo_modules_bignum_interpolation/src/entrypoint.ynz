@@ -1,0 +1,12 @@
+// M8 combo: modules + bignum + string interpolation.
+// Demonstrates: import syntax, number<N> arithmetic, interpolation of bignum values.
+import { scale } from `math_high`
+
+function entrypoint() -> nothing {
+  let x: number<100> = 0.1
+  let y: number<100> = 0.2
+  let sum: number<100> = x + y
+  print(`0.1 + 0.2 = ${sum}`)
+  let product: number<100> = x * y
+  print(`0.1 * 0.2 = ${product}`)
+}

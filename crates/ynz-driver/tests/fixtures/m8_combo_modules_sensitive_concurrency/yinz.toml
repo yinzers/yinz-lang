@@ -1,0 +1,3 @@
+entry = "src/entrypoint.ynz"
+name = "m8_combo_modules_sensitive_concurrency"
+version = "0.1.0"

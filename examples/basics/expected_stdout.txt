@@ -1,0 +1,82 @@
+Yinz v0.1 language showcase
+===========================
+
+M2 — variables, arithmetic, primitives:
+Cheddar
+66
+0.00000000000000000000000000000
+1234.56
+true
+3
+false
+0
+
+M3 — control flow + user functions:
+healthy
+wounded
+critical
+B
+3
+2
+1
+15
+55
+true
+true
+
+M4 — shapes + methods + ownership:
+Cheddar
+Cheddar
+
+M5 — generics + collections:
+42
+generic
+4
+10
+3
+300
+0
+90
+2
+M6 — options, unions, narrowing:
+active
+active
+true
+42
+3
+99
+10
+
+M7 — full strings, errors, iterables:
+Player Alice scored 150 points!
+Welcome to the tournament!
+  Top player: Alice
+Hello, World!
+HELLO
+world
+true
+true
+true
+6
+4
+4
+5
+2
+range item: 0
+range item: 1
+range item: 2
+char: a
+char: b
+char: c
+3
+2
+1
+
+M8 — bignum (number<100>):
+  0.1 + 0.2 = (see next line)
+0.3
+
+M8 — modules, multi-file project:
+  import { newPlayer, greet } from services/players
+  import { clamp, square } from utils/math_extra
+  Multi-file build: ALL .ynz files under src/ compiled + linked.

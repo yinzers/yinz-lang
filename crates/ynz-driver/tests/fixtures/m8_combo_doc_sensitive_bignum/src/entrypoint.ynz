@@ -1,0 +1,19 @@
+// M8 combo: doc comments + sensitive + bignum on one shape.
+// Demonstrates all three features working together on a single value.
+
+/// An API client with a sensitive key and high-precision rate budget.
+shape ApiClient {
+  /// The secret API key — auto-redacted in print output.
+  key: sensitive string
+  /// Remaining API call budget at decimal precision.
+  budget: number<100>
+}
+
+function entrypoint() -> nothing {
+  let client: ApiClient = { key: sensitive(`api-key-xyz`), budget: 0.1 }
+  let newBudget: number<100> = client.budget + 0.2
+  print(client.key)
+  print(client.key.reveal())
+  print(newBudget)
+  print(`budget: ${newBudget}`)
+}

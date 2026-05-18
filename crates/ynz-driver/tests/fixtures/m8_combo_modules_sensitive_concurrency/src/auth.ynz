@@ -1,0 +1,13 @@
+// M8 combo: auth module — exports a sensitive API-key shape.
+// Cross-file CALLS ship in v0.2; this file demonstrates export syntax + sensitive types.
+
+/// An API credential with a secret key.
+export shape ApiCred {
+  /// The secret API key — auto-redacted in print output.
+  key: sensitive string
+}
+
+/// Validate a credential (stub: always succeeds in M8).
+export function validateCred(share self: ApiCred) -> bool {
+  return true
+}
