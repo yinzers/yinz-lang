@@ -1151,17 +1151,9 @@ impl<'a> Parser<'a> {
                     return Type::Error;
                 }
 
-                if precision != 34 {
-                    self.diags.push(Diagnostic::error(
-                        self.current_span(),
-                        format!("`number<{precision}>` is not available yet."),
-                        "Use `number` (34 decimal digits) for now.",
-                        "`number<N>` for N other than 34 (bignum support) arrives in M8.",
-                    ));
-                    return Type::Error;
-                }
-
-                Type::Number { precision: 34 }
+                // M8 P6: all precisions 1..=4096 are now valid. The N != 34 deferral
+                // (which pointed to M8) is lifted now that bignum ships.
+                Type::Number { precision }
             }
             _ => Type::Number { precision: 34 },
         }

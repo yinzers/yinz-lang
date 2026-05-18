@@ -913,6 +913,8 @@ impl<'b> Checker<'b> {
 
             Expr::NumberLit(_, _) => match hint {
                 Some(Type::Float) => Type::Float,
+                // M8 P6: use the annotated precision when a number annotation is present.
+                Some(Type::Number { precision }) => Type::Number { precision: *precision },
                 _ => Type::Number { precision: 34 },
             },
 
@@ -1304,10 +1306,14 @@ impl<'b> Checker<'b> {
         // Shapes are printable — the compiler emits a default "ShapeName { field: val, ... }"
         // representation. User-defined toString() can override this.
         // M8 P4: sensitive values are printable (they emit [REDACTED]).
+        // M8 P6: all number<N> precisions (including bignum) are printable.
         let is_printable = self.intrinsics.is_print_type(&arg_ty)
             || matches!(
                 &arg_ty,
-                Type::Shape { .. } | Type::BuiltinArray { .. } | Type::Sensitive { .. }
+                Type::Shape { .. }
+                    | Type::BuiltinArray { .. }
+                    | Type::Sensitive { .. }
+                    | Type::Number { .. }
             );
         if arg_ty != Type::Error && !is_printable {
             // M7 P3a: give a more helpful diagnostic for ErrorsCapable values.
@@ -3433,6 +3439,12 @@ fn types_compatible(a: &Type, b: &Type) -> bool {
         (Type::ErrorsCapable { inner: ia }, Type::ErrorsCapable { inner: ib }) => {
             types_compatible(ia, ib)
         }
+        // M8 P6: mixed-precision number compatibility.
+        // Any number<A> is compatible with any number<B> — widening always succeeds;
+        // narrowing (A > B) will emit a warning at the call site. Here we just
+        // allow the assignment so the program can type-check. The narrowing warning
+        // is emitted in check_let_stmt when we detect precision shrinkage.
+        (Type::Number { .. }, Type::Number { .. }) => true,
         _ => a == b,
     }
 }

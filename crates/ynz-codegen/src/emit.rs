@@ -310,7 +310,9 @@ fn llvm_type_for_ctx<'ctx>(ctx: &'ctx Context, ty: &Type) -> Option<BasicTypeEnu
         Type::Int => Some(ctx.i64_type().into()),
         Type::Float => Some(ctx.f64_type().into()),
         Type::Bool => Some(ctx.bool_type().into()),
-        Type::Number { .. } => Some(ctx.i128_type().into()),
+        // N ≤ 34: hardware decimal128 path (i128 pair).
+        // N > 34: bignum path — pointer to heap-allocated decimal string.
+        Type::Number { precision } if *precision <= 34 => Some(ctx.i128_type().into()),
         Type::Nothing => None,
         _ => Some(ctx.ptr_type(AddressSpace::default()).into()),
     }
@@ -611,7 +613,9 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             Type::Int => Some(self.i64().into()),
             Type::Float => Some(self.f64().into()),
             Type::Bool => Some(self.bool().into()),
-            Type::Number { .. } => Some(self.i128().into()),
+            // N ≤ 34: hardware decimal128 (i128). N > 34: bignum (ptr to decimal string).
+            Type::Number { precision } if *precision <= 34 => Some(self.i128().into()),
+            Type::Number { .. } => Some(self.ptr().into()),
             Type::String => Some(self.ptr().into()),
             // Shape and dynamic values are always passed/stored as opaque pointers.
             Type::Shape { .. } => Some(self.ptr().into()),
@@ -2117,6 +2121,24 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         Expr::IntLit(n, _) => Ok(cg.i64().const_int(*n as u64, true).into()),
 
         Expr::NumberLit(s, _) => {
+            let ty = cg.expr_type(expr);
+            // M8 P6: bignum path for N > 34.
+            if let Type::Number { precision } = &ty {
+                if *precision > 34 {
+                    let prec16 = (*precision).min(4096) as u16;
+                    let bn = ynz_numerics::decimal_n::parse_bignum(s, prec16)
+                        .unwrap_or_else(|| ynz_numerics::BigNum::zero(prec16));
+                    let formatted = ynz_numerics::decimal_n::format_bignum(&bn);
+                    let global = build_string_global(
+                        cg.ctx,
+                        cg.module,
+                        &formatted,
+                        &format!(".bignum.lit.{}", &s[..s.len().min(8)]),
+                    );
+                    return Ok(global.as_pointer_value().into());
+                }
+            }
+            // Hardware decimal128 path (N ≤ 34).
             let bits: u128 =
                 ynz_numerics::parse(s).ok_or_else(|| format!("bad decimal literal `{s}`"))?;
             let slot = cg
@@ -2927,27 +2949,39 @@ fn lower_binop<'ctx>(
             .map(|v| v.into())
             .map_err(|e| format!("{e}")),
 
-        (Add, Type::Number { .. }) => decimal_binop(
+        (Add, Type::Number { precision }) if *precision <= 34 => decimal_binop(
             cg,
             lhs.into_pointer_value(),
             rhs.into_pointer_value(),
             cg.rt.decimal_add,
             "dadd",
         ),
-        (Sub, Type::Number { .. }) => decimal_binop(
+        (Add, Type::Number { precision }) => {
+            bignum_binop(cg, lhs.into_pointer_value(), rhs.into_pointer_value(), *precision, cg.rt.ynz_bignum_add, "bnadd")
+        }
+        (Sub, Type::Number { precision }) if *precision <= 34 => decimal_binop(
             cg,
             lhs.into_pointer_value(),
             rhs.into_pointer_value(),
             cg.rt.decimal_sub,
             "dsub",
         ),
-        (Mul, Type::Number { .. }) => decimal_binop(
+        (Sub, Type::Number { precision }) => {
+            bignum_binop(cg, lhs.into_pointer_value(), rhs.into_pointer_value(), *precision, cg.rt.ynz_bignum_sub, "bnsub")
+        }
+        (Mul, Type::Number { precision }) if *precision <= 34 => decimal_binop(
             cg,
             lhs.into_pointer_value(),
             rhs.into_pointer_value(),
             cg.rt.decimal_mul,
             "dmul",
         ),
+        (Mul, Type::Number { precision }) => {
+            bignum_binop(cg, lhs.into_pointer_value(), rhs.into_pointer_value(), *precision, cg.rt.ynz_bignum_mul, "bnmul")
+        }
+        (Div, Type::Number { precision }) if *precision > 34 => {
+            bignum_binop(cg, lhs.into_pointer_value(), rhs.into_pointer_value(), *precision, cg.rt.ynz_bignum_div, "bndiv")
+        }
         (Div, Type::Number { .. }) => {
             decimal_div(cg, lhs.into_pointer_value(), rhs.into_pointer_value())
         }
@@ -3194,6 +3228,26 @@ fn decimal_binop<'ctx>(
     Ok(out.into())
 }
 
+/// M8 P6: bignum arithmetic call — (a: *i8, b: *i8, precision: i32) → *i8.
+fn bignum_binop<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    lhs: PointerValue<'ctx>,
+    rhs: PointerValue<'ctx>,
+    precision: u32,
+    rt_fn: FunctionValue<'ctx>,
+    name: &str,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let prec_val = cg.ctx.i32_type().const_int(precision as u64, false);
+    let result = cg
+        .builder
+        .build_call(rt_fn, &[lhs.into(), rhs.into(), prec_val.into()], name)
+        .map_err(|e| format!("{e}"))?;
+    Ok(result
+        .try_as_basic_value()
+        .basic()
+        .ok_or("bignum op returned void")?)
+}
+
 fn decimal_div<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     lhs: PointerValue<'ctx>,
@@ -3411,7 +3465,7 @@ fn to_c_string<'ctx>(
                 .ok_or("float_to_string returned void")?
                 .into_pointer_value())
         }
-        Type::Number { .. } => {
+        Type::Number { precision } if *precision <= 34 => {
             let c = cg
                 .builder
                 .build_call(cg.rt.decimal_to_string, &[val.into()], "dec_str")
@@ -3421,6 +3475,8 @@ fn to_c_string<'ctx>(
                 .ok_or("decimal_to_string returned void")?
                 .into_pointer_value())
         }
+        // M8 P6: bignum (N > 34) is stored as a pointer to a decimal string — pass directly.
+        Type::Number { .. } => Ok(val.into_pointer_value()),
         // Default debug representation for user-defined shapes: "ShapeName { field: val, ... }"
         // Visible fields only. Nested shapes are printed recursively.
         Type::Shape { name } => {

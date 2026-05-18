@@ -159,6 +159,14 @@ declare ptr @ynz_string_builder_finalize(ptr)
 
 declare void @ynz_string_builder_drop(ptr)
 
+declare ptr @ynz_bignum_add(ptr, ptr, i32)
+
+declare ptr @ynz_bignum_sub(ptr, ptr, i32)
+
+declare ptr @ynz_bignum_mul(ptr, ptr, i32)
+
+declare ptr @ynz_bignum_div(ptr, ptr, i32)
+
 define i32 @main() {
 entry:
   call void @ynz_siphash_init()

@@ -1392,24 +1392,19 @@ fn number_angle_bracket_34_accepts() {
 }
 
 #[test]
-fn number_angle_bracket_non34_produces_deferral() {
-    // WHY: `number<N>` for N != 34 is reserved for M8 bignum. The parser must
-    // accept the angle-bracket syntax but emit a deferral diagnostic pointing at M8.
+fn number_angle_bracket_non34_parses_in_m8() {
+    // WHY: M8 P6 lifts the N != 34 deferral. `number<128>` must now parse without
+    // error — the bignum runtime ships in M8. Guards that the deferral diagnostic
+    // was fully removed and doesn't fire for any valid precision 1..=4096.
+    //
+    // test-ratchet: M8 P6 changes behavior from "1 deferral diagnostic" to "0 diagnostics".
+    // The old test (number_angle_bracket_non34_produces_deferral) is replaced by this one.
     let output = parse("function entrypoint() -> nothing { let x: number<128> = 0 }");
     assert_eq!(
         output.diagnostics.len(),
-        1,
-        "number<N != 34> must produce exactly 1 deferral diagnostic"
-    );
-    assert!(
-        output.diagnostics[0].what.contains("number<128>"),
-        "Deferral diagnostic must name the precision, got: {:?}",
-        output.diagnostics[0].what
-    );
-    assert!(
-        output.diagnostics[0].why.contains("M8"),
-        "Deferral diagnostic must mention M8, got: {:?}",
-        output.diagnostics[0].why
+        0,
+        "number<128> must parse without diagnostics in M8 (bignum ships): {:?}",
+        output.diagnostics
     );
 }
 

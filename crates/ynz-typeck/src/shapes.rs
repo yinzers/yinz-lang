@@ -301,6 +301,8 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
                 continue;
             }
             let ty = name_table.resolve_ast_type(&field.ty);
+            // Scan the type annotation for unknown named types and emit targeted diagnostics.
+            emit_unknown_field_type_diag(&field.ty, &field.name, &s.name, &name_table, diags);
             own_fields.push(FieldDef {
                 name: field.name.clone(),
                 ty,
@@ -550,5 +552,49 @@ fn resolve_field_type_in_generic_shape(ast_ty: &AstType, type_params: &[String])
             }
         }
         _ => Type::Error,
+    }
+}
+
+/// Emit a diagnostic when a shape field's type annotation contains an unrecognized
+/// type name. Walks the AstType to find the first unknown Named node and points at it.
+/// Walk an AstType annotation and emit a diagnostic for each unknown named type.
+/// Used at shape-collection time so the error points at the declaration, not usage.
+fn emit_unknown_field_type_diag(
+    ast_ty: &AstType,
+    field_name: &str,
+    shape_name: &str,
+    name_table: &ShapeTable,
+    diags: &mut DiagnosticBucket,
+) {
+    let known = |n: &str| -> bool {
+        matches!(n, "int" | "float" | "number" | "bool" | "string"
+                  | "nothing" | "none" | "range" | "Frame" | "SourceLoc")
+            || name_table.contains(n)
+            || name_table.union_aliases.contains_key(n)
+    };
+
+    match ast_ty {
+        AstType::Named(n, span) if !known(n) => {
+            diags.push(Diagnostic::error(
+                span.clone(),
+                format!("`{n}` is not a known type."),
+                format!("Field `{field_name}` on `{shape_name}` cannot use `{n}`. Use a built-in or a `shape` name defined in this file."),
+                "Built-ins: `int`, `float`, `number`, `bool`, `string`. Collections: `array<T>`, `fixed<T>`, `map<K, V>`. Optionals: `maybe<T>`.",
+            ));
+        }
+        AstType::Union { variants, .. } => {
+            for v in variants {
+                emit_unknown_field_type_diag(v, field_name, shape_name, name_table, diags);
+            }
+        }
+        AstType::Maybe { inner, .. } => {
+            emit_unknown_field_type_diag(inner, field_name, shape_name, name_table, diags);
+        }
+        AstType::Generic { args, .. } => {
+            for a in args {
+                emit_unknown_field_type_diag(a, field_name, shape_name, name_table, diags);
+            }
+        }
+        _ => {}
     }
 }
