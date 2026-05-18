@@ -1,6 +1,6 @@
 # Session State: ynz
 
-**Last Updated**: 2026-05-18 (M6 all phases complete P0–P6; feat/m6 branch ready for PR; version bumped to 0.1.0-m6; 631 tests green)
+**Last Updated**: 2026-05-18 (M6 SHIPPED: tag v0.1.0-m6, 631 tests; plan archived to done/; next milestone = M7)
 
 ---
 
@@ -9,7 +9,8 @@
 *(auto-rebuilt by SessionStart hook from `.claude/plans/active/*.md` front-matter — do not edit by hand)*
 
 <!-- RADAR-START -->
-- m6-options-unions (patrick) — 18 files touched — 12/114 done — 2026-05-18-r2
+- m5-generics (patrick) — 18 files touched — 0/146 done — 2026-05-17-r4
+- m6-options-unions (patrick) — 18 files touched — 19/114 done — 2026-05-18-r2
 - v0-1-compiler (patrick) — 5 files touched — 0/184 done — 2026-05-12-r4
 <!-- RADAR-END -->
 
@@ -78,6 +79,7 @@ cargo fmt --all
 - [2026-05-17] **M4 merged to main (direct merge by patrick)**: feat/m4-verification (P3c–P7 bundled — ownership, codegen, fixtures, v0.1.0-m4 prep) landed on main. Cargo.toml at `0.1.0-m4`. Tag `v0.1.0-m4` local.
 - [2026-05-17] **M5 plan approved + Phase 0 shipped (524ca2e, branch chore/m5-doc-lockdown)**: Generics + Collections + Maybe<T> milestone planned and plan-reviewer Round 2 PASS. Locked decisions: `maybe<T>` moves from M6 to M5 (cleanest .get() API); map = Swiss Tables + SipHash-2-4 + perfect-hash for static-key literals; for-loop over built-in collections is typeck+codegen special-case with REPLACE-AT M7 markers; auto-promotion `array<T>` → `fixed<T>` ships codegen-only in M5 (Tier 3 lint defers to v0.4, muted hint defers to v0.2). 8-phase plan (P0-P6). P0 (doc lockdown — master plan M5/M6/M7 paragraphs updated to `<>`, design/maybe.md created with 9-row LLVM lowering decision table + 10-row flow-sensitive .value rules + 9-row none-inference rules + documented v0.1 cycle-leak limitation, spec/maybe.md syntax-updated) SHIPPED on branch `chore/m5-doc-lockdown`, awaiting merge to main. Plan: `.claude/plans/active/m5-generics.md`.
 - [2026-05-17] **M5 P1 shipped (49940c9)**: Lexer + AST scaffolding. Tok::None, 3 Type variants, 2 Expr variants, 1 Stmt variant. 401 tests.
+- [2026-05-18] **M6 SHIPPED (tag v0.1.0-m6, 631 tests)**: All 8 phases P0–P6 done via PRs #25+#26. options types (i8 tags, exhaustiveness, toString), union types (tagged-struct, is-narrowing, shape aliases), fallible conversions (.toInt/.toFloat/.toNumber on float/number/string), early-return narrowing, 3 new design docs, M2+M3 catch-up closed. Plan archived: `.claude/plans/done/m6-options-unions.md`.
 - [2026-05-17] **M5 FULLY SHIPPED (tag v0.1.0-m5, 574 tests)**: All 8 phases P0–P6 done via PRs #17–#24. Generics engine (MonomorphizationTable, GenericFnTable, GenericShapeTable, follows constraints), BuiltinArray/Fixed/Maybe/Map typeck, LLVM codegen (ynz_array_* runtime, {i64,i64} maybe, SipHash-2-4, Swiss Tables), 5 runnable fixtures, examples/basics M4+M5 showcase, m5_errors gallery. Plan archived: `.claude/plans/done/m5-generics.md`.
 
 ---
