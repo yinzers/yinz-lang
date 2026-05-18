@@ -1440,6 +1440,59 @@ fn single_quote_produces_one_error_with_recovery() {
 }
 
 #[test]
+fn hash_comment_produces_one_error_no_cascade() {
+    // WHY: `# this is a comment` used to produce cascade errors because `#` was
+    // consumed but `this`, `is`, `a`, `comment` were still lexed as identifiers.
+    // The dedicated handler must consume the whole line — guard against regression.
+    let (_, diag_count) = lex_counts("# this is a comment");
+    assert_eq!(diag_count, 1, "Hash comment must produce exactly 1 diagnostic, got {diag_count}");
+    let diags = lex_diags("# this is a comment");
+    assert!(
+        diags[0].what_instead.contains("//"),
+        "Must redirect to `//` syntax, got: {:?}", diags[0].what_instead
+    );
+}
+
+#[test]
+fn semicolon_produces_teaching_error() {
+    // WHY: `let x = 5;` from JS/Rust habit must tell the user semicolons aren't needed,
+    // not just "character not valid". Guards against falling back to emit_unknown_byte.
+    let (_, diag_count) = lex_counts("let x = 5;");
+    assert_eq!(diag_count, 1, "Semicolon must produce exactly 1 diagnostic");
+    let diags = lex_diags("let x = 5;");
+    assert!(
+        diags[0].what.contains("Semicolons") || diags[0].what.contains("semicolon"),
+        "Must mention semicolons, got: {:?}", diags[0].what
+    );
+    assert!(
+        diags[0].what_instead.contains("newline") || diags[0].what_instead.contains("Remove"),
+        "Must tell user to remove it, got: {:?}", diags[0].what_instead
+    );
+}
+
+#[test]
+fn dollar_prefix_produces_teaching_error() {
+    // WHY: `$x` from PHP/shell must tell the user no prefix is needed, not generic.
+    let diags = lex_diags("$x");
+    assert!(!diags.is_empty(), "$ must produce a diagnostic");
+    assert!(
+        diags[0].what_instead.contains("$") || diags[0].what.contains("$"),
+        "Must mention the $ prefix, got: {:?}", diags[0]
+    );
+}
+
+#[test]
+fn question_mark_produces_teaching_error() {
+    // WHY: `int?` from Swift/Kotlin must redirect to `maybe<T>`, not generic.
+    let diags = lex_diags("int?");
+    assert!(!diags.is_empty(), "? must produce a diagnostic");
+    assert!(
+        diags[0].what_instead.contains("maybe") || diags[0].why.contains("maybe"),
+        "Must redirect to maybe<T>, got: {:?}", diags[0]
+    );
+}
+
+#[test]
 fn m7_errors_keyword_lexes() {
     // WHY: `errors` is a new M7 keyword — it must produce Token::Errors, not
     // an Identifier. If it falls through to Identifier, the parser cannot

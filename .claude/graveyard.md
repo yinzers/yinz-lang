@@ -136,3 +136,30 @@ Add entries via `/learn` when a project-specific mistake pattern is identified. 
 **Severity**: critical for compiler source changes (would land in the compiler if merged); warning for docs changes (re-relitigation risk only).
 
 **Originating incident**: 2026-05-14 — earlier in the design-lockdown conversation, Claude proposed `try { } recover (e: Panic) { }` blocks for explicit panic recovery in scope. Patrick correctly identified this as try/catch under a different name and rejected it. The supervisor pattern at the task boundary handles every legitimate use case (per-request isolation in HTTP servers, per-job isolation in queue workers, per-order isolation in trading bots). Adding a second recovery mechanism would violate Yinz's "one concept = one keyword" principle and re-introduce all the problems Java/Python have with try/catch (catch-and-silently-continue, exception-as-flow-control, etc.). See `design/future/panic-safety.md` for the full design rationale.
+
+---
+
+## Generic Lexer Error for Common Migrant-Language Characters — 2026-05-18
+
+**Scope**: `crates/ynz-parser/src/lexer.rs` — the `lex_one` match and `emit_unknown_byte` fallthrough.
+
+**Exemption**: Truly obscure characters with no established use in major languages (e.g., `\x01`, `\x7f`) may use the generic fallthrough. Any character that IS syntactically meaningful in JS, Python, Rust, Go, TypeScript, PHP, Swift, or Kotlin needs a dedicated handler.
+
+**Cause**: New characters added to the lexer's fallthrough `emit_unknown_byte` path produce a generic "The character X is not valid here / Remove or replace this character" message with a wrong WHY ("Yinz source files may only contain ASCII text" — single quote IS ASCII). This violates Golden Rule 11 (WHY must be specific and contextual) and can cause cascade errors when the character normally delimits a multi-token construct (e.g., `'hello world'` → 5 cascade errors before the fix; `# comment` → cascade into keyword parse errors before the fix).
+
+**Known fixed**: `"` (double quote), `'` (single quote), `#` (Python/shell comment), `;` (JS/Rust/C semicolon), `$` (PHP/shell variable prefix), `?` (Swift/Kotlin nullable suffix). Each has a dedicated handler and a regression test.
+
+**Detection signature**: A diff adding a `b'X' => { ... emit_unknown_byte ... }` arm in `lex_one` where the message text contains "not valid here" or "Remove or replace this character" — i.e., the generic text leaks through instead of a dedicated teaching message.
+
+**Constraint**: Any new character that is syntactically meaningful in a major language (see Exemption above) MUST get a dedicated handler in `lex_one` that:
+1. Consumes the full construct if it can span multiple tokens (e.g., `#` comment → consume to EOL; `'...'` → consume to closing quote)
+2. Emits a WHAT that names the character's role in the source language ("Semicolons are not used in Yinz" not "The character `;` is not valid here")
+3. Emits a WHAT-INSTEAD with a concrete Yinz equivalent (not "Remove or replace")
+4. Has a regression test in `crates/ynz-parser/tests/lex.rs` asserting non-generic message content
+
+**Bouncer checks**:
+- [ ] For diff lines in `crates/ynz-parser/src/lexer.rs` adding `emit_unknown_byte`: grep surrounding context for "not valid here" or "Remove or replace". Match → WARNING.
+
+**Severity**: warning (bad UX, not a correctness bug — but the teaching mission makes this load-bearing).
+
+**Originating incident**: 2026-05-18 — user tested `ynz run` with `print('hello world')` and got 5 cryptic cascade errors. Audit by Explore agent identified `#`, `;`, `$`, `?` as additional gaps. All five fixed in one session.
