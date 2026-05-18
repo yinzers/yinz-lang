@@ -74,7 +74,10 @@ fn analyze_stmts(stmts: &[Stmt]) -> ReturnAnalysis {
         }
     }
 
-    ReturnAnalysis { all_paths_return: definite_return, dead_code: dead }
+    ReturnAnalysis {
+        all_paths_return: definite_return,
+        dead_code: dead,
+    }
 }
 
 fn stmt_span(stmt: &Stmt) -> SourceSpan {
@@ -107,12 +110,18 @@ mod tests {
     }
 
     fn empty_block() -> Block {
-        Block { stmts: vec![], span: span() }
+        Block {
+            stmts: vec![],
+            span: span(),
+        }
     }
 
     fn return_block() -> Block {
         Block {
-            stmts: vec![Stmt::Return { value: None, span: span() }],
+            stmts: vec![Stmt::Return {
+                value: None,
+                span: span(),
+            }],
             span: span(),
         }
     }
@@ -130,7 +139,10 @@ mod tests {
     fn single_return_stmt_returns_on_all_paths() {
         // WHY: the simplest valid case — one explicit return covers all paths.
         let block = Block {
-            stmts: vec![Stmt::Return { value: None, span: span() }],
+            stmts: vec![Stmt::Return {
+                value: None,
+                span: span(),
+            }],
             span: span(),
         };
         let result = analyze_return_paths(&block);
@@ -143,14 +155,21 @@ mod tests {
         // identify the print's span so typeck can emit a dead-code warning.
         let block = Block {
             stmts: vec![
-                Stmt::Return { value: None, span: span() },
+                Stmt::Return {
+                    value: None,
+                    span: span(),
+                },
                 Stmt::Expr(err_expr()),
             ],
             span: span(),
         };
         let result = analyze_return_paths(&block);
         assert!(result.all_paths_return);
-        assert_eq!(result.dead_code.len(), 1, "dead-code span expected for stmt after return");
+        assert_eq!(
+            result.dead_code.len(),
+            1,
+            "dead-code span expected for stmt after return"
+        );
     }
 
     #[test]
@@ -166,7 +185,10 @@ mod tests {
             span: span(),
         };
         let result = analyze_return_paths(&block);
-        assert!(!result.all_paths_return, "simple if does NOT guarantee return");
+        assert!(
+            !result.all_paths_return,
+            "simple if does NOT guarantee return"
+        );
     }
 
     #[test]
@@ -174,7 +196,10 @@ mod tests {
         // WHY: `if (x) { 1 => return 1; else => return 0 }` — every arm returns.
         // The analysis must recognize this as covering all paths.
         let arm = MatchArm {
-            pattern: MatchPattern { kind: MatchPatternKind::Value(err_expr()), span: span() },
+            pattern: MatchPattern {
+                kind: MatchPatternKind::Value(err_expr()),
+                span: span(),
+            },
             body: return_block(),
             arrow_span: span(),
         };
@@ -188,7 +213,10 @@ mod tests {
             span: span(),
         };
         let result = analyze_return_paths(&block);
-        assert!(result.all_paths_return, "match with else + all-returning arms covers all paths");
+        assert!(
+            result.all_paths_return,
+            "match with else + all-returning arms covers all paths"
+        );
     }
 
     #[test]
@@ -196,7 +224,10 @@ mod tests {
         // WHY: `if (x) { 1 => return 1 }` — no else_arm means fall-through.
         // The analysis must NOT count this as covering all paths.
         let arm = MatchArm {
-            pattern: MatchPattern { kind: MatchPatternKind::Value(err_expr()), span: span() },
+            pattern: MatchPattern {
+                kind: MatchPatternKind::Value(err_expr()),
+                span: span(),
+            },
             body: return_block(),
             arrow_span: span(),
         };
@@ -210,7 +241,10 @@ mod tests {
             span: span(),
         };
         let result = analyze_return_paths(&block);
-        assert!(!result.all_paths_return, "match without else has a fall-through path");
+        assert!(
+            !result.all_paths_return,
+            "match without else has a fall-through path"
+        );
     }
 
     #[test]
@@ -226,7 +260,10 @@ mod tests {
             span: span(),
         };
         let result = analyze_return_paths(&block);
-        assert!(!result.all_paths_return, "while loop does NOT guarantee return");
+        assert!(
+            !result.all_paths_return,
+            "while loop does NOT guarantee return"
+        );
     }
 
     #[test]
@@ -244,7 +281,10 @@ mod tests {
             span: span(),
         };
         let result = analyze_return_paths(&block);
-        assert!(!result.all_paths_return, "for loop does NOT guarantee return");
+        assert!(
+            !result.all_paths_return,
+            "for loop does NOT guarantee return"
+        );
     }
 
     #[test]
@@ -255,13 +295,19 @@ mod tests {
         let arm_with_dead = {
             let body = Block {
                 stmts: vec![
-                    Stmt::Return { value: None, span: span() },
+                    Stmt::Return {
+                        value: None,
+                        span: span(),
+                    },
                     Stmt::Expr(err_expr()),
                 ],
                 span: span(),
             };
             MatchArm {
-                pattern: MatchPattern { kind: MatchPatternKind::Value(err_expr()), span: span() },
+                pattern: MatchPattern {
+                    kind: MatchPatternKind::Value(err_expr()),
+                    span: span(),
+                },
                 body,
                 arrow_span: span(),
             }
@@ -277,6 +323,10 @@ mod tests {
         };
         let result = analyze_return_paths(&block);
         assert!(result.all_paths_return);
-        assert_eq!(result.dead_code.len(), 1, "dead code inside arm body must be reported");
+        assert_eq!(
+            result.dead_code.len(),
+            1,
+            "dead code inside arm body must be reported"
+        );
     }
 }

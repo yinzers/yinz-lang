@@ -48,7 +48,6 @@ fn ynz_run_stdout(source_path: &Path) -> (String, String, i32) {
     (stdout, stderr, code)
 }
 
-
 #[test]
 fn hello_ynz_prints_hello_yinz_and_exits_zero() {
     // WHY: this is the M1 success criterion. Every other test is secondary.
@@ -59,7 +58,6 @@ fn hello_ynz_prints_hello_yinz_and_exits_zero() {
         "stdout must be exactly `hello, yinz\\n`"
     );
 }
-
 
 #[test]
 fn build_produces_executable_and_exits_zero() {
@@ -91,7 +89,6 @@ fn build_produces_executable_and_exits_zero() {
     // Clean up.
     let _ = std::fs::remove_dir_all(&tmp);
 }
-
 
 #[test]
 fn broken_main_exits_nonzero_with_diagnostic() {
@@ -126,7 +123,6 @@ fn empty_source_exits_nonzero_with_missing_entrypoint_diagnostic() {
     insta::assert_snapshot!("empty_stderr", stderr);
 }
 
-
 #[test]
 fn file_path_with_spaces_runs_correctly() {
     // WHY: file paths with spaces are the canonical shell-injection and quoting
@@ -145,7 +141,6 @@ fn file_path_with_spaces_runs_correctly() {
     assert_eq!(stdout, "hello, yinz\n");
 }
 
-
 #[test]
 fn invalid_utf8_source_exits_nonzero_with_diagnostic() {
     // WHY: a source file with invalid UTF-8 must produce a clear error,
@@ -162,7 +157,6 @@ fn invalid_utf8_source_exits_nonzero_with_diagnostic() {
         "invalid UTF-8 must produce a diagnostic"
     );
 }
-
 
 #[test]
 fn m2_smoke_prints_expected_stdout() {
@@ -187,7 +181,6 @@ fn m2_decimal_exactness_prints_0_3() {
     assert_eq!(code, 0, "decimal exactness must exit 0; stderr:\n{stderr}");
     assert_eq!(stdout, "0.3\n", "0.1 + 0.2 must print exactly `0.3`");
 }
-
 
 #[test]
 fn m2_mixed_int_number_produces_diagnostic() {
@@ -244,7 +237,6 @@ fn m2_compound_assign_produces_diagnostic() {
     insta::assert_snapshot!("m2_compound_assign_stderr", stderr);
 }
 
-
 #[test]
 fn m2_int_overflow_panics_and_exits_nonzero() {
     // WHY: i64::MAX + 1 overflows. The runtime must catch it and exit non-zero
@@ -252,7 +244,10 @@ fn m2_int_overflow_panics_and_exits_nonzero() {
     // indication that anything went wrong.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m2_int_overflow.ynz"));
     assert_ne!(code, 0, "int overflow must exit non-zero");
-    assert!(stdout.is_empty(), "panicking program must produce no stdout");
+    assert!(
+        stdout.is_empty(),
+        "panicking program must produce no stdout"
+    );
     assert!(
         !stderr.is_empty(),
         "int overflow must print a runtime error message"
@@ -272,8 +267,6 @@ fn m2_int_div_by_zero_panics_and_exits_nonzero() {
     );
 }
 
-
-
 #[test]
 fn m3_fib_prints_55() {
     // WHY: M3 success criterion. fib(10) = 55. If this is wrong, recursion,
@@ -292,7 +285,10 @@ fn m4_p5_wrapping_add_closes_m2_catchup() {
     // wrapping intrinsic lowering or LLVM overflow-check bypass is broken.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m2_wrapping_add_deferred.ynz"));
     assert_eq!(code, 0, "wrapping add must succeed; stderr:\n{stderr}");
-    assert_eq!(stdout, "-9223372036854775808\n", "int.max + 1 must wrap to int.min");
+    assert_eq!(
+        stdout, "-9223372036854775808\n",
+        "int.max + 1 must wrap to int.min"
+    );
 }
 
 #[test]
@@ -303,8 +299,10 @@ fn m4_p5_int_max_constant_closes_m2_catchup() {
     // this produces a compile error ("int is not defined").
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m2_int_max_deferred.ynz"));
     assert_eq!(code, 0, "int.max constant must compile; stderr:\n{stderr}");
-    assert_eq!(stdout, "9223372036854775807\n-9223372036854775808\n",
-        "int.max and int.min must print the correct i64 extremes");
+    assert_eq!(
+        stdout, "9223372036854775807\n-9223372036854775808\n",
+        "int.max and int.min must print the correct i64 extremes"
+    );
 }
 
 // ── M4 P6 positive fixtures ───────────────────────────────────────────────────
@@ -315,7 +313,10 @@ fn m4_inheritance_extends_prepends_parent_fields() {
     // If field layout merging is broken, Dog.name (from Animal) would be
     // missing and the print would segfault or produce garbage.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_inheritance.ynz"));
-    assert_eq!(code, 0, "inheritance fixture must compile; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "inheritance fixture must compile; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "Rex\nHusky\n");
 }
 
@@ -335,7 +336,10 @@ fn m4_hidden_field_accessible_inside_method() {
     // methods but invisible outside. This tests the read path (value()) and
     // write path (increment()) for a field that callers can't see.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_hidden_field.ynz"));
-    assert_eq!(code, 0, "hidden field fixture must compile; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "hidden field fixture must compile; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "3\n");
 }
 
@@ -354,7 +358,10 @@ fn m4_base_shape_blocks_direct_instantiation() {
     // inherited); only direct instantiation of the base is blocked (tested
     // separately in the negative suite).
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_base_shape.ynz"));
-    assert_eq!(code, 0, "base shape fixture must compile; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "base shape fixture must compile; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "Rust\n120\n");
 }
 
@@ -363,8 +370,14 @@ fn m4_type_constants_and_wrapping_saturation() {
     // WHY: int.max / int.min type-attached constants + saturatingAdd must
     // clamp at INT64_MAX and wrappingAdd must two's-complement-wrap.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_type_constants.ynz"));
-    assert_eq!(code, 0, "type constants fixture must compile; stderr:\n{stderr}");
-    assert_eq!(stdout, "9223372036854775807\n-9223372036854775808\n9223372036854775807\n-9223372036854775808\n");
+    assert_eq!(
+        code, 0,
+        "type constants fixture must compile; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout,
+        "9223372036854775807\n-9223372036854775808\n9223372036854775807\n-9223372036854775808\n"
+    );
 }
 
 // ── M4 P6 negative fixtures ───────────────────────────────────────────────────
@@ -376,7 +389,10 @@ fn m4_neg_use_after_give_is_compile_error() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_use_after_give.ynz"));
     assert_ne!(code, 0, "use-after-give must be rejected");
     assert!(stdout.is_empty());
-    assert!(stderr.contains("given away"), "error must name the give site; got:\n{stderr}");
+    assert!(
+        stderr.contains("given away"),
+        "error must name the give site; got:\n{stderr}"
+    );
 }
 
 #[test]
@@ -386,7 +402,10 @@ fn m4_neg_const_cannot_be_lent_for_mutation() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_const_cannot_lend.ynz"));
     assert_ne!(code, 0, "const-lend must be rejected");
     assert!(stdout.is_empty());
-    assert!(stderr.contains("const"), "error must mention const; got:\n{stderr}");
+    assert!(
+        stderr.contains("const"),
+        "error must mention const; got:\n{stderr}"
+    );
 }
 
 #[test]
@@ -396,7 +415,10 @@ fn m4_neg_const_field_assign_is_compile_error() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_const_field_assign.ynz"));
     assert_ne!(code, 0, "const field assign must be rejected");
     assert!(stdout.is_empty());
-    assert!(stderr.contains("const"), "error must mention const; got:\n{stderr}");
+    assert!(
+        stderr.contains("const"),
+        "error must mention const; got:\n{stderr}"
+    );
 }
 
 #[test]
@@ -406,7 +428,10 @@ fn m4_neg_base_shape_cannot_be_instantiated() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_base_instantiate.ynz"));
     assert_ne!(code, 0, "base shape instantiation must be rejected");
     assert!(stdout.is_empty());
-    assert!(stderr.contains("base shape"), "error must name the constraint; got:\n{stderr}");
+    assert!(
+        stderr.contains("base shape"),
+        "error must name the constraint; got:\n{stderr}"
+    );
 }
 
 #[test]
@@ -416,7 +441,10 @@ fn m4_neg_struct_missing_required_field_is_error() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_struct_missing_field.ynz"));
     assert_ne!(code, 0, "missing field must be rejected");
     assert!(stdout.is_empty());
-    assert!(stderr.contains("health") || stderr.contains("Missing"), "error must name the field; got:\n{stderr}");
+    assert!(
+        stderr.contains("health") || stderr.contains("Missing"),
+        "error must name the field; got:\n{stderr}"
+    );
 }
 
 #[test]
@@ -426,7 +454,10 @@ fn m4_neg_struct_wrong_field_type_is_error() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_struct_wrong_type.ynz"));
     assert_ne!(code, 0, "wrong field type must be rejected");
     assert!(stdout.is_empty());
-    assert!(stderr.contains("int") || stderr.contains("expects"), "error must name the expected type; got:\n{stderr}");
+    assert!(
+        stderr.contains("int") || stderr.contains("expects"),
+        "error must name the expected type; got:\n{stderr}"
+    );
 }
 
 #[test]
@@ -436,7 +467,10 @@ fn m4_neg_hidden_field_access_outside_shape_is_error() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_hidden_field_access.ynz"));
     assert_ne!(code, 0, "hidden field access must be rejected");
     assert!(stdout.is_empty());
-    assert!(stderr.contains("hidden"), "error must explain the hidden constraint; got:\n{stderr}");
+    assert!(
+        stderr.contains("hidden"),
+        "error must explain the hidden constraint; got:\n{stderr}"
+    );
 }
 
 #[test]
@@ -446,7 +480,10 @@ fn m4_neg_follows_missing_function_is_error() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_follows_missing_fn.ynz"));
     assert_ne!(code, 0, "missing contract function must be rejected");
     assert!(stdout.is_empty());
-    assert!(stderr.contains("missing") || stderr.contains("draw"), "error must name the missing function; got:\n{stderr}");
+    assert!(
+        stderr.contains("missing") || stderr.contains("draw"),
+        "error must name the missing function; got:\n{stderr}"
+    );
 }
 
 #[test]
@@ -456,7 +493,10 @@ fn m4_neg_cyclic_extends_is_error() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_cyclic_extends.ynz"));
     assert_ne!(code, 0, "cyclic extends must be rejected");
     assert!(stdout.is_empty());
-    assert!(stderr.contains("cyclic") || stderr.contains("cycle"), "error must describe the cycle; got:\n{stderr}");
+    assert!(
+        stderr.contains("cyclic") || stderr.contains("cycle"),
+        "error must describe the cycle; got:\n{stderr}"
+    );
 }
 
 #[test]
@@ -464,7 +504,10 @@ fn m4_neg_banned_type_keyword_is_error() {
     // WHY: `type` is banned in favor of `shape`. Any program using it must
     // fail to compile — it should never silently pass as an identifier.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_banned_type_kw.ynz"));
-    assert_ne!(code, 0, "`type` keyword must be rejected; stderr:\n{stderr}");
+    assert_ne!(
+        code, 0,
+        "`type` keyword must be rejected; stderr:\n{stderr}"
+    );
     assert!(stdout.is_empty());
 }
 
@@ -474,9 +517,14 @@ fn m4_player_shape_compiles_and_produces_correct_output() {
     // UFCS dispatch (share/lend/give self), and lend mutation. If any codegen path
     // for shapes is broken, this fails with a compile error or wrong stdout.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_player.ynz"));
-    assert_eq!(code, 0, "m4_player must compile and run cleanly; stderr:\n{stderr}");
-    assert_eq!(stdout, "Patrick\n120\nPatrick\n",
-        "greet prints name, health is 120 after heal, consume prints name");
+    assert_eq!(
+        code, 0,
+        "m4_player must compile and run cleanly; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout, "Patrick\n120\nPatrick\n",
+        "greet prints name, health is 120 after heal, consume prints name"
+    );
 }
 
 #[test]
@@ -551,7 +599,6 @@ fn m3_multicase_else_arm_dispatches_correctly() {
     assert_eq!(code, 0, "exit code must be 0; stderr:\n{stderr}");
     assert_eq!(stdout, "10\n20\n0\n");
 }
-
 
 #[test]
 fn m3_param_mutation_produces_m4_deferral_diagnostic() {
@@ -687,16 +734,24 @@ fn m3_loop_var_mutation_produces_diagnostic() {
     );
 }
 
-
 #[test]
 fn m3_is_type_deferral_now_runnable_in_m6() {
     // WHY: `m3_is_type_deferral.ynz` was a deferral fixture in M3.
     // M6 P5 ships the runnable replacement (Circle | Square union demo).
     // The fixture must now compile and run cleanly with correct output.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_is_type_deferral.ynz"));
-    assert_eq!(code, 0, "union fixture must compile and run; stderr:\n{stderr}");
-    assert!(stdout.contains("circle"), "expected 'circle' in output, got: {stdout}");
-    assert!(stdout.contains("square"), "expected 'square' in output, got: {stdout}");
+    assert_eq!(
+        code, 0,
+        "union fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("circle"),
+        "expected 'circle' in output, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("square"),
+        "expected 'square' in output, got: {stdout}"
+    );
 }
 
 #[test]
@@ -706,7 +761,10 @@ fn m4_share_param_compiles_and_runs() {
     // the share param compiles cleanly and the function is callable.
     // If this regresses to a deferral or error, the ownership system is broken.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_share_param_deferral.ynz"));
-    assert_eq!(code, 0, "share param must compile and run in M4; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "share param must compile and run in M4; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "world\n", "greet(n) must print `world`");
 }
 
@@ -718,7 +776,10 @@ fn m3_range_outside_for_now_supported_in_m7() {
     // must compile and run cleanly. If the M7 P4c range codegen is broken, this
     // would exit non-zero or produce wrong output.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_range_outside_for_deferral.ynz"));
-    assert_eq!(code, 0, "range as first-class value must compile in M7; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "range as first-class value must compile in M7; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "done\n");
 }
 
@@ -757,7 +818,10 @@ fn m5_identity_generic_fn_prints_42() {
     // simplest generic function. If monomorphization is broken, the call either
     // fails to compile or produces wrong output.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_identity.ynz"));
-    assert_eq!(code, 0, "m5_identity must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "m5_identity must compile and run; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "42\n");
 }
 
@@ -808,7 +872,10 @@ fn m6_string_to_int_catch_up() {
     // Exercises the locked parsing rules (whitespace strip, sign accept, hex reject,
     // fractional reject). Each line's result must match the locked test vector.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m2_string_to_int.ynz"));
-    assert_eq!(code, 0, "m2_string_to_int must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "m2_string_to_int must compile and run; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "42\n17\n-99\n-1\n-1\n-1\n-1\n");
 }
 
@@ -817,7 +884,10 @@ fn m6_string_to_float_catch_up() {
     // WHY: M6 P5 closes the M2 catch-up obligation for string.toFloat().
     // Verifies that valid floats return some(true) and invalid inputs return none(false).
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m2_string_to_float.ynz"));
-    assert_eq!(code, 0, "m2_string_to_float must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "m2_string_to_float must compile and run; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "true\nfalse\nfalse\ntrue\n");
 }
 
@@ -826,10 +896,12 @@ fn m6_union_is_narrowing_runnable() {
     // WHY: m3_is_type_deferral.ynz is now the runnable M6 union demo.
     // Verifies that `is Circle =>` and `is Square =>` correctly narrow union values.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_is_type_deferral.ynz"));
-    assert_eq!(code, 0, "union demo must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "union demo must compile and run; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "circle\nsquare\n");
 }
-
 
 // ── M7 P4a: errors codegen ─────────────────────────────────────────────────────
 
@@ -841,7 +913,10 @@ fn m7_errors_basic_success_path() {
     // instead of "ok". The output "ok" proves the success bits were correctly stored
     // and extracted.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_errors_basic.ynz"));
-    assert_eq!(code, 0, "m7_errors_basic must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "m7_errors_basic must compile and run; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "ok\n");
 }
 
@@ -852,7 +927,10 @@ fn m7_errors_failed_check_false_when_success() {
     // must be 0 for success. If .failed() returns true on success, the if body would
     // execute and print "error!" — this test would fail with extra output.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_errors_failed_check.ynz"));
-    assert_eq!(code, 0, "m7_errors_failed_check must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "m7_errors_failed_check must compile and run; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "hello\n");
 }
 
@@ -862,7 +940,10 @@ fn m7_errors_propagate_two_level() {
     // main catches with .or(). Verifies that inner()'s success value flows through
     // outer()'s {i64, i64} return struct to main's .or() extraction.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_errors_propagate.ynz"));
-    assert_eq!(code, 0, "m7_errors_propagate must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "m7_errors_propagate must compile and run; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "propagated\n");
 }
 
@@ -873,10 +954,12 @@ fn m7_errors_int_return_type() {
     // scalars. If only string (pointer) values work but int values are broken,
     // this test catches it.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_errors_int.ynz"));
-    assert_eq!(code, 0, "m7_errors_int must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "m7_errors_int must compile and run; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "42\n");
 }
-
 
 // ── M7 P4b: string runtime + codegen integration tests ───────────────────────
 
@@ -887,7 +970,10 @@ fn m7_string_methods_tolower_toupper_split() {
     // (ynz_string_to_lower, ynz_string_to_upper, ynz_string_split + ynz_array_count)
     // have a codegen or ABI bug, the output will differ.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_string_methods.ynz"));
-    assert_eq!(code, 0, "m7_string_methods must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "m7_string_methods must compile and run; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "hello, world!\nHELLO, WORLD!\n2\n");
 }
 
@@ -898,7 +984,10 @@ fn m7_string_interpolation_with_expressions() {
     // If the builder codegen is wrong, the output will be missing segments, garbled,
     // or segfault. The expected output has literal text and two interpolated values.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_string_interpolation.ynz"));
-    assert_eq!(code, 0, "m7_string_interpolation must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "m7_string_interpolation must compile and run; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "Hello Alice, your score is 42!\n");
 }
 
@@ -909,10 +998,12 @@ fn m7_nfc_equality_same_bytes() {
     // If ynz_string_eq is not called at all (e.g., if == falls through to a missing
     // codegen path), the program would either crash or skip the branch.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_nfc_equality.ynz"));
-    assert_eq!(code, 0, "m7_nfc_equality must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "m7_nfc_equality must compile and run; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "equal\n");
 }
-
 
 // ── M7 P4c: Iterable codegen — string iteration, first-class range, user shape ─
 
@@ -923,7 +1014,10 @@ fn m7_for_string_iterates_code_points() {
     // is not wired, the compiler produces a codegen error. Counting 5 chars in "hello"
     // verifies the loop runs the correct number of times.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_for_string.ynz"));
-    assert_eq!(code, 0, "m7_for_string must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "m7_for_string must compile and run; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "5\n");
 }
 
@@ -934,7 +1028,10 @@ fn m7_range_first_class_storable_and_iterable() {
     // range() is only lowered as an inline iter expression (the M3 path), this test
     // fails with a codegen error when the for-loop iter is an ident, not a call.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_range_first_class.ynz"));
-    assert_eq!(code, 0, "m7_range_first_class must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "m7_range_first_class must compile and run; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "0\n1\n2\n");
 }
 
@@ -946,10 +1043,12 @@ fn m7_user_shape_iterable_via_next_function() {
     // and exits when next returns none. If the UFCS `next` dispatch is broken,
     // the loop either infinite-loops or produces no output.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_user_iterable.ynz"));
-    assert_eq!(code, 0, "m7_user_iterable must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "m7_user_iterable must compile and run; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "10\n20\n30\n");
 }
-
 
 // ── M7 P5: adversarial fixtures ────────────────────────────────────────────────
 
@@ -960,7 +1059,10 @@ fn m7_errors_unhandled_is_compile_error() {
     // rejected at compile time. If the compiler accepts this, unhandled failures
     // silently pass through — the errors keyword provides no safety. Exit code 1
     // and a non-empty stderr prove the diagnostic fires.
-    let out = run_ynz(&["build", fixture("m7_errors_unhandled.ynz").to_str().unwrap()]);
+    let out = run_ynz(&[
+        "build",
+        fixture("m7_errors_unhandled.ynz").to_str().unwrap(),
+    ]);
     assert!(
         !out.status.success(),
         "m7_errors_unhandled must fail to compile (exit != 0)"
@@ -979,7 +1081,10 @@ fn m7_errors_nested_propagation_three_levels() {
     // If any level's {error_ptr, success_val} struct is mis-wired, the value
     // leaks or the error tag is corrupted, producing 0 (fallback) instead of 42.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_errors_nested_propagation.ynz"));
-    assert_eq!(code, 0, "m7_errors_nested_propagation must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "m7_errors_nested_propagation must compile and run; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "42\n");
 }
 
@@ -990,7 +1095,10 @@ fn m7_string_empty_operations() {
     // empty string must return true (a string always starts and ends with "").
     // Off-by-one errors in the string runtime are most visible at zero length.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_string_empty.ynz"));
-    assert_eq!(code, 0, "m7_string_empty must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "m7_string_empty must compile and run; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "0\nfalse\ntrue\ntrue\n");
 }
 
@@ -1001,7 +1109,10 @@ fn m7_string_oob_returns_none() {
     // (index 100 on a 5-char string) and exactly-at-end (index 5 on "hello").
     // In-bounds index 0 must return the first code point "h".
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_string_oob.ynz"));
-    assert_eq!(code, 0, "m7_string_oob must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "m7_string_oob must compile and run; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "none\nnone\nh\n");
 }
 
@@ -1013,6 +1124,9 @@ fn m7_interpolation_nested_expressions() {
     // and a prefix/suffix pattern. If the builder codegen evaluates expressions
     // eagerly or the order is wrong, output differs.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_interpolation_nested.ynz"));
-    assert_eq!(code, 0, "m7_interpolation_nested must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "m7_interpolation_nested must compile and run; stderr:\n{stderr}"
+    );
     assert_eq!(stdout, "10 + 5 = 15\n10 * 5 = 50\nprefix_10_suffix\n");
 }

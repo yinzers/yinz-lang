@@ -24,7 +24,10 @@ fn main() {
 
     // Emit the full path to the archive so the driver can embed it with include_bytes!.
     // The driver extracts it to a temp file at link time — no external lib file needed.
-    println!("cargo:rustc-env=YNZ_RT_LIB_PATH={}", lib_dir.join("libynz_runtime.a").display());
+    println!(
+        "cargo:rustc-env=YNZ_RT_LIB_PATH={}",
+        lib_dir.join("libynz_runtime.a").display()
+    );
 
     println!(
         "cargo:rerun-if-changed={}",

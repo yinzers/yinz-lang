@@ -33,8 +33,7 @@ impl PartialEq for SignatureTable {
         // Two signature tables are equal if they have the same set of function names.
         // Fine-grained per-body salsa incrementality (v0.2 LSP work) would compare
         // individual sigs; for now, same-key-set is the coarse check.
-        self.fns.len() == other.fns.len()
-            && self.fns.keys().all(|k| other.fns.contains_key(k))
+        self.fns.len() == other.fns.len() && self.fns.keys().all(|k| other.fns.contains_key(k))
     }
 }
 
@@ -83,14 +82,18 @@ impl PartialEq for MonomorphizationTable {
 /// Shapes are collected before signatures so function signatures can reference
 /// shape types (e.g. `function greet(share self: Player) -> string`).
 #[salsa::tracked]
-pub fn module_signatures_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<SignatureOutput> {
+pub fn module_signatures_query(
+    db: &dyn salsa::Database,
+    source: SourceFile,
+) -> Arc<SignatureOutput> {
     let parse = parse_query(db, source);
     let mut diag_bucket = ynz_diagnostics::DiagnosticBucket::new();
     // Shapes first — function signatures need them for type resolution.
     let shape_table = collect_shapes(&parse.module, &mut diag_bucket);
     let generic_shape_table = collect_generic_shapes(&parse.module, &mut diag_bucket);
     let sig_table = collect_signatures(&parse.module, &mut diag_bucket, &shape_table);
-    let generic_fn_table = collect_generic_signatures(&parse.module, &mut diag_bucket, &shape_table);
+    let generic_fn_table =
+        collect_generic_signatures(&parse.module, &mut diag_bucket, &shape_table);
     Arc::new(SignatureOutput {
         sig_table,
         shape_table,

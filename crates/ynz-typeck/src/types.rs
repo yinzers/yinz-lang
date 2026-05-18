@@ -4,7 +4,6 @@
 /// Current count: 20 (M7 P3a adds ErrorsCapable; total 20 across M1–M7)
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
-
     /// Functions that don't return a value.
     Nothing,
     /// String literal type (full Unicode strings land in M7).
@@ -12,7 +11,6 @@ pub enum Type {
     /// Placeholder when the type is unknown due to an earlier error.
     /// The type checker does not cascade errors through Error-typed expressions.
     Error,
-
 
     /// Signed 64-bit integer — the default inferred type for integer literals.
     Int,
@@ -40,7 +38,6 @@ pub enum Type {
     // ── M4 ───────────────────────────────────────────────────────────────────
 
     // test-ratchet: M4 adds Shape and Dynamic for user-defined types.
-
     /// A user-defined shape type, identified by name.
     ///
     /// Field layout and method resolution use the `ShapeTable`.
@@ -55,7 +52,6 @@ pub enum Type {
     // ── M5 ───────────────────────────────────────────────────────────────────
 
     // test-ratchet: M5 P3a adds TypeParam and Generic for the generics engine.
-
     /// A type parameter placeholder inside a generic function or shape body.
     ///
     /// `function identity<T>(give value: T) -> T` — the two `T` references in the
@@ -73,7 +69,6 @@ pub enum Type {
     Generic { name: String, args: Vec<Type> },
 
     // test-ratchet: M5 P3b adds BuiltinArray, BuiltinFixed, Maybe for collection types.
-
     /// Heap-allocated growable list: `array<T>` in source.
     /// Element type is concrete at typeck time.
     BuiltinArray { elem: Box<Type> },
@@ -81,7 +76,10 @@ pub enum Type {
     /// Stack-allocated fixed-size list: `fixed<T>` in source.
     /// `size` is `Some(n)` when the literal element count is known at typeck time
     /// (for literal-OOB checking), `None` when only the annotation is present.
-    BuiltinFixed { elem: Box<Type>, size: Option<usize> },
+    BuiltinFixed {
+        elem: Box<Type>,
+        size: Option<usize>,
+    },
 
     /// Built-in optional type: `maybe<T>` in source.
     /// Distinct from `Type::Generic` because `.value` has special flow-sensitive
@@ -89,7 +87,6 @@ pub enum Type {
     Maybe { inner: Box<Type> },
 
     // test-ratchet: M5 P3c adds BuiltinMap and MapEntry for map<K,V> support.
-
     /// Built-in hash map: `map<K, V>` in source.
     /// Uses Swiss Tables + SipHash-2-4 at runtime (M5 P4b codegen).
     BuiltinMap { key: Box<Type>, val: Box<Type> },
@@ -102,7 +99,6 @@ pub enum Type {
     // ── M6 ───────────────────────────────────────────────────────────────────
 
     // test-ratchet: M6 adds Options and Union.
-
     /// A named options type: `options Status { active, inactive, banned }`.
     ///
     /// Values carry an `i8` tag; comparison is `icmp eq i8` at codegen time.
@@ -119,7 +115,6 @@ pub enum Type {
     // ── M7 ───────────────────────────────────────────────────────────────────
 
     // test-ratchet: M7 P3a adds ErrorsCapable for errors-keyword fallible types.
-
     /// Return type of a function marked `errors`: carries the success value on success,
     /// or an error value on failure. Flow-sensitive: the type narrows to `inner` after
     /// the caller checks `.failed()` or auto-propagation fires at first use.
@@ -153,9 +148,11 @@ pub fn type_name(t: &Type) -> String {
         Type::BuiltinMap { key, val } => format!("map<{}, {}>", type_name(key), type_name(val)),
         Type::MapEntry { key, val } => format!("MapEntry<{}, {}>", type_name(key), type_name(val)),
         Type::Options { name } => name.clone(),
-        Type::Union { variants } => {
-            variants.iter().map(type_name).collect::<Vec<_>>().join(" | ")
-        }
+        Type::Union { variants } => variants
+            .iter()
+            .map(type_name)
+            .collect::<Vec<_>>()
+            .join(" | "),
         Type::ErrorsCapable { inner } => format!("{} errors", type_name(inner)),
     }
 }

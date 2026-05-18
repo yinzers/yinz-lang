@@ -241,11 +241,7 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 i32.fn_type(&[ptr.into(), ptr.into()], false),
             ),
 
-            ynz_alloc: declare_fn(
-                module,
-                "ynz_alloc",
-                ptr.fn_type(&[i64.into()], false),
-            ),
+            ynz_alloc: declare_fn(module, "ynz_alloc", ptr.fn_type(&[i64.into()], false)),
             ynz_free: declare_fn(
                 module,
                 "ynz_free",
@@ -253,66 +249,234 @@ impl<'ctx> RuntimeDecls<'ctx> {
             ),
 
             ynz_array_new: declare_fn(module, "ynz_array_new", ptr.fn_type(&[], false)),
-            ynz_array_push: declare_fn(module, "ynz_array_push", void.fn_type(&[ptr.into(), i64.into()], false)),
+            ynz_array_push: declare_fn(
+                module,
+                "ynz_array_push",
+                void.fn_type(&[ptr.into(), i64.into()], false),
+            ),
             // ynz_array_get: (ptr arr, i64 idx, ptr out) -> void
-            ynz_array_get: declare_fn(module, "ynz_array_get", void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false)),
+            ynz_array_get: declare_fn(
+                module,
+                "ynz_array_get",
+                void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
+            ),
             // ynz_array_set: (ptr arr, i64 idx, i64 value) -> void
-            ynz_array_set: declare_fn(module, "ynz_array_set", void.fn_type(&[ptr.into(), i64.into(), i64.into()], false)),
-            ynz_array_count: declare_fn(module, "ynz_array_count", i64.fn_type(&[ptr.into()], false)),
-            ynz_array_drop: declare_fn(module, "ynz_array_drop", void.fn_type(&[ptr.into()], false)),
+            ynz_array_set: declare_fn(
+                module,
+                "ynz_array_set",
+                void.fn_type(&[ptr.into(), i64.into(), i64.into()], false),
+            ),
+            ynz_array_count: declare_fn(
+                module,
+                "ynz_array_count",
+                i64.fn_type(&[ptr.into()], false),
+            ),
+            ynz_array_drop: declare_fn(
+                module,
+                "ynz_array_drop",
+                void.fn_type(&[ptr.into()], false),
+            ),
 
             ynz_siphash_init: declare_fn(module, "ynz_siphash_init", void.fn_type(&[], false)),
             ynz_map_new: declare_fn(module, "ynz_map_new", ptr.fn_type(&[], false)),
-            ynz_map_get: declare_fn(module, "ynz_map_get", void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false)),
-            ynz_map_get_str: declare_fn(module, "ynz_map_get_str", void.fn_type(&[ptr.into(), ptr.into(), ptr.into()], false)),
-            ynz_map_set: declare_fn(module, "ynz_map_set", void.fn_type(&[ptr.into(), i64.into(), i64.into()], false)),
-            ynz_map_set_str: declare_fn(module, "ynz_map_set_str", void.fn_type(&[ptr.into(), ptr.into(), i64.into()], false)),
+            ynz_map_get: declare_fn(
+                module,
+                "ynz_map_get",
+                void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
+            ),
+            ynz_map_get_str: declare_fn(
+                module,
+                "ynz_map_get_str",
+                void.fn_type(&[ptr.into(), ptr.into(), ptr.into()], false),
+            ),
+            ynz_map_set: declare_fn(
+                module,
+                "ynz_map_set",
+                void.fn_type(&[ptr.into(), i64.into(), i64.into()], false),
+            ),
+            ynz_map_set_str: declare_fn(
+                module,
+                "ynz_map_set_str",
+                void.fn_type(&[ptr.into(), ptr.into(), i64.into()], false),
+            ),
             ynz_map_count: declare_fn(module, "ynz_map_count", i64.fn_type(&[ptr.into()], false)),
-            ynz_map_has: declare_fn(module, "ynz_map_has", i64.fn_type(&[ptr.into(), i64.into()], false)),
-            ynz_map_iter_get: declare_fn(module, "ynz_map_iter_get", void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false)),
-            ynz_map_iter_get_str: declare_fn(module, "ynz_map_iter_get_str", void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false)),
+            ynz_map_has: declare_fn(
+                module,
+                "ynz_map_has",
+                i64.fn_type(&[ptr.into(), i64.into()], false),
+            ),
+            ynz_map_iter_get: declare_fn(
+                module,
+                "ynz_map_iter_get",
+                void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
+            ),
+            ynz_map_iter_get_str: declare_fn(
+                module,
+                "ynz_map_iter_get_str",
+                void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
+            ),
             ynz_map_drop: declare_fn(module, "ynz_map_drop", void.fn_type(&[ptr.into()], false)),
 
             // M6: string-to-numeric ABI: (ptr, i64 len, ptr out) -> void
-            ynz_string_to_int:    declare_fn(module, "ynz_string_to_int",    void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false)),
-            ynz_string_to_float:  declare_fn(module, "ynz_string_to_float",  void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false)),
-            ynz_string_to_number: declare_fn(module, "ynz_string_to_number", void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false)),
+            ynz_string_to_int: declare_fn(
+                module,
+                "ynz_string_to_int",
+                void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
+            ),
+            ynz_string_to_float: declare_fn(
+                module,
+                "ynz_string_to_float",
+                void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
+            ),
+            ynz_string_to_number: declare_fn(
+                module,
+                "ynz_string_to_number",
+                void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
+            ),
 
             // M6: (ptr, i64 len) -> ptr (null-terminated)
-            ynz_string_from_static: declare_fn(module, "ynz_string_from_static", ptr.fn_type(&[ptr.into(), i64.into()], false)),
+            ynz_string_from_static: declare_fn(
+                module,
+                "ynz_string_from_static",
+                ptr.fn_type(&[ptr.into(), i64.into()], false),
+            ),
 
             // M7 P4a: errors runtime.
-            ynz_frame_push: declare_fn(module, "ynz_frame_push", void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false)),
-            ynz_frame_pop:  declare_fn(module, "ynz_frame_pop",  void.fn_type(&[], false)),
-            ynz_error_new:  declare_fn(module, "ynz_error_new",  ptr.fn_type(&[ptr.into()], false)),
-            ynz_error_drop: declare_fn(module, "ynz_error_drop", void.fn_type(&[ptr.into()], false)),
-            ynz_error_message: declare_fn(module, "ynz_error_message", ptr.fn_type(&[ptr.into()], false)),
+            ynz_frame_push: declare_fn(
+                module,
+                "ynz_frame_push",
+                void.fn_type(&[ptr.into(), i64.into(), ptr.into()], false),
+            ),
+            ynz_frame_pop: declare_fn(module, "ynz_frame_pop", void.fn_type(&[], false)),
+            ynz_error_new: declare_fn(module, "ynz_error_new", ptr.fn_type(&[ptr.into()], false)),
+            ynz_error_drop: declare_fn(
+                module,
+                "ynz_error_drop",
+                void.fn_type(&[ptr.into()], false),
+            ),
+            ynz_error_message: declare_fn(
+                module,
+                "ynz_error_message",
+                ptr.fn_type(&[ptr.into()], false),
+            ),
             // ynz_unhandled_error is noreturn; LLVM void return + unreachable after call.
-            ynz_unhandled_error: declare_fn(module, "ynz_unhandled_error", void.fn_type(&[ptr.into()], false)),
+            ynz_unhandled_error: declare_fn(
+                module,
+                "ynz_unhandled_error",
+                void.fn_type(&[ptr.into()], false),
+            ),
 
             // M7 P4b: string runtime methods and builder.
-            ynz_string_validate_utf8: declare_fn(module, "ynz_string_validate_utf8", i32.fn_type(&[ptr.into(), i64.into()], false)),
-            ynz_string_concat: declare_fn(module, "ynz_string_concat", ptr.fn_type(&[ptr.into(), ptr.into()], false)),
-            ynz_string_count: declare_fn(module, "ynz_string_count", i64.fn_type(&[ptr.into()], false)),
-            ynz_string_byte_count: declare_fn(module, "ynz_string_byte_count", i64.fn_type(&[ptr.into()], false)),
-            ynz_string_codepoint_at: declare_fn(module, "ynz_string_codepoint_at", ptr.fn_type(&[ptr.into(), i64.into()], false)),
-            ynz_string_byte_at: declare_fn(module, "ynz_string_byte_at", i64.fn_type(&[ptr.into(), i64.into()], false)),
-            ynz_string_contains: declare_fn(module, "ynz_string_contains", i32.fn_type(&[ptr.into(), ptr.into()], false)),
-            ynz_string_index_of: declare_fn(module, "ynz_string_index_of", i64.fn_type(&[ptr.into(), ptr.into()], false)),
-            ynz_string_starts_with: declare_fn(module, "ynz_string_starts_with", i32.fn_type(&[ptr.into(), ptr.into()], false)),
-            ynz_string_ends_with: declare_fn(module, "ynz_string_ends_with", i32.fn_type(&[ptr.into(), ptr.into()], false)),
-            ynz_string_to_upper: declare_fn(module, "ynz_string_to_upper", ptr.fn_type(&[ptr.into()], false)),
-            ynz_string_to_lower: declare_fn(module, "ynz_string_to_lower", ptr.fn_type(&[ptr.into()], false)),
-            ynz_string_substring: declare_fn(module, "ynz_string_substring", ptr.fn_type(&[ptr.into(), i64.into(), i64.into()], false)),
-            ynz_string_trim: declare_fn(module, "ynz_string_trim", ptr.fn_type(&[ptr.into()], false)),
-            ynz_string_grapheme_count: declare_fn(module, "ynz_string_grapheme_count", i64.fn_type(&[ptr.into()], false)),
-            ynz_string_grapheme_at: declare_fn(module, "ynz_string_grapheme_at", ptr.fn_type(&[ptr.into(), i64.into()], false)),
-            ynz_string_split: declare_fn(module, "ynz_string_split", ptr.fn_type(&[ptr.into(), ptr.into()], false)),
-            ynz_string_replace: declare_fn(module, "ynz_string_replace", ptr.fn_type(&[ptr.into(), ptr.into(), ptr.into()], false)),
-            ynz_string_builder_new: declare_fn(module, "ynz_string_builder_new", ptr.fn_type(&[], false)),
-            ynz_string_builder_append: declare_fn(module, "ynz_string_builder_append", void.fn_type(&[ptr.into(), ptr.into()], false)),
-            ynz_string_builder_finalize: declare_fn(module, "ynz_string_builder_finalize", ptr.fn_type(&[ptr.into()], false)),
-            ynz_string_builder_drop: declare_fn(module, "ynz_string_builder_drop", void.fn_type(&[ptr.into()], false)),
+            ynz_string_validate_utf8: declare_fn(
+                module,
+                "ynz_string_validate_utf8",
+                i32.fn_type(&[ptr.into(), i64.into()], false),
+            ),
+            ynz_string_concat: declare_fn(
+                module,
+                "ynz_string_concat",
+                ptr.fn_type(&[ptr.into(), ptr.into()], false),
+            ),
+            ynz_string_count: declare_fn(
+                module,
+                "ynz_string_count",
+                i64.fn_type(&[ptr.into()], false),
+            ),
+            ynz_string_byte_count: declare_fn(
+                module,
+                "ynz_string_byte_count",
+                i64.fn_type(&[ptr.into()], false),
+            ),
+            ynz_string_codepoint_at: declare_fn(
+                module,
+                "ynz_string_codepoint_at",
+                ptr.fn_type(&[ptr.into(), i64.into()], false),
+            ),
+            ynz_string_byte_at: declare_fn(
+                module,
+                "ynz_string_byte_at",
+                i64.fn_type(&[ptr.into(), i64.into()], false),
+            ),
+            ynz_string_contains: declare_fn(
+                module,
+                "ynz_string_contains",
+                i32.fn_type(&[ptr.into(), ptr.into()], false),
+            ),
+            ynz_string_index_of: declare_fn(
+                module,
+                "ynz_string_index_of",
+                i64.fn_type(&[ptr.into(), ptr.into()], false),
+            ),
+            ynz_string_starts_with: declare_fn(
+                module,
+                "ynz_string_starts_with",
+                i32.fn_type(&[ptr.into(), ptr.into()], false),
+            ),
+            ynz_string_ends_with: declare_fn(
+                module,
+                "ynz_string_ends_with",
+                i32.fn_type(&[ptr.into(), ptr.into()], false),
+            ),
+            ynz_string_to_upper: declare_fn(
+                module,
+                "ynz_string_to_upper",
+                ptr.fn_type(&[ptr.into()], false),
+            ),
+            ynz_string_to_lower: declare_fn(
+                module,
+                "ynz_string_to_lower",
+                ptr.fn_type(&[ptr.into()], false),
+            ),
+            ynz_string_substring: declare_fn(
+                module,
+                "ynz_string_substring",
+                ptr.fn_type(&[ptr.into(), i64.into(), i64.into()], false),
+            ),
+            ynz_string_trim: declare_fn(
+                module,
+                "ynz_string_trim",
+                ptr.fn_type(&[ptr.into()], false),
+            ),
+            ynz_string_grapheme_count: declare_fn(
+                module,
+                "ynz_string_grapheme_count",
+                i64.fn_type(&[ptr.into()], false),
+            ),
+            ynz_string_grapheme_at: declare_fn(
+                module,
+                "ynz_string_grapheme_at",
+                ptr.fn_type(&[ptr.into(), i64.into()], false),
+            ),
+            ynz_string_split: declare_fn(
+                module,
+                "ynz_string_split",
+                ptr.fn_type(&[ptr.into(), ptr.into()], false),
+            ),
+            ynz_string_replace: declare_fn(
+                module,
+                "ynz_string_replace",
+                ptr.fn_type(&[ptr.into(), ptr.into(), ptr.into()], false),
+            ),
+            ynz_string_builder_new: declare_fn(
+                module,
+                "ynz_string_builder_new",
+                ptr.fn_type(&[], false),
+            ),
+            ynz_string_builder_append: declare_fn(
+                module,
+                "ynz_string_builder_append",
+                void.fn_type(&[ptr.into(), ptr.into()], false),
+            ),
+            ynz_string_builder_finalize: declare_fn(
+                module,
+                "ynz_string_builder_finalize",
+                ptr.fn_type(&[ptr.into()], false),
+            ),
+            ynz_string_builder_drop: declare_fn(
+                module,
+                "ynz_string_builder_drop",
+                void.fn_type(&[ptr.into()], false),
+            ),
         }
     }
 }

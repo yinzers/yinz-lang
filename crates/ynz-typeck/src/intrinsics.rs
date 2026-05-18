@@ -43,18 +43,51 @@ impl PrimitiveIntrinsicTable {
         // (int).toInt() is infallible — returns int directly (identity).
         t.methods.push((Type::Int, "toInt", Type::Int));
         // (float).toInt() is fallible — returns maybe<int>.
-        t.methods.push((Type::Float, "toInt", Type::Maybe { inner: Box::new(Type::Int) }));
+        t.methods.push((
+            Type::Float,
+            "toInt",
+            Type::Maybe {
+                inner: Box::new(Type::Int),
+            },
+        ));
         // (number).toInt() is fallible — returns maybe<int>.
-        t.methods.push((Type::Number { precision: 34 }, "toInt", Type::Maybe { inner: Box::new(Type::Int) }));
+        t.methods.push((
+            Type::Number { precision: 34 },
+            "toInt",
+            Type::Maybe {
+                inner: Box::new(Type::Int),
+            },
+        ));
         // string → fallible int/float/number conversions.
-        t.methods.push((Type::String, "toInt",    Type::Maybe { inner: Box::new(Type::Int) }));
-        t.methods.push((Type::String, "toFloat",  Type::Maybe { inner: Box::new(Type::Float) }));
-        t.methods.push((Type::String, "toNumber", Type::Maybe { inner: Box::new(Type::Number { precision: 34 }) }));
+        t.methods.push((
+            Type::String,
+            "toInt",
+            Type::Maybe {
+                inner: Box::new(Type::Int),
+            },
+        ));
+        t.methods.push((
+            Type::String,
+            "toFloat",
+            Type::Maybe {
+                inner: Box::new(Type::Float),
+            },
+        ));
+        t.methods.push((
+            Type::String,
+            "toNumber",
+            Type::Maybe {
+                inner: Box::new(Type::Number { precision: 34 }),
+            },
+        ));
         t
     }
 
     pub fn m3() -> Self {
-        let range_ret = || Type::Range { element: Box::new(Type::Int), end_inclusive: false };
+        let range_ret = || Type::Range {
+            element: Box::new(Type::Int),
+            end_inclusive: false,
+        };
         Self {
             print_types: vec![
                 Type::String,
@@ -65,9 +98,21 @@ impl PrimitiveIntrinsicTable {
             ],
             free_fns: vec![
                 // range(end) — 0..end exclusive
-                ("range", FreeFnSig { params: vec![Type::Int], ret: range_ret() }),
+                (
+                    "range",
+                    FreeFnSig {
+                        params: vec![Type::Int],
+                        ret: range_ret(),
+                    },
+                ),
                 // range(start, end) — start..end exclusive
-                ("range", FreeFnSig { params: vec![Type::Int, Type::Int], ret: range_ret() }),
+                (
+                    "range",
+                    FreeFnSig {
+                        params: vec![Type::Int, Type::Int],
+                        ret: range_ret(),
+                    },
+                ),
             ],
             methods: vec![
                 // int conversions
@@ -86,9 +131,9 @@ impl PrimitiveIntrinsicTable {
             // M4 P5: wrapping and saturating arithmetic on int.
             // All take one `int` argument and return `int`.
             methods_1arg: vec![
-                (Type::Int, "wrappingAdd",   Type::Int, Type::Int),
-                (Type::Int, "wrappingSub",   Type::Int, Type::Int),
-                (Type::Int, "wrappingMul",   Type::Int, Type::Int),
+                (Type::Int, "wrappingAdd", Type::Int, Type::Int),
+                (Type::Int, "wrappingSub", Type::Int, Type::Int),
+                (Type::Int, "wrappingMul", Type::Int, Type::Int),
                 (Type::Int, "saturatingAdd", Type::Int, Type::Int),
                 (Type::Int, "saturatingSub", Type::Int, Type::Int),
                 (Type::Int, "saturatingMul", Type::Int, Type::Int),
@@ -110,8 +155,7 @@ impl PrimitiveIntrinsicTable {
 
     /// All free-function names (for Levenshtein suggestions on undefined-function errors).
     pub fn free_fn_names(&self) -> Vec<&'static str> {
-        let mut names: Vec<&'static str> =
-            self.free_fns.iter().map(|(n, _)| *n).collect();
+        let mut names: Vec<&'static str> = self.free_fns.iter().map(|(n, _)| *n).collect();
         names.sort_unstable();
         names.dedup();
         names
@@ -165,12 +209,7 @@ impl PrimitiveIntrinsicTable {
     /// Used to test type-mismatch paths without needing full language features.
     /// The production binary never includes test intrinsics.
     #[cfg(test)]
-    pub fn with_test_intrinsic(
-        mut self,
-        name: &'static str,
-        params: Vec<Type>,
-        ret: Type,
-    ) -> Self {
+    pub fn with_test_intrinsic(mut self, name: &'static str, params: Vec<Type>, ret: Type) -> Self {
         self.test_fns.push((name, FreeFnSig { params, ret }));
         self
     }

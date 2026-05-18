@@ -38,7 +38,6 @@ impl U256 {
         U256 { hi, lo }
     }
 
-
     /// Multiply U256 by a u128, returning the lower 256 bits (wrapping on overflow).
     /// Sufficient for our use case since all intermediate values fit in 226 bits.
     pub fn mul_u128(self, rhs: u128) -> U256 {
@@ -53,7 +52,6 @@ impl U256 {
     pub fn le(self, rhs: U256) -> bool {
         self.hi < rhs.hi || (self.hi == rhs.hi && self.lo <= rhs.lo)
     }
-
 
     /// Saturating subtraction.  Panics in debug if `rhs > self`.
     pub fn sub(self, rhs: U256) -> U256 {

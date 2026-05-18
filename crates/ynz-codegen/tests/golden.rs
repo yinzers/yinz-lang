@@ -70,7 +70,6 @@ fn run_codegen() -> CompiledArtifact {
     output.artifact.clone()
 }
 
-
 #[test]
 fn llvm_version_is_18() {
     // WHY: the golden SHA-256 is valid only for a specific LLVM version.
@@ -83,7 +82,6 @@ fn llvm_version_is_18() {
          See README.md for LLVM 18 install instructions."
     );
 }
-
 
 #[test]
 fn object_file_sha256_matches_golden() {
@@ -107,7 +105,6 @@ fn object_file_sha256_matches_golden() {
     }
 }
 
-
 #[test]
 fn codegen_is_deterministic_across_two_runs() {
     // WHY: a second run with the same source must produce byte-identical output.
@@ -130,7 +127,6 @@ fn codegen_is_deterministic_across_two_runs() {
     );
 }
 
-
 #[test]
 fn ir_text_snapshot() {
     // WHY: IR text diffs help spot codegen regressions during development.
@@ -139,7 +135,6 @@ fn ir_text_snapshot() {
     let artifact = run_codegen();
     insta::assert_snapshot!("hello_ir", artifact.ir_text);
 }
-
 
 #[test]
 fn object_file_is_non_empty() {
@@ -150,7 +145,6 @@ fn object_file_is_non_empty() {
         "Object file must be non-empty"
     );
 }
-
 
 #[test]
 fn sha256_of_empty_input_matches_known_value() {
@@ -183,7 +177,6 @@ fn sha256_of_abc_matches_known_value() {
     );
 }
 
-
 #[test]
 fn codegen_query_returns_owned_bytes_not_inkwell_types() {
     // WHY: inkwell's Context is not Send+Sync. If it escapes the query, the
@@ -194,7 +187,6 @@ fn codegen_query_returns_owned_bytes_not_inkwell_types() {
     fn assert_send_sync<T: Send + Sync>(_: &T) {}
     assert_send_sync(&artifact);
 }
-
 
 fn run_m2_codegen() -> Option<CompiledArtifact> {
     let db = CompilerDb::default();
@@ -287,10 +279,11 @@ fn m2_decimal_exactness() {
         "Decimal exactness source must compile without errors: {:#?}",
         output.diagnostics
     );
-    assert!(!output.artifact.object_bytes.is_empty(), "Must produce an object file");
+    assert!(
+        !output.artifact.object_bytes.is_empty(),
+        "Must produce an object file"
+    );
 }
-
-
 
 const M3_FIB_FILE: &str = "m3_fib.ynz";
 const M3_FIB_SOURCE: &str = r#"function fib(n: int) -> int {
@@ -320,7 +313,10 @@ fn m3_fib_codegen_produces_non_empty_object() {
     // WHY: M3 success criterion — fibonacci must compile to a non-empty object.
     // A None result means typeck or codegen failed; check the diagnostics.
     let artifact = run_m3_fib_codegen().expect("M3 fibonacci codegen must succeed");
-    assert!(!artifact.object_bytes.is_empty(), "M3 fib object file must be non-empty");
+    assert!(
+        !artifact.object_bytes.is_empty(),
+        "M3 fib object file must be non-empty"
+    );
 }
 
 #[test]
@@ -336,7 +332,10 @@ fn m3_fib_codegen_is_deterministic() {
     let a2 = codegen_query(&db2, sf2).artifact.clone();
 
     assert_eq!(a1.sha256, a2.sha256, "M3 fib codegen is not deterministic");
-    assert_eq!(a1.object_bytes, a2.object_bytes, "M3 fib object bytes not deterministic");
+    assert_eq!(
+        a1.object_bytes, a2.object_bytes,
+        "M3 fib object bytes not deterministic"
+    );
 }
 
 #[test]
@@ -374,7 +373,11 @@ const M4_PLAYER_SOURCE: &str = "shape Player {\n  name: string\n  health: int\n}
 
 fn run_m4_player_codegen() -> Option<CompiledArtifact> {
     let db = CompilerDb::default();
-    let sf = SourceFile::new(&db, M4_PLAYER_FILE.to_string(), M4_PLAYER_SOURCE.to_string());
+    let sf = SourceFile::new(
+        &db,
+        M4_PLAYER_FILE.to_string(),
+        M4_PLAYER_SOURCE.to_string(),
+    );
     let output = codegen_query(&db, sf);
     if !output.diagnostics.is_empty() {
         eprintln!("M4 Player codegen diagnostics: {:#?}", output.diagnostics);
@@ -388,7 +391,10 @@ fn m4_player_codegen_produces_non_empty_object() {
     // WHY: M4 P4 success criterion. Shape struct, UFCS dispatch, ownership
     // modifiers must all lower to a valid, non-empty object file.
     let artifact = run_m4_player_codegen().expect("M4 Player codegen must succeed");
-    assert!(!artifact.object_bytes.is_empty(), "M4 Player object file must be non-empty");
+    assert!(
+        !artifact.object_bytes.is_empty(),
+        "M4 Player object file must be non-empty"
+    );
 }
 
 #[test]

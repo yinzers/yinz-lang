@@ -36,7 +36,6 @@ pub const TEN_33: u128 = 1_000_000_000_000_000_000_000_000_000_000_000;
 /// 10^34
 pub const TEN_34: u128 = 10_000_000_000_000_000_000_000_000_000_000_000;
 
-
 pub const SIGN_MASK: u128 = 1u128 << 127;
 pub const G_MASK: u128 = 0x1_FFFF_u128 << 110; // 17 bits [126:110]
 pub const T_MASK: u128 = (1u128 << 110) - 1; // 110 bits [109:0]
@@ -47,7 +46,6 @@ pub const NEG_ZERO: u128 = encode_finite_raw(true, EXPONENT_BIAS as u32, 0, 0);
 pub const POS_INF: u128 = encode_infinity(false);
 pub const NEG_INF: u128 = encode_infinity(true);
 pub const QUIET_NAN: u128 = encode_qnan(false);
-
 
 /// The decoded form used for arithmetic.  Only valid when `is_finite` is true.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,7 +78,6 @@ impl D128Value {
         self.is_finite() && self.coefficient == 0
     }
 }
-
 
 /// Decode a raw BID bit-pattern into the canonical representation.
 pub fn decode(bits: u128) -> D128Value {
@@ -139,7 +136,6 @@ pub fn decode(bits: u128) -> D128Value {
     }
 }
 
-
 /// Encode a finite value.  `coefficient` must be in [0, 10^34 − 1].
 pub fn encode_finite(sign: bool, exponent: i32, coefficient: u128) -> u128 {
     debug_assert!(coefficient <= MAX_COEFFICIENT, "coefficient overflow");
@@ -187,7 +183,6 @@ const fn encode_finite_raw(sign: bool, biased: u32, lead: u32, trailing: u128) -
     let sign_bit: u128 = if sign { SIGN_MASK } else { 0 };
     sign_bit | ((g as u128) << 110) | trailing
 }
-
 
 /// Powers of 10 table for coefficients (indices 0..=34).
 pub const POW10: [u128; 35] = [

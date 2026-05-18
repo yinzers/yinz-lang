@@ -88,7 +88,6 @@ fn compare_with_python(op_name: &str, a_str: &str, b_str: Option<&str>, ynz_resu
     );
 }
 
-
 #[test]
 fn differential_decimal_exactness() {
     // WHY: 0.1 + 0.2 = 0.3 is the canonical test of decimal correctness.
@@ -119,7 +118,6 @@ fn differential_large_multiply() {
     let result = mul(parse(a).unwrap(), parse(b).unwrap());
     compare_with_python("mul", a, Some(b), result);
 }
-
 
 #[cfg(test)]
 mod proptest_differential {

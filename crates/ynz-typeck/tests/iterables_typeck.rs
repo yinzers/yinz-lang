@@ -39,8 +39,7 @@ fn check_diag_count(source: &str, expected: usize) -> CheckOutput {
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .count();
     assert_eq!(
-        error_count,
-        expected,
+        error_count, expected,
         "Expected {expected} error(s), got: {:#?}",
         out.diagnostics
     );
@@ -50,9 +49,7 @@ fn check_diag_count(source: &str, expected: usize) -> CheckOutput {
 fn check_has_diag(source: &str, fragment: &str) {
     let out = check(source);
     let found = out.diagnostics.iter().any(|d| {
-        d.what.contains(fragment)
-            || d.what_instead.contains(fragment)
-            || d.why.contains(fragment)
+        d.what.contains(fragment) || d.what_instead.contains(fragment) || d.why.contains(fragment)
     });
     assert!(
         found,

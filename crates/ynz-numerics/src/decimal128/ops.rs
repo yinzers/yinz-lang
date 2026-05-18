@@ -8,7 +8,6 @@ use super::bits::{
 };
 use super::wide::U256;
 
-
 /// Add two decimal128 values.
 pub fn add(a: u128, b: u128) -> u128 {
     add_sub(a, b, false)
@@ -160,7 +159,6 @@ pub fn compare(a: u128, b: u128) -> i32 {
         cmp
     }
 }
-
 
 fn add_sub(a: u128, b: u128, subtract: bool) -> u128 {
     let av = decode(a);
@@ -517,7 +515,6 @@ mod tests {
         super::super::format::format(bits)
     }
 
-
     #[test]
     fn add_one_plus_one() {
         // WHY: the simplest non-trivial add case; exercises the same-sign path.
@@ -551,7 +548,6 @@ mod tests {
         assert_eq!(to_str(sub(from_str("3"), from_str("5"))), "-2");
     }
 
-
     #[test]
     fn mul_basic() {
         // WHY: M2 smoke fixture uses count * count (42 * 42 = 1764).
@@ -572,7 +568,6 @@ mod tests {
     fn mul_negative() {
         assert_eq!(to_str(mul(from_str("-3"), from_str("4"))), "-12");
     }
-
 
     #[test]
     fn div_basic() {
@@ -595,7 +590,6 @@ mod tests {
         assert!(!result.sign);
     }
 
-
     #[test]
     fn add_inf_plus_inf_is_inf() {
         let inf = encode_infinity(false);
@@ -616,7 +610,6 @@ mod tests {
         let result = decode(add(NAN_BITS, from_str("1")));
         assert!(result.is_nan());
     }
-
 
     #[test]
     fn compare_equal() {

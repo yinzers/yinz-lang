@@ -26,21 +26,31 @@ impl OptionsTable {
     pub fn with_builtins() -> Self {
         let mut t = Self::default();
         // Built-in options always in scope — no import needed.
-        t.options.insert("SortOrder".into(), OptionsEntry {
-            variants: vec!["asc".into(), "desc".into()],
-            decl_span: SourceSpan::new("<stdlib>", 0, 0),
-        });
-        t.options.insert("Comparison".into(), OptionsEntry {
-            variants: vec!["equal".into(), "greater".into(), "less".into()],
-            decl_span: SourceSpan::new("<stdlib>", 0, 0),
-        });
+        t.options.insert(
+            "SortOrder".into(),
+            OptionsEntry {
+                variants: vec!["asc".into(), "desc".into()],
+                decl_span: SourceSpan::new("<stdlib>", 0, 0),
+            },
+        );
+        t.options.insert(
+            "Comparison".into(),
+            OptionsEntry {
+                variants: vec!["equal".into(), "greater".into(), "less".into()],
+                decl_span: SourceSpan::new("<stdlib>", 0, 0),
+            },
+        );
         t
     }
 
     /// Returns the tag (0-indexed) for a variant of the given options type.
     pub fn tag_for(&self, type_name: &str, variant: &str) -> Option<i8> {
         let entry = self.options.get(type_name)?;
-        entry.variants.iter().position(|v| v == variant).map(|i| i as i8)
+        entry
+            .variants
+            .iter()
+            .position(|v| v == variant)
+            .map(|i| i as i8)
     }
 
     /// Returns the options type name that has this variant in scope — used for shorthand resolution.
@@ -49,7 +59,11 @@ impl OptionsTable {
     /// Returns `Err(candidates)` when multiple types have it (ambiguous shorthand).
     /// Returns `Ok(None)` implicitly when called with a specific expected type — not used here;
     /// callers use `has_variant` for that case.
-    pub fn resolve_shorthand<'a>(&'a self, variant: &str, expected_type: &'a str) -> ShorthandResult<'a> {
+    pub fn resolve_shorthand<'a>(
+        &'a self,
+        variant: &str,
+        expected_type: &'a str,
+    ) -> ShorthandResult<'a> {
         // If the expected type is known, check it directly.
         if let Some(entry) = self.options.get(expected_type) {
             if entry.variants.contains(&variant.to_string()) {
@@ -57,7 +71,9 @@ impl OptionsTable {
             }
         }
         // Otherwise scan all visible types.
-        let mut candidates: Vec<&'a str> = self.options.iter()
+        let mut candidates: Vec<&'a str> = self
+            .options
+            .iter()
             .filter(|(_, e)| e.variants.contains(&variant.to_string()))
             .map(|(name, _)| name.as_str())
             .collect();
@@ -96,7 +112,9 @@ pub fn collect_options(module: &Module, diags: &mut DiagnosticBucket) -> Options
     let mut table = OptionsTable::with_builtins();
 
     for item in &module.items {
-        let Item::OptionsDecl(opt) = item else { continue };
+        let Item::OptionsDecl(opt) = item else {
+            continue;
+        };
 
         // Empty body: parse was tolerant, typeck rejects.
         if opt.variants.is_empty() {
@@ -114,7 +132,10 @@ pub fn collect_options(module: &Module, diags: &mut DiagnosticBucket) -> Options
         if opt.variants.len() == 1 {
             diags.push(Diagnostic::error(
                 opt.span.clone(),
-                format!("`options {}` has only 1 variant — options types need at least 2.", opt.name),
+                format!(
+                    "`options {}` has only 1 variant — options types need at least 2.",
+                    opt.name
+                ),
                 "Add a second variant, or use a const if you only need one named value:\n\
                  `const ACTIVE: int = 0`",
                 "A single-variant options type has only one possible value and carries no \
@@ -127,7 +148,11 @@ pub fn collect_options(module: &Module, diags: &mut DiagnosticBucket) -> Options
         if opt.variants.len() >= 256 {
             diags.push(Diagnostic::error(
                 opt.span.clone(),
-                format!("`options {}` has {} variants — the limit is 255.", opt.name, opt.variants.len()),
+                format!(
+                    "`options {}` has {} variants — the limit is 255.",
+                    opt.name,
+                    opt.variants.len()
+                ),
                 "Split into multiple options types, or model as `int` if you need more values.",
                 "256+ variants almost always indicates a design smell. Options types work best \
                  for small, finite sets of named states.",
@@ -151,7 +176,9 @@ pub fn collect_options(module: &Module, diags: &mut DiagnosticBucket) -> Options
                 seen.insert(v_name.clone(), ());
             }
         }
-        if has_dup { continue; }
+        if has_dup {
+            continue;
+        }
 
         // Name clash with existing options type.
         if table.options.contains_key(&opt.name) {
@@ -164,10 +191,13 @@ pub fn collect_options(module: &Module, diags: &mut DiagnosticBucket) -> Options
             continue;
         }
 
-        table.options.insert(opt.name.clone(), OptionsEntry {
-            variants: opt.variants.iter().map(|(v, _)| v.clone()).collect(),
-            decl_span: opt.span.clone(),
-        });
+        table.options.insert(
+            opt.name.clone(),
+            OptionsEntry {
+                variants: opt.variants.iter().map(|(v, _)| v.clone()).collect(),
+                decl_span: opt.span.clone(),
+            },
+        );
     }
 
     table

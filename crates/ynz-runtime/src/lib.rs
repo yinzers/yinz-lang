@@ -1,3 +1,4 @@
+use unicode_normalization::UnicodeNormalization;
 /// C-ABI runtime shims for Yinz-compiled binaries.
 ///
 /// # Memory model (M2)
@@ -14,8 +15,6 @@
 /// on the same thread.  This is safe for M2's single-threaded programs; it is NOT
 /// safe for multi-threaded use.  A comment at each function marks this limitation.
 use ynz_numerics::{abs, add, compare, div, format, mul, neg, parse, sub};
-use unicode_normalization::UnicodeNormalization;
-
 
 /// Raw decimal128 storage: 16 bytes = 128 bits, BID encoding.
 type D128 = [u8; 16];
@@ -33,7 +32,6 @@ fn store(p: *mut D128, v: u128) {
     // SAFETY: caller guarantees the pointer is valid and aligned to 1 byte.
     unsafe { *p = v.to_ne_bytes() }
 }
-
 
 #[no_mangle]
 pub extern "C" fn ynz_decimal_add(a: *const D128, b: *const D128, out: *mut D128) {
@@ -106,7 +104,6 @@ pub extern "C" fn ynz_decimal_to_string(a: *const D128) -> *const u8 {
     })
 }
 
-
 /// Called by compiled code on integer overflow.
 ///
 /// `op_name` is a static C string (null-terminated) describing the operation,
@@ -145,7 +142,6 @@ pub unsafe extern "C" fn ynz_panic_div_by_zero(op_name: *const u8) -> ! {
     );
     std::process::abort();
 }
-
 
 /// Convert an i64 to its decimal string representation.
 ///
@@ -187,7 +183,6 @@ pub extern "C" fn ynz_float_to_string(x: f64) -> *const u8 {
     })
 }
 
-
 /// Compare two null-terminated UTF-8 strings for NFC canonical equivalence.
 ///
 /// Returns 1 if NFC-normalized forms are equal, 0 otherwise. Used by codegen for
@@ -202,9 +197,15 @@ pub extern "C" fn ynz_float_to_string(x: f64) -> *const u8 {
 /// Both `a` and `b` must be valid pointers to null-terminated C strings.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_eq(a: *const u8, b: *const u8) -> i32 {
-    if a == b { return 1; }
-    let a_str = unsafe { std::ffi::CStr::from_ptr(a as *const i8) }.to_str().unwrap_or("");
-    let b_str = unsafe { std::ffi::CStr::from_ptr(b as *const i8) }.to_str().unwrap_or("");
+    if a == b {
+        return 1;
+    }
+    let a_str = unsafe { std::ffi::CStr::from_ptr(a as *const i8) }
+        .to_str()
+        .unwrap_or("");
+    let b_str = unsafe { std::ffi::CStr::from_ptr(b as *const i8) }
+        .to_str()
+        .unwrap_or("");
     // Fast path: ASCII-only strings are always NFC; byte comparison is sufficient.
     if a_str.is_ascii() && b_str.is_ascii() {
         return (a_str == b_str) as i32;
@@ -226,7 +227,6 @@ unsafe fn cstr_to_str<'a>(p: *const u8) -> &'a str {
     std::str::from_utf8(unsafe { std::slice::from_raw_parts(p, len) })
         .unwrap_or("<invalid utf-8 in op name>")
 }
-
 
 // ── Heap allocator shims (M4) ─────────────────────────────────────────────────
 //
@@ -269,7 +269,6 @@ pub unsafe extern "C" fn ynz_free(ptr: *mut u8, _size: usize) {
     free(ptr as *mut core::ffi::c_void);
 }
 
-
 // ── SipHash-2-4 (M5 P4b) ─────────────────────────────────────────────────────
 //
 // Reference: https://131002.net/siphash/siphash.pdf
@@ -307,11 +306,19 @@ fn siphash_key() -> (u64, u64) {
 
 macro_rules! sipround {
     ($v0:expr, $v1:expr, $v2:expr, $v3:expr) => {
-        $v0 = $v0.wrapping_add($v1); $v1 = $v1.rotate_left(13); $v1 ^= $v0;
+        $v0 = $v0.wrapping_add($v1);
+        $v1 = $v1.rotate_left(13);
+        $v1 ^= $v0;
         $v0 = $v0.rotate_left(32);
-        $v2 = $v2.wrapping_add($v3); $v3 = $v3.rotate_left(16); $v3 ^= $v2;
-        $v0 = $v0.wrapping_add($v3); $v3 = $v3.rotate_left(21); $v3 ^= $v0;
-        $v2 = $v2.wrapping_add($v1); $v1 = $v1.rotate_left(17); $v1 ^= $v2;
+        $v2 = $v2.wrapping_add($v3);
+        $v3 = $v3.rotate_left(16);
+        $v3 ^= $v2;
+        $v0 = $v0.wrapping_add($v3);
+        $v3 = $v3.rotate_left(21);
+        $v3 ^= $v0;
+        $v2 = $v2.wrapping_add($v1);
+        $v1 = $v1.rotate_left(17);
+        $v1 ^= $v2;
         $v2 = $v2.rotate_left(32);
     };
 }
@@ -326,7 +333,7 @@ fn siphash24(data: &[u8]) -> u64 {
     let len = data.len();
     let blocks = len / 8;
     for i in 0..blocks {
-        let m = u64::from_le_bytes(data[i*8..i*8+8].try_into().unwrap());
+        let m = u64::from_le_bytes(data[i * 8..i * 8 + 8].try_into().unwrap());
         v3 ^= m;
         sipround!(v0, v1, v2, v3);
         sipround!(v0, v1, v2, v3);
@@ -366,10 +373,11 @@ pub extern "C" fn ynz_siphash_i64(value: i64) -> u64 {
 #[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn ynz_siphash_str(ptr: *const u8) -> u64 {
     let mut len = 0;
-    while *ptr.add(len) != 0 { len += 1; }
+    while *ptr.add(len) != 0 {
+        len += 1;
+    }
     siphash24(std::slice::from_raw_parts(ptr, len))
 }
-
 
 // ── Swiss Tables map runtime (M5 P4b) ────────────────────────────────────────
 //
@@ -402,7 +410,15 @@ unsafe fn map_alloc(capacity: i64) -> *mut YnzMap {
     let order_cap: i64 = 64;
     let order = malloc((order_cap as usize) * 8) as *mut i64;
     std::ptr::write_bytes(ctrl, CTRL_EMPTY, capacity as usize);
-    *hdr = YnzMap { ctrl, keys, vals, insert_order: order, count: 0, capacity, order_cap };
+    *hdr = YnzMap {
+        ctrl,
+        keys,
+        vals,
+        insert_order: order,
+        count: 0,
+        capacity,
+        order_cap,
+    };
     hdr
 }
 
@@ -420,10 +436,16 @@ unsafe fn find_slot(map: *const YnzMap, hash: u64, key: i64) -> Option<usize> {
     let mut idx = start;
     loop {
         let ctrl = *(*map).ctrl.add(idx);
-        if ctrl == CTRL_EMPTY { return None; }
-        if ctrl == h2 && *(*map).keys.add(idx) == key { return Some(idx); }
+        if ctrl == CTRL_EMPTY {
+            return None;
+        }
+        if ctrl == h2 && *(*map).keys.add(idx) == key {
+            return Some(idx);
+        }
         idx = (idx + 1) & (cap - 1);
-        if idx == start { return None; }
+        if idx == start {
+            return None;
+        }
     }
 }
 
@@ -432,7 +454,9 @@ unsafe fn find_insert_slot(map: *const YnzMap, hash: u64) -> usize {
     let mut idx = (hash >> 7) as usize & (cap - 1);
     loop {
         let ctrl = *(*map).ctrl.add(idx);
-        if ctrl == CTRL_EMPTY || ctrl == CTRL_DELETED { return idx; }
+        if ctrl == CTRL_EMPTY || ctrl == CTRL_DELETED {
+            return idx;
+        }
         idx = (idx + 1) & (cap - 1);
     }
 }
@@ -447,13 +471,17 @@ unsafe fn map_grow_int(map: *mut YnzMap) {
 
     for i in 0..old_cap as usize {
         let ctrl = *(*map).ctrl.add(i);
-        if ctrl == CTRL_EMPTY || ctrl == CTRL_DELETED { continue; }
+        if ctrl == CTRL_EMPTY || ctrl == CTRL_DELETED {
+            continue;
+        }
         let k = *(*map).keys.add(i);
         let v = *(*map).vals.add(i);
         let hash = ynz_siphash_i64(k);
         let h2 = (hash & 0x7f) as u8;
         let mut idx = (hash >> 7) as usize & (new_cap as usize - 1);
-        while *new_ctrl.add(idx) != CTRL_EMPTY { idx = (idx + 1) & (new_cap as usize - 1); }
+        while *new_ctrl.add(idx) != CTRL_EMPTY {
+            idx = (idx + 1) & (new_cap as usize - 1);
+        }
         *new_ctrl.add(idx) = h2;
         *new_keys.add(idx) = k;
         *new_vals.add(idx) = v;
@@ -478,13 +506,17 @@ unsafe fn map_grow_str(map: *mut YnzMap) {
 
     for i in 0..old_cap as usize {
         let ctrl = *(*map).ctrl.add(i);
-        if ctrl == CTRL_EMPTY || ctrl == CTRL_DELETED { continue; }
+        if ctrl == CTRL_EMPTY || ctrl == CTRL_DELETED {
+            continue;
+        }
         let k = *(*map).keys.add(i);
         let v = *(*map).vals.add(i);
         let hash = ynz_siphash_str(k as *const u8);
         let h2 = (hash & 0x7f) as u8;
         let mut idx = (hash >> 7) as usize & (new_cap as usize - 1);
-        while *new_ctrl.add(idx) != CTRL_EMPTY { idx = (idx + 1) & (new_cap as usize - 1); }
+        while *new_ctrl.add(idx) != CTRL_EMPTY {
+            idx = (idx + 1) & (new_cap as usize - 1);
+        }
         *new_ctrl.add(idx) = h2;
         *new_keys.add(idx) = k;
         *new_vals.add(idx) = v;
@@ -502,7 +534,10 @@ unsafe fn map_grow_str(map: *mut YnzMap) {
 unsafe fn order_push(map: *mut YnzMap, key: i64) {
     if (*map).count >= (*map).order_cap {
         let new_cap = (*map).order_cap * 2;
-        let new_order = realloc((*map).insert_order as *mut core::ffi::c_void, (new_cap as usize) * 8) as *mut i64;
+        let new_order = realloc(
+            (*map).insert_order as *mut core::ffi::c_void,
+            (new_cap as usize) * 8,
+        ) as *mut i64;
         (*map).insert_order = new_order;
         (*map).order_cap = new_cap;
     }
@@ -514,8 +549,12 @@ unsafe fn cstr_eq_raw(a: *const u8, b: *const u8) -> bool {
     loop {
         let ca = *a.add(i);
         let cb = *b.add(i);
-        if ca != cb { return false; }
-        if ca == 0 { return true; }
+        if ca != cb {
+            return false;
+        }
+        if ca == 0 {
+            return true;
+        }
         i += 1;
     }
 }
@@ -545,7 +584,9 @@ pub unsafe extern "C" fn ynz_map_get_str(map: *const YnzMap, key: *const u8, out
     let cap = (*map).capacity as usize;
     for i in 0..cap {
         let ctrl = *(*map).ctrl.add(i);
-        if ctrl == CTRL_EMPTY || ctrl == CTRL_DELETED { continue; }
+        if ctrl == CTRL_EMPTY || ctrl == CTRL_DELETED {
+            continue;
+        }
         let stored_ptr = *(*map).keys.add(i) as *const u8;
         if cstr_eq_raw(stored_ptr, key) {
             *out = [1, *(*map).vals.add(i)];
@@ -592,7 +633,9 @@ pub unsafe extern "C" fn ynz_map_set_str(map: *mut YnzMap, key: *const u8, value
     let cap = (*map).capacity as usize;
     for i in 0..cap {
         let ctrl = *(*map).ctrl.add(i);
-        if ctrl == CTRL_EMPTY || ctrl == CTRL_DELETED { continue; }
+        if ctrl == CTRL_EMPTY || ctrl == CTRL_DELETED {
+            continue;
+        }
         let stored = *(*map).keys.add(i) as *const u8;
         if cstr_eq_raw(stored, key) {
             *(*map).vals.add(i) = value;
@@ -669,7 +712,9 @@ pub unsafe extern "C" fn ynz_map_iter_get_str(map: *const YnzMap, pos: i64, out:
     let cap = (*map).capacity as usize;
     for i in 0..cap {
         let ctrl = *(*map).ctrl.add(i);
-        if ctrl == CTRL_EMPTY || ctrl == CTRL_DELETED { continue; }
+        if ctrl == CTRL_EMPTY || ctrl == CTRL_DELETED {
+            continue;
+        }
         if *(*map).keys.add(i) == key_ptr {
             *out = [1, key_ptr, *(*map).vals.add(i)];
             return;
@@ -691,7 +736,6 @@ pub unsafe extern "C" fn ynz_map_drop(map: *mut YnzMap) {
     free((*map).insert_order as *mut core::ffi::c_void);
     free(map as *mut core::ffi::c_void);
 }
-
 
 // ── Array runtime (M5 P4a) ────────────────────────────────────────────────────
 //
@@ -729,7 +773,10 @@ pub unsafe extern "C" fn ynz_array_new() -> *mut YnzArray {
 pub unsafe extern "C" fn ynz_array_push(arr: *mut YnzArray, value: i64) {
     if (*arr).len == (*arr).cap {
         let new_cap = (*arr).cap * 2;
-        let new_data = realloc((*arr).data as *mut core::ffi::c_void, (new_cap as usize) * 8) as *mut u8;
+        let new_data = realloc(
+            (*arr).data as *mut core::ffi::c_void,
+            (new_cap as usize) * 8,
+        ) as *mut u8;
         (*arr).data = new_data;
         (*arr).cap = new_cap;
     }
@@ -802,7 +849,9 @@ pub unsafe extern "C" fn ynz_array_drop(arr: *mut YnzArray) {
 /// `num_ptr` must be a valid pointer to 16 bytes of decimal128 data.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_decimal_to_float(num_ptr: *const u8) -> f64 {
-    let raw: [u8; 16] = std::slice::from_raw_parts(num_ptr, 16).try_into().unwrap_or([0u8; 16]);
+    let raw: [u8; 16] = std::slice::from_raw_parts(num_ptr, 16)
+        .try_into()
+        .unwrap_or([0u8; 16]);
     let bits = u128::from_ne_bytes(raw);
     // Use the ynz-numerics formatter to get a string, then parse as f64.
     let s = ynz_numerics::format(bits);
@@ -827,8 +876,14 @@ pub unsafe extern "C" fn ynz_string_to_int(ptr: *const u8, len: i64, out: *mut i
     let bytes = std::slice::from_raw_parts(ptr, len as usize);
     let result = parse_string_to_int(bytes);
     match result {
-        Some(n) => { *out = 1; *out.add(1) = n; }
-        None    => { *out = 0; *out.add(1) = 0; }
+        Some(n) => {
+            *out = 1;
+            *out.add(1) = n;
+        }
+        None => {
+            *out = 0;
+            *out.add(1) = 0;
+        }
     }
 }
 
@@ -839,8 +894,14 @@ pub unsafe extern "C" fn ynz_string_to_float(ptr: *const u8, len: i64, out: *mut
     let bytes = std::slice::from_raw_parts(ptr, len as usize);
     let result = parse_string_to_float(bytes);
     match result {
-        Some(f) => { *out = 1; *out.add(1) = f64::to_bits(f) as i64; }
-        None    => { *out = 0; *out.add(1) = 0; }
+        Some(f) => {
+            *out = 1;
+            *out.add(1) = f64::to_bits(f) as i64;
+        }
+        None => {
+            *out = 0;
+            *out.add(1) = 0;
+        }
     }
 }
 
@@ -853,7 +914,9 @@ pub unsafe extern "C" fn ynz_string_to_number(ptr: *const u8, len: i64, out: *mu
     // Use ynz-numerics parse (decimal128 string parser).
     // parse() is infallible but returns 0 on bad input; we pre-validate here.
     match std::str::from_utf8(trimmed) {
-        Err(_) => { *out = 0; }
+        Err(_) => {
+            *out = 0;
+        }
         Ok(s) => {
             if is_valid_number_str(s.as_bytes()) {
                 match parse(s) {
@@ -863,7 +926,9 @@ pub unsafe extern "C" fn ynz_string_to_number(ptr: *const u8, len: i64, out: *mu
                         let data = out.add(1) as *mut u8;
                         std::ptr::copy_nonoverlapping(bytes_le.as_ptr(), data, 16);
                     }
-                    None => { *out = 0; }
+                    None => {
+                        *out = 0;
+                    }
                 }
             } else {
                 *out = 0;
@@ -881,7 +946,9 @@ pub unsafe extern "C" fn ynz_string_to_number(ptr: *const u8, len: i64, out: *mu
 pub unsafe extern "C" fn ynz_string_from_static(ptr: *const u8, len: i64) -> *const u8 {
     let size = len as usize + 1; // +1 for null terminator
     let buf = malloc(size) as *mut u8;
-    if buf.is_null() { return b"\0".as_ptr(); }
+    if buf.is_null() {
+        return b"\0".as_ptr();
+    }
     std::ptr::copy_nonoverlapping(ptr, buf, len as usize);
     *buf.add(len as usize) = 0;
     buf as *const u8
@@ -894,12 +961,16 @@ pub unsafe extern "C" fn ynz_string_from_static(ptr: *const u8, len: i64) -> *co
 /// Reference implementation of `(float).toInt()` semantics — used in Rust unit tests.
 /// The actual codegen emits explicit LLVM IR (see P4 codegen, not this function).
 pub fn float_to_int_ref(x: f64) -> Option<i64> {
-    if x.is_nan() { return None; }
+    if x.is_nan() {
+        return None;
+    }
     // i64::MAX (2^63-1) is not exactly representable in f64; nearest is 2^63.
     // Upper check: x must be < 2^63 (strictly less, i.e. fits after truncation).
     const I64_MAX_F64: f64 = 9.223372036854776e18_f64; // 2^63
     const I64_MIN_F64: f64 = -9.223372036854776e18_f64; // -2^63
-    if x >= I64_MAX_F64 || x < I64_MIN_F64 { return None; }
+    if x >= I64_MAX_F64 || x < I64_MIN_F64 {
+        return None;
+    }
     Some(x as i64) // truncate toward zero; in-range proven above
 }
 
@@ -908,23 +979,35 @@ pub fn float_to_int_ref(x: f64) -> Option<i64> {
 fn trim_ascii_ws(bytes: &[u8]) -> &[u8] {
     let is_ws = |b: &u8| matches!(b, 0x20 | 0x09 | 0x0A | 0x0D);
     let start = bytes.iter().position(|b| !is_ws(b)).unwrap_or(bytes.len());
-    let end = bytes.iter().rposition(|b| !is_ws(b)).map(|i| i + 1).unwrap_or(0);
-    if start >= end { &[] } else { &bytes[start..end] }
+    let end = bytes
+        .iter()
+        .rposition(|b| !is_ws(b))
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    if start >= end {
+        &[]
+    } else {
+        &bytes[start..end]
+    }
 }
 
 fn parse_sign(bytes: &[u8]) -> (bool, &[u8]) {
     match bytes.first() {
         Some(b'+') => (false, &bytes[1..]),
-        Some(b'-') => (true,  &bytes[1..]),
-        _          => (false, bytes),
+        Some(b'-') => (true, &bytes[1..]),
+        _ => (false, bytes),
     }
 }
 
 fn parse_string_to_int(bytes: &[u8]) -> Option<i64> {
     let trimmed = trim_ascii_ws(bytes);
     let (neg, digits) = parse_sign(trimmed);
-    if digits.is_empty() { return None; }
-    if !digits.iter().all(|b| b.is_ascii_digit()) { return None; }
+    if digits.is_empty() {
+        return None;
+    }
+    if !digits.iter().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
     // Parse decimal digits without any prefix.
     let mut acc: i64 = 0;
     for &d in digits {
@@ -938,11 +1021,17 @@ fn parse_string_to_float(bytes: &[u8]) -> Option<f64> {
     let trimmed = trim_ascii_ws(bytes);
     // Peel optional sign, validate the digit structure, then parse the full trimmed string.
     let (_, digits_only) = parse_sign(trimmed);
-    if digits_only.is_empty() { return None; }
-    if !is_valid_float_digits(digits_only) { return None; }
+    if digits_only.is_empty() {
+        return None;
+    }
+    if !is_valid_float_digits(digits_only) {
+        return None;
+    }
     let s = std::str::from_utf8(trimmed).ok()?;
     let f: f64 = s.parse().ok()?; // Rust parser handles the sign
-    if f.is_infinite() { return None; }
+    if f.is_infinite() {
+        return None;
+    }
     Some(f)
 }
 
@@ -955,20 +1044,32 @@ fn is_valid_float_digits(bytes: &[u8]) -> bool {
     let mut i = 0;
     let n = bytes.len();
     // Integer part
-    while i < n && bytes[i].is_ascii_digit() { i += 1; }
-    if i == 0 { return false; }
+    while i < n && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == 0 {
+        return false;
+    }
     // Decimal part
     if i < n && bytes[i] == b'.' {
         i += 1;
-        while i < n && bytes[i].is_ascii_digit() { i += 1; }
+        while i < n && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
     }
     // Exponent
     if i < n && (bytes[i] == b'e' || bytes[i] == b'E') {
         i += 1;
-        if i < n && (bytes[i] == b'+' || bytes[i] == b'-') { i += 1; }
+        if i < n && (bytes[i] == b'+' || bytes[i] == b'-') {
+            i += 1;
+        }
         let start = i;
-        while i < n && bytes[i].is_ascii_digit() { i += 1; }
-        if i == start { return false; } // exponent with no digits
+        while i < n && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == start {
+            return false;
+        } // exponent with no digits
     }
     i == n
 }
@@ -977,7 +1078,6 @@ fn is_valid_number_str(bytes: &[u8]) -> bool {
     // Same rules as float — decimal128 parser uses same format
     is_valid_float_digits(bytes)
 }
-
 
 // ── M7 P4b: string runtime — UTF-8 validation, methods, builder ──────────────
 //
@@ -1013,7 +1113,9 @@ pub unsafe extern "C" fn ynz_string_concat(a: *const u8, b: *const u8) -> *const
     let b_str = unsafe { std::ffi::CStr::from_ptr(b as *const i8) }.to_bytes();
     let total = a_str.len() + b_str.len() + 1;
     let buf = malloc(total) as *mut u8;
-    if buf.is_null() { return b"\0".as_ptr(); }
+    if buf.is_null() {
+        return b"\0".as_ptr();
+    }
     std::ptr::copy_nonoverlapping(a_str.as_ptr(), buf, a_str.len());
     std::ptr::copy_nonoverlapping(b_str.as_ptr(), buf.add(a_str.len()), b_str.len());
     *buf.add(a_str.len() + b_str.len()) = 0;
@@ -1026,7 +1128,9 @@ pub unsafe extern "C" fn ynz_string_concat(a: *const u8, b: *const u8) -> *const
 /// `s` must be a valid pointer to a null-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_count(s: *const u8) -> i64 {
-    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_str().unwrap_or("");
+    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }
+        .to_str()
+        .unwrap_or("");
     s_str.chars().count() as i64
 }
 
@@ -1048,8 +1152,12 @@ pub unsafe extern "C" fn ynz_string_byte_count(s: *const u8) -> i64 {
 /// `s` must be a valid pointer to a null-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_codepoint_at(s: *const u8, n: i64) -> *const u8 {
-    if n < 0 { return std::ptr::null(); }
-    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_str().unwrap_or("");
+    if n < 0 {
+        return std::ptr::null();
+    }
+    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }
+        .to_str()
+        .unwrap_or("");
     match s_str.chars().nth(n as usize) {
         None => std::ptr::null(),
         Some(ch) => {
@@ -1057,7 +1165,9 @@ pub unsafe extern "C" fn ynz_string_codepoint_at(s: *const u8, n: i64) -> *const
             let encoded = ch.encode_utf8(&mut buf[..4]);
             let len = encoded.len();
             let heap = malloc(len + 1) as *mut u8;
-            if heap.is_null() { return std::ptr::null(); }
+            if heap.is_null() {
+                return std::ptr::null();
+            }
             std::ptr::copy_nonoverlapping(encoded.as_ptr(), heap, len);
             *heap.add(len) = 0;
             heap as *const u8
@@ -1071,7 +1181,9 @@ pub unsafe extern "C" fn ynz_string_codepoint_at(s: *const u8, n: i64) -> *const
 /// `s` must be a valid pointer to a null-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_byte_at(s: *const u8, n: i64) -> i64 {
-    if n < 0 { return -1; }
+    if n < 0 {
+        return -1;
+    }
     let s_bytes = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_bytes();
     match s_bytes.get(n as usize) {
         Some(&b) => b as i64,
@@ -1090,8 +1202,10 @@ pub unsafe extern "C" fn ynz_string_byte_at(s: *const u8, n: i64) -> i64 {
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_contains(s: *const u8, substr: *const u8) -> i32 {
     let haystack = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_bytes();
-    let needle   = unsafe { std::ffi::CStr::from_ptr(substr as *const i8) }.to_bytes();
-    if needle.is_empty() { return 1; }
+    let needle = unsafe { std::ffi::CStr::from_ptr(substr as *const i8) }.to_bytes();
+    if needle.is_empty() {
+        return 1;
+    }
     (memchr::memmem::find(haystack, needle).is_some()) as i32
 }
 
@@ -1102,8 +1216,10 @@ pub unsafe extern "C" fn ynz_string_contains(s: *const u8, substr: *const u8) ->
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_index_of(s: *const u8, substr: *const u8) -> i64 {
     let haystack = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_bytes();
-    let needle   = unsafe { std::ffi::CStr::from_ptr(substr as *const i8) }.to_bytes();
-    if needle.is_empty() { return 0; }
+    let needle = unsafe { std::ffi::CStr::from_ptr(substr as *const i8) }.to_bytes();
+    if needle.is_empty() {
+        return 0;
+    }
     match memchr::memmem::find(haystack, needle) {
         Some(offset) => offset as i64,
         None => -1,
@@ -1144,7 +1260,9 @@ pub unsafe extern "C" fn ynz_string_ends_with(s: *const u8, suffix: *const u8) -
 /// `s` must be a valid pointer to a null-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_to_upper(s: *const u8) -> *const u8 {
-    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_str().unwrap_or("");
+    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }
+        .to_str()
+        .unwrap_or("");
     // unicase::UniCase provides locale-invariant case conversion; we use the standard
     // Unicode uppercase mapping directly since UniCase focuses on case folding.
     let upper: String = s_str.chars().flat_map(|c| c.to_uppercase()).collect();
@@ -1159,7 +1277,9 @@ pub unsafe extern "C" fn ynz_string_to_upper(s: *const u8) -> *const u8 {
 /// `s` must be a valid pointer to a null-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_to_lower(s: *const u8) -> *const u8 {
-    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_str().unwrap_or("");
+    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }
+        .to_str()
+        .unwrap_or("");
     // Use locale-invariant Unicode lowercase mapping (avoids Turkish I problem).
     let lower: String = s_str.chars().flat_map(|c| c.to_lowercase()).collect();
     heap_string_from_str(&lower)
@@ -1173,11 +1293,17 @@ pub unsafe extern "C" fn ynz_string_to_lower(s: *const u8) -> *const u8 {
 /// `s` must be a valid pointer to a null-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_substring(s: *const u8, start: i64, end: i64) -> *const u8 {
-    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_str().unwrap_or("");
+    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }
+        .to_str()
+        .unwrap_or("");
     let len = s_str.chars().count() as i64;
     let start = start.max(0).min(len) as usize;
-    let end   = end.max(0).min(len) as usize;
-    let slice: String = s_str.chars().skip(start).take(end.saturating_sub(start)).collect();
+    let end = end.max(0).min(len) as usize;
+    let slice: String = s_str
+        .chars()
+        .skip(start)
+        .take(end.saturating_sub(start))
+        .collect();
     heap_string_from_str(&slice)
 }
 
@@ -1189,7 +1315,9 @@ pub unsafe extern "C" fn ynz_string_substring(s: *const u8, start: i64, end: i64
 /// `s` must be a valid pointer to a null-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_trim(s: *const u8) -> *const u8 {
-    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_str().unwrap_or("");
+    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }
+        .to_str()
+        .unwrap_or("");
     heap_string_from_str(s_str.trim())
 }
 
@@ -1200,7 +1328,9 @@ pub unsafe extern "C" fn ynz_string_trim(s: *const u8) -> *const u8 {
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_grapheme_count(s: *const u8) -> i64 {
     use unicode_segmentation::UnicodeSegmentation;
-    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_str().unwrap_or("");
+    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }
+        .to_str()
+        .unwrap_or("");
     s_str.graphemes(true).count() as i64
 }
 
@@ -1213,8 +1343,12 @@ pub unsafe extern "C" fn ynz_string_grapheme_count(s: *const u8) -> i64 {
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_grapheme_at(s: *const u8, n: i64) -> *const u8 {
     use unicode_segmentation::UnicodeSegmentation;
-    if n < 0 { return std::ptr::null(); }
-    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_str().unwrap_or("");
+    if n < 0 {
+        return std::ptr::null();
+    }
+    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }
+        .to_str()
+        .unwrap_or("");
     match s_str.graphemes(true).nth(n as usize) {
         None => std::ptr::null(),
         Some(g) => heap_string_from_str(g),
@@ -1229,8 +1363,12 @@ pub unsafe extern "C" fn ynz_string_grapheme_at(s: *const u8, n: i64) -> *const 
 /// Both pointers must be valid null-terminated C strings.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_split(s: *const u8, sep: *const u8) -> *mut YnzArray {
-    let s_str   = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }.to_str().unwrap_or("");
-    let sep_str = unsafe { std::ffi::CStr::from_ptr(sep as *const i8) }.to_str().unwrap_or("");
+    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }
+        .to_str()
+        .unwrap_or("");
+    let sep_str = unsafe { std::ffi::CStr::from_ptr(sep as *const i8) }
+        .to_str()
+        .unwrap_or("");
     let arr = ynz_array_new();
     if sep_str.is_empty() {
         // Split into individual code-point strings.
@@ -1256,11 +1394,23 @@ pub unsafe extern "C" fn ynz_string_split(s: *const u8, sep: *const u8) -> *mut 
 /// # Safety
 /// All pointers must be valid null-terminated C strings.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_string_replace(s: *const u8, from: *const u8, to: *const u8) -> *const u8 {
-    let s_str    = unsafe { std::ffi::CStr::from_ptr(s    as *const i8) }.to_str().unwrap_or("");
-    let from_str = unsafe { std::ffi::CStr::from_ptr(from as *const i8) }.to_str().unwrap_or("");
-    let to_str   = unsafe { std::ffi::CStr::from_ptr(to   as *const i8) }.to_str().unwrap_or("");
-    if from_str.is_empty() { return ynz_string_from_static(s, ynz_string_byte_count(s)); }
+pub unsafe extern "C" fn ynz_string_replace(
+    s: *const u8,
+    from: *const u8,
+    to: *const u8,
+) -> *const u8 {
+    let s_str = unsafe { std::ffi::CStr::from_ptr(s as *const i8) }
+        .to_str()
+        .unwrap_or("");
+    let from_str = unsafe { std::ffi::CStr::from_ptr(from as *const i8) }
+        .to_str()
+        .unwrap_or("");
+    let to_str = unsafe { std::ffi::CStr::from_ptr(to as *const i8) }
+        .to_str()
+        .unwrap_or("");
+    if from_str.is_empty() {
+        return ynz_string_from_static(s, ynz_string_byte_count(s));
+    }
     let result = s_str.replace(from_str, to_str);
     heap_string_from_str(&result)
 }
@@ -1303,7 +1453,9 @@ pub unsafe extern "C" fn ynz_string_builder_finalize(builder: *mut u8) -> *const
     vec.push(0); // null-terminate
     let len = vec.len();
     let buf = malloc(len) as *mut u8;
-    if buf.is_null() { return b"\0".as_ptr(); }
+    if buf.is_null() {
+        return b"\0".as_ptr();
+    }
     std::ptr::copy_nonoverlapping(vec.as_ptr(), buf, len);
     buf as *const u8
 }
@@ -1322,14 +1474,19 @@ fn heap_string_from_str(s: &str) -> *const u8 {
     let bytes = s.as_bytes();
     let len = bytes.len();
     let buf = unsafe { malloc(len + 1) as *mut u8 };
-    if buf.is_null() { return b"\0".as_ptr(); }
-    if len > 0 {
-        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, len); }
+    if buf.is_null() {
+        return b"\0".as_ptr();
     }
-    unsafe { *buf.add(len) = 0; }
+    if len > 0 {
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, len);
+        }
+    }
+    unsafe {
+        *buf.add(len) = 0;
+    }
     buf as *const u8
 }
-
 
 // ── M7 P4a: errors runtime — YnzError, YnzFrame, frame stack ─────────────────
 //
@@ -1419,7 +1576,9 @@ pub extern "C" fn ynz_frame_pop() {
 #[no_mangle]
 pub unsafe extern "C" fn ynz_error_new(message: *const u8) -> *mut YnzError {
     let err = malloc(std::mem::size_of::<YnzError>()) as *mut YnzError;
-    if err.is_null() { std::process::abort(); }
+    if err.is_null() {
+        std::process::abort();
+    }
 
     // Snapshot the frame stack.
     let (trace_ptr, trace_len) = FRAME_STACK.with(|stack| {
@@ -1429,9 +1588,15 @@ pub unsafe extern "C" fn ynz_error_new(message: *const u8) -> *mut YnzError {
             return (std::ptr::null_mut::<YnzFrame>(), 0i64);
         }
         let frames_mem = malloc(len * std::mem::size_of::<YnzFrame>()) as *mut YnzFrame;
-        if frames_mem.is_null() { std::process::abort(); }
+        if frames_mem.is_null() {
+            std::process::abort();
+        }
         for (i, &(file, line, function)) in s.iter().enumerate() {
-            *frames_mem.add(i) = YnzFrame { file, line, function };
+            *frames_mem.add(i) = YnzFrame {
+                file,
+                line,
+                function,
+            };
         }
         (frames_mem, len as i64)
     });
@@ -1457,7 +1622,9 @@ pub unsafe extern "C" fn ynz_error_new(message: *const u8) -> *mut YnzError {
 /// yet freed.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_error_drop(err: *mut YnzError) {
-    if err.is_null() { return; }
+    if err.is_null() {
+        return;
+    }
     if !(*err).trace_ptr.is_null() {
         free((*err).trace_ptr as *mut core::ffi::c_void);
     }
@@ -1490,7 +1657,9 @@ pub unsafe extern "C" fn ynz_error_trace_len(err: *const YnzError) -> i64 {
 /// `err` must be a valid non-null pointer returned by `ynz_error_new`.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_error_trace_frame(err: *const YnzError, idx: i64) -> *const YnzFrame {
-    if idx < 0 || idx >= (*err).trace_len { return std::ptr::null(); }
+    if idx < 0 || idx >= (*err).trace_len {
+        return std::ptr::null();
+    }
     (*err).trace_ptr.add(idx as usize) as *const YnzFrame
 }
 
@@ -1538,10 +1707,16 @@ pub unsafe extern "C" fn ynz_unhandled_error(err: *const YnzError) -> ! {
         eprintln!("  Call trace (most recent last):");
         for i in 0..(*err).trace_len {
             let frame = (*err).trace_ptr.add(i as usize);
-            let fn_name = if (*frame).function.is_null() { "<unknown>" }
-                          else { cstr_to_str((*frame).function) };
-            let file = if (*frame).file.is_null() { "<unknown>" }
-                       else { cstr_to_str((*frame).file) };
+            let fn_name = if (*frame).function.is_null() {
+                "<unknown>"
+            } else {
+                cstr_to_str((*frame).function)
+            };
+            let file = if (*frame).file.is_null() {
+                "<unknown>"
+            } else {
+                cstr_to_str((*frame).file)
+            };
             let line = (*frame).line;
             if line >= 0 {
                 eprintln!("    {fn_name} ({file}:{line})");
@@ -1553,62 +1728,108 @@ pub unsafe extern "C" fn ynz_unhandled_error(err: *const YnzError) -> ! {
     std::process::exit(1);
 }
 
-
 // Unit tests for M6 string parsing semantics (locked test vectors from design/narrowing.md)
 #[cfg(test)]
 mod m6_string_parsing {
     use super::*;
 
     #[test]
-    fn int_basic() { assert_eq!(parse_string_to_int(b"42"), Some(42)); }
+    fn int_basic() {
+        assert_eq!(parse_string_to_int(b"42"), Some(42));
+    }
     #[test]
-    fn int_whitespace_sign() { assert_eq!(parse_string_to_int(b"  +42  "), Some(42)); }
+    fn int_whitespace_sign() {
+        assert_eq!(parse_string_to_int(b"  +42  "), Some(42));
+    }
     #[test]
-    fn int_negative() { assert_eq!(parse_string_to_int(b"-42"), Some(-42)); }
+    fn int_negative() {
+        assert_eq!(parse_string_to_int(b"-42"), Some(-42));
+    }
     #[test]
-    fn int_empty() { assert_eq!(parse_string_to_int(b""), None); }
+    fn int_empty() {
+        assert_eq!(parse_string_to_int(b""), None);
+    }
     #[test]
-    fn int_whitespace_only() { assert_eq!(parse_string_to_int(b"  "), None); }
+    fn int_whitespace_only() {
+        assert_eq!(parse_string_to_int(b"  "), None);
+    }
     #[test]
-    fn int_lone_sign() { assert_eq!(parse_string_to_int(b"+"), None); }
+    fn int_lone_sign() {
+        assert_eq!(parse_string_to_int(b"+"), None);
+    }
     #[test]
-    fn int_hex_prefix() { assert_eq!(parse_string_to_int(b"0x1A"), None); }
+    fn int_hex_prefix() {
+        assert_eq!(parse_string_to_int(b"0x1A"), None);
+    }
     #[test]
-    fn int_trailing_chars() { assert_eq!(parse_string_to_int(b"42 hello"), None); }
+    fn int_trailing_chars() {
+        assert_eq!(parse_string_to_int(b"42 hello"), None);
+    }
     #[test]
-    fn int_fractional() { assert_eq!(parse_string_to_int(b"42.5"), None); }
+    fn int_fractional() {
+        assert_eq!(parse_string_to_int(b"42.5"), None);
+    }
     #[test]
-    fn int_scientific() { assert_eq!(parse_string_to_int(b"1e3"), None); }
+    fn int_scientific() {
+        assert_eq!(parse_string_to_int(b"1e3"), None);
+    }
     #[test]
-    fn int_tab_lf() { assert_eq!(parse_string_to_int(b"\t42\n"), Some(42)); }
+    fn int_tab_lf() {
+        assert_eq!(parse_string_to_int(b"\t42\n"), Some(42));
+    }
     #[test]
-    fn int_non_breaking_space() { assert_eq!(parse_string_to_int(b"\xC2\xA042"), None); } // UTF-8 U+00A0
+    fn int_non_breaking_space() {
+        assert_eq!(parse_string_to_int(b"\xC2\xA042"), None);
+    } // UTF-8 U+00A0
     #[test]
-    fn float_basic() { assert_eq!(parse_string_to_float(b"1.5"), Some(1.5)); }
+    fn float_basic() {
+        assert_eq!(parse_string_to_float(b"1.5"), Some(1.5));
+    }
     #[test]
-    fn float_scientific() { assert_eq!(parse_string_to_float(b"1.5e2"), Some(150.0)); }
+    fn float_scientific() {
+        assert_eq!(parse_string_to_float(b"1.5e2"), Some(150.0));
+    }
     #[test]
-    fn float_negative() { assert_eq!(parse_string_to_float(b"  -1.5  "), Some(-1.5)); }
+    fn float_negative() {
+        assert_eq!(parse_string_to_float(b"  -1.5  "), Some(-1.5));
+    }
     #[test]
-    fn float_bad() { assert_eq!(parse_string_to_float(b"abc"), None); }
+    fn float_bad() {
+        assert_eq!(parse_string_to_float(b"abc"), None);
+    }
     #[test]
-    fn float_double_dot() { assert_eq!(parse_string_to_float(b"1.5.5"), None); }
+    fn float_double_dot() {
+        assert_eq!(parse_string_to_float(b"1.5.5"), None);
+    }
     #[test]
-    fn float_to_int_nan() { assert_eq!(float_to_int_ref(f64::NAN), None); }
+    fn float_to_int_nan() {
+        assert_eq!(float_to_int_ref(f64::NAN), None);
+    }
     #[test]
-    fn float_to_int_inf() { assert_eq!(float_to_int_ref(f64::INFINITY), None); }
+    fn float_to_int_inf() {
+        assert_eq!(float_to_int_ref(f64::INFINITY), None);
+    }
     #[test]
-    fn float_to_int_oor() { assert_eq!(float_to_int_ref(1e30), None); }
+    fn float_to_int_oor() {
+        assert_eq!(float_to_int_ref(1e30), None);
+    }
     #[test]
-    fn float_to_int_truncate() { assert_eq!(float_to_int_ref(2.5), Some(2)); }
+    fn float_to_int_truncate() {
+        assert_eq!(float_to_int_ref(2.5), Some(2));
+    }
     #[test]
-    fn float_to_int_neg_truncate() { assert_eq!(float_to_int_ref(-2.5), Some(-2)); }
+    fn float_to_int_neg_truncate() {
+        assert_eq!(float_to_int_ref(-2.5), Some(-2));
+    }
     #[test]
-    fn float_to_int_boundary_upper() { assert_eq!(float_to_int_ref(9.223372036854776e18), None); }
+    fn float_to_int_boundary_upper() {
+        assert_eq!(float_to_int_ref(9.223372036854776e18), None);
+    }
     #[test]
-    fn float_to_int_boundary_lower() { assert_eq!(float_to_int_ref(-9.223372036854776e18), Some(i64::MIN)); }
+    fn float_to_int_boundary_lower() {
+        assert_eq!(float_to_int_ref(-9.223372036854776e18), Some(i64::MIN));
+    }
 }
-
 
 // ── M7 P4a: errors runtime tests ──────────────────────────────────────────────
 #[cfg(test)]
@@ -1722,13 +1943,14 @@ mod m7_errors_runtime {
     }
 }
 
-
 // ── M7 P4b: string runtime tests ──────────────────────────────────────────────
 #[cfg(test)]
 mod m7_string_runtime {
     use super::*;
 
-    unsafe fn c(s: &'static [u8]) -> *const u8 { s.as_ptr() }
+    unsafe fn c(s: &'static [u8]) -> *const u8 {
+        s.as_ptr()
+    }
     unsafe fn str_from_ptr(p: *const u8) -> &'static str {
         std::ffi::CStr::from_ptr(p as *const i8).to_str().unwrap()
     }
@@ -1763,8 +1985,11 @@ mod m7_string_runtime {
             let precomposed = b"\xC3\xA9\0";
             // U+0065 + U+0301 = e (0x65) + combining acute accent (UTF-8: 0xCC 0x81)
             let decomposed = b"\x65\xCC\x81\0";
-            assert_eq!(ynz_string_eq(c(precomposed), c(decomposed)), 1,
-                "NFC: precomposed e-acute must equal decomposed e + combining accent");
+            assert_eq!(
+                ynz_string_eq(c(precomposed), c(decomposed)),
+                1,
+                "NFC: precomposed e-acute must equal decomposed e + combining accent"
+            );
         }
     }
 
@@ -1848,8 +2073,14 @@ mod m7_string_runtime {
     fn string_starts_with_ends_with() {
         // WHY: startsWith and endsWith must match the prefix/suffix exactly.
         unsafe {
-            assert_eq!(ynz_string_starts_with(c(b"Hello World\0"), c(b"Hello\0")), 1);
-            assert_eq!(ynz_string_starts_with(c(b"Hello World\0"), c(b"World\0")), 0);
+            assert_eq!(
+                ynz_string_starts_with(c(b"Hello World\0"), c(b"Hello\0")),
+                1
+            );
+            assert_eq!(
+                ynz_string_starts_with(c(b"Hello World\0"), c(b"World\0")),
+                0
+            );
             assert_eq!(ynz_string_ends_with(c(b"Hello World\0"), c(b"World\0")), 1);
             assert_eq!(ynz_string_ends_with(c(b"Hello World\0"), c(b"Hello\0")), 0);
         }
@@ -1927,7 +2158,9 @@ mod m7_string_runtime {
         // WHY: builder_drop must not leak memory. Valgrind-clean programs depend on this.
         // We can't test for leaks directly, but we can assert no panic occurs.
         let b = ynz_string_builder_new();
-        unsafe { ynz_string_builder_drop(b); }
+        unsafe {
+            ynz_string_builder_drop(b);
+        }
     }
 
     #[test]

@@ -64,7 +64,10 @@ pub struct ShapeTable {
 
 impl ShapeTable {
     pub fn empty() -> Self {
-        Self { shapes: HashMap::new(), union_aliases: HashMap::new() }
+        Self {
+            shapes: HashMap::new(),
+            union_aliases: HashMap::new(),
+        }
     }
 
     pub fn get(&self, name: &str) -> Option<&ShapeDef> {
@@ -94,9 +97,10 @@ impl ShapeTable {
                 Type::Shape { name: n.clone() }
             }
             // M7 P3c: first-class range type annotation.
-            AstType::Named(n, _) if n == "range" => {
-                Type::Range { element: Box::new(Type::Int), end_inclusive: false }
-            }
+            AstType::Named(n, _) if n == "range" => Type::Range {
+                element: Box::new(Type::Int),
+                end_inclusive: false,
+            },
             AstType::Error | AstType::Named(_, _) | AstType::Range { .. } => Type::Error,
             // P3b: dynamic dispatch and Self type resolution.
             AstType::Dynamic { .. } | AstType::SelfType { .. } => Type::Error,
@@ -104,31 +108,46 @@ impl ShapeTable {
             AstType::TypeParam { .. } => Type::Error,
             // Generic instantiation: P3a handles user-defined generics; P3b handles built-ins.
             AstType::Generic { name, args, .. } => {
-                let resolved_args: Vec<Type> = args.iter().map(|a| self.resolve_ast_type(a)).collect();
+                let resolved_args: Vec<Type> =
+                    args.iter().map(|a| self.resolve_ast_type(a)).collect();
                 match name.as_str() {
                     "array" => {
                         let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
-                        Type::BuiltinArray { elem: Box::new(elem) }
+                        Type::BuiltinArray {
+                            elem: Box::new(elem),
+                        }
                     }
                     "fixed" => {
                         let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
-                        Type::BuiltinFixed { elem: Box::new(elem), size: None }
+                        Type::BuiltinFixed {
+                            elem: Box::new(elem),
+                            size: None,
+                        }
                     }
                     "map" => {
                         let mut args = resolved_args.into_iter();
                         let key = args.next().unwrap_or(Type::Error);
                         let val = args.next().unwrap_or(Type::Error);
-                        Type::BuiltinMap { key: Box::new(key), val: Box::new(val) }
+                        Type::BuiltinMap {
+                            key: Box::new(key),
+                            val: Box::new(val),
+                        }
                     }
                     "MapEntry" => {
                         let mut args = resolved_args.into_iter();
                         let key = args.next().unwrap_or(Type::Error);
                         let val = args.next().unwrap_or(Type::Error);
-                        Type::MapEntry { key: Box::new(key), val: Box::new(val) }
+                        Type::MapEntry {
+                            key: Box::new(key),
+                            val: Box::new(val),
+                        }
                     }
                     _ => {
                         if self.contains(name) {
-                            Type::Generic { name: name.clone(), args: resolved_args }
+                            Type::Generic {
+                                name: name.clone(),
+                                args: resolved_args,
+                            }
                         } else {
                             Type::Error
                         }
@@ -138,18 +157,27 @@ impl ShapeTable {
             // maybe<T>: P3b.
             AstType::Maybe { inner, .. } => {
                 let inner_ty = self.resolve_ast_type(inner);
-                Type::Maybe { inner: Box::new(inner_ty) }
+                Type::Maybe {
+                    inner: Box::new(inner_ty),
+                }
             }
             // M6: Union types in shape field/signature contexts.
             // These are rare (shape fields of union type); resolve conservatively.
             AstType::Union { variants, .. } => {
-                let resolved: Vec<crate::types::Type> = variants.iter().map(|v| self.resolve_ast_type(v)).collect();
-                if resolved.len() < 2 { crate::types::Type::Error } else { crate::types::Type::Union { variants: resolved } }
+                let resolved: Vec<crate::types::Type> =
+                    variants.iter().map(|v| self.resolve_ast_type(v)).collect();
+                if resolved.len() < 2 {
+                    crate::types::Type::Error
+                } else {
+                    crate::types::Type::Union { variants: resolved }
+                }
             }
             // M7 P3a: `-> T errors` — resolve to ErrorsCapable wrapping the inner type.
             AstType::ErrorCapable { inner, .. } => {
                 let inner_ty = self.resolve_ast_type(inner);
-                crate::types::Type::ErrorsCapable { inner: Box::new(inner_ty) }
+                crate::types::Type::ErrorsCapable {
+                    inner: Box::new(inner_ty),
+                }
             }
         }
     }
@@ -173,12 +201,17 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
         if let Item::ShapeDecl(s) = item {
             // M6: skip alias declarations (`shape Shape = Circle | Square`) — they're not
             // regular shapes with fields. UnionAliasTable handles them in typeck.
-            if s.alias_ty.is_some() { continue; }
+            if s.alias_ty.is_some() {
+                continue;
+            }
 
             if all_names.contains(&s.name) {
                 diags.push(Diagnostic::error(
                     s.name_span.clone(),
-                    format!("A shape named `{}` is already defined in this file.", s.name),
+                    format!(
+                        "A shape named `{}` is already defined in this file.",
+                        s.name
+                    ),
                     "Rename one of the two shapes — each shape in a file must have a unique name.",
                     "Yinz does not allow two shapes with the same name in the same file.",
                 ));
@@ -190,15 +223,23 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
 
     // Temporary name-only table for type resolution (enables forward references).
     let name_table = ShapeTable {
-        shapes: all_names.iter().map(|n| (n.clone(), ShapeDef {
-            name: n.clone(),
-            is_base: false,
-            extends: None,
-            follows: vec![],
-            fields: vec![],
-            contract_sigs: vec![],
-            defined_at: SourceSpan::new("", 0, 0),
-        })).collect(),
+        shapes: all_names
+            .iter()
+            .map(|n| {
+                (
+                    n.clone(),
+                    ShapeDef {
+                        name: n.clone(),
+                        is_base: false,
+                        extends: None,
+                        follows: vec![],
+                        fields: vec![],
+                        contract_sigs: vec![],
+                        defined_at: SourceSpan::new("", 0, 0),
+                    },
+                )
+            })
+            .collect(),
         union_aliases: HashMap::new(),
     };
 
@@ -243,7 +284,10 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
             if !seen_field_names.insert(field.name.clone()) {
                 diags.push(Diagnostic::error(
                     field.name_span.clone(),
-                    format!("Field `{}` is already declared on `{}`.", field.name, s.name),
+                    format!(
+                        "Field `{}` is already declared on `{}`.",
+                        field.name, s.name
+                    ),
                     "Each field in a shape must have a unique name.",
                     "Two fields with the same name would make it impossible to tell them apart.",
                 ));
@@ -260,23 +304,36 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
         }
 
         // Resolve contract sigs.
-        let contract_sigs: Vec<ContractSigDef> = s.contract_sigs.iter().map(|sig| {
-            let param_tys: Vec<Type> = sig.params.iter()
-                .map(|p| name_table.resolve_ast_type(&p.ty))
-                .collect();
-            let ret_ty = name_table.resolve_ast_type(&sig.return_type);
-            ContractSigDef { name: sig.name.clone(), param_tys, ret_ty }
-        }).collect();
+        let contract_sigs: Vec<ContractSigDef> = s
+            .contract_sigs
+            .iter()
+            .map(|sig| {
+                let param_tys: Vec<Type> = sig
+                    .params
+                    .iter()
+                    .map(|p| name_table.resolve_ast_type(&p.ty))
+                    .collect();
+                let ret_ty = name_table.resolve_ast_type(&sig.return_type);
+                ContractSigDef {
+                    name: sig.name.clone(),
+                    param_tys,
+                    ret_ty,
+                }
+            })
+            .collect();
 
-        table.shapes.insert(s.name.clone(), ShapeDef {
-            name: s.name.clone(),
-            is_base: s.is_base,
-            extends,
-            follows,
-            fields: own_fields, // inherited fields added in pass 3
-            contract_sigs,
-            defined_at: s.name_span.clone(),
-        });
+        table.shapes.insert(
+            s.name.clone(),
+            ShapeDef {
+                name: s.name.clone(),
+                is_base: s.is_base,
+                extends,
+                follows,
+                fields: own_fields, // inherited fields added in pass 3
+                contract_sigs,
+                defined_at: s.name_span.clone(),
+            },
+        );
     }
 
     // Pass 3: detect cyclic extends chains, then flatten inherited fields.
@@ -334,20 +391,25 @@ fn flatten_inherited_fields(table: &mut ShapeTable, _diags: &mut DiagnosticBucke
         // Collect parent fields (may themselves be inherited — already flattened if
         // we process in topological order, but for simplicity just grab what's there).
         let parent_fields: Vec<FieldDef> = match table.shapes.get(&parent) {
-            Some(p) => p.fields.iter().map(|f| FieldDef {
-                name: f.name.clone(),
-                ty: f.ty.clone(),
-                is_hidden: f.is_hidden,
-                is_inherited: true,
-                defined_at: f.defined_at.clone(),
-            }).collect(),
+            Some(p) => p
+                .fields
+                .iter()
+                .map(|f| FieldDef {
+                    name: f.name.clone(),
+                    ty: f.ty.clone(),
+                    is_hidden: f.is_hidden,
+                    is_inherited: true,
+                    defined_at: f.defined_at.clone(),
+                })
+                .collect(),
             None => continue, // parent doesn't exist — already errored
         };
 
         // Prepend parent fields to child's own fields, skipping overridden names.
         let child = table.shapes.get_mut(name).unwrap();
         let own_names: HashSet<&str> = child.fields.iter().map(|f| f.name.as_str()).collect();
-        let mut all_fields: Vec<FieldDef> = parent_fields.into_iter()
+        let mut all_fields: Vec<FieldDef> = parent_fields
+            .into_iter()
             .filter(|f| !own_names.contains(f.name.as_str()))
             .collect();
         all_fields.append(&mut child.fields);
@@ -414,7 +476,10 @@ pub fn collect_generic_shapes(module: &Module, diags: &mut DiagnosticBucket) -> 
         if table.contains(&s.name) {
             diags.push(Diagnostic::error(
                 s.name_span.clone(),
-                format!("A generic shape named `{}` is already defined in this file.", s.name),
+                format!(
+                    "A generic shape named `{}` is already defined in this file.",
+                    s.name
+                ),
                 "Rename one of the two shapes.",
                 "Yinz does not allow two shapes with the same name in the same file.",
             ));
@@ -468,10 +533,14 @@ fn resolve_field_type_in_generic_shape(ast_ty: &AstType, type_params: &[String])
         AstType::Named(n, _) if n == "string" => Type::String,
         AstType::Named(n, _) if type_params.contains(n) => Type::TypeParam { name: n.clone() },
         AstType::Generic { name, args, .. } => {
-            let resolved_args = args.iter()
+            let resolved_args = args
+                .iter()
                 .map(|a| resolve_field_type_in_generic_shape(a, type_params))
                 .collect();
-            Type::Generic { name: name.clone(), args: resolved_args }
+            Type::Generic {
+                name: name.clone(),
+                args: resolved_args,
+            }
         }
         _ => Type::Error,
     }

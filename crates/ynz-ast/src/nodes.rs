@@ -315,7 +315,6 @@ pub enum StringPart {
 /// M6 added Is(19) for `if (x is Foo)` type-narrowing condition.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
-
     /// A function or identifier name.
     Ident(String, SourceSpan),
     /// A string literal (raw UTF-8 bytes).
@@ -325,7 +324,6 @@ pub enum Expr {
     /// A placeholder inserted by the parser when it recovers from an error.
     /// The type checker skips functions whose bodies contain Error nodes.
     Error(SourceSpan),
-
 
     /// An integer literal: `42`, `0xFF`, `0b1010`.
     IntLit(i64, SourceSpan),
@@ -358,7 +356,6 @@ pub enum Expr {
     // ── M4 ───────────────────────────────────────────────────────────────────
 
     // test-ratchet: M4 adds FieldAccess, StructLit, PostfixOp.
-
     /// Field access: `receiver.field` (no parens — pure read per dot-postfix rule).
     FieldAccess {
         receiver: Box<Expr>,
@@ -389,21 +386,16 @@ pub enum Expr {
 
     /// The `self` value keyword (lowercase) — the receiver instance inside a
     /// function whose first parameter is `share self` / `lend self` / `give self`.
-    SelfValue {
-        span: SourceSpan,
-    },
+    SelfValue { span: SourceSpan },
 
     // ── M5 ───────────────────────────────────────────────────────────────────
 
     // test-ratchet: M5 adds NoneLit, IndexAccess.
-
     /// The `none` literal — the absent value of `maybe<T>` for some T resolved
     /// from context (binding annotation, return type, enclosing call's
     /// parameter type, sibling branch). See `design/maybe.md` for the full
     /// none-inference rules.
-    NoneLit {
-        span: SourceSpan,
-    },
+    NoneLit { span: SourceSpan },
 
     /// Bracket-index access: `receiver[index]`.
     ///
@@ -530,14 +522,12 @@ pub struct CallExpr {
 /// TypeParam(11), Generic(12), Maybe(13); M6 added Union(14).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Type {
-
     /// The `nothing` return type.
     Nothing,
     /// A named type (identifier that names a user-defined type).
     Named(String, SourceSpan),
     /// A placeholder inserted during error recovery.
     Error,
-
 
     /// The `int` primitive type (signed 64-bit integer).
     Int,
@@ -564,35 +554,25 @@ pub enum Type {
     // ── M4 ───────────────────────────────────────────────────────────────────
 
     // test-ratchet: M4 adds Dynamic and SelfType.
-
     /// `dynamic Foo` — runtime polymorphism via fat pointer + vtable lookup.
     ///
     /// Opt-in only: static dispatch is the default when the concrete type is known.
-    Dynamic {
-        contract: String,
-        span: SourceSpan,
-    },
+    Dynamic { contract: String, span: SourceSpan },
 
     /// `Self` — the concrete type of the enclosing shape (in type position).
     ///
     /// Only valid inside a shape body or a function whose first parameter is `self`.
-    SelfType {
-        span: SourceSpan,
-    },
+    SelfType { span: SourceSpan },
 
     // ── M5 ───────────────────────────────────────────────────────────────────
 
     // test-ratchet: M5 adds TypeParam, Generic, Maybe.
-
     /// A type parameter reference inside a generic function or generic shape body.
     ///
     /// Example: in `function identity<T>(give value: T) -> T`, the two `T` uses
     /// produce `Type::TypeParam { name: "T", ... }`. Resolved against the
     /// enclosing function/shape's `generics` list at typeck time.
-    TypeParam {
-        name: String,
-        span: SourceSpan,
-    },
+    TypeParam { name: String, span: SourceSpan },
 
     /// A generic type instantiation: `array<int>`, `Pair<A, B>`, `maybe<Player>`,
     /// `Box<map<string, int>>`, etc.
@@ -614,15 +594,11 @@ pub enum Type {
     /// because `maybe<T>` has special typeck rules: flow-sensitive `.value`
     /// enforcement, the `none` literal, and a fixed lowering decision table.
     /// See `design/maybe.md` for the full spec.
-    Maybe {
-        inner: Box<Type>,
-        span: SourceSpan,
-    },
+    Maybe { inner: Box<Type>, span: SourceSpan },
 
     // ── M6 ───────────────────────────────────────────────────────────────────
 
     // test-ratchet: M6 adds Union for `A | B | C` union type declarations.
-
     /// A union type: `Circle | Square | Triangle` in type position.
     ///
     /// Typeck validates: ≥2 variants, no duplicate names, no `T | none` form
@@ -643,12 +619,8 @@ pub enum Type {
     /// error-type typeck (error propagation, the `?` operator, error shapes)
     /// arrives in M7 P3a. In M7 P1, this node is parsed and stored on
     /// `FunctionDecl.errors_capable`; typeck defers to the inner type.
-    ErrorCapable {
-        inner: Box<Type>,
-        span: SourceSpan,
-    },
+    ErrorCapable { inner: Box<Type>, span: SourceSpan },
 }
-
 
 // ── M4 shape declarations ────────────────────────────────────────────────────
 

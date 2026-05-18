@@ -18,7 +18,6 @@ fn span(start: usize, end: usize) -> SourceSpan {
     SourceSpan::new(FILE, start, end)
 }
 
-
 #[test]
 fn single_error_with_span() {
     // WHY: verifies that a single error renders with all three message parts and
@@ -34,7 +33,6 @@ fn single_error_with_span() {
     let output = render(&bucket, &sources(), false);
     assert_snapshot!("single_error_with_span", output);
 }
-
 
 #[test]
 fn two_errors_same_file() {
@@ -58,7 +56,6 @@ fn two_errors_same_file() {
     assert_snapshot!("two_errors_same_file", output);
 }
 
-
 #[test]
 fn error_and_warning() {
     // WHY: verifies that Error and Warning severity both render, and that errors
@@ -81,7 +78,6 @@ fn error_and_warning() {
     assert_snapshot!("error_and_warning", output);
 }
 
-
 #[test]
 fn suggestion_only() {
     // WHY: Suggestion tier is reserved for v0.4 lint rules, but the tier must
@@ -98,7 +94,6 @@ fn suggestion_only() {
     let output = render(&bucket, &sources(), false);
     assert_snapshot!("suggestion_only", output);
 }
-
 
 #[test]
 fn sixty_errors_capped_at_fifty() {
@@ -130,7 +125,6 @@ fn sixty_errors_capped_at_fifty() {
     );
     assert_snapshot!("sixty_errors_capped_at_fifty", output);
 }
-
 
 #[test]
 #[should_panic(expected = "what must not be empty")]

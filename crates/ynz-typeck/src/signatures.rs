@@ -28,7 +28,9 @@ pub struct SignatureTable {
 
 impl SignatureTable {
     pub fn empty() -> Self {
-        Self { fns: HashMap::new() }
+        Self {
+            fns: HashMap::new(),
+        }
     }
 
     /// All function names in the table, for Levenshtein suggestions.
@@ -67,11 +69,8 @@ pub fn collect_signatures(
                     .iter()
                     .map(|p| (p.name.clone(), sig_ast_type_to_type(&p.ty, shape_table)))
                     .collect();
-                let param_ownerships: Vec<Option<OwnershipModifier>> = f
-                    .params
-                    .iter()
-                    .map(|p| p.ownership.clone())
-                    .collect();
+                let param_ownerships: Vec<Option<OwnershipModifier>> =
+                    f.params.iter().map(|p| p.ownership.clone()).collect();
                 // sig_ast_type_to_type resolves ErrorCapable → ErrorsCapable { inner }
                 // via ShapeTable::resolve_ast_type. No additional wrapping needed.
                 let ret = sig_ast_type_to_type(&f.return_type, shape_table);
@@ -114,7 +113,12 @@ pub fn collect_signatures(
 
                 table.fns.insert(
                     f.name.clone(),
-                    FunctionSig { params, param_ownerships, ret, decl_span: f.span.clone() },
+                    FunctionSig {
+                        params,
+                        param_ownerships,
+                        ret,
+                        decl_span: f.span.clone(),
+                    },
                 );
             }
         }
@@ -173,32 +177,44 @@ pub fn collect_generic_signatures(
         let type_params: Vec<String> = f.generics.iter().map(|gp| gp.name.clone()).collect();
 
         // Build constraint map: (type_param_name, [contract_names]).
-        let constraints: Vec<(String, Vec<String>)> = f.generics.iter()
+        let constraints: Vec<(String, Vec<String>)> = f
+            .generics
+            .iter()
             .map(|gp| {
-                let contracts: Vec<String> = gp.constraints.iter().map(|(c, _)| c.clone()).collect();
+                let contracts: Vec<String> =
+                    gp.constraints.iter().map(|(c, _)| c.clone()).collect();
                 (gp.name.clone(), contracts)
             })
             .filter(|(_, contracts)| !contracts.is_empty())
             .collect();
 
-        let params: Vec<(String, Type)> = f.params.iter()
-            .map(|p| (p.name.clone(), resolve_sig_type_with_params(&p.ty, &type_params, shape_table)))
+        let params: Vec<(String, Type)> = f
+            .params
+            .iter()
+            .map(|p| {
+                (
+                    p.name.clone(),
+                    resolve_sig_type_with_params(&p.ty, &type_params, shape_table),
+                )
+            })
             .collect();
 
-        let param_ownerships: Vec<Option<OwnershipModifier>> = f.params.iter()
-            .map(|p| p.ownership.clone())
-            .collect();
+        let param_ownerships: Vec<Option<OwnershipModifier>> =
+            f.params.iter().map(|p| p.ownership.clone()).collect();
 
         let ret = resolve_sig_type_with_params(&f.return_type, &type_params, shape_table);
 
-        table.fns.insert(f.name.clone(), GenericFnSig {
-            type_params,
-            constraints,
-            params,
-            param_ownerships,
-            ret,
-            decl_span: f.span.clone(),
-        });
+        table.fns.insert(
+            f.name.clone(),
+            GenericFnSig {
+                type_params,
+                constraints,
+                params,
+                param_ownerships,
+                ret,
+                decl_span: f.span.clone(),
+            },
+        );
     }
 
     table
@@ -216,10 +232,14 @@ fn resolve_sig_type_with_params(
     match ast_ty {
         AstType::Named(n, _) if type_params.contains(n) => Type::TypeParam { name: n.clone() },
         AstType::Generic { name, args, .. } => {
-            let resolved_args = args.iter()
+            let resolved_args = args
+                .iter()
                 .map(|a| resolve_sig_type_with_params(a, type_params, shape_table))
                 .collect();
-            Type::Generic { name: name.clone(), args: resolved_args }
+            Type::Generic {
+                name: name.clone(),
+                args: resolved_args,
+            }
         }
         other => shape_table.resolve_ast_type(other),
     }

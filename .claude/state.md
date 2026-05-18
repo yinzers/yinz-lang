@@ -13,6 +13,8 @@
 *(no active roadmaps)*
 
 ### Active Workstreams
+- m7-strings-errors-iterables (patrick) — 13 files touched — 26/128 done — 2026-05-18-r2
+- m8-modules-doc-sensitive-concurrency-bignum-release (patrick) — 17 files touched — 0/120 done — roadmap: v0-1-compiler — 2026-05-18-r2
 - v0-1-compiler (patrick) — 5 files touched — 0/184 done — 2026-05-12-r4
 <!-- RADAR-END -->
 

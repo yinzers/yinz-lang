@@ -29,7 +29,11 @@ pub fn codegen_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<Codege
 
     if has_errors {
         return Arc::new(CodegenOutput {
-            artifact: CompiledArtifact { object_bytes: Vec::new(), ir_text: String::new(), sha256: [0u8; 32] },
+            artifact: CompiledArtifact {
+                object_bytes: Vec::new(),
+                ir_text: String::new(),
+                sha256: [0u8; 32],
+            },
             diagnostics,
         });
     }
@@ -45,7 +49,10 @@ pub fn codegen_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<Codege
         &check.mono_table,
         None,
     ) {
-        Ok(artifact) => Arc::new(CodegenOutput { artifact, diagnostics }),
+        Ok(artifact) => Arc::new(CodegenOutput {
+            artifact,
+            diagnostics,
+        }),
         Err(msg) => {
             diagnostics.push(Diagnostic::error(
                 ynz_diagnostics::SourceSpan::new(source_path.as_str(), 0, 0),
@@ -54,7 +61,11 @@ pub fn codegen_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<Codege
                 "Machine-code generation failed inside the LLVM backend.",
             ));
             Arc::new(CodegenOutput {
-                artifact: CompiledArtifact { object_bytes: Vec::new(), ir_text: String::new(), sha256: [0u8; 32] },
+                artifact: CompiledArtifact {
+                    object_bytes: Vec::new(),
+                    ir_text: String::new(),
+                    sha256: [0u8; 32],
+                },
                 diagnostics,
             })
         }

@@ -44,7 +44,6 @@ fn assert_errors(source: &str, expected_count: usize) -> CheckOutput {
     output
 }
 
-
 #[test]
 fn m4_type_variant_count_locked() {
     // WHY: adding new types before their milestones introduces untested paths.
@@ -68,13 +67,23 @@ fn m4_type_variant_count_locked() {
         Type::Float,
         Type::Number { precision: 34 },
         Type::Bool,
-        Type::Range { element: Box::new(Type::Int), end_inclusive: false },
-        Type::Shape { name: "Player".into() },
-        Type::Dynamic { contract: "Foo".into() },
+        Type::Range {
+            element: Box::new(Type::Int),
+            end_inclusive: false,
+        },
+        Type::Shape {
+            name: "Player".into(),
+        },
+        Type::Dynamic {
+            contract: "Foo".into(),
+        },
     ];
-    assert_eq!(all.len(), 10, "Type variant count changed from 10 — add // test-ratchet: comment");
+    assert_eq!(
+        all.len(),
+        10,
+        "Type variant count changed from 10 — add // test-ratchet: comment"
+    );
 }
-
 
 #[test]
 fn m1_source_type_checks_clean() {
@@ -134,13 +143,15 @@ fn conversion_methods_type_check_clean() {
     );
 }
 
-
 #[test]
 fn int_literal_infers_as_int() {
     // WHY: `let x = 42` must give x the type `int`, not `number`. This is
     // Golden Rule 10 (efficiency first) — the default must be the most
     // performant type. If x becomes `number`, arithmetic is decimal-128 overhead.
-    let output = assert_errors("function entrypoint() -> nothing { let x = 42\nprint(x.toString()) }", 0);
+    let output = assert_errors(
+        "function entrypoint() -> nothing { let x = 42\nprint(x.toString()) }",
+        0,
+    );
     let int_ty = output
         .typed_module
         .expr_types
@@ -176,22 +187,17 @@ fn number_literal_retypes_as_float_with_annotation() {
     assert_clean("function entrypoint() -> nothing { let x: float = 1.0\nprint(x) }");
 }
 
-
 #[test]
 fn int_annotation_rejects_number_literal() {
     // WHY: `let x: int = 1.5` must error — you can't store a decimal in an int.
     // The type checker must catch this before codegen tries to emit an alloca.
-    let output = assert_errors(
-        "function entrypoint() -> nothing { let x: int = 1.5 }",
-        1,
-    );
+    let output = assert_errors("function entrypoint() -> nothing { let x: int = 1.5 }", 1);
     assert!(
         output.diagnostics[0].what.contains("number") || output.diagnostics[0].what.contains("int"),
         "Diagnostic must mention the types, got: {}",
         output.diagnostics[0].what
     );
 }
-
 
 #[test]
 fn int_arithmetic_type_checks_clean() {
@@ -205,7 +211,9 @@ fn float_arithmetic_type_checks_clean() {
 
 #[test]
 fn number_arithmetic_type_checks_clean() {
-    assert_clean("function entrypoint() -> nothing { let x = 0.1\nlet y = 0.2\nlet z = x + y\nprint(z) }");
+    assert_clean(
+        "function entrypoint() -> nothing { let x = 0.1\nlet y = 0.2\nlet z = x + y\nprint(z) }",
+    );
 }
 
 #[test]
@@ -266,7 +274,8 @@ fn percent_on_number_produces_specific_error() {
         1,
     );
     assert!(
-        output.diagnostics[0].what.contains("%") || output.diagnostics[0].what_instead.contains("math"),
+        output.diagnostics[0].what.contains("%")
+            || output.diagnostics[0].what_instead.contains("math"),
         "Diagnostic must mention % or the math module, got: {:#?}",
         output.diagnostics[0]
     );
@@ -277,12 +286,8 @@ fn bool_less_than_int_is_type_error() {
     // WHY: `1 < 2 < 3` parses as `(1 < 2) < 3` — the outer `<` is `bool < int`,
     // which is a type error. This catches comparison chaining which silently
     // passes in many languages but produces wrong results.
-    assert_errors(
-        "function entrypoint() -> nothing { let x = 1 < 2 < 3 }",
-        1,
-    );
+    assert_errors("function entrypoint() -> nothing { let x = 1 < 2 < 3 }", 1);
 }
-
 
 #[test]
 fn comparison_result_type_is_bool() {
@@ -290,7 +295,6 @@ fn comparison_result_type_is_bool() {
     // boolean operators `&&` and `||` would fail when applied to comparison results.
     assert_clean("function entrypoint() -> nothing { let x: int = 1\nlet y: int = 2\nlet z = x < y\nprint(z) }");
 }
-
 
 #[test]
 fn bool_and_type_checks_clean() {
@@ -302,7 +306,6 @@ fn int_and_bool_is_type_error() {
     // WHY: `42 && true` looks plausible to a beginner but `&&` only accepts bool.
     assert_errors("function entrypoint() -> nothing { let x = 42 && true }", 1);
 }
-
 
 #[test]
 fn unary_neg_on_int_type_checks_clean() {
@@ -320,15 +323,11 @@ fn unary_neg_on_bool_is_type_error() {
     assert_errors("function entrypoint() -> nothing { let x = -true }", 1);
 }
 
-
 #[test]
 fn const_reassignment_is_error() {
     // WHY: `const` expresses the intent that a value does not change. Allowing
     // reassignment would break the contract and confuse readers who see `const`.
-    let output = assert_errors(
-        "function entrypoint() -> nothing { const x = 1\nx = 2 }",
-        1,
-    );
+    let output = assert_errors("function entrypoint() -> nothing { const x = 1\nx = 2 }", 1);
     assert!(
         output.diagnostics[0].what.contains("const"),
         "Diagnostic must mention `const`, got: {}",
@@ -341,14 +340,10 @@ fn const_reassignment_is_error() {
     );
 }
 
-
 #[test]
 fn undefined_identifier_produces_diagnostic() {
     // WHY: referencing an undefined name must error at compile time.
-    let output = assert_errors(
-        r#"function entrypoint() -> nothing { unknownIdent() }"#,
-        1,
-    );
+    let output = assert_errors(r#"function entrypoint() -> nothing { unknownIdent() }"#, 1);
     assert!(
         output.diagnostics[0].what.contains("unknownIdent"),
         "Diagnostic must name the unknown identifier, got: {}",
@@ -379,16 +374,12 @@ fn undefined_in_assignment_produces_diagnostic() {
     assert_errors("function entrypoint() -> nothing { x = 42 }", 1);
 }
 
-
 #[test]
 fn print_with_two_args_produces_arity_error() {
     // WHY: `print(1, 2)` parses fine (parser doesn't enforce arity) but typeck
     // must catch it. Without this check, the user gets a confusing codegen error
     // instead of a clear teaching diagnostic.
-    let output = assert_errors(
-        r#"function entrypoint() -> nothing { print(1, 2) }"#,
-        1,
-    );
+    let output = assert_errors(r#"function entrypoint() -> nothing { print(1, 2) }"#, 1);
     assert!(
         output.diagnostics[0].what.contains("print") && output.diagnostics[0].what.contains("1"),
         "Diagnostic must mention print and argument count, got: {}",
@@ -406,7 +397,6 @@ fn print_with_each_primitive_type_is_clean() {
     assert_clean("function entrypoint() -> nothing { let f: float = 1.0\nprint(f) }");
 }
 
-
 #[test]
 fn unknown_method_produces_error_with_available_list() {
     // WHY: `1.unknownMethod()` must name the available methods on `int`.
@@ -418,7 +408,9 @@ fn unknown_method_produces_error_with_available_list() {
     );
     let what_instead = &output.diagnostics[0].what_instead;
     assert!(
-        what_instead.contains("toString") || what_instead.contains("toNumber") || what_instead.contains("toFloat"),
+        what_instead.contains("toString")
+            || what_instead.contains("toNumber")
+            || what_instead.contains("toFloat"),
         "Suggestion must list available methods, got: {what_instead}"
     );
 }
@@ -439,7 +431,6 @@ fn to_float_on_int_produces_float() {
     );
 }
 
-
 #[test]
 fn parse_error_gate_prevents_cascade_noise() {
     // WHY: type-checking a body that has parse errors produces duplicate diagnostics
@@ -459,7 +450,6 @@ fn parse_error_gate_prevents_cascade_noise() {
         errors
     );
 }
-
 
 #[test]
 fn empty_file_missing_main_produces_diagnostic() {
@@ -484,7 +474,6 @@ fn main_with_wrong_return_type_produces_diagnostic() {
     );
 }
 
-
 #[test]
 fn check_re_runs_when_source_changes() {
     // WHY: check_query depends on parse_query. When source changes, salsa must
@@ -500,10 +489,11 @@ fn check_re_runs_when_source_changes() {
     let diag_count_after = check_query(&db, sf).diagnostics.len();
 
     assert!(diag_count_before > 0, "Empty file should have diagnostics");
-    assert_eq!(diag_count_after, 0, "Valid M1 program should have 0 diagnostics");
+    assert_eq!(
+        diag_count_after, 0,
+        "Valid M1 program should have 0 diagnostics"
+    );
 }
-
-
 
 fn assert_warnings(source: &str, expected_count: usize) -> CheckOutput {
     let output = run(source);
@@ -631,8 +621,10 @@ fn m3_multi_case_string_type_checks_clean() {
 #[test]
 fn m3_return_with_correct_type_is_clean() {
     // WHY: `return 42` in a `-> int` function — the simplest happy-path return.
-    assert_clean(r#"function answer() -> int { return 42 }
-function entrypoint() -> nothing { print(answer()) }"#);
+    assert_clean(
+        r#"function answer() -> int { return 42 }
+function entrypoint() -> nothing { print(answer()) }"#,
+    );
 }
 
 #[test]
@@ -678,17 +670,17 @@ function foo() -> nothing { }
 function entrypoint() -> nothing { }"#,
         1,
     );
-    assert!(out.diagnostics[0].what.contains("foo"), "diagnostic must name the duplicate function");
+    assert!(
+        out.diagnostics[0].what.contains("foo"),
+        "diagnostic must name the duplicate function"
+    );
 }
 
 #[test]
 fn missing_main_produces_diagnostic() {
     // WHY: guard M1's invariant — a module without entrypoint is a compile error.
     // This must hold even with multi-function M3 modules.
-    let out = assert_errors(
-        r#"function helper() -> nothing { }"#,
-        1,
-    );
+    let out = assert_errors(r#"function helper() -> nothing { }"#, 1);
     assert!(out.diagnostics[0].what.contains("entrypoint"));
 }
 
@@ -740,7 +732,10 @@ fn wrong_return_type_produces_diagnostic() {
 function entrypoint() -> nothing { print(foo()) }"#,
         1,
     );
-    assert!(out.diagnostics.iter().any(|d| d.what.contains("int") || d.what.contains("string")));
+    assert!(out
+        .diagnostics
+        .iter()
+        .any(|d| d.what.contains("int") || d.what.contains("string")));
 }
 
 #[test]
@@ -783,7 +778,10 @@ fn dead_code_after_return_produces_warning() {
 function entrypoint() -> nothing { print(foo()) }"#,
         1,
     );
-    assert!(out.diagnostics.iter().any(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning)));
+    assert!(out
+        .diagnostics
+        .iter()
+        .any(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning)));
 }
 
 #[test]
@@ -841,7 +839,8 @@ fn range_outside_for_produces_m7_deferral() {
     // Storing a range in a variable is now valid; the M3 restriction is lifted.
     // test-ratchet: M7 P3c removes the range-outside-for restriction; the test
     // now verifies that storing a range produces NO error (non-regression).
-    assert_clean(r#"function entrypoint() -> nothing { let r = range(0, 5) }"#); // test-ratchet: M7 P3c lifts M3 range-outside-for restriction
+    assert_clean(r#"function entrypoint() -> nothing { let r = range(0, 5) }"#);
+    // test-ratchet: M7 P3c lifts M3 range-outside-for restriction
 }
 
 #[test]
@@ -866,10 +865,7 @@ fn range_wrong_arg_type_produces_diagnostic() {
 fn undefined_function_produces_diagnostic_with_levenshtein() {
     // WHY: `unknownFn()` must produce an error. With a close enough name (`main`
     // vs `mann`), the "did you mean" suggestion must fire.
-    let out = assert_errors(
-        r#"function entrypoint() -> nothing { entrpoint() }"#,
-        1,
-    );
+    let out = assert_errors(r#"function entrypoint() -> nothing { entrpoint() }"#, 1);
     assert!(
         out.diagnostics[0].what_instead.contains("entrypoint"),
         "Levenshtein must suggest `entrypoint` for `entrpoint`, got: {:?}",
@@ -908,7 +904,9 @@ fn parse_error_gate_still_works_in_m3() {
     // `let x = $` produces: (1) lex error on `$`, (2) parse error on the
     // missing expression. Both are lex/parse errors — typeck must not add more.
     let out = run(r#"function entrypoint() -> nothing { let x = $ }"#);
-    let errors: Vec<_> = out.diagnostics.iter()
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
     // All errors must be parse/lex errors, not typeck errors.
@@ -920,7 +918,11 @@ fn parse_error_gate_still_works_in_m3() {
             e.what
         );
     }
-    assert!(errors.len() <= 2, "At most lex + parse error expected, got {}", errors.len());
+    assert!(
+        errors.len() <= 2,
+        "At most lex + parse error expected, got {}",
+        errors.len()
+    );
 }
 
 #[test]
@@ -952,9 +954,7 @@ fn for_loop_var_is_typed_as_int() {
     // WHY: inside `for (i in range(0, 5))`, `i` must be `int` so it can be
     // passed to `print` without a `.toString()` call. If `i` is Error or
     // unknown, print(i) would produce a false type error.
-    assert_clean(
-        r#"function entrypoint() -> nothing { for (i in range(0, 10)) { print(i) } }"#,
-    );
+    assert_clean(r#"function entrypoint() -> nothing { for (i in range(0, 10)) { print(i) } }"#);
 }
 
 #[test]
@@ -962,13 +962,24 @@ fn module_signatures_query_is_separate_from_check_query() {
     // WHY: validates the two-pass salsa design. module_signatures_query must
     // exist and return the same diagnostics as check_query for signature errors.
     let db = CompilerDb::default();
-    let sf = SourceFile::new(&db, FILE.to_string(), "function helper() -> nothing { }".to_string());
+    let sf = SourceFile::new(
+        &db,
+        FILE.to_string(),
+        "function helper() -> nothing { }".to_string(),
+    );
     let sig_out = ynz_typeck::module_signatures_query(&db, sf);
     // No main → 1 error in sig pass
-    assert_eq!(sig_out.diagnostics.len(), 1, "Missing main must appear in signature output");
+    assert_eq!(
+        sig_out.diagnostics.len(),
+        1,
+        "Missing main must appear in signature output"
+    );
     // check_query should also have the error (it includes sig diags)
     let check_out = check_query(&db, sf);
-    assert!(check_out.diagnostics.len() >= 1, "Missing main must appear in check output");
+    assert!(
+        check_out.diagnostics.len() >= 1,
+        "Missing main must appear in check output"
+    );
 }
 
 // ── M4 P3a: shape type-checking tests ────────────────────────────────────────
@@ -978,7 +989,8 @@ fn shape_with_struct_literal_type_checks() {
     // WHY: The end-to-end path — `shape Player { ... }` declared, then `let p: Player = { ... }`
     // constructed — must type-check cleanly. This is the simplest shape program that uses
     // all of P3a's new code paths together.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 shape Player {
   name: string
   health: int
@@ -988,134 +1000,170 @@ function entrypoint() -> nothing {
   let p: Player = { name: `Patrick`, health: 100 }
   print(p.health)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn struct_lit_missing_field_produces_error() {
     // WHY: A struct literal that doesn't provide all required fields must error.
     // Without this check, shapes could be partially initialized with garbage values.
-    let out = assert_errors(r#"
+    let out = assert_errors(
+        r#"
 shape Player { name: string health: int }
 function entrypoint() -> nothing { let p: Player = { name: `x` } }
-"#, 1);
+"#,
+        1,
+    );
     let e = &out.diagnostics[0];
-    assert!(e.what.contains("health") || e.what.contains("Missing"),
-        "Error must name the missing field, got: {:?}", e.what);
+    assert!(
+        e.what.contains("health") || e.what.contains("Missing"),
+        "Error must name the missing field, got: {:?}",
+        e.what
+    );
 }
 
 #[test]
 fn struct_lit_wrong_field_type_produces_error() {
     // WHY: Passing an int where a string is expected must be caught.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 shape Player { name: string }
 function entrypoint() -> nothing { let p: Player = { name: 42 } }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 #[test]
 fn struct_lit_unknown_field_produces_error() {
     // WHY: Providing a field that doesn't exist on the shape must error.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 shape Player { name: string }
 function entrypoint() -> nothing { let p: Player = { name: `x`, age: 30 } }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 #[test]
 fn field_access_resolves_correct_type() {
     // WHY: `p.health` where health is `int` must produce an int — not Error.
     // The int literal binop check below confirms the field resolved to int.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 shape Player { name: string health: int }
 function entrypoint() -> nothing {
   let p: Player = { name: `x`, health: 100 }
   let doubled = p.health * 2
   print(doubled)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn field_access_unknown_field_produces_error() {
     // WHY: `p.nonexistent` must error at the field-access site, not silently produce Error
     // which would cascade into cascading spurious errors everywhere the value is used.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 shape Player { name: string }
 function entrypoint() -> nothing {
   let p: Player = { name: `x` }
   let x = p.age
 }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 #[test]
 fn field_assignment_type_checks() {
     // WHY: `p.health = 50` where health is `int` must check that 50 is `int`.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 shape Player { name: string health: int }
 function entrypoint() -> nothing {
   let p: Player = { name: `x`, health: 100 }
   p.health = 50
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn field_assignment_type_mismatch_produces_error() {
     // WHY: `p.health = `fifty`` must error — field is int, value is string.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 shape Player { name: string health: int }
 function entrypoint() -> nothing {
   let p: Player = { name: `x`, health: 100 }
   p.health = `fifty`
 }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 #[test]
 fn const_field_assignment_produces_error() {
     // WHY: `const p` bindings are fully immutable — field mutation must be rejected.
     // This is one of the five const deep-immutability paths from the plan invariants.
-    let out = assert_errors(r#"
+    let out = assert_errors(
+        r#"
 shape Player { name: string health: int }
 function entrypoint() -> nothing {
   const p: Player = { name: `x`, health: 100 }
   p.health = 50
 }
-"#, 1);
-    assert!(out.diagnostics[0].what.contains("const") || out.diagnostics[0].what.contains("const"),
-        "Error must mention `const`, got: {:?}", out.diagnostics[0].what);
+"#,
+        1,
+    );
+    assert!(
+        out.diagnostics[0].what.contains("const") || out.diagnostics[0].what.contains("const"),
+        "Error must mention `const`, got: {:?}",
+        out.diagnostics[0].what
+    );
 }
 
 #[test]
 fn base_shape_instantiation_produces_error() {
     // WHY: `base shape Entity` cannot be constructed via struct literal.
     // Typeck must reject it at the construction site.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 base shape Entity { name: string }
 function entrypoint() -> nothing { let e: Entity = { name: `x` } }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 #[test]
 fn hidden_field_outside_shape_produces_error() {
     // WHY: `hidden` fields are visible only to functions with `self: ShapeName`.
     // Reading them from an outside function must error.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 shape Player { name: string hidden cache: int }
 function entrypoint() -> nothing {
   let p: Player = { name: `x` }
   let x = p.cache
 }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 #[test]
 fn self_parameter_resolves_to_shape_type() {
     // WHY: A function with `share self: Player` must be able to access `self.name`
     // and have `self` resolve to `Type::Shape { name: "Player" }`.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 shape Player { name: string health: int }
 function greet(share self: Player) -> string { return self.name }
 function entrypoint() -> nothing {
@@ -1123,14 +1171,16 @@ function entrypoint() -> nothing {
   let g = greet(p)
   print(g)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn ufcs_method_call_on_shape_resolves() {
     // WHY: `player.greet()` (UFCS sugar for `greet(player)`) must resolve the function
     // and return its declared return type. This is the primary M4 interaction pattern.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 shape Player { name: string }
 function greet(share self: Player) -> string { return self.name }
 function entrypoint() -> nothing {
@@ -1138,28 +1188,35 @@ function entrypoint() -> nothing {
   let msg = p.greet()
   print(msg)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn duplicate_shape_name_produces_error() {
     // WHY: Two shapes with the same name in one file must error — otherwise the
     // second silently shadows the first and field lookups become nondeterministic.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 shape Player { name: string }
 shape Player { health: int }
 function entrypoint() -> nothing { }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 #[test]
 fn struct_lit_without_annotation_produces_error() {
     // WHY: Anonymous struct literals need a type annotation to know which shape
     // to validate against. Without one the compiler cannot check field names.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 shape Player { name: string }
 function entrypoint() -> nothing { let p = { name: `x` } }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 // ── M4 P3b: inheritance + follows + dynamic tests ────────────────────────────
@@ -1168,7 +1225,8 @@ function entrypoint() -> nothing { let p = { name: `x` } }
 fn extends_inherits_parent_fields() {
     // WHY: A child shape via `extends` must be able to access all parent fields.
     // The field is resolved through the flattened field list in ShapeDef.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 shape Entity { name: string }
 shape Player extends Entity { health: int }
 function entrypoint() -> nothing {
@@ -1176,24 +1234,29 @@ function entrypoint() -> nothing {
   print(p.name)
   print(p.health)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn extends_unknown_parent_produces_error() {
     // WHY: `shape Player extends Ghost` where Ghost is not defined must error
     // at the extends declaration, not silently produce a broken shape.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 shape Player extends Ghost { health: int }
 function entrypoint() -> nothing { }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 #[test]
 fn follows_satisfied_type_checks() {
     // WHY: `shape Player follows Damageable` with a matching standalone function
     // must type-check cleanly — the contract is satisfied.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 shape Damageable {
   takeDamage(lend self, amount: int) -> nothing
 }
@@ -1205,32 +1268,43 @@ function entrypoint() -> nothing {
   let p: Player = { health: 100 }
   takeDamage(p, 10)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn follows_missing_function_produces_error() {
     // WHY: If a shape follows a contract but the required function is missing,
     // the compiler must catch it and name which function is absent.
-    let out = assert_errors(r#"
+    let out = assert_errors(
+        r#"
 shape Damageable { takeDamage(lend self, amount: int) -> nothing }
 shape Player follows Damageable { health: int }
 function entrypoint() -> nothing { }
-"#, 1);
-    assert!(out.diagnostics[0].what.contains("takeDamage") || out.diagnostics[0].what.contains("missing"),
-        "Error must name the missing function, got: {:?}", out.diagnostics[0].what);
+"#,
+        1,
+    );
+    assert!(
+        out.diagnostics[0].what.contains("takeDamage")
+            || out.diagnostics[0].what.contains("missing"),
+        "Error must name the missing function, got: {:?}",
+        out.diagnostics[0].what
+    );
 }
 
 #[test]
 fn follows_wrong_return_type_produces_error() {
     // WHY: A function whose return type doesn't match the contract sig's return type
     // must produce a clear mismatch diagnostic.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 shape Greetable { greet(share self) -> string }
 shape Player follows Greetable { name: string }
 function greet(share self: Player) -> int { return 42 }
 function entrypoint() -> nothing { }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 #[test]
@@ -1239,13 +1313,29 @@ fn type_variant_count_includes_dynamic() {
     //
     // test-ratchet: P3b adds Dynamic for runtime polymorphism. Count 9 → 10.
     let all: &[Type] = &[
-        Type::Nothing, Type::String, Type::Error,
-        Type::Int, Type::Float, Type::Number { precision: 34 }, Type::Bool,
-        Type::Range { element: Box::new(Type::Int), end_inclusive: false },
-        Type::Shape { name: "Player".into() },
-        Type::Dynamic { contract: "Damageable".into() },
+        Type::Nothing,
+        Type::String,
+        Type::Error,
+        Type::Int,
+        Type::Float,
+        Type::Number { precision: 34 },
+        Type::Bool,
+        Type::Range {
+            element: Box::new(Type::Int),
+            end_inclusive: false,
+        },
+        Type::Shape {
+            name: "Player".into(),
+        },
+        Type::Dynamic {
+            contract: "Damageable".into(),
+        },
     ];
-    assert_eq!(all.len(), 10, "Type variant count changed from 10 — add // test-ratchet: comment");
+    assert_eq!(
+        all.len(),
+        10,
+        "Type variant count changed from 10 — add // test-ratchet: comment"
+    );
 }
 
 // ── M4 P3c: ownership analysis tests ─────────────────────────────────────────
@@ -1254,7 +1344,8 @@ fn type_variant_count_includes_dynamic() {
 fn give_param_consumes_binding() {
     // WHY: When a function takes a `give` parameter, the caller's binding is consumed.
     // Using it afterward must produce a use-after-give error.
-    let out = assert_errors(r#"
+    let out = assert_errors(
+        r#"
 shape Player { name: string }
 function consume(give p: Player) -> nothing { }
 function entrypoint() -> nothing {
@@ -1262,29 +1353,38 @@ function entrypoint() -> nothing {
   consume(p)
   let x = p.name
 }
-"#, 1);
-    assert!(out.diagnostics[0].what.contains("given away"),
-        "Error must mention the binding was given away, got: {:?}", out.diagnostics[0].what);
+"#,
+        1,
+    );
+    assert!(
+        out.diagnostics[0].what.contains("given away"),
+        "Error must mention the binding was given away, got: {:?}",
+        out.diagnostics[0].what
+    );
 }
 
 #[test]
 fn const_binding_cannot_be_given() {
     // WHY: `const` blocks the `give` path — ownership cannot be transferred out
     // of a const binding. Const deep-immutability path #3.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 shape Player { name: string }
 function consume(give p: Player) -> nothing { }
 function entrypoint() -> nothing {
   const p: Player = { name: `Patrick` }
   consume(p)
 }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 #[test]
 fn const_binding_cannot_be_lent() {
     // WHY: `const` blocks the `lend` path. Const deep-immutability path #2.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 shape Player { health: int }
 function damage(lend self: Player, amount: int) -> nothing {
   self.health = self.health - amount
@@ -1293,13 +1393,16 @@ function entrypoint() -> nothing {
   const p: Player = { health: 100 }
   damage(p, 10)
 }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 #[test]
 fn give_twice_is_use_after_give() {
     // WHY: After a value is given, the second give must see it as consumed.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 shape Player { name: string }
 function consume(give p: Player) -> nothing { }
 function entrypoint() -> nothing {
@@ -1307,13 +1410,16 @@ function entrypoint() -> nothing {
   consume(p)
   consume(p)
 }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 #[test]
 fn share_on_const_is_allowed() {
     // WHY: A `share` (read-only) parameter can receive a const binding.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 shape Player { name: string }
 function greet(share p: Player) -> string { return p.name }
 function entrypoint() -> nothing {
@@ -1321,13 +1427,15 @@ function entrypoint() -> nothing {
   let g = greet(p)
   print(g)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn unspecified_param_accepts_const() {
     // WHY: No ownership modifier defaults to share semantics. Const bindings are fine.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 shape Player { name: string }
 function greet(p: Player) -> string { return p.name }
 function entrypoint() -> nothing {
@@ -1335,7 +1443,8 @@ function entrypoint() -> nothing {
   let g = greet(p)
   print(g)
 }
-"#);
+"#,
+    );
 }
 
 // ── M6: union typeck (P3b) ───────────────────────────────────────────────────
@@ -1344,7 +1453,8 @@ function entrypoint() -> nothing {
 fn m6_union_type_annotation_works() {
     // WHY: A union type `let s: Circle | Square = c` must parse and typecheck without errors.
     // Assigning a concrete variant (Circle) to a union type must be valid.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 shape Circle { radius: number }
 shape Square { side: number }
 shape Shape = Circle | Square
@@ -1359,13 +1469,15 @@ function entrypoint() -> nothing {
   let s: Shape = c
   describe(s)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn m6_union_multicase_exhaustive_clean() {
     // WHY: A fully-covered union multi-case must typecheck cleanly.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 shape Circle { radius: number }
 shape Square { side: number }
 shape Shape = Circle | Square
@@ -1376,13 +1488,15 @@ function classify(s: Shape) -> nothing {
   }
 }
 function entrypoint() -> nothing { }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn m6_union_multicase_nonexhaustive_is_error() {
     // WHY: A missing `is Foo` arm in a union multi-case must produce an error.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 shape Circle { radius: number }
 shape Square { side: number }
 shape Triangle { width: number
@@ -1395,13 +1509,16 @@ function classify(s: Shape) -> nothing {
   }
 }
 function entrypoint() -> nothing { }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 #[test]
 fn m6_union_multicase_with_else_is_clean() {
     // WHY: `else =>` covers all remaining variants — must typecheck clean.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 shape Circle { radius: number }
 shape Square { side: number }
 shape Triangle { width: number
@@ -1414,20 +1531,24 @@ function classify(s: Shape) -> nothing {
   }
 }
 function entrypoint() -> nothing { }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn m6_is_expr_on_non_union_is_error() {
     // WHY: `is Foo` on a non-union (e.g., string) must produce a teaching error.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 function entrypoint() -> nothing {
   let s: string = `hello`
   if (s is int) {
     print(`wrong`)
   }
 }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 // ── M6: options typeck ────────────────────────────────────────────────────────
@@ -1436,50 +1557,62 @@ function entrypoint() -> nothing {
 fn m6_options_value_typechecks() {
     // WHY: `Status.active` must resolve to Type::Options { name: "Status" }, not Error.
     // If this fails, every options-typed variable is mistyped and comparisons fail.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 options Status { active, inactive, banned }
 function entrypoint() -> nothing {
   let s: Status = Status.active
   print(s.toString())
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn m6_options_unknown_variant_is_error() {
     // WHY: Accessing a non-existent variant must produce an error, not silently type as Error.
     // A typo like `Status.activ` should be caught at compile time.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 options Status { active, inactive, banned }
 function entrypoint() -> nothing {
   let s: Status = Status.activ
 }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 #[test]
 fn m6_options_empty_body_is_error() {
     // WHY: An options type with no variants can never hold a value — the compiler must reject it.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 options Empty { }
 function entrypoint() -> nothing { }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 #[test]
 fn m6_options_single_variant_is_error() {
     // WHY: Single-variant options types carry no information — symmetric with single-variant union rejection.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 options Single { only }
 function entrypoint() -> nothing { }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 #[test]
 fn m6_options_multicase_exhaustive_clean() {
     // WHY: A fully-covered options multi-case must typecheck with zero errors.
     // If this fails, correct options code is incorrectly rejected.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 options Status { active, inactive }
 function entrypoint() -> nothing {
   let s: Status = Status.active
@@ -1488,14 +1621,16 @@ function entrypoint() -> nothing {
     inactive => print(`off`)
   }
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn m6_options_multicase_nonexhaustive_is_error() {
     // WHY: A multi-case with a missing arm must produce an error naming the missing variant.
     // Missing variants silently fall through without this check — a latent bug class.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 options Status { active, inactive, banned }
 function entrypoint() -> nothing {
   let s: Status = Status.active
@@ -1504,14 +1639,17 @@ function entrypoint() -> nothing {
     inactive => print(`off`)
   }
 }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 #[test]
 fn m6_options_multicase_with_else_arm_is_clean() {
     // WHY: An `else =>` arm covers all remaining variants — must typecheck clean even if
     // individual variants are not all listed.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 options Status { active, inactive, banned }
 function entrypoint() -> nothing {
   let s: Status = Status.active
@@ -1520,13 +1658,15 @@ function entrypoint() -> nothing {
     else => print(`other`)
   }
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn m6_same_options_comparison_clean() {
     // WHY: Comparing two values of the same options type with `==` must succeed.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 options Status { active, inactive }
 function entrypoint() -> nothing {
   let a: Status = Status.active
@@ -1534,14 +1674,16 @@ function entrypoint() -> nothing {
   let eq = a == b
   print(eq.toString())
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn m6_cross_options_comparison_is_error() {
     // WHY: Comparing values of different options types is almost always a bug —
     // the tags have no shared meaning between types.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 options Status { active, inactive }
 options Visibility { visible, invisible }
 function entrypoint() -> nothing {
@@ -1549,53 +1691,64 @@ function entrypoint() -> nothing {
   let v: Visibility = Visibility.visible
   let eq = s == v
 }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 #[test]
 fn m6_bool_to_int_is_error() {
     // WHY: `.toInt()` on bool must be rejected — no silent 0/1 coercion.
-    assert_errors(r#"
+    assert_errors(
+        r#"
 function entrypoint() -> nothing {
   let x = true.toInt()
 }
-"#, 1);
+"#,
+        1,
+    );
 }
 
 #[test]
 fn m6_int_to_int_is_clean() {
     // WHY: `.toInt()` on int must be the identity and return `int` directly (not `maybe<int>`).
-    assert_clean(r#"
+    assert_clean(
+        r#"
 function entrypoint() -> nothing {
   let x: int = 42
   let y: int = x.toInt()
   print(y.toString())
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn m6_float_to_int_returns_maybe() {
     // WHY: `.toInt()` on float is fallible — must return `maybe<int>`, not bare `int`.
     // If this returns int, NaN and OOR cases silently produce wrong values at runtime.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 function entrypoint() -> nothing {
   let x: float = 3.14
   let y: maybe<int> = x.toInt()
   print(y.or(0).toString())
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn m6_string_to_int_returns_maybe() {
     // WHY: `"42".toInt()` is fallible — the string might not be a valid integer.
     // Must return `maybe<int>` so the caller handles the failure case.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 function entrypoint() -> nothing {
   let s: string = `42`
   let x: maybe<int> = s.toInt()
   print(x.or(0).toString())
 }
-"#);
+"#,
+    );
 }

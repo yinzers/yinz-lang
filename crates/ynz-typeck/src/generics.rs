@@ -28,8 +28,14 @@ pub fn unify_param(param_ty: &Type, arg_ty: &Type, subst: &mut Substitution) -> 
                 Ok(())
             }
         },
-        Type::Generic { name: pname, args: pargs } => match arg_ty {
-            Type::Generic { name: aname, args: aargs } if pname == aname && pargs.len() == aargs.len() => {
+        Type::Generic {
+            name: pname,
+            args: pargs,
+        } => match arg_ty {
+            Type::Generic {
+                name: aname,
+                args: aargs,
+            } if pname == aname && pargs.len() == aargs.len() => {
                 for (p, a) in pargs.iter().zip(aargs.iter()) {
                     unify_param(p, a, subst)?;
                 }

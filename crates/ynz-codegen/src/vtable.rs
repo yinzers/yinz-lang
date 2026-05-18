@@ -30,12 +30,16 @@ pub fn emit_vtable_globals<'ctx>(
             };
 
             // Build the array of function pointers — one per contract method slot.
-            let fn_ptrs: Vec<_> = contract_def.contract_sigs.iter().map(|sig| {
-                module
-                    .get_function(&sig.name)
-                    .map(|f| f.as_global_value().as_pointer_value())
-                    .unwrap_or_else(|| ptr.const_null())
-            }).collect();
+            let fn_ptrs: Vec<_> = contract_def
+                .contract_sigs
+                .iter()
+                .map(|sig| {
+                    module
+                        .get_function(&sig.name)
+                        .map(|f| f.as_global_value().as_pointer_value())
+                        .unwrap_or_else(|| ptr.const_null())
+                })
+                .collect();
 
             let arr_ty = ptr.array_type(fn_ptrs.len() as u32);
             let arr_val = ptr.const_array(&fn_ptrs);
@@ -54,7 +58,15 @@ pub fn emit_vtable_globals<'ctx>(
 }
 
 /// Find the slot index of `method_name` in `contract_name`'s method list.
-pub fn method_slot(shape_table: &ShapeTable, contract_name: &str, method_name: &str) -> Option<u32> {
+pub fn method_slot(
+    shape_table: &ShapeTable,
+    contract_name: &str,
+    method_name: &str,
+) -> Option<u32> {
     let contract = shape_table.get(contract_name)?;
-    contract.contract_sigs.iter().position(|s| s.name == method_name).map(|i| i as u32)
+    contract
+        .contract_sigs
+        .iter()
+        .position(|s| s.name == method_name)
+        .map(|i| i as u32)
 }
