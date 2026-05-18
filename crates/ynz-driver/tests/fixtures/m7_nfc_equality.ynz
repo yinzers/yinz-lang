@@ -1,0 +1,14 @@
+// WHY: validates NFC canonical equivalence for string equality (M3 catch-up obligation).
+// Since source literals are always NFC, this tests that the fast path (same bytes)
+// works. The slow path (precomposed vs decomposed) is tested in runtime unit tests.
+
+function main() -> nothing {
+  let a = `hello`
+  let b = `hello`
+  if (a == b) {
+    print(`equal`)
+  }
+  if (a != b) {
+    print(`not equal`)
+  }
+}

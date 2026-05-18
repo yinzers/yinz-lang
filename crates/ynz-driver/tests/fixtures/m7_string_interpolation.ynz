@@ -1,0 +1,9 @@
+// WHY: validates string interpolation codegen (M7 P4b builder-based path).
+// A string with ${expr} parts must use ynz_string_builder_* to concatenate
+// the literal segments and stringified expression values into one string.
+
+function main() -> nothing {
+  let name = `Alice`
+  let score = 42
+  print(`Hello ${name}, your score is ${score}!`)
+}
