@@ -837,13 +837,11 @@ fn while_condition_must_be_bool() {
 
 #[test]
 fn range_outside_for_produces_m7_deferral() {
-    // WHY: `let r = range(0, 5)` — storing a range is not allowed in M3.
-    // The error must mention M7 so the user knows when this changes.
-    let out = assert_errors(
-        r#"function main() -> nothing { let r = range(0, 5) }"#,
-        1,
-    );
-    assert!(out.diagnostics.iter().any(|d| d.why.contains("milestone 7")));
+    // WHY: `let r = range(0, 5)` — range values are first-class from M7 onward.
+    // Storing a range in a variable is now valid; the M3 restriction is lifted.
+    // test-ratchet: M7 P3c removes the range-outside-for restriction; the test
+    // now verifies that storing a range produces NO error (non-regression).
+    assert_clean(r#"function main() -> nothing { let r = range(0, 5) }"#); // test-ratchet: M7 P3c lifts M3 range-outside-for restriction
 }
 
 #[test]

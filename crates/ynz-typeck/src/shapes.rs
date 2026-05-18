@@ -89,6 +89,14 @@ impl ShapeTable {
                 self.union_aliases[n].clone()
             }
             AstType::Named(n, _) if self.contains(n) => Type::Shape { name: n.clone() },
+            // M7 P3c: built-in compiler-synthesized shapes.
+            AstType::Named(n, _) if matches!(n.as_str(), "Frame" | "SourceLoc") => {
+                Type::Shape { name: n.clone() }
+            }
+            // M7 P3c: first-class range type annotation.
+            AstType::Named(n, _) if n == "range" => {
+                Type::Range { element: Box::new(Type::Int), end_inclusive: false }
+            }
             AstType::Error | AstType::Named(_, _) | AstType::Range { .. } => Type::Error,
             // P3b: dynamic dispatch and Self type resolution.
             AstType::Dynamic { .. } | AstType::SelfType { .. } => Type::Error,
