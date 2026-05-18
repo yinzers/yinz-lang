@@ -1,8 +1,11 @@
 // services/players.ynz — exported shapes and functions for player management.
-// Demonstrates: export shape, export function, UFCS across modules.
+// Demonstrates: export shape, export function, doc comments, UFCS across modules.
 
+/// A player in the game world. Tracks name and current health.
 export shape Player {
+  /// The player's display name.
   name: string
+  /// Current hit points. Starts at 100.
   health: int
 }
 

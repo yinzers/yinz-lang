@@ -272,6 +272,7 @@ Module {
                 },
                 errors_capable: false,
                 is_exported: false,
+                doc: None,
             },
         ),
     ],

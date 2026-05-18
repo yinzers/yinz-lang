@@ -103,6 +103,8 @@ pub struct OptionsDecl {
     pub span: SourceSpan,
     /// `true` when prefixed with `export` — visible to other modules.
     pub is_exported: bool,
+    /// M8 P3: doc comment attached to this options declaration.
+    pub doc: Option<String>,
 }
 
 /// A function declaration: `function name<generics>(params) -> return_type [errors] { body }`.
@@ -123,6 +125,9 @@ pub struct FunctionDecl {
     pub errors_capable: bool,
     /// M8: true when prefixed with `export` — visible to other modules.
     pub is_exported: bool,
+    /// M8 P3: doc comment attached to this function (`/// ...` immediately before).
+    /// `None` = no doc comment. Preserved through to AST for `ynz doc` (v1.1).
+    pub doc: Option<String>,
 }
 
 /// M5: a type parameter on a generic function or generic shape.
@@ -743,6 +748,8 @@ pub struct FieldDecl {
     /// Default expression for hidden fields (constants and empty literals only).
     pub default: Option<Expr>,
     pub span: SourceSpan,
+    /// M8 P3: doc comment attached to this field.
+    pub doc: Option<String>,
 }
 
 /// A shape (data type) declaration.
@@ -776,4 +783,6 @@ pub struct ShapeDecl {
     pub span: SourceSpan,
     /// M8: true when prefixed with `export` — visible to other modules.
     pub is_exported: bool,
+    /// M8 P3: doc comment attached to this shape declaration.
+    pub doc: Option<String>,
 }
