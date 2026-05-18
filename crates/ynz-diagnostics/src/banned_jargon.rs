@@ -52,7 +52,7 @@ pub const BANNED_JARGON: &[&str] = &[
     "ADT",
     "AST",
     // M7 additions — errors/iterables jargon (2026-05-18)
-    "struct",   // Yinz term is "shape value" — `struct` is C/Rust jargon
+    "struct", // Yinz term is "shape value" — `struct` is C/Rust jargon
     "monad",
     "lift",
     "wrap",
@@ -65,4 +65,11 @@ pub const BANNED_JARGON: &[&str] = &[
     "catch",
     "throw",
     "UTF-16",
+    // M8 additions — concurrency jargon (2026-05-18)
+    // Note: "promise", "future", "pub", "private", "protected", "public" are NOT here
+    // because they appear in legitimate English prose in diagnostic messages.
+    // The lexer-level banned-keyword handlers redirect them as Yinz keywords.
+    "async",
+    "await",
+    "goroutine",
 ];

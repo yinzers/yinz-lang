@@ -34,6 +34,15 @@ fn lex_diags(source: &str) -> Vec<ynz_diagnostics::Diagnostic> {
     output.diagnostics.clone()
 }
 
+/// Run the lexer and return (tokens, diagnostics) together.
+fn lex_with_diags(source: &str) -> (Vec<Token>, Vec<ynz_diagnostics::Diagnostic>) {
+    let db = CompilerDb::default();
+    let sf = SourceFile::new(&db, FILE.to_string(), source.to_string());
+    let output = lex_query(&db, sf);
+    let toks = output.tokens.iter().map(|s| s.value.clone()).collect();
+    (toks, output.diagnostics.clone())
+}
+
 #[test]
 fn m4_token_variant_count_locked() {
     // WHY: This test pins the token vocabulary to the M4 surface.
@@ -1738,4 +1747,216 @@ fn m7_errors_keyword_in_context() {
     // The token immediately before Errors should be an Identifier("string") or similar
     let errors_pos = tokens.iter().position(|t| *t == Token::Errors).unwrap();
     assert!(errors_pos > 0, "Token::Errors must not be the first token");
+}
+
+// ── M8 P1: import/export/sensitive/wait/background keywords + doc comments ───
+
+#[test]
+fn m8_token_variant_count_locked() {
+    // WHY: Pins the token vocabulary at the M8 P1 surface. Adding a token
+    // without updating this test signals an unplanned API change.
+    //
+    // test-ratchet: M8 P1 adds 6 variants over M7's 64:
+    //   Import, Export, Sensitive, Wait, Background, DocComment
+    //   Total M1+...+M8: 64 + 6 = 70
+    let expected_count = 70usize;
+
+    use ynz_parser::Token::*;
+    let all_variants: &[Token] = &[
+        // M1
+        Function, Nothing, Identifier("x".into()), StringLit(vec![]),
+        LParen, RParen, LBrace, RBrace, Arrow, Eof,
+        // M2
+        Let, Const, True, False, IntLit(0), NumberLit("0.0".into()),
+        Plus, Minus, Star, Slash, Percent,
+        EqEq, NotEq, Lt, LtEq, Gt, GtEq,
+        AmpAmp, PipePipe, Bang,
+        Amp, Pipe, Caret, Tilde, LtLt, GtGt,
+        Eq, Colon, Dot, LBracket, RBracket, Comma,
+        // M3
+        If, Else, While, For, In, Return, FatArrow,
+        // M4
+        Shape, Follows, Extends, Base, Hidden, Dynamic, SelfType, SelfValue,
+        // M5
+        None,
+        // M6
+        Options, Is,
+        // M7 P1
+        BacktickString(vec![]), InterpolationStart, InterpolationEnd, Errors,
+        // M8 P1
+        Import, Export, Sensitive, Wait, Background,
+        DocComment { content: String::new(), break_after: false },
+    ];
+    assert_eq!(
+        all_variants.len(),
+        expected_count,
+        "Token variant count changed from {expected_count} — update this test \
+         with a // test-ratchet: <reason> comment and update the Token doc comment"
+    );
+}
+
+#[test]
+fn m8_import_keyword_tokenizes() {
+    // WHY: `import` must lex as Token::Import, not as an Identifier. If it
+    // lexes as Identifier, the parser cannot build ImportDecl nodes.
+    let tokens = lex_tokens("import");
+    assert!(
+        tokens.iter().any(|t| *t == Token::Import),
+        "Token::Import must appear for `import` keyword"
+    );
+}
+
+#[test]
+fn m8_export_keyword_tokenizes() {
+    // WHY: `export` must lex as Token::Export, not as an Identifier.
+    let tokens = lex_tokens("export");
+    assert!(
+        tokens.iter().any(|t| *t == Token::Export),
+        "Token::Export must appear for `export` keyword"
+    );
+}
+
+#[test]
+fn m8_sensitive_keyword_tokenizes() {
+    // WHY: `sensitive` must lex as Token::Sensitive for type-modifier parsing.
+    let tokens = lex_tokens("sensitive");
+    assert!(
+        tokens.iter().any(|t| *t == Token::Sensitive),
+        "Token::Sensitive must appear for `sensitive` keyword"
+    );
+}
+
+#[test]
+fn m8_wait_keyword_tokenizes() {
+    // WHY: `wait` must lex as Token::Wait, not an Identifier.
+    let tokens = lex_tokens("wait");
+    assert!(
+        tokens.iter().any(|t| *t == Token::Wait),
+        "Token::Wait must appear for `wait` keyword"
+    );
+}
+
+#[test]
+fn m8_background_keyword_tokenizes() {
+    // WHY: `background` must lex as Token::Background.
+    let tokens = lex_tokens("background");
+    assert!(
+        tokens.iter().any(|t| *t == Token::Background),
+        "Token::Background must appear for `background` keyword"
+    );
+}
+
+#[test]
+fn m8_doc_comment_simple() {
+    // WHY: `/// foo` must produce Token::DocComment{content:"foo", break_after:false}
+    // when followed immediately by a real token. If it produces no token or
+    // an Identifier, doc-comment attachment is impossible.
+    let tokens = lex_tokens("/// foo\nexport function f() -> nothing {}");
+    let doc = tokens.iter().find_map(|t| {
+        if let Token::DocComment { content, break_after } = t {
+            Some((content.clone(), *break_after))
+        } else {
+            None
+        }
+    });
+    assert!(doc.is_some(), "DocComment token must be emitted for `/// foo`");
+    let (content, break_after) = doc.unwrap();
+    assert_eq!(content, "foo", "Content must be stripped of `/// ` prefix");
+    assert!(!break_after, "break_after must be false when next token follows immediately");
+}
+
+#[test]
+fn m8_doc_comment_empty_line_is_break_after() {
+    // WHY: A blank line between a doc-comment and the following item sets
+    // break_after = true. The parser uses this to discard orphaned doc chains.
+    let src = "/// orphan\n\nexport function f() -> nothing {}";
+    let tokens = lex_tokens(src);
+    let doc = tokens.iter().find_map(|t| {
+        if let Token::DocComment { content, break_after } = t {
+            Some((content.clone(), *break_after))
+        } else {
+            None
+        }
+    });
+    assert!(doc.is_some(), "DocComment must be emitted even when break_after is true");
+    let (_content, break_after) = doc.unwrap();
+    assert!(break_after, "break_after must be true when a blank line separates doc from item");
+}
+
+#[test]
+fn m8_doc_comment_regular_comment_not_a_break() {
+    // WHY: A regular `//` line between two `///` lines does NOT break the chain.
+    // Source: `/// line1\n// internal\n/// line2\nexport ...`
+    // Lexer must emit two DocComment tokens, both with break_after = false.
+    let src = "/// line1\n// internal\n/// line2\nexport function f() -> nothing {}";
+    let tokens = lex_tokens(src);
+    let docs: Vec<(String, bool)> = tokens.iter().filter_map(|t| {
+        if let Token::DocComment { content, break_after } = t {
+            Some((content.clone(), *break_after))
+        } else {
+            None
+        }
+    }).collect();
+    assert_eq!(docs.len(), 2, "Two DocComment tokens expected; got {}", docs.len());
+    assert!(!docs[0].1, "First doc must have break_after = false");
+    assert!(!docs[1].1, "Second doc must have break_after = false");
+}
+
+#[test]
+fn m8_double_slash_still_skipped() {
+    // WHY: `// regular comment` must NOT produce a DocComment token; it should
+    // be consumed as trivia. Regression guard against `///` detection logic
+    // accidentally matching `//`.
+    let tokens = lex_tokens("// regular comment\nlet x = 1");
+    let has_doc = tokens.iter().any(|t| matches!(t, Token::DocComment { .. }));
+    assert!(!has_doc, "Regular `//` comment must not produce DocComment token");
+}
+
+#[test]
+fn m8_four_slashes_is_doc_with_slash_content() {
+    // WHY: `////` must produce DocComment{content: "/", ...}. The fourth slash
+    // is part of the content. Guards against off-by-one in the `///` prefix strip.
+    let tokens = lex_tokens("////\nexport function f() -> nothing {}");
+    let doc = tokens.iter().find_map(|t| {
+        if let Token::DocComment { content, .. } = t {
+            Some(content.clone())
+        } else {
+            None
+        }
+    });
+    assert!(doc.is_some(), "DocComment must be emitted for `////`");
+    assert_eq!(doc.unwrap(), "/", "Content of `////` must be `/` (fourth slash is content)");
+}
+
+#[test]
+fn m8_async_banned_keyword_produces_diagnostic() {
+    // WHY: `async` is a banned concurrency keyword in Yinz. The lexer must emit
+    // a teaching diagnostic and degrade to Identifier so parsing can continue.
+    let (toks, diags) = lex_with_diags("async function foo() -> nothing {}");
+    assert_eq!(diags.len(), 1, "One diagnostic expected for `async`");
+    assert!(
+        diags[0].what.contains("async") || diags[0].what_instead.contains("wait"),
+        "Diagnostic must mention `async` or redirect to `wait`"
+    );
+    // Token degrades to Identifier so parsing continues.
+    assert!(
+        toks.iter().any(|t| matches!(t, Token::Identifier(_))),
+        "Identifier must appear in stream after async banned-keyword diagnostic"
+    );
+}
+
+#[test]
+fn m8_pub_banned_keyword_produces_diagnostic() {
+    // WHY: `pub` is a banned visibility keyword in Yinz. Must redirect to `export`.
+    let (toks, diags) = lex_with_diags("pub function foo() -> nothing {}");
+    assert_eq!(diags.len(), 1, "One diagnostic expected for `pub`");
+    assert!(
+        diags[0].what_instead.contains("export"),
+        "Diagnostic must redirect to `export`, got: {:?}",
+        diags[0].what_instead
+    );
+    assert!(
+        toks.iter().any(|t| matches!(t, Token::Identifier(_))),
+        "Identifier must appear in stream after pub banned-keyword diagnostic"
+    );
 }

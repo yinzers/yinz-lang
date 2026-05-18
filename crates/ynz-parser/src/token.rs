@@ -22,10 +22,9 @@ impl<T> Spanned<T> {
 /// Adding a variant requires both an inline `// test-ratchet: <reason>` marker
 /// on that test AND updating this comment with the new count.
 ///
-/// Current count: 64 (M7 P1 adds BacktickString, InterpolationStart, InterpolationEnd, Errors)
+/// Current count: 70 (M8 P1 adds Import, Export, Sensitive, Wait, Background, DocComment)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Token {
-
     /// The `function` keyword.
     Function,
     /// The `nothing` return type keyword.
@@ -38,7 +37,6 @@ pub enum Token {
     // ── M7: backtick strings + errors keyword ─────────────────────────────────
 
     // test-ratchet: M7 P1 adds 4 variants — BacktickString, InterpolationStart, InterpolationEnd, Errors
-
     /// A literal segment of a backtick-quoted string (bytes between backticks/interpolations).
     ///
     /// Emitted once per contiguous literal run. An empty `Vec<u8>` is valid (represents
@@ -70,7 +68,6 @@ pub enum Token {
     /// End of file.
     Eof,
 
-
     /// The `let` keyword.
     Let,
     /// The `const` keyword.
@@ -79,7 +76,6 @@ pub enum Token {
     True,
     /// The `false` boolean literal keyword.
     False,
-
 
     /// An integer literal parsed to i64.
     ///
@@ -96,7 +92,6 @@ pub enum Token {
     /// float from number at this stage.
     NumberLit(String),
 
-
     /// `+`
     Plus,
     /// `-` (binary subtract or unary negate — parser distinguishes by context)
@@ -107,7 +102,6 @@ pub enum Token {
     Slash,
     /// `%`
     Percent,
-
 
     /// `==`
     EqEq,
@@ -122,14 +116,12 @@ pub enum Token {
     /// `>=`
     GtEq,
 
-
     /// `&&`
     AmpAmp,
     /// `||`
     PipePipe,
     /// `!`
     Bang,
-
 
     /// `&` (bitwise AND — distinguished from `&&` by token kind)
     Amp,
@@ -144,12 +136,10 @@ pub enum Token {
     /// `>>`
     GtGt,
 
-
     /// `=` (variable binding and type annotation separator)
     Eq,
     /// `:`
     Colon,
-
 
     /// `.` (method-call receiver separator, e.g. `x.toString()`)
     Dot,
@@ -159,7 +149,6 @@ pub enum Token {
     RBracket,
     /// `,` (argument separator in calls)
     Comma,
-
 
     /// The `if` keyword.
     If,
@@ -176,9 +165,7 @@ pub enum Token {
     /// `=>` (fat arrow — multi-case arm separator in `if (value) { 1 => ... }`).
     FatArrow,
 
-
     // ── M4: shapes, inheritance, contracts, dynamic dispatch ────────────────
-
     /// The `shape` keyword — declares a data type.
     Shape,
     /// The `follows` keyword — declares that a shape satisfies a contract.
@@ -197,7 +184,6 @@ pub enum Token {
     SelfValue,
 
     // ── M5: generics + maybe + none ───────────────────────────────────────────
-
     /// The `none` keyword — the absent value of `maybe<T>`.
     ///
     /// `none` is only valid where typeck can resolve the type parameter T from
@@ -206,7 +192,6 @@ pub enum Token {
     None,
 
     // ── M6: options + unions + narrowing ──────────────────────────────────────
-
     /// The `options` keyword — declares a finite set of named values.
     ///
     /// Replaces `enum` from other languages. `enum` is a banned keyword with a
@@ -222,6 +207,34 @@ pub enum Token {
     /// `is` looks up the type name in the types-only namespace (same-name value
     /// bindings are not shadowed). See `design/narrowing.md`.
     Is,
+
+    // ── M8: modules, doc comments, sensitive, concurrency keywords ────────────
+
+    // test-ratchet: M8 P1 adds 6 variants — Import, Export, Sensitive, Wait, Background, DocComment.
+    //   Count 64 → 70.
+
+    /// The `import` keyword — brings names from another module into scope.
+    Import,
+    /// The `export` keyword — makes a declaration visible to other modules.
+    Export,
+    /// The `sensitive` keyword — type modifier marking values that auto-redact in output.
+    Sensitive,
+    /// The `wait` keyword — force completion of an I/O or background operation at a call site.
+    Wait,
+    /// The `background` keyword — run a function call outside the current function's lifetime.
+    Background,
+    /// A doc-comment line (`/// content`).
+    ///
+    /// `content` is the raw text after stripping the leading `///` and one optional space.
+    /// `break_after` is `true` when a blank line appears between this doc-comment line and
+    /// the next non-trivia content (blank = ≥2 consecutive newlines with only whitespace
+    /// between this line's terminating `\n` and the next non-trivia content).
+    /// When `break_after` is `true`, the parser discards this comment chain — it is not
+    /// attached to the following item. Regular `//` comments do NOT count as a break.
+    DocComment {
+        content: String,
+        break_after: bool,
+    },
 }
 
 impl Token {
