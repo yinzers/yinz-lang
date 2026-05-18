@@ -124,34 +124,58 @@ impl<'a> Parser<'a> {
     pub fn parse_module(&mut self) -> Module {
         let start = self.current_span();
         let mut items = Vec::new();
+        // Doc-comment accumulator: lines collected since the last non-doc token.
+        // Cleared when an item consumes it or when a break_after=true discards the chain.
+        let mut doc_buffer: Vec<String> = Vec::new();
 
         while !matches!(self.peek(), Token::Eof) {
-            match self.peek() {
+            match self.peek().clone() {
+                Token::DocComment {
+                    content,
+                    break_after,
+                } => {
+                    self.advance();
+                    if break_after {
+                        // Blank line between this doc and the next content — discard chain.
+                        doc_buffer.clear();
+                    } else {
+                        doc_buffer.push(content);
+                    }
+                    continue;
+                }
                 Token::Import => {
+                    doc_buffer.clear(); // imports don't carry doc comments in M8
                     if let Some(decl) = self.parse_import_decl() {
                         items.push(Item::ImportDecl(decl));
                     }
                 }
                 Token::Export => {
-                    self.parse_export_item(&mut items);
+                    let doc = Self::take_doc(&mut doc_buffer);
+                    self.parse_export_item_with_doc(&mut items, doc);
                 }
                 Token::Function => {
-                    if let Some(decl) = self.parse_function_decl() {
+                    let doc = Self::take_doc(&mut doc_buffer);
+                    if let Some(mut decl) = self.parse_function_decl() {
+                        decl.doc = doc;
                         items.push(Item::Function(decl));
                     }
                 }
                 Token::Shape => {
-                    if let Some(decl) = self.parse_shape_decl(false) {
+                    let doc = Self::take_doc(&mut doc_buffer);
+                    if let Some(mut decl) = self.parse_shape_decl(false) {
+                        decl.doc = doc;
                         items.push(Item::ShapeDecl(decl));
                     }
                 }
                 Token::Options => {
-                    if let Some(decl) = self.parse_options_decl() {
+                    let doc = Self::take_doc(&mut doc_buffer);
+                    if let Some(mut decl) = self.parse_options_decl() {
+                        decl.doc = doc;
                         items.push(Item::OptionsDecl(decl));
                     }
                 }
                 Token::Base => {
-                    // `base shape Name { ... }` — consume `base`, then expect `shape`
+                    let doc = Self::take_doc(&mut doc_buffer);
                     let base_span = self.current_span();
                     self.advance(); // consume `base`
                     if !matches!(self.peek(), Token::Shape) {
@@ -161,17 +185,15 @@ impl<'a> Parser<'a> {
                             "Write `base shape Name { ... }` to declare a shape that cannot be instantiated directly.",
                             "`base` is a modifier on `shape` — it must be immediately followed by the `shape` keyword.",
                         ));
-                        let _ = base_span;
+                        let _ = (base_span, doc);
                         self.advance();
-                    } else if let Some(decl) = self.parse_shape_decl(true) {
+                    } else if let Some(mut decl) = self.parse_shape_decl(true) {
+                        decl.doc = doc;
                         items.push(Item::ShapeDecl(decl));
                     }
                 }
-                Token::DocComment { .. } => {
-                    // Doc-comment tokens are attached to items by P3. For now, skip them.
-                    self.advance();
-                }
                 _ => {
+                    doc_buffer.clear(); // unrecognized token — discard pending doc
                     let span = self.current_span();
                     self.diags.push(Diagnostic::error(
                         span.clone(),
@@ -191,6 +213,94 @@ impl<'a> Parser<'a> {
         Module {
             items,
             span: SourceSpan::new(self.file, start.start, end.end),
+        }
+    }
+
+    /// Drain the doc_buffer into a doc string (or None if empty).
+    fn take_doc(doc_buffer: &mut Vec<String>) -> Option<String> {
+        if doc_buffer.is_empty() {
+            None
+        } else {
+            let doc = doc_buffer.join("\n");
+            doc_buffer.clear();
+            Some(doc)
+        }
+    }
+
+    /// Parse `export function/shape/options/const/base/{ ... }` with a doc comment.
+    fn parse_export_item_with_doc(&mut self, items: &mut Vec<Item>, doc: Option<String>) {
+        let export_start = self.current_span();
+        self.advance(); // consume `export`
+
+        match self.peek().clone() {
+            Token::Function => {
+                if let Some(mut decl) = self.parse_function_decl() {
+                    decl.is_exported = true;
+                    decl.doc = doc;
+                    items.push(Item::Function(decl));
+                }
+            }
+            Token::Shape => {
+                if let Some(mut decl) = self.parse_shape_decl(false) {
+                    decl.is_exported = true;
+                    decl.doc = doc;
+                    items.push(Item::ShapeDecl(decl));
+                }
+            }
+            Token::Options => {
+                if let Some(mut decl) = self.parse_options_decl() {
+                    decl.is_exported = true;
+                    decl.doc = doc;
+                    items.push(Item::OptionsDecl(decl));
+                }
+            }
+            Token::Base => {
+                self.advance(); // consume `base`
+                if !matches!(self.peek(), Token::Shape) {
+                    self.diags.push(Diagnostic::error(
+                        self.current_span(),
+                        "Expected `shape` after `export base`.",
+                        "Write `export base shape Name { ... }`.",
+                        "`base` must be immediately followed by the `shape` keyword.",
+                    ));
+                    self.advance();
+                } else if let Some(mut decl) = self.parse_shape_decl(true) {
+                    decl.is_exported = true;
+                    decl.doc = doc;
+                    items.push(Item::ShapeDecl(decl));
+                }
+            }
+            Token::Const => {
+                if let Some(mut decl) = self.parse_const_decl() {
+                    decl.is_exported = true;
+                    items.push(Item::ConstDecl(decl));
+                }
+            }
+            Token::LBrace => {
+                if let Some(re) = self.parse_reexport(export_start.start) {
+                    items.push(Item::ReExport(re));
+                }
+            }
+            Token::Identifier(kw) if kw == "default" => {
+                let span = self.current_span();
+                self.advance();
+                self.diags.push(Diagnostic::error(
+                    span,
+                    "Yinz does not have default exports.",
+                    "Name the export instead: `export function foo()` or `export const PI = 3.14`.",
+                    "Yinz uses named exports only — every exported item is referred to by its name in `import { name }` statements.",
+                ));
+            }
+            _ => {
+                self.diags.push(Diagnostic::error(
+                    self.current_span(),
+                    format!("Expected a declaration after `export`, not `{}`.", token_display(self.peek())),
+                    "Write `export function foo()`, `export shape Foo { ... }`, or `export { name } from \"path\"`.",
+                    "`export` makes a declaration visible to other modules.",
+                ));
+                self.advance();
+                let _ = export_start;
+            }
         }
     }
 
@@ -780,6 +890,7 @@ impl<'a> Parser<'a> {
             name_span,
             errors_capable,
             is_exported: false, // set to true by parse_module when `export` precedes
+            doc: None,          // set by parse_module when preceded by `///` lines
         })
     }
 
@@ -2376,6 +2487,33 @@ impl<'a> Parser<'a> {
         let start = self.current_span().start;
         self.advance(); // consume `[`
         let mut elements = Vec::new();
+
+        // Empty array.
+        if matches!(self.peek(), Token::RBracket) {
+            let end = self.current_span().end;
+            self.advance();
+            return Expr::ArrayLit {
+                elements,
+                span: SourceSpan::new(self.file, start, end),
+            };
+        }
+
+        // First element — no leading comma required.
+        if matches!(self.peek(), Token::Eof) {
+            self.diags.push(Diagnostic::error(
+                self.eof_span(),
+                "Missing `]` to close this array literal.",
+                "Add `]` after the last element.",
+                "Every `[` in an array literal must be matched with a `]`.",
+            ));
+            return Expr::ArrayLit {
+                elements,
+                span: SourceSpan::new(self.file, start, self.current_span().end),
+            };
+        }
+        elements.push(self.parse_expr(0));
+
+        // Subsequent elements — comma required, trailing comma allowed.
         loop {
             match self.peek() {
                 Token::RBracket => {
@@ -2396,9 +2534,37 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 Token::Comma => {
-                    self.advance();
+                    self.advance(); // consume `,`
+                                    // Trailing comma — next token closes the array.
+                    if matches!(self.peek(), Token::RBracket) {
+                        let end = self.current_span().end;
+                        self.advance();
+                        return Expr::ArrayLit {
+                            elements,
+                            span: SourceSpan::new(self.file, start, end),
+                        };
+                    }
+                    if matches!(self.peek(), Token::Eof) {
+                        self.diags.push(Diagnostic::error(
+                            self.eof_span(),
+                            "Missing `]` to close this array literal.",
+                            "Add `]` after the last element.",
+                            "Every `[` in an array literal must be matched with a `]`.",
+                        ));
+                        break;
+                    }
+                    elements.push(self.parse_expr(0));
                 }
                 _ => {
+                    // Missing comma between elements.
+                    let span = self.current_span();
+                    self.diags.push(Diagnostic::error(
+                        span,
+                        "Expected `,` between array elements.",
+                        "Add a comma after the previous element: `[a, b, c]`",
+                        "Array elements must be separated by commas. A trailing comma after the last element is also fine: `[a, b, c,]`",
+                    ));
+                    // Recover by parsing this as the next element anyway.
                     elements.push(self.parse_expr(0));
                 }
             }
@@ -2970,6 +3136,7 @@ impl<'a> Parser<'a> {
             variants,
             span: SourceSpan::new(self.file, start, end),
             is_exported: false, // set to true by parse_module when `export` precedes
+            doc: None,          // set by parse_module when preceded by `///` lines
         })
     }
 
@@ -3023,6 +3190,7 @@ impl<'a> Parser<'a> {
                 alias_ty: Some(alias_ty),
                 span: SourceSpan::new(self.file, start, end),
                 is_exported: false, // set to true by parse_module when `export` precedes
+                doc: None,          // set by parse_module when preceded by `///` lines
             });
         }
 
@@ -3091,9 +3259,22 @@ impl<'a> Parser<'a> {
         // Shape body: fields and contract signatures
         let mut fields = Vec::new();
         let mut contract_sigs = Vec::new();
+        let mut field_doc_buffer: Vec<String> = Vec::new();
 
         loop {
-            match self.peek() {
+            match self.peek().clone() {
+                Token::DocComment {
+                    content,
+                    break_after,
+                } => {
+                    self.advance();
+                    if break_after {
+                        field_doc_buffer.clear();
+                    } else {
+                        field_doc_buffer.push(content);
+                    }
+                    continue;
+                }
                 Token::RBrace => {
                     self.advance();
                     break;
@@ -3129,23 +3310,28 @@ impl<'a> Parser<'a> {
                 }
                 Token::Hidden => {
                     // `hidden fieldName: Type = default`
+                    let doc = Self::take_doc(&mut field_doc_buffer);
                     let field_start = self.current_span().start;
                     self.advance(); // consume `hidden`
-                    if let Some(field) = self.parse_field_decl(true, field_start) {
+                    if let Some(mut field) = self.parse_field_decl(true, field_start) {
+                        field.doc = doc;
                         fields.push(field);
                     }
                 }
                 Token::Identifier(_) => {
                     // Could be a field `name: Type` or a contract sig `name(...)  -> Type`.
                     // Lookahead: Identifier Colon → field; Identifier LParen → contract sig.
+                    let doc = Self::take_doc(&mut field_doc_buffer);
                     let field_start = self.current_span().start;
                     match self.peek_ahead(1) {
                         Token::Colon => {
-                            if let Some(field) = self.parse_field_decl(false, field_start) {
+                            if let Some(mut field) = self.parse_field_decl(false, field_start) {
+                                field.doc = doc;
                                 fields.push(field);
                             }
                         }
                         Token::LParen => {
+                            field_doc_buffer.clear(); // contract sigs don't carry field docs
                             if let Some(sig) = self.parse_contract_sig() {
                                 contract_sigs.push(sig);
                             }
@@ -3192,6 +3378,7 @@ impl<'a> Parser<'a> {
             alias_ty: None,
             span: SourceSpan::new(self.file, start, end),
             is_exported: false, // set to true by parse_module when `export` precedes
+            doc: None,          // set by parse_module when preceded by `///` lines
         })
     }
 
@@ -3250,6 +3437,7 @@ impl<'a> Parser<'a> {
             is_hidden,
             default,
             span: SourceSpan::new(self.file, field_start, end),
+            doc: None, // set by parse_shape_body when preceded by `///` lines
         })
     }
 
