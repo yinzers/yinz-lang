@@ -8,6 +8,21 @@
 // to see every M8 diagnostic class at once (Yinz multi-errors up to 50/compile).
 // Uncomment the trigger body inside each function to activate the diagnostic.
 
+// ────── P1: banned concurrency + visibility keywords ──────
+
+// WHY: `async` is not a Yinz keyword — the lexer must redirect it with a
+// teaching diagnostic pointing at `wait`. Guards the banned-keyword gate.
+function p1_async_banned() -> nothing {
+    // Uncomment to trigger "`async` is not a keyword in Yinz":
+    // async function helper() -> nothing {}
+}
+
+// WHY: `pub` is a banned visibility keyword — must redirect to `export`.
+function p1_pub_banned() -> nothing {
+    // Uncomment to trigger "`pub` is not a keyword in Yinz":
+    // pub function helper() -> nothing {}
+}
+
 // ────── P0: number syntax migration ──────
 
 // WHY: `number[N]` is the pre-M5 syntax. Parser must reject it with a

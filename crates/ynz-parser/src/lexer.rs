@@ -68,11 +68,17 @@ impl<'src> Lexer<'src> {
             while self.pos < self.src.len() && self.src[self.pos].is_ascii_whitespace() {
                 self.pos += 1;
             }
-            // Line comment: `// ...` — skip to end of line
+            // `//` — either a regular comment or a `///` doc-comment.
             if self.pos + 1 < self.src.len()
                 && self.src[self.pos] == b'/'
                 && self.src[self.pos + 1] == b'/'
             {
+                // Check for `///` — doc-comment trivia.
+                if self.pos + 2 < self.src.len() && self.src[self.pos + 2] == b'/' {
+                    self.lex_doc_comment();
+                    return; // DocComment token emitted; let run() call us again.
+                }
+                // Regular `//` comment — skip to end of line.
                 while self.pos < self.src.len() && self.src[self.pos] != b'\n' {
                     self.pos += 1;
                 }
@@ -80,6 +86,91 @@ impl<'src> Lexer<'src> {
             }
             break;
         }
+    }
+
+    /// Lex a `///` doc-comment line and emit `Token::DocComment`.
+    ///
+    /// Called from `skip_whitespace_and_comments` when `///` is detected.
+    /// Consumes the entire `///...` line including its terminating `\n`.
+    /// Determines `break_after` via read-only lookahead (does not advance past
+    /// the lookahead content).
+    fn lex_doc_comment(&mut self) {
+        let start = self.pos;
+
+        // Consume the `///` prefix.
+        self.pos += 3; // skip `///`
+
+        // Strip one optional leading space.
+        if self.pos < self.src.len() && self.src[self.pos] == b' ' {
+            self.pos += 1;
+        }
+
+        // Collect content up to `\n` or EOF.
+        let content_start = self.pos;
+        while self.pos < self.src.len() && self.src[self.pos] != b'\n' {
+            self.pos += 1;
+        }
+        let content_bytes = &self.src[content_start..self.pos];
+        let content = std::str::from_utf8(content_bytes)
+            .unwrap_or("")
+            .trim_end()
+            .to_string();
+
+        let line_end = self.pos; // position of the `\n` (or EOF)
+
+        // Consume the `\n` if present.
+        if self.pos < self.src.len() && self.src[self.pos] == b'\n' {
+            self.pos += 1;
+        }
+
+        // Read-only lookahead to determine `break_after`.
+        let break_after = self.doc_comment_break_after(self.pos);
+
+        self.push_token(
+            Token::DocComment {
+                content,
+                break_after,
+            },
+            start,
+            line_end,
+        );
+    }
+
+    /// Read-only lookahead from `scan_start` to determine whether a blank line
+    /// separates the doc-comment from the next non-trivia content.
+    ///
+    /// A blank line = a line containing only whitespace (spaces/tabs) ending with `\n`.
+    /// Regular `//` comment lines are NOT blank lines (they have content).
+    fn doc_comment_break_after(&self, scan_start: usize) -> bool {
+        let mut scan = scan_start;
+        let mut line_is_blank = true;
+
+        while scan < self.src.len() {
+            match self.src[scan] {
+                b'\n' => {
+                    if line_is_blank {
+                        return true; // Found a blank line.
+                    }
+                    scan += 1;
+                    line_is_blank = true; // Start of next line.
+                }
+                b' ' | b'\t' | b'\r' => {
+                    scan += 1; // Whitespace doesn't change blank-line status.
+                }
+                b'/' if scan + 1 < self.src.len() && self.src[scan + 1] == b'/' => {
+                    if scan + 2 < self.src.len() && self.src[scan + 2] == b'/' {
+                        return false; // Next doc-comment — no blank line between.
+                    }
+                    // Regular `//` comment — not a blank line; skip to `\n`.
+                    line_is_blank = false;
+                    while scan < self.src.len() && self.src[scan] != b'\n' {
+                        scan += 1;
+                    }
+                }
+                _ => return false, // Non-blank content reached — no blank line.
+            }
+        }
+        false // EOF — no blank line found.
     }
 
     fn peek(&self, offset: usize) -> Option<u8> {
@@ -91,7 +182,6 @@ impl<'src> Lexer<'src> {
         let byte = self.src[self.pos];
 
         match byte {
-
             b'(' => {
                 self.pos += 1;
                 self.push_token(Token::LParen, start, self.pos);
@@ -158,7 +248,6 @@ impl<'src> Lexer<'src> {
                 self.push_token(Token::Caret, start, self.pos);
             }
 
-
             b'+' => {
                 if self.peek(1) == Some(b'=') {
                     self.pos += 2;
@@ -220,7 +309,6 @@ impl<'src> Lexer<'src> {
                 }
             }
 
-
             b'=' => {
                 if self.peek(1) == Some(b'=') {
                     self.pos += 2;
@@ -274,7 +362,6 @@ impl<'src> Lexer<'src> {
                 }
             },
 
-
             b'&' => {
                 if self.peek(1) == Some(b'&') {
                     self.pos += 2;
@@ -295,8 +382,7 @@ impl<'src> Lexer<'src> {
                 }
             }
 
-
-            b'"'  => self.lex_double_quote_error(start),
+            b'"' => self.lex_double_quote_error(start),
             b'\'' => self.lex_single_quote_error(start),
 
             // `#` is a comment marker in Python/shell. Consume to end of line so the
@@ -352,13 +438,9 @@ impl<'src> Lexer<'src> {
 
             b'`' => self.lex_backtick_segment(),
 
-
             b'0'..=b'9' => self.lex_number(start),
 
-
-            b if b.is_ascii_alphabetic() || b == b'_' => {
-                self.lex_identifier_or_keyword(start)
-            }
+            b if b.is_ascii_alphabetic() || b == b'_' => self.lex_identifier_or_keyword(start),
 
             b => {
                 self.pos += 1;
@@ -366,7 +448,6 @@ impl<'src> Lexer<'src> {
             }
         }
     }
-
 
     fn lex_identifier_or_keyword(&mut self, start: usize) {
         while self.pos < self.src.len() {
@@ -398,21 +479,101 @@ impl<'src> Lexer<'src> {
                 Token::Identifier(text.to_string())
             }
             // M4 keywords
-            "shape"   => Token::Shape,
+            "shape" => Token::Shape,
             "follows" => Token::Follows,
             "extends" => Token::Extends,
-            "base"    => Token::Base,
-            "hidden"  => Token::Hidden,
+            "base" => Token::Base,
+            "hidden" => Token::Hidden,
             "dynamic" => Token::Dynamic,
-            "Self"    => Token::SelfType,
-            "self"    => Token::SelfValue,
+            "Self" => Token::SelfType,
+            "self" => Token::SelfValue,
             // M5 keywords
-            "none"    => Token::None,
+            "none" => Token::None,
             // M6 keywords
             "options" => Token::Options,
-            "is"      => Token::Is,
+            "is" => Token::Is,
             // M7 keywords
-            "errors"  => Token::Errors,
+            "errors" => Token::Errors,
+            // M8 keywords
+            "import" => Token::Import,
+            "export" => Token::Export,
+            "sensitive" => Token::Sensitive,
+            "wait" => Token::Wait,
+            "background" => Token::Background,
+            // M8 banned concurrency keywords — other languages' concurrency vocabulary
+            "async" => {
+                self.emit_banned_declaration_keyword(
+                    start, self.pos, "async",
+                    "Write `wait foo()` at the call site — no declaration-level annotation needed.",
+                    "Yinz determines concurrency from the call graph automatically. Functions don't need a special declaration.",
+                );
+                Token::Identifier(text.to_string())
+            }
+            "await" => {
+                self.emit_banned_declaration_keyword(
+                    start, self.pos, "await",
+                    "Write `wait foo()` at the call site.",
+                    "Yinz uses `wait` at the call site — no function-level annotation needed.",
+                );
+                Token::Identifier(text.to_string())
+            }
+            "promise" => {
+                self.emit_banned_declaration_keyword(
+                    start, self.pos, "promise",
+                    "Yinz has `wait` (force completion) and `background` (run outside this function's lifetime). Two keywords cover what other languages use a dozen for.",
+                    "A `background` task runs when called; use `wait` to force completion. No promise objects needed.",
+                );
+                Token::Identifier(text.to_string())
+            }
+            "future" => {
+                self.emit_banned_declaration_keyword(
+                    start, self.pos, "future",
+                    "Yinz has `wait` (force completion) and `background` (run outside this function's lifetime). Two keywords cover what other languages use a dozen for.",
+                    "A `background` task runs when called; use `wait` to force completion. No future objects needed.",
+                );
+                Token::Identifier(text.to_string())
+            }
+            "goroutine" => {
+                self.emit_banned_declaration_keyword(
+                    start, self.pos, "goroutine",
+                    "Yinz has `background` for running a function outside the current function's lifetime: `background process(data)`.",
+                    "Use `background foo(arg)` instead. Two keywords (`wait`, `background`) cover what other languages use a dozen for.",
+                );
+                Token::Identifier(text.to_string())
+            }
+            // M8 banned visibility keywords — Yinz uses `export` or private-by-default
+            "pub" => {
+                self.emit_banned_declaration_keyword(
+                    start, self.pos, "pub",
+                    "Yinz has two visibility states — exported (`export`) or private (default). No `pub`, no `protected`, no modifiers.",
+                    "Write `export function foo()` to make it visible to other modules. Without `export`, it's private automatically.",
+                );
+                Token::Identifier(text.to_string())
+            }
+            "private" => {
+                self.emit_banned_declaration_keyword(
+                    start, self.pos, "private",
+                    "Yinz has two visibility states — exported (`export`) or private (default). Declarations are private unless marked `export`.",
+                    "Remove `private` — in Yinz, anything without `export` is already private.",
+                );
+                Token::Identifier(text.to_string())
+            }
+            "protected" => {
+                self.emit_banned_declaration_keyword(
+                    start, self.pos, "protected",
+                    "Yinz has two visibility states — exported (`export`) or private (default). No `pub`, no `protected`, no modifiers.",
+                    "Remove `protected` — in Yinz, visibility is binary: `export` or private.",
+                );
+                Token::Identifier(text.to_string())
+            }
+            "public" => {
+                self.emit_banned_declaration_keyword(
+                    start, self.pos, "public",
+                    "Yinz has two visibility states — exported (`export`) or private (default). Use `export` to make a declaration visible.",
+                    "Write `export function foo()` instead of `public function foo()`.",
+                );
+                Token::Identifier(text.to_string())
+            }
             // M4 banned declaration keywords — redirect to Yinz equivalents
             "type" => {
                 self.emit_banned_declaration_keyword(start, self.pos, "type",
@@ -471,7 +632,6 @@ impl<'src> Lexer<'src> {
         self.push_token(tok, start, self.pos);
     }
 
-
     /// M7: double-quoted strings are not valid Yinz syntax. Redirect to backticks.
     ///
     /// Advances past the entire `"..."` content for error recovery, emits a
@@ -479,10 +639,8 @@ impl<'src> Lexer<'src> {
     /// downstream parsing can continue without cascading errors.
     fn lex_double_quote_error(&mut self, start: usize) {
         self.pos += 1; // skip opening `"`
-        // Consume the string content so we can give a recovery token after the error.
-        while self.pos < self.src.len()
-            && self.src[self.pos] != b'"'
-            && self.src[self.pos] != b'\n'
+                       // Consume the string content so we can give a recovery token after the error.
+        while self.pos < self.src.len() && self.src[self.pos] != b'"' && self.src[self.pos] != b'\n'
         {
             self.pos += 1;
         }
@@ -528,7 +686,10 @@ impl<'src> Lexer<'src> {
     /// Consumes the backtick, then delegates to `lex_backtick_content`.
     fn lex_backtick_segment(&mut self) {
         // Consume the opening backtick.
-        debug_assert!(self.src.get(self.pos) == Some(&b'`'), "lex_backtick_segment called without leading backtick");
+        debug_assert!(
+            self.src.get(self.pos) == Some(&b'`'),
+            "lex_backtick_segment called without leading backtick"
+        );
         self.pos += 1;
         self.lex_backtick_content();
     }
@@ -589,12 +750,30 @@ impl<'src> Lexer<'src> {
                         break;
                     }
                     match self.src[self.pos] {
-                        b'`'  => { bytes.push(b'`');  self.pos += 1; }
-                        b'n'  => { bytes.push(b'\n'); self.pos += 1; }
-                        b't'  => { bytes.push(b'\t'); self.pos += 1; }
-                        b'\\' => { bytes.push(b'\\'); self.pos += 1; }
-                        b'r'  => { bytes.push(b'\r'); self.pos += 1; }
-                        b'0'  => { bytes.push(b'\0'); self.pos += 1; }
+                        b'`' => {
+                            bytes.push(b'`');
+                            self.pos += 1;
+                        }
+                        b'n' => {
+                            bytes.push(b'\n');
+                            self.pos += 1;
+                        }
+                        b't' => {
+                            bytes.push(b'\t');
+                            self.pos += 1;
+                        }
+                        b'\\' => {
+                            bytes.push(b'\\');
+                            self.pos += 1;
+                        }
+                        b'r' => {
+                            bytes.push(b'\r');
+                            self.pos += 1;
+                        }
+                        b'0' => {
+                            bytes.push(b'\0');
+                            self.pos += 1;
+                        }
                         b'$' if self.peek(1) == Some(b'{') => {
                             // `\${` — literal `${` (not an interpolation)
                             bytes.push(b'$');
@@ -621,7 +800,6 @@ impl<'src> Lexer<'src> {
         }
         self.push_token(Token::BacktickString(bytes), seg_start, self.pos);
     }
-
 
     fn lex_number(&mut self, start: usize) {
         // Dispatch on prefix: `0x` = hex, `0b` = binary, else decimal
@@ -782,9 +960,7 @@ impl<'src> Lexer<'src> {
     fn lex_decimal_number(&mut self, start: usize) {
         // Phase 1 — integer part: digits and underscores
         let int_start = self.pos;
-        while self.pos < self.src.len()
-            && matches!(self.src[self.pos], b'0'..=b'9' | b'_')
-        {
+        while self.pos < self.src.len() && matches!(self.src[self.pos], b'0'..=b'9' | b'_') {
             self.pos += 1;
         }
         let int_raw =
@@ -811,9 +987,7 @@ impl<'src> Lexer<'src> {
         if has_dot {
             self.pos += 1; // consume `.`
             let frac_start = self.pos;
-            while self.pos < self.src.len()
-                && matches!(self.src[self.pos], b'0'..=b'9' | b'_')
-            {
+            while self.pos < self.src.len() && matches!(self.src[self.pos], b'0'..=b'9' | b'_') {
                 self.pos += 1;
             }
             let frac_raw = std::str::from_utf8(&self.src[frac_start..self.pos])
@@ -849,8 +1023,7 @@ impl<'src> Lexer<'src> {
         }
 
         // Phase 3 — optional exponent part
-        let has_exp =
-            self.pos < self.src.len() && matches!(self.src[self.pos], b'e' | b'E');
+        let has_exp = self.pos < self.src.len() && matches!(self.src[self.pos], b'e' | b'E');
 
         if has_exp {
             let e_pos = self.pos;
@@ -859,9 +1032,7 @@ impl<'src> Lexer<'src> {
                 self.pos += 1; // consume optional sign
             }
             let exp_digits_start = self.pos;
-            while self.pos < self.src.len()
-                && matches!(self.src[self.pos], b'0'..=b'9' | b'_')
-            {
+            while self.pos < self.src.len() && matches!(self.src[self.pos], b'0'..=b'9' | b'_') {
                 self.pos += 1;
             }
             if self.pos == exp_digits_start {
@@ -910,14 +1081,7 @@ impl<'src> Lexer<'src> {
         }
     }
 
-
-    fn emit_banned_compound_op(
-        &mut self,
-        start: usize,
-        end: usize,
-        op: &str,
-        suggestion: &str,
-    ) {
+    fn emit_banned_compound_op(&mut self, start: usize, end: usize, op: &str, suggestion: &str) {
         self.diags.push(Diagnostic::error(
             SourceSpan::new(self.file, start, end),
             format!("`{}` is not supported in Yinz.", op),
