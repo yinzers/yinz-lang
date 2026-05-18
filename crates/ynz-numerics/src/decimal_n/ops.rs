@@ -134,7 +134,7 @@ pub fn add(a: &BigNum, b: &BigNum) -> BigNum {
 
     let (a_digits, b_digits, common_exp) = align(a, b);
 
-    let mut result_digits;
+    let result_digits;
     let mut result_sign;
     let result_exp = common_exp;
 
@@ -219,22 +219,28 @@ pub fn mul(a: &BigNum, b: &BigNum) -> BigNum {
     // Schoolbook decimal multiplication
     let n = a.digits.len();
     let m = b.digits.len();
-    let mut result = vec![0u32; n + m];
+    let mut result = vec![0u64; n + m];
 
     for i in (0..n).rev() {
         for j in (0..m).rev() {
-            let product = a.digits[i] as u32 * b.digits[j] as u32;
+            let product = a.digits[i] as u64 * b.digits[j] as u64;
             let pos = i + j + 1;
             result[pos] += product;
         }
     }
 
-    // Propagate carries
+    // Propagate carries (right-to-left). result[0] may still be ≥ 10 after this pass —
+    // it accumulates all cascaded carry and is NOT bounded to a single digit.
     for i in (1..result.len()).rev() {
         result[i - 1] += result[i] / 10;
         result[i] %= 10;
     }
-
+    // Reduce result[0]: any value ≥ 10 means there are extra most-significant digits.
+    while result[0] >= 10 {
+        let carry = result[0] / 10;
+        result[0] %= 10;
+        result.insert(0, carry);
+    }
     let result_digits: Vec<u8> = result.iter().map(|&d| d as u8).collect();
     let result_exp = a.exponent + b.exponent;
     let result_sign = a.sign ^ b.sign;
@@ -318,7 +324,8 @@ pub fn div(a: &BigNum, b: &BigNum) -> BigNum {
     //   a_coeff × 10^(prec+1 - len(a_coeff) + len(b_coeff)) / b_coeff
     // then adjust exponent.
 
-    let extra = prec as usize + 1 - a.digits.len() + b.digits.len();
+    let numerator_digits = (prec as usize + 1).saturating_add(b.digits.len());
+    let extra = numerator_digits.saturating_sub(a.digits.len());
     // Compute scaled dividend: a_digits × 10^extra
     let mut dividend: Vec<u8> = a.digits.clone();
     dividend.extend(std::iter::repeat(0).take(extra));
@@ -381,7 +388,7 @@ fn long_div_step(dividend: &[u8], divisor: &[u8]) -> u8 {
     let mut lo = 0u8;
     let mut hi = 9u8;
     while lo < hi {
-        let mid = (lo + hi + 1) / 2;
+        let mid = (lo + hi).div_ceil(2);
         let trial = mul_single(divisor, mid);
         if ge_digits_padded(&d, &trial) {
             lo = mid;

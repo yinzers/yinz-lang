@@ -1271,7 +1271,10 @@ fn examples_basics_runs_end_to_end() {
         code, 0,
         "examples/basics must compile and run; stderr:\n{stderr}"
     );
-    assert_eq!(stdout, golden, "stdout must match examples/basics/expected_stdout.txt");
+    assert_eq!(
+        stdout, golden,
+        "stdout must match examples/basics/expected_stdout.txt"
+    );
 }
 
 // ── P7: combined-feature integration fixtures ─────────────────────────────────
@@ -1288,8 +1291,7 @@ fn m8_combo_modules_sensitive_concurrency() {
         "sensitive+concurrency combo must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(
-        stdout,
-        "[REDACTED]\nsuper-secret-key\n[REDACTED]\ndone\n",
+        stdout, "[REDACTED]\nsuper-secret-key\n[REDACTED]\ndone\n",
         "sensitive must redact in print, reveal() must show raw value, background must run"
     );
 }
@@ -1306,8 +1308,7 @@ fn m8_combo_modules_bignum_interpolation() {
         "bignum+interpolation combo must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(
-        stdout,
-        "0.1 + 0.2 = 0.3\n0.1 * 0.2 = 0.02\n",
+        stdout, "0.1 + 0.2 = 0.3\n0.1 * 0.2 = 0.02\n",
         "bignum arithmetic must be exact and interpolate correctly"
     );
 }
@@ -1324,8 +1325,7 @@ fn m8_combo_doc_sensitive_bignum() {
         "doc+sensitive+bignum combo must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(
-        stdout,
-        "[REDACTED]\napi-key-xyz\n0.3\nbudget: 0.3\n",
+        stdout, "[REDACTED]\napi-key-xyz\n0.3\nbudget: 0.3\n",
         "sensitive must redact, reveal() must show raw, bignum field addition must be exact"
     );
 }

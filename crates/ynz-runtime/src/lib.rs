@@ -871,6 +871,9 @@ pub unsafe extern "C" fn ynz_decimal_to_float(num_ptr: *const u8) -> f64 {
 
 /// ABI: `(ptr: *const u8, len: i64, out: *mut [i64; 2]) -> void`
 /// out[0] = has_value (1 or 0), out[1] = the i64 value on success.
+///
+/// # Safety
+/// `ptr` must be valid for `len` bytes. `out` must point to a writable i64[2] array.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_to_int(ptr: *const u8, len: i64, out: *mut i64) {
     let bytes = std::slice::from_raw_parts(ptr, len as usize);
@@ -889,6 +892,9 @@ pub unsafe extern "C" fn ynz_string_to_int(ptr: *const u8, len: i64, out: *mut i
 
 /// ABI: `(ptr: *const u8, len: i64, out: *mut [i64; 2]) -> void`
 /// out[0] = has_value, out[1] = f64 bits (bit-cast from the double).
+///
+/// # Safety
+/// `ptr` must be valid for `len` bytes. `out` must point to a writable i64[2] array.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_to_float(ptr: *const u8, len: i64, out: *mut i64) {
     let bytes = std::slice::from_raw_parts(ptr, len as usize);
@@ -907,6 +913,9 @@ pub unsafe extern "C" fn ynz_string_to_float(ptr: *const u8, len: i64, out: *mut
 
 /// ABI: `(ptr: *const u8, len: i64, out: *mut [i64; 3]) -> void`
 /// out[0] = has_value, out[1..3] = 16-byte decimal128 on success.
+///
+/// # Safety
+/// `ptr` must be valid for `len` bytes. `out` must point to a writable i64[3] array.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_to_number(ptr: *const u8, len: i64, out: *mut i64) {
     let bytes = std::slice::from_raw_parts(ptr, len as usize);
@@ -942,12 +951,15 @@ pub unsafe extern "C" fn ynz_string_to_number(ptr: *const u8, len: i64, out: *mu
 /// Used by options .toString() to produce a heap-owned Yinz string from a static byte literal.
 /// Allocates and copies the bytes + null terminator. Caller is responsible for freeing
 /// (though in practice, toString() results are printed then dropped in the same expression).
+///
+/// # Safety
+/// `ptr` must be valid for `len` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_string_from_static(ptr: *const u8, len: i64) -> *const u8 {
     let size = len as usize + 1; // +1 for null terminator
     let buf = malloc(size) as *mut u8;
     if buf.is_null() {
-        return b"\0".as_ptr();
+        return c"".as_ptr().cast::<u8>();
     }
     std::ptr::copy_nonoverlapping(ptr, buf, len as usize);
     *buf.add(len as usize) = 0;
@@ -968,7 +980,7 @@ pub fn float_to_int_ref(x: f64) -> Option<i64> {
     // Upper check: x must be < 2^63 (strictly less, i.e. fits after truncation).
     const I64_MAX_F64: f64 = 9.223372036854776e18_f64; // 2^63
     const I64_MIN_F64: f64 = -9.223372036854776e18_f64; // -2^63
-    if x >= I64_MAX_F64 || x < I64_MIN_F64 {
+    if !(I64_MIN_F64..I64_MAX_F64).contains(&x) {
         return None;
     }
     Some(x as i64) // truncate toward zero; in-range proven above
@@ -1114,7 +1126,7 @@ pub unsafe extern "C" fn ynz_string_concat(a: *const u8, b: *const u8) -> *const
     let total = a_str.len() + b_str.len() + 1;
     let buf = malloc(total) as *mut u8;
     if buf.is_null() {
-        return b"\0".as_ptr();
+        return c"".as_ptr().cast::<u8>();
     }
     std::ptr::copy_nonoverlapping(a_str.as_ptr(), buf, a_str.len());
     std::ptr::copy_nonoverlapping(b_str.as_ptr(), buf.add(a_str.len()), b_str.len());
@@ -1454,7 +1466,7 @@ pub unsafe extern "C" fn ynz_string_builder_finalize(builder: *mut u8) -> *const
     let len = vec.len();
     let buf = malloc(len) as *mut u8;
     if buf.is_null() {
-        return b"\0".as_ptr();
+        return c"".as_ptr().cast::<u8>();
     }
     std::ptr::copy_nonoverlapping(vec.as_ptr(), buf, len);
     buf as *const u8
@@ -1475,7 +1487,7 @@ fn heap_string_from_str(s: &str) -> *const u8 {
     let len = bytes.len();
     let buf = unsafe { malloc(len + 1) as *mut u8 };
     if buf.is_null() {
-        return b"\0".as_ptr();
+        return c"".as_ptr().cast::<u8>();
     }
     if len > 0 {
         unsafe {

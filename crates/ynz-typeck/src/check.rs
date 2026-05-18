@@ -1545,7 +1545,7 @@ impl<'b> Checker<'b> {
                     self.diags.push(Diagnostic::error(
                         span.clone(),
                         format!("Cannot compare `{a}` and `{b}` — they are different options types."),
-                        format!("Compare values of the same options type, or convert both to the same type first."),
+                        "Compare values of the same options type, or convert both to the same type first.",
                         "Comparing values of different options types is almost always a bug — \
                          the tags have no shared meaning between types.",
                     ));
@@ -2282,6 +2282,8 @@ impl<'b> Checker<'b> {
                     inner: Box::new(inner_ty),
                 }
             }
+            // AnonShape: not yet reachable in v0.1 (future inline shape syntax).
+            AstType::AnonShape { .. } => Type::Error,
         }
     }
 
@@ -2658,7 +2660,11 @@ impl<'b> Checker<'b> {
         let map_hint = match hint {
             Some(Type::BuiltinMap { key, val }) => Some((key, val)),
             Some(Type::Union { variants }) => variants.iter().find_map(|v| {
-                if let Type::BuiltinMap { key, val } = v { Some((key, val)) } else { None }
+                if let Type::BuiltinMap { key, val } = v {
+                    Some((key, val))
+                } else {
+                    None
+                }
             }),
             _ => None,
         };
@@ -2669,13 +2675,21 @@ impl<'b> Checker<'b> {
                 if actual != Type::Error && val != Type::Error && actual != val {
                     self.diags.push(Diagnostic::error(
                         f.value.span().clone(),
-                        format!("Map value for key `{}` is `{}`, but this map holds `{}`.", f.name, type_name(&actual), type_name(&val)),
+                        format!(
+                            "Map value for key `{}` is `{}`, but this map holds `{}`.",
+                            f.name,
+                            type_name(&actual),
+                            type_name(&val)
+                        ),
                         format!("Pass a `{}` value.", type_name(&val)),
                         "All values in a map must be the same type.",
                     ));
                 }
             }
-            return Type::BuiltinMap { key: key.clone(), val: Box::new(val) };
+            return Type::BuiltinMap {
+                key: key.clone(),
+                val: Box::new(val),
+            };
         }
 
         let shape_name = match hint {
@@ -2687,7 +2701,7 @@ impl<'b> Checker<'b> {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
                     format!("`{{ ... }}` creates a single `{elem_name}` value, not an `array<{elem_name}>`."),
-                    format!("Put it inside `[...]` to make an array: `[{{ ... }}]`"),
+                    "Put it inside `[...]` to make an array: `[{ ... }]`",
                     format!("`{{ ... }}` creates one value. `[...]` creates a collection. \
                              Use `array<{elem_name}>` when you need multiple values."),
                 ));
@@ -2701,8 +2715,8 @@ impl<'b> Checker<'b> {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
                     format!("`{{ ... }}` creates a single `{elem_name}` value, not a `fixed<{elem_name}>`."),
-                    format!("Put it inside `[...]` to make a fixed array: `[{{ ... }}]`"),
-                    format!("`{{ ... }}` creates one value. `[...]` creates a collection."),
+                    "Put it inside `[...]` to make a fixed array: `[{ ... }]`",
+                    "`{ ... }` creates one value. `[...]` creates a collection.",
                 ));
                 for f in fields {
                     self.infer_expr(&f.value, None);
@@ -2847,7 +2861,10 @@ impl<'b> Checker<'b> {
                 }
                 Some(expected) => {
                     let actual = self.infer_expr(&lit_field.value, Some(&expected));
-                    if actual != Type::Error && expected != Type::Error && !types_compatible(&actual, &expected) {
+                    if actual != Type::Error
+                        && expected != Type::Error
+                        && !types_compatible(&actual, &expected)
+                    {
                         self.diags.push(Diagnostic::error(
                             lit_field.name_span.clone(),
                             format!(

@@ -919,9 +919,17 @@ impl<'a> Parser<'a> {
                 let mut fields = Vec::new();
                 loop {
                     match self.peek() {
-                        Token::RBrace => { self.advance(); break; }
+                        Token::RBrace => {
+                            self.advance();
+                            break;
+                        }
                         Token::Eof => {
-                            self.diags.push(Diagnostic::error(self.eof_span(), "Missing `}` to close this inline shape type.", "Add `}` after the last field.", "Every `{` in an inline shape type must be matched with a `}`."));
+                            self.diags.push(Diagnostic::error(
+                                self.eof_span(),
+                                "Missing `}` to close this inline shape type.",
+                                "Add `}` after the last field.",
+                                "Every `{` in an inline shape type must be matched with a `}`.",
+                            ));
                             break;
                         }
                         _ => {
@@ -932,8 +940,15 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
-                let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(start);
-                Type::AnonShape { fields, span: SourceSpan::new(self.file, start, end) }
+                let end = self
+                    .tokens
+                    .get(self.pos.saturating_sub(1))
+                    .map(|s| s.span.end)
+                    .unwrap_or(start);
+                Type::AnonShape {
+                    fields,
+                    span: SourceSpan::new(self.file, start, end),
+                }
             }
 
             _ => {

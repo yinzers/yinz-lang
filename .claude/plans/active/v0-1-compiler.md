@@ -1,7 +1,7 @@
 ---
 slug: v0-1-compiler
 owner: patrick
-status: active
+status: done
 files:
   - Cargo.toml
   - crates/**
@@ -9,7 +9,7 @@ files:
   - rust-toolchain.toml
   - .github/workflows/**
 created: 2026-05-12
-last_updated: 2026-05-12-r4
+last_updated: 2026-05-18
 ---
 
 # Plan: v0.1 Compiler Implementation

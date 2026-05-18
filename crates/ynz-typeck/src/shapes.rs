@@ -84,7 +84,9 @@ impl ShapeTable {
             AstType::Nothing => Type::Nothing,
             AstType::Int => Type::Int,
             AstType::Float => Type::Float,
-            AstType::Number { precision } => Type::Number { precision: *precision },
+            AstType::Number { precision } => Type::Number {
+                precision: *precision,
+            },
             AstType::Bool => Type::Bool,
             AstType::Named(n, _) if n == "string" => Type::String,
             // M6: union type aliases.
@@ -210,7 +212,9 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
     let mut synthetic_items: Vec<ynz_ast::nodes::ShapeDecl> = Vec::new();
     for item in &module.items {
         if let Item::ShapeDecl(s) = item {
-            if s.alias_ty.is_some() { continue; }
+            if s.alias_ty.is_some() {
+                continue;
+            }
             for field in &s.fields {
                 collect_anon_shapes_in_type(&field.ty, &s.name, &field.name, &mut synthetic_items);
             }
@@ -285,15 +289,18 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
                 defined_at: field.name_span.clone(),
             });
         }
-        table.shapes.insert(s.name.clone(), ShapeDef {
-            name: s.name.clone(),
-            is_base: false,
-            extends: None,
-            follows: vec![],
-            fields: own_fields,
-            contract_sigs: vec![],
-            defined_at: s.span.clone(),
-        });
+        table.shapes.insert(
+            s.name.clone(),
+            ShapeDef {
+                name: s.name.clone(),
+                is_base: false,
+                extends: None,
+                follows: vec![],
+                fields: own_fields,
+                contract_sigs: vec![],
+                defined_at: s.span.clone(),
+            },
+        );
     }
 
     for item in &module.items {
@@ -347,7 +354,9 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
             }
             // AnonShape fields resolve to their synthesized named shape.
             let ty = if let AstType::AnonShape { .. } = &field.ty {
-                Type::Shape { name: format!("__anon_{}_{}", s.name, field.name) }
+                Type::Shape {
+                    name: format!("__anon_{}_{}", s.name, field.name),
+                }
             } else {
                 name_table.resolve_ast_type(&field.ty)
             };

@@ -1,17 +1,84 @@
 # Changelog
 
-## [Unreleased] — M8: Modules, Doc Comments, Sensitive, Concurrency Keywords, Bignum, v0.1.0 Release
+## [0.1.0] — 2026-05-18 — v0.1.0: All M1–M8 language features shipped
 
-### In progress
-- **P0**: `number<N>` angle-bracket syntax (was `number[N]`); migration diagnostic for old form; M8 status active.
-- **P1**: Lexer — `import`, `export`, `sensitive`, `wait`, `background` keyword tokens; `///` doc-comment trivia; banned-keyword diagnostics for concurrency + visibility jargon.
-- **P2**: Modules — multi-file driver, `yinz.toml`, `import`/`export` grammar, cross-file typeck.
-- **P3**: Doc comments — `///` AST attachment + preservation.
-- **P4**: Sensitive type modifier — `sensitive T`, `sensitive(value)`, `.reveal()`, auto-redact in `print`.
-- **P5**: Concurrency keywords — `wait`/`background` parse + typeck + sequential lowering.
-- **P6**: Bignum — `number<N>` for N ∈ (34, 4096]; full IEEE 754-2008 conformance.
-- **P7**: Demo polish + M8 error gallery completion.
-- **P8**: v0.1.0 audit sweep + version bump + tag.
+Commit range: v0.1.0-m7..v0.1.0
+
+### What's new in M8
+
+M8 closes out v0.1 with six orthogonal pillars that turn Yinz from a single-file
+language into a structured, safe, high-precision multi-module language.
+
+**`number<N>` bignum.** `number<N>` for N ∈ (34, 4096] uses a Rust-native
+schoolbook decimal arithmetic engine with half-even (banker's) rounding and
+IEEE 754-2008 conformance. `0.1 + 0.2 == 0.3` is exact. The `number[N]`
+square-bracket syntax produces a migration diagnostic pointing at the correct
+`number<N>` form. P8 audit found and fixed: u32→u64 accumulator promotion in
+mul to prevent silent carry truncation at high precision; `saturating_sub` in
+div to prevent usize underflow; `add_digits` index formula corrected for
+right-aligned alignment.
+
+**Multi-file module system.** `yinz.toml` marks the project root. `ynz run <dir>`
+compiles and links all `.ynz` files under `src/`. `import { foo } from \`module\``
+and `export function/shape/options/const/base` syntax is fully parsed and
+type-checked. Cross-file symbol *calls* are deferred to v0.2 (the syntax is
+locked and validated; the typeck resolver is a stub). Library files (those with
+`export` declarations) do not require an `entrypoint` function.
+
+**Doc comments.** `///` trivia tokens attach to the next declaration (function,
+shape, options, field) via the AST's `doc: Option<String>` field. Blank-line
+separation (`break_after` flag) correctly orphans isolated comment blocks.
+
+**`sensitive T` type modifier.** `sensitive string` auto-redacts to `[REDACTED]`
+in `print()`. `.reveal()` strips the modifier and returns the raw string.
+`sensitive(value)` is the constructor. P8 audit fixed: `sensitive string`
+function parameters now correctly lower to `Type::Sensitive` instead of
+`Type::Error` in codegen; shape fields with `number<N>` types correctly use
+a pointer field layout instead of i128 for N > 34.
+
+**`wait` / `background` concurrency keywords.** Both parse and type-check;
+in M8 they lower to sequential direct calls (same semantics as an unadorned
+call). The compiler reserves the keywords and produces teaching diagnostics for
+banned synonyms (`async`, `await`, `promise`, `future`, `goroutine`,
+`pub`, `private`, `protected`, `public`). The v0.3 scheduler wires these up
+to actual task spawning.
+
+**P8 audit fixes (additional).** Mixed-precision arithmetic: when `number<100>`
+and `number<34>` operands appear in a binary expression, codegen now coerces the
+N≤34 side to a bignum string before calling `ynz_bignum_*`. The `add_digits`
+algorithm in the bignum engine used an incorrect array indexing formula that
+caused subtraction overflow for arrays of different lengths; corrected to a
+right-aligned offset formula.
+
+### Language surface (M8)
+
+- `number<N>` for N ∈ (34, 4096] — exact decimal arithmetic via bignum engine
+- `number[N]` migration diagnostic → `number<N>`
+- Multi-file projects: `yinz.toml`, `ynz run <dir>`, `import`/`export` syntax
+- `///` doc comments attached to declarations in the AST
+- `sensitive T` — auto-redact modifier; `.reveal()` method
+- `wait expr` / `background call()` — concurrency keyword reservation
+- 9 banned-keyword diagnostics (async, await, pub, private, protected, etc.)
+
+### Runtime and codegen improvements (M8)
+
+- Bignum arithmetic engine (`ynz-numerics` crate): add, sub, mul, div with
+  half-even rounding; `ynz_bignum_add/sub/mul/div` C-ABI functions in `ynz-runtime`
+- Shape LLVM struct layout: `number<N>` fields with N > 34 now use `ptr` (was `i128`)
+- Function parameter types: `sensitive T` and `number<N>` now correctly lower
+  in `ast_type_to_typeck_type` and `materialize_param`
+- Mixed-precision coercion in `lower_binop`: N≤34 operand auto-converted to
+  bignum string when paired with N>34 operand
+
+### Tests (M8)
+
+- 830 tests total (was 737 in M7)
+- 93 integration tests including 4 new:
+  - `examples_basics_runs_end_to_end` — golden stdout assertion
+  - `m8_combo_modules_sensitive_concurrency`
+  - `m8_combo_modules_bignum_interpolation`
+  - `m8_combo_doc_sensitive_bignum`
+- 14 bignum deterministic test vectors (0.1+0.2=0.3, half-even rounding, etc.)
 
 ---
 

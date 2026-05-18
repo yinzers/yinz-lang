@@ -37,6 +37,7 @@ pub fn load_source(path: &Path, diags: &mut DiagnosticBucket) -> Option<String> 
 }
 
 /// Minimal `yinz.toml` config — three fields, everything else warns.
+#[allow(dead_code)]
 pub struct ProjectConfig {
     pub entry: String,
     pub name: String,
@@ -68,7 +69,7 @@ pub fn load_project_config(root: &Path, diags: &mut DiagnosticBucket) -> Project
         Err(_) => return default_config(root),
     };
 
-    let mut entry = format!("src/entrypoint.ynz");
+    let mut entry = "src/entrypoint.ynz".to_string();
     let mut name = root
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -148,6 +149,7 @@ pub struct SourceEntry {
     /// Canonical file path (for diagnostics).
     pub path: PathBuf,
     /// Module path relative to `src/` (no `.ynz` suffix) — used for mangling.
+    #[allow(dead_code)]
     pub module_path: String,
     /// Source text.
     pub text: String,
@@ -197,7 +199,7 @@ fn collect_ynz_files(
         let path = entry.path();
         if path.is_dir() {
             collect_ynz_files(src_root, &path, entries, diags);
-        } else if path.extension().map_or(false, |e| e == "ynz") {
+        } else if path.extension().is_some_and(|e| e == "ynz") {
             let module_path = path
                 .strip_prefix(src_root)
                 .unwrap_or(&path)
