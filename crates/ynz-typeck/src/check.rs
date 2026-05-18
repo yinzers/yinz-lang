@@ -64,6 +64,9 @@ pub fn check(
         maybe_non_none: HashSet::new(),
         union_narrowed: HashMap::new(),
         union_aliases: collect_union_aliases(module, shape_table),
+        errors_success_narrowed: HashSet::new(),
+        errors_consumed: HashSet::new(),
+        current_fn_errors_capable: false,
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -101,6 +104,19 @@ struct Checker<'b> {
     /// M6: named union type aliases from `shape Shape = Circle | Square` declarations.
     /// Maps alias name → resolved union type. Populated before check_module runs.
     union_aliases: HashMap<String, Type>,
+
+    // ── M7 P3a: errors-capable flow tracking ─────────────────────────────────
+
+    /// Flow-sensitive: binding names known to be in the success state after a
+    /// `.failed() == false` check or after auto-propagation fired. These bindings
+    /// have narrowed from `ErrorsCapable<T>` to `T`.
+    errors_success_narrowed: HashSet<String>,
+    /// Bindings that have been consumed by auto-propagation at first use or by
+    /// a `.failed()` check. After consumption, calling `.failed()` is a compile
+    /// error ("check-after-use").
+    errors_consumed: HashSet<String>,
+    /// Whether the function currently being checked is itself errors_capable.
+    current_fn_errors_capable: bool,
 }
 
 impl<'b> Checker<'b> {
@@ -131,8 +147,14 @@ impl<'b> Checker<'b> {
             return;
         }
 
+        // ast_type_to_type resolves ErrorCapable → ErrorsCapable { inner } already.
         let ret_ty = self.ast_type_to_type(&f.return_type);
         self.current_fn_ret = ret_ty.clone();
+
+        // M7 P3a: track whether the current function is errors-capable.
+        self.current_fn_errors_capable = f.errors_capable;
+        self.errors_success_narrowed.clear();
+        self.errors_consumed.clear();
 
         self.scope.push();
 
@@ -163,7 +185,16 @@ impl<'b> Checker<'b> {
         self.scope.pop();
 
         // Return-path analysis for non-nothing functions.
-        if ret_ty != Type::Nothing && ret_ty != Type::Error {
+        // For ErrorsCapable functions, report the inner type name (not "string errors")
+        // so the error message reads naturally. Also skip analysis for -> nothing errors
+        // (inner is Nothing) since implicit fallthrough is valid for nothing-returning fns.
+        let ret_ty_for_analysis = match &ret_ty {
+            Type::ErrorsCapable { inner } => *inner.clone(),
+            other => other.clone(),
+        };
+        if ret_ty != Type::Nothing && ret_ty != Type::Error
+            && ret_ty_for_analysis != Type::Nothing
+        {
             let analysis = analyze_return_paths(&f.body);
             if !analysis.all_paths_return {
                 self.diags.push(Diagnostic::error(
@@ -171,7 +202,7 @@ impl<'b> Checker<'b> {
                     format!(
                         "`{}` must return a `{}` on every path, but some paths fall off the end without returning.",
                         f.name,
-                        type_name(&ret_ty)
+                        type_name(&ret_ty_for_analysis)
                     ),
                     "Add `return value` at the end of the function, or add an `else =>` default arm to any multi-case `if` that needs to return.",
                     "Every path through the function must produce a value. A path that falls off the end produces no value, which is a bug.",
@@ -448,6 +479,13 @@ impl<'b> Checker<'b> {
             self.maybe_non_none.insert(name.clone());
         }
 
+        // M7 P3a: if condition is `x.failed()`, mark `x` as "consumed by failed check"
+        // inside the if body. After the block, `x` is narrowed to success.
+        let failed_binding = self.extract_failed_binding(cond);
+        for name in &failed_binding {
+            self.errors_consumed.insert(name.clone());
+        }
+
         self.scope.push();
         self.check_stmts(&body.stmts);
         self.scope.pop();
@@ -456,6 +494,31 @@ impl<'b> Checker<'b> {
         for name in &narrowed {
             self.maybe_non_none.remove(name.as_str());
         }
+
+        // M7 P3a: after `if (x.failed()) { ... }`, narrow `x` to success for subsequent code.
+        for name in &failed_binding {
+            self.errors_success_narrowed.insert(name.clone());
+        }
+    }
+
+    /// M7 P3a: extract the binding name from a `.failed()` condition.
+    ///
+    /// Matches `x.failed()` → `vec!["x"]` so the if-body can use error fields
+    /// and subsequent code sees `x` narrowed to its success type.
+    fn extract_failed_binding(&self, cond: &Expr) -> Vec<String> {
+        if let Expr::MethodCall { receiver, method, args, .. } = cond {
+            if method == "failed" && args.is_empty() {
+                if let Expr::Ident(name, _) = receiver.as_ref() {
+                    // Only extract when the binding is actually ErrorsCapable.
+                    if let Some(entry) = self.scope.lookup(name) {
+                        if matches!(entry.ty, Type::ErrorsCapable { .. }) {
+                            return vec![name.clone()];
+                        }
+                    }
+                }
+            }
+        }
+        Vec::new()
     }
 
     /// Extract the binding name from an `.exists()` condition for flow-sensitive narrowing.
@@ -685,19 +748,31 @@ impl<'b> Checker<'b> {
             (Some(expr), ret) => {
                 let val_ty = self.infer_expr(expr, Some(ret));
                 if val_ty != Type::Error && *ret != Type::Error && val_ty != *ret {
-                    self.diags.push(Diagnostic::error(
-                        expr.span().clone(),
-                        format!(
-                            "`return` produces `{}`, but this function must return `{}`.",
-                            type_name(&val_ty),
-                            type_name(ret)
-                        ),
-                        format!("Return a `{}` value instead.", type_name(ret)),
-                        format!(
-                            "The function's declared return type is `{}`. Every `return` must produce a value of that type.",
-                            type_name(ret)
-                        ),
-                    ));
+                    // M7 P3a: in an errors-capable function, returning the inner success
+                    // type is valid (the auto-propagation machinery wraps it at codegen).
+                    let compatible = if let Type::ErrorsCapable { inner } = ret {
+                        types_compatible(&val_ty, inner)
+                    } else if let Type::ErrorsCapable { inner } = &val_ty {
+                        // Returning an ErrorsCapable value from an errors function is also valid.
+                        self.current_fn_errors_capable && types_compatible(inner, ret)
+                    } else {
+                        false
+                    };
+                    if !compatible {
+                        self.diags.push(Diagnostic::error(
+                            expr.span().clone(),
+                            format!(
+                                "`return` produces `{}`, but this function must return `{}`.",
+                                type_name(&val_ty),
+                                type_name(ret)
+                            ),
+                            format!("Return a `{}` value instead.", type_name(ret)),
+                            format!(
+                                "The function's declared return type is `{}`. Every `return` must produce a value of that type.",
+                                type_name(ret)
+                            ),
+                        ));
+                    }
                 }
             }
         }
@@ -807,8 +882,15 @@ impl<'b> Checker<'b> {
                 }
             }
             Expr::NoneLit { span } => {
-                match hint {
-                    Some(Type::Maybe { .. }) => hint.unwrap().clone(),
+                // M7 P3a: if the hint is ErrorsCapable wrapping Maybe, unwrap to the Maybe type.
+                let effective_hint = match hint {
+                    Some(Type::ErrorsCapable { inner }) if matches!(inner.as_ref(), Type::Maybe { .. }) => {
+                        Some(inner.as_ref())
+                    }
+                    other => other,
+                };
+                match effective_hint {
+                    Some(Type::Maybe { .. }) => effective_hint.unwrap().clone(),
                     // When hint is Type::Error, an upstream annotation error was already emitted —
                     // suppress the cascade by returning Error silently.
                     Some(Type::Error) => Type::Error,
@@ -898,6 +980,33 @@ impl<'b> Checker<'b> {
                 ));
                 return Type::Error;
             }
+
+            // M7 P3a: ErrorsCapable binding use handling.
+            // Return the ErrorsCapable type as-is so method dispatch (.failed, .or, etc.)
+            // can handle it. Auto-propagation fires when the binding is passed to a function
+            // expecting the plain success type — that check happens in check_user_fn_call.
+            if let Type::ErrorsCapable { inner } = &entry.ty {
+                let inner = inner.as_ref().clone();
+
+                // Already narrowed to success type (after .failed() check or prior use) —
+                // return the success type directly.
+                if self.errors_success_narrowed.contains(name) {
+                    return inner;
+                }
+
+                if self.current_fn_errors_capable {
+                    // Inside an errors function: auto-propagation fires — narrow the
+                    // binding to its success type. The compiler will insert early-return-
+                    // on-failure IR at P4a; for typeck, just return the inner type.
+                    self.errors_success_narrowed.insert(name.to_string());
+                    self.errors_consumed.insert(name.to_string());
+                    return inner;
+                }
+                // Outside an errors function: return the full ErrorsCapable type.
+                // check_user_fn_call will emit the diagnostic if it's passed as
+                // a success-typed argument. Method calls (.failed, .or) are fine.
+            }
+
             return entry.ty.clone();
         }
 
@@ -945,7 +1054,9 @@ impl<'b> Checker<'b> {
                     let params = sig.params.clone();
                     let ownerships = sig.param_ownerships.clone();
                     let ret = sig.ret.clone();
-                    return self.check_user_fn_call(call, name, &params, &ownerships, ret);
+                    let result = self.check_user_fn_call(call, name, &params, &ownerships, ret);
+                    // M7 P3a: if the called function returns ErrorsCapable, handle context.
+                    return self.handle_errors_capable_call_result(result, name, call.span.clone());
                 }
                 // Generic user-defined function?
                 if let Some(sig) = self.generic_fn_table.fns.get(name) {
@@ -986,12 +1097,22 @@ impl<'b> Checker<'b> {
         }
         let arg_ty = self.infer_expr(&call.args[0], None);
         if arg_ty != Type::Error && !self.intrinsics.is_print_type(&arg_ty) {
-            self.diags.push(Diagnostic::error(
-                call.args[0].span().clone(),
-                format!("`print` cannot display a `{}` value directly.", type_name(&arg_ty)),
-                "Convert it to a string first with `.toString()`.",
-                "`print` works with: int, float, number, bool, and string.",
-            ));
+            // M7 P3a: give a more helpful diagnostic for ErrorsCapable values.
+            if let Type::ErrorsCapable { .. } = &arg_ty {
+                self.diags.push(Diagnostic::error(
+                    call.args[0].span().clone(),
+                    "This function can fail, but the failure is not handled here.",
+                    "Three options: (1) Mark this function `-> T errors` to pass failures up. (2) Use `.or(default)` for a fallback. (3) Check `.failed()` explicitly.",
+                    "When a function can fail, the failure must be handled somewhere. The compiler enforces this so failures can't silently pass through.",
+                ));
+            } else {
+                self.diags.push(Diagnostic::error(
+                    call.args[0].span().clone(),
+                    format!("`print` cannot display a `{}` value directly.", type_name(&arg_ty)),
+                    "Convert it to a string first with `.toString()`.",
+                    "`print` works with: int, float, number, bool, and string.",
+                ));
+            }
             return Type::Error;
         }
         Type::Nothing
@@ -1092,6 +1213,17 @@ impl<'b> Checker<'b> {
                     "Use `range(...)` directly in a `for` loop instead.",
                     "Range values can only appear as the iterable in a `for` loop in M3. Passing them arrives in v0.1 milestone 7.",
                 ));
+            } else if let Type::ErrorsCapable { .. } = &actual_ty {
+                // M7 P3a: give a more helpful diagnostic for ErrorsCapable values passed
+                // to a function expecting the success type.
+                if !matches!(expected_ty, Type::ErrorsCapable { .. }) {
+                    self.diags.push(Diagnostic::error(
+                        arg.span().clone(),
+                        "This function can fail, but the failure is not handled here.",
+                        "Three options: (1) Mark this function `-> T errors` to pass failures up. (2) Use `.or(default)` for a fallback. (3) Check `.failed()` explicitly.",
+                        "When a function can fail, the failure must be handled somewhere. The compiler enforces this so failures can't silently pass through.",
+                    ));
+                }
             } else if actual_ty != Type::Error && actual_ty != *expected_ty {
                 self.diags.push(Diagnostic::error(
                     arg.span().clone(),
@@ -1547,6 +1679,12 @@ impl<'b> Checker<'b> {
             return Type::Error;
         }
 
+        // M7 P3a: errors-capable value method dispatch.
+        if let Type::ErrorsCapable { inner } = receiver_ty {
+            let inner = inner.as_ref().clone();
+            return self.check_errors_capable_method(method, method_span, &inner);
+        }
+
         // M6: options type method dispatch.
         if let Type::Options { name: opts_name } = receiver_ty {
             return match method {
@@ -1583,6 +1721,65 @@ impl<'b> Checker<'b> {
         Type::Error
     }
 
+    /// M7 P3a: type-check a method call on an `errors`-capable value.
+    ///
+    /// Available methods: `.failed()`, `.or(default)`, `.message`, `.suggestions`,
+    /// `.trace`, `.source`. All other method names are a compile error.
+    fn check_errors_capable_method(
+        &mut self,
+        method: &str,
+        method_span: &SourceSpan,
+        inner: &Type,
+    ) -> Type {
+        match method {
+            "failed" => {
+                // .failed() returns bool. Records that the check happened.
+                Type::Bool
+            }
+            "or" => {
+                // .or(default) — returns the success type. Arg checking happens
+                // at the call site where args are inferred; here return inner.
+                inner.clone()
+            }
+            "message" => Type::String,
+            "suggestions" => Type::BuiltinArray { elem: Box::new(Type::String) },
+            "trace" => {
+                // trace returns array<Frame> — Frame is a compiler-synthesized shape.
+                Type::BuiltinArray { elem: Box::new(Type::Shape { name: "Frame".into() }) }
+            }
+            "source" => {
+                // source returns SourceLoc — a compiler-synthesized shape.
+                Type::Shape { name: "SourceLoc".into() }
+            }
+            other => {
+                self.diags.push(Diagnostic::error(
+                    method_span.clone(),
+                    format!("An `errors`-capable value does not have a method called `{other}`."),
+                    "Available methods: failed(), or(default), message, suggestions, trace, source.",
+                    "An `errors`-capable value is the output of a call that can fail. Check `.failed()` first, then use the success value directly.",
+                ));
+                Type::Error
+            }
+        }
+    }
+
+    /// M7 P3a: after calling a function that returns `ErrorsCapable`, return the
+    /// `ErrorsCapable` type as-is regardless of context.
+    ///
+    /// The caller must handle the `ErrorsCapable` type — either by chaining `.or()` /
+    /// `.failed()` immediately (method dispatch handles it), or by storing in a binding
+    /// (the binding carries the `ErrorsCapable` type). When the binding is later used
+    /// as a success value in a non-errors function, `resolve_ident` emits the diagnostic.
+    fn handle_errors_capable_call_result(
+        &mut self,
+        result: Type,
+        _fn_name: &str,
+        _call_span: SourceSpan,
+    ) -> Type {
+        // Always return the ErrorsCapable type — method chaining (.or, .failed)
+        // and resolve_ident (for binding uses) handle the diagnostic responsibility.
+        result
+    }
 
     fn ast_type_to_type(&mut self, ast_ty: &AstType) -> Type {
         match ast_ty {
@@ -1716,8 +1913,11 @@ impl<'b> Checker<'b> {
                     Type::Union { variants: resolved }
                 }
             }
-            // M7 P1: `-> T errors` — resolve the inner type; full error typeck arrives in P3a.
-            AstType::ErrorCapable { inner, .. } => self.ast_type_to_type(inner),
+            // M7 P3a: `-> T errors` — resolve to ErrorsCapable wrapping the inner type.
+            AstType::ErrorCapable { inner, .. } => {
+                let inner_ty = self.ast_type_to_type(inner);
+                Type::ErrorsCapable { inner: Box::new(inner_ty) }
+            }
         }
     }
 
@@ -1847,6 +2047,32 @@ impl<'b> Checker<'b> {
     /// Infer the type of a field access `receiver.field`.
     fn infer_field_access(&mut self, receiver: &Expr, field: &str, field_span: &SourceSpan) -> Type {
         let receiver_ty = self.infer_expr(receiver, None);
+
+        // M7 P3a: errors-capable value property access (message, suggestions, trace, source).
+        // These are dot-property accesses (no parens) per the Yinz dot-postfix rule.
+        if let Type::ErrorsCapable { inner } = &receiver_ty {
+            let inner = inner.as_ref().clone();
+            return match field {
+                "message" => Type::String,
+                "suggestions" => Type::BuiltinArray { elem: Box::new(Type::String) },
+                "trace" => Type::BuiltinArray {
+                    elem: Box::new(Type::Shape { name: "Frame".into() }),
+                },
+                "source" => Type::Shape { name: "SourceLoc".into() },
+                other => {
+                    // Not an error-property — check if it's a field on the inner type.
+                    // Recurse by pretending the receiver has the inner type.
+                    let _ = inner;
+                    self.diags.push(Diagnostic::error(
+                        field_span.clone(),
+                        format!("An `errors`-capable value does not have a field called `{other}`."),
+                        "Available properties: message, suggestions, trace, source. Call `.failed()` first to check, or `.or(default)` for a fallback.",
+                        "An `errors`-capable value is the output of a call that can fail. Check `.failed()` first, then access the success value directly.",
+                    ));
+                    Type::Error
+                }
+            };
+        }
 
         // M5 P3c: `MapEntry<K,V>.key` / `.value` field access.
         if let Type::MapEntry { key, val } = &receiver_ty {
@@ -2538,6 +2764,10 @@ fn types_compatible(a: &Type, b: &Type) -> bool {
         // e.g., `let s: Circle | Square = { radius: 5.0 }` — Circle is a valid union value.
         (Type::Union { variants }, concrete) => {
             variants.iter().any(|v| types_compatible(v, concrete))
+        }
+        // M7 P3a: ErrorsCapable is compatible with itself when inner types match.
+        (Type::ErrorsCapable { inner: ia }, Type::ErrorsCapable { inner: ib }) => {
+            types_compatible(ia, ib)
         }
         _ => a == b,
     }
