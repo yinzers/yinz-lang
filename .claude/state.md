@@ -1,6 +1,6 @@
 # Session State: ynz
 
-**Last Updated**: 2026-05-18 (M7 SHIPPED: tag v0.1.0-m7, 782 tests; plan archived to done/; next milestone = M8)
+**Last Updated**: 2026-05-18 (v0.1.0 SHIPPED: M1–M8 complete, 830 tests, tag v0.1.0; all plans archived to done/)
 
 ---
 
