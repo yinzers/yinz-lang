@@ -237,6 +237,15 @@ function entrypoint() -> nothing {
     print(n.toString())
   }
 
+  // ────── M8: bignum (number<N> for N > 34) ──────
+  let a: number<100> = 0.1
+  let b: number<100> = 0.2
+  let c: number<100> = a + b
+  print(``)
+  print(`M8 — bignum (number<100>):`)
+  print(`  0.1 + 0.2 = `)
+  print(c)
+
   // ────── M8: modules (syntax demo) ──────
   // Import statements above bring names from companion modules into scope.
   // Cross-file CALLS (using newPlayer / clamp etc. here) ship in v0.2 when

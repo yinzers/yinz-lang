@@ -211,19 +211,20 @@ fn m2_const_reassignment_produces_diagnostic() {
 }
 
 #[test]
-fn m2_bignum_deferral_produces_diagnostic() {
-    // WHY: `number[100]` is reserved syntax but not implemented until M8.
-    // The diagnostic must point at M8 so the user knows it's coming.
-    // The fixture is the catch-up marker — M8 updates this snapshot.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m2_bignum_deferral.ynz"));
-    assert_ne!(code, 0, "number[N!=34] must exit non-zero");
-    assert!(stdout.is_empty());
-    assert!(
-        stderr.contains("v0.8") || stderr.contains("M8") || stderr.contains("34"),
-        "deferral diagnostic must mention v0.8 or 34, got:\n{stderr}"
+fn m8_bignum_number100_runs() {
+    // WHY: M8 P6 ships bignum — `number<100>` must now compile and run successfully.
+    // This test was previously called `m2_bignum_deferral_produces_diagnostic` and
+    // expected a compile error. The CATCH-UP M8 marker is now resolved.
+    //
+    // test-ratchet: M8 P6 flips this from "expect non-zero exit" to "expect success".
+    // The fixture (m2_bignum_deferral.ynz) contains `let x: number<100> = 1.0; print(x)`.
+    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("m2_bignum_deferral.ynz"));
+    assert_eq!(code, 0, "number<100> must compile and run in M8");
+    assert_eq!(
+        stdout.trim(),
+        "1.0",
+        "number<100> literal 1.0 must print 1.0"
     );
-    // CATCH-UP M8: when bignum lands, delete this fixture or update the snapshot.
-    insta::assert_snapshot!("m2_bignum_deferral_stderr", stderr);
 }
 
 #[test]
@@ -1232,4 +1233,19 @@ fn m8_background_runs_sequentially() {
         stdout, "side effect ran\nafter background\n",
         "background must run before the subsequent print"
     );
+}
+
+// ── M8 P6: bignum — number<N> for N > 34 ─────────────────────────────────────
+// (m8_bignum_number100_runs above covers the literal print case)
+
+#[test]
+fn m8_bignum_point1_plus_point2_equals_point3() {
+    // WHY: 0.1 + 0.2 = 0.3 with exact decimal arithmetic — the classic binary-float
+    // trap. If bignum uses binary-float internally, this would produce 0.30000...
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m8_bignum_basic.ynz"));
+    assert_eq!(
+        code, 0,
+        "bignum add must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(stdout.trim(), "0.3", "0.1 + 0.2 must equal exactly 0.3");
 }

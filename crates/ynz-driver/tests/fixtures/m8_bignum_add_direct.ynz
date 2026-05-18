@@ -1,0 +1,11 @@
+// Test bignum add with direct print
+function add100(a: number<100>, b: number<100>) -> number<100> {
+  return a + b
+}
+
+function entrypoint() -> nothing {
+  let a: number<100> = 0.1
+  let b: number<100> = 0.2
+  let c = add100(a, b)
+  print(c)
+}

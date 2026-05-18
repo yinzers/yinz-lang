@@ -859,7 +859,7 @@ impl<'b> Checker<'b> {
             }
             (Some(expr), ret) => {
                 let val_ty = self.infer_expr(expr, Some(ret));
-                if val_ty != Type::Error && *ret != Type::Error && val_ty != *ret {
+                if val_ty != Type::Error && *ret != Type::Error && !types_compatible(ret, &val_ty) {
                     // M7 P3a: in an errors-capable function, returning the inner success
                     // type is valid (the auto-propagation machinery wraps it at codegen).
                     let compatible = if let Type::ErrorsCapable { inner } = ret {
@@ -913,6 +913,10 @@ impl<'b> Checker<'b> {
 
             Expr::NumberLit(_, _) => match hint {
                 Some(Type::Float) => Type::Float,
+                // M8 P6: use the annotated precision when a number annotation is present.
+                Some(Type::Number { precision }) => Type::Number {
+                    precision: *precision,
+                },
                 _ => Type::Number { precision: 34 },
             },
 
@@ -1304,10 +1308,14 @@ impl<'b> Checker<'b> {
         // Shapes are printable — the compiler emits a default "ShapeName { field: val, ... }"
         // representation. User-defined toString() can override this.
         // M8 P4: sensitive values are printable (they emit [REDACTED]).
+        // M8 P6: all number<N> precisions (including bignum) are printable.
         let is_printable = self.intrinsics.is_print_type(&arg_ty)
             || matches!(
                 &arg_ty,
-                Type::Shape { .. } | Type::BuiltinArray { .. } | Type::Sensitive { .. }
+                Type::Shape { .. }
+                    | Type::BuiltinArray { .. }
+                    | Type::Sensitive { .. }
+                    | Type::Number { .. }
             );
         if arg_ty != Type::Error && !is_printable {
             // M7 P3a: give a more helpful diagnostic for ErrorsCapable values.
@@ -1452,7 +1460,7 @@ impl<'b> Checker<'b> {
                         "When a function can fail, the failure must be handled somewhere. The compiler enforces this so failures can't silently pass through.",
                     ));
                 }
-            } else if actual_ty != Type::Error && actual_ty != *expected_ty {
+            } else if actual_ty != Type::Error && !types_compatible(expected_ty, &actual_ty) {
                 self.diags.push(Diagnostic::error(
                     arg.span().clone(),
                     format!(
@@ -1486,7 +1494,10 @@ impl<'b> Checker<'b> {
             Add | Sub | Mul | Div => match (lhs, rhs) {
                 (Type::Int, Type::Int) => Type::Int,
                 (Type::Float, Type::Float) => Type::Float,
-                (Type::Number { .. }, Type::Number { .. }) => Type::Number { precision: 34 },
+                // M8 P6: mixed-precision promotion — result precision = max(lhs, rhs).
+                (Type::Number { precision: pa }, Type::Number { precision: pb }) => Type::Number {
+                    precision: (*pa).max(*pb),
+                },
                 _ => {
                     self.emit_binop_mismatch(op, lhs, rhs, span);
                     Type::Error
@@ -2641,25 +2652,23 @@ impl<'b> Checker<'b> {
         hint: Option<&Type>,
         span: &SourceSpan,
     ) -> Type {
-        // M5 P3c: handle `let m: map<K,V> = { }` — empty struct lit with BuiltinMap annotation.
-        // Non-empty struct lits with identifier keys are errors (should be MapLit with string keys).
+        // When the hint is a map, accept identifier-key syntax — treat field names as string keys.
+        // `{ name: value }` works the same as `{ "name": value }` when the type context says map.
+        // Quoted keys remain valid too; this just removes the friction of requiring them.
         if let Some(Type::BuiltinMap { key, val }) = hint {
-            if fields.is_empty() {
-                return Type::BuiltinMap {
-                    key: key.clone(),
-                    val: val.clone(),
-                };
-            }
-            self.diags.push(Diagnostic::error(
-                span.clone(),
-                "Map literals use string or integer keys, not field names.",
-                "Write `{ \"key\": value }` instead of `{ key: value }` for map literals.",
-                "Shape values use identifier field names. Map literals use string or integer literal keys.",
-            ));
+            let val = val.as_ref().clone();
             for f in fields {
-                self.infer_expr(&f.value, None);
+                let actual = self.infer_expr(&f.value, Some(&val));
+                if actual != Type::Error && val != Type::Error && actual != val {
+                    self.diags.push(Diagnostic::error(
+                        f.value.span().clone(),
+                        format!("Map value for key `{}` is `{}`, but this map holds `{}`.", f.name, type_name(&actual), type_name(&val)),
+                        format!("Pass a `{}` value.", type_name(&val)),
+                        "All values in a map must be the same type.",
+                    ));
+                }
             }
-            return Type::Error;
+            return Type::BuiltinMap { key: key.clone(), val: Box::new(val) };
         }
 
         let shape_name = match hint {
@@ -2694,14 +2703,22 @@ impl<'b> Checker<'b> {
                 return Type::Error;
             }
             Some(other) if *other != Type::Error => {
+                let what_instead = match other {
+                    Type::BuiltinMap { .. } =>
+                        "For a map literal, use quoted string keys: `{ \"key\": value, \"key2\": value2 }`".to_string(),
+                    Type::Union { .. } =>
+                        "Check the union type — if one variant is a `shape`, annotate with its name; if it's a `map`, use quoted string keys.".to_string(),
+                    _ =>
+                        "Annotate the binding with a `shape` name: `let p: Player = { ... }`".to_string(),
+                };
                 self.diags.push(Diagnostic::error(
                     span.clone(),
                     format!(
                         "A shape value `{{ ... }}` cannot produce a `{}` value.",
                         type_name(other)
                     ),
-                    "Annotate the binding with a `shape` name: `let p: Player = { ... }`",
-                    "Shape values can only be created for `shape` types, not primitive types.",
+                    what_instead,
+                    "Shape values use identifier field names (`name: value`). Map literals use quoted string keys (`\"name\": value`).",
                 ));
                 for f in fields {
                     self.infer_expr(&f.value, None);
@@ -3433,6 +3450,12 @@ fn types_compatible(a: &Type, b: &Type) -> bool {
         (Type::ErrorsCapable { inner: ia }, Type::ErrorsCapable { inner: ib }) => {
             types_compatible(ia, ib)
         }
+        // M8 P6: mixed-precision number compatibility.
+        // Any number<A> is compatible with any number<B> — widening always succeeds;
+        // narrowing (A > B) will emit a warning at the call site. Here we just
+        // allow the assignment so the program can type-check. The narrowing warning
+        // is emitted in check_let_stmt when we detect precision shrinkage.
+        (Type::Number { .. }, Type::Number { .. }) => true,
         _ => a == b,
     }
 }

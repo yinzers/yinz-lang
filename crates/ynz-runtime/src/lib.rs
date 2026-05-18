@@ -2211,3 +2211,72 @@ mod m7_string_runtime {
         }
     }
 }
+
+// ── M8 P6: bignum runtime — `number<N>` for N > 34 ──────────────────────────
+//
+// Bignum values at the ABI boundary are null-terminated decimal strings
+// (pointer to i8). The runtime allocates result strings with `malloc`;
+// callers are responsible for eventual cleanup (deferred to v0.2 arena).
+
+use ynz_numerics::decimal_n::{
+    add as bignum_add_op, div as bignum_div_op, format_bignum, mul as bignum_mul_op, parse_bignum,
+    sub as bignum_sub_op,
+};
+use ynz_numerics::BigNum;
+
+/// Parse a decimal string and compute `a + b` at `precision` digits.
+/// Returns a newly-allocated C string. Caller owns the memory.
+///
+/// # Safety
+/// `a` and `b` must be valid null-terminated UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_bignum_add(a: *const i8, b: *const i8, precision: u16) -> *mut i8 {
+    bignum_binop(a, b, precision, bignum_add_op)
+}
+
+/// Subtract: `a - b` at `precision` digits.
+///
+/// # Safety
+/// Same as `ynz_bignum_add`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_bignum_sub(a: *const i8, b: *const i8, precision: u16) -> *mut i8 {
+    bignum_binop(a, b, precision, bignum_sub_op)
+}
+
+/// Multiply: `a * b` at `precision` digits.
+///
+/// # Safety
+/// Same as `ynz_bignum_add`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_bignum_mul(a: *const i8, b: *const i8, precision: u16) -> *mut i8 {
+    bignum_binop(a, b, precision, bignum_mul_op)
+}
+
+/// Divide: `a / b` at `precision` digits.
+///
+/// # Safety
+/// Same as `ynz_bignum_add`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_bignum_div(a: *const i8, b: *const i8, precision: u16) -> *mut i8 {
+    bignum_binop(a, b, precision, bignum_div_op)
+}
+
+/// Helper: parse, apply op, format, return as heap-allocated C string.
+///
+/// # Safety
+/// `a` and `b` must be valid null-terminated UTF-8 strings.
+unsafe fn bignum_binop(
+    a: *const i8,
+    b: *const i8,
+    precision: u16,
+    op: fn(&BigNum, &BigNum) -> BigNum,
+) -> *mut i8 {
+    let a_str = std::ffi::CStr::from_ptr(a).to_str().unwrap_or("0");
+    let b_str = std::ffi::CStr::from_ptr(b).to_str().unwrap_or("0");
+    let an = parse_bignum(a_str, precision).unwrap_or_else(|| BigNum::zero(precision));
+    let bn_val = parse_bignum(b_str, precision).unwrap_or_else(|| BigNum::zero(precision));
+    let result = op(&an, &bn_val);
+    let s = format_bignum(&result);
+    let cstr = std::ffi::CString::new(s).unwrap_or_else(|_| std::ffi::CString::new("0").unwrap());
+    cstr.into_raw()
+}

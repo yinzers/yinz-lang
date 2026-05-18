@@ -142,6 +142,14 @@ pub struct RuntimeDecls<'ctx> {
     pub ynz_string_builder_finalize: FunctionValue<'ctx>,
     // ynz_string_builder_drop(builder: *mut u8) → void
     pub ynz_string_builder_drop: FunctionValue<'ctx>,
+
+    // ── M8 P6: bignum arithmetic — `number<N>` for N > 34 ────────────────
+    // Each function: (a: *const i8, b: *const i8, precision: i16) → *mut i8
+    // Returns a heap-allocated C string (null-terminated decimal representation).
+    pub ynz_bignum_add: FunctionValue<'ctx>,
+    pub ynz_bignum_sub: FunctionValue<'ctx>,
+    pub ynz_bignum_mul: FunctionValue<'ctx>,
+    pub ynz_bignum_div: FunctionValue<'ctx>,
 }
 
 impl<'ctx> RuntimeDecls<'ctx> {
@@ -476,6 +484,27 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 module,
                 "ynz_string_builder_drop",
                 void.fn_type(&[ptr.into()], false),
+            ),
+            // M8 P6: bignum arithmetic — (ptr a, ptr b, i16 precision) → ptr
+            ynz_bignum_add: declare_fn(
+                module,
+                "ynz_bignum_add",
+                ptr.fn_type(&[ptr.into(), ptr.into(), i32.into()], false),
+            ),
+            ynz_bignum_sub: declare_fn(
+                module,
+                "ynz_bignum_sub",
+                ptr.fn_type(&[ptr.into(), ptr.into(), i32.into()], false),
+            ),
+            ynz_bignum_mul: declare_fn(
+                module,
+                "ynz_bignum_mul",
+                ptr.fn_type(&[ptr.into(), ptr.into(), i32.into()], false),
+            ),
+            ynz_bignum_div: declare_fn(
+                module,
+                "ynz_bignum_div",
+                ptr.fn_type(&[ptr.into(), ptr.into(), i32.into()], false),
             ),
         }
     }
