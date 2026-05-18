@@ -2336,7 +2336,7 @@ impl<'b> Checker<'b> {
                 span.clone(),
                 "Map literals use string or integer keys, not field names.",
                 "Write `{ \"key\": value }` instead of `{ key: value }` for map literals.",
-                "Struct literals with identifier keys create shape values. Map literals use string or integer literal keys.",
+                "Shape values use identifier field names. Map literals use string or integer literal keys.",
             ));
             for f in fields { self.infer_expr(&f.value, None); }
             return Type::Error;
@@ -2347,9 +2347,9 @@ impl<'b> Checker<'b> {
             Some(other) if *other != Type::Error => {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
-                    format!("A struct literal `{{ ... }}` cannot produce a `{}` value.", type_name(other)),
+                    format!("A shape value `{{ ... }}` cannot produce a `{}` value.", type_name(other)),
                     "Annotate the binding with a `shape` name: `let p: Player = { ... }`",
-                    "Struct literals create shape values — the annotation must name a shape, not a primitive type.",
+                    "Shape values can only be created for `shape` types, not primitive types.",
                 ));
                 for f in fields { self.infer_expr(&f.value, None); }
                 return Type::Error;
@@ -2363,9 +2363,9 @@ impl<'b> Checker<'b> {
             _ => {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
-                    "This struct literal needs a type annotation to know which shape to create.",
+                    "This shape value needs a type annotation — the compiler needs to know which `shape` to create.",
                     "Add a type annotation: `let p: Player = { ... }`",
-                    "Struct literals are anonymous — the `shape` type comes from the surrounding annotation. Without it, the compiler cannot check the field names or types.",
+                    "Shape values are anonymous — the `shape` type comes from the annotation on the left. Without it, the compiler cannot check field names or types.",
                 ));
                 for f in fields { self.infer_expr(&f.value, None); }
                 return Type::Error;
@@ -2399,7 +2399,7 @@ impl<'b> Checker<'b> {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
                     format!("Missing field `{}` in `{shape_name}` construction.", shape_field.name),
-                    format!("Add `{}: value` to the struct literal.", shape_field.name),
+                    format!("Add `{}: value` to the shape value.", shape_field.name),
                     "Every visible field of a shape must be provided when constructing a value — the compiler cannot fill them in for you.",
                 ));
             }
@@ -2425,7 +2425,7 @@ impl<'b> Checker<'b> {
                         lit_field.name_span.clone(),
                         format!("`{shape_name}` does not have a field called `{}`.", lit_field.name),
                         what_instead,
-                        "Struct literals can only set fields that are declared on the shape.",
+                        "Shape values can only set fields declared on the shape.",
                     ));
                     self.infer_expr(&lit_field.value, None);
                 }

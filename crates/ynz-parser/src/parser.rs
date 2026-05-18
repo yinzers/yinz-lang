@@ -451,61 +451,80 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse `number` or `number[N]`.
+    /// Parse `number`, `number<N>`, or legacy `number[N]` (migration redirect).
     ///
-    /// Called after `number` has already been consumed. If `[N]` follows,
-    /// consumes the brackets and validates the precision. Only N=34 is
-    /// supported in M2; any other value produces a deferral diagnostic.
+    /// Called after `number` has already been consumed.
+    /// - Bare `number` → 34-digit precision (default).
+    /// - `number<N>` → validated precision N ∈ 1..=4096; non-34 deferred until M8 bignum.
+    /// - `number[N]` → three-part migration diagnostic; returns `Type::Error`.
     fn parse_number_type(&mut self) -> Type {
-        if !matches!(self.peek(), Token::LBracket) {
-            return Type::Number { precision: 34 };
-        }
-
-        self.advance(); // consume `[`
-
-        let precision = match self.peek().clone() {
-            Token::IntLit(n) if n > 0 && n <= 4096 => {
-                let p = n as u32;
-                self.advance();
-                p
-            }
-            _ => {
-                self.diags.push(Diagnostic::error(
-                    self.current_span(),
-                    "Expected a precision value between 1 and 4096 inside `number[N]`.",
-                    "Write `number[34]` for the default 34-digit decimal.",
-                    "The number in `number[N]` sets how many decimal digits of precision you get.",
-                ));
-                // Consume to `]` to recover
+        match self.peek() {
+            Token::LBracket => {
+                // Legacy number[N] syntax — teach the migration.
+                let bracket_span = self.current_span();
+                self.advance(); // consume `[`
+                // Consume the body up to `]` for error recovery.
                 while !matches!(self.peek(), Token::RBracket | Token::RBrace | Token::Eof) {
                     self.advance();
                 }
                 let _ = self.expect(&Token::RBracket);
-                return Type::Error;
+                self.diags.push(Diagnostic::error(
+                    bracket_span,
+                    "Use angle brackets for `number<N>`, not square brackets.",
+                    "Write `number<100>` instead of `number[100]`.",
+                    "M5 unified all generic syntax — array<T>, map<K,V>, number<N> — on `<>`. Square brackets are now index access only.",
+                ));
+                Type::Error
             }
-        };
+            Token::Lt => {
+                self.advance(); // consume `<`
 
-        if self.expect(&Token::RBracket).is_none() {
-            self.diags.push(Diagnostic::error(
-                self.current_span(),
-                "Expected `]` to close `number[N]`.",
-                "Write `number[34]` — close the bracket after the precision.",
-                "The bracket must be closed to complete the type.",
-            ));
-            return Type::Error;
+                let precision = match self.peek().clone() {
+                    Token::IntLit(n) if n > 0 && n <= 4096 => {
+                        let p = n as u32;
+                        self.advance();
+                        p
+                    }
+                    _ => {
+                        self.diags.push(Diagnostic::error(
+                            self.current_span(),
+                            "Expected a precision value between 1 and 4096 inside `number<N>`.",
+                            "Write `number<34>` for the default 34-digit decimal.",
+                            "The number in `number<N>` sets how many decimal digits of precision you get.",
+                        ));
+                        // Consume to `>` to recover.
+                        while !matches!(self.peek(), Token::Gt | Token::RBrace | Token::Eof) {
+                            self.advance();
+                        }
+                        let _ = self.expect(&Token::Gt);
+                        return Type::Error;
+                    }
+                };
+
+                if self.expect(&Token::Gt).is_none() {
+                    self.diags.push(Diagnostic::error(
+                        self.current_span(),
+                        "Expected `>` to close `number<N>`.",
+                        "Write `number<34>` — close the angle bracket after the precision.",
+                        "The angle bracket must be closed to complete the type.",
+                    ));
+                    return Type::Error;
+                }
+
+                if precision != 34 {
+                    self.diags.push(Diagnostic::error(
+                        self.current_span(),
+                        format!("`number<{precision}>` is not available yet."),
+                        "Use `number` (34 decimal digits) for now.",
+                        "`number<N>` for N other than 34 (bignum support) arrives in M8.",
+                    ));
+                    return Type::Error;
+                }
+
+                Type::Number { precision: 34 }
+            }
+            _ => Type::Number { precision: 34 },
         }
-
-        if precision != 34 {
-            self.diags.push(Diagnostic::error(
-                self.current_span(),
-                format!("`number[{precision}]` is not available yet."),
-                "Use `number` (34 decimal digits) for now.",
-                "`number[N]` for N other than 34 (bignum support) arrives in v0.8.",
-            ));
-            return Type::Error;
-        }
-
-        Type::Number { precision: 34 }
     }
 
 
@@ -1546,9 +1565,9 @@ impl<'a> Parser<'a> {
                     let brace_span = self.current_span();
                     self.diags.push(Diagnostic::error(
                         brace_span,
-                        format!("`{name} {{ ... }}` is not the Yinz struct literal syntax."),
+                        format!("`{name} {{ ... }}` is not valid Yinz shape value syntax."),
                         format!("Use an annotation-driven literal: `let p: {name} = {{ ... }}`"),
-                        "Yinz struct literals are anonymous — the type comes from the `let`/`const` annotation, not a prefix name. This keeps the syntax consistent with how all other literal values work.",
+                        "In Yinz, shape values are written without a type prefix — the type comes from the `let`/`const` annotation.",
                     ));
                     // Parse and discard the body so the parser recovers cleanly.
                     self.advance(); // consume `{`
@@ -2118,9 +2137,9 @@ impl<'a> Parser<'a> {
                 Token::Eof => {
                     self.diags.push(Diagnostic::error(
                         self.eof_span(),
-                        "Missing `}` to close this struct literal.",
+                        "Missing `}` to close this shape value.",
                         "Add `}` after the last field.",
-                        "Every `{` in a struct literal must be matched with a `}`.",
+                        "Every `{` in a shape value must be matched with a `}`.",
                     ));
                     break;
                 }
@@ -2140,7 +2159,7 @@ impl<'a> Parser<'a> {
                         self.current_span(),
                         "Expected a field name here.",
                         "Write `{ fieldName: value, ... }` to initialize a shape value.",
-                        "Struct literals list each field by name followed by `:` and a value.",
+                        "Shape values list each field by name followed by `:` and a value.",
                     ));
                     // Recover to `}` or `,`
                     while !matches!(self.peek(), Token::RBrace | Token::Comma | Token::Eof) {
@@ -2155,7 +2174,7 @@ impl<'a> Parser<'a> {
                     self.current_span(),
                     format!("Expected `:` after field name `{field_name}`."),
                     format!("Write `{{ {field_name}: value }}`"),
-                    "The `:` separates the field name from its value in a struct literal.",
+                    "The `:` separates the field name from its value in a shape value.",
                 ));
                 while !matches!(self.peek(), Token::RBrace | Token::Comma | Token::Eof) {
                     self.advance();

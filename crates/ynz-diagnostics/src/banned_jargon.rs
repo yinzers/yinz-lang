@@ -52,6 +52,7 @@ pub const BANNED_JARGON: &[&str] = &[
     "ADT",
     "AST",
     // M7 additions — errors/iterables jargon (2026-05-18)
+    "struct",   // Yinz term is "shape value" — `struct` is C/Rust jargon
     "monad",
     "lift",
     "wrap",
