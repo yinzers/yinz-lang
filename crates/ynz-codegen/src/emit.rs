@@ -3625,7 +3625,9 @@ fn to_c_string<'ctx>(
                     .map(|_| ())
             };
 
-            append_static(cg, builder_val, &format!("{name} {{ "))?;
+            // Anonymous inline shapes use synthesized `__anon_*` names — omit the name prefix.
+            let open = if name.starts_with("__anon_") { "{ ".to_string() } else { format!("{name} {{ ") };
+            append_static(cg, builder_val, &open)?;
 
             for (i, (field_name, field_idx, field_ty)) in visible_fields.iter().enumerate() {
                 if i > 0 {

@@ -102,6 +102,9 @@ impl ShapeTable {
                 end_inclusive: false,
             },
             AstType::Error | AstType::Named(_, _) | AstType::Range { .. } => Type::Error,
+            // AnonShape is hoisted to a named shape before resolve_ast_type runs;
+            // if we ever encounter it here, the parent/field context is unavailable.
+            AstType::AnonShape { .. } => Type::Error,
             // P3b: dynamic dispatch and Self type resolution.
             AstType::Dynamic { .. } | AstType::SelfType { .. } => Type::Error,
             // TypeParam: must be resolved in context (Checker::ast_type_to_type handles this).
@@ -202,8 +205,24 @@ impl ShapeTable {
 pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTable {
     let mut table = ShapeTable::empty();
 
+    // Pre-pass: hoist AnonShape field types to named ShapeDecls so all subsequent
+    // passes see only Named types. Synthetic name format: `__anon_ParentName_fieldName`.
+    let mut synthetic_items: Vec<ynz_ast::nodes::ShapeDecl> = Vec::new();
+    for item in &module.items {
+        if let Item::ShapeDecl(s) = item {
+            if s.alias_ty.is_some() { continue; }
+            for field in &s.fields {
+                collect_anon_shapes_in_type(&field.ty, &s.name, &field.name, &mut synthetic_items);
+            }
+        }
+    }
+
     // Pass 1: collect all shape names + their raw AST data.
     let mut all_names: HashSet<String> = HashSet::new();
+    // Register synthetic anonymous shapes first so they're visible to all real shapes.
+    for s in &synthetic_items {
+        all_names.insert(s.name.clone());
+    }
     for item in &module.items {
         if let Item::ShapeDecl(s) = item {
             // M6: skip alias declarations (`shape Shape = Circle | Square`) — they're not
@@ -251,6 +270,32 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
     };
 
     // Pass 2: resolve each shape's own fields, contract sigs, extends, and follows.
+    // Process synthetic anonymous shapes first.
+    for s in &synthetic_items {
+        let ty = name_table.resolve_ast_type(&ynz_ast::nodes::Type::Nothing); // dummy
+        let _ = ty;
+        let mut own_fields: Vec<FieldDef> = Vec::new();
+        for field in &s.fields {
+            let ty = name_table.resolve_ast_type(&field.ty);
+            own_fields.push(FieldDef {
+                name: field.name.clone(),
+                ty,
+                is_hidden: field.is_hidden,
+                is_inherited: false,
+                defined_at: field.name_span.clone(),
+            });
+        }
+        table.shapes.insert(s.name.clone(), ShapeDef {
+            name: s.name.clone(),
+            is_base: false,
+            extends: None,
+            follows: vec![],
+            fields: own_fields,
+            contract_sigs: vec![],
+            defined_at: s.span.clone(),
+        });
+    }
+
     for item in &module.items {
         let Item::ShapeDecl(s) = item else { continue };
         if !all_names.contains(&s.name) {
@@ -300,7 +345,12 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
                 ));
                 continue;
             }
-            let ty = name_table.resolve_ast_type(&field.ty);
+            // AnonShape fields resolve to their synthesized named shape.
+            let ty = if let AstType::AnonShape { .. } = &field.ty {
+                Type::Shape { name: format!("__anon_{}_{}", s.name, field.name) }
+            } else {
+                name_table.resolve_ast_type(&field.ty)
+            };
             // Collect the shape's own type parameter names so the diagnostic
             // function can skip them (type params resolve to Type::Error in the
             // shape table but are not unknown types — they're substituted at use site).
@@ -568,6 +618,44 @@ fn resolve_field_type_in_generic_shape(ast_ty: &AstType, type_params: &[String])
 
 /// Emit a diagnostic when a shape field's type annotation contains an unrecognized
 /// type name. Walks the AstType to find the first unknown Named node and points at it.
+/// Recursively extract AnonShape nodes from a type annotation, registering each as a
+/// synthetic named ShapeDecl. The synthesized name is `__anon_ParentName_fieldName`.
+fn collect_anon_shapes_in_type(
+    ast_ty: &AstType,
+    parent_name: &str,
+    field_name: &str,
+    out: &mut Vec<ynz_ast::nodes::ShapeDecl>,
+) {
+    match ast_ty {
+        AstType::AnonShape { fields, span } => {
+            let synth_name = format!("__anon_{parent_name}_{field_name}");
+            out.push(ynz_ast::nodes::ShapeDecl {
+                name: synth_name,
+                name_span: span.clone(),
+                is_base: false,
+                generics: vec![],
+                extends: None,
+                follows: vec![],
+                fields: fields.clone(),
+                contract_sigs: vec![],
+                alias_ty: None,
+                span: span.clone(),
+                is_exported: false,
+                doc: None,
+            });
+        }
+        AstType::Union { variants, .. } => {
+            for (i, v) in variants.iter().enumerate() {
+                collect_anon_shapes_in_type(v, parent_name, &format!("{field_name}_{i}"), out);
+            }
+        }
+        AstType::Maybe { inner, .. } => {
+            collect_anon_shapes_in_type(inner, parent_name, field_name, out);
+        }
+        _ => {}
+    }
+}
+
 /// Walk an AstType annotation and emit a diagnostic for each unknown named type.
 /// Used at shape-collection time so the error points at the declaration, not usage.
 fn emit_unknown_field_type_diag(

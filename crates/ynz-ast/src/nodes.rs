@@ -614,8 +614,9 @@ pub struct CallExpr {
 /// A type annotation.
 ///
 /// Variant count is pinned by the milestone-locked tests in the test suite.
-/// Current count: 14 — M4 added Dynamic(9), SelfType(10); M5 added
-/// TypeParam(11), Generic(12), Maybe(13); M6 added Union(14).
+/// Current count: 15 — M4 added Dynamic(9), SelfType(10); M5 added
+/// TypeParam(11), Generic(12), Maybe(13); M6 added Union(14);
+/// v0.1-polish added AnonShape(15).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Type {
     /// The `nothing` return type.
@@ -723,6 +724,20 @@ pub enum Type {
     /// Only wraps `string` in v0.1 (typeck enforces this). `.reveal()` strips
     /// the modifier and returns the underlying value.
     Sensitive(Box<Type>),
+
+    // ── v0.1-polish: anonymous inline shapes ────────────────────────────────
+
+    // test-ratchet: v0.1-polish adds AnonShape for `field: { name: T }` inline type syntax.
+    /// An anonymous inline shape type: `spread: { bid: number\n ask: number }`.
+    ///
+    /// `{` in type position is unambiguous — no other Yinz type annotation uses it.
+    /// Typeck synthesizes a name (`__anon_ParentShape_fieldName`) and registers it as
+    /// a real shape so all downstream passes (codegen, print, field access) treat it
+    /// identically to a named shape.
+    AnonShape {
+        fields: Vec<FieldDecl>,
+        span: SourceSpan,
+    },
 }
 
 // ── M4 shape declarations ────────────────────────────────────────────────────

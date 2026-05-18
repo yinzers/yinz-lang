@@ -304,80 +304,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse `export function/shape/options/const/base/{ ... }` after `export` is consumed.
-    fn parse_export_item(&mut self, items: &mut Vec<Item>) {
-        let export_start = self.current_span();
-        self.advance(); // consume `export`
-
-        match self.peek().clone() {
-            Token::Function => {
-                if let Some(mut decl) = self.parse_function_decl() {
-                    decl.is_exported = true;
-                    items.push(Item::Function(decl));
-                }
-            }
-            Token::Shape => {
-                if let Some(mut decl) = self.parse_shape_decl(false) {
-                    decl.is_exported = true;
-                    items.push(Item::ShapeDecl(decl));
-                }
-            }
-            Token::Options => {
-                if let Some(mut decl) = self.parse_options_decl() {
-                    decl.is_exported = true;
-                    items.push(Item::OptionsDecl(decl));
-                }
-            }
-            Token::Base => {
-                self.advance(); // consume `base`
-                if !matches!(self.peek(), Token::Shape) {
-                    self.diags.push(Diagnostic::error(
-                        self.current_span(),
-                        "Expected `shape` after `export base`.",
-                        "Write `export base shape Name { ... }`.",
-                        "`base` must be immediately followed by the `shape` keyword.",
-                    ));
-                    self.advance();
-                } else if let Some(mut decl) = self.parse_shape_decl(true) {
-                    decl.is_exported = true;
-                    items.push(Item::ShapeDecl(decl));
-                }
-            }
-            Token::Const => {
-                if let Some(mut decl) = self.parse_const_decl() {
-                    decl.is_exported = true;
-                    items.push(Item::ConstDecl(decl));
-                }
-            }
-            Token::LBrace => {
-                // Re-export: `export { foo, bar } from "path"`
-                if let Some(re) = self.parse_reexport(export_start.start) {
-                    items.push(Item::ReExport(re));
-                }
-            }
-            Token::Identifier(kw) if kw == "default" => {
-                let span = self.current_span();
-                self.advance(); // consume `default`
-                self.diags.push(Diagnostic::error(
-                    span,
-                    "Yinz does not have default exports.",
-                    "Name the export instead: `export function foo()` or `export const PI = 3.14`.",
-                    "Yinz uses named exports only — every exported item is referred to by its name in `import { name }` statements.",
-                ));
-            }
-            _ => {
-                self.diags.push(Diagnostic::error(
-                    self.current_span(),
-                    format!("Expected a declaration after `export`, not `{}`.", token_display(self.peek())),
-                    "Write `export function foo()`, `export shape Foo { ... }`, `export options Status { ... }`, or `export { name } from \"path\"`.",
-                    "`export` makes a declaration visible to other modules.",
-                ));
-                self.advance();
-                let _ = export_start;
-            }
-        }
-    }
-
     /// Parse `import { name1, name2 as alias } from "path"` or `import ns from "path"`.
     fn parse_import_decl(&mut self) -> Option<ImportDecl> {
         let start = self.current_span().start;
@@ -985,6 +911,31 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
+            // `{` in type position = anonymous inline shape: `field: { name: T\n age: int }`
+            // Unambiguous — `{` has no other meaning in a type annotation.
+            Token::LBrace => {
+                let start = self.current_span().start;
+                self.advance(); // consume `{`
+                let mut fields = Vec::new();
+                loop {
+                    match self.peek() {
+                        Token::RBrace => { self.advance(); break; }
+                        Token::Eof => {
+                            self.diags.push(Diagnostic::error(self.eof_span(), "Missing `}` to close this inline shape type.", "Add `}` after the last field.", "Every `{` in an inline shape type must be matched with a `}`."));
+                            break;
+                        }
+                        _ => {
+                            let field_start = self.current_span().start;
+                            if let Some(field) = self.parse_field_decl(false, field_start) {
+                                fields.push(field);
+                            }
+                        }
+                    }
+                }
+                let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(start);
+                Type::AnonShape { fields, span: SourceSpan::new(self.file, start, end) }
+            }
+
             _ => {
                 self.diags.push(Diagnostic::error(
                     self.current_span(),
@@ -3190,9 +3141,7 @@ impl<'a> Parser<'a> {
             }
         };
 
-        if self.expect(&Token::LBrace).is_none() {
-            return None;
-        }
+        self.expect(&Token::LBrace)?;
 
         let mut variants = Vec::new();
         while !matches!(self.peek(), Token::RBrace | Token::Eof) {
