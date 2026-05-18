@@ -1,5 +1,43 @@
 use crate::types::Type;
 
+/// Look up the return type of a method call on `string`.
+///
+/// Returns `None` if the method does not exist on strings.
+/// Multi-arg string methods (substring, split, replace) use arity checked
+/// at the call site; this table only covers 0- and 1-arg dispatch.
+pub fn string_method_return(method: &str) -> Option<Type> {
+    match method {
+        // Zero-arg transformations
+        "toUpperCase" => Some(Type::String),
+        "toLowerCase" => Some(Type::String),
+        "trim" => Some(Type::String),
+        "count" => Some(Type::Int),
+        "byteCount" => Some(Type::Int),
+        "graphemeCount" => Some(Type::Int),
+        // One-arg predicates (arg type checked at call site)
+        "contains" => Some(Type::Bool),
+        "startsWith" => Some(Type::Bool),
+        "endsWith" => Some(Type::Bool),
+        // One-arg indexed access
+        "get" | "graphemeAt" => Some(Type::Maybe { inner: Box::new(Type::String) }),
+        "byteAt" => Some(Type::Maybe { inner: Box::new(Type::Int) }),
+        "indexOf" => Some(Type::Maybe { inner: Box::new(Type::Int) }),
+        // Multi-arg methods: substring(int, int), split(string), replace(string, string)
+        "substring" => Some(Type::String),
+        "split" => Some(Type::BuiltinArray { elem: Box::new(Type::String) }),
+        "replace" => Some(Type::String),
+        _ => None,
+    }
+}
+
+/// All string method names, for "did you mean" suggestions.
+pub const STRING_METHODS: &[&str] = &[
+    "contains", "indexOf", "startsWith", "endsWith",
+    "toUpperCase", "toLowerCase", "substring", "trim",
+    "split", "replace", "byteAt", "graphemeAt",
+    "count", "byteCount", "graphemeCount", "get",
+];
+
 /// Look up the return type of a method call on `array<elem>`.
 ///
 /// Returns `None` if the method does not exist on arrays.
