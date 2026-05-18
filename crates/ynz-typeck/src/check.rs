@@ -1927,7 +1927,20 @@ impl<'b> Checker<'b> {
                     Type::Error
                 }
             }
-            AstType::Generic { name, args, .. } => {
+            AstType::Generic { name, args, name_span, .. } => {
+                // Catch capitalized built-in names (Array, Fixed, Map) — Golden Rule 13:
+                // capital letter = type, everything else = lowercase. Built-ins are lowercase.
+                let lower = name.to_lowercase();
+                if name.as_str() != lower.as_str() && matches!(lower.as_str(), "array" | "fixed" | "map") {
+                    self.diags.push(Diagnostic::error(
+                        name_span.clone(),
+                        format!("`{name}` is not a type — built-in collection types are lowercase in Yinz."),
+                        format!("Use `{lower}` (lowercase): `{lower}<...>`"),
+                        "In Yinz, capital letter = user-defined shape, lowercase = built-in. \
+                         `Array`, `Fixed`, and `Map` are not valid — use `array`, `fixed`, `map`.",
+                    ));
+                    return Type::Error;
+                }
                 let resolved_args: Vec<Type> = args.iter().map(|a| self.ast_type_to_type(a)).collect();
                 match name.as_str() {
                     "array" => {
@@ -2338,6 +2351,12 @@ impl<'b> Checker<'b> {
                     "Annotate the binding with a `shape` name: `let p: Player = { ... }`",
                     "Struct literals create shape values — the annotation must name a shape, not a primitive type.",
                 ));
+                for f in fields { self.infer_expr(&f.value, None); }
+                return Type::Error;
+            }
+            Some(Type::Error) => {
+                // Hint is Type::Error — an upstream diagnostic already explained the problem.
+                // Don't cascade with a confusing "needs a type annotation" message.
                 for f in fields { self.infer_expr(&f.value, None); }
                 return Type::Error;
             }
