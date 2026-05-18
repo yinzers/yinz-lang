@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased] — M8: Modules, Doc Comments, Sensitive, Concurrency Keywords, Bignum, v0.1.0 Release
+
+### In progress
+- **P0**: `number<N>` angle-bracket syntax (was `number[N]`); migration diagnostic for old form; M8 status active.
+- **P1**: Lexer — `import`, `export`, `sensitive`, `wait`, `background` keyword tokens; `///` doc-comment trivia; banned-keyword diagnostics for concurrency + visibility jargon.
+- **P2**: Modules — multi-file driver, `yinz.toml`, `import`/`export` grammar, cross-file typeck.
+- **P3**: Doc comments — `///` AST attachment + preservation.
+- **P4**: Sensitive type modifier — `sensitive T`, `sensitive(value)`, `.reveal()`, auto-redact in `print`.
+- **P5**: Concurrency keywords — `wait`/`background` parse + typeck + sequential lowering.
+- **P6**: Bignum — `number<N>` for N ∈ (34, 4096]; full IEEE 754-2008 conformance.
+- **P7**: Demo polish + M8 error gallery completion.
+- **P8**: v0.1.0 audit sweep + version bump + tag.
+
+---
+
 ## v0.1.0-m7 — Full Strings, errors Keyword, Iterables Protocol
 
 Commit range: v0.1.0-m6..v0.1.0-m7

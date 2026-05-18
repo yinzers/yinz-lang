@@ -18,8 +18,7 @@
 use ynz_ast::nodes::{
     BinOpKind, Block, CallExpr, ContractSig, Expr, FieldDecl, FunctionDecl, GenericParam, Item,
     MatchArm, MatchPattern, MatchPatternKind, Module, OptionsDecl, OwnershipModifier, Param,
-    PostfixOpKind, ReceiverKind, ShapeDecl, Stmt, StructLitField, Type, TypePath,
-    UnaryOpKind,
+    PostfixOpKind, ReceiverKind, ShapeDecl, Stmt, StructLitField, Type, TypePath, UnaryOpKind,
 };
 // TypePath is also used for Expr::Is
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
@@ -42,7 +41,6 @@ impl<'a> Parser<'a> {
             diags: DiagnosticBucket::new(),
         }
     }
-
 
     fn peek(&self) -> &Token {
         self.tokens
@@ -121,7 +119,6 @@ impl<'a> Parser<'a> {
             }
         }
     }
-
 
     pub fn parse_module(&mut self) -> Module {
         let start = self.current_span();
@@ -245,7 +242,13 @@ impl<'a> Parser<'a> {
             let errors_tok_span = self.current_span();
             self.advance(); // consume `errors`
             let full_span = SourceSpan::new(self.file, return_type_start, errors_tok_span.end);
-            (Type::ErrorCapable { inner: Box::new(inner_ty), span: full_span }, true)
+            (
+                Type::ErrorCapable {
+                    inner: Box::new(inner_ty),
+                    span: full_span,
+                },
+                true,
+            )
         } else {
             (inner_ty, false)
         };
@@ -277,7 +280,6 @@ impl<'a> Parser<'a> {
         })
     }
 
-
     fn parse_type(&mut self) -> Type {
         let start = self.current_span().start;
         let first = self.parse_type_with_depth(0);
@@ -294,7 +296,10 @@ impl<'a> Parser<'a> {
             variants.push(next);
         }
         let end = self.current_span().start;
-        Type::Union { variants, span: SourceSpan::new(self.file, start, end) }
+        Type::Union {
+            variants,
+            span: SourceSpan::new(self.file, start, end),
+        }
     }
 
     fn parse_type_with_depth(&mut self, depth: u8) -> Type {
@@ -320,7 +325,10 @@ impl<'a> Parser<'a> {
                     Token::Identifier(contract) => {
                         let contract_span = span;
                         self.advance();
-                        Type::Dynamic { contract, span: contract_span }
+                        Type::Dynamic {
+                            contract,
+                            span: contract_span,
+                        }
                     }
                     _ => {
                         self.diags.push(Diagnostic::error(
@@ -392,7 +400,11 @@ impl<'a> Parser<'a> {
             return Type::Error;
         }
 
-        let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(maybe_start_span.start);
+        let end = self
+            .tokens
+            .get(self.pos.saturating_sub(1))
+            .map(|s| s.span.end)
+            .unwrap_or(maybe_start_span.start);
         Type::Maybe {
             inner: Box::new(inner),
             span: SourceSpan::new(self.file, maybe_start_span.start, end),
@@ -422,7 +434,10 @@ impl<'a> Parser<'a> {
                             "Generic type arguments are comma-separated and the list ends with `>`.",
                         ));
                         // Recover to `>` or something sane
-                        while !matches!(self.peek(), Token::Gt | Token::RBrace | Token::Eof | Token::LParen) {
+                        while !matches!(
+                            self.peek(),
+                            Token::Gt | Token::RBrace | Token::Eof | Token::LParen
+                        ) {
                             self.advance();
                         }
                         break;
@@ -442,7 +457,11 @@ impl<'a> Parser<'a> {
         }
 
         let type_start = name_span.start;
-        let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(type_start);
+        let end = self
+            .tokens
+            .get(self.pos.saturating_sub(1))
+            .map(|s| s.span.end)
+            .unwrap_or(type_start);
         Type::Generic {
             name,
             name_span,
@@ -463,7 +482,7 @@ impl<'a> Parser<'a> {
                 // Legacy number[N] syntax — teach the migration.
                 let bracket_span = self.current_span();
                 self.advance(); // consume `[`
-                // Consume the body up to `]` for error recovery.
+                                // Consume the body up to `]` for error recovery.
                 while !matches!(self.peek(), Token::RBracket | Token::RBrace | Token::Eof) {
                     self.advance();
                 }
@@ -527,7 +546,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-
     fn parse_block(&mut self) -> Block {
         let start = self.current_span();
         let mut stmts = Vec::new();
@@ -566,9 +584,7 @@ impl<'a> Parser<'a> {
     fn parse_stmt(&mut self) -> Option<Stmt> {
         match self.peek() {
             Token::Let | Token::Const => Some(self.parse_let_or_const()),
-            Token::Identifier(_) if *self.peek_ahead(1) == Token::Eq => {
-                Some(self.parse_assign())
-            }
+            Token::Identifier(_) if *self.peek_ahead(1) == Token::Eq => Some(self.parse_assign()),
             Token::If => Some(self.parse_if()),
             Token::While => Some(self.parse_while()),
             Token::For => Some(self.parse_for()),
@@ -590,11 +606,20 @@ impl<'a> Parser<'a> {
                             span,
                         });
                     }
-                    if let Expr::IndexAccess { receiver, index, .. } = expr {
+                    if let Expr::IndexAccess {
+                        receiver, index, ..
+                    } = expr
+                    {
                         self.advance(); // consume `=`
                         let value = self.parse_expr(0);
-                        let span = SourceSpan::new(self.file, receiver.span().start, value.span().end);
-                        return Some(Stmt::IndexAssign { receiver, index, value, span });
+                        let span =
+                            SourceSpan::new(self.file, receiver.span().start, value.span().end);
+                        return Some(Stmt::IndexAssign {
+                            receiver,
+                            index,
+                            value,
+                            span,
+                        });
                     }
                     // Something else followed by `=` — error
                     let span = self.current_span();
@@ -699,7 +724,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-
     /// Parse a parameter list `(p1: T1, p2: T2, ...)` for a function declaration.
     ///
     /// Returns `None` (fatal, recovery attempted) only if `)` cannot be found
@@ -721,9 +745,18 @@ impl<'a> Parser<'a> {
             // Also handles `share self`, `lend self`, `give self` receiver parameters.
             let ownership = if let Token::Identifier(kw) = self.peek().clone() {
                 match kw.as_str() {
-                    "share" => { self.advance(); Some(OwnershipModifier::Share) }
-                    "lend"  => { self.advance(); Some(OwnershipModifier::Lend) }
-                    "give"  => { self.advance(); Some(OwnershipModifier::Give) }
+                    "share" => {
+                        self.advance();
+                        Some(OwnershipModifier::Share)
+                    }
+                    "lend" => {
+                        self.advance();
+                        Some(OwnershipModifier::Lend)
+                    }
+                    "give" => {
+                        self.advance();
+                        Some(OwnershipModifier::Give)
+                    }
                     _ => None,
                 }
             } else {
@@ -751,7 +784,10 @@ impl<'a> Parser<'a> {
                         "Each parameter needs a name and a type so the function body can use it.",
                     ));
                     // Recover to `)` or `}`
-                    while !matches!(self.peek(), Token::RParen | Token::Comma | Token::RBrace | Token::Eof) {
+                    while !matches!(
+                        self.peek(),
+                        Token::RParen | Token::Comma | Token::RBrace | Token::Eof
+                    ) {
                         self.advance();
                     }
                     let _ = self.expect(&Token::Comma);
@@ -766,7 +802,10 @@ impl<'a> Parser<'a> {
                     format!("Write `{param_name}: Type`, e.g. `{param_name}: int`"),
                     "The `:` separates the parameter name from its type.",
                 ));
-                while !matches!(self.peek(), Token::RParen | Token::Comma | Token::RBrace | Token::Eof) {
+                while !matches!(
+                    self.peek(),
+                    Token::RParen | Token::Comma | Token::RBrace | Token::Eof
+                ) {
                     self.advance();
                 }
                 let _ = self.expect(&Token::Comma);
@@ -775,7 +814,14 @@ impl<'a> Parser<'a> {
 
             let ty_start = self.current_span().start;
             let ty = self.parse_type();
-            let ty_span = SourceSpan::new(self.file, ty_start, self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(ty_start));
+            let ty_span = SourceSpan::new(
+                self.file,
+                ty_start,
+                self.tokens
+                    .get(self.pos.saturating_sub(1))
+                    .map(|s| s.span.end)
+                    .unwrap_or(ty_start),
+            );
             let param_end = ty_span.end;
 
             // Duplicate name check
@@ -806,7 +852,10 @@ impl<'a> Parser<'a> {
                     "Each parameter must be separated by a comma.",
                 ));
                 // Recover to `)` or next identifier (another param attempt)
-                while !matches!(self.peek(), Token::RParen | Token::RBrace | Token::Eof | Token::Identifier(_)) {
+                while !matches!(
+                    self.peek(),
+                    Token::RParen | Token::RBrace | Token::Eof | Token::Identifier(_)
+                ) {
                     self.advance();
                 }
             }
@@ -868,7 +917,10 @@ impl<'a> Parser<'a> {
             let is_end = self.current_span().start;
             cond = Expr::Is {
                 expr: Box::new(cond),
-                ty: TypePath { name: ty_name, span: ty_span },
+                ty: TypePath {
+                    name: ty_name,
+                    span: ty_span,
+                },
                 span: SourceSpan::new(self.file, is_start, is_end),
             };
         }
@@ -890,10 +942,21 @@ impl<'a> Parser<'a> {
                 "Curly braces are always required in Yinz — `if (cond) stmt` without braces is not valid.",
             ));
             let span = SourceSpan::new(self.file, start, self.current_span().end);
-            return Stmt::If { cond, body: Block { stmts: vec![], span: span.clone() }, span };
+            return Stmt::If {
+                cond,
+                body: Block {
+                    stmts: vec![],
+                    span: span.clone(),
+                },
+                span,
+            };
         }
 
-        let block_open = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.start).unwrap_or(start);
+        let block_open = self
+            .tokens
+            .get(self.pos.saturating_sub(1))
+            .map(|s| s.span.start)
+            .unwrap_or(start);
         let _ = block_open;
 
         // Disambiguate: is this simple-if or multi-case-if?
@@ -930,8 +993,8 @@ impl<'a> Parser<'a> {
         ) && *self.peek_ahead(1) == Token::FatArrow;
 
         // `is Type =>` form: Token::Is followed by a type-name identifier (M6 keyword)
-        let is_type_arm = matches!(self.peek(), Token::Is)
-            && matches!(self.peek_ahead(1), Token::Identifier(_));
+        let is_type_arm =
+            matches!(self.peek(), Token::Is) && matches!(self.peek_ahead(1), Token::Identifier(_));
 
         value_arm || is_type_arm
     }
@@ -1049,7 +1112,13 @@ impl<'a> Parser<'a> {
             let body = self.parse_arm_body();
             let pat_span = SourceSpan::new(self.file, pat_start, arrow_span.start);
             return MatchArm {
-                pattern: MatchPattern { kind: MatchPatternKind::Is(TypePath { name: type_name, span: is_span }), span: pat_span },
+                pattern: MatchPattern {
+                    kind: MatchPatternKind::Is(TypePath {
+                        name: type_name,
+                        span: is_span,
+                    }),
+                    span: pat_span,
+                },
                 body,
                 arrow_span,
             };
@@ -1068,7 +1137,10 @@ impl<'a> Parser<'a> {
                 let body = self.parse_arm_body();
                 let _pat_span = SourceSpan::new(self.file, pat_start, arrow_span.start);
                 return MatchArm {
-                    pattern: MatchPattern { kind: MatchPatternKind::OptionName(v_name), span: SourceSpan::new(self.file, v_span.start, v_span.end) },
+                    pattern: MatchPattern {
+                        kind: MatchPatternKind::OptionName(v_name),
+                        span: SourceSpan::new(self.file, v_span.start, v_span.end),
+                    },
                     body,
                     arrow_span,
                 };
@@ -1093,7 +1165,10 @@ impl<'a> Parser<'a> {
 
         let body = self.parse_arm_body();
         MatchArm {
-            pattern: MatchPattern { kind: MatchPatternKind::Value(pattern_expr), span: pat_span },
+            pattern: MatchPattern {
+                kind: MatchPatternKind::Value(pattern_expr),
+                span: pat_span,
+            },
             body,
             arrow_span,
         }
@@ -1119,7 +1194,10 @@ impl<'a> Parser<'a> {
                 }
             } else {
                 let span = self.current_span();
-                Block { stmts: vec![], span }
+                Block {
+                    stmts: vec![],
+                    span,
+                }
             }
         }
     }
@@ -1156,7 +1234,14 @@ impl<'a> Parser<'a> {
                 "Curly braces are always required in Yinz — `while (cond) stmt` without braces is not valid.",
             ));
             let span = SourceSpan::new(self.file, start, self.current_span().end);
-            return Stmt::While { cond, body: Block { stmts: vec![], span: span.clone() }, span };
+            return Stmt::While {
+                cond,
+                body: Block {
+                    stmts: vec![],
+                    span: span.clone(),
+                },
+                span,
+            };
         }
 
         let body = self.parse_block();
@@ -1233,7 +1318,16 @@ impl<'a> Parser<'a> {
                 "Curly braces are always required in Yinz.",
             ));
             let span = SourceSpan::new(self.file, start, self.current_span().end);
-            return Stmt::For { var, var_span, iter, body: Block { stmts: vec![], span: span.clone() }, span };
+            return Stmt::For {
+                var,
+                var_span,
+                iter,
+                body: Block {
+                    stmts: vec![],
+                    span: span.clone(),
+                },
+                span,
+            };
         }
 
         let body = self.parse_block();
@@ -1348,7 +1442,10 @@ impl<'a> Parser<'a> {
                 var: "__entry".to_string(),
                 var_span: entry_span.clone(),
                 iter,
-                body: Block { stmts: vec![], span: span.clone() },
+                body: Block {
+                    stmts: vec![],
+                    span: span.clone(),
+                },
                 span,
             };
         }
@@ -1395,7 +1492,10 @@ impl<'a> Parser<'a> {
             var: "__entry".to_string(),
             var_span: entry_span,
             iter,
-            body: Block { stmts: desugared_stmts, span: body_span },
+            body: Block {
+                stmts: desugared_stmts,
+                span: body_span,
+            },
             span: full_span,
         }
     }
@@ -1468,8 +1568,7 @@ impl<'a> Parser<'a> {
             let op_span = self.current_span();
             let op = self.consume_bin_op();
             let rhs = self.parse_expr(rbp);
-            let span =
-                SourceSpan::new(self.file, lhs.span().start, rhs.span().end);
+            let span = SourceSpan::new(self.file, lhs.span().start, rhs.span().end);
             let _ = op_span;
             lhs = Expr::BinOp {
                 op,
@@ -1554,9 +1653,7 @@ impl<'a> Parser<'a> {
                 Expr::StringLit(bytes, span)
             }
             // M7 P1: backtick string literal — may contain ${...} interpolations.
-            Token::BacktickString(_) => {
-                self.parse_backtick_string()
-            }
+            Token::BacktickString(_) => self.parse_backtick_string(),
             Token::Identifier(name) => {
                 let span = self.current_span();
                 self.advance();
@@ -1581,17 +1678,11 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Expr::SelfValue { span }
             }
-            Token::LBrace if self.peek_is_map_lit_start() => {
-                self.parse_map_lit()
-            }
-            Token::LBrace if self.peek_is_struct_lit_start(0) => {
-                self.parse_struct_lit()
-            }
+            Token::LBrace if self.peek_is_map_lit_start() => self.parse_map_lit(),
+            Token::LBrace if self.peek_is_struct_lit_start(0) => self.parse_struct_lit(),
             // Empty `{}` — parse as a struct literal with no fields; typeck resolves
             // based on the annotation (empty shape literal vs empty map literal).
-            Token::LBrace if matches!(self.peek_ahead(1), Token::RBrace) => {
-                self.parse_struct_lit()
-            }
+            Token::LBrace if matches!(self.peek_ahead(1), Token::RBrace) => self.parse_struct_lit(),
             Token::LParen => {
                 self.advance(); // consume `(`
                 let inner = self.parse_expr(0);
@@ -1605,9 +1696,7 @@ impl<'a> Parser<'a> {
                 }
                 inner
             }
-            Token::LBracket => {
-                self.parse_array_lit()
-            }
+            Token::LBracket => self.parse_array_lit(),
             _ => {
                 let span = self.current_span();
                 if self.is_stmt_boundary() {
@@ -1624,10 +1713,7 @@ impl<'a> Parser<'a> {
                 } else {
                     self.diags.push(Diagnostic::error(
                         span.clone(),
-                        format!(
-                            "`{}` cannot appear here.",
-                            token_display(self.peek())
-                        ),
+                        format!("`{}` cannot appear here.", token_display(self.peek())),
                         "Write a value or expression instead.",
                         "Expressions need something to evaluate — a number, name, or calculation.",
                     ));
@@ -1637,7 +1723,6 @@ impl<'a> Parser<'a> {
             }
         }
     }
-
 
     /// Parse a backtick-quoted string literal into `Expr::InterpolatedString`.
     ///
@@ -1663,7 +1748,10 @@ impl<'a> Parser<'a> {
                     // another BacktickString (adjacent segments — shouldn't happen from
                     // the lexer, but handle defensively) or we're done.
                     // The next token is NOT BacktickString or InterpolationStart → done.
-                    if !matches!(self.peek(), Token::BacktickString(_) | Token::InterpolationStart) {
+                    if !matches!(
+                        self.peek(),
+                        Token::BacktickString(_) | Token::InterpolationStart
+                    ) {
                         break;
                     }
                 }
@@ -1709,7 +1797,6 @@ impl<'a> Parser<'a> {
         );
         Expr::InterpolatedString(parts, full_span)
     }
-
 
     fn parse_call(&mut self, callee: Expr, type_args: Option<Vec<Type>>) -> Expr {
         let start = callee.span().start;
@@ -1769,7 +1856,11 @@ impl<'a> Parser<'a> {
             ));
         }
 
-        let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(start);
+        let end = self
+            .tokens
+            .get(self.pos.saturating_sub(1))
+            .map(|s| s.span.end)
+            .unwrap_or(start);
         Expr::IndexAccess {
             receiver: Box::new(receiver),
             index: Box::new(index),
@@ -1801,12 +1892,23 @@ impl<'a> Parser<'a> {
                     ));
                     break;
                 }
-                Token::Comma => { self.advance(); }
-                _ => { elements.push(self.parse_expr(0)); }
+                Token::Comma => {
+                    self.advance();
+                }
+                _ => {
+                    elements.push(self.parse_expr(0));
+                }
             }
         }
-        let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(start);
-        Expr::ArrayLit { elements, span: SourceSpan::new(self.file, start, end) }
+        let end = self
+            .tokens
+            .get(self.pos.saturating_sub(1))
+            .map(|s| s.span.end)
+            .unwrap_or(start);
+        Expr::ArrayLit {
+            elements,
+            span: SourceSpan::new(self.file, start, end),
+        }
     }
 
     /// Speculatively parse a generic type-argument list `<T, U>` followed by `(`.
@@ -1909,7 +2011,15 @@ impl<'a> Parser<'a> {
                         "Type parameters are names — usually a short uppercase letter like `T`, `U`, or `Key`.",
                     ));
                     // Consume to a safe boundary; stop at hard delimiters so we don't loop.
-                    while !matches!(self.peek(), Token::Gt | Token::Comma | Token::Eof | Token::LBrace | Token::LParen | Token::Arrow) {
+                    while !matches!(
+                        self.peek(),
+                        Token::Gt
+                            | Token::Comma
+                            | Token::Eof
+                            | Token::LBrace
+                            | Token::LParen
+                            | Token::Arrow
+                    ) {
                         self.advance();
                     }
                     if matches!(self.peek(), Token::Comma) {
@@ -1940,7 +2050,11 @@ impl<'a> Parser<'a> {
                 }
             }
 
-            let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(param_start);
+            let end = self
+                .tokens
+                .get(self.pos.saturating_sub(1))
+                .map(|s| s.span.end)
+                .unwrap_or(param_start);
             params.push(GenericParam {
                 name,
                 name_span,
@@ -1948,7 +2062,9 @@ impl<'a> Parser<'a> {
                 span: SourceSpan::new(self.file, param_start, end),
             });
 
-            if !matches!(self.peek(), Token::Gt | Token::Eof) && self.expect(&Token::Comma).is_none() {
+            if !matches!(self.peek(), Token::Gt | Token::Eof)
+                && self.expect(&Token::Comma).is_none()
+            {
                 self.diags.push(Diagnostic::error(
                     self.current_span(),
                     "Expected `,` or `>` after type parameter.",
@@ -1956,7 +2072,10 @@ impl<'a> Parser<'a> {
                     "The type parameter list must end with `>`.",
                 ));
                 // Recover to something the parser can continue from
-                while !matches!(self.peek(), Token::Gt | Token::LParen | Token::LBrace | Token::Eof) {
+                while !matches!(
+                    self.peek(),
+                    Token::Gt | Token::LParen | Token::LBrace | Token::Eof
+                ) {
                     self.advance();
                 }
             }
@@ -2019,9 +2138,9 @@ impl<'a> Parser<'a> {
 
         // `.copy()` and `.freeze()` — body operations, produce PostfixOp
         if let Some(op) = match name.as_str() {
-            "copy"   => Some(PostfixOpKind::Copy),
+            "copy" => Some(PostfixOpKind::Copy),
             "freeze" => Some(PostfixOpKind::Freeze),
-            _        => None,
+            _ => None,
         } {
             self.advance(); // consume `(`
             if self.expect(&Token::RParen).is_none() {
@@ -2032,7 +2151,11 @@ impl<'a> Parser<'a> {
                     format!("`{name}` is a dot-postfix body operation — it acts on the receiver value with no extra arguments."),
                 ));
             }
-            let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(start);
+            let end = self
+                .tokens
+                .get(self.pos.saturating_sub(1))
+                .map(|s| s.span.end)
+                .unwrap_or(start);
             return Expr::PostfixOp {
                 receiver: Box::new(receiver),
                 op,
@@ -2080,7 +2203,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-
     // ── M4: struct literal helpers ──────────────────────────────────────────
 
     /// True when current position is the start of a map literal:
@@ -2108,9 +2230,16 @@ impl<'a> Parser<'a> {
         let brace_pos = self.pos + offset;
         let ident_pos = brace_pos + 1;
         let colon_pos = brace_pos + 2;
-        matches!(self.tokens.get(brace_pos).map(|s| &s.value), Some(Token::LBrace))
-            && matches!(self.tokens.get(ident_pos).map(|s| &s.value), Some(Token::Identifier(_)))
-            && matches!(self.tokens.get(colon_pos).map(|s| &s.value), Some(Token::Colon))
+        matches!(
+            self.tokens.get(brace_pos).map(|s| &s.value),
+            Some(Token::LBrace)
+        ) && matches!(
+            self.tokens.get(ident_pos).map(|s| &s.value),
+            Some(Token::Identifier(_))
+        ) && matches!(
+            self.tokens.get(colon_pos).map(|s| &s.value),
+            Some(Token::Colon)
+        )
     }
 
     /// Parse an anonymous struct literal `{ field: value, ... }`.
@@ -2121,7 +2250,11 @@ impl<'a> Parser<'a> {
         let start = self.current_span().start;
         self.advance(); // consume `{`
         let fields = self.parse_struct_lit_fields();
-        let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(start);
+        let end = self
+            .tokens
+            .get(self.pos.saturating_sub(1))
+            .map(|s| s.span.end)
+            .unwrap_or(start);
         Expr::StructLit {
             fields,
             span: SourceSpan::new(self.file, start, end),
@@ -2133,7 +2266,10 @@ impl<'a> Parser<'a> {
         let mut fields = Vec::new();
         loop {
             match self.peek() {
-                Token::RBrace => { self.advance(); break; }
+                Token::RBrace => {
+                    self.advance();
+                    break;
+                }
                 Token::Eof => {
                     self.diags.push(Diagnostic::error(
                         self.eof_span(),
@@ -2143,7 +2279,10 @@ impl<'a> Parser<'a> {
                     ));
                     break;
                 }
-                Token::Comma => { self.advance(); continue; }
+                Token::Comma => {
+                    self.advance();
+                    continue;
+                }
                 _ => {}
             }
 
@@ -2183,7 +2322,11 @@ impl<'a> Parser<'a> {
             }
 
             let value = self.parse_expr(0);
-            fields.push(StructLitField { name: field_name, name_span, value });
+            fields.push(StructLitField {
+                name: field_name,
+                name_span,
+                value,
+            });
 
             // Optional trailing comma
             if !matches!(self.peek(), Token::RBrace) {
@@ -2207,7 +2350,10 @@ impl<'a> Parser<'a> {
                 Token::RBrace => {
                     let end = self.current_span().end;
                     self.advance();
-                    return Expr::MapLit { entries, span: SourceSpan::new(self.file, start, end) };
+                    return Expr::MapLit {
+                        entries,
+                        span: SourceSpan::new(self.file, start, end),
+                    };
                 }
                 Token::Eof => {
                     self.diags.push(Diagnostic::error(
@@ -2218,7 +2364,10 @@ impl<'a> Parser<'a> {
                     ));
                     break;
                 }
-                Token::Comma => { self.advance(); continue; }
+                Token::Comma => {
+                    self.advance();
+                    continue;
+                }
                 _ => {
                     let key = self.parse_expr(0);
                     if self.expect(&Token::Colon).is_none() {
@@ -2242,8 +2391,15 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(start);
-        Expr::MapLit { entries, span: SourceSpan::new(self.file, start, end) }
+        let end = self
+            .tokens
+            .get(self.pos.saturating_sub(1))
+            .map(|s| s.span.end)
+            .unwrap_or(start);
+        Expr::MapLit {
+            entries,
+            span: SourceSpan::new(self.file, start, end),
+        }
     }
 
     // ── M6: options declaration ──────────────────────────────────────────────
@@ -2352,8 +2508,14 @@ impl<'a> Parser<'a> {
             let alias_ty = self.parse_type();
             let end = self.current_span().start;
             return Some(ShapeDecl {
-                name, name_span, is_base, generics,
-                extends: None, follows: vec![], fields: vec![], contract_sigs: vec![],
+                name,
+                name_span,
+                is_base,
+                generics,
+                extends: None,
+                follows: vec![],
+                fields: vec![],
+                contract_sigs: vec![],
                 alias_ty: Some(alias_ty),
                 span: SourceSpan::new(self.file, start, end),
             });
@@ -2427,7 +2589,10 @@ impl<'a> Parser<'a> {
 
         loop {
             match self.peek() {
-                Token::RBrace => { self.advance(); break; }
+                Token::RBrace => {
+                    self.advance();
+                    break;
+                }
                 Token::Eof => {
                     self.diags.push(Diagnostic::error(
                         self.eof_span(),
@@ -2505,7 +2670,11 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(start);
+        let end = self
+            .tokens
+            .get(self.pos.saturating_sub(1))
+            .map(|s| s.span.end)
+            .unwrap_or(start);
         Some(ShapeDecl {
             name,
             name_span,
@@ -2551,7 +2720,11 @@ impl<'a> Parser<'a> {
 
         let ty_start = self.current_span().start;
         let ty = self.parse_type();
-        let ty_end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(ty_start);
+        let ty_end = self
+            .tokens
+            .get(self.pos.saturating_sub(1))
+            .map(|s| s.span.end)
+            .unwrap_or(ty_start);
         let ty_span = SourceSpan::new(self.file, ty_start, ty_end);
 
         // Optional `= default` (only valid for hidden fields; typeck enforces this)
@@ -2613,9 +2786,9 @@ impl<'a> Parser<'a> {
                 self.advance(); // consume `self`
                 receiver = ownership_kw.as_deref().map(|kw| match kw {
                     "share" => ReceiverKind::Share,
-                    "lend"  => ReceiverKind::Lend,
-                    "give"  => ReceiverKind::Give,
-                    _       => ReceiverKind::Share,
+                    "lend" => ReceiverKind::Lend,
+                    "give" => ReceiverKind::Give,
+                    _ => ReceiverKind::Share,
                 });
                 // Consume optional `,` after self
                 let _ = self.expect(&Token::Comma);
@@ -2630,21 +2803,42 @@ impl<'a> Parser<'a> {
                 let param_start = self.current_span().start;
                 let own = if let Token::Identifier(kw) = self.peek().clone() {
                     match kw.as_str() {
-                        "share" => { self.advance(); Some(OwnershipModifier::Share) }
-                        "lend"  => { self.advance(); Some(OwnershipModifier::Lend) }
-                        "give"  => { self.advance(); Some(OwnershipModifier::Give) }
+                        "share" => {
+                            self.advance();
+                            Some(OwnershipModifier::Share)
+                        }
+                        "lend" => {
+                            self.advance();
+                            Some(OwnershipModifier::Lend)
+                        }
+                        "give" => {
+                            self.advance();
+                            Some(OwnershipModifier::Give)
+                        }
                         _ => None,
                     }
-                } else { None };
+                } else {
+                    None
+                };
 
                 let (pname, pname_span) = match self.peek().clone() {
-                    Token::Identifier(n) => { let s = self.current_span(); self.advance(); (n, s) }
+                    Token::Identifier(n) => {
+                        let s = self.current_span();
+                        self.advance();
+                        (n, s)
+                    }
                     _ => break,
                 };
-                if self.expect(&Token::Colon).is_none() { break; }
+                if self.expect(&Token::Colon).is_none() {
+                    break;
+                }
                 let ty_s = self.current_span().start;
                 let ty = self.parse_type();
-                let ty_e = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(ty_s);
+                let ty_e = self
+                    .tokens
+                    .get(self.pos.saturating_sub(1))
+                    .map(|s| s.span.end)
+                    .unwrap_or(ty_s);
                 params.push(Param {
                     name: pname,
                     name_span: pname_span,
@@ -2682,8 +2876,19 @@ impl<'a> Parser<'a> {
             Type::Error
         };
 
-        let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(start);
-        Some(ContractSig { name, name_span, receiver, params, return_type, span: SourceSpan::new(self.file, start, end) })
+        let end = self
+            .tokens
+            .get(self.pos.saturating_sub(1))
+            .map(|s| s.span.end)
+            .unwrap_or(start);
+        Some(ContractSig {
+            name,
+            name_span,
+            receiver,
+            params,
+            return_type,
+            span: SourceSpan::new(self.file, start, end),
+        })
     }
 
     fn consume_bin_op(&mut self) -> BinOpKind {

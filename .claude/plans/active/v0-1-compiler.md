@@ -204,11 +204,11 @@ Full Unicode strings with SSO (23-byte inline, 24-byte struct) + SIMD UTF-8 vali
 **Depends on**: M6
 
 ### Milestone 8 (M8): Modules + remaining + v0.1 tag — multi-session
-`import` / `export`, root-relative paths, aliases with `as`, duplicate-name compile error. Doc comments (`///`) parsed and preserved on signatures. Sensitive type modifier (auto-redact in print output). Concurrency keywords (`wait`, `background`) parse and type-check, run sequentially. **Bignum `number[N]` for N ∈ (34, 4096]** — multi-u128 coefficient path with mixed-precision promotion + narrowing-warning rounding (per `design/numeric-types.md` lines 65–78). Polish + audit + v0.1.0 tag.
+`import` / `export`, root-relative paths, aliases with `as`, duplicate-name compile error. Doc comments (`///`) parsed and preserved on signatures. Sensitive type modifier (auto-redact in print output). Concurrency keywords (`wait`, `background`) parse and type-check, run sequentially. **Bignum `number<N>` for N ∈ (34, 4096]** — multi-u128 coefficient path with mixed-precision promotion + narrowing-warning rounding (per `design/numeric-types.md` lines 65–78). Polish + audit + v0.1.0 tag.
 **Flag**: N/A
-**Status**: planned
+**Status**: active
 **Depends on**: M7
-**Non-negotiable carry-from-M2**: `number[N]` for N > 34 is patrick's load-bearing v0.1 promise (exact decimal at any reasonable precision). M2 reserves the syntax and emits a three-part error pointing here. M8 must close the loop before v0.1.0 ships — if M8 has to drop something, it isn't this.
+**Non-negotiable carry-from-M2**: `number<N>` for N > 34 is patrick's load-bearing v0.1 promise (exact decimal at any reasonable precision). M2 reserved the syntax; P0 migrated to angle-bracket form. M8 must close the loop before v0.1.0 ships — if M8 has to drop something, it isn't this.
 
 ---
 

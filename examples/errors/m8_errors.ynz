@@ -1,0 +1,25 @@
+// examples/errors/m8_errors.ynz
+//
+// Intentional compile-error gallery for M8: modules, doc comments, sensitive,
+// concurrency keywords, bignum, and the number[N] → number<N> migration.
+// Each trigger is wrapped in its own function so errors stay isolated.
+//
+// USAGE: Run with `ynz run examples/errors/m8_errors.ynz --max-errors 100`
+// to see every M8 diagnostic class at once (Yinz multi-errors up to 50/compile).
+// Uncomment the trigger body inside each function to activate the diagnostic.
+
+// ────── P0: number syntax migration ──────
+
+// WHY: `number[N]` is the pre-M5 syntax. Parser must reject it with a
+// migration diagnostic pointing at `number<N>`. Guards the syntax migration gate.
+function p0_number_bracket_migration() -> nothing {
+    // Uncomment to trigger "Use angle brackets for number<N>, not square brackets":
+    // let x: number[100] = 1.0
+}
+
+// WHY: `number<5000>` exceeds the 4096-digit cap. Compiler must reject it.
+// This guards the precision upper-bound invariant.
+function p0_number_over_cap() -> nothing {
+    // Uncomment to trigger "number<5000> is not available yet":
+    // let x: number<5000> = 0.0
+}

@@ -12,7 +12,12 @@ use ynz_parser::{parse_query, CompilerDb, SourceFile};
 // ── M5 parse helpers ─────────────────────────────────────────────────────────
 fn parse_fn_body(source: &str) -> Vec<Stmt> {
     let output = parse(source);
-    assert_eq!(output.diagnostics.len(), 0, "unexpected diagnostics: {:?}", output.diagnostics);
+    assert_eq!(
+        output.diagnostics.len(),
+        0,
+        "unexpected diagnostics: {:?}",
+        output.diagnostics
+    );
     match &output.module.items[0] {
         Item::Function(f) => f.body.stmts.clone(),
         Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function"),
@@ -36,7 +41,6 @@ fn parse(source: &str) -> ynz_parser::ParseOutput {
     (*output).clone()
 }
 
-
 #[test]
 fn m3_stmt_variant_count_locked() {
     // WHY: Stmt variants beyond the M3 set are M4+ work. This test pins the count.
@@ -49,7 +53,10 @@ fn m3_stmt_variant_count_locked() {
     //   If(4), Match(5), While(6), For(7), Return(8). Total: 8.
     use ynz_ast::nodes::Stmt::*;
     let err = ynz_ast::nodes::Expr::Error(span(0, 0));
-    let empty_block = ynz_ast::nodes::Block { stmts: vec![], span: span(0, 0) };
+    let empty_block = ynz_ast::nodes::Block {
+        stmts: vec![],
+        span: span(0, 0),
+    };
     let all_variants: &[Stmt] = &[
         Expr(err.clone()),
         Let {
@@ -94,7 +101,11 @@ fn m3_stmt_variant_count_locked() {
             span: span(0, 0),
         },
     ];
-    assert_eq!(all_variants.len(), 8, "Stmt variant count changed from 8 — add a // test-ratchet: comment");
+    assert_eq!(
+        all_variants.len(),
+        8,
+        "Stmt variant count changed from 8 — add a // test-ratchet: comment"
+    );
 }
 
 #[test]
@@ -110,10 +121,17 @@ fn m3_match_pattern_kind_variant_count_locked() {
     use ynz_ast::nodes::MatchPatternKind::*;
     let all_variants: &[MatchPatternKind] = &[
         Value(ynz_ast::nodes::Expr::Error(span(0, 0))),
-        Is(ynz_ast::nodes::TypePath { name: "Foo".into(), span: span(0, 3) }),
+        Is(ynz_ast::nodes::TypePath {
+            name: "Foo".into(),
+            span: span(0, 3),
+        }),
         OptionName("bar".into()),
     ];
-    assert_eq!(all_variants.len(), 3, "MatchPatternKind variant count changed from 3");
+    assert_eq!(
+        all_variants.len(),
+        3,
+        "MatchPatternKind variant count changed from 3"
+    );
 }
 
 #[test]
@@ -184,9 +202,16 @@ fn m3_type_variant_count_locked() {
         Float,
         Number { precision: 34 },
         Bool,
-        Range { element: Box::new(Int), end_inclusive: false },
+        Range {
+            element: Box::new(Int),
+            end_inclusive: false,
+        },
     ];
-    assert_eq!(all_variants.len(), 8, "Type variant count changed from 8 — add a // test-ratchet: comment");
+    assert_eq!(
+        all_variants.len(),
+        8,
+        "Type variant count changed from 8 — add a // test-ratchet: comment"
+    );
 }
 
 // ── M4 variant count ratchets ────────────────────────────────────────────────
@@ -199,7 +224,10 @@ fn m4_item_variant_count_locked() {
     // test-ratchet: M1 adds 1 variant: Function(1).
     // test-ratchet: M4 adds 1 variant: ShapeDecl(2).
     use ynz_ast::nodes::{Block, FunctionDecl, Item, ShapeDecl, Type};
-    let empty_block = Block { stmts: vec![], span: span(0, 0) };
+    let empty_block = Block {
+        stmts: vec![],
+        span: span(0, 0),
+    };
     let all_variants: &[Item] = &[
         Item::Function(FunctionDecl {
             name: "f".into(),
@@ -225,7 +253,11 @@ fn m4_item_variant_count_locked() {
             span: span(0, 0),
         }),
     ];
-    assert_eq!(all_variants.len(), 2, "Item variant count changed from 2 — add a // test-ratchet: comment");
+    assert_eq!(
+        all_variants.len(),
+        2,
+        "Item variant count changed from 2 — add a // test-ratchet: comment"
+    );
 }
 
 #[test]
@@ -235,19 +267,64 @@ fn m4_stmt_variant_count_locked() {
     // test-ratchet: M4 adds 1 variant over M3's 8: FieldAssign(9).
     use ynz_ast::nodes::Stmt::*;
     let err = ynz_ast::nodes::Expr::Error(span(0, 0));
-    let empty_block = ynz_ast::nodes::Block { stmts: vec![], span: span(0, 0) };
+    let empty_block = ynz_ast::nodes::Block {
+        stmts: vec![],
+        span: span(0, 0),
+    };
     let all_variants: &[Stmt] = &[
         Expr(err.clone()),
-        Let { is_const: false, name: String::new(), name_span: span(0, 0), ty: None, value: err.clone(), span: span(0, 0) },
-        Assign { target: String::new(), target_span: span(0, 0), value: err.clone(), span: span(0, 0) },
-        If { cond: err.clone(), body: empty_block.clone(), span: span(0, 0) },
-        Match { scrutinee: err.clone(), arms: vec![], else_arm: None, span: span(0, 0) },
-        While { cond: err.clone(), body: empty_block.clone(), span: span(0, 0) },
-        For { var: String::new(), var_span: span(0, 0), iter: err.clone(), body: empty_block.clone(), span: span(0, 0) },
-        Return { value: None, span: span(0, 0) },
-        FieldAssign { target: Box::new(err.clone()), value: err.clone(), span: span(0, 0) },
+        Let {
+            is_const: false,
+            name: String::new(),
+            name_span: span(0, 0),
+            ty: None,
+            value: err.clone(),
+            span: span(0, 0),
+        },
+        Assign {
+            target: String::new(),
+            target_span: span(0, 0),
+            value: err.clone(),
+            span: span(0, 0),
+        },
+        If {
+            cond: err.clone(),
+            body: empty_block.clone(),
+            span: span(0, 0),
+        },
+        Match {
+            scrutinee: err.clone(),
+            arms: vec![],
+            else_arm: None,
+            span: span(0, 0),
+        },
+        While {
+            cond: err.clone(),
+            body: empty_block.clone(),
+            span: span(0, 0),
+        },
+        For {
+            var: String::new(),
+            var_span: span(0, 0),
+            iter: err.clone(),
+            body: empty_block.clone(),
+            span: span(0, 0),
+        },
+        Return {
+            value: None,
+            span: span(0, 0),
+        },
+        FieldAssign {
+            target: Box::new(err.clone()),
+            value: err.clone(),
+            span: span(0, 0),
+        },
     ];
-    assert_eq!(all_variants.len(), 9, "Stmt variant count changed from 9 — add a // test-ratchet: comment");
+    assert_eq!(
+        all_variants.len(),
+        9,
+        "Stmt variant count changed from 9 — add a // test-ratchet: comment"
+    );
 }
 
 #[test]
@@ -260,20 +337,56 @@ fn m4_expr_variant_count_locked() {
     let all_variants: &[ynz_ast::nodes::Expr] = &[
         Ident("x".into(), span(0, 1)),
         StringLit(vec![], span(0, 0)),
-        Call(Box::new(ynz_ast::nodes::CallExpr { callee: Ident("f".into(), span(0, 1)), type_args: None, args: vec![], span: span(0, 3) })),
+        Call(Box::new(ynz_ast::nodes::CallExpr {
+            callee: Ident("f".into(), span(0, 1)),
+            type_args: None,
+            args: vec![],
+            span: span(0, 3),
+        })),
         Error(span(0, 0)),
         IntLit(0, span(0, 1)),
         NumberLit("0".into(), span(0, 1)),
         BoolLit(true, span(0, 4)),
-        BinOp { op: BinOpKind::Add, lhs: err(), rhs: err(), span: span(0, 0) },
-        UnaryOp { op: ynz_ast::nodes::UnaryOpKind::Neg, operand: err(), span: span(0, 0) },
-        MethodCall { receiver: err(), method: "m".into(), method_span: span(0, 1), args: vec![], span: span(0, 0) },
-        FieldAccess { receiver: err(), field: "f".into(), field_span: span(0, 1), span: span(0, 0) },
-        StructLit { fields: vec![], span: span(0, 0) },
-        PostfixOp { receiver: err(), op: PostfixOpKind::Copy, span: span(0, 0) },
+        BinOp {
+            op: BinOpKind::Add,
+            lhs: err(),
+            rhs: err(),
+            span: span(0, 0),
+        },
+        UnaryOp {
+            op: ynz_ast::nodes::UnaryOpKind::Neg,
+            operand: err(),
+            span: span(0, 0),
+        },
+        MethodCall {
+            receiver: err(),
+            method: "m".into(),
+            method_span: span(0, 1),
+            args: vec![],
+            span: span(0, 0),
+        },
+        FieldAccess {
+            receiver: err(),
+            field: "f".into(),
+            field_span: span(0, 1),
+            span: span(0, 0),
+        },
+        StructLit {
+            fields: vec![],
+            span: span(0, 0),
+        },
+        PostfixOp {
+            receiver: err(),
+            op: PostfixOpKind::Copy,
+            span: span(0, 0),
+        },
         SelfValue { span: span(0, 0) },
     ];
-    assert_eq!(all_variants.len(), 14, "Expr variant count changed from 14 — add a // test-ratchet: comment");
+    assert_eq!(
+        all_variants.len(),
+        14,
+        "Expr variant count changed from 14 — add a // test-ratchet: comment"
+    );
 }
 
 #[test]
@@ -290,11 +403,21 @@ fn m4_type_variant_count_locked() {
         Float,
         Number { precision: 34 },
         Bool,
-        Range { element: Box::new(Int), end_inclusive: false },
-        Dynamic { contract: "Foo".into(), span: span(0, 3) },
+        Range {
+            element: Box::new(Int),
+            end_inclusive: false,
+        },
+        Dynamic {
+            contract: "Foo".into(),
+            span: span(0, 3),
+        },
         SelfType { span: span(0, 4) },
     ];
-    assert_eq!(all_variants.len(), 10, "Type variant count changed from 10 — add a // test-ratchet: comment");
+    assert_eq!(
+        all_variants.len(),
+        10,
+        "Type variant count changed from 10 — add a // test-ratchet: comment"
+    );
 }
 
 // ── M5 variant-count locks ───────────────────────────────────────────────────
@@ -306,20 +429,70 @@ fn m5_stmt_variant_count_locked() {
     // test-ratchet: M5 adds 1 variant over M4's 9: IndexAssign(10).
     use ynz_ast::nodes::Stmt::*;
     let err = ynz_ast::nodes::Expr::Error(span(0, 0));
-    let empty_block = ynz_ast::nodes::Block { stmts: vec![], span: span(0, 0) };
+    let empty_block = ynz_ast::nodes::Block {
+        stmts: vec![],
+        span: span(0, 0),
+    };
     let all_variants: &[Stmt] = &[
         Expr(err.clone()),
-        Let { is_const: false, name: String::new(), name_span: span(0, 0), ty: None, value: err.clone(), span: span(0, 0) },
-        Assign { target: String::new(), target_span: span(0, 0), value: err.clone(), span: span(0, 0) },
-        If { cond: err.clone(), body: empty_block.clone(), span: span(0, 0) },
-        Match { scrutinee: err.clone(), arms: vec![], else_arm: None, span: span(0, 0) },
-        While { cond: err.clone(), body: empty_block.clone(), span: span(0, 0) },
-        For { var: String::new(), var_span: span(0, 0), iter: err.clone(), body: empty_block.clone(), span: span(0, 0) },
-        Return { value: None, span: span(0, 0) },
-        FieldAssign { target: Box::new(err.clone()), value: err.clone(), span: span(0, 0) },
-        IndexAssign { receiver: Box::new(err.clone()), index: Box::new(err.clone()), value: err.clone(), span: span(0, 0) },
+        Let {
+            is_const: false,
+            name: String::new(),
+            name_span: span(0, 0),
+            ty: None,
+            value: err.clone(),
+            span: span(0, 0),
+        },
+        Assign {
+            target: String::new(),
+            target_span: span(0, 0),
+            value: err.clone(),
+            span: span(0, 0),
+        },
+        If {
+            cond: err.clone(),
+            body: empty_block.clone(),
+            span: span(0, 0),
+        },
+        Match {
+            scrutinee: err.clone(),
+            arms: vec![],
+            else_arm: None,
+            span: span(0, 0),
+        },
+        While {
+            cond: err.clone(),
+            body: empty_block.clone(),
+            span: span(0, 0),
+        },
+        For {
+            var: String::new(),
+            var_span: span(0, 0),
+            iter: err.clone(),
+            body: empty_block.clone(),
+            span: span(0, 0),
+        },
+        Return {
+            value: None,
+            span: span(0, 0),
+        },
+        FieldAssign {
+            target: Box::new(err.clone()),
+            value: err.clone(),
+            span: span(0, 0),
+        },
+        IndexAssign {
+            receiver: Box::new(err.clone()),
+            index: Box::new(err.clone()),
+            value: err.clone(),
+            span: span(0, 0),
+        },
     ];
-    assert_eq!(all_variants.len(), 10, "Stmt variant count changed from 10 — add a // test-ratchet: comment");
+    assert_eq!(
+        all_variants.len(),
+        10,
+        "Stmt variant count changed from 10 — add a // test-ratchet: comment"
+    );
 }
 
 #[test]
@@ -333,24 +506,70 @@ fn m5_expr_variant_count_locked() {
     let all_variants: &[ynz_ast::nodes::Expr] = &[
         Ident("x".into(), span(0, 1)),
         StringLit(vec![], span(0, 0)),
-        Call(Box::new(ynz_ast::nodes::CallExpr { callee: Ident("f".into(), span(0, 1)), type_args: None, args: vec![], span: span(0, 3) })),
+        Call(Box::new(ynz_ast::nodes::CallExpr {
+            callee: Ident("f".into(), span(0, 1)),
+            type_args: None,
+            args: vec![],
+            span: span(0, 3),
+        })),
         Error(span(0, 0)),
         IntLit(0, span(0, 1)),
         NumberLit("0".into(), span(0, 1)),
         BoolLit(true, span(0, 4)),
-        BinOp { op: BinOpKind::Add, lhs: err(), rhs: err(), span: span(0, 0) },
-        UnaryOp { op: ynz_ast::nodes::UnaryOpKind::Neg, operand: err(), span: span(0, 0) },
-        MethodCall { receiver: err(), method: "m".into(), method_span: span(0, 1), args: vec![], span: span(0, 0) },
-        FieldAccess { receiver: err(), field: "f".into(), field_span: span(0, 1), span: span(0, 0) },
-        StructLit { fields: vec![], span: span(0, 0) },
-        PostfixOp { receiver: err(), op: PostfixOpKind::Copy, span: span(0, 0) },
+        BinOp {
+            op: BinOpKind::Add,
+            lhs: err(),
+            rhs: err(),
+            span: span(0, 0),
+        },
+        UnaryOp {
+            op: ynz_ast::nodes::UnaryOpKind::Neg,
+            operand: err(),
+            span: span(0, 0),
+        },
+        MethodCall {
+            receiver: err(),
+            method: "m".into(),
+            method_span: span(0, 1),
+            args: vec![],
+            span: span(0, 0),
+        },
+        FieldAccess {
+            receiver: err(),
+            field: "f".into(),
+            field_span: span(0, 1),
+            span: span(0, 0),
+        },
+        StructLit {
+            fields: vec![],
+            span: span(0, 0),
+        },
+        PostfixOp {
+            receiver: err(),
+            op: PostfixOpKind::Copy,
+            span: span(0, 0),
+        },
         SelfValue { span: span(0, 0) },
         NoneLit { span: span(0, 0) },
-        IndexAccess { receiver: err(), index: err(), span: span(0, 0) },
-        ArrayLit { elements: vec![], span: span(0, 0) },
-        MapLit { entries: vec![], span: span(0, 0) },
+        IndexAccess {
+            receiver: err(),
+            index: err(),
+            span: span(0, 0),
+        },
+        ArrayLit {
+            elements: vec![],
+            span: span(0, 0),
+        },
+        MapLit {
+            entries: vec![],
+            span: span(0, 0),
+        },
     ];
-    assert_eq!(all_variants.len(), 18, "Expr variant count changed from 18 — add a // test-ratchet: comment");
+    assert_eq!(
+        all_variants.len(),
+        18,
+        "Expr variant count changed from 18 — add a // test-ratchet: comment"
+    );
 }
 
 #[test]
@@ -363,25 +582,78 @@ fn m6_expr_variant_count_locked() {
     let all_variants: &[ynz_ast::nodes::Expr] = &[
         Ident("x".into(), span(0, 1)),
         StringLit(vec![], span(0, 0)),
-        Call(Box::new(ynz_ast::nodes::CallExpr { callee: Ident("f".into(), span(0, 1)), type_args: None, args: vec![], span: span(0, 3) })),
+        Call(Box::new(ynz_ast::nodes::CallExpr {
+            callee: Ident("f".into(), span(0, 1)),
+            type_args: None,
+            args: vec![],
+            span: span(0, 3),
+        })),
         Error(span(0, 0)),
         IntLit(0, span(0, 1)),
         NumberLit("0".into(), span(0, 1)),
         BoolLit(true, span(0, 4)),
-        BinOp { op: BinOpKind::Add, lhs: err(), rhs: err(), span: span(0, 0) },
-        UnaryOp { op: ynz_ast::nodes::UnaryOpKind::Neg, operand: err(), span: span(0, 0) },
-        MethodCall { receiver: err(), method: "m".into(), method_span: span(0, 1), args: vec![], span: span(0, 0) },
-        FieldAccess { receiver: err(), field: "f".into(), field_span: span(0, 1), span: span(0, 0) },
-        StructLit { fields: vec![], span: span(0, 0) },
-        PostfixOp { receiver: err(), op: PostfixOpKind::Copy, span: span(0, 0) },
+        BinOp {
+            op: BinOpKind::Add,
+            lhs: err(),
+            rhs: err(),
+            span: span(0, 0),
+        },
+        UnaryOp {
+            op: ynz_ast::nodes::UnaryOpKind::Neg,
+            operand: err(),
+            span: span(0, 0),
+        },
+        MethodCall {
+            receiver: err(),
+            method: "m".into(),
+            method_span: span(0, 1),
+            args: vec![],
+            span: span(0, 0),
+        },
+        FieldAccess {
+            receiver: err(),
+            field: "f".into(),
+            field_span: span(0, 1),
+            span: span(0, 0),
+        },
+        StructLit {
+            fields: vec![],
+            span: span(0, 0),
+        },
+        PostfixOp {
+            receiver: err(),
+            op: PostfixOpKind::Copy,
+            span: span(0, 0),
+        },
         SelfValue { span: span(0, 0) },
         NoneLit { span: span(0, 0) },
-        IndexAccess { receiver: err(), index: err(), span: span(0, 0) },
-        ArrayLit { elements: vec![], span: span(0, 0) },
-        MapLit { entries: vec![], span: span(0, 0) },
-        Is { expr: err(), ty: ynz_ast::nodes::TypePath { name: "Foo".into(), span: span(0, 3) }, span: span(0, 0) },
+        IndexAccess {
+            receiver: err(),
+            index: err(),
+            span: span(0, 0),
+        },
+        ArrayLit {
+            elements: vec![],
+            span: span(0, 0),
+        },
+        MapLit {
+            entries: vec![],
+            span: span(0, 0),
+        },
+        Is {
+            expr: err(),
+            ty: ynz_ast::nodes::TypePath {
+                name: "Foo".into(),
+                span: span(0, 3),
+            },
+            span: span(0, 0),
+        },
     ];
-    assert_eq!(all_variants.len(), 19, "Expr variant count changed from 19 — add a // test-ratchet: comment");
+    assert_eq!(
+        all_variants.len(),
+        19,
+        "Expr variant count changed from 19 — add a // test-ratchet: comment"
+    );
 }
 
 #[test]
@@ -398,14 +670,35 @@ fn m5_type_variant_count_locked() {
         Float,
         Number { precision: 34 },
         Bool,
-        Range { element: Box::new(Int), end_inclusive: false },
-        Dynamic { contract: "Foo".into(), span: span(0, 3) },
+        Range {
+            element: Box::new(Int),
+            end_inclusive: false,
+        },
+        Dynamic {
+            contract: "Foo".into(),
+            span: span(0, 3),
+        },
         SelfType { span: span(0, 4) },
-        TypeParam { name: "T".into(), span: span(0, 1) },
-        Generic { name: "array".into(), name_span: span(0, 5), args: vec![Int], span: span(0, 10) },
-        Maybe { inner: Box::new(Int), span: span(0, 9) },
+        TypeParam {
+            name: "T".into(),
+            span: span(0, 1),
+        },
+        Generic {
+            name: "array".into(),
+            name_span: span(0, 5),
+            args: vec![Int],
+            span: span(0, 10),
+        },
+        Maybe {
+            inner: Box::new(Int),
+            span: span(0, 9),
+        },
     ];
-    assert_eq!(all_variants.len(), 13, "Type variant count changed from 13 — add a // test-ratchet: comment");
+    assert_eq!(
+        all_variants.len(),
+        13,
+        "Type variant count changed from 13 — add a // test-ratchet: comment"
+    );
 }
 
 // ── M6 variant-count locks ───────────────────────────────────────────────────
@@ -419,22 +712,43 @@ fn m6_item_variant_count_locked() {
     use ynz_ast::nodes::Item::*;
     let all_variants: &[Item] = &[
         Function(ynz_ast::nodes::FunctionDecl {
-            name: String::new(), name_span: span(0, 0), generics: vec![], params: vec![],
+            name: String::new(),
+            name_span: span(0, 0),
+            generics: vec![],
+            params: vec![],
             return_type: Type::Nothing,
-            body: ynz_ast::nodes::Block { stmts: vec![], span: span(0, 0) },
+            body: ynz_ast::nodes::Block {
+                stmts: vec![],
+                span: span(0, 0),
+            },
             span: span(0, 0),
             // test-ratchet: M7 P1 adds errors_capable field to FunctionDecl
             errors_capable: false,
         }),
         ShapeDecl(ynz_ast::nodes::ShapeDecl {
-            name: String::new(), name_span: span(0, 0), is_base: false, generics: vec![],
-            extends: None, follows: vec![], fields: vec![], contract_sigs: vec![], alias_ty: None, span: span(0, 0),
+            name: String::new(),
+            name_span: span(0, 0),
+            is_base: false,
+            generics: vec![],
+            extends: None,
+            follows: vec![],
+            fields: vec![],
+            contract_sigs: vec![],
+            alias_ty: None,
+            span: span(0, 0),
         }),
         OptionsDecl(ynz_ast::nodes::OptionsDecl {
-            name: "Status".into(), name_span: span(0, 6), variants: vec![], span: span(0, 20),
+            name: "Status".into(),
+            name_span: span(0, 6),
+            variants: vec![],
+            span: span(0, 20),
         }),
     ];
-    assert_eq!(all_variants.len(), 3, "Item variant count changed from 3 — add a // test-ratchet: comment");
+    assert_eq!(
+        all_variants.len(),
+        3,
+        "Item variant count changed from 3 — add a // test-ratchet: comment"
+    );
 }
 
 #[test]
@@ -444,17 +758,46 @@ fn m6_type_variant_count_locked() {
     // test-ratchet: M6 adds Union(14) for `A | B | C` union type syntax.
     use ynz_ast::nodes::Type::*;
     let all_variants: &[Type] = &[
-        Nothing, Named("foo".into(), span(0, 3)), Error, Int, Float,
-        Number { precision: 34 }, Bool,
-        Range { element: Box::new(Int), end_inclusive: false },
-        Dynamic { contract: "Foo".into(), span: span(0, 3) },
+        Nothing,
+        Named("foo".into(), span(0, 3)),
+        Error,
+        Int,
+        Float,
+        Number { precision: 34 },
+        Bool,
+        Range {
+            element: Box::new(Int),
+            end_inclusive: false,
+        },
+        Dynamic {
+            contract: "Foo".into(),
+            span: span(0, 3),
+        },
         SelfType { span: span(0, 4) },
-        TypeParam { name: "T".into(), span: span(0, 1) },
-        Generic { name: "array".into(), name_span: span(0, 5), args: vec![Int], span: span(0, 10) },
-        Maybe { inner: Box::new(Int), span: span(0, 9) },
-        Union { variants: vec![Int, Float], span: span(0, 10) },
+        TypeParam {
+            name: "T".into(),
+            span: span(0, 1),
+        },
+        Generic {
+            name: "array".into(),
+            name_span: span(0, 5),
+            args: vec![Int],
+            span: span(0, 10),
+        },
+        Maybe {
+            inner: Box::new(Int),
+            span: span(0, 9),
+        },
+        Union {
+            variants: vec![Int, Float],
+            span: span(0, 10),
+        },
     ];
-    assert_eq!(all_variants.len(), 14, "Type variant count changed from 14 — add a // test-ratchet: comment");
+    assert_eq!(
+        all_variants.len(),
+        14,
+        "Type variant count changed from 14 — add a // test-ratchet: comment"
+    );
 }
 
 // ── M6 parse tests ───────────────────────────────────────────────────────────
@@ -464,7 +807,12 @@ fn m6_options_decl_parses() {
     // WHY: The simplest valid options declaration must parse into OptionsDecl with
     // the correct variant list. If this fails, every options-using program fails.
     let output = parse("options Status { active, inactive, banned }");
-    assert_eq!(output.diagnostics.len(), 0, "unexpected diagnostics: {:?}", output.diagnostics);
+    assert_eq!(
+        output.diagnostics.len(),
+        0,
+        "unexpected diagnostics: {:?}",
+        output.diagnostics
+    );
     match &output.module.items[0] {
         Item::OptionsDecl(o) => {
             assert_eq!(o.name, "Status");
@@ -482,7 +830,11 @@ fn m6_options_decl_empty_body_parses_tolerantly() {
     // WHY: Empty options body must parse (typeck rejects it with a teaching error).
     // If the parser panics or produces 0 items, typeck never gets the chance to teach.
     let output = parse("options Empty { }");
-    assert_eq!(output.module.items.len(), 1, "expected 1 item (OptionsDecl) even for empty body");
+    assert_eq!(
+        output.module.items.len(),
+        1,
+        "expected 1 item (OptionsDecl) even for empty body"
+    );
     match &output.module.items[0] {
         Item::OptionsDecl(o) => {
             assert_eq!(o.name, "Empty");
@@ -498,7 +850,10 @@ fn m6_union_type_in_return_position_parses() {
     // If it produces two separate Named types, union narrowing is never reachable.
     let stmts = parse_fn_body(&wrap("let x: Circle | Square = { radius: 5.0 }"));
     match &stmts[0] {
-        ynz_ast::nodes::Stmt::Let { ty: Some(Type::Union { variants, .. }), .. } => {
+        ynz_ast::nodes::Stmt::Let {
+            ty: Some(Type::Union { variants, .. }),
+            ..
+        } => {
             assert_eq!(variants.len(), 2, "expected 2 union variants");
         }
         other => panic!("expected Let with Union type, got {other:?}"),
@@ -511,7 +866,10 @@ fn m6_union_type_three_variants_parses() {
     // not nested two-variant unions. Codegen relies on the flat list for tag assignment.
     let stmts = parse_fn_body(&wrap("let x: Circle | Square | Triangle = { radius: 5.0 }"));
     match &stmts[0] {
-        ynz_ast::nodes::Stmt::Let { ty: Some(Type::Union { variants, .. }), .. } => {
+        ynz_ast::nodes::Stmt::Let {
+            ty: Some(Type::Union { variants, .. }),
+            ..
+        } => {
             assert_eq!(variants.len(), 3, "expected 3 union variants in flat list");
         }
         other => panic!("expected Let with Union type, got {other:?}"),
@@ -537,12 +895,16 @@ fn m6_is_arm_produces_is_pattern() {
     };
     let is_arm_found = func.body.stmts.iter().any(|stmt| {
         if let ynz_ast::nodes::Stmt::Match { arms, .. } = stmt {
-            arms.iter().any(|arm| matches!(&arm.pattern.kind, MatchPatternKind::Is(_)))
+            arms.iter()
+                .any(|arm| matches!(&arm.pattern.kind, MatchPatternKind::Is(_)))
         } else {
             false
         }
     });
-    assert!(is_arm_found, "expected at least one MatchPatternKind::Is arm");
+    assert!(
+        is_arm_found,
+        "expected at least one MatchPatternKind::Is arm"
+    );
 }
 
 // ── M4 parse tests ───────────────────────────────────────────────────────────
@@ -552,7 +914,11 @@ fn shape_declaration_parses() {
     // WHY: The simplest valid shape must parse cleanly. If this fails,
     // every downstream shape test is meaningless.
     let output = parse("shape Player { name: string\n health: int }");
-    assert_eq!(output.diagnostics.len(), 0, "Simple shape must parse with 0 diagnostics");
+    assert_eq!(
+        output.diagnostics.len(),
+        0,
+        "Simple shape must parse with 0 diagnostics"
+    );
     assert!(
         matches!(&output.module.items[0], Item::ShapeDecl(s) if s.name == "Player"),
         "Expected ShapeDecl(Player)"
@@ -593,7 +959,10 @@ fn shape_with_extends_and_follows_parses() {
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::ShapeDecl(s) => {
-            assert!(s.extends.as_ref().is_some_and(|(n, _)| n == "Entity"), "Expected extends=Entity");
+            assert!(
+                s.extends.as_ref().is_some_and(|(n, _)| n == "Entity"),
+                "Expected extends=Entity"
+            );
             assert_eq!(s.follows.len(), 1);
             assert_eq!(s.follows[0].0, "Damageable");
         }
@@ -626,7 +995,10 @@ fn contract_sig_in_shape_parses() {
             assert_eq!(s.fields.len(), 0, "No data fields");
             assert_eq!(s.contract_sigs.len(), 1, "Expected 1 contract sig");
             assert_eq!(s.contract_sigs[0].name, "greet");
-            assert!(matches!(s.contract_sigs[0].receiver, Some(ynz_ast::nodes::ReceiverKind::Share)));
+            assert!(matches!(
+                s.contract_sigs[0].receiver,
+                Some(ynz_ast::nodes::ReceiverKind::Share)
+            ));
         }
         _ => panic!("expected ShapeDecl"),
     }
@@ -644,7 +1016,10 @@ fn anonymous_struct_lit_parses() {
         Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
-        Stmt::Let { value: ynz_ast::nodes::Expr::StructLit { fields, .. }, .. } => {
+        Stmt::Let {
+            value: ynz_ast::nodes::Expr::StructLit { fields, .. },
+            ..
+        } => {
             assert_eq!(fields.len(), 1, "Expected 1 field");
             assert_eq!(fields[0].name, "name");
         }
@@ -663,7 +1038,10 @@ fn field_access_parses() {
         Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
-        Stmt::Let { value: ynz_ast::nodes::Expr::FieldAccess { field, .. }, .. } => {
+        Stmt::Let {
+            value: ynz_ast::nodes::Expr::FieldAccess { field, .. },
+            ..
+        } => {
             assert_eq!(field, "health");
         }
         other => panic!("Expected Let with FieldAccess, got {other:?}"),
@@ -681,8 +1059,14 @@ fn field_assignment_parses() {
         Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
-        Stmt::FieldAssign { target, value: ynz_ast::nodes::Expr::IntLit(50, _), .. } => {
-            assert!(matches!(**target, ynz_ast::nodes::Expr::FieldAccess { ref field, .. } if field == "health"));
+        Stmt::FieldAssign {
+            target,
+            value: ynz_ast::nodes::Expr::IntLit(50, _),
+            ..
+        } => {
+            assert!(
+                matches!(**target, ynz_ast::nodes::Expr::FieldAccess { ref field, .. } if field == "health")
+            );
         }
         other => panic!("Expected FieldAssign, got {other:?}"),
     }
@@ -699,7 +1083,14 @@ fn copy_postfix_op_parses() {
         Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
-        Stmt::Let { value: ynz_ast::nodes::Expr::PostfixOp { op: ynz_ast::nodes::PostfixOpKind::Copy, .. }, .. } => {}
+        Stmt::Let {
+            value:
+                ynz_ast::nodes::Expr::PostfixOp {
+                    op: ynz_ast::nodes::PostfixOpKind::Copy,
+                    ..
+                },
+            ..
+        } => {}
         other => panic!("Expected Let with PostfixOp(Copy), got {other:?}"),
     }
 }
@@ -714,7 +1105,10 @@ fn freeze_postfix_op_parses() {
         Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
-        Stmt::Expr(ynz_ast::nodes::Expr::PostfixOp { op: ynz_ast::nodes::PostfixOpKind::Freeze, .. }) => {}
+        Stmt::Expr(ynz_ast::nodes::Expr::PostfixOp {
+            op: ynz_ast::nodes::PostfixOpKind::Freeze,
+            ..
+        }) => {}
         other => panic!("Expected Expr(PostfixOp(Freeze)), got {other:?}"),
     }
 }
@@ -730,7 +1124,10 @@ fn dynamic_type_in_type_position_parses() {
         Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
-        Stmt::Let { ty: Some(ynz_ast::nodes::Type::Dynamic { contract, .. }), .. } => {
+        Stmt::Let {
+            ty: Some(ynz_ast::nodes::Type::Dynamic { contract, .. }),
+            ..
+        } => {
             assert_eq!(contract, "Foo");
         }
         other => panic!("Expected Let with Type::Dynamic, got {other:?}"),
@@ -786,7 +1183,10 @@ fn self_value_in_function_body_parses() {
     };
     match &body.stmts[0] {
         Stmt::Expr(ynz_ast::nodes::Expr::Call(c)) => {
-            assert!(matches!(c.args[0], ynz_ast::nodes::Expr::SelfValue { .. }), "Arg must be SelfValue");
+            assert!(
+                matches!(c.args[0], ynz_ast::nodes::Expr::SelfValue { .. }),
+                "Arg must be SelfValue"
+            );
         }
         other => panic!("Expected Expr(Call) with SelfValue arg, got {other:?}"),
     }
@@ -799,10 +1199,13 @@ fn m4_parse_snapshot() {
     // test-ratchet: M7 P1 — migrated to backtick syntax
     let source = "shape Player {\n  name: string\n  health: int\n  hidden cache: int\n}\n\nfunction greet(share self: Player) -> string {\n  return self.name\n}\n\nfunction entrypoint() -> nothing {\n  let p: Player = { name: `Patrick`, health: 100 }\n  p.health = 90\n  let h = p.health\n  let b = p.copy()\n}";
     let output = parse(source);
-    assert_eq!(output.diagnostics.len(), 0, "M4 fixture must parse with 0 diagnostics");
+    assert_eq!(
+        output.diagnostics.len(),
+        0,
+        "M4 fixture must parse with 0 diagnostics"
+    );
     assert_debug_snapshot!("m4_ast", output.module);
 }
-
 
 #[test]
 fn m1_source_parses_to_expected_ast() {
@@ -818,7 +1221,6 @@ fn m1_source_parses_to_expected_ast() {
     );
     assert_debug_snapshot!("m1_ast", output.module);
 }
-
 
 #[test]
 fn m2_source_parses_to_expected_ast() {
@@ -841,7 +1243,6 @@ fn m2_source_parses_to_expected_ast() {
     assert_debug_snapshot!("m2_ast", output.module);
 }
 
-
 #[test]
 fn type_annotations_parse_correctly() {
     // WHY: `let x: int = 1` needs to produce Type::Int, not Type::Named("int").
@@ -853,7 +1254,10 @@ fn type_annotations_parse_correctly() {
         Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
-        Stmt::Let { ty: Some(Type::Int), .. } => {}
+        Stmt::Let {
+            ty: Some(Type::Int),
+            ..
+        } => {}
         other => panic!("Expected Let with Type::Int, got {other:?}"),
     }
 }
@@ -868,28 +1272,86 @@ fn number_type_without_brackets_is_34_precision() {
         Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
-        Stmt::Let { ty: Some(Type::Number { precision: 34 }), .. } => {}
+        Stmt::Let {
+            ty: Some(Type::Number { precision: 34 }),
+            ..
+        } => {}
         other => panic!("Expected Let with Type::Number{{34}}, got {other:?}"),
     }
 }
 
 #[test]
-fn number_n_not_34_produces_deferral_diagnostic() {
-    // WHY: `number[128]` is reserved but not yet implemented. The parser must
-    // emit a deferral diagnostic pointing at v0.8, not silently accept it.
+fn number_bracket_syntax_produces_migration_diagnostic() {
+    // WHY: M5 unified all generic syntax on `<>`. `number[N]` is the pre-M5 form;
+    // the parser must reject it with a teaching migration diagnostic, not silently
+    // parse it or emit the old deferral. This guards against the old bracket form
+    // slipping back in if parse_number_type is refactored.
+    //
+    // test-ratchet: M8 P0 replaces the old deferral check (which tested `why.contains("v0.8")`)
+    // with a migration-diagnostic check. The old test was: `number[128]` → deferral.
+    // New behavior: `number[128]` → migration redirect; `number<128>` → deferral.
     let output = parse("function entrypoint() -> nothing { let x: number[128] = 0 }");
     assert_eq!(
         output.diagnostics.len(),
         1,
-        "number[N] for N != 34 must produce exactly 1 deferral diagnostic"
+        "number[N] must produce exactly 1 migration diagnostic"
     );
     assert!(
-        output.diagnostics[0].why.contains("v0.8"),
-        "Deferral diagnostic must mention v0.8, got: {:?}",
-        output.diagnostics[0].why
+        output.diagnostics[0].what.contains("angle brackets"),
+        "Migration diagnostic must mention angle brackets, got: {:?}",
+        output.diagnostics[0].what
+    );
+    assert!(
+        output.diagnostics[0].what_instead.contains("number<"),
+        "Migration diagnostic what-instead must show the angle-bracket form, got: {:?}",
+        output.diagnostics[0].what_instead
     );
 }
 
+#[test]
+fn number_angle_bracket_34_accepts() {
+    // WHY: `number<34>` is the explicit angle-bracket form of the default precision.
+    // It must parse successfully and produce Type::Number{34}.
+    let output = parse("function entrypoint() -> nothing { let x: number<34> = 3.14 }");
+    assert_eq!(
+        output.diagnostics.len(),
+        0,
+        "number<34> must have no diagnostics"
+    );
+    let body = match &output.module.items[0] {
+        Item::Function(f) => &f.body,
+        _ => panic!("expected a function item"),
+    };
+    match &body.stmts[0] {
+        Stmt::Let {
+            ty: Some(Type::Number { precision: 34 }),
+            ..
+        } => {}
+        other => panic!("Expected Let with Type::Number{{34}}, got {other:?}"),
+    }
+}
+
+#[test]
+fn number_angle_bracket_non34_produces_deferral() {
+    // WHY: `number<N>` for N != 34 is reserved for M8 bignum. The parser must
+    // accept the angle-bracket syntax but emit a deferral diagnostic pointing at M8.
+    let output = parse("function entrypoint() -> nothing { let x: number<128> = 0 }");
+    assert_eq!(
+        output.diagnostics.len(),
+        1,
+        "number<N != 34> must produce exactly 1 deferral diagnostic"
+    );
+    assert!(
+        output.diagnostics[0].what.contains("number<128>"),
+        "Deferral diagnostic must name the precision, got: {:?}",
+        output.diagnostics[0].what
+    );
+    assert!(
+        output.diagnostics[0].why.contains("M8"),
+        "Deferral diagnostic must mention M8, got: {:?}",
+        output.diagnostics[0].why
+    );
+}
 
 #[test]
 fn mul_binds_tighter_than_add() {
@@ -903,8 +1365,14 @@ fn mul_binds_tighter_than_add() {
     };
     match &body.stmts[0] {
         Stmt::Let { value, .. } => match value {
-            Expr::BinOp { op: BinOpKind::Add, rhs, .. } => match rhs.as_ref() {
-                Expr::BinOp { op: BinOpKind::Mul, .. } => {}
+            Expr::BinOp {
+                op: BinOpKind::Add,
+                rhs,
+                ..
+            } => match rhs.as_ref() {
+                Expr::BinOp {
+                    op: BinOpKind::Mul, ..
+                } => {}
                 other => panic!("rhs of + should be Mul, got {other:?}"),
             },
             other => panic!("top should be Add, got {other:?}"),
@@ -925,9 +1393,26 @@ fn comparison_binds_tighter_than_and() {
     };
     match &body.stmts[0] {
         Stmt::Let { value, .. } => match value {
-            Expr::BinOp { op: BinOpKind::And, lhs, rhs, .. } => {
-                assert!(matches!(lhs.as_ref(), Expr::BinOp { op: BinOpKind::Lt, .. }));
-                assert!(matches!(rhs.as_ref(), Expr::BinOp { op: BinOpKind::Gt, .. }));
+            Expr::BinOp {
+                op: BinOpKind::And,
+                lhs,
+                rhs,
+                ..
+            } => {
+                assert!(matches!(
+                    lhs.as_ref(),
+                    Expr::BinOp {
+                        op: BinOpKind::Lt,
+                        ..
+                    }
+                ));
+                assert!(matches!(
+                    rhs.as_ref(),
+                    Expr::BinOp {
+                        op: BinOpKind::Gt,
+                        ..
+                    }
+                ));
             }
             other => panic!("top should be And, got {other:?}"),
         },
@@ -947,9 +1432,20 @@ fn binary_ops_are_left_associative() {
     };
     match &body.stmts[0] {
         Stmt::Let { value, .. } => match value {
-            Expr::BinOp { op: BinOpKind::Sub, lhs, rhs, .. } => {
+            Expr::BinOp {
+                op: BinOpKind::Sub,
+                lhs,
+                rhs,
+                ..
+            } => {
                 // lhs should be (1 - 2), rhs should be 3
-                assert!(matches!(lhs.as_ref(), Expr::BinOp { op: BinOpKind::Sub, .. }));
+                assert!(matches!(
+                    lhs.as_ref(),
+                    Expr::BinOp {
+                        op: BinOpKind::Sub,
+                        ..
+                    }
+                ));
                 assert!(matches!(rhs.as_ref(), Expr::IntLit(3, _)));
             }
             other => panic!("Expected Sub, got {other:?}"),
@@ -969,8 +1465,18 @@ fn or_binds_looser_than_and() {
     };
     match &body.stmts[0] {
         Stmt::Let { value, .. } => match value {
-            Expr::BinOp { op: BinOpKind::Or, rhs, .. } => {
-                assert!(matches!(rhs.as_ref(), Expr::BinOp { op: BinOpKind::And, .. }));
+            Expr::BinOp {
+                op: BinOpKind::Or,
+                rhs,
+                ..
+            } => {
+                assert!(matches!(
+                    rhs.as_ref(),
+                    Expr::BinOp {
+                        op: BinOpKind::And,
+                        ..
+                    }
+                ));
             }
             other => panic!("top should be Or, got {other:?}"),
         },
@@ -990,8 +1496,18 @@ fn parentheses_override_precedence() {
     };
     match &body.stmts[0] {
         Stmt::Let { value, .. } => match value {
-            Expr::BinOp { op: BinOpKind::Mul, lhs, .. } => {
-                assert!(matches!(lhs.as_ref(), Expr::BinOp { op: BinOpKind::Add, .. }));
+            Expr::BinOp {
+                op: BinOpKind::Mul,
+                lhs,
+                ..
+            } => {
+                assert!(matches!(
+                    lhs.as_ref(),
+                    Expr::BinOp {
+                        op: BinOpKind::Add,
+                        ..
+                    }
+                ));
             }
             other => panic!("top should be Mul, got {other:?}"),
         },
@@ -999,15 +1515,14 @@ fn parentheses_override_precedence() {
     }
 }
 
-
 #[test]
 fn parser_precedence_table_matches_spec() {
     // WHY: the Pratt binding powers in parser.rs must match the precedence table
     // in spec/operators.md. If these drift, the compiler enforces different
     // precedence than the language spec promises — a silent correctness bug.
     // This test parses the spec table at runtime and compares it to the code.
-    use ynz_parser::Token;
     use std::collections::HashMap;
+    use ynz_parser::Token;
 
     // Read the spec precedence table
     let spec_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1060,22 +1575,22 @@ fn parser_precedence_table_matches_spec() {
     // parse_atom, not infix_bp), level 2 = unary (handled in parse_prefix).
     // This table covers only the INFIX binary operators in infix_bp().
     let code_table: &[(&str, u8, Token)] = &[
-        ("*",  3,  Token::Star),
-        ("/",  3,  Token::Slash),
-        ("%",  3,  Token::Percent),
-        ("+",  4,  Token::Plus),
-        ("-",  4,  Token::Minus),
-        ("<<", 5,  Token::LtLt),
-        (">>", 5,  Token::GtGt),
-        ("<",  6,  Token::Lt),
-        (">",  6,  Token::Gt),
-        ("<=", 6,  Token::LtEq),
-        (">=", 6,  Token::GtEq),
-        ("==", 7,  Token::EqEq),
-        ("!=", 7,  Token::NotEq),
-        ("&",  8,  Token::Amp),
-        ("^",  9,  Token::Caret),
-        ("|",  10, Token::Pipe),
+        ("*", 3, Token::Star),
+        ("/", 3, Token::Slash),
+        ("%", 3, Token::Percent),
+        ("+", 4, Token::Plus),
+        ("-", 4, Token::Minus),
+        ("<<", 5, Token::LtLt),
+        (">>", 5, Token::GtGt),
+        ("<", 6, Token::Lt),
+        (">", 6, Token::Gt),
+        ("<=", 6, Token::LtEq),
+        (">=", 6, Token::GtEq),
+        ("==", 7, Token::EqEq),
+        ("!=", 7, Token::NotEq),
+        ("&", 8, Token::Amp),
+        ("^", 9, Token::Caret),
+        ("|", 10, Token::Pipe),
         ("&&", 11, Token::AmpAmp),
         ("||", 12, Token::PipePipe),
     ];
@@ -1107,7 +1622,6 @@ fn parser_precedence_table_matches_spec() {
     }
 }
 
-
 #[test]
 fn missing_rhs_produces_diagnostic_and_recovers() {
     // WHY: `let x = 1 +` must emit a diagnostic and still produce a parseable
@@ -1132,7 +1646,11 @@ fn missing_let_identifier_produces_diagnostic_and_recovers() {
         !output.diagnostics.is_empty(),
         "Missing variable name must produce at least 1 diagnostic"
     );
-    assert_eq!(output.module.items.len(), 1, "Function must still be in AST");
+    assert_eq!(
+        output.module.items.len(),
+        1,
+        "Function must still be in AST"
+    );
 }
 
 #[test]
@@ -1151,7 +1669,11 @@ fn let_type_mismatch_parses_cleanly() {
         Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
-        Stmt::Let { ty: Some(Type::Int), value: Expr::NumberLit(s, _), .. } => {
+        Stmt::Let {
+            ty: Some(Type::Int),
+            value: Expr::NumberLit(s, _),
+            ..
+        } => {
             assert_eq!(s, "1.5");
         }
         other => panic!("Expected Let with Int type and NumberLit value, got {other:?}"),
@@ -1202,16 +1724,31 @@ fn chained_comparison_parses_as_left_associative() {
     // The test documents that the PARSE result is deterministic — the typeck
     // diagnostic targets the outer `<`, not the inner one.
     let output = parse("function entrypoint() -> nothing { let x = 1 < 2 < 3 }");
-    assert_eq!(output.diagnostics.len(), 0, "Chained comparison parses clean");
+    assert_eq!(
+        output.diagnostics.len(),
+        0,
+        "Chained comparison parses clean"
+    );
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
         Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { value, .. } => match value {
-            Expr::BinOp { op: BinOpKind::Lt, lhs, rhs, .. } => {
+            Expr::BinOp {
+                op: BinOpKind::Lt,
+                lhs,
+                rhs,
+                ..
+            } => {
                 // outer: (1 < 2) < 3
-                assert!(matches!(lhs.as_ref(), Expr::BinOp { op: BinOpKind::Lt, .. }));
+                assert!(matches!(
+                    lhs.as_ref(),
+                    Expr::BinOp {
+                        op: BinOpKind::Lt,
+                        ..
+                    }
+                ));
                 assert!(matches!(rhs.as_ref(), Expr::IntLit(3, _)));
             }
             other => panic!("Expected Lt, got {other:?}"),
@@ -1219,7 +1756,6 @@ fn chained_comparison_parses_as_left_associative() {
         other => panic!("Expected Stmt::Let, got {other:?}"),
     }
 }
-
 
 #[test]
 fn assignment_parses_as_stmt_assign() {
@@ -1239,7 +1775,6 @@ fn assignment_parses_as_stmt_assign() {
     );
 }
 
-
 #[test]
 fn method_call_parses_correctly() {
     // WHY: `count.toString()` must produce MethodCall, not a BinOp(Dot) hack.
@@ -1251,13 +1786,15 @@ fn method_call_parses_correctly() {
         Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
-        Stmt::Let { value: Expr::MethodCall { method, .. }, .. } => {
+        Stmt::Let {
+            value: Expr::MethodCall { method, .. },
+            ..
+        } => {
             assert_eq!(method, "toString");
         }
         other => panic!("Expected Let with MethodCall value, got {other:?}"),
     }
 }
-
 
 #[test]
 fn unary_neg_parses_correctly() {
@@ -1270,14 +1807,16 @@ fn unary_neg_parses_correctly() {
         Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
-        Stmt::Let { value: Expr::UnaryOp { op, operand, .. }, .. } => {
+        Stmt::Let {
+            value: Expr::UnaryOp { op, operand, .. },
+            ..
+        } => {
             assert_eq!(*op, ynz_ast::nodes::UnaryOpKind::Neg);
             assert!(matches!(operand.as_ref(), Expr::IntLit(5, _)));
         }
         other => panic!("Expected Let with UnaryOp(Neg), got {other:?}"),
     }
 }
-
 
 #[test]
 fn missing_arrow_produces_diagnostic_and_recovers() {
@@ -1447,8 +1986,12 @@ fn ownership_annotation_on_param_parses_correctly() {
         Item::Function(f) => {
             assert_eq!(f.params.len(), 1, "Expected 1 param");
             assert!(
-                matches!(f.params[0].ownership, Some(ynz_ast::nodes::OwnershipModifier::Share)),
-                "Expected ownership=Share, got {:?}", f.params[0].ownership
+                matches!(
+                    f.params[0].ownership,
+                    Some(ynz_ast::nodes::OwnershipModifier::Share)
+                ),
+                "Expected ownership=Share, got {:?}",
+                f.params[0].ownership
             );
             assert_eq!(f.params[0].name, "x");
         }
@@ -1540,11 +2083,16 @@ fn multi_case_if_with_int_arms_parses_as_match() {
     // WHY: `if (x) { 1 => ...; 2 => ... }` must produce Stmt::Match, not Stmt::If.
     // If the parser always picks simple-if, multi-case `if` becomes syntactically
     // impossible and the entire branching-by-value feature is dead.
-    let output = parse("function entrypoint() -> nothing { if (x) { 1 => print(1) 2 => print(2) } }");
+    let output =
+        parse("function entrypoint() -> nothing { if (x) { 1 => print(1) 2 => print(2) } }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => match &f.body.stmts[0] {
-            Stmt::Match { arms, else_arm: None, .. } => {
+            Stmt::Match {
+                arms,
+                else_arm: None,
+                ..
+            } => {
                 assert_eq!(arms.len(), 2, "Expected 2 arms");
             }
             other => panic!("Expected Stmt::Match, got {other:?}"),
@@ -1558,11 +2106,16 @@ fn multi_case_if_with_else_arm() {
     // WHY: `if (x) { 1 => ...; else => ... }` must produce Stmt::Match with
     // else_arm = Some(_). Typeck uses the presence of else_arm to determine
     // whether the multi-case is exhaustive for return-path analysis.
-    let output = parse("function entrypoint() -> nothing { if (x) { 1 => print(1) else => print(0) } }");
+    let output =
+        parse("function entrypoint() -> nothing { if (x) { 1 => print(1) else => print(0) } }");
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => match &f.body.stmts[0] {
-            Stmt::Match { arms, else_arm: Some(_), .. } => {
+            Stmt::Match {
+                arms,
+                else_arm: Some(_),
+                ..
+            } => {
                 assert_eq!(arms.len(), 1, "Expected 1 value arm + else");
             }
             other => panic!("Expected Stmt::Match with else_arm, got {other:?}"),
@@ -1580,7 +2133,11 @@ fn multi_case_else_only_parses_as_match() {
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => match &f.body.stmts[0] {
-            Stmt::Match { arms, else_arm: Some(_), .. } => {
+            Stmt::Match {
+                arms,
+                else_arm: Some(_),
+                ..
+            } => {
                 assert_eq!(arms.len(), 0, "Else-only: 0 value arms");
             }
             other => panic!("Expected Stmt::Match with else_arm only, got {other:?}"),
@@ -1602,12 +2159,21 @@ fn is_type_arm_produces_is_pattern_no_deferral() {
         if let Item::Function(f) = item {
             f.body.stmts.iter().any(|stmt| {
                 if let ynz_ast::nodes::Stmt::Match { arms, .. } = stmt {
-                    arms.iter().any(|arm| matches!(&arm.pattern.kind, MatchPatternKind::Is(_)))
-                } else { false }
+                    arms.iter()
+                        .any(|arm| matches!(&arm.pattern.kind, MatchPatternKind::Is(_)))
+                } else {
+                    false
+                }
             })
-        } else { false }
+        } else {
+            false
+        }
     });
-    assert!(is_arm_found, "expected Is arm in parsed AST; diagnostics: {:?}", output.diagnostics);
+    assert!(
+        is_arm_found,
+        "expected Is arm in parsed AST; diagnostics: {:?}",
+        output.diagnostics
+    );
 }
 
 #[test]
@@ -1647,7 +2213,11 @@ fn nested_if_inside_for_parses_correctly() {
   }
 }"#;
     let output = parse(source);
-    assert_eq!(output.diagnostics.len(), 0, "Nested if-inside-for must parse cleanly");
+    assert_eq!(
+        output.diagnostics.len(),
+        0,
+        "Nested if-inside-for must parse cleanly"
+    );
     match &output.module.items[0] {
         Item::Function(f) => match &f.body.stmts[0] {
             Stmt::For { body, .. } => match &body.stmts[0] {
@@ -1685,7 +2255,10 @@ fn parse_re_runs_when_source_changes() {
         Item::Function(f) => f.body.stmts.len(),
         Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
-    assert_eq!(stmts_after, 1, "Updated source should have 1 stmt in the body");
+    assert_eq!(
+        stmts_after, 1,
+        "Updated source should have 1 stmt in the body"
+    );
 }
 
 // ── M5 P2: Generic function declarations ─────────────────────────────────────
@@ -1828,7 +2401,10 @@ fn m5_array_type_annotation() {
     assert_eq!(output.diagnostics.len(), 0);
     let stmts = parse_fn_body(&wrap("let arr: array<int> = arr"));
     match &stmts[0] {
-        Stmt::Let { ty: Some(Type::Generic { name, args, .. }), .. } => {
+        Stmt::Let {
+            ty: Some(Type::Generic { name, args, .. }),
+            ..
+        } => {
             assert_eq!(name, "array");
             assert_eq!(args.len(), 1);
             assert!(matches!(args[0], Type::Int));
@@ -1844,7 +2420,11 @@ fn m5_maybe_type_annotation() {
     // is required so typeck can apply flow-sensitive `.value` rules.
     let stmts = parse_fn_body(&wrap("let x: maybe<int> = none"));
     match &stmts[0] {
-        Stmt::Let { ty: Some(Type::Maybe { inner, .. }), value: Expr::NoneLit { .. }, .. } => {
+        Stmt::Let {
+            ty: Some(Type::Maybe { inner, .. }),
+            value: Expr::NoneLit { .. },
+            ..
+        } => {
             assert!(matches!(**inner, Type::Int));
         }
         other => panic!("expected Let with Maybe<Int> type and NoneLit, got {other:?}"),
@@ -1856,7 +2436,10 @@ fn m5_maybe_player_type_annotation() {
     // WHY: `maybe<Player>` (named inner type) must produce `Maybe { inner: Named("Player") }`.
     let stmts = parse_fn_body(&wrap("let x: maybe<Player> = none"));
     match &stmts[0] {
-        Stmt::Let { ty: Some(Type::Maybe { inner, .. }), .. } => {
+        Stmt::Let {
+            ty: Some(Type::Maybe { inner, .. }),
+            ..
+        } => {
             assert!(matches!(**inner, Type::Named(ref n, _) if n == "Player"));
         }
         other => panic!("expected Let with Maybe<Named>, got {other:?}"),
@@ -1870,7 +2453,10 @@ fn m5_nested_generic_type() {
     // Generic arg and one Int arg.
     let stmts = parse_fn_body(&wrap("let x: Pair<Pair<int, int>, int> = x"));
     match &stmts[0] {
-        Stmt::Let { ty: Some(Type::Generic { name, args, .. }), .. } => {
+        Stmt::Let {
+            ty: Some(Type::Generic { name, args, .. }),
+            ..
+        } => {
             assert_eq!(name, "Pair");
             assert_eq!(args.len(), 2);
             assert!(matches!(&args[0], Type::Generic { name: n, .. } if n == "Pair"));
@@ -1902,7 +2488,10 @@ fn m5_none_literal_expr() {
     // typeck cannot recognize the absence value and the maybe<T> flow won't work.
     let stmts = parse_fn_body(&wrap("let x = none"));
     match &stmts[0] {
-        Stmt::Let { value: Expr::NoneLit { .. }, .. } => {}
+        Stmt::Let {
+            value: Expr::NoneLit { .. },
+            ..
+        } => {}
         other => panic!("expected NoneLit, got {other:?}"),
     }
 }
@@ -1924,7 +2513,10 @@ fn m5_index_access_expr() {
     // Without this, bracket access on collections has no AST representation.
     let stmts = parse_fn_body(&wrap("let x = arr[0]"));
     match &stmts[0] {
-        Stmt::Let { value: Expr::IndexAccess { index, .. }, .. } => {
+        Stmt::Let {
+            value: Expr::IndexAccess { index, .. },
+            ..
+        } => {
             assert!(matches!(**index, Expr::IntLit(0, _)));
         }
         other => panic!("expected IndexAccess, got {other:?}"),
@@ -1939,7 +2531,10 @@ fn m5_index_access_string_key() {
     // The index token is now a BacktickString token that parses to InterpolatedString.
     let stmts = parse_fn_body(&wrap("let x = m[`alice`]"));
     match &stmts[0] {
-        Stmt::Let { value: Expr::IndexAccess { index, .. }, .. } => {
+        Stmt::Let {
+            value: Expr::IndexAccess { index, .. },
+            ..
+        } => {
             assert!(matches!(**index, Expr::InterpolatedString(_, _)));
         }
         other => panic!("expected IndexAccess with InterpolatedString index, got {other:?}"),
@@ -1954,7 +2549,10 @@ fn m5_chained_index_access() {
     // test-ratchet: M7 P1 — migrated to backtick syntax
     let stmts = parse_fn_body(&wrap("let x = m[`alice`][0]"));
     match &stmts[0] {
-        Stmt::Let { value: Expr::IndexAccess { receiver, .. }, .. } => {
+        Stmt::Let {
+            value: Expr::IndexAccess { receiver, .. },
+            ..
+        } => {
             assert!(matches!(**receiver, Expr::IndexAccess { .. }));
         }
         other => panic!("expected chained IndexAccess, got {other:?}"),
@@ -1980,7 +2578,11 @@ fn m5_index_assign_stmt() {
     // the bracket-sugar `.set()` lowering.
     let stmts = parse_fn_body(&wrap("arr[0] = 5"));
     match &stmts[0] {
-        Stmt::IndexAssign { index, value: Expr::IntLit(5, _), .. } => {
+        Stmt::IndexAssign {
+            index,
+            value: Expr::IntLit(5, _),
+            ..
+        } => {
             assert!(matches!(**index, Expr::IntLit(0, _)));
         }
         other => panic!("expected IndexAssign, got {other:?}"),
@@ -1995,7 +2597,11 @@ fn m5_index_assign_string_key() {
     // test-ratchet: M7 P1 — backtick strings produce InterpolatedString, not StringLit.
     let stmts = parse_fn_body(&wrap("scores[`alice`] = 90"));
     match &stmts[0] {
-        Stmt::IndexAssign { index, value: Expr::IntLit(90, _), .. } => {
+        Stmt::IndexAssign {
+            index,
+            value: Expr::IntLit(90, _),
+            ..
+        } => {
             assert!(matches!(**index, Expr::InterpolatedString(_, _)));
         }
         other => panic!("expected IndexAssign with InterpolatedString key, got {other:?}"),
@@ -2011,7 +2617,10 @@ fn m5_generic_call_one_type_arg() {
     // sites are silently dropped and typeck falls back to inference only.
     let stmts = parse_fn_body(&wrap("let x = identity<int>(5)"));
     match &stmts[0] {
-        Stmt::Let { value: Expr::Call(call), .. } => {
+        Stmt::Let {
+            value: Expr::Call(call),
+            ..
+        } => {
             assert!(call.type_args.is_some(), "type_args must be Some");
             let args = call.type_args.as_ref().unwrap();
             assert_eq!(args.len(), 1);
@@ -2029,7 +2638,10 @@ fn m5_generic_call_two_type_args() {
     // test-ratchet: M7 P1 — migrated to backtick syntax
     let stmts = parse_fn_body(&wrap("let x = pair<int, string>(1, `a`)"));
     match &stmts[0] {
-        Stmt::Let { value: Expr::Call(call), .. } => {
+        Stmt::Let {
+            value: Expr::Call(call),
+            ..
+        } => {
             let args = call.type_args.as_ref().expect("type_args must be Some");
             assert_eq!(args.len(), 2);
             assert!(matches!(args[0], Type::Int));
@@ -2046,8 +2658,14 @@ fn m5_generic_call_no_type_args_has_none() {
     // list (semantically different for typeck to distinguish).
     let stmts = parse_fn_body(&wrap("let x = add(1, 2)"));
     match &stmts[0] {
-        Stmt::Let { value: Expr::Call(call), .. } => {
-            assert!(call.type_args.is_none(), "non-generic call must have type_args: None");
+        Stmt::Let {
+            value: Expr::Call(call),
+            ..
+        } => {
+            assert!(
+                call.type_args.is_none(),
+                "non-generic call must have type_args: None"
+            );
         }
         other => panic!("expected Call, got {other:?}"),
     }
@@ -2062,7 +2680,12 @@ fn m5_less_than_stays_comparison() {
     // becomes a parse error.
     let stmts = parse_fn_body(&wrap("let x = a < b"));
     match &stmts[0] {
-        Stmt::Let { value: Expr::BinOp { op: BinOpKind::Lt, .. }, .. } => {}
+        Stmt::Let {
+            value: Expr::BinOp {
+                op: BinOpKind::Lt, ..
+            },
+            ..
+        } => {}
         other => panic!("expected Lt comparison, got {other:?}"),
     }
 }
@@ -2074,8 +2697,22 @@ fn m5_comparison_chain_not_generic() {
     let stmts = parse_fn_body(&wrap("let x = a < b > c"));
     // Should be (a < b) > c — two BinOps.
     match &stmts[0] {
-        Stmt::Let { value: Expr::BinOp { op: BinOpKind::Gt, lhs, .. }, .. } => {
-            assert!(matches!(**lhs, Expr::BinOp { op: BinOpKind::Lt, .. }));
+        Stmt::Let {
+            value:
+                Expr::BinOp {
+                    op: BinOpKind::Gt,
+                    lhs,
+                    ..
+                },
+            ..
+        } => {
+            assert!(matches!(
+                **lhs,
+                Expr::BinOp {
+                    op: BinOpKind::Lt,
+                    ..
+                }
+            ));
         }
         other => panic!("expected comparison chain a<b>c, got {other:?}"),
     }
@@ -2088,8 +2725,17 @@ fn m5_comparison_in_index_not_generic() {
     // is lost.
     let stmts = parse_fn_body(&wrap("let x = arr[a < b]"));
     match &stmts[0] {
-        Stmt::Let { value: Expr::IndexAccess { index, .. }, .. } => {
-            assert!(matches!(**index, Expr::BinOp { op: BinOpKind::Lt, .. }));
+        Stmt::Let {
+            value: Expr::IndexAccess { index, .. },
+            ..
+        } => {
+            assert!(matches!(
+                **index,
+                Expr::BinOp {
+                    op: BinOpKind::Lt,
+                    ..
+                }
+            ));
         }
         other => panic!("expected IndexAccess with Lt index, got {other:?}"),
     }
@@ -2101,7 +2747,10 @@ fn m5_generic_call_not_confused_by_comparison() {
     // be a valid comparison. The `(` following the `>` disambiguates.
     let stmts = parse_fn_body(&wrap("let x = foo<int>(5)"));
     match &stmts[0] {
-        Stmt::Let { value: Expr::Call(call), .. } => {
+        Stmt::Let {
+            value: Expr::Call(call),
+            ..
+        } => {
             assert!(call.type_args.is_some());
         }
         other => panic!("expected generic Call, got {other:?}"),
@@ -2139,7 +2788,12 @@ function entrypoint() -> nothing {
 }
 "#;
     let output = parse(source);
-    assert_eq!(output.diagnostics.len(), 0, "M5 surface must parse clean: {:?}", output.diagnostics);
+    assert_eq!(
+        output.diagnostics.len(),
+        0,
+        "M5 surface must parse clean: {:?}",
+        output.diagnostics
+    );
     assert_debug_snapshot!(output.module);
 }
 
@@ -2151,13 +2805,24 @@ fn m5_recovery_unclosed_generic_param_list() {
     // and still parse the remaining top-level items. A cascade of errors here
     // would drown out the single real mistake.
     let output = parse("function foo< { } function bar() -> nothing { }");
-    assert!(output.diagnostics.len() >= 1, "Expected at least one diagnostic");
+    assert!(
+        output.diagnostics.len() >= 1,
+        "Expected at least one diagnostic"
+    );
     // bar() must still be parsed — recovery must continue past the broken decl.
-    let fn_names: Vec<_> = output.module.items.iter().filter_map(|i| match i {
-        Item::Function(f) => Some(f.name.as_str()),
-        _ => None,
-    }).collect();
-    assert!(fn_names.contains(&"bar"), "bar() must parse despite foo<'s error");
+    let fn_names: Vec<_> = output
+        .module
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Function(f) => Some(f.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        fn_names.contains(&"bar"),
+        "bar() must parse despite foo<'s error"
+    );
 }
 
 #[test]
@@ -2165,7 +2830,10 @@ fn m5_recovery_missing_type_arg_close_bracket() {
     // WHY: `let x: array<int = 5` (missing `>`) must produce a diagnostic but
     // still give the parser enough to continue with the next statement.
     let output = parse(&wrap("let x: array<int = 5"));
-    assert!(output.diagnostics.len() >= 1, "Expected at least one diagnostic for missing `>`");
+    assert!(
+        output.diagnostics.len() >= 1,
+        "Expected at least one diagnostic for missing `>`"
+    );
 }
 
 #[test]
@@ -2177,7 +2845,12 @@ fn m5_recovery_generic_call_no_close_angle() {
     // This is a comparison, not a generic call: (foo < int) > 5
     assert_eq!(output.diagnostics.len(), 0, "comparison must parse cleanly");
     match &parse_fn_body(&wrap("let x = foo < int > 5"))[0] {
-        Stmt::Let { value: Expr::BinOp { op: BinOpKind::Gt, .. }, .. } => {}
+        Stmt::Let {
+            value: Expr::BinOp {
+                op: BinOpKind::Gt, ..
+            },
+            ..
+        } => {}
         other => panic!("expected Gt comparison, got {other:?}"),
     }
 }
@@ -2186,7 +2859,10 @@ fn m5_recovery_generic_call_no_close_angle() {
 fn m5_recovery_index_missing_close_bracket() {
     // WHY: `arr[0` without `]` must produce exactly one diagnostic and not crash.
     let output = parse(&wrap("let x = arr[0"));
-    assert!(output.diagnostics.len() >= 1, "Expected diagnostic for unclosed `[`");
+    assert!(
+        output.diagnostics.len() >= 1,
+        "Expected diagnostic for unclosed `[`"
+    );
 }
 
 #[test]
@@ -2194,7 +2870,10 @@ fn m5_maybe_missing_type_arg() {
     // WHY: `maybe` without `<T>` must produce exactly one diagnostic. The error
     // message must guide the user to write `maybe<T>` — not produce a cascade.
     let output = parse(&wrap("let x: maybe = none"));
-    assert!(output.diagnostics.len() >= 1, "Expected diagnostic for bare `maybe`");
+    assert!(
+        output.diagnostics.len() >= 1,
+        "Expected diagnostic for bare `maybe`"
+    );
     assert!(
         output.diagnostics.iter().any(|d| d.what.contains("maybe")),
         "Diagnostic must mention `maybe`"
@@ -2209,10 +2888,18 @@ fn m7_errors_capable_string_return_type() {
     // type in Type::ErrorCapable. If errors_capable stays false, the type checker
     // can never gate propagation checks on fallible functions.
     let output = parse("function readFile() -> string errors { }");
-    assert_eq!(output.diagnostics.len(), 0, "unexpected diagnostics: {:?}", output.diagnostics);
+    assert_eq!(
+        output.diagnostics.len(),
+        0,
+        "unexpected diagnostics: {:?}",
+        output.diagnostics
+    );
     match &output.module.items[0] {
         Item::Function(f) => {
-            assert!(f.errors_capable, "errors_capable must be true for `-> string errors`");
+            assert!(
+                f.errors_capable,
+                "errors_capable must be true for `-> string errors`"
+            );
             assert!(
                 matches!(f.return_type, Type::ErrorCapable { .. }),
                 "return_type must be Type::ErrorCapable, got {:?}",
@@ -2228,10 +2915,18 @@ fn m7_errors_capable_nothing_return_type() {
     // WHY: `-> nothing errors` is valid — a function that performs a side-effectful
     // operation and may fail but has no success value. errors_capable must be true.
     let output = parse("function writeFile() -> nothing errors { }");
-    assert_eq!(output.diagnostics.len(), 0, "unexpected diagnostics: {:?}", output.diagnostics);
+    assert_eq!(
+        output.diagnostics.len(),
+        0,
+        "unexpected diagnostics: {:?}",
+        output.diagnostics
+    );
     match &output.module.items[0] {
         Item::Function(f) => {
-            assert!(f.errors_capable, "errors_capable must be true for `-> nothing errors`");
+            assert!(
+                f.errors_capable,
+                "errors_capable must be true for `-> nothing errors`"
+            );
             assert!(
                 matches!(f.return_type, Type::ErrorCapable { ref inner, .. } if matches!(**inner, Type::Nothing)),
                 "ErrorCapable must wrap Nothing, got {:?}",
@@ -2247,7 +2942,12 @@ fn m7_errors_capable_maybe_string_return_type() {
     // WHY: `-> maybe<string> errors` must produce ErrorCapable wrapping a Maybe type.
     // The two modifiers are orthogonal: maybe = absent value, errors = failure mode.
     let output = parse("function findUser() -> maybe<string> errors { }");
-    assert_eq!(output.diagnostics.len(), 0, "unexpected diagnostics: {:?}", output.diagnostics);
+    assert_eq!(
+        output.diagnostics.len(),
+        0,
+        "unexpected diagnostics: {:?}",
+        output.diagnostics
+    );
     match &output.module.items[0] {
         Item::Function(f) => {
             assert!(f.errors_capable, "errors_capable must be true");
@@ -2272,10 +2972,18 @@ fn m7_plain_return_type_has_errors_capable_false() {
     // If this flag is accidentally set to true, every function becomes fallible and
     // the typeck gates on error propagation trigger incorrectly everywhere.
     let output = parse("function getGreeting() -> string { }");
-    assert_eq!(output.diagnostics.len(), 0, "unexpected diagnostics: {:?}", output.diagnostics);
+    assert_eq!(
+        output.diagnostics.len(),
+        0,
+        "unexpected diagnostics: {:?}",
+        output.diagnostics
+    );
     match &output.module.items[0] {
         Item::Function(f) => {
-            assert!(!f.errors_capable, "errors_capable must be false for plain `-> string`");
+            assert!(
+                !f.errors_capable,
+                "errors_capable must be false for plain `-> string`"
+            );
             assert!(
                 matches!(f.return_type, Type::Named(_, _)),
                 "return_type must be Named(string), got {:?}",
@@ -2292,16 +3000,23 @@ fn m7_errors_capable_inner_type_is_preserved() {
     // the return annotation — not wrapped again or replaced. Regression guard for
     // accidental double-wrapping (ErrorCapable(ErrorCapable(T))).
     let output = parse("function compute() -> int errors { }");
-    assert_eq!(output.diagnostics.len(), 0, "unexpected diagnostics: {:?}", output.diagnostics);
+    assert_eq!(
+        output.diagnostics.len(),
+        0,
+        "unexpected diagnostics: {:?}",
+        output.diagnostics
+    );
     match &output.module.items[0] {
-        Item::Function(f) => {
-            match &f.return_type {
-                Type::ErrorCapable { inner, .. } => {
-                    assert!(matches!(**inner, Type::Int), "inner must be Int, got {:?}", inner);
-                }
-                other => panic!("expected ErrorCapable, got {other:?}"),
+        Item::Function(f) => match &f.return_type {
+            Type::ErrorCapable { inner, .. } => {
+                assert!(
+                    matches!(**inner, Type::Int),
+                    "inner must be Int, got {:?}",
+                    inner
+                );
             }
-        }
+            other => panic!("expected ErrorCapable, got {other:?}"),
+        },
         other => panic!("expected Function, got {other:?}"),
     }
 }
@@ -2315,9 +3030,15 @@ fn m7_backtick_plain_literal_parses_as_interpolated_string() {
     use ynz_ast::nodes::StringPart;
     let stmts = parse_fn_body(&wrap("let s = `hello`"));
     match &stmts[0] {
-        Stmt::Let { value: Expr::InterpolatedString(parts, _), .. } => {
+        Stmt::Let {
+            value: Expr::InterpolatedString(parts, _),
+            ..
+        } => {
             assert_eq!(parts.len(), 1, "plain backtick string must have 1 part");
-            assert!(matches!(&parts[0], StringPart::Lit(b, _) if b == b"hello"), "part must be Lit(hello)");
+            assert!(
+                matches!(&parts[0], StringPart::Lit(b, _) if b == b"hello"),
+                "part must be Lit(hello)"
+            );
         }
         other => panic!("expected Let with InterpolatedString, got {other:?}"),
     }
@@ -2332,11 +3053,28 @@ fn m7_backtick_single_interpolation_produces_three_parts() {
     use ynz_ast::nodes::StringPart;
     let stmts = parse_fn_body(&wrap("let s = `hello ${name}`"));
     match &stmts[0] {
-        Stmt::Let { value: Expr::InterpolatedString(parts, _), .. } => {
-            assert_eq!(parts.len(), 3, "expected Lit + Expr + Lit, got {}", parts.len());
-            assert!(matches!(&parts[0], StringPart::Lit(b, _) if b == b"hello "), "first part must be Lit(hello )");
-            assert!(matches!(&parts[1], StringPart::Expr(_, _)), "second part must be Expr");
-            assert!(matches!(&parts[2], StringPart::Lit(b, _) if b.is_empty()), "third part must be Lit()");
+        Stmt::Let {
+            value: Expr::InterpolatedString(parts, _),
+            ..
+        } => {
+            assert_eq!(
+                parts.len(),
+                3,
+                "expected Lit + Expr + Lit, got {}",
+                parts.len()
+            );
+            assert!(
+                matches!(&parts[0], StringPart::Lit(b, _) if b == b"hello "),
+                "first part must be Lit(hello )"
+            );
+            assert!(
+                matches!(&parts[1], StringPart::Expr(_, _)),
+                "second part must be Expr"
+            );
+            assert!(
+                matches!(&parts[2], StringPart::Lit(b, _) if b.is_empty()),
+                "third part must be Lit()"
+            );
         }
         other => panic!("expected Let with InterpolatedString, got {other:?}"),
     }
@@ -2350,13 +3088,36 @@ fn m7_backtick_two_interpolations_produces_five_parts() {
     use ynz_ast::nodes::StringPart;
     let stmts = parse_fn_body(&wrap("let s = `${a} + ${b}`"));
     match &stmts[0] {
-        Stmt::Let { value: Expr::InterpolatedString(parts, _), .. } => {
-            assert_eq!(parts.len(), 5, "expected 5 parts (Lit+Expr+Lit+Expr+Lit), got {}", parts.len());
-            assert!(matches!(&parts[0], StringPart::Lit(b, _) if b.is_empty()), "parts[0] must be empty Lit");
-            assert!(matches!(&parts[1], StringPart::Expr(_, _)), "parts[1] must be Expr");
-            assert!(matches!(&parts[2], StringPart::Lit(b, _) if b == b" + "), "parts[2] must be Lit( + )");
-            assert!(matches!(&parts[3], StringPart::Expr(_, _)), "parts[3] must be Expr");
-            assert!(matches!(&parts[4], StringPart::Lit(b, _) if b.is_empty()), "parts[4] must be empty Lit");
+        Stmt::Let {
+            value: Expr::InterpolatedString(parts, _),
+            ..
+        } => {
+            assert_eq!(
+                parts.len(),
+                5,
+                "expected 5 parts (Lit+Expr+Lit+Expr+Lit), got {}",
+                parts.len()
+            );
+            assert!(
+                matches!(&parts[0], StringPart::Lit(b, _) if b.is_empty()),
+                "parts[0] must be empty Lit"
+            );
+            assert!(
+                matches!(&parts[1], StringPart::Expr(_, _)),
+                "parts[1] must be Expr"
+            );
+            assert!(
+                matches!(&parts[2], StringPart::Lit(b, _) if b == b" + "),
+                "parts[2] must be Lit( + )"
+            );
+            assert!(
+                matches!(&parts[3], StringPart::Expr(_, _)),
+                "parts[3] must be Expr"
+            );
+            assert!(
+                matches!(&parts[4], StringPart::Lit(b, _) if b.is_empty()),
+                "parts[4] must be empty Lit"
+            );
         }
         other => panic!("expected Let with InterpolatedString, got {other:?}"),
     }
@@ -2370,11 +3131,17 @@ fn m7_backtick_interpolated_expr_is_ident() {
     use ynz_ast::nodes::StringPart;
     let stmts = parse_fn_body(&wrap("let s = `value=${x}`"));
     match &stmts[0] {
-        Stmt::Let { value: Expr::InterpolatedString(parts, _), .. } => {
+        Stmt::Let {
+            value: Expr::InterpolatedString(parts, _),
+            ..
+        } => {
             assert_eq!(parts.len(), 3, "expected Lit + Expr + Lit");
             match &parts[1] {
                 StringPart::Expr(inner, _) => {
-                    assert!(matches!(**inner, Expr::Ident(ref n, _) if n == "x"), "expr must be Ident(x)");
+                    assert!(
+                        matches!(**inner, Expr::Ident(ref n, _) if n == "x"),
+                        "expr must be Ident(x)"
+                    );
                 }
                 other => panic!("expected Expr part, got {other:?}"),
             }
@@ -2391,9 +3158,19 @@ fn m7_backtick_empty_string_is_single_empty_lit() {
     use ynz_ast::nodes::StringPart;
     let stmts = parse_fn_body(&wrap("let s = ``"));
     match &stmts[0] {
-        Stmt::Let { value: Expr::InterpolatedString(parts, _), .. } => {
-            assert_eq!(parts.len(), 1, "empty backtick string must have exactly 1 Lit part");
-            assert!(matches!(&parts[0], StringPart::Lit(b, _) if b.is_empty()), "the Lit must be empty bytes");
+        Stmt::Let {
+            value: Expr::InterpolatedString(parts, _),
+            ..
+        } => {
+            assert_eq!(
+                parts.len(),
+                1,
+                "empty backtick string must have exactly 1 Lit part"
+            );
+            assert!(
+                matches!(&parts[0], StringPart::Lit(b, _) if b.is_empty()),
+                "the Lit must be empty bytes"
+            );
         }
         other => panic!("expected Let with InterpolatedString, got {other:?}"),
     }
@@ -2410,7 +3187,10 @@ fn m7_for_destructure_produces_for_with_synthetic_entry() {
     match &stmts[0] {
         Stmt::For { var, body, .. } => {
             assert_eq!(var, "__entry", "desugared for-loop var must be __entry");
-            assert!(body.stmts.len() >= 2, "body must have at least the 2 injected let bindings");
+            assert!(
+                body.stmts.len() >= 2,
+                "body must have at least the 2 injected let bindings"
+            );
             // First stmt is `let k = __entry.key`
             match &body.stmts[0] {
                 Stmt::Let { name, .. } => {
@@ -2438,9 +3218,16 @@ fn m7_for_destructure_preserves_user_body_stmts() {
     let stmts = parse_fn_body(&wrap("for ((k, v) in m) { print(k) }"));
     match &stmts[0] {
         Stmt::For { body, .. } => {
-            assert_eq!(body.stmts.len(), 3, "body must have 2 injected lets + 1 user stmt");
+            assert_eq!(
+                body.stmts.len(),
+                3,
+                "body must have 2 injected lets + 1 user stmt"
+            );
             // Index 2 is the user's print(k)
-            assert!(matches!(&body.stmts[2], Stmt::Expr(_)), "third stmt must be user's expression");
+            assert!(
+                matches!(&body.stmts[2], Stmt::Expr(_)),
+                "third stmt must be user's expression"
+            );
         }
         other => panic!("expected For, got {other:?}"),
     }
@@ -2454,7 +3241,10 @@ fn m7_for_single_binding_still_works() {
     let stmts = parse_fn_body(&wrap("for (entry in myMap) { }"));
     match &stmts[0] {
         Stmt::For { var, .. } => {
-            assert_eq!(var, "entry", "single-binding for-loop var must be the user's name");
+            assert_eq!(
+                var, "entry",
+                "single-binding for-loop var must be the user's name"
+            );
         }
         other => panic!("expected For, got {other:?}"),
     }
@@ -2467,14 +3257,15 @@ fn m7_for_destructure_key_binding_uses_field_access() {
     // can't determine the type of k.
     let stmts = parse_fn_body(&wrap("for ((k, v) in m) { }"));
     match &stmts[0] {
-        Stmt::For { body, .. } => {
-            match &body.stmts[0] {
-                Stmt::Let { value: Expr::FieldAccess { field, .. }, .. } => {
-                    assert_eq!(field, "key", "injected key binding must access .key field");
-                }
-                other => panic!("expected Let with FieldAccess, got {other:?}"),
+        Stmt::For { body, .. } => match &body.stmts[0] {
+            Stmt::Let {
+                value: Expr::FieldAccess { field, .. },
+                ..
+            } => {
+                assert_eq!(field, "key", "injected key binding must access .key field");
             }
-        }
+            other => panic!("expected Let with FieldAccess, got {other:?}"),
+        },
         other => panic!("expected For, got {other:?}"),
     }
 }
@@ -2533,26 +3324,79 @@ fn m7_expr_variant_count_locked() {
     let all_variants: &[ynz_ast::nodes::Expr] = &[
         Ident("x".into(), span(0, 1)),
         StringLit(vec![], span(0, 0)),
-        Call(Box::new(ynz_ast::nodes::CallExpr { callee: Ident("f".into(), span(0, 1)), type_args: None, args: vec![], span: span(0, 3) })),
+        Call(Box::new(ynz_ast::nodes::CallExpr {
+            callee: Ident("f".into(), span(0, 1)),
+            type_args: None,
+            args: vec![],
+            span: span(0, 3),
+        })),
         Error(span(0, 0)),
         IntLit(0, span(0, 1)),
         NumberLit("0".into(), span(0, 1)),
         BoolLit(true, span(0, 4)),
-        BinOp { op: BinOpKind::Add, lhs: err(), rhs: err(), span: span(0, 0) },
-        UnaryOp { op: ynz_ast::nodes::UnaryOpKind::Neg, operand: err(), span: span(0, 0) },
-        MethodCall { receiver: err(), method: "m".into(), method_span: span(0, 1), args: vec![], span: span(0, 0) },
-        FieldAccess { receiver: err(), field: "f".into(), field_span: span(0, 1), span: span(0, 0) },
-        StructLit { fields: vec![], span: span(0, 0) },
-        PostfixOp { receiver: err(), op: PostfixOpKind::Copy, span: span(0, 0) },
+        BinOp {
+            op: BinOpKind::Add,
+            lhs: err(),
+            rhs: err(),
+            span: span(0, 0),
+        },
+        UnaryOp {
+            op: ynz_ast::nodes::UnaryOpKind::Neg,
+            operand: err(),
+            span: span(0, 0),
+        },
+        MethodCall {
+            receiver: err(),
+            method: "m".into(),
+            method_span: span(0, 1),
+            args: vec![],
+            span: span(0, 0),
+        },
+        FieldAccess {
+            receiver: err(),
+            field: "f".into(),
+            field_span: span(0, 1),
+            span: span(0, 0),
+        },
+        StructLit {
+            fields: vec![],
+            span: span(0, 0),
+        },
+        PostfixOp {
+            receiver: err(),
+            op: PostfixOpKind::Copy,
+            span: span(0, 0),
+        },
         SelfValue { span: span(0, 0) },
         NoneLit { span: span(0, 0) },
-        IndexAccess { receiver: err(), index: err(), span: span(0, 0) },
-        ArrayLit { elements: vec![], span: span(0, 0) },
-        MapLit { entries: vec![], span: span(0, 0) },
-        Is { expr: err(), ty: ynz_ast::nodes::TypePath { name: "Foo".into(), span: span(0, 3) }, span: span(0, 0) },
+        IndexAccess {
+            receiver: err(),
+            index: err(),
+            span: span(0, 0),
+        },
+        ArrayLit {
+            elements: vec![],
+            span: span(0, 0),
+        },
+        MapLit {
+            entries: vec![],
+            span: span(0, 0),
+        },
+        Is {
+            expr: err(),
+            ty: ynz_ast::nodes::TypePath {
+                name: "Foo".into(),
+                span: span(0, 3),
+            },
+            span: span(0, 0),
+        },
         InterpolatedString(vec![StringPart::Lit(vec![], span(0, 0))], span(0, 0)),
     ];
-    assert_eq!(all_variants.len(), 20, "Expr variant count changed from 20 — add a // test-ratchet: comment");
+    assert_eq!(
+        all_variants.len(),
+        20,
+        "Expr variant count changed from 20 — add a // test-ratchet: comment"
+    );
 }
 
 #[test]
@@ -2570,14 +3414,41 @@ fn m7_type_variant_count_locked() {
         Float,
         Number { precision: 34 },
         Bool,
-        Range { element: Box::new(Int), end_inclusive: false },
-        Dynamic { contract: "Foo".into(), span: span(0, 3) },
+        Range {
+            element: Box::new(Int),
+            end_inclusive: false,
+        },
+        Dynamic {
+            contract: "Foo".into(),
+            span: span(0, 3),
+        },
         SelfType { span: span(0, 4) },
-        TypeParam { name: "T".into(), span: span(0, 1) },
-        Generic { name: "array".into(), name_span: span(0, 5), args: vec![Int], span: span(0, 10) },
-        Maybe { inner: Box::new(Int), span: span(0, 9) },
-        Union { variants: vec![Int, Float], span: span(0, 10) },
-        ErrorCapable { inner: Box::new(Int), span: span(0, 15) },
+        TypeParam {
+            name: "T".into(),
+            span: span(0, 1),
+        },
+        Generic {
+            name: "array".into(),
+            name_span: span(0, 5),
+            args: vec![Int],
+            span: span(0, 10),
+        },
+        Maybe {
+            inner: Box::new(Int),
+            span: span(0, 9),
+        },
+        Union {
+            variants: vec![Int, Float],
+            span: span(0, 10),
+        },
+        ErrorCapable {
+            inner: Box::new(Int),
+            span: span(0, 15),
+        },
     ];
-    assert_eq!(all_variants.len(), 15, "Type variant count changed from 15 — add a // test-ratchet: comment");
+    assert_eq!(
+        all_variants.len(),
+        15,
+        "Type variant count changed from 15 — add a // test-ratchet: comment"
+    );
 }
