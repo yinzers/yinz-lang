@@ -140,7 +140,7 @@ fn build_module<'ctx, 'g>(
     for item in &typed.module.items {
         match item {
             Item::Function(f) if f.generics.is_empty() => declare_function(ctx, module, f, shape_table)?,
-            Item::Function(_) | Item::ShapeDecl(_) => {}
+            Item::Function(_) | Item::ShapeDecl(_) | Item::OptionsDecl(_) => {}
         }
     }
 
@@ -169,7 +169,7 @@ fn build_module<'ctx, 'g>(
             Item::Function(f) if f.generics.is_empty() => {
                 lower_function(ctx, module, &rt, &globals, typed, f, shape_table, &shape_types, mono_table)?
             }
-            Item::Function(_) | Item::ShapeDecl(_) => {}
+            Item::Function(_) | Item::ShapeDecl(_) | Item::OptionsDecl(_) => {}
         }
     }
 
@@ -840,9 +840,9 @@ fn lower_stmt_match<'ctx>(
                 let pat_val = lower_expr(cg, pat_expr)?;
                 match_cmp(cg, &scrutinee_ty, scrutinee_val, pat_val)?
             }
-            // IsType/Variant: M6 deferral — parser emitted the diagnostic; typeck
-            // would have rejected the program before reaching codegen.
-            MatchPatternKind::IsType(_) | MatchPatternKind::Variant(_) => {
+            // Is/OptionName: M6 arm forms — P3b/P4 implement full codegen.
+            // Typeck would have rejected programs using these before codegen.
+            MatchPatternKind::Is(_) | MatchPatternKind::OptionName(_) => {
                 return Err("codegen: M6 pattern kind reached codegen (should be rejected by typeck)".to_string());
             }
         };

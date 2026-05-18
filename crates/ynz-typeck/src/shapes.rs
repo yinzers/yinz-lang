@@ -125,6 +125,8 @@ impl ShapeTable {
                 let inner_ty = self.resolve_ast_type(inner);
                 Type::Maybe { inner: Box::new(inner_ty) }
             }
+            // M6: Union types — P3b implements full resolution.
+            AstType::Union { .. } => Type::Error,
         }
     }
 }

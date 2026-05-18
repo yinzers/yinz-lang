@@ -15,7 +15,7 @@ fn parse_fn_body(source: &str) -> Vec<Stmt> {
     assert_eq!(output.diagnostics.len(), 0, "unexpected diagnostics: {:?}", output.diagnostics);
     match &output.module.items[0] {
         Item::Function(f) => f.body.stmts.clone(),
-        Item::ShapeDecl(_) => panic!("expected a function"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function"),
     }
 }
 
@@ -99,17 +99,19 @@ fn m3_stmt_variant_count_locked() {
 
 #[test]
 fn m3_match_pattern_kind_variant_count_locked() {
-    // WHY: Only three MatchPatternKind variants ship in M3: Value (active),
-    // IsType and Variant (both reserved for M6). Locking this prevents
-    // accidentally adding a fourth without documenting the milestone.
+    // WHY: Only three MatchPatternKind variants exist through M6: Value (active),
+    // Is and OptionName (both widened from M3 stubs in M6 P2).
+    // Locking this prevents accidentally adding a fourth without documenting the milestone.
     //
     // test-ratchet: M3 adds 3 variants: Value(1), IsType(2), Variant(3).
     //   IsType and Variant are deferred to M6 — parser emits diagnostics.
+    // test-ratchet: M6 P2 renames IsType → Is(TypePath) and Variant → OptionName(String).
+    //   Variant count stays 3; payloads widened.
     use ynz_ast::nodes::MatchPatternKind::*;
     let all_variants: &[MatchPatternKind] = &[
         Value(ynz_ast::nodes::Expr::Error(span(0, 0))),
-        IsType("Foo".into()),
-        Variant("bar".into()),
+        Is(ynz_ast::nodes::TypePath { name: "Foo".into(), span: span(0, 3) }),
+        OptionName("bar".into()),
     ];
     assert_eq!(all_variants.len(), 3, "MatchPatternKind variant count changed from 3");
 }
@@ -372,6 +374,141 @@ fn m5_type_variant_count_locked() {
     assert_eq!(all_variants.len(), 13, "Type variant count changed from 13 — add a // test-ratchet: comment");
 }
 
+// ── M6 variant-count locks ───────────────────────────────────────────────────
+
+#[test]
+fn m6_item_variant_count_locked() {
+    // WHY: Item variants beyond M6 are M7+ work. This pins the count.
+    //
+    // test-ratchet: M6 adds OptionsDecl(3) for `options Status { ... }` declarations.
+    //   M1: Function(1). M4: ShapeDecl(2). M6: OptionsDecl(3). Total: 3.
+    use ynz_ast::nodes::Item::*;
+    let all_variants: &[Item] = &[
+        Function(ynz_ast::nodes::FunctionDecl {
+            name: String::new(), name_span: span(0, 0), generics: vec![], params: vec![],
+            return_type: Type::Nothing,
+            body: ynz_ast::nodes::Block { stmts: vec![], span: span(0, 0) },
+            span: span(0, 0),
+        }),
+        ShapeDecl(ynz_ast::nodes::ShapeDecl {
+            name: String::new(), name_span: span(0, 0), is_base: false, generics: vec![],
+            extends: None, follows: vec![], fields: vec![], contract_sigs: vec![], span: span(0, 0),
+        }),
+        OptionsDecl(ynz_ast::nodes::OptionsDecl {
+            name: "Status".into(), name_span: span(0, 6), variants: vec![], span: span(0, 20),
+        }),
+    ];
+    assert_eq!(all_variants.len(), 3, "Item variant count changed from 3 — add a // test-ratchet: comment");
+}
+
+#[test]
+fn m6_type_variant_count_locked() {
+    // WHY: Type variants beyond M6 are M7+ work. This pins the count.
+    //
+    // test-ratchet: M6 adds Union(14) for `A | B | C` union type syntax.
+    use ynz_ast::nodes::Type::*;
+    let all_variants: &[Type] = &[
+        Nothing, Named("foo".into(), span(0, 3)), Error, Int, Float,
+        Number { precision: 34 }, Bool,
+        Range { element: Box::new(Int), end_inclusive: false },
+        Dynamic { contract: "Foo".into(), span: span(0, 3) },
+        SelfType { span: span(0, 4) },
+        TypeParam { name: "T".into(), span: span(0, 1) },
+        Generic { name: "array".into(), name_span: span(0, 5), args: vec![Int], span: span(0, 10) },
+        Maybe { inner: Box::new(Int), span: span(0, 9) },
+        Union { variants: vec![Int, Float], span: span(0, 10) },
+    ];
+    assert_eq!(all_variants.len(), 14, "Type variant count changed from 14 — add a // test-ratchet: comment");
+}
+
+// ── M6 parse tests ───────────────────────────────────────────────────────────
+
+#[test]
+fn m6_options_decl_parses() {
+    // WHY: The simplest valid options declaration must parse into OptionsDecl with
+    // the correct variant list. If this fails, every options-using program fails.
+    let output = parse("options Status { active, inactive, banned }");
+    assert_eq!(output.diagnostics.len(), 0, "unexpected diagnostics: {:?}", output.diagnostics);
+    match &output.module.items[0] {
+        Item::OptionsDecl(o) => {
+            assert_eq!(o.name, "Status");
+            assert_eq!(o.variants.len(), 3);
+            assert_eq!(o.variants[0].0, "active");
+            assert_eq!(o.variants[1].0, "inactive");
+            assert_eq!(o.variants[2].0, "banned");
+        }
+        other => panic!("expected OptionsDecl, got {other:?}"),
+    }
+}
+
+#[test]
+fn m6_options_decl_empty_body_parses_tolerantly() {
+    // WHY: Empty options body must parse (typeck rejects it with a teaching error).
+    // If the parser panics or produces 0 items, typeck never gets the chance to teach.
+    let output = parse("options Empty { }");
+    assert_eq!(output.module.items.len(), 1, "expected 1 item (OptionsDecl) even for empty body");
+    match &output.module.items[0] {
+        Item::OptionsDecl(o) => {
+            assert_eq!(o.name, "Empty");
+            assert_eq!(o.variants.len(), 0, "empty body produces 0 variants");
+        }
+        other => panic!("expected OptionsDecl, got {other:?}"),
+    }
+}
+
+#[test]
+fn m6_union_type_in_return_position_parses() {
+    // WHY: `A | B` in a let annotation type position must produce Type::Union.
+    // If it produces two separate Named types, union narrowing is never reachable.
+    let stmts = parse_fn_body(&wrap("let x: Circle | Square = { radius: 5.0 }"));
+    match &stmts[0] {
+        ynz_ast::nodes::Stmt::Let { ty: Some(Type::Union { variants, .. }), .. } => {
+            assert_eq!(variants.len(), 2, "expected 2 union variants");
+        }
+        other => panic!("expected Let with Union type, got {other:?}"),
+    }
+}
+
+#[test]
+fn m6_union_type_three_variants_parses() {
+    // WHY: Three-variant union `A | B | C` must parse into a single Union with 3 variants,
+    // not nested two-variant unions. Codegen relies on the flat list for tag assignment.
+    let stmts = parse_fn_body(&wrap("let x: Circle | Square | Triangle = { radius: 5.0 }"));
+    match &stmts[0] {
+        ynz_ast::nodes::Stmt::Let { ty: Some(Type::Union { variants, .. }), .. } => {
+            assert_eq!(variants.len(), 3, "expected 3 union variants in flat list");
+        }
+        other => panic!("expected Let with Union type, got {other:?}"),
+    }
+}
+
+#[test]
+fn m6_is_arm_produces_is_pattern() {
+    // WHY: `is Circle =>` in a multi-case arm must produce MatchPatternKind::Is(TypePath),
+    // not a generic Value pattern. Typeck and codegen key on this variant for union narrowing.
+    let output = parse(
+        r#"function main() -> nothing {
+  if (x) {
+    is Circle => print("circle")
+    else => print("other")
+  }
+}"#,
+    );
+    // Parser emits a deferral diagnostic (P3b removes it); but the AST node must be Is.
+    let func = match &output.module.items[0] {
+        Item::Function(f) => f,
+        other => panic!("expected Function, got {other:?}"),
+    };
+    let is_arm_found = func.body.stmts.iter().any(|stmt| {
+        if let ynz_ast::nodes::Stmt::Match { arms, .. } = stmt {
+            arms.iter().any(|arm| matches!(&arm.pattern.kind, MatchPatternKind::Is(_)))
+        } else {
+            false
+        }
+    });
+    assert!(is_arm_found, "expected at least one MatchPatternKind::Is arm");
+}
+
 // ── M4 parse tests ───────────────────────────────────────────────────────────
 
 #[test]
@@ -467,7 +604,7 @@ fn anonymous_struct_lit_parses() {
     assert_eq!(output.diagnostics.len(), 0, "Struct lit must parse cleanly");
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { value: ynz_ast::nodes::Expr::StructLit { fields, .. }, .. } => {
@@ -486,7 +623,7 @@ fn field_access_parses() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { value: ynz_ast::nodes::Expr::FieldAccess { field, .. }, .. } => {
@@ -504,7 +641,7 @@ fn field_assignment_parses() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::FieldAssign { target, value: ynz_ast::nodes::Expr::IntLit(50, _), .. } => {
@@ -522,7 +659,7 @@ fn copy_postfix_op_parses() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { value: ynz_ast::nodes::Expr::PostfixOp { op: ynz_ast::nodes::PostfixOpKind::Copy, .. }, .. } => {}
@@ -537,7 +674,7 @@ fn freeze_postfix_op_parses() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Expr(ynz_ast::nodes::Expr::PostfixOp { op: ynz_ast::nodes::PostfixOpKind::Freeze, .. }) => {}
@@ -553,7 +690,7 @@ fn dynamic_type_in_type_position_parses() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { ty: Some(ynz_ast::nodes::Type::Dynamic { contract, .. }), .. } => {
@@ -606,7 +743,7 @@ fn self_value_in_function_body_parses() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Expr(ynz_ast::nodes::Expr::Call(c)) => {
@@ -686,7 +823,7 @@ fn type_annotations_parse_correctly() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { ty: Some(Type::Int), .. } => {}
@@ -701,7 +838,7 @@ fn number_type_without_brackets_is_34_precision() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { ty: Some(Type::Number { precision: 34 }), .. } => {}
@@ -735,7 +872,7 @@ fn mul_binds_tighter_than_add() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { value, .. } => match value {
@@ -757,7 +894,7 @@ fn comparison_binds_tighter_than_and() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { value, .. } => match value {
@@ -779,7 +916,7 @@ fn binary_ops_are_left_associative() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { value, .. } => match value {
@@ -801,7 +938,7 @@ fn or_binds_looser_than_and() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { value, .. } => match value {
@@ -822,7 +959,7 @@ fn parentheses_override_precedence() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { value, .. } => match value {
@@ -984,7 +1121,7 @@ fn let_type_mismatch_parses_cleanly() {
     );
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { ty: Some(Type::Int), value: Expr::NumberLit(s, _), .. } => {
@@ -1021,7 +1158,7 @@ fn multi_arg_call_parses_cleanly() {
     );
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Expr(Expr::Call(c)) => {
@@ -1041,7 +1178,7 @@ fn chained_comparison_parses_as_left_associative() {
     assert_eq!(output.diagnostics.len(), 0, "Chained comparison parses clean");
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { value, .. } => match value {
@@ -1067,7 +1204,7 @@ fn assignment_parses_as_stmt_assign() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     assert!(
         matches!(&body.stmts[1], Stmt::Assign { target, .. } if target == "x"),
@@ -1084,7 +1221,7 @@ fn method_call_parses_correctly() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { value: Expr::MethodCall { method, .. }, .. } => {
@@ -1103,7 +1240,7 @@ fn unary_neg_parses_correctly() {
     assert_eq!(output.diagnostics.len(), 0);
     let body = match &output.module.items[0] {
         Item::Function(f) => &f.body,
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     match &body.stmts[0] {
         Stmt::Let { value: Expr::UnaryOp { op, operand, .. }, .. } => {
@@ -1176,7 +1313,7 @@ fn wrong_return_type_parses_with_named_type() {
                 f.return_type
             );
         }
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     }
 }
 
@@ -1220,7 +1357,7 @@ fn function_with_parameters_parses_correctly() {
             assert!(matches!(f.params[0].ty, Type::Int));
             assert!(matches!(f.params[1].ty, Type::Int));
         }
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     }
 }
 
@@ -1232,7 +1369,7 @@ fn function_with_no_params_still_parses() {
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => assert_eq!(f.params.len(), 0),
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     }
 }
 
@@ -1245,7 +1382,7 @@ fn trailing_comma_in_params_is_accepted() {
     assert_eq!(output.diagnostics.len(), 0);
     match &output.module.items[0] {
         Item::Function(f) => assert_eq!(f.params.len(), 1),
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     }
 }
 
@@ -1287,7 +1424,7 @@ fn ownership_annotation_on_param_parses_correctly() {
             );
             assert_eq!(f.params[0].name, "x");
         }
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     }
 }
 
@@ -1303,7 +1440,7 @@ fn simple_if_parses_correctly() {
             Stmt::If { .. } => {}
             other => panic!("Expected Stmt::If, got {other:?}"),
         },
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     }
 }
 
@@ -1318,7 +1455,7 @@ fn while_loop_parses_correctly() {
             Stmt::While { .. } => {}
             other => panic!("Expected Stmt::While, got {other:?}"),
         },
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     }
 }
 
@@ -1334,7 +1471,7 @@ fn for_loop_parses_correctly() {
             Stmt::For { var, .. } => assert_eq!(var, "i"),
             other => panic!("Expected Stmt::For, got {other:?}"),
         },
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     }
 }
 
@@ -1350,7 +1487,7 @@ fn return_with_value_parses_correctly() {
             Stmt::Return { value: Some(_), .. } => {}
             other => panic!("Expected Stmt::Return with value, got {other:?}"),
         },
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     }
 }
 
@@ -1366,7 +1503,7 @@ fn return_without_value_parses_correctly() {
             Stmt::Return { value: None, .. } => {}
             other => panic!("Expected Stmt::Return with no value, got {other:?}"),
         },
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     }
 }
 
@@ -1384,7 +1521,7 @@ fn multi_case_if_with_int_arms_parses_as_match() {
             }
             other => panic!("Expected Stmt::Match, got {other:?}"),
         },
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     }
 }
 
@@ -1402,7 +1539,7 @@ fn multi_case_if_with_else_arm() {
             }
             other => panic!("Expected Stmt::Match with else_arm, got {other:?}"),
         },
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     }
 }
 
@@ -1420,7 +1557,7 @@ fn multi_case_else_only_parses_as_match() {
             }
             other => panic!("Expected Stmt::Match with else_arm only, got {other:?}"),
         },
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     }
 }
 
@@ -1488,7 +1625,7 @@ fn nested_if_inside_for_parses_correctly() {
             },
             other => panic!("Outer stmt should be For, got {other:?}"),
         },
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     }
 }
 
@@ -1514,7 +1651,7 @@ fn parse_re_runs_when_source_changes() {
 
     let stmts_after = match &parse_query(&db, sf).module.items[0] {
         Item::Function(f) => f.body.stmts.len(),
-        Item::ShapeDecl(_) => panic!("expected a function item"),
+        Item::ShapeDecl(_) | Item::OptionsDecl(_) => panic!("expected a function item"),
     };
     assert_eq!(stmts_after, 1, "Updated source should have 1 stmt in the body");
 }

@@ -17,8 +17,8 @@
 /// diagnostics at exact source locations.
 use ynz_ast::nodes::{
     BinOpKind, Block, CallExpr, ContractSig, Expr, FieldDecl, FunctionDecl, GenericParam, Item,
-    MatchArm, MatchPattern, MatchPatternKind, Module, OwnershipModifier, Param, PostfixOpKind,
-    ReceiverKind, ShapeDecl, Stmt, StructLitField, Type, UnaryOpKind,
+    MatchArm, MatchPattern, MatchPatternKind, Module, OptionsDecl, OwnershipModifier, Param,
+    PostfixOpKind, ReceiverKind, ShapeDecl, Stmt, StructLitField, Type, TypePath, UnaryOpKind,
 };
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
@@ -100,6 +100,7 @@ impl<'a> Parser<'a> {
                 | Token::Function
                 | Token::Shape
                 | Token::Base
+                | Token::Options
                 | Token::If
                 | Token::While
                 | Token::For
@@ -134,6 +135,11 @@ impl<'a> Parser<'a> {
                 Token::Shape => {
                     if let Some(decl) = self.parse_shape_decl(false) {
                         items.push(Item::ShapeDecl(decl));
+                    }
+                }
+                Token::Options => {
+                    if let Some(decl) = self.parse_options_decl() {
+                        items.push(Item::OptionsDecl(decl));
                     }
                 }
                 Token::Base => {
@@ -258,7 +264,22 @@ impl<'a> Parser<'a> {
 
 
     fn parse_type(&mut self) -> Type {
-        self.parse_type_with_depth(0)
+        let start = self.current_span().start;
+        let first = self.parse_type_with_depth(0);
+
+        // `|` in type position = union type (not bitwise-OR which is expr-position only).
+        // Collect remaining variants until no more `|`.
+        if !matches!(self.peek(), Token::Pipe) {
+            return first;
+        }
+        let mut variants = vec![first];
+        while matches!(self.peek(), Token::Pipe) {
+            self.advance(); // consume `|`
+            let next = self.parse_type_with_depth(0);
+            variants.push(next);
+        }
+        let end = self.current_span().start;
+        Type::Union { variants, span: SourceSpan::new(self.file, start, end) }
     }
 
     fn parse_type_with_depth(&mut self, depth: u8) -> Type {
@@ -956,7 +977,7 @@ impl<'a> Parser<'a> {
             let arrow_span = self.current_span();
             let _ = self.expect(&Token::FatArrow);
             self.diags.push(Diagnostic::error(
-                is_span,
+                is_span.clone(),
                 format!("`is {type_name} =>` pattern matching is not available yet."),
                 "Use value matching `1 => ...` or `else => ...` for now.",
                 "Matching on a value's type in multi-case `if` arms (`is Circle => ...`) arrives in v0.1 milestone 6 when union types land.",
@@ -964,7 +985,7 @@ impl<'a> Parser<'a> {
             let body = self.parse_arm_body();
             let pat_span = SourceSpan::new(self.file, pat_start, arrow_span.start);
             return MatchArm {
-                pattern: MatchPattern { kind: MatchPatternKind::IsType(type_name), span: pat_span },
+                pattern: MatchPattern { kind: MatchPatternKind::Is(TypePath { name: type_name, span: is_span }), span: pat_span },
                 body,
                 arrow_span,
             };
@@ -1900,6 +1921,73 @@ impl<'a> Parser<'a> {
         }
         let end = self.tokens.get(self.pos.saturating_sub(1)).map(|s| s.span.end).unwrap_or(start);
         Expr::MapLit { entries, span: SourceSpan::new(self.file, start, end) }
+    }
+
+    // ── M6: options declaration ──────────────────────────────────────────────
+
+    /// Parse `options Name { variant1, variant2, ... }`.
+    ///
+    /// Consumes the `options` token. Tolerant: empty body parses (typeck rejects).
+    fn parse_options_decl(&mut self) -> Option<OptionsDecl> {
+        let start = self.current_span().start;
+        self.advance(); // consume `options`
+
+        let (name, name_span) = match self.peek().clone() {
+            Token::Identifier(n) => {
+                let sp = self.current_span();
+                let name = n.clone();
+                self.advance();
+                (name, sp)
+            }
+            _ => {
+                self.diags.push(Diagnostic::error(
+                    self.current_span(),
+                    "Expected a name for the options type.",
+                    "Write `options Status { active, inactive }` with a PascalCase name.",
+                    "The name identifies the options type in the type system.",
+                ));
+                return None;
+            }
+        };
+
+        if self.expect(&Token::LBrace).is_none() {
+            return None;
+        }
+
+        let mut variants = Vec::new();
+        while !matches!(self.peek(), Token::RBrace | Token::Eof) {
+            match self.peek().clone() {
+                Token::Identifier(v) => {
+                    let v_span = self.current_span();
+                    let v_name = v.clone();
+                    self.advance();
+                    variants.push((v_name, v_span));
+                    // Optional trailing comma
+                    if matches!(self.peek(), Token::Comma) {
+                        self.advance();
+                    }
+                }
+                _ => {
+                    self.diags.push(Diagnostic::error(
+                        self.current_span(),
+                        format!("Expected a variant name inside `options {name} {{ ... }}`."),
+                        "Write variant names as lowercase identifiers separated by commas.",
+                        "Each variant is a named label: `options Status { active, inactive, banned }`.",
+                    ));
+                    self.advance();
+                }
+            }
+        }
+
+        let end = self.current_span().end;
+        self.expect(&Token::RBrace);
+
+        Some(OptionsDecl {
+            name,
+            name_span,
+            variants,
+            span: SourceSpan::new(self.file, start, end),
+        })
     }
 
     // ── M4: shape declaration ────────────────────────────────────────────────

@@ -55,6 +55,8 @@ pub fn collect_signatures(
         match item {
             // M4 P3a: shapes not yet collected into the signature table.
             Item::ShapeDecl(_) => continue,
+            // M6: options declarations — P3a registers them in OptionsTable; not needed here.
+            Item::OptionsDecl(_) => continue,
             Item::Function(f) if !f.generics.is_empty() => {
                 // Generic functions are collected by collect_generic_signatures.
                 continue;

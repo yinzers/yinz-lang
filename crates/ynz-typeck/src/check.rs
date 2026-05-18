@@ -100,6 +100,9 @@ impl<'b> Checker<'b> {
             match item {
                 Item::Function(f) => self.check_function(f),
                 Item::ShapeDecl(_) => {}
+                // M6: options declarations are registered in the OptionsTable (P3a work).
+                // For P2 (parser), the typeck just acknowledges the new Item variant.
+                Item::OptionsDecl(_) => {}
             }
         }
     }
@@ -452,8 +455,9 @@ impl<'b> Checker<'b> {
                         ));
                     }
                 }
-                // IsType and Variant: M6 deferrals already emitted by the parser.
-                MatchPatternKind::IsType(_) | MatchPatternKind::Variant(_) => {}
+                // Is and OptionName: M6 arms — typeck implementation lands in P3a/P3b.
+                // Parser already emitted the deferral diagnostic; typeck skips for now.
+                MatchPatternKind::Is(_) | MatchPatternKind::OptionName(_) => {}
             }
             self.scope.push();
             self.check_stmts(&arm.body.stmts);
@@ -1498,6 +1502,10 @@ impl<'b> Checker<'b> {
                 let inner_ty = self.ast_type_to_type(inner);
                 Type::Maybe { inner: Box::new(inner_ty) }
             }
+            // M6: Union types — P3b implements full resolution; for P2 produce Type::Error
+            // so existing code continues to compile. The parser emits the AST node;
+            // typeck will process it properly in P3b.
+            AstType::Union { .. } => Type::Error,
         }
     }
 
