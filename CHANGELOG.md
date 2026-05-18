@@ -1,5 +1,100 @@
 # Changelog
 
+## v0.1.0-m7 — Full Strings, errors Keyword, Iterables Protocol
+
+Commit range: v0.1.0-m6..v0.1.0-m7
+
+### What's new
+
+M7 is the largest milestone yet — three interlocking pillars that make Yinz programs
+feel like a real language: production-quality strings, a first-class failure-handling
+system, and a uniform iteration protocol.
+
+**Full Unicode strings.** Yinz now has one string form: backtick-quoted `` `...` ``
+with built-in `${}` interpolation and escape sequences (`\n`, `\t`, `\\`, `` \` ``,
+`\${`). The old double-quote form no longer exists — a diagnostic redirects any
+`"..."` to the backtick form. String equality uses NFC canonical normalisation, so
+`` `é` == `é` `` is always `true` regardless of byte representation. All 16 string
+methods ship: `.contains`, `.indexOf`, `.startsWith`, `.endsWith`, `.toUpperCase`,
+`.toLowerCase`, `.substring`, `.trim`, `.split`, `.replace`, `.byteAt`, `.get`,
+`.graphemeAt`, `.count`, `.byteCount`, `.graphemeCount`. The runtime uses
+`simdutf8` for UTF-8 validation and `memchr` for SIMD-accelerated search on
+patterns ≥ 16 bytes.
+
+**`errors` keyword.** Functions that can fail declare `-> T errors`. Calling an
+`errors` function from another `errors` function auto-propagates on failure —
+the happy path reads without any boilerplate. Calling from a non-`errors` function
+requires explicit handling: `.or(default)` for a fallback or `.failed()` for an
+explicit check. The error value carries `.message`, `.suggestions`, `.trace`
+(a call chain as `array<Frame>`), and `.source` (where the failure originated).
+The flow-sensitive narrowing engine (M6) is extended to `errors`-capable bindings:
+`.message` is only valid inside the `if (x.failed())` true-branch.
+
+**Iterable protocol.** `for` loops now dispatch uniformly through the `Iterable<T>`
+and `FallibleIterable<T>` contracts. Built-in collections (`array<T>`, `fixed<T>`,
+`map<K,V>`, `string`, `Range`) all follow `Iterable<T>` via synthesized wrappers.
+User shapes can implement `Iterable<T>` by writing a standalone `next(lend self: Foo)
+-> maybe T` function. `range()` is now first-class — storable, passable, returnable.
+The four REPLACE-AT M7 markers left by M5 are all gone. For-loop iteration over
+strings walks code points.
+
+### Language surface (M7)
+
+- Backtick-only strings with `${}` interpolation, escape sequences, multi-line
+- 16 string methods on the built-in `string` type
+- String equality: NFC canonical (`` `é` == `é` `` is `true`)
+- `for c in someString` — walks code points
+- `-> T errors` function return type — fallible functions
+- Auto-propagation: first use of an errors-capable value in an `errors` function
+  triggers implicit early-return-on-failure
+- `.failed()`, `.or(default)`, `.message`, `.suggestions`, `.trace`, `.source`
+- `range()` first-class — `let r = range(0, 10); for i in r { ... }`
+- User shapes follow `Iterable<T>` via standalone `next()` function
+- `for ((k, v) in m)` tuple-destructure for map iteration
+
+### Design decisions locked
+
+M7 P0 locked 24 design questions before a line of code landed:
+- SSO 24-byte string struct layout (ABI locked; tag byte at offset 23)
+- SIMD crates pinned: `simdutf8=0.1.4`, `memchr=2.7.4`, `unicode-normalization=0.1.24`, `unicase=2.7.0`
+- `Frame { file: string, line: maybe int, function: string }` shape
+- `SourceLoc { file: string, line: maybe int }` shape
+- Frame stack: thread-local, cap-1024, compile-time-emitted (not libunwind)
+- `.orSkipFailures()` is pure (no I/O side effects); `.logSkippedFailuresTo(sink)` for logging
+- `.withErrors()` returns `Iterable<maybe T errors>`, not `Iterable<Result<T>>`
+- 12 new banned-jargon entries: monad, lift, wrap, Result, Option, Either, exception, try, catch, throw, UTF-16, unwrap
+
+### Compiler features
+
+- **`ynz-parser`**: backtick string lexer with interpolation (brace-depth stack for
+  nested `{}`), escape processing, `Token::Errors/BacktickString/InterpolationStart/
+  InterpolationEnd` (60→64 tokens); `-> T errors` return type; `Expr::InterpolatedString`,
+  `Type::ErrorCapable`, `FunctionDecl.errors_capable`; `for ((k,v) in m)` desugaring
+- **`ynz-ast`**: `StringPart` enum; `Expr::InterpolatedString`; `Type::ErrorCapable`
+- **`ynz-typeck`**: `Type::ErrorsCapable` (18→20 types); flow-sensitive errors tracking
+  (`errors_success_narrowed`, `errors_consumed`); string method dispatch (16 methods);
+  interpolation stringifiability check; `Iterable<T>` contract verification for user
+  shapes; Frame/SourceLoc built-in field dispatch; range-outside-for restriction removed
+- **`ynz-codegen`**: `{i64,i64}` errors ABI (mirrors `maybe<T>`); frame push/pop at
+  function entry/exit; auto-propagation branch emission; string method call lowering;
+  interpolated string builder (`ynz_string_builder_*`); string iteration via
+  `ynz_string_codepoint_at`; first-class range as `{i64,i64}` struct; user shape
+  `next()` dispatch
+- **`ynz-runtime`**: `YnzError`/`YnzFrame` structs; `ynz_frame_push/pop` (cap-1024);
+  `ynz_error_new/drop/message`; `ynz_unhandled_error`; NFC equality via
+  `unicode-normalization`; 17 string method functions; SIMD search via `memchr`;
+  locale-invariant case via `unicase`; `ynz_string_builder_*` family
+
+### Tests
+
+782 tests across 7 crates, all passing. New in M7: 12 lexer tests, 19 parser tests,
+29 errors typeck tests, 28 string typeck tests, 21 iterable typeck tests, 6 runtime
+unit tests, and 16 integration fixtures (basic/propagation/nested errors, string
+methods/interpolation/NFC/boundary, string iteration, first-class range, user
+iterables, adversarial OOB/empty/nested).
+
+---
+
 ## v0.1.0-m6 — Options + Unions + Narrowing
 
 Commit range: v0.1.0-m5..v0.1.0-m6
