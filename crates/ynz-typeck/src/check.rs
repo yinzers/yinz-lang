@@ -1615,20 +1615,31 @@ impl<'b> Checker<'b> {
             }
         }
 
-        // Verify all type params were resolved.
-        let mut ok = true;
-        for tp_name in &sig.type_params {
-            if !subst.contains_key(tp_name) {
-                self.diags.push(Diagnostic::error(
-                    call.span.clone(),
-                    format!("Cannot work out the type parameter `{tp_name}` for function `{name}` — pass a value or annotate explicitly."),
-                    format!("Examples: `{name}(5)` (T = int) or `{name}<int>()`"),
-                    "Yinz infers type parameters from the argument types. If there are no arguments, specify the type explicitly.",
-                ));
-                ok = false;
+        // Verify all type params were resolved — emit one consolidated error if multiple are missing.
+        let unresolved: Vec<&String> = sig.type_params.iter()
+            .filter(|tp| !subst.contains_key(*tp))
+            .collect();
+        if !unresolved.is_empty() {
+            match unresolved.len() {
+                1 => {
+                    let tp_name = unresolved[0];
+                    self.diags.push(Diagnostic::error(
+                        call.span.clone(),
+                        format!("Cannot work out the type parameter `{tp_name}` for function `{name}` — pass a value or annotate explicitly."),
+                        format!("Examples: `{name}(5)` (T = int) or `{name}<int>()`"),
+                        "Yinz infers type parameters from the argument types. If there are no arguments, specify the type explicitly.",
+                    ));
+                }
+                n => {
+                    let list = unresolved.iter().map(|tp| format!("`{tp}`")).collect::<Vec<_>>().join(", ");
+                    self.diags.push(Diagnostic::error(
+                        call.span.clone(),
+                        format!("{n} type parameters could not be resolved for `{name}`: {list}."),
+                        format!("Annotate the call explicitly: `{name}<Type1, Type2>(...)` or pass typed arguments."),
+                        "Yinz infers type parameters from the argument types. If there are no arguments, specify all types explicitly.",
+                    ));
+                }
             }
-        }
-        if !ok {
             return Type::Error;
         }
 

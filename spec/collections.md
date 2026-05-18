@@ -324,3 +324,35 @@ function getTopNames(share players: fixed<Player>, count: number) -> array<strin
   return top.map(p => p.name)
 }
 ```
+
+---
+
+## Common mistakes
+
+**Collection types are lowercase — `Array` and `Fixed` are not valid:**
+
+```
+let scores: Array<int> = []
+// COMPILE ERROR: `Array` is not a type — built-in collection types are lowercase in Yinz.
+// Use `array` (lowercase): `array<int>`
+```
+
+Capital letter = user-defined shape. Lowercase = built-in. `array`, `fixed`, `map` are all lowercase.
+
+**A shape value is not an array — use `[...]` to make a collection:**
+
+```
+shape Player { name: string, health: int }
+
+let team: array<Player> = { name: `Alice`, health: 100 }
+// COMPILE ERROR: `{ ... }` creates a single `Player` value, not an `array<Player>`.
+// Put it inside `[...]` to make an array: [{ name: `Alice`, health: 100 }]
+```
+
+**A shape type is not a collection type:**
+
+```
+let team: Player = []
+// COMPILE ERROR: `[]` is an array literal, but `Player` is a shape — a single value, not a collection.
+// Use `array<Player>` if you want a list: `let team: array<Player> = []`
+```

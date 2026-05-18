@@ -216,3 +216,25 @@ a == b             // true — Yinz normalizes to NFC before comparing
 ```
 
 This is called NFC canonical equivalence. You never need to think about it for normal string comparisons.
+
+---
+
+## Common mistakes from other languages
+
+**Single quotes (`'...'`) are not string delimiters in Yinz:**
+
+```
+print('hello world')
+// COMPILE ERROR: Single-quoted strings don't exist in Yinz.
+// Use backtick strings instead: `hello world`
+```
+
+**Double quotes (`"..."`) are also not valid:**
+
+```
+print("hello world")
+// COMPILE ERROR: Double-quoted strings don't exist in Yinz.
+// Use backtick strings instead: `hello world`
+```
+
+Yinz has exactly one string form. You never have to choose between quote styles.

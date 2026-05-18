@@ -80,6 +80,7 @@ Each section covers one part of the language. They're self-contained — start w
 - [Main Function](main.md) — program entry point
 - [Doc Comments](doc-comments.md) — documenting your public API with `///`
 - [Configuration](config.md) — yinz.toml, .env, and runtime set functions
+- [Common Mistakes](common-mistakes.md) — syntax from other languages and how Yinz does it instead
 - [Tooling](tooling.md) — ynz build, ynz run, ynz watch, ynz test, ynz add
 - [Testing](testing.md) — writing and running tests
 - [Packages](packages.md) — adding and publishing packages

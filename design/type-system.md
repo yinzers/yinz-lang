@@ -45,7 +45,7 @@ w.greet()    // calls greet(Warrior) — more specific overload wins
 
 **Why**: "Base shape" reads like English — "this is a base you build on." `abstract` requires knowing what abstraction means in object-oriented design. Yinz isn't OOP and avoids the term. Golden Rule 12.
 
-`base` shapes cannot be instantiated via struct literal — attempting `let e: Entity = { ... }` on a `base shape Entity` is a compile error. They exist purely to be extended.
+`base` shapes cannot be instantiated via shape value literal — attempting `let e: Entity = { ... }` on a `base shape Entity` is a compile error. They exist purely to be extended.
 
 ---
 
