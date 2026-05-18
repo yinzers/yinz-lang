@@ -22,13 +22,10 @@ fn main() {
     let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
     let lib_dir = workspace_root.join("target").join(&profile);
 
-    // Emit the path so the driver binary can find the archive at compile time.
-    // The driver's build.rs (this file) runs before the driver source is compiled,
-    // so env!("YNZ_RT_LIB_DIR") and env!("YNZ_RT_LIB_NAME") will be available.
-    println!("cargo:rustc-env=YNZ_RT_LIB_DIR={}", lib_dir.display());
-    println!("cargo:rustc-env=YNZ_RT_LIB_NAME=ynz_runtime");
+    // Emit the full path to the archive so the driver can embed it with include_bytes!.
+    // The driver extracts it to a temp file at link time — no external lib file needed.
+    println!("cargo:rustc-env=YNZ_RT_LIB_PATH={}", lib_dir.join("libynz_runtime.a").display());
 
-    // Re-run this build script when the runtime library changes.
     println!(
         "cargo:rerun-if-changed={}",
         lib_dir.join("libynz_runtime.a").display()

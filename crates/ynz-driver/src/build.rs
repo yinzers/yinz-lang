@@ -3,6 +3,9 @@ use std::{
     process::{Command, Stdio},
 };
 
+// Runtime library embedded at compile time — no external file dependency when distributing ynz.
+static RUNTIME_LIB_BYTES: &[u8] = include_bytes!(env!("YNZ_RT_LIB_PATH"));
+
 use ynz_codegen::codegen_query;
 use ynz_diagnostics::{render, DiagnosticBucket, SourceSpan};
 use ynz_parser::{CompilerDb, SourceFile};
@@ -79,11 +82,19 @@ pub fn build(source_path: &Path) -> BuildResult {
 
     // 4. Link with system C compiler, including the Yinz runtime library.
     //
-    // YNZ_RT_LIB_DIR and YNZ_RT_LIB_NAME are emitted by crates/ynz-driver/build.rs
-    // at compile time and resolve to the target/{profile}/ directory where cargo
-    // places the ynz-runtime staticlib.
-    let rt_lib_dir = env!("YNZ_RT_LIB_DIR");
-    let rt_lib_name = env!("YNZ_RT_LIB_NAME");
+    // The runtime library is embedded in the ynz binary at compile time (RUNTIME_LIB_BYTES).
+    // We extract it to a temp file for the linker invocation, then delete it immediately after.
+    // This means ynz is fully self-contained — no libynz_runtime.a on the target machine needed.
+    let rt_lib_tmp = std::env::temp_dir().join(format!("libynz_runtime_{}.a", std::process::id()));
+    if let Err(e) = std::fs::write(&rt_lib_tmp, RUNTIME_LIB_BYTES) {
+        diags.push(ynz_diagnostics::Diagnostic::error(
+            SourceSpan::new(&file_name, 0, 0),
+            format!("Failed to extract runtime library to temp dir: {e}"),
+            "Check that your temp directory is writable.",
+            "ynz extracts its bundled runtime library to a temp file during linking.",
+        ));
+        return build_failed(diags, source_path);
+    }
 
     let Some(linker) = find_linker() else {
         diags.push(ynz_diagnostics::Diagnostic::error(
@@ -100,8 +111,7 @@ pub fn build(source_path: &Path) -> BuildResult {
     let binary_path = source_path.with_extension("");
     let cc_result = Command::new(linker)
         .arg(&obj_path)
-        .arg(format!("-L{rt_lib_dir}"))
-        .arg(format!("-l{rt_lib_name}"))
+        .arg(&rt_lib_tmp)
         // Modern Linux distros default `cc` to producing PIE executables, but
         // LLVM emits object files with absolute (non-PIC) relocations for
         // string-literal references. Linking those against a PIE template
@@ -116,8 +126,9 @@ pub fn build(source_path: &Path) -> BuildResult {
         .arg(&binary_path)
         .output();
 
-    // Clean up object file regardless of link outcome.
+    // Clean up temp files regardless of link outcome.
     let _ = std::fs::remove_file(&obj_path);
+    let _ = std::fs::remove_file(&rt_lib_tmp);
 
     match cc_result {
         Err(e) => {
