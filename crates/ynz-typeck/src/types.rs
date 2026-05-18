@@ -26,13 +26,10 @@ pub enum Type {
     Number { precision: u32 },
     /// Boolean: `true` or `false`.
     Bool,
-    /// Internal type produced by `range(...)` calls.
+    /// The type produced by `range(...)` calls — an integer range value.
     ///
-    /// Only valid in the iterable position of a `for` loop. Using it in any other
-    /// position (let binding, function argument, return type) is a compile error
-    /// pointing to M7, where the full `Iterable[T]` protocol replaces this type.
-    ///
-    /// REPLACE-AT M7: remove and replace with Iterable[T] protocol dispatch.
+    /// First-class from M7 onward: can be stored in bindings, passed to functions,
+    /// and returned. Iterating over a `Range` in a `for` loop yields integers.
     Range {
         /// Always `Int` in M3.
         element: Box<Type>,

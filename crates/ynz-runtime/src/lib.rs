@@ -192,8 +192,9 @@ pub extern "C" fn ynz_float_to_string(x: f64) -> *const u8 {
 /// Returns 1 if identical, 0 otherwise. Used by codegen for multi-case `if`
 /// on string scrutinees.
 ///
-/// REPLACE-AT M7: swap for Unicode canonical equivalence — M3 programs do not
-/// produce NFD strings, so byte-equality is correct for all current programs.
+/// NFC normalization for Unicode canonical equivalence is targeted for M7 P4b
+/// (string codegen). Current programs only produce NFC strings from source
+/// literals, so byte-equality is correct. P4b will swap this for NFC comparison.
 ///
 /// # Safety
 ///

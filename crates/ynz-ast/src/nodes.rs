@@ -551,17 +551,13 @@ pub enum Type {
     /// The `bool` primitive type.
     Bool,
 
-    /// The internal type of a `range(...)` expression.
+    /// The type of a `range(...)` expression — an integer range value.
     ///
-    /// Never written by users in M3 — only produced by typeck when it checks
-    /// the iterable position of a `for` loop. Using `Range` in any other position
-    /// (let binding, parameter, return type) is a typeck error pointing to M7.
-    ///
-    /// REPLACE-AT M7: remove this variant and replace with `Iterable[T]` protocol dispatch.
+    /// First-class from M7 onward: can be stored, passed, and returned.
+    /// Iterating over a `Range` in a `for` loop yields integers.
     Range {
-        /// Always `Int` in M3 — `range(...)` only produces integer ranges.
         element: Box<Type>,
-        /// Always `false` in M3 — `range(end)` and `range(start, end)` are end-exclusive.
+        /// Always `false` — `range(end)` and `range(start, end)` are end-exclusive.
         end_inclusive: bool,
     },
 

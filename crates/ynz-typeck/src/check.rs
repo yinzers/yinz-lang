@@ -328,24 +328,8 @@ impl<'b> Checker<'b> {
         let annotated_ty = annotation.map(|t| self.ast_type_to_type(t));
         let value_ty = self.infer_expr(value, annotated_ty.as_ref());
 
-        // Range values cannot be stored in let bindings (M7 deferral).
-        if matches!(value_ty, Type::Range { .. }) {
-            self.diags.push(Diagnostic::error(
-                value.span().clone(),
-                "A `range(...)` value cannot be stored in a variable.",
-                "Use `range(...)` directly in a `for` loop: `for (i in range(0, 10)) { ... }`",
-                "Range values can only appear as the iterable in a `for` loop in M3. Storing, passing, or returning them arrives in v0.1 milestone 7.",
-            ));
-            self.scope.insert(name.to_string(), ScopeEntry {
-                ty: Type::Error,
-                is_const,
-                is_param: false,
-                is_loop_var: false,
-                is_consumed: false,
-                defined_at: name_span.clone(),
-            });
-            return;
-        }
+        // M7 P3c: range values are first-class — no restriction on storage.
+        // (The M3 restriction is removed here.)
 
         let binding_ty = if let Some(ann_ty) = &annotated_ty {
             if value_ty == Type::Error || *ann_ty == Type::Error {
@@ -687,21 +671,30 @@ impl<'b> Checker<'b> {
     ) {
         let iter_ty = self.infer_expr(iter, None);
 
+        // M7 P3c: Iterable<T> protocol dispatch. Each built-in collection type
+        // maps to an element type. User shapes are checked for a next() function
+        // matching the Iterable<T> contract.
         let elem_ty = match &iter_ty {
             Type::Range { element, .. } => *element.clone(),
             Type::BuiltinArray { elem } => *elem.clone(),
             Type::BuiltinFixed { elem, .. } => *elem.clone(),
-            // REPLACE-AT M7: dispatch via Iterable<T>
             Type::BuiltinMap { key, val } => {
                 Type::MapEntry { key: key.clone(), val: val.clone() }
+            }
+            // M7 P3c: string iteration yields one code-point string per step.
+            Type::String => Type::String,
+            // M7 P3c: user shape iteration — requires a standalone next() function
+            // whose return type is maybe<T>. The element type T is extracted from it.
+            Type::Shape { name } => {
+                self.infer_iterable_element_for_shape(name, iter.span())
             }
             Type::Error => Type::Error,
             other => {
                 self.diags.push(Diagnostic::error(
                     iter.span().clone(),
-                    format!("`for` loops over `{}` are not yet supported.", type_name(other)),
-                    "Use `range(...)`: `for (i in range(0, 10)) { ... }`, or iterate over `array<T>` or `fixed<T>`.",
-                    "Full iteration over maps and custom types arrives in v0.1 milestone 7 with the `Iterable[T]` protocol.",
+                    format!("`for` loops over `{}` are not supported.", type_name(other)),
+                    "Use `range(...)`, iterate over `array<T>`, `fixed<T>`, `map<K, V>`, `string`, or a shape that follows `Iterable<T>`.",
+                    "For custom types, define `function next(lend self: YourShape) -> maybe<T>` to make them iterable.",
                 ));
                 Type::Error
             }
@@ -721,6 +714,42 @@ impl<'b> Checker<'b> {
         );
         self.check_stmts(&body.stmts);
         self.scope.pop();
+    }
+
+    /// M7 P3c: look up the element type T for iterating over a user-defined shape.
+    ///
+    /// A shape is iterable if there is a standalone `next` function in the signature
+    /// table whose first parameter is `Shape { name }` and whose return type is
+    /// `Maybe { inner: T }`. If no such function exists, emits a diagnostic and
+    /// returns `Type::Error`.
+    fn infer_iterable_element_for_shape(&mut self, shape_name: &str, span: &SourceSpan) -> Type {
+        if let Some(sig) = self.sig_table.fns.get("next") {
+            let shape_ty = Type::Shape { name: shape_name.to_string() };
+            if let Some((_, first_ty)) = sig.params.first() {
+                if *first_ty == shape_ty {
+                    // next() returns maybe<T> — extract T as the element type.
+                    return match &sig.ret {
+                        Type::Maybe { inner } => *inner.clone(),
+                        other => {
+                            self.diags.push(Diagnostic::error(
+                                span.clone(),
+                                format!("`{shape_name}.next()` must return `maybe<T>` to be iterable, but it returns `{}`.", type_name(other)),
+                                format!("Change `function next(lend self: {shape_name}) -> {}` to return `maybe<T>` instead.", type_name(other)),
+                                "The `Iterable<T>` contract requires `next(lend self) -> maybe<T>`. When the iterator is exhausted, return `none`.",
+                            ));
+                            Type::Error
+                        }
+                    };
+                }
+            }
+        }
+        self.diags.push(Diagnostic::error(
+            span.clone(),
+            format!("`{shape_name}` cannot be iterated — it does not follow `Iterable<T>`."),
+            format!("Add `function next(lend self: {shape_name}) -> maybe<T>` to make it iterable."),
+            "For a `for` loop to work on a custom shape, the shape needs a standalone `next` function returning `maybe<T>`. When the iterator is done, return `none`.",
+        ));
+        Type::Error
     }
 
     fn check_stmt_return(&mut self, value: Option<&Expr>, span: &SourceSpan) {
@@ -1224,14 +1253,8 @@ impl<'b> Checker<'b> {
                 }
             }
 
-            if matches!(actual_ty, Type::Range { .. }) {
-                self.diags.push(Diagnostic::error(
-                    arg.span().clone(),
-                    "A `range(...)` value cannot be passed as a function argument.",
-                    "Use `range(...)` directly in a `for` loop instead.",
-                    "Range values can only appear as the iterable in a `for` loop in M3. Passing them arrives in v0.1 milestone 7.",
-                ));
-            } else if let Type::ErrorsCapable { .. } = &actual_ty {
+            // M7 P3c: range values are first-class — can be passed as function arguments.
+            if let Type::ErrorsCapable { .. } = &actual_ty {
                 // M7 P3a: give a more helpful diagnostic for ErrorsCapable values passed
                 // to a function expecting the success type.
                 if !matches!(expected_ty, Type::ErrorsCapable { .. }) {
@@ -1839,6 +1862,14 @@ impl<'b> Checker<'b> {
             AstType::Named(n, _) if self.shape_table.contains(n) => {
                 Type::Shape { name: n.clone() }
             }
+            // M7 P3c: built-in compiler-synthesized types — always recognized.
+            AstType::Named(n, _) if matches!(n.as_str(), "Frame" | "SourceLoc") => {
+                Type::Shape { name: n.clone() }
+            }
+            // M7 P3c: first-class range type — `range` as a type annotation.
+            AstType::Named(n, _) if n == "range" => {
+                Type::Range { element: Box::new(Type::Int), end_inclusive: false }
+            }
             AstType::Named(n, span) if matches!(n.as_str(), "array" | "fixed" | "maybe" | "map" | "MapEntry") => {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
@@ -2211,6 +2242,41 @@ impl<'b> Checker<'b> {
             }
         };
         let shape_name = shape_name.clone();
+
+        // M7 P3c: built-in compiler-synthesized shapes — Frame and SourceLoc.
+        // These are never user-declared in source; their fields are hardcoded here.
+        if shape_name == "Frame" {
+            return match field {
+                "file" => Type::String,
+                "line" => Type::Maybe { inner: Box::new(Type::Int) },
+                "function" => Type::String,
+                other => {
+                    self.diags.push(Diagnostic::error(
+                        field_span.clone(),
+                        format!("`Frame` does not have a field called `{other}`."),
+                        "Frame has three fields: `file: string`, `line: maybe<int>`, `function: string`.",
+                        "`Frame` is a compiler-synthesized shape that represents one stack frame in an error trace.",
+                    ));
+                    Type::Error
+                }
+            };
+        }
+        if shape_name == "SourceLoc" {
+            return match field {
+                "file" => Type::String,
+                "line" => Type::Maybe { inner: Box::new(Type::Int) },
+                other => {
+                    self.diags.push(Diagnostic::error(
+                        field_span.clone(),
+                        format!("`SourceLoc` does not have a field called `{other}`."),
+                        "SourceLoc has two fields: `file: string`, `line: maybe<int>`.",
+                        "`SourceLoc` is a compiler-synthesized shape that records the source position of an error.",
+                    ));
+                    Type::Error
+                }
+            };
+        }
+
         let Some(shape_def) = self.shape_table.get(&shape_name) else {
             return Type::Error; // shape not in table — already errored at pre-pass
         };
