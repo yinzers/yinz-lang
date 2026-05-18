@@ -9,7 +9,7 @@ use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 use crate::{
     builtins::{
         array_method_return, fixed_method_return, map_method_return, maybe_method_return,
-        string_method_return, STRING_METHODS,
+        sensitive_method_return, string_method_return, STRING_METHODS,
     },
     generics::{
         apply_substitution, unify_param, GenericFnSig, GenericFnTable, GenericShapeTable,
@@ -1078,11 +1078,15 @@ impl<'b> Checker<'b> {
             // M7 P3b: interpolated string — validate that each ${...} expression
             // has a stringifiable type. Primitive types are always valid; shapes
             // require a standalone `toString` function.
+            // M8 P4: if ANY interpoland is `sensitive`, the result is `sensitive string`.
             Expr::InterpolatedString(parts, _) => {
+                let mut has_sensitive = false;
                 for part in parts {
                     if let ynz_ast::nodes::StringPart::Expr(e, span) = part {
                         let part_ty = self.infer_expr(e, None);
-                        if !is_stringifiable(&part_ty, self.sig_table) {
+                        if matches!(&part_ty, Type::Sensitive { .. }) {
+                            has_sensitive = true;
+                        } else if !is_stringifiable(&part_ty, self.sig_table) {
                             let type_name_str = type_name(&part_ty);
                             self.diags.push(Diagnostic::error(
                                 span.clone(),
@@ -1098,7 +1102,13 @@ impl<'b> Checker<'b> {
                         }
                     }
                 }
-                Type::String
+                if has_sensitive {
+                    Type::Sensitive {
+                        inner: Box::new(Type::String),
+                    }
+                } else {
+                    Type::String
+                }
             }
         };
 
@@ -1189,6 +1199,34 @@ impl<'b> Checker<'b> {
         match callee_name.as_str() {
             "print" => self.check_print_call(call),
             "range" => self.check_range_call(call),
+            // M8 P4: `sensitive(value)` constructor — wraps a string in Type::Sensitive.
+            "sensitive" => {
+                if call.args.len() != 1 {
+                    self.diags.push(Diagnostic::error(
+                        call.span.clone(),
+                        format!("`sensitive` takes exactly one argument, got {}.", call.args.len()),
+                        "Write `sensitive(`my secret value`)`.",
+                        "`sensitive` marks a string value as sensitive so it auto-redacts in print output.",
+                    ));
+                    return Type::Error;
+                }
+                let arg_ty = self.infer_expr(&call.args[0], None);
+                if arg_ty != Type::String && arg_ty != Type::Error {
+                    self.diags.push(Diagnostic::error(
+                        call.args[0].span().clone(),
+                        format!(
+                            "`sensitive` only wraps strings, not `{}`.",
+                            type_name(&arg_ty)
+                        ),
+                        "Pass a string value: `sensitive(`my secret`)`.",
+                        "Only string values can be marked sensitive in v0.1.",
+                    ));
+                    return Type::Error;
+                }
+                Type::Sensitive {
+                    inner: Box::new(Type::String),
+                }
+            }
             name => {
                 // Non-generic user-defined function?
                 if let Some(sig) = self.sig_table.fns.get(name) {
@@ -1246,8 +1284,12 @@ impl<'b> Checker<'b> {
         let arg_ty = self.infer_expr(&call.args[0], None);
         // Shapes are printable — the compiler emits a default "ShapeName { field: val, ... }"
         // representation. User-defined toString() can override this.
+        // M8 P4: sensitive values are printable (they emit [REDACTED]).
         let is_printable = self.intrinsics.is_print_type(&arg_ty)
-            || matches!(&arg_ty, Type::Shape { .. } | Type::BuiltinArray { .. });
+            || matches!(
+                &arg_ty,
+                Type::Shape { .. } | Type::BuiltinArray { .. } | Type::Sensitive { .. }
+            );
         if arg_ty != Type::Error && !is_printable {
             // M7 P3a: give a more helpful diagnostic for ErrorsCapable values.
             if let Type::ErrorsCapable { .. } = &arg_ty {
@@ -1739,6 +1781,12 @@ impl<'b> Checker<'b> {
             return Type::Error;
         }
 
+        // M8 P4: sensitive type method dispatch.
+        if let Type::Sensitive { inner } = receiver_ty {
+            let inner = inner.as_ref().clone();
+            return sensitive_method_return(method, &inner, method_span, &mut self.diags);
+        }
+
         // M6: reject `.toInt()` on bool — no silent 0/1 coercion.
         if *receiver_ty == Type::Bool && method == "toInt" {
             self.diags.push(Diagnostic::error(
@@ -2192,6 +2240,15 @@ impl<'b> Checker<'b> {
             AstType::ErrorCapable { inner, .. } => {
                 let inner_ty = self.ast_type_to_type(inner);
                 Type::ErrorsCapable {
+                    inner: Box::new(inner_ty),
+                }
+            }
+            // M8 P4: `sensitive T` — resolve to Sensitive wrapping the inner type.
+            AstType::Sensitive(inner) => {
+                let inner_ty = self.ast_type_to_type(inner);
+                // Only string is allowed as the inner type in v0.1. Other types
+                // will produce type-mismatch errors downstream; no extra diagnostic needed.
+                Type::Sensitive {
                     inner: Box::new(inner_ty),
                 }
             }

@@ -119,6 +119,15 @@ pub enum Type {
     /// or an error value on failure. Flow-sensitive: the type narrows to `inner` after
     /// the caller checks `.failed()` or auto-propagation fires at first use.
     ErrorsCapable { inner: Box<Type> },
+
+    // ── M8 ───────────────────────────────────────────────────────────────────
+
+    // test-ratchet: M8 P4 adds Sensitive for the sensitive type modifier.
+    /// A sensitive value: auto-redacts in `print()` and string interpolation.
+    ///
+    /// Only wraps `string` in v0.1. `.reveal()` strips the modifier.
+    /// `.length` / `.count` / boolean methods return non-sensitive types per spec.
+    Sensitive { inner: Box<Type> },
 }
 
 /// Human-readable type name for diagnostic messages.
@@ -154,5 +163,6 @@ pub fn type_name(t: &Type) -> String {
             .collect::<Vec<_>>()
             .join(" | "),
         Type::ErrorsCapable { inner } => format!("{} errors", type_name(inner)),
+        Type::Sensitive { inner } => format!("sensitive {}", type_name(inner)),
     }
 }

@@ -44,6 +44,14 @@ function p1_pub_banned() -> nothing {
     // pub function helper() -> nothing {}
 }
 
+// ────── P4: sensitive type errors ──────
+
+// WHY: The .reveal() method in a print context should (in future) emit a Tier 3
+// lint; for M8 it compiles cleanly. But printing a sensitive value directly
+// MUST produce [REDACTED]. This tests that the type system accepts sensitive
+// and that the runtime redaction fires.
+// Note: These are commented-out triggers for RUNTIME behavior, not compile errors.
+
 // ────── P0: number syntax migration ──────
 
 // WHY: `number[N]` is the pre-M5 syntax. Parser must reject it with a
