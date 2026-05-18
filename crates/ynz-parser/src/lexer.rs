@@ -315,6 +315,9 @@ impl<'src> Lexer<'src> {
             "self"    => Token::SelfValue,
             // M5 keywords
             "none"    => Token::None,
+            // M6 keywords
+            "options" => Token::Options,
+            "is"      => Token::Is,
             // M4 banned declaration keywords — redirect to Yinz equivalents
             "type" => {
                 self.emit_banned_declaration_keyword(start, self.pos, "type",

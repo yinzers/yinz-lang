@@ -22,7 +22,7 @@ impl<T> Spanned<T> {
 /// Adding a variant requires both an inline `// test-ratchet: <reason>` marker
 /// on that test AND updating this comment with the new count.
 ///
-/// Current count: 58 (M5 P1 added `None` for the `none` literal keyword)
+/// Current count: 60 (M6 P1 added `Options` and `Is` keywords)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Token {
 
@@ -181,6 +181,24 @@ pub enum Token {
     /// surrounding context (annotation, return type, parameter type, sibling
     /// branch). See `design/maybe.md` for the full none-inference rules.
     None,
+
+    // ── M6: options + unions + narrowing ──────────────────────────────────────
+
+    /// The `options` keyword — declares a finite set of named values.
+    ///
+    /// Replaces `enum` from other languages. `enum` is a banned keyword with a
+    /// redirecting diagnostic pointing here.
+    Options,
+
+    /// The `is` keyword — type-narrowing discriminator in union `if`-arm context.
+    ///
+    /// Used in two positions:
+    ///   1. As a multi-case arm prefix: `if (x) { is Circle => ... }`
+    ///   2. As a condition in a regular `if`: `if (x is Circle) { ... }`
+    ///
+    /// `is` looks up the type name in the types-only namespace (same-name value
+    /// bindings are not shadowed). See `design/narrowing.md`.
+    Is,
 }
 
 impl Token {

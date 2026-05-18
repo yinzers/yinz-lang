@@ -846,8 +846,8 @@ impl<'a> Parser<'a> {
                 | Token::Else
         ) && *self.peek_ahead(1) == Token::FatArrow;
 
-        // `is Type =>` form (three tokens): `is` identifier, type-name identifier, `=>`
-        let is_type_arm = matches!(self.peek(), Token::Identifier(kw) if kw == "is")
+        // `is Type =>` form: Token::Is followed by a type-name identifier (M6 keyword)
+        let is_type_arm = matches!(self.peek(), Token::Is)
             && matches!(self.peek_ahead(1), Token::Identifier(_));
 
         value_arm || is_type_arm
@@ -941,35 +941,33 @@ impl<'a> Parser<'a> {
     fn parse_match_arm(&mut self) -> MatchArm {
         let pat_start = self.current_span().start;
 
-        // Check for deferred M6 forms: `is TypeName =>` or bare identifier-not-followed-by-`=>`
-        // `is Type =>` form
-        if let Token::Identifier(kw) = self.peek().clone() {
-            if kw == "is" {
-                let is_span = self.current_span();
-                self.advance(); // consume `is`
-                let type_name = if let Token::Identifier(n) = self.peek().clone() {
-                    let n2 = n.clone();
-                    self.advance();
-                    n2
-                } else {
-                    String::new()
-                };
-                let arrow_span = self.current_span();
-                let _ = self.expect(&Token::FatArrow);
-                self.diags.push(Diagnostic::error(
-                    is_span,
-                    format!("`is {type_name} =>` pattern matching is not available yet."),
-                    "Use value matching `1 => ...` or `else => ...` for now.",
-                    "Matching on a value's type in multi-case `if` arms (`is Circle => ...`) arrives in v0.1 milestone 6 when union types land.",
-                ));
-                let body = self.parse_arm_body();
-                let pat_span = SourceSpan::new(self.file, pat_start, arrow_span.start);
-                return MatchArm {
-                    pattern: MatchPattern { kind: MatchPatternKind::IsType(type_name), span: pat_span },
-                    body,
-                    arrow_span,
-                };
-            }
+        // Check for the `is TypeName =>` arm form (M6 — Token::Is is now a real keyword).
+        // P2 replaces this deferral with a real implementation; for P1 it preserves the M3 diagnostic.
+        if matches!(self.peek(), Token::Is) {
+            let is_span = self.current_span();
+            self.advance(); // consume `is`
+            let type_name = if let Token::Identifier(n) = self.peek().clone() {
+                let n2 = n.clone();
+                self.advance();
+                n2
+            } else {
+                String::new()
+            };
+            let arrow_span = self.current_span();
+            let _ = self.expect(&Token::FatArrow);
+            self.diags.push(Diagnostic::error(
+                is_span,
+                format!("`is {type_name} =>` pattern matching is not available yet."),
+                "Use value matching `1 => ...` or `else => ...` for now.",
+                "Matching on a value's type in multi-case `if` arms (`is Circle => ...`) arrives in v0.1 milestone 6 when union types land.",
+            ));
+            let body = self.parse_arm_body();
+            let pat_span = SourceSpan::new(self.file, pat_start, arrow_span.start);
+            return MatchArm {
+                pattern: MatchPattern { kind: MatchPatternKind::IsType(type_name), span: pat_span },
+                body,
+                arrow_span,
+            };
         }
 
         // Value pattern: literal or identifier followed by `=>`
@@ -2383,5 +2381,7 @@ fn token_display(tok: &Token) -> &str {
         Token::SelfType => "Self",
         Token::SelfValue => "self",
         Token::None => "none",
+        Token::Options => "options",
+        Token::Is => "is",
     }
 }
