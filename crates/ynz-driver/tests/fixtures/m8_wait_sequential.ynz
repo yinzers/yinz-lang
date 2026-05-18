@@ -1,0 +1,9 @@
+// M8 P5: `wait foo()` must run identically to `foo()` (sequential semantics).
+function double(n: int) -> int {
+  return n * 2
+}
+
+function entrypoint() -> nothing {
+  let result = wait double(21)
+  print(result)
+}

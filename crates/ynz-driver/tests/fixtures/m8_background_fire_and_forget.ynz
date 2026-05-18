@@ -1,0 +1,9 @@
+// M8 P5: `background foo()` runs sequentially in M8 (return value discarded).
+function sideEffect() -> nothing {
+  print(`side effect ran`)
+}
+
+function entrypoint() -> nothing {
+  background sideEffect()
+  print(`after background`)
+}

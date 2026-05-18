@@ -1208,3 +1208,28 @@ fn m8_sensitive_reveal_prints_raw() {
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "secret-value\n", "reveal() must print raw value");
 }
+
+// ── M8 P5: concurrency keywords (sequential semantics) ───────────────────────
+
+#[test]
+fn m8_wait_runs_sequentially() {
+    // WHY: In M8, `wait foo()` has identical semantics to `foo()`. The result
+    // is returned normally. Guards that wait doesn't discard the return value
+    // or skip the call.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m8_wait_sequential.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "42\n", "wait double(21) must return 42");
+}
+
+#[test]
+fn m8_background_runs_sequentially() {
+    // WHY: In M8, `background foo()` is sequential — the call runs to completion
+    // before the next statement. The return value is discarded. Guards that
+    // background doesn't skip the call or run after subsequent statements.
+    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("m8_background_fire_and_forget.ynz"));
+    assert_eq!(code, 0);
+    assert_eq!(
+        stdout, "side effect ran\nafter background\n",
+        "background must run before the subsequent print"
+    );
+}
