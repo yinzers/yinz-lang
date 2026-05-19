@@ -53,6 +53,8 @@ Both frontends do the SAME work — parse, type-check, analyze. If we write two 
 
 Same code path serves both frontends. The LSP becomes "expose existing queries over JSON-RPC" instead of "write a second compiler."
 
+Both frontends also share the **SSOT feature registry** (`registry/features.toml`, parsed by `crates/ynz-registry/build.rs`). The registry is the single source of truth for keyword lists, banned-jargon words, primitive intrinsics, type-attached constants, deferred-feature catalog, and IDE muted-hint domains. The CLI compiler reads it to generate diagnostics; the LSP reads it to generate autocomplete suggestions and muted hints. Without the registry, "what keywords can autocomplete here?" and "what muted hints should I show?" have no single place to ask — they'd drift as the feature set grows. See `design/feature-registry.md` for the schema and migration plan.
+
 This is non-negotiable. If we don't commit to salsa from day 1, the LSP is a 6-month side-quest later instead of a few weeks.
 
 ---

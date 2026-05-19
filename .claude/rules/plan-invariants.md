@@ -14,6 +14,10 @@ This file governs what every milestone plan from **M4 onward** must declare.
 >
 > `### Safety` · `### Performance` · `### Teaching` · `### Runtime Dependencies` · `### Kernel-Mode Behavior` · `### Demo & Error Gallery`
 >
+> **From v0.2-M2 onward**, a seventh subsection is also required:
+>
+> `### Feature Registry Entries`
+>
 > Each sub-section lists testable assertions, not vague aspirations.
 
 Pre-M4 milestone plans (M1, M2, M3) are exempt — the rule kicks in for M4 (types + ownership) where the invariants get load-bearing. M3 has a retroactive partial Invariants section per the `design-lockdown-from-gemini-review` plan as proof-of-concept.
@@ -108,6 +112,28 @@ Every phase that adds executable surface MUST extend two canonical files as part
 
 **Cross-reference to project CLAUDE.md**: this requirement is also stated in `<project>/CLAUDE.md` "When Working on This Project" so plans drafted in fresh chats see the requirement immediately.
 
+### `### Feature Registry Entries` *(applies to plans from v0.2-M2 onward — v0.2-M1 is exempt as the plan creating this rule)*
+
+Every plan from v0.2-M2 onward that adds a new language keyword, banned-jargon word, primitive method, type-attached constant, reserved/deferred feature, diagnostic template, or muted-hint domain MUST enumerate the registry entries it adds or modifies.
+
+**Required content per entry type:**
+
+- For new entries: `[[entry_kind]] name = "<name>"` — one line per entry, listing the kind and name.
+- For modified entries: `modify [[entry_kind]] name = "<name>"` — include which fields change and why.
+- For entries the plan explicitly DOES NOT add (e.g., "this plan adds no new keywords"): state that explicitly so reviewers know it was considered.
+
+**Examples (for a plan that adds a new keyword `verify` in v0.2-M3):**
+```
+### Feature Registry Entries
+- New `[[keyword]]` entry: `verify` (token = `Verify`, since = "v0.2")
+- New `[[banned_declaration_keyword]]` entry: `assert` (redirects to `verify`)
+- No new banned_jargon, primitive_intrinsic, type_attached_constant, deferred_* entries for this milestone.
+```
+
+**Why this is a mandatory subsection**: the feature registry SSOT discipline (v0.2-M1) requires that adding a feature to the compiler and adding it to the registry happen in the SAME plan. Without this subsection, plans drift — the code ships but the registry entry is forgotten until the LSP tries to read it (v0.2-M2) and gets an incomplete autocomplete list or stale muted-hint domain.
+
+**Enforcement**: `.claude/graveyard.md` "missing-feature-registry-subsection" Bouncer entry (to be added after v0.2-M2 ships the first plan under this rule — until then, checked at plan-review time).
+
 ---
 
 ## Enforcement
@@ -115,9 +141,10 @@ Every phase that adds executable surface MUST extend two canonical files as part
 This rule is enforced mechanically by the Bouncer:
 
 - `.claude/graveyard.md` Entry 1 catches M4+ plans missing the const-deep-immutability invariants in `### Safety`
-- `.claude/graveyard.md` Entry 3 catches M4+ plans missing any of the (now 6) required sub-sections
+- `.claude/graveyard.md` Entry 3 catches M4+ plans missing any of the (now 7) required sub-sections
 - `.claude/graveyard.md` Entry 4 catches plans that touch `crates/**` without declaring runtime dependencies and kernel-mode behavior
 - `### Demo & Error Gallery` subsection: future Bouncer entry catches plans that touch `crates/**` without including the `examples/basics/` + `examples/errors/` extension obligations (entry to be added once the first M4+ plan ships under the rule — until then, this requirement is checked at plan-review time)
+- `### Feature Registry Entries` subsection: future Bouncer entry catches plans that add language features without enumerating registry entries (to be added after v0.2-M2 ships)
 
 Bouncer checks are runnable shell commands. False-positives are fixed by tightening the regex in the graveyard entry, not by exempting the plan.
 
