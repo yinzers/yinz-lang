@@ -112,6 +112,9 @@ Use `float` when:
 
 The IDE warns you if `float` looks wrong:
 
+> **IDE (v0.2)**: this hint surfaces via the LSP, which ships in v0.2.
+> In v0.1, the compiler emits the warning to stderr when `--release` is set.
+
 ```
 let price: float = 19.99
 // IDE HINT: Using float for financial values may cause rounding errors.
@@ -141,6 +144,9 @@ let count: int = 3.5
 ```
 
 The IDE suggests `int` when you're using `number` for something that's clearly a whole number:
+
+> **IDE (v0.2)**: this hint surfaces via the LSP, which ships in v0.2.
+> In v0.1, the compiler emits the warning to stderr when `--release` is set.
 
 ```
 let pixels: number = 1920

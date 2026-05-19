@@ -55,6 +55,7 @@ pub fn emit_artifact(
     generic_fn_table: &GenericFnTable,
     mono_table: &MonomorphizationTable,
     target_triple: Option<&str>,
+    imported_options: &std::collections::HashMap<String, ynz_typeck::options_table::OptionsEntry>,
 ) -> Result<CompiledArtifact, String> {
     Target::initialize_x86(&InitializationConfig::default());
 
@@ -85,10 +86,12 @@ pub fn emit_artifact(
     build_module(
         &context,
         &module,
+        source_path,
         typed_module,
         shape_table,
         generic_fn_table,
         mono_table,
+        imported_options,
     )?;
 
     module
@@ -112,8 +115,6 @@ pub fn emit_artifact(
 struct ModuleGlobals<'ctx> {
     str_true: GlobalValue<'ctx>,
     str_false: GlobalValue<'ctx>,
-    /// Static "[REDACTED]" string for sensitive value print output (M8 P4).
-    str_redacted: GlobalValue<'ctx>,
     dec_zero: GlobalValue<'ctx>,
     panic_int_add: GlobalValue<'ctx>,
     panic_int_sub: GlobalValue<'ctx>,
@@ -122,28 +123,51 @@ struct ModuleGlobals<'ctx> {
     panic_int_rem: GlobalValue<'ctx>,
     panic_dec_div: GlobalValue<'ctx>,
     panic_dec_rem: GlobalValue<'ctx>,
+    /// Source file path embedded as a C string for runtime panic messages.
+    source_file: GlobalValue<'ctx>,
 }
 
+/// Emit LLVM IR for one Yinz source module.
+///
+/// # Flow (5 passes — order is mandatory)
+///
+/// | Pass | What | Requires from prior passes |
+/// |------|------|---------------------------|
+/// | 0 | Emit LLVM struct types for all user-defined shapes | nothing |
+/// | 1 | Forward-declare every non-generic function | Pass 0 (shape types used in param/return types) |
+/// | 1.5 | Forward-declare monomorphized generic functions | Pass 0 + Pass 1 (non-generic functions may be called from generic bodies) |
+/// | 1.6 | Emit vtable globals for `dynamic Foo` dispatch | Pass 1 (vtable entries point to forward-declared function values) |
+/// | 2 | Emit non-generic function bodies (and lower generic instances) | All prior passes (bodies call functions, construct shapes, dispatch via vtables) |
+///
+/// Generic functions are lowered during Pass 2 by iterating `mono_table` entries, not
+/// by walking the AST's `Item::Function` list — by Pass 2 every generic call site has
+/// already been collected into `mono_table` by the typeck pass.
 fn build_module<'ctx, 'g>(
     ctx: &'ctx Context,
     module: &'g Module<'ctx>,
+    source_path: &str,
     typed: &'g TypedModule,
     shape_table: &'g ShapeTable,
     generic_fn_table: &'g GenericFnTable,
     mono_table: &'g MonomorphizationTable,
+    imported_options: &std::collections::HashMap<String, ynz_typeck::options_table::OptionsEntry>,
 ) -> Result<(), String> {
     let rt = RuntimeDecls::declare(ctx, module);
 
     // M6: collect options table for variant tag lookups during codegen.
     let mut options_diags = ynz_diagnostics::DiagnosticBucket::new();
-    let options_table =
+    let mut options_table =
         ynz_typeck::options_table::collect_options(&typed.module, &mut options_diags);
+    // Merge imported options so cross-file options types work in codegen
+    // (e.g. `Timeframe.daily` where Timeframe is imported from another file).
+    for (name, entry) in imported_options {
+        options_table.options.entry(name.clone()).or_insert_with(|| entry.clone());
+    }
 
     let zero_bits = ynz_numerics::parse("0").expect("decimal zero parse");
     let globals = ModuleGlobals {
         str_true: build_string_global(ctx, module, "true", ".str.true"),
         str_false: build_string_global(ctx, module, "false", ".str.false"),
-        str_redacted: build_string_global(ctx, module, "[REDACTED]", ".str.redacted"),
         dec_zero: build_decimal_global(ctx, module, zero_bits, ".dec.zero"),
         panic_int_add: build_string_global(ctx, module, "int overflow in '+'", ".panic.iadd"),
         panic_int_sub: build_string_global(ctx, module, "int overflow in '-'", ".panic.isub"),
@@ -157,6 +181,7 @@ fn build_module<'ctx, 'g>(
             "remainder by zero (number)",
             ".panic.drem",
         ),
+        source_file: build_string_global(ctx, module, source_path, ".source.file"),
     };
 
     // Pass 0 — emit LLVM struct types for all user-defined shapes.
@@ -285,20 +310,43 @@ fn mangle_type(ty: &Type) -> String {
     match ty {
         Type::Int => "int".to_string(),
         Type::Float => "float".to_string(),
-        Type::Bool => "bool".to_string(),
+        Type::Bool => "boolean".to_string(),
         Type::String => "string".to_string(),
         Type::Nothing => "nothing".to_string(),
-        Type::Shape { name } => name.clone(),
+        Type::Shape { name } => format!("shape_{name}"),
+        Type::Dynamic { contract } => format!("dyn_{contract}"),
         Type::BuiltinArray { elem } => format!("array_{}", mangle_type(elem)),
-        Type::BuiltinFixed { elem, .. } => format!("fixed_{}", mangle_type(elem)),
+        Type::BuiltinFixed { elem, size } => {
+            format!("fixed_{}_{}", size.unwrap_or(0), mangle_type(elem))
+        }
         Type::Maybe { inner } => format!("maybe_{}", mangle_type(inner)),
         Type::Generic { name, args } => {
             let arg_str = args.iter().map(mangle_type).collect::<Vec<_>>().join("_");
             format!("{name}_{arg_str}")
         }
-        other => format!("{other:?}")
-            .to_lowercase()
-            .replace([' ', '{', '}', '"', ':'], "_"),
+        Type::TypeParam { name } => format!("tparam_{name}"),
+        Type::Number { precision } => format!("number_{precision}"),
+        Type::Range { element, end_inclusive } => {
+            format!("range_{}{}", mangle_type(element), if *end_inclusive { "_inc" } else { "" })
+        }
+        Type::BuiltinMap { key, val } => {
+            format!("map_{}_{}", mangle_type(key), mangle_type(val))
+        }
+        Type::MapEntry { key, val } => {
+            format!("mapentry_{}_{}", mangle_type(key), mangle_type(val))
+        }
+        Type::Options { name } => format!("options_{name}"),
+        Type::Union { variants } => {
+            let parts: Vec<_> = variants.iter().map(mangle_type).collect();
+            format!("union_{}", parts.join("_or_"))
+        }
+        Type::ErrorsCapable { inner } => format!("errors_{}", mangle_type(inner)),
+        Type::Sensitive { inner } => format!("sensitive_{}", mangle_type(inner)),
+        // Type::Error should never reach codegen — an earlier phase should have
+        // caught all type errors and stopped compilation. Panic here so it's
+        // visible immediately if it ever does (instead of silently emitting a
+        // mangled name that causes a mysterious linker error).
+        Type::Error => panic!("Type::Error reached mangle_type — compilation should have stopped at typeck"),
     }
 }
 
@@ -495,8 +543,17 @@ fn declare_function<'ctx>(
 
 /// LLVM struct type for errors-capable return values: `{i64, i64}`.
 ///
-/// field 0 = error pointer as i64 (0 = success, non-zero = *YnzError on heap)
-/// field 1 = success value as i64 bits (valid only when field 0 = 0)
+/// LLVM struct type for the `errors`-keyword return encoding: `{i64, i64}`.
+///
+/// # ABI contract
+///
+/// - `field 0` (i64): error pointer — `0` means success; non-zero is a `*YnzError`
+///   heap pointer cast to i64.
+/// - `field 1` (i64): success value bits — valid ONLY when `field 0 == 0`.
+///   - Scalar types (int, bool, float): stored directly as i64.
+///   - Pointer-typed success values (string, shape, array, …): the heap pointer is
+///     cast to i64.  Callers must cast `field 1` back to the appropriate pointer
+///     type before dereferencing.
 fn errors_result_type(ctx: &Context) -> inkwell::types::StructType<'_> {
     ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false)
 }
@@ -1765,6 +1822,88 @@ fn lower_stmt_for<'ctx>(
         return Ok(());
     }
 
+    // Fixed array iteration: `for (x in arr)` where arr: fixed<T>.
+    // Identical to BuiltinArray but uses compile-time size + direct GEP instead of runtime calls.
+    if let Type::BuiltinFixed { elem, size } = &iter_ty {
+        let elem = elem.as_ref().clone();
+        let n = match size {
+            Some(n) => *n as u64,
+            None => return Err("codegen: cannot iterate fixed array with unknown size".to_string()),
+        };
+        let size_val = cg.i64().const_int(n, false);
+        let arr_ptr = lower_expr(cg, iter)?.into_pointer_value();
+
+        let i_slot = cg
+            .builder
+            .build_alloca(cg.i64(), "ff_i")
+            .map_err(|e| format!("{e}"))?;
+        cg.builder
+            .build_store(i_slot, cg.i64().const_zero())
+            .map_err(|e| format!("{e}"))?;
+
+        let cond_bb = cg.append_block("ff_cond");
+        let body_bb = cg.append_block("ff_body");
+        let after_bb = cg.append_block("ff_after");
+
+        cg.builder
+            .build_unconditional_branch(cond_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        cg.builder.position_at_end(cond_bb);
+        let i = cg
+            .builder
+            .build_load(cg.i64(), i_slot, "ff_i_v")
+            .map_err(|e| format!("{e}"))?
+            .into_int_value();
+        let lt = cg
+            .builder
+            .build_int_compare(IntPredicate::SLT, i, size_val, "ff_lt")
+            .map_err(|e| format!("{e}"))?;
+        cg.builder
+            .build_conditional_branch(lt, body_bb, after_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        cg.builder.position_at_end(body_bb);
+        let elem_gep = unsafe {
+            cg.builder
+                .build_gep(cg.i64(), arr_ptr, &[i], "ff_gep")
+                .map_err(|e| format!("{e}"))?
+        };
+        let bits = cg
+            .builder
+            .build_load(cg.i64(), elem_gep, "ff_bits")
+            .map_err(|e| format!("{e}"))?
+            .into_int_value();
+        let elem_val = cg.i64_bits_to(bits, &elem)?;
+        let var_slot = cg.alloca(&elem, var)?;
+        store(cg, elem_val, &elem, var_slot)?;
+        cg.locals.insert(var.to_string(), var_slot);
+
+        for stmt in &body.stmts {
+            if is_block_terminated(cg) {
+                break;
+            }
+            lower_stmt(cg, stmt)?;
+        }
+
+        if !is_block_terminated(cg) {
+            let next_i = cg
+                .builder
+                .build_int_add(i, cg.i64().const_int(1, false), "ff_ni")
+                .map_err(|e| format!("{e}"))?;
+            cg.builder
+                .build_store(i_slot, next_i)
+                .map_err(|e| format!("{e}"))?;
+            cg.builder
+                .build_unconditional_branch(cond_bb)
+                .map_err(|e| format!("{e}"))?;
+        }
+
+        cg.locals.remove(var);
+        cg.builder.position_at_end(after_bb);
+        return Ok(());
+    }
+
     // Map iteration: `for (entry in m)` where m: map<K,V>.
     // Iterates by insertion order; loop var has type MapEntry {key_bits, val_bits}.
     if let Type::BuiltinMap { key, val } = &iter_ty {
@@ -2169,7 +2308,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
 
         Expr::StringLit(bytes, _) => {
             let mut null = bytes.clone();
-            null.push(0);
+            push_c_string_terminator(&mut null);
             let i8t = cg.i8();
             let arr_ty = i8t.array_type(null.len() as u32);
             let arr = i8t.const_array(
@@ -2840,7 +2979,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         ynz_ast::nodes::StringPart::Expr(_, _) => unreachable!(),
                     })
                     .collect();
-                bytes.push(0); // null-terminate
+                push_c_string_terminator(&mut bytes);
                 let i8t = cg.i8();
                 let arr_ty = i8t.array_type(bytes.len() as u32);
                 let arr = i8t.const_array(
@@ -2873,7 +3012,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         ynz_ast::nodes::StringPart::Lit(bytes, _) => {
                             // Emit the literal bytes as a global and append.
                             let mut b = bytes.clone();
-                            b.push(0);
+                            push_c_string_terminator(&mut b);
                             let i8t = cg.i8();
                             let arr_ty = i8t.array_type(b.len() as u32);
                             let arr = i8t.const_array(
@@ -2999,11 +3138,11 @@ fn lower_binop<'ctx>(
     let (lhs, rhs) = coerce_to_bignum_pair(cg, lhs, rhs, lhs_ty, rhs_ty)?;
 
     match (op, lhs_ty) {
-        (Add, Type::Int) => int_arith_overflow(cg, lhs.into_int_value(), rhs.into_int_value(), op),
-        (Sub, Type::Int) => int_arith_overflow(cg, lhs.into_int_value(), rhs.into_int_value(), op),
-        (Mul, Type::Int) => int_arith_overflow(cg, lhs.into_int_value(), rhs.into_int_value(), op),
-        (Div, Type::Int) => int_divrem(cg, lhs.into_int_value(), rhs.into_int_value(), false),
-        (Rem, Type::Int) => int_divrem(cg, lhs.into_int_value(), rhs.into_int_value(), true),
+        (Add, Type::Int) => int_arith_overflow(cg, lhs.into_int_value(), rhs.into_int_value(), op, lhs_e.span().start as u32),
+        (Sub, Type::Int) => int_arith_overflow(cg, lhs.into_int_value(), rhs.into_int_value(), op, lhs_e.span().start as u32),
+        (Mul, Type::Int) => int_arith_overflow(cg, lhs.into_int_value(), rhs.into_int_value(), op, lhs_e.span().start as u32),
+        (Div, Type::Int) => int_divrem(cg, lhs.into_int_value(), rhs.into_int_value(), false, lhs_e.span().start as u32),
+        (Rem, Type::Int) => int_divrem(cg, lhs.into_int_value(), rhs.into_int_value(), true, lhs_e.span().start as u32),
 
         (Add, Type::Float) => cg
             .builder
@@ -3089,10 +3228,12 @@ fn lower_binop<'ctx>(
         }
         (Rem, Type::Number { .. }) => {
             // typeck already rejected this; emit unreachable panic
+            let file_ptr = cg.globals.source_file.as_pointer_value();
+            let zero32 = cg.i32().const_int(0, false);
             cg.builder
                 .build_call(
                     cg.rt.panic_div_by_zero,
-                    &[cg.globals.panic_dec_rem.as_pointer_value().into()],
+                    &[cg.globals.panic_dec_rem.as_pointer_value().into(), file_ptr.into(), zero32.into(), zero32.into()],
                     "",
                 )
                 .map_err(|e| format!("{e}"))?;
@@ -3224,6 +3365,7 @@ fn int_arith_overflow<'ctx>(
     lhs: inkwell::values::IntValue<'ctx>,
     rhs: inkwell::values::IntValue<'ctx>,
     op: &BinOpKind,
+    span_start: u32,
 ) -> Result<BasicValueEnum<'ctx>, String> {
     let (intrinsic, msg_g) = match op {
         BinOpKind::Add => (cg.rt.sadd_overflow, cg.globals.panic_int_add),
@@ -3258,8 +3400,15 @@ fn int_arith_overflow<'ctx>(
         .map_err(|e| format!("{e}"))?;
 
     cg.builder.position_at_end(panic_bb);
+    let file_ptr = cg.globals.source_file.as_pointer_value();
+    let offset_val = cg.i32().const_int(span_start as u64, false);
+    let zero_col = cg.i32().const_int(0, false);
     cg.builder
-        .build_call(cg.rt.panic_overflow, &[msg_g.as_pointer_value().into()], "")
+        .build_call(
+            cg.rt.panic_overflow,
+            &[msg_g.as_pointer_value().into(), file_ptr.into(), offset_val.into(), zero_col.into()],
+            "",
+        )
         .map_err(|e| format!("{e}"))?;
     cg.builder.build_unreachable().map_err(|e| format!("{e}"))?;
 
@@ -3272,6 +3421,7 @@ fn int_divrem<'ctx>(
     lhs: inkwell::values::IntValue<'ctx>,
     rhs: inkwell::values::IntValue<'ctx>,
     is_rem: bool,
+    span_start: u32,
 ) -> Result<BasicValueEnum<'ctx>, String> {
     let zero = cg.i64().const_int(0, false);
     let is_z = cg
@@ -3290,10 +3440,13 @@ fn int_divrem<'ctx>(
     } else {
         cg.globals.panic_int_div
     };
+    let file_ptr = cg.globals.source_file.as_pointer_value();
+    let offset_val = cg.i32().const_int(span_start as u64, false);
+    let zero_col = cg.i32().const_int(0, false);
     cg.builder
         .build_call(
             cg.rt.panic_div_by_zero,
-            &[msg.as_pointer_value().into()],
+            &[msg.as_pointer_value().into(), file_ptr.into(), offset_val.into(), zero_col.into()],
             "",
         )
         .map_err(|e| format!("{e}"))?;
@@ -3384,10 +3537,12 @@ fn decimal_div<'ctx>(
         .build_conditional_branch(is_z, pbb, ok_bb)
         .map_err(|e| format!("{e}"))?;
     cg.builder.position_at_end(pbb);
+    let file_ptr = cg.globals.source_file.as_pointer_value();
+    let zero32 = cg.i32().const_int(0, false);
     cg.builder
         .build_call(
             cg.rt.panic_div_by_zero,
-            &[cg.globals.panic_dec_div.as_pointer_value().into()],
+            &[cg.globals.panic_dec_div.as_pointer_value().into(), file_ptr.into(), zero32.into(), zero32.into()],
             "",
         )
         .map_err(|e| format!("{e}"))?;
@@ -3524,6 +3679,24 @@ fn lower_print<'ctx>(
     Ok(())
 }
 
+/// Terminate a byte vector as a C string, aborting with an ICE message if any
+/// embedded NUL is found.
+///
+/// The lexer rejects `\0` in string literals (Batch 5a.6), so this path should
+/// be unreachable in v0.1. If reached, an earlier compiler phase silently
+/// introduced a NUL — that is a compiler bug, not a user error.
+fn push_c_string_terminator(bytes: &mut Vec<u8>) {
+    if bytes.iter().any(|&b| b == 0) {
+        eprintln!(
+            "INTERNAL COMPILER ERROR: string literal contains an embedded NUL byte at codegen \
+             time. The lexer should have rejected this. Please file an issue at \
+             https://github.com/patrickrizzardi/ynz/issues with the source file."
+        );
+        std::process::abort();
+    }
+    bytes.push(0);
+}
+
 fn to_c_string<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     val: BasicValueEnum<'ctx>,
@@ -3532,8 +3705,25 @@ fn to_c_string<'ctx>(
     match ty {
         Type::String => Ok(val.into_pointer_value()),
 
-        // M8 P4: sensitive string → always prints [REDACTED].
-        Type::Sensitive { .. } => Ok(cg.globals.str_redacted.as_pointer_value()),
+        // M8 P4: sensitive string — delegate to the runtime, which checks
+        // YNZ_REVEAL_SENSITIVE at first call and returns either the raw pointer
+        // or a static "[REDACTED]" string accordingly.
+        Type::Sensitive { .. } => {
+            let call = cg
+                .builder
+                .build_call(
+                    cg.rt.ynz_sensitive_to_string,
+                    &[val.into()],
+                    "sens_str",
+                )
+                .map_err(|e| format!("{e}"))?;
+            let ptr = call
+                .try_as_basic_value()
+                .basic()
+                .ok_or("ynz_sensitive_to_string returned void")?
+                .into_pointer_value();
+            Ok(ptr)
+        }
 
         Type::Bool => cg
             .builder
@@ -3644,9 +3834,10 @@ fn to_c_string<'ctx>(
                     .builder
                     .build_struct_gep(struct_ty, shape_ptr, *field_idx as u32, field_name)
                     .map_err(|e| format!("GEP {field_name}: {e}"))?;
-                // Number (decimal128) fields are stored as i128 in the struct and
-                // must be passed as a pointer to to_c_string. All other field types
-                // are i64-wide and go through i64_bits_to.
+                // Fields use different LLVM types depending on the Yinz type:
+                //   Number (decimal128) → i128 → pass as pointer
+                //   Options            → i8   → zero-extend to i64, use as tag
+                //   everything else    → i64  → i64_bits_to
                 let field_val: BasicValueEnum = if matches!(field_ty, Type::Number { .. }) {
                     let i128t = cg.ctx.i128_type();
                     let raw = cg
@@ -3661,6 +3852,18 @@ fn to_c_string<'ctx>(
                         .build_store(slot, raw)
                         .map_err(|e| format!("{e}"))?;
                     slot.into()
+                } else if matches!(field_ty, Type::Options { .. }) {
+                    // Options stored as i8 tag — load as i8, zero-extend to i64.
+                    let raw = cg
+                        .builder
+                        .build_load(cg.ctx.i8_type(), gep, "dbg_opt_raw")
+                        .map_err(|e| format!("{e}"))?
+                        .into_int_value();
+                    let extended = cg
+                        .builder
+                        .build_int_z_extend(raw, cg.i64(), "dbg_opt_ext")
+                        .map_err(|e| format!("{e}"))?;
+                    extended.into()
                 } else {
                     let bits = cg
                         .builder
@@ -4129,6 +4332,17 @@ fn to_c_string<'ctx>(
                 let g = build_string_global(cg.ctx, cg.module, "<union>", "union_placeholder");
                 Ok(g.as_pointer_value())
             }
+        }
+
+        // Options type — val is the i64-extended i8 tag; delegate to options toString.
+        Type::Options { name } => {
+            // Cast i64 back to i8 for lower_options_to_string which expects an i8.
+            let tag_i64 = val.into_int_value();
+            let tag_i8 = cg.builder
+                .build_int_truncate(tag_i64, cg.ctx.i8_type(), "opt_tag_i8")
+                .map_err(|e| format!("{e}"))?;
+            lower_options_to_string(cg, tag_i8.into(), name)
+                .map(|v| v.into_pointer_value())
         }
 
         _ => Err(format!("codegen: cannot convert {:?} to string", ty)),
@@ -5372,6 +5586,10 @@ fn lower_options_to_string<'ctx>(
         .ok_or("opts_to_string: no insert block")?;
 
     for (i, variant) in entry.variants.iter().enumerate() {
+        // Use the display string if provided, otherwise fall back to the variant name.
+        let display = entry.display_strings.get(i)
+            .and_then(|d| d.as_deref())
+            .unwrap_or(variant.as_str());
         let tag_const = cg.ctx.i8_type().const_int(i as u64, false);
         let is_this_variant = cg
             .builder
@@ -5393,10 +5611,10 @@ fn lower_options_to_string<'ctx>(
         let g = build_string_global(
             cg.ctx,
             cg.module,
-            variant,
+            display,
             &format!(".opts.{opts_name}.{variant}"),
         );
-        let len = cg.i64().const_int(variant.len() as u64, false);
+        let len = cg.i64().const_int(display.len() as u64, false);
         let ptr = cg
             .builder
             .build_call(

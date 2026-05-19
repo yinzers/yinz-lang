@@ -17,7 +17,7 @@ The absolute minimum: the language compiles and runs a hello-world program. No s
 - Functions (with ownership modifiers: `share`/`lend`/`give`/`copy`/`.freeze`)
 - Types (struct-like with fields and methods)
 - Options (named value sets, replaces enums)
-- Unions (`type Foo = A or B or C`)
+- Unions (`shape Foo = A | B | C`)
 - Maybe types (`maybe T`, `none`, `.exists()`, `.value`, `.or(default)`)
 - Generics — both **type generics** (`array<T>`, `map<K,V>`) AND **function generics** (`function foo<T>(...)`)
 - Collections (`fixed<T>`, `array<T>`, `map<K,V>`) with bracket sugar for `.get()` / `.set()`
@@ -29,6 +29,7 @@ The absolute minimum: the language compiles and runs a hello-world program. No s
 - Errors (`errors` keyword, flow-sensitive auto-propagation)
 - Ownership (`share`/`lend`/`give`/`copy`/`.freeze`)
 - Numeric types (`number` = decimal128 default, `number<N>` up to 4096, `float` = f64, `int` = i64)
+- Boolean type (`boolean`, literals `true` / `false`)
 - Concurrency keywords parse + type-check (`wait`, `background`) — runs SEQUENTIALLY (auto-parallelization comes in v0.3)
 - Iterables — built-in iteration over collections (`for (x in arr)`). Custom `follows Iterable<T>` is v1.0.
 - Modules (`import`, `export`, root-relative paths, aliases with `as`, duplicate-name compile error)
@@ -36,7 +37,7 @@ The absolute minimum: the language compiles and runs a hello-world program. No s
 - Doc comments (`///`)
 - Sensitive type modifier (auto-redact in output)
 - Operators (built-in `+`, `-`, `*`, `/`, `%`, `&&`, `||`, `!`, comparison, bitwise). Operator overloading is v1.0.
-- Test keyword reserved in parser (rejected at compile until v0.13)
+- Test keyword reserved in parser (rejected at compile until v0.14)
 
 **Built-in globals:**
 - `print(value)` — output to stdout
@@ -92,6 +93,8 @@ The compiler starts emitting the third severity tier — suggestions — during 
 
 No separate `ynz lint` command — the compiler IS the linter. Customization (config file) comes in v1.x.
 
+**Co-shipping candidate: `--release` flag** — LLVM `-O3`, strip debug info, disable dev-only flags. Locked direction; see `design/future/release-mode.md`. May ship in v0.4 alongside the linting work or slip to v0.5; both are perf-focused milestones where release-build engineering fits.
+
 ---
 
 ## v0.5 — Package manager
@@ -107,6 +110,8 @@ Install mechanism targets bun-class speed (content-addressed cache, hard-links, 
 ## v0.6 — File system (tight trio)
 
 Three modules bundled together because they're tightly coupled:
+
+**Co-shipping candidate: `{ptr, len}` string overhaul** — migrating strings from NUL-terminated C strings to `{ptr, len}` slices. v0.6 is the most likely landing slot because file I/O is the first stdlib that needs embedded-NUL-safe strings (reading binary as a string-typed buffer). See `design/future/string-ptr-len-overhaul.md`. May slip later if file-I/O doesn't actually need embedded NULs in v0.6.
 
 - **`file`** — read, write, append, exists, delete
 - **`path`** — join, dirname, basename, extname, normalize, isAbsolute
@@ -148,23 +153,45 @@ Always paired. `date.now()`, `date.from()`, comparisons, formatting, parsing. `d
 
 ---
 
-## v0.11 — `log` (basic)
+## v0.11 — `db` (database)
 
-`log.info()`, `log.warn()`, `log.error()`, `log.debug()`. Starter logging — the full framework (structured logging, sinks, filters, log levels per module) ships in v0.22.
+Postgres and MySQL to start. Additional drivers (SQLite, etc.) deferred to a later milestone.
+
+The `db` module is one of the most substantial stdlib entries — see `design/stdlib/database.md` for the full early design, including the embedded SQL syntax open question. Headline features:
+
+- **Structured query layer** — type-safe, compiler-validated. Covers filters, joins, group by, aggregates, subqueries, window functions, `NOT EXISTS`/`EXISTS`, `HAVING`, `DISTINCT`, `LIMIT`/`OFFSET`. Types derived from migration history automatically — no separate model file.
+- **Raw SQL escape hatch** — for what the structured layer can't express. Embedded SQL syntax (exact form TBD at design time — see `design/stdlib/database.md` "Embedded SQL Syntax + IDE Support"). Typed results always enforced even for raw queries. Injection structurally impossible: parameters always passed as separate typed values, never interpolated.
+- **Iterator model** — `db.query()` returns a streaming iterator over a small ring buffer. `.collect()` is explicit opt-in, not default.
+- **Direct wire-to-struct deserialization** — compiler generates a typed deserializer per shape at compile time. No intermediate allocation layer.
+- **Migrations** — atomic (transactional DDL), pre-flight schema validation, content-hash migration tracking (not filename-based).
+- **Compiler as query advisor** — N+1 detection, missing-index suggestions, query rewrite hints. Rule 11 format: WHAT/WHAT-INSTEAD/WHY at every warning.
+- **Typed runtime errors** — `DatabaseError` with structured fields + Postgres error-code mapping to human-readable summaries and suggestions.
+
+**IDE support for embedded SQL (ships with this version)**:
+- Syntax coloring for SQL inside the raw escape hatch construct
+- Format-on-save: SQL content formatted with standard SQL indentation, first keyword (`INSERT INTO`, `SELECT`, `FROM`, etc.) indented at surrounding `const`-indentation + project-standard indent width
+
+**Hard dependencies**: v0.6 (file — schema snapshot files), v0.10 (date/duration — timestamp wire deserialization).
+
+---
+
+## v0.12 — `log` (basic)
+
+`log.info()`, `log.warn()`, `log.error()`, `log.debug()`. Starter logging — the full framework (structured logging, sinks, filters, log levels per module) ships in v0.23.
 
 Module-specific lint suggestion: "prefer `log.info()` over `print()` in non-test code when `log` module is available."
 
 ---
 
-## v0.12 — `random`
+## v0.13 — `random`
 
 Tiny module. `random.int(min, max)`, `random.float()`, `random.choice(array)`, `random.shuffle(array)`, `random.seed(n)` for deterministic testing.
 
 ---
 
-## v0.13 — Testing framework (`test` keyword + `ynz test`)
+## v0.14 — Testing framework (`test` keyword + `ynz test`)
 
-The `test` keyword has been reserved in the parser since v0.1. v0.13 ships the runner.
+The `test` keyword has been reserved in the parser since v0.1. v0.14 ships the runner.
 
 Includes:
 - `test "description" { ... }` blocks
@@ -182,20 +209,20 @@ See `design/testing.md` for the full design.
 
 `parallel file` declaration to enable within-file test parallelism. `sequential "resource-name"` declarations to serialize files that share a resource (e.g., two test files both writing to the `users` DB table).
 
-- **Why v0.14+**: v0.13 ships with file-level parallelism only. The 95% case is "files in parallel, tests within a file sequential" and it works fine. Adding refinements upfront creates complexity for everyone to solve a problem only large test suites hit.
-- **Substitute used pre-v0.14+**: Users are responsible for test isolation. `setup file { db.connect(...) }` opens a per-file connection. Files that genuinely share state should be designed differently or use `--serial` mode.
-- **Trigger to land**: v0.14+ if real demand surfaces (e.g., a project with massive test files that need within-file parallelism, or users reporting they can't isolate cross-file state cleanly).
+- **Why v0.15+**: v0.14 ships with file-level parallelism only. The 95% case is "files in parallel, tests within a file sequential" and it works fine. Adding refinements upfront creates complexity for everyone to solve a problem only large test suites hit.
+- **Substitute used pre-v0.15+**: Users are responsible for test isolation. `setup file { db.connect(...) }` opens a per-file connection. Files that genuinely share state should be designed differently or use `--serial` mode.
+- **Trigger to land**: v0.15+ if real demand surfaces (e.g., a project with massive test files that need within-file parallelism, or users reporting they can't isolate cross-file state cleanly).
 - **Locked design**: See `design/testing.md` and `spec/testing.md`
 
 ---
 
-## v0.14 — `regex`
+## v0.15 — `regex`
 
 Substantial design surface (engine choice, flags, captures, replace). Gets its own milestone.
 
 ---
 
-## v0.15 — `http` client
+## v0.16 — `http` client
 
 Three-tier API design (see HTTP open question in `design/open-questions.md` to be designed when this version is up):
 
@@ -207,49 +234,49 @@ With TLS support from day 1 in this version.
 
 ---
 
-## v0.16 — `stats`
+## v0.17 — `stats`
 
 mean, median, mode, stddev, variance, percentile, histogram. Built on `math`.
 
 ---
 
-## v0.17 — `crypto` / `hash`
+## v0.18 — `crypto` / `hash`
 
 SHA-256, SHA-512, AES-GCM, HMAC, key derivation (PBKDF2/Argon2). Careful design needed.
 
 ---
 
-## v0.18 — `compression`
+## v0.19 — `compression`
 
 gzip, zstd, optionally brotli. Wraps system libs via the compiler-internal FFI (since user-facing FFI is v2+).
 
 ---
 
-## v0.19 — `terminal`
+## v0.20 — `terminal`
 
 ANSI colors, cursor positioning, terminal-size detection. For richer CLI output.
 
 ---
 
-## v0.20 — `csv`
+## v0.21 — `csv`
 
 Read, write, optionally streaming for huge files. Less common than JSON but useful.
 
 ---
 
-## v0.21 — `http.server`
+## v0.22 — `http.server`
 
 Builds on `http` client. Routing, middleware, request/response abstractions. Substantial module.
 
 ---
 
-## v0.22 — Logging framework
+## v0.23 — Logging framework
 
-Structured logging on top of v0.11's basic `log` module. Sinks (file, stdout, syslog), filters, log levels per module, structured fields, contextual loggers.
+Structured logging on top of v0.12's basic `log` module. Sinks (file, stdout, syslog), filters, log levels per module, structured fields, contextual loggers.
 
 ---
 
-## v0.23 — Process spawning
+## v0.24 — Process spawning
 
 `process.spawn(cmd, args)`, pipes (stdin/stdout/stderr), signal handling beyond `onShutdown`. Distinct from v0.8's `process.exit/.pid/.isRunning` (which are about the current process).
 
@@ -307,7 +334,7 @@ A way to mark stdlib functions / language features as deprecated, with compiler 
 
 ## v1.2 — Public package registry
 
-Built in Yinz itself. The dogfood milestone — by v1.2 we have everything needed (http.server v0.21, file system v0.6, env v0.8, JSON v0.9, logging framework v0.22, crypto v0.17, compression v0.18), and building the registry in Yinz proves the language can build real services. If we can't, that's a signal the language has gaps to fix.
+Built in Yinz itself. The dogfood milestone — by v1.2 we have everything needed (http.server v0.22, file system v0.6, env v0.8, JSON v0.9, logging framework v0.23, crypto v0.18, compression v0.19), and building the registry in Yinz proves the language can build real services. If we can't, that's a signal the language has gaps to fix.
 
 Registry isn't deployed publicly until shortly before this version ships. The language launch (v1.0) uses git URLs + local paths for packages until v1.2.
 
@@ -356,6 +383,7 @@ Angle-bracket-parameterized sized integers (`int<8>`, `int<16>`, `int<32>`, `uin
 - **Substitute used pre-v2**: Use plain `int` (= i64) for all whole numbers. Covers ±9.2 × 10^18 — bigger than any count a human writes by hand. Precision loss vs sized variants only matters at FFI boundaries, which aren't in v0.1.
 - **Trigger to land**: Either (a) FFI work begins, OR (b) a real user workload needs to interop with a binary protocol that v0.1's byte-array helpers can't ergonomically handle.
 - **Locked design**: See `design/numeric-types.md` and `spec/numeric-types.md`
+- **Registry entries**: `[[deferred_language_feature]]` names `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64` — TBD M1 (P5a)
 
 ### Sized float variants (locked design, deferred from v0.1)
 
@@ -365,6 +393,7 @@ Single-precision (32-bit) IEEE 754 binary float.
 - **Substitute used pre-v2**: Use `float` (f64) for all binary-float math. Slower than f32 on SIMD-heavy workloads but correct.
 - **Trigger to land**: GPU dispatch begins OR ML stdlib begins.
 - **Locked design**: See `design/numeric-types.md` and `spec/numeric-types.md`
+- **Registry entries**: `[[deferred_language_feature]]` names `f32`, `f64` — TBD M1 (P5a)
 
 ### Arbitrary-precision decimal (locked design, deferred from v0.1)
 
@@ -374,6 +403,7 @@ Single-precision (32-bit) IEEE 754 binary float.
 - **Substitute used pre-v2**: Use `number<N>` with N up to 4096. Compile error if a user tries `number<5000>` — error message explicitly points to this deferral.
 - **Trigger to land**: A real user workload genuinely exceeds 4096 digits AND can't be restructured to fit. This is a deliberately high bar.
 - **Locked design**: See `design/numeric-types.md` and `spec/numeric-types.md`
+- **Registry entries**: No token reserved yet — no `[[deferred_language_feature]]` entry. Tracked in this doc only until a token/syntax is reserved.
 
 ### FFI (Foreign Function Interface) (locked design, deferred from v0.1)
 
@@ -383,6 +413,7 @@ The `foreign` keyword and machinery to call C / C++ / Rust libraries from Yinz.
 - **Substitute used pre-v2**: Stdlib modules that need C interop (file I/O, networking, math) call C internally via compiler-private mechanisms. Users don't see this. If a user genuinely needs to call a third-party C library, they have to wait for v2+ or contribute to the stdlib.
 - **Trigger to land**: v2+ work begins OR a stdlib gap creates a real need.
 - **Locked design**: See `design/ffi.md` and `spec/ffi.md`
+- **Registry entries**: `[[deferred_language_feature]]` name `foreign` — TBD M1 (P5b, via `design/future/*.md` catalog)
 
 ### GPU dispatch (locked design, deferred from v0.1)
 
@@ -392,6 +423,7 @@ The `gpu` call-site keyword and kernel compilation to GPU shader / compute langu
 - **Substitute used pre-v2**: None — `gpu` keyword is reserved but not parseable. Compile error if used.
 - **Trigger to land**: v2+ AND a real ML/compute workload requires it.
 - **Locked design**: See `design/gpu.md` and `spec/concurrency.md`
+- **Registry entries**: `[[deferred_language_feature]]` name `gpu` — TBD M1 (P5b)
 
 ### ML stdlib (locked design, deferred from v0.1)
 
@@ -401,6 +433,7 @@ Tensors, neural network primitives, autodiff, optimizers.
 - **Substitute used pre-v2**: None. ML workloads run in Python until then.
 - **Trigger to land**: v2+ AND GPU dispatch lands.
 - **Locked design**: See `design/stdlib/ml.md`
+- **Registry entries**: No `[[deferred_*]]` entry — covered by `[[deferred_stdlib_api]]` (RESERVED kind, zero M1 entries per schema). Populated in the ML stdlib milestone, not M1.
 
 ### Markets stdlib (locked design, deferred from v0.1)
 
@@ -410,6 +443,7 @@ Financial data ingestion, brokerage integrations, market data feeds.
 - **Substitute used pre-v2**: None. Users write HTTP-based integrations directly.
 - **Trigger to land**: v2+.
 - **Locked design**: See `design/stdlib/markets.md`
+- **Registry entries**: No `[[deferred_*]]` entry — covered by `[[deferred_stdlib_api]]` (RESERVED kind, zero M1 entries per schema). Populated in the Markets stdlib milestone, not M1.
 
 ### Self-hosted compiler (locked design, deferred from v0.1)
 
@@ -419,6 +453,7 @@ The Yinz compiler rewritten in Yinz (current bootstrap is in Rust).
 - **Substitute used pre-v2**: Rust bootstrap compiler — see `design/compiler-language.md`.
 - **Trigger to land**: v2+ AND the language is stable enough to self-host.
 - **Locked design**: See `design/compiler-language.md`
+- **Registry entries**: No entry — compiler-internal milestone with no user-facing token reserved. No `[[deferred_language_feature]]` or `[[deferred_tooling_feature]]` entry applies.
 
 ---
 

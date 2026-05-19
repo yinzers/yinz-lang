@@ -136,7 +136,7 @@ rgb[5] = 100
 .count()            // number of items → number
 .unique()           // deduplicated copy
 .limit(n)           // cap to the first N items — returns new collection of at most N
-.contains(fn)       // does any item match? → bool
+.contains(fn)       // does any item match? → boolean
 .concat(other)      // combined copy — does not modify original
 .append(item)       // new collection with item added at the end
 .prepend(item)      // new collection with item added at the front
@@ -163,7 +163,7 @@ These mutate in place, which requires dynamic sizing:
 
 ## map<K, V> — key-value pairs
 
-Use maps when keys aren't known at compile time. For known fields, define a `type` — it's faster.
+Use maps when keys aren't known at compile time. For known fields, define a `shape` — it's faster.
 
 ```
 let wordCounts: map<string, number> = {}
@@ -179,7 +179,7 @@ Map dot methods:
 .get(key)             // → maybe V (might not exist — see Maybe Types)
 .set(key, value)      // add or update one key
 .update({...})        // add or update multiple keys at once
-.has(key)             // does the key exist? → bool
+.has(key)             // does the key exist? → boolean
 .remove(key)          // delete by key
 .keys()               // → array<K>
 .values()             // → array<V>
@@ -244,22 +244,22 @@ let scores: map<string, number> = { alice: 50 }
 scores.alice
 // COMPILE ERROR: Dot access is for methods, not map keys.
 //   Use scores["alice"] for the value at the "alice" key.
-//   If you actually have a fixed set of known keys, consider using a type
+//   If you actually have a fixed set of known keys, consider using a shape
 //   instead — it's faster AND gives you dot access:
 //
-//     type Scores { alice: number, bob: number }
+//     shape Scores { alice: number, bob: number }
 //     scores.alice         // works — alice is a compile-time field
 //
-//   See: spec/collections.md#use-types-instead-of-maps-for-known-fields
+//   See: spec/collections.md#use-shapes-instead-of-maps-for-known-fields
 ```
 
 The simple rule: **dot is for compile-time-known names; brackets are for runtime lookups.**
 
 ---
 
-## Use types instead of maps for known fields
+## Use shapes instead of maps for known fields
 
-If you know all the keys at compile time, a `type` is faster (direct field access vs hash lookup):
+If you know all the keys at compile time, a `shape` is faster (direct field access vs hash lookup):
 
 ```
 // Slower — known fields in a map

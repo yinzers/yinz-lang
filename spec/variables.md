@@ -67,7 +67,7 @@ Inside a function body, you don't have to write the type when it's obvious:
 ```
 let x = 42              // compiler knows: int
 let name = "Patrick"    // compiler knows: string
-let active = true       // compiler knows: bool
+let active = true       // compiler knows: boolean
 ```
 
 The IDE still shows the inferred type on hover. You just don't have to write it.

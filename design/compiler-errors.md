@@ -51,7 +51,7 @@ These words should NEVER appear in user-facing diagnostics. They require CS back
 | ADT, algebraic data type | "a type that can be one of several shapes" |
 | arity | "number of arguments" |
 | variadic | "takes any number of arguments" |
-| residual, remainder | "what's left over" |
+| residual | "what's left over" |
 | associated type | (avoid this concept until we have a user-facing name for it) |
 | implementation (generic CS sense) | Describe what it does; avoid "implementation detail" |
 | referentially transparent | Avoid — describe the behavior directly |
@@ -63,6 +63,8 @@ These words should NEVER appear in user-facing diagnostics. They require CS back
 | invariant violation | "this assumption was broken" |
 
 **When in doubt, use the plain-English form even if slightly longer.** A jr dev who has to look up "monomorphize" is a jr dev who'll close the compiler output and ask a senior dev. That's a failure.
+
+**Mathematical terms that aid teaching are NOT jargon.** `remainder`, `quotient`, `divisor` are more accessible to a newcomer than operator symbols (`%`, `/`). Only programmer-internals jargon (`monomorphize`, `propagate`) belongs on this list. If a term helps a non-programmer understand what the operation means, it earns its place in the diagnostic.
 
 ---
 

@@ -1,0 +1,3 @@
+name = "duplicate-entrypoint-test"
+version = "0.0.0"
+entry = "main.ynz"

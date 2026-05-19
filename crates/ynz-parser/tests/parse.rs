@@ -1953,6 +1953,47 @@ fn trailing_garbage_after_function_produces_diagnostic() {
 }
 
 #[test]
+fn hardening_expression_nesting_depth_cap() {
+    // WHY: ~50k nested open parens deterministically crash the compiler with a
+    // stack overflow (SIGABRT). The 256-level cap must fire a diagnostic and
+    // return an Error node — NOT overflow the stack.
+    //
+    // The test runs on a 16 MB thread stack because debug-mode parse frames are
+    // large. The production cap (256) is what we're testing — the extra stack
+    // just ensures the test harness can REACH the cap without itself overflowing.
+    let result = std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            let depth = 300usize;
+            let source = format!(
+                "function entrypoint() -> nothing {{ let x = {}1{} }}",
+                "(".repeat(depth),
+                ")".repeat(depth)
+            );
+            parse(&source)
+        })
+        .expect("thread spawn failed")
+        .join()
+        .expect("thread panicked");
+    assert!(
+        !result.diagnostics.is_empty(),
+        "Must produce at least one diagnostic for 300 levels of nesting"
+    );
+    let depth_diag = result.diagnostics.iter().find(|d| d.what.contains("256"));
+    assert!(
+        depth_diag.is_some(),
+        "A diagnostic mentioning the 256 limit must be present, got: {:?}",
+        result.diagnostics
+    );
+    // Partial AST still produced — no panic, no empty module.
+    assert_eq!(
+        result.module.items.len(),
+        1,
+        "The function item must still appear in the AST"
+    );
+}
+
+#[test]
 fn empty_source_produces_empty_module() {
     let output = parse("");
     assert_eq!(output.diagnostics.len(), 0);

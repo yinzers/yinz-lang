@@ -136,7 +136,7 @@ fn m7_string_contains_returns_bool() {
     check_no_diags(
         r#"function entrypoint() -> nothing {
     let s = `hello world`
-    let b: bool = s.contains(`world`)
+    let b: boolean = s.contains(`world`)
 }"#,
     );
 }
@@ -147,7 +147,7 @@ fn m7_string_startsWith_returns_bool() {
     check_no_diags(
         r#"function entrypoint() -> nothing {
     let s = `hello`
-    let b: bool = s.startsWith(`he`)
+    let b: boolean = s.startsWith(`he`)
 }"#,
     );
 }
@@ -158,7 +158,7 @@ fn m7_string_endsWith_returns_bool() {
     check_no_diags(
         r#"function entrypoint() -> nothing {
     let s = `hello`
-    let b: bool = s.endsWith(`lo`)
+    let b: boolean = s.endsWith(`lo`)
 }"#,
     );
 }

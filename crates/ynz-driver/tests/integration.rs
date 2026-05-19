@@ -604,8 +604,12 @@ fn m3_multicase_else_arm_dispatches_correctly() {
 #[test]
 fn m3_param_mutation_produces_m4_deferral_diagnostic() {
     // WHY: assigning to a parameter must error with a three-part diagnostic
-    // pointing at M4 (when `lend` lands). If this passes silently, the
-    // read-only-param guarantee is gone.
+    // preserving the read-only-param guarantee. If this passes silently, the
+    // read-only contract is gone.
+    //
+    // test-ratchet: M4 shipped — the old WHY text said "arrive in v0.1 milestone 4"
+    // which was future-tense and incorrect. Updated to check the accurate current
+    // message ("parameters are read-only by default") instead of the stale M4 reference.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_param_mutation.ynz"));
     assert_ne!(code, 0, "param mutation must exit non-zero");
     assert!(stdout.is_empty());
@@ -614,8 +618,8 @@ fn m3_param_mutation_produces_m4_deferral_diagnostic() {
         "diagnostic must mention 'parameter', got:\n{stderr}"
     );
     assert!(
-        stderr.contains("milestone 4"),
-        "deferral must name M4, got:\n{stderr}"
+        stderr.contains("read-only"),
+        "diagnostic must mention read-only semantics, got:\n{stderr}"
     );
 }
 
@@ -1210,6 +1214,44 @@ fn m8_sensitive_reveal_prints_raw() {
     assert_eq!(stdout, "secret-value\n", "reveal() must print raw value");
 }
 
+// ── reveal-sensitive flag ─────────────────────────────────────────────────────
+
+#[test]
+fn reveal_sensitive_flag_shows_raw_value() {
+    // WHY: `ynz run --reveal-sensitive` must print the actual string rather than
+    // `[REDACTED]`. Guards that the env-var propagation from driver → child process
+    // works end-to-end and that the runtime OnceLock reads the flag correctly.
+    let src = fixture("m8_sensitive_basic.ynz");
+    let out = Command::new(ynz_binary())
+        .args(["run", "--reveal-sensitive", src.to_str().unwrap()])
+        .env("CLICOLOR", "0")
+        .output()
+        .expect("failed to spawn ynz binary");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(
+        out.status.code().unwrap_or(-1),
+        0,
+        "must compile and run; stderr:\n{stderr}"
+    );
+    assert!(
+        !stdout.contains("[REDACTED]"),
+        "--reveal-sensitive must not redact; got: {stdout:?}"
+    );
+}
+
+#[test]
+fn without_reveal_sensitive_flag_sensitive_is_redacted() {
+    // WHY: without the flag, sensitive values must still redact. Guards that
+    // the OnceLock default path (env var absent) returns [REDACTED] correctly.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m8_sensitive_basic.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        stdout, "[REDACTED]\n",
+        "without --reveal-sensitive, sensitive must print [REDACTED]"
+    );
+}
+
 // ── M8 P5: concurrency keywords (sequential semantics) ───────────────────────
 
 #[test]
@@ -1327,5 +1369,23 @@ fn m8_combo_doc_sensitive_bignum() {
     assert_eq!(
         stdout, "[REDACTED]\napi-key-xyz\n0.3\nbudget: 0.3\n",
         "sensitive must redact, reveal() must show raw, bignum field addition must be exact"
+    );
+}
+
+#[test]
+fn duplicate_entrypoint_in_project_produces_teaching_diagnostic() {
+    // WHY: two files both declaring `function entrypoint()` would each be renamed
+    // to the C `main` symbol at link time, producing a confusing linker error.
+    // The driver must catch this before codegen and emit a Yinz-level diagnostic.
+    let project_root = fixtures_dir().join("m_duplicate_entrypoint");
+    let (_stdout, stderr, code) = ynz_run_stdout(&project_root);
+    assert_ne!(code, 0, "duplicate entrypoint must fail to build");
+    assert!(
+        stderr.contains("more than one `entrypoint`"),
+        "diagnostic must name the duplicate-entrypoint problem; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("yinz.toml"),
+        "diagnostic must mention yinz.toml so the user knows where to set the entry file; got:\n{stderr}"
     );
 }

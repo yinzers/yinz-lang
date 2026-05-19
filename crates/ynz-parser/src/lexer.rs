@@ -450,8 +450,15 @@ impl<'src> Lexer<'src> {
             b if b.is_ascii_alphabetic() || b == b'_' => self.lex_identifier_or_keyword(start),
 
             b => {
-                self.pos += 1;
-                self.emit_unknown_byte(start, b);
+                let codepoint_len = utf8_codepoint_len(b);
+                let end = (self.pos + codepoint_len).min(self.src.len());
+                self.pos = end;
+                self.diags.push(Diagnostic::error(
+                    SourceSpan::new(self.file, start, end),
+                    format!("The character `{}` is not valid here.", byte_as_char_display(self.src, start, end)),
+                    "Remove or replace this character.",
+                    "Yinz source files may only contain ASCII text and UTF-8 string content.",
+                ));
             }
         }
     }
@@ -465,6 +472,20 @@ impl<'src> Lexer<'src> {
                 break;
             }
         }
+        if self.pos - start > 1024 {
+            self.diags.push(Diagnostic::error(
+                SourceSpan::new(self.file, start, self.pos),
+                "Identifier too long (max 1024 characters).",
+                "Split it into a short binding name and a longer descriptive comment, or trim the name.",
+                "Identifiers this long usually indicate a typo where a closing quote or boundary character is missing, or an attempt to exhaust memory. The limit is set far above realistic usage.",
+            ));
+            self.push_token(Token::Identifier(String::new()), start, self.pos);
+            return;
+        }
+        // Invariant: load.rs validates UTF-8 before constructing a Lexer; every
+        // byte in self.src is valid UTF-8. Identifier bytes are ASCII (alphanumeric
+        // + '_'), which are always valid single-byte UTF-8 sequences, so this slice
+        // is guaranteed to be valid.
         let text = std::str::from_utf8(&self.src[start..self.pos])
             .expect("identifier slice is valid UTF-8 — source was validated at load time");
         let tok = match text {
@@ -529,7 +550,7 @@ impl<'src> Lexer<'src> {
             "promise" => {
                 self.emit_banned_declaration_keyword(
                     start, self.pos, "promise",
-                    "Yinz has `wait` (force completion) and `background` (run outside this function's lifetime). Two keywords cover what other languages use a dozen for.",
+                    "Yinz has `wait` (force completion) and `background` (run after this function returns). Two keywords cover what other languages use a dozen for.",
                     "A `background` task runs when called; use `wait` to force completion. No promise objects needed.",
                 );
                 Token::Identifier(text.to_string())
@@ -537,7 +558,7 @@ impl<'src> Lexer<'src> {
             "future" => {
                 self.emit_banned_declaration_keyword(
                     start, self.pos, "future",
-                    "Yinz has `wait` (force completion) and `background` (run outside this function's lifetime). Two keywords cover what other languages use a dozen for.",
+                    "Yinz has `wait` (force completion) and `background` (run after this function returns). Two keywords cover what other languages use a dozen for.",
                     "A `background` task runs when called; use `wait` to force completion. No future objects needed.",
                 );
                 Token::Identifier(text.to_string())
@@ -545,8 +566,21 @@ impl<'src> Lexer<'src> {
             "goroutine" => {
                 self.emit_banned_declaration_keyword(
                     start, self.pos, "goroutine",
-                    "Yinz has `background` for running a function outside the current function's lifetime: `background process(data)`.",
+                    "Yinz has `background` for running a function after the current function returns: `background process(data)`.",
                     "Use `background foo(arg)` instead. Two keywords (`wait`, `background`) cover what other languages use a dozen for.",
+                );
+                Token::Identifier(text.to_string())
+            }
+            // `test` is reserved for the built-in test framework shipping in v0.13.
+            // Reserving now means existing code using `test` as an identifier breaks
+            // with a clear message rather than a surprise incompatibility when v0.13 ships.
+            "test" => {
+                self.emit_banned_declaration_keyword(
+                    start, self.pos, "test",
+                    "Use a different identifier. The built-in test framework ships in v0.13 \
+                     and will use `test` as a keyword.",
+                    "`test` is reserved for the built-in test framework (v0.13, per design/mvp-scope.md). \
+                     Pre-reserving it means your existing code will not break when v0.13 ships.",
                 );
                 Token::Identifier(text.to_string())
             }
@@ -636,6 +670,26 @@ impl<'src> Lexer<'src> {
                 );
                 Token::Identifier(text.to_string())
             }
+            // Sized numeric type names from C/Rust/Go — not part of the Yinz v0.1 numeric system.
+            // Yinz keeps the numeric type system small: `int` (i64), `float` (f64), `number`
+            // (decimal128). Sized variants land with kernel-mode + embedded support in v2+.
+            "f32" | "f64" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" => {
+                self.emit_banned_declaration_keyword(
+                    start,
+                    self.pos,
+                    text,
+                    "Use `int` for whole numbers, `float` for fast-but-approximate decimals, \
+                     or `number` for exact decimals. Sized variants like `f32` ship in v2+ \
+                     for embedded and kernel-mode work.",
+                    "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit), \
+                     one fast-decimal type (`float`), and one exact-decimal type (`number`). Most programs \
+                     don't need sized variants; they add cognitive load without paying off for typical \
+                     application code. When v2+ ships kernel-mode and embedded targets, sized variants \
+                     land at the same time.",
+                );
+                Token::Identifier(text.to_string())
+            }
+
             other => Token::Identifier(other.to_string()),
         };
         self.push_token(tok, start, self.pos);
@@ -643,21 +697,39 @@ impl<'src> Lexer<'src> {
 
     /// M7: double-quoted strings are not valid Yinz syntax. Redirect to backticks.
     ///
-    /// Advances past the entire `"..."` content for error recovery, emits a
-    /// teaching diagnostic, then produces an empty `BacktickString` token so
-    /// downstream parsing can continue without cascading errors.
+    /// Advances past the entire `"..."` content for error recovery, emits ONE
+    /// teaching diagnostic pointing at the opening quote, then produces an empty
+    /// `BacktickString` token so downstream parsing can continue without cascading errors.
+    ///
+    /// Recovery consumes up to the matching closing `"`, or a blank line (two
+    /// consecutive newlines — an unambiguous block boundary), or EOF — whichever
+    /// comes first. This avoids the cascade of "word is undefined" errors that
+    /// result from stopping at the first `\n` and re-lexing the rest as code.
     fn lex_double_quote_error(&mut self, start: usize) {
         self.pos += 1; // skip opening `"`
-                       // Consume the string content so we can give a recovery token after the error.
-        while self.pos < self.src.len() && self.src[self.pos] != b'"' && self.src[self.pos] != b'\n'
-        {
+        let mut last_was_newline = false;
+        loop {
+            if self.pos >= self.src.len() {
+                break;
+            }
+            let b = self.src[self.pos];
+            if b == b'"' {
+                self.pos += 1; // skip closing `"`
+                break;
+            }
+            if b == b'\n' {
+                if last_was_newline {
+                    // Two consecutive newlines = blank line = block boundary; stop here.
+                    break;
+                }
+                last_was_newline = true;
+            } else {
+                last_was_newline = false;
+            }
             self.pos += 1;
         }
-        if self.pos < self.src.len() && self.src[self.pos] == b'"' {
-            self.pos += 1; // skip closing `"`
-        }
         self.diags.push(Diagnostic::error(
-            SourceSpan::new(self.file, start, self.pos),
+            SourceSpan::new(self.file, start, start + 1),
             "Double-quoted strings don't exist in Yinz.",
             "Use backtick strings instead: `` `hello` `` or `` `Hello ${name}` ``",
             "Yinz has one string form — backtick-quoted strings. They always support \
@@ -738,6 +810,17 @@ impl<'src> Lexer<'src> {
                     return;
                 }
                 b'$' if self.peek(1) == Some(b'{') => {
+                    if self.interp_depth_stack.len() >= 64 {
+                        self.diags.push(Diagnostic::error(
+                            SourceSpan::new(self.file, self.pos, self.pos + 2),
+                            "String interpolation nested too deeply (max 64 levels).",
+                            "Build the string with named `let` bindings instead of inline interpolation.",
+                            "Each `${...}` opens a new nesting level. Beyond 64 the lexer can't recover meaningfully; the limit catches malformed input and adversarial nesting.",
+                        ));
+                        // Consume `${` and continue so the lexer doesn't spin.
+                        self.pos += 2;
+                        continue;
+                    }
                     // Start of interpolation — emit what we have so far, then the marker.
                     self.push_token(Token::BacktickString(bytes), seg_start, self.pos);
                     let interp_start = self.pos;
@@ -780,7 +863,12 @@ impl<'src> Lexer<'src> {
                             self.pos += 1;
                         }
                         b'0' => {
-                            bytes.push(b'\0');
+                            self.diags.push(Diagnostic::error(
+                                SourceSpan::new(self.file, self.pos - 1, self.pos + 1),
+                                "`\\0` (NUL byte) is not a valid escape in Yinz strings.",
+                                "Use a non-NUL placeholder like `*` or split the string into pieces if you need a sentinel.",
+                                "Yinz strings are passed to the runtime as C strings (length-prefixed string slices ship in a future version). Embedding a NUL byte would silently truncate the string at print/concatenate time. The compiler refuses up-front to avoid the silent-truncation footgun.",
+                            ));
                             self.pos += 1;
                         }
                         b'$' if self.peek(1) == Some(b'{') => {
@@ -825,6 +913,18 @@ impl<'src> Lexer<'src> {
     fn lex_hex_int(&mut self, start: usize) {
         self.pos += 2; // skip "0x" or "0X"
         let digits_start = self.pos;
+
+        if self.pos < self.src.len() && self.src[self.pos] == b'_' {
+            self.diags.push(Diagnostic::error(
+                SourceSpan::new(self.file, self.pos, self.pos + 1),
+                "Numeric literals cannot start with `_`.",
+                "Use a single `_` between groups of digits: `0xDEAD_BEEF`.",
+                "The `_` separator is a visual aid — it must sit between digit groups, not at the start.",
+            ));
+            self.skip_to_whitespace();
+            return;
+        }
+
         let mut has_invalid = false;
 
         while self.pos < self.src.len() {
@@ -862,6 +962,9 @@ impl<'src> Lexer<'src> {
             return; // diagnostic already emitted; skip the token
         }
 
+        // Invariant: lex_hex_int only advances self.pos over bytes matching
+        // b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F' | b'_', all of which are
+        // ASCII — valid single-byte UTF-8.
         let raw = std::str::from_utf8(&self.src[digits_start..self.pos])
             .expect("hex digit bytes are ASCII");
 
@@ -894,6 +997,18 @@ impl<'src> Lexer<'src> {
     fn lex_binary_int(&mut self, start: usize) {
         self.pos += 2; // skip "0b" or "0B"
         let digits_start = self.pos;
+
+        if self.pos < self.src.len() && self.src[self.pos] == b'_' {
+            self.diags.push(Diagnostic::error(
+                SourceSpan::new(self.file, self.pos, self.pos + 1),
+                "Numeric literals cannot start with `_`.",
+                "Use a single `_` between digit groups: `0b1111_0000`.",
+                "The `_` separator is a visual aid — it must sit between digit groups, not at the start.",
+            ));
+            self.skip_to_whitespace();
+            return;
+        }
+
         let mut has_invalid = false;
 
         while self.pos < self.src.len() {
@@ -931,6 +1046,8 @@ impl<'src> Lexer<'src> {
             return;
         }
 
+        // Invariant: lex_binary_int only advances over b'0', b'1', and b'_',
+        // all ASCII — valid single-byte UTF-8.
         let raw = std::str::from_utf8(&self.src[digits_start..self.pos])
             .expect("binary digit bytes are ASCII");
 
@@ -972,6 +1089,8 @@ impl<'src> Lexer<'src> {
         while self.pos < self.src.len() && matches!(self.src[self.pos], b'0'..=b'9' | b'_') {
             self.pos += 1;
         }
+        // Invariant: lex_decimal_number only advances over b'0'..=b'9' and b'_',
+        // all ASCII — valid single-byte UTF-8.
         let int_raw =
             std::str::from_utf8(&self.src[int_start..self.pos]).expect("decimal digits are ASCII");
 
@@ -987,7 +1106,26 @@ impl<'src> Lexer<'src> {
             return;
         }
 
-        // Phase 2 — optional fractional part (only if `.` is followed by a digit)
+        // Phase 2 — optional fractional part (only if `.` is followed by a digit).
+        // `3.` followed by EOF, whitespace, or an operator is an error — ambiguous intent.
+        // `42.toString()` is fine — `.` followed by a letter is a method-call dot, not decimal.
+        let next_after_dot = self.pos.checked_add(1).and_then(|i| self.src.get(i)).copied();
+        if self.pos < self.src.len()
+            && self.src[self.pos] == b'.'
+            && !matches!(next_after_dot, Some(b'0'..=b'9'))
+            && !matches!(next_after_dot, Some(b'a'..=b'z' | b'A'..=b'Z' | b'_'))
+        {
+            let dot_pos = self.pos;
+            self.diags.push(Diagnostic::error(
+                SourceSpan::new(self.file, dot_pos, dot_pos + 1),
+                "Decimal point without fractional digits.",
+                "Write `3.0` if you mean three, or `3` if you mean integer three.",
+                "`3.` is ambiguous — could be a float literal or a typo. Yinz requires the digit so the intent is clear at the point of writing.",
+            ));
+            self.skip_to_whitespace();
+            return;
+        }
+
         let has_dot = self.pos < self.src.len()
             && self.src[self.pos] == b'.'
             && self.pos + 1 < self.src.len()
@@ -999,6 +1137,7 @@ impl<'src> Lexer<'src> {
             while self.pos < self.src.len() && matches!(self.src[self.pos], b'0'..=b'9' | b'_') {
                 self.pos += 1;
             }
+            // Invariant: fractional digits are b'0'..=b'9' | b'_', all ASCII.
             let frac_raw = std::str::from_utf8(&self.src[frac_start..self.pos])
                 .expect("fractional digits are ASCII");
             if let Some(err_offset) = validate_underscores(frac_raw) {
@@ -1054,6 +1193,7 @@ impl<'src> Lexer<'src> {
                 self.skip_to_whitespace();
                 return;
             }
+            // Invariant: exponent digits are b'0'..=b'9' | b'_', all ASCII.
             let exp_raw = std::str::from_utf8(&self.src[exp_digits_start..self.pos])
                 .expect("exponent digits are ASCII");
             if let Some(err_offset) = validate_underscores(exp_raw) {
@@ -1070,6 +1210,9 @@ impl<'src> Lexer<'src> {
         }
 
         // Produce the token
+        // Invariant: the full decimal literal span (int part + optional dot +
+        // frac + optional exponent) consists only of b'0'..=b'9', b'.',
+        // b'e'/'E', b'+'/b'-', and b'_', all ASCII — valid UTF-8.
         let raw = std::str::from_utf8(&self.src[start..self.pos]).expect("decimal chars are ASCII");
         if has_dot || has_exp {
             let normalized: String = raw.chars().filter(|&c| c != '_').collect();
@@ -1126,14 +1269,6 @@ impl<'src> Lexer<'src> {
         ));
     }
 
-    fn emit_unknown_byte(&mut self, pos: usize, byte: u8) {
-        self.diags.push(Diagnostic::error(
-            SourceSpan::new(self.file, pos, pos + 1),
-            format!("The character `{}` is not valid here.", byte as char),
-            "Remove or replace this character.",
-            "Yinz source files may only contain ASCII text and UTF-8 string content.",
-        ));
-    }
 
     /// Advance past non-whitespace bytes to recover from a malformed literal.
     fn skip_to_whitespace(&mut self) {
@@ -1144,6 +1279,27 @@ impl<'src> Lexer<'src> {
 
     fn push_token(&mut self, tok: Token, start: usize, end: usize) {
         self.tokens.push(Spanned::new(tok, self.file, start, end));
+    }
+}
+
+/// Return the byte length of the UTF-8 codepoint starting with `first_byte`.
+/// Defaults to 1 for any invalid / continuation byte.
+fn utf8_codepoint_len(first_byte: u8) -> usize {
+    match first_byte {
+        0x00..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF7 => 4,
+        _ => 1,
+    }
+}
+
+/// Produce a display string for the codepoint at `src[start..end]`.
+/// Falls back to a hex escape if the bytes are not valid UTF-8.
+fn byte_as_char_display(src: &[u8], start: usize, end: usize) -> String {
+    match std::str::from_utf8(&src[start..end]) {
+        Ok(s) => s.to_string(),
+        Err(_) => format!("\\x{:02X}", src[start]),
     }
 }
 

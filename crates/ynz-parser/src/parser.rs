@@ -31,6 +31,12 @@ pub struct Parser<'a> {
     tokens: &'a [Spanned<Token>],
     pos: usize,
     pub diags: DiagnosticBucket,
+    expr_depth: u32,
+    /// When `true`, the current token is logically `>` — the first half of a `>>` token
+    /// that was split while closing a nested generic type. `peek()` returns `&Token::Gt`
+    /// and `advance()` consumes it by clearing this flag (without incrementing `pos`).
+    /// The actual `>>` token at `pos` will then be seen on the next call to `peek()`.
+    pending_gt: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -40,10 +46,15 @@ impl<'a> Parser<'a> {
             tokens,
             pos: 0,
             diags: DiagnosticBucket::new(),
+            expr_depth: 0,
+            pending_gt: false,
         }
     }
 
     fn peek(&self) -> &Token {
+        if self.pending_gt {
+            return &Token::Gt;
+        }
         self.tokens
             .get(self.pos)
             .map(|s| &s.value)
@@ -71,6 +82,11 @@ impl<'a> Parser<'a> {
     }
 
     fn advance(&mut self) -> &Spanned<Token> {
+        if self.pending_gt {
+            // Consume the synthetic Gt without moving pos — the underlying `>>` token stays.
+            self.pending_gt = false;
+            return &self.tokens[self.pos];
+        }
         let tok = &self.tokens[self.pos];
         if !tok.value.is_eof() {
             self.pos += 1;
@@ -379,9 +395,9 @@ impl<'a> Parser<'a> {
                 _ => {
                     self.diags.push(Diagnostic::error(
                         self.current_span(),
-                        "Expected an alias name after `as`.",
-                        "Write `import ns as alias from \"path\"`.",
-                        "`as` renames the namespace import to a different local name.",
+                        "Expected a name after `as` to bind the import to.",
+                        "Write `import ns as myName from \"path\"`.",
+                        "`as` gives the import a different local name in this file.",
                     ));
                     return None;
                 }
@@ -484,9 +500,9 @@ impl<'a> Parser<'a> {
                     _ => {
                         self.diags.push(Diagnostic::error(
                             self.current_span(),
-                            "Expected an alias name after `as`.",
+                            "Expected a name after `as` to bind the import to.",
                             "Write `import { fetchUser as getUser } from \"path\"`.",
-                            "`as` renames the imported name to a different local name.",
+                            "`as` gives the imported name a different local name in this file.",
                         ));
                         (exported_name.clone(), exported_name_span.clone())
                     }
@@ -579,11 +595,33 @@ impl<'a> Parser<'a> {
                 Some((path, span))
             }
             _ => {
+                // Try to reconstruct what the user probably meant — consume identifier/slash/dot
+                // tokens to form the path so we can suggest the correct syntax.
+                let span = self.current_span();
+                let mut guessed = String::new();
+                while matches!(
+                    self.peek(),
+                    Token::Identifier(_) | Token::Slash | Token::Dot | Token::LBracket | Token::RBracket
+                ) {
+                    match self.peek().clone() {
+                        Token::Identifier(n) => { guessed.push_str(&n); self.advance(); }
+                        Token::Slash => { guessed.push('/'); self.advance(); }
+                        Token::Dot => { guessed.push('.'); self.advance(); }
+                        _ => { self.advance(); }
+                    }
+                }
+                let suggestion = if guessed.is_empty() {
+                    "import { Symbol } from `shared/contracts/symbol.contracts`".to_string()
+                } else {
+                    // Strip any .ynz suffix the user included
+                    let path = guessed.trim_end_matches(".ynz");
+                    format!("import {{ ... }} from `{path}`")
+                };
                 self.diags.push(Diagnostic::error(
-                    self.current_span(),
-                    "Expected a path string after `from`.",
-                    "Write the module path: `import { foo } from `services/users``.",
-                    "The path is the project-root-relative location of the module file (without `.ynz`).",
+                    span,
+                    "Import paths must be backtick strings.",
+                    suggestion,
+                    "Paths are project-root-relative without the `.ynz` suffix. Example: import {{ Symbol }} from `shared/contracts/symbol.contracts`",
                 ));
                 None
             }
@@ -899,7 +937,7 @@ impl<'a> Parser<'a> {
                 match name.as_str() {
                     "int" => Type::Int,
                     "float" => Type::Float,
-                    "bool" => Type::Bool,
+                    "boolean" => Type::Bool,
                     "number" => self.parse_number_type(),
                     "maybe" => self.parse_maybe_type(span, depth),
                     _ => {
@@ -932,10 +970,28 @@ impl<'a> Parser<'a> {
                             ));
                             break;
                         }
+                        Token::Comma => {
+                            // Allow optional commas between fields.
+                            self.advance();
+                        }
+                        Token::Hidden => {
+                            let hidden_span = self.current_span();
+                            self.advance(); // consume `hidden`
+                            self.diags.push(Diagnostic::error(
+                                hidden_span,
+                                "Inline shape types cannot have `hidden` fields.",
+                                "Move this to a named `shape` declaration, or drop the `hidden` modifier.",
+                                "Hidden fields are file-private — they only make sense for shapes other code in the same file refers to by name. An inline shape is anonymous and one-off; `hidden` has no observable effect.",
+                            ));
+                        }
                         _ => {
                             let field_start = self.current_span().start;
                             if let Some(field) = self.parse_field_decl(false, field_start) {
                                 fields.push(field);
+                            } else {
+                                // parse_field_decl failed but didn't advance — skip the token
+                                // to avoid an infinite loop.
+                                self.advance();
                             }
                         }
                     }
@@ -955,7 +1011,7 @@ impl<'a> Parser<'a> {
                 self.diags.push(Diagnostic::error(
                     self.current_span(),
                     "Expected a type here.",
-                    "Use `nothing`, `int`, `float`, `number`, `bool`, `maybe<T>`, `array<T>`, `dynamic Foo`, `Self`, or a type name.",
+                    "Use `nothing`, `int`, `float`, `number`, `boolean`, `maybe<T>`, `array<T>`, `dynamic Foo`, `Self`, or a type name.",
                     "Types tell Yinz what kind of value a variable holds or a function produces.",
                 ));
                 Type::Error
@@ -1007,13 +1063,13 @@ impl<'a> Parser<'a> {
 
         loop {
             match self.peek() {
-                Token::Gt | Token::Eof => break,
+                Token::Gt | Token::GtGt | Token::Eof => break,
                 Token::Comma => {
                     self.advance();
                 }
                 _ => {
                     args.push(self.parse_type_with_depth(depth + 1));
-                    if !matches!(self.peek(), Token::Gt | Token::Comma) {
+                    if !matches!(self.peek(), Token::Gt | Token::GtGt | Token::Comma) {
                         self.diags.push(Diagnostic::error(
                             self.current_span(),
                             "Expected `,` or `>` in generic type argument list.",
@@ -1023,7 +1079,7 @@ impl<'a> Parser<'a> {
                         // Recover to `>` or something sane
                         while !matches!(
                             self.peek(),
-                            Token::Gt | Token::RBrace | Token::Eof | Token::LParen
+                            Token::Gt | Token::GtGt | Token::RBrace | Token::Eof | Token::LParen
                         ) {
                             self.advance();
                         }
@@ -1033,10 +1089,27 @@ impl<'a> Parser<'a> {
             }
         }
 
-        if self.expect(&Token::Gt).is_none() {
+        // Close the inner `>`. When we see `>>`, split it: consume one `>` here (by setting
+        // pending_gt) and leave the other for the outer parse_generic_type to consume.
+        let closed = match self.peek() {
+            Token::Gt => {
+                self.advance();
+                true
+            }
+            Token::GtGt => {
+                // Split `>>` into two `>` tokens. Advance past the `>>` (consuming it fully),
+                // then mark pending_gt so the outer parse_generic_type's next peek() returns
+                // a synthetic `Gt` that advance() will consume by just clearing the flag.
+                self.advance(); // pos moves past the `>>` token
+                self.pending_gt = true;
+                true
+            }
+            _ => false,
+        };
+        if !closed {
             self.diags.push(Diagnostic::error(
                 self.current_span(),
-                format!("Missing `>` to close `{name}<...>`.",),
+                format!("Missing `>` to close `{name}<...>`."),
                 format!("Write `{name}<T>` — close the angle bracket after the type arguments."),
                 "Every `<` in a generic type must be matched with a `>`.",
             ));
@@ -1168,6 +1241,31 @@ impl<'a> Parser<'a> {
             Token::While => Some(self.parse_while()),
             Token::For => Some(self.parse_for()),
             Token::Return => Some(self.parse_return()),
+            Token::Shape | Token::Base => {
+                let span = self.current_span();
+                self.diags.push(Diagnostic::error(
+                    span,
+                    "Shape declarations are not allowed inside function bodies.",
+                    "Move the `shape` declaration to the top level of the file, before the function that uses it.",
+                    "Shapes are type declarations — they define a data layout the whole file can use. Moving it to the top level also makes it available to other functions in the file.",
+                ));
+                self.advance(); // consume `shape` or `base`
+                while !matches!(self.peek(), Token::LBrace | Token::Eof) {
+                    self.advance();
+                }
+                if matches!(self.peek(), Token::LBrace) {
+                    self.advance(); // consume `{`
+                    let mut depth = 1usize;
+                    while depth > 0 && !matches!(self.peek(), Token::Eof) {
+                        match self.peek() {
+                            Token::LBrace => { depth += 1; self.advance(); }
+                            Token::RBrace => { depth -= 1; self.advance(); }
+                            _ => { self.advance(); }
+                        }
+                    }
+                }
+                None
+            }
             _ => {
                 // Parse the expression; if it resolves to a FieldAccess followed by
                 // `=`, it becomes a FieldAssign. Otherwise it's a bare expression stmt.
@@ -1851,6 +1949,42 @@ impl<'a> Parser<'a> {
             return self.parse_for_destructure(start);
         }
 
+        // `for ({field, field} in collection)` — shape destructuring form.
+        if matches!(self.peek(), Token::LBrace) {
+            return self.parse_for_shape_destructure(start);
+        }
+
+        // Catch `for ([a, b] in ...)` — array destructuring is not supported in for loops.
+        // Yinz has no tuple types; the user likely wants a shape with named fields.
+        if matches!(self.peek(), Token::LBracket) {
+            let bracket_span = self.current_span();
+            self.diags.push(Diagnostic::error(
+                bracket_span,
+                "Array destructuring `[a, b]` isn't supported in `for` loop headers.",
+                "Loop with a single binding and access fields directly:\n  for (config in intervals) {\n      config.minutes\n      config.timeframe\n  }",
+                "Array indices aren't compile-time verified — `[a, b]` could silently miss elements after a refactor. Named shape fields are statically guaranteed. The shape iterator compiles to the same pointer-arithmetic loop a tuple array would.",
+            ));
+            // Recover: skip to `{` so the body parses cleanly.
+            while !matches!(self.peek(), Token::LBrace | Token::Eof) {
+                self.advance();
+            }
+            let body = if matches!(self.peek(), Token::LBrace) {
+                self.advance(); // consume `{`
+                self.parse_block()
+            } else {
+                let span = SourceSpan::new(self.file, start, self.current_span().end);
+                Block { stmts: vec![], span }
+            };
+            let span = SourceSpan::new(self.file, start, body.span.end);
+            return Stmt::For {
+                var: "_".to_string(),
+                var_span: span.clone(),
+                iter: Expr::Error(span.clone()),
+                body,
+                span,
+            };
+        }
+
         let (var, var_span) = match self.peek().clone() {
             Token::Identifier(n) => {
                 let span = self.current_span();
@@ -1917,6 +2051,146 @@ impl<'a> Parser<'a> {
             iter,
             body,
             span: SourceSpan::new(self.file, start, end),
+        }
+    }
+
+    /// Parse `for ({field, field as name, ...} in collection) { body }` — shape destructuring.
+    ///
+    /// Desugars to:
+    ///   `for (__shape in collection) { let field = __shape.field; ... body ... }`
+    ///
+    /// Supports optional `as` rename: `{ minutes as mins }` binds `__shape.minutes` to `mins`.
+    fn parse_for_shape_destructure(&mut self, start: usize) -> Stmt {
+        self.advance(); // consume `{`
+
+        // Parse comma-separated field bindings: `field` or `field as name`.
+        struct FieldBinding {
+            field: String,
+            var: String,
+            span: SourceSpan,
+        }
+        let mut fields: Vec<FieldBinding> = Vec::new();
+
+        loop {
+            match self.peek() {
+                Token::RBrace | Token::Eof => break,
+                Token::Comma => { self.advance(); }
+                Token::Identifier(_) => {
+                    let field_span = self.current_span();
+                    let field_name = if let Token::Identifier(n) = self.peek().clone() {
+                        self.advance();
+                        n
+                    } else { unreachable!() };
+
+                    let var_name = if matches!(self.peek(), Token::Identifier(n) if n == "as") {
+                        self.advance(); // consume `as`
+                        match self.peek().clone() {
+                            Token::Identifier(n) => { self.advance(); n }
+                            _ => {
+                                self.diags.push(Diagnostic::error(
+                                    self.current_span(),
+                                    "Expected a variable name after `as` in shape destructure.",
+                                    format!("Write `{{ {field_name} as myName }}` to rename the binding."),
+                                    "The `as` keyword renames the field to a different local variable name.",
+                                ));
+                                field_name.clone()
+                            }
+                        }
+                    } else {
+                        field_name.clone()
+                    };
+
+                    fields.push(FieldBinding { field: field_name, var: var_name, span: field_span });
+                }
+                _ => {
+                    self.diags.push(Diagnostic::error(
+                        self.current_span(),
+                        "Expected a field name in shape destructure.",
+                        "Write `for ({ field1, field2 } in collection) { ... }` with field names from the shape.",
+                        "Shape destructuring lists the fields you want to bind as local variables.",
+                    ));
+                    self.advance();
+                }
+            }
+        }
+
+        if self.expect(&Token::RBrace).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `}` to close the shape destructure pattern.",
+                "Write `for ({ field1, field2 } in collection) { ... }` — close with `}`.",
+                "Every `{` in a destructure pattern must be matched with a `}`.",
+            ));
+        }
+
+        if self.expect(&Token::In).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `in` after `{ ... }` in shape for-loop.",
+                "Write `for ({ field } in collection) { ... }` — put the collection after `in`.",
+                "The `in` keyword separates the destructure pattern from the collection.",
+            ));
+        }
+
+        let iter = self.parse_expr(0);
+
+        if self.expect(&Token::RParen).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `)` to close the `for` loop header.",
+                "Write `for ({ field } in collection) { ... }` — close the outer `(` with `)`.",
+                "Every `(` in a `for` header must be matched with a `)`.",
+            ));
+        }
+
+        if self.expect(&Token::LBrace).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `{` to open the `for` body.",
+                "Write `for ({ field } in collection) { ... }` with curly braces around the body.",
+                "Curly braces are always required in Yinz.",
+            ));
+            let span = SourceSpan::new(self.file, start, self.current_span().end);
+            return Stmt::For {
+                var: "__shape".to_string(),
+                var_span: span.clone(),
+                iter,
+                body: Block { stmts: vec![], span: span.clone() },
+                span,
+            };
+        }
+
+        let user_body = self.parse_block();
+        let body_end = user_body.span.end;
+        let body_span = user_body.span.clone();
+        let item_span = body_span.clone();
+
+        // Desugar: prepend `let field = __shape.field` for each binding.
+        let mut desugared_stmts: Vec<Stmt> = fields
+            .iter()
+            .map(|f| Stmt::Let {
+                is_const: false,
+                name: f.var.clone(),
+                name_span: f.span.clone(),
+                ty: None,
+                value: Expr::FieldAccess {
+                    receiver: Box::new(Expr::Ident("__shape".to_string(), item_span.clone())),
+                    field: f.field.clone(),
+                    field_span: f.span.clone(),
+                    span: f.span.clone(),
+                },
+                span: f.span.clone(),
+            })
+            .collect();
+        desugared_stmts.extend(user_body.stmts);
+
+        let full_span = SourceSpan::new(self.file, start, body_end);
+        Stmt::For {
+            var: "__shape".to_string(),
+            var_span: item_span,
+            iter,
+            body: Block { stmts: desugared_stmts, span: body_span },
+            span: full_span,
         }
     }
 
@@ -2108,6 +2382,26 @@ impl<'a> Parser<'a> {
     ///
     /// Unary prefix operators (`-`, `!`, `~`) use right-BP=21 (higher than `*`/`/`).
     pub fn parse_expr(&mut self, min_bp: u8) -> Expr {
+        if self.expr_depth >= 256 {
+            let span = self.current_span();
+            // Emit the diagnostic only once to avoid a cascade.
+            let already_reported = self
+                .diags
+                .iter()
+                .any(|d| d.what.starts_with("Expression nesting too deep"));
+            if !already_reported {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    "Expression nesting too deep (max 256 levels).",
+                    "Break this expression into smaller pieces with named `let` bindings — Yinz prefers step-by-step over chains anyway (Golden Rule 7).",
+                    "The parser uses one stack frame per nested expression. At 256 levels we're well past any reasonable code; further nesting would crash the compiler. The limit catches both typos (a million open parens) and adversarial inputs.",
+                ));
+                // Drain tokens to the next statement boundary so recovery doesn't loop.
+                self.recover_to_rbrace();
+            }
+            return Expr::Error(span);
+        }
+        self.expr_depth += 1;
         let mut lhs = self.parse_prefix();
 
         loop {
@@ -2157,6 +2451,7 @@ impl<'a> Parser<'a> {
             };
         }
 
+        self.expr_depth -= 1;
         lhs
     }
 
@@ -2945,105 +3240,31 @@ impl<'a> Parser<'a> {
         let mut fields = Vec::new();
 
         // Empty shape value.
-        if matches!(self.peek(), Token::RBrace) {
-            self.advance();
-            return fields;
-        }
+        if matches!(self.peek(), Token::RBrace) { self.advance(); return fields; }
         if matches!(self.peek(), Token::Eof) {
-            self.diags.push(Diagnostic::error(
-                self.eof_span(),
-                "Missing `}` to close this shape value.",
-                "Add `}` after the last field.",
-                "Every `{` in a shape value must be matched with a `}`.",
-            ));
+            self.diags.push(Diagnostic::error(self.eof_span(), "Missing `}` to close this shape value.", "Add `}` after the last field.", "Every `{` in a shape value must be matched with a `}`."));
             return fields;
         }
 
-        // Parse one field (`name: value`) and push it to fields.
-        // Returns false if recovery consumed everything and we should stop.
-        macro_rules! parse_one_field {
-            () => {{
-                let (field_name, name_span) = match self.peek().clone() {
-                    Token::Identifier(n) => {
-                        let span = self.current_span();
-                        self.advance();
-                        (n, span)
-                    }
-                    _ => {
-                        self.diags.push(Diagnostic::error(
-                            self.current_span(),
-                            "Expected a field name here.",
-                            "Write `{ fieldName: value, ... }` to initialize a shape value.",
-                            "Shape values list each field by name followed by `:` and a value.",
-                        ));
-                        while !matches!(self.peek(), Token::RBrace | Token::Comma | Token::Eof) {
-                            self.advance();
-                        }
-                        continue;
-                    }
-                };
-                if self.expect(&Token::Colon).is_none() {
-                    self.diags.push(Diagnostic::error(
-                        self.current_span(),
-                        format!("Expected `:` after field name `{field_name}`."),
-                        format!("Write `{{ {field_name}: value }}`"),
-                        "The `:` separates the field name from its value in a shape value.",
-                    ));
-                    while !matches!(self.peek(), Token::RBrace | Token::Comma | Token::Eof) {
-                        self.advance();
-                    }
-                    continue;
-                }
-                let value = self.parse_expr(0);
-                fields.push(StructLitField {
-                    name: field_name,
-                    name_span,
-                    value,
-                });
-            }};
-        }
+        // Parse first field (no leading comma required).
+        if let Some(f) = self.parse_struct_lit_one_field() { fields.push(f); }
 
-        // First field — no leading comma.
-        loop {
-            parse_one_field!();
-            break;
-        }
-
-        // Subsequent fields — comma required, trailing comma allowed.
+        // Subsequent fields — comma required, trailing comma OK.
         loop {
             match self.peek() {
-                Token::RBrace => {
-                    self.advance();
-                    break;
-                }
+                Token::RBrace => { self.advance(); break; }
                 Token::Eof => {
-                    self.diags.push(Diagnostic::error(
-                        self.eof_span(),
-                        "Missing `}` to close this shape value.",
-                        "Add `}` after the last field.",
-                        "Every `{` in a shape value must be matched with a `}`.",
-                    ));
+                    self.diags.push(Diagnostic::error(self.eof_span(), "Missing `}` to close this shape value.", "Add `}` after the last field.", "Every `{` in a shape value must be matched with a `}`."));
                     break;
                 }
                 Token::Comma => {
                     self.advance();
-                    if matches!(self.peek(), Token::RBrace) {
-                        self.advance();
-                        break;
-                    } // trailing comma
+                    if matches!(self.peek(), Token::RBrace) { self.advance(); break; }
                     if matches!(self.peek(), Token::Eof) {
-                        self.diags.push(Diagnostic::error(
-                            self.eof_span(),
-                            "Missing `}` to close this shape value.",
-                            "Add `}` after the last field.",
-                            "Every `{` in a shape value must be matched with a `}`.",
-                        ));
+                        self.diags.push(Diagnostic::error(self.eof_span(), "Missing `}` to close this shape value.", "Add `}` after the last field.", "Every `{` in a shape value must be matched with a `}`."));
                         break;
                     }
-                    loop {
-                        parse_one_field!();
-                        break;
-                    }
+                    if let Some(f) = self.parse_struct_lit_one_field() { fields.push(f); }
                 }
                 _ => {
                     self.diags.push(Diagnostic::error(
@@ -3052,9 +3273,7 @@ impl<'a> Parser<'a> {
                         "Add a comma after the previous field: `{ a: 1, b: 2 }`",
                         "Shape value fields must be separated by commas. A trailing comma after the last field is also fine.",
                     ));
-                    // Recover: skip to the next field boundary to avoid looping.
-                    // Do NOT re-invoke parse_one_field! here — the macro's `continue`
-                    // would re-enter this inner loop on EOF/boundary, hanging forever.
+                    // Invariant: must advance at least one token or exit — never zero-advance + continue.
                     while !matches!(self.peek(), Token::RBrace | Token::Comma | Token::Eof) {
                         self.advance();
                     }
@@ -3062,6 +3281,45 @@ impl<'a> Parser<'a> {
             }
         }
         fields
+    }
+
+    /// Parse one `fieldName: value` entry. Returns `None` if the field name is missing
+    /// or malformed (diagnostics already emitted; caller must not loop without advancing).
+    fn parse_struct_lit_one_field(&mut self) -> Option<StructLitField> {
+        let (field_name, name_span) = match self.peek().clone() {
+            Token::Identifier(n) => {
+                let span = self.current_span();
+                self.advance();
+                (n, span)
+            }
+            _ => {
+                self.diags.push(Diagnostic::error(
+                    self.current_span(),
+                    "Expected a field name here.",
+                    "Write `{ fieldName: value, ... }` to initialize a shape value.",
+                    "Shape values list each field by name followed by `:` and a value.",
+                ));
+                // Advance to a boundary so the caller's loop can continue safely.
+                while !matches!(self.peek(), Token::RBrace | Token::Comma | Token::Eof) {
+                    self.advance();
+                }
+                return None;
+            }
+        };
+        if self.expect(&Token::Colon).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                format!("Expected `:` after field name `{field_name}`."),
+                format!("Write `{{ {field_name}: value }}`"),
+                "The `:` separates the field name from its value in a shape value.",
+            ));
+            while !matches!(self.peek(), Token::RBrace | Token::Comma | Token::Eof) {
+                self.advance();
+            }
+            return None;
+        }
+        let value = self.parse_expr(0);
+        Some(StructLitField { name: field_name, name_span, value })
     }
 
     // ── M5 P3c: map literal ──────────────────────────────────────────────────
@@ -3166,19 +3424,53 @@ impl<'a> Parser<'a> {
                     let v_span = self.current_span();
                     let v_name = v.clone();
                     self.advance();
-                    variants.push((v_name, v_span));
-                    // Optional trailing comma
+                    // Optional display string: `variantName: \`Display Value\``
+                    let display = if matches!(self.peek(), Token::Colon) {
+                        self.advance(); // consume `:`
+                        match self.peek().clone() {
+                            Token::BacktickString(bytes) => {
+                                let s = std::str::from_utf8(&bytes).unwrap_or("").to_string();
+                                self.advance();
+                                Some(s)
+                            }
+                            _ => {
+                                self.diags.push(Diagnostic::error(
+                                    self.current_span(),
+                                    format!("Expected a display string after `{v_name}:`."),
+                                    format!("Write `{v_name}: \\`Display Value\\``"),
+                                    "The display string is what `.toString()` returns for this variant.",
+                                ));
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    variants.push((v_name, v_span, display));
+                    // Optional trailing comma or newline-separated (no comma needed)
                     if matches!(self.peek(), Token::Comma) {
                         self.advance();
                     }
                 }
                 _ => {
-                    self.diags.push(Diagnostic::error(
-                        self.current_span(),
-                        format!("Expected a variant name inside `options {name} {{ ... }}`."),
-                        "Write variant names as lowercase identifiers separated by commas.",
-                        "Each variant is a named label: `options Status { active, inactive, banned }`.",
-                    ));
+                    let span = self.current_span();
+                    let tok = self.peek().clone();
+                    // Give a specific error when a reserved keyword is used as a variant name.
+                    if let Some(kw) = token_as_keyword_name(&tok) {
+                        self.diags.push(Diagnostic::error(
+                            span,
+                            format!("`{kw}` is a reserved keyword and cannot be used as a variant name."),
+                            format!("Rename the variant — for example `{kw}Contract` or `{kw}Type`."),
+                            "Yinz reserves keywords like `options`, `shape`, `function`, `let`, etc. for the language. Variant names must be plain identifiers.",
+                        ));
+                    } else {
+                        self.diags.push(Diagnostic::error(
+                            span,
+                            format!("Expected a variant name inside `options {name} {{ ... }}`."),
+                            "Write variant names as lowercase identifiers separated by commas.",
+                            "Each variant is a named label: `options Status { active, inactive, banned }`.",
+                        ));
+                    }
                     self.advance();
                 }
             }
@@ -3448,12 +3740,23 @@ impl<'a> Parser<'a> {
                 (n, span)
             }
             _ => {
-                self.diags.push(Diagnostic::error(
-                    self.current_span(),
-                    "Expected a field name.",
-                    "Write `fieldName: Type` to declare a field.",
-                    "Fields need a name and a type.",
-                ));
+                let span = self.current_span();
+                let tok = self.peek().clone();
+                if let Some(kw) = token_as_keyword_name(&tok) {
+                    self.diags.push(Diagnostic::error(
+                        span,
+                        format!("`{kw}` is a reserved keyword and cannot be used as a field name."),
+                        format!("Rename the field — for example `{kw}Type` or `{kw}Value`."),
+                        "Yinz reserves keywords for the language. Field names must be plain identifiers.",
+                    ));
+                } else {
+                    self.diags.push(Diagnostic::error(
+                        span,
+                        "Expected a field name.",
+                        "Write `fieldName: Type` to declare a field.",
+                        "Fields need a name and a type.",
+                    ));
+                }
                 return None;
             }
         };
@@ -3698,6 +4001,41 @@ pub fn infix_bp(tok: &Token) -> Option<(u8, u8)> {
         Token::LtLt | Token::GtGt => Some((16, 17)),
         Token::Plus | Token::Minus => Some((18, 19)),
         Token::Star | Token::Slash | Token::Percent => Some((20, 21)),
+        _ => None,
+    }
+}
+
+/// If `tok` is a reserved keyword token, return its text so callers can emit
+/// "X is a reserved keyword" errors instead of generic "expected identifier".
+fn token_as_keyword_name(tok: &Token) -> Option<&'static str> {
+    match tok {
+        Token::Function  => Some("function"),
+        Token::Nothing   => Some("nothing"),
+        Token::Let       => Some("let"),
+        Token::Const     => Some("const"),
+        Token::True      => Some("true"),
+        Token::False     => Some("false"),
+        Token::If        => Some("if"),
+        Token::Else      => Some("else"),
+        Token::While     => Some("while"),
+        Token::For       => Some("for"),
+        Token::In        => Some("in"),
+        Token::Return    => Some("return"),
+        Token::Shape     => Some("shape"),
+        Token::Follows   => Some("follows"),
+        Token::Extends   => Some("extends"),
+        Token::Base      => Some("base"),
+        Token::Hidden    => Some("hidden"),
+        Token::Dynamic   => Some("dynamic"),
+        Token::None      => Some("none"),
+        Token::Options   => Some("options"),
+        Token::Is        => Some("is"),
+        Token::Errors    => Some("errors"),
+        Token::Wait      => Some("wait"),
+        Token::Background => Some("background"),
+        Token::Import    => Some("import"),
+        Token::Export    => Some("export"),
+        Token::Sensitive => Some("sensitive"),
         _ => None,
     }
 }

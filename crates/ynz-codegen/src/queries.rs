@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use ynz_diagnostics::Diagnostic;
-use ynz_parser::SourceFile;
+use ynz_diagnostics::{Diagnostic, DiagnosticBucket};
+use ynz_parser::{SourceFile, SourceFileRegistry};
 use ynz_typeck::{check_query, module_signatures_query};
 
 use crate::{artifact::CompiledArtifact, emit::emit_artifact};
@@ -10,7 +10,7 @@ use crate::{artifact::CompiledArtifact, emit::emit_artifact};
 #[derive(Clone, Debug, PartialEq)]
 pub struct CodegenOutput {
     pub artifact: CompiledArtifact,
-    pub diagnostics: Vec<Diagnostic>,
+    pub diagnostics: DiagnosticBucket,
 }
 
 /// Generate a relocatable object file for a source file.
@@ -18,16 +18,11 @@ pub struct CodegenOutput {
 /// Salsa-tracked — depends on `check_query`. Skips emission if there are
 /// type errors (avoids emitting broken object files).
 #[salsa::tracked]
-pub fn codegen_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<CodegenOutput> {
+pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<CodegenOutput> {
     let check = check_query(db, source);
     let mut diagnostics = check.diagnostics.clone();
 
-    let has_errors = check
-        .diagnostics
-        .iter()
-        .any(|d| d.severity == ynz_diagnostics::Severity::Error);
-
-    if has_errors {
+    if diagnostics.has_errors() {
         return Arc::new(CodegenOutput {
             artifact: CompiledArtifact {
                 object_bytes: Vec::new(),
@@ -48,17 +43,18 @@ pub fn codegen_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<Codege
         &sig_output.generic_fn_table,
         &check.mono_table,
         None,
+        &sig_output.imported_options,
     ) {
         Ok(artifact) => Arc::new(CodegenOutput {
             artifact,
             diagnostics,
         }),
         Err(msg) => {
-            diagnostics.push(Diagnostic::error(
-                ynz_diagnostics::SourceSpan::new(source_path.as_str(), 0, 0),
+            diagnostics.push(Diagnostic::file_error(
+                source_path.as_str(),
                 format!("The compiler failed to produce machine code: {msg}"),
                 "This is a compiler bug. Please report it with the source file attached.",
-                "Machine-code generation failed inside the LLVM backend.",
+                "Machine-code generation failed inside the backend.",
             ));
             Arc::new(CodegenOutput {
                 artifact: CompiledArtifact {

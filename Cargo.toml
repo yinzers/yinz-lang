@@ -27,6 +27,7 @@ insta = { version = "1.47.2", features = ["redactions"] }
 clap = { version = "4.6.1", features = ["derive"] }
 
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
+tempfile = "3.14.0"
 
 # Cross-crate workspace deps
 ynz-diagnostics = { path = "crates/ynz-diagnostics" }

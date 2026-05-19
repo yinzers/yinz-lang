@@ -163,3 +163,82 @@ Add entries via `/learn` when a project-specific mistake pattern is identified. 
 **Severity**: warning (bad UX, not a correctness bug — but the teaching mission makes this load-bearing).
 
 **Originating incident**: 2026-05-18 — user tested `ynz run` with `print('hello world')` and got 5 cryptic cascade errors. Audit by Explore agent identified `#`, `;`, `$`, `?` as additional gaps. All five fixed in one session.
+
+---
+
+## Parser Infinite Loop — Zero-Advance Recovery in Bounded Loop — 2026-05-18
+
+**Scope**: Any parser loop in `crates/ynz-parser/src/parser.rs` — specifically all `loop { ... }` constructs that contain error-recovery paths.
+
+**Cause**: Using a macro with a `continue` statement inside `loop { macro!(); break; }`. In Rust, `continue` inside a macro targets the **innermost** enclosing loop at the expansion site — the inner `loop { ... break; }`, not the outer field/element-parsing loop. When the macro's recovery path advances to a boundary token (e.g. `Eof`, `RBrace`) and then `continue`s, it re-enters the inner loop, calls the macro again, sees the same boundary token, skips the recovery loop (no advance), and `continue`s again. Infinite loop.
+
+**The invariant**: every parser loop must **advance at least one token OR exit (break/return) on every iteration**. A zero-advance path that does not `break` or `return` is always a hang.
+
+**Detection**: any `loop { some_macro_with_continue!(); break; }` pattern in parser code is suspect. The correct alternative is a real method (`fn parse_one_thing(&mut self) -> Option<T>`) that returns `None` on failure (already recovered) instead of `continue`-ing.
+
+**Root incident**: `parse_struct_lit_fields` used `loop { parse_one_field!(); break; }` in three places. The macro contained two `continue` paths. On malformed input (e.g. `` {`name:`a`} `` producing an unterminated backtick string + weird token sequence), the compiler hung indefinitely. Fixed by extracting `parse_struct_lit_one_field(&mut self) -> Option<StructLitField>` and replacing all `loop { macro!(); break; }` with `if let Some(f) = self.parse_struct_lit_one_field() { fields.push(f); }`.
+
+**Bouncer checks**:
+- [ ] For diffs touching `crates/ynz-parser/src/parser.rs`: grep added lines for `loop {` followed within 3 lines by a macro invocation ending in `!()` and `break;`. Match → WARNING: verify the macro contains no `continue` or that all `continue` paths advance at least one token first.
+- [ ] For any new parser macro (`macro_rules!`) containing `continue`: flag as high risk unless the macro is ONLY used in the outermost loop context where `continue` is intended.
+
+**Severity**: critical — parser hang means the compiler never exits, which users experience as a freeze with no diagnostic output. This is the worst possible failure mode: silent, unrecoverable, no error message.
+
+---
+
+## Scattered Registry Without SSOT Link — 2026-05-19
+
+**Scope**: `crates/ynz-diagnostics/src/`, `crates/ynz-typeck/src/`, `crates/ynz-parser/src/` — new `pub const` or `pub static` string-array definitions that represent feature inventories (keyword lists, jargon lists, method-name lists, etc.).
+
+**Exemption**:
+- Definitions marked `#[cfg(test)]` (test-only intrinsics — registry is for production surface only)
+- Definitions with `// CARVE-OUT: <reason>` on the definition line (explicitly declared legitimate parallel registries per `design/feature-registry.md` "Carve-Outs" section)
+- Definitions that are lookup tables OVER the registry's generated output (e.g., a perf-critical wrapper that caches registry data)
+
+**Last verified**: 2026-05-19 — pattern tested against current codebase. Matches: `crates/ynz-diagnostics/src/banned_jargon.rs:21` (migrating in Phase 2) and `crates/ynz-typeck/src/builtins.rs:101` (migrating in Phase 3, undiscovered in original research). Zero false positives in other files in those crates.
+
+**Cause**: v0.1.0 shipped with feature inventories scattered across 7+ locations. Adding `int.max` in M4 P5 touched five locations that nothing enforced to stay in sync. The v0.2 LSP (M2) needs these inventories at IDE-keystroke latency — reading from 7 separate Rust files is not tenable. v0.2-M1 builds the SSOT registry to fix the class. This entry prevents new scattered registries from appearing post-M1.
+
+**Detection signature**: A new `pub const NAME: &[&str] = &[...]` or `pub static NAME: &[&str] = &[...]` definition in `crates/ynz-{diagnostics,typeck,parser}/src/` that:
+- Does NOT have `#[cfg(test)]` on the preceding line or the definition line itself
+- Does NOT have a `// CARVE-OUT:` comment within 3 lines above the definition
+
+**Constraint**: All new user-facing feature inventories go in `registry/features.toml` first. Code (Rust constant, adapter function) is derived from the registry, not the other way. See `design/feature-registry.md` for the schema and `.claude/rules/feature-registry.md` for the entry-type checklist.
+
+**Bouncer checks** (each runnable as shell against a diff):
+- [ ] For each diff line adding `pub const.*&\[.*&str\].*=.*&\[` or `pub static.*&\[.*&str\].*=.*&\[` in `crates/ynz-diagnostics/src/`, `crates/ynz-typeck/src/`, or `crates/ynz-parser/src/`: check that within the 3 lines ABOVE the definition (in the same diff context) there is either `#[cfg(test)]` or `// CARVE-OUT:`. Missing either → WARNING: "New string-array registry detected without SSOT link — add to registry/features.toml or annotate // CARVE-OUT: <reason>."
+- [ ] For each diff adding `pub const` or `pub static` matching the above pattern: additionally grep the diff for a corresponding `[[` TOML entry in `registry/features.toml` within the same PR. Missing → WARNING: "Registry entry not found for new constant — was this added to registry/features.toml?"
+
+**Severity**: warning (the pre-M1 code is being migrated; the Bouncer prevents NEW drift from being introduced post-M1).
+
+**Originating incident**: 2026-05-19 — v0.2-M1 planning revealed that `int.max` (M4 P5) touched 5 separate registry locations with no enforced sync. The Explore agent research found 7 scattered registries; manual grep found an 8th (`STRING_METHODS` in `builtins.rs:101`) missed in the initial research scan. v0.2-M1 builds the fix; this entry makes the fix self-defending.
+
+---
+
+## M8 Modules Shipped Untested — Three Infrastructure Bugs — 2026-05-18/19
+
+**Scope**: `crates/ynz-driver/src/` — any build/load infrastructure change that touches multi-file project loading or path resolution.
+
+**Cause**: M8 Phase 2 (modules) shipped import/export grammar + multi-file driver wiring but wrote zero integration tests for the project-load path. Three infrastructure bugs shipped:
+
+1. **`src/` directory hard-requirement** (`load.rs`): `load_project()` errored if `root/src/` didn't exist, breaking any project without that exact layout. Fixed by falling back to walking the project root when `src/` is absent.
+
+2. **Empty project root from relative path** (`build.rs`): `find_project_root()` walked up relative paths and returned `""` when `yinz.toml` was in the current working directory. `build_project("")` then called `read_dir("")` → "No such file or directory". Fixed by canonicalizing the source path to absolute before root detection.
+
+3. **Typeck cross-file resolution entirely unimplemented** (separate graveyard note): `Item::ImportDecl(_) => {}` meant imports compiled but were silently ignored in all type checking and codegen.
+
+**Detection**: all three bugs would have been caught by one integration test: a two-file project where file B imports a type from file A and the test asserts `ynz run B` produces the expected output. This test was listed in the M8 P2 plan but never written.
+
+**Constraint**: Any compiler phase that ships multi-file or cross-module functionality MUST include an integration test that:
+1. Creates a temporary two-file project on disk (with `yinz.toml` at the root)
+2. Has one file export a type and a second file import and use it
+3. Runs `ynz run` on the entry file
+4. Asserts the binary produces the expected stdout
+
+**Bouncer checks**:
+- [ ] For diffs touching `crates/ynz-driver/src/load.rs` or `crates/ynz-driver/src/build.rs`: check that `crates/ynz-driver/tests/integration.rs` has at least one test with `yinz.toml` creation + two-file import. No such test → WARNING.
+- [ ] For plan files claiming "multi-file" or "module" or "import/export": verify `### Demo & Error Gallery` includes a two-file cross-import demo in `examples/`. Missing → WARNING.
+
+**Severity**: critical — infrastructure bugs that produce non-obvious error messages ("No src/ directory", empty path crashes) with no clear path to the fix without reading source code.
+
+**Originating incident**: M8 P2 shipped 2026-05-18. All three bugs discovered 2026-05-19 during first real-world use (trading-v4 project). Total fix time: ~2 hours.

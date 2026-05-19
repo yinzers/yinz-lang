@@ -471,11 +471,11 @@ function entrypoint() -> nothing {
 
 #[test]
 fn m7_errors_bool_or_false_clean() {
-    // WHY: `-> bool errors` must type-check cleanly. Bool is a primitive just like
+    // WHY: `-> boolean errors` must type-check cleanly. Bool is a primitive just like
     // int or string — the errors wrapper must work for all inner types.
     assert_clean(
         r#"
-function checkFile() -> bool errors {
+function checkFile() -> boolean errors {
   return true
 }
 

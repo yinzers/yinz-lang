@@ -9,7 +9,7 @@ User spec: `spec/maybe.md`
 `maybe<T>` is a built-in generic primitive shipped in M5 alongside the generics engine. It expresses "a value of type T that might not exist." Operations:
 
 - `none` — the absent value (built-in keyword)
-- `m.exists() -> bool` — method (parens — action)
+- `m.exists() -> boolean` — method (parens — action)
 - `m.value` — virtual field (no parens — access; flow-sensitive proof of `.exists()` required)
 - `m.or(default: T) -> T` — method (parens — action)
 
@@ -33,7 +33,7 @@ The lowering is chosen per concrete T at monomorphization time. The decision is 
 
 | Concrete T | Encoding | LLVM type | Why |
 |---|---|---|---|
-| `int`, `float`, `number`, `bool` (primitives) | Tagged union | `struct { i1 has_value, T value }` | Fits in 2 words; tag is cheaper than reserving a sentinel value of T |
+| `int`, `float`, `number`, `boolean` (primitives) | Tagged union | `struct { i1 has_value, T value }` | Fits in 2 words; tag is cheaper than reserving a sentinel value of T |
 | Heap-allocated shape pointer (`ynz_alloc`-backed shape) | Null-pointer | `T*` (null = none) | One word; no tag byte; matches Rust's `Option<Box<T>>` optimization |
 | `fixed<U, N>` (stack-allocated array) | Tagged union | `struct { i1 has_value, [N x U] value }` | The whole array is inline; null-pointer encoding doesn't apply |
 | `array<U>` (heap array header) | Null-pointer | `*Array<U>` (null = none) | Pointer = discriminator |

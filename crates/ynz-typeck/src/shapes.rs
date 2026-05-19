@@ -1,15 +1,15 @@
 use std::collections::{HashMap, HashSet};
 
-use ynz_ast::nodes::{Item, Module, Type as AstType};
+use ynz_ast::nodes::{Item, Module, Stmt, Type as AstType};
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 use crate::{
     generics::{GenericShapeDef, GenericShapeTable},
-    types::Type,
+    types::{type_name, Type},
 };
 
 /// A resolved field on a shape.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FieldDef {
     pub name: String,
     pub ty: Type,
@@ -20,7 +20,7 @@ pub struct FieldDef {
 }
 
 /// A bare contract method signature stored on the contract shape.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ContractSigDef {
     pub name: String,
     /// Param types (not including self).
@@ -32,7 +32,7 @@ pub struct ContractSigDef {
 ///
 /// Fields include inherited ones (prepended from parent chain).
 /// `extends` and `follows` names are stored for P3b verification.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ShapeDef {
     pub name: String,
     pub is_base: bool,
@@ -54,12 +54,25 @@ impl ShapeDef {
 }
 
 /// All shapes collected from a module.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShapeTable {
     pub shapes: HashMap<String, ShapeDef>,
     /// M6: union type aliases from `shape Shape = Circle | Square` declarations.
     /// Keyed by alias name; value is the resolved union type.
     pub union_aliases: HashMap<String, Type>,
+    /// Options type names from this module — allows field type resolution to
+    /// produce Type::Options for `options Foo { ... }` types used in shape fields.
+    ///
+    /// @design-decision SAME-FILE ONLY — cross-file imported options types are NOT visible here.
+    /// @rationale collect_shapes runs before collect_options and before imports are resolved,
+    ///            so only a same-file pre-scan is possible at this stage.
+    /// @cost-to-fix ~1 session: refactor type collection to a single pre-pass that collects
+    ///              all type names (shapes + options + imported symbols) before any field
+    ///              resolution runs. When that refactor ships, DELETE this field and the
+    ///              pre-scan in collect_shapes — it becomes dead weight superseded by the
+    ///              global type registry.
+    /// @trigger Adding a second file to a project + using an imported options type in a shape field.
+    pub options_names: HashSet<String>,
 }
 
 impl ShapeTable {
@@ -67,6 +80,7 @@ impl ShapeTable {
         Self {
             shapes: HashMap::new(),
             union_aliases: HashMap::new(),
+            options_names: HashSet::new(),
         }
     }
 
@@ -103,10 +117,17 @@ impl ShapeTable {
                 element: Box::new(Type::Int),
                 end_inclusive: false,
             },
+            // Options types declared in this module resolve to Type::Options.
+            AstType::Named(n, _) if self.options_names.contains(n) => {
+                Type::Options { name: n.clone() }
+            }
             AstType::Error | AstType::Named(_, _) | AstType::Range { .. } => Type::Error,
-            // AnonShape is hoisted to a named shape before resolve_ast_type runs;
-            // if we ever encounter it here, the parent/field context is unavailable.
-            AstType::AnonShape { .. } => Type::Error,
+            // AnonShape: hoisted to a synthetic named shape during collect_shapes.
+            // Resolve to the canonical synthetic name so the rest of typeck sees a
+            // plain Type::Shape.
+            AstType::AnonShape { fields, .. } => Type::Shape {
+                name: canonical_anon_name(fields),
+            },
             // P3b: dynamic dispatch and Self type resolution.
             AstType::Dynamic { .. } | AstType::SelfType { .. } => Type::Error,
             // TypeParam: must be resolved in context (Checker::ast_type_to_type handles this).
@@ -204,21 +225,57 @@ impl ShapeTable {
 ///
 /// Field types are resolved in a forward-reference-friendly two-pass approach.
 /// Inherited fields (from `extends`) are prepended to the child's field list.
-pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTable {
+pub fn collect_shapes(
+    module: &Module,
+    imported_shapes: &HashMap<String, ShapeDef>,
+    imported_options: &HashMap<String, crate::options_table::OptionsEntry>,
+    diags: &mut DiagnosticBucket,
+) -> ShapeTable {
     let mut table = ShapeTable::empty();
 
-    // Pre-pass: hoist AnonShape field types to named ShapeDecls so all subsequent
-    // passes see only Named types. Synthetic name format: `__anon_ParentName_fieldName`.
+    // Seed the table with imported shapes so field type resolution sees them.
+    for (name, def) in imported_shapes {
+        table.shapes.insert(name.clone(), def.clone());
+    }
+
+    // Pre-pass: collect options type names (same-file AND imported) so field type
+    // resolution recognizes them as valid types.
+    table.options_names = module.items.iter().filter_map(|i| {
+        if let Item::OptionsDecl(o) = i { Some(o.name.clone()) } else { None }
+    }).chain(imported_options.keys().cloned()).collect();
+
+    // Pre-pass: hoist AnonShape types to named ShapeDecls so all subsequent passes see
+    // only Named types. Synthetic names are content-based (canonical) so structurally
+    // identical inline shapes share the same name regardless of where they appear.
+    // This pass scans ALL type positions: shape body fields, function params, return
+    // types, and let-binding annotations.
     let mut synthetic_items: Vec<ynz_ast::nodes::ShapeDecl> = Vec::new();
     for item in &module.items {
-        if let Item::ShapeDecl(s) = item {
-            if s.alias_ty.is_some() {
-                continue;
+        match item {
+            Item::ShapeDecl(s) if s.alias_ty.is_none() => {
+                for field in &s.fields {
+                    collect_anon_shapes_in_type(&field.ty, &mut synthetic_items);
+                }
             }
-            for field in &s.fields {
-                collect_anon_shapes_in_type(&field.ty, &s.name, &field.name, &mut synthetic_items);
+            Item::Function(f) => {
+                for param in &f.params {
+                    collect_anon_shapes_in_type(&param.ty, &mut synthetic_items);
+                }
+                collect_anon_shapes_in_type(&f.return_type, &mut synthetic_items);
+                collect_anon_shapes_in_stmts(&f.body.stmts, &mut synthetic_items);
             }
+            Item::ConstDecl(c) => {
+                if let Some(ty) = &c.ty {
+                    collect_anon_shapes_in_type(ty, &mut synthetic_items);
+                }
+            }
+            _ => {}
         }
+    }
+    // Deduplicate: two identical inline shapes produce the same synthetic name; keep one.
+    {
+        let mut seen_names: HashSet<String> = HashSet::new();
+        synthetic_items.retain(|s| seen_names.insert(s.name.clone()));
     }
 
     // Pass 1: collect all shape names + their raw AST data.
@@ -271,6 +328,7 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
             })
             .collect(),
         union_aliases: HashMap::new(),
+        options_names: table.options_names.clone(),
     };
 
     // Pass 2: resolve each shape's own fields, contract sigs, extends, and follows.
@@ -352,10 +410,9 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
                 ));
                 continue;
             }
-            // AnonShape fields resolve to their synthesized named shape.
-            let ty = if let AstType::AnonShape { .. } = &field.ty {
+            let ty = if let AstType::AnonShape { fields: anon_fields, .. } = &field.ty {
                 Type::Shape {
-                    name: format!("__anon_{}_{}", s.name, field.name),
+                    name: canonical_anon_name(anon_fields),
                 }
             } else {
                 name_table.resolve_ast_type(&field.ty)
@@ -373,6 +430,45 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
                 &type_param_names,
                 diags,
             );
+            if field.is_hidden && field.default.is_none() {
+                let tn = type_name(&ty);
+                let (what_instead, why) = if type_is_maybe(&ty) {
+                    (
+                        format!(
+                            "Default to `none` since the type allows absence — \
+                             `hidden {}: {} = none`.",
+                            field.name, tn
+                        ),
+                        "Hidden fields can't be set by code in other files. Without a default, \
+                         external construction would leave the field in an undefined state. \
+                         Your field's type is `maybe ...`, so `none` is the natural default."
+                            .to_string(),
+                    )
+                } else {
+                    (
+                        format!(
+                            "Provide one — `hidden {}: {} = <value>`.",
+                            field.name, tn
+                        ),
+                        format!(
+                            "Hidden fields can't be set by code in other files. Without a default, \
+                             external construction would leave the field in an undefined state. \
+                             If no sensible default applies here, change the type to \
+                             `maybe {}` and default to `none`: \
+                             `hidden {}: maybe {} = none`. \
+                             The type then says `sometimes absent` and same-file code reads it \
+                             through `.exists()` guards.",
+                            tn, field.name, tn
+                        ),
+                    )
+                };
+                diags.push(Diagnostic::error(
+                    field.name_span.clone(),
+                    format!("Hidden field `{}` has no default value.", field.name),
+                    what_instead,
+                    why,
+                ));
+            }
             own_fields.push(FieldDef {
                 name: field.name.clone(),
                 ty,
@@ -438,37 +534,85 @@ pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTab
 
 fn detect_extends_cycles(table: &ShapeTable, diags: &mut DiagnosticBucket) {
     for name in table.shapes.keys() {
-        let mut visited: Vec<String> = vec![name.clone()];
+        // Perf: HashSet for O(1) membership checks; Vec built separately for the
+        // chain string needed in the diagnostic message only when a cycle is found.
+        let mut visited_set: HashSet<&str> = HashSet::new();
+        let mut chain: Vec<String> = vec![name.clone()];
+        visited_set.insert(name.as_str());
         let mut current = name.clone();
         while let Some(def) = table.shapes.get(&current) {
             let Some(parent) = &def.extends else { break };
-            if visited.contains(parent) {
-                let chain = visited.join(" → ");
+            if visited_set.contains(parent.as_str()) {
+                let chain_str = chain.join(" → ");
                 if let Some(def) = table.shapes.get(name) {
                     diags.push(Diagnostic::error(
                         def.defined_at.clone(),
-                        format!("`{name}` has a cyclic `extends` chain: {chain} → {parent}"),
+                        format!("`{name}` has a cyclic `extends` chain: {chain_str} → {parent}"),
                         "Break the cycle by removing one of the `extends` declarations.",
                         "`extends` is for data inheritance — a shape cannot inherit from itself, directly or through a chain.",
                     ));
                 }
                 break;
             }
-            visited.push(parent.clone());
+            visited_set.insert(parent.as_str());
+            chain.push(parent.clone());
             current = parent.clone();
         }
     }
 }
 
 fn flatten_inherited_fields(table: &mut ShapeTable, _diags: &mut DiagnosticBucket) {
-    // Collect the inheritance order to avoid borrow conflicts.
+    // Process shapes in parent-first (depth-first) order so that when we flatten
+    // C extends B extends A, B is always fully flattened before C visits it.
+    // HashMap iteration order is non-deterministic — without this ordering, C could
+    // grab B's not-yet-flattened fields and silently miss A's fields when iteration
+    // happens to visit C before B.
+    let mut done: HashSet<String> = HashSet::new();
+    // `visiting` tracks shapes currently on the DFS stack. If we see a shape already
+    // in `visiting` during recursion, that's a cycle — skip rather than stack-overflow.
+    // detect_extends_cycles already emitted a diagnostic for the cycle; we just stop.
+    let mut visiting: HashSet<String> = HashSet::new();
     let names: Vec<String> = table.shapes.keys().cloned().collect();
     for name in &names {
-        let parent_name = table.shapes[name].extends.clone();
-        let Some(parent) = parent_name else { continue };
+        flatten_recursive(name, table, &mut done, &mut visiting);
+    }
+}
 
-        // Collect parent fields (may themselves be inherited — already flattened if
-        // we process in topological order, but for simplicity just grab what's there).
+/// Recursively flatten a single shape, ensuring its parent is fully flattened first.
+///
+/// Time: O(n) where n = number of shapes in the table — each shape's body runs once
+///       thanks to the `done` memo. Space: O(d) where d = max inheritance depth (the
+///       DFS call stack).
+///
+/// - `done`: shapes whose full field list has been computed. Re-entry is a no-op.
+/// - `visiting`: shapes currently on the DFS call stack. A name appearing in `visiting`
+///   signals a cycle (already diagnosed by `detect_extends_cycles`). We skip rather
+///   than recurse infinitely.
+fn flatten_recursive(
+    name: &str,
+    table: &mut ShapeTable,
+    done: &mut HashSet<String>,
+    visiting: &mut HashSet<String>,
+) {
+    if done.contains(name) {
+        return;
+    }
+    if visiting.contains(name) {
+        // Cycle detected — detect_extends_cycles already emitted the diagnostic. Stop.
+        return;
+    }
+
+    visiting.insert(name.to_string());
+
+    // Clone the parent name out so we don't hold an immutable borrow while we recurse.
+    let parent_name = table.shapes.get(name).and_then(|s| s.extends.clone());
+
+    if let Some(parent) = parent_name {
+        if table.shapes.contains_key(&parent) {
+            flatten_recursive(&parent, table, done, visiting);
+        }
+
+        // Parent is now fully flattened (or unknown — already errored in detect_extends_cycles).
         let parent_fields: Vec<FieldDef> = match table.shapes.get(&parent) {
             Some(p) => p
                 .fields
@@ -481,7 +625,11 @@ fn flatten_inherited_fields(table: &mut ShapeTable, _diags: &mut DiagnosticBucke
                     defined_at: f.defined_at.clone(),
                 })
                 .collect(),
-            None => continue, // parent doesn't exist — already errored
+            None => {
+                visiting.remove(name);
+                done.insert(name.to_string());
+                return;
+            }
         };
 
         // Prepend parent fields to child's own fields, skipping overridden names.
@@ -494,6 +642,13 @@ fn flatten_inherited_fields(table: &mut ShapeTable, _diags: &mut DiagnosticBucke
         all_fields.append(&mut child.fields);
         child.fields = all_fields;
     }
+
+    visiting.remove(name);
+    done.insert(name.to_string());
+}
+
+fn type_is_maybe(t: &Type) -> bool {
+    matches!(t, Type::Maybe { .. })
 }
 
 fn detect_field_cycles(table: &ShapeTable, diags: &mut DiagnosticBucket) {
@@ -627,17 +782,61 @@ fn resolve_field_type_in_generic_shape(ast_ty: &AstType, type_params: &[String])
 
 /// Emit a diagnostic when a shape field's type annotation contains an unrecognized
 /// type name. Walks the AstType to find the first unknown Named node and points at it.
+/// Compute the canonical synthetic name for an anonymous inline shape from its field list.
+///
+/// The name is content-based: fields are sorted by name and each contributes a
+/// `_fieldname_typename` segment. This ensures structural equality —
+/// `{ a: int, b: string }` and `{ b: string, a: int }` produce the same name
+/// regardless of where in the file they appear.
+///
+/// Example: `{ bid: number, ask: number }` → `__anon__ask_number__bid_number`
+pub(crate) fn canonical_anon_name(fields: &[ynz_ast::nodes::FieldDecl]) -> String {
+    let mut sorted: Vec<_> = fields.iter().collect();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    let segments: Vec<String> = sorted
+        .iter()
+        .map(|f| format!("{}__{}", f.name, ast_type_short_name(&f.ty)))
+        .collect();
+    format!("__anon__{}", segments.join("__"))
+}
+
+/// Produce a short, stable, identifier-safe name for an AST type — used only for
+/// building canonical anon-shape names, not for user-facing output.
+fn ast_type_short_name(ty: &AstType) -> String {
+    match ty {
+        AstType::Int => "int".to_string(),
+        AstType::Float => "float".to_string(),
+        AstType::Number { .. } => "number".to_string(),
+        AstType::Bool => "boolean".to_string(),
+        AstType::Named(n, _) => n.clone(),
+        AstType::Nothing => "nothing".to_string(),
+        AstType::Maybe { inner, .. } => format!("maybe_{}", ast_type_short_name(inner)),
+        AstType::Generic { name, args, .. } => {
+            let arg_str: Vec<_> = args.iter().map(ast_type_short_name).collect();
+            format!("{}__{}", name, arg_str.join("__"))
+        }
+        AstType::AnonShape { fields, .. } => canonical_anon_name(fields),
+        AstType::Union { variants, .. } => {
+            let parts: Vec<_> = variants.iter().map(ast_type_short_name).collect();
+            format!("union_{}", parts.join("_or_"))
+        }
+        AstType::ErrorCapable { inner, .. } => format!("errors_{}", ast_type_short_name(inner)),
+        AstType::Sensitive(inner) => format!("sensitive_{}", ast_type_short_name(inner)),
+        _ => "unknown".to_string(),
+    }
+}
+
 /// Recursively extract AnonShape nodes from a type annotation, registering each as a
-/// synthetic named ShapeDecl. The synthesized name is `__anon_ParentName_fieldName`.
+/// synthetic named ShapeDecl. The synthesized name is content-based (canonical) so that
+/// structurally identical inline shapes share the same synthetic name regardless of
+/// where they appear.
 fn collect_anon_shapes_in_type(
     ast_ty: &AstType,
-    parent_name: &str,
-    field_name: &str,
     out: &mut Vec<ynz_ast::nodes::ShapeDecl>,
 ) {
     match ast_ty {
         AstType::AnonShape { fields, span } => {
-            let synth_name = format!("__anon_{parent_name}_{field_name}");
+            let synth_name = canonical_anon_name(fields);
             out.push(ynz_ast::nodes::ShapeDecl {
                 name: synth_name,
                 name_span: span.clone(),
@@ -652,16 +851,61 @@ fn collect_anon_shapes_in_type(
                 is_exported: false,
                 doc: None,
             });
+            // Recurse into nested anon shapes inside field types.
+            for field in fields {
+                collect_anon_shapes_in_type(&field.ty, out);
+            }
         }
         AstType::Union { variants, .. } => {
-            for (i, v) in variants.iter().enumerate() {
-                collect_anon_shapes_in_type(v, parent_name, &format!("{field_name}_{i}"), out);
+            for v in variants {
+                collect_anon_shapes_in_type(v, out);
             }
         }
         AstType::Maybe { inner, .. } => {
-            collect_anon_shapes_in_type(inner, parent_name, field_name, out);
+            collect_anon_shapes_in_type(inner, out);
+        }
+        AstType::Generic { args, .. } => {
+            for a in args {
+                collect_anon_shapes_in_type(a, out);
+            }
+        }
+        AstType::ErrorCapable { inner, .. } => {
+            collect_anon_shapes_in_type(inner, out);
+        }
+        AstType::Sensitive(inner) => {
+            collect_anon_shapes_in_type(inner, out);
         }
         _ => {}
+    }
+}
+
+/// Walk function body statements, collecting any AnonShape type annotations from
+/// `let`/`const` bindings into `out`.
+fn collect_anon_shapes_in_stmts(stmts: &[Stmt], out: &mut Vec<ynz_ast::nodes::ShapeDecl>) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { ty: Some(ty), .. } => {
+                collect_anon_shapes_in_type(ty, out);
+            }
+            Stmt::If { body, .. } => {
+                collect_anon_shapes_in_stmts(&body.stmts, out);
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                for arm in arms {
+                    collect_anon_shapes_in_stmts(&arm.body.stmts, out);
+                }
+                if let Some(else_block) = else_arm {
+                    collect_anon_shapes_in_stmts(&else_block.stmts, out);
+                }
+            }
+            Stmt::While { body, .. } => {
+                collect_anon_shapes_in_stmts(&body.stmts, out);
+            }
+            Stmt::For { body, .. } => {
+                collect_anon_shapes_in_stmts(&body.stmts, out);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -681,7 +925,7 @@ fn emit_unknown_field_type_diag(
             "int"
                 | "float"
                 | "number"
-                | "bool"
+                | "boolean"
                 | "string"
                 | "nothing"
                 | "none"
@@ -690,7 +934,8 @@ fn emit_unknown_field_type_diag(
                 | "SourceLoc"
         ) || name_table.contains(n)
             || name_table.union_aliases.contains_key(n)
-            || type_params.contains(&n) // type params are not unknown
+            || name_table.options_names.contains(n)
+            || type_params.contains(&n)
     };
 
     match ast_ty {
@@ -699,7 +944,7 @@ fn emit_unknown_field_type_diag(
                 span.clone(),
                 format!("`{n}` is not a known type."),
                 format!("Field `{field_name}` on `{shape_name}` cannot use `{n}`. Use a built-in or a `shape` name defined in this file."),
-                "Built-ins: `int`, `float`, `number`, `bool`, `string`. Collections: `array<T>`, `fixed<T>`, `map<K, V>`. Optionals: `maybe<T>`.",
+                "Built-ins: `int`, `float`, `number`, `boolean`, `string`. Collections: `array<T>`, `fixed<T>`, `map<K, V>`. Optionals: `maybe<T>`.",
             ));
         }
         AstType::Union { variants, .. } => {

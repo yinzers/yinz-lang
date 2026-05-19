@@ -84,7 +84,12 @@ pub fn div(a: u128, b: u128) -> u128 {
         return encode_infinity(av.sign ^ bv.sign);
     }
     if av.is_zero() {
-        return encode_finite(av.sign ^ bv.sign, av.exponent - bv.exponent, 0);
+        // Clamp the preferred exponent to [MIN_EXPONENT, MAX_EXPONENT] per IEEE 754-2008.
+        // Without clamping, extreme inputs (e.g. av.exponent=MIN_EXPONENT=-6176,
+        // bv.exponent=MAX_EXPONENT=6111) produce a difference of -12287, which is
+        // out of range and causes a debug-assert panic / garbage bits in release builds.
+        let preferred_exp = (av.exponent - bv.exponent).clamp(MIN_EXPONENT, MAX_EXPONENT);
+        return encode_finite(av.sign ^ bv.sign, preferred_exp, 0);
     }
 
     let sign = av.sign ^ bv.sign;
@@ -160,7 +165,7 @@ pub fn compare(a: u128, b: u128) -> i32 {
     }
 }
 
-fn add_sub(a: u128, b: u128, subtract: bool) -> u128 {
+fn add_sub(a: u128, b: u128, negate_b: bool) -> u128 {
     let av = decode(a);
     let bv = decode(b);
 
@@ -168,7 +173,7 @@ fn add_sub(a: u128, b: u128, subtract: bool) -> u128 {
         return QUIET_NAN;
     }
 
-    let b_sign = if subtract { !bv.sign } else { bv.sign };
+    let b_sign = if negate_b { !bv.sign } else { bv.sign };
 
     // Infinity handling
     if av.is_infinity() || bv.is_infinity() {
@@ -246,7 +251,7 @@ fn align_exponents(a_exp: i32, a_coef: u128, b_exp: i32, b_coef: u128) -> (u128,
         return (a_coef, b_coef, a_exp);
     }
 
-    let (coarse_exp, coarse_coef, fine_coef, fine_exp, coarse_is_a) = if a_exp > b_exp {
+    let (coarse_exp, coarse_coef, fine_coef, fine_exp, large_is_a) = if a_exp > b_exp {
         (a_exp, a_coef, b_coef, b_exp, true)
     } else {
         (b_exp, b_coef, a_coef, a_exp, false)
@@ -277,7 +282,7 @@ fn align_exponents(a_exp: i32, a_coef: u128, b_exp: i32, b_coef: u128) -> (u128,
         (coarse_scaled, fine_trimmed, fine_exp + scale_down as i32)
     };
 
-    if coarse_is_a {
+    if large_is_a {
         (coarse_aligned, fine_aligned, result_exp)
     } else {
         (fine_aligned, coarse_aligned, result_exp)
@@ -591,6 +596,38 @@ mod tests {
     }
 
     #[test]
+    fn div_zero_by_finite_at_exponent_extremes_produces_defined_zero() {
+        // WHY: when av.exponent=MIN_EXPONENT and bv.exponent=MAX_EXPONENT, the naive
+        // av.exponent - bv.exponent = -12287 is outside [MIN_EXPONENT, MAX_EXPONENT].
+        // Without clamping, debug builds panic and release builds produce garbage bits.
+        // The fix clamps to MIN_EXPONENT. Python decimal with strict decimal128 context
+        // agrees the result is zero (both ctx.divide(0E-6176, 1E+6111) and the clamped
+        // Yinz result decode as finite zero with correct sign).
+        let zero_at_min_exp = encode_finite(false, MIN_EXPONENT, 0);
+        let one_at_max_exp = encode_finite(false, MAX_EXPONENT, 1);
+        let result = decode(div(zero_at_min_exp, one_at_max_exp));
+        assert_eq!(result.kind, D128Kind::Finite, "div(0@MIN_EXP, 1@MAX_EXP) must be finite");
+        assert!(result.is_zero(), "div(0@MIN_EXP, 1@MAX_EXP) must be zero");
+        assert!(!result.sign, "div(+0@MIN_EXP, +1@MAX_EXP) must be +0");
+
+        // Reverse: zero at MAX_EXP divided by nonzero at MIN_EXP — exponent difference is +12287,
+        // clamped to MAX_EXPONENT=6111. Python: div(0E+6111, 1E-6176) = 0E+6111 = zero. Agrees.
+        let zero_at_max_exp = encode_finite(false, MAX_EXPONENT, 0);
+        let one_at_min_exp = encode_finite(false, MIN_EXPONENT, 1);
+        let result2 = decode(div(zero_at_max_exp, one_at_min_exp));
+        assert_eq!(result2.kind, D128Kind::Finite, "div(0@MAX_EXP, 1@MIN_EXP) must be finite");
+        assert!(result2.is_zero(), "div(0@MAX_EXP, 1@MIN_EXP) must be zero");
+        assert!(!result2.sign, "div(+0@MAX_EXP, +1@MIN_EXP) must be +0");
+
+        // Negative zero: sign propagation.
+        let neg_zero = encode_finite(true, MIN_EXPONENT, 0);
+        let result3 = decode(div(neg_zero, one_at_max_exp));
+        assert_eq!(result3.kind, D128Kind::Finite);
+        assert!(result3.is_zero());
+        assert!(result3.sign, "div(-0@MIN_EXP, +1@MAX_EXP) must be -0");
+    }
+
+    #[test]
     fn add_inf_plus_inf_is_inf() {
         let inf = encode_infinity(false);
         let result = decode(add(inf, inf));
@@ -634,7 +671,6 @@ mod tests {
         assert_eq!(compare(pos_zero, neg_zero), 0);
     }
 
-    #[test]
     #[test]
     fn add_small_decimal_plus_large_integer() {
         // WHY: this catches the align_exponents exponent-difference boundary case

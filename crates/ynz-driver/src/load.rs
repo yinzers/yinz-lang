@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
@@ -69,7 +72,7 @@ pub fn load_project_config(root: &Path, diags: &mut DiagnosticBucket) -> Project
         Err(_) => return default_config(root),
     };
 
-    let mut entry = "src/entrypoint.ynz".to_string();
+    let mut entry = "entrypoint.ynz".to_string();
     let mut name = root
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -97,7 +100,7 @@ pub fn load_project_config(root: &Path, diags: &mut DiagnosticBucket) -> Project
             // Unknown key — warn
             let key = line.split('=').next().unwrap_or("").trim();
             if !key.is_empty() {
-                diags.push(Diagnostic::error(
+                diags.push(Diagnostic::warning(
                     SourceSpan::new(toml_path.display().to_string(), 0, 0),
                     format!("Unknown field `{key}` in yinz.toml — ignored."),
                     "Supported fields: `entry`, `name`, `version`.",
@@ -114,6 +117,13 @@ pub fn load_project_config(root: &Path, diags: &mut DiagnosticBucket) -> Project
     }
 }
 
+/// Parse the value portion of a TOML key = "value" line.
+///
+/// `rest` is everything AFTER the key name — i.e. it starts with optional
+/// whitespace, then `=`, then the value.  The function strips the `=` itself
+/// and any surrounding whitespace before unquoting.
+///
+/// Returns `None` when the value is empty or the key was not present.
 fn parse_toml_string(rest: &str) -> Option<String> {
     let rest = rest
         .trim_start_matches(|c: char| c.is_whitespace() || c == '=')
@@ -135,7 +145,7 @@ fn parse_toml_string(rest: &str) -> Option<String> {
 
 fn default_config(root: &Path) -> ProjectConfig {
     ProjectConfig {
-        entry: "src/entrypoint.ynz".to_string(),
+        entry: "entrypoint.ynz".to_string(),
         name: root
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -148,39 +158,34 @@ fn default_config(root: &Path) -> ProjectConfig {
 pub struct SourceEntry {
     /// Canonical file path (for diagnostics).
     pub path: PathBuf,
-    /// Module path relative to `src/` (no `.ynz` suffix) — used for mangling.
+    /// Module path relative to project root (no `.ynz` suffix) — used for mangling.
     #[allow(dead_code)]
     pub module_path: String,
     /// Source text.
     pub text: String,
 }
 
-/// Load all `.ynz` files under `root/src/` for a project build.
+/// Load all `.ynz` files under the project root for a project build.
 ///
+/// Walks from the project root (where `yinz.toml` lives). All `.ynz` files
+/// are included regardless of directory structure — the spec says paths are
+/// project-root-relative, no `src/` convention required.
 /// Returns entries sorted by path for deterministic ordering.
 pub fn load_project(root: &Path, diags: &mut DiagnosticBucket) -> Vec<SourceEntry> {
-    let src_dir = root.join("src");
-    if !src_dir.exists() {
-        diags.push(Diagnostic::error(
-            SourceSpan::new(root.display().to_string(), 0, 0),
-            "No `src/` directory found in the project root.",
-            "Create a `src/` directory and add your Yinz source files there.",
-            "`ynz build` expects source files under `src/**/*.ynz`.",
-        ));
-        return vec![];
-    }
-
     let mut entries: Vec<SourceEntry> = Vec::new();
-    collect_ynz_files(&src_dir, &src_dir, &mut entries, diags);
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+    collect_ynz_files(root, root, &mut entries, diags, &mut visited);
     entries.sort_by(|a, b| a.path.cmp(&b.path));
     entries
 }
 
+/// Time: O(n) where n = total files in project tree. Space: O(d) where d = max directory depth.
 fn collect_ynz_files(
     src_root: &Path,
     dir: &Path,
     entries: &mut Vec<SourceEntry>,
     diags: &mut DiagnosticBucket,
+    visited: &mut HashSet<PathBuf>,
 ) {
     let read_dir = match std::fs::read_dir(dir) {
         Ok(r) => r,
@@ -189,7 +194,7 @@ fn collect_ynz_files(
                 SourceSpan::new(dir.display().to_string(), 0, 0),
                 format!("Cannot read directory `{}`: {e}", dir.display()),
                 "Check that the directory exists and you have read permission.",
-                "`ynz build` walks `src/**/*.ynz` to find all source files.",
+                "`ynz build` walks all `.ynz` files from the project root.",
             ));
             return;
         }
@@ -197,8 +202,45 @@ fn collect_ynz_files(
 
     for entry in read_dir.flatten() {
         let path = entry.path();
-        if path.is_dir() {
-            collect_ynz_files(src_root, &path, entries, diags);
+        // Use symlink_metadata so we inspect the symlink itself, not its target.
+        // This prevents following symlinks into directories (which can form cycles).
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        if meta.file_type().is_symlink() {
+            // Resolve to check for cycles; skip symlinks that point to directories.
+            if let Ok(canon) = std::fs::canonicalize(&path) {
+                if canon.is_dir() {
+                    if !visited.insert(canon.clone()) {
+                        diags.push(Diagnostic::error(
+                            SourceSpan::new(path.display().to_string(), 0, 0),
+                            format!(
+                                "Symbolic-link cycle detected in project tree at `{}`.",
+                                path.display()
+                            ),
+                            "Remove the cycle, or replace the symlink with a real directory.",
+                            "Yinz walks the project tree to find `.ynz` source files. \
+                             A cycle of symlinks would loop forever. \
+                             The walk skips symlinks that lead back into the project.",
+                        ));
+                    }
+                    // Skip symlinked directories entirely (cycle or not).
+                }
+                // Symlinks to .ynz files are handled below through the is_dir() == false path.
+            }
+            continue;
+        }
+
+        if meta.is_dir() {
+            // Canonical path for the directory — track to detect hard-link cycles (rare but possible).
+            let canon = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            if !visited.insert(canon) {
+                // Already visited this canonical path — skip to avoid loops.
+                continue;
+            }
+            collect_ynz_files(src_root, &path, entries, diags, visited);
         } else if path.extension().is_some_and(|e| e == "ynz") {
             let module_path = path
                 .strip_prefix(src_root)
@@ -218,7 +260,7 @@ fn collect_ynz_files(
                         SourceSpan::new(path.display().to_string(), 0, 0),
                         format!("Could not read `{}`: {e}", path.display()),
                         "Check that the file exists and you have read permission.",
-                        "All `.ynz` files under `src/` are compiled as part of the project.",
+                        "All `.ynz` files under the project root are compiled.",
                     ));
                 }
             }

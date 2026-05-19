@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use ynz_ast::nodes::{
     BinOpKind, Block, CallExpr, Expr, FunctionDecl, Item, MatchArm, MatchPatternKind, Module,
-    PostfixOpKind, Stmt, StructLitField, Type as AstType, UnaryOpKind,
+    OwnershipModifier, PostfixOpKind, Stmt, StructLitField, Type as AstType, UnaryOpKind,
 };
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
@@ -46,9 +46,14 @@ pub fn check(
     generic_fn_table: &GenericFnTable,
     generic_shape_table: &GenericShapeTable,
     intrinsics: &PrimitiveIntrinsicTable,
+    imported_options: &std::collections::HashMap<String, crate::options_table::OptionsEntry>,
 ) -> (TypedModule, MonomorphizationTable, DiagnosticBucket) {
     let mut diags = DiagnosticBucket::new();
-    let options_table = collect_options(module, &mut diags);
+    let mut options_table = collect_options(module, &mut diags);
+    // Merge imported options so function bodies can use cross-file options types.
+    for (name, entry) in imported_options {
+        options_table.options.entry(name.clone()).or_insert_with(|| entry.clone());
+    }
 
     let mut checker = Checker {
         intrinsics,
@@ -80,14 +85,33 @@ pub fn check(
 }
 
 struct Checker<'b> {
+    // ── Borrowed look-up tables (module-wide, read-only during check) ─────────
+    //
+    // These tables are built by the signature pre-pass and imported symbol
+    // resolution before `check_module` runs.  They never change during a single
+    // check pass.
     intrinsics: &'b PrimitiveIntrinsicTable,
     sig_table: &'b SignatureTable,
     shape_table: &'b ShapeTable,
     generic_fn_table: &'b GenericFnTable,
     generic_shape_table: &'b GenericShapeTable,
     options_table: &'b OptionsTable,
+
+    // ── Mutable module-level output ───────────────────────────────────────────
+    //
+    // These accumulate results across the entire module; they are NOT reset
+    // between functions.
     expr_types: HashMap<(usize, usize), Type>,
     diags: DiagnosticBucket,
+    /// Accumulated monomorphization entries for all generic call sites in this module.
+    mono_table: MonomorphizationTable,
+    /// M6: named union type aliases from `shape Shape = Circle | Square` declarations.
+    /// Maps alias name → resolved union type. Populated before check_module runs.
+    union_aliases: HashMap<String, Type>,
+
+    // ── Per-function mutable state ────────────────────────────────────────────
+    //
+    // Reset at the start of each function body (see `check_function`).
     scope: Scope,
     /// Return type of the function currently being checked.
     current_fn_ret: Type,
@@ -97,18 +121,27 @@ struct Checker<'b> {
     /// Type parameters in scope for the function currently being checked.
     /// Maps type-param name → unit; presence means the name resolves to `TypeParam`.
     type_param_scope: HashMap<String, ()>,
-    /// Accumulated monomorphization entries for all generic call sites in this module.
-    mono_table: MonomorphizationTable,
+    /// Whether the function currently being checked is itself errors_capable.
+    current_fn_errors_capable: bool,
+
+    // ── Flow-sensitive sets (reset per function; persist through if/else branches) ──
+    //
+    // `maybe_non_none` and `union_narrowed` are intentionally NOT reset between
+    // functions — they track narrowing that may span nested scope levels within a
+    // single function and are cleared at the start of each new function by
+    // `check_function`.  `errors_success_narrowed` and `errors_consumed` are
+    // explicitly cleared in `check_function` (see lines ~165-166).
+    //
+    // Summary of reset points:
+    //   errors_success_narrowed — cleared at the start of each function
+    //   errors_consumed          — cleared at the start of each function
+    //   maybe_non_none           — managed per scope-push/pop inside if-guards
+    //   union_narrowed           — managed per is-arm scope
     /// Flow-sensitive tracking: binding names known to be non-none inside an `.exists()` guard.
     maybe_non_none: HashSet<String>,
     /// M6: binding names narrowed to a specific union variant inside an `is`-arm body.
     /// Maps binding name → narrowed type (the specific variant type).
     union_narrowed: HashMap<String, Type>,
-    /// M6: named union type aliases from `shape Shape = Circle | Square` declarations.
-    /// Maps alias name → resolved union type. Populated before check_module runs.
-    union_aliases: HashMap<String, Type>,
-
-    // ── M7 P3a: errors-capable flow tracking ─────────────────────────────────
     /// Flow-sensitive: binding names known to be in the success state after a
     /// `.failed() == false` check or after auto-propagation fired. These bindings
     /// have narrowed from `ErrorsCapable<T>` to `T`.
@@ -117,8 +150,6 @@ struct Checker<'b> {
     /// a `.failed()` check. After consumption, calling `.failed()` is a compile
     /// error ("check-after-use").
     errors_consumed: HashSet<String>,
-    /// Whether the function currently being checked is itself errors_capable.
-    current_fn_errors_capable: bool,
 }
 
 impl<'b> Checker<'b> {
@@ -139,6 +170,7 @@ impl<'b> Checker<'b> {
                 Item::ImportDecl(_) | Item::ConstDecl(_) | Item::ReExport(_) => {}
             }
         }
+        lint_repeated_inline_shapes(module, &mut self.diags);
     }
 
     fn check_function(&mut self, f: &FunctionDecl) {
@@ -362,6 +394,33 @@ impl<'b> Checker<'b> {
         annotation: Option<&AstType>,
         value: &Expr,
     ) {
+        // M8 P5 locked: `let h = background fn()` must be a compile error. Background
+        // handles (.send/.receive) ship in v0.3. Without this guard, the binding
+        // silently gets type `nothing` and the user has no signal anything went wrong.
+        if let Expr::Background(_, bg_span) = value {
+            self.diags.push(Diagnostic::error(
+                bg_span.clone(),
+                "Capturing the output of `background` is not yet supported.",
+                "Drop the `let` binding — `background fn(...)` is a fire-and-forget statement in v0.1. \
+                 The background-handle form (`.send` / `.receive`) ships in v0.3.",
+                "`background fn(...)` schedules a function to run outside the current scope. \
+                 In v0.1 the output is discarded (no way to wait or send messages). \
+                 Background handles will land in v0.3 per the concurrency roadmap.",
+            ));
+            self.scope.insert(
+                name.to_string(),
+                ScopeEntry {
+                    ty: Type::Error,
+                    is_const,
+                    is_param: false,
+                    is_loop_var: false,
+                    is_consumed: false,
+                    defined_at: name_span.clone(),
+                },
+            );
+            return;
+        }
+
         let annotated_ty = annotation.map(|t| self.ast_type_to_type(t));
         let value_ty = self.infer_expr(value, annotated_ty.as_ref());
 
@@ -419,15 +478,11 @@ impl<'b> Checker<'b> {
             None => {
                 let mut candidates: Vec<&str> = self.scope.all_names();
                 candidates.extend(self.sig_table.all_names());
-                let suggestion = find_closest_name(target, &candidates);
-                let what_instead = match suggestion {
-                    Some(close) => format!("Did you mean `{close}`?"),
-                    None => format!("Declare it first: `let {target} = ...`"),
-                };
-                self.diags.push(Diagnostic::error(
+                self.diags.push(make_not_defined_diag(
+                    target,
                     target_span.clone(),
-                    format!("`{target}` is not defined."),
-                    what_instead,
+                    &candidates,
+                    format!("Declare it first: `let {target} = ...`"),
                     "You can only assign to variables that have been declared with `let`.",
                 ));
             }
@@ -436,7 +491,7 @@ impl<'b> Checker<'b> {
                     target_span.clone(),
                     format!("`{target}` is a parameter — parameters cannot be reassigned."),
                     format!("To work with a modified value, declare a new variable: `let my_{target} = {target}`"),
-                    "Yinz ownership modifiers that allow parameter mutation (`lend`) arrive in v0.1 milestone 4. Until then, parameters are read-only.",
+                    "In Yinz, function parameters are read-only by default. If you need to mutate the value, declare a `let` binding: `let my_name = name` then modify `my_name` instead.",
                 ));
             }
             Some(entry) if entry.is_loop_var => {
@@ -487,7 +542,7 @@ impl<'b> Checker<'b> {
         if cond_ty != Type::Error && cond_ty != Type::Bool {
             self.diags.push(Diagnostic::error(
                 cond.span().clone(),
-                format!("The condition of an `if` must be `bool`, but this is `{}`.", type_name(&cond_ty)),
+                format!("The condition of an `if` must be `boolean`, but this is `{}`.", type_name(&cond_ty)),
                 "Write a comparison that produces `true` or `false`, e.g. `x > 0`.",
                 "`if` branches on whether the condition is `true` or `false`. Any other type cannot be used as a condition.",
             ));
@@ -737,7 +792,7 @@ impl<'b> Checker<'b> {
         if cond_ty != Type::Error && cond_ty != Type::Bool {
             self.diags.push(Diagnostic::error(
                 cond.span().clone(),
-                format!("The condition of a `while` loop must be `bool`, but this is `{}`.", type_name(&cond_ty)),
+                format!("The condition of a `while` loop must be `boolean`, but this is `{}`.", type_name(&cond_ty)),
                 "Write a comparison that produces `true` or `false`, e.g. `x > 0`.",
                 "`while` loops until the condition becomes `false`. Any other type cannot be used as a condition.",
             ));
@@ -1130,6 +1185,37 @@ impl<'b> Checker<'b> {
                          It cannot be applied to non-call expressions.",
                     ));
                 }
+                // Locked M8 decision (spec/concurrency.md:164-177): `background` must
+                // reject callees that borrow their arguments via `share`. A `share`
+                // borrow may outlive the caller's scope once the task runs in the
+                // background — a memory-safety hole.
+                let callee_name: Option<&str> = match inner.as_ref() {
+                    Expr::Call(call) => {
+                        if let Expr::Ident(name, _) = &call.callee {
+                            Some(name.as_str())
+                        } else {
+                            None
+                        }
+                    }
+                    Expr::MethodCall { method, .. } => Some(method.as_str()),
+                    _ => None,
+                };
+                if let Some(name) = callee_name {
+                    if let Some(sig) = self.sig_table.fns.get(name) {
+                        let has_share_param = sig
+                            .param_ownerships
+                            .iter()
+                            .any(|o| *o == Some(OwnershipModifier::Share));
+                        if has_share_param {
+                            self.diags.push(Diagnostic::error(
+                                inner.span().clone(),
+                                "Cannot use `background` with a function that borrows its arguments.",
+                                "Change the parameter to `give` (take ownership) or pass a copy: `background fn(value.copy())`.",
+                                "`background` will run this function outside the current scope. If the function only borrows its argument (via `share`), the borrow may outlive the value — a memory-safety hole. Pass ownership (`give`) or a copy so the background task has its own value.",
+                            ));
+                        }
+                    }
+                }
                 let _ = inner_ty;
                 Type::Nothing // background discards the return value
             }
@@ -1188,17 +1274,15 @@ impl<'b> Checker<'b> {
         let mut candidates: Vec<&str> = self.scope.all_names();
         candidates.extend(self.sig_table.all_names());
         candidates.extend(["print", "range"]);
-        let suggestion = find_closest_name(name, &candidates);
-        let what_instead = match suggestion {
-            Some(close) => format!("Did you mean `{close}`?"),
-            None => format!("Check the spelling, or declare it: `let {name} = ...`"),
-        };
-
-        self.diags.push(Diagnostic::error(
+        self.diags.push(make_not_defined_diag(
+            name,
             span.clone(),
-            format!("`{name}` is not defined."),
-            what_instead,
-            "Every name must be declared before it can be used.",
+            &candidates,
+            format!("Check the spelling, or declare it: `let {name} = ...`"),
+            &format!(
+                "`{name}` has no declaration in scope. Declare it with `let {name} = ...` before \
+                 using it, or check whether it's defined in a file you haven't imported yet."
+            ),
         ));
         Type::Error
     }
@@ -1269,16 +1353,15 @@ impl<'b> Checker<'b> {
                 let mut candidates: Vec<&str> = self.sig_table.all_names();
                 candidates.extend(self.generic_fn_table.all_names());
                 candidates.extend(["print", "range"]);
-                let suggestion = find_closest_name(name, &candidates);
-                let what_instead = match suggestion {
-                    Some(close) => format!("Did you mean `{close}`?"),
-                    None => format!("Define `{name}` as a function or check the spelling."),
-                };
-                self.diags.push(Diagnostic::error(
+                self.diags.push(make_not_defined_diag(
+                    name,
                     call.callee.span().clone(),
-                    format!("`{name}` is not defined."),
-                    what_instead,
-                    "The compiler looks up every name you call. If a name doesn't exist, the program can't run.",
+                    &candidates,
+                    format!("Define `{name}` as a function or check the spelling."),
+                    &format!(
+                        "`{name}` is not defined as a function in this file or its imports. \
+                         Add `function {name}(...)` or import it from another file."
+                    ),
                 ));
                 for arg in &call.args {
                     self.infer_expr(arg, None);
@@ -1345,7 +1428,7 @@ impl<'b> Checker<'b> {
                         type_name(&arg_ty)
                     ),
                     what_instead,
-                    "`print` works with: int, float, number, bool, string, and any shape.",
+                    "`print` works with: int, float, number, booleanean, string, and any shape.",
                 ));
             }
             return Type::Error;
@@ -1510,9 +1593,9 @@ impl<'b> Checker<'b> {
                 (Type::Number { .. }, Type::Number { .. }) => {
                     self.diags.push(Diagnostic::error(
                         span.clone(),
-                        "`%` is not available for `number`.",
-                        "Use the `math` module's `.rem()` method (arriving in v0.7).",
-                        "Remainder on decimal numbers requires careful rounding semantics that the `math` module provides.",
+                        "The `%` (remainder) operator on `number` requires careful rounding semantics.",
+                        "Use `int` instead of `number` if you want exact integer remainders, or write your own rounding-aware helper.",
+                        "On decimal `number`, `%` (remainder) depends on which rounding mode is in effect — IEEE 754-2008 §5.3.1 defines remainder as `a − (round(a/b) × b)`, and different rounding modes (half-even, truncation, etc.) produce different results for the same inputs. Yinz refuses `%` on `number` to avoid the silent precision-loss class.",
                     ));
                     Type::Error
                 }
@@ -1600,7 +1683,7 @@ impl<'b> Checker<'b> {
                     self.diags.push(Diagnostic::error(
                         span.clone(),
                         format!("`!` cannot be used on a `{}` value.", type_name(other)),
-                        "Use `!` only with `bool` expressions.",
+                        "Use `!` only with `boolean` expressions.",
                         "`!` is the boolean NOT operator — it flips `true` to `false` and vice versa.",
                     ));
                     Type::Error
@@ -1821,7 +1904,7 @@ impl<'b> Checker<'b> {
         if *receiver_ty == Type::Bool && method == "toInt" {
             self.diags.push(Diagnostic::error(
                 method_span.clone(),
-                "`.toInt()` is not available on `bool`.",
+                "`.toInt()` is not available on `boolean`.",
                 "Use an `if` expression instead: `if (b) { 1 } else { 0 }`",
                 "Automatic bool-to-int coercion is a common source of bugs. \
                  Yinz requires an explicit conversion.",
@@ -2137,8 +2220,8 @@ impl<'b> Checker<'b> {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
                     format!("`{n}` is not a known type."),
-                    "Use a built-in type (`int`, `float`, `number`, `bool`, `string`) or a `shape` name defined in this file.",
-                    "Types must be declared before use. If `{n}` is a shape, make sure the `shape {n} {{ ... }}` declaration is in this file.",
+                    "Use a built-in type (`int`, `float`, `number`, `boolean`, `string`) or a `shape` name defined in this file.",
+                    format!("Types must be declared before use. If `{n}` is a shape, make sure the `shape {n} {{ ... }}` declaration is in this file.", n = n),
                 ));
                 Type::Error
             }
@@ -2181,7 +2264,7 @@ impl<'b> Checker<'b> {
                 name,
                 args,
                 name_span,
-                ..
+                span,
             } => {
                 // Catch capitalized built-in names (Array, Fixed, Map) — Golden Rule 13:
                 // capital letter = type, everything else = lowercase. Built-ins are lowercase.
@@ -2208,6 +2291,14 @@ impl<'b> Checker<'b> {
                         }
                     }
                     "fixed" => {
+                        if resolved_args.len() > 1 {
+                            self.diags.push(Diagnostic::error(
+                                span.clone(),
+                                "`fixed<T>` takes one type argument. Yinz doesn't have tuple types.",
+                                "Define a shape with named fields instead:\n  shape IntervalConfig { minutes: int, timeframe: Timeframe }\n  const intervals: fixed<IntervalConfig> = [\n      { minutes: 5, timeframe: Timeframe.fiveMinute },\n      ...\n  ]",
+                                "Named fields are always self-documenting — `config.minutes` is clearer than a positional index. The shape compiles to the same stack-allocated memory layout a tuple would use, with zero overhead. Yinz also auto-reorders shape fields for optimal memory alignment, so the shape may pack tighter than a manual tuple.",
+                            ));
+                        }
                         let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
                         Type::BuiltinFixed {
                             elem: Box::new(elem),
@@ -2282,8 +2373,11 @@ impl<'b> Checker<'b> {
                     inner: Box::new(inner_ty),
                 }
             }
-            // AnonShape: not yet reachable in v0.1 (future inline shape syntax).
-            AstType::AnonShape { .. } => Type::Error,
+            // AnonShape: hoisted to a synthetic named shape by collect_shapes.
+            // Resolve to the same canonical name so the checker sees Type::Shape.
+            AstType::AnonShape { fields, .. } => Type::Shape {
+                name: crate::shapes::canonical_anon_name(fields),
+            },
         }
     }
 
@@ -2541,17 +2635,13 @@ impl<'b> Checker<'b> {
                     Some(ty) => ty,
                     None => {
                         let available = generic_def.field_names();
-                        let suggestion = find_closest_name(field, &available);
-                        let what_instead = match suggestion {
-                            Some(close) => format!("Did you mean `{close}`?"),
-                            None => format!("`{name}` has these fields: {}", available.join(", ")),
-                        };
-                        self.diags.push(Diagnostic::error(
+                        self.emit_unknown_field_error(
+                            &name,
+                            field,
+                            &available,
                             field_span.clone(),
-                            format!("`{name}` does not have a field called `{field}`.",),
-                            what_instead,
-                            "Field names must match exactly what was declared in the `shape` body.",
-                        ));
+                            false,
+                        );
                         Type::Error
                     }
                 };
@@ -2618,17 +2708,13 @@ impl<'b> Checker<'b> {
         };
         let Some(field_def) = shape_def.field(field) else {
             let available: Vec<&str> = shape_def.fields.iter().map(|f| f.name.as_str()).collect();
-            let suggestion = find_closest_name(field, &available);
-            let what_instead = match suggestion {
-                Some(close) => format!("Did you mean `{close}`?"),
-                None => format!("`{shape_name}` has these fields: {}", available.join(", ")),
-            };
-            self.diags.push(Diagnostic::error(
+            self.emit_unknown_field_error(
+                &shape_name,
+                field,
+                &available,
                 field_span.clone(),
-                format!("`{shape_name}` does not have a field called `{field}`.",),
-                what_instead,
-                "Field names must match exactly what was declared in the `shape` body.",
-            ));
+                false,
+            );
             return Type::Error;
         };
         // Hidden field visibility: only accessible inside the declaring shape's functions.
@@ -2645,6 +2731,42 @@ impl<'b> Checker<'b> {
             }
         }
         field_def.ty.clone()
+    }
+
+    /// Emit a "shape X does not have a field called Y" diagnostic.
+    ///
+    /// Shared by field access on concrete/generic shapes and struct-literal unknown-field
+    /// checks.  The `why` wording differs slightly between access (reading a field that
+    /// doesn't exist) and literal construction (writing a field that doesn't exist).
+    fn emit_unknown_field_error(
+        &mut self,
+        shape_name: &str,
+        field: &str,
+        available: &[&str],
+        span: SourceSpan,
+        is_struct_literal: bool,
+    ) {
+        let display_name = if shape_name.starts_with("__anon__") {
+            type_name(&Type::Shape { name: shape_name.to_string() })
+        } else {
+            shape_name.to_string()
+        };
+        let suggestion = find_closest_name(field, available);
+        let what_instead = match suggestion {
+            Some(close) => format!("Did you mean `{close}`?"),
+            None => format!("`{display_name}` has these fields: {}", available.join(", ")),
+        };
+        let why = if is_struct_literal {
+            "Shape values can only set fields declared on the shape."
+        } else {
+            "Field names must match exactly what was declared in the `shape` body."
+        };
+        self.diags.push(Diagnostic::error(
+            span,
+            format!("`{display_name}` does not have a field called `{field}`."),
+            what_instead,
+            why,
+        ));
     }
 
     /// Type-check a struct literal `{ name: "x", health: 100 }` against the hint type.
@@ -2775,12 +2897,18 @@ impl<'b> Checker<'b> {
             return Type::Error;
         };
 
+        let display_name = if shape_name.starts_with("__anon__") {
+            type_name(&Type::Shape { name: shape_name.clone() })
+        } else {
+            shape_name.clone()
+        };
+
         // base shapes cannot be instantiated
         if shape_def.is_base {
             self.diags.push(Diagnostic::error(
                 span.clone(),
-                format!("`{shape_name}` is a `base shape` and cannot be constructed directly."),
-                format!("Create a shape that extends `{shape_name}`, then construct that instead."),
+                format!("`{display_name}` is a `base shape` and cannot be constructed directly."),
+                format!("Create a shape that extends `{display_name}`, then construct that instead."),
                 "`base shape` declarations are meant to be extended — they provide shared fields for child shapes but cannot be instantiated on their own.",
             ));
             for f in fields {
@@ -2801,7 +2929,7 @@ impl<'b> Checker<'b> {
             1 => {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
-                    format!("Missing field `{}` in `{shape_name}` construction.", missing[0]),
+                    format!("Missing field `{}` in `{display_name}` construction.", missing[0]),
                     format!("Add `{}: value` to the shape value.", missing[0]),
                     "Every visible field of a shape must be provided when constructing a value — the compiler cannot fill them in for you.",
                 ));
@@ -2819,7 +2947,7 @@ impl<'b> Checker<'b> {
                     .join(", ");
                 self.diags.push(Diagnostic::error(
                     span.clone(),
-                    format!("{n} fields are missing from this `{shape_name}` value: {list}."),
+                    format!("{n} fields are missing from this `{display_name}` value: {list}."),
                     format!("Add the missing fields: {add}."),
                     "Every visible field of a shape must be provided when constructing a value — the compiler cannot fill them in for you.",
                 ));
@@ -2828,12 +2956,11 @@ impl<'b> Checker<'b> {
 
         // Check each provided field: name must exist and value type must match.
         for lit_field in fields {
-            let expected_ty = shape_def
+            let found_field = shape_def
                 .fields
                 .iter()
-                .find(|f| f.name == lit_field.name)
-                .map(|f| f.ty.clone());
-            match expected_ty {
+                .find(|f| f.name == lit_field.name);
+            match found_field {
                 None => {
                     let available: Vec<&str> = shape_def
                         .fields
@@ -2841,25 +2968,59 @@ impl<'b> Checker<'b> {
                         .filter(|f| !f.is_hidden)
                         .map(|f| f.name.as_str())
                         .collect();
-                    let suggestion = find_closest_name(&lit_field.name, &available);
-                    let what_instead = match suggestion {
-                        Some(close) => format!("Did you mean `{close}`?"),
-                        None => {
-                            format!("`{shape_name}` has these fields: {}", available.join(", "))
+                    self.emit_unknown_field_error(
+                        &shape_name,
+                        &lit_field.name,
+                        &available,
+                        lit_field.name_span.clone(),
+                        true,
+                    );
+                    self.infer_expr(&lit_field.value, None);
+                }
+                Some(field_def) if field_def.is_hidden
+                    && lit_field.name_span.file != shape_def.defined_at.file =>
+                {
+                    // External file is trying to set a hidden field at construction time.
+                    let declaring_file = std::path::Path::new(&shape_def.defined_at.file)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(&shape_def.defined_at.file);
+                    let setter_name = {
+                        let mut chars = lit_field.name.chars();
+                        match chars.next() {
+                            Some(first) if first.is_alphabetic() => {
+                                format!(
+                                    "with{}{}",
+                                    first.to_uppercase(),
+                                    chars.as_str()
+                                )
+                            }
+                            _ => format!("with_{}", lit_field.name),
                         }
                     };
+                    let field_ty_name = type_name(&field_def.ty);
                     self.diags.push(Diagnostic::error(
                         lit_field.name_span.clone(),
                         format!(
-                            "`{shape_name}` does not have a field called `{}`.",
+                            "`{}` is hidden — code in this file cannot set it at construction.",
                             lit_field.name
                         ),
-                        what_instead,
-                        "Shape values can only set fields declared on the shape.",
+                        format!(
+                            "Remove `{}: <value>` from the shape value. \
+                             The default from `{declaring_file}` will be used. \
+                             To customize the value, expose a setter from the declaring file: \
+                             `function {setter_name}(lend self: {shape_name}, v: {field_ty_name}) -> nothing {{ self.{} = v }}`\
+                             — then call that function instead.",
+                            lit_field.name, lit_field.name
+                        ),
+                        "Hidden fields are file-private (the spec calls this `visibility, not mutability`). \
+                         Allowing external construction to set them would bypass whatever invariants \
+                         the declaring file's functions maintain.",
                     ));
                     self.infer_expr(&lit_field.value, None);
                 }
-                Some(expected) => {
+                Some(field_def) => {
+                    let expected = field_def.ty.clone();
                     let actual = self.infer_expr(&lit_field.value, Some(&expected));
                     if actual != Type::Error
                         && expected != Type::Error
@@ -3057,6 +3218,23 @@ impl<'b> Checker<'b> {
         value: &Expr,
         span: &SourceSpan,
     ) {
+        // const-deep-immutability: reject element writes on const-bound collections,
+        // mirroring the same guard in check_field_assign.
+        if let Some(root_name) = root_binding_name(receiver) {
+            if let Some(entry) = self.scope.lookup(root_name) {
+                if entry.is_const {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        format!("`{root_name}` is `const` and its elements cannot be changed."),
+                        format!("Declare it with `let` instead: `let {root_name}: array<...> = [...]`"),
+                        "`const` bindings are fully read-only — no reassignment, no field changes, no element writes. Use `let` for values that need to change.",
+                    ));
+                    self.infer_expr(value, None);
+                    return;
+                }
+            }
+        }
+
         let recv_ty = self.infer_expr(receiver, None);
         let _idx_ty = self.infer_expr(index, Some(&Type::Int));
         match &recv_ty {
@@ -3654,6 +3832,205 @@ fn suggest_conversion(lhs: &Type, rhs: &Type) -> String {
     }
 }
 
+/// Build a "not defined" diagnostic.
+///
+/// Searches `candidates` for a Levenshtein-close alternative.  When one is
+/// found the `what_instead` reads "Did you mean `close`?"; otherwise
+/// `fallback_what_instead` is used.
+/// Tier 3 lint: emit a Warning at each use site when the same inline shape
+/// appears 2 or more times in the module. Suggests extracting to a named `shape`.
+///
+/// Per `.claude/rules/auto-promotion.md`: threshold = 2+ uses, Warning severity,
+/// emit at EVERY use site so the IDE underlines each one.
+///
+/// Synthetic compiler-generated shapes (non-`__anon__*`) are skipped — only
+/// user-written inline shapes trigger the lint.
+///
+/// Time: O(n) where n = number of type-annotation nodes in the module.
+/// Space: O(k) where k = number of distinct inline shapes.
+fn lint_repeated_inline_shapes(module: &Module, diags: &mut DiagnosticBucket) {
+    use crate::shapes::canonical_anon_name;
+
+    // Collect (canonical_name, rendered_fields, span) for every AnonShape in the module.
+    let mut uses: Vec<(String, String, SourceSpan)> = Vec::new();
+
+    collect_anon_uses_in_module(module, &mut uses, &canonical_anon_name);
+
+    // Count occurrences per canonical name.
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (name, _, _) in &uses {
+        *counts.entry(name.clone()).or_insert(0) += 1;
+    }
+
+    // Emit a Warning at each use site for shapes that appear 2+ times.
+    for (canonical, rendered, span) in &uses {
+        let n = *counts.get(canonical).unwrap_or(&0);
+        if n < 2 {
+            continue;
+        }
+        let fields_block = render_fields_block(rendered);
+        diags.push(Diagnostic::warning(
+            span.clone(),
+            format!("Inline shape `{rendered}` is used in {n} places."),
+            format!(
+                "Consider extracting to a named shape:\nshape SuggestedName {{\n{fields_block}\n}}\n\
+                 Then reference `SuggestedName` at each of the {n} use sites."
+            ),
+            "Inline shapes are the right tool for one-off types — they keep the type definition \
+             next to its only use. Repeated identical inline shapes duplicate the definition, so \
+             a future change has to be made in multiple places. A named shape gives one source \
+             of truth and a meaningful identifier in diagnostics.".to_string(),
+        ));
+    }
+}
+
+/// Walk a module and collect `(canonical_name, rendered, span)` for each `AnonShape`.
+fn collect_anon_uses_in_module(
+    module: &Module,
+    out: &mut Vec<(String, String, SourceSpan)>,
+    canonical: &impl Fn(&[ynz_ast::nodes::FieldDecl]) -> String,
+) {
+    for item in &module.items {
+        match item {
+            Item::Function(f) => {
+                collect_anon_uses_in_type(&f.return_type, out, canonical);
+                for param in &f.params {
+                    collect_anon_uses_in_type(&param.ty, out, canonical);
+                }
+                collect_anon_uses_in_stmts(&f.body.stmts, out, canonical);
+            }
+            Item::ShapeDecl(s) => {
+                for field in &s.fields {
+                    collect_anon_uses_in_type(&field.ty, out, canonical);
+                }
+            }
+            Item::ConstDecl(c) => {
+                if let Some(ty) = &c.ty {
+                    collect_anon_uses_in_type(ty, out, canonical);
+                }
+            }
+            Item::ImportDecl(_) | Item::OptionsDecl(_) | Item::ReExport(_) => {}
+        }
+    }
+}
+
+fn collect_anon_uses_in_type(
+    ty: &ynz_ast::nodes::Type,
+    out: &mut Vec<(String, String, SourceSpan)>,
+    canonical: &impl Fn(&[ynz_ast::nodes::FieldDecl]) -> String,
+) {
+    use ynz_ast::nodes::Type as AstType;
+    match ty {
+        AstType::AnonShape { fields, span } => {
+            let name = canonical(fields);
+            let rendered = render_inline_shape(fields);
+            out.push((name, rendered, span.clone()));
+            for field in fields {
+                collect_anon_uses_in_type(&field.ty, out, canonical);
+            }
+        }
+        AstType::Maybe { inner, .. } => collect_anon_uses_in_type(inner, out, canonical),
+        AstType::Union { variants, .. } => {
+            for v in variants {
+                collect_anon_uses_in_type(v, out, canonical);
+            }
+        }
+        AstType::Generic { args, .. } => {
+            for a in args {
+                collect_anon_uses_in_type(a, out, canonical);
+            }
+        }
+        AstType::ErrorCapable { inner, .. } => collect_anon_uses_in_type(inner, out, canonical),
+        AstType::Sensitive(inner) => collect_anon_uses_in_type(inner, out, canonical),
+        _ => {}
+    }
+}
+
+fn collect_anon_uses_in_stmts(
+    stmts: &[Stmt],
+    out: &mut Vec<(String, String, SourceSpan)>,
+    canonical: &impl Fn(&[ynz_ast::nodes::FieldDecl]) -> String,
+) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { ty: Some(ty), .. } => collect_anon_uses_in_type(ty, out, canonical),
+            Stmt::Let { .. }
+            | Stmt::Assign { .. }
+            | Stmt::Return { .. }
+            | Stmt::Expr(_)
+            | Stmt::If { .. }
+            | Stmt::Match { .. }
+            | Stmt::While { .. }
+            | Stmt::For { .. }
+            | Stmt::FieldAssign { .. }
+            | Stmt::IndexAssign { .. } => {}
+        }
+    }
+}
+
+
+/// Render an `AnonShape`'s fields as `{ field: type, ... }` for the WHAT message.
+fn render_inline_shape(fields: &[ynz_ast::nodes::FieldDecl]) -> String {
+    let mut sorted: Vec<_> = fields.iter().collect();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    let parts: Vec<String> = sorted
+        .iter()
+        .map(|f| format!("{}: {}", f.name, render_ast_type(&f.ty)))
+        .collect();
+    format!("{{ {} }}", parts.join(", "))
+}
+
+/// Render an `AnonShape`'s fields as a `shape` body block (2-space indent per field).
+fn render_fields_block(rendered: &str) -> String {
+    // `rendered` is like `{ a: int, b: string }` — strip outer braces, split on `, `.
+    let inner = rendered.trim_start_matches("{ ").trim_end_matches(" }");
+    inner
+        .split(", ")
+        .map(|f| format!("  {f}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_ast_type(ty: &ynz_ast::nodes::Type) -> String {
+    use ynz_ast::nodes::Type as AstType;
+    match ty {
+        AstType::Int => "int".to_string(),
+        AstType::Float => "float".to_string(),
+        AstType::Number { .. } => "number".to_string(),
+        AstType::Bool => "bool".to_string(),
+        AstType::Nothing => "nothing".to_string(),
+        AstType::Named(n, _) => n.clone(),
+        AstType::Maybe { inner, .. } => format!("maybe {}", render_ast_type(inner)),
+        AstType::AnonShape { fields, .. } => render_inline_shape(fields),
+        AstType::Generic { name, args, .. } => {
+            let arg_str: Vec<_> = args.iter().map(render_ast_type).collect();
+            format!("{}<{}>", name, arg_str.join(", "))
+        }
+        AstType::Union { variants, .. } => {
+            let parts: Vec<_> = variants.iter().map(render_ast_type).collect();
+            parts.join(" | ")
+        }
+        AstType::ErrorCapable { inner, .. } => format!("{} errors", render_ast_type(inner)),
+        AstType::Sensitive(inner) => format!("sensitive {}", render_ast_type(inner)),
+        _ => "?".to_string(),
+    }
+}
+
+fn make_not_defined_diag(
+    name: &str,
+    span: SourceSpan,
+    candidates: &[&str],
+    fallback_what_instead: String,
+    why: &str,
+) -> Diagnostic {
+    let suggestion = find_closest_name(name, candidates);
+    let what_instead = match suggestion {
+        Some(close) => format!("Did you mean `{close}`?"),
+        None => fallback_what_instead,
+    };
+    Diagnostic::error(span, format!("`{name}` is not defined."), what_instead, why)
+}
+
 /// Find the closest name using Levenshtein distance — for "did you mean?" suggestions.
 pub fn find_closest_name<'a>(target: &str, candidates: &[&'a str]) -> Option<&'a str> {
     let threshold = match target.len() {
@@ -3675,23 +4052,34 @@ pub fn find_closest_name<'a>(target: &str, candidates: &[&'a str]) -> Option<&'a
         .map(|(_, c)| c)
 }
 
+/// Levenshtein distance between two strings.
+///
+/// Time: O(m×n) where m, n = string lengths. Space: O(min(m, n)) — two-row
+/// rolling DP instead of an m×n matrix. Operates on bytes (identifiers are ASCII).
 fn levenshtein(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
+    let a = a.as_bytes();
+    let b = b.as_bytes();
     let (m, n) = (a.len(), b.len());
-    let mut dp = vec![vec![0usize; n + 1]; m + 1];
-    (0..=m).for_each(|i| dp[i][0] = i);
-    (0..=n).for_each(|j| dp[0][j] = j);
+    // Early exit when length difference already exceeds any useful threshold.
+    if m.abs_diff(n) > 2 {
+        return m.abs_diff(n);
+    }
+    // Keep the shorter string in `b` so the inner row is as small as possible.
+    let (a, b, m, n) = if m < n { (b, a, n, m) } else { (a, b, m, n) };
+    let mut prev: Vec<usize> = (0..=n).collect();
+    let mut curr = vec![0usize; n + 1];
     for i in 1..=m {
+        curr[0] = i;
         for j in 1..=n {
-            dp[i][j] = if a[i - 1] == b[j - 1] {
-                dp[i - 1][j - 1]
+            curr[j] = if a[i - 1] == b[j - 1] {
+                prev[j - 1]
             } else {
-                1 + dp[i - 1][j].min(dp[i][j - 1]).min(dp[i - 1][j - 1])
+                1 + prev[j].min(curr[j - 1]).min(prev[j - 1])
             };
         }
+        std::mem::swap(&mut prev, &mut curr);
     }
-    dp[m][n]
+    prev[n]
 }
 
 /// Return the identifier name if `expr` is a bare `Ident` or `SelfValue`.
@@ -3766,7 +4154,7 @@ mod tests {
             vec![Type::Nothing],
             Type::Nothing,
         );
-        let shape_table = crate::shapes::collect_shapes(&module, &mut DiagnosticBucket::new());
+        let shape_table = crate::shapes::collect_shapes(&module, &Default::default(), &Default::default(), &mut DiagnosticBucket::new());
         let generic_shape_table =
             crate::shapes::collect_generic_shapes(&module, &mut DiagnosticBucket::new());
         let sig_table = crate::signatures::collect_signatures(
@@ -3786,6 +4174,7 @@ mod tests {
             &generic_fn_table,
             &generic_shape_table,
             &intrinsics,
+            &std::collections::HashMap::new(),
         );
         let diags: Vec<_> = diags.into_iter().collect();
         assert_eq!(

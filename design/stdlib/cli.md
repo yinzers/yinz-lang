@@ -8,7 +8,7 @@ Scripting should be as easy as Python. One-file scripts, CLI tools, data process
 
 ```
 let args = cli.args()
-let verbose = cli.flag("verbose")           // -> bool
+let verbose = cli.flag("verbose")           // -> boolean
 let port = cli.option("port", "3000")       // -> string (with default)
 ```
 
@@ -32,7 +32,7 @@ terminal.clear()
 
 ```
 let name = terminal.ask("What's your name?")
-let confirm = terminal.confirm("Continue?")             // -> bool
+let confirm = terminal.confirm("Continue?")             // -> boolean
 let choice = terminal.choose("Pick one:", ["A", "B", "C"])
 ```
 

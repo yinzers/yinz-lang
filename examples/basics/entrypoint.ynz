@@ -31,11 +31,11 @@ function entrypoint() -> nothing {
   const playerName = `Cheddar`
   let score: int = 0
 
-  // Primitive types — int, float, number (decimal128), bool
+  // Primitive types — int, float, number (decimal128), boolean
   const startHealth: int = 100
   const damageMultiplier: float = 1.5
   const accountBalance: number = 1234.56     // decimal128, exact
-  const isActive: bool = true
+  const isActive: boolean = true
 
   // Arithmetic, comparison, boolean
   let combo = startHealth + 25
@@ -304,12 +304,12 @@ function fib(n: int) -> int {
 }
 
 // Mutual recursion — isEven calls isOdd and vice versa.
-function isEven(n: int) -> bool {
+function isEven(n: int) -> boolean {
   if (n == 0) { return true }
   return isOdd(n - 1)
 }
 
-function isOdd(n: int) -> bool {
+function isOdd(n: int) -> boolean {
   if (n == 0) { return false }
   return isEven(n - 1)
 }
@@ -370,7 +370,7 @@ function safeDivide(a: int, b: int) -> int errors {
 // Countdown: user-defined iterable shape — walks 3, 2, 1 sequence
 shape Countdown {
   from: int
-  hidden current: int
+  hidden current: int = 0
 }
 
 // next: standalone function satisfying the Iterable<int> protocol for Countdown.
@@ -383,4 +383,23 @@ function next(lend self: Countdown) -> maybe<int> {
   let result = items.get(self.current)
   self.current = self.current + 1
   return result
+}
+
+
+// ────── v0.1-polish: inline / anonymous shape types ──────
+
+// Inline shape in a let binding — type defined at the point of use.
+function demoInlineShapes() -> nothing {
+  let point: { x: int, y: int } = { x: 3, y: 4 }
+  print(`point x=${point.x} y=${point.y}`)
+
+  // Inline shape in fixed<T> + for-loop destructuring (the motivating example).
+  const intervals: fixed<{ minutes: int }> = [
+    { minutes: 5 },
+    { minutes: 15 },
+    { minutes: 60 },
+  ]
+  for ({ minutes } in intervals) {
+    print(`interval: ${minutes} minutes`)
+  }
 }

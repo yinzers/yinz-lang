@@ -20,7 +20,7 @@ options Single { only }
 // WHY: empty options is rejected — must have ≥2 variants
 options Empty { }
 
-// WHY: .toInt() on bool is rejected — no silent 0/1 coercion
+// WHY: .toInt() on boolean is rejected — no silent 0/1 coercion
 function boolToInt() -> nothing {
   let x = true.toInt()
 }

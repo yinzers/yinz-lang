@@ -1,6 +1,6 @@
 # Session State: ynz
 
-**Last Updated**: 2026-05-18 (v0.1.0 SHIPPED: M1–M8 complete, 830 tests, tag v0.1.0; all plans archived to done/)
+**Last Updated**: 2026-05-19 (v0.1.0 SHIPPED: M1–M8 complete, 830 tests, tag v0.1.0; all plans archived to done/; v0.2-M1 planning in progress)
 
 ---
 
@@ -10,12 +10,11 @@
 
 <!-- RADAR-START -->
 ### Active Roadmaps
-*(no active roadmaps)*
+- v0-2-dev-loop-tooling (patrick) — 1 active plans — 2026-05-18
 
 ### Active Workstreams
-- m7-strings-errors-iterables (patrick) — 13 files touched — 26/128 done — 2026-05-18-r2
-- m8-modules-doc-sensitive-concurrency-bignum-release (patrick) — 17 files touched — 0/120 done — roadmap: v0-1-compiler — 2026-05-18-r2
-- v0-1-compiler (patrick) — 5 files touched — 0/184 done — 2026-05-12-r4
+- m8-typeck-cross-file-resolution (Patrick Rizzardi) — 4 files touched — 0/32 done — roadmap: v0-1-compiler — 2026-05-18
+- v0-2-m1-feature-inventory-sync (Patrick Rizzardi) — 15 files touched — 11/111 done — roadmap: v0-2-dev-loop-tooling — 2026-05-19
 <!-- RADAR-END -->
 
 ---
@@ -45,8 +44,7 @@ cargo fmt --all
 ./target/debug/ynz run crates/ynz-driver/tests/fixtures/m4_player.ynz
 # → Patrick / 120 / Patrick  (M4 P4 success-criteria fixture)
 
-# Current branch: feat/m4-verification (M4 P7 in progress)
-# M4 status: P1-P6 done; P7 (verify + tag v0.1.0-m4) in progress
+# Current branch: main (v0.1.0 shipped; v0.2-M1 planning in progress)
 ```
 
 ---

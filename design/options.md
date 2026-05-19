@@ -26,7 +26,11 @@ Every `options` type lowers to an `i8` tag (or smallest fitting type for the var
 
 Multi-case `if` over an options scrutinee lowers to LLVM `switch` on the tag byte — the same dense jump-table optimization used for `int` multi-case (per `design/control-flow.md`).
 
-`.toString()` on an options value: the compiler emits a per-type LLVM global `[N x *const u8]` array of variant-name string literals. The `.toString()` method indexes by tag and calls `ynz_string_from_static(ptr, len)` (a `ynz-runtime` function) to return a heap-owned Yinz string.
+`.toString()` on an options value: the compiler emits a per-type LLVM global `[N x *const u8]` array of string literals indexed by tag. The `.toString()` method indexes by tag and calls `ynz_string_from_static(ptr, len)` to return a heap-owned Yinz string.
+
+**Display strings** (added 2026-05-18): the `variantName: \`Display String\`` syntax lets the author attach a separate display string to any variant. When present, the display string populates the string table slot instead of the variant identifier. Variants without a display string fall back to the identifier name. This is purely a string-table substitution — the tag value, comparison semantics, and ABI are unchanged. The `OptionsEntry` in the typeck table carries a parallel `display_strings: Vec<Option<String>>` field; `lower_options_to_string` reads `display_strings[i].unwrap_or(&variants[i])` when building the LLVM string global per variant.
+
+**Why not a separate `.displayString()` method**: one string representation per options type is cleaner and avoids the question of which method to call in interpolation. The display string IS the string — if you need both the identifier and the label, access the identifier via the variant name in code (which is free, compile-time) and call `.toString()` for display.
 
 ---
 

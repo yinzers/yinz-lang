@@ -180,9 +180,9 @@ When the compiler emits the memory layout for a `shape` declaration, it auto-reo
 
 ```ynz
 shape Event {
-  flag: bool      // user wrote: 1 byte
+  flag: boolean      // user wrote: 1 byte
   timestamp: int  // user wrote: 8 bytes
-  count: bool     // user wrote: 1 byte
+  count: boolean     // user wrote: 1 byte
 }
 // Compiler emits: timestamp (8) + flag (1) + count (1) + 6 bytes end-padding = 16 bytes
 // (NOT what the user wrote in source order, which would have been 24 bytes with 14 bytes of padding)
@@ -203,9 +203,9 @@ None of these require a `layout: c` modifier on the shape itself — the layout 
 
 ```
 shape Event {                     // muted: // reordered: timestamp, flag, count
-  flag: bool                      //         saved 8 bytes per value
+  flag: boolean                   //         saved 8 bytes per value
   timestamp: int
-  count: bool
+  count: boolean
 }
 ```
 
@@ -224,7 +224,7 @@ The primary API is `.sort()`. The compiler picks stable or unstable codegen base
 
 | Element type | Compiler picks | Reasoning |
 |---|---|---|
-| `array<int>`, `array<float>`, `array<bool>`, `array<string>` | Unstable (fast in-place quicksort family) | Equal primitives/strings are interchangeable — there's no "original order" between two `5`s or two `"hello"`s to preserve. Pure speed and memory win. |
+| `array<int>`, `array<float>`, `array<boolean>`, `array<string>` | Unstable (fast in-place quicksort family) | Equal primitives/strings are interchangeable — there's no "original order" between two `5`s or two `"hello"`s to preserve. Pure speed and memory win. |
 | `array<Shape>` (any composite type) | Stable (TimSort or equivalent) | Equal-keyed shapes might have other fields the user wants preserved in order. Default to safe. |
 | `array<array<T>>`, `array<map<K,V>>`, `array<Entry<K,V>>` | Stable | Same — nested or composite types. |
 

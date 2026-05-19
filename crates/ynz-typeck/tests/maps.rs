@@ -85,7 +85,7 @@ fn m5p3c_map_int_bool_literal_typechecks() {
     check_no_diags(
         r#"
 function entrypoint() -> nothing {
-    let m: map<int, bool> = { 1: true, 2: false }
+    let m: map<int, boolean> = { 1: true, 2: false }
 }
 "#,
     );
@@ -194,7 +194,7 @@ fn m5p3c_map_has_returns_bool() {
         r#"
 function entrypoint() -> nothing {
     let m: map<string, int> = { `alice`: 90 }
-    let exists: bool = m.has(`alice`)
+    let exists: boolean = m.has(`alice`)
 }
 "#,
     );

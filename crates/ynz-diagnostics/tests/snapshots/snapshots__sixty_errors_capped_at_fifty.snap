@@ -9,7 +9,7 @@ Error: Error number 0.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 1.
    ╭─[ test.ynz:1:1 ]
@@ -18,7 +18,7 @@ Error: Error number 1.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 2.
    ╭─[ test.ynz:1:1 ]
@@ -27,7 +27,7 @@ Error: Error number 2.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 3.
    ╭─[ test.ynz:1:1 ]
@@ -36,7 +36,7 @@ Error: Error number 3.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 4.
    ╭─[ test.ynz:1:1 ]
@@ -45,7 +45,7 @@ Error: Error number 4.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 5.
    ╭─[ test.ynz:1:1 ]
@@ -54,7 +54,7 @@ Error: Error number 5.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 6.
    ╭─[ test.ynz:1:1 ]
@@ -63,7 +63,7 @@ Error: Error number 6.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 7.
    ╭─[ test.ynz:1:1 ]
@@ -72,7 +72,7 @@ Error: Error number 7.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 8.
    ╭─[ test.ynz:1:1 ]
@@ -81,7 +81,7 @@ Error: Error number 8.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 9.
    ╭─[ test.ynz:1:1 ]
@@ -90,7 +90,7 @@ Error: Error number 9.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 10.
    ╭─[ test.ynz:1:1 ]
@@ -99,7 +99,7 @@ Error: Error number 10.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 11.
    ╭─[ test.ynz:1:1 ]
@@ -108,7 +108,7 @@ Error: Error number 11.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 12.
    ╭─[ test.ynz:1:1 ]
@@ -117,7 +117,7 @@ Error: Error number 12.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 13.
    ╭─[ test.ynz:1:1 ]
@@ -126,7 +126,7 @@ Error: Error number 13.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 14.
    ╭─[ test.ynz:1:1 ]
@@ -135,7 +135,7 @@ Error: Error number 14.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 15.
    ╭─[ test.ynz:1:1 ]
@@ -144,7 +144,7 @@ Error: Error number 15.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 16.
    ╭─[ test.ynz:1:1 ]
@@ -153,7 +153,7 @@ Error: Error number 16.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 17.
    ╭─[ test.ynz:1:1 ]
@@ -162,7 +162,7 @@ Error: Error number 17.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 18.
    ╭─[ test.ynz:1:1 ]
@@ -171,7 +171,7 @@ Error: Error number 18.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 19.
    ╭─[ test.ynz:1:1 ]
@@ -180,7 +180,7 @@ Error: Error number 19.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 20.
    ╭─[ test.ynz:1:1 ]
@@ -189,7 +189,7 @@ Error: Error number 20.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 21.
    ╭─[ test.ynz:1:1 ]
@@ -198,7 +198,7 @@ Error: Error number 21.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 22.
    ╭─[ test.ynz:1:1 ]
@@ -207,7 +207,7 @@ Error: Error number 22.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 23.
    ╭─[ test.ynz:1:1 ]
@@ -216,7 +216,7 @@ Error: Error number 23.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 24.
    ╭─[ test.ynz:1:1 ]
@@ -225,7 +225,7 @@ Error: Error number 24.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 25.
    ╭─[ test.ynz:1:1 ]
@@ -234,7 +234,7 @@ Error: Error number 25.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 26.
    ╭─[ test.ynz:1:1 ]
@@ -243,7 +243,7 @@ Error: Error number 26.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 27.
    ╭─[ test.ynz:1:1 ]
@@ -252,7 +252,7 @@ Error: Error number 27.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 28.
    ╭─[ test.ynz:1:1 ]
@@ -261,7 +261,7 @@ Error: Error number 28.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 29.
    ╭─[ test.ynz:1:1 ]
@@ -270,7 +270,7 @@ Error: Error number 29.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 30.
    ╭─[ test.ynz:1:1 ]
@@ -279,7 +279,7 @@ Error: Error number 30.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 31.
    ╭─[ test.ynz:1:1 ]
@@ -288,7 +288,7 @@ Error: Error number 31.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 32.
    ╭─[ test.ynz:1:1 ]
@@ -297,7 +297,7 @@ Error: Error number 32.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 33.
    ╭─[ test.ynz:1:1 ]
@@ -306,7 +306,7 @@ Error: Error number 33.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 34.
    ╭─[ test.ynz:1:1 ]
@@ -315,7 +315,7 @@ Error: Error number 34.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 35.
    ╭─[ test.ynz:1:1 ]
@@ -324,7 +324,7 @@ Error: Error number 35.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 36.
    ╭─[ test.ynz:1:1 ]
@@ -333,7 +333,7 @@ Error: Error number 36.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 37.
    ╭─[ test.ynz:1:1 ]
@@ -342,7 +342,7 @@ Error: Error number 37.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 38.
    ╭─[ test.ynz:1:1 ]
@@ -351,7 +351,7 @@ Error: Error number 38.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 39.
    ╭─[ test.ynz:1:1 ]
@@ -360,7 +360,7 @@ Error: Error number 39.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 40.
    ╭─[ test.ynz:1:1 ]
@@ -369,7 +369,7 @@ Error: Error number 40.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 41.
    ╭─[ test.ynz:1:1 ]
@@ -378,7 +378,7 @@ Error: Error number 41.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 42.
    ╭─[ test.ynz:1:1 ]
@@ -387,7 +387,7 @@ Error: Error number 42.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 43.
    ╭─[ test.ynz:1:1 ]
@@ -396,7 +396,7 @@ Error: Error number 43.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 44.
    ╭─[ test.ynz:1:1 ]
@@ -405,7 +405,7 @@ Error: Error number 44.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 45.
    ╭─[ test.ynz:1:1 ]
@@ -414,7 +414,7 @@ Error: Error number 45.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 46.
    ╭─[ test.ynz:1:1 ]
@@ -423,7 +423,7 @@ Error: Error number 46.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 47.
    ╭─[ test.ynz:1:1 ]
@@ -432,7 +432,7 @@ Error: Error number 47.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 48.
    ╭─[ test.ynz:1:1 ]
@@ -441,7 +441,7 @@ Error: Error number 48.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 Error: Error number 49.
    ╭─[ test.ynz:1:1 ]
@@ -450,7 +450,7 @@ Error: Error number 49.
    │ ┬  
    │ ╰── Fix it.
    │ 
-   │ Note: Why: Because it is wrong.
+   │ Note: Because it is wrong.
 ───╯
 ... and 10 more errors hidden
 

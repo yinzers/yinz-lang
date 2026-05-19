@@ -72,4 +72,16 @@ pub const BANNED_JARGON: &[&str] = &[
     "async",
     "await",
     "goroutine",
+    // Batch 4c additions — design/compiler-errors.md sync (2026-05-19)
+    "interface",       // Yinz term: "shape" (data) + "follows" (contract) — Batch 7.9
+    // Note: lexer.rs emit_banned_declaration_keyword uses format!("`{keyword}` is not…") so the
+    // literal word "interface" never appears as a string literal — jargon audit is not tripped.
+    "trait",           // Yinz term: "follows" and "contract"
+    "lifetime",        // Yinz term: "scope" or "after this function returns" — Batch 7.8
+    // "remainder"  — NOT banned: mathematical terms that aid teaching are NOT jargon (Batch 6.10)
+    "alias",           // Yinz term: "a different local name" — Batch 6.11
+    "associated type", // Yinz term: (avoid — no user-facing name yet)
+    "implementation",  // Yinz term: describe what it does; avoid "implementation detail"
+    "precondition",    // Yinz term: "must be true before"
+    "postcondition",   // Yinz term: "must be true after"
 ];

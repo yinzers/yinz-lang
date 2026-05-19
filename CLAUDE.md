@@ -30,6 +30,9 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 |------|---------|
 | `/spec/` | Language specification — for users of Yinz |
 | `/design/` | Design decisions and open questions — for contributors |
+| `design/feature-registry.md` | SSOT registry schema + carve-out policy (see `registry/features.toml`) |
+| `registry/features.toml` | Single source of truth for all feature inventories (keywords, jargon, intrinsics, deferred features, hint domains) |
+| `crates/ynz-registry/` | Crate that parses `registry/features.toml` + generates typed Rust constants via `build.rs` |
 | `.claude/rules/` | Detailed rule files (loaded on demand) |
 | `CLAUDE.md` | This file — rules for Claude |
 
@@ -46,7 +49,8 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 | `.claude/rules/inference.md` | Designing IDE behavior, ownership UI, type-inference UI, any teaching surface where the compiler figures things out automatically |
 | `.claude/rules/auto-promotion.md` | Designing any new feature, stdlib type, or compiler optimization — mandates auto-promotion analysis (silent codegen + muted hint + Tier 3 lint) when a stricter/faster form fits. The "fast by design even for inexperienced developers" pattern. |
 | `.claude/rules/stdlib-design.md` | Designing or reviewing any stdlib module — six rules: pure-named methods are pure, no parallel APIs, no platform-default config, bounded queues, receiver-first args, codegen serialization. |
-| `.claude/rules/plan-invariants.md` | Writing or reviewing milestone plans (M4 onward must include the 5-subsection Invariants block) |
+| `.claude/rules/feature-registry.md` | Adding any new keyword, jargon entry, primitive method, type constant, deferred feature, diagnostic template, or muted-hint domain — all go in `registry/features.toml` first |
+| `.claude/rules/plan-invariants.md` | Writing or reviewing milestone plans (M4 onward must include the 7-subsection Invariants block; v0.2-M2+ plans also require `### Feature Registry Entries`) |
 | `.claude/rules/spec-writing.md` | Writing or editing `/spec/` files |
 | `.claude/rules/language-design.md` | Making or reviewing language design decisions |
 | `.claude/rules/docs-checklist.md` | Adding new design docs, future-list ideas, or spec sections |

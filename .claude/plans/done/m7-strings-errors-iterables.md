@@ -1,7 +1,7 @@
 ---
 slug: m7-strings-errors-iterables
 owner: patrick
-status: active
+status: done
 files:
   - Cargo.toml
   - crates/**
@@ -24,7 +24,7 @@ depends_on: [v0-1-compiler, m6-options-unions]
 # Plan: M7 — Full Strings, `errors` Keyword, Iterables Protocol
 
 Created: 2026-05-18
-Status: active
+Status: done
 
 ## Context & Why
 

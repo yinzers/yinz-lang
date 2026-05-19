@@ -47,16 +47,74 @@ The `for` syntax is the same either way. What changes is that a fallible loop re
 
 ---
 
+## Shape destructuring in for loops
+
+When iterating a collection of shapes, you can destructure fields directly in the loop header instead of accessing them via the loop variable:
+
+```ynz
+shape Player { name: string, health: int, score: int }
+
+const players: fixed<Player> = [
+    { name: "Alice", health: 100, score: 50 },
+    { name: "Bob",   health: 80,  score: 30 },
+]
+
+// Single binding — access fields via the variable
+for (player in players) {
+    print(player.name)
+    print(player.health)
+}
+
+// Shape destructuring — bind fields directly
+for ({ name, health } in players) {
+    print(name)
+    print(health)
+}
+```
+
+Both forms compile to the same code. Destructuring is shorthand — the compiler introduces a hidden `__shape` binding and generates the field accesses for you.
+
+You can rename a field with `as`:
+
+```ynz
+for ({ name as playerName, health as hp } in players) {
+    print(playerName)
+    print(hp)
+}
+```
+
+You don't have to destructure every field — list only the ones you need:
+
+```ynz
+for ({ name } in players) {
+    print(name)   // health and score are still there on the hidden binding, just not bound
+}
+```
+
+---
+
 ## Range — numbers without creating an array
 
-```
-// Iterate 1 to 1,000,000 with almost zero memory
+`range()` accepts one or two arguments:
+
+```ynz
+// Two-argument form: start (inclusive) to end (exclusive)
+for (num in range(1, 10)) {
+  print(num)    // 1, 2, 3, ..., 9
+}
+
+// One-argument form: 0 (inclusive) to end (exclusive)
+for (num in range(5)) {
+  print(num)    // 0, 1, 2, 3, 4
+}
+
+// Large range — almost zero memory
 for (num in range(1, 1000000)) {
   print(num)
 }
 ```
 
-`range()` is built into the standard library. Each number is generated on demand — no million-element array created. Under the hood it's a `Range` type that follows `Iterable<int>`.
+`range()` is built into the standard library. Each number is generated on demand — no array created. Under the hood it's a `Range` type that follows `Iterable<int>`.
 
 ---
 
@@ -139,7 +197,7 @@ If your iteration step can fail (I/O, network), follow the fallible contract ins
 shape ApiPager<T> follows FallibleIterable<T> {
   baseUrl: string
   hidden cursor: maybe string = none
-  hidden done: bool = false
+  hidden done: boolean = false
 }
 
 function next(lend self: ApiPager<T>) -> maybe T errors {

@@ -9,7 +9,6 @@ target triple = "x86_64-pc-linux-gnu"
 
 @.str.true = private unnamed_addr constant [5 x i8] c"true\00"
 @.str.false = private unnamed_addr constant [6 x i8] c"false\00"
-@.str.redacted = private unnamed_addr constant [11 x i8] c"[REDACTED]\00"
 @.dec.zero = private unnamed_addr constant i128 45235290231555418299757684020165476352
 @.panic.iadd = private unnamed_addr constant [20 x i8] c"int overflow in '+'\00"
 @.panic.isub = private unnamed_addr constant [20 x i8] c"int overflow in '-'\00"
@@ -18,6 +17,7 @@ target triple = "x86_64-pc-linux-gnu"
 @.panic.irem = private unnamed_addr constant [24 x i8] c"remainder by zero (int)\00"
 @.panic.ddiv = private unnamed_addr constant [26 x i8] c"division by zero (number)\00"
 @.panic.drem = private unnamed_addr constant [27 x i8] c"remainder by zero (number)\00"
+@.source.file = private unnamed_addr constant [14 x i8] c"m4_player.ynz\00"
 @bts = private unnamed_addr constant [8 x i8] c"Patrick\00"
 
 declare i32 @puts(ptr)
@@ -42,9 +42,9 @@ declare ptr @ynz_int_to_string(i64)
 
 declare ptr @ynz_float_to_string(double)
 
-declare void @ynz_panic_overflow(ptr)
+declare void @ynz_panic_overflow(ptr, ptr, i32, i32)
 
-declare void @ynz_panic_div_by_zero(ptr)
+declare void @ynz_panic_div_by_zero(ptr, ptr, i32, i32)
 
 ; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
 declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64) #0
@@ -159,6 +159,8 @@ declare ptr @ynz_string_builder_finalize(ptr)
 
 declare void @ynz_string_builder_drop(ptr)
 
+declare ptr @ynz_sensitive_to_string(ptr)
+
 declare ptr @ynz_bignum_add(ptr, ptr, i32)
 
 declare ptr @ynz_bignum_sub(ptr, ptr, i32)
@@ -200,7 +202,7 @@ ov_ok:                                            ; preds = %entry
   ret void
 
 ov_panic:                                         ; preds = %entry
-  call void @ynz_panic_overflow(ptr @.panic.iadd)
+  call void @ynz_panic_overflow(ptr @.panic.iadd, ptr @.source.file, i32 190, i32 0)
   unreachable
 }
 

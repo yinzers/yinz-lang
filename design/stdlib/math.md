@@ -159,7 +159,7 @@ math.map(value, inMin, inMax, outMin, outMax)
 random.number()                     // 0 to 1
 random.between(min, max)
 random.int(min, max)
-random.bool()
+random.boolean()
 random.pick(array)
 random.shuffle(array)
 random.seed(value)

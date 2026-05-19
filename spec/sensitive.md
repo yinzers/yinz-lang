@@ -9,9 +9,9 @@ Values from environment variables and other secret sources are automatically pro
 `env.get()` returns `sensitive string` by default. No extra annotation needed:
 
 ```
-let apiKey = env.get("STRIPE_KEY").or("")      // sensitive string
-let dbPass = env.get("DB_PASSWORD").or("")     // sensitive string
-let appName = "My App"                          // regular string
+let apiKey = env.get(`STRIPE_KEY`).or(``)      // sensitive string
+let dbPass = env.get(`DB_PASSWORD`).or(``)     // sensitive string
+let appName = `My App`                          // regular string
 ```
 
 ---
@@ -21,7 +21,7 @@ let appName = "My App"                          // regular string
 Sensitive values print as `[REDACTED]` everywhere — `print()`, log statements, string interpolation, and default type representations:
 
 ```
-let apiKey = env.get("STRIPE_KEY").or("")
+let apiKey = env.get(`STRIPE_KEY`).or(``)
 
 print(apiKey)                                   // [REDACTED]
 log(`Connecting with key: ${apiKey}`)           // Connecting with key: [REDACTED]
@@ -32,9 +32,9 @@ shape Config {
   port: number
 }
 
-let config: Config = { appName: "MyApp", apiKey: env.get("API_KEY").or(""), port: 3000 }
+let config: Config = { appName: `MyApp`, apiKey: env.get(`API_KEY`).or(``), port: 3000 }
 print(config)
-// Config { appName: "MyApp", apiKey: [REDACTED], port: 3000 }
+// Config { appName: `MyApp`, apiKey: [REDACTED], port: 3000 }
 ```
 
 ---
@@ -62,7 +62,7 @@ print(apiKey.reveal())
 Not just env vars — mark any value sensitive:
 
 ```
-let ssn: sensitive string = sensitive("123-45-6789")
+let ssn: sensitive string = sensitive(`123-45-6789`)
 let card: sensitive string = sensitive(rawCardNumber)
 
 print(ssn)    // [REDACTED]
@@ -75,12 +75,12 @@ print(ssn)    // [REDACTED]
 String operations on sensitive values stay sensitive. Non-string extractions don't:
 
 ```
-let key = env.get("API_KEY").or("")    // sensitive string
-let upper = key.toUpper()              // still sensitive string
+let key = env.get(`API_KEY`).or(``)    // sensitive string
+let upper = key.toUpperCase()          // still sensitive string
 let trimmed = key.trim()               // still sensitive string
 let combined = `Bearer ${key}`         // still sensitive string
 
-let length = key.length                // number — NOT sensitive (length isn't secret)
+let length = key.count()               // number — NOT sensitive (length isn't secret)
 ```
 
 ---
@@ -99,6 +99,9 @@ Error messages that might contain sensitive data are auto-redacted:
 ---
 
 ## Development flag
+
+> **Status**: The `--reveal-sensitive` flag is locked design but not yet
+> shipped. It targets a future audit batch.
 
 ```
 ynz run entrypoint.ynz --reveal-sensitive    // shows all sensitive values in output

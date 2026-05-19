@@ -25,10 +25,10 @@ That's the contract. Anyone reading the signature knows what happens to the valu
 When you call a function, you just pass the value normally. The compiler reads the callee's signature and figures out what to do — share, lend, or give. The IDE shows what was inferred as muted text so you can see what's happening:
 
 ```ynz
-greet(name)           // IDE shows muted "share" — read-only access
-print(message)        // IDE shows muted "share" — read-only access
-rename(player)        // IDE shows muted "lend" (red-tinted) — function modifies player
-consume(data)         // IDE shows muted "give" (red-tinted) — function takes ownership
+greet(name)           // IDE shows muted `share` — read-only access
+print(message)        // IDE shows muted `share` — read-only access
+rename(player)        // IDE shows muted `lend` (red-tinted) — function modifies player
+consume(data)         // IDE shows muted `give` (red-tinted) — function takes ownership
 ```
 
 Hovering on any muted hint shows a tooltip explaining WHAT it means, WHAT INSTEAD you'd write to make it explicit (on the function signature, not the call site), and WHY the compiler chose it.
@@ -55,7 +55,7 @@ print(data)
 A `const` binding can only be shared (read). The compiler refuses to infer `lend` or `give` for a `const` value:
 
 ```ynz
-const player: Player = { name: "Patrick", health: 100 }
+const player: Player = { name: `Patrick`, health: 100 }
 rename(player)
 // COMPILE ERROR: player is `const`, but rename's signature requires `lend`.
 // To allow modification, declare player with `let` instead.
@@ -66,7 +66,7 @@ rename(player)
 ## `.copy()` — when you need to keep a copy
 
 ```ynz
-const original: Player = { name: "Patrick", health: 100 }
+const original: Player = { name: `Patrick`, health: 100 }
 const backup = original.copy()    // produces a new owned value (cheap, trivially-copyable types only)
 saveForever(backup)                // backup is given to saveForever; original is unchanged
 ```
@@ -81,8 +81,8 @@ Sometimes you want to build a value step-by-step then prevent any more changes:
 
 ```ynz
 let config: ConfigBuilder = { rules: [] }
-config.addRule("a", 1)
-config.addRule("b", 2)
+config.addRule(`a`, 1)
+config.addRule(`b`, 2)
 config.freeze()                    // lock from this point forward
 runApp(config)                      // config can still be read; further mutation is a compile error
 ```

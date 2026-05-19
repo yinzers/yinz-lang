@@ -163,12 +163,20 @@ pub fn encode_finite(sign: bool, exponent: i32, coefficient: u128) -> u128 {
     sign_bit | ((g as u128) << 110) | trailing
 }
 
+/// Encode ±Infinity per IEEE 754-2008 §3.5.2 decimal128 BID format.
+///
+/// Bit pattern: G[16:12] = `11110`. Coefficient and exponent fields are ignored
+/// by decoders for Infinity (IEEE 754-2008 §6.2).
 pub const fn encode_infinity(sign: bool) -> u128 {
     // G[16:12] = 11110
     let sign_bit: u128 = if sign { SIGN_MASK } else { 0 };
     sign_bit | (0b11110_u128 << 122) // bits [126:122]
 }
 
+/// Encode a quiet NaN per IEEE 754-2008 §3.5.2 decimal128 BID format.
+///
+/// Bit pattern: G[16:12] = `11111`, G[11] = 0 (quiet; 1 would be signaling NaN).
+/// Payload bits T[109:0] are zero (no diagnostic information encoded).
 pub const fn encode_qnan(sign: bool) -> u128 {
     // G[16:12] = 11111, G[11] = 0 (quiet)
     let sign_bit: u128 = if sign { SIGN_MASK } else { 0 };

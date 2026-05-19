@@ -18,7 +18,7 @@ Every design topic has its own file. This is the index. One line per topic, link
 
 | Topic | File | What's in it |
 |-------|------|--------------|
-| Type system | `design/type-system.md` | `shape`, `base`, `extends` (data-only inheritance), `follows` (structural function-signature matching), structural typing, `\|` (unions), `maybe`, `options`, `hidden` (per-field visibility within exported shapes). ⚠️ Removed by r10-r15: `override` keyword (function overloading by argument type), type aliases (`shape UserId = string` — pure documentation sugar; parameter names + comments do the job). Doc-PR 2 (Task #8) updates this file. |
+| Type system | `design/type-system.md` | `shape`, `base`, `extends` (data-only inheritance), `follows` (structural function-signature matching), structural typing, `\|` (unions), `maybe`, `options`, `hidden` (per-field visibility within exported shapes). ⚠️ Removed by r10-r15: `override` keyword (function overloading by argument type), scalar type aliases (`shape UserId = string` — pure documentation sugar, banned: parameter names + comments do the job). **Supported**: union aliases (`shape Result = Success \| Failure`) — these are real type unions shipped in M6, not scalar sugar. Doc-PR 2 (Task #8) updates this file. |
 | Generics | `design/generics.md` | Type generics `<T>`, function generics, `follows` constraints inline, type inference at call sites |
 | Ownership | `design/ownership.md` | `.share`/`.lend`/`.give`/`.copy`/`.freeze`, no direct array indexing |
 | Collections | `design/collections.md` | `fixed`/`array`/`map`, no chaining, method naming, bracket sugar for `.get()`/`.set()`, string indexing methods |
@@ -41,6 +41,7 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Iterables | `design/iterables.md` | `follows Iterable<T>`, `next()` with `maybe T`, hidden state fields |
 | GPU dispatch | `design/gpu.md` | MVP2+ vision: `gpu` call-site keyword, compiler manages CPU/GPU dispatch (DEFERRED to v2+) |
 | Destructuring | `design/destructuring.md` | Object only, no array, `as` rename, parameter destructuring |
+| Inline / anonymous shape types | `design/inline-shape-types.md` | `{ field: T }` in type-annotation position; structural typing (two identical inline shapes are the same type); canonical-name hoisting implementation; no `hidden` in inline shapes; named shapes remain nominal |
 | Type conversion | `design/type-conversion.md` | Dot methods, no `as` keyword, safe vs unsafe split, no ternary |
 | Concurrency | `design/concurrency.md` | Auto-parallelization, `wait`, `background`, ownership with tasks (optimization DEFERRED to v0.3) |
 | Strings (internal) | `design/strings.md` | UTF-8 internal encoding locked, UTF-8 file I/O default, SIMD-accelerated validation/traversal target |
@@ -81,6 +82,8 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Arena allocators | `design/future/arena.md` | v0.2 (A1/A2) + v0.3+ (B). `arena scratch {}` scope blocks ship v0.2 — 10-100x faster than malloc for scope-bounded workloads. Compiler internals should adopt arenas in M8 polish. |
 | HTTP framework | `design/future/http-framework.md` | v0.3+ — supervised-by-default HTTP server. Per-request task isolation, accept-loop supervision, custom `supervise:` config option, default 500 handler. |
 | Compiled-package binary format | `design/future/packages.md` | v0.1 binary-format reservation + v0.2 implementation. May-block metadata, ownership signatures, kernel-mode compatibility flags, allocator requirements, LLVM attribute hints, self-referential markers, doc comments per exported item. |
+| Release-mode builds | `design/future/release-mode.md` | v0.4+ — `--release` flag: LLVM `-O3`, strip debug info, disable dev-only flags (`--reveal-sensitive`, `--emit-ir`). Strips dev-only env-var checks via `cfg(release_build)`. |
+| String `{ptr, len}` overhaul | `design/future/string-ptr-len-overhaul.md` | TBD (likely v0.6 alongside file I/O) — migrate strings from NUL-terminated C strings to `{ptr, len}` slices. Removes embedded-NUL footgun, makes `length` O(1). Multi-day rewrite. |
 
 ## Standard Library
 

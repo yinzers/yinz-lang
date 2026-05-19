@@ -99,7 +99,10 @@ pub struct ReExport {
 pub struct OptionsDecl {
     pub name: String,
     pub name_span: SourceSpan,
-    pub variants: Vec<(String, SourceSpan)>,
+    /// Each variant: (name, name_span, display_string).
+    /// `display_string` is the optional `name: \`Display Value\`` form.
+    /// When absent, `.toString()` returns the variant name as-is.
+    pub variants: Vec<(String, SourceSpan, Option<String>)>,
     pub span: SourceSpan,
     /// `true` when prefixed with `export` — visible to other modules.
     pub is_exported: bool,

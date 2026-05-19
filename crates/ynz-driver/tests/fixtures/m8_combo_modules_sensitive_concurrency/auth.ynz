@@ -8,6 +8,6 @@ export shape ApiCred {
 }
 
 /// Validate a credential (stub: always succeeds in M8).
-export function validateCred(share self: ApiCred) -> bool {
+export function validateCred(share self: ApiCred) -> boolean {
   return true
 }

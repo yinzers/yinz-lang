@@ -46,7 +46,7 @@ if (active && (isAdmin || isModerator) && !banned) {
 
 `&&` = AND. `||` = OR. `!` = NOT.
 
-Note: `|` (single pipe) is for **union types**, not boolean OR: `type Shape = Circle | Square`. `||` (double pipe) is boolean OR in expressions.
+Note: `|` (single pipe) is for **union types**, not boolean OR: `shape Shape = Circle | Square`. `||` (double pipe) is boolean OR in expressions.
 
 ---
 
@@ -141,6 +141,10 @@ Types can implement operators through `follows` contracts from the standard libr
 
 ## Overloading
 
+> **Status**: Operator overloading is **deferred to v1.0**. In v0.1, users
+> who want custom math types should write `.add()`, `.subtract()` methods
+> explicitly. The design below is locked but not yet implemented.
+
 The standard library defines contracts for operators. Each contract declares the bare signature of the function the implementing shape must provide. Implementations live as standalone functions at the file/module level (Yinz is not object-oriented — see `.claude/rules/non-oop.md`).
 
 ```ynz
@@ -150,7 +154,7 @@ shape Addable {
 }
 
 shape Equatable {
-  equals(share self, share other: Self) -> bool
+  equals(share self, share other: Self) -> boolean
 }
 
 shape Comparable follows Equatable {
@@ -179,7 +183,7 @@ function add(share self: Vector2D, share other: Vector2D) -> Vector2D {
   return { x: self.x + other.x, y: self.y + other.y }
 }
 
-function equals(share self: Vector2D, share other: Vector2D) -> bool {
+function equals(share self: Vector2D, share other: Vector2D) -> boolean {
   return self.x == other.x && self.y == other.y
 }
 
@@ -213,13 +217,36 @@ The compiler looks up the function by name + first-parameter type (standard over
 
 ## `print()` always works
 
-All types are printable. Built-in types print naturally. Custom types get a default representation — type name and visible fields:
+All types are printable — no `Printable` contract, no `.toString()` implementation required.
+
+**Shapes** print as `ShapeName { field: value, field: value }`:
 
 ```ynz
-print(player)    // Player { name: "Alice", health: 100 }
+print(player)    // Player { name: Alice, health: 100 }
 ```
 
-Declare your shape `follows Printable` and provide a standalone `toString(share self: YourShape) -> string` to customize the format.
+**Arrays** print as `[elem1, elem2, ...]`. Large arrays are capped at 20 elements:
+
+```ynz
+print(scores)               // [82, 91, 74, 88]
+print(bigArray)             // [1, 2, 3, ..., 20, ... and 980 more]
+```
+
+**Options** print their display string if one was declared, otherwise the variant name:
+
+```ynz
+print(Timeframe.daily)      // Daily    (if declared as daily: `Daily`)
+print(Status.active)        // active   (bare variant, no display string)
+```
+
+To customize how a shape prints, write a standalone `toString(share self: YourShape) -> string` function and use string interpolation:
+
+```ynz
+function toString(share self: Player) -> string {
+    return `${self.name} (HP: ${self.health})`
+}
+print(player)    // Alice (HP: 100)
+```
 
 ---
 

@@ -2,7 +2,7 @@
 slug: m8-modules-doc-sensitive-concurrency-bignum-release
 type: execution
 owner: patrick
-status: active
+status: done
 roadmap: v0-1-compiler
 depends_on: [m7-strings-errors-iterables]
 files:

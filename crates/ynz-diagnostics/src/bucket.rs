@@ -11,10 +11,12 @@ const ERROR_CAP: usize = 50;
 ///
 /// After a full pass, call `has_errors()` to decide whether to proceed to the next
 /// compiler stage.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct DiagnosticBucket {
     diagnostics: Vec<Diagnostic>,
     hidden_count: usize,
+    /// O(1) count of Error-severity entries currently in `diagnostics`.
+    error_count: usize,
 }
 
 impl DiagnosticBucket {
@@ -26,24 +28,19 @@ impl DiagnosticBucket {
     /// `hidden_count`). Warnings and suggestions are always accepted.
     pub fn push(&mut self, diag: Diagnostic) {
         if diag.severity == Severity::Error {
-            let current_errors = self
-                .diagnostics
-                .iter()
-                .filter(|d| d.severity == Severity::Error)
-                .count();
-            if current_errors >= ERROR_CAP {
+            if self.error_count >= ERROR_CAP {
                 self.hidden_count += 1;
                 return;
             }
+            self.error_count += 1;
         }
         self.diagnostics.push(diag);
     }
 
     /// Returns `true` if any Error-severity diagnostics are present.
+    // Perf: O(1) via error_count field — avoids walking the Vec on every has_errors() call.
     pub fn has_errors(&self) -> bool {
-        self.diagnostics
-            .iter()
-            .any(|d| d.severity == Severity::Error)
+        self.error_count > 0
     }
 
     /// Number of errors that were dropped due to the cap.
@@ -68,7 +65,12 @@ impl DiagnosticBucket {
     /// Used by speculative parsers (e.g. contextual `<` disambiguation) to roll
     /// back errors emitted during a failed parse attempt.
     pub fn truncate(&mut self, len: usize) {
+        let removed_errors = self.diagnostics[len..]
+            .iter()
+            .filter(|d| d.severity == Severity::Error)
+            .count();
         self.diagnostics.truncate(len);
+        self.error_count = self.error_count.saturating_sub(removed_errors);
     }
 }
 
@@ -78,5 +80,13 @@ impl IntoIterator for DiagnosticBucket {
 
     fn into_iter(self) -> Self::IntoIter {
         self.diagnostics.into_iter()
+    }
+}
+
+impl std::ops::Index<usize> for DiagnosticBucket {
+    type Output = Diagnostic;
+
+    fn index(&self, idx: usize) -> &Diagnostic {
+        &self.diagnostics[idx]
     }
 }

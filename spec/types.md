@@ -26,7 +26,7 @@ Use annotation-driven literal form — declare the variable's type, then assign 
 
 ```ynz
 const player: Player = {
-  name: "Patrick",
+  name: `Patrick`,
   health: 100,
   score: 0
 }
@@ -36,7 +36,7 @@ Every field must be provided. Forgetting one is a compile error:
 
 ```ynz
 const player: Player = {
-  name: "Patrick",
+  name: `Patrick`,
   health: 100
 }
 // COMPILE ERROR: Missing field 'score' (required by Player).
@@ -61,11 +61,11 @@ function takeDamage(lend self: Player, amount: number) -> nothing {
   self.health = self.health - amount
 }
 
-function isAlive(share self: Player) -> bool {
+function isAlive(share self: Player) -> boolean {
   return self.health > 0
 }
 
-const player: Player = { name: "Patrick", health: 100 }
+const player: Player = { name: `Patrick`, health: 100 }
 
 player.takeDamage(25)    // dot-call — sugar for takeDamage(player, 25)
 takeDamage(player, 25)    // function-call — same effect
@@ -103,9 +103,9 @@ function takeDamage(lend self: Warrior, amount: number) -> nothing {
 }
 
 const warrior: Warrior = {
-  name: "Patrick",
+  name: `Patrick`,
   health: 100,
-  weapon: "sword",
+  weapon: `sword`,
   armor: 15
 }
 
@@ -129,18 +129,18 @@ base shape Entity {
   health: number
 }
 
-const e: Entity = { name: "test", health: 50 }
+const e: Entity = { name: `test`, health: 50 }
 // COMPILE ERROR: Entity is a base shape — you can't create one directly.
 //
 //   Create a shape that extends Entity instead:
 //     shape Warrior extends Entity { weapon: string, armor: number }
-//     const w: Warrior = { name: "test", health: 50, weapon: "axe", armor: 10 }
+//     const w: Warrior = { name: `test`, health: 50, weapon: `axe`, armor: 10 }
 //
 //   Why: base shapes describe shared fields but aren't meant to stand alone.
 //        Creating one directly would give you an incomplete value. Always
 //        use a specific shape that extends the base.
 
-const w: Warrior = { name: "test", health: 50, weapon: "axe", armor: 10 }   // fine
+const w: Warrior = { name: `test`, health: 50, weapon: `axe`, armor: 10 }   // fine
 ```
 
 ---
@@ -241,9 +241,9 @@ External callers only provide visible fields when creating the value:
 
 ```ynz
 // File: entrypoint.ynz
-import { Player, takeDamage } from "./player"
+import { Player, takeDamage } from `./player`
 
-const player: Player = { name: "Alice", health: 100 }
+const player: Player = { name: `Alice`, health: 100 }
 // damageMultiplier starts at 1.0, internalCache starts empty
 // (defaults from player.ynz)
 
@@ -258,11 +258,46 @@ print(player.damageMultiplier)
 
 ---
 
-## Anonymous inline shapes — field types without a name
+## Inline shapes (anonymous types)
 
-If a field's structure is only used in one place, you can define it inline:
+> Design rationale: `design/inline-shape-types.md`
+
+If a type is only used in one place, you can define it right where you use it instead of scrolling to a `shape` declaration at the top of the file.
 
 ```ynz
+// Named shape — right when used in more than one function
+shape IntervalConfig {
+    minutes: int
+    timeframe: Timeframe
+}
+
+// Inline type — right for a one-off config that never leaves this block
+const intervals: fixed<{ minutes: int }> = [
+    { minutes: 5 },
+    { minutes: 15 },
+    { minutes: 60 },
+]
+```
+
+`{` in a type annotation always means an inline shape. No extra keyword needed.
+
+### Where inline shapes can appear
+
+Inline shapes work in any type-annotation position:
+
+```ynz
+// Variable binding
+let p: { x: int, y: int } = { x: 3, y: 4 }
+
+// Function parameter
+function area(rect: { w: int, h: int }) -> int {
+    return rect.w * rect.h
+}
+
+// Inside a generic type
+const intervals: fixed<{ minutes: int }> = [{ minutes: 5 }, { minutes: 15 }]
+
+// Field type inside a named shape
 shape Bar {
     symbol: string
     spread: {
@@ -272,32 +307,53 @@ shape Bar {
 }
 ```
 
-No extra keyword needed. `{` in type position always means an inline shape.
+### Accessing fields
 
-Creating a value works exactly the same:
+Field access works the same as for named shapes:
 
 ```ynz
-let b: Bar = {
-    symbol: `AAPL`,
-    spread: { bid: 182.40, ask: 182.50 }
-}
-
-print(b)
-// Bar { symbol: AAPL, spread: { bid: 182.40, ask: 182.50 } }
+let p: { x: int, y: int } = { x: 3, y: 4 }
+print(`${p.x + p.y}`)  // prints 7
 ```
 
-**When to use a named shape instead**: if you need to reference the type elsewhere — pass a `Spread` independently, use it in another shape, or annotate a variable as that type — give it a name:
+### Structural equivalence
+
+Two inline shapes with the same fields are the same type, regardless of where they appear or what order the fields are listed:
 
 ```ynz
-shape Spread {
-    bid: number
-    ask: number
+function takesAB(p: { a: int, b: int }) -> nothing {
+    print(`${p.a}`)
 }
 
-shape Bar {
-    symbol: string
-    spread: Spread
+function entrypoint() -> nothing {
+    let x: { b: int, a: int } = { a: 1, b: 2 }
+    takesAB(x)  // OK — same fields, same type
 }
 ```
 
-The inline form is for truly one-off nested structure. Once you need to name it elsewhere, promote it.
+### Inline vs named: which to use
+
+Use an inline shape when the type is truly one-off — defined and consumed in the same small block. Use a named shape when:
+
+- The same type appears in more than one function or file
+- You want to give the type a meaningful name for readability
+- You need to use `extends`, `follows`, or `hidden` fields
+
+```ynz
+// Inline — fine when only this loop uses it
+for ({ minutes } in intervals) {
+    print(`${minutes}`)
+}
+
+// Named — better when the type is used in multiple places
+shape IntervalConfig {
+    minutes: int
+    timeframe: Timeframe
+}
+```
+
+### Restrictions
+
+- **No `hidden` fields.** Hidden fields are file-private and require a named `shape` declaration.
+- **No `extends` or `follows`.** Inline shapes are pure data — they have no inheritance or contract requirements.
+- Named shapes and inline shapes with identical fields are **different types** and do not convert to each other. If you annotate a variable `let x: Foo`, you cannot assign an `{ a: int }` value to it even if `Foo` has exactly field `a: int`.

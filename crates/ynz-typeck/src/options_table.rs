@@ -3,10 +3,13 @@ use ynz_ast::nodes::{Item, Module};
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 /// A registered `options` type with its declared variant names in declaration order.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct OptionsEntry {
     /// Variant names in declaration order. Tags are assigned as 0, 1, 2, … in this order.
     pub variants: Vec<String>,
+    /// Optional display strings per variant (`variant: \`Display Value\``).
+    /// Same length as `variants`. `None` means use the variant name itself.
+    pub display_strings: Vec<Option<String>>,
     /// Source span of the options declaration, for diagnostics.
     pub decl_span: SourceSpan,
 }
@@ -15,7 +18,7 @@ pub struct OptionsEntry {
 ///
 /// Populated from `Item::OptionsDecl` items plus the two built-in options types
 /// (`SortOrder`, `Comparison`) registered at startup.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct OptionsTable {
     /// Map from options type name to its entry.
     pub options: HashMap<String, OptionsEntry>,
@@ -30,6 +33,7 @@ impl OptionsTable {
             "SortOrder".into(),
             OptionsEntry {
                 variants: vec!["asc".into(), "desc".into()],
+                display_strings: vec![None, None],
                 decl_span: SourceSpan::new("<stdlib>", 0, 0),
             },
         );
@@ -37,6 +41,7 @@ impl OptionsTable {
             "Comparison".into(),
             OptionsEntry {
                 variants: vec!["equal".into(), "greater".into(), "less".into()],
+                display_strings: vec![None, None, None],
                 decl_span: SourceSpan::new("<stdlib>", 0, 0),
             },
         );
@@ -44,13 +49,15 @@ impl OptionsTable {
     }
 
     /// Returns the tag (0-indexed) for a variant of the given options type.
-    pub fn tag_for(&self, type_name: &str, variant: &str) -> Option<i8> {
+    ///
+    /// Returns `u8` — variants are 0–255 (the validator caps at 256 variants).
+    pub fn tag_for(&self, type_name: &str, variant: &str) -> Option<u8> {
         let entry = self.options.get(type_name)?;
         entry
             .variants
             .iter()
             .position(|v| v == variant)
-            .map(|i| i as i8)
+            .map(|i| i as u8)
     }
 
     /// Returns the options type name that has this variant in scope — used for shorthand resolution.
@@ -163,7 +170,7 @@ pub fn collect_options(module: &Module, diags: &mut DiagnosticBucket) -> Options
         // Duplicate variant names.
         let mut seen: HashMap<String, ()> = HashMap::new();
         let mut has_dup = false;
-        for (v_name, v_span) in &opt.variants {
+        for (v_name, v_span, _display) in &opt.variants {
             if seen.contains_key(v_name) {
                 diags.push(Diagnostic::error(
                     v_span.clone(),
@@ -194,7 +201,8 @@ pub fn collect_options(module: &Module, diags: &mut DiagnosticBucket) -> Options
         table.options.insert(
             opt.name.clone(),
             OptionsEntry {
-                variants: opt.variants.iter().map(|(v, _)| v.clone()).collect(),
+                variants: opt.variants.iter().map(|(v, _, _)| v.clone()).collect(),
+                display_strings: opt.variants.iter().map(|(_, _, d)| d.clone()).collect(),
                 decl_span: opt.span.clone(),
             },
         );

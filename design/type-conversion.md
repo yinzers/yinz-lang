@@ -18,7 +18,7 @@ All type conversions are dot methods. No `as` keyword. No angle bracket casts. T
 
 Conversions that always succeed return the value directly. Conversions that might fail return `maybe`.
 
-**Safe (always succeed)**: Numeric type widening and narrowing, bool to string, number to string. The result is always valid.
+**Safe (always succeed)**: Numeric type widening and narrowing, boolean to string, number to string. The result is always valid.
 
 **Unsafe (might fail)**: String parsing. `"hello".toInt()` has no valid result. Returns `maybe int` — the compiler forces the caller to handle the failure case.
 

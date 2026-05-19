@@ -47,6 +47,13 @@ abstract class Entity {
   name: string
 }
 
+// WHY: `test` is reserved for the built-in test framework (v0.13). Pre-reserving
+// now means existing code gets a clear message rather than a surprise breakage
+// when v0.13 ships. This is a locked design decision (design/mvp-scope.md:39).
+function test() -> nothing {
+  print(`this function name is reserved`)
+}
+
 // ────── M4 P2: Parser errors ──────
 
 // WHY: Prefix-form struct literal `Player { ... }` is banned — annotation-only
@@ -89,6 +96,21 @@ function constFieldMutation() -> nothing {
   const p: Player = { name: `Patrick`, health: 100 }
   p.health = 50
 }
+
+// ────── Hidden-field errors ──────
+
+// WHY: hidden fields must have a default value — without one, external
+// construction would leave the field uninitialized. This triggers the
+// "hidden field has no default" diagnostic from collect_shapes.
+shape NoDefault {
+    hidden bar: int
+}
+
+// WHY: external construction cannot set a hidden field. The multi-file case
+// (importing a shape from another file and setting its hidden field at
+// construction) requires two files and is covered by the typeck test
+// `external_file_construction_cannot_set_hidden_field` in
+// crates/ynz-typeck/tests/check.rs rather than here.
 
 // ────── (P3b+ error classes added here as phases land) ──────
 // After M4 P3b: cyclic extends, dynamic type mismatch, follows contract violation

@@ -1,5 +1,47 @@
+//! Yinz type checker.
+//!
+//! # Pipeline
+//!
+//! Parsed [`ynz_ast::nodes::Module`] → [`module_signatures_query`] (pre-pass) →
+//! [`check_query`] (full check) → [`CheckOutput`] with a [`TypedModule`] and diagnostics.
+//!
+//! # Entry points
+//!
+//! - [`module_signatures_query`] — Salsa-tracked; collects shapes, function signatures,
+//!   and imported symbols.  Cross-file import resolution runs here so that shape field
+//!   type annotations can reference imported shapes and options types.  Returns a
+//!   [`SignatureOutput`] — the input to the body-checking pass.
+//! - [`check_query`] — Salsa-tracked; depends on `module_signatures_query` and
+//!   `parse_query`.  Runs the full type-checking pass over all function bodies.
+//!   Returns a [`CheckOutput`] with the typed module, monomorphization table, and
+//!   combined diagnostics.
+//! - [`check`] — the direct (non-Salsa) entry point used in unit tests; takes the
+//!   pre-built tables as arguments.
+//! - [`type_attached_const_type`] — resolves `int.max`, `number.epsilon`, etc. to their
+//!   types; also used by the codegen to decide which constant to emit.
+//!
+//! # Module layout
+//!
+//! - `check` — the main [`Checker`] type; hosts `check_expr`, `infer_expr`, `check_stmt`
+//!   and all specialised sub-checkers.  Flow-sensitive sets (`maybe_non_none`,
+//!   `errors_success_narrowed`, etc.) live here.
+//! - `shapes` — `collect_shapes`: builds [`ShapeTable`] from shape declarations.
+//! - `signatures` — `collect_signatures`: builds [`SignatureTable`] from function items.
+//! - `generics` — generic function / shape tables; monomorphization engine.
+//! - `resolve_import` — cross-file import resolution; path validation + cycle detection.
+//! - `scope` — the scoped name-resolution table used during body checking.
+//! - `intrinsics` — primitive method dispatch table (`int.toString()`, `string.count()`, …).
+//! - `options_table` — `collect_options`: maps `options` declarations to tag integers.
+//! - `exports` — [`ExportTable`] used by the Salsa incremental build to detect
+//!   cross-file signature changes.
+//! - `return_paths` — control-flow analysis to verify all non-nothing functions return.
+//! - `builtins` — built-in shape type helper (`Frame`, `SourceLoc`).
+//! - `types` — the [`Type`] enum: all types the type checker knows.
+
 pub mod builtins;
 pub mod check;
+pub mod exports;
+pub mod resolve_import;
 pub mod generics;
 pub mod intrinsics;
 pub mod options_table;

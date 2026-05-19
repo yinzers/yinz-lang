@@ -33,7 +33,7 @@ If your function is also marked `errors`, any call to an `errors` function auto-
 
 ```
 function loadConfig() -> Config errors {
-  let raw = readFile("config.txt")    // if this fails, the error cascades to the caller automatically
+  let raw = readFile(`config.txt`)    // if this fails, the error cascades to the caller automatically
   let config = parseConfig(raw)       // same — auto-propagates on failure
   return config                       // only gets here on success
 }
@@ -49,7 +49,7 @@ Sometimes you want to log a warning, fall back to a default, or retry before let
 
 ```
 function loadConfig() -> Config errors {
-  let raw = readFile("config.txt")
+  let raw = readFile(`config.txt`)
 
   if (raw.failed()) {
     log.warn(`config missing, using default: ${raw.message}`)
@@ -70,14 +70,14 @@ Same code pattern, two behaviors picked by the compiler from what you wrote. You
 
 ```
 function loadConfig() -> Config errors {
-  let raw = readFile("config.txt")
+  let raw = readFile(`config.txt`)
   let parsed = parseConfig(raw)              // ← raw used here as a string
   if (raw.failed()) { return Config.default() }
 }
 // COMPILE ERROR: raw can no longer be checked for failure here.
 //
 //                Move the failure check above the line that uses raw as a string:
-//                  let raw = readFile("config.txt")
+//                  let raw = readFile(`config.txt`)
 //                  if (raw.failed()) { return Config.default() }
 //                  let parsed = parseConfig(raw)
 //
@@ -97,9 +97,9 @@ If your function does NOT declare `errors`, you must explicitly handle every fal
 
 ```
 function loadConfig() -> Config {
-  let raw = readFile("config.txt")
+  let raw = readFile(`config.txt`)
   // COMPILE ERROR: readFile() can fail but loadConfig() is not marked errors.
-  // Either handle the error or add "errors" to this function.
+  // Either handle the error or add `errors` to this function.
 }
 ```
 
@@ -109,7 +109,7 @@ Three ways to handle it:
 
 ```
 function loadConfig() -> Config errors {
-  let raw = readFile("config.txt")    // auto-propagates
+  let raw = readFile(`config.txt`)    // auto-propagates
   return parseConfig(raw)
 }
 ```
@@ -118,7 +118,7 @@ function loadConfig() -> Config errors {
 
 ```
 function loadConfig() -> Config {
-  let raw = readFile("config.txt").or("{}")    // use "{}" if the file can't be read
+  let raw = readFile(`config.txt`).or(`{}`)    // use `{}` if the file can't be read
   return parseConfig(raw)
 }
 ```
@@ -127,7 +127,7 @@ function loadConfig() -> Config {
 
 ```
 function loadConfig() -> Config {
-  let raw = readFile("config.txt")
+  let raw = readFile(`config.txt`)
   if (raw.failed()) {
     log(raw.message)
     return defaultConfig        // return a fallback Config
@@ -143,7 +143,7 @@ function loadConfig() -> Config {
 When you call an `errors` function, the result has these methods until you handle the error (or auto-propagation cascades it to the caller):
 
 ```ynz
-content.failed()           // did it fail? → bool
+content.failed()           // did it fail? → boolean
 content.message            // error description (only valid after .failed() check)
 content.suggestions        // array<string> of next steps (may be empty)
 content.trace              // array<Frame> — the call path
@@ -160,7 +160,7 @@ After `if (content.failed()) { return ... }`, the variable is treated as its pla
 ```ynz
 let raw = readFile(`config.txt`)
 print(raw.message)    // COMPILE ERROR: raw hasn't been checked for failure.
-                      //   Check with raw.failed() first, or use raw.or("default").
+                      //   Check with raw.failed() first, or use raw.or(`default`).
 ```
 
 Correct:
@@ -235,7 +235,7 @@ function findUser(id: string) -> maybe User errors {
 If an error propagates all the way up without being handled, the program stops and prints a clean, readable error:
 
 ```
-ERROR: Could not read file "config.ynz"
+ERROR: Could not read file `config.ynz`
   Reason: File not found
 
   main()              entrypoint.ynz    line 4
@@ -243,9 +243,9 @@ ERROR: Could not read file "config.ynz"
       → loadConfig()  config.ynz  line 12
         → readFile()  ✖ failed here
 
-  Suggestion: Check that "config.ynz" exists, or handle this error in loadConfig():
+  Suggestion: Check that `config.ynz` exists, or handle this error in loadConfig():
 
-    let config = readFile("config.ynz")
+    let config = readFile(`config.ynz`)
     if (config.failed()) {
       // handle missing config
     }
