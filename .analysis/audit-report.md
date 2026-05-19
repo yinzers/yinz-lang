@@ -195,7 +195,7 @@ No genuine conflicts between analyzers.
 ~~`spec/operators.md` "Overloading" section describes a v1.0-deferred feature without flagging~~ **FIXED (Batch 4c)** — deferred-status banner added
 - `test` keyword not actually reserved in lexer — locked decision drift
 ~~`spec/main.md` mentions `cli.args()`, `process.exit()` — both are v0.8~~ **FIXED (Batch 4c)** — v0.8 status banners added
-- `spec/types.md` hidden-field auto-default contradicts demo file — **Status: deferred** (4c.25 investigation found typeck gap: no default enforcement, cross-file construction also not blocked; fix is in typeck, not docs alone)
+~~`spec/types.md` hidden-field auto-default contradicts demo file~~ **FIXED** — hidden-field-no-default check added to `collect_shapes`; external construction of hidden fields now rejected in `check_struct_lit`; demo and driver fixtures updated; 4 new typeck tests added.
 - `spec/doc-comments.md` "/// only on exported" — implementation attaches to all
 - `background` no handle-form rejection diagnostic — `examples/errors/m8_errors.ynz:64-68` says it should exist
 ~~`spec/sensitive.md` describes `--reveal-sensitive` flag that's not in driver~~ **FIXED (Batch 4c)** — deferred-status banner added; open-questions.md entry added

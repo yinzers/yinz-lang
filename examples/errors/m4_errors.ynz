@@ -90,6 +90,21 @@ function constFieldMutation() -> nothing {
   p.health = 50
 }
 
+// ────── Hidden-field errors ──────
+
+// WHY: hidden fields must have a default value — without one, external
+// construction would leave the field uninitialized. This triggers the
+// "hidden field has no default" diagnostic from collect_shapes.
+shape NoDefault {
+    hidden bar: int
+}
+
+// WHY: external construction cannot set a hidden field. The multi-file case
+// (importing a shape from another file and setting its hidden field at
+// construction) requires two files and is covered by the typeck test
+// `external_file_construction_cannot_set_hidden_field` in
+// crates/ynz-typeck/tests/check.rs rather than here.
+
 // ────── (P3b+ error classes added here as phases land) ──────
 // After M4 P3b: cyclic extends, dynamic type mismatch, follows contract violation
 // After M4 P3c: use-after-give, const-lend, double-lend, mutable-while-shared

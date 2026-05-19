@@ -2864,12 +2864,11 @@ impl<'b> Checker<'b> {
 
         // Check each provided field: name must exist and value type must match.
         for lit_field in fields {
-            let expected_ty = shape_def
+            let found_field = shape_def
                 .fields
                 .iter()
-                .find(|f| f.name == lit_field.name)
-                .map(|f| f.ty.clone());
-            match expected_ty {
+                .find(|f| f.name == lit_field.name);
+            match found_field {
                 None => {
                     let available: Vec<&str> = shape_def
                         .fields
@@ -2895,7 +2894,50 @@ impl<'b> Checker<'b> {
                     ));
                     self.infer_expr(&lit_field.value, None);
                 }
-                Some(expected) => {
+                Some(field_def) if field_def.is_hidden
+                    && lit_field.name_span.file != shape_def.defined_at.file =>
+                {
+                    // External file is trying to set a hidden field at construction time.
+                    let declaring_file = std::path::Path::new(&shape_def.defined_at.file)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(&shape_def.defined_at.file);
+                    let setter_name = {
+                        let mut chars = lit_field.name.chars();
+                        match chars.next() {
+                            Some(first) if first.is_alphabetic() => {
+                                format!(
+                                    "with{}{}",
+                                    first.to_uppercase(),
+                                    chars.as_str()
+                                )
+                            }
+                            _ => format!("with_{}", lit_field.name),
+                        }
+                    };
+                    let field_ty_name = type_name(&field_def.ty);
+                    self.diags.push(Diagnostic::error(
+                        lit_field.name_span.clone(),
+                        format!(
+                            "`{}` is hidden — code in this file cannot set it at construction.",
+                            lit_field.name
+                        ),
+                        format!(
+                            "Remove `{}: <value>` from the shape value. \
+                             The default from `{declaring_file}` will be used. \
+                             To customize the value, expose a setter from the declaring file: \
+                             `function {setter_name}(lend self: {shape_name}, v: {field_ty_name}) -> nothing {{ self.{} = v }}`\
+                             — then call that function instead.",
+                            lit_field.name, lit_field.name
+                        ),
+                        "Hidden fields are file-private (the spec calls this `visibility, not mutability`). \
+                         Allowing external construction to set them would bypass whatever invariants \
+                         the declaring file's functions maintain.",
+                    ));
+                    self.infer_expr(&lit_field.value, None);
+                }
+                Some(field_def) => {
+                    let expected = field_def.ty.clone();
                     let actual = self.infer_expr(&lit_field.value, Some(&expected));
                     if actual != Type::Error
                         && expected != Type::Error

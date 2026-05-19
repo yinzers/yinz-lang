@@ -5,7 +5,7 @@ use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 use crate::{
     generics::{GenericShapeDef, GenericShapeTable},
-    types::Type,
+    types::{type_name, Type},
 };
 
 /// A resolved field on a shape.
@@ -408,6 +408,45 @@ pub fn collect_shapes(
                 &type_param_names,
                 diags,
             );
+            if field.is_hidden && field.default.is_none() {
+                let tn = type_name(&ty);
+                let (what_instead, why) = if type_is_maybe(&ty) {
+                    (
+                        format!(
+                            "Default to `none` since the type allows absence — \
+                             `hidden {}: {} = none`.",
+                            field.name, tn
+                        ),
+                        "Hidden fields can't be set by code in other files. Without a default, \
+                         external construction would leave the field in an undefined state. \
+                         Your field's type is `maybe ...`, so `none` is the natural default."
+                            .to_string(),
+                    )
+                } else {
+                    (
+                        format!(
+                            "Provide one — `hidden {}: {} = <value>`.",
+                            field.name, tn
+                        ),
+                        format!(
+                            "Hidden fields can't be set by code in other files. Without a default, \
+                             external construction would leave the field in an undefined state. \
+                             If no sensible default applies here, change the type to \
+                             `maybe {}` and default to `none`: \
+                             `hidden {}: maybe {} = none`. \
+                             The type then says `sometimes absent` and same-file code reads it \
+                             through `.exists()` guards.",
+                            tn, field.name, tn
+                        ),
+                    )
+                };
+                diags.push(Diagnostic::error(
+                    field.name_span.clone(),
+                    format!("Hidden field `{}` has no default value.", field.name),
+                    what_instead,
+                    why,
+                ));
+            }
             own_fields.push(FieldDef {
                 name: field.name.clone(),
                 ty,
@@ -579,6 +618,10 @@ fn flatten_recursive(
 
     visiting.remove(name);
     done.insert(name.to_string());
+}
+
+fn type_is_maybe(t: &Type) -> bool {
+    matches!(t, Type::Maybe { .. })
 }
 
 fn detect_field_cycles(table: &ShapeTable, diags: &mut DiagnosticBucket) {
@@ -766,7 +809,7 @@ fn emit_unknown_field_type_diag(
             "int"
                 | "float"
                 | "number"
-                | "bool"
+                | "boolean"
                 | "string"
                 | "nothing"
                 | "none"

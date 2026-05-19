@@ -2,11 +2,11 @@
 
 Read-only audit comparing `/spec/`, `/design/`, plans (`.claude/plans/done/`), `examples/` against the actual compiler in `crates/`. CHANGELOG says M1–M8 shipped at `v0.1.0`. Audit scope: locked decisions vs implementation, spec syntax vs parser/typeck/codegen, example correctness, banned-jargon coverage.
 
-**Summary**: 35 findings. Many resolved by Batch 4c — see status annotations below.
+**Summary**: 35 findings. Many resolved by Batch 4c; hidden-field enforcement fixed by hidden-field batch — see status annotations below.
 
 - 5 critical (locked decisions violated, or spec describes syntax the parser rejects)
 - 18 high (shipped feature misdocumented or example uses rejected syntax)
-- 11 medium (drift causes user confusion — wrong method names, stale references)
+- 10 medium (drift causes user confusion — wrong method names, stale references; #8 fixed)
 - 1 low (cosmetic / minor)
 
 Grouped by area: Lexer/Parser, Type System, Diagnostics, Numerics, Strings, Modules, Examples, Misc.
@@ -54,10 +54,8 @@ Grouped by area: Lexer/Parser, Type System, Diagnostics, Numerics, Strings, Modu
 - **Implementation reality**: `crates/ynz-typeck/src/builtins.rs:32` lists supported sensitive-string methods as `toUpperCase`, `toLowerCase`, `trim`, `substring`, `replace`. There is no `.toUpper()` and no `.length` field. The string method table (`string_method_return`) uses `.count()` for length. Per `.claude/rules/dot-postfix.md`, methods take parens — `.length` without parens would be a field access, but string is not a shape with a `length` field.
 - **Severity**: HIGH — the canonical "sensitive type" spec page uses wrong API names. A user trying these literal examples gets compile errors.
 
-### 8. spec/types.md `hidden` field auto-default contradicts the actual hidden-field handling (MEDIUM)
-- **Doc claim**: `spec/types.md` lines 220–253 says hidden fields require a default value: `hidden damageMultiplier: number = 1.0`. External callers "only provide visible fields when creating the value".
-- **Implementation reality**: `examples/basics/src/entrypoint.ynz:373` declares `shape Countdown { from: int, hidden current: int }` WITHOUT a default value, and constructs it with `let cd: Countdown = { from: 3, current: 0 }` — providing the hidden field explicitly. This contradicts the spec's "external code can't provide them at construction" rule. Whether the implementation rejects external construction of hidden fields is unclear without testing — but the demo file shows construction includes the hidden field even from the same file (which the spec said was fine).
-- **Severity**: MEDIUM — spec under-explains the same-file case (where hidden fields can be constructed normally) vs cross-file case (where they can't be).
+### ~~8. spec/types.md `hidden` field auto-default contradicts the actual hidden-field handling~~ **FIXED**
+- **Fix**: `collect_shapes` now rejects hidden fields with no default value (diagnostic with `none`-suggestion for `maybe<T>` fields). `check_struct_lit` now rejects external-file construction that sets a hidden field. Demo (`entrypoint.ynz`) and driver fixture (`m7_user_iterable.ynz`) updated. 4 typeck tests added covering both checks.
 
 ### 9. spec/doc-comments.md says `///` only works on exported items — implementation attaches doc to any decl (MEDIUM)
 - **Doc claim**: `spec/doc-comments.md` line 47: "`///` only works on exported items. Commenting a private function has no effect on generated docs."

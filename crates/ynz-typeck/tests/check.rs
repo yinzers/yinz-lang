@@ -1146,9 +1146,10 @@ function entrypoint() -> nothing { let e: Entity = { name: `x` } }
 fn hidden_field_outside_shape_produces_error() {
     // WHY: `hidden` fields are visible only to functions with `self: ShapeName`.
     // Reading them from an outside function must error.
+    // Hidden field has a default (required since Fix A) so only the read violation fires.
     assert_errors(
         r#"
-shape Player { name: string hidden cache: int }
+shape Player { name: string hidden cache: int = 0 }
 function entrypoint() -> nothing {
   let p: Player = { name: `x` }
   let x = p.cache
@@ -1881,5 +1882,110 @@ fn incremental_rebuild_invalidates_when_imported_signature_changes() {
     );
 
     // Cleanup.
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn hidden_field_without_default_value_is_compile_error() {
+    // WHY: hidden fields can't be set by external construction, so the spec requires
+    //      a default value at declaration. Without this check, codegen would emit
+    //      either a silent zero or undefined behavior for the hidden field's slot.
+    let output = assert_errors(
+        r#"
+shape Foo {
+    name: string
+    hidden bar: int
+}
+function entrypoint() -> nothing {}
+"#,
+        1,
+    );
+    let has_msg = output.diagnostics.iter().any(|d| {
+        d.what.contains("`bar`") && d.what.contains("no default value")
+    });
+    assert!(has_msg, "Expected hidden-no-default diagnostic, got: {:#?}", output.diagnostics);
+}
+
+#[test]
+fn hidden_maybe_field_without_default_suggests_none() {
+    // WHY: when the field type is `maybe T`, the natural default is `none`, and
+    //      the diagnostic should suggest exactly that rather than the generic case-A1 wording.
+    let output = assert_errors(
+        r#"
+shape Foo {
+    name: string
+    hidden cache: maybe<int>
+}
+function entrypoint() -> nothing {}
+"#,
+        1,
+    );
+    let suggests_none = output.diagnostics.iter().any(|d| {
+        d.what_instead.contains("none")
+    });
+    assert!(suggests_none, "Expected `none` suggestion for maybe-typed field, got: {:#?}", output.diagnostics);
+}
+
+#[test]
+fn same_file_construction_can_omit_hidden_field() {
+    // WHY: hidden fields can be omitted at construction (defaults fill in), and
+    //      same-file code CAN set them explicitly too — the file boundary is what
+    //      gates the construction-time set, not the hidden flag alone.
+    assert_clean(r#"
+shape Foo {
+    name: string
+    hidden bar: int = 0
+}
+
+function entrypoint() -> nothing {
+    const x: Foo = { name: `hello` }
+    print(x.name)
+}
+"#);
+}
+
+#[test]
+fn external_file_construction_cannot_set_hidden_field() {
+    // WHY: Fix B — external code (in a different file from the shape declaration)
+    //      must not be able to set hidden fields at construction. This catches a
+    //      regression where the field-existence check at check_struct_lit accepted
+    //      hidden fields without distinguishing the file boundary.
+    use salsa::Setter as _;
+
+    let dir = std::env::temp_dir().join(format!(
+        "ynz_hidden_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    std::fs::write(dir.join("yinz.toml"), "[project]\nname = \"test\"\n").expect("write yinz.toml");
+
+    let player_path = dir.join("player.ynz");
+    let main_path = dir.join("entrypoint.ynz");
+
+    std::fs::write(&player_path,
+        "export shape Player { name: string hidden secret: int = 0 }").expect("write player.ynz");
+    std::fs::write(&main_path,
+        "import { Player } from `player`\n\
+         function entrypoint() -> nothing {\n\
+             const p: Player = { name: `Alice`, secret: 42 }\n\
+         }").expect("write entrypoint.ynz");
+
+    let mut db = CompilerDb::default();
+    let sf_player = SourceFile::new(&db, player_path.display().to_string(), std::fs::read_to_string(&player_path).unwrap());
+    let sf_main = SourceFile::new(&db, main_path.display().to_string(), std::fs::read_to_string(&main_path).unwrap());
+    db.register_source(sf_player);
+    db.register_source(sf_main);
+
+    let output = check_query(&db, sf_main);
+    let errors: Vec<_> = output.diagnostics.iter()
+        .filter(|d| d.severity == ynz_diagnostics::Severity::Error)
+        .collect();
+    assert!(!errors.is_empty(), "Expected hidden-set-from-external diagnostic; got 0 errors. Diagnostics: {:#?}", output.diagnostics);
+    let has_hidden_msg = errors.iter().any(|d| d.what.contains("`secret`") && d.what.contains("hidden"));
+    assert!(has_hidden_msg, "Expected the hidden-set diagnostic; got: {:#?}", errors);
+
     let _ = std::fs::remove_dir_all(&dir);
 }

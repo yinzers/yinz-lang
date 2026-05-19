@@ -5,7 +5,7 @@
 
 shape SliceIter {
   max: int
-  hidden pos: int
+  hidden pos: int = 0
 }
 
 function next(lend self: SliceIter) -> maybe<int> {

@@ -370,7 +370,7 @@ function safeDivide(a: int, b: int) -> int errors {
 // Countdown: user-defined iterable shape — walks 3, 2, 1 sequence
 shape Countdown {
   from: int
-  hidden current: int
+  hidden current: int = 0
 }
 
 // next: standalone function satisfying the Iterable<int> protocol for Countdown.
