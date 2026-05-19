@@ -1374,6 +1374,7 @@ dependencies = [
  "salsa",
  "ynz-ast",
  "ynz-diagnostics",
+ "ynz-registry",
 ]
 
 [[package]]

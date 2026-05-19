@@ -21,22 +21,270 @@
 # Required fields: name, token, since
 # ---------------------------------------------------------------------------
 
+# M1 keywords
 [[keyword]]
-name = "PLACEHOLDER_KEYWORD_PHASE_4"
+name = "function"
 token = "Function"
 since = "M1"
+
+[[keyword]]
+name = "nothing"
+token = "Nothing"
+since = "M1"
+
+[[keyword]]
+name = "let"
+token = "Let"
+since = "M1"
+
+[[keyword]]
+name = "const"
+token = "Const"
+since = "M1"
+
+[[keyword]]
+name = "true"
+token = "True"
+since = "M1"
+
+[[keyword]]
+name = "false"
+token = "False"
+since = "M1"
+
+[[keyword]]
+name = "if"
+token = "If"
+since = "M1"
+
+[[keyword]]
+name = "else"
+token = "Else"
+since = "M1"
+
+[[keyword]]
+name = "while"
+token = "While"
+since = "M1"
+
+[[keyword]]
+name = "for"
+token = "For"
+since = "M1"
+
+[[keyword]]
+name = "in"
+token = "In"
+since = "M1"
+
+[[keyword]]
+name = "return"
+token = "Return"
+since = "M1"
+
+# M4 keywords
+[[keyword]]
+name = "shape"
+token = "Shape"
+since = "M4"
+
+[[keyword]]
+name = "follows"
+token = "Follows"
+since = "M4"
+
+[[keyword]]
+name = "extends"
+token = "Extends"
+since = "M4"
+
+[[keyword]]
+name = "base"
+token = "Base"
+since = "M4"
+
+[[keyword]]
+name = "hidden"
+token = "Hidden"
+since = "M4"
+
+[[keyword]]
+name = "dynamic"
+token = "Dynamic"
+since = "M4"
+
+[[keyword]]
+name = "Self"
+token = "SelfType"
+since = "M4"
+
+[[keyword]]
+name = "self"
+token = "SelfValue"
+since = "M4"
+
+# M5 keywords
+[[keyword]]
+name = "none"
+token = "None"
+since = "M5"
+
+# M6 keywords
+[[keyword]]
+name = "options"
+token = "Options"
+since = "M6"
+
+[[keyword]]
+name = "is"
+token = "Is"
+since = "M6"
+
+# M7 keywords
+[[keyword]]
+name = "errors"
+token = "Errors"
+since = "M7"
+
+# M8 keywords
+[[keyword]]
+name = "import"
+token = "Import"
+since = "M8"
+
+[[keyword]]
+name = "export"
+token = "Export"
+since = "M8"
+
+[[keyword]]
+name = "sensitive"
+token = "Sensitive"
+since = "M8"
+
+[[keyword]]
+name = "wait"
+token = "Wait"
+since = "M8"
+
+[[keyword]]
+name = "background"
+token = "Background"
+since = "M8"
 
 # ---------------------------------------------------------------------------
 # [[banned_declaration_keyword]] — keywords from other languages Yinz rejects
 # at lex time with a teaching error. Distinct from [[banned_jargon]] (prose).
 # Required fields: name, what_instead, why, since
+# Note: sized numeric types (f32, f64, i8-i64, u8-u64) and `test` are in
+# [[deferred_language_feature]] (Phase 5a) — they ship in a future version.
 # ---------------------------------------------------------------------------
 
+# M3 banned
 [[banned_declaration_keyword]]
-name = "PLACEHOLDER_BDK_PHASE_4"
-what_instead = "placeholder — Phase 4 populates this entry"
-why = "placeholder — Phase 4 populates this entry"
+name = "match"
+what_instead = "Yinz uses `if (x is Shape)` for type-based branching — no `match` keyword needed."
+why = "Type narrowing handles the cases `match` is typically used for, without a separate keyword."
+since = "M3"
+
+[[banned_declaration_keyword]]
+name = "switch"
+what_instead = "Yinz uses `if (x is Shape)` for type-based branching — no `switch` keyword needed."
+why = "Type narrowing handles the cases `switch` is typically used for, without a separate keyword."
+since = "M3"
+
+# M4 banned OOP declaration keywords
+[[banned_declaration_keyword]]
+name = "type"
+what_instead = "Use `shape` to declare a data type: `shape Player { name: string, health: int }`"
+why = "`type` is common in TypeScript, but Yinz uses `shape` — one unambiguous keyword for all data type declarations."
 since = "M4"
+
+[[banned_declaration_keyword]]
+name = "struct"
+what_instead = "Use `shape` to declare a data type: `shape Player { name: string, health: int }`"
+why = "Yinz uses `shape` for all data type declarations, whether they would be called structs, classes, or interfaces in other languages."
+since = "M4"
+
+[[banned_declaration_keyword]]
+name = "class"
+what_instead = "Use `shape` for data and standalone functions for behavior: `shape Player { name: string }` then `function greet(share self: Player) -> string`"
+why = "Yinz is not object-oriented — there are no classes. Data lives in shapes; behavior lives in standalone functions called via dot-call syntax."
+since = "M4"
+
+[[banned_declaration_keyword]]
+name = "interface"
+what_instead = "For contracts, declare a `shape` with bare method signatures and use `follows`: `shape Damageable { takeDamage(lend self, amount: int) -> nothing }` then `shape Player follows Damageable { ... }`"
+why = "Yinz uses `shape` for both data types and contracts. A contract shape holds bare-signature declarations; implementing shapes use the `follows` keyword."
+since = "M4"
+
+[[banned_declaration_keyword]]
+name = "enum"
+what_instead = "Use `options` to declare a set of named values: `options Status { active, inactive, banned }`"
+why = "Yinz uses human-readable keywords. `options` immediately signals a set of choices."
+since = "M4"
+
+[[banned_declaration_keyword]]
+name = "abstract"
+what_instead = "Use `base shape` for a shape that cannot be instantiated directly: `base shape Entity { name: string }`"
+why = "`base shape` names what the type is before saying it cannot be instantiated — the constraint is part of the declaration, not a separate modifier."
+since = "M4"
+
+# M8 banned concurrency keywords
+[[banned_declaration_keyword]]
+name = "async"
+what_instead = "Write `wait foo()` at the call site — no declaration-level annotation needed."
+why = "Yinz determines concurrency from the call graph automatically. Functions don't need a special declaration."
+since = "M8"
+
+[[banned_declaration_keyword]]
+name = "await"
+what_instead = "Write `wait foo()` at the call site."
+why = "Yinz uses `wait` at the call site — no function-level annotation needed."
+since = "M8"
+
+[[banned_declaration_keyword]]
+name = "promise"
+what_instead = "Yinz has `wait` (force completion) and `background` (run after this function returns). Two keywords cover what other languages use a dozen for."
+why = "A `background` task runs when called; use `wait` to force completion. No promise objects needed."
+since = "M8"
+
+[[banned_declaration_keyword]]
+name = "future"
+what_instead = "Yinz has `wait` (force completion) and `background` (run after this function returns). Two keywords cover what other languages use a dozen for."
+why = "A `background` task runs when called; use `wait` to force completion. No future objects needed."
+since = "M8"
+
+[[banned_declaration_keyword]]
+name = "goroutine"
+what_instead = "Yinz has `background` for running a function after the current function returns: `background process(data)`."
+why = "Use `background foo(arg)` instead. Two keywords (`wait`, `background`) cover what other languages use a dozen for."
+since = "M8"
+
+# M8 banned visibility keywords
+[[banned_declaration_keyword]]
+name = "pub"
+what_instead = "Yinz has two visibility states — exported (`export`) or private (default). No `pub`, no `protected`, no modifiers."
+why = "Write `export function foo()` to make it visible to other modules. Without `export`, it's private automatically."
+since = "M8"
+
+[[banned_declaration_keyword]]
+name = "private"
+what_instead = "Yinz has two visibility states — exported (`export`) or private (default). Declarations are private unless marked `export`."
+why = "Remove `private` — in Yinz, anything without `export` is already private."
+since = "M8"
+
+[[banned_declaration_keyword]]
+name = "protected"
+what_instead = "Yinz has two visibility states — exported (`export`) or private (default). No `pub`, no `protected`, no modifiers."
+why = "Remove `protected` — in Yinz, visibility is binary: `export` or private."
+since = "M8"
+
+[[banned_declaration_keyword]]
+name = "public"
+what_instead = "Yinz has two visibility states — exported (`export`) or private (default). Use `export` to make a declaration visible."
+why = "Write `export function foo()` instead of `public function foo()`."
+since = "M8"
 
 # ---------------------------------------------------------------------------
 # [[banned_jargon]] — words banned from user-facing compiler diagnostic prose.

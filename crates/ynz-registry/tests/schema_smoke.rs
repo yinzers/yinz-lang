@@ -11,10 +11,19 @@ use std::collections::HashMap;
 // ---------------------------------------------------------------------------
 #[test]
 fn keyword_lookup_by_name() {
-    let entry = ynz_registry::keyword_lookup("PLACEHOLDER_KEYWORD_PHASE_4")
-        .expect("placeholder keyword entry not found — was registry/features.toml parsed?");
+    let entry = ynz_registry::keyword_lookup("function")
+        .expect("'function' keyword entry not found (Phase 4 migration)");
     assert_eq!(entry.token, "Function");
     assert_eq!(entry.since, "M1");
+}
+
+#[test]
+fn banned_declaration_keyword_lookup_by_name() {
+    let entry = ynz_registry::banned_declaration_keyword_lookup("class")
+        .expect("'class' banned_declaration_keyword not found (Phase 4 migration)");
+    assert!(!entry.what_instead.is_empty());
+    assert!(!entry.why.is_empty());
+    assert_eq!(entry.since, "M4");
 }
 
 #[test]
@@ -25,10 +34,9 @@ fn keyword_lookup_miss_returns_none() {
 #[test]
 fn keyword_iteration_finds_all() {
     let names: Vec<&str> = ynz_registry::keywords().map(|e| e.name).collect();
-    assert!(
-        names.contains(&"PLACEHOLDER_KEYWORD_PHASE_4"),
-        "expected placeholder keyword in iteration; got: {names:?}"
-    );
+    assert!(names.contains(&"function"), "expected 'function' in keyword iteration; got: {names:?}");
+    assert!(names.contains(&"wait"), "expected 'wait' in keyword iteration; got: {names:?}");
+    assert_eq!(names.len(), 29, "expected 29 keywords");
 }
 
 // ---------------------------------------------------------------------------
@@ -129,11 +137,11 @@ fn lsp_autocomplete_sweep() {
     assert!(all.len() >= 2, "combined list must have at least 2 entries");
 
     // Prove fuzzy filtering works (contains check — stand-in for prefix/fuzzy match).
-    let prefix = "PLACE";
+    let prefix = "to";
     let matches: Vec<&&str> = all.iter().filter(|name| name.starts_with(prefix)).collect();
     assert!(
         !matches.is_empty(),
-        "expected at least one name starting with '{prefix}' for fuzzy-match test"
+        "expected at least one name starting with '{prefix}' (e.g. toString, toFloat) for fuzzy-match test"
     );
 }
 
