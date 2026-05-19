@@ -7,48 +7,17 @@
 
 ---
 
-## HIGH — Path traversal in import resolution (cross-project file disclosure via parse)
+## ~~HIGH — Path traversal in import resolution (cross-project file disclosure via parse)~~ FIXED (Batch 5c)
 
 **Category**: Path traversal
 **OWASP**: A01:2021 — Broken Access Control
-**Location**: `crates/ynz-typeck/src/resolve_import.rs:59,69` (also reachable from `crates/ynz-parser/src/parser.rs:538` import-string parse)
+**Location**: `crates/ynz-typeck/src/resolve_import.rs`
 
-**Issue**: `resolve_module_path` calls `base.join(format!("{module_str}.ynz"))` where `module_str` is the attacker-controlled import string from a `.ynz` file. `Path::join` does NOT canonicalize `..` segments. The parser only rejects strings that START with `./` or `../` (`parser.rs:547`, `parser.rs:566`); mid-string traversal like `foo/../../../some/other/dir/file` passes through unchecked.
+**Fix**: Two-layer defense in `resolve_import.rs`:
+- Layer 1 (segment check): `module_path_has_traversal_segments()` rejects any path where a `/`-split segment is exactly `..` or `.` before the filesystem is touched. Emits a teaching diagnostic with WHAT/WHAT-INSTEAD/WHY.
+- Layer 2 (boundary check): after `std::fs::canonicalize`, verifies the resolved path `starts_with` the canonicalized project root. Catches symlink-based escapes that layer 1 cannot see. Returns `None` silently (maps to the existing "not found" diagnostic flow).
 
-After `candidate.exists()` is true, `std::fs::canonicalize(&candidate)` is called (`resolve_import.rs:63`), which dereferences `..` segments and produces a path that may be entirely outside the project root. The resolved file is then read (`resolve_import.rs:278`) and parsed as `.ynz` source for type-information extraction.
-
-**Attack scenario**: A user runs `ynz build /tmp/evil-project/` containing `entrypoint.ynz`:
-```yinz
-import { x } from `foo/../../../home/victim/secret-project/internal`
-```
-The compiler reads, parses, and type-checks `/home/victim/secret-project/internal.ynz` (assuming it exists). Any parse errors or signature mismatches are surfaced in diagnostics that quote source content from the victim file (`resolve_import.rs:286-289, 302-310`). Effectively this is a cross-project information disclosure: source bytes from a victim's `.ynz` file can be exfiltrated to stderr/stdout, where the attacker may have arranged for them to be visible (e.g., CI log scraping, dev shell history capture).
-
-**Impact**: Disclosure of `.ynz` file content outside the project root. Not a generic arbitrary-file read (the path must end with `.ynz` and contain parseable Yinz code OR the error path leaks `e: io::Error` text containing the canonicalized path), but enough to leak proprietary Yinz code on shared dev machines / CI runners.
-
-**Vulnerable code** (`resolve_import.rs:51-72`):
-```rust
-pub fn resolve_module_path(importer_path: &str, module_str: &str) -> Option<PathBuf> {
-    let importer = Path::new(importer_path);
-    let importer_dir = importer.parent()?;
-    let project_root = find_project_root(importer_dir);
-    let base = project_root.as_deref().unwrap_or(importer_dir);
-    let candidate = base.join(format!("{module_str}.ynz"));   // <-- no normalization
-    if candidate.exists() {
-        std::fs::canonicalize(&candidate).ok()                 // <-- escapes project root
-    } ...
-}
-```
-
-**Secure fix**: After canonicalization, verify the resolved path is a descendant of the project root before returning it. Reject any module_str containing `..` as a path component (use `Path::components()` to check, NOT a substring match — `..` can appear inside legitimate filenames). Pseudocode:
-```rust
-if module_str.split('/').any(|seg| seg == ".." || seg == ".") { return None; }
-let canon = std::fs::canonicalize(&candidate).ok()?;
-let root_canon = std::fs::canonicalize(base).ok()?;
-if !canon.starts_with(&root_canon) { return None; }
-Some(canon)
-```
-
-**Environment note**: This issue exists in dev too — a multi-tenant CI runner is the most realistic exposure path. Single-developer machines are lower-risk but not zero (e.g., `ynz` invoked on a downloaded project containing a malicious import).
+**Security test suite**: `crates/ynz-typeck/tests/path_traversal.rs` — 6 should-FAIL cases (mid-path `..`, subdir indirection, `.`+`..` mixed, multiple dotdots overshooting, symlink escape) + 5 should-PASS cases (normal nested, flat, deep nested, dir-with-dots, file-with-dots). All 11 pass.
 
 ---
 
@@ -135,25 +104,11 @@ for entry in read_dir.flatten() {
 
 ---
 
-## MEDIUM — Stack overflow via deeply-nested expressions or statements
+~~## MEDIUM — Stack overflow via deeply-nested expressions or statements~~ **FIXED (Batch 5a — parser side)**
 
 **Category**: Resource exhaustion (compiler DoS)
-**Location**: `crates/ynz-parser/src/parser.rs:2132` (`parse_expr`), `crates/ynz-typeck/src/check.rs` (`check_expr`/`infer_expr` family), `crates/ynz-codegen/src/emit.rs:2137` (`lower_expr`)
 
-**Issue**: The parser limits *type* recursion to depth 16 (`parser.rs:868`), but expression and statement recursion are unbounded. A `.ynz` file containing `((((((((((((((((1))))))))))))))))` repeated millions of times — or right-associative `1+1+1+1+1+...` for the same depth — will:
-1. Cause `parse_expr` to recurse to that depth.
-2. Cause `check_expr` to recurse over the resulting AST.
-3. Cause `lower_expr` to recurse during codegen.
-
-Default Rust thread stack is ~8 MB. With ~100-200 bytes per stack frame across the parser, an attacker can blow the stack with a file of ~50k-100k unmatched-open-paren tokens. The compiler panics with a stack overflow signal (SIGABRT on Linux) — not a graceful diagnostic.
-
-**Attack scenario**: User feeds a malicious `.ynz` (or imports one) that crashes `ynz build` mid-parse. On a CI runner this aborts the build with no usable error; on an editor LSP it crashes the language server.
-
-**Impact**: Compiler DoS. Not a memory-safety bug (Rust's overflow protection aborts cleanly) but a UX/availability issue. Could also bypass `cargo fuzz` harnesses that consider abort-on-stack-overflow non-fatal.
-
-**Vulnerable code**: All three recursive expression handlers have no depth tracking.
-
-**Secure fix**: Add a depth parameter to `parse_expr` mirroring the existing `parse_type_with_depth` pattern. Reasonable expression-nesting depth: 256 (well above any handwritten code, well below stack limit). Same fix for `check_expr` / `lower_expr` — or run the entire compile inside a `stacker::grow` boundary so deeply-recursive ASTs allocate on a separate stack rather than aborting.
+Parser-side fix shipped: `expr_depth` field on `Parser`, cap at 256, WHAT/WHAT-INSTEAD/WHY diagnostic + token drain to statement boundary on overflow. typeck (`check_expr`/`infer_expr`) and codegen (`lower_expr`) sides remain open — if the parser never produces an AST deeper than 256, typeck/codegen won't see one in practice, but a crafted AST from another source could still hit them.
 
 ---
 
@@ -172,22 +127,12 @@ Default Rust thread stack is ~8 MB. With ~100-200 bytes per stack frame across t
 
 ---
 
-## MEDIUM — Diagnostic includes raw OS error (limited information disclosure)
+## ~~MEDIUM — Diagnostic includes raw OS error (limited information disclosure)~~ FIXED (Batch 5c)
 
 **Category**: Information disclosure
-**Location**: `crates/ynz-typeck/src/resolve_import.rs:283`, `crates/ynz-driver/src/load.rs:13,213`
+**Location**: `crates/ynz-typeck/src/resolve_import.rs`
 
-**Issue**: When file read fails, the error path renders the OS error to the diagnostic, e.g.:
-```rust
-format!("Cannot read module \"{module_str}\": {e}.")
-```
-On Linux, `e: io::Error` from `read_to_string` can include the absolute canonicalized path (in newer Rust) or only the error class (older). The canonicalized path resolved through the path-traversal issue (#1) gets surfaced verbatim. Combined with #1, this is the leak channel: even when the victim's `.ynz` file is not parseable, the IO error message confirms its existence and discloses the canonical path.
-
-**Attack scenario**: Combined with #1 — attacker imports `foo/../../../home/victim/secret/file` with various extensions. The `Not Found` vs `Permission denied` vs `Is a directory` error text discloses the filesystem layout of the victim's home directory.
-
-**Impact**: Filesystem enumeration primitive. Not a direct file-content leak (that's #1) but an oracle for "does file X exist."
-
-**Secure fix**: When path traversal is fixed (issue #1), this disclosure scope narrows to project-internal paths. Additionally, scrub absolute paths from error messages — show only the module string the user typed, not the resolved location.
+**Fix**: Swept all diagnostics in `resolve_import.rs`. No diagnostic interpolates `resolved_path.display()`, OS error text (`{e}`), or any canonicalized path. All error messages reference `module_str` (the user's input string) only. The dead `cycle_path` variable (computed from `resolved_path.display()` but unused) was also removed. Combined with the path-traversal fix (HIGH #1 above), the filesystem-enumeration oracle via "Not Found" vs "Permission denied" distinction is eliminated — traversal paths are rejected before reaching the filesystem.
 
 ---
 
@@ -225,12 +170,12 @@ This is a runtime (compiled-binary) issue, NOT a compiler issue. The threat mode
 
 ---
 
-## Summary (after Batch 4b)
+## Summary (after Batch 5c)
 
-- Path traversal: 1 remains (import resolution — symlink walk FIXED)
+- Path traversal: 0 remain (import resolution FIXED — layer-1 segment check + layer-2 boundary check + 11-test security suite; symlink walk FIXED Batch 4b)
 - Insecure file handling: 1 remains (ynz build O_NOFOLLOW — ynz run tempdir FIXED, runtime lib NamedTempFile FIXED)
 - Resource exhaustion: 2 (expression recursion, interpolation depth)
-- Information disclosure: 1
+- Information disclosure: 0 remain (diagnostic path scrub FIXED — no resolved/canonicalized paths in any diagnostic)
 - Input validation: 1
 - Runtime null-deref: 1
 
@@ -240,7 +185,7 @@ This is a runtime (compiled-binary) issue, NOT a compiler issue. The threat mode
 None. The compiler is pre-v1.0 and is not exposed to untrusted input in production deployments yet.
 
 ### High (This Sprint)
-- **#1 Path traversal in `resolve_module_path`** — landmark fix for the project's first real attacker-controlled input vector. Compiler's `module_str` validation is a v0.1 obligation.
+- ~~**#1 Path traversal in `resolve_module_path`**~~ **FIXED (Batch 5c)**
 - **#2 Insecure temp-file extraction** — straightforward `tempfile::NamedTempFile` swap. Low effort, high payoff for shared-CI users.
 - **#3 Output binary write path** — at minimum, `ynz run` should drop the binary into a per-invocation tempdir.
 
@@ -248,7 +193,7 @@ None. The compiler is pre-v1.0 and is not exposed to untrusted input in producti
 - **#4 Symlink-following project walk** — `symlink_metadata` swap.
 - **#5 Stack overflow on deeply-nested expressions** — add depth limit mirroring the existing type-depth pattern (`parser.rs:868`).
 - **#6 Bounded interpolation stack** — small cap with teaching diagnostic.
-- **#7 Diagnostic path scrubbing** — narrows the leak channel from #1.
+- ~~**#7 Diagnostic path scrubbing**~~ **FIXED (Batch 5c)**
 
 ### Backlog
 - **#8 TOML strict parsing** — pre-emptive before `entry` becomes load-bearing.
@@ -269,7 +214,7 @@ None. The compiler is pre-v1.0 and is not exposed to untrusted input in producti
 - Salsa db model is consistent — no cross-db panic risk from imports.
 
 **Gaps**:
-- No path-traversal hardening on import resolution. This is the most exploitable gap.
+- ~~No path-traversal hardening on import resolution.~~ **FIXED (Batch 5c)**
 - Tempfile usage is predictable-PID-based, not random-named. Standard CWE-377 footgun.
 - No expression-depth limits in parser/typeck/codegen. Compiler DoS via crafted source.
 - Symlink-following file walk allows cross-tree write primitives in the build pipeline.

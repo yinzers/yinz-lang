@@ -2,7 +2,7 @@
 
 **Scope**: Can a contributor reconstruct what decision the compiler made, on what inputs, with what outcome, from compiler output alone?
 
-**Findings**: 11 (Critical: 2, High: 4, Medium: 3, Low: 2)
+**Findings**: 11 (Critical: 2, High: 4, Medium: 3, Low: 2) — Batch 5b fixed: High bignum_binop, Medium SipHash try_into
 
 ---
 
@@ -38,10 +38,9 @@
 - **File**: `crates/ynz-typeck/src/resolve_import.rs:274` and `crates/ynz-typeck/src/queries.rs:116` (comments only)
 - **Gap**: "Cannot change database mid-query" salsa panic — avoided by passing the same `db` everywhere, but no structural / type-system guarantee. New contributor adds a second `Database::new()` inside a query → opaque salsa crash.
 
-## HIGH — `bignum_binop` silent zero-fallback on CString null-byte injection
+~~## HIGH — `bignum_binop` silent zero-fallback on CString null-byte injection~~ **FIXED (Batch 5b)**
 
-- **File**: `crates/ynz-runtime/src/lib.rs:2292` — `CString::new(s).unwrap_or_else(|_| CString::new("0").unwrap())`
-- **Gap**: Decimal formatting result with embedded NUL → silent fallback to `"0"` with no log, no panic, no diagnostic. Silent data-corruption class on the math path. Severity high because it's silent wrong-answer on money/numerics.
+`CString::new(s)` failure now aborts with an INTERNAL ERROR message pointing to the issue tracker instead of silently returning `"0"`.
 
 ## MEDIUM — `RUST_BACKTRACE` documented nowhere user-facing
 
@@ -53,10 +52,9 @@
 - **File**: `crates/ynz-driver/src/main.rs:19-31`; `crates/ynz-diagnostics/src/diagnostic.rs` (no `code` field on `Diagnostic`)
 - **Gap**: Cross-referencing bug-report text to source-of-truth requires grep across the diagnostics calls. No identifier ties a user-visible error to a specific diagnostic site.
 
-## MEDIUM — SipHash `try_into().unwrap()` on infallible-but-undocumented slices
+~~## MEDIUM — SipHash `try_into().unwrap()` on infallible-but-undocumented slices~~ **FIXED (Batch 5b)**
 
-- **File**: `crates/ynz-runtime/src/lib.rs:302-303, 336`
-- **Gap**: Currently infallible (fixed 16-byte key); if slicing changes, panic is `TryFromSliceError(())` with zero context.
+Eliminated via direct array indexing (`[k[0], k[1], ...]`). No conversion step; no panic path.
 
 ## LOW — `decimal128/parse.rs:102` infallible `.unwrap()` with no safety comment
 

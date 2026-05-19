@@ -47,6 +47,10 @@ impl ResolvedImport {
 /// 3. Fallback: `<importer_dir>/<module_str>.ynz` (single-file projects)
 /// 4. Canonicalize via `std::fs::canonicalize` to detect case collisions on
 ///    case-insensitive filesystems (macOS, Windows).
+///
+/// Returns `None` when the module does not exist, when path segments are invalid
+/// (caller must have already checked via `module_path_has_traversal_segments`), or
+/// when the resolved path escapes the project root after canonicalization.
 pub fn resolve_module_path(importer_path: &str, module_str: &str) -> Option<PathBuf> {
     let importer = Path::new(importer_path);
     let importer_dir = importer.parent()?;
@@ -59,15 +63,40 @@ pub fn resolve_module_path(importer_path: &str, module_str: &str) -> Option<Path
 
     if candidate.exists() {
         // Canonicalize to handle case-insensitive filesystem collisions.
-        std::fs::canonicalize(&candidate).ok()
+        let canon = std::fs::canonicalize(&candidate).ok()?;
+
+        // Layer 2: boundary check. Catches symlink-based escapes that the
+        // segment check (layer 1, in resolve_imports) cannot see.
+        let root_canon = std::fs::canonicalize(base).ok()?;
+        if !canon.starts_with(&root_canon) {
+            return None;
+        }
+
+        Some(canon)
     } else if project_root.is_some() {
         // Had a project root but file not found there — no fallback.
         None
     } else {
         // No project root — try relative to importer dir.
         let rel = importer_dir.join(format!("{module_str}.ynz"));
-        if rel.exists() { std::fs::canonicalize(&rel).ok() } else { None }
+        if rel.exists() {
+            let canon = std::fs::canonicalize(&rel).ok()?;
+            let root_canon = std::fs::canonicalize(importer_dir).ok()?;
+            if !canon.starts_with(&root_canon) {
+                return None;
+            }
+            Some(canon)
+        } else {
+            None
+        }
     }
+}
+
+/// Returns `true` when `module_str` contains any path segment that is exactly
+/// `..` or `.`. Only exact-segment matches count — a directory named `dir.v2`
+/// or `dir..weird` is not blocked because those segments are not literally `..`.
+pub fn module_path_has_traversal_segments(module_str: &str) -> bool {
+    module_str.split('/').any(|seg| seg == ".." || seg == ".")
 }
 
 fn find_project_root(start: &Path) -> Option<PathBuf> {
@@ -104,6 +133,24 @@ pub fn resolve_imports(
     for import in imports {
         let module_str = &import.source;
         let span = import.source_span.clone();
+
+        // Layer 1: reject any segment that is exactly `..` or `.` before touching
+        // the filesystem. This blocks mid-path traversal like `foo/../../etc/passwd`.
+        // Only exact-segment matches are rejected — names like `dir.v2` are fine.
+        if module_path_has_traversal_segments(module_str) {
+            diags.push(Diagnostic::error(
+                span.clone(),
+                format!("Import path \"{module_str}\" contains `..` or `.` segments."),
+                "Use a project-root-relative path. If you need to import from a sibling \
+                 directory, use the full path from the project root (`subdir/module`), \
+                 never `../sibling/module`.",
+                "Yinz import paths are anchored to the project root (the directory \
+                 containing `yinz.toml`). Allowing `..` would let an import escape the \
+                 project boundary and could leak source from outside the project to \
+                 diagnostic output.",
+            ));
+            continue;
+        }
 
         // Resolve the import path. Detect the no-yinz.toml case to give a better error.
         let has_project_root = find_project_root(
@@ -142,7 +189,6 @@ pub fn resolve_imports(
 
         // Circular import detection.
         if visiting.contains(&resolved_path) {
-            let cycle_path = resolved_path.display().to_string();
             diags.push(Diagnostic::error(
                 span.clone(),
                 format!("Circular import detected: \"{module_str}\" is already being imported in this chain."),

@@ -82,11 +82,11 @@ function entrypoint() -> nothing {
 
 #[test]
 fn m5p3b_array_bool_literal_typechecks() {
-    // WHY: array<bool> must work.
+    // WHY: array<boolean> must work.
     check_no_diags(
         r#"
 function entrypoint() -> nothing {
-    let arr: array<bool> = [true, false, true]
+    let arr: array<boolean> = [true, false, true]
 }
 "#,
     );
@@ -153,7 +153,7 @@ fn m5p3b_array_contains_returns_bool() {
         r#"
 function entrypoint() -> nothing {
     let arr: array<int> = [1, 2, 3]
-    let found: bool = arr.contains(2)
+    let found: boolean = arr.contains(2)
 }
 "#,
     );
@@ -346,7 +346,7 @@ fn m5p3b_fixed_contains_returns_bool() {
         r#"
 function entrypoint() -> nothing {
     let f: fixed<int> = [1, 2, 3]
-    let found: bool = f.contains(2)
+    let found: boolean = f.contains(2)
 }
 "#,
     );
@@ -488,7 +488,7 @@ fn m5p3b_maybe_exists_returns_bool() {
         r#"
 function entrypoint() -> nothing {
     let m: maybe<int> = none
-    let b: bool = m.exists()
+    let b: boolean = m.exists()
 }
 "#,
     );
@@ -774,7 +774,7 @@ fn m5p3b_bracket_assign_on_non_collection_errors() {
     check_diag_count(
         r#"
 function entrypoint() -> nothing {
-    let x: bool = true
+    let x: boolean = true
     x[0] = 5
 }
 "#,

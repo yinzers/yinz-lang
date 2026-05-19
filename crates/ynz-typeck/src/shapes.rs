@@ -828,7 +828,7 @@ fn emit_unknown_field_type_diag(
                 span.clone(),
                 format!("`{n}` is not a known type."),
                 format!("Field `{field_name}` on `{shape_name}` cannot use `{n}`. Use a built-in or a `shape` name defined in this file."),
-                "Built-ins: `int`, `float`, `number`, `bool`, `string`. Collections: `array<T>`, `fixed<T>`, `map<K, V>`. Optionals: `maybe<T>`.",
+                "Built-ins: `int`, `float`, `number`, `boolean`, `string`. Collections: `array<T>`, `fixed<T>`, `map<K, V>`. Optionals: `maybe<T>`.",
             ));
         }
         AstType::Union { variants, .. } => {

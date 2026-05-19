@@ -33,39 +33,15 @@ Decimal literals (`1_000`) are not affected — the lexer enters `lex_decimal_nu
 
 ---
 
-### Bug #7: Memory leak / use-after-free on OOM in map runtime
+~~### Bug #7: Memory leak / use-after-free on OOM in map runtime~~ **FIXED (Batch 5b)**
 
-**File**: `crates/ynz-runtime/src/lib.rs:405-423` (`map_alloc`), `534-545` (`order_push`)
-**Severity**: HIGH
-**Category**: Resource Leak / Null deref UB
-
-**Issue**: Two related issues in the map runtime:
-
-1. `map_alloc` (line 405) calls `malloc` 5 times with no null check. If any call returns null (OOM), `std::ptr::write_bytes(ctrl, CTRL_EMPTY, ...)` on line 412 writes through a null pointer — undefined behavior. Compare to `ynz_alloc` (line 250) which DOES check and abort.
-
-2. `order_push` (line 537) does `realloc(...) as *mut i64; (*map).insert_order = new_order;` with no null check. If `realloc` returns null (OOM), the original buffer is still valid but `(*map).insert_order` is set to null, leaking the old buffer and breaking subsequent `*(*map).insert_order.add(i) = key` writes (UB).
-
-**Why This Breaks Production**: a Yinz program that exhausts memory while inserting into a map gets a segfault or worse rather than the documented OOM-abort.
+`map_alloc`, `map_grow_int`, `map_grow_str`, and `order_push` now null-check every `malloc`/`realloc` return and abort with a teaching message on null.
 
 ---
 
-### Bug #8: `ynz_map_set_str` can infinite-loop on a full map
+~~### Bug #8: `ynz_map_set_str` can infinite-loop on a full map~~ **FIXED (Batch 5b)**
 
-**File**: `crates/ynz-runtime/src/lib.rs:629-656`
-**Severity**: HIGH
-**Category**: Logic Error / Infinite Loop
-
-**Issue**: After the growth check at line 630, line 648 has:
-
-```rust
-while *(*map).ctrl.add(idx) != CTRL_EMPTY && *(*map).ctrl.add(idx) != CTRL_DELETED {
-    idx = (idx + 1) & (cap - 1);
-}
-```
-
-There is no termination guard if every slot is occupied (no EMPTY or DELETED markers). The growth check at line 630 protects against this in the normal path (75% load factor forces growth), BUT if `map_grow_str` fails (e.g., OOM, sibling Bug #7) and silently returns without growing, the next probe hits 100%-occupied state and infinite-loops.
-
-Same pattern in `find_insert_slot` (line 452-462): no full-map guard, only saved by the load-factor check.
+`find_insert_slot` and the `ynz_map_set_str` probe loop now track probe count and abort with a compiler-bug message if probe count reaches capacity.
 
 ---
 
@@ -227,8 +203,8 @@ If the linker invocation panics between `std::fs::write(&rt_lib_tmp, ...)` (line
 1. **Bug #1** — `src/` preference contradicts spec. Silent file-skipping.
 
 ### Should Fix Soon (User Impact)
-2. **Bug #2** — Map allocator OOM handling.
-3. **Bug #3** — Map set_str infinite loop risk.
+~~2. **Bug #2** — Map allocator OOM handling.~~ **FIXED (Batch 5b)**
+~~3. **Bug #3** — Map set_str infinite loop risk.~~ **FIXED (Batch 5b)**
 4. **Bug #4** — entrypoint→main rename collision across files.
 5. **Bug #6** — Leading-underscore numeric literal accepted.
 6. **Bug #7** — Misleading import-failure diagnostic.

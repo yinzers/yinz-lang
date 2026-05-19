@@ -450,8 +450,15 @@ impl<'src> Lexer<'src> {
             b if b.is_ascii_alphabetic() || b == b'_' => self.lex_identifier_or_keyword(start),
 
             b => {
-                self.pos += 1;
-                self.emit_unknown_byte(start, b);
+                let codepoint_len = utf8_codepoint_len(b);
+                let end = (self.pos + codepoint_len).min(self.src.len());
+                self.pos = end;
+                self.diags.push(Diagnostic::error(
+                    SourceSpan::new(self.file, start, end),
+                    format!("The character `{}` is not valid here.", byte_as_char_display(self.src, start, end)),
+                    "Remove or replace this character.",
+                    "Yinz source files may only contain ASCII text and UTF-8 string content.",
+                ));
             }
         }
     }
@@ -464,6 +471,16 @@ impl<'src> Lexer<'src> {
             } else {
                 break;
             }
+        }
+        if self.pos - start > 1024 {
+            self.diags.push(Diagnostic::error(
+                SourceSpan::new(self.file, start, self.pos),
+                "Identifier too long (max 1024 characters).",
+                "Split it into a short binding name and a longer descriptive comment, or trim the name.",
+                "Identifiers this long usually indicate a typo where a closing quote or boundary character is missing, or an attempt to exhaust memory. The limit is set far above realistic usage.",
+            ));
+            self.push_token(Token::Identifier(String::new()), start, self.pos);
+            return;
         }
         let text = std::str::from_utf8(&self.src[start..self.pos])
             .expect("identifier slice is valid UTF-8 — source was validated at load time");
@@ -643,21 +660,39 @@ impl<'src> Lexer<'src> {
 
     /// M7: double-quoted strings are not valid Yinz syntax. Redirect to backticks.
     ///
-    /// Advances past the entire `"..."` content for error recovery, emits a
-    /// teaching diagnostic, then produces an empty `BacktickString` token so
-    /// downstream parsing can continue without cascading errors.
+    /// Advances past the entire `"..."` content for error recovery, emits ONE
+    /// teaching diagnostic pointing at the opening quote, then produces an empty
+    /// `BacktickString` token so downstream parsing can continue without cascading errors.
+    ///
+    /// Recovery consumes up to the matching closing `"`, or a blank line (two
+    /// consecutive newlines — an unambiguous block boundary), or EOF — whichever
+    /// comes first. This avoids the cascade of "word is undefined" errors that
+    /// result from stopping at the first `\n` and re-lexing the rest as code.
     fn lex_double_quote_error(&mut self, start: usize) {
         self.pos += 1; // skip opening `"`
-                       // Consume the string content so we can give a recovery token after the error.
-        while self.pos < self.src.len() && self.src[self.pos] != b'"' && self.src[self.pos] != b'\n'
-        {
+        let mut last_was_newline = false;
+        loop {
+            if self.pos >= self.src.len() {
+                break;
+            }
+            let b = self.src[self.pos];
+            if b == b'"' {
+                self.pos += 1; // skip closing `"`
+                break;
+            }
+            if b == b'\n' {
+                if last_was_newline {
+                    // Two consecutive newlines = blank line = block boundary; stop here.
+                    break;
+                }
+                last_was_newline = true;
+            } else {
+                last_was_newline = false;
+            }
             self.pos += 1;
         }
-        if self.pos < self.src.len() && self.src[self.pos] == b'"' {
-            self.pos += 1; // skip closing `"`
-        }
         self.diags.push(Diagnostic::error(
-            SourceSpan::new(self.file, start, self.pos),
+            SourceSpan::new(self.file, start, start + 1),
             "Double-quoted strings don't exist in Yinz.",
             "Use backtick strings instead: `` `hello` `` or `` `Hello ${name}` ``",
             "Yinz has one string form — backtick-quoted strings. They always support \
@@ -738,6 +773,17 @@ impl<'src> Lexer<'src> {
                     return;
                 }
                 b'$' if self.peek(1) == Some(b'{') => {
+                    if self.interp_depth_stack.len() >= 64 {
+                        self.diags.push(Diagnostic::error(
+                            SourceSpan::new(self.file, self.pos, self.pos + 2),
+                            "String interpolation nested too deeply (max 64 levels).",
+                            "Build the string with named `let` bindings instead of inline interpolation.",
+                            "Each `${...}` opens a new nesting level. Beyond 64 the lexer can't recover meaningfully; the limit catches malformed input and adversarial nesting.",
+                        ));
+                        // Consume `${` and continue so the lexer doesn't spin.
+                        self.pos += 2;
+                        continue;
+                    }
                     // Start of interpolation — emit what we have so far, then the marker.
                     self.push_token(Token::BacktickString(bytes), seg_start, self.pos);
                     let interp_start = self.pos;
@@ -780,7 +826,12 @@ impl<'src> Lexer<'src> {
                             self.pos += 1;
                         }
                         b'0' => {
-                            bytes.push(b'\0');
+                            self.diags.push(Diagnostic::error(
+                                SourceSpan::new(self.file, self.pos - 1, self.pos + 1),
+                                "`\\0` (NUL byte) is not a valid escape in Yinz strings.",
+                                "Use a non-NUL placeholder like `*` or split the string into pieces if you need a sentinel.",
+                                "Yinz strings are passed to the runtime as C strings (length-prefixed string slices ship in a future version). Embedding a NUL byte would silently truncate the string at print/concatenate time. The compiler refuses up-front to avoid the silent-truncation footgun.",
+                            ));
                             self.pos += 1;
                         }
                         b'$' if self.peek(1) == Some(b'{') => {
@@ -825,6 +876,18 @@ impl<'src> Lexer<'src> {
     fn lex_hex_int(&mut self, start: usize) {
         self.pos += 2; // skip "0x" or "0X"
         let digits_start = self.pos;
+
+        if self.pos < self.src.len() && self.src[self.pos] == b'_' {
+            self.diags.push(Diagnostic::error(
+                SourceSpan::new(self.file, self.pos, self.pos + 1),
+                "Numeric literals cannot start with `_`.",
+                "Use a single `_` between groups of digits: `0xDEAD_BEEF`.",
+                "The `_` separator is a visual aid — it must sit between digit groups, not at the start.",
+            ));
+            self.skip_to_whitespace();
+            return;
+        }
+
         let mut has_invalid = false;
 
         while self.pos < self.src.len() {
@@ -894,6 +957,18 @@ impl<'src> Lexer<'src> {
     fn lex_binary_int(&mut self, start: usize) {
         self.pos += 2; // skip "0b" or "0B"
         let digits_start = self.pos;
+
+        if self.pos < self.src.len() && self.src[self.pos] == b'_' {
+            self.diags.push(Diagnostic::error(
+                SourceSpan::new(self.file, self.pos, self.pos + 1),
+                "Numeric literals cannot start with `_`.",
+                "Use a single `_` between digit groups: `0b1111_0000`.",
+                "The `_` separator is a visual aid — it must sit between digit groups, not at the start.",
+            ));
+            self.skip_to_whitespace();
+            return;
+        }
+
         let mut has_invalid = false;
 
         while self.pos < self.src.len() {
@@ -987,7 +1062,26 @@ impl<'src> Lexer<'src> {
             return;
         }
 
-        // Phase 2 — optional fractional part (only if `.` is followed by a digit)
+        // Phase 2 — optional fractional part (only if `.` is followed by a digit).
+        // `3.` followed by EOF, whitespace, or an operator is an error — ambiguous intent.
+        // `42.toString()` is fine — `.` followed by a letter is a method-call dot, not decimal.
+        let next_after_dot = self.pos.checked_add(1).and_then(|i| self.src.get(i)).copied();
+        if self.pos < self.src.len()
+            && self.src[self.pos] == b'.'
+            && !matches!(next_after_dot, Some(b'0'..=b'9'))
+            && !matches!(next_after_dot, Some(b'a'..=b'z' | b'A'..=b'Z' | b'_'))
+        {
+            let dot_pos = self.pos;
+            self.diags.push(Diagnostic::error(
+                SourceSpan::new(self.file, dot_pos, dot_pos + 1),
+                "Decimal point without fractional digits.",
+                "Write `3.0` if you mean three, or `3` if you mean integer three.",
+                "`3.` is ambiguous — could be a float literal or a typo. Yinz requires the digit so the intent is clear at the point of writing.",
+            ));
+            self.skip_to_whitespace();
+            return;
+        }
+
         let has_dot = self.pos < self.src.len()
             && self.src[self.pos] == b'.'
             && self.pos + 1 < self.src.len()
@@ -1126,14 +1220,6 @@ impl<'src> Lexer<'src> {
         ));
     }
 
-    fn emit_unknown_byte(&mut self, pos: usize, byte: u8) {
-        self.diags.push(Diagnostic::error(
-            SourceSpan::new(self.file, pos, pos + 1),
-            format!("The character `{}` is not valid here.", byte as char),
-            "Remove or replace this character.",
-            "Yinz source files may only contain ASCII text and UTF-8 string content.",
-        ));
-    }
 
     /// Advance past non-whitespace bytes to recover from a malformed literal.
     fn skip_to_whitespace(&mut self) {
@@ -1144,6 +1230,27 @@ impl<'src> Lexer<'src> {
 
     fn push_token(&mut self, tok: Token, start: usize, end: usize) {
         self.tokens.push(Spanned::new(tok, self.file, start, end));
+    }
+}
+
+/// Return the byte length of the UTF-8 codepoint starting with `first_byte`.
+/// Defaults to 1 for any invalid / continuation byte.
+fn utf8_codepoint_len(first_byte: u8) -> usize {
+    match first_byte {
+        0x00..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF7 => 4,
+        _ => 1,
+    }
+}
+
+/// Produce a display string for the codepoint at `src[start..end]`.
+/// Falls back to a hex escape if the bytes are not valid UTF-8.
+fn byte_as_char_display(src: &[u8], start: usize, end: usize) -> String {
+    match std::str::from_utf8(&src[start..end]) {
+        Ok(s) => s.to_string(),
+        Err(_) => format!("\\x{:02X}", src[start]),
     }
 }
 

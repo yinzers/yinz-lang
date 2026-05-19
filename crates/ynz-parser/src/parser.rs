@@ -31,6 +31,12 @@ pub struct Parser<'a> {
     tokens: &'a [Spanned<Token>],
     pos: usize,
     pub diags: DiagnosticBucket,
+    expr_depth: u32,
+    /// When `true`, the current token is logically `>` — the first half of a `>>` token
+    /// that was split while closing a nested generic type. `peek()` returns `&Token::Gt`
+    /// and `advance()` consumes it by clearing this flag (without incrementing `pos`).
+    /// The actual `>>` token at `pos` will then be seen on the next call to `peek()`.
+    pending_gt: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -40,10 +46,15 @@ impl<'a> Parser<'a> {
             tokens,
             pos: 0,
             diags: DiagnosticBucket::new(),
+            expr_depth: 0,
+            pending_gt: false,
         }
     }
 
     fn peek(&self) -> &Token {
+        if self.pending_gt {
+            return &Token::Gt;
+        }
         self.tokens
             .get(self.pos)
             .map(|s| &s.value)
@@ -71,6 +82,11 @@ impl<'a> Parser<'a> {
     }
 
     fn advance(&mut self) -> &Spanned<Token> {
+        if self.pending_gt {
+            // Consume the synthetic Gt without moving pos — the underlying `>>` token stays.
+            self.pending_gt = false;
+            return &self.tokens[self.pos];
+        }
         let tok = &self.tokens[self.pos];
         if !tok.value.is_eof() {
             self.pos += 1;
@@ -977,7 +993,7 @@ impl<'a> Parser<'a> {
                 self.diags.push(Diagnostic::error(
                     self.current_span(),
                     "Expected a type here.",
-                    "Use `nothing`, `int`, `float`, `number`, `bool`, `maybe<T>`, `array<T>`, `dynamic Foo`, `Self`, or a type name.",
+                    "Use `nothing`, `int`, `float`, `number`, `boolean`, `maybe<T>`, `array<T>`, `dynamic Foo`, `Self`, or a type name.",
                     "Types tell Yinz what kind of value a variable holds or a function produces.",
                 ));
                 Type::Error
@@ -1029,13 +1045,13 @@ impl<'a> Parser<'a> {
 
         loop {
             match self.peek() {
-                Token::Gt | Token::Eof => break,
+                Token::Gt | Token::GtGt | Token::Eof => break,
                 Token::Comma => {
                     self.advance();
                 }
                 _ => {
                     args.push(self.parse_type_with_depth(depth + 1));
-                    if !matches!(self.peek(), Token::Gt | Token::Comma) {
+                    if !matches!(self.peek(), Token::Gt | Token::GtGt | Token::Comma) {
                         self.diags.push(Diagnostic::error(
                             self.current_span(),
                             "Expected `,` or `>` in generic type argument list.",
@@ -1045,7 +1061,7 @@ impl<'a> Parser<'a> {
                         // Recover to `>` or something sane
                         while !matches!(
                             self.peek(),
-                            Token::Gt | Token::RBrace | Token::Eof | Token::LParen
+                            Token::Gt | Token::GtGt | Token::RBrace | Token::Eof | Token::LParen
                         ) {
                             self.advance();
                         }
@@ -1055,10 +1071,27 @@ impl<'a> Parser<'a> {
             }
         }
 
-        if self.expect(&Token::Gt).is_none() {
+        // Close the inner `>`. When we see `>>`, split it: consume one `>` here (by setting
+        // pending_gt) and leave the other for the outer parse_generic_type to consume.
+        let closed = match self.peek() {
+            Token::Gt => {
+                self.advance();
+                true
+            }
+            Token::GtGt => {
+                // Split `>>` into two `>` tokens. Advance past the `>>` (consuming it fully),
+                // then mark pending_gt so the outer parse_generic_type's next peek() returns
+                // a synthetic `Gt` that advance() will consume by just clearing the flag.
+                self.advance(); // pos moves past the `>>` token
+                self.pending_gt = true;
+                true
+            }
+            _ => false,
+        };
+        if !closed {
             self.diags.push(Diagnostic::error(
                 self.current_span(),
-                format!("Missing `>` to close `{name}<...>`.",),
+                format!("Missing `>` to close `{name}<...>`."),
                 format!("Write `{name}<T>` — close the angle bracket after the type arguments."),
                 "Every `<` in a generic type must be matched with a `>`.",
             ));
@@ -1873,6 +1906,37 @@ impl<'a> Parser<'a> {
             return self.parse_for_destructure(start);
         }
 
+        // Catch `for ([a, b] in ...)` — array destructuring is not supported in for loops.
+        // Yinz has no tuple types; the user likely wants a shape with named fields.
+        if matches!(self.peek(), Token::LBracket) {
+            let bracket_span = self.current_span();
+            self.diags.push(Diagnostic::error(
+                bracket_span,
+                "Array destructuring `[a, b]` isn't supported in `for` loop headers.",
+                "Loop with a single binding and access fields directly:\n  for (config in intervals) {\n      config.minutes\n      config.timeframe\n  }",
+                "Array indices aren't compile-time verified — `[a, b]` could silently miss elements after a refactor. Named shape fields are statically guaranteed. The shape iterator compiles to the same pointer-arithmetic loop a tuple array would.",
+            ));
+            // Recover: skip to `{` so the body parses cleanly.
+            while !matches!(self.peek(), Token::LBrace | Token::Eof) {
+                self.advance();
+            }
+            let body = if matches!(self.peek(), Token::LBrace) {
+                self.advance(); // consume `{`
+                self.parse_block()
+            } else {
+                let span = SourceSpan::new(self.file, start, self.current_span().end);
+                Block { stmts: vec![], span }
+            };
+            let span = SourceSpan::new(self.file, start, body.span.end);
+            return Stmt::For {
+                var: "_".to_string(),
+                var_span: span.clone(),
+                iter: Expr::Error(span.clone()),
+                body,
+                span,
+            };
+        }
+
         let (var, var_span) = match self.peek().clone() {
             Token::Identifier(n) => {
                 let span = self.current_span();
@@ -2130,6 +2194,26 @@ impl<'a> Parser<'a> {
     ///
     /// Unary prefix operators (`-`, `!`, `~`) use right-BP=21 (higher than `*`/`/`).
     pub fn parse_expr(&mut self, min_bp: u8) -> Expr {
+        if self.expr_depth >= 256 {
+            let span = self.current_span();
+            // Emit the diagnostic only once to avoid a cascade.
+            let already_reported = self
+                .diags
+                .iter()
+                .any(|d| d.what.starts_with("Expression nesting too deep"));
+            if !already_reported {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    "Expression nesting too deep (max 256 levels).",
+                    "Break this expression into smaller pieces with named `let` bindings — Yinz prefers step-by-step over chains anyway (Golden Rule 7).",
+                    "The parser uses one stack frame per nested expression. At 256 levels we're well past any reasonable code; further nesting would crash the compiler. The limit catches both typos (a million open parens) and adversarial inputs.",
+                ));
+                // Drain tokens to the next statement boundary so recovery doesn't loop.
+                self.recover_to_rbrace();
+            }
+            return Expr::Error(span);
+        }
+        self.expr_depth += 1;
         let mut lhs = self.parse_prefix();
 
         loop {
@@ -2179,6 +2263,7 @@ impl<'a> Parser<'a> {
             };
         }
 
+        self.expr_depth -= 1;
         lhs
     }
 

@@ -50,10 +50,9 @@
 - **Files**: `crates/ynz-parser/src/lib.rs:1`, `crates/ynz-codegen/src/lib.rs:1`, `crates/ynz-typeck/src/lib.rs:1`
 - **Gap**: No `//!` describing entry points (salsa-tracked queries vs direct `lex`/`parse`/`emit_artifact`), pipeline phases, public types.
 
-## MEDIUM — SipHash zero-key justification missing
+~~## MEDIUM — SipHash zero-key justification missing~~ **FIXED (Batch 5b)**
 
-- **File**: `crates/ynz-runtime/src/lib.rs:300-360`
-- **Gap**: Standard IV constants used; no spec citation; no note that zero-key SipHash is OK for compiler-internal maps but NOT for user-facing maps with attacker-controlled keys. Future contributor might reuse this for user-facing hashing without realizing.
+Algorithm citation, key-seeding rationale, IV constant provenance, and the zero-key-OK-for-internal-use distinction are all documented in the SipHash section header comment.
 
 ## LOW — `Lexer` struct three-mode state machine undocumented
 
@@ -90,7 +89,7 @@
 - Missing complexity analyses: 0 (BigNum mul/div/round_to_precision all annotated)
 - Missing operational docs (flow/side-effects/safety): 3 (build_module passes, map_grow side effects, FFI safety contracts)
 - Missing crate-level docs: 3 (parser, codegen, typeck lib.rs)
-- Undocumented business logic / rationale: 3 (sha256 rationale, SipHash zero-key justification, ExportTable coarse-eq risk)
+- Undocumented business logic / rationale: 2 (sha256 rationale, ExportTable coarse-eq risk) — SipHash zero-key fixed by Batch 5b
 
 ---
 

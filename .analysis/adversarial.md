@@ -1,39 +1,29 @@
 # Adversarial Test Analysis — Yinz Compiler
 
 **Scope**: lexer, parser, project loader, import resolver, banned-jargon scanner.
-**Findings**: 15 scenarios — 1 fixed Batch 4b (Critical: 2 remain, High: 4, Medium: 3, Low: 5)
+**Findings**: 15 scenarios — 1 fixed Batch 4b, 6 fixed Batch 5a (Critical: 0 remain, High: 1 remain, Medium: 3 remain, Low: 3 remain)
 
 ---
 
-## CRITICAL — Finding 2: Deeply nested expressions → parser stack overflow
+~~## CRITICAL — Finding 2: Deeply nested expressions → parser stack overflow~~ **FIXED (Batch 5a)**
 
-- **Trigger**: A `.ynz` file containing `((((...((x))...))))` with deep nesting
-- **Trace**: Recursive descent `parse_primary` / `parse_paren_expr` (no depth budget)
-- **Outcome**: Stack overflow, process crash, no output
-- **Fix**: Track depth via `&mut self.depth`, cap (e.g. 256), emit `Diagnostic::error("expression nesting too deep")`
+`expr_depth` field added to `Parser`; checked at 256 in `parse_expr`; overflow emits WHAT/WHAT-INSTEAD/WHY diagnostic and drains to statement boundary. Test in `crates/ynz-parser/tests/parse.rs` (`hardening_expression_nesting_depth_cap`).
 
 ## ~~CRITICAL — Finding 4: Symlink loop in project tree → infinite recursion~~ FIXED (Batch 4b)
 
 `collect_ynz_files` uses `symlink_metadata()` to detect symlinks without following them. Canonical-path `HashSet` prevents re-visiting directories (catches hard-link cycles). Teaching diagnostic on detection per WHAT/WHAT-INSTEAD/WHY format.
 
-## CRITICAL/HIGH — Finding 11: NUL byte in string literal → silent runtime truncation
+~~## CRITICAL/HIGH — Finding 11: NUL byte in string literal → silent runtime truncation~~ **FIXED (Batch 5a — lexer side)**
 
-- **Trigger**: `` `hello\0world` `` in source
-- **Trace**: `crates/ynz-parser/src/lexer.rs:782-784` accepts `\0` escape; `crates/ynz-codegen/src/emit.rs:2850-2851` emits as C string with terminator; runtime `print()` stops at first NUL
-- **Outcome**: Silent data loss — `print(x)` outputs `hello`, drops `world`. No compile error, no runtime error.
-- **Fix**: Either (a) reject `\0` in string literals at lexer, or (b) represent strings as `{ptr, len}` slices throughout. Aligns with `design/strings.md` UTF-8/SSO model.
+Lexer now rejects `\0` escape with WHAT/WHAT-INSTEAD/WHY diagnostic instead of pushing the NUL byte. Codegen-side is moot — the lexer refuse ensures the AST never contains a NUL. Future `{ptr, len}` string representation (per `design/strings.md`) can revisit if there is a use case for embedded NULs.
 
-## HIGH — Finding 1: Multi-byte Unicode chars produce N errors per codepoint
+~~## HIGH — Finding 1: Multi-byte Unicode chars produce N errors per codepoint~~ **FIXED (Batch 5a)**
 
-- **Trigger**: Source containing `日本語` outside an identifier/string
-- **Trace**: Lexer error path emits a diagnostic per byte rather than per codepoint; ariadne renders garbled spans
-- **Fix**: Advance lexer by full codepoint length on error; emit one diagnostic per invalid codepoint
+`lex_one` fallthrough now advances by `utf8_codepoint_len(first_byte)` and emits one diagnostic per codepoint. `日本語` produces 3 diagnostics, not 9. Test: `hardening_unicode_error_one_diagnostic_per_codepoint`.
 
-## HIGH — Finding 3: Extremely long identifier (10 MB) → unbounded heap allocation
+~~## HIGH — Finding 3: Extremely long identifier (10 MB) → unbounded heap allocation~~ **FIXED (Batch 5a)**
 
-- **Trigger**: Single identifier `aaa...a` of 10 MB
-- **Trace**: `crates/ynz-parser/src/lexer.rs:486-639` accumulates chars into `String` without bound
-- **Fix**: Cap identifier length (suggest 1024 bytes), emit diagnostic on overflow
+`lex_identifier_or_keyword` checks `pos - start > 1024` after consuming characters, emits diagnostic, emits empty Identifier token for recovery. Test: `hardening_identifier_too_long_produces_diagnostic`.
 
 ## ~~HIGH — Finding 9: Concurrent `ynz build` races on same `obj_path`~~ FIXED (Batch 4b)
 
@@ -87,12 +77,9 @@ Cross-references reliability.md Finding 3. All intermediates in `tempfile::tempd
 - **File**: `crates/ynz-driver/src/build.rs:55-62`
 - **Fix**: use existing `DiagnosticBucket::has_errors()` instead of `iter().filter().collect::<Vec<_>>().is_empty()`
 
-## LOW — Finding 15: Multi-line `"..."` string stops at newline → cascade errors
+~~## LOW — Finding 15: Multi-line `"..."` string stops at newline → cascade errors~~ **FIXED (Batch 5a)**
 
-- **File**: `crates/ynz-parser/src/lexer.rs:652`
-- **Trigger**: `"hello\nworld"` with a literal newline
-- **Outcome**: Lexer stops at `\n`; second line is parsed as code, producing cascade of unrelated errors
-- **Acceptable but improvable**: emit a single "unterminated string literal" pointing at the opening quote
+`lex_double_quote_error` now recovers to the next closing `"`, blank line, or EOF — whichever comes first. Emits ONE diagnostic pointing at the opening `"` (span start+1 only). Test: `hardening_double_quote_multiline_one_error`.
 
 ---
 

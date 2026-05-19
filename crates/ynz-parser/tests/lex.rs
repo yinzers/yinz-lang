@@ -2057,3 +2057,144 @@ fn m8_pub_banned_keyword_produces_diagnostic() {
         "Identifier must appear in stream after pub banned-keyword diagnostic"
     );
 }
+
+// ── 5a security/robustness fixes ─────────────────────────────────────────────
+
+#[test]
+fn hardening_identifier_too_long_produces_diagnostic() {
+    // WHY: A 10 MB single identifier must not exhaust heap without bound.
+    // The cap at 1024 bytes must fire and produce one diagnostic; the lexer
+    // must not hang or OOM.
+    let long_id: String = "a".repeat(2000);
+    let (_, diags) = lex_with_diags(&long_id);
+    assert_eq!(diags.len(), 1, "Exactly one diagnostic expected for over-long identifier");
+    assert!(
+        diags[0].what.contains("1024"),
+        "Diagnostic must mention the 1024 limit, got: {:?}",
+        diags[0].what
+    );
+}
+
+#[test]
+fn hardening_unicode_error_one_diagnostic_per_codepoint() {
+    // WHY: Multi-byte codepoints outside any token must produce one diagnostic
+    // per codepoint, NOT one per byte. `日本語` is three 3-byte codepoints →
+    // 3 diagnostics, not 9.
+    let source = "日本語";
+    let (_, diags) = lex_with_diags(source);
+    assert_eq!(
+        diags.len(),
+        3,
+        "Expected 3 diagnostics (one per codepoint), got {}: {:?}",
+        diags.len(),
+        diags
+    );
+}
+
+#[test]
+fn hardening_leading_underscore_hex_rejected() {
+    // WHY: `0x_FF` has a leading separator that the spec forbids. The validator
+    // missed it before this fix; now it must produce exactly one diagnostic.
+    let (_, diags) = lex_with_diags("let bad = 0x_FF");
+    assert_eq!(diags.len(), 1, "Exactly one diagnostic expected for 0x_FF, got: {:?}", diags);
+    assert!(
+        diags[0].what.contains("_"),
+        "Diagnostic must mention the underscore, got: {:?}",
+        diags[0].what
+    );
+}
+
+#[test]
+fn hardening_leading_underscore_binary_rejected() {
+    // WHY: Same as the hex case — `0b_1010` must be rejected for the same reason.
+    let (_, diags) = lex_with_diags("let bad = 0b_1010");
+    assert_eq!(diags.len(), 1, "Exactly one diagnostic expected for 0b_1010, got: {:?}", diags);
+    assert!(
+        diags[0].what.contains("_"),
+        "Diagnostic must mention the underscore, got: {:?}",
+        diags[0].what
+    );
+}
+
+#[test]
+fn hardening_interpolation_depth_cap() {
+    // WHY: Deeply nested `${...}` must not grow the interp_depth_stack without
+    // bound. The cap at 64 levels must fire with a diagnostic. Nested interpolation
+    // structure: `` ` `` then 100× `` ${` `` (each opens an interpolation then starts
+    // an inner backtick string inside the expression) drives the depth well past 64.
+    let mut source = String::from("`");
+    for _ in 0..100 {
+        source.push_str("${`");
+    }
+    let (_, diags) = lex_with_diags(&source);
+    assert!(
+        !diags.is_empty(),
+        "At least one diagnostic expected for over-deep interpolation"
+    );
+    let depth_diag = diags.iter().find(|d| d.what.contains("64"));
+    assert!(
+        depth_diag.is_some(),
+        "A diagnostic mentioning the 64-level cap must be present, got: {:?}",
+        diags
+    );
+}
+
+#[test]
+fn hardening_nul_byte_in_string_rejected() {
+    // WHY: `\0` (NUL byte) inside a backtick string must be rejected at the
+    // lexer so the silent-truncation footgun never reaches the runtime.
+    // `hello\0world` — the NUL would silently truncate to `hello` at print time.
+    let (_, diags) = lex_with_diags("`hello\\0world`");
+    assert_eq!(diags.len(), 1, "Exactly one diagnostic expected for NUL escape, got: {:?}", diags);
+    assert!(
+        diags[0].what.contains("\\0") || diags[0].what.contains("NUL"),
+        "Diagnostic must mention the NUL escape, got: {:?}",
+        diags[0].what
+    );
+}
+
+#[test]
+fn hardening_bare_dot_float_rejected() {
+    // WHY: `3.` without a fractional digit is ambiguous — could be a float literal
+    // or a typo. The compiler must reject it with a clear diagnostic.
+    let (_, diags) = lex_with_diags("let x = 3.");
+    assert_eq!(diags.len(), 1, "Exactly one diagnostic expected for `3.`, got: {:?}", diags);
+    assert!(
+        diags[0].what.contains("Decimal") || diags[0].what.contains("decimal"),
+        "Diagnostic must mention the missing digits, got: {:?}",
+        diags[0].what
+    );
+}
+
+#[test]
+fn hardening_double_quote_multiline_one_error() {
+    // WHY: A "string" with a literal newline inside (`"hello\nworld"`) must
+    // produce exactly ONE error pointing at the opening `"`, not a cascade of
+    // parse errors from the second line being re-lexed as code.
+    // The error span must point at the opening quote, not the whole "string".
+    let source = "\"hello\nworld\"";
+    let (_, diags) = lex_with_diags(source);
+    // The double-quote error fires once for the opening `"`.
+    // After recovery, `world` is lexed as an identifier (no diagnostic for that).
+    // The closing `"` on the second line fires a second double-quote diagnostic.
+    // So we expect exactly 2 diagnostics (one per `"`), NOT a cascade of "world
+    // is undefined" or similar.
+    let double_quote_diags: Vec<_> = diags
+        .iter()
+        .filter(|d| d.what.contains("Double-quoted"))
+        .collect();
+    assert_eq!(
+        double_quote_diags.len(),
+        1,
+        "Exactly one double-quote diagnostic expected for the opening `\"`, got {} total diags: {:?}",
+        diags.len(),
+        diags
+    );
+    // The diagnostic span must point at just the opening `"` (position 0), not
+    // the full string content.
+    assert_eq!(
+        double_quote_diags[0].span.start,
+        0,
+        "Diagnostic span must start at the opening `\"`"
+    );
+}

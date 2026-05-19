@@ -492,7 +492,7 @@ impl<'b> Checker<'b> {
         if cond_ty != Type::Error && cond_ty != Type::Bool {
             self.diags.push(Diagnostic::error(
                 cond.span().clone(),
-                format!("The condition of an `if` must be `bool`, but this is `{}`.", type_name(&cond_ty)),
+                format!("The condition of an `if` must be `boolean`, but this is `{}`.", type_name(&cond_ty)),
                 "Write a comparison that produces `true` or `false`, e.g. `x > 0`.",
                 "`if` branches on whether the condition is `true` or `false`. Any other type cannot be used as a condition.",
             ));
@@ -742,7 +742,7 @@ impl<'b> Checker<'b> {
         if cond_ty != Type::Error && cond_ty != Type::Bool {
             self.diags.push(Diagnostic::error(
                 cond.span().clone(),
-                format!("The condition of a `while` loop must be `bool`, but this is `{}`.", type_name(&cond_ty)),
+                format!("The condition of a `while` loop must be `boolean`, but this is `{}`.", type_name(&cond_ty)),
                 "Write a comparison that produces `true` or `false`, e.g. `x > 0`.",
                 "`while` loops until the condition becomes `false`. Any other type cannot be used as a condition.",
             ));
@@ -1381,7 +1381,7 @@ impl<'b> Checker<'b> {
                         type_name(&arg_ty)
                     ),
                     what_instead,
-                    "`print` works with: int, float, number, bool, string, and any shape.",
+                    "`print` works with: int, float, number, booleanean, string, and any shape.",
                 ));
             }
             return Type::Error;
@@ -1636,7 +1636,7 @@ impl<'b> Checker<'b> {
                     self.diags.push(Diagnostic::error(
                         span.clone(),
                         format!("`!` cannot be used on a `{}` value.", type_name(other)),
-                        "Use `!` only with `bool` expressions.",
+                        "Use `!` only with `boolean` expressions.",
                         "`!` is the boolean NOT operator — it flips `true` to `false` and vice versa.",
                     ));
                     Type::Error
@@ -1857,7 +1857,7 @@ impl<'b> Checker<'b> {
         if *receiver_ty == Type::Bool && method == "toInt" {
             self.diags.push(Diagnostic::error(
                 method_span.clone(),
-                "`.toInt()` is not available on `bool`.",
+                "`.toInt()` is not available on `boolean`.",
                 "Use an `if` expression instead: `if (b) { 1 } else { 0 }`",
                 "Automatic bool-to-int coercion is a common source of bugs. \
                  Yinz requires an explicit conversion.",
@@ -2173,7 +2173,7 @@ impl<'b> Checker<'b> {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
                     format!("`{n}` is not a known type."),
-                    "Use a built-in type (`int`, `float`, `number`, `bool`, `string`) or a `shape` name defined in this file.",
+                    "Use a built-in type (`int`, `float`, `number`, `boolean`, `string`) or a `shape` name defined in this file.",
                     format!("Types must be declared before use. If `{n}` is a shape, make sure the `shape {n} {{ ... }}` declaration is in this file.", n = n),
                 ));
                 Type::Error
@@ -2217,7 +2217,7 @@ impl<'b> Checker<'b> {
                 name,
                 args,
                 name_span,
-                ..
+                span,
             } => {
                 // Catch capitalized built-in names (Array, Fixed, Map) — Golden Rule 13:
                 // capital letter = type, everything else = lowercase. Built-ins are lowercase.
@@ -2244,6 +2244,14 @@ impl<'b> Checker<'b> {
                         }
                     }
                     "fixed" => {
+                        if resolved_args.len() > 1 {
+                            self.diags.push(Diagnostic::error(
+                                span.clone(),
+                                "`fixed<T>` takes one type argument. Yinz doesn't have tuple types.",
+                                "Define a shape with named fields instead:\n  shape IntervalConfig { minutes: int, timeframe: Timeframe }\n  const intervals: fixed<IntervalConfig> = [\n      { minutes: 5, timeframe: Timeframe.fiveMinute },\n      ...\n  ]",
+                                "Named fields are always self-documenting — `config.minutes` is clearer than a positional index. The shape compiles to the same stack-allocated memory layout a tuple would use, with zero overhead. Yinz also auto-reorders shape fields for optimal memory alignment, so the shape may pack tighter than a manual tuple.",
+                            ));
+                        }
                         let elem = resolved_args.into_iter().next().unwrap_or(Type::Error);
                         Type::BuiltinFixed {
                             elem: Box::new(elem),

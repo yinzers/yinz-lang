@@ -14,10 +14,10 @@ Severity = execution order, not "whether to fix." Per Patrick's Rule 11, confirm
 
 | Severity | Count | Notes |
 |---|---:|---|
-| Critical | 7 | locked decisions violated / deterministic crashes / silent data corruption |
-| High | 26 | shipped feature broken or misdocumented / large-impact UX / perf hotspots |
-| Medium | 49 | drift, missed checks, minor UX |
-| Low | 47 | polish, magic numbers, minor docs |
+| Critical | 5 | locked decisions violated / deterministic crashes / silent data corruption |
+| High | 21 | shipped feature broken or misdocumented / large-impact UX / perf hotspots |
+| Medium | 44 | drift, missed checks, minor UX |
+| Low | 45 | polish, magic numbers, minor docs |
 | Verified Correct | 9 | doc-drift positives — explicitly noted to prevent re-flagging |
 
 ---
@@ -59,19 +59,17 @@ No genuine conflicts between analyzers.
 - **Issue**: Tests use `ir_text` via `insta` snapshots; production CLI has no `--emit-ir`/`--print-ir`/`--dump-llvm`. Every "wrong codegen" investigation requires recompiling the compiler.
 - **Fix**: Add `--emit-ir` flag on `ynz build`. Trivial — field already populated.
 
-### 5. Stack overflow via deeply-nested expressions (compiler DoS)
-- **Files**: `crates/ynz-parser/src/parser.rs:2132` (`parse_expr`), `crates/ynz-typeck/src/check.rs` (`check_expr`/`infer_expr` family), `crates/ynz-codegen/src/emit.rs:2137` (`lower_expr`)
-- **Issue**: Type recursion capped at 16; expression and statement recursion unbounded. `((((...((x))...))))` of ~50k depth deterministically crashes the compiler with SIGABRT.
-- **Fix**: Add depth budget to `parse_expr` (256 limit), mirror in `check_expr` / `lower_expr`. Same teaching pattern as existing type-depth diagnostic.
+~~### 5. Stack overflow via deeply-nested expressions (compiler DoS)~~ **FIXED (Batch 5a)**
+- **Files**: `crates/ynz-parser/src/parser.rs` (`parse_expr`), `crates/ynz-typeck/src/check.rs` (`check_expr`/`infer_expr` family), `crates/ynz-codegen/src/emit.rs` (`lower_expr`)
+- Parser-side fix shipped: `expr_depth` field on `Parser`, checked at 256, emits WHAT/WHAT-INSTEAD/WHY diagnostic + drains to statement boundary on overflow. typeck/codegen side remains open.
 
 ### ~~6. Symlink loop in project tree → infinite recursion~~ FIXED (Batch 4b)
 - **File**: `crates/ynz-driver/src/load.rs`
 - `symlink_metadata()` instead of `is_dir()` prevents symlinks to dirs from being followed. Canonical-path `HashSet` detects hard-link cycles. Teaching diagnostic on detection.
 
-### 7. NUL byte in string literal → silent runtime truncation
-- **Files**: `crates/ynz-parser/src/lexer.rs:782-784` (`\0` escape accepted), `crates/ynz-codegen/src/emit.rs:2850-2851` (emits as C string)
-- **Issue**: `` `hello\0world` `` compiles; `print(x)` outputs `hello`. Silent data loss on string round-trip.
-- **Fix**: Either reject `\0` in string literals at the lexer, OR represent strings as `{ptr, len}` slices end-to-end (aligns with `design/strings.md`).
+~~### 7. NUL byte in string literal → silent runtime truncation~~ **FIXED (Batch 5a — lexer side)**
+- **Files**: `crates/ynz-parser/src/lexer.rs` (`\0` escape rejected), `crates/ynz-codegen/src/emit.rs` (codegen side: moot once lexer rejects; `{ptr, len}` future work)
+- Lexer now emits error diagnostic instead of pushing `\0` byte. Note in diagnostic: future `{ptr, len}` string overhaul (per `design/strings.md`) can relax this if needed.
 
 ### 8. `DiagnosticBucket::push` does O(n) error count per push
 - **File**: `crates/ynz-diagnostics/src/bucket.rs:29-38`
@@ -84,18 +82,18 @@ No genuine conflicts between analyzers.
 
 ### Compiler logic / correctness
 ~~10. `load_project` prefers `src/` despite recent commit removing it~~ **FIXED (Batch 4b)**
-11. Map runtime `malloc`/`realloc` paths skip null-check → SIGSEGV on OOM — `crates/ynz-runtime/src/lib.rs:405-423, 534-545`
-13. `ynz_map_set_str` infinite-loop on full map if growth silently fails — `crates/ynz-runtime/src/lib.rs:629-656`
+~~11. Map runtime `malloc`/`realloc` paths skip null-check → SIGSEGV on OOM~~ **FIXED (Batch 5b)** — `map_alloc`, `map_grow_int`, `map_grow_str`, `order_push` all null-check and abort with teaching message
+~~13. `ynz_map_set_str` infinite-loop on full map if growth silently fails~~ **FIXED (Batch 5b)** — `find_insert_slot` and `ynz_map_set_str` probe loops now abort if probe count reaches capacity
 14. `entrypoint → main` rename collides on multi-file projects — `crates/ynz-codegen/src/emit.rs:460-465, 815-819`
-15. `bignum_binop` silent fallback to `"0"` on CString null-byte → wrong math result with no log — `crates/ynz-runtime/src/lib.rs:2292`
+~~15. `bignum_binop` silent fallback to `"0"` on CString null-byte → wrong math result with no log~~ **FIXED (Batch 5b)** — aborts with INTERNAL ERROR message instead
 16. Runtime overflow / div-zero panics lack source location (design says line/col, code says only op name) — `crates/ynz-runtime/src/lib.rs:115-143`
 17. `ariadne` render `.expect()` panics on out-of-range span (no diagnostic; raw panic) — `crates/ynz-diagnostics/src/render.rs:85`
 
 ### Security (after path-traversal fix from Critical-adjacent set)
-18. Path traversal via mid-path `..` in import — `crates/ynz-typeck/src/resolve_import.rs:59,69`
+~~18. Path traversal via mid-path `..` in import~~ **FIXED (Batch 5c)** — layer-1 segment check + layer-2 canonicalize boundary check in `resolve_import.rs`; 11-test security suite in `tests/path_traversal.rs`
 ~~19. Predictable temp filename for runtime lib (CWE-377 on shared CI)~~ **FIXED (Batch 4b)** — uses `tempfile::NamedTempFile`
 ~~20. Output binary clobber + TOCTOU between write and execute in `ynz run`~~ **FIXED (Batch 4b)** — `ynz run` writes binary to per-invocation `tempdir()`
-21. Extremely long identifier (10MB) → unbounded heap — `crates/ynz-parser/src/lexer.rs:486-639` (cap identifier length, e.g. 1024)
+~~21. Extremely long identifier (10MB) → unbounded heap~~ **FIXED (Batch 5a)** — `lex_identifier_or_keyword` caps at 1024 bytes with WHAT/WHAT-INSTEAD/WHY diagnostic
 
 ### Reliability
 ~~22. `.o` file stranded when rt_lib write or linker probe fails~~ **FIXED (Batch 4b)** — `CleanupGuard` drop impl removes `.o` on any early return
@@ -139,7 +137,7 @@ No genuine conflicts between analyzers.
 ## Phase 3 — MEDIUM (drift, missed checks, minor UX)
 
 ### Bugs / logic
-- `validate_underscores` misses leading `_` in hex/binary literals (`0x_FF` accepted) — `crates/ynz-parser/src/lexer.rs:1157-1172`
+- ~~`validate_underscores` misses leading `_` in hex/binary literals (`0x_FF` accepted)~~ **FIXED (Batch 5a)** — leading `_` check added to `lex_hex_int` / `lex_binary_int` before `validate_underscores`
 - `parse_string_to_int` rejects `i64::MIN` (overflow before negate) — `crates/ynz-runtime/src/lib.rs:1014-1030`
 - `find_project_root` discrepancy between driver + typeck implementations — `crates/ynz-typeck/src/resolve_import.rs:110-112`
 - `mangle_type` ambiguous Debug-format catch-all — `crates/ynz-codegen/src/emit.rs:292-311`
@@ -150,11 +148,11 @@ No genuine conflicts between analyzers.
 
 ### Security
 - Symlink walker writes `.o` into symlink-targeted dirs — `crates/ynz-driver/src/load.rs:193-220`
-- Unbounded interpolation depth stack in lexer — `crates/ynz-parser/src/lexer.rs:27,746`
-- Diagnostic discloses canonicalized paths (info leak via #21) — `crates/ynz-typeck/src/resolve_import.rs:283`
+- ~~Unbounded interpolation depth stack in lexer~~ **FIXED (Batch 5a)** — `interp_depth_stack` capped at 64; overflow emits WHAT/WHAT-INSTEAD/WHY diagnostic
+- ~~Diagnostic discloses canonicalized paths (info leak via #21)~~ **FIXED (Batch 5c)** — `resolve_import.rs` diagnostics show user-input `module_str` only; no OS error text or resolved paths in any diagnostic
 
 ### Adversarial
-- Multi-byte Unicode error cascade — one diagnostic per byte instead of per codepoint
+- ~~Multi-byte Unicode error cascade — one diagnostic per byte instead of per codepoint~~ **FIXED (Batch 5a)** — `lex_one` fallthrough advances by full UTF-8 codepoint length; one diagnostic per codepoint
 - yinz.toml `entry` path traversal (currently inert) — `crates/ynz-driver/src/load.rs`
 - yinz.toml unreadable → silent fallback to defaults
 - Import resolver re-reads same files O(n·m) times — `resolve_import.rs:278-279`
@@ -162,7 +160,7 @@ No genuine conflicts between analyzers.
 ### Forensics
 - `RUST_BACKTRACE` not documented user-facing — feedback footer should include it
 - No error codes / `--explain` mechanism
-- SipHash `try_into().unwrap()` on infallible-but-undocumented slices — `crates/ynz-runtime/src/lib.rs:302-303, 336`
+~~- SipHash `try_into().unwrap()` on infallible-but-undocumented slices~~ **FIXED (Batch 5b)** — eliminated via direct array indexing; SipHash section comment block now documents key/IV rationale
 
 ### Performance
 - Lexer allocates `String` per identifier (`String::from`) — significant on large files
@@ -180,7 +178,7 @@ No genuine conflicts between analyzers.
 - `sha256` missing spec citation + complexity — `crates/ynz-codegen/src/artifact.rs:17`
 - `Checker` struct field-group explanation missing — `crates/ynz-typeck/src/check.rs:87`
 - 3 crate-level docs missing (`ynz-parser`, `ynz-codegen`, `ynz-typeck`)
-- SipHash zero-key choice unjustified in runtime — `crates/ynz-runtime/src/lib.rs:300-360`
+~~- SipHash zero-key choice unjustified in runtime~~ **FIXED (Batch 5b)** — algorithm, key seeding rationale, IV constants, and zero-key-OK-for-internal-use documented in section header
 
 ### UX
 - Render footer (hidden-count + URL) written without ariadne styling
@@ -221,7 +219,7 @@ No genuine conflicts between analyzers.
 - `errors_result_type` ABI contract for pointer types undocumented
 - `ExportTable::eq` coarse-equality risk documented on impl, not at field comparison
 - Float-to-string buffer can truncate — `crates/ynz-runtime/src/lib.rs:171-184`
-- `lex_decimal_number` accepts `3.` — spec inconsistency
+- ~~`lex_decimal_number` accepts `3.` — spec inconsistency~~ **FIXED (Batch 5a)** — `3.` followed by non-digit/non-alpha emits diagnostic; `42.toString()` still works
 - `find_slot` early-return subtle but correct
 - `ynz_decimal_to_float` silent fallback to 0.0 — `crates/ynz-runtime/src/lib.rs:851-859`
 - ~~`link_objects` temp lib cleanup not in finally-pattern~~ **FIXED (Batch 4b)** — `NamedTempFile` drop handles cleanup
