@@ -28,18 +28,22 @@ pub struct BuildResult {
 /// loads all `.ynz` files under `src/` and links them together. Otherwise
 /// treats `source_path` as a single-file project (M1-compatible path).
 pub fn build(source_path: &Path) -> BuildResult {
-    // Detect project root.
-    let project_root = if source_path.is_dir() {
-        Some(source_path.to_path_buf())
+    // Canonicalize to absolute path so find_project_root never returns ""
+    // when the user runs `ynz run relative/path.ynz` from the project root.
+    let source_abs = std::fs::canonicalize(source_path)
+        .unwrap_or_else(|_| source_path.to_path_buf());
+
+    let project_root = if source_abs.is_dir() {
+        Some(source_abs.clone())
     } else {
-        find_project_root(source_path)
+        find_project_root(&source_abs)
     };
 
     if let Some(root) = project_root {
         return build_project(&root);
     }
 
-    build_single_file(source_path)
+    build_single_file(&source_abs)
 }
 
 /// Build a multi-file project rooted at `root`.
