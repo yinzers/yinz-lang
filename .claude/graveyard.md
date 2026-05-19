@@ -186,6 +186,35 @@ Add entries via `/learn` when a project-specific mistake pattern is identified. 
 
 ---
 
+## Scattered Registry Without SSOT Link — 2026-05-19
+
+**Scope**: `crates/ynz-diagnostics/src/`, `crates/ynz-typeck/src/`, `crates/ynz-parser/src/` — new `pub const` or `pub static` string-array definitions that represent feature inventories (keyword lists, jargon lists, method-name lists, etc.).
+
+**Exemption**:
+- Definitions marked `#[cfg(test)]` (test-only intrinsics — registry is for production surface only)
+- Definitions with `// CARVE-OUT: <reason>` on the definition line (explicitly declared legitimate parallel registries per `design/feature-registry.md` "Carve-Outs" section)
+- Definitions that are lookup tables OVER the registry's generated output (e.g., a perf-critical wrapper that caches registry data)
+
+**Last verified**: 2026-05-19 — pattern tested against current codebase. Matches: `crates/ynz-diagnostics/src/banned_jargon.rs:21` (migrating in Phase 2) and `crates/ynz-typeck/src/builtins.rs:101` (migrating in Phase 3, undiscovered in original research). Zero false positives in other files in those crates.
+
+**Cause**: v0.1.0 shipped with feature inventories scattered across 7+ locations. Adding `int.max` in M4 P5 touched five locations that nothing enforced to stay in sync. The v0.2 LSP (M2) needs these inventories at IDE-keystroke latency — reading from 7 separate Rust files is not tenable. v0.2-M1 builds the SSOT registry to fix the class. This entry prevents new scattered registries from appearing post-M1.
+
+**Detection signature**: A new `pub const NAME: &[&str] = &[...]` or `pub static NAME: &[&str] = &[...]` definition in `crates/ynz-{diagnostics,typeck,parser}/src/` that:
+- Does NOT have `#[cfg(test)]` on the preceding line or the definition line itself
+- Does NOT have a `// CARVE-OUT:` comment within 3 lines above the definition
+
+**Constraint**: All new user-facing feature inventories go in `registry/features.toml` first. Code (Rust constant, adapter function) is derived from the registry, not the other way. See `design/feature-registry.md` for the schema and `.claude/rules/feature-registry.md` for the entry-type checklist.
+
+**Bouncer checks** (each runnable as shell against a diff):
+- [ ] For each diff line adding `pub const.*&\[.*&str\].*=.*&\[` or `pub static.*&\[.*&str\].*=.*&\[` in `crates/ynz-diagnostics/src/`, `crates/ynz-typeck/src/`, or `crates/ynz-parser/src/`: check that within the 3 lines ABOVE the definition (in the same diff context) there is either `#[cfg(test)]` or `// CARVE-OUT:`. Missing either → WARNING: "New string-array registry detected without SSOT link — add to registry/features.toml or annotate // CARVE-OUT: <reason>."
+- [ ] For each diff adding `pub const` or `pub static` matching the above pattern: additionally grep the diff for a corresponding `[[` TOML entry in `registry/features.toml` within the same PR. Missing → WARNING: "Registry entry not found for new constant — was this added to registry/features.toml?"
+
+**Severity**: warning (the pre-M1 code is being migrated; the Bouncer prevents NEW drift from being introduced post-M1).
+
+**Originating incident**: 2026-05-19 — v0.2-M1 planning revealed that `int.max` (M4 P5) touched 5 separate registry locations with no enforced sync. The Explore agent research found 7 scattered registries; manual grep found an 8th (`STRING_METHODS` in `builtins.rs:101`) missed in the initial research scan. v0.2-M1 builds the fix; this entry makes the fix self-defending.
+
+---
+
 ## M8 Modules Shipped Untested — Three Infrastructure Bugs — 2026-05-18/19
 
 **Scope**: `crates/ynz-driver/src/` — any build/load infrastructure change that touches multi-file project loading or path resolution.
