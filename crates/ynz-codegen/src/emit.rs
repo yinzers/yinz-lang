@@ -1773,6 +1773,88 @@ fn lower_stmt_for<'ctx>(
         return Ok(());
     }
 
+    // Fixed array iteration: `for (x in arr)` where arr: fixed<T>.
+    // Identical to BuiltinArray but uses compile-time size + direct GEP instead of runtime calls.
+    if let Type::BuiltinFixed { elem, size } = &iter_ty {
+        let elem = elem.as_ref().clone();
+        let n = match size {
+            Some(n) => *n as u64,
+            None => return Err("codegen: cannot iterate fixed array with unknown size".to_string()),
+        };
+        let size_val = cg.i64().const_int(n, false);
+        let arr_ptr = lower_expr(cg, iter)?.into_pointer_value();
+
+        let i_slot = cg
+            .builder
+            .build_alloca(cg.i64(), "ff_i")
+            .map_err(|e| format!("{e}"))?;
+        cg.builder
+            .build_store(i_slot, cg.i64().const_zero())
+            .map_err(|e| format!("{e}"))?;
+
+        let cond_bb = cg.append_block("ff_cond");
+        let body_bb = cg.append_block("ff_body");
+        let after_bb = cg.append_block("ff_after");
+
+        cg.builder
+            .build_unconditional_branch(cond_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        cg.builder.position_at_end(cond_bb);
+        let i = cg
+            .builder
+            .build_load(cg.i64(), i_slot, "ff_i_v")
+            .map_err(|e| format!("{e}"))?
+            .into_int_value();
+        let lt = cg
+            .builder
+            .build_int_compare(IntPredicate::SLT, i, size_val, "ff_lt")
+            .map_err(|e| format!("{e}"))?;
+        cg.builder
+            .build_conditional_branch(lt, body_bb, after_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        cg.builder.position_at_end(body_bb);
+        let elem_gep = unsafe {
+            cg.builder
+                .build_gep(cg.i64(), arr_ptr, &[i], "ff_gep")
+                .map_err(|e| format!("{e}"))?
+        };
+        let bits = cg
+            .builder
+            .build_load(cg.i64(), elem_gep, "ff_bits")
+            .map_err(|e| format!("{e}"))?
+            .into_int_value();
+        let elem_val = cg.i64_bits_to(bits, &elem)?;
+        let var_slot = cg.alloca(&elem, var)?;
+        store(cg, elem_val, &elem, var_slot)?;
+        cg.locals.insert(var.to_string(), var_slot);
+
+        for stmt in &body.stmts {
+            if is_block_terminated(cg) {
+                break;
+            }
+            lower_stmt(cg, stmt)?;
+        }
+
+        if !is_block_terminated(cg) {
+            let next_i = cg
+                .builder
+                .build_int_add(i, cg.i64().const_int(1, false), "ff_ni")
+                .map_err(|e| format!("{e}"))?;
+            cg.builder
+                .build_store(i_slot, next_i)
+                .map_err(|e| format!("{e}"))?;
+            cg.builder
+                .build_unconditional_branch(cond_bb)
+                .map_err(|e| format!("{e}"))?;
+        }
+
+        cg.locals.remove(var);
+        cg.builder.position_at_end(after_bb);
+        return Ok(());
+    }
+
     // Map iteration: `for (entry in m)` where m: map<K,V>.
     // Iterates by insertion order; loop var has type MapEntry {key_bits, val_bits}.
     if let Type::BuiltinMap { key, val } = &iter_ty {
