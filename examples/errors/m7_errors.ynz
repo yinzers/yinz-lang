@@ -2,196 +2,109 @@
 //
 // Intentional compile-error gallery for M7: strings, errors keyword, iterables.
 // Every declaration below triggers a specific diagnostic class.
-// Run via the existing m{N}_errors.ynz snapshot harness in crates/ynz-driver/tests.
+// Run via the error_galleries test in crates/ynz-driver/tests/error_galleries.rs.
 //
-// USAGE: Uncomment the trigger inside each function body to see the error.
-// The // WHY: comment above each function names the diagnostic class it exercises.
-// All functions are self-contained so errors are isolated per diagnostic class.
+// All triggers fire on a single compile (Yinz multi-errors up to 50/compile).
+// Positive reference functions are included to confirm happy paths still hold.
 
 // ────── errors keyword diagnostics ──────
 
-// WHY: calling an errors-capable function inside a non-errors context without
-// handling the result — compiler must reject the unhandled call.
 function readFile(path: string) -> string errors {
   return `file contents`
 }
 
-// Uncomment the body to trigger: `unhandled errors call in non-errors context`
-// function noErrorsContext() -> nothing {
-//   let x = readFile(`test.txt`)
-//   print(x)
-// }
+function safeDivide(a: int, b: int) -> int errors {
+  return a / b
+}
 
-// WHY: errors function calling another errors function — auto-propagation
-// is valid inside an errors context; valid codegen path exercised.
+// WHY: calling an errors-capable function inside a non-errors context without
+// handling the result — compiler must reject the unhandled call.
+function noErrorsContext() -> nothing {
+  let x = readFile(`test.txt`)
+  print(x)
+}
+
+// WHY: .or() on a non-errors value — int does not have .or()
+function badOr() -> nothing {
+  let x: int = 42
+  let y = x.or(0)
+  print(y.toString())
+}
+
+// WHY: .failed() on a non-errors value — boolean does not have .failed()
+function badFailed() -> nothing {
+  let x: boolean = true
+  if (x.failed()) {
+    print(`wrong`)
+  }
+}
+
+// ────── string diagnostics ──────
+
+// WHY: string mutation via bracket assignment — strings are not mutable by index
+function stringMutation() -> nothing {
+  let s = `hello`
+  s[0] = `H`
+}
+
+// WHY: .contains() on a non-string type — int has no .contains()
+function badContains() -> nothing {
+  let n: int = 42
+  let r = n.contains(`4`)
+  print(r.toString())
+}
+
+// ────── iterable diagnostics ──────
+
+// WHY: iterating over a non-iterable type — int cannot be used in a for loop
+function iterateInt() -> nothing {
+  let n: int = 5
+  for (x in n) {
+    print(x.toString())
+  }
+}
+
+// WHY: iterating over boolean — not iterable
+function iterateBool() -> nothing {
+  for (x in true) {
+    print(x.toString())
+  }
+}
+
+// ────── positive reference cases ──────
+
+// WHY: positive — errors auto-propagation inside an errors context is valid.
 function outer() -> string errors {
   let inner = readFile(`log.txt`)
   return inner
 }
 
-// WHY: errors function returning a non-errors value — the return type is `int errors`
-// but the body always returns successfully; `.or()` on the call site extracts the int.
-function safeDivide(a: int, b: int) -> int errors {
-  return a / b
-}
-
-// WHY: .or() on a non-errors value — int does not have .or()
-// Uncomment to trigger: `int does not have method 'or'`
-// function badOr() -> nothing {
-//   let x: int = 42
-//   let y = x.or(0)
-// }
-
-// WHY: .failed() on a non-errors value — boolean does not have .failed()
-// Uncomment to trigger: `boolean does not have method 'failed'`
-// function badFailed() -> nothing {
-//   let x: boolean = true
-//   if (x.failed()) {
-//     print(`wrong`)
-//   }
-// }
-
-// WHY: double-use of errors result after .or() — the binding becomes int after
-// .or() is called; calling .failed() on the int result is rejected.
-// Uncomment to trigger: `int does not have method 'failed'`
-// function doubleUse() -> nothing {
-//   let raw = safeDivide(10, 2).or(0)
-//   if (raw.failed()) {   // raw is now int — no .failed()
-//     print(`wrong`)
-//   }
-// }
-
-// ────── string diagnostics ──────
-
-// WHY: double-quote string literal — no longer valid syntax (backtick-only)
-// Uncomment to trigger: `double-quoted strings are not valid Yinz syntax`
-// function doubleQuoteString() -> nothing {
-//   let s = "this is invalid"
-//   print(s)
-// }
-
-// WHY: string mutation via bracket assignment — strings are immutable
-// Uncomment to trigger: `string bracket assignment is not allowed`
-// function stringMutation() -> nothing {
-//   let s = `hello`
-//   s[0] = `H`
-// }
-
-// WHY: interpolation with a type that has no .toString() on its surface.
-// When a shape is interpolated in ${...}, it must support toString().
-// Uncomment to trigger: `NoToString does not have method 'toString'`
-// shape NoToString { value: int }
-// function badInterp() -> nothing {
-//   const ns: NoToString = { value: 42 }
-//   let s = `result: ${ns}`
-// }
-
-// WHY: .split() returns array<string>; calling .count() on a non-array is rejected
-// (positive: this works correctly — shows split returns iterable result)
+// WHY: positive — .split() returns array<string>; calling .count() on it compiles.
 function splitCount() -> nothing {
   const csv = `a,b,c`
   const parts = csv.split(`,`)
   print(parts.count().toString())
 }
 
-// WHY: .contains() on a non-string type — int has no .contains()
-// Uncomment to trigger: `int does not have method 'contains'`
-// function badContains() -> nothing {
-//   let n: int = 42
-//   let r = n.contains(`4`)
-// }
-
-// WHY: .indexOf() returns maybe<int>; accessing .value without guard is rejected
-// Uncomment to trigger: `cannot access .value without narrowing maybe<int>`
-// function badIndexOf() -> nothing {
-//   let idx = `hello`.indexOf(`ell`)
-//   let n: int = idx.value
-// }
-
-// ────── iterable diagnostics ──────
-
-// WHY: iterating over a non-iterable type — int cannot be used in a for loop
-// Uncomment to trigger: `int is not iterable`
-// function iterateInt() -> nothing {
-//   let n: int = 5
-//   for (x in n) {
-//     print(x.toString())
-//   }
-// }
-
-// WHY: iterating over boolean — not iterable
-// Uncomment to trigger: `boolean is not iterable`
-// function iterateBool() -> nothing {
-//   for (x in true) {
-//     print(x.toString())
-//   }
-// }
-
-// WHY: user shape without a next() function — used in for loop; compiler rejects
-// because no `next(lend self: NoNext) -> maybe<T>` function exists.
-// Uncomment to trigger: `NoNext has no standalone next() function — not iterable`
-// shape NoNext { value: int }
-// function iterateNoNext() -> nothing {
-//   let s: NoNext = { value: 1 }
-//   for (x in s) {
-//     print(x.toString())
-//   }
-// }
-
-// WHY: for loop over a shape whose next() takes `share self` (not `lend self`)
-// — the Iterable protocol requires `lend self` since iteration mutates state.
-// Uncomment to trigger: `next(share self: ...) does not satisfy the Iterable protocol`
-// shape BadIter { pos: int }
-// function next(share self: BadIter) -> maybe<int> {
-//   return none
-// }
-// function iterateBadIter() -> nothing {
-//   let s: BadIter = { pos: 0 }
-//   for (x in s) {
-//     print(x.toString())
-//   }
-// }
-
-// WHY: range stored as const and mutated in loop body — const cannot be lent
-// Uncomment to trigger: `cannot lend const binding r`
-// function rangeConst() -> nothing {
-//   const r = range(0, 3)
-//   for (i in r) {   // range iter requires lend — const cannot be lent
-//     print(i.toString())
-//   }
-// }
-
-// ────── entry point ──────
-
-// main: calls only the positive reference case and the split count demo.
-// All the error triggers above are commented out — uncomment one at a time to see the diagnostic.
-function entrypoint() -> nothing {
-  splitCount()
-  m7AllFeaturesOk()
-}
-
-// WHY: positive — all M7 features compile and run correctly in one function.
-// This is the "no error" reference case in the gallery.
+// WHY: positive — all M7 features compile and run correctly.
 function m7AllFeaturesOk() -> nothing {
-  // String methods
   const s = `Hello, World!`
   print(s.toLowerCase())
   print(s.contains(`World`).toString())
-
-  // errors keyword
   const result = safeDivide(10, 2).or(0)
   print(result.toString())
-
-  // First-class range
   let r = range(0, 2)
   for (i in r) {
     print(i.toString())
   }
-
-  // String iteration
   let count = 0
   for (c in `abc`) {
     count = count + 1
   }
   print(count.toString())
+}
+
+function entrypoint() -> nothing {
+  splitCount()
+  m7AllFeaturesOk()
 }

@@ -9,7 +9,7 @@ Error: `print` was given a number, but it expects a string.
    │  ─┬  
    │   ╰── Add quotes: print("42")
    │ 
-   │ Note: Why: `print` always writes text. Numbers have to be turned into text first.
+   │ Note: `print` always writes text. Numbers have to be turned into text first.
 ───╯
 
 If any of these errors are confusing or unhelpful, please open an issue:

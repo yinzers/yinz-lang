@@ -9,7 +9,7 @@ Error: `x` cannot be changed — it was declared with `const`.
    │   ┬  
    │   ╰── Change `const x = ...` to `let x = ...` if you need to reassign it.
    │ 
-   │ Note: Why: `const` declares a value that never changes. Use `let` when the value needs to be updated.
+   │ Note: `const` declares a value that never changes. Use `let` when the value needs to be updated.
 ───╯
 
 If any of these errors are confusing or unhelpful, please open an issue:

@@ -14,7 +14,7 @@ Error: This file has no `entrypoint` function.
     ...
   }
    │     
-   │     Note: Why: Every Yinz program needs an `entrypoint` function — that is where execution starts.
+   │     Note: Every Yinz program needs an `entrypoint` function — that is where execution starts.
 ───╯
 Error: Missing return type on `entrypoint`.
    ╭─[ /workspaces/ynz/crates/ynz-driver/tests/fixtures/broken_main.ynz:1:23 ]
@@ -23,7 +23,7 @@ Error: Missing return type on `entrypoint`.
    │                       ┬  
    │                       ╰── Add `-> nothing` after the parentheses: `function entrypoint() -> nothing`
    │ 
-   │ Note: Why: Every function in Yinz declares what it returns. Use `-> nothing` for functions that don't return a value.
+   │ Note: Every function in Yinz declares what it returns. Use `-> nothing` for functions that don't return a value.
 ───╯
 Error: Unexpected `}` at the top level.
    ╭─[ /workspaces/ynz/crates/ynz-driver/tests/fixtures/broken_main.ynz:3:1 ]
@@ -32,7 +32,7 @@ Error: Unexpected `}` at the top level.
    │ ┬  
    │ ╰── Top-level code must be inside a `function`, `shape`, `import`, or `export` declaration.
    │ 
-   │ Note: Why: Yinz programs are made of functions and shapes. Only declarations are allowed at the top level.
+   │ Note: Yinz programs are made of functions and shapes. Only declarations are allowed at the top level.
 ───╯
 
 If any of these errors are confusing or unhelpful, please open an issue:

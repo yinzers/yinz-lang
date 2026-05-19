@@ -1,7 +1,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use ynz_ast::nodes::{ImportDecl, Item};
-use ynz_diagnostics::Diagnostic;
+use ynz_diagnostics::DiagnosticBucket;
 use ynz_parser::{parse_query, SourceFile, SourceFileRegistry};
 
 use crate::{
@@ -24,7 +24,7 @@ pub struct SignatureOutput {
     pub imported_fns: std::collections::HashMap<String, FunctionSig>,
     /// Imported options types visible in function bodies (for options value expressions).
     pub imported_options: std::collections::HashMap<String, crate::options_table::OptionsEntry>,
-    pub diagnostics: Vec<Diagnostic>,
+    pub diagnostics: DiagnosticBucket,
 }
 
 impl SignatureOutput {
@@ -38,7 +38,7 @@ impl SignatureOutput {
 pub struct CheckOutput {
     pub typed_module: TypedModule,
     pub mono_table: MonomorphizationTable,
-    pub diagnostics: Vec<Diagnostic>,
+    pub diagnostics: DiagnosticBucket,
 }
 
 /// Pass 1: collect all shape declarations and function signatures from the module,
@@ -89,7 +89,7 @@ pub fn module_signatures_query(
         generic_shape_table,
         imported_fns: imported.functions,
         imported_options: imported.options.clone(),
-        diagnostics: diag_bucket.into_iter().collect(),
+        diagnostics: diag_bucket,
     })
 }
 
@@ -102,8 +102,10 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
     let parse = parse_query(db, source);
     let sig_output = module_signatures_query(db, source);
 
-    let mut all_diags: Vec<Diagnostic> = parse.diagnostics.clone();
-    all_diags.extend(sig_output.diagnostics.clone());
+    let mut all_diags = parse.diagnostics.clone();
+    for d in sig_output.diagnostics.iter() {
+        all_diags.push(d.clone());
+    }
 
     // Merge imported functions into the local signature table so function bodies
     // can call imported functions by name.
@@ -122,7 +124,9 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
         &PrimitiveIntrinsicTable::m6(),
         &sig_output.imported_options,
     );
-    all_diags.extend(check_diags.into_iter());
+    for d in check_diags.into_iter() {
+        all_diags.push(d);
+    }
 
     Arc::new(CheckOutput {
         typed_module: typed,

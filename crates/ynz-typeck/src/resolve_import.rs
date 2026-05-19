@@ -153,9 +153,8 @@ pub fn resolve_imports(
         }
 
         // Resolve the import path. Detect the no-yinz.toml case to give a better error.
-        let has_project_root = find_project_root(
-            std::path::Path::new(importer_path).parent().unwrap_or(std::path::Path::new("."))
-        ).is_some();
+        let has_project_root =
+            find_project_root(std::path::Path::new(importer_path)).is_some();
         let Some(resolved_path) = resolve_module_path(importer_path, module_str) else {
             if !has_project_root && module_str.contains('/') {
                 // Cross-directory import with no project root — the most common cause.
@@ -214,7 +213,7 @@ pub fn resolve_imports(
                     diags.push(Diagnostic::error(
                         local_name_span.clone(),
                         format!("Import name `{local}` is already bound by a previous import."),
-                        "Use a different local name with `import ns as alias from \"...\"`",
+                        "Use a different local name with `import ns as otherName from \"...\"`",
                         "Each imported name must be unique in the local scope.",
                     ));
                 }
@@ -279,7 +278,7 @@ fn bind_named_import(
         diags.push(Diagnostic::error(
             span,
             format!("Import name `{local}` is already bound by a previous import."),
-            "Use a different local name with `import {{ {exported} as alias }} from \"...\"`",
+            format!("Use a different local name: `import {{ {exported} as otherName }} from \"...\"`"),
             "Each imported name must be unique in the local scope.",
         ));
         return;

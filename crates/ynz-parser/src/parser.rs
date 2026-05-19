@@ -395,9 +395,9 @@ impl<'a> Parser<'a> {
                 _ => {
                     self.diags.push(Diagnostic::error(
                         self.current_span(),
-                        "Expected an alias name after `as`.",
-                        "Write `import ns as alias from \"path\"`.",
-                        "`as` renames the namespace import to a different local name.",
+                        "Expected a name after `as` to bind the import to.",
+                        "Write `import ns as myName from \"path\"`.",
+                        "`as` gives the import a different local name in this file.",
                     ));
                     return None;
                 }
@@ -500,9 +500,9 @@ impl<'a> Parser<'a> {
                     _ => {
                         self.diags.push(Diagnostic::error(
                             self.current_span(),
-                            "Expected an alias name after `as`.",
+                            "Expected a name after `as` to bind the import to.",
                             "Write `import { fetchUser as getUser } from \"path\"`.",
-                            "`as` renames the imported name to a different local name.",
+                            "`as` gives the imported name a different local name in this file.",
                         ));
                         (exported_name.clone(), exported_name_span.clone())
                     }

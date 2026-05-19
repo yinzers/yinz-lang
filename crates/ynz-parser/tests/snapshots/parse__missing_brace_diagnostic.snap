@@ -2,29 +2,35 @@
 source: crates/ynz-parser/tests/parse.rs
 expression: output.diagnostics
 ---
-[
-    Diagnostic {
-        severity: Error,
-        span: SourceSpan {
-            file: "test.ynz",
-            start: 41,
-            end: 42,
+DiagnosticBucket {
+    diagnostics: [
+        Diagnostic {
+            severity: Error,
+            span: SourceSpan {
+                file: "test.ynz",
+                start: 41,
+                end: 42,
+            },
+            what: "Double-quoted strings don't exist in Yinz.",
+            what_instead: "Use backtick strings instead: `` `hello` `` or `` `Hello ${name}` ``",
+            why: "Yinz has one string form — backtick-quoted strings. They always support interpolation and span multiple lines without extra syntax.",
+            related: [],
+            kind: None,
         },
-        what: "Double-quoted strings don't exist in Yinz.",
-        what_instead: "Use backtick strings instead: `` `hello` `` or `` `Hello ${name}` ``",
-        why: "Yinz has one string form — backtick-quoted strings. They always support interpolation and span multiple lines without extra syntax.",
-        related: [],
-    },
-    Diagnostic {
-        severity: Error,
-        span: SourceSpan {
-            file: "test.ynz",
-            start: 46,
-            end: 46,
+        Diagnostic {
+            severity: Error,
+            span: SourceSpan {
+                file: "test.ynz",
+                start: 46,
+                end: 46,
+            },
+            what: "Missing closing `}` for this block.",
+            what_instead: "Add `}` at the end of the function body.",
+            why: "Every `{` must be matched with a `}`. The compiler reached the end of the file before finding it.",
+            related: [],
+            kind: None,
         },
-        what: "Missing closing `}` for this block.",
-        what_instead: "Add `}` at the end of the function body.",
-        why: "Every `{` must be matched with a `}`. The compiler reached the end of the file before finding it.",
-        related: [],
-    },
-]
+    ],
+    hidden_count: 0,
+    error_count: 2,
+}

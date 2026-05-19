@@ -1546,9 +1546,9 @@ impl<'b> Checker<'b> {
                 (Type::Number { .. }, Type::Number { .. }) => {
                     self.diags.push(Diagnostic::error(
                         span.clone(),
-                        "`%` is not available for `number`.",
-                        "Use the `math` module's `.rem()` method (arriving in v0.7).",
-                        "Remainder on decimal numbers requires careful rounding semantics that the `math` module provides.",
+                        "The `%` (remainder) operator on `number` requires careful rounding semantics.",
+                        "Use `int` instead of `number` if you want exact integer remainders, or write your own rounding-aware helper.",
+                        "On decimal `number`, `%` (remainder) depends on which rounding mode is in effect — IEEE 754-2008 §5.3.1 defines remainder as `a − (round(a/b) × b)`, and different rounding modes (half-even, truncation, etc.) produce different results for the same inputs. Yinz refuses `%` on `number` to avoid the silent precision-loss class.",
                     ));
                     Type::Error
                 }
@@ -3778,23 +3778,34 @@ pub fn find_closest_name<'a>(target: &str, candidates: &[&'a str]) -> Option<&'a
         .map(|(_, c)| c)
 }
 
+/// Levenshtein distance between two strings.
+///
+/// Time: O(m×n) where m, n = string lengths. Space: O(min(m, n)) — two-row
+/// rolling DP instead of an m×n matrix. Operates on bytes (identifiers are ASCII).
 fn levenshtein(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
+    let a = a.as_bytes();
+    let b = b.as_bytes();
     let (m, n) = (a.len(), b.len());
-    let mut dp = vec![vec![0usize; n + 1]; m + 1];
-    (0..=m).for_each(|i| dp[i][0] = i);
-    (0..=n).for_each(|j| dp[0][j] = j);
+    // Early exit when length difference already exceeds any useful threshold.
+    if m.abs_diff(n) > 2 {
+        return m.abs_diff(n);
+    }
+    // Keep the shorter string in `b` so the inner row is as small as possible.
+    let (a, b, m, n) = if m < n { (b, a, n, m) } else { (a, b, m, n) };
+    let mut prev: Vec<usize> = (0..=n).collect();
+    let mut curr = vec![0usize; n + 1];
     for i in 1..=m {
+        curr[0] = i;
         for j in 1..=n {
-            dp[i][j] = if a[i - 1] == b[j - 1] {
-                dp[i - 1][j - 1]
+            curr[j] = if a[i - 1] == b[j - 1] {
+                prev[j - 1]
             } else {
-                1 + dp[i - 1][j].min(dp[i][j - 1]).min(dp[i - 1][j - 1])
+                1 + prev[j].min(curr[j - 1]).min(prev[j - 1])
             };
         }
+        std::mem::swap(&mut prev, &mut curr);
     }
-    dp[m][n]
+    prev[n]
 }
 
 /// Return the identifier name if `expr` is a bare `Ident` or `SelfValue`.

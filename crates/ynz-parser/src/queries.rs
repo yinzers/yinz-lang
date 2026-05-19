@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use ynz_ast::nodes::Module;
-use ynz_diagnostics::{Diagnostic, DiagnosticBucket};
+use ynz_diagnostics::DiagnosticBucket;
 
 use crate::{
     db::SourceFile,
@@ -14,7 +14,7 @@ use crate::{
 #[derive(Clone, Debug, PartialEq)]
 pub struct LexOutput {
     pub tokens: Vec<Spanned<Token>>,
-    pub diagnostics: Vec<Diagnostic>,
+    pub diagnostics: DiagnosticBucket,
 }
 
 /// Lex a source file.
@@ -26,8 +26,7 @@ pub struct LexOutput {
 pub fn lex_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<LexOutput> {
     let path = source.path(db);
     let text = source.text(db);
-    let (tokens, bucket) = lexer::lex(path.as_str(), text.as_str());
-    let diagnostics: Vec<Diagnostic> = bucket.into_iter().collect();
+    let (tokens, diagnostics) = lexer::lex(path.as_str(), text.as_str());
     Arc::new(LexOutput {
         tokens,
         diagnostics,
@@ -36,19 +35,14 @@ pub fn lex_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<LexOutput>
 
 /// Convenience: lex a source and return the diagnostics bucket directly.
 pub fn lex_to_bucket(db: &dyn salsa::Database, source: SourceFile) -> DiagnosticBucket {
-    let output = lex_query(db, source);
-    let mut bucket = DiagnosticBucket::new();
-    for diag in &output.diagnostics {
-        bucket.push(diag.clone());
-    }
-    bucket
+    lex_query(db, source).diagnostics.clone()
 }
 
 /// The output of the parse pass: an AST module + any parse-level diagnostics.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParseOutput {
     pub module: Module,
-    pub diagnostics: Vec<Diagnostic>,
+    pub diagnostics: DiagnosticBucket,
 }
 
 /// Parse a source file.
@@ -63,8 +57,10 @@ pub fn parse_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<ParseOut
     let mut parser = Parser::new(path.as_str(), &lex.tokens);
     let module = parser.parse_module();
 
-    let mut diagnostics: Vec<Diagnostic> = lex.diagnostics.clone();
-    diagnostics.extend(parser.diags.into_iter());
+    let mut diagnostics = lex.diagnostics.clone();
+    for d in parser.diags.into_iter() {
+        diagnostics.push(d);
+    }
 
     Arc::new(ParseOutput {
         module,

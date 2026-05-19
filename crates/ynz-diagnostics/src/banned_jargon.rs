@@ -74,11 +74,10 @@ pub const BANNED_JARGON: &[&str] = &[
     "goroutine",
     // Batch 4c additions — design/compiler-errors.md sync (2026-05-19)
     // "lifetime"   — SKIPPED: appears in lexer.rs "outside this function's lifetime" diagnostic
-    // "alias"      — SKIPPED: appears in parser.rs + resolve_import.rs as the syntax keyword name
     // "interface"  — SKIPPED: lexer.rs emits "`interface` is not a keyword in Yinz" diagnostic
     "trait",           // Yinz term: "follows" and "contract"
-    // "remainder"     — SKIPPED: crates/ynz-typeck/src/check.rs:1551 diagnostic uses it;
-    //                   that diagnostic needs rewriting before this ban can land
+    // "remainder"  — NOT banned: mathematical terms that aid teaching are NOT jargon (Batch 6.10)
+    "alias",           // Yinz term: "a different local name" — Batch 6.11
     "associated type", // Yinz term: (avoid — no user-facing name yet)
     "implementation",  // Yinz term: describe what it does; avoid "implementation detail"
     "precondition",    // Yinz term: "must be true before"

@@ -49,13 +49,15 @@ impl OptionsTable {
     }
 
     /// Returns the tag (0-indexed) for a variant of the given options type.
-    pub fn tag_for(&self, type_name: &str, variant: &str) -> Option<i8> {
+    ///
+    /// Returns `u8` — variants are 0–255 (the validator caps at 256 variants).
+    pub fn tag_for(&self, type_name: &str, variant: &str) -> Option<u8> {
         let entry = self.options.get(type_name)?;
         entry
             .variants
             .iter()
             .position(|v| v == variant)
-            .map(|i| i as i8)
+            .map(|i| i as u8)
     }
 
     /// Returns the options type name that has this variant in scope — used for shorthand resolution.

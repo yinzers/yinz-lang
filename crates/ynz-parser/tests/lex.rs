@@ -27,15 +27,14 @@ fn lex_counts(source: &str) -> (usize, usize) {
 }
 
 /// Run the lexer and return just the diagnostics.
-fn lex_diags(source: &str) -> Vec<ynz_diagnostics::Diagnostic> {
+fn lex_diags(source: &str) -> ynz_diagnostics::DiagnosticBucket {
     let db = CompilerDb::default();
     let sf = SourceFile::new(&db, FILE.to_string(), source.to_string());
-    let output = lex_query(&db, sf);
-    output.diagnostics.clone()
+    lex_query(&db, sf).diagnostics.clone()
 }
 
 /// Run the lexer and return (tokens, diagnostics) together.
-fn lex_with_diags(source: &str) -> (Vec<Token>, Vec<ynz_diagnostics::Diagnostic>) {
+fn lex_with_diags(source: &str) -> (Vec<Token>, ynz_diagnostics::DiagnosticBucket) {
     let db = CompilerDb::default();
     let sf = SourceFile::new(&db, FILE.to_string(), source.to_string());
     let output = lex_query(&db, sf);

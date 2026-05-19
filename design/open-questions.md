@@ -159,6 +159,29 @@ These flags are NOT in the v0.1 driver. Do not document them in `--help` until t
 
 ---
 
+## Inline / Anonymous Shape Types — Single-Use Structural Types
+
+**Status**: design open, needs plan pass. Triggered by Patrick hitting verbosity friction defining one-off shapes during testing (2026-05-19).
+
+**The friction**: named `shape Foo { ... }` is the right tool when a type is used multiple times, but single-use types (a config struct for one function, an intermediate result that never leaves a loop) force scrolling to the top of the file. Type definition is physically separated from its only use.
+
+**Proposed syntax** (TypeScript-style):
+
+```ynz
+const intervals: fixed<{ minutes: int, timeframe: Timeframe }> = [
+    { minutes: 5,  timeframe: Timeframe.fiveMinute },
+    { minutes: 60, timeframe: Timeframe.hourly },
+]
+```
+
+**Blocking design call**: structural vs nominal for anonymous types. If Yinz stays nominal, inline types are just sugar for an anonymous-but-fresh shape (2-day feature). If Yinz adopts structural for anonymous types (TypeScript's model), two identical inline shapes are interchangeable across files — bigger type-system extension.
+
+**Full design doc**: `design/future/inline-shape-types.md` (4 open design questions catalogued there).
+
+**Target version**: language feature, v0.1.x or post-v0.2 language slot. NOT v0.2 (tooling-only).
+
+---
+
 ## Type Collection Ordering — Options/Shapes Must See Each Other (v0.2+)
 
 `collect_shapes` and `collect_options` run as separate passes in the wrong order. `collect_shapes` runs first (in `module_signatures_query`) but needs to know about options type names to resolve field types like `timeframe: Timeframe`. `collect_options` runs later inside `check_query`.

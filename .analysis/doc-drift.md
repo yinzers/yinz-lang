@@ -81,10 +81,9 @@ Grouped by area: Lexer/Parser, Type System, Diagnostics, Numerics, Strings, Modu
 
 ## Diagnostics
 
-### ~~13. banned_jargon.rs missing entries~~ **PARTIALLY FIXED (Batch 4c)** (HIGH)
-- **Doc claim**: `design/compiler-errors.md` lines 31–64 lists banned jargon, including: `lifetime (Rust sense)`, `alias (when not the syntax keyword)`, `trait`, `interface`, `remainder`, `associated type`, `implementation (generic CS sense)`, `precondition`, `postcondition`.
-- **Implementation reality**: `crates/ynz-diagnostics/src/banned_jargon.rs:21-75` does NOT include any of those. The list has propagate/propagation, narrow/narrowing, discriminator, infer/inference, polymorphic, monomorphize/monomorphic, covariant/contravariant, deref/dereference, shadow/shadowing, coerce/coercion, fallible/infallible, first-class, idiomatic, arity, variadic, residual, referentially transparent, immutable, mutable, invariant violation, ADT, AST, struct, monad, lift, wrap, unwrap, Result, Option, Either, exception, try, catch, throw, UTF-16, async, await, goroutine. Missing 7+ entries from the design file.
-- **Severity**: HIGH — design file is the source of truth (`banned_jargon.rs` comment line 3: "Source of truth: `design/compiler-errors.md`"). Audit list is incomplete.
+### ~~13. banned_jargon.rs missing entries~~ **FURTHER FIXED in Batch 6.11** (HIGH)
+- `alias` added to `banned_jargon.rs`; `resolve_import.rs` + `parser.rs` diagnostics rewritten to avoid "alias" bare word. `remainder` confirmed NOT jargon and explicitly removed from banned list. `design/compiler-errors.md` updated with clarifying note.
+- Remaining skipped: `lifetime` (lexer diagnostic, Batch 7), `interface` (backtick exception applies).
 
 ### ~~14. spec/numeric-types.md IDE hints need v0.2 tag~~ **FIXED (Batch 4c)** (LOW)
 - **Doc claim**: `spec/numeric-types.md` lines 113–118 ("IDE WARNS"), lines 143–149 ("IDE HINT: number (decimal) is slower for pure integer math").

@@ -15,17 +15,11 @@
 - **Gap**: Tells user to write `type Foo { ... }` — which the lexer banned-jargon list rejects. Compiler contradicts itself. Jargon audit doesn't catch this because `type` is in the lexer banned-declaration-keyword list, not `BANNED_JARGON`.
 - **Fix**: Replace `type` with `shape` in the snapshot fixture text.
 
-### HIGH — Render output prefixes WHY with redundant `Note: Why:` label
+~~### HIGH — Render output prefixes WHY with redundant `Note: Why:` label~~
+**FIXED in Batch 6.5** — `"Why: "` prefix dropped; renders as `Note: <text>`.
 
-- **File**: `crates/ynz-diagnostics/src/render.rs:76`
-- **Gap**: Every diagnostic shows `│ Note: Why: ...`. Two stacked labels. Reads as bureaucratic noise.
-- **Fix**: Drop the literal `Why: ` prefix or replace ariadne's `Note:` label with `Why:`.
-
-### HIGH — `what_instead` used as caret label but often reads as instructions
-
-- **File**: `crates/ynz-diagnostics/src/render.rs:75` + systematic across `check.rs`
-- **Gap**: `what_instead` serves two purposes ariadne conflates: inline span annotation vs action instruction. Examples: `"Change the annotation to 'int', or use a different value."` underlines the value with prose about the annotation 20 chars away.
-- **Fix**: For prose-instruction diagnostics, move the instruction into the note position; keep the caret label terse.
+~~### HIGH — `what_instead` used as caret label but often reads as instructions~~
+**FIXED in Batch 6.6 (infrastructure)** — `DiagnosticKind` enum added; when `kind` is set, caret uses `kind.tag()` and `what_instead` moves to note. Per-diagnostic migration ongoing.
 
 ### HIGH — `check.rs:444` parameter-reassignment WHY references shipped M4 as future
 
@@ -41,11 +35,8 @@
 - **Gap**: Explains what compilers do; doesn't help the user fix the typo. Violates Golden Rule 11 (specific + contextual WHY).
 - **Fix**: Mention "is it in another file? add `import { name } from './module'`"; specific to call-site.
 
-### MEDIUM — render footer (`... and N more` + issues URL) written without ariadne styling
-
-- **File**: `crates/ynz-diagnostics/src/render.rs:88-101`
-- **Gap**: Raw `writeln!` bypasses styling pipeline. Plain text below colored diagnostics; URL easy to miss.
-- **Fix**: Format footer through a styled writer; use bold/underline for URL.
+~~### MEDIUM — render footer (`... and N more` + issues URL) written without ariadne styling~~
+**FIXED in Batch 6.7** — URL wrapped with ANSI bold+underline when `colors=true`.
 
 ### MEDIUM — `next()` return-type error in `check.rs:822` mixes prose + signature in `what_instead`
 
@@ -53,11 +44,8 @@
 - **Gap**: `"Change \`function next(... ) -> {wrong}\` to return \`maybe<T>\` instead."` — user must mentally substitute. Not copy-pasteable.
 - **Fix**: Emit the corrected signature in `what_instead`; explain in `why`.
 
-### MEDIUM — Error gallery files have most triggers commented out
-
-- **File**: `examples/errors/m7_errors.ynz:19-163`, `examples/errors/m8_errors.ynz:18-101`
-- **Gap**: Per `plan-invariants.md` `### Demo & Error Gallery`, one run of the file should produce every diagnostic that milestone can emit. Currently most triggers are wrapped in `// Uncomment to trigger:` blocks. Review mechanism broken.
-- **Fix**: Restructure gallery files so triggers fire by default — using separate small modules per error, or `expect`-style harness that asserts diagnostic counts.
+~~### MEDIUM — Error gallery files have most triggers commented out~~
+**FIXED in Batch 6.9** — m7/m8 gallery files restructured to auto-fire; `crates/ynz-driver/tests/error_galleries.rs` added to verify diagnostic counts + key phrases.
 
 ### MEDIUM — `resolve_import.rs:147` circular-import error doesn't show the cycle chain + has dead var
 

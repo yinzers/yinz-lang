@@ -9,9 +9,11 @@ Delete this file when Round 3's commits land.
 
 ---
 
-## Batch 6 — Typeck perf + diagnostics UX + banned-jargon (typeck side)
+## ~~Batch 6 — Typeck perf + diagnostics UX + banned-jargon (typeck side)~~ FIXED (2026-05-19)
 
 Touches `crates/ynz-typeck/src/{check,shapes}.rs` + `crates/ynz-diagnostics/**` + `crates/ynz-typeck/src/resolve_import.rs` + `examples/errors/m{N}_errors.ynz`.
+
+**All 6.1–6.15 items shipped. See Batch 7 for remaining ICE + observability work.**
 
 ### 6.1 — `DiagnosticBucket::push` O(n²) → O(1) (CRITICAL)
 

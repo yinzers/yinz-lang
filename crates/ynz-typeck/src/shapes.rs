@@ -512,23 +512,28 @@ pub fn collect_shapes(
 
 fn detect_extends_cycles(table: &ShapeTable, diags: &mut DiagnosticBucket) {
     for name in table.shapes.keys() {
-        let mut visited: Vec<String> = vec![name.clone()];
+        // Perf: HashSet for O(1) membership checks; Vec built separately for the
+        // chain string needed in the diagnostic message only when a cycle is found.
+        let mut visited_set: HashSet<&str> = HashSet::new();
+        let mut chain: Vec<String> = vec![name.clone()];
+        visited_set.insert(name.as_str());
         let mut current = name.clone();
         while let Some(def) = table.shapes.get(&current) {
             let Some(parent) = &def.extends else { break };
-            if visited.contains(parent) {
-                let chain = visited.join(" → ");
+            if visited_set.contains(parent.as_str()) {
+                let chain_str = chain.join(" → ");
                 if let Some(def) = table.shapes.get(name) {
                     diags.push(Diagnostic::error(
                         def.defined_at.clone(),
-                        format!("`{name}` has a cyclic `extends` chain: {chain} → {parent}"),
+                        format!("`{name}` has a cyclic `extends` chain: {chain_str} → {parent}"),
                         "Break the cycle by removing one of the `extends` declarations.",
                         "`extends` is for data inheritance — a shape cannot inherit from itself, directly or through a chain.",
                     ));
                 }
                 break;
             }
-            visited.push(parent.clone());
+            visited_set.insert(parent.as_str());
+            chain.push(parent.clone());
             current = parent.clone();
         }
     }

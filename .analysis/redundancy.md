@@ -58,6 +58,7 @@
 
 ## Already DRY (preserved)
 
+- `Diagnostic::file_error/file_warning/file_suggestion` convenience constructors — added Batch 6.8; 21 call sites may migrate over time
 - `Diagnostic::error/warning/suggestion` constructors — centralized; panic-on-empty enforces all three parts
 - `find_closest_name` / `levenshtein` — single definition (`check.rs:3662-3700`), 6 call sites
 - `type_name`, `PrimitiveIntrinsicTable`, `array_method_return` etc. — single source of truth

@@ -102,12 +102,7 @@ fn build_project(root: &Path, output_dir: Option<&Path>) -> BuildResult {
     let _config = load_project_config(root, &mut diags);
     let sources = load_project(root, &mut diags);
 
-    if !diags
-        .iter()
-        .filter(|d| d.severity == ynz_diagnostics::Severity::Error)
-        .collect::<Vec<_>>()
-        .is_empty()
-    {
+    if diags.has_errors() {
         return build_failed_diags(
             diags,
             &std::collections::HashMap::new(),
@@ -169,11 +164,8 @@ fn build_project(root: &Path, output_dir: Option<&Path>) -> BuildResult {
         let sf = *sf;
         let codegen_out = codegen_query(&db, sf);
 
-        let has_error = codegen_out
-            .diagnostics
-            .iter()
-            .any(|d| d.severity == ynz_diagnostics::Severity::Error);
-        for d in &codegen_out.diagnostics {
+        let has_error = codegen_out.diagnostics.has_errors();
+        for d in codegen_out.diagnostics.iter() {
             diags.push(d.clone());
         }
         if has_error {
@@ -227,19 +219,19 @@ fn build_project(root: &Path, output_dir: Option<&Path>) -> BuildResult {
 
     match result {
         Ok(()) => {
-            let warnings: Vec<_> = diags
+            let has_warnings = diags
                 .iter()
-                .filter(|d| d.severity != ynz_diagnostics::Severity::Error)
-                .cloned()
-                .collect();
-            let stderr_output = if warnings.is_empty() {
-                String::new()
-            } else {
+                .any(|d| d.severity != ynz_diagnostics::Severity::Error);
+            let stderr_output = if has_warnings {
                 let mut bucket = DiagnosticBucket::new();
-                for w in warnings {
-                    bucket.push(w);
+                for d in diags.iter() {
+                    if d.severity != ynz_diagnostics::Severity::Error {
+                        bucket.push(d.clone());
+                    }
                 }
                 render(&bucket, &all_source_texts, false)
+            } else {
+                String::new()
             };
             BuildResult {
                 binary: Some(binary_path),
@@ -367,16 +359,12 @@ fn build_single_file(source_path: &Path, output_dir: Option<&Path>) -> BuildResu
     let sf = SourceFile::new(&db, file_name.clone(), source_text);
     let codegen_out = codegen_query(&db, sf);
 
-    if codegen_out
-        .diagnostics
-        .iter()
-        .any(|d| d.severity == ynz_diagnostics::Severity::Error)
-    {
-        let mut bucket = DiagnosticBucket::new();
-        for d in &codegen_out.diagnostics {
-            bucket.push(d.clone());
-        }
-        return build_failed(bucket, source_path, FailureKind::CompileError);
+    if codegen_out.diagnostics.has_errors() {
+        return build_failed(
+            codegen_out.diagnostics.clone(),
+            source_path,
+            FailureKind::CompileError,
+        );
     }
 
     let object_bytes = &codegen_out.artifact.object_bytes;
@@ -509,23 +497,23 @@ fn build_single_file(source_path: &Path, output_dir: Option<&Path>) -> BuildResu
         }
         Ok(_) => {
             // Render any warnings so the user sees them even though the build succeeded.
-            let warnings: Vec<_> = codegen_out
+            let has_warnings = codegen_out
                 .diagnostics
                 .iter()
-                .filter(|d| d.severity != ynz_diagnostics::Severity::Error)
-                .cloned()
-                .collect();
-            let stderr_output = if warnings.is_empty() {
-                String::new()
-            } else {
+                .any(|d| d.severity != ynz_diagnostics::Severity::Error);
+            let stderr_output = if has_warnings {
                 let mut bucket = DiagnosticBucket::new();
-                for w in warnings {
-                    bucket.push(w);
+                for d in codegen_out.diagnostics.iter() {
+                    if d.severity != ynz_diagnostics::Severity::Error {
+                        bucket.push(d.clone());
+                    }
                 }
                 let sources = std::fs::read_to_string(source_path)
                     .map(|text| std::collections::HashMap::from([(file_name.clone(), text)]))
                     .unwrap_or_default();
                 render(&bucket, &sources, false)
+            } else {
+                String::new()
             };
             BuildResult {
                 binary: Some(binary_path),

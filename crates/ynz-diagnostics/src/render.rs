@@ -7,18 +7,42 @@ use crate::{
     diagnostic::{Diagnostic, Severity},
 };
 
-struct SourceCache(HashMap<String, Source>);
+/// Lazily-parsed source cache: Source objects are only built for files that
+/// actually appear in a diagnostic span.
+// Perf: avoids cloning + building line tables for files with no diagnostics in
+// this render pass. For a 100-file project, only the 1–2 files mentioned in
+// diagnostics pay the line-table-build cost.
+struct SourceCache<'a> {
+    sources: &'a HashMap<String, String>,
+    parsed: HashMap<String, Source>,
+}
 
-impl ariadne::Cache<str> for SourceCache {
+impl<'a> SourceCache<'a> {
+    fn new(sources: &'a HashMap<String, String>) -> Self {
+        Self {
+            sources,
+            parsed: HashMap::new(),
+        }
+    }
+}
+
+impl<'a> ariadne::Cache<str> for SourceCache<'a> {
     type Storage = String;
 
-    fn fetch(&mut self, id: &str) -> Result<&Source, impl fmt::Debug> {
-        self.0
-            .get(id)
-            .ok_or_else(|| format!("unknown source file: {id}"))
+    #[allow(refining_impl_trait)]
+    fn fetch(&mut self, id: &str) -> Result<&Source, String> {
+        // Insert on first access; only files referenced by a span pay the parse cost.
+        if !self.parsed.contains_key(id) {
+            let text = self
+                .sources
+                .get(id)
+                .ok_or_else(|| format!("unknown source file: {id}"))?;
+            self.parsed.insert(id.to_string(), Source::from(text.clone()));
+        }
+        Ok(self.parsed.get(id).unwrap())
     }
 
-    fn display<'a>(&self, id: &'a str) -> Option<impl fmt::Display + 'a> {
+    fn display<'b>(&self, id: &'b str) -> Option<impl fmt::Display + 'b> {
         Some(id)
     }
 }
@@ -52,12 +76,7 @@ pub fn render(
     sources: &HashMap<String, String>,
     colors: bool,
 ) -> String {
-    let mut cache = SourceCache(
-        sources
-            .iter()
-            .map(|(k, v)| (k.clone(), Source::from(v.clone())))
-            .collect(),
-    );
+    let mut cache = SourceCache::new(sources);
 
     let config = Config::default().with_color(colors);
 
@@ -67,13 +86,23 @@ pub fn render(
     let mut out: Vec<u8> = Vec::new();
 
     for diag in &sorted {
-        let kind = severity_to_kind(diag.severity, colors);
+        let report_kind = severity_to_kind(diag.severity, colors);
 
-        let mut builder = Report::build(kind, diag.span.clone())
+        // When a DiagnosticKind is present: use its terse tag as the caret label
+        // and move the full what_instead prose into the note alongside why.
+        // When absent: fall back to what_instead as the caret label (legacy path).
+        let (caret_label, note_text) = if let Some(dk) = &diag.kind {
+            let note = format!("{} — {}", diag.what_instead, diag.why);
+            (dk.tag(), note)
+        } else {
+            (diag.what_instead.clone(), diag.why.clone())
+        };
+
+        let mut builder = Report::build(report_kind, diag.span.clone())
             .with_config(config)
             .with_message(&diag.what)
-            .with_label(Label::new(diag.span.clone()).with_message(&diag.what_instead))
-            .with_note(format!("Why: {}", diag.why));
+            .with_label(Label::new(diag.span.clone()).with_message(caret_label))
+            .with_note(note_text);
 
         for rel in &diag.related {
             builder = builder.with_label(Label::new(rel.span.clone()).with_message(&rel.label));
@@ -92,12 +121,23 @@ pub fn render(
 
     let has_errors = sorted.iter().any(|d| matches!(d.severity, Severity::Error));
     if has_errors {
-        writeln!(
-            out,
-            "\nIf any of these errors are confusing or unhelpful, please open an issue:\
-             \n  https://github.com/patrickrizzardi/ynz/issues"
-        )
-        .expect("write feedback footer failed");
+        let url = "https://github.com/patrickrizzardi/ynz/issues";
+        if colors {
+            // Bold + underline the URL with ANSI codes.
+            writeln!(
+                out,
+                "\nIf any of these errors are confusing or unhelpful, please open an issue:\
+                 \n  \x1b[1;4m{url}\x1b[0m"
+            )
+            .expect("write feedback footer failed");
+        } else {
+            writeln!(
+                out,
+                "\nIf any of these errors are confusing or unhelpful, please open an issue:\
+                 \n  {url}"
+            )
+            .expect("write feedback footer failed");
+        }
     }
 
     String::from_utf8(out).expect("ariadne output is valid UTF-8")

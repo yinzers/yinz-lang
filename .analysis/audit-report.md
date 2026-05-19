@@ -71,10 +71,8 @@ No genuine conflicts between analyzers.
 - **Files**: `crates/ynz-parser/src/lexer.rs` (`\0` escape rejected), `crates/ynz-codegen/src/emit.rs` (codegen side: moot once lexer rejects; `{ptr, len}` future work)
 - Lexer now emits error diagnostic instead of pushing `\0` byte. Note in diagnostic: future `{ptr, len}` string overhaul (per `design/strings.md`) can relax this if needed.
 
-### 8. `DiagnosticBucket::push` does O(n) error count per push
-- **File**: `crates/ynz-diagnostics/src/bucket.rs:29-38`
-- **Issue**: `.iter().filter(...).count()` on every error push. Bounded by the 50-cap but pattern is wrong; `has_errors()` (L43-47) also pays O(n) per call.
-- **Fix**: Add `error_count: usize` field; increment on push, decrement in `truncate`. `has_errors()` becomes `self.error_count > 0`. O(n²) → O(1).
+~~### 8. `DiagnosticBucket::push` does O(n) error count per push~~ **FIXED (Batch 6.1)**
+- `error_count: usize` field added; O(1) push + `has_errors()`; `truncate` decrements correctly. `DiagnosticBucket` now derives `Clone + PartialEq`.
 
 ---
 
@@ -100,15 +98,15 @@ No genuine conflicts between analyzers.
 ~~23. Concurrent `ynz build` races on same `obj_path`~~ **FIXED (Batch 4b)** — all intermediates go into per-invocation `tempdir()`
 
 ### Performance
-24. `levenshtein` allocates full O(m×n) matrix per candidate — `crates/ynz-typeck/src/check.rs:3683-3700` — rolling DP + byte-level scan
-26. `detect_extends_cycles` uses `Vec.contains` on visited set (already inconsistent with `has_cycle` HashSet) — `crates/ynz-typeck/src/shapes.rs:474-495`
-27. `render()` eagerly clones every source string + builds line tables → O(total_source_bytes) per render — `crates/ynz-diagnostics/src/render.rs:55-59`
+~~24. `levenshtein` allocates full O(m×n) matrix per candidate~~ **FIXED (Batch 6.2)** — two-row rolling DP, byte-level scan, early-exit on length diff.
+~~26. `detect_extends_cycles` uses `Vec.contains` on visited set~~ **FIXED (Batch 6.3)** — swapped to `HashSet<String>`.
+~~27. `render()` eagerly clones every source string + builds line tables~~ **FIXED (Batch 6.4)** — lazy `SourceCache` on first access per file.
 
 ### Doc-drift (HIGH — spec misleads users today)
 ~~28. Spec-wide double-quoted strings across 11+ files~~ **FIXED (Batch 4c)** — replaced in code blocks only; prose quotes untouched
 29. `spec/destructuring.md` documents object destructuring that doesn't parse — only `for ((k,v) in m)` exists
 ~~30. `spec/sensitive.md` uses `.toUpper()` and `.length`~~ **FIXED (Batch 4c)** — changed to `.toUpperCase()` and `.count()`
-~~31. `banned_jargon.rs` missing entries~~ **PARTIALLY FIXED (Batch 4c)** — added `trait`, `associated type`, `implementation`, `precondition`, `postcondition`. Skipped: `lifetime` (lexer.rs:532,540), `alias` (parser.rs+resolve_import.rs), `interface` (lexer.rs:613), `remainder` (check.rs:1551 diagnostic needs rewriting first — deferred)
+~~31. `banned_jargon.rs` missing entries~~ **FURTHER FIXED (Batch 6.11)** — `alias` added; resolve_import.rs + parser.rs diagnostics rewritten. `remainder` confirmed NOT jargon (mathematical teaching term) and removed from banned list. Remaining: `lifetime` (lexer.rs, Batch 7).
 ~~32. `spec/modules.md` re-export described as shipped~~ **FIXED (Batch 4c)** — v0.2 caveat added
 ~~33. `spec/modules.md:253` side-effect imports example uses double quotes~~ **FIXED (Batch 4c)** — covered by fix #28
 ~~34. `spec/modules.md:139-146` alias collision example~~ **NO CHANGE NEEDED (Batch 4c)** — verified parser accepts `import ns as alias from \`path\``; example is valid
@@ -121,8 +119,8 @@ No genuine conflicts between analyzers.
 ### UX (HIGH)
 39. `check.rs:444` parameter-reassignment WHY references shipped M4 as future
 40. `check.rs:1282-1287` "not defined" WHY is generic ("the program can't run")
-41. Render output prefixes WHY with `Note: Why:` double label — `crates/ynz-diagnostics/src/render.rs:76`
-42. `what_instead` used as caret label conflicts with prose-instruction content — `crates/ynz-diagnostics/src/render.rs:75`
+~~41. Render output prefixes WHY with `Note: Why:` double label~~ **FIXED (Batch 6.5)** — `"Why: "` prefix dropped.
+~~42. `what_instead` used as caret label conflicts with prose-instruction content~~ **FIXED (Batch 6.6, infrastructure)** — `DiagnosticKind` enum + render restructured. Per-diagnostic migration ongoing.
 ~~43. Single exit code 1 for all failure modes~~ **FIXED (Batch 4b)** — `EXIT_COMPILE_ERROR=1`, `EXIT_INFRA_ERROR=2`
 ~~44. No success output from `ynz build`~~ **FIXED (Batch 4b)** — prints `Build succeeded: <path>` to stdout
 45. No "did you mean?" for imports (`find_closest_name` exists but unused in import path) — `crates/ynz-typeck/src/resolve_import.rs:211-229`
@@ -139,7 +137,7 @@ No genuine conflicts between analyzers.
 ### Bugs / logic
 - ~~`validate_underscores` misses leading `_` in hex/binary literals (`0x_FF` accepted)~~ **FIXED (Batch 5a)** — leading `_` check added to `lex_hex_int` / `lex_binary_int` before `validate_underscores`
 - `parse_string_to_int` rejects `i64::MIN` (overflow before negate) — `crates/ynz-runtime/src/lib.rs:1014-1030`
-- `find_project_root` discrepancy between driver + typeck implementations — `crates/ynz-typeck/src/resolve_import.rs:110-112`
+~~- `find_project_root` discrepancy between driver + typeck implementations~~ **FIXED (Batch 6.13)** — `has_project_root` now uses unified `find_project_root` helper.
 - `mangle_type` ambiguous Debug-format catch-all — `crates/ynz-codegen/src/emit.rs:292-311`
 
 ### Reliability
@@ -171,7 +169,7 @@ No genuine conflicts between analyzers.
 - `not_defined` diagnostic × 3 in check.rs
 - `collect_options` invoked redundantly at 2 remaining sites: `check.rs:52` and `emit.rs:141-143` (the `resolve_import.rs` site was fixed by Batch 3 via `module_signatures_query` memoization; `collect_shapes` and `collect_signatures` are now memoized at those sites too)
 - Two `llvm_type_for` lookup functions in `emit.rs` (silent fall-through to ptr)
-- `Diagnostic::file_error()` convenience missing (21 verbose call sites)
+~~- `Diagnostic::file_error()` convenience missing (21 verbose call sites)~~ **FIXED (Batch 6.8)** — `file_error`, `file_warning`, `file_suggestion` added.
 
 ### Documentation
 - `build_module` 5-pass flow undocumented — `crates/ynz-codegen/src/emit.rs:129`
@@ -181,9 +179,9 @@ No genuine conflicts between analyzers.
 ~~- SipHash zero-key choice unjustified in runtime~~ **FIXED (Batch 5b)** — algorithm, key seeding rationale, IV constants, and zero-key-OK-for-internal-use documented in section header
 
 ### UX
-- Render footer (hidden-count + URL) written without ariadne styling
+~~- Render footer (hidden-count + URL) written without ariadne styling~~ **FIXED (Batch 6.7)** — ANSI bold+underline on URL when colors=true.
 - `next()` return-type error mixes prose + signature in `what_instead`
-- Error gallery files have most triggers commented out (`m7_errors.ynz`, `m8_errors.ynz`) — violates `plan-invariants.md`
+~~- Error gallery files have most triggers commented out (`m7_errors.ynz`, `m8_errors.ynz`) — violates `plan-invariants.md`~~ **FIXED (Batch 6.9)** — m7/m8 restructured; `error_galleries.rs` test added.
 - Circular import error doesn't show the cycle chain — `crates/ynz-typeck/src/resolve_import.rs:147`
 - Linker stderr stuffed into `why` field — `crates/ynz-driver/src/build.rs:227-232`
 - `.value` on unguarded `maybe<T>` lacks dedicated teaching diagnostic
@@ -214,10 +212,10 @@ No genuine conflicts between analyzers.
 - `find_closest_name`/`levenshtein` should move to shared crate (`ynz-diagnostics::suggest`) — currently only in typeck
 - Workspace cargo.toml: promote `simdutf8`/`unicode-normalization`/`memchr`/`unicase` to `[workspace.dependencies]`
 - `build_single_file` should call existing `link_objects` helper (linker invocation duplicated)
-- `Vec<Diagnostic>` ⇄ `DiagnosticBucket` round-trip silently drops `hidden_count`
-- `options_table::tag_for` returns `i8` but variants reach 255 — switch to `u8`
+~~- `Vec<Diagnostic>` ⇄ `DiagnosticBucket` round-trip silently drops `hidden_count`~~ **FIXED (Batch 6.12)** — all salsa query outputs now store `DiagnosticBucket` directly.
+~~- `options_table::tag_for` returns `i8` but variants reach 255 — switch to `u8`~~ **FIXED (Batch 6.14)** — changed to `u8`.
 - `errors_result_type` ABI contract for pointer types undocumented
-- `ExportTable::eq` coarse-equality risk documented on impl, not at field comparison
+~~- `ExportTable::eq` coarse-equality risk documented on impl, not at field comparison~~ **VERIFIED FIXED (Batch 6.15)** — `PartialEq` is derived; no coarse manual impl.
 - Float-to-string buffer can truncate — `crates/ynz-runtime/src/lib.rs:171-184`
 - ~~`lex_decimal_number` accepts `3.` — spec inconsistency~~ **FIXED (Batch 5a)** — `3.` followed by non-digit/non-alpha emits diagnostic; `42.toString()` still works
 - `find_slot` early-return subtle but correct

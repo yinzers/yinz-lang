@@ -9,5 +9,5 @@ expression: output
    │ ────┬───  
    │     ╰───── Consider using a `type` instead of a `map` for direct field access.
    │ 
-   │ Note: Why: Type field access is a single memory lookup. Map access requires a hash lookup.
+   │ Note: Type field access is a single memory lookup. Map access requires a hash lookup.
 ───╯
