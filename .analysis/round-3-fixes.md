@@ -79,15 +79,11 @@ Touches `crates/ynz-typeck/src/{check,shapes}.rs` + `crates/ynz-diagnostics/**` 
 
 **Files**: `crates/ynz-diagnostics/src/render.rs:75` (the structural place) + audit of caller sites in `check.rs` (which diagnostics use prose-instruction `what_instead` vs terse code-fix `what_instead`).
 
-**Fix**: two options to pick from:
-- (a) Change `render` to use a terse generated label under the caret, and put `what_instead` in the note position. Side effect: every snapshot test moves.
-- (b) Audit individual diagnostics whose `what_instead` reads as prose, and rewrite to be caret-appropriate (short, code-shaped).
+**Fix** (LOCKED — Patrick chose option a 2026-05-19): restructure `render` so the caret label is a terse generated tag (auto-derived from the diagnostic's kind — "expected: int", "consumed", "borrowed", etc.), and move `what_instead` to the note position where prose instructions belong.
 
-Option (b) is more surgical — fewer snapshot changes, fixes the diagnostics where it's actually wrong. Option (a) is structurally cleaner but cascades through 100+ snapshot files.
+Side effect: ~100 snapshot tests regenerate. Plan: spot-check a few new snapshots to confirm the format is right, then `cargo insta accept` the rest. WHY this is the right long-term fix: the current setup forces every diagnostic author to write `what_instead` as a span-appropriate label AND an action-instruction simultaneously, and most pick one or the other and ship the wrong-context version. The restructure cleanly separates "what's at the caret" from "what you should do."
 
-**Recommended**: (b) for this batch. Document the structural option (a) as a future redesign.
-
-**Risk**: medium-high if (a); low if (b).
+**Risk**: medium-high. Snapshot churn is large. Implementation needs care so the generated caret label is genuinely useful (not just "error here") — likely a small enum on `Diagnostic` for the kind, generating tags like `expected:T`, `unreachable`, `unused`, etc.
 
 ### 6.7 — Render footer (hidden-count + URL) written without ariadne styling (MEDIUM)
 
@@ -113,24 +109,38 @@ Option (b) is more surgical — fewer snapshot changes, fixes the diagnostics wh
 
 **Files**: `examples/errors/m7_errors.ynz`, `examples/errors/m8_errors.ynz`.
 
-**Fix**: restructure so triggers fire by default. Three approaches:
-- (a) split each error trigger into its own helper function at top level, with the trigger inline — then `entrypoint()` does nothing but the file as a whole produces every error.
-- (b) wrap the file in a harness that asserts the expected diagnostic count.
-- (c) make a per-milestone test that compiles the gallery and asserts diagnostic count.
+**Fix** (LOCKED — Patrick chose option c 2026-05-19 for the long-term right answer): per-milestone test in `crates/ynz-driver/tests/` (probably a new file `error_galleries.rs` or extension of `integration.rs`) that:
+1. Compiles each `examples/errors/m{N}_errors.ynz` via the driver
+2. Asserts the gallery produces a known set of diagnostics
+3. Each gallery's expected output catalogued in the test (diagnostic count + key text per error class)
 
-(a) is simplest. (c) is most robust but requires test infrastructure.
+This is option (c) because (a) alone (auto-fire triggers) doesn't VERIFY the gallery is current. If a diagnostic gets removed from the compiler, the gallery silently has a dead trigger and (a) won't catch it. The test makes the gallery a verified artifact.
 
-**Recommended**: (a) for this batch. The triggers move from commented-out to top-level functions; the file as a whole becomes a compile-failing artifact that produces N diagnostics on every CI run.
+Sub-fix: also restructure the gallery files themselves to auto-fire (option a), so the test actually has triggers to assert on. Both layers together — restructured files + verifying test — give the right long-term fix.
 
-**Risk**: medium. Restructures shared example files; need to verify the gallery's existing integration test (if any) still passes against the new shape.
+Per `plan-invariants.md` `### Demo & Error Gallery`, the gallery IS supposed to be a hands-on review surface that breaks when the implementation drifts. Option (c) makes that break automated.
 
-### 6.10 — `remainder` banned-jargon diagnostic rewrite (MEDIUM)
+**Risk**: medium. The verifying test is new infrastructure; need to design the expected-output format carefully so it's tolerant of formatting changes but catches semantic drift. Likely a JSON manifest per gallery (`m4_errors.expected.json` etc.) listing expected diagnostic codes/key-phrases.
 
-**What's broken**: `crates/ynz-typeck/src/check.rs:1551` says "Remainder on decimal numbers requires careful rounding semantics" — uses banned `remainder` term in user-facing text. Banned-jargon list (4c) skipped adding `remainder` because of this site.
+### 6.10 — Keep `remainder`, remove it from the banned-jargon list (MEDIUM — reversed)
 
-**Fix**: rewrite the diagnostic to use plain language. Something like "The `%` operator on decimal numbers ..." or rephrase to avoid the technical term entirely. Then add `remainder` to `banned_jargon.rs`.
+**Update 2026-05-19 (Patrick)**: `remainder` is NOT actually jargon. `%` (the symbol) is MORE opaque to newcomers than the mathematical term `remainder`. The audit's plan to ban `remainder` was wrong; the diagnostic at `check.rs:1551` is fine as-is.
 
-**Risk**: low.
+**Fix**:
+
+1. `crates/ynz-typeck/src/check.rs:1551` — light polish to teach the operator-to-term mapping. Suggested wording:
+   ```
+   WHAT: "The `%` (remainder) operator on `number` requires careful rounding semantics."
+   WHAT INSTEAD: "Use `int` instead of `number` if you want exact integer remainders, or write your own rounding-aware helper."
+   WHY: "On decimal `number`, `%` (remainder) depends on which rounding mode is in effect — IEEE 754-2008 §5.3.1 defines remainder as `a − (round(a/b) × b)`, and different rounding modes (half-even, truncation, etc.) produce different results for the same inputs. Yinz refuses `%` on `number` to avoid the silent precision-loss class."
+   ```
+   The `%` operator gets backtick-wrapped; the math term clarifies. Both available; users learn the mapping.
+
+2. `design/compiler-errors.md` — REMOVE `remainder` from the banned-jargon list. Add a comment explaining why it was reconsidered: "Mathematical terms that aid teaching (`remainder`, `quotient`, `divisor`) are NOT jargon — they're more accessible than the operator symbols. Only terms that are programmer-internals jargon (`monomorphize`, `propagate`) belong on this list."
+
+3. Do NOT add `remainder` to `crates/ynz-diagnostics/src/banned_jargon.rs` — leave the list as-is for this term.
+
+**Risk**: zero. Polishes the diagnostic; cleans up the design doc.
 
 ### 6.11 — `alias` banned-jargon diagnostic rewrite (MEDIUM)
 

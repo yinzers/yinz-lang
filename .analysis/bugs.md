@@ -16,20 +16,9 @@
 
 ## HIGH SEVERITY BUGS
 
-### Bug #6: `validate_underscores` misses leading underscore in hex/binary literals
+~~### Bug #6: `validate_underscores` misses leading underscore in hex/binary literals~~ **FIXED (Batch 5a)**
 
-**File**: `crates/ynz-parser/src/lexer.rs:1157-1172`, called from `lex_hex_int` (line 867) and `lex_binary_int` (line 936)
-**Severity**: MEDIUM
-**Category**: Logic Error
-
-**Issue**: `validate_underscores` correctly catches double-underscores and trailing underscores, but not LEADING underscores. For hex/binary literals, the digit slice passed in starts immediately AFTER `0x`/`0b`, so a leading `_` (e.g., `0x_FF`) is a valid input to the validator that the validator silently accepts. The numeric parser then strips it and parses `FF` — producing a numeric literal that the spec presumably forbids.
-
-```ynz
-let bad = 0x_FF       // currently parses as 0xFF without error
-let bad2 = 0b_1010    // same
-```
-
-Decimal literals (`1_000`) are not affected — the lexer enters `lex_decimal_number` only on a digit byte, so a leading `_` is impossible in that path.
+Leading-`_` check added to `lex_hex_int` and `lex_binary_int` before `validate_underscores`. `0x_FF` and `0b_1010` now emit a teaching diagnostic. Tests: `hardening_leading_underscore_hex_rejected`, `hardening_leading_underscore_binary_rejected`.
 
 ---
 
@@ -131,13 +120,9 @@ Uses Debug formatting of arbitrary Type variants. Two different Types whose Debu
 
 ---
 
-### Bug #14: `lex_decimal_number` accepts `3.` as a valid number literal
+~~### Bug #14: `lex_decimal_number` accepts `3.` as a valid number literal~~ **FIXED (Batch 5a)**
 
-**File**: `crates/ynz-parser/src/lexer.rs:996-1014`, `crates/ynz-runtime/src/lib.rs:1066-1071` (`is_valid_float_digits`)
-**Severity**: LOW
-**Category**: Logic Error / Spec inconsistency
-
-**Issue**: `is_valid_float_digits` and the lexer accept `"3."` as a valid number. The lexer at line 991-994 only consumes the `.` when followed by a digit, so `3.toString()` lexes correctly. But the runtime parser `is_valid_float_digits` accepts the bare `"3."` — if a user passes `"3."` to `.toFloat()` at runtime, it succeeds because Rust's f64 parser accepts it. Spec inconsistency more than a real bug.
+`lex_decimal_number` now checks for `.` followed by non-digit/non-alpha before the `has_dot` path. `3.` at EOF/operator emits a "Decimal point without fractional digits" diagnostic. `42.toString()` is unaffected (`.` followed by `t`). Test: `hardening_bare_dot_float_rejected`.
 
 ---
 

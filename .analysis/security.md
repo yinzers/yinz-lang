@@ -112,18 +112,11 @@ Parser-side fix shipped: `expr_depth` field on `Parser`, cap at 256, WHAT/WHAT-I
 
 ---
 
-## MEDIUM — Unbounded interpolation depth stack in lexer
+~~## MEDIUM — Unbounded interpolation depth stack in lexer~~ **FIXED (Batch 5a)**
 
 **Category**: Resource exhaustion
-**Location**: `crates/ynz-parser/src/lexer.rs:27,746`
 
-**Issue**: `interp_depth_stack: Vec<u32>` tracks open interpolations across `${...}`. Each `${` push (`lexer.rs:746`) adds an entry; there's no cap. A pathological input with millions of unclosed interpolations consumes O(N) memory in the stack vector. The bytes vector for the BacktickString segment is also rebuilt on each push (`lexer.rs:742`), but each is bounded.
-
-**Attack scenario**: Source file containing `\`${\`${\`${\`${...` repeated millions of times. Compiler memory grows linearly with input size — not exponential, but a single file can pin a large vector without bound.
-
-**Impact**: Memory exhaustion on very large inputs. Limited because file size already bounds memory (the source itself must be in RAM). Worth bounding to a sensible value to fail fast with a teaching diagnostic.
-
-**Secure fix**: Cap `interp_depth_stack.len()` at e.g. 64 — far more than any real code uses. Emit a teaching diagnostic on overflow: "String interpolation nested too deeply (limit: 64). Break the string into smaller pieces."
+`lex_backtick_content` now checks `interp_depth_stack.len() >= 64` before pushing. Emits WHAT/WHAT-INSTEAD/WHY diagnostic and skips the `${` instead of pushing. Test: `hardening_interpolation_depth_cap`.
 
 ---
 
@@ -216,7 +209,8 @@ None. The compiler is pre-v1.0 and is not exposed to untrusted input in producti
 **Gaps**:
 - ~~No path-traversal hardening on import resolution.~~ **FIXED (Batch 5c)**
 - Tempfile usage is predictable-PID-based, not random-named. Standard CWE-377 footgun.
-- No expression-depth limits in parser/typeck/codegen. Compiler DoS via crafted source.
+- ~~No expression-depth limits in parser/typeck/codegen.~~ **PARTIAL (Batch 5a)** — parser-side capped at 256; typeck/codegen remain open.
+- ~~Unbounded interpolation stack.~~ **FIXED (Batch 5a)** — capped at 64.
 - Symlink-following file walk allows cross-tree write primitives in the build pipeline.
 - Output binary placement next to source is a UX choice with security side-effects on shared dirs.
 - Runtime heap functions skip null-checks on a path that's already known to be handled correctly elsewhere in the same file (the discipline is inconsistent).
