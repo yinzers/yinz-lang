@@ -3,7 +3,7 @@
 **Analyzed**: 2026-05-19
 **Scope**: Entire `crates/**/*.rs` (compiler, driver, codegen, parser, typeck, runtime, diagnostics)
 **Threat model**: A malicious `.ynz` source file (or project) compiled by `ynz build` / `ynz run` should not gain code execution beyond what normal compilation+linking permits, should not read arbitrary files outside the project, should not crash the compiler with attacker-friendly DoS, and should not corrupt object/binary outputs in surprising locations.
-**Vulnerabilities Found**: 9 (Critical: 0, High: 3, Medium: 4, Low: 2)
+**Vulnerabilities Found**: 9 — 3 fixed Batch 4b (High: 1, Medium: 1 remain from those); remaining: 6 (High: 1, Medium: 3, Low: 2)
 
 ---
 
@@ -52,7 +52,7 @@ Some(canon)
 
 ---
 
-## HIGH — Predictable temp filename for runtime library extraction (TOCTOU + symlink swap)
+## ~~HIGH — Predictable temp filename for runtime library extraction (TOCTOU + symlink swap)~~ FIXED (Batch 4b)
 
 **Category**: Insecure temp-file handling
 **OWASP**: A01:2021 — Broken Access Control
@@ -70,20 +70,11 @@ The result: arbitrary file overwrite (limited to the bytes of `libynz_runtime.a`
 
 **Impact**: Arbitrary file overwrite on shared systems. On single-user dev machines, low risk; on multi-tenant CI/build runners, this is the standard insecure-tempfile foot-gun.
 
-**Vulnerable code** (`build.rs:182, 310`):
-```rust
-let rt_lib_tmp = std::env::temp_dir()
-    .join(format!("libynz_runtime_{}.a", std::process::id()));
-if let Err(e) = std::fs::write(&rt_lib_tmp, RUNTIME_LIB_BYTES) { ... }
-```
-
-**Secure fix**: Use `tempfile::NamedTempFile` (the `tempfile` crate is already in the dependency graph for testing — promote it to a runtime dep). It creates files with `O_CREAT | O_EXCL` and a random suffix, defeating both prediction and TOCTOU. Alternatively use `tempfile::tempdir()` and put the .a file inside.
-
-**Environment note**: Linux + macOS `/tmp` is world-writable; the symlink-overwrite primitive is the standard CWE-377 / CWE-378 pattern. Windows behaves slightly differently but the predictable-PID pattern is still exploitable.
+**Fixed**: `build.rs` now uses `tempfile::NamedTempFile::new()` (O_CREAT|O_EXCL, random suffix). The `tempfile` crate is now a runtime dep in `ynz-driver/Cargo.toml`. The `NamedTempFile` variable stays alive until the linker finishes, then drops and deletes the file. Verified: all 93 driver tests pass.
 
 ---
 
-## HIGH — Output binary written next to source (cross-user binary squat / shared-dir race)
+## ~~HIGH — Output binary written next to source (cross-user binary squat / shared-dir race)~~ PARTIALLY FIXED (Batch 4b)
 
 **Category**: Insecure file write path
 **OWASP**: A01:2021 — Broken Access Control
@@ -109,18 +100,18 @@ let binary_path = source_path.with_extension("");
 let status = process::Command::new(&binary).status().unwrap_or_else(|e| { ... });
 ```
 
-**Secure fix**: For `ynz run`, write the binary to a per-invocation tempdir (`tempfile::tempdir()` returns a freshly-created, mode 0o700, randomly-named directory) and execute from there. For `ynz build`, accept that the user wants the binary in `cwd`, but emit a warning if the target file already exists and is not owned/writable by the current user. At minimum, use `OpenOptions::new().write(true).create_new(false).truncate(true).open()` so the file content is overwritten without following dangling symlinks (NB: `fs::write` already truncates but follows symlinks — `O_NOFOLLOW` on the open call is the standard hardening).
+**Status (Batch 4b)**: `ynz run` now writes the binary into `tempfile::tempdir()` (mode 0o700, random name) and executes from there — the TOCTOU race is eliminated for `run`. `ynz build` still writes next to source (user expectation); `O_NOFOLLOW` hardening for the `ynz build` output path is a remaining item (low priority on single-user dev machines).
 
 **Environment note**: Single-user dev machines using `/home/user/projects/` are not vulnerable. Shared CI runners, classroom labs, multi-developer build hosts are vulnerable.
 
 ---
 
-## MEDIUM — Object/binary files written into project tree with no symlink check
+## ~~MEDIUM — Object/binary files written into project tree with no symlink check~~ FIXED (Batch 4b)
 
-**Category**: Path traversal via symlink (compile-time write primitive)
-**Location**: `crates/ynz-driver/src/build.rs:115,294`
+~~**Category**: Path traversal via symlink (compile-time write primitive)~~
+~~**Location**: `crates/ynz-driver/src/build.rs:115,294`~~
 
-**Issue**: When walking the project, `collect_ynz_files` (`load.rs:174-222`) accepts any `.ynz` file regardless of whether the containing path crosses a symlink boundary. After codegen, the corresponding `.o` file is written to `entry.path.with_extension("o")`. A malicious project layout can place a symlink-directory in `src/` pointing at a victim directory; the `.ynz` files inside get parsed normally, and the `.o` file write goes back to the same canonicalized location (writing into the victim's directory).
+**Fixed**: `collect_ynz_files` now uses `symlink_metadata()` instead of `is_dir()` — symlinks to directories are never followed during the walk. Additionally, all `.o` intermediates now go into `tempfile::tempdir()` rather than next to the source files, so even if a symlink were somehow followed, no `.o` write would land in the source tree.
 
 The `.o` files are deleted on the success or failure path (`build.rs:130-132, 146-147, 352`), but a write that succeeds then immediately gets cleaned up still creates the file briefly, AND the cleanup uses the same canonicalized path, so a swap during the window between write and cleanup gives the attacker an inode of their choice.
 
@@ -234,10 +225,10 @@ This is a runtime (compiled-binary) issue, NOT a compiler issue. The threat mode
 
 ---
 
-## Summary
+## Summary (after Batch 4b)
 
-- Path traversal: 2 (import resolution + symlink walk)
-- Insecure file handling: 2 (temp file, output binary)
+- Path traversal: 1 remains (import resolution — symlink walk FIXED)
+- Insecure file handling: 1 remains (ynz build O_NOFOLLOW — ynz run tempdir FIXED, runtime lib NamedTempFile FIXED)
 - Resource exhaustion: 2 (expression recursion, interpolation depth)
 - Information disclosure: 1
 - Input validation: 1

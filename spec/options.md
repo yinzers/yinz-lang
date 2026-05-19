@@ -68,9 +68,9 @@ When you use multi-case `if` on an options type, you must handle every variant �
 
 ```
 if (current) {
-  Status.active  => print("active")
-  Status.inactive => print("inactive")
-  Status.banned  => print("banned")
+  Status.active  => print(`active`)
+  Status.inactive => print(`inactive`)
+  Status.banned  => print(`banned`)
 }
 ```
 
@@ -120,7 +120,7 @@ By default, `.toString()` on an options value returns the variant identifier as 
 
 ```ynz
 options Direction { north, south, east, west }
-Direction.north.toString()    // "north"
+Direction.north.toString()    // `north`
 ```
 
 You can attach a display string to any variant using `: \`value\`` syntax:
@@ -135,8 +135,8 @@ options Timeframe {
     daily: `Daily`
 }
 
-Timeframe.fifteenMinute.toString()    // "Fifteen Minute"
-Timeframe.daily.toString()            // "Daily"
+Timeframe.fifteenMinute.toString()    // `Fifteen Minute`
+Timeframe.daily.toString()            // `Daily`
 ```
 
 Variants without a display string still return the identifier:
@@ -144,7 +144,7 @@ Variants without a display string still return the identifier:
 ```ynz
 options Status {
     active: `Active`
-    inactive               // no display string — toString() returns "inactive"
+    inactive               // no display string — toString() returns `inactive`
     banned: `Banned`
 }
 ```

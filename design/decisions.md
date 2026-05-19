@@ -18,7 +18,7 @@ Every design topic has its own file. This is the index. One line per topic, link
 
 | Topic | File | What's in it |
 |-------|------|--------------|
-| Type system | `design/type-system.md` | `shape`, `base`, `extends` (data-only inheritance), `follows` (structural function-signature matching), structural typing, `\|` (unions), `maybe`, `options`, `hidden` (per-field visibility within exported shapes). ⚠️ Removed by r10-r15: `override` keyword (function overloading by argument type), type aliases (`shape UserId = string` — pure documentation sugar; parameter names + comments do the job). Doc-PR 2 (Task #8) updates this file. |
+| Type system | `design/type-system.md` | `shape`, `base`, `extends` (data-only inheritance), `follows` (structural function-signature matching), structural typing, `\|` (unions), `maybe`, `options`, `hidden` (per-field visibility within exported shapes). ⚠️ Removed by r10-r15: `override` keyword (function overloading by argument type), scalar type aliases (`shape UserId = string` — pure documentation sugar, banned: parameter names + comments do the job). **Supported**: union aliases (`shape Result = Success \| Failure`) — these are real type unions shipped in M6, not scalar sugar. Doc-PR 2 (Task #8) updates this file. |
 | Generics | `design/generics.md` | Type generics `<T>`, function generics, `follows` constraints inline, type inference at call sites |
 | Ownership | `design/ownership.md` | `.share`/`.lend`/`.give`/`.copy`/`.freeze`, no direct array indexing |
 | Collections | `design/collections.md` | `fixed`/`array`/`map`, no chaining, method naming, bracket sugar for `.get()`/`.set()`, string indexing methods |

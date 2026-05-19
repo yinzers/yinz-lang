@@ -68,7 +68,7 @@ File-level constants can use pure function calls as long as all inputs are const
 // Valid const expressions — compiler evaluates at compile time
 const RESPAWN_TIME = duration.seconds(5)
 const MAX_AREA = math.PI * 100 * 100
-const GREETING = "Hello world"
+const GREETING = `Hello world`
 const GRAVITY: float = 9.81
 ```
 
@@ -76,7 +76,7 @@ Calls that depend on runtime information are not valid:
 
 ```
 const NOW = date.now()                  // COMPILE ERROR: date.now() depends on runtime
-const CONFIG = file.read("config.ynz") // COMPILE ERROR: file.read() is I/O
+const CONFIG = file.read(`config.ynz`) // COMPILE ERROR: file.read() is I/O
 ```
 
 The rule: can the compiler know this value before the program starts? Pure math, pure string operations, and pure stdlib functions with constant arguments — yes. Anything reading from the clock, file system, network, or OS — no.
@@ -90,11 +90,11 @@ Export a constant to share it across files:
 ```
 // constants.ynz
 export const MAX_HEALTH = 100
-export const API_URL = "https://api.example.com"
+export const API_URL = `https://api.example.com`
 export const GRAVITY: float = 9.81
 
 // anywhere else in the project
-import { MAX_HEALTH } from "constants"
+import { MAX_HEALTH } from `constants`
 ```
 
 No special global keyword. The module system handles it.

@@ -26,7 +26,7 @@ Use annotation-driven literal form — declare the variable's type, then assign 
 
 ```ynz
 const player: Player = {
-  name: "Patrick",
+  name: `Patrick`,
   health: 100,
   score: 0
 }
@@ -36,7 +36,7 @@ Every field must be provided. Forgetting one is a compile error:
 
 ```ynz
 const player: Player = {
-  name: "Patrick",
+  name: `Patrick`,
   health: 100
 }
 // COMPILE ERROR: Missing field 'score' (required by Player).
@@ -65,7 +65,7 @@ function isAlive(share self: Player) -> bool {
   return self.health > 0
 }
 
-const player: Player = { name: "Patrick", health: 100 }
+const player: Player = { name: `Patrick`, health: 100 }
 
 player.takeDamage(25)    // dot-call — sugar for takeDamage(player, 25)
 takeDamage(player, 25)    // function-call — same effect
@@ -103,9 +103,9 @@ function takeDamage(lend self: Warrior, amount: number) -> nothing {
 }
 
 const warrior: Warrior = {
-  name: "Patrick",
+  name: `Patrick`,
   health: 100,
-  weapon: "sword",
+  weapon: `sword`,
   armor: 15
 }
 
@@ -129,18 +129,18 @@ base shape Entity {
   health: number
 }
 
-const e: Entity = { name: "test", health: 50 }
+const e: Entity = { name: `test`, health: 50 }
 // COMPILE ERROR: Entity is a base shape — you can't create one directly.
 //
 //   Create a shape that extends Entity instead:
 //     shape Warrior extends Entity { weapon: string, armor: number }
-//     const w: Warrior = { name: "test", health: 50, weapon: "axe", armor: 10 }
+//     const w: Warrior = { name: `test`, health: 50, weapon: `axe`, armor: 10 }
 //
 //   Why: base shapes describe shared fields but aren't meant to stand alone.
 //        Creating one directly would give you an incomplete value. Always
 //        use a specific shape that extends the base.
 
-const w: Warrior = { name: "test", health: 50, weapon: "axe", armor: 10 }   // fine
+const w: Warrior = { name: `test`, health: 50, weapon: `axe`, armor: 10 }   // fine
 ```
 
 ---
@@ -241,9 +241,9 @@ External callers only provide visible fields when creating the value:
 
 ```ynz
 // File: entrypoint.ynz
-import { Player, takeDamage } from "./player"
+import { Player, takeDamage } from `./player`
 
-const player: Player = { name: "Alice", health: 100 }
+const player: Player = { name: `Alice`, health: 100 }
 // damageMultiplier starts at 1.0, internalCache starts empty
 // (defaults from player.ynz)
 

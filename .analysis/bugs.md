@@ -8,22 +8,9 @@
 
 ## CRITICAL BUGS (Fix Immediately)
 
-### Bug #1: `load_project` still prefers `src/` despite recent "remove src/ convention" commit
+### ~~Bug #1: `load_project` still prefers `src/`~~ FIXED (Batch 4b)
 
-**File**: `crates/ynz-driver/src/load.rs:164-172`
-**Severity**: HIGH
-**Category**: Logic Error / Inconsistency with commit intent
-
-**Issue**: Doc comment says "no `src/` convention required" and recent commit `8440274` removed the requirement. The code still has:
-
-```rust
-let src_dir = root.join("src");
-let walk_root = if src_dir.exists() { src_dir } else { root.to_path_buf() };
-```
-
-This means a project with BOTH a `src/` subdirectory AND `.ynz` files at the project root will only compile the files under `src/`. The project-root-level files are silently ignored. Also, `build.rs:67` still emits an error message hardcoded to `src/`: `"No `.ynz` source files found under `src/`."`
-
-**Why This Breaks Production**: directly contradicts the documented spec (project-root-relative) that the commit was supposed to enforce. Silent file-skipping is among the worst compiler bug classes — users have no signal that files are being ignored.
+`load.rs` now walks from `root` directly with no `src/` fallback. Error message updated to "No `.ynz` source files found in the project root." All fixtures and `examples/basics/` restructured. 93/93 driver tests pass.
 
 ---
 

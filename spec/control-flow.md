@@ -24,9 +24,9 @@ There is no `else` block. Instead, use early returns to handle one case and fall
 // Instead of if/else — early return pattern
 function describe(share player: Player) -> string {
   if (player.health <= 0) {
-    return "dead"
+    return `dead`
   }
-  return "alive"
+  return `alive`
 }
 ```
 
@@ -34,9 +34,9 @@ When you can't return (not in a function, or you need to continue after both cas
 
 ```
 // Pre-assignment pattern
-let message = "in danger"
+let message = `in danger`
 if (player.health > 50) {
-  message = "healthy"
+  message = `healthy`
 }
 print(message)
 ```
@@ -94,7 +94,7 @@ Standard symbols — the same as JavaScript and TypeScript.
 | `\|\|` | boolean OR |
 | `!` | boolean NOT |
 
-Note: `|` (single pipe) is for union types (`type Shape = Circle | Square`), not boolean OR. `||` (double pipe) is boolean OR in expressions.
+Note: `|` (single pipe) is for union types (`shape Shape = Circle | Square`), not boolean OR. `||` (double pipe) is boolean OR in expressions.
 
 ---
 
@@ -108,9 +108,9 @@ The compiler tells them apart: `=>` inside the block = multi-case matching.
 
 ```
 if (status) {
-  active => print("online")
-  inactive => print("offline")
-  banned => print("banned")
+  active => print(`online`)
+  inactive => print(`offline`)
+  banned => print(`banned`)
 }
 ```
 
@@ -130,9 +130,9 @@ After `is Circle`, the compiler knows `shape` is a `Circle`. Access `.radius` di
 
 ```
 if (statusCode) {
-  200 => print("ok")
-  404 => print("not found")
-  500 => print("server error")
+  200 => print(`ok`)
+  404 => print(`not found`)
+  500 => print(`server error`)
   else => print(`unexpected: ${statusCode}`)
 }
 ```

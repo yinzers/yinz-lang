@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
@@ -162,20 +165,20 @@ pub struct SourceEntry {
 /// project-root-relative, no `src/` convention required.
 /// Returns entries sorted by path for deterministic ordering.
 pub fn load_project(root: &Path, diags: &mut DiagnosticBucket) -> Vec<SourceEntry> {
-    let src_dir = root.join("src");
-    let walk_root = if src_dir.exists() { src_dir } else { root.to_path_buf() };
-
     let mut entries: Vec<SourceEntry> = Vec::new();
-    collect_ynz_files(&walk_root, &walk_root, &mut entries, diags);
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+    collect_ynz_files(root, root, &mut entries, diags, &mut visited);
     entries.sort_by(|a, b| a.path.cmp(&b.path));
     entries
 }
 
+/// Time: O(n) where n = total files in project tree. Space: O(d) where d = max directory depth.
 fn collect_ynz_files(
     src_root: &Path,
     dir: &Path,
     entries: &mut Vec<SourceEntry>,
     diags: &mut DiagnosticBucket,
+    visited: &mut HashSet<PathBuf>,
 ) {
     let read_dir = match std::fs::read_dir(dir) {
         Ok(r) => r,
@@ -192,8 +195,45 @@ fn collect_ynz_files(
 
     for entry in read_dir.flatten() {
         let path = entry.path();
-        if path.is_dir() {
-            collect_ynz_files(src_root, &path, entries, diags);
+        // Use symlink_metadata so we inspect the symlink itself, not its target.
+        // This prevents following symlinks into directories (which can form cycles).
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        if meta.file_type().is_symlink() {
+            // Resolve to check for cycles; skip symlinks that point to directories.
+            if let Ok(canon) = std::fs::canonicalize(&path) {
+                if canon.is_dir() {
+                    if !visited.insert(canon.clone()) {
+                        diags.push(Diagnostic::error(
+                            SourceSpan::new(path.display().to_string(), 0, 0),
+                            format!(
+                                "Symbolic-link cycle detected in project tree at `{}`.",
+                                path.display()
+                            ),
+                            "Remove the cycle, or replace the symlink with a real directory.",
+                            "Yinz walks the project tree to find `.ynz` source files. \
+                             A cycle of symlinks would loop forever. \
+                             The walk skips symlinks that lead back into the project.",
+                        ));
+                    }
+                    // Skip symlinked directories entirely (cycle or not).
+                }
+                // Symlinks to .ynz files are handled below through the is_dir() == false path.
+            }
+            continue;
+        }
+
+        if meta.is_dir() {
+            // Canonical path for the directory — track to detect hard-link cycles (rare but possible).
+            let canon = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            if !visited.insert(canon) {
+                // Already visited this canonical path — skip to avoid loops.
+                continue;
+            }
+            collect_ynz_files(src_root, &path, entries, diags, visited);
         } else if path.extension().is_some_and(|e| e == "ynz") {
             let module_path = path
                 .strip_prefix(src_root)

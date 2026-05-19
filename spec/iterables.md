@@ -49,14 +49,26 @@ The `for` syntax is the same either way. What changes is that a fallible loop re
 
 ## Range — numbers without creating an array
 
-```
-// Iterate 1 to 1,000,000 with almost zero memory
+`range()` accepts one or two arguments:
+
+```ynz
+// Two-argument form: start (inclusive) to end (exclusive)
+for (num in range(1, 10)) {
+  print(num)    // 1, 2, 3, ..., 9
+}
+
+// One-argument form: 0 (inclusive) to end (exclusive)
+for (num in range(5)) {
+  print(num)    // 0, 1, 2, 3, 4
+}
+
+// Large range — almost zero memory
 for (num in range(1, 1000000)) {
   print(num)
 }
 ```
 
-`range()` is built into the standard library. Each number is generated on demand — no million-element array created. Under the hood it's a `Range` type that follows `Iterable<int>`.
+`range()` is built into the standard library. Each number is generated on demand — no array created. Under the hood it's a `Range` type that follows `Iterable<int>`.
 
 ---
 

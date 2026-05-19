@@ -46,8 +46,8 @@ shape AnyUser = Admin | User
 
 function describe(share user: AnyUser) -> string {
   if (user) {
-    is Admin => return "Admin: " + user.name
-    is User => return "User: " + user.name
+    is Admin => return `Admin: ` + user.name
+    is User => return `User: ` + user.name
   }
 }
 ```
@@ -60,10 +60,10 @@ function describe(share user: AnyUser) -> string {
 
 ```
 function greet(share user: User) -> string {
-  return "Hello " + user.name
+  return `Hello ` + user.name
 }
 
-let admin: Admin = { name: "Alice", email: "a@b.com", permissions: ["all"] }
+let admin: Admin = { name: `Alice`, email: `a@b.com`, permissions: [`all`] }
 greet(admin)    // fine — Admin extends User, so Admin IS a User here
 ```
 
@@ -82,9 +82,9 @@ shape AnyUser = Admin | Guest | User
 
 function getAccess(share user: AnyUser) -> string {
   if (user) {
-    is Admin => return user.permissions.first().or("none")
-    is Guest => return "read-only"
-    is User => return "basic"
+    is Admin => return user.permissions.first().or(`none`)
+    is Guest => return `read-only`
+    is User => return `basic`
   }
 }
 ```

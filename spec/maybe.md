@@ -13,7 +13,7 @@ In a lot of languages, any variable can be `null` — and you only find out at r
 ## maybe<T> — a value that might not exist
 
 ```
-let name: string = "Patrick"             // always has a value, guaranteed
+let name: string = `Patrick`             // always has a value, guaranteed
 let nickname: maybe<string> = none       // might not have a value
 ```
 
@@ -50,7 +50,7 @@ if (nickname.exists()) {
 **Use a default if it's none:**
 
 ```
-let display = nickname.or("Anonymous")    // get the value or a fallback
+let display = nickname.or(`Anonymous`)    // get the value or a fallback
 ```
 
 **`.value` without checking — compile error:**
@@ -74,7 +74,7 @@ function findPlayer(share roster: fixed<Player>, name: string) -> maybe<Player> 
 The caller must handle the `maybe`:
 
 ```
-let player = findPlayer(roster, "Alice")
+let player = findPlayer(roster, `Alice`)
 
 // Option 1 — use a fallback
 let name = player.or(defaultPlayer).name

@@ -46,7 +46,7 @@ if (active && (isAdmin || isModerator) && !banned) {
 
 `&&` = AND. `||` = OR. `!` = NOT.
 
-Note: `|` (single pipe) is for **union types**, not boolean OR: `type Shape = Circle | Square`. `||` (double pipe) is boolean OR in expressions.
+Note: `|` (single pipe) is for **union types**, not boolean OR: `shape Shape = Circle | Square`. `||` (double pipe) is boolean OR in expressions.
 
 ---
 
@@ -140,6 +140,10 @@ Types can implement operators through `follows` contracts from the standard libr
 ---
 
 ## Overloading
+
+> **Status**: Operator overloading is **deferred to v1.0**. In v0.1, users
+> who want custom math types should write `.add()`, `.subtract()` methods
+> explicitly. The design below is locked but not yet implemented.
 
 The standard library defines contracts for operators. Each contract declares the bare signature of the function the implementing shape must provide. Implementations live as standalone functions at the file/module level (Yinz is not object-oriented — see `.claude/rules/non-oop.md`).
 

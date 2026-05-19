@@ -1,8 +1,8 @@
 # UX Analysis — Yinz Compiler
 
 **Scope**: `crates/ynz-diagnostics/`, `crates/ynz-typeck/src/`, `crates/ynz-driver/src/`, `examples/errors/`, snapshot files
-**Friction**: 12 findings (Critical: 1, High: 4, Medium: 6, Low: 1)
-**Opportunities**: 9 (High: 3, Medium: 4, Low: 2)
+**Friction**: 9 findings remain (Critical: 1, High: 3, Medium: 5, Low: 0) — 3 fixed Batch 4b
+**Opportunities**: 7 remain (High: 2, Medium: 4, Low: 1) — 2 fixed Batch 4b
 
 ---
 
@@ -71,11 +71,9 @@
 - **Gap**: `Note: Why: ld: undefined symbol: ynz_print` — frames linker tool output as Yinz explanation.
 - **Fix**: Use `why` for a teaching explanation ("the linker combines compiled code into a binary; this error means a function was declared but not implemented"); put raw stderr in a separate section.
 
-### LOW — No success confirmation from `ynz build`
+### ~~LOW — No success confirmation from `ynz build`~~ FIXED (Batch 4b)
 
-- **File**: `crates/ynz-driver/src/build.rs:385-401`, `crates/ynz-driver/src/run.rs:15-17`
-- **Gap**: Successful build with warnings prints warnings; success with no warnings prints nothing. New user can't tell if it worked.
-- **Fix**: Print `Build succeeded: <binary_path>` to stdout on success.
+`main.rs` now prints `Build succeeded: <binary_path>` to stdout on success.
 
 ---
 
@@ -87,35 +85,30 @@
 - **Gap**: Import-name typo shows the full sorted export list; `find_closest_name` is already wired for `check_call` / `resolve_ident` but not for imports.
 - **Fix**: Apply `find_closest_name` against `exported_names` before formatting `what_instead`.
 
-### HIGH — Single exit code (1) for all failure modes
+### ~~HIGH — Single exit code (1) for all failure modes~~ FIXED (Batch 4b)
 
-- **File**: `crates/ynz-driver/src/main.rs:36-48`
-- **Gap**: Compile error vs "linker not installed" vs I/O error → indistinguishable to CI/editor integration. `rustc`/`clang` use distinct codes.
-- **Fix**: `EXIT_COMPILE_ERROR=1`, `EXIT_INFRA_ERROR=2`. Plumb through `BuildResult`.
+`EXIT_COMPILE_ERROR=1`, `EXIT_INFRA_ERROR=2` in `main.rs`. `FailureKind` plumbed through `BuildResult`.
 
-### HIGH — No success-line output
+### ~~HIGH — No success-line output~~ FIXED (Batch 4b)
 
-- Covered above (Friction Low). Cross-listed because impact is high for new-user onboarding.
+See Friction section above.
 
 ### MEDIUM — `.value` on unguarded `maybe<T>` lacks dedicated teaching diagnostic
 
 - **File**: `crates/ynz-typeck/src/check.rs` field-access path
 - **Gap**: Falls through to generic field-not-found. The most common novice mistake from nullable-types backgrounds deserves a specific "use `if (x.exists()) { let n = x.value }` with the user's actual variable name" diagnostic.
 
-### MEDIUM — `ynz run` always deletes binary, no `--keep`
+### ~~MEDIUM — `ynz run` always deletes binary, no `--keep`~~ FIXED (Batch 4b)
 
-- **File**: `crates/ynz-driver/src/run.rs:27`
-- **Gap**: Common workflow "build once, run many times with different inputs" forced through `ynz build` + manual invocation.
-- **Fix**: `--keep` flag or make delete opt-in.
+`--keep` flag added to `ynz run` in `main.rs`/`run.rs`.
 
-### MEDIUM — Mid-build SIGKILL leaves `.o` files in source tree
+### ~~MEDIUM — Mid-build SIGKILL leaves `.o` files in source tree~~ FIXED (Batch 4b)
 
-- Cross-references reliability.md Finding 4 + adversarial Finding 9.
+All intermediates now go into `tempfile::tempdir()` — source tree is never polluted.
 
-### LOW — `ynz build --help` doesn't explain single-file vs project mode
+### ~~LOW — `ynz build --help` doesn't explain single-file vs project mode~~ FIXED (Batch 4b)
 
-- **File**: `crates/ynz-driver/src/main.rs:20-31`
-- **Fix**: Expand `long_about` describing `yinz.toml` role and the two modes.
+Both `Build` and `Run` subcommand variants now have expanded doc comments describing modes, options, and exit codes.
 
 ### LOW — Jargon audit doesn't catch declaration-keyword leaks in backticks
 

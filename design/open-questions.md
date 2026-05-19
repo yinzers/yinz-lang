@@ -142,6 +142,23 @@ The four `symbol`/`name`/`assetClass`/`exchange` trailing comments align in a co
 
 ---
 
+## CLI Flags Planned for Future Versions
+
+Tracked so the help text reflects what currently ships and the design log remembers what's coming.
+
+- `--release` — release-mode codegen (LLVM `-O3`, no debug info, smaller binary).
+  Target version: v0.X (TBD; tied to dedicated optimization pass milestone).
+- `--kernel` — kernel-mode build (no heap allocator, no panic-on-OOM, no threading).
+  See `design/future/no-runtime-mode.md`. Target version: v0.3 per `design/mvp-scope.md`.
+- `--emit-ir` — dump LLVM IR alongside the compiled binary.
+  Target version: pending audit batch (already populated on `CompiledArtifact`; needs CLI wiring).
+- `--reveal-sensitive` — show all sensitive values in output (dev-only; stripped from release builds).
+  Target version: pending audit batch. Design is locked in `design/sensitive.md`.
+
+These flags are NOT in the v0.1 driver. Do not document them in `--help` until they ship.
+
+---
+
 ## Type Collection Ordering — Options/Shapes Must See Each Other (v0.2+)
 
 `collect_shapes` and `collect_options` run as separate passes in the wrong order. `collect_shapes` runs first (in `module_signatures_query`) but needs to know about options type names to resolve field types like `timeframe: Timeframe`. `collect_options` runs later inside `check_query`.

@@ -1,7 +1,7 @@
 # Adversarial Test Analysis — Yinz Compiler
 
 **Scope**: lexer, parser, project loader, import resolver, banned-jargon scanner.
-**Findings**: 15 scenarios (Critical: 3, High: 4, Medium: 3, Low: 5)
+**Findings**: 15 scenarios — 1 fixed Batch 4b (Critical: 2 remain, High: 4, Medium: 3, Low: 5)
 
 ---
 
@@ -12,12 +12,9 @@
 - **Outcome**: Stack overflow, process crash, no output
 - **Fix**: Track depth via `&mut self.depth`, cap (e.g. 256), emit `Diagnostic::error("expression nesting too deep")`
 
-## CRITICAL — Finding 4: Symlink loop in project tree → infinite recursion
+## ~~CRITICAL — Finding 4: Symlink loop in project tree → infinite recursion~~ FIXED (Batch 4b)
 
-- **Trigger**: `ln -s . src/self` then `ynz build`
-- **Trace**: `crates/ynz-driver/src/load.rs` walks src/ recursively without symlink-cycle detection
-- **Outcome**: Process crash via stack overflow or unbounded walk
-- **Fix**: `canonicalize()` each entry; track visited canonical paths in a HashSet; emit error on cycle
+`collect_ynz_files` uses `symlink_metadata()` to detect symlinks without following them. Canonical-path `HashSet` prevents re-visiting directories (catches hard-link cycles). Teaching diagnostic on detection per WHAT/WHAT-INSTEAD/WHY format.
 
 ## CRITICAL/HIGH — Finding 11: NUL byte in string literal → silent runtime truncation
 
@@ -38,9 +35,9 @@
 - **Trace**: `crates/ynz-parser/src/lexer.rs:486-639` accumulates chars into `String` without bound
 - **Fix**: Cap identifier length (suggest 1024 bytes), emit diagnostic on overflow
 
-## HIGH — Finding 9: Concurrent `ynz build` races on same `obj_path`
+## ~~HIGH — Finding 9: Concurrent `ynz build` races on same `obj_path`~~ FIXED (Batch 4b)
 
-- Cross-references reliability.md Finding 3. Same root cause.
+Cross-references reliability.md Finding 3. All intermediates in `tempfile::tempdir()`.
 
 ## HIGH — Finding 10: `ariadne` render with out-of-range span → `.expect()` panics
 

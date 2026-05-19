@@ -79,9 +79,9 @@ setLogLevel(logLevel)
 
 ---
 
-## Layer 3: Runtime config — `set` functions in `main()`
+## Layer 3: Runtime config — `set` functions in `entrypoint()`
 
-Runtime behavior is configured in code, in your `main()` function, using `set` functions. Type `set` in autocomplete to see all available options.
+Runtime behavior is configured in code, in your `entrypoint()` function, using `set` functions. Type `set` in autocomplete to see all available options.
 
 ```
 function entrypoint() -> nothing {
@@ -161,8 +161,8 @@ function entrypoint() -> nothing {
 | Build target, optimization | `yinz.toml` | `optimization = "release"` |
 | Secrets, API keys, DB URLs | `.env` (git-ignored) | `DATABASE_URL=postgres://...` |
 | Required var documentation | `.env.example` (committed) | `DATABASE_URL=` |
-| Shutdown timeout | `setShutdownTimeout()` in `main()` | `setShutdownTimeout(duration.minutes(2))` |
-| Thread pool size | `setThreadPoolSize()` in `main()` | `setThreadPoolSize(16)` |
-| Error handling behavior | `setErrorHandler()` in `main()` | `setErrorHandler(e => { ... })` |
-| Shutdown behavior | `setShutdownHandler()` in `main()` | `setShutdownHandler(s => { ... })` |
-| Environment-specific logic | Code branching in `main()` | `if (env == "production") { ... }` |
+| Shutdown timeout | `setShutdownTimeout()` in `entrypoint()` | `setShutdownTimeout(duration.minutes(2))` |
+| Thread pool size | `setThreadPoolSize()` in `entrypoint()` | `setThreadPoolSize(16)` |
+| Error handling behavior | `setErrorHandler()` in `entrypoint()` | `setErrorHandler(e => { ... })` |
+| Shutdown behavior | `setShutdownHandler()` in `entrypoint()` | `setShutdownHandler(s => { ... })` |
+| Environment-specific logic | Code branching in `entrypoint()` | `if (env == "production") { ... }` |

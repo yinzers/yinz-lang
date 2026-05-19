@@ -47,6 +47,7 @@ No genuine conflicts between analyzers.
 - **Files**: `crates/ynz-diagnostics/tests/snapshots.rs:88-92` + `__snapshots/suggestion_only.snap`; `spec/collections.md:166, 248, 269`
 - **Issue**: Compiler-shipped suggestion text says "Consider using a `type` instead of a `map`". User writes `type Foo { ... }` and gets a banned-keyword error from the lexer. Compiler contradicts itself.
 - **Fix**: Replace `type` → `shape` in both the snapshot fixture and the spec page.
+- **Status**: `spec/collections.md` fixed by Batch 4c. Snapshot fixture (`snapshots.rs` + `suggestion_only.snap`) still needs fixing — different batch (code files).
 
 ### 3. No ICE distinction — compiler panics look identical to user errors
 - **File**: `crates/ynz-driver/src/main.rs` (top-level), panics across `crates/ynz-diagnostics/src/render.rs:85`, `crates/ynz-codegen/src/emit.rs:150`, `crates/ynz-parser/src/lexer.rs:469`
@@ -106,14 +107,14 @@ No genuine conflicts between analyzers.
 27. `render()` eagerly clones every source string + builds line tables → O(total_source_bytes) per render — `crates/ynz-diagnostics/src/render.rs:55-59`
 
 ### Doc-drift (HIGH — spec misleads users today)
-28. Spec-wide double-quoted strings across 11+ files (`"foo"` rejected by M7 lexer) — `spec/types.md`, `modules.md`, `errors.md`, `options.md`, `ownership.md`, `unions.md`, `control-flow.md`, `main.md`, `scope.md`, `maybe.md`, `sensitive.md`
+~~28. Spec-wide double-quoted strings across 11+ files~~ **FIXED (Batch 4c)** — replaced in code blocks only; prose quotes untouched
 29. `spec/destructuring.md` documents object destructuring that doesn't parse — only `for ((k,v) in m)` exists
-30. `spec/sensitive.md` uses `.toUpper()` and `.length` (real names: `.toUpperCase()`, `.count()`)
-31. `banned_jargon.rs` missing 7+ entries from `design/compiler-errors.md` — `crates/ynz-diagnostics/src/banned_jargon.rs:21-75` vs `design/compiler-errors.md:31-64` (`lifetime`, `alias`, `trait`, `interface`, `remainder`, `associated type`, `implementation`, `precondition`, `postcondition`)
-32. `spec/modules.md` re-export described as shipped — syntax parses but cross-file calls are v0.2 stubs
-33. `spec/modules.md:253` "side-effect imports" example uses double quotes — wouldn't trigger documented error
-34. `spec/modules.md:139-146` "alias collision" example uses invalid `import math as advancedMath from "..."` syntax
-35. `spec/collections.md` uses banned `type` keyword in body + code examples — `:166, 248, 269`
+~~30. `spec/sensitive.md` uses `.toUpper()` and `.length`~~ **FIXED (Batch 4c)** — changed to `.toUpperCase()` and `.count()`
+~~31. `banned_jargon.rs` missing entries~~ **PARTIALLY FIXED (Batch 4c)** — added `trait`, `associated type`, `implementation`, `precondition`, `postcondition`. Skipped: `lifetime` (lexer.rs:532,540), `alias` (parser.rs+resolve_import.rs), `interface` (lexer.rs:613), `remainder` (check.rs:1551 diagnostic needs rewriting first — deferred)
+~~32. `spec/modules.md` re-export described as shipped~~ **FIXED (Batch 4c)** — v0.2 caveat added
+~~33. `spec/modules.md:253` side-effect imports example uses double quotes~~ **FIXED (Batch 4c)** — covered by fix #28
+~~34. `spec/modules.md:139-146` alias collision example~~ **NO CHANGE NEEDED (Batch 4c)** — verified parser accepts `import ns as alias from \`path\``; example is valid
+~~35. `spec/collections.md` uses banned `type` keyword~~ **FIXED (Batch 4c)** — changed to `shape` at all 3 sites + section header
 
 ### Documentation (HIGH)
 36. 9 unsafe FFI map functions missing `# Safety` contracts — `crates/ynz-runtime/src/lib.rs:568, 583, 605, 629, 664, 674, 688, 706, 732`
@@ -191,17 +192,17 @@ No genuine conflicts between analyzers.
 - `ynz run` always deletes binary, no `--keep` flag
 
 ### Doc-drift (MEDIUM)
-- `spec/operators.md` "Overloading" section describes a v1.0-deferred feature without flagging
+~~`spec/operators.md` "Overloading" section describes a v1.0-deferred feature without flagging~~ **FIXED (Batch 4c)** — deferred-status banner added
 - `test` keyword not actually reserved in lexer — locked decision drift
-- `spec/main.md` mentions `cli.args()`, `process.exit()` — both are v0.8
-- `spec/types.md` hidden-field auto-default contradicts demo file
+~~`spec/main.md` mentions `cli.args()`, `process.exit()` — both are v0.8~~ **FIXED (Batch 4c)** — v0.8 status banners added
+- `spec/types.md` hidden-field auto-default contradicts demo file — **Status: deferred** (4c.25 investigation found typeck gap: no default enforcement, cross-file construction also not blocked; fix is in typeck, not docs alone)
 - `spec/doc-comments.md` "/// only on exported" — implementation attaches to all
 - `background` no handle-form rejection diagnostic — `examples/errors/m8_errors.ynz:64-68` says it should exist
-- `spec/sensitive.md` describes `--reveal-sensitive` flag that's not in driver
-- `design/decisions.md` "type aliases removed" ambiguous — union aliases ARE supported
+~~`spec/sensitive.md` describes `--reveal-sensitive` flag that's not in driver~~ **FIXED (Batch 4c)** — deferred-status banner added; open-questions.md entry added
+~~`design/decisions.md` "type aliases removed" ambiguous~~ **FIXED (Batch 4c)** — clarified: scalar aliases banned, union aliases supported
 - ~~`examples/basics/yinz.toml` uses `src/entrypoint.ynz`~~ **FIXED (Batch 4b)**
-- `spec/main.md` + `spec/config.md` mix `main()` / `entrypoint()` — Yinz term is `entrypoint`
-- `spec/modules.md` "stdlib no import needed" examples reference unshipped modules
+~~`spec/main.md` + `spec/config.md` mix `main()` / `entrypoint()`~~ **FIXED (Batch 4c)** — all `main()` references changed to `entrypoint()`
+~~`spec/modules.md` "stdlib no import needed" examples reference unshipped modules~~ **FIXED (Batch 4c)** — version annotations added to each example
 - ~~`examples/basics/src/entrypoint.ynz` shadows `nums` and `score`~~ **FIXED (Batch 4b)** — files moved to project root; path references updated
 
 ---
@@ -229,9 +230,9 @@ No genuine conflicts between analyzers.
 - 6 documentation-naming improvements (sha-256 state vars, runtime capacity constants)
 - `Lexer` struct three-mode state machine undocumented
 - `parse_toml_string` parameter contract undocumented
-- Spec `overview.md` says "12 Golden Rules" — should be 13
-- `spec/iterables.md` under-documents `range(end)` one-arg form
-- `spec/numeric-types.md` IDE-hint examples need "v0.2 (IDE)" tag
+~~Spec `overview.md` says "12 Golden Rules" — should be 13~~ **FIXED (Batch 4c)** — updated to 13 with Rule 13 text added
+~~`spec/iterables.md` under-documents `range(end)` one-arg form~~ **FIXED (Batch 4c)** — one-arg form documented with example
+~~`spec/numeric-types.md` IDE-hint examples need "v0.2 (IDE)" tag~~ **FIXED (Batch 4c)** — IDE (v0.2) banners added to both hints
 - `mvp-scope.md` "custom iterables v1.0" stale — shipped in M7
 - `f32` deferred to v2 but no teaching diagnostic when user writes `let x: f32`
 - `spec/sensitive.md` `env.get()` example references v0.8 module

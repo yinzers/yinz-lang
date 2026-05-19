@@ -36,7 +36,7 @@ If you've written JavaScript | TypeScript before, most of this should feel famil
 
 ---
 
-## The 12 Golden Rules
+## The 13 Golden Rules
 
 Every decision in this language follows these rules. When something seems weird, one of these is why.
 
@@ -52,6 +52,7 @@ Every decision in this language follows these rules. When something seems weird,
 10. **Efficiency first, dynamic after** — the default path is always the fastest path
 11. **The compiler is a teacher** — errors explain what went wrong and suggest fixes
 12. **Human-readable over jargon** — `options` not `enum`, `nothing` not `void`, `follows` not `implements`
+13. **Capital letter = type** — scan any line: capital letter means type, lowercase means everything else (variable, function, keyword, module)
 
 ---
 
