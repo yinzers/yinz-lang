@@ -7,7 +7,7 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Now (active)
 
-*(v0.2-M1 execution in progress — Phase 0 branch `chore/v0-2-m1-doc-lockdown`. See `.claude/plans/active/v0-2-m1-feature-inventory-sync.md` for the plan.)*
+*(v0.2-M1 SHIPPED — all 8 phases merged, Cargo.toml bumped to 0.2.0-m1, tag cut pending /release. v0.2-M2 (LSP) is next. Plan moved to done/.)*
 
 - [ ] **m8-typeck-cross-file-resolution still in active/** — audit as of v0.2-M1 Phase 0 (2026-05-19): plan is `status: active` / `pending_approval` / `0/32 done`. Roadmap: v0-1-compiler. This is real unfinished work (cross-file import/export typeck — `Item::ImportDecl(_) => {}` currently silently ignored). Action needed: either (a) approve the plan and start execution in a dedicated chat, OR (b) move plan to `paused/` if v0.2-M1 is higher priority. Does NOT appear to be a ghost resurrected by git-mv — it's genuinely incomplete M8 work. Investigate before v0.2-M2 LSP work begins (cross-file resolution is a precondition for LSP "go-to-definition" working across files).
 

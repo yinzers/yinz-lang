@@ -2,7 +2,7 @@
 slug: v0-2-m1-feature-inventory-sync
 type: execution
 owner: Patrick Rizzardi
-status: active
+status: done
 roadmap: v0-2-dev-loop-tooling
 created: 2026-05-19
 last_updated: 2026-05-19
