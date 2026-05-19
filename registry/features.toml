@@ -45,9 +45,282 @@ since = "M4"
 # ---------------------------------------------------------------------------
 
 [[banned_jargon]]
-name = "PLACEHOLDER_JARGON_PHASE_2"
-replacement = "placeholder — Phase 2 populates this entry"
-reason = "placeholder — Phase 2 populates this entry"
+name = "propagate"
+replacement = "auto-propagate (use the `errors` keyword — errors flow up automatically)"
+reason = "compiler jargon unfamiliar to developers new to error handling"
+
+[[banned_jargon]]
+name = "propagation"
+replacement = "auto-propagation (the `errors` keyword makes errors flow up automatically)"
+reason = "compiler jargon unfamiliar to developers new to error handling"
+
+[[banned_jargon]]
+name = "narrow"
+replacement = "the compiler figures out the specific type from context"
+reason = "type-theory jargon"
+
+[[banned_jargon]]
+name = "narrowing"
+replacement = "the compiler figuring out the specific type from context"
+reason = "type-theory jargon"
+
+[[banned_jargon]]
+name = "discriminator"
+replacement = "(describe what distinguishes each case instead)"
+reason = "type theory and compiler jargon"
+
+[[banned_jargon]]
+name = "infer"
+replacement = "figure out automatically"
+reason = "type-theory jargon"
+
+[[banned_jargon]]
+name = "inference"
+replacement = "the compiler figuring it out automatically"
+reason = "type-theory jargon"
+
+[[banned_jargon]]
+name = "polymorphic"
+replacement = "works with multiple types"
+reason = "CS theory jargon"
+
+[[banned_jargon]]
+name = "monomorphize"
+replacement = "generate a type-specific version of"
+reason = "compiler implementation jargon"
+
+[[banned_jargon]]
+name = "monomorphic"
+replacement = "a type-specific version of"
+reason = "compiler implementation jargon"
+
+[[banned_jargon]]
+name = "covariant"
+replacement = "(describe the specific relationship instead)"
+reason = "type theory jargon"
+
+[[banned_jargon]]
+name = "contravariant"
+replacement = "(describe the specific relationship instead)"
+reason = "type theory jargon"
+
+[[banned_jargon]]
+name = "deref"
+replacement = "access through"
+reason = "Rust/C pointer jargon"
+
+[[banned_jargon]]
+name = "dereference"
+replacement = "access through"
+reason = "Rust/C pointer jargon"
+
+[[banned_jargon]]
+name = "shadow"
+replacement = "redeclare the same name in an inner scope"
+reason = "scoping jargon"
+
+[[banned_jargon]]
+name = "shadowing"
+replacement = "redeclaring the same name in an inner scope"
+reason = "scoping jargon"
+
+[[banned_jargon]]
+name = "coerce"
+replacement = "automatically convert"
+reason = "type theory jargon"
+
+[[banned_jargon]]
+name = "coercion"
+replacement = "automatic conversion"
+reason = "type theory jargon"
+
+[[banned_jargon]]
+name = "fallible"
+replacement = "can fail — use the `errors` keyword to declare that"
+reason = "Rust-specific jargon for operations that can return errors"
+
+[[banned_jargon]]
+name = "infallible"
+replacement = "always succeeds"
+reason = "Rust-specific jargon"
+
+[[banned_jargon]]
+name = "first-class"
+replacement = "(describe what is supported instead)"
+reason = "programming language theory jargon"
+
+[[banned_jargon]]
+name = "idiomatic"
+replacement = "the Yinz way"
+reason = "community jargon"
+
+[[banned_jargon]]
+name = "arity"
+replacement = "the number of arguments"
+reason = "CS jargon"
+
+[[banned_jargon]]
+name = "variadic"
+replacement = "accepts any number of arguments"
+reason = "CS jargon"
+
+[[banned_jargon]]
+name = "residual"
+replacement = "(use specific language instead)"
+reason = "mathematical and type-theory jargon"
+
+[[banned_jargon]]
+name = "referentially transparent"
+replacement = "produces the same result for the same inputs"
+reason = "functional programming theory jargon"
+
+[[banned_jargon]]
+name = "immutable"
+replacement = "cannot be changed — declare it `const`"
+reason = "programming jargon — use `const` or describe the constraint"
+
+[[banned_jargon]]
+name = "mutable"
+replacement = "can be changed — declare it `let`"
+reason = "programming jargon — use `let` or describe what changes"
+
+[[banned_jargon]]
+name = "invariant violation"
+replacement = "the compiler found an internal inconsistency"
+reason = "CS jargon for internal consistency errors"
+
+[[banned_jargon]]
+name = "ADT"
+replacement = "shape or options type"
+reason = "CS-degree acronym (Algebraic Data Type)"
+is_acronym = true
+
+[[banned_jargon]]
+name = "AST"
+replacement = "the program structure the compiler builds"
+reason = "CS-degree acronym (Abstract Syntax Tree)"
+is_acronym = true
+
+[[banned_jargon]]
+name = "struct"
+replacement = "shape value"
+reason = "C/Rust jargon — the Yinz term is `shape`"
+
+[[banned_jargon]]
+name = "monad"
+replacement = "(no direct replacement — describe what the operation does instead)"
+reason = "functional programming jargon not known to junior developers"
+
+[[banned_jargon]]
+name = "lift"
+replacement = "(describe what the operation does instead)"
+reason = "functional programming jargon"
+
+[[banned_jargon]]
+name = "wrap"
+replacement = "(describe what the operation does instead)"
+reason = "functional programming jargon (wrapping into Option/Result)"
+
+[[banned_jargon]]
+name = "unwrap"
+replacement = "access the value directly or handle the absent case"
+reason = "Rust-specific jargon for Option::unwrap / Result::unwrap"
+
+[[banned_jargon]]
+name = "Result"
+replacement = "use the `errors` keyword: `function foo() -> T errors`"
+reason = "Rust-specific type name — Yinz uses the `errors` keyword instead"
+
+[[banned_jargon]]
+name = "Option"
+replacement = "`maybe T` — a value that might not be present"
+reason = "Rust-specific type name — Yinz uses `maybe T`"
+
+[[banned_jargon]]
+name = "Either"
+replacement = "`A | B` — a union type"
+reason = "Haskell jargon for tagged unions — Yinz uses `|` for union types"
+
+[[banned_jargon]]
+name = "exception"
+replacement = "use the `errors` keyword for expected failures; panics handle unexpected ones"
+reason = "traditional OOP exception-handling jargon"
+
+[[banned_jargon]]
+name = "try"
+replacement = "use the `errors` keyword"
+reason = "traditional OOP exception-handling keyword"
+
+[[banned_jargon]]
+name = "catch"
+replacement = "use the `errors` keyword"
+reason = "traditional OOP exception-handling keyword"
+
+[[banned_jargon]]
+name = "throw"
+replacement = "use the `errors` keyword"
+reason = "traditional OOP exception-handling keyword"
+
+[[banned_jargon]]
+name = "UTF-16"
+replacement = "UTF-8 — Yinz strings are always UTF-8"
+reason = "alternative encoding Yinz explicitly rejects"
+is_acronym = true
+
+[[banned_jargon]]
+name = "async"
+replacement = "write `wait` at the call site — no function-level declaration needed"
+reason = "JavaScript/Rust async annotation jargon — Yinz uses `wait` at the call site"
+
+[[banned_jargon]]
+name = "await"
+replacement = "write `wait` at the call site"
+reason = "JavaScript jargon — Yinz uses `wait`"
+
+[[banned_jargon]]
+name = "goroutine"
+replacement = "use `background` — `background process(data)` runs after this function returns"
+reason = "Go-specific concurrency jargon"
+
+[[banned_jargon]]
+name = "interface"
+replacement = "declare a `shape` with bare method signatures and use `follows`"
+reason = "OOP jargon — Yinz uses `shape` for data types and contracts"
+
+[[banned_jargon]]
+name = "trait"
+replacement = "`follows` and contract — `shape Foo follows Bar { ... }`"
+reason = "Rust-specific jargon for type contracts"
+
+[[banned_jargon]]
+name = "lifetime"
+replacement = "scope, or the period a value is valid"
+reason = "Rust-specific memory management jargon"
+
+[[banned_jargon]]
+name = "alias"
+replacement = "a different local name"
+reason = "programming jargon"
+
+[[banned_jargon]]
+name = "associated type"
+replacement = "(no direct Yinz equivalent yet)"
+reason = "Rust/Haskell type system jargon"
+
+[[banned_jargon]]
+name = "implementation"
+replacement = "(describe what the code does instead — avoid 'implementation detail')"
+reason = "programming jargon that often obscures rather than explains"
+
+[[banned_jargon]]
+name = "precondition"
+replacement = "must be true before calling this"
+reason = "formal methods jargon"
+
+[[banned_jargon]]
+name = "postcondition"
+replacement = "must be true after this returns"
+reason = "formal methods jargon"
 
 # ---------------------------------------------------------------------------
 # [[primitive_intrinsic]] — built-in functions and methods on primitive types.

@@ -9,6 +9,7 @@ license.workspace = true
 
 [dependencies]
 ariadne = { workspace = true }
+ynz-registry = { path = "../../crates/ynz-registry" }
 
 [dev-dependencies]
 insta = { workspace = true }
