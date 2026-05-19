@@ -117,6 +117,13 @@ pub fn load_project_config(root: &Path, diags: &mut DiagnosticBucket) -> Project
     }
 }
 
+/// Parse the value portion of a TOML key = "value" line.
+///
+/// `rest` is everything AFTER the key name — i.e. it starts with optional
+/// whitespace, then `=`, then the value.  The function strips the `=` itself
+/// and any surrounding whitespace before unquoting.
+///
+/// Returns `None` when the value is empty or the key was not present.
 fn parse_toml_string(rest: &str) -> Option<String> {
     let rest = rest
         .trim_start_matches(|c: char| c.is_whitespace() || c == '=')

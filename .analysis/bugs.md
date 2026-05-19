@@ -52,7 +52,7 @@ The string `"-9223372036854775808"` (i64::MIN) requires `acc = 92233720368547758
 
 ---
 
-### Bug #10: `entrypoint` → `main` rename per file enables duplicate symbol on multi-file projects
+~~### Bug #10: `entrypoint` → `main` rename per file enables duplicate symbol on multi-file projects~~ **FIXED (Batch 8)**
 
 **File**: `crates/ynz-codegen/src/emit.rs:460-465`, `815-819`
 **Severity**: HIGH
@@ -102,7 +102,7 @@ So `resolve_module_path` returns None entirely, while `has_project_root` compute
 
 ## MEDIUM SEVERITY BUGS
 
-### Bug #13: Codegen `mangle_type` produces ambiguous names for unhandled variants
+~~### Bug #13: Codegen `mangle_type` produces ambiguous names for unhandled variants~~ **FIXED (Batch 8)**
 
 **File**: `crates/ynz-codegen/src/emit.rs:292-311`
 **Severity**: MEDIUM

@@ -14,9 +14,14 @@ pub struct CompiledArtifact {
 }
 
 /// Compute a SHA-256 digest of `data`.
+///
+/// Time: O(n) where n = `data.len()`.
+/// Space: O(n) for the padded message copy (padding rounds up to next 512-bit block boundary).
+///
+/// Implementation: minimal pure-Rust SHA-256 per FIPS 180-4 §6.2.2.
+/// No external dependency — avoids adding a `sha2` crate for a single call site.
+/// Variables `a`–`h` are the eight working variables named in FIPS 180-4 §6.2.2 step 2.
 pub fn sha256(data: &[u8]) -> [u8; 32] {
-    // A minimal pure-Rust SHA-256 implementation — no external dependency needed.
-    // Source: FIPS 180-4 specification, hand-transcribed.
     let mut state = [
         0x6a09e667u32,
         0xbb67ae85,

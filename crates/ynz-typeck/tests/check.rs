@@ -2004,8 +2004,9 @@ function entrypoint() -> nothing {
 "#,
         1,
     );
+    // test-ratchet: diagnostic wording updated to avoid "result" (banned jargon).
     let has_msg = output.diagnostics.iter().any(|d| {
-        d.what.contains("Storing the result of `background`")
+        d.what.contains("Capturing the output of `background`")
     });
     assert!(has_msg, "Expected handle-form rejection diagnostic, got: {:#?}", output.diagnostics);
 }

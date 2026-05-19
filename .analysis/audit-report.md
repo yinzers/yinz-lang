@@ -8,9 +8,21 @@ Comprehensive code audit + doc-drift check across the entire workspace.
 
 Severity = execution order, not "whether to fix." Per Patrick's Rule 11, confirmed findings get fixed regardless of label.
 
+## Round 4 closed: 2026-05-19. Remaining open items are explicitly deferred design decisions (destructuring milestone already shipped in commit 19d9d4c; inline shapes feature build queued; `--reveal-sensitive` flag pending; `f32` deferred to v2).
+
 ---
 
-## Severity Summary
+## Severity Summary (post-Round-4)
+
+| Severity | Count | Notes |
+|---|---:|---|
+| Critical | 0 | All resolved |
+| High | 3 | Bug #11 (import diagnostic discrepancy), Bug #12 (dead-code import fallback), 9 unsafe FFI docs FIXED R4 |
+| Medium | ~10 | Partial/corrupt binary cleanup, orphan .o on SIGKILL, various UX/docs items |
+| Low | ~15 | Magic number renames FIXED R4, crate docs FIXED R4, various polish items remain |
+| Verified Correct | 9 | doc-drift positives — explicitly noted to prevent re-flagging |
+
+Previous summary (pre-Round-4):
 
 | Severity | Count | Notes |
 |---|---:|---|
@@ -78,7 +90,7 @@ No genuine conflicts between analyzers.
 ~~10. `load_project` prefers `src/` despite recent commit removing it~~ **FIXED (Batch 4b)**
 ~~11. Map runtime `malloc`/`realloc` paths skip null-check → SIGSEGV on OOM~~ **FIXED (Batch 5b)** — `map_alloc`, `map_grow_int`, `map_grow_str`, `order_push` all null-check and abort with teaching message
 ~~13. `ynz_map_set_str` infinite-loop on full map if growth silently fails~~ **FIXED (Batch 5b)** — `find_insert_slot` and `ynz_map_set_str` probe loops now abort if probe count reaches capacity
-14. `entrypoint → main` rename collides on multi-file projects — `crates/ynz-codegen/src/emit.rs:460-465, 815-819`
+~~14. `entrypoint → main` rename collides on multi-file projects~~ **FIXED (Batch 8)** — driver-level check in `build_project` rejects duplicate `entrypoint` before codegen; teaching diagnostic with yinz.toml guidance; test `duplicate_entrypoint_in_project_produces_teaching_diagnostic` added.
 ~~15. `bignum_binop` silent fallback to `"0"` on CString null-byte → wrong math result with no log~~ **FIXED (Batch 5b)** — aborts with INTERNAL ERROR message instead
 ~~16. Runtime overflow / div-zero panics lack source location~~ **FIXED (Batch 7.4)** — `ynz_panic_overflow` and `ynz_panic_div_by_zero` now accept `(op_name, file, offset, col)`. Codegen emits the source_file global + span byte offset at each arithmetic panic site.
 ~~17. `ariadne` render `.expect()` panics on out-of-range span~~ **FIXED (Batch 7.3)** — replaced with graceful degradation: writes `<unable to render diagnostic for {file}: {error}>` and continues rendering remaining diagnostics.
@@ -109,8 +121,8 @@ No genuine conflicts between analyzers.
 ~~35. `spec/collections.md` uses banned `type` keyword~~ **FIXED (Batch 4c)** — changed to `shape` at all 3 sites + section header
 
 ### Documentation (HIGH)
-36. 9 unsafe FFI map functions missing `# Safety` contracts — `crates/ynz-runtime/src/lib.rs:568, 583, 605, 629, 664, 674, 688, 706, 732`
-37. `map_grow_int` / `map_grow_str` side-effect contract undocumented — `crates/ynz-runtime/src/lib.rs:464, 499` (×2 growth, 75% LF, slot pointers invalidated)
+~~36. 9 unsafe FFI map functions missing `# Safety` contracts~~ **FIXED (Batch 8)** — all map/siphash/array FFI functions now have `# Safety` docs; all `#[allow(clippy::missing_safety_doc)]` suppression annotations removed.
+~~37. `map_grow_int` / `map_grow_str` side-effect contract undocumented~~ **FIXED (Batch 8)** — both functions now have doc comments naming the ×2 growth, 75% LF trigger, and slot-pointer invalidation contract.
 
 ### UX (HIGH)
 39. `check.rs:444` parameter-reassignment WHY references shipped M4 as future
@@ -124,7 +136,7 @@ No genuine conflicts between analyzers.
 ### Redundancy (HIGH)
 46. Typeck test scaffolding duplicate across 7 files — `crates/ynz-typeck/tests/*.rs`
 47. Codegen `run_mN_codegen` pattern × 4 — `crates/ynz-codegen/tests/golden.rs:61-71, 191-200, 300-309, 374-387`
-48. `build_project` / `build_single_file` share warning-render block — `crates/ynz-driver/src/build.rs:151-163, 379-395`
+~~48. `build_project` / `build_single_file` share warning-render block~~ **FIXED (Batch 8)** — `render_warnings(diags, sources)` helper extracted; both sites use it.
 
 ---
 
@@ -134,7 +146,7 @@ No genuine conflicts between analyzers.
 - ~~`validate_underscores` misses leading `_` in hex/binary literals (`0x_FF` accepted)~~ **FIXED (Batch 5a)** — leading `_` check added to `lex_hex_int` / `lex_binary_int` before `validate_underscores`
 - `parse_string_to_int` rejects `i64::MIN` (overflow before negate) — `crates/ynz-runtime/src/lib.rs:1014-1030`
 ~~- `find_project_root` discrepancy between driver + typeck implementations~~ **FIXED (Batch 6.13)** — `has_project_root` now uses unified `find_project_root` helper.
-- `mangle_type` ambiguous Debug-format catch-all — `crates/ynz-codegen/src/emit.rs:292-311`
+~~- `mangle_type` ambiguous Debug-format catch-all~~ **FIXED (Batch 8)** — all 20 `Type` variants explicitly handled; `Type::Error` panics with clear message; exhaustive match forces new variants to be addressed.
 
 ### Reliability
 - Partial/corrupt binary left after linker crash — `crates/ynz-driver/src/build.rs:333-373, 139-171`
@@ -161,17 +173,17 @@ No genuine conflicts between analyzers.
 - Lexer allocates `String` per numeric literal to strip underscores
 
 ### Redundancy / Consolidation
-- "Unknown field" diagnostic × 3 in check.rs
-- `not_defined` diagnostic × 3 in check.rs
+~~- "Unknown field" diagnostic × 3 in check.rs~~ **FIXED (Batch 8)** — `emit_unknown_field_error` helper method on `Checker`; two `why` variants (access vs literal) via `is_struct_literal: bool`.
+~~- `not_defined` diagnostic × 3 in check.rs~~ **FIXED (Batch 8)** — `make_not_defined_diag` free function; all three call sites use it.
 - `collect_options` invoked redundantly at 2 remaining sites: `check.rs:52` and `emit.rs:141-143` (the `resolve_import.rs` site was fixed by Batch 3 via `module_signatures_query` memoization; `collect_shapes` and `collect_signatures` are now memoized at those sites too)
 - Two `llvm_type_for` lookup functions in `emit.rs` (silent fall-through to ptr)
 ~~- `Diagnostic::file_error()` convenience missing (21 verbose call sites)~~ **FIXED (Batch 6.8)** — `file_error`, `file_warning`, `file_suggestion` added.
 
 ### Documentation
-- `build_module` 5-pass flow undocumented — `crates/ynz-codegen/src/emit.rs:129`
-- `sha256` missing spec citation + complexity — `crates/ynz-codegen/src/artifact.rs:17`
-- `Checker` struct field-group explanation missing — `crates/ynz-typeck/src/check.rs:87`
-- 3 crate-level docs missing (`ynz-parser`, `ynz-codegen`, `ynz-typeck`)
+~~- `build_module` 5-pass flow undocumented~~ **FIXED (Batch 8)** — 5-pass table in doc comment; ordering invariants documented.
+~~- `sha256` missing spec citation + complexity~~ **FIXED (Batch 8)** — FIPS 180-4 §6.2.2 cited; O(n)/O(n) complexity annotated; hand-roll vs `sha2` crate rationale added.
+~~- `Checker` struct field-group explanation missing~~ **FIXED (Batch 8)** — three field groups documented with reset-point commentary.
+~~- 3 crate-level docs missing (`ynz-parser`, `ynz-codegen`, `ynz-typeck`)~~ **FIXED (Batch 8)** — `//!` crate-level docs added to all three lib.rs files.
 ~~- SipHash zero-key choice unjustified in runtime~~ **FIXED (Batch 5b)** — algorithm, key seeding rationale, IV constants, and zero-key-OK-for-internal-use documented in section header
 
 ### UX
@@ -210,7 +222,7 @@ No genuine conflicts between analyzers.
 - `build_single_file` should call existing `link_objects` helper (linker invocation duplicated)
 ~~- `Vec<Diagnostic>` ⇄ `DiagnosticBucket` round-trip silently drops `hidden_count`~~ **FIXED (Batch 6.12)** — all salsa query outputs now store `DiagnosticBucket` directly.
 ~~- `options_table::tag_for` returns `i8` but variants reach 255 — switch to `u8`~~ **FIXED (Batch 6.14)** — changed to `u8`.
-- `errors_result_type` ABI contract for pointer types undocumented
+~~- `errors_result_type` ABI contract for pointer types undocumented~~ **FIXED (Batch 8)**
 ~~- `ExportTable::eq` coarse-equality risk documented on impl, not at field comparison~~ **VERIFIED FIXED (Batch 6.15)** — `PartialEq` is derived; no coarse manual impl.
 - Float-to-string buffer can truncate — `crates/ynz-runtime/src/lib.rs:171-184`
 - ~~`lex_decimal_number` accepts `3.` — spec inconsistency~~ **FIXED (Batch 5a)** — `3.` followed by non-digit/non-alpha emits diagnostic; `42.toString()` still works
@@ -218,8 +230,8 @@ No genuine conflicts between analyzers.
 - `ynz_decimal_to_float` silent fallback to 0.0 — `crates/ynz-runtime/src/lib.rs:851-859`
 - ~~`link_objects` temp lib cleanup not in finally-pattern~~ **FIXED (Batch 4b)** — `NamedTempFile` drop handles cleanup
 - Generic vs non-generic function name collision not caught — `crates/ynz-typeck/src/signatures.rs:80-91`
-- 8 magic-number rename opportunities in `ynz-runtime`
-- 6 documentation-naming improvements (sha-256 state vars, runtime capacity constants)
+~~- 8 magic-number rename opportunities in `ynz-runtime`~~ **FIXED (Batch 8)** — 5 constants extracted (`DECIMAL128_STRING_BUF_LEN`, `INT64_STRING_BUF_LEN`, `INITIAL_ORDER_CAP`, `INITIAL_MAP_CAPACITY`, `INITIAL_ARRAY_CAPACITY`).
+~~- 6 documentation-naming improvements (sha-256 state vars, runtime capacity constants)~~ **FIXED (Batch 8)**
 - `Lexer` struct three-mode state machine undocumented
 - `parse_toml_string` parameter contract undocumented
 ~~Spec `overview.md` says "12 Golden Rules" — should be 13~~ **FIXED (Batch 4c)** — updated to 13 with Rule 13 text added

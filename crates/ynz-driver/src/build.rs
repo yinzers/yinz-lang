@@ -8,9 +8,31 @@ static RUNTIME_LIB_BYTES: &[u8] = include_bytes!(env!("YNZ_RT_LIB_PATH"));
 
 use ynz_codegen::codegen_query;
 use ynz_diagnostics::{render, DiagnosticBucket, SourceSpan};
-use ynz_parser::{CompilerDb, SourceFile};
+use ynz_parser::{parse_query, CompilerDb, SourceFile};
 
 use crate::load::{find_project_root, load_project, load_project_config, load_source};
+
+/// Filter `diags` to non-error diagnostics and render them as a string.
+///
+/// Returns an empty string when there are no warnings or suggestions.
+fn render_warnings(
+    diags: &DiagnosticBucket,
+    sources: &std::collections::HashMap<String, String>,
+) -> String {
+    let has_warnings = diags
+        .iter()
+        .any(|d| d.severity != ynz_diagnostics::Severity::Error);
+    if !has_warnings {
+        return String::new();
+    }
+    let mut bucket = DiagnosticBucket::new();
+    for d in diags.iter() {
+        if d.severity != ynz_diagnostics::Severity::Error {
+            bucket.push(d.clone());
+        }
+    }
+    render(&bucket, sources, false)
+}
 
 /// Whether a failed build was caused by user source errors or an infra problem.
 pub enum FailureKind {
@@ -144,6 +166,46 @@ fn build_project(root: &Path, output_dir: Option<&Path>) -> BuildResult {
         source_files.push((sf, entry));
     }
 
+    // Pass 1.5: reject projects with more than one `entrypoint` function declaration.
+    //
+    // Each file's `entrypoint` would be renamed to the C `main` symbol at link time;
+    // two files both declaring it produces a linker collision with a confusing C-level
+    // error message.  Catching it here gives a teaching diagnostic instead.
+    {
+        let mut entrypoint_files: Vec<String> = Vec::new();
+        for (sf, entry) in &source_files {
+            let parse = parse_query(&db, *sf);
+            let has_entrypoint = parse.module.items.iter().any(|item| {
+                if let ynz_ast::nodes::Item::Function(f) = item {
+                    f.name == "entrypoint"
+                } else {
+                    false
+                }
+            });
+            if has_entrypoint {
+                entrypoint_files.push(entry.path.display().to_string());
+            }
+        }
+        if entrypoint_files.len() > 1 {
+            let file_a = &entrypoint_files[0];
+            let file_b = &entrypoint_files[1];
+            diags.push(ynz_diagnostics::Diagnostic::error(
+                SourceSpan::new(file_b.clone(), 0, 0),
+                format!(
+                    "Project has more than one `entrypoint` function — defined in `{file_a}` and `{file_b}`."
+                ),
+                format!(
+                    "Yinz programs have exactly one entrypoint, declared in the file named by \
+                     `entry` in `yinz.toml`. Remove or rename `entrypoint` in `{file_b}`."
+                ),
+                "The `entrypoint` function is the program's starting point. Allowing multiple \
+                 would create ambiguity at link time (each gets emitted as the C `main` symbol) \
+                 and at semantics (which one runs?). Yinz refuses both.",
+            ));
+            return build_failed_diags(diags, &all_source_texts, FailureKind::CompileError);
+        }
+    }
+
     // Pass 2: run codegen for each file now that all SourceFiles are registered.
     // Intermediates are written into a per-invocation temp dir to avoid races when
     // two `ynz build` invocations run on the same project concurrently.
@@ -223,20 +285,7 @@ fn build_project(root: &Path, output_dir: Option<&Path>) -> BuildResult {
 
     match result {
         Ok(()) => {
-            let has_warnings = diags
-                .iter()
-                .any(|d| d.severity != ynz_diagnostics::Severity::Error);
-            let stderr_output = if has_warnings {
-                let mut bucket = DiagnosticBucket::new();
-                for d in diags.iter() {
-                    if d.severity != ynz_diagnostics::Severity::Error {
-                        bucket.push(d.clone());
-                    }
-                }
-                render(&bucket, &all_source_texts, false)
-            } else {
-                String::new()
-            };
+            let stderr_output = render_warnings(&diags, &all_source_texts);
             BuildResult {
                 binary: Some(binary_path),
                 stderr_output,
@@ -502,25 +551,10 @@ fn build_single_file(source_path: &Path, output_dir: Option<&Path>) -> BuildResu
             build_failed(diags, source_path, FailureKind::InfraError)
         }
         Ok(_) => {
-            // Render any warnings so the user sees them even though the build succeeded.
-            let has_warnings = codegen_out
-                .diagnostics
-                .iter()
-                .any(|d| d.severity != ynz_diagnostics::Severity::Error);
-            let stderr_output = if has_warnings {
-                let mut bucket = DiagnosticBucket::new();
-                for d in codegen_out.diagnostics.iter() {
-                    if d.severity != ynz_diagnostics::Severity::Error {
-                        bucket.push(d.clone());
-                    }
-                }
-                let sources = std::fs::read_to_string(source_path)
-                    .map(|text| std::collections::HashMap::from([(file_name.clone(), text)]))
-                    .unwrap_or_default();
-                render(&bucket, &sources, false)
-            } else {
-                String::new()
-            };
+            let sources = std::fs::read_to_string(source_path)
+                .map(|text| std::collections::HashMap::from([(file_name.clone(), text)]))
+                .unwrap_or_default();
+            let stderr_output = render_warnings(&codegen_out.diagnostics, &sources);
             let ir_text = {
                 let ir = &codegen_out.artifact.ir_text;
                 if ir.is_empty() { None } else { Some(ir.clone()) }

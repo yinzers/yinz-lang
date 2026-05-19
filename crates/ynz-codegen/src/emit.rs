@@ -129,6 +129,21 @@ struct ModuleGlobals<'ctx> {
     source_file: GlobalValue<'ctx>,
 }
 
+/// Emit LLVM IR for one Yinz source module.
+///
+/// # Flow (5 passes — order is mandatory)
+///
+/// | Pass | What | Requires from prior passes |
+/// |------|------|---------------------------|
+/// | 0 | Emit LLVM struct types for all user-defined shapes | nothing |
+/// | 1 | Forward-declare every non-generic function | Pass 0 (shape types used in param/return types) |
+/// | 1.5 | Forward-declare monomorphized generic functions | Pass 0 + Pass 1 (non-generic functions may be called from generic bodies) |
+/// | 1.6 | Emit vtable globals for `dynamic Foo` dispatch | Pass 1 (vtable entries point to forward-declared function values) |
+/// | 2 | Emit non-generic function bodies (and lower generic instances) | All prior passes (bodies call functions, construct shapes, dispatch via vtables) |
+///
+/// Generic functions are lowered during Pass 2 by iterating `mono_table` entries, not
+/// by walking the AST's `Item::Function` list — by Pass 2 every generic call site has
+/// already been collected into `mono_table` by the typeck pass.
 fn build_module<'ctx, 'g>(
     ctx: &'ctx Context,
     module: &'g Module<'ctx>,
@@ -301,17 +316,40 @@ fn mangle_type(ty: &Type) -> String {
         Type::Bool => "boolean".to_string(),
         Type::String => "string".to_string(),
         Type::Nothing => "nothing".to_string(),
-        Type::Shape { name } => name.clone(),
+        Type::Shape { name } => format!("shape_{name}"),
+        Type::Dynamic { contract } => format!("dyn_{contract}"),
         Type::BuiltinArray { elem } => format!("array_{}", mangle_type(elem)),
-        Type::BuiltinFixed { elem, .. } => format!("fixed_{}", mangle_type(elem)),
+        Type::BuiltinFixed { elem, size } => {
+            format!("fixed_{}_{}", size.unwrap_or(0), mangle_type(elem))
+        }
         Type::Maybe { inner } => format!("maybe_{}", mangle_type(inner)),
         Type::Generic { name, args } => {
             let arg_str = args.iter().map(mangle_type).collect::<Vec<_>>().join("_");
             format!("{name}_{arg_str}")
         }
-        other => format!("{other:?}")
-            .to_lowercase()
-            .replace([' ', '{', '}', '"', ':'], "_"),
+        Type::TypeParam { name } => format!("tparam_{name}"),
+        Type::Number { precision } => format!("number_{precision}"),
+        Type::Range { element, end_inclusive } => {
+            format!("range_{}{}", mangle_type(element), if *end_inclusive { "_inc" } else { "" })
+        }
+        Type::BuiltinMap { key, val } => {
+            format!("map_{}_{}", mangle_type(key), mangle_type(val))
+        }
+        Type::MapEntry { key, val } => {
+            format!("mapentry_{}_{}", mangle_type(key), mangle_type(val))
+        }
+        Type::Options { name } => format!("options_{name}"),
+        Type::Union { variants } => {
+            let parts: Vec<_> = variants.iter().map(mangle_type).collect();
+            format!("union_{}", parts.join("_or_"))
+        }
+        Type::ErrorsCapable { inner } => format!("errors_{}", mangle_type(inner)),
+        Type::Sensitive { inner } => format!("sensitive_{}", mangle_type(inner)),
+        // Type::Error should never reach codegen — an earlier phase should have
+        // caught all type errors and stopped compilation. Panic here so it's
+        // visible immediately if it ever does (instead of silently emitting a
+        // mangled name that causes a mysterious linker error).
+        Type::Error => panic!("Type::Error reached mangle_type — compilation should have stopped at typeck"),
     }
 }
 
@@ -508,8 +546,17 @@ fn declare_function<'ctx>(
 
 /// LLVM struct type for errors-capable return values: `{i64, i64}`.
 ///
-/// field 0 = error pointer as i64 (0 = success, non-zero = *YnzError on heap)
-/// field 1 = success value as i64 bits (valid only when field 0 = 0)
+/// LLVM struct type for the `errors`-keyword return encoding: `{i64, i64}`.
+///
+/// # ABI contract
+///
+/// - `field 0` (i64): error pointer — `0` means success; non-zero is a `*YnzError`
+///   heap pointer cast to i64.
+/// - `field 1` (i64): success value bits — valid ONLY when `field 0 == 0`.
+///   - Scalar types (int, bool, float): stored directly as i64.
+///   - Pointer-typed success values (string, shape, array, …): the heap pointer is
+///     cast to i64.  Callers must cast `field 1` back to the appropriate pointer
+///     type before dereferencing.
 fn errors_result_type(ctx: &Context) -> inkwell::types::StructType<'_> {
     ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false)
 }

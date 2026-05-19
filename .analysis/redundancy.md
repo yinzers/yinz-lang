@@ -30,19 +30,19 @@
 - **Pattern**: identical 6-line: create db, SourceFile, `codegen_query`, check diags, return artifact. Only the file-name and source constants differ.
 - **Fix**: `fn run_codegen_for(file: &str, source: &str) -> Option<CompiledArtifact>` — call sites become one-liner wrappers.
 
-## HIGH — `build_project` and `build_single_file` share warning-render block
+~~## HIGH — `build_project` and `build_single_file` share warning-render block~~ **FIXED (Batch 8)**
 
 - **File**: `crates/ynz-driver/src/build.rs:151-163` and `:379-395`
 - **Pattern**: filter non-errors → new `DiagnosticBucket` → push each warning → render
 - **Fix**: `fn render_warnings(diags, sources) -> String`. Also: `build_failed` / `build_failed_diags` share `BuildResult` construction — can merge once.
 
-## MEDIUM — "Unknown field" diagnostic block × 3 in check.rs
+~~## MEDIUM — "Unknown field" diagnostic block × 3 in check.rs~~ **FIXED (Batch 8)**
 
 - **File**: `crates/ynz-typeck/src/check.rs:2546-2563, 2621-2637, 2842-2864`
 - **Pattern**: build `available` field list → `find_closest_name` → conditional "Did you mean" / "has these fields" what_instead → error diagnostic
 - **Fix**: `fn emit_unknown_field_error(self, shape_name, field, available, span, context: FieldErrorContext)` — enum distinguishes access vs struct-literal wording.
 
-## MEDIUM — `not_defined` diagnostic construction × 3
+~~## MEDIUM — `not_defined` diagnostic construction × 3~~ **FIXED (Batch 8)**
 
 - **File**: `crates/ynz-typeck/src/check.rs:425-430, 1193-1207, 1274-1288`
 - **Pattern**: candidates list (varies: scope only / scope+sigs / sigs+generics) → `find_closest_name` → "Did you mean" / fallback what_instead → "name is not defined" error

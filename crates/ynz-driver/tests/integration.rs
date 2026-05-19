@@ -1329,3 +1329,21 @@ fn m8_combo_doc_sensitive_bignum() {
         "sensitive must redact, reveal() must show raw, bignum field addition must be exact"
     );
 }
+
+#[test]
+fn duplicate_entrypoint_in_project_produces_teaching_diagnostic() {
+    // WHY: two files both declaring `function entrypoint()` would each be renamed
+    // to the C `main` symbol at link time, producing a confusing linker error.
+    // The driver must catch this before codegen and emit a Yinz-level diagnostic.
+    let project_root = fixtures_dir().join("m_duplicate_entrypoint");
+    let (_stdout, stderr, code) = ynz_run_stdout(&project_root);
+    assert_ne!(code, 0, "duplicate entrypoint must fail to build");
+    assert!(
+        stderr.contains("more than one `entrypoint`"),
+        "diagnostic must name the duplicate-entrypoint problem; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("yinz.toml"),
+        "diagnostic must mention yinz.toml so the user knows where to set the entry file; got:\n{stderr}"
+    );
+}

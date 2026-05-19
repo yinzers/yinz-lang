@@ -90,8 +90,7 @@ pub extern "C" fn ynz_decimal_from_int(x: i64, out: *mut D128) {
 #[no_mangle]
 pub extern "C" fn ynz_decimal_to_string(a: *const D128) -> *const u8 {
     thread_local! {
-        // 48 bytes: 34 digits + sign + decimal point + exponent + null = comfortably enough
-        static BUF: std::cell::RefCell<[u8; 48]> = const { std::cell::RefCell::new([0u8; 48]) };
+        static BUF: std::cell::RefCell<[u8; DECIMAL128_STRING_BUF_LEN]> = const { std::cell::RefCell::new([0u8; DECIMAL128_STRING_BUF_LEN]) };
     }
     let s = format(load(a));
     let bytes = s.as_bytes();
@@ -165,8 +164,7 @@ pub unsafe extern "C" fn ynz_panic_div_by_zero(
 #[no_mangle]
 pub extern "C" fn ynz_int_to_string(x: i64) -> *const u8 {
     thread_local! {
-        // 64-bit int: max 20 digits + sign + null = 22 bytes
-        static BUF: std::cell::RefCell<[u8; 22]> = const { std::cell::RefCell::new([0u8; 22]) };
+        static BUF: std::cell::RefCell<[u8; INT64_STRING_BUF_LEN]> = const { std::cell::RefCell::new([0u8; INT64_STRING_BUF_LEN]) };
     }
     let s = format!("{x}");
     let bytes = s.as_bytes();
@@ -284,6 +282,42 @@ pub unsafe extern "C" fn ynz_free(ptr: *mut u8, _size: usize) {
     free(ptr as *mut core::ffi::c_void);
 }
 
+// ── Capacity / buffer size constants ─────────────────────────────────────────
+//
+// Named here so the rationale is co-located with the values and tuning them
+// updates all uses automatically.
+
+/// Thread-local buffer length for `ynz_decimal_to_string`.
+///
+/// decimal128 max: 34 significant digits + sign + decimal point + exponent ("E+N") +
+/// null terminator = ≤ 40 bytes. 48 rounds up to a cache-friendly size with margin.
+const DECIMAL128_STRING_BUF_LEN: usize = 48;
+
+/// Thread-local buffer length for `ynz_int_to_string`.
+///
+/// i64 max: 20 decimal digits + sign + null terminator = 22 bytes.
+const INT64_STRING_BUF_LEN: usize = 22;
+
+/// Initial insertion-order buffer capacity for a new map.
+///
+/// 64 entries: accommodates typical Yinz maps without a growth step; tuned
+/// alongside `INITIAL_MAP_CAPACITY` so the order buffer only grows when the
+/// hash table itself has already grown at least twice.
+const INITIAL_ORDER_CAP: i64 = 64;
+
+/// Initial hash-table capacity for a new map.
+///
+/// 16 slots: gives room for up to 12 entries before the 75% load-factor
+/// threshold triggers the first ×2 growth. Power-of-two required by the
+/// bitmask probe arithmetic `(hash >> 7) & (cap - 1)`.
+const INITIAL_MAP_CAPACITY: i64 = 16;
+
+/// Initial data-buffer capacity for a new array (in elements).
+///
+/// 8 elements × 8 bytes = 64 bytes = one typical cache line; avoids an
+/// immediate realloc on the first push while keeping initial allocation small.
+const INITIAL_ARRAY_CAPACITY: i64 = 8;
+
 // ── SipHash-2-4 (M5 P4b) ─────────────────────────────────────────────────────
 //
 // Algorithm: SipHash-2-4 (Aumasson & Bernstein, 2012).
@@ -398,9 +432,8 @@ pub extern "C" fn ynz_siphash_i64(value: i64) -> u64 {
 /// Hash a null-terminated string key.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer to a null-terminated byte string.
+/// `ptr` must be a non-null pointer to a valid null-terminated byte string.
 #[no_mangle]
-#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn ynz_siphash_str(ptr: *const u8) -> u64 {
     let mut len = 0;
     while *ptr.add(len) != 0 {
@@ -465,7 +498,7 @@ unsafe fn map_alloc(capacity: i64) -> *mut YnzMap {
                   an inconsistent map.");
         std::process::abort();
     }
-    let order_cap: i64 = 64;
+    let order_cap: i64 = INITIAL_ORDER_CAP;
     let order = malloc((order_cap as usize) * 8) as *mut i64;
     if order.is_null() {
         eprintln!("RUNTIME ERROR: Out of memory while allocating a new map. \
@@ -487,11 +520,13 @@ unsafe fn map_alloc(capacity: i64) -> *mut YnzMap {
     hdr
 }
 
-/// Allocate a new empty map with initial capacity 16.
+/// Allocate a new empty map with initial capacity [`INITIAL_MAP_CAPACITY`].
+///
+/// # Safety
+/// The returned pointer is valid and must be freed with [`ynz_map_drop`].
 #[no_mangle]
-#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn ynz_map_new() -> *mut YnzMap {
-    map_alloc(16)
+    map_alloc(INITIAL_MAP_CAPACITY)
 }
 
 unsafe fn find_slot(map: *const YnzMap, hash: u64, key: i64) -> Option<usize> {
@@ -534,6 +569,21 @@ unsafe fn find_insert_slot(map: *const YnzMap, hash: u64) -> usize {
     }
 }
 
+/// Grow an int-keyed map to ×2 capacity.
+///
+/// # Side effects
+///
+/// - Allocates three new arrays (ctrl, keys, vals) of `2 × capacity` slots each.
+/// - Rehashes all live entries into the new arrays.
+/// - Frees the old ctrl, keys, and vals arrays.
+/// - Updates `map.ctrl`, `map.keys`, `map.vals`, and `map.capacity` in place.
+///   Any previously obtained raw pointers into these arrays are INVALIDATED.
+///   The `insert_order` / `order_cap` / `count` fields are NOT modified.
+/// - Aborts the process on OOM (Yinz programs cannot recover from out-of-memory).
+///
+/// # Growth trigger
+///
+/// Called by `ynz_map_set` when `count * 4 >= capacity * 3` (75% load factor).
 unsafe fn map_grow_int(map: *mut YnzMap) {
     let old_cap = (*map).capacity;
     let new_cap = old_cap * 2;
@@ -590,6 +640,11 @@ unsafe fn map_grow_int(map: *mut YnzMap) {
     (*map).capacity = new_cap;
 }
 
+/// Grow a string-keyed map to ×2 capacity.
+///
+/// Same side-effect contract as `map_grow_int` except rehashing uses
+/// `ynz_siphash_str` (pointer-to-string keys) instead of `ynz_siphash_i64`.
+/// String key POINTERS are preserved as-is (the map stores pointers, not copies).
 unsafe fn map_grow_str(map: *mut YnzMap) {
     let old_cap = (*map).capacity;
     let new_cap = old_cap * 2;
@@ -684,9 +739,9 @@ unsafe fn cstr_eq_raw(a: *const u8, b: *const u8) -> bool {
 /// Get a value by i64 key. Writes `[has_value, value]` into `out`.
 ///
 /// # Safety
-/// `map` and `out` must be valid non-null pointers.
+/// - `map` must be a non-null pointer returned by `ynz_map_new` and not yet freed.
+/// - `out` must point to a writable `[i64; 2]` array.
 #[no_mangle]
-#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn ynz_map_get(map: *const YnzMap, key: i64, out: *mut [i64; 2]) {
     let hash = ynz_siphash_i64(key);
     match find_slot(map, hash, key) {
@@ -699,9 +754,10 @@ pub unsafe extern "C" fn ynz_map_get(map: *const YnzMap, key: i64, out: *mut [i6
 /// Writes `[has_value, value]` into `out`.
 ///
 /// # Safety
-/// `map`, `key`, and `out` must be valid non-null pointers.
+/// - `map` must be a non-null pointer returned by `ynz_map_new` and not yet freed.
+/// - `key` must be a non-null pointer to a valid null-terminated byte string.
+/// - `out` must point to a writable `[i64; 2]` array.
 #[no_mangle]
-#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn ynz_map_get_str(map: *const YnzMap, key: *const u8, out: *mut [i64; 2]) {
     let cap = (*map).capacity as usize;
     for i in 0..cap {
@@ -721,9 +777,10 @@ pub unsafe extern "C" fn ynz_map_get_str(map: *const YnzMap, key: *const u8, out
 /// Set a key-value pair with an i64 key.
 ///
 /// # Safety
-/// `map` must be a valid non-null pointer returned by `ynz_map_new`.
+/// - `map` must be a non-null pointer returned by `ynz_map_new` and not yet freed.
+/// - May grow the map (×2 capacity at 75% load factor), invalidating any previously
+///   obtained slot pointers into the map's internal arrays.
 #[no_mangle]
-#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn ynz_map_set(map: *mut YnzMap, key: i64, value: i64) {
     if (*map).count * 4 >= (*map).capacity * 3 {
         map_grow_int(map);
@@ -745,9 +802,12 @@ pub unsafe extern "C" fn ynz_map_set(map: *mut YnzMap, key: i64, value: i64) {
 /// Set a key-value pair with a string key (pointer to null-terminated bytes).
 ///
 /// # Safety
-/// `map` and `key` must be valid non-null pointers.
+/// - `map` must be a non-null pointer returned by `ynz_map_new` and not yet freed.
+/// - `key` must be a non-null pointer to a valid null-terminated byte string that
+///   remains valid for the lifetime of the map (the map stores the pointer, not a copy).
+/// - May grow the map (×2 capacity at 75% load factor), invalidating any previously
+///   obtained slot pointers into the map's internal arrays.
 #[no_mangle]
-#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn ynz_map_set_str(map: *mut YnzMap, key: *const u8, value: i64) {
     if (*map).count * 4 >= (*map).capacity * 3 {
         map_grow_str(map);
@@ -788,9 +848,8 @@ pub unsafe extern "C" fn ynz_map_set_str(map: *mut YnzMap, key: *const u8, value
 /// Return the number of key-value pairs.
 ///
 /// # Safety
-/// `map` must be a valid non-null pointer.
+/// `map` must be a non-null pointer returned by `ynz_map_new` and not yet freed.
 #[no_mangle]
-#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn ynz_map_count(map: *const YnzMap) -> i64 {
     (*map).count
 }
@@ -798,9 +857,8 @@ pub unsafe extern "C" fn ynz_map_count(map: *const YnzMap) -> i64 {
 /// Check if an i64 key exists. Returns 1 if found, 0 otherwise.
 ///
 /// # Safety
-/// `map` must be a valid non-null pointer.
+/// `map` must be a non-null pointer returned by `ynz_map_new` and not yet freed.
 #[no_mangle]
-#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn ynz_map_has(map: *const YnzMap, key: i64) -> i64 {
     let hash = ynz_siphash_i64(key);
     match find_slot(map, hash, key) {
@@ -812,9 +870,9 @@ pub unsafe extern "C" fn ynz_map_has(map: *const YnzMap, key: i64) -> i64 {
 /// Get the entry at insertion-order position `pos`. Writes `[has, key, value]` into `out`.
 ///
 /// # Safety
-/// `map` and `out` must be valid non-null pointers.
+/// - `map` must be a non-null pointer returned by `ynz_map_new` and not yet freed.
+/// - `out` must point to a writable `[i64; 3]` array.
 #[no_mangle]
-#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn ynz_map_iter_get(map: *const YnzMap, pos: i64, out: *mut [i64; 3]) {
     if pos < 0 || pos >= (*map).count {
         *out = [0, 0, 0];
@@ -830,9 +888,11 @@ pub unsafe extern "C" fn ynz_map_iter_get(map: *const YnzMap, pos: i64, out: *mu
 /// Writes `[has, key_ptr_as_i64, value]` into `out`.
 ///
 /// # Safety
-/// `map` and `out` must be valid non-null pointers.
+/// - `map` must be a non-null pointer returned by `ynz_map_new` and not yet freed.
+/// - `out` must point to a writable `[i64; 3]` array.
+/// - The `key_ptr_as_i64` written into `out[1]` is a pointer cast to i64; callers
+///   must cast it back to `*const u8` before dereferencing.
 #[no_mangle]
-#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn ynz_map_iter_get_str(map: *const YnzMap, pos: i64, out: *mut [i64; 3]) {
     if pos < 0 || pos >= (*map).count {
         *out = [0, 0, 0];
@@ -856,9 +916,9 @@ pub unsafe extern "C" fn ynz_map_iter_get_str(map: *const YnzMap, pos: i64, out:
 /// Free all memory associated with the map.
 ///
 /// # Safety
-/// `map` must be a valid non-null pointer returned by `ynz_map_new` and not yet freed.
+/// `map` must be a non-null pointer returned by `ynz_map_new` and not yet freed.
+/// After this call, `map` is a dangling pointer and must not be used.
 #[no_mangle]
-#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn ynz_map_drop(map: *mut YnzMap) {
     free((*map).ctrl as *mut core::ffi::c_void);
     free((*map).keys as *mut core::ffi::c_void);
@@ -880,15 +940,29 @@ pub struct YnzArray {
     cap: i64,
 }
 
-/// Allocate a new empty array with an initial capacity of 8 elements.
+/// Allocate a new empty array with an initial capacity of [`INITIAL_ARRAY_CAPACITY`] elements.
 ///
 /// # Safety
 /// Returns a heap pointer. Caller must free with `ynz_array_drop`.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_array_new() -> *mut YnzArray {
-    let cap: i64 = 8;
+    let cap: i64 = INITIAL_ARRAY_CAPACITY;
     let data = malloc((cap as usize) * 8) as *mut u8;
+    if data.is_null() {
+        eprintln!("RUNTIME ERROR: Out of memory while allocating a new array. \
+                  The program tried to create an array but the system couldn't \
+                  allocate memory. Yinz aborts rather than continuing with \
+                  an inconsistent state.");
+        std::process::abort();
+    }
     let hdr = malloc(std::mem::size_of::<YnzArray>()) as *mut YnzArray;
+    if hdr.is_null() {
+        eprintln!("RUNTIME ERROR: Out of memory while allocating a new array. \
+                  The program tried to create an array but the system couldn't \
+                  allocate memory. Yinz aborts rather than continuing with \
+                  an inconsistent state.");
+        std::process::abort();
+    }
     (*hdr) = YnzArray { data, len: 0, cap };
     hdr
 }
@@ -898,7 +972,7 @@ pub unsafe extern "C" fn ynz_array_new() -> *mut YnzArray {
 /// Doubles the capacity when full (amortized O(1) push).
 ///
 /// # Safety
-/// `arr` must be a valid pointer returned by `ynz_array_new`.
+/// `arr` must be a non-null pointer returned by `ynz_array_new` and not yet freed.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_array_push(arr: *mut YnzArray, value: i64) {
     if (*arr).len == (*arr).cap {
@@ -907,6 +981,13 @@ pub unsafe extern "C" fn ynz_array_push(arr: *mut YnzArray, value: i64) {
             (*arr).data as *mut core::ffi::c_void,
             (new_cap as usize) * 8,
         ) as *mut u8;
+        if new_data.is_null() {
+            eprintln!("RUNTIME ERROR: Out of memory while growing an array. \
+                      The program tried to push to an array but the system couldn't \
+                      allocate more memory. Yinz aborts rather than continuing with \
+                      an inconsistent state.");
+            std::process::abort();
+        }
         (*arr).data = new_data;
         (*arr).cap = new_cap;
     }
@@ -2350,6 +2431,56 @@ mod m7_string_runtime {
             assert_eq!(ynz_string_validate_utf8(b"\xC3\xA9".as_ptr(), 2), 1);
             // Invalid: orphan continuation byte
             assert_eq!(ynz_string_validate_utf8(b"\x80".as_ptr(), 1), 0);
+        }
+    }
+}
+
+// ── M5 P4a: array runtime tests ───────────────────────────────────────────────
+#[cfg(test)]
+mod array_runtime {
+    use super::*;
+
+    #[test]
+    fn array_new_push_get_count() {
+        // WHY: guards that ynz_array_new initialises a valid empty array and
+        // that ynz_array_push grows it correctly.  Any regression in the null-
+        // check or capacity arithmetic trips these asserts.
+        unsafe {
+            let arr = ynz_array_new();
+            assert!(!arr.is_null(), "ynz_array_new must return non-null");
+            assert_eq!(ynz_array_count(arr), 0, "new array must have count 0");
+
+            ynz_array_push(arr, 10);
+            ynz_array_push(arr, 20);
+            ynz_array_push(arr, 30);
+            assert_eq!(ynz_array_count(arr), 3, "count must equal number of pushes");
+
+            let mut out = [0i64; 2];
+            ynz_array_get(arr, 0, &mut out);
+            assert_eq!(out, [1, 10], "get(0) must return [1, 10]");
+            ynz_array_get(arr, 2, &mut out);
+            assert_eq!(out, [1, 30], "get(2) must return [1, 30]");
+            ynz_array_get(arr, 3, &mut out);
+            assert_eq!(out, [0, 0], "get(OOB) must return [0, 0]");
+
+            ynz_array_drop(arr);
+        }
+    }
+
+    #[test]
+    fn array_push_beyond_initial_capacity_grows() {
+        // WHY: INITIAL_ARRAY_CAPACITY = 8; pushing 16 elements forces one realloc.
+        // Verifies the realloc null-check path doesn't break normal growth.
+        unsafe {
+            let arr = ynz_array_new();
+            for i in 0..16i64 {
+                ynz_array_push(arr, i * 100);
+            }
+            assert_eq!(ynz_array_count(arr), 16, "must have 16 elements after growth");
+            let mut out = [0i64; 2];
+            ynz_array_get(arr, 15, &mut out);
+            assert_eq!(out, [1, 1500], "element 15 must be 15*100 = 1500");
+            ynz_array_drop(arr);
         }
     }
 }

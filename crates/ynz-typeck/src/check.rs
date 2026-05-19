@@ -85,14 +85,33 @@ pub fn check(
 }
 
 struct Checker<'b> {
+    // ── Borrowed look-up tables (module-wide, read-only during check) ─────────
+    //
+    // These tables are built by the signature pre-pass and imported symbol
+    // resolution before `check_module` runs.  They never change during a single
+    // check pass.
     intrinsics: &'b PrimitiveIntrinsicTable,
     sig_table: &'b SignatureTable,
     shape_table: &'b ShapeTable,
     generic_fn_table: &'b GenericFnTable,
     generic_shape_table: &'b GenericShapeTable,
     options_table: &'b OptionsTable,
+
+    // ── Mutable module-level output ───────────────────────────────────────────
+    //
+    // These accumulate results across the entire module; they are NOT reset
+    // between functions.
     expr_types: HashMap<(usize, usize), Type>,
     diags: DiagnosticBucket,
+    /// Accumulated monomorphization entries for all generic call sites in this module.
+    mono_table: MonomorphizationTable,
+    /// M6: named union type aliases from `shape Shape = Circle | Square` declarations.
+    /// Maps alias name → resolved union type. Populated before check_module runs.
+    union_aliases: HashMap<String, Type>,
+
+    // ── Per-function mutable state ────────────────────────────────────────────
+    //
+    // Reset at the start of each function body (see `check_function`).
     scope: Scope,
     /// Return type of the function currently being checked.
     current_fn_ret: Type,
@@ -102,18 +121,27 @@ struct Checker<'b> {
     /// Type parameters in scope for the function currently being checked.
     /// Maps type-param name → unit; presence means the name resolves to `TypeParam`.
     type_param_scope: HashMap<String, ()>,
-    /// Accumulated monomorphization entries for all generic call sites in this module.
-    mono_table: MonomorphizationTable,
+    /// Whether the function currently being checked is itself errors_capable.
+    current_fn_errors_capable: bool,
+
+    // ── Flow-sensitive sets (reset per function; persist through if/else branches) ──
+    //
+    // `maybe_non_none` and `union_narrowed` are intentionally NOT reset between
+    // functions — they track narrowing that may span nested scope levels within a
+    // single function and are cleared at the start of each new function by
+    // `check_function`.  `errors_success_narrowed` and `errors_consumed` are
+    // explicitly cleared in `check_function` (see lines ~165-166).
+    //
+    // Summary of reset points:
+    //   errors_success_narrowed — cleared at the start of each function
+    //   errors_consumed          — cleared at the start of each function
+    //   maybe_non_none           — managed per scope-push/pop inside if-guards
+    //   union_narrowed           — managed per is-arm scope
     /// Flow-sensitive tracking: binding names known to be non-none inside an `.exists()` guard.
     maybe_non_none: HashSet<String>,
     /// M6: binding names narrowed to a specific union variant inside an `is`-arm body.
     /// Maps binding name → narrowed type (the specific variant type).
     union_narrowed: HashMap<String, Type>,
-    /// M6: named union type aliases from `shape Shape = Circle | Square` declarations.
-    /// Maps alias name → resolved union type. Populated before check_module runs.
-    union_aliases: HashMap<String, Type>,
-
-    // ── M7 P3a: errors-capable flow tracking ─────────────────────────────────
     /// Flow-sensitive: binding names known to be in the success state after a
     /// `.failed() == false` check or after auto-propagation fired. These bindings
     /// have narrowed from `ErrorsCapable<T>` to `T`.
@@ -122,8 +150,6 @@ struct Checker<'b> {
     /// a `.failed()` check. After consumption, calling `.failed()` is a compile
     /// error ("check-after-use").
     errors_consumed: HashSet<String>,
-    /// Whether the function currently being checked is itself errors_capable.
-    current_fn_errors_capable: bool,
 }
 
 impl<'b> Checker<'b> {
@@ -373,11 +399,11 @@ impl<'b> Checker<'b> {
         if let Expr::Background(_, bg_span) = value {
             self.diags.push(Diagnostic::error(
                 bg_span.clone(),
-                "Storing the result of `background` is not yet supported.",
+                "Capturing the output of `background` is not yet supported.",
                 "Drop the `let` binding — `background fn(...)` is a fire-and-forget statement in v0.1. \
                  The background-handle form (`.send` / `.receive`) ships in v0.3.",
                 "`background fn(...)` schedules a function to run outside the current scope. \
-                 In v0.1 the result is discarded (no way to await or send messages). \
+                 In v0.1 the output is discarded (no way to wait or send messages). \
                  Background handles will land in v0.3 per the concurrency roadmap.",
             ));
             self.scope.insert(
@@ -451,15 +477,11 @@ impl<'b> Checker<'b> {
             None => {
                 let mut candidates: Vec<&str> = self.scope.all_names();
                 candidates.extend(self.sig_table.all_names());
-                let suggestion = find_closest_name(target, &candidates);
-                let what_instead = match suggestion {
-                    Some(close) => format!("Did you mean `{close}`?"),
-                    None => format!("Declare it first: `let {target} = ...`"),
-                };
-                self.diags.push(Diagnostic::error(
+                self.diags.push(make_not_defined_diag(
+                    target,
                     target_span.clone(),
-                    format!("`{target}` is not defined."),
-                    what_instead,
+                    &candidates,
+                    format!("Declare it first: `let {target} = ...`"),
                     "You can only assign to variables that have been declared with `let`.",
                 ));
             }
@@ -1251,16 +1273,11 @@ impl<'b> Checker<'b> {
         let mut candidates: Vec<&str> = self.scope.all_names();
         candidates.extend(self.sig_table.all_names());
         candidates.extend(["print", "range"]);
-        let suggestion = find_closest_name(name, &candidates);
-        let what_instead = match suggestion {
-            Some(close) => format!("Did you mean `{close}`?"),
-            None => format!("Check the spelling, or declare it: `let {name} = ...`"),
-        };
-
-        self.diags.push(Diagnostic::error(
+        self.diags.push(make_not_defined_diag(
+            name,
             span.clone(),
-            format!("`{name}` is not defined."),
-            what_instead,
+            &candidates,
+            format!("Check the spelling, or declare it: `let {name} = ...`"),
             "Every name must be declared before it can be used.",
         ));
         Type::Error
@@ -1332,15 +1349,11 @@ impl<'b> Checker<'b> {
                 let mut candidates: Vec<&str> = self.sig_table.all_names();
                 candidates.extend(self.generic_fn_table.all_names());
                 candidates.extend(["print", "range"]);
-                let suggestion = find_closest_name(name, &candidates);
-                let what_instead = match suggestion {
-                    Some(close) => format!("Did you mean `{close}`?"),
-                    None => format!("Define `{name}` as a function or check the spelling."),
-                };
-                self.diags.push(Diagnostic::error(
+                self.diags.push(make_not_defined_diag(
+                    name,
                     call.callee.span().clone(),
-                    format!("`{name}` is not defined."),
-                    what_instead,
+                    &candidates,
+                    format!("Define `{name}` as a function or check the spelling."),
                     "The compiler looks up every name you call. If a name doesn't exist, the program can't run.",
                 ));
                 for arg in &call.args {
@@ -2612,17 +2625,13 @@ impl<'b> Checker<'b> {
                     Some(ty) => ty,
                     None => {
                         let available = generic_def.field_names();
-                        let suggestion = find_closest_name(field, &available);
-                        let what_instead = match suggestion {
-                            Some(close) => format!("Did you mean `{close}`?"),
-                            None => format!("`{name}` has these fields: {}", available.join(", ")),
-                        };
-                        self.diags.push(Diagnostic::error(
+                        self.emit_unknown_field_error(
+                            &name,
+                            field,
+                            &available,
                             field_span.clone(),
-                            format!("`{name}` does not have a field called `{field}`.",),
-                            what_instead,
-                            "Field names must match exactly what was declared in the `shape` body.",
-                        ));
+                            false,
+                        );
                         Type::Error
                     }
                 };
@@ -2689,17 +2698,13 @@ impl<'b> Checker<'b> {
         };
         let Some(field_def) = shape_def.field(field) else {
             let available: Vec<&str> = shape_def.fields.iter().map(|f| f.name.as_str()).collect();
-            let suggestion = find_closest_name(field, &available);
-            let what_instead = match suggestion {
-                Some(close) => format!("Did you mean `{close}`?"),
-                None => format!("`{shape_name}` has these fields: {}", available.join(", ")),
-            };
-            self.diags.push(Diagnostic::error(
+            self.emit_unknown_field_error(
+                &shape_name,
+                field,
+                &available,
                 field_span.clone(),
-                format!("`{shape_name}` does not have a field called `{field}`.",),
-                what_instead,
-                "Field names must match exactly what was declared in the `shape` body.",
-            ));
+                false,
+            );
             return Type::Error;
         };
         // Hidden field visibility: only accessible inside the declaring shape's functions.
@@ -2716,6 +2721,37 @@ impl<'b> Checker<'b> {
             }
         }
         field_def.ty.clone()
+    }
+
+    /// Emit a "shape X does not have a field called Y" diagnostic.
+    ///
+    /// Shared by field access on concrete/generic shapes and struct-literal unknown-field
+    /// checks.  The `why` wording differs slightly between access (reading a field that
+    /// doesn't exist) and literal construction (writing a field that doesn't exist).
+    fn emit_unknown_field_error(
+        &mut self,
+        shape_name: &str,
+        field: &str,
+        available: &[&str],
+        span: SourceSpan,
+        is_struct_literal: bool,
+    ) {
+        let suggestion = find_closest_name(field, available);
+        let what_instead = match suggestion {
+            Some(close) => format!("Did you mean `{close}`?"),
+            None => format!("`{shape_name}` has these fields: {}", available.join(", ")),
+        };
+        let why = if is_struct_literal {
+            "Shape values can only set fields declared on the shape."
+        } else {
+            "Field names must match exactly what was declared in the `shape` body."
+        };
+        self.diags.push(Diagnostic::error(
+            span,
+            format!("`{shape_name}` does not have a field called `{field}`."),
+            what_instead,
+            why,
+        ));
     }
 
     /// Type-check a struct literal `{ name: "x", health: 100 }` against the hint type.
@@ -2911,22 +2947,13 @@ impl<'b> Checker<'b> {
                         .filter(|f| !f.is_hidden)
                         .map(|f| f.name.as_str())
                         .collect();
-                    let suggestion = find_closest_name(&lit_field.name, &available);
-                    let what_instead = match suggestion {
-                        Some(close) => format!("Did you mean `{close}`?"),
-                        None => {
-                            format!("`{shape_name}` has these fields: {}", available.join(", "))
-                        }
-                    };
-                    self.diags.push(Diagnostic::error(
+                    self.emit_unknown_field_error(
+                        &shape_name,
+                        &lit_field.name,
+                        &available,
                         lit_field.name_span.clone(),
-                        format!(
-                            "`{shape_name}` does not have a field called `{}`.",
-                            lit_field.name
-                        ),
-                        what_instead,
-                        "Shape values can only set fields declared on the shape.",
-                    ));
+                        true,
+                    );
                     self.infer_expr(&lit_field.value, None);
                 }
                 Some(field_def) if field_def.is_hidden
@@ -3782,6 +3809,26 @@ fn suggest_conversion(lhs: &Type, rhs: &Type) -> String {
         }
         _ => "Check that both sides have the same type.".to_string(),
     }
+}
+
+/// Build a "not defined" diagnostic.
+///
+/// Searches `candidates` for a Levenshtein-close alternative.  When one is
+/// found the `what_instead` reads "Did you mean `close`?"; otherwise
+/// `fallback_what_instead` is used.
+fn make_not_defined_diag(
+    name: &str,
+    span: SourceSpan,
+    candidates: &[&str],
+    fallback_what_instead: String,
+    why: &str,
+) -> Diagnostic {
+    let suggestion = find_closest_name(name, candidates);
+    let what_instead = match suggestion {
+        Some(close) => format!("Did you mean `{close}`?"),
+        None => fallback_what_instead,
+    };
+    Diagnostic::error(span, format!("`{name}` is not defined."), what_instead, why)
 }
 
 /// Find the closest name using Levenshtein distance — for "did you mean?" suggestions.
