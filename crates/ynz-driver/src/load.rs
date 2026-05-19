@@ -155,23 +155,17 @@ pub struct SourceEntry {
     pub text: String,
 }
 
-/// Load all `.ynz` files under `root/src/` for a project build.
+/// Load all `.ynz` files under the project root for a project build.
 ///
+/// Prefers `root/src/` if it exists (conventional layout), but falls back
+/// to walking the whole project root so projects with arbitrary layouts work.
 /// Returns entries sorted by path for deterministic ordering.
 pub fn load_project(root: &Path, diags: &mut DiagnosticBucket) -> Vec<SourceEntry> {
     let src_dir = root.join("src");
-    if !src_dir.exists() {
-        diags.push(Diagnostic::error(
-            SourceSpan::new(root.display().to_string(), 0, 0),
-            "No `src/` directory found in the project root.",
-            "Create a `src/` directory and add your Yinz source files there.",
-            "`ynz build` expects source files under `src/**/*.ynz`.",
-        ));
-        return vec![];
-    }
+    let walk_root = if src_dir.exists() { src_dir } else { root.to_path_buf() };
 
     let mut entries: Vec<SourceEntry> = Vec::new();
-    collect_ynz_files(&src_dir, &src_dir, &mut entries, diags);
+    collect_ynz_files(&walk_root, &walk_root, &mut entries, diags);
     entries.sort_by(|a, b| a.path.cmp(&b.path));
     entries
 }
