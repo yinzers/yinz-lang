@@ -3,7 +3,7 @@ use ynz_ast::nodes::{Item, Module};
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 /// A registered `options` type with its declared variant names in declaration order.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct OptionsEntry {
     /// Variant names in declaration order. Tags are assigned as 0, 1, 2, … in this order.
     pub variants: Vec<String>,
@@ -18,7 +18,7 @@ pub struct OptionsEntry {
 ///
 /// Populated from `Item::OptionsDecl` items plus the two built-in options types
 /// (`SortOrder`, `Comparison`) registered at startup.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct OptionsTable {
     /// Map from options type name to its entry.
     pub options: HashMap<String, OptionsEntry>,

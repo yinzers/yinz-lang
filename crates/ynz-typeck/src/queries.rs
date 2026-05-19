@@ -6,17 +6,15 @@ use ynz_parser::{parse_query, SourceFile, SourceFileRegistry};
 
 use crate::{
     check::{check, TypedModule},
-    exports::collect_exports,
     generics::{GenericFnTable, GenericShapeTable, MonomorphizationTable},
     intrinsics::PrimitiveIntrinsicTable,
-    options_table::collect_options,
     resolve_import::resolve_imports,
     shapes::{collect_generic_shapes, collect_shapes, ShapeTable},
     signatures::{collect_generic_signatures, collect_signatures, FunctionSig, SignatureTable},
 };
 
 /// Output of the signature pre-pass.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SignatureOutput {
     pub sig_table: SignatureTable,
     pub shape_table: ShapeTable,
@@ -29,48 +27,9 @@ pub struct SignatureOutput {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-impl PartialEq for SignatureOutput {
-    fn eq(&self, other: &Self) -> bool {
-        self.sig_table == other.sig_table
-            && self.shape_table == other.shape_table
-            && self.generic_fn_table == other.generic_fn_table
-            && self.generic_shape_table == other.generic_shape_table
-            && self.imported_fns.len() == other.imported_fns.len()
-            && self.imported_fns.keys().all(|k| other.imported_fns.contains_key(k))
-    }
-}
-
 impl SignatureOutput {
     pub fn sig_table(&self) -> &SignatureTable {
         &self.sig_table
-    }
-}
-
-/// Allow SignatureTable to derive PartialEq for salsa.
-impl PartialEq for SignatureTable {
-    fn eq(&self, other: &Self) -> bool {
-        self.fns.len() == other.fns.len() && self.fns.keys().all(|k| other.fns.contains_key(k))
-    }
-}
-
-/// Allow ShapeTable to derive PartialEq for salsa (coarse: same shape names).
-impl PartialEq for ShapeTable {
-    fn eq(&self, other: &Self) -> bool {
-        self.shapes.len() == other.shapes.len()
-            && self.shapes.keys().all(|k| other.shapes.contains_key(k))
-    }
-}
-
-impl PartialEq for GenericFnTable {
-    fn eq(&self, other: &Self) -> bool {
-        self.fns.len() == other.fns.len() && self.fns.keys().all(|k| other.fns.contains_key(k))
-    }
-}
-
-impl PartialEq for GenericShapeTable {
-    fn eq(&self, other: &Self) -> bool {
-        self.shapes.len() == other.shapes.len()
-            && self.shapes.keys().all(|k| other.shapes.contains_key(k))
     }
 }
 
@@ -82,12 +41,6 @@ pub struct CheckOutput {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-impl PartialEq for MonomorphizationTable {
-    fn eq(&self, other: &Self) -> bool {
-        self.entries.len() == other.entries.len()
-    }
-}
-
 /// Pass 1: collect all shape declarations and function signatures from the module,
 /// including symbols imported from other files.
 ///
@@ -95,7 +48,7 @@ impl PartialEq for MonomorphizationTable {
 /// can reference imported shapes and options types.
 #[salsa::tracked]
 pub fn module_signatures_query(
-    db: &dyn salsa::Database,
+    db: &dyn SourceFileRegistry,
     source: SourceFile,
 ) -> Arc<SignatureOutput> {
     let parse = parse_query(db, source);
@@ -145,7 +98,7 @@ pub fn module_signatures_query(
 /// Depends on `module_signatures_query` for the signature table.
 /// Depends on `parse_query` for the AST.
 #[salsa::tracked]
-pub fn check_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<CheckOutput> {
+pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<CheckOutput> {
     let parse = parse_query(db, source);
     let sig_output = module_signatures_query(db, source);
 

@@ -83,7 +83,7 @@ pub struct MonoKey {
 }
 
 /// The concrete signature produced when a generic function is instantiated.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MonoSignature {
     pub param_types: Vec<Type>,
     pub ret_type: Type,
@@ -93,7 +93,7 @@ pub struct MonoSignature {
 ///
 /// Keyed by `(fn_name, concrete_type_args)`. Codegen (P4a) consumes this to
 /// emit one LLVM function per unique instantiation.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct MonomorphizationTable {
     pub entries: HashMap<MonoKey, MonoSignature>,
 }
@@ -110,7 +110,7 @@ impl MonomorphizationTable {
 ///
 /// Distinct from `FunctionSig` (which only holds non-generic functions) so the
 /// two tables stay cleanly separated and the call-site dispatch is unambiguous.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct GenericFnSig {
     /// Ordered list of type-parameter names (e.g. `["T"]` for `identity<T>`).
     pub type_params: Vec<String>,
@@ -128,7 +128,7 @@ pub struct GenericFnSig {
 }
 
 /// All generic function signatures collected from a module.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct GenericFnTable {
     pub fns: HashMap<String, GenericFnSig>,
 }
@@ -148,7 +148,7 @@ impl GenericFnTable {
 /// A generic shape: `shape Pair<A, B> { first: A, second: B }`.
 ///
 /// Field types may be `TypeParam` — resolved per-instantiation via `field_type`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct GenericShapeDef {
     pub name: String,
     /// Ordered type-parameter names: `["A", "B"]` for `Pair<A, B>`.
@@ -187,7 +187,7 @@ impl GenericShapeDef {
 }
 
 /// All generic shape definitions from a module.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct GenericShapeTable {
     pub shapes: HashMap<String, GenericShapeDef>,
 }

@@ -53,10 +53,15 @@ function p1_pub_banned() -> nothing {
 // WHY: `background foo()` where `foo` has a `share` parameter is a compile
 // error (shared borrows may dangle when the background task outlives the caller).
 // The type system must reject this even in M8's sequential lowering.
+// Nested functions are not supported in Yinz — the trigger and its helper live
+// at top-level scope so the diagnostic fires on parse + type-check of this file.
+function p5_readData(share data: string) -> nothing {
+    print(data)
+}
+
 function p5_background_share_rejected() -> nothing {
-    // Uncomment the function + call below to trigger:
-    // function readData(share data: string) -> nothing { print(data) }
-    // function handler(data: string) -> nothing { background readData(data) }
+    let s: string = `hello`
+    background p5_readData(s)
 }
 
 // WHY: `let h = background foo()` (handle form) is rejected in M8.

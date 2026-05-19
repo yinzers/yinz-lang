@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use ynz_diagnostics::Diagnostic;
-use ynz_parser::SourceFile;
+use ynz_parser::{SourceFile, SourceFileRegistry};
 use ynz_typeck::{check_query, module_signatures_query};
 
 use crate::{artifact::CompiledArtifact, emit::emit_artifact};
@@ -18,7 +18,7 @@ pub struct CodegenOutput {
 /// Salsa-tracked — depends on `check_query`. Skips emission if there are
 /// type errors (avoids emitting broken object files).
 #[salsa::tracked]
-pub fn codegen_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<CodegenOutput> {
+pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<CodegenOutput> {
     let check = check_query(db, source);
     let mut diagnostics = check.diagnostics.clone();
 

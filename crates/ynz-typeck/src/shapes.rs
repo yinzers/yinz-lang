@@ -9,7 +9,7 @@ use crate::{
 };
 
 /// A resolved field on a shape.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FieldDef {
     pub name: String,
     pub ty: Type,
@@ -20,7 +20,7 @@ pub struct FieldDef {
 }
 
 /// A bare contract method signature stored on the contract shape.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ContractSigDef {
     pub name: String,
     /// Param types (not including self).
@@ -32,7 +32,7 @@ pub struct ContractSigDef {
 ///
 /// Fields include inherited ones (prepended from parent chain).
 /// `extends` and `follows` names are stored for P3b verification.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ShapeDef {
     pub name: String,
     pub is_base: bool,
@@ -54,7 +54,7 @@ impl ShapeDef {
 }
 
 /// All shapes collected from a module.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShapeTable {
     pub shapes: HashMap<String, ShapeDef>,
     /// M6: union type aliases from `shape Shape = Circle | Square` declarations.
@@ -496,14 +496,57 @@ fn detect_extends_cycles(table: &ShapeTable, diags: &mut DiagnosticBucket) {
 }
 
 fn flatten_inherited_fields(table: &mut ShapeTable, _diags: &mut DiagnosticBucket) {
-    // Collect the inheritance order to avoid borrow conflicts.
+    // Process shapes in parent-first (depth-first) order so that when we flatten
+    // C extends B extends A, B is always fully flattened before C visits it.
+    // HashMap iteration order is non-deterministic — without this ordering, C could
+    // grab B's not-yet-flattened fields and silently miss A's fields when iteration
+    // happens to visit C before B.
+    let mut done: HashSet<String> = HashSet::new();
+    // `visiting` tracks shapes currently on the DFS stack. If we see a shape already
+    // in `visiting` during recursion, that's a cycle — skip rather than stack-overflow.
+    // detect_extends_cycles already emitted a diagnostic for the cycle; we just stop.
+    let mut visiting: HashSet<String> = HashSet::new();
     let names: Vec<String> = table.shapes.keys().cloned().collect();
     for name in &names {
-        let parent_name = table.shapes[name].extends.clone();
-        let Some(parent) = parent_name else { continue };
+        flatten_recursive(name, table, &mut done, &mut visiting);
+    }
+}
 
-        // Collect parent fields (may themselves be inherited — already flattened if
-        // we process in topological order, but for simplicity just grab what's there).
+/// Recursively flatten a single shape, ensuring its parent is fully flattened first.
+///
+/// Time: O(n) where n = number of shapes in the table — each shape's body runs once
+///       thanks to the `done` memo. Space: O(d) where d = max inheritance depth (the
+///       DFS call stack).
+///
+/// - `done`: shapes whose full field list has been computed. Re-entry is a no-op.
+/// - `visiting`: shapes currently on the DFS call stack. A name appearing in `visiting`
+///   signals a cycle (already diagnosed by `detect_extends_cycles`). We skip rather
+///   than recurse infinitely.
+fn flatten_recursive(
+    name: &str,
+    table: &mut ShapeTable,
+    done: &mut HashSet<String>,
+    visiting: &mut HashSet<String>,
+) {
+    if done.contains(name) {
+        return;
+    }
+    if visiting.contains(name) {
+        // Cycle detected — detect_extends_cycles already emitted the diagnostic. Stop.
+        return;
+    }
+
+    visiting.insert(name.to_string());
+
+    // Clone the parent name out so we don't hold an immutable borrow while we recurse.
+    let parent_name = table.shapes.get(name).and_then(|s| s.extends.clone());
+
+    if let Some(parent) = parent_name {
+        if table.shapes.contains_key(&parent) {
+            flatten_recursive(&parent, table, done, visiting);
+        }
+
+        // Parent is now fully flattened (or unknown — already errored in detect_extends_cycles).
         let parent_fields: Vec<FieldDef> = match table.shapes.get(&parent) {
             Some(p) => p
                 .fields
@@ -516,7 +559,11 @@ fn flatten_inherited_fields(table: &mut ShapeTable, _diags: &mut DiagnosticBucke
                     defined_at: f.defined_at.clone(),
                 })
                 .collect(),
-            None => continue, // parent doesn't exist — already errored
+            None => {
+                visiting.remove(name);
+                done.insert(name.to_string());
+                return;
+            }
         };
 
         // Prepend parent fields to child's own fields, skipping overridden names.
@@ -529,6 +576,9 @@ fn flatten_inherited_fields(table: &mut ShapeTable, _diags: &mut DiagnosticBucke
         all_fields.append(&mut child.fields);
         child.fields = all_fields;
     }
+
+    visiting.remove(name);
+    done.insert(name.to_string());
 }
 
 fn detect_field_cycles(table: &ShapeTable, diags: &mut DiagnosticBucket) {

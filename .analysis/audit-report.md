@@ -14,9 +14,9 @@ Severity = execution order, not "whether to fix." Per Patrick's Rule 11, confirm
 
 | Severity | Count | Notes |
 |---|---:|---|
-| Critical | 12 | locked decisions violated / deterministic crashes / silent data corruption |
-| High | 36 | shipped feature broken or misdocumented / large-impact UX / perf hotspots |
-| Medium | 51 | drift, missed checks, minor UX |
+| Critical | 8 | locked decisions violated / deterministic crashes / silent data corruption |
+| High | 35 | shipped feature broken or misdocumented / large-impact UX / perf hotspots |
+| Medium | 50 | drift, missed checks, minor UX |
 | Low | 49 | polish, magic numbers, minor docs |
 | Verified Correct | 9 | doc-drift positives — explicitly noted to prevent re-flagging |
 
@@ -25,7 +25,7 @@ Severity = execution order, not "whether to fix." Per Patrick's Rule 11, confirm
 ## Dedup / Conflict Resolution Notes
 
 - **Const-deep-immutability bypass** (Bug #1) — only flagged by bug analyzer; doc-drift confirms it as a documented M4 invariant.
-- **Salsa cache invalidation gaps** — Bug #2 (PartialEq) + Bug #5 (import re-read) + Consolidation #3 (redundant collect_options) + Consolidation #6 (hidden_count loss) — all touch the same surface, listed separately because fixes are independent.
+- **Salsa cache invalidation gaps** — Bug #2 (PartialEq) **FIXED** + Bug #5 (import re-read) **FIXED** + Consolidation #6 (hidden_count loss) — Bug #2 and #5 resolved by Batch 3 (real PartialEq derive + `db.source_by_path` + memoized `module_signatures_query` calls). Consolidation #6 stays open (separate fix).
 - **Concurrent build races** — Reliability #1/#3, Adversarial #9, Security #3 partial overlap → one grouped fix at `build.rs:294`.
 - **Symlink loop** — Adversarial #4 (critical: infinite recursion) + Security #4 (medium: write primitive) → critical (infinite recursion is deterministic crash).
 - **`DiagnosticBucket::push` O(n²)** — Performance Critical + Adversarial #12 (low). Performance assessment wins — even bounded by 50-cap, algorithm pattern is wrong AND `has_errors()` repeatedly pays the cost.
@@ -43,57 +43,37 @@ No genuine conflicts between analyzers.
 
 ## Phase 1 — CRITICAL (fix first; blocks downstream work)
 
-### 1. `check_index_assign` skips const-deep-immutability check
-- **File**: `crates/ynz-typeck/src/check.rs:3058-3128`
-- **Issue**: Other const-mutation sites enforce; index-assign path forgot. `const xs = [1,2,3]; xs[0] = 99` compiles but should error per M4 invariant.
-- **Fix**: Call `root_binding_name` + emit the standard const-mutation diagnostic, mirroring `check_field_assign:2917-2929`.
-
-### 2. Loose `PartialEq` on Salsa-tracked outputs → stale incremental builds
-- **File**: `crates/ynz-typeck/src/queries.rs:32-89`, `crates/ynz-typeck/src/exports.rs:35-44`
-- **Issue**: `PartialEq` compares only map sizes + keys. Editing a function body or signature without renaming → Salsa returns stale cached output → wrong IR / wrong binary.
-- **Fix**: Derive real `PartialEq` on `FunctionSig`, `ShapeDef`, `OptionsEntry`, `ExportTable`. Or content-hash.
-
-### 3. `flatten_inherited_fields` non-deterministic HashMap iteration
-- **File**: `crates/ynz-typeck/src/shapes.rs:498-532`
-- **Issue**: Inheritance flattening iterates `HashMap` in randomized order — multi-level `extends C → B → A` may miss A's fields. Same source compiles differently across runs.
-- **Fix**: Process shapes in topological order over the `extends` graph.
-
-### 4. `background fn` share-rejection not enforced (locked M8 decision)
-- **File**: `crates/ynz-typeck/src/check.rs:1126-1140`
-- **Issue**: M8 plan + `spec/concurrency.md:164-177` lock the rule: `background` must reject `share`-parameter callees. Typeck only enforces "must wrap a call." `examples/errors/m8_errors.ynz:53-60` has a commented-out trigger that wouldn't fire.
-- **Fix**: Walk callee signature; emit teaching diagnostic per the spec wording.
-
-### 6. Snapshot fixture + `spec/collections.md` recommend banned `type` keyword
+### 1. Snapshot fixture + `spec/collections.md` recommend banned `type` keyword
 - **Files**: `crates/ynz-diagnostics/tests/snapshots.rs:88-92` + `__snapshots/suggestion_only.snap`; `spec/collections.md:166, 248, 269`
 - **Issue**: Compiler-shipped suggestion text says "Consider using a `type` instead of a `map`". User writes `type Foo { ... }` and gets a banned-keyword error from the lexer. Compiler contradicts itself.
 - **Fix**: Replace `type` → `shape` in both the snapshot fixture and the spec page.
 
-### 7. No ICE distinction — compiler panics look identical to user errors
+### 3. No ICE distinction — compiler panics look identical to user errors
 - **File**: `crates/ynz-driver/src/main.rs` (top-level), panics across `crates/ynz-diagnostics/src/render.rs:85`, `crates/ynz-codegen/src/emit.rs:150`, `crates/ynz-parser/src/lexer.rs:469`
 - **Issue**: Bug reports of "compiler crashed" arrive without source stage / input data / backtrace. Only `codegen_query` catches LLVM errors with bug-report framing.
 - **Fix**: Top-level `std::panic::set_hook` printing "this is a compiler bug — please file at <URL> with `RUST_BACKTRACE=1` output." Use `EXIT_INFRA_ERROR = 101`.
 
-### 8. LLVM IR generated every build but inaccessible from CLI
+### 4. LLVM IR generated every build but inaccessible from CLI
 - **Files**: `crates/ynz-codegen/src/artifact.rs:10` (`ir_text` populated), `crates/ynz-driver/src/main.rs` (never read)
 - **Issue**: Tests use `ir_text` via `insta` snapshots; production CLI has no `--emit-ir`/`--print-ir`/`--dump-llvm`. Every "wrong codegen" investigation requires recompiling the compiler.
 - **Fix**: Add `--emit-ir` flag on `ynz build`. Trivial — field already populated.
 
-### 9. Stack overflow via deeply-nested expressions (compiler DoS)
+### 5. Stack overflow via deeply-nested expressions (compiler DoS)
 - **Files**: `crates/ynz-parser/src/parser.rs:2132` (`parse_expr`), `crates/ynz-typeck/src/check.rs` (`check_expr`/`infer_expr` family), `crates/ynz-codegen/src/emit.rs:2137` (`lower_expr`)
 - **Issue**: Type recursion capped at 16; expression and statement recursion unbounded. `((((...((x))...))))` of ~50k depth deterministically crashes the compiler with SIGABRT.
 - **Fix**: Add depth budget to `parse_expr` (256 limit), mirror in `check_expr` / `lower_expr`. Same teaching pattern as existing type-depth diagnostic.
 
-### 10. Symlink loop in project tree → infinite recursion
+### 6. Symlink loop in project tree → infinite recursion
 - **File**: `crates/ynz-driver/src/load.rs:193-220`
 - **Issue**: `ln -s . src/self` then `ynz build` walks indefinitely. Stack overflow / unbounded heap.
 - **Fix**: Track canonical paths in a `HashSet` during walk; use `symlink_metadata()` instead of `is_dir()` so symlinks don't follow silently.
 
-### 11. NUL byte in string literal → silent runtime truncation
+### 7. NUL byte in string literal → silent runtime truncation
 - **Files**: `crates/ynz-parser/src/lexer.rs:782-784` (`\0` escape accepted), `crates/ynz-codegen/src/emit.rs:2850-2851` (emits as C string)
 - **Issue**: `` `hello\0world` `` compiles; `print(x)` outputs `hello`. Silent data loss on string round-trip.
 - **Fix**: Either reject `\0` in string literals at the lexer, OR represent strings as `{ptr, len}` slices end-to-end (aligns with `design/strings.md`).
 
-### 12. `DiagnosticBucket::push` does O(n) error count per push
+### 8. `DiagnosticBucket::push` does O(n) error count per push
 - **File**: `crates/ynz-diagnostics/src/bucket.rs:29-38`
 - **Issue**: `.iter().filter(...).count()` on every error push. Bounded by the 50-cap but pattern is wrong; `has_errors()` (L43-47) also pays O(n) per call.
 - **Fix**: Add `error_count: usize` field; increment on push, decrement in `truncate`. `has_errors()` becomes `self.error_count > 0`. O(n²) → O(1).
@@ -103,59 +83,58 @@ No genuine conflicts between analyzers.
 ## Phase 2 — HIGH (substantial impact; fix after Critical)
 
 ### Compiler logic / correctness
-13. `load_project` prefers `src/` despite recent commit removing it — `crates/ynz-driver/src/load.rs:164-172` + `build.rs:67` error message hardcoded to `src/`
-14. `resolve_imports` reads files directly from disk → Salsa cross-file inconsistency + TOCTOU — `crates/ynz-typeck/src/resolve_import.rs:278-289`
-15. Map runtime `malloc`/`realloc` paths skip null-check → SIGSEGV on OOM — `crates/ynz-runtime/src/lib.rs:405-423, 534-545`
-16. `ynz_map_set_str` infinite-loop on full map if growth silently fails — `crates/ynz-runtime/src/lib.rs:629-656`
-17. `entrypoint → main` rename collides on multi-file projects — `crates/ynz-codegen/src/emit.rs:460-465, 815-819`
-18. `bignum_binop` silent fallback to `"0"` on CString null-byte → wrong math result with no log — `crates/ynz-runtime/src/lib.rs:2292`
-19. Runtime overflow / div-zero panics lack source location (design says line/col, code says only op name) — `crates/ynz-runtime/src/lib.rs:115-143`
-20. `ariadne` render `.expect()` panics on out-of-range span (no diagnostic; raw panic) — `crates/ynz-diagnostics/src/render.rs:85`
+10. `load_project` prefers `src/` despite recent commit removing it — `crates/ynz-driver/src/load.rs:164-172` + `build.rs:67` error message hardcoded to `src/`
+11. Map runtime `malloc`/`realloc` paths skip null-check → SIGSEGV on OOM — `crates/ynz-runtime/src/lib.rs:405-423, 534-545`
+13. `ynz_map_set_str` infinite-loop on full map if growth silently fails — `crates/ynz-runtime/src/lib.rs:629-656`
+14. `entrypoint → main` rename collides on multi-file projects — `crates/ynz-codegen/src/emit.rs:460-465, 815-819`
+15. `bignum_binop` silent fallback to `"0"` on CString null-byte → wrong math result with no log — `crates/ynz-runtime/src/lib.rs:2292`
+16. Runtime overflow / div-zero panics lack source location (design says line/col, code says only op name) — `crates/ynz-runtime/src/lib.rs:115-143`
+17. `ariadne` render `.expect()` panics on out-of-range span (no diagnostic; raw panic) — `crates/ynz-diagnostics/src/render.rs:85`
 
 ### Security (after path-traversal fix from Critical-adjacent set)
-21. Path traversal via mid-path `..` in import — `crates/ynz-typeck/src/resolve_import.rs:59,69`
-22. Predictable temp filename for runtime lib (CWE-377 on shared CI) — `crates/ynz-driver/src/build.rs:182,310`
-23. Output binary clobber + TOCTOU between write and execute in `ynz run` — `crates/ynz-driver/src/build.rs:333` + `run.rs:21`
-24. Extremely long identifier (10MB) → unbounded heap — `crates/ynz-parser/src/lexer.rs:486-639` (cap identifier length, e.g. 1024)
+18. Path traversal via mid-path `..` in import — `crates/ynz-typeck/src/resolve_import.rs:59,69`
+19. Predictable temp filename for runtime lib (CWE-377 on shared CI) — `crates/ynz-driver/src/build.rs:182,310`
+20. Output binary clobber + TOCTOU between write and execute in `ynz run` — `crates/ynz-driver/src/build.rs:333` + `run.rs:21`
+21. Extremely long identifier (10MB) → unbounded heap — `crates/ynz-parser/src/lexer.rs:486-639` (cap identifier length, e.g. 1024)
 
 ### Reliability
-25. `.o` file stranded when rt_lib write or linker probe fails — `crates/ynz-driver/src/build.rs:295/311-331`
-26. Concurrent `ynz build` races on same `obj_path` — `crates/ynz-driver/src/build.rs:294`
+22. `.o` file stranded when rt_lib write or linker probe fails — `crates/ynz-driver/src/build.rs:295/311-331`
+23. Concurrent `ynz build` races on same `obj_path` — `crates/ynz-driver/src/build.rs:294`
 
 ### Performance
-27. `levenshtein` allocates full O(m×n) matrix per candidate — `crates/ynz-typeck/src/check.rs:3683-3700` — rolling DP + byte-level scan
-28. `BigNum::mul` carry cascade uses `Vec::insert(0, ...)` → O(n²) — `crates/ynz-numerics/src/decimal_n/ops.rs:239-243, 414`
-29. `detect_extends_cycles` uses `Vec.contains` on visited set (already inconsistent with `has_cycle` HashSet) — `crates/ynz-typeck/src/shapes.rs:474-495`
-30. `render()` eagerly clones every source string + builds line tables → O(total_source_bytes) per render — `crates/ynz-diagnostics/src/render.rs:55-59`
+24. `levenshtein` allocates full O(m×n) matrix per candidate — `crates/ynz-typeck/src/check.rs:3683-3700` — rolling DP + byte-level scan
+25. `BigNum::mul` carry cascade uses `Vec::insert(0, ...)` → O(n²) — `crates/ynz-numerics/src/decimal_n/ops.rs:239-243, 414`
+26. `detect_extends_cycles` uses `Vec.contains` on visited set (already inconsistent with `has_cycle` HashSet) — `crates/ynz-typeck/src/shapes.rs:474-495`
+27. `render()` eagerly clones every source string + builds line tables → O(total_source_bytes) per render — `crates/ynz-diagnostics/src/render.rs:55-59`
 
 ### Doc-drift (HIGH — spec misleads users today)
-31. Spec-wide double-quoted strings across 11+ files (`"foo"` rejected by M7 lexer) — `spec/types.md`, `modules.md`, `errors.md`, `options.md`, `ownership.md`, `unions.md`, `control-flow.md`, `main.md`, `scope.md`, `maybe.md`, `sensitive.md`
-32. `spec/destructuring.md` documents object destructuring that doesn't parse — only `for ((k,v) in m)` exists
-33. `spec/sensitive.md` uses `.toUpper()` and `.length` (real names: `.toUpperCase()`, `.count()`)
-34. `banned_jargon.rs` missing 7+ entries from `design/compiler-errors.md` — `crates/ynz-diagnostics/src/banned_jargon.rs:21-75` vs `design/compiler-errors.md:31-64` (`lifetime`, `alias`, `trait`, `interface`, `remainder`, `associated type`, `implementation`, `precondition`, `postcondition`)
-35. `spec/modules.md` re-export described as shipped — syntax parses but cross-file calls are v0.2 stubs
-36. `spec/modules.md:253` "side-effect imports" example uses double quotes — wouldn't trigger documented error
-37. `spec/modules.md:139-146` "alias collision" example uses invalid `import math as advancedMath from "..."` syntax
-38. `spec/collections.md` uses banned `type` keyword in body + code examples — `:166, 248, 269`
+28. Spec-wide double-quoted strings across 11+ files (`"foo"` rejected by M7 lexer) — `spec/types.md`, `modules.md`, `errors.md`, `options.md`, `ownership.md`, `unions.md`, `control-flow.md`, `main.md`, `scope.md`, `maybe.md`, `sensitive.md`
+29. `spec/destructuring.md` documents object destructuring that doesn't parse — only `for ((k,v) in m)` exists
+30. `spec/sensitive.md` uses `.toUpper()` and `.length` (real names: `.toUpperCase()`, `.count()`)
+31. `banned_jargon.rs` missing 7+ entries from `design/compiler-errors.md` — `crates/ynz-diagnostics/src/banned_jargon.rs:21-75` vs `design/compiler-errors.md:31-64` (`lifetime`, `alias`, `trait`, `interface`, `remainder`, `associated type`, `implementation`, `precondition`, `postcondition`)
+32. `spec/modules.md` re-export described as shipped — syntax parses but cross-file calls are v0.2 stubs
+33. `spec/modules.md:253` "side-effect imports" example uses double quotes — wouldn't trigger documented error
+34. `spec/modules.md:139-146` "alias collision" example uses invalid `import math as advancedMath from "..."` syntax
+35. `spec/collections.md` uses banned `type` keyword in body + code examples — `:166, 248, 269`
 
 ### Documentation (HIGH)
-39. 9 unsafe FFI map functions missing `# Safety` contracts — `crates/ynz-runtime/src/lib.rs:568, 583, 605, 629, 664, 674, 688, 706, 732`
-40. `BigNum::mul` / `div` missing complexity annotations (decimal128 path documents this) — `crates/ynz-numerics/src/decimal_n/ops.rs:183, 262`
-41. `map_grow_int` / `map_grow_str` side-effect contract undocumented — `crates/ynz-runtime/src/lib.rs:464, 499` (×2 growth, 75% LF, slot pointers invalidated)
+36. 9 unsafe FFI map functions missing `# Safety` contracts — `crates/ynz-runtime/src/lib.rs:568, 583, 605, 629, 664, 674, 688, 706, 732`
+37. `BigNum::mul` / `div` missing complexity annotations (decimal128 path documents this) — `crates/ynz-numerics/src/decimal_n/ops.rs:183, 262`
+38. `map_grow_int` / `map_grow_str` side-effect contract undocumented — `crates/ynz-runtime/src/lib.rs:464, 499` (×2 growth, 75% LF, slot pointers invalidated)
 
 ### UX (HIGH)
-42. `check.rs:444` parameter-reassignment WHY references shipped M4 as future
-43. `check.rs:1282-1287` "not defined" WHY is generic ("the program can't run")
-44. Render output prefixes WHY with `Note: Why:` double label — `crates/ynz-diagnostics/src/render.rs:76`
-45. `what_instead` used as caret label conflicts with prose-instruction content — `crates/ynz-diagnostics/src/render.rs:75`
-46. Single exit code 1 for all failure modes (compile vs infra indistinguishable for CI) — `crates/ynz-driver/src/main.rs:36-48`
-47. No success output from `ynz build` — `crates/ynz-driver/src/main.rs`
-48. No "did you mean?" for imports (`find_closest_name` exists but unused in import path) — `crates/ynz-typeck/src/resolve_import.rs:211-229`
+39. `check.rs:444` parameter-reassignment WHY references shipped M4 as future
+40. `check.rs:1282-1287` "not defined" WHY is generic ("the program can't run")
+41. Render output prefixes WHY with `Note: Why:` double label — `crates/ynz-diagnostics/src/render.rs:76`
+42. `what_instead` used as caret label conflicts with prose-instruction content — `crates/ynz-diagnostics/src/render.rs:75`
+43. Single exit code 1 for all failure modes (compile vs infra indistinguishable for CI) — `crates/ynz-driver/src/main.rs:36-48`
+44. No success output from `ynz build` — `crates/ynz-driver/src/main.rs`
+45. No "did you mean?" for imports (`find_closest_name` exists but unused in import path) — `crates/ynz-typeck/src/resolve_import.rs:211-229`
 
 ### Redundancy (HIGH)
-49. Typeck test scaffolding duplicate across 7 files — `crates/ynz-typeck/tests/*.rs`
-50. Codegen `run_mN_codegen` pattern × 4 — `crates/ynz-codegen/tests/golden.rs:61-71, 191-200, 300-309, 374-387`
-51. `build_project` / `build_single_file` share warning-render block — `crates/ynz-driver/src/build.rs:151-163, 379-395`
+46. Typeck test scaffolding duplicate across 7 files — `crates/ynz-typeck/tests/*.rs`
+47. Codegen `run_mN_codegen` pattern × 4 — `crates/ynz-codegen/tests/golden.rs:61-71, 191-200, 300-309, 374-387`
+48. `build_project` / `build_single_file` share warning-render block — `crates/ynz-driver/src/build.rs:151-163, 379-395`
 
 ---
 
@@ -195,7 +174,7 @@ No genuine conflicts between analyzers.
 ### Redundancy / Consolidation
 - "Unknown field" diagnostic × 3 in check.rs
 - `not_defined` diagnostic × 3 in check.rs
-- `collect_options` / `collect_shapes` / `collect_signatures` invoked redundantly from 4 sites (already flagged @design-decision at `shapes.rs:67-75`)
+- `collect_options` invoked redundantly at 2 remaining sites: `check.rs:52` and `emit.rs:141-143` (the `resolve_import.rs` site was fixed by Batch 3 via `module_signatures_query` memoization; `collect_shapes` and `collect_signatures` are now memoized at those sites too)
 - Two `llvm_type_for` lookup functions in `emit.rs` (silent fall-through to ptr)
 - `Diagnostic::file_error()` convenience missing (21 verbose call sites)
 
@@ -296,19 +275,18 @@ These were checked and found accurate. Don't re-flag in future audits:
 ## Parallel Fix Groups (when user approves Phase 6)
 
 Group A (independent — different crates, different files):
-- ynz-typeck files: Bug #1, #2, #3, #5; perf #27, #29; UX #42, #43, #49; redundancy #50; consolidation #56
-- ynz-driver files: Bug #4; Security #22, #23; UX #44, #47, #48
-- ynz-codegen files: Bug #17; consolidation #57; doc #59
-- ynz-runtime files: Bug #15, #16; Forensics #18, #19; doc #58
-- ynz-diagnostics files: Critical #12; perf #30; UX #45, #46
-- ynz-parser files: Critical #9, #11; security #24; bug #6
-- spec/ files: doc-drift #31-#38 (write changes only)
-- design/ files: Critical #5; doc-drift #34
+- ynz-typeck files: Phase1 #1, #2; Phase2 #26; UX #39, #40, #46; redundancy #47; consolidation
+- ynz-driver files: Phase2 #10; Security #19, #20; UX #41, #44, #45
+- ynz-codegen files: Phase2 #14; doc
+- ynz-runtime files: Phase2 #12, #13; doc
+- ynz-diagnostics files: Phase1 #8; Phase2 #27; UX #42, #43
+- ynz-parser files: Phase1 #5, #7; security #21; bug
+- spec/ files: doc-drift #28-#35 (write changes only)
 
 Group B (sequential — depends on A):
-- LLVM IR flag (Critical #8) — after CLI exit-code rework (UX #47)
+- LLVM IR flag (Phase1 #4) — after CLI exit-code rework (UX #44)
 - `--keep` flag (UX medium) — after CLI rework
-- Error-gallery restructure — after the underlying diagnostics fired (Critical #4 + others)
+- Error-gallery restructure — after the underlying diagnostics fired
 
 Group C (low-risk parallel — different concerns):
 - Documentation High items: independent of fix work, can run in parallel as a `docs-writer` agent batch

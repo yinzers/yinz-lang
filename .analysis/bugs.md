@@ -8,95 +8,7 @@
 
 ## CRITICAL BUGS (Fix Immediately)
 
-### Bug #1: `check_index_assign` skips the `const`-deep-immutability check
-
-**File**: `crates/ynz-typeck/src/check.rs:3058-3128`
-**Severity**: CRITICAL
-**Category**: Logic Error / Yinz invariant violation
-
-**Issue**: `check_index_assign` does NOT call `root_binding_name` to verify the receiver isn't a `const` binding. Compare to `check_field_assign` at line 2917-2929 which DOES check. Result: this code compiles cleanly even though it violates the locked const-deep-immutability invariant:
-
-```ts
-const nums: array<int> = [1, 2, 3]
-nums[0] = 5                          // should error — const blocks index-write — but compiles
-```
-
-The other two const-mutation sites (`check_assign` at line 455, `check_field_assign` at line 2919) DO emit the diagnostic. Only the index-assign path is missing it.
-
-**Why This Breaks Production**: violates a documented Yinz language invariant (`.claude/rules/plan-invariants.md` `### Safety`: "const bindings cannot have their fields mutated" extended to deep immutability). A compiled Yinz program would silently mutate a value the user declared immutable. This is the textbook bug class the M4 invariants section exists to prevent — and it shipped past it for index-assign.
-
-**Reproduction**:
-```ynz
-function entrypoint() -> nothing {
-  const xs: array<int> = [1, 2, 3]
-  xs[0] = 99      // currently compiles; should be a compile error
-}
-```
-
----
-
-### Bug #2: Loose `PartialEq` on salsa-tracked outputs causes stale incremental compilation
-
-**File**: `crates/ynz-typeck/src/queries.rs:32-89`, `crates/ynz-typeck/src/exports.rs:35-44`
-**Severity**: CRITICAL
-**Category**: Salsa cache invalidation
-
-**Issue**: The `PartialEq` impls for `SignatureOutput`, `SignatureTable`, `ShapeTable`, `GenericFnTable`, `GenericShapeTable`, `MonomorphizationTable`, and `ExportTable` compare ONLY map sizes and keys — never the values. Example (`queries.rs:50-54`):
-
-```rust
-impl PartialEq for SignatureTable {
-    fn eq(&self, other: &Self) -> bool {
-        self.fns.len() == other.fns.len() && self.fns.keys().all(|k| other.fns.contains_key(k))
-    }
-}
-```
-
-Salsa uses `PartialEq` on a query output to decide whether downstream queries need to re-run. With this implementation, any edit that changes a function's parameter types, return type, ownership modifiers, or body — without renaming the function — produces an output that `==` the old output, so salsa SKIPS re-running `check_query` / `codegen_query`. The downstream queries return stale results — wrong types, wrong IR, wrong binary.
-
-**Reproduction sketch**:
-1. Build a project with `function foo(x: int) -> int { x + 1 }`.
-2. Edit `foo` body to `x + 2` (same signature).
-3. Edit again, change return type to `int` from `string` (same name).
-4. Subsequent `ynz build` may emit IR using the old signature because `SignatureTable::eq` returns true (same names, same length).
-
-**Why This Breaks Production**: incremental builds silently produce wrong binaries. This is a worst-case compiler bug class — the user sees "build succeeded" but the program runs old (or worse, half-old, half-new) code. The `ExportTable::PartialEq` comment even acknowledges the issue ("deferred to v0.2 LSP incremental caching") — but with this `PartialEq` shipping in production today, the cache is already broken.
-
-**Fixed Code**: derive real PartialEq on the inner types (`FunctionSig`, `ShapeDef`, `OptionsEntry`) or use a content-hash invalidation strategy. Make these salsa outputs Hash + PartialEq over the actual contract, not just names.
-
----
-
-### Bug #3: `flatten_inherited_fields` has order-dependent results from HashMap iteration
-
-**File**: `crates/ynz-typeck/src/shapes.rs:498-532`
-**Severity**: CRITICAL
-**Category**: Logic Error / Non-determinism
-
-**Issue**: When flattening inheritance chains (e.g., `C extends B extends A`), the function iterates `table.shapes` in HashMap iteration order — which is non-deterministic in Rust. The comment at line 505-506 acknowledges:
-
-```rust
-// Collect parent fields (may themselves be inherited — already flattened if
-// we process in topological order, but for simplicity just grab what's there).
-```
-
-If iteration visits C before B, then C grabs B's NOT-yet-flattened fields (which lack A's fields). C ends up missing A's fields.
-
-**Why This Breaks Production**:
-1. Same source compiles to different binaries across runs (HashMap is randomized per-process).
-2. Field access on inherited grandparent fields silently produces "field not found" errors OR (worse) wrong offsets at codegen if some paths happened to win the race.
-
-**Reproduction sketch**:
-```ynz
-shape A { x: int }
-shape B extends A { y: int }
-shape C extends B { z: int }
-// c.x access may or may not work depending on HashMap order
-```
-
-**Fix**: process shapes in topological order over the `extends` graph — children only flattened after their parent has been flattened.
-
----
-
-### Bug #4: `load_project` still prefers `src/` despite recent "remove src/ convention" commit
+### Bug #1: `load_project` still prefers `src/` despite recent "remove src/ convention" commit
 
 **File**: `crates/ynz-driver/src/load.rs:164-172`
 **Severity**: HIGH
@@ -112,22 +24,6 @@ let walk_root = if src_dir.exists() { src_dir } else { root.to_path_buf() };
 This means a project with BOTH a `src/` subdirectory AND `.ynz` files at the project root will only compile the files under `src/`. The project-root-level files are silently ignored. Also, `build.rs:67` still emits an error message hardcoded to `src/`: `"No `.ynz` source files found under `src/`."`
 
 **Why This Breaks Production**: directly contradicts the documented spec (project-root-relative) that the commit was supposed to enforce. Silent file-skipping is among the worst compiler bug classes — users have no signal that files are being ignored.
-
----
-
-### Bug #5: `resolve_imports` reads files from disk, bypassing the salsa source registry
-
-**File**: `crates/ynz-typeck/src/resolve_import.rs:278-289`
-**Severity**: HIGH
-**Category**: Salsa cache invalidation / TOCTOU on file reads
-
-**Issue**: When resolving an import, `load_export_table` does `std::fs::read_to_string(resolved_path)` directly, rather than looking up the file via `db.source_by_path`. The comment at lines 275-277 acknowledges this is incorrect ("v0.2 TODO: use the pre-registered SourceFile from the driver's project load via CompilerDb::source_by_path").
-
-Two real bugs result:
-1. **Salsa cache inconsistency**: file A's SourceFile may have updated text in salsa, but file B (which imports A) reads stale disk content during import resolution. Type-check uses two different versions of A simultaneously.
-2. **TOCTOU**: between two queries in the same session, the file on disk may change. The driver and the import resolver see different contents.
-
-**Why This Breaks Production**: in incremental builds (the entire point of using salsa), imports use one version of a module while the module's own queries use another. Result: type errors that don't exist, or invalid IR.
 
 ---
 
@@ -347,35 +243,31 @@ If the linker invocation panics between `std::fs::write(&rt_lib_tmp, ...)` (line
 - Null/Undefined: 2 (Bug #7, observation #18)
 - Types: 1 (Bug #13)
 - Async: 0
-- Logic: 6 (Bug #1, #3, #4, #6, #8, #11)
+- Logic: 4 (Bug #4, #6, #8, #11) — Bug #1 and #3 fixed by Batch 3
 - Leaks: 2 (Observation #19, Bug #7 part 2)
 - Isolation: 0
-- Flow/Ordering: 1 (Bug #3)
-- Salsa cache: 2 (Bug #2, #5)
-- Edge case: 4 (Bug #9, #14, #15, #17)
+- Flow/Ordering: 0 (Bug #3 fixed)
+- Salsa cache: 0 — Bug #1 (coarse PartialEq) and Bug #5 (disk reads) **FIXED by Batch 3**
+- Edge case: 4 (Bug #8, #13, #14, #16)
 
 ## Prioritized Fix Order
 
 ### Must Fix Now (Production Risk)
-1. **Bug #1** — const-deep-immutability bypass via index-assign. Documented invariant violation.
-2. **Bug #2** — Salsa `PartialEq` cache bug. Silently wrong incremental builds.
-3. **Bug #3** — HashMap-order-dependent inheritance flattening. Non-deterministic compilation.
-4. **Bug #4** — `src/` preference contradicts spec. Silent file-skipping.
-5. **Bug #5** — Import resolver bypasses salsa registry. Cross-file inconsistency.
+1. **Bug #1** — `src/` preference contradicts spec. Silent file-skipping.
 
 ### Should Fix Soon (User Impact)
-6. **Bug #7** — Map allocator OOM handling.
-7. **Bug #8** — Map set_str infinite loop risk.
-8. **Bug #10** — entrypoint→main rename collision across files.
-9. **Bug #6** — Leading-underscore numeric literal accepted.
-10. **Bug #11** — Misleading import-failure diagnostic.
+2. **Bug #2** — Map allocator OOM handling.
+3. **Bug #3** — Map set_str infinite loop risk.
+4. **Bug #4** — entrypoint→main rename collision across files.
+5. **Bug #6** — Leading-underscore numeric literal accepted.
+6. **Bug #7** — Misleading import-failure diagnostic.
 
 ### Nice to Fix (Code Quality)
-11. **Bug #9** — i64::MIN parse rejection.
-12. **Bug #12** — Dead-code fallback in `resolve_module_path`.
-13. **Bug #13** — Debug-formatted mangle names.
-14. **Bug #14** — `3.` accepted as float.
-15. **Bug #17** — div exponent overflow on extremes.
+7. **Bug #8** — i64::MIN parse rejection.
+8. **Bug #9** — Dead-code fallback in `resolve_module_path`.
+9. **Bug #10** — Debug-formatted mangle names.
+10. **Bug #11** — `3.` accepted as float.
+11. **Bug #12** — div exponent overflow on extremes.
 
 ---
 
@@ -384,7 +276,7 @@ If the linker invocation panics between `std::fs::write(&rt_lib_tmp, ...)` (line
 - The lexer's banned-jargon emission for `type`/`struct`/`class`/`interface`/`enum`/`abstract`/`async`/`await`/`promise`/`future`/`goroutine`/`pub`/`private`/`protected`/`public` is comprehensive and correctly redirects to Yinz vocabulary.
 - The non-OOP invariant (methods are standalone functions, not inside shape bodies) appears enforced at the parser level.
 - Diagnostics consistently follow the WHAT/WHAT-INSTEAD/WHY three-part teaching format from Golden Rule 11.
-- Const-mutation checks (Bug #1 aside) exist at `check_assign`, `check_field_assign`, and call-site `give`/`lend` argument enforcement.
+- Const-mutation checks exist at `check_assign`, `check_field_assign`, `check_index_assign`, and call-site `give`/`lend` argument enforcement.
 - The lexer recovers from errors and emits diagnostics rather than panicking — good fail-soft behavior.
 - The unsafe ABI shim layer in `ynz-runtime` consistently documents safety preconditions.
 - SipHash key initialization is gated on a `OnceLock` for thread safety.

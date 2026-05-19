@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use ynz_ast::nodes::{
     BinOpKind, Block, CallExpr, Expr, FunctionDecl, Item, MatchArm, MatchPatternKind, Module,
-    PostfixOpKind, Stmt, StructLitField, Type as AstType, UnaryOpKind,
+    OwnershipModifier, PostfixOpKind, Stmt, StructLitField, Type as AstType, UnaryOpKind,
 };
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
@@ -1134,6 +1134,37 @@ impl<'b> Checker<'b> {
                         "`background` schedules a function call to run outside the current scope. \
                          It cannot be applied to non-call expressions.",
                     ));
+                }
+                // Locked M8 decision (spec/concurrency.md:164-177): `background` must
+                // reject callees that borrow their arguments via `share`. A `share`
+                // borrow may outlive the caller's scope once the task runs in the
+                // background — a memory-safety hole.
+                let callee_name: Option<&str> = match inner.as_ref() {
+                    Expr::Call(call) => {
+                        if let Expr::Ident(name, _) = &call.callee {
+                            Some(name.as_str())
+                        } else {
+                            None
+                        }
+                    }
+                    Expr::MethodCall { method, .. } => Some(method.as_str()),
+                    _ => None,
+                };
+                if let Some(name) = callee_name {
+                    if let Some(sig) = self.sig_table.fns.get(name) {
+                        let has_share_param = sig
+                            .param_ownerships
+                            .iter()
+                            .any(|o| *o == Some(OwnershipModifier::Share));
+                        if has_share_param {
+                            self.diags.push(Diagnostic::error(
+                                inner.span().clone(),
+                                "Cannot use `background` with a function that borrows its arguments.",
+                                "Change the parameter to `give` (take ownership) or pass a copy: `background fn(value.copy())`.",
+                                "`background` will run this function outside the current scope. If the function only borrows its argument (via `share`), the borrow may outlive the value — a memory-safety hole. Pass ownership (`give`) or a copy so the background task has its own value.",
+                            ));
+                        }
+                    }
                 }
                 let _ = inner_ty;
                 Type::Nothing // background discards the return value
@@ -3062,6 +3093,23 @@ impl<'b> Checker<'b> {
         value: &Expr,
         span: &SourceSpan,
     ) {
+        // const-deep-immutability: reject element writes on const-bound collections,
+        // mirroring the same guard in check_field_assign.
+        if let Some(root_name) = root_binding_name(receiver) {
+            if let Some(entry) = self.scope.lookup(root_name) {
+                if entry.is_const {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        format!("`{root_name}` is `const` and its elements cannot be changed."),
+                        format!("Declare it with `let` instead: `let {root_name}: array<...> = [...]`"),
+                        "`const` bindings are fully read-only — no reassignment, no field changes, no element writes. Use `let` for values that need to change.",
+                    ));
+                    self.infer_expr(value, None);
+                    return;
+                }
+            }
+        }
+
         let recv_ty = self.infer_expr(receiver, None);
         let _idx_ty = self.infer_expr(index, Some(&Type::Int));
         match &recv_ty {

@@ -1,8 +1,12 @@
 use std::collections::HashMap;
 
 /// Supertrait for databases that support project-file lookup by path.
-/// Implemented by `CompilerDb` so salsa tracked functions can call
-/// `source_by_path` without unsafe downcasting.
+///
+/// Applying `#[salsa::db]` here (and on its `impl` for `CompilerDb`) registers
+/// `dyn SourceFileRegistry` as a salsa view — enabling salsa tracked functions
+/// to declare `db: &dyn SourceFileRegistry` and use `source_by_path` directly
+/// without unsafe downcasting.
+#[salsa::db]
 pub trait SourceFileRegistry: salsa::Database {
     fn source_by_path(&self, path: &str) -> Option<SourceFile>;
 }
@@ -55,6 +59,7 @@ impl CompilerDb {
 #[salsa::db]
 impl salsa::Database for CompilerDb {}
 
+#[salsa::db]
 impl SourceFileRegistry for CompilerDb {
     fn source_by_path(&self, path: &str) -> Option<SourceFile> {
         self.source_registry.get(path).copied()

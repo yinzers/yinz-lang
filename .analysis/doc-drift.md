@@ -2,9 +2,9 @@
 
 Read-only audit comparing `/spec/`, `/design/`, plans (`.claude/plans/done/`), `examples/` against the actual compiler in `crates/`. CHANGELOG says M1–M8 shipped at `v0.1.0`. Audit scope: locked decisions vs implementation, spec syntax vs parser/typeck/codegen, example correctness, banned-jargon coverage.
 
-**Summary**: 36 findings.
+**Summary**: 35 findings.
 
-- 6 critical (locked decisions violated, or spec describes syntax the parser rejects)
+- 5 critical (locked decisions violated, or spec describes syntax the parser rejects)
 - 18 high (shipped feature misdocumented or example uses rejected syntax)
 - 11 medium (drift causes user confusion — wrong method names, stale references)
 - 1 low (cosmetic / minor)
@@ -64,28 +64,17 @@ Grouped by area: Lexer/Parser, Type System, Diagnostics, Numerics, Strings, Modu
 - **Implementation reality**: `crates/ynz-ast/src/nodes.rs:110, 133, 794` adds a `doc: Option<String>` field on FunctionDecl, ShapeDecl, OptionsDecl, and Field, independent of `is_exported`. The lexer attaches `///` to any next-following declaration. There is no compile error or warning for `///` on a private item.
 - **Severity**: MEDIUM — spec is more restrictive than implementation. Either lift the restriction in spec (cheap), or add a warning in the parser when `///` precedes a non-exported item.
 
-### 10. spec/concurrency.md says `background fn` rejects callees with `share` parameters — typeck does NOT enforce this (CRITICAL — LOCKED DECISION)
-- **Doc claim**: `spec/concurrency.md` lines 164–177:
-  ```
-  function processData(share data: Data) -> nothing { ... }
-  background processData(data)
-  // COMPILE ERROR: Cannot share with a background task.
-  ```
-  `examples/errors/m8_errors.ynz` lines 53–60 (`p5_background_share_rejected`) lists this as an intentional M8 error trigger.
-- **Implementation reality**: `crates/ynz-typeck/src/check.rs:1126-1140` (`Expr::Background`) only enforces that `background` wraps a call expression. There is NO check that the callee's parameters are `give` (or `share` rejection). `grep -n "share with a background" check.rs` produces no matches.
-- **Severity**: CRITICAL — locked invariant from M8 plan (per `.claude/plans/done/m8-modules-doc-sensitive-concurrency-bignum-release.md` "Locked decisions in scope" table: "Concurrency scope … `background` … ownership-`.share` rejection") is not enforced. Per `.claude/rules/plan-invariants.md` Safety/Demo & Error Gallery requirements, the gallery file's commented-out trigger should activate a real diagnostic.
-
-### 11. `background` does NOT support handle form (`let h = background fn()`) but M8 error gallery says it should reject explicitly (MEDIUM)
+### 10. `background` does NOT support handle form (`let h = background fn()`) but M8 error gallery says it should reject explicitly (MEDIUM)
 - **Doc claim**: `spec/concurrency.md` lines 148–157 describes `let monitor = background watchHealth()` and `.send()/.receive()` as the long-running form. `examples/errors/m8_errors.ynz:64-68` says: "WHY: `let h = background foo()` (handle form) is rejected in M8. Background handles (.send/.receive) ship in v0.3."
 - **Implementation reality**: `Expr::Background` returns `Type::Nothing` (line 1139), so binding it to a `let` would type-check as `let h: nothing = ...`. There is no explicit "Storing the result of background is not yet supported" diagnostic.
 - **Severity**: MEDIUM — error gallery declares a diagnostic that doesn't actually fire as documented.
 
-### 12. spec/sensitive.md describes development flag `--reveal-sensitive` — flag not in driver (MEDIUM)
+### 11. spec/sensitive.md describes development flag `--reveal-sensitive` — flag not in driver (MEDIUM)
 - **Doc claim**: `spec/sensitive.md` lines 104–107 describes `ynz run entrypoint.ynz --reveal-sensitive` flag.
 - **Implementation reality**: `grep -rn "reveal-sensitive\|reveal_sensitive" crates/` produces no matches. The flag is not in `crates/ynz-driver/`.
 - **Severity**: MEDIUM — spec advertises a runtime override that does not exist.
 
-### 13. spec/iterables.md custom-iterable feature documented as shipped, but mvp-scope says v1.0 (LOW)
+### 12. spec/iterables.md custom-iterable feature documented as shipped, but mvp-scope says v1.0 (LOW)
 - **Doc claim**: `spec/iterables.md` lines 113–158 describe user-defined iterables via `follows Iterable<T>` + standalone `next()` as shipped.
 - **Implementation reality**: This IS shipped (per CHANGELOG M7 and `crates/ynz-typeck/src/check.rs:758-833`), AND `examples/basics/src/entrypoint.ynz:370-386` uses it. However, `design/mvp-scope.md` line 276: "Custom iterables (locked design, deferred from v0.1)" says it's v1.0.
 - **Severity**: LOW — mvp-scope is out of date (the feature shipped early). Should be moved to v0.1 in mvp-scope.md.
@@ -94,17 +83,17 @@ Grouped by area: Lexer/Parser, Type System, Diagnostics, Numerics, Strings, Modu
 
 ## Diagnostics
 
-### 14. banned_jargon.rs missing entries that design/compiler-errors.md lists (HIGH)
+### 13. banned_jargon.rs missing entries that design/compiler-errors.md lists (HIGH)
 - **Doc claim**: `design/compiler-errors.md` lines 31–64 lists banned jargon, including: `lifetime (Rust sense)`, `alias (when not the syntax keyword)`, `trait`, `interface`, `remainder`, `associated type`, `implementation (generic CS sense)`, `precondition`, `postcondition`.
 - **Implementation reality**: `crates/ynz-diagnostics/src/banned_jargon.rs:21-75` does NOT include any of those. The list has propagate/propagation, narrow/narrowing, discriminator, infer/inference, polymorphic, monomorphize/monomorphic, covariant/contravariant, deref/dereference, shadow/shadowing, coerce/coercion, fallible/infallible, first-class, idiomatic, arity, variadic, residual, referentially transparent, immutable, mutable, invariant violation, ADT, AST, struct, monad, lift, wrap, unwrap, Result, Option, Either, exception, try, catch, throw, UTF-16, async, await, goroutine. Missing 7+ entries from the design file.
 - **Severity**: HIGH — design file is the source of truth (`banned_jargon.rs` comment line 3: "Source of truth: `design/compiler-errors.md`"). Audit list is incomplete.
 
-### 15. spec/numeric-types.md describes IDE hints but compiler has no IDE-hint infrastructure yet (LOW)
+### 14. spec/numeric-types.md describes IDE hints but compiler has no IDE-hint infrastructure yet (LOW)
 - **Doc claim**: `spec/numeric-types.md` lines 113–118 ("IDE WARNS"), lines 143–149 ("IDE HINT: number (decimal) is slower for pure integer math").
 - **Implementation reality**: v0.2 (per mvp-scope) ships LSP. v0.1 has no LSP and no IDE-hint emission. The `inference.md` rule says "muted hints" are an IDE-only protocol that v0.2 implements.
 - **Severity**: LOW — spec is forward-looking but doesn't flag the timing. Add a "v0.2 (IDE)" tag to these examples.
 
-### 16. design/decisions.md "type aliases" claim contradicts current implementation (MEDIUM)
+### 15. design/decisions.md "type aliases" claim contradicts current implementation (MEDIUM)
 - **Doc claim**: `design/decisions.md` line 21 in the "Type system" row says: "⚠️ Removed by r10-r15: `override` keyword (function overloading by argument type), type aliases (`shape UserId = string` — pure documentation sugar; parameter names + comments do the job)."
 - **Implementation reality**: `crates/ynz-parser/src/parser.rs` accepts `shape Name = Type` form (used for union aliases like `shape Shape = Circle | Square`). The "shape alias" syntax is used heavily in `examples/basics/src/entrypoint.ynz:346` (`shape AccountResult = ActiveAccount | BannedAccount | PendingAccount`) and the parser has `ShapeDecl.alias_ty` (per CHANGELOG M6). The ban applies only to scalar aliases like `shape UserId = string`, but design/decisions.md reads as if all aliases are banned.
 - **Severity**: MEDIUM — phrasing in decisions.md is ambiguous; should clarify that union aliases ARE supported and only single-type aliases are banned.
@@ -113,12 +102,12 @@ Grouped by area: Lexer/Parser, Type System, Diagnostics, Numerics, Strings, Modu
 
 ## Numerics
 
-### 17. design/numeric-types.md cap reference is correct, but spec/numeric-types.md uses different error wording (LOW)
+### 16. design/numeric-types.md cap reference is correct, but spec/numeric-types.md uses different error wording (LOW)
 - **Doc claim**: Both `spec/numeric-types.md:75-78` and `design/numeric-types.md:55-58` describe `number<5000>` being rejected. Spec says: "design/mvp-scope.md#v2--deferred-features". Design says the same path.
 - **Implementation reality**: `examples/errors/m8_errors.ynz` triggers the cap reject in two functions (`p0_number_over_cap` and `p6_number_over_cap`). The actual diagnostic emitted by the compiler isn't grepable from the audit but the bound is 4096 per `design/numeric-types.md`. mvp-scope.md does not have a `v2--deferred-features` heading by that name — searching for it: `grep -n "deferred-features" design/mvp-scope.md` produces a match around v2+ section but anchor name may differ.
 - **Severity**: LOW — link anchor mismatch is minor cosmetic issue.
 
-### 18. spec/numeric-types.md type-attached constants match implementation (NOT DRIFT — POSITIVE)
+### 17. spec/numeric-types.md type-attached constants match implementation (NOT DRIFT — POSITIVE)
 - **Doc claim**: `spec/numeric-types.md:133` says `int.min` to `int.max`. `int.max` referenced in spec/operators.md, spec/numeric-types.md, etc.
 - **Implementation reality**: `crates/ynz-typeck/src/check.rs:3525-3534` implements `int.max`, `int.min`, `float.max`, `float.min`, `float.epsilon`, `number.max`, `number.min`, `number.epsilon` — exactly what spec describes.
 - **Severity**: N/A — verified correct.
@@ -127,12 +116,12 @@ Grouped by area: Lexer/Parser, Type System, Diagnostics, Numerics, Strings, Modu
 
 ## Strings
 
-### 19. spec/strings.md uses `.contains()`, `.indexOf()`, `.startsWith()`, `.endsWith()`, `.trim()`, etc. — all match implementation (NOT DRIFT — POSITIVE)
+### 18. spec/strings.md uses `.contains()`, `.indexOf()`, `.startsWith()`, `.endsWith()`, `.trim()`, etc. — all match implementation (NOT DRIFT — POSITIVE)
 - **Doc claim**: `spec/strings.md:178-203` lists 16 string methods.
 - **Implementation reality**: `crates/ynz-typeck/src/builtins.rs:67-98` (`string_method_return`) supports exactly: toUpperCase, toLowerCase, trim, count, byteCount, graphemeCount, contains, startsWith, endsWith, get, graphemeAt, byteAt, indexOf, substring, split, replace. CHANGELOG M7 lists 16 string methods. Match is exact.
 - **Severity**: N/A — verified correct.
 
-### 20. spec/strings.md uses `.set()` for index-assignment example but strings are immutable (NOT DRIFT — spec correctly says "compile error")
+### 19. spec/strings.md uses `.set()` for index-assignment example but strings are immutable (NOT DRIFT — spec correctly says "compile error")
 - **Doc claim**: `spec/strings.md:101-110` shows `name[0] = `B`` as a compile error.
 - **Implementation reality**: Verified the parser produces IndexAssign for `name[0] = ...` and the typeck must reject for strings. Looks correct per `crates/ynz-typeck/src/check.rs:3562`.
 - **Severity**: N/A — verified.
@@ -141,22 +130,22 @@ Grouped by area: Lexer/Parser, Type System, Diagnostics, Numerics, Strings, Modu
 
 ## Modules
 
-### 21. spec/modules.md says "Re-exporting" works (`export { foo } from "..."`) — implementation has parsing but cross-file export wiring is incomplete (HIGH)
+### 20. spec/modules.md says "Re-exporting" works (`export { foo } from "..."`) — implementation has parsing but cross-file export wiring is incomplete (HIGH)
 - **Doc claim**: `spec/modules.md:179-194` describes re-export syntax `export { fetchUser, createUser, User } from "services/users"`.
 - **Implementation reality**: `crates/ynz-ast/src/nodes.rs:23-46` has `ReExport` item and `ReExportItem` shape. CHANGELOG M8: "import/export syntax is fully parsed and type-checked. Cross-file symbol *calls* are deferred to v0.2 (the syntax is locked and validated; the typeck resolver is a stub)." So syntax parses, but the entire cross-file call mechanism is a v0.2 stub. spec/modules.md presents re-export as working without flagging that calls don't resolve.
 - **Severity**: HIGH — spec implies functionality that's a stub. The spec needs a v0.1 caveat: "syntax accepted; cross-file calls deferred to v0.2."
 
-### 22. spec/modules.md says "Standard Library — No Import Needed" — but no stdlib modules exist in v0.1 (MEDIUM)
+### 21. spec/modules.md says "Standard Library — No Import Needed" — but no stdlib modules exist in v0.1 (MEDIUM)
 - **Doc claim**: `spec/modules.md:37-48` shows `math.sqrt(16)`, `file.read("data.txt")`, `http.get(...)`, `date.now()` as "always available, just use it."
 - **Implementation reality**: Per `design/mvp-scope.md`, `math` is v0.7, `file` is v0.6, `http` is v0.15, `date` is v0.10. None ship in v0.1. The compiler does not auto-import any stdlib in v0.1.
 - **Severity**: MEDIUM — spec is forward-looking and forms the right mental model for users, but uses examples that don't compile in v0.1. Should add an "Available from v0.X" annotation per module reference.
 
-### 23. spec/modules.md "side-effect imports" example uses string syntax that wouldn't even parse (HIGH)
+### 22. spec/modules.md "side-effect imports" example uses string syntax that wouldn't even parse (HIGH)
 - **Doc claim**: `spec/modules.md:253` shows `import "some-module"` as a compile error.
 - **Implementation reality**: Uses double-quoted string. Parser would reject double quotes first (M7 lexer error per #1 above), so the user would never see the "imports must bind to something" diagnostic.
 - **Severity**: HIGH — same root cause as #1. The "bad example" in the spec doesn't trigger the documented error because the string form is wrong.
 
-### 24. spec/modules.md "alias collision" example wouldn't trigger as described (HIGH)
+### 23. spec/modules.md "alias collision" example wouldn't trigger as described (HIGH)
 - **Doc claim**: `spec/modules.md:139-146`:
   ```
   import math as advancedMath from "math"
@@ -166,7 +155,7 @@ Grouped by area: Lexer/Parser, Type System, Diagnostics, Numerics, Strings, Modu
 - **Implementation reality**: First import would fail lexer on `"..."` (double quote). And the parser grammar for namespace imports is `import NAME from "..."`, not `import math as advancedMath from "..."`. Need to verify the actual `as` alias position. The spec's syntax is unclear / possibly wrong.
 - **Severity**: HIGH — spec invalid even ignoring quote issue.
 
-### 25. spec/modules.md describes IDE auto-import — IDE infrastructure is v0.2 (LOW)
+### 24. spec/modules.md describes IDE auto-import — IDE infrastructure is v0.2 (LOW)
 - **Doc claim**: `spec/modules.md:275-285` describes IDE auto-import behavior.
 - **Implementation reality**: LSP is v0.2 per mvp-scope.
 - **Severity**: LOW — forward-looking spec content.
@@ -175,17 +164,17 @@ Grouped by area: Lexer/Parser, Type System, Diagnostics, Numerics, Strings, Modu
 
 ## Examples
 
-### 26. `examples/basics/src/entrypoint.ynz` shadows `nums` and `score` — duplicate names in same scope (MEDIUM)
+### 25. `examples/basics/src/entrypoint.ynz` shadows `nums` and `score` — duplicate names in same scope (MEDIUM)
 - **Doc claim**: Per `.claude/rules/plan-invariants.md` `### Demo & Error Gallery`, every phase that adds executable surface must extend the basics demo. The plan invariants imply the demo should compile cleanly.
 - **Implementation reality**: `examples/basics/src/entrypoint.ynz:124` declares `let nums: array<int> = [10, 20, 30]`. Line 168: `let nums: array<int> = [10, 20, 30]` — same name in same function scope (re-declared). Line 135 declares `let score: maybe<int> = none` after line 32 declared `let score: int = 0`. Shadow-in-same-scope unclear — implementation either allows it or rejects it; the existing demo passes the `examples_basics_runs_end_to_end` integration test per CHANGELOG, suggesting in-function re-declaration is permitted, which would contradict `spec/variables.md` "No variable hoisting. No surprises." and `spec/scope.md`.
 - **Severity**: MEDIUM — either the spec is wrong about no-shadowing or the test is permissive. Per banned jargon rule "shadow, shadowing" is banned in diagnostics but the language behavior re: shadow-in-scope is undocumented.
 
-### 27. examples/errors/m8_errors.ynz: comment says "Cross-directory import from no-project" but trigger is commented out (LOW)
+### 26. examples/errors/m8_errors.ynz: comment says "Cross-directory import from no-project" but trigger is commented out (LOW)
 - **Doc claim**: `examples/errors/m8_errors.ynz:17-21` — `p2_relative_import` says it should trigger "Import paths must be project-root relative". All triggers are commented out, requiring manual uncommenting.
 - **Implementation reality**: The harness in `crates/ynz-driver/tests/` runs the error galleries. Galleries with all-commented-out triggers don't actually test the diagnostics. Per `.claude/rules/plan-invariants.md` this is intended to be a "uncomment to test" reference, but no automated test forces every trigger to be exercised. The actual diagnostics may or may not exist as worded.
 - **Severity**: LOW — depends on whether the in-tree gallery is meant to be runnable or reference-only.
 
-### 28. examples/basics/yinz.toml has `entry = "src/entrypoint.ynz"` but spec/main.md says default is `"entrypoint.ynz"` (MEDIUM)
+### 27. examples/basics/yinz.toml has `entry = "src/entrypoint.ynz"` but spec/main.md says default is `"entrypoint.ynz"` (MEDIUM)
 - **Doc claim**: `spec/main.md:35`: `entry = "entrypoint.ynz"` (default — change to any .ynz file).
 - **Implementation reality**: `examples/basics/yinz.toml` uses `entry = "src/entrypoint.ynz"`. The compiler walks `src/**/*.ynz` per CHANGELOG M8: "`ynz run <dir>` compiles and links all `.ynz` files under `src/`". Recent commit `8440274 fix(driver): remove src/ convention — spec says project-root-relative only` suggests this was just fixed/changed. The spec doesn't mention `src/` convention at all but the example demo project uses it.
 - **Severity**: MEDIUM — the example contradicts the spec; one or the other is wrong. Per the recent commit message, the spec is the source of truth, but the example still uses `src/`.
@@ -194,39 +183,39 @@ Grouped by area: Lexer/Parser, Type System, Diagnostics, Numerics, Strings, Modu
 
 ## Misc / Cross-cutting
 
-### 29. design/mvp-scope.md still lists pre-r12 syntax `type Foo = A or B or C` for unions (CRITICAL — LOCKED DECISION)
+### 28. design/mvp-scope.md still lists pre-r12 syntax `type Foo = A or B or C` for unions (CRITICAL — LOCKED DECISION)
 - **Doc claim**: `design/mvp-scope.md:20`: "Unions (`type Foo = A or B or C`)".
 - **Implementation reality**: `design/golden-rules.md:149` and `design/decisions.md` rows clearly state Rule 12 was amended 2026-05-14 — Yinz uses `|` for unions, NOT `or`. `crates/ynz-parser/src/lexer.rs` token table has `Token::Pipe` and `Token::PipePipe`. The lexer does not recognize `or` as a keyword. Trying `type Foo = A or B` would fail twice: `type` is banned, and `or` is an Identifier.
 - **Severity**: CRITICAL — mvp-scope.md is the source of truth for "what ships in v0.N" but documents an obsolete syntax for a locked decision (`|` for unions, banned `or`).
 
-### 30. design/decisions.md "type aliases" — see #16 above (CROSS-REF)
+### 29. design/decisions.md "type aliases" — see #15 above (CROSS-REF)
 
-### 31. design/open-questions.md does NOT cover destructuring deferral (LOW)
+### 30. design/open-questions.md does NOT cover destructuring deferral (LOW)
 - **Doc claim**: Open questions list contains: Metaprogramming, HTTP Module, Actor Primitives, Specialization, Workspace, Formatter, Type Collection Ordering.
 - **Implementation reality**: spec/destructuring.md describes a non-existent v0.1 feature (#2 above). Either destructuring should be on the open questions list (with a "deferred to v0.2/v1.0" note) or the spec should be marked v-deferred.
 - **Severity**: LOW.
 
-### 32. `spec/main.md` and `spec/config.md` use `main()` inconsistently with `entrypoint()` (MEDIUM)
+### 31. `spec/main.md` and `spec/config.md` use `main()` inconsistently with `entrypoint()` (MEDIUM)
 - **Doc claim**: `spec/config.md:82-167` repeatedly says "in `main()`" — line 84 "in your `main()` function", line 164–168 "in `main()`" 5 times.
 - **Implementation reality**: Per `spec/main.md:1` and CHANGELOG, entry is `function entrypoint()`. Implementation: `crates/ynz-typeck/src/queries.rs` searches for the `entrypoint` symbol.
 - **Severity**: MEDIUM — spec/config.md needs `main()` → `entrypoint()` everywhere. Per the renamed-concepts table in `.claude/rules/naming.md`, the function MUST be named `entrypoint`, not `main`.
 
-### 34. spec/overview.md misnumbered "12 Golden Rules" but the rules go up to 13 (LOW)
+### 32. spec/overview.md misnumbered "12 Golden Rules" but the rules go up to 13 (LOW)
 - **Doc claim**: `spec/overview.md:39` says "The 12 Golden Rules" — then lists rules 1–12 (with no rule 13).
 - **Implementation reality**: `CLAUDE.md` rules 1–13 explicitly defined. `design/golden-rules.md` covers 13 rules. Rule 13 ("Capital letter = type") was added later and is load-bearing. `spec/overview.md` omits it.
 - **Severity**: LOW — spec is missing one rule. Should renumber to "13 Golden Rules" and add rule 13.
 
-### 35. design/decisions.md lists "Sized variants (`f32`): Deferred to v2+" — no compile-error gallery entry for `f32` (LOW)
+### 33. design/decisions.md lists "Sized variants (`f32`): Deferred to v2+" — no compile-error gallery entry for `f32` (LOW)
 - **Doc claim**: `design/numeric-types.md:89` says `f32` is deferred to v2+.
 - **Implementation reality**: No diagnostic for `f32` type usage. Searching `f32` in lexer/parser produces no token reservation. A user writing `let x: f32 = 1.0` gets the standard "unknown type" diagnostic, not a teaching diagnostic pointing to v2+ deferral.
 - **Severity**: LOW — minor teaching opportunity not implemented.
 
-### 36. spec/collections.md uses the word `type` as a keyword in body text (HIGH)
+### 34. spec/collections.md uses the word `type` as a keyword in body text (HIGH)
 - **Doc claim**: `spec/collections.md:166` says "for known fields, define a `type` — it's faster." Line 248–250: "consider using a type instead". Line 269: `type Scores { alice: number, bob: number }` (banned `type` keyword in code).
 - **Implementation reality**: `crates/ynz-parser/src/lexer.rs:587-594` banned `type` as a declaration keyword in M4 with a teaching diagnostic redirecting to `shape`. The spec uses both the banned `type` keyword in code AND uses "type" in prose where "shape" is the Yinz term.
 - **Severity**: HIGH — directly violates `.claude/rules/vocabulary.md` banned-jargon rule (`type` as declaration keyword) AND `.claude/rules/naming.md` renamed-concepts table.
 
-### 37. spec/sensitive.md `env.get()` example references a v0.8 module (MEDIUM)
+### 35. spec/sensitive.md `env.get()` example references a v0.8 module (MEDIUM)
 - **Doc claim**: `spec/sensitive.md:9-13`: "`env.get()` returns `sensitive string` by default."
 - **Implementation reality**: `env` is the v0.8 module per mvp-scope. In v0.1, there is no `env`. The sensitive type-system surface DOES ship in M8 (per CHANGELOG), but the `env` source documented as the canonical example does not. Per M8 plan: "the env-based source (`env.get()` returns `sensitive string`) ships v0.8; M8 ships the type machinery + the manual `sensitive(literal)` constructor."
 - **Severity**: MEDIUM — primary example references unshipped module. Should lead with `sensitive("...")` constructor and mention env as v0.8.
@@ -250,14 +239,13 @@ Grouped by area: Lexer/Parser, Type System, Diagnostics, Numerics, Strings, Modu
 ## Recommended Priority for Fixes
 
 1. **Spec-wide double-quote → backtick sweep** (#1) — touches 11+ spec files, hundreds of occurrences. Single biggest source of user-facing confusion.
-2. **`background fn` share-rejection** (#10) — locked-decision violation, security/safety implication. Implement the check or revise the spec.
-3. **mvp-scope.md "or" → "|" for unions** (#29) — locked-decision drift in the version-source-of-truth file.
-4. **spec/types.md, spec/collections.md `type` keyword usage** (#36) — directly violates banned-jargon rule.
-5. **spec/destructuring.md feature flag** (#2) — clarify deferral.
-6. **spec/sensitive.md method names** (#7) — wrong API surface in the canonical doc.
-7. **spec/main.md, spec/config.md `main()` → `entrypoint()`** (#32) — naming inconsistency in user-facing docs.
-8. **banned_jargon.rs missing 7+ entries** (#14) — sync with design/compiler-errors.md.
-9. **spec/modules.md cross-file v0.2 caveats** (#21, #23, #24) — clarify stub status.
-10. **examples/basics/yinz.toml `src/` convention** (#28) — align with spec or document.
+2. **mvp-scope.md "or" → "|" for unions** (#28) — locked-decision drift in the version-source-of-truth file.
+3. **spec/types.md, spec/collections.md `type` keyword usage** (#34) — directly violates banned-jargon rule.
+4. **spec/destructuring.md feature flag** (#2) — clarify deferral.
+5. **spec/sensitive.md method names** (#7) — wrong API surface in the canonical doc.
+6. **spec/main.md, spec/config.md `main()` → `entrypoint()`** (#31) — naming inconsistency in user-facing docs.
+7. **banned_jargon.rs missing 7+ entries** (#13) — sync with design/compiler-errors.md.
+8. **spec/modules.md cross-file v0.2 caveats** (#20, #22, #23) — clarify stub status.
+9. **examples/basics/yinz.toml `src/` convention** (#27) — align with spec or document.
 
 All items in this report are read-only audit findings; no source files were edited.

@@ -1752,3 +1752,134 @@ function entrypoint() -> nothing {
 "#,
     );
 }
+
+#[test]
+fn bug3_multi_level_inheritance_flatten_deterministic() {
+    // WHY: catches the HashMap-iteration-order bug (Bug #3) in flatten_inherited_fields.
+    // Previously, if HashMap visited C before B, C would miss A's fields because B wasn't
+    // flattened yet. The fix processes shapes in parent-first (depth-first) order, so
+    // A is always flattened before B, and B before C. If c.x produces "field not found",
+    // the deterministic ordering fix is incomplete.
+    assert_clean(
+        r#"
+shape A { x: int }
+shape B extends A { y: int }
+shape C extends B { z: int }
+
+function entrypoint() -> nothing {
+  let c: C = { x: 1, y: 2, z: 3 }
+  print(`${c.x}`)
+  print(`${c.y}`)
+  print(`${c.z}`)
+}
+"#,
+    );
+}
+
+#[test]
+fn m8_background_rejects_share_param_callee() {
+    // WHY: enforces the locked M8 decision (spec/concurrency.md:164-177): `background`
+    // must reject callees whose parameters use `share` ownership. A shared borrow may
+    // outlive the caller's scope when the task runs in the background — a memory-safety
+    // hole. This test catches regressions where the check is removed or bypassed.
+    let output = assert_errors(
+        r#"
+function readData(share data: string) -> nothing {
+  print(data)
+}
+
+function entrypoint() -> nothing {
+  let s: string = `hello`
+  background readData(s)
+}
+"#,
+        1,
+    );
+    let has_share_msg = output.diagnostics.iter().any(|d| {
+        d.what
+            .to_lowercase()
+            .contains("cannot use `background` with a function that borrows its arguments")
+    });
+    assert!(
+        has_share_msg,
+        "Expected 'cannot use `background` with a function that borrows its arguments' diagnostic, got: {:#?}",
+        output.diagnostics
+    );
+}
+
+#[test]
+fn incremental_rebuild_invalidates_when_imported_signature_changes() {
+    // WHY: Bug #2 — coarse PartialEq on Salsa-tracked outputs caused incremental
+    //      builds to skip re-typechecking when an imported file's function signature
+    //      changed but the function NAME stayed the same. This test catches a
+    //      regression by editing fileB's source after fileA was checked once,
+    //      then asserting fileA re-checks against the new signature.
+    //
+    //      Uses real temp files on disk because resolve_module_path canonicalizes
+    //      paths via std::fs — the files must actually exist for imports to resolve.
+    use salsa::Setter as _;
+
+    let dir = std::env::temp_dir().join(format!(
+        "ynz_incremental_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+
+    // yinz.toml required for cross-directory import resolution.
+    std::fs::write(dir.join("yinz.toml"), "[project]\nname = \"test\"\n")
+        .expect("write yinz.toml");
+
+    let b_path = dir.join("b.ynz");
+    let a_path = dir.join("a.ynz");
+
+    // v1: fileB exports `foo(x: int) -> int`. fileA imports and calls `foo(42)`.
+    let file_b_v1 = "export function foo(x: int) -> int { return x }";
+    let file_a_src = "import { foo } from `b`\nfunction entrypoint() -> nothing { let r = foo(42) }";
+
+    std::fs::write(&b_path, file_b_v1).expect("write b.ynz v1");
+    std::fs::write(&a_path, file_a_src).expect("write a.ynz");
+
+    let b_path_str = b_path.display().to_string();
+    let a_path_str = a_path.display().to_string();
+
+    let mut db = CompilerDb::default();
+    let sf_b = SourceFile::new(&db, b_path_str.clone(), file_b_v1.to_string());
+    let sf_a = SourceFile::new(&db, a_path_str.clone(), file_a_src.to_string());
+    db.register_source(sf_b);
+    db.register_source(sf_a);
+
+    let output1 = check_query(&db, sf_a);
+    let v1_errors: Vec<_> = output1.diagnostics.iter()
+        .filter(|d| d.severity == ynz_diagnostics::Severity::Error)
+        .collect();
+    assert_eq!(
+        v1_errors.len(), 0,
+        "v1: foo(int)->int + call foo(42) should typecheck clean; got: {:#?}",
+        v1_errors
+    );
+
+    // Change fileB's foo to take a string instead of int — same name, different signature.
+    let file_b_v2 = "export function foo(x: string) -> int { return 42 }";
+    std::fs::write(&b_path, file_b_v2).expect("write b.ynz v2");
+    sf_b.set_text(&mut db).to(file_b_v2.to_string());
+
+    let output2 = check_query(&db, sf_a);
+    let v2_errors: Vec<_> = output2.diagnostics.iter()
+        .filter(|d| d.severity == ynz_diagnostics::Severity::Error)
+        .collect();
+    // After fix: foo(42) passes int to a function expecting string — must produce >= 1 error.
+    // Before fix: Salsa skipped re-checking because coarse PartialEq said "no change"
+    //             (same function name, same length — values were ignored).
+    assert!(
+        !v2_errors.is_empty(),
+        "v2: foo now expects string but call passes int — must produce a type error; got 0 errors. \
+         Diagnostics: {:#?}",
+        output2.diagnostics
+    );
+
+    // Cleanup.
+    let _ = std::fs::remove_dir_all(&dir);
+}

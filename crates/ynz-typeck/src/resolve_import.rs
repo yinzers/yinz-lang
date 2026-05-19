@@ -5,19 +5,18 @@
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 use ynz_ast::nodes::{ImportDecl, ImportItem, ImportKind};
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
-use ynz_parser::{parse_query, SourceFile};
+use ynz_parser::{parse_query, SourceFileRegistry};
 
 use crate::{
     exports::{collect_exports, ExportTable},
-    options_table::collect_options,
-    shapes::{collect_shapes, ShapeDef},
-    options_table::OptionsEntry,
-    signatures::{collect_signatures, FunctionSig},
+    options_table::{collect_options, OptionsEntry},
+    queries::module_signatures_query,
+    shapes::ShapeDef,
+    signatures::FunctionSig,
 };
 
 /// Result of resolving a single `import { ... } from "path"` declaration.
@@ -92,7 +91,7 @@ fn find_project_root(start: &Path) -> Option<PathBuf> {
 pub fn resolve_imports(
     imports: &[&ImportDecl],
     importer_path: &str,
-    db: &dyn salsa::Database,
+    db: &dyn SourceFileRegistry,
     visiting: &mut HashSet<PathBuf>,
     diags: &mut DiagnosticBucket,
 ) -> ResolvedImport {
@@ -252,15 +251,17 @@ fn bind_named_import(
     }
 }
 
-/// Load (or use cached) ExportTable for a file at `resolved_path`.
+/// Load (or build) the ExportTable for a file at `resolved_path`.
 ///
-/// Uses the same `db` so salsa can track the cross-file dependency. If the
-/// file was registered by the driver (`db.source_by_path`), we get the exact
-/// same SourceFile input and salsa memoizes correctly. If not registered
-/// (single-file mode), we create a fresh SourceFile — results are correct but
-/// not incrementally cached.
+/// Looks up the SourceFile via `db.source_by_path` so salsa tracks the
+/// cross-file dependency and uses the exact in-memory text (not stale disk
+/// content). Files not registered in the project (single-file mode) return an
+/// error diagnostic — cross-file imports require a `yinz.toml` project.
+///
+/// Uses the memoized `module_signatures_query` for shapes and signatures so
+/// salsa can skip re-running those passes on unchanged imported files.
 fn load_export_table(
-    db: &dyn salsa::Database,
+    db: &dyn SourceFileRegistry,
     resolved_path: &Path,
     module_str: &str,
     span: &SourceSpan,
@@ -269,20 +270,20 @@ fn load_export_table(
 ) -> ExportTable {
     let path_str = resolved_path.display().to_string();
 
-    // Read the imported file from disk and create a SourceFile in the SAME salsa db.
-    // Using the same db is mandatory — creating a separate db inside a salsa tracked
-    // function panics ("Cannot change database mid-query").
-    // Incremental optimization (v0.2): use the pre-registered SourceFile from the
-    // driver's project load via CompilerDb::source_by_path so salsa tracks the
-    // cross-file dependency. For now, reading fresh from disk is correct but not cached.
-    let sf = match std::fs::read_to_string(resolved_path) {
-        Ok(text) => SourceFile::new(db, path_str.clone(), text),
-        Err(e) => {
+    // Look up the SourceFile from the salsa registry. The driver registers all
+    // project files before any query runs, so every valid import is present here.
+    // Files missing from the registry were not part of the project load —
+    // single-file mode cannot import across files.
+    let sf = match db.source_by_path(&path_str) {
+        Some(sf) => sf,
+        None => {
             diags.push(Diagnostic::error(
                 span.clone(),
-                format!("Cannot read module \"{module_str}\": {e}."),
-                "Check file permissions and that the file exists.",
-                "The compiler must be able to read all imported files.",
+                format!("Module \"{module_str}\" was not registered in the project."),
+                "Check that the file exists under your project root and that `yinz.toml` is present.",
+                "Yinz only resolves imports inside projects (a directory with `yinz.toml`). \
+                 Compiling a single file with `ynz build foo.ynz` has no project context — \
+                 add a `yinz.toml` and put your files under that directory if you need imports.",
             ));
             return ExportTable::empty();
         }
@@ -291,7 +292,9 @@ fn load_export_table(
     // Mark as visiting to detect circular imports in recursive calls.
     visiting.insert(resolved_path.to_path_buf());
 
-    // Build the imported file's type tables.
+    // Use the salsa-memoized signature query — shapes and function signatures
+    // are computed once and cached; salsa re-runs only when the source changes.
+    let sig_output = module_signatures_query(db, sf);
     let parse = parse_query(db, sf);
 
     // Propagate parse errors as a summary diagnostic rather than re-emitting
@@ -310,12 +313,13 @@ fn load_export_table(
         return ExportTable::empty();
     }
 
+    // OptionsTable isn't part of SignatureOutput, so we collect it inline here.
+    // This pass is uncached; the shape/sig tables above are memoized via the
+    // tracked query, so this is the only repeated work for cross-file imports.
     let mut dummy_diags = DiagnosticBucket::new();
-    let shape_table = collect_shapes(&parse.module, &Default::default(), &Default::default(), &mut dummy_diags);
     let options_table = collect_options(&parse.module, &mut dummy_diags);
-    let sig_table = collect_signatures(&parse.module, &mut dummy_diags, &shape_table);
 
     visiting.remove(resolved_path);
 
-    collect_exports(&parse.module, &shape_table, &options_table, &sig_table)
+    collect_exports(&parse.module, &sig_output.shape_table, &options_table, &sig_output.sig_table)
 }

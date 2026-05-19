@@ -54,23 +54,22 @@ All test-side crates list it as a `[dev-dependencies]` entry.
 
 ---
 
-## MEDIUM — `collect_options` / `collect_shapes` / `collect_signatures` invoked redundantly across crates
+## MEDIUM — `collect_options` invoked redundantly in check.rs and emit.rs (two remaining sites)
 
 **Type**: Shared Data Source (parallel access patterns to AST analysis)
 **Crates Involved**: `ynz-typeck`, `ynz-codegen`
-**Current State**: The signature/shape/options collection passes run from THREE different call sites for the same module:
+**Current State (post-Batch-3)**: The `resolve_import.rs` site (#4 below) was fixed by Batch 3 — `load_export_table` now calls `module_signatures_query(db, sf)` which memoizes shapes and signatures. `collect_options` in `load_export_table` remains inline because `OptionsTable` isn't part of `SignatureOutput` yet. Two redundant call sites remain:
 
-1. `crates/ynz-typeck/src/queries.rs:123-132` (`module_signatures_query`) — the salsa-tracked happy path
-2. `crates/ynz-typeck/src/check.rs:52` (`check`) — re-runs `collect_options` inside check, separate from the query that fed it
-3. `crates/ynz-codegen/src/emit.rs:141-143` (`emit_artifact`) — re-runs `collect_options` AGAIN at codegen for variant tag lookups
-4. `crates/ynz-typeck/src/resolve_import.rs:314-316` — re-runs all three passes for every imported file (uncached — there's a `dummy_diags` bucket that swallows diagnostics)
+1. `crates/ynz-typeck/src/queries.rs` (`module_signatures_query`) — the salsa-tracked happy path (**correct**)
+2. `crates/ynz-typeck/src/check.rs:52` (`check`) — re-runs `collect_options` inside check, separate from the query that fed it (**still open**)
+3. `crates/ynz-codegen/src/emit.rs:141-143` (`emit_artifact`) — re-runs `collect_options` AGAIN at codegen for variant tag lookups (**still open**)
+4. `crates/ynz-typeck/src/resolve_import.rs` — **FIXED** by Batch 3 (now calls `module_signatures_query` for shapes+sigs; options still collected inline with `dummy_diags`)
 
-(1) is correct. (2), (3), (4) are recomputation. The result of (1) is already plumbed into `CheckOutput` and `CodegenOutput` via `sig_output`, but `collect_options` is called separately inside check.rs and emit.rs because the OptionsTable wasn't part of the SignatureOutput contract.
-**Proposed Consolidation**: Promote `OptionsTable` into `SignatureOutput` (it's already in scope — `imported_options` is there). Have `check()` and `emit_artifact()` consume it from the query result instead of re-running `collect_options`. For (4), the cross-file resolution should call `module_signatures_query` on the imported `SourceFile` instead of running `collect_shapes` / `collect_options` / `collect_signatures` directly — that's exactly what salsa is designed for and `resolve_import.rs` already has the db handle.
-**Trigger Condition**: When a project with N imported files starts compiling noticeably slower than `ynz` should be (the `dummy_diags` swallowing in `load_export_table` already signals "we know this is wrong"), OR when adding a new pass (e.g., M9 stdlib type registration) tempts a fourth call site.
-**Effort**: Medium — needs `OptionsTable` PartialEq impl for salsa (it derives `Default` but the table isn't `PartialEq`-derivable through HashMap). The cross-file salsa call already has TODOs comments at `queries.rs:118` and `resolve_import.rs:275` flagging this same issue.
-**Benefits**: Correct salsa caching of cross-file imports (currently uncached per the @design-decision comment at `shapes.rs:67`). Eliminates the redundant codegen-side options collection. Faster recompiles for multi-file projects.
-**Risks**: Touches the central type-collection contract — requires the SignatureOutput to expand. Coordination with M9 stdlib work.
+**Proposed Consolidation**: Promote `OptionsTable` into `SignatureOutput`. Have `check()` and `emit_artifact()` consume it from the query result instead of re-running `collect_options`. This also allows removing the inline `collect_options` call in `load_export_table`.
+**Trigger Condition**: When adding a new pass (e.g., M9 stdlib type registration) tempts another call site, OR when noticeably slow recompiles on options-heavy projects.
+**Effort**: Medium — needs `OptionsTable` PartialEq impl for salsa (already done by Batch 3 — `OptionsTable` now derives `PartialEq`). Remaining work: expand `SignatureOutput` to include `OptionsTable`, update `check()` and `emit_artifact()` call sites.
+**Benefits**: Fully correct salsa caching of cross-file options types. Eliminates the two remaining redundant options collection calls.
+**Risks**: Touches the central type-collection contract. Coordination with M9 stdlib work.
 
 ---
 

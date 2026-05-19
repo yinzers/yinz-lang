@@ -12,7 +12,7 @@ use crate::{
 ///
 /// Keys are the exported names. Options/shapes/functions are stored by the name
 /// as declared in the exporting file; the importing file may rebind via `as alias`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ExportTable {
     pub shapes: HashMap<String, ShapeDef>,
     pub options: HashMap<String, OptionsEntry>,
@@ -26,20 +26,6 @@ impl ExportTable {
 
     pub fn is_empty(&self) -> bool {
         self.shapes.is_empty() && self.options.is_empty() && self.functions.is_empty()
-    }
-}
-
-/// Coarse equality — same exported name sets. Fine-grained signature comparison
-/// deferred to v0.2 LSP incremental caching; for now, any export-set change
-/// re-runs downstream queries.
-impl PartialEq for ExportTable {
-    fn eq(&self, other: &Self) -> bool {
-        self.shapes.len() == other.shapes.len()
-            && self.shapes.keys().all(|k| other.shapes.contains_key(k))
-            && self.options.len() == other.options.len()
-            && self.options.keys().all(|k| other.options.contains_key(k))
-            && self.functions.len() == other.functions.len()
-            && self.functions.keys().all(|k| other.functions.contains_key(k))
     }
 }
 

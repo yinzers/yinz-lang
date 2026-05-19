@@ -10,7 +10,7 @@ use crate::{
 };
 
 /// The resolved signature of a user-defined function.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FunctionSig {
     /// (parameter_name, resolved_type) pairs, in declaration order.
     pub params: Vec<(String, Type)>,
@@ -21,7 +21,7 @@ pub struct FunctionSig {
 }
 
 /// All user-defined function signatures collected from a module.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SignatureTable {
     pub fns: HashMap<String, FunctionSig>,
 }
