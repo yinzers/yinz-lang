@@ -282,6 +282,13 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 5. **Do NOT start Phase 1** until the user confirms the commit.
 
+**STATUS (2026-05-19)**: Phase 0 COMPLETE.
+- Commit: `bba8830` on branch `chore/v0-2-m1-doc-lockdown` (pushed to origin)
+- PR: branch pushed; `gh auth login` needed to create via CLI. URL: `https://github.com/patrickrizzardi/ynz/pull/new/chore/v0-2-m1-doc-lockdown`
+- Code-reviewer: PASS (after fixing 3 missing mvp-scope placeholders — ML stdlib, Markets stdlib, Self-hosted compiler)
+- Discovery: `builtins.rs:101 STRING_METHODS` is an 8th scattered registry; added to Bouncer pattern + Phase 3 scope
+- Waiting on: user to authenticate `gh` and merge the PR, then start Phase 1
+
 ---
 
 ### Phase 1: Bootstrap `ynz-registry` crate + Schema Validation
