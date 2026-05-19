@@ -1,4 +1,4 @@
-FROM ubuntu:latest
+FROM ubuntu:24.04
 
 ENV USER=ubuntu
 
@@ -28,6 +28,19 @@ RUN install -m 0755 -d /etc/apt/keyrings \
     && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
     && apt-get update && apt-get install -y --no-install-recommends gh \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# LLVM 18 + Clang 18
+# - llvm-18-dev: LLVM libraries + headers that inkwell/llvm-sys links against when
+#   building the ynz compiler itself (cargo build)
+# - clang-18: the system linker ynz invokes to turn .o files into native binaries
+#   (ynz build uses clang-18 as its first-choice linker)
+# - libclang-18-dev: libclang headers used by some inkwell binding code
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       llvm-18-dev \
+       clang-18 \
+       libclang-18-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Allow ubuntu user to run commands as root
