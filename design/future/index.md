@@ -27,6 +27,8 @@ Each doc in this directory has a **Status header** stating one of:
 | [`http-framework.md`](http-framework.md) | Locked | v0.3+ | Supervision-by-default HTTP server. |
 | [`auto-soa.md`](auto-soa.md) | Locked (commitment) | v0.3+ | Compiler auto-transforms `array<shape>` to Struct-of-Arrays layout for hot loops accessing 1-2 fields. User code unchanged; IDE shows the transform as muted hint. |
 | [`packages.md`](packages.md) | Locked design, v0.1 binary-format reservation | v0.1 + v0.2 | Binary package format reserves space for may-block metadata, ownership signatures, kernel flags from v0.1; populated in v0.2. |
+| [`release-mode.md`](release-mode.md) | Locked direction | v0.4+ (TBD) | `--release` flag: LLVM `-O3`, strip debug info, disable dev-only flags (`--reveal-sensitive`, `--emit-ir`). Strips dev-only env-var checks via `cfg(release_build)`. |
+| [`string-ptr-len-overhaul.md`](string-ptr-len-overhaul.md) | Locked direction, implementation deferred | TBD (likely v0.6 alongside file I/O) | Migrate strings from NUL-terminated C strings to `{ptr, len}` slices. Removes the NUL-byte footgun, makes `length` O(1). Multi-day rewrite across parser/codegen/runtime/stdlib. |
 
 ---
 

@@ -93,6 +93,8 @@ The compiler starts emitting the third severity tier — suggestions — during 
 
 No separate `ynz lint` command — the compiler IS the linter. Customization (config file) comes in v1.x.
 
+**Co-shipping candidate: `--release` flag** — LLVM `-O3`, strip debug info, disable dev-only flags. Locked direction; see `design/future/release-mode.md`. May ship in v0.4 alongside the linting work or slip to v0.5; both are perf-focused milestones where release-build engineering fits.
+
 ---
 
 ## v0.5 — Package manager
@@ -108,6 +110,8 @@ Install mechanism targets bun-class speed (content-addressed cache, hard-links, 
 ## v0.6 — File system (tight trio)
 
 Three modules bundled together because they're tightly coupled:
+
+**Co-shipping candidate: `{ptr, len}` string overhaul** — migrating strings from NUL-terminated C strings to `{ptr, len}` slices. v0.6 is the most likely landing slot because file I/O is the first stdlib that needs embedded-NUL-safe strings (reading binary as a string-typed buffer). See `design/future/string-ptr-len-overhaul.md`. May slip later if file-I/O doesn't actually need embedded NULs in v0.6.
 
 - **`file`** — read, write, append, exists, delete
 - **`path`** — join, dirname, basename, extname, normalize, isAbsolute
