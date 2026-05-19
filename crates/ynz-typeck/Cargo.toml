@@ -12,6 +12,7 @@ salsa             = { workspace = true }
 ynz-diagnostics   = { workspace = true }
 ynz-ast           = { workspace = true }
 ynz-parser        = { workspace = true }
+ynz-registry      = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

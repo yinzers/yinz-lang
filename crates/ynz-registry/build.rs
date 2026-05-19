@@ -205,6 +205,7 @@ fn emit_banned_jargon(table: &TomlTable, out: &mut String) {
 fn emit_primitive_intrinsics(table: &TomlTable, out: &mut String) {
     let kind = "primitive_intrinsic";
     let entries = get_entries(table, kind);
+    // Overloads with the same name are intentional (e.g. range/1 and range/2) — skip duplicate check.
 
     writeln!(out, "pub static PRIMITIVE_INTRINSICS: &[crate::PrimitiveIntrinsicEntry] = &[").unwrap();
     for entry in &entries {
@@ -212,7 +213,8 @@ fn emit_primitive_intrinsics(table: &TomlTable, out: &mut String) {
         let intr_kind = get_str(entry, "kind", kind, name);
         let receiver_type = entry.get("receiver_type").and_then(|v| v.as_str());
         let param_types = get_str_array(entry, "param_types", kind, name);
-        let return_type = get_str(entry, "return_type", kind, name);
+        // return_type is optional for print_type entries (they have no return value).
+        let return_type = entry.get("return_type").and_then(|v| v.as_str()).unwrap_or("");
         let since = get_str(entry, "since", kind, name);
 
         let receiver_expr = match receiver_type {
@@ -234,6 +236,16 @@ fn emit_primitive_intrinsics(table: &TomlTable, out: &mut String) {
 fn emit_type_attached_constants(table: &TomlTable, out: &mut String) {
     let kind = "type_attached_constant";
     let entries = get_entries(table, kind);
+    // Uniqueness is (type_name, const_name) composite — same const_name on different types is valid.
+    let mut seen = std::collections::HashSet::new();
+    for e in &entries {
+        let tn = get_str(e, "type_name", kind, "<unknown>");
+        let cn = get_str(e, "const_name", kind, tn);
+        let key = format!("{tn}.{cn}");
+        if !seen.insert(key.clone()) {
+            panic!("registry/features.toml: [[{kind}]] has duplicate entry '{key}' — (type_name, const_name) must be unique");
+        }
+    }
 
     writeln!(out, "pub static TYPE_ATTACHED_CONSTANTS: &[crate::TypeAttachedConstantEntry] = &[").unwrap();
     for entry in &entries {

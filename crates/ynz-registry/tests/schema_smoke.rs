@@ -63,13 +63,29 @@ fn banned_jargon_lookup_miss_returns_none() {
 // ---------------------------------------------------------------------------
 #[test]
 fn primitive_intrinsic_method_lookup() {
-    let mut found = ynz_registry::primitive_intrinsic_methods("int", "PLACEHOLDER_INTRINSIC_PHASE_3");
+    let mut found = ynz_registry::primitive_intrinsic_methods("int", "toNumber");
     let entry = found
         .next()
-        .expect("placeholder primitive intrinsic not found for (int, PLACEHOLDER_INTRINSIC_PHASE_3)");
+        .expect("int.toNumber intrinsic not found (Phase 3 migration)");
     assert_eq!(entry.kind, "method");
     assert_eq!(entry.receiver_type, Some("int"));
+    assert_eq!(entry.return_type, "number");
+}
+
+#[test]
+fn primitive_intrinsic_method_1arg_lookup() {
+    let mut found = ynz_registry::primitive_intrinsic_methods("int", "wrappingAdd");
+    let entry = found.next().expect("int.wrappingAdd not found (Phase 3 migration)");
+    assert_eq!(entry.kind, "method_1arg");
+    assert_eq!(entry.param_types, &["int"]);
     assert_eq!(entry.return_type, "int");
+}
+
+#[test]
+fn primitive_intrinsic_free_fn_lookup() {
+    let mut overloads = ynz_registry::primitive_free_fns("range");
+    assert!(overloads.next().is_some(), "range/1 not found");
+    assert!(overloads.next().is_some(), "range/2 not found");
 }
 
 #[test]
@@ -80,11 +96,19 @@ fn primitive_intrinsic_unknown_method_returns_empty() {
 
 #[test]
 fn type_attached_constant_lookup() {
-    let entry = ynz_registry::type_attached_constant_lookup("int", "PLACEHOLDER_CONST_PHASE_3")
-        .expect("placeholder type-attached constant not found");
+    let entry = ynz_registry::type_attached_constant_lookup("int", "max")
+        .expect("int.max not found (Phase 3 migration)");
     assert_eq!(entry.type_name, "int");
     assert_eq!(entry.value_type, "int");
-    assert!(!entry.value_literal.is_empty());
+    assert_eq!(entry.value_literal, "9223372036854775807");
+}
+
+#[test]
+fn type_attached_constant_number_epsilon() {
+    let entry = ynz_registry::type_attached_constant_lookup("number", "epsilon")
+        .expect("number.epsilon not found (Phase 3 migration)");
+    assert_eq!(entry.value_type, "number");
+    assert_eq!(entry.value_literal, "1e-33");
 }
 
 // ---------------------------------------------------------------------------

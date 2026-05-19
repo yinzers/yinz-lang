@@ -4631,24 +4631,29 @@ fn lower_postfix_op<'ctx>(
 }
 
 /// Emit a type-attached constant such as `int.max` or `number.epsilon`.
+///
+/// All data (value_type and value_literal) lives in registry/features.toml.
 fn emit_type_const<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     type_name: &str,
     const_name: &str,
 ) -> Result<BasicValueEnum<'ctx>, String> {
-    match (type_name, const_name) {
-        ("int", "max") => Ok(cg.i64().const_int(i64::MAX as u64, false).into()),
-        ("int", "min") => Ok(cg.i64().const_int(i64::MIN as u64, true).into()),
-        ("float", "max") => Ok(cg.f64().const_float(f64::MAX).into()),
-        ("float", "min") => Ok(cg.f64().const_float(f64::MIN).into()),
-        ("float", "epsilon") => Ok(cg.f64().const_float(f64::EPSILON).into()),
-        ("number", "max") | ("number", "min") | ("number", "epsilon") => {
-            let s = match (type_name, const_name) {
-                ("number", "max") => "9.999999999999999999999999999999999e+6144",
-                ("number", "min") => "1e-6143",
-                ("number", "epsilon") => "1e-33",
-                _ => unreachable!(),
-            };
+    let entry = ynz_registry::type_attached_constant_lookup(type_name, const_name)
+        .ok_or_else(|| format!("no registry entry for {type_name}.{const_name}"))?;
+
+    match entry.value_type {
+        "int" => {
+            let v: i64 = entry.value_literal.parse()
+                .map_err(|e| format!("int literal parse error for {type_name}.{const_name}: {e}"))?;
+            Ok(cg.i64().const_int(v as u64, v < 0).into())
+        }
+        "float" => {
+            let v: f64 = entry.value_literal.parse()
+                .map_err(|e| format!("float literal parse error for {type_name}.{const_name}: {e}"))?;
+            Ok(cg.f64().const_float(v).into())
+        }
+        "number" => {
+            let s = entry.value_literal;
             let bits = ynz_numerics::parse(s)
                 .ok_or_else(|| format!("failed to parse decimal128 constant `{s}`"))?;
             let slot = cg
@@ -4664,8 +4669,8 @@ fn emit_type_const<'ctx>(
                 .map_err(|e| format!("{e}"))?;
             Ok(slot.into())
         }
-        _ => Err(format!(
-            "codegen: unknown type-attached constant `{type_name}.{const_name}`"
+        other => Err(format!(
+            "codegen: unknown value_type {other:?} for type-attached constant `{type_name}.{const_name}`"
         )),
     }
 }

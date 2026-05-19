@@ -330,13 +330,340 @@ reason = "formal methods jargon"
 # param_types required when kind = "free_fn" or "method_1arg"
 # ---------------------------------------------------------------------------
 
+# --- print_type: types that print() accepts ---
 [[primitive_intrinsic]]
-name = "PLACEHOLDER_INTRINSIC_PHASE_3"
+name = "string"
+kind = "print_type"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "int"
+kind = "print_type"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "float"
+kind = "print_type"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "number"
+kind = "print_type"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "bool"
+kind = "print_type"
+since = "M3"
+
+# --- free_fn: range ---
+[[primitive_intrinsic]]
+name = "range"
+kind = "free_fn"
+param_types = ["int"]
+return_type = "range<int>"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "range"
+kind = "free_fn"
+param_types = ["int", "int"]
+return_type = "range<int>"
+since = "M3"
+
+# --- methods: int conversions ---
+[[primitive_intrinsic]]
+name = "toNumber"
+kind = "method"
+receiver_type = "int"
+param_types = []
+return_type = "number"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "toFloat"
+kind = "method"
+receiver_type = "int"
+param_types = []
+return_type = "float"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "toString"
+kind = "method"
+receiver_type = "int"
+param_types = []
+return_type = "string"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "toInt"
 kind = "method"
 receiver_type = "int"
 param_types = []
 return_type = "int"
+since = "M6"
+
+# --- methods: float conversions ---
+[[primitive_intrinsic]]
+name = "toNumber"
+kind = "method"
+receiver_type = "float"
+param_types = []
+return_type = "number"
 since = "M3"
+
+[[primitive_intrinsic]]
+name = "toString"
+kind = "method"
+receiver_type = "float"
+param_types = []
+return_type = "string"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "toInt"
+kind = "method"
+receiver_type = "float"
+param_types = []
+return_type = "maybe<int>"
+since = "M6"
+
+# --- methods: number conversions ---
+[[primitive_intrinsic]]
+name = "toFloat"
+kind = "method"
+receiver_type = "number"
+param_types = []
+return_type = "float"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "toString"
+kind = "method"
+receiver_type = "number"
+param_types = []
+return_type = "string"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "toInt"
+kind = "method"
+receiver_type = "number"
+param_types = []
+return_type = "maybe<int>"
+since = "M6"
+
+# --- methods: bool conversions ---
+[[primitive_intrinsic]]
+name = "toString"
+kind = "method"
+receiver_type = "bool"
+param_types = []
+return_type = "string"
+since = "M3"
+
+# --- method_1arg: int wrapping/saturating arithmetic ---
+[[primitive_intrinsic]]
+name = "wrappingAdd"
+kind = "method_1arg"
+receiver_type = "int"
+param_types = ["int"]
+return_type = "int"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "wrappingSub"
+kind = "method_1arg"
+receiver_type = "int"
+param_types = ["int"]
+return_type = "int"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "wrappingMul"
+kind = "method_1arg"
+receiver_type = "int"
+param_types = ["int"]
+return_type = "int"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "saturatingAdd"
+kind = "method_1arg"
+receiver_type = "int"
+param_types = ["int"]
+return_type = "int"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "saturatingSub"
+kind = "method_1arg"
+receiver_type = "int"
+param_types = ["int"]
+return_type = "int"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "saturatingMul"
+kind = "method_1arg"
+receiver_type = "int"
+param_types = ["int"]
+return_type = "int"
+since = "M4"
+
+# --- methods: string --- (16 entries from builtins.rs STRING_METHODS + M6 fallible conversions)
+[[primitive_intrinsic]]
+name = "contains"
+kind = "method_1arg"
+receiver_type = "string"
+param_types = ["string"]
+return_type = "bool"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "indexOf"
+kind = "method_1arg"
+receiver_type = "string"
+param_types = ["string"]
+return_type = "maybe<int>"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "startsWith"
+kind = "method_1arg"
+receiver_type = "string"
+param_types = ["string"]
+return_type = "bool"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "endsWith"
+kind = "method_1arg"
+receiver_type = "string"
+param_types = ["string"]
+return_type = "bool"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "toUpperCase"
+kind = "method"
+receiver_type = "string"
+param_types = []
+return_type = "string"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "toLowerCase"
+kind = "method"
+receiver_type = "string"
+param_types = []
+return_type = "string"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "trim"
+kind = "method"
+receiver_type = "string"
+param_types = []
+return_type = "string"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "count"
+kind = "method"
+receiver_type = "string"
+param_types = []
+return_type = "int"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "byteCount"
+kind = "method"
+receiver_type = "string"
+param_types = []
+return_type = "int"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "graphemeCount"
+kind = "method"
+receiver_type = "string"
+param_types = []
+return_type = "int"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "get"
+kind = "method_1arg"
+receiver_type = "string"
+param_types = ["int"]
+return_type = "maybe<string>"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "graphemeAt"
+kind = "method_1arg"
+receiver_type = "string"
+param_types = ["int"]
+return_type = "maybe<string>"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "byteAt"
+kind = "method_1arg"
+receiver_type = "string"
+param_types = ["int"]
+return_type = "maybe<int>"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "substring"
+kind = "method_1arg"
+receiver_type = "string"
+param_types = ["int"]
+return_type = "string"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "split"
+kind = "method_1arg"
+receiver_type = "string"
+param_types = ["string"]
+return_type = "array<string>"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "replace"
+kind = "method_1arg"
+receiver_type = "string"
+param_types = ["string"]
+return_type = "string"
+since = "M3"
+
+[[primitive_intrinsic]]
+name = "toInt"
+kind = "method"
+receiver_type = "string"
+param_types = []
+return_type = "maybe<int>"
+since = "M6"
+
+[[primitive_intrinsic]]
+name = "toFloat"
+kind = "method"
+receiver_type = "string"
+param_types = []
+return_type = "maybe<float>"
+since = "M6"
+
+[[primitive_intrinsic]]
+name = "toNumber"
+kind = "method"
+receiver_type = "string"
+param_types = []
+return_type = "maybe<number>"
+since = "M6"
 
 # ---------------------------------------------------------------------------
 # [[type_attached_constant]] — constants accessed as Type.name (e.g. int.max).
@@ -346,9 +673,58 @@ since = "M3"
 
 [[type_attached_constant]]
 type_name = "int"
-const_name = "PLACEHOLDER_CONST_PHASE_3"
+const_name = "max"
 value_type = "int"
-value_literal = "0"
+value_literal = "9223372036854775807"
+since = "M4"
+
+[[type_attached_constant]]
+type_name = "int"
+const_name = "min"
+value_type = "int"
+value_literal = "-9223372036854775808"
+since = "M4"
+
+[[type_attached_constant]]
+type_name = "float"
+const_name = "max"
+value_type = "float"
+value_literal = "1.7976931348623157e308"
+since = "M4"
+
+[[type_attached_constant]]
+type_name = "float"
+const_name = "min"
+value_type = "float"
+value_literal = "-1.7976931348623157e308"
+since = "M4"
+
+[[type_attached_constant]]
+type_name = "float"
+const_name = "epsilon"
+value_type = "float"
+value_literal = "2.220446049250313e-16"
+since = "M4"
+
+[[type_attached_constant]]
+type_name = "number"
+const_name = "max"
+value_type = "number"
+value_literal = "9.999999999999999999999999999999999e+6144"
+since = "M4"
+
+[[type_attached_constant]]
+type_name = "number"
+const_name = "min"
+value_type = "number"
+value_literal = "1e-6143"
+since = "M4"
+
+[[type_attached_constant]]
+type_name = "number"
+const_name = "epsilon"
+value_type = "number"
+value_literal = "1e-33"
 since = "M4"
 
 # ---------------------------------------------------------------------------

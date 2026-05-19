@@ -9,7 +9,7 @@ use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 use crate::{
     builtins::{
         array_method_return, fixed_method_return, map_method_return, maybe_method_return,
-        sensitive_method_return, string_method_return, STRING_METHODS,
+        sensitive_method_return, string_method_return,
     },
     generics::{
         apply_substitution, unify_param, GenericFnSig, GenericFnTable, GenericShapeTable,
@@ -2066,7 +2066,11 @@ impl<'b> Checker<'b> {
             return if let Some(ret) = string_method_return(method) {
                 ret
             } else {
-                let available_list = STRING_METHODS.join(", ");
+                let available_list = ynz_registry::primitive_intrinsics()
+                    .filter(|e| e.receiver_type == Some("string"))
+                    .map(|e| e.name)
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 self.diags.push(Diagnostic::error(
                     method_span.clone(),
                     format!("`string` does not have a method called `{method}`."),
@@ -3695,15 +3699,15 @@ fn is_stringifiable(ty: &Type, sig_table: &crate::signatures::SignatureTable) ->
 /// Return the typeck `Type` for a type-attached constant like `int.max` or `number.epsilon`.
 ///
 /// Returns `None` if the (type_name, const_name) pair is not a known constant.
+/// All data lives in registry/features.toml — edit that file to add new constants.
 pub fn type_attached_const_type(type_name: &str, const_name: &str) -> Option<Type> {
-    match (type_name, const_name) {
-        ("int", "max") | ("int", "min") => Some(Type::Int),
-        ("float", "max") | ("float", "min") | ("float", "epsilon") => Some(Type::Float),
-        ("number", "max") | ("number", "min") | ("number", "epsilon") => {
-            Some(Type::Number { precision: 34 })
-        }
-        _ => None,
-    }
+    let entry = ynz_registry::type_attached_constant_lookup(type_name, const_name)?;
+    Some(match entry.value_type {
+        "int" => Type::Int,
+        "float" => Type::Float,
+        "number" => Type::Number { precision: 34 },
+        other => panic!("type_attached_const_type: unknown value_type {other:?} for {type_name}.{const_name}"),
+    })
 }
 
 fn body_has_error_node(stmts: &[Stmt]) -> bool {
