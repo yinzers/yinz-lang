@@ -97,25 +97,9 @@ pub fn string_method_return(method: &str) -> Option<Type> {
     }
 }
 
-/// All string method names, for "did you mean" suggestions.
-pub const STRING_METHODS: &[&str] = &[
-    "contains",
-    "indexOf",
-    "startsWith",
-    "endsWith",
-    "toUpperCase",
-    "toLowerCase",
-    "substring",
-    "trim",
-    "split",
-    "replace",
-    "byteAt",
-    "graphemeAt",
-    "count",
-    "byteCount",
-    "graphemeCount",
-    "get",
-];
+// CARVE-OUT: string_method_return() is a local dispatch table used by the type checker.
+// It is NOT an independent registry — string method names also live in registry/features.toml
+// as [[primitive_intrinsic]] entries with receiver_type = "string".
 
 /// Look up the return type of a method call on `array<elem>`.
 ///

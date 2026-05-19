@@ -1,5 +1,8 @@
 use crate::types::Type;
 
+// All data lives in registry/features.toml — edit that file to add or remove intrinsics.
+// Schema reference: design/feature-registry.md #primitive_intrinsic
+
 /// A free-standing function signature (not method dispatch).
 #[derive(Clone, Debug)]
 pub struct FreeFnSig {
@@ -7,145 +10,129 @@ pub struct FreeFnSig {
     pub ret: Type,
 }
 
-/// The table of primitive intrinsics available in M4.
+/// The table of primitive intrinsics.
 ///
-/// Four categories:
-///   1. Free-standing polymorphic calls — `print` (accepts all primitive types).
-///   2. Fixed-signature free-standing calls — `range` (checked via `free_fns`).
-///   3. Zero-arg method calls — `.toNumber()`, `.toFloat()`, `.toString()` on primitive types.
-///   4. One-arg method calls — `.wrappingAdd()`, `.saturatingAdd()`, etc. on `int` (M4 P5).
-///
-/// Single source of truth: no scattered hardcoded function-name lists exist
-/// anywhere else in the type checker.
+/// Built at construction time from `ynz_registry::primitive_intrinsics()`.
+/// Public API is identical to the pre-migration version so callers don't change.
 pub struct PrimitiveIntrinsicTable {
-    /// Types that `print` accepts as its single argument.
     print_types: Vec<Type>,
-    /// Fixed-signature free-standing functions: (name, sig).
-    /// Multiple entries with the same name represent overloads (e.g. `range` with 1 or 2 args).
     pub free_fns: Vec<(&'static str, FreeFnSig)>,
-    /// Zero-arg method dispatch: `(receiver_type, method_name)` → return type.
     methods: Vec<(Type, &'static str, Type)>,
-    /// One-arg method dispatch: `(receiver_type, method_name, arg_type)` → return type.
     methods_1arg: Vec<(Type, &'static str, Type, Type)>,
-    /// Test-only free-standing functions added via `with_test_intrinsic`.
     #[cfg(test)]
     test_fns: Vec<(&'static str, FreeFnSig)>,
 }
 
+/// Parse a registry `return_type` / `receiver_type` string into a `Type` enum value.
+///
+/// Covers every type string that appears in `registry/features.toml` `[[primitive_intrinsic]]` entries.
+fn parse_type(s: &str) -> Type {
+    match s {
+        "int" => Type::Int,
+        "float" => Type::Float,
+        "number" => Type::Number { precision: 34 },
+        "bool" => Type::Bool,
+        "string" => Type::String,
+        "nothing" => Type::Nothing,
+        "range<int>" => Type::Range {
+            element: Box::new(Type::Int),
+            end_inclusive: false,
+        },
+        s if s.starts_with("maybe<") && s.ends_with('>') => Type::Maybe {
+            inner: Box::new(parse_type(&s[6..s.len() - 1])),
+        },
+        s if s.starts_with("array<") && s.ends_with('>') => Type::BuiltinArray {
+            elem: Box::new(parse_type(&s[6..s.len() - 1])),
+        },
+        other => panic!("intrinsics: unknown type string in registry: {other:?} — update parse_type()"),
+    }
+}
+
+/// Build a table from all registry entries whose `since` matches the predicate.
+fn build_table(since_filter: impl Fn(&str) -> bool) -> PrimitiveIntrinsicTable {
+    let mut print_types = Vec::new();
+    let mut free_fns: Vec<(&'static str, FreeFnSig)> = Vec::new();
+    let mut methods = Vec::new();
+    let mut methods_1arg = Vec::new();
+
+    for entry in ynz_registry::primitive_intrinsics() {
+        if !since_filter(entry.since) {
+            continue;
+        }
+        match entry.kind {
+            "print_type" => {
+                let ty = parse_type(entry.name);
+                if !print_types.contains(&ty) {
+                    print_types.push(ty);
+                }
+            }
+            "free_fn" => {
+                free_fns.push((
+                    entry.name,
+                    FreeFnSig {
+                        params: entry.param_types.iter().map(|&s| parse_type(s)).collect(),
+                        ret: parse_type(entry.return_type),
+                    },
+                ));
+            }
+            "method" => {
+                let recv = parse_type(
+                    entry.receiver_type.unwrap_or_else(|| {
+                        panic!("registry method entry '{}' missing receiver_type", entry.name)
+                    }),
+                );
+                methods.push((recv, entry.name, parse_type(entry.return_type)));
+            }
+            "method_1arg" => {
+                let recv = parse_type(
+                    entry.receiver_type.unwrap_or_else(|| {
+                        panic!("registry method_1arg entry '{}' missing receiver_type", entry.name)
+                    }),
+                );
+                assert_eq!(
+                    entry.param_types.len(), 1,
+                    "method_1arg '{}' must have exactly 1 param_type in registry", entry.name
+                );
+                methods_1arg.push((
+                    recv,
+                    entry.name,
+                    parse_type(entry.param_types[0]),
+                    parse_type(entry.return_type),
+                ));
+            }
+            other => panic!("intrinsics: unknown kind {other:?} in registry for entry '{}'", entry.name),
+        }
+    }
+
+    PrimitiveIntrinsicTable {
+        print_types,
+        free_fns,
+        methods,
+        methods_1arg,
+        #[cfg(test)]
+        test_fns: Vec::new(),
+    }
+}
+
 impl PrimitiveIntrinsicTable {
+    /// Build the table with all entries up to and including M3 (and M4 catch-up).
+    ///
+    /// M6 additions (fallible conversions, string→numeric) are excluded.
+    /// Callers that need the full current set should use `m6()`.
     pub fn m2() -> Self {
         Self::m3()
     }
 
-    pub fn m6() -> Self {
-        let mut t = Self::m3();
-        // M6 P3a: fallible numeric and string conversions.
-        // (int).toInt() is infallible — returns int directly (identity).
-        t.methods.push((Type::Int, "toInt", Type::Int));
-        // (float).toInt() is fallible — returns maybe<int>.
-        t.methods.push((
-            Type::Float,
-            "toInt",
-            Type::Maybe {
-                inner: Box::new(Type::Int),
-            },
-        ));
-        // (number).toInt() is fallible — returns maybe<int>.
-        t.methods.push((
-            Type::Number { precision: 34 },
-            "toInt",
-            Type::Maybe {
-                inner: Box::new(Type::Int),
-            },
-        ));
-        // string → fallible int/float/number conversions.
-        t.methods.push((
-            Type::String,
-            "toInt",
-            Type::Maybe {
-                inner: Box::new(Type::Int),
-            },
-        ));
-        t.methods.push((
-            Type::String,
-            "toFloat",
-            Type::Maybe {
-                inner: Box::new(Type::Float),
-            },
-        ));
-        t.methods.push((
-            Type::String,
-            "toNumber",
-            Type::Maybe {
-                inner: Box::new(Type::Number { precision: 34 }),
-            },
-        ));
-        t
+    pub fn m3() -> Self {
+        build_table(|since| since != "M6")
     }
 
-    pub fn m3() -> Self {
-        let range_ret = || Type::Range {
-            element: Box::new(Type::Int),
-            end_inclusive: false,
-        };
-        Self {
-            print_types: vec![
-                Type::String,
-                Type::Int,
-                Type::Float,
-                Type::Number { precision: 34 },
-                Type::Bool,
-            ],
-            free_fns: vec![
-                // range(end) — 0..end exclusive
-                (
-                    "range",
-                    FreeFnSig {
-                        params: vec![Type::Int],
-                        ret: range_ret(),
-                    },
-                ),
-                // range(start, end) — start..end exclusive
-                (
-                    "range",
-                    FreeFnSig {
-                        params: vec![Type::Int, Type::Int],
-                        ret: range_ret(),
-                    },
-                ),
-            ],
-            methods: vec![
-                // int conversions
-                (Type::Int, "toNumber", Type::Number { precision: 34 }),
-                (Type::Int, "toFloat", Type::Float),
-                (Type::Int, "toString", Type::String),
-                // number conversions
-                (Type::Number { precision: 34 }, "toFloat", Type::Float),
-                (Type::Number { precision: 34 }, "toString", Type::String),
-                // float conversions
-                (Type::Float, "toNumber", Type::Number { precision: 34 }),
-                (Type::Float, "toString", Type::String),
-                // bool conversion
-                (Type::Bool, "toString", Type::String),
-            ],
-            // M4 P5: wrapping and saturating arithmetic on int.
-            // All take one `int` argument and return `int`.
-            methods_1arg: vec![
-                (Type::Int, "wrappingAdd", Type::Int, Type::Int),
-                (Type::Int, "wrappingSub", Type::Int, Type::Int),
-                (Type::Int, "wrappingMul", Type::Int, Type::Int),
-                (Type::Int, "saturatingAdd", Type::Int, Type::Int),
-                (Type::Int, "saturatingSub", Type::Int, Type::Int),
-                (Type::Int, "saturatingMul", Type::Int, Type::Int),
-            ],
-            #[cfg(test)]
-            test_fns: Vec::new(),
-        }
+    /// Build the full table with all intrinsic entries.
+    pub fn m6() -> Self {
+        build_table(|_| true)
     }
 
     /// Look up a `range` overload by argument count.
-    ///
-    /// Returns the matching `FreeFnSig` if one exists, or `None` on arity mismatch.
     pub fn lookup_free_fn(&self, name: &str, arg_count: usize) -> Option<&FreeFnSig> {
         self.free_fns
             .iter()
@@ -167,8 +154,6 @@ impl PrimitiveIntrinsicTable {
     }
 
     /// Look up a zero-arg method call: `receiver_type.method_name()`.
-    ///
-    /// Returns the return type if found, `None` if the method doesn't exist on this type.
     pub fn lookup_method(&self, receiver: &Type, name: &str) -> Option<Type> {
         self.methods
             .iter()
@@ -177,8 +162,6 @@ impl PrimitiveIntrinsicTable {
     }
 
     /// Look up a one-arg method call: `receiver_type.method_name(arg)`.
-    ///
-    /// Returns `(expected_arg_type, return_type)` if found.
     pub fn lookup_method_1arg(&self, receiver: &Type, name: &str) -> Option<(&Type, Type)> {
         self.methods_1arg
             .iter()
@@ -195,7 +178,6 @@ impl PrimitiveIntrinsicTable {
             .collect()
     }
 
-    /// Look up a test-only free-standing function.
     #[cfg(test)]
     pub fn lookup_test_fn(&self, name: &str) -> Option<&FreeFnSig> {
         self.test_fns
@@ -204,10 +186,6 @@ impl PrimitiveIntrinsicTable {
             .map(|(_, sig)| sig)
     }
 
-    /// Add a test-only free-standing function to the table.
-    ///
-    /// Used to test type-mismatch paths without needing full language features.
-    /// The production binary never includes test intrinsics.
     #[cfg(test)]
     pub fn with_test_intrinsic(mut self, name: &'static str, params: Vec<Type>, ret: Type) -> Self {
         self.test_fns.push((name, FreeFnSig { params, ret }));

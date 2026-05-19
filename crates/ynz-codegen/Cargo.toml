@@ -15,6 +15,7 @@ ynz-ast         = { workspace = true }
 ynz-numerics    = { path = "../ynz-numerics" }
 ynz-parser      = { workspace = true }
 ynz-typeck      = { workspace = true }
+ynz-registry    = { workspace = true }
 
 [dev-dependencies]
 insta    = { workspace = true }
