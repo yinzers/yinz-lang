@@ -127,15 +127,17 @@ fn m7_gallery_fires_expected_diagnostics() {
 
 #[test]
 fn m8_gallery_fires_expected_diagnostics() {
-    // WHY: m8_errors.ynz covers concurrency keyword errors. Expected: 1 error
-    // (background with share parameter).
+    // WHY: m8_errors.ynz covers concurrency keyword errors (2 errors) plus
+    // v0.1-polish inline shape type errors (4+ errors). Expected: 5–10.
+    // test-ratchet: v0.1-polish adds 3 inline-shape error triggers (unknown field,
+    // missing field, hidden-in-inline) — count grows from 2 to ~6.
     let (stderr, code) = compile_gallery(&gallery("m8_errors.ynz"));
     assert_ne!(code, 0, "m8 gallery must exit non-zero");
 
     let error_count = count_errors(&stderr);
     assert!(
-        (1..=5).contains(&error_count),
-        "m8 gallery must produce 1–5 errors; got {error_count}.\nstderr:\n{stderr}"
+        (5..=12).contains(&error_count),
+        "m8 gallery must produce 5–12 errors; got {error_count}.\nstderr:\n{stderr}"
     );
 
     assert!(

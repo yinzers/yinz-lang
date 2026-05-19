@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use ynz_ast::nodes::{Item, Module, Type as AstType};
+use ynz_ast::nodes::{Item, Module, Stmt, Type as AstType};
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 use crate::{
@@ -122,9 +122,12 @@ impl ShapeTable {
                 Type::Options { name: n.clone() }
             }
             AstType::Error | AstType::Named(_, _) | AstType::Range { .. } => Type::Error,
-            // AnonShape is hoisted to a named shape before resolve_ast_type runs;
-            // if we ever encounter it here, the parent/field context is unavailable.
-            AstType::AnonShape { .. } => Type::Error,
+            // AnonShape: hoisted to a synthetic named shape during collect_shapes.
+            // Resolve to the canonical synthetic name so the rest of typeck sees a
+            // plain Type::Shape.
+            AstType::AnonShape { fields, .. } => Type::Shape {
+                name: canonical_anon_name(fields),
+            },
             // P3b: dynamic dispatch and Self type resolution.
             AstType::Dynamic { .. } | AstType::SelfType { .. } => Type::Error,
             // TypeParam: must be resolved in context (Checker::ast_type_to_type handles this).
@@ -241,18 +244,38 @@ pub fn collect_shapes(
         if let Item::OptionsDecl(o) = i { Some(o.name.clone()) } else { None }
     }).chain(imported_options.keys().cloned()).collect();
 
-    // Pre-pass: hoist AnonShape field types to named ShapeDecls so all subsequent
-    // passes see only Named types. Synthetic name format: `__anon_ParentName_fieldName`.
+    // Pre-pass: hoist AnonShape types to named ShapeDecls so all subsequent passes see
+    // only Named types. Synthetic names are content-based (canonical) so structurally
+    // identical inline shapes share the same name regardless of where they appear.
+    // This pass scans ALL type positions: shape body fields, function params, return
+    // types, and let-binding annotations.
     let mut synthetic_items: Vec<ynz_ast::nodes::ShapeDecl> = Vec::new();
     for item in &module.items {
-        if let Item::ShapeDecl(s) = item {
-            if s.alias_ty.is_some() {
-                continue;
+        match item {
+            Item::ShapeDecl(s) if s.alias_ty.is_none() => {
+                for field in &s.fields {
+                    collect_anon_shapes_in_type(&field.ty, &mut synthetic_items);
+                }
             }
-            for field in &s.fields {
-                collect_anon_shapes_in_type(&field.ty, &s.name, &field.name, &mut synthetic_items);
+            Item::Function(f) => {
+                for param in &f.params {
+                    collect_anon_shapes_in_type(&param.ty, &mut synthetic_items);
+                }
+                collect_anon_shapes_in_type(&f.return_type, &mut synthetic_items);
+                collect_anon_shapes_in_stmts(&f.body.stmts, &mut synthetic_items);
             }
+            Item::ConstDecl(c) => {
+                if let Some(ty) = &c.ty {
+                    collect_anon_shapes_in_type(ty, &mut synthetic_items);
+                }
+            }
+            _ => {}
         }
+    }
+    // Deduplicate: two identical inline shapes produce the same synthetic name; keep one.
+    {
+        let mut seen_names: HashSet<String> = HashSet::new();
+        synthetic_items.retain(|s| seen_names.insert(s.name.clone()));
     }
 
     // Pass 1: collect all shape names + their raw AST data.
@@ -387,10 +410,9 @@ pub fn collect_shapes(
                 ));
                 continue;
             }
-            // AnonShape fields resolve to their synthesized named shape.
-            let ty = if let AstType::AnonShape { .. } = &field.ty {
+            let ty = if let AstType::AnonShape { fields: anon_fields, .. } = &field.ty {
                 Type::Shape {
-                    name: format!("__anon_{}_{}", s.name, field.name),
+                    name: canonical_anon_name(anon_fields),
                 }
             } else {
                 name_table.resolve_ast_type(&field.ty)
@@ -760,17 +782,61 @@ fn resolve_field_type_in_generic_shape(ast_ty: &AstType, type_params: &[String])
 
 /// Emit a diagnostic when a shape field's type annotation contains an unrecognized
 /// type name. Walks the AstType to find the first unknown Named node and points at it.
+/// Compute the canonical synthetic name for an anonymous inline shape from its field list.
+///
+/// The name is content-based: fields are sorted by name and each contributes a
+/// `_fieldname_typename` segment. This ensures structural equality —
+/// `{ a: int, b: string }` and `{ b: string, a: int }` produce the same name
+/// regardless of where in the file they appear.
+///
+/// Example: `{ bid: number, ask: number }` → `__anon__ask_number__bid_number`
+pub(crate) fn canonical_anon_name(fields: &[ynz_ast::nodes::FieldDecl]) -> String {
+    let mut sorted: Vec<_> = fields.iter().collect();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    let segments: Vec<String> = sorted
+        .iter()
+        .map(|f| format!("{}__{}", f.name, ast_type_short_name(&f.ty)))
+        .collect();
+    format!("__anon__{}", segments.join("__"))
+}
+
+/// Produce a short, stable, identifier-safe name for an AST type — used only for
+/// building canonical anon-shape names, not for user-facing output.
+fn ast_type_short_name(ty: &AstType) -> String {
+    match ty {
+        AstType::Int => "int".to_string(),
+        AstType::Float => "float".to_string(),
+        AstType::Number { .. } => "number".to_string(),
+        AstType::Bool => "boolean".to_string(),
+        AstType::Named(n, _) => n.clone(),
+        AstType::Nothing => "nothing".to_string(),
+        AstType::Maybe { inner, .. } => format!("maybe_{}", ast_type_short_name(inner)),
+        AstType::Generic { name, args, .. } => {
+            let arg_str: Vec<_> = args.iter().map(ast_type_short_name).collect();
+            format!("{}__{}", name, arg_str.join("__"))
+        }
+        AstType::AnonShape { fields, .. } => canonical_anon_name(fields),
+        AstType::Union { variants, .. } => {
+            let parts: Vec<_> = variants.iter().map(ast_type_short_name).collect();
+            format!("union_{}", parts.join("_or_"))
+        }
+        AstType::ErrorCapable { inner, .. } => format!("errors_{}", ast_type_short_name(inner)),
+        AstType::Sensitive(inner) => format!("sensitive_{}", ast_type_short_name(inner)),
+        _ => "unknown".to_string(),
+    }
+}
+
 /// Recursively extract AnonShape nodes from a type annotation, registering each as a
-/// synthetic named ShapeDecl. The synthesized name is `__anon_ParentName_fieldName`.
+/// synthetic named ShapeDecl. The synthesized name is content-based (canonical) so that
+/// structurally identical inline shapes share the same synthetic name regardless of
+/// where they appear.
 fn collect_anon_shapes_in_type(
     ast_ty: &AstType,
-    parent_name: &str,
-    field_name: &str,
     out: &mut Vec<ynz_ast::nodes::ShapeDecl>,
 ) {
     match ast_ty {
         AstType::AnonShape { fields, span } => {
-            let synth_name = format!("__anon_{parent_name}_{field_name}");
+            let synth_name = canonical_anon_name(fields);
             out.push(ynz_ast::nodes::ShapeDecl {
                 name: synth_name,
                 name_span: span.clone(),
@@ -785,16 +851,61 @@ fn collect_anon_shapes_in_type(
                 is_exported: false,
                 doc: None,
             });
+            // Recurse into nested anon shapes inside field types.
+            for field in fields {
+                collect_anon_shapes_in_type(&field.ty, out);
+            }
         }
         AstType::Union { variants, .. } => {
-            for (i, v) in variants.iter().enumerate() {
-                collect_anon_shapes_in_type(v, parent_name, &format!("{field_name}_{i}"), out);
+            for v in variants {
+                collect_anon_shapes_in_type(v, out);
             }
         }
         AstType::Maybe { inner, .. } => {
-            collect_anon_shapes_in_type(inner, parent_name, field_name, out);
+            collect_anon_shapes_in_type(inner, out);
+        }
+        AstType::Generic { args, .. } => {
+            for a in args {
+                collect_anon_shapes_in_type(a, out);
+            }
+        }
+        AstType::ErrorCapable { inner, .. } => {
+            collect_anon_shapes_in_type(inner, out);
+        }
+        AstType::Sensitive(inner) => {
+            collect_anon_shapes_in_type(inner, out);
         }
         _ => {}
+    }
+}
+
+/// Walk function body statements, collecting any AnonShape type annotations from
+/// `let`/`const` bindings into `out`.
+fn collect_anon_shapes_in_stmts(stmts: &[Stmt], out: &mut Vec<ynz_ast::nodes::ShapeDecl>) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { ty: Some(ty), .. } => {
+                collect_anon_shapes_in_type(ty, out);
+            }
+            Stmt::If { body, .. } => {
+                collect_anon_shapes_in_stmts(&body.stmts, out);
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                for arm in arms {
+                    collect_anon_shapes_in_stmts(&arm.body.stmts, out);
+                }
+                if let Some(else_block) = else_arm {
+                    collect_anon_shapes_in_stmts(&else_block.stmts, out);
+                }
+            }
+            Stmt::While { body, .. } => {
+                collect_anon_shapes_in_stmts(&body.stmts, out);
+            }
+            Stmt::For { body, .. } => {
+                collect_anon_shapes_in_stmts(&body.stmts, out);
+            }
+            _ => {}
+        }
     }
 }
 

@@ -2366,8 +2366,11 @@ impl<'b> Checker<'b> {
                     inner: Box::new(inner_ty),
                 }
             }
-            // AnonShape: not yet reachable in v0.1 (future inline shape syntax).
-            AstType::AnonShape { .. } => Type::Error,
+            // AnonShape: hoisted to a synthetic named shape by collect_shapes.
+            // Resolve to the same canonical name so the checker sees Type::Shape.
+            AstType::AnonShape { fields, .. } => Type::Shape {
+                name: crate::shapes::canonical_anon_name(fields),
+            },
         }
     }
 
@@ -2736,10 +2739,15 @@ impl<'b> Checker<'b> {
         span: SourceSpan,
         is_struct_literal: bool,
     ) {
+        let display_name = if shape_name.starts_with("__anon__") {
+            type_name(&Type::Shape { name: shape_name.to_string() })
+        } else {
+            shape_name.to_string()
+        };
         let suggestion = find_closest_name(field, available);
         let what_instead = match suggestion {
             Some(close) => format!("Did you mean `{close}`?"),
-            None => format!("`{shape_name}` has these fields: {}", available.join(", ")),
+            None => format!("`{display_name}` has these fields: {}", available.join(", ")),
         };
         let why = if is_struct_literal {
             "Shape values can only set fields declared on the shape."
@@ -2748,7 +2756,7 @@ impl<'b> Checker<'b> {
         };
         self.diags.push(Diagnostic::error(
             span,
-            format!("`{shape_name}` does not have a field called `{field}`."),
+            format!("`{display_name}` does not have a field called `{field}`."),
             what_instead,
             why,
         ));
@@ -2882,12 +2890,18 @@ impl<'b> Checker<'b> {
             return Type::Error;
         };
 
+        let display_name = if shape_name.starts_with("__anon__") {
+            type_name(&Type::Shape { name: shape_name.clone() })
+        } else {
+            shape_name.clone()
+        };
+
         // base shapes cannot be instantiated
         if shape_def.is_base {
             self.diags.push(Diagnostic::error(
                 span.clone(),
-                format!("`{shape_name}` is a `base shape` and cannot be constructed directly."),
-                format!("Create a shape that extends `{shape_name}`, then construct that instead."),
+                format!("`{display_name}` is a `base shape` and cannot be constructed directly."),
+                format!("Create a shape that extends `{display_name}`, then construct that instead."),
                 "`base shape` declarations are meant to be extended — they provide shared fields for child shapes but cannot be instantiated on their own.",
             ));
             for f in fields {
@@ -2908,7 +2922,7 @@ impl<'b> Checker<'b> {
             1 => {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
-                    format!("Missing field `{}` in `{shape_name}` construction.", missing[0]),
+                    format!("Missing field `{}` in `{display_name}` construction.", missing[0]),
                     format!("Add `{}: value` to the shape value.", missing[0]),
                     "Every visible field of a shape must be provided when constructing a value — the compiler cannot fill them in for you.",
                 ));
@@ -2926,7 +2940,7 @@ impl<'b> Checker<'b> {
                     .join(", ");
                 self.diags.push(Diagnostic::error(
                     span.clone(),
-                    format!("{n} fields are missing from this `{shape_name}` value: {list}."),
+                    format!("{n} fields are missing from this `{display_name}` value: {list}."),
                     format!("Add the missing fields: {add}."),
                     "Every visible field of a shape must be provided when constructing a value — the compiler cannot fill them in for you.",
                 ));

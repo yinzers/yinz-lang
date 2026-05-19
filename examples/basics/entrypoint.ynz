@@ -384,3 +384,22 @@ function next(lend self: Countdown) -> maybe<int> {
   self.current = self.current + 1
   return result
 }
+
+
+// ────── v0.1-polish: inline / anonymous shape types ──────
+
+// Inline shape in a let binding — type defined at the point of use.
+function demoInlineShapes() -> nothing {
+  let point: { x: int, y: int } = { x: 3, y: 4 }
+  print(`point x=${point.x} y=${point.y}`)
+
+  // Inline shape in fixed<T> + for-loop destructuring (the motivating example).
+  const intervals: fixed<{ minutes: int }> = [
+    { minutes: 5 },
+    { minutes: 15 },
+    { minutes: 60 },
+  ]
+  for ({ minutes } in intervals) {
+    print(`interval: ${minutes} minutes`)
+  }
+}

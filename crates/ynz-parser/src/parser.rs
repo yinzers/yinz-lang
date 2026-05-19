@@ -970,10 +970,28 @@ impl<'a> Parser<'a> {
                             ));
                             break;
                         }
+                        Token::Comma => {
+                            // Allow optional commas between fields.
+                            self.advance();
+                        }
+                        Token::Hidden => {
+                            let hidden_span = self.current_span();
+                            self.advance(); // consume `hidden`
+                            self.diags.push(Diagnostic::error(
+                                hidden_span,
+                                "Inline shape types cannot have `hidden` fields.",
+                                "Move this to a named `shape` declaration, or drop the `hidden` modifier.",
+                                "Hidden fields are file-private — they only make sense for shapes other code in the same file refers to by name. An inline shape is anonymous and one-off; `hidden` has no observable effect.",
+                            ));
+                        }
                         _ => {
                             let field_start = self.current_span().start;
                             if let Some(field) = self.parse_field_decl(false, field_start) {
                                 fields.push(field);
+                            } else {
+                                // parse_field_decl failed but didn't advance — skip the token
+                                // to avoid an infinite loop.
+                                self.advance();
                             }
                         }
                     }

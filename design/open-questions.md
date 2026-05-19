@@ -157,26 +157,10 @@ These flags are NOT in the v0.1 driver. Do not document them in `--help` until t
 
 ---
 
-## Inline / Anonymous Shape Types — Single-Use Structural Types
-
-**Status**: design open, needs plan pass. Triggered by Patrick hitting verbosity friction defining one-off shapes during testing (2026-05-19).
-
-**The friction**: named `shape Foo { ... }` is the right tool when a type is used multiple times, but single-use types (a config struct for one function, an intermediate result that never leaves a loop) force scrolling to the top of the file. Type definition is physically separated from its only use.
-
-**Proposed syntax** (TypeScript-style):
-
-```ynz
-const intervals: fixed<{ minutes: int, timeframe: Timeframe }> = [
-    { minutes: 5,  timeframe: Timeframe.fiveMinute },
-    { minutes: 60, timeframe: Timeframe.hourly },
-]
-```
-
-**Blocking design call**: structural vs nominal for anonymous types. If Yinz stays nominal, inline types are just sugar for an anonymous-but-fresh shape (2-day feature). If Yinz adopts structural for anonymous types (TypeScript's model), two identical inline shapes are interchangeable across files — bigger type-system extension.
-
-**Full design doc**: `design/future/inline-shape-types.md` (4 open design questions catalogued there).
-
-**Target version**: language feature, v0.1.x or post-v0.2 language slot. NOT v0.2 (tooling-only).
+<!-- Inline / Anonymous Shape Types: RESOLVED and shipped v0.1-polish 2026-05-19.
+     Design decision: structural typing for anonymous shapes, nominal for named shapes.
+     Implementation: canonical-name hoisting (no new Type variant).
+     See design/inline-shape-types.md for the full design. -->
 
 ---
 

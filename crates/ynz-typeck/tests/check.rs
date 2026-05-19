@@ -2010,3 +2010,155 @@ function entrypoint() -> nothing {
     });
     assert!(has_msg, "Expected handle-form rejection diagnostic, got: {:#?}", output.diagnostics);
 }
+
+// ── Inline / anonymous shape types (v0.1-polish) ──────────────────────────────
+
+#[test]
+fn anon_shape_basic_annotation_works() {
+    // WHY: minimal inline shape — must compile clean and bind fields correctly.
+    assert_clean(r#"
+function entrypoint() -> nothing {
+  let p: { a: int, b: string } = { a: 1, b: `hi` }
+  print(p.b)
+}
+"#);
+}
+
+#[test]
+fn anon_shape_field_order_irrelevant_for_equivalence() {
+    // WHY: structural typing — {a:int, b:int} and {b:int, a:int} must be the same type
+    //      so that passing one where the other is expected compiles clean.
+    assert_clean(r#"
+function takesAB(p: { a: int, b: int }) -> nothing { print(`${p.a}`) }
+function entrypoint() -> nothing {
+  let x: { b: int, a: int } = { a: 1, b: 2 }
+  takesAB(x)
+}
+"#);
+}
+
+#[test]
+fn anon_shape_unknown_field_rejected() {
+    // WHY: setting a field not declared in the inline shape must be caught — the type
+    //      contract says exactly which fields exist.
+    let output = assert_errors(r#"
+function entrypoint() -> nothing {
+  let x: { a: int } = { a: 1, b: 2 }
+}
+"#, 1);
+    let has_msg = output.diagnostics.iter().any(|d| d.what.contains("`b`"));
+    assert!(has_msg, "Expected unknown-field diagnostic mentioning `b`; got: {:#?}", output.diagnostics);
+}
+
+#[test]
+fn anon_shape_missing_field_rejected() {
+    // WHY: declared field not provided at construction must error — forces complete
+    //      initialization just like named shapes.
+    let output = assert_errors(r#"
+function entrypoint() -> nothing {
+  let x: { a: int, b: int } = { a: 1 }
+}
+"#, 1);
+    let has_msg = output.diagnostics.iter().any(|d| d.what.contains("`b`"));
+    assert!(has_msg, "Expected missing-field diagnostic; got: {:#?}", output.diagnostics);
+}
+
+#[test]
+fn anon_shape_named_shape_are_different_types() {
+    // WHY: nominal typing for named shapes — `shape Foo { a: int }` and `{ a: int }`
+    //      do NOT interconvert; the user must pick one or the other.
+    let output = assert_errors(r#"
+shape Foo { a: int }
+function entrypoint() -> nothing {
+  let x: Foo = { a: 1 }
+  let y: { a: int } = x
+}
+"#, 1);
+    let has_mismatch = output.diagnostics.iter().any(|d| {
+        d.what.contains("cannot produce")
+            || d.what.contains("mismatch")
+            || d.what.contains("expected")
+            || d.what.contains("is declared as")
+            || d.what.contains("This value is")
+    });
+    assert!(has_mismatch, "Expected type-mismatch diagnostic; got: {:#?}", output.diagnostics);
+}
+
+#[test]
+fn anon_shape_nested_works() {
+    // WHY: inline shapes can be nested in their own type annotations — the inner
+    //      anon shape is hoisted to its own canonical synthetic name.
+    assert_clean(r#"
+function entrypoint() -> nothing {
+  let p: { outer: { inner: int } } = { outer: { inner: 42 } }
+  print(`${p.outer.inner}`)
+}
+"#);
+}
+
+#[test]
+fn anon_shape_in_fixed_works_with_for_destructure() {
+    // WHY: Patrick's motivating example — inline shape in fixed<T>, iterated with
+    //      destructuring. End-to-end integration with destructuring from commit 19d9d4c.
+    assert_clean(r#"
+function entrypoint() -> nothing {
+  const intervals: fixed<{ minutes: int }> = [
+    { minutes: 5 },
+    { minutes: 15 },
+    { minutes: 60 },
+  ]
+  for ({ minutes } in intervals) {
+    print(`${minutes}`)
+  }
+}
+"#);
+}
+
+#[test]
+fn anon_shape_field_access_works() {
+    // WHY: field access on an anon-shape-typed binding must resolve field types.
+    assert_clean(r#"
+function entrypoint() -> nothing {
+  let p: { x: int, y: int } = { x: 3, y: 4 }
+  let sum: int = p.x + p.y
+  print(`${sum}`)
+}
+"#);
+}
+
+#[test]
+fn anon_shape_as_function_param_works() {
+    // WHY: inline shapes in function parameter type position must compile clean —
+    //      the function signature pre-pass must hoist the anon shape.
+    assert_clean(r#"
+function area(rect: { w: int, h: int }) -> int {
+  return rect.w * rect.h
+}
+function entrypoint() -> nothing {
+  let r: { w: int, h: int } = { w: 5, h: 3 }
+  print(`${area(r)}`)
+}
+"#);
+}
+
+#[test]
+fn anon_shape_rejects_hidden_field() {
+    // WHY: `hidden` inside an inline shape type is incoherent — hidden fields are
+    //      file-private and require a named shape. The parser must emit the specific
+    //      diagnostic pointing at the `hidden` keyword.
+    // The `hidden` keyword is consumed and reported; the remaining `b: int` is parsed as
+    // a regular field, so the struct literal `{ a: 1 }` gets a secondary "missing b" error.
+    let output = run(r#"
+function entrypoint() -> nothing {
+  let p: { a: int, hidden b: int } = { a: 1 }
+}
+"#);
+    let errors: Vec<_> = output.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(!errors.is_empty(), "Expected at least 1 error; got none");
+    let has_hidden_msg = errors.iter().any(|d| {
+        d.what.contains("Inline shape types cannot have `hidden`")
+    });
+    assert!(has_hidden_msg, "Expected hidden-in-inline-shape diagnostic; got: {:#?}", errors);
+}

@@ -31,6 +31,27 @@ function p5_background_handle_rejected() -> nothing {
     print(h)
 }
 
+// ────── v0.1-polish: inline shape type errors ──────
+
+// WHY: inline shape with a field not in the declared type must be caught.
+function polish_unknown_field_in_inline_shape() -> nothing {
+    let x: { a: int } = { a: 1, b: 2 }
+    print(x)
+}
+
+// WHY: inline shape missing a required field at construction must error.
+function polish_missing_field_in_inline_shape() -> nothing {
+    let x: { a: int, b: int } = { a: 1 }
+    print(x)
+}
+
+// WHY: `hidden` inside an inline shape type must emit the specific diagnostic.
+// (The `b: int` that follows gets parsed as a regular field — secondary "missing b" error fires too.)
+function polish_hidden_in_inline_shape() -> nothing {
+    let p: { a: int, hidden b: int } = { a: 1 }
+    print(p)
+}
+
 // ────── positive reference case ──────
 
 function entrypoint() -> nothing {

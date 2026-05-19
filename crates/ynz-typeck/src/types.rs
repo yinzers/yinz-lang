@@ -144,6 +144,23 @@ pub fn type_name(t: &Type) -> String {
         Type::Number { .. } => "number".into(),
         Type::Bool => "boolean".into(),
         Type::Range { .. } => "range".into(),
+        Type::Shape { name } if name.starts_with("__anon__") => {
+            // Render canonical anon-shape names as `{ field: type, ... }` for diagnostics.
+            // Format: `__anon__fieldname__typename__fieldname__typename...`
+            // (each name__type pair joined by `__`, prefix `__anon__`)
+            let body = &name["__anon__".len()..];
+            let parts: Vec<&str> = body.split("__").collect();
+            let mut fields: Vec<String> = Vec::new();
+            let mut i = 0;
+            while i + 1 < parts.len() {
+                fields.push(format!("{}: {}", parts[i], parts[i + 1]));
+                i += 2;
+            }
+            if fields.is_empty() {
+                return name.clone();
+            }
+            format!("{{ {} }}", fields.join(", "))
+        }
         Type::Shape { name } => name.clone(),
         Type::Dynamic { contract } => format!("dynamic {contract}"),
         Type::TypeParam { name } => name.clone(),

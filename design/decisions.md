@@ -41,6 +41,7 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Iterables | `design/iterables.md` | `follows Iterable<T>`, `next()` with `maybe T`, hidden state fields |
 | GPU dispatch | `design/gpu.md` | MVP2+ vision: `gpu` call-site keyword, compiler manages CPU/GPU dispatch (DEFERRED to v2+) |
 | Destructuring | `design/destructuring.md` | Object only, no array, `as` rename, parameter destructuring |
+| Inline / anonymous shape types | `design/inline-shape-types.md` | `{ field: T }` in type-annotation position; structural typing (two identical inline shapes are the same type); canonical-name hoisting implementation; no `hidden` in inline shapes; named shapes remain nominal |
 | Type conversion | `design/type-conversion.md` | Dot methods, no `as` keyword, safe vs unsafe split, no ternary |
 | Concurrency | `design/concurrency.md` | Auto-parallelization, `wait`, `background`, ownership with tasks (optimization DEFERRED to v0.3) |
 | Strings (internal) | `design/strings.md` | UTF-8 internal encoding locked, UTF-8 file I/O default, SIMD-accelerated validation/traversal target |
