@@ -114,8 +114,6 @@ pub fn module_signatures_query(
 
     // Import resolution reads imported files from disk using the SAME salsa db.
     // Using the same db avoids "Cannot change database mid-query" panics from salsa.
-    // v0.2 TODO: use pre-registered SourceFiles from the driver's project load so
-    // salsa properly tracks cross-file dependencies for incremental caching.
     let imported = resolve_imports(&import_decls, importer_path_str, db, &mut visiting, &mut diag_bucket);
 
     // Shapes first — function signatures need them for type resolution.

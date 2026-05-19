@@ -2143,7 +2143,7 @@ impl<'b> Checker<'b> {
                     span.clone(),
                     format!("`{n}` is not a known type."),
                     "Use a built-in type (`int`, `float`, `number`, `bool`, `string`) or a `shape` name defined in this file.",
-                    "Types must be declared before use. If `{n}` is a shape, make sure the `shape {n} {{ ... }}` declaration is in this file.",
+                    format!("Types must be declared before use. If `{n}` is a shape, make sure the `shape {n} {{ ... }}` declaration is in this file.", n = n),
                 ));
                 Type::Error
             }
@@ -3791,6 +3791,7 @@ mod tests {
             &generic_fn_table,
             &generic_shape_table,
             &intrinsics,
+            &std::collections::HashMap::new(),
         );
         let diags: Vec<_> = diags.into_iter().collect();
         assert_eq!(

@@ -97,7 +97,7 @@ pub fn load_project_config(root: &Path, diags: &mut DiagnosticBucket) -> Project
             // Unknown key — warn
             let key = line.split('=').next().unwrap_or("").trim();
             if !key.is_empty() {
-                diags.push(Diagnostic::error(
+                diags.push(Diagnostic::warning(
                     SourceSpan::new(toml_path.display().to_string(), 0, 0),
                     format!("Unknown field `{key}` in yinz.toml — ignored."),
                     "Supported fields: `entry`, `name`, `version`.",
