@@ -91,3 +91,68 @@ The single-root-toml model above sidesteps this if Yinz has no feature-flag syst
 ---
 
 
+
+---
+
+## Formatter — Trailing Comment Alignment (v0.2-M3 directive)
+
+**Locked directive for `ynz fmt` (v0.2-M3)**: trailing inline comments after real code are aligned within contiguous declaration blocks. Whole-line comments (single OR multi-line) are NOT aligned to the trailing-comment column — they stay at the surrounding indent level.
+
+**Canonical example** (Patrick's `shape Symbol`):
+
+```ynz
+export shape Symbol {
+    symbol: string          // aapl
+    name: string            // apple
+    assetClass: AssetClass  // stock
+    exchange: string        // nyse
+
+    sector: string
+    industry: string
+
+    float: number           // 19_822_143
+    marketCap: number       // 5_712_092
+
+    // lastSyncedAt: datetime
+}
+```
+
+The four `symbol`/`name`/`assetClass`/`exchange` trailing comments align in a column. The `float`/`marketCap` pair forms a SEPARATE alignment block (blank line broke it). `// lastSyncedAt: datetime` is a whole-line comment — anchored to the field's indent column, not pushed out to align with the trailing-comment column above.
+
+**Rules**:
+1. Trailing comments (`code  // text`) within a contiguous run of declarations align to the rightmost code-end-column in the run, plus two spaces.
+2. **Blank line breaks the run.** Each contiguous declaration block aligns independently.
+3. **Whole-line comments** (line starts with `//`) are anchored to the surrounding indent level. They do NOT extend or join the trailing-comment alignment.
+4. **Multi-line whole-line comment blocks** (consecutive `//` lines) stay at indent level — never aligned to a trailing-comment column.
+5. Applies inside `shape` field declarations, `options` variants, `const` blocks of homogeneous declarations, and any other "table-like" declaration context. Does NOT apply inside function bodies (statements don't form alignment groups — each statement is its own thing).
+
+**Why this is locked, not configurable**: per v0.2 constraint "`ynz fmt` is opinionated, zero-config" (roadmap `v0-2-dev-loop-tooling.md`). Alignment is either on always or off always. Patrick picked on (this directive).
+
+**Why on always**: Yinz uses `shape` declarations heavily, fields are usually short, trailing comments are usually short "what this IS" hints. The columnar layout reads as a table. Diff-noise cost (re-flow on field add/remove) is the formatter's job to absorb, not the user's. Mixed-length-field edge case (one long field name pushes the column out to 60+) is an acceptable cost — the alternative (no alignment, ever) gives up the common-case readability win to avoid an uncommon edge case.
+
+**Future config (NOT v0.2)**: if real Yinz codebases hit the mixed-length edge case often enough to justify it, a future version may add a per-file or per-block opt-out. v0.2 ships on-always with no opt-out per the no-config rule. Trigger to revisit: a documented pattern of Yinz codebases working around the alignment (e.g., reordering fields by length, splitting blocks artificially to avoid alignment cascade). Until that pattern emerges, no config.
+
+**M3 research phase still locks**:
+- Algorithm for finding the contiguous-declaration-block boundaries (probably: same indent level + same statement-kind + no blank lines between)
+- Tab-vs-space padding character (probably: spaces only, per most modern formatters — but research phase confirms)
+- Behavior when a comment line is longer than line-width (probably: alignment column wins; line wraps after the comment text; research phase confirms)
+- Interaction with `///` doc comments — doc comments on fields are whole-line and stay at indent column per rule 3; trailing `///` is rare and probably banned at the lexer level for fields (a doc comment on a field belongs above the field, not after it)
+
+**Cross-references**: `v0-2-dev-loop-tooling.md` v0.2-M3 milestone scope; `design/mvp-scope.md` v0.2 entry (no-config opinionated formatter); `design/doc-comments.md` (`///` syntax — doc comments are anchored, not aligned).
+
+---
+
+## Type Collection Ordering — Options/Shapes Must See Each Other (v0.2+)
+
+`collect_shapes` and `collect_options` run as separate passes in the wrong order. `collect_shapes` runs first (in `module_signatures_query`) but needs to know about options type names to resolve field types like `timeframe: Timeframe`. `collect_options` runs later inside `check_query`.
+
+**Current workaround** (2026-05-18): `collect_shapes` does a same-file pre-scan for `OptionsDecl` names and stores them in `ShapeTable.options_names`. Works for same-file only. Cross-file imported options types in shape fields still fail.
+
+**Proper fix**: refactor to a single "type name collection" pre-pass that runs before any field type resolution:
+1. Scan all module items (shapes, options, imports) to build a full `TypeNameRegistry`
+2. Pass that registry to `collect_shapes` and `collect_options` instead of each doing their own pre-scans
+3. Field type resolution then has full visibility of all type names regardless of file or declaration order
+
+**Trigger**: a user creates a multi-file project where an imported options type is used in a shape field annotation. The workaround produces "not a known type" diagnostic for the imported options type.
+
+**Removal**: when the proper fix ships, `ShapeTable.options_names` and its pre-scan in `collect_shapes` are deleted — they're superseded by the global type registry.
