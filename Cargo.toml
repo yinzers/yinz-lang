@@ -31,6 +31,7 @@ proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 tempfile = "3.14.0"
 
 # Cross-crate workspace deps
+ynz-registry    = { path = "crates/ynz-registry" }
 ynz-diagnostics = { path = "crates/ynz-diagnostics" }
 ynz-ast          = { path = "crates/ynz-ast" }
 ynz-parser       = { path = "crates/ynz-parser" }

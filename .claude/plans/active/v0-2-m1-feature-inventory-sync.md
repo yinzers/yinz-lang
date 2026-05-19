@@ -254,7 +254,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - [x] m7/m8 plan-file audit logged to `todos.md` (action or no-action)
 
 **Quality gate**:
-- [ ] Schema example TOML in `design/feature-registry.md` is parseable by the `toml` crate — pending: no `toml-validate` binary yet (Phase 1 builds the crate); TOML hand-reviewed for syntax correctness
+- [x] Schema example TOML in `design/feature-registry.md` is parseable by the `toml` crate — verified via `python3 tomllib` during Phase 1 code-review; all 8 entry-kind example blocks parsed cleanly
 - [x] All 13 `design/future/*.md` files are listed in the schema's "deferred-feature catalog" placeholder table
 - [x] Grep pattern in graveyard entry tested against the current codebase (catches banned_jargon.rs + builtins.rs STRING_METHODS; zero false positives in other crates)
 - [x] No banned-jargon words introduced in the new docs (three `infer` hits in design/feature-registry.md are engineer-audience prose — dual-audience exemption per `.claude/rules/inference.md`)
