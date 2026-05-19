@@ -579,11 +579,33 @@ impl<'a> Parser<'a> {
                 Some((path, span))
             }
             _ => {
+                // Try to reconstruct what the user probably meant — consume identifier/slash/dot
+                // tokens to form the path so we can suggest the correct syntax.
+                let span = self.current_span();
+                let mut guessed = String::new();
+                while matches!(
+                    self.peek(),
+                    Token::Identifier(_) | Token::Slash | Token::Dot | Token::LBracket | Token::RBracket
+                ) {
+                    match self.peek().clone() {
+                        Token::Identifier(n) => { guessed.push_str(&n); self.advance(); }
+                        Token::Slash => { guessed.push('/'); self.advance(); }
+                        Token::Dot => { guessed.push('.'); self.advance(); }
+                        _ => { self.advance(); }
+                    }
+                }
+                let suggestion = if guessed.is_empty() {
+                    "import { Symbol } from `shared/contracts/symbol.contracts`".to_string()
+                } else {
+                    // Strip any .ynz suffix the user included
+                    let path = guessed.trim_end_matches(".ynz");
+                    format!("import {{ ... }} from `{path}`")
+                };
                 self.diags.push(Diagnostic::error(
-                    self.current_span(),
-                    "Expected a path string after `from`.",
-                    "Write the module path: `import { foo } from `services/users``.",
-                    "The path is the project-root-relative location of the module file (without `.ynz`).",
+                    span,
+                    "Import paths must be backtick strings.",
+                    suggestion,
+                    "Paths are project-root-relative without the `.ynz` suffix. Example: import {{ Symbol }} from `shared/contracts/symbol.contracts`",
                 ));
                 None
             }
