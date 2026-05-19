@@ -1931,6 +1931,11 @@ impl<'a> Parser<'a> {
             return self.parse_for_destructure(start);
         }
 
+        // `for ({field, field} in collection)` — shape destructuring form.
+        if matches!(self.peek(), Token::LBrace) {
+            return self.parse_for_shape_destructure(start);
+        }
+
         // Catch `for ([a, b] in ...)` — array destructuring is not supported in for loops.
         // Yinz has no tuple types; the user likely wants a shape with named fields.
         if matches!(self.peek(), Token::LBracket) {
@@ -2028,6 +2033,146 @@ impl<'a> Parser<'a> {
             iter,
             body,
             span: SourceSpan::new(self.file, start, end),
+        }
+    }
+
+    /// Parse `for ({field, field as name, ...} in collection) { body }` — shape destructuring.
+    ///
+    /// Desugars to:
+    ///   `for (__shape in collection) { let field = __shape.field; ... body ... }`
+    ///
+    /// Supports optional `as` rename: `{ minutes as mins }` binds `__shape.minutes` to `mins`.
+    fn parse_for_shape_destructure(&mut self, start: usize) -> Stmt {
+        self.advance(); // consume `{`
+
+        // Parse comma-separated field bindings: `field` or `field as name`.
+        struct FieldBinding {
+            field: String,
+            var: String,
+            span: SourceSpan,
+        }
+        let mut fields: Vec<FieldBinding> = Vec::new();
+
+        loop {
+            match self.peek() {
+                Token::RBrace | Token::Eof => break,
+                Token::Comma => { self.advance(); }
+                Token::Identifier(_) => {
+                    let field_span = self.current_span();
+                    let field_name = if let Token::Identifier(n) = self.peek().clone() {
+                        self.advance();
+                        n
+                    } else { unreachable!() };
+
+                    let var_name = if matches!(self.peek(), Token::Identifier(n) if n == "as") {
+                        self.advance(); // consume `as`
+                        match self.peek().clone() {
+                            Token::Identifier(n) => { self.advance(); n }
+                            _ => {
+                                self.diags.push(Diagnostic::error(
+                                    self.current_span(),
+                                    "Expected a variable name after `as` in shape destructure.",
+                                    format!("Write `{{ {field_name} as myName }}` to rename the binding."),
+                                    "The `as` keyword renames the field to a different local variable name.",
+                                ));
+                                field_name.clone()
+                            }
+                        }
+                    } else {
+                        field_name.clone()
+                    };
+
+                    fields.push(FieldBinding { field: field_name, var: var_name, span: field_span });
+                }
+                _ => {
+                    self.diags.push(Diagnostic::error(
+                        self.current_span(),
+                        "Expected a field name in shape destructure.",
+                        "Write `for ({ field1, field2 } in collection) { ... }` with field names from the shape.",
+                        "Shape destructuring lists the fields you want to bind as local variables.",
+                    ));
+                    self.advance();
+                }
+            }
+        }
+
+        if self.expect(&Token::RBrace).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `}` to close the shape destructure pattern.",
+                "Write `for ({ field1, field2 } in collection) { ... }` — close with `}`.",
+                "Every `{` in a destructure pattern must be matched with a `}`.",
+            ));
+        }
+
+        if self.expect(&Token::In).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `in` after `{ ... }` in shape for-loop.",
+                "Write `for ({ field } in collection) { ... }` — put the collection after `in`.",
+                "The `in` keyword separates the destructure pattern from the collection.",
+            ));
+        }
+
+        let iter = self.parse_expr(0);
+
+        if self.expect(&Token::RParen).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `)` to close the `for` loop header.",
+                "Write `for ({ field } in collection) { ... }` — close the outer `(` with `)`.",
+                "Every `(` in a `for` header must be matched with a `)`.",
+            ));
+        }
+
+        if self.expect(&Token::LBrace).is_none() {
+            self.diags.push(Diagnostic::error(
+                self.current_span(),
+                "Expected `{` to open the `for` body.",
+                "Write `for ({ field } in collection) { ... }` with curly braces around the body.",
+                "Curly braces are always required in Yinz.",
+            ));
+            let span = SourceSpan::new(self.file, start, self.current_span().end);
+            return Stmt::For {
+                var: "__shape".to_string(),
+                var_span: span.clone(),
+                iter,
+                body: Block { stmts: vec![], span: span.clone() },
+                span,
+            };
+        }
+
+        let user_body = self.parse_block();
+        let body_end = user_body.span.end;
+        let body_span = user_body.span.clone();
+        let item_span = body_span.clone();
+
+        // Desugar: prepend `let field = __shape.field` for each binding.
+        let mut desugared_stmts: Vec<Stmt> = fields
+            .iter()
+            .map(|f| Stmt::Let {
+                is_const: false,
+                name: f.var.clone(),
+                name_span: f.span.clone(),
+                ty: None,
+                value: Expr::FieldAccess {
+                    receiver: Box::new(Expr::Ident("__shape".to_string(), item_span.clone())),
+                    field: f.field.clone(),
+                    field_span: f.span.clone(),
+                    span: f.span.clone(),
+                },
+                span: f.span.clone(),
+            })
+            .collect();
+        desugared_stmts.extend(user_body.stmts);
+
+        let full_span = SourceSpan::new(self.file, start, body_end);
+        Stmt::For {
+            var: "__shape".to_string(),
+            var_span: item_span,
+            iter,
+            body: Block { stmts: desugared_stmts, span: body_span },
+            span: full_span,
         }
     }
 

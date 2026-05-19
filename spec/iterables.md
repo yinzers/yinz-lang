@@ -47,6 +47,52 @@ The `for` syntax is the same either way. What changes is that a fallible loop re
 
 ---
 
+## Shape destructuring in for loops
+
+When iterating a collection of shapes, you can destructure fields directly in the loop header instead of accessing them via the loop variable:
+
+```ynz
+shape Player { name: string, health: int, score: int }
+
+const players: fixed<Player> = [
+    { name: "Alice", health: 100, score: 50 },
+    { name: "Bob",   health: 80,  score: 30 },
+]
+
+// Single binding — access fields via the variable
+for (player in players) {
+    print(player.name)
+    print(player.health)
+}
+
+// Shape destructuring — bind fields directly
+for ({ name, health } in players) {
+    print(name)
+    print(health)
+}
+```
+
+Both forms compile to the same code. Destructuring is shorthand — the compiler introduces a hidden `__shape` binding and generates the field accesses for you.
+
+You can rename a field with `as`:
+
+```ynz
+for ({ name as playerName, health as hp } in players) {
+    print(playerName)
+    print(hp)
+}
+```
+
+You don't have to destructure every field — list only the ones you need:
+
+```ynz
+for ({ name } in players) {
+    print(name)   // health and score are still there on the hidden binding, just not bound
+}
+```
+
+---
+
 ## Range — numbers without creating an array
 
 `range()` accepts one or two arguments:
