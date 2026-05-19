@@ -30,6 +30,10 @@ pub struct BuildResult {
     pub success: bool,
     /// Populated on failure — classifies the failure for exit-code purposes.
     pub failure_kind: Option<FailureKind>,
+    /// LLVM IR text from the last compiled source file, if available.
+    /// `None` on multi-file projects (IR is per-file; the driver surfaces the
+    /// first file's IR for single-file builds only).
+    pub ir_text: Option<String>,
 }
 
 /// Drop guard that removes `path` on drop, unless `.persist()` is called first.
@@ -238,6 +242,7 @@ fn build_project(root: &Path, output_dir: Option<&Path>) -> BuildResult {
                 stderr_output,
                 success: true,
                 failure_kind: None,
+                ir_text: None,
             }
         }
         Err(()) => {
@@ -337,6 +342,7 @@ fn build_failed_diags(
         stderr_output,
         success: false,
         failure_kind: Some(kind),
+        ir_text: None,
     }
 }
 
@@ -515,11 +521,16 @@ fn build_single_file(source_path: &Path, output_dir: Option<&Path>) -> BuildResu
             } else {
                 String::new()
             };
+            let ir_text = {
+                let ir = &codegen_out.artifact.ir_text;
+                if ir.is_empty() { None } else { Some(ir.clone()) }
+            };
             BuildResult {
                 binary: Some(binary_path),
                 stderr_output,
                 success: true,
                 failure_kind: None,
+                ir_text,
             }
         }
     }
@@ -556,5 +567,6 @@ fn build_failed(diags: DiagnosticBucket, source_path: &Path, kind: FailureKind) 
         stderr_output,
         success: false,
         failure_kind: Some(kind),
+        ir_text: None,
     }
 }

@@ -107,20 +107,26 @@ pub extern "C" fn ynz_decimal_to_string(a: *const D128) -> *const u8 {
 /// Called by compiled code on integer overflow.
 ///
 /// `op_name` is a static C string (null-terminated) describing the operation,
-/// e.g. `"int overflow in '+'"`.
+/// e.g. `"int overflow in '+'"`. `file` is the source file name; `line` and
+/// `col` are 1-based source positions.
 ///
 /// # Safety
-/// `op_name` must be a valid, null-terminated C string or null.
+/// `op_name` and `file` must be valid, null-terminated C strings or null.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_panic_overflow(op_name: *const u8) -> ! {
+pub unsafe extern "C" fn ynz_panic_overflow(
+    op_name: *const u8,
+    file: *const u8,
+    line: u32,
+    col: u32,
+) -> ! {
     let msg = cstr_to_str(op_name);
-    // Write the diagnostic to stderr before aborting.
+    let src = cstr_to_str(file);
     // The WHAT/WHAT-INSTEAD/WHY three-part format is embedded here; it cannot
     // go through ariadne because the runtime has no source map at abort time.
     eprintln!(
-        "RUNTIME ERROR: {msg}\n\n  \
+        "RUNTIME ERROR: {msg} at {src}:{line}:{col}\n\n  \
          The value wrapped past the maximum (or minimum) for this type.\n\n  \
-         Use .wrappingAdd() if wrap-around is intentional (available in M4).\n\n  \
+         Use .wrappingAdd() if wrap-around is intentional.\n\n  \
          Why: Yinz panics on integer overflow by default to prevent silent data corruption."
     );
     std::process::abort();
@@ -128,13 +134,22 @@ pub unsafe extern "C" fn ynz_panic_overflow(op_name: *const u8) -> ! {
 
 /// Called by compiled code on division by zero.
 ///
+/// `op_name` is a static C string (null-terminated). `file`, `line`, `col`
+/// are the source location of the division expression.
+///
 /// # Safety
-/// `op_name` must be a valid, null-terminated C string or null.
+/// `op_name` and `file` must be valid, null-terminated C strings or null.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_panic_div_by_zero(op_name: *const u8) -> ! {
+pub unsafe extern "C" fn ynz_panic_div_by_zero(
+    op_name: *const u8,
+    file: *const u8,
+    line: u32,
+    col: u32,
+) -> ! {
     let msg = cstr_to_str(op_name);
+    let src = cstr_to_str(file);
     eprintln!(
-        "RUNTIME ERROR: {msg}\n\n  \
+        "RUNTIME ERROR: {msg} at {src}:{line}:{col}\n\n  \
          Check that the denominator is not zero before dividing:\n    \
          if (denominator != 0) {{ let result = numerator / denominator }}\n\n  \
          Why: Dividing by zero produces an undefined result. Yinz panics rather\n  \

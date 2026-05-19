@@ -221,12 +221,12 @@ impl<'ctx> RuntimeDecls<'ctx> {
             panic_overflow: declare_fn(
                 module,
                 "ynz_panic_overflow",
-                void.fn_type(&[ptr.into()], false),
+                void.fn_type(&[ptr.into(), ptr.into(), i32.into(), i32.into()], false),
             ),
             panic_div_by_zero: declare_fn(
                 module,
                 "ynz_panic_div_by_zero",
-                void.fn_type(&[ptr.into()], false),
+                void.fn_type(&[ptr.into(), ptr.into(), i32.into(), i32.into()], false),
             ),
             sadd_overflow: declare_fn(
                 module,

@@ -81,9 +81,10 @@ Grouped by area: Lexer/Parser, Type System, Diagnostics, Numerics, Strings, Modu
 
 ## Diagnostics
 
-### ~~13. banned_jargon.rs missing entries~~ **FURTHER FIXED in Batch 6.11** (HIGH)
+### ~~13. banned_jargon.rs missing entries~~ **FULLY FIXED (Batch 6.11 + Batch 7.8/7.9)** (HIGH)
 - `alias` added to `banned_jargon.rs`; `resolve_import.rs` + `parser.rs` diagnostics rewritten to avoid "alias" bare word. `remainder` confirmed NOT jargon and explicitly removed from banned list. `design/compiler-errors.md` updated with clarifying note.
-- Remaining skipped: `lifetime` (lexer diagnostic, Batch 7), `interface` (backtick exception applies).
+- `lifetime` (Batch 7.8): lexer `promise`/`future`/`goroutine` diagnostics rewritten to say "after this function returns" / "run after the current function returns". `lifetime` added to banned list.
+- `interface` (Batch 7.9): added to banned list. `emit_banned_declaration_keyword` uses `format!("`{keyword}` is not…")` — literal word never appears in scanned strings — audit clean.
 
 ### ~~14. spec/numeric-types.md IDE hints need v0.2 tag~~ **FIXED (Batch 4c)** (LOW)
 - **Doc claim**: `spec/numeric-types.md` lines 113–118 ("IDE WARNS"), lines 143–149 ("IDE HINT: number (decimal) is slower for pure integer math").

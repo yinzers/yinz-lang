@@ -150,8 +150,6 @@ Tracked so the help text reflects what currently ships and the design log rememb
   Target version: v0.X (TBD; tied to dedicated optimization pass milestone).
 - `--kernel` — kernel-mode build (no heap allocator, no panic-on-OOM, no threading).
   See `design/future/no-runtime-mode.md`. Target version: v0.3 per `design/mvp-scope.md`.
-- `--emit-ir` — dump LLVM IR alongside the compiled binary.
-  Target version: pending audit batch (already populated on `CompiledArtifact`; needs CLI wiring).
 - `--reveal-sensitive` — show all sensitive values in output (dev-only; stripped from release builds).
   Target version: pending audit batch. Design is locked in `design/sensitive.md`.
 

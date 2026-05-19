@@ -9,7 +9,9 @@ use crate::build::{build_into, FailureKind};
 ///
 /// When `keep` is false (default), the binary is removed after execution.
 /// When `keep` is true, the binary is left in place.
-pub fn run(source_path: &Path, keep: bool) -> i32 {
+///
+/// When `emit_ir` is true, the LLVM IR is written alongside the binary as `<binary>.ll`.
+pub fn run(source_path: &Path, keep: bool, emit_ir: bool) -> i32 {
     let bin_dir = match tempfile::tempdir() {
         Ok(d) => d,
         Err(e) => {
@@ -34,6 +36,17 @@ pub fn run(source_path: &Path, keep: bool) -> i32 {
     }
 
     let binary = result.binary.expect("success implies binary is set");
+
+    if emit_ir {
+        if let Some(ir) = &result.ir_text {
+            let ir_path = binary.with_extension("ll");
+            if let Err(e) = std::fs::write(&ir_path, ir) {
+                eprintln!("ynz: could not write IR to `{}`: {e}", ir_path.display());
+                return 2;
+            }
+            println!("LLVM IR written to: {}", ir_path.display());
+        }
+    }
 
     let status = process::Command::new(&binary).status().unwrap_or_else(|e| {
         eprintln!("ynz: failed to run `{}`: {e}", binary.display());

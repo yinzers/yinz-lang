@@ -194,11 +194,13 @@ Resolved by Batch 3 (the `PartialEq` derive replaced the coarse manual impl). Ve
 
 ---
 
-## Batch 7 — ICE + observability + banned-jargon (parser/runtime/codegen side)
+## ~~Batch 7 — ICE + observability + banned-jargon (parser/runtime/codegen side)~~ FIXED (2026-05-19)
 
 Sequential AFTER Batch 6 because both touch `crates/ynz-diagnostics/` and `crates/ynz-driver/`.
 
-### 7.1 — Top-level panic hook (CRITICAL — ICE distinction)
+**All 7.1–7.9 items shipped.**
+
+### ~~7.1 — Top-level panic hook (CRITICAL — ICE distinction)~~
 
 **What's broken**: when the compiler itself panics (e.g., an `.expect()` deep in lexer/parser/typeck), the user sees a raw Rust panic message. They don't know whether it's their bug or ours. Maintainers reading bug reports get no source-stage, no backtrace, no repro info.
 
@@ -216,7 +218,7 @@ Match the existing `codegen_query` error pattern at `crates/ynz-codegen/src/quer
 
 **Risk**: medium. Every panic path becomes user-visible — test by intentionally triggering a panic and seeing the new output.
 
-### 7.2 — `--emit-ir` flag (CRITICAL — observability)
+### ~~7.2 — `--emit-ir` flag (CRITICAL — observability)~~
 
 **What's broken**: `CompiledArtifact.ir_text` is populated on every build but never read by the driver. Tests use it via insta snapshots; production CLI has no flag. "Wrong codegen output" investigations require recompiling the compiler with a one-off patch.
 
@@ -226,7 +228,7 @@ Match the existing `codegen_query` error pattern at `crates/ynz-codegen/src/quer
 
 **Risk**: low. Trivial — the data is already populated.
 
-### 7.3 — `ariadne` render `.expect()` panics on out-of-range span (HIGH)
+### ~~7.3 — `ariadne` render `.expect()` panics on out-of-range span (HIGH)~~
 
 **File**: `crates/ynz-diagnostics/src/render.rs:85`.
 
@@ -236,7 +238,7 @@ Match the existing `codegen_query` error pattern at `crates/ynz-codegen/src/quer
 
 **Risk**: low.
 
-### 7.4 — Runtime overflow / div-zero panics lack source location (HIGH)
+### ~~7.4 — Runtime overflow / div-zero panics lack source location (HIGH)~~
 
 **Files**: `crates/ynz-runtime/src/lib.rs:115-127, 134-143` (the panic functions) + `crates/ynz-codegen/src/emit.rs` (where the panic calls are emitted).
 
@@ -252,7 +254,7 @@ Match the existing `codegen_query` error pattern at `crates/ynz-codegen/src/quer
 
 Cross-reference. Was a Forensics finding too. Confirm removed from `.analysis/forensics.md`.
 
-### 7.6 — `codegen_query` LLVM-error span pinned at (0,0) (LOW)
+### ~~7.6 — `codegen_query` LLVM-error span pinned at (0,0) (LOW)~~
 
 **File**: `crates/ynz-codegen/src/queries.rs:59`.
 
@@ -262,7 +264,7 @@ Cross-reference. Was a Forensics finding too. Confirm removed from `.analysis/fo
 
 **Risk**: low.
 
-### 7.7 — Parser/lexer `.expect()` calls — audit for span context (HIGH)
+### ~~7.7 — Parser/lexer `.expect()` calls — audit for span context (HIGH)~~
 
 **Files**: `crates/ynz-parser/src/lexer.rs:469,866,935,976,1003,1058,1073` (the multiple "digits are ASCII" / "identifier is UTF-8" expects).
 
@@ -272,7 +274,7 @@ Cross-reference. Was a Forensics finding too. Confirm removed from `.analysis/fo
 
 **Risk**: low.
 
-### 7.8 — `lifetime` banned-jargon diagnostic rewrite (MEDIUM)
+### ~~7.8 — `lifetime` banned-jargon diagnostic rewrite (MEDIUM)~~
 
 **File**: `crates/ynz-parser/src/lexer.rs:532,540` (`promise`/`future` banned-keyword diagnostics).
 
@@ -282,7 +284,7 @@ Cross-reference. Was a Forensics finding too. Confirm removed from `.analysis/fo
 
 **Risk**: low.
 
-### 7.9 — `interface` banned-jargon diagnostic rewrite (MEDIUM)
+### ~~7.9 — `interface` banned-jargon diagnostic rewrite (MEDIUM)~~
 
 **File**: `crates/ynz-parser/src/lexer.rs:613`.
 

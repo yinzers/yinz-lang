@@ -108,10 +108,13 @@ pub fn render(
             builder = builder.with_label(Label::new(rel.span.clone()).with_message(&rel.label));
         }
 
-        builder
-            .finish()
-            .write(&mut cache, &mut out)
-            .expect("ariadne render failed");
+        if let Err(e) = builder.finish().write(&mut cache, &mut out) {
+            let _ = writeln!(
+                out,
+                "<unable to render diagnostic for {}: {e}>",
+                diag.span.file,
+            );
+        }
     }
 
     if bucket.hidden_count() > 0 {

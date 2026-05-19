@@ -14,8 +14,8 @@ Severity = execution order, not "whether to fix." Per Patrick's Rule 11, confirm
 
 | Severity | Count | Notes |
 |---|---:|---|
-| Critical | 5 | locked decisions violated / deterministic crashes / silent data corruption |
-| High | 21 | shipped feature broken or misdocumented / large-impact UX / perf hotspots |
+| Critical | 5 | locked decisions violated / deterministic crashes / silent data corruption (3 open, 2 fixed Batch 7) |
+| High | 21 | shipped feature broken or misdocumented / large-impact UX / perf hotspots (2 fixed Batch 7: #16 runtime panic location, #17 ariadne render expect) |
 | Medium | 44 | drift, missed checks, minor UX |
 | Low | 45 | polish, magic numbers, minor docs |
 | Verified Correct | 9 | doc-drift positives — explicitly noted to prevent re-flagging |
@@ -49,15 +49,11 @@ No genuine conflicts between analyzers.
 - **Fix**: Replace `type` → `shape` in both the snapshot fixture and the spec page.
 - **Status**: `spec/collections.md` fixed by Batch 4c. Snapshot fixture (`snapshots.rs` + `suggestion_only.snap`) still needs fixing — different batch (code files).
 
-### 3. No ICE distinction — compiler panics look identical to user errors
-- **File**: `crates/ynz-driver/src/main.rs` (top-level), panics across `crates/ynz-diagnostics/src/render.rs:85`, `crates/ynz-codegen/src/emit.rs:150`, `crates/ynz-parser/src/lexer.rs:469`
-- **Issue**: Bug reports of "compiler crashed" arrive without source stage / input data / backtrace. Only `codegen_query` catches LLVM errors with bug-report framing.
-- **Fix**: Top-level `std::panic::set_hook` printing "this is a compiler bug — please file at <URL> with `RUST_BACKTRACE=1` output." Use `EXIT_INFRA_ERROR = 101`.
+~~### 3. No ICE distinction — compiler panics look identical to user errors~~ **FIXED (Batch 7.1)**
+- Top-level `std::panic::set_hook` in `main()` prints box-bordered ICE banner + panic message + location + issue URL + RUST_BACKTRACE=1 instruction, then exits with `EXIT_INFRA_ERROR`.
 
-### 4. LLVM IR generated every build but inaccessible from CLI
-- **Files**: `crates/ynz-codegen/src/artifact.rs:10` (`ir_text` populated), `crates/ynz-driver/src/main.rs` (never read)
-- **Issue**: Tests use `ir_text` via `insta` snapshots; production CLI has no `--emit-ir`/`--print-ir`/`--dump-llvm`. Every "wrong codegen" investigation requires recompiling the compiler.
-- **Fix**: Add `--emit-ir` flag on `ynz build`. Trivial — field already populated.
+~~### 4. LLVM IR generated every build but inaccessible from CLI~~ **FIXED (Batch 7.2)**
+- `--emit-ir` flag added to `Build` and `Run` subcommands. Writes `<binary>.ll` alongside the binary. `BuildResult` carries `ir_text: Option<String>` (populated for single-file builds). `design/open-questions.md` "CLI flags planned" entry removed.
 
 ~~### 5. Stack overflow via deeply-nested expressions (compiler DoS)~~ **FIXED (Batch 5a)**
 - **Files**: `crates/ynz-parser/src/parser.rs` (`parse_expr`), `crates/ynz-typeck/src/check.rs` (`check_expr`/`infer_expr` family), `crates/ynz-codegen/src/emit.rs` (`lower_expr`)
@@ -84,8 +80,8 @@ No genuine conflicts between analyzers.
 ~~13. `ynz_map_set_str` infinite-loop on full map if growth silently fails~~ **FIXED (Batch 5b)** — `find_insert_slot` and `ynz_map_set_str` probe loops now abort if probe count reaches capacity
 14. `entrypoint → main` rename collides on multi-file projects — `crates/ynz-codegen/src/emit.rs:460-465, 815-819`
 ~~15. `bignum_binop` silent fallback to `"0"` on CString null-byte → wrong math result with no log~~ **FIXED (Batch 5b)** — aborts with INTERNAL ERROR message instead
-16. Runtime overflow / div-zero panics lack source location (design says line/col, code says only op name) — `crates/ynz-runtime/src/lib.rs:115-143`
-17. `ariadne` render `.expect()` panics on out-of-range span (no diagnostic; raw panic) — `crates/ynz-diagnostics/src/render.rs:85`
+~~16. Runtime overflow / div-zero panics lack source location~~ **FIXED (Batch 7.4)** — `ynz_panic_overflow` and `ynz_panic_div_by_zero` now accept `(op_name, file, offset, col)`. Codegen emits the source_file global + span byte offset at each arithmetic panic site.
+~~17. `ariadne` render `.expect()` panics on out-of-range span~~ **FIXED (Batch 7.3)** — replaced with graceful degradation: writes `<unable to render diagnostic for {file}: {error}>` and continues rendering remaining diagnostics.
 
 ### Security (after path-traversal fix from Critical-adjacent set)
 ~~18. Path traversal via mid-path `..` in import~~ **FIXED (Batch 5c)** — layer-1 segment check + layer-2 canonicalize boundary check in `resolve_import.rs`; 11-test security suite in `tests/path_traversal.rs`
@@ -207,7 +203,7 @@ No genuine conflicts between analyzers.
 
 (Selected; full list in individual analyzer reports)
 
-- `codegen_query` LLVM error diagnostic pinned to span (0,0) — misleading caret
+~~- `codegen_query` LLVM error diagnostic pinned to span (0,0) — misleading caret~~ **FIXED (Batch 7.6)** — `codegen_query` already uses `Diagnostic::file_error` (added in Batch 6); verified no misleading (0,0) span.
 - `decimal128/parse.rs:102` infallible `.unwrap()` without safety comment
 - `find_closest_name`/`levenshtein` should move to shared crate (`ynz-diagnostics::suggest`) — currently only in typeck
 - Workspace cargo.toml: promote `simdutf8`/`unicode-normalization`/`memchr`/`unicase` to `[workspace.dependencies]`

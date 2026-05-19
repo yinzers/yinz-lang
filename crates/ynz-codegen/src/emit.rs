@@ -86,6 +86,7 @@ pub fn emit_artifact(
     build_module(
         &context,
         &module,
+        source_path,
         typed_module,
         shape_table,
         generic_fn_table,
@@ -124,11 +125,14 @@ struct ModuleGlobals<'ctx> {
     panic_int_rem: GlobalValue<'ctx>,
     panic_dec_div: GlobalValue<'ctx>,
     panic_dec_rem: GlobalValue<'ctx>,
+    /// Source file path embedded as a C string for runtime panic messages.
+    source_file: GlobalValue<'ctx>,
 }
 
 fn build_module<'ctx, 'g>(
     ctx: &'ctx Context,
     module: &'g Module<'ctx>,
+    source_path: &str,
     typed: &'g TypedModule,
     shape_table: &'g ShapeTable,
     generic_fn_table: &'g GenericFnTable,
@@ -165,6 +169,7 @@ fn build_module<'ctx, 'g>(
             "remainder by zero (number)",
             ".panic.drem",
         ),
+        source_file: build_string_global(ctx, module, source_path, ".source.file"),
     };
 
     // Pass 0 — emit LLVM struct types for all user-defined shapes.
@@ -3089,11 +3094,11 @@ fn lower_binop<'ctx>(
     let (lhs, rhs) = coerce_to_bignum_pair(cg, lhs, rhs, lhs_ty, rhs_ty)?;
 
     match (op, lhs_ty) {
-        (Add, Type::Int) => int_arith_overflow(cg, lhs.into_int_value(), rhs.into_int_value(), op),
-        (Sub, Type::Int) => int_arith_overflow(cg, lhs.into_int_value(), rhs.into_int_value(), op),
-        (Mul, Type::Int) => int_arith_overflow(cg, lhs.into_int_value(), rhs.into_int_value(), op),
-        (Div, Type::Int) => int_divrem(cg, lhs.into_int_value(), rhs.into_int_value(), false),
-        (Rem, Type::Int) => int_divrem(cg, lhs.into_int_value(), rhs.into_int_value(), true),
+        (Add, Type::Int) => int_arith_overflow(cg, lhs.into_int_value(), rhs.into_int_value(), op, lhs_e.span().start as u32),
+        (Sub, Type::Int) => int_arith_overflow(cg, lhs.into_int_value(), rhs.into_int_value(), op, lhs_e.span().start as u32),
+        (Mul, Type::Int) => int_arith_overflow(cg, lhs.into_int_value(), rhs.into_int_value(), op, lhs_e.span().start as u32),
+        (Div, Type::Int) => int_divrem(cg, lhs.into_int_value(), rhs.into_int_value(), false, lhs_e.span().start as u32),
+        (Rem, Type::Int) => int_divrem(cg, lhs.into_int_value(), rhs.into_int_value(), true, lhs_e.span().start as u32),
 
         (Add, Type::Float) => cg
             .builder
@@ -3179,10 +3184,12 @@ fn lower_binop<'ctx>(
         }
         (Rem, Type::Number { .. }) => {
             // typeck already rejected this; emit unreachable panic
+            let file_ptr = cg.globals.source_file.as_pointer_value();
+            let zero32 = cg.i32().const_int(0, false);
             cg.builder
                 .build_call(
                     cg.rt.panic_div_by_zero,
-                    &[cg.globals.panic_dec_rem.as_pointer_value().into()],
+                    &[cg.globals.panic_dec_rem.as_pointer_value().into(), file_ptr.into(), zero32.into(), zero32.into()],
                     "",
                 )
                 .map_err(|e| format!("{e}"))?;
@@ -3314,6 +3321,7 @@ fn int_arith_overflow<'ctx>(
     lhs: inkwell::values::IntValue<'ctx>,
     rhs: inkwell::values::IntValue<'ctx>,
     op: &BinOpKind,
+    span_start: u32,
 ) -> Result<BasicValueEnum<'ctx>, String> {
     let (intrinsic, msg_g) = match op {
         BinOpKind::Add => (cg.rt.sadd_overflow, cg.globals.panic_int_add),
@@ -3348,8 +3356,15 @@ fn int_arith_overflow<'ctx>(
         .map_err(|e| format!("{e}"))?;
 
     cg.builder.position_at_end(panic_bb);
+    let file_ptr = cg.globals.source_file.as_pointer_value();
+    let offset_val = cg.i32().const_int(span_start as u64, false);
+    let zero_col = cg.i32().const_int(0, false);
     cg.builder
-        .build_call(cg.rt.panic_overflow, &[msg_g.as_pointer_value().into()], "")
+        .build_call(
+            cg.rt.panic_overflow,
+            &[msg_g.as_pointer_value().into(), file_ptr.into(), offset_val.into(), zero_col.into()],
+            "",
+        )
         .map_err(|e| format!("{e}"))?;
     cg.builder.build_unreachable().map_err(|e| format!("{e}"))?;
 
@@ -3362,6 +3377,7 @@ fn int_divrem<'ctx>(
     lhs: inkwell::values::IntValue<'ctx>,
     rhs: inkwell::values::IntValue<'ctx>,
     is_rem: bool,
+    span_start: u32,
 ) -> Result<BasicValueEnum<'ctx>, String> {
     let zero = cg.i64().const_int(0, false);
     let is_z = cg
@@ -3380,10 +3396,13 @@ fn int_divrem<'ctx>(
     } else {
         cg.globals.panic_int_div
     };
+    let file_ptr = cg.globals.source_file.as_pointer_value();
+    let offset_val = cg.i32().const_int(span_start as u64, false);
+    let zero_col = cg.i32().const_int(0, false);
     cg.builder
         .build_call(
             cg.rt.panic_div_by_zero,
-            &[msg.as_pointer_value().into()],
+            &[msg.as_pointer_value().into(), file_ptr.into(), offset_val.into(), zero_col.into()],
             "",
         )
         .map_err(|e| format!("{e}"))?;
@@ -3474,10 +3493,12 @@ fn decimal_div<'ctx>(
         .build_conditional_branch(is_z, pbb, ok_bb)
         .map_err(|e| format!("{e}"))?;
     cg.builder.position_at_end(pbb);
+    let file_ptr = cg.globals.source_file.as_pointer_value();
+    let zero32 = cg.i32().const_int(0, false);
     cg.builder
         .build_call(
             cg.rt.panic_div_by_zero,
-            &[cg.globals.panic_dec_div.as_pointer_value().into()],
+            &[cg.globals.panic_dec_div.as_pointer_value().into(), file_ptr.into(), zero32.into(), zero32.into()],
             "",
         )
         .map_err(|e| format!("{e}"))?;

@@ -482,6 +482,10 @@ impl<'src> Lexer<'src> {
             self.push_token(Token::Identifier(String::new()), start, self.pos);
             return;
         }
+        // Invariant: load.rs validates UTF-8 before constructing a Lexer; every
+        // byte in self.src is valid UTF-8. Identifier bytes are ASCII (alphanumeric
+        // + '_'), which are always valid single-byte UTF-8 sequences, so this slice
+        // is guaranteed to be valid.
         let text = std::str::from_utf8(&self.src[start..self.pos])
             .expect("identifier slice is valid UTF-8 — source was validated at load time");
         let tok = match text {
@@ -546,7 +550,7 @@ impl<'src> Lexer<'src> {
             "promise" => {
                 self.emit_banned_declaration_keyword(
                     start, self.pos, "promise",
-                    "Yinz has `wait` (force completion) and `background` (run outside this function's lifetime). Two keywords cover what other languages use a dozen for.",
+                    "Yinz has `wait` (force completion) and `background` (run after this function returns). Two keywords cover what other languages use a dozen for.",
                     "A `background` task runs when called; use `wait` to force completion. No promise objects needed.",
                 );
                 Token::Identifier(text.to_string())
@@ -554,7 +558,7 @@ impl<'src> Lexer<'src> {
             "future" => {
                 self.emit_banned_declaration_keyword(
                     start, self.pos, "future",
-                    "Yinz has `wait` (force completion) and `background` (run outside this function's lifetime). Two keywords cover what other languages use a dozen for.",
+                    "Yinz has `wait` (force completion) and `background` (run after this function returns). Two keywords cover what other languages use a dozen for.",
                     "A `background` task runs when called; use `wait` to force completion. No future objects needed.",
                 );
                 Token::Identifier(text.to_string())
@@ -562,7 +566,7 @@ impl<'src> Lexer<'src> {
             "goroutine" => {
                 self.emit_banned_declaration_keyword(
                     start, self.pos, "goroutine",
-                    "Yinz has `background` for running a function outside the current function's lifetime: `background process(data)`.",
+                    "Yinz has `background` for running a function after the current function returns: `background process(data)`.",
                     "Use `background foo(arg)` instead. Two keywords (`wait`, `background`) cover what other languages use a dozen for.",
                 );
                 Token::Identifier(text.to_string())
@@ -925,6 +929,9 @@ impl<'src> Lexer<'src> {
             return; // diagnostic already emitted; skip the token
         }
 
+        // Invariant: lex_hex_int only advances self.pos over bytes matching
+        // b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F' | b'_', all of which are
+        // ASCII — valid single-byte UTF-8.
         let raw = std::str::from_utf8(&self.src[digits_start..self.pos])
             .expect("hex digit bytes are ASCII");
 
@@ -1006,6 +1013,8 @@ impl<'src> Lexer<'src> {
             return;
         }
 
+        // Invariant: lex_binary_int only advances over b'0', b'1', and b'_',
+        // all ASCII — valid single-byte UTF-8.
         let raw = std::str::from_utf8(&self.src[digits_start..self.pos])
             .expect("binary digit bytes are ASCII");
 
@@ -1047,6 +1056,8 @@ impl<'src> Lexer<'src> {
         while self.pos < self.src.len() && matches!(self.src[self.pos], b'0'..=b'9' | b'_') {
             self.pos += 1;
         }
+        // Invariant: lex_decimal_number only advances over b'0'..=b'9' and b'_',
+        // all ASCII — valid single-byte UTF-8.
         let int_raw =
             std::str::from_utf8(&self.src[int_start..self.pos]).expect("decimal digits are ASCII");
 
@@ -1093,6 +1104,7 @@ impl<'src> Lexer<'src> {
             while self.pos < self.src.len() && matches!(self.src[self.pos], b'0'..=b'9' | b'_') {
                 self.pos += 1;
             }
+            // Invariant: fractional digits are b'0'..=b'9' | b'_', all ASCII.
             let frac_raw = std::str::from_utf8(&self.src[frac_start..self.pos])
                 .expect("fractional digits are ASCII");
             if let Some(err_offset) = validate_underscores(frac_raw) {
@@ -1148,6 +1160,7 @@ impl<'src> Lexer<'src> {
                 self.skip_to_whitespace();
                 return;
             }
+            // Invariant: exponent digits are b'0'..=b'9' | b'_', all ASCII.
             let exp_raw = std::str::from_utf8(&self.src[exp_digits_start..self.pos])
                 .expect("exponent digits are ASCII");
             if let Some(err_offset) = validate_underscores(exp_raw) {
@@ -1164,6 +1177,9 @@ impl<'src> Lexer<'src> {
         }
 
         // Produce the token
+        // Invariant: the full decimal literal span (int part + optional dot +
+        // frac + optional exponent) consists only of b'0'..=b'9', b'.',
+        // b'e'/'E', b'+'/b'-', and b'_', all ASCII — valid UTF-8.
         let raw = std::str::from_utf8(&self.src[start..self.pos]).expect("decimal chars are ASCII");
         if has_dot || has_exp {
             let normalized: String = raw.chars().filter(|&c| c != '_').collect();
