@@ -183,3 +183,33 @@ Add entries via `/learn` when a project-specific mistake pattern is identified. 
 - [ ] For any new parser macro (`macro_rules!`) containing `continue`: flag as high risk unless the macro is ONLY used in the outermost loop context where `continue` is intended.
 
 **Severity**: critical — parser hang means the compiler never exits, which users experience as a freeze with no diagnostic output. This is the worst possible failure mode: silent, unrecoverable, no error message.
+
+---
+
+## M8 Modules Shipped Untested — Three Infrastructure Bugs — 2026-05-18/19
+
+**Scope**: `crates/ynz-driver/src/` — any build/load infrastructure change that touches multi-file project loading or path resolution.
+
+**Cause**: M8 Phase 2 (modules) shipped import/export grammar + multi-file driver wiring but wrote zero integration tests for the project-load path. Three infrastructure bugs shipped:
+
+1. **`src/` directory hard-requirement** (`load.rs`): `load_project()` errored if `root/src/` didn't exist, breaking any project without that exact layout. Fixed by falling back to walking the project root when `src/` is absent.
+
+2. **Empty project root from relative path** (`build.rs`): `find_project_root()` walked up relative paths and returned `""` when `yinz.toml` was in the current working directory. `build_project("")` then called `read_dir("")` → "No such file or directory". Fixed by canonicalizing the source path to absolute before root detection.
+
+3. **Typeck cross-file resolution entirely unimplemented** (separate graveyard note): `Item::ImportDecl(_) => {}` meant imports compiled but were silently ignored in all type checking and codegen.
+
+**Detection**: all three bugs would have been caught by one integration test: a two-file project where file B imports a type from file A and the test asserts `ynz run B` produces the expected output. This test was listed in the M8 P2 plan but never written.
+
+**Constraint**: Any compiler phase that ships multi-file or cross-module functionality MUST include an integration test that:
+1. Creates a temporary two-file project on disk (with `yinz.toml` at the root)
+2. Has one file export a type and a second file import and use it
+3. Runs `ynz run` on the entry file
+4. Asserts the binary produces the expected stdout
+
+**Bouncer checks**:
+- [ ] For diffs touching `crates/ynz-driver/src/load.rs` or `crates/ynz-driver/src/build.rs`: check that `crates/ynz-driver/tests/integration.rs` has at least one test with `yinz.toml` creation + two-file import. No such test → WARNING.
+- [ ] For plan files claiming "multi-file" or "module" or "import/export": verify `### Demo & Error Gallery` includes a two-file cross-import demo in `examples/`. Missing → WARNING.
+
+**Severity**: critical — infrastructure bugs that produce non-obvious error messages ("No src/ directory", empty path crashes) with no clear path to the fix without reading source code.
+
+**Originating incident**: M8 P2 shipped 2026-05-18. All three bugs discovered 2026-05-19 during first real-world use (trading-v4 project). Total fix time: ~2 hours.
