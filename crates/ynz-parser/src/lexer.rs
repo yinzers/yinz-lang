@@ -571,6 +571,19 @@ impl<'src> Lexer<'src> {
                 );
                 Token::Identifier(text.to_string())
             }
+            // `test` is reserved for the built-in test framework shipping in v0.13.
+            // Reserving now means existing code using `test` as an identifier breaks
+            // with a clear message rather than a surprise incompatibility when v0.13 ships.
+            "test" => {
+                self.emit_banned_declaration_keyword(
+                    start, self.pos, "test",
+                    "Use a different identifier. The built-in test framework ships in v0.13 \
+                     and will use `test` as a keyword.",
+                    "`test` is reserved for the built-in test framework (v0.13, per design/mvp-scope.md). \
+                     Pre-reserving it means your existing code will not break when v0.13 ships.",
+                );
+                Token::Identifier(text.to_string())
+            }
             // M8 banned visibility keywords — Yinz uses `export` or private-by-default
             "pub" => {
                 self.emit_banned_declaration_keyword(

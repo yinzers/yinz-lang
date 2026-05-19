@@ -1989,3 +1989,23 @@ fn external_file_construction_cannot_set_hidden_field() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn m8_background_let_binding_rejected() {
+    // WHY: M8 locked: `let h = background fn()` must error — background-handle form
+    //      (.send/.receive) ships in v0.3. Without this check, the let-binding silently
+    //      gives `h` type `nothing` and the user has no signal anything is wrong.
+    let output = assert_errors(
+        r#"
+function readData() -> nothing { print(`hello`) }
+function entrypoint() -> nothing {
+  let h = background readData()
+}
+"#,
+        1,
+    );
+    let has_msg = output.diagnostics.iter().any(|d| {
+        d.what.contains("Storing the result of `background`")
+    });
+    assert!(has_msg, "Expected handle-form rejection diagnostic, got: {:#?}", output.diagnostics);
+}

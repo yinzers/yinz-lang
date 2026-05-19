@@ -30,10 +30,9 @@ Grouped by area: Lexer/Parser, Type System, Diagnostics, Numerics, Strings, Modu
 - **Implementation reality**: `design/mvp-scope.md` lines 268–274 says "Operator overloading (locked design, deferred from v0.1)" — "Substitute used pre-v1.0: Users with custom math types write `.add()`, `.subtract()` methods explicitly." `crates/ynz-typeck/src/check.rs` has no operator-overloading dispatch (`grep -n "Addable\|Operator\|operator" check.rs` finds only `"!" is the boolean NOT operator` string).
 - **Severity**: MEDIUM — spec misleads users into thinking the feature works in v0.1. Should add an explicit "v1.0 feature" callout at the top of the Overloading section.
 
-### 4. `test` keyword not actually reserved in lexer (MEDIUM)
+### ~~4. `test` keyword not actually reserved in lexer~~ **FIXED** (MEDIUM)
 - **Doc claim**: `design/mvp-scope.md` line 39: "Test keyword reserved in parser (rejected at compile until v0.13)". `design/decisions.md` line 36: "Built-in `test` keyword".
-- **Implementation reality**: `crates/ynz-parser/src/lexer.rs:470-639` keyword table has no `test` entry. `grep -n "test\b" lexer.rs` produces nothing. Writing `test "foo" { ... }` parses as `Identifier("test")` followed by a syntax error.
-- **Severity**: MEDIUM — locked-decision drift. Reserving the keyword now (with a "shipping in v0.13" diagnostic) is the documented behavior; not reserving it means v0.13 will need to make a breaking change.
+- **Fix**: `crates/ynz-parser/src/lexer.rs` — `test` added to the banned-keyword arm via `emit_banned_declaration_keyword`. Produces a teaching diagnostic pointing to v0.13. `examples/errors/m4_errors.ynz` extended with a trigger. Lex test `test_keyword_reserved_for_v013` added in `crates/ynz-parser/tests/lex.rs`.
 
 ### ~~5. spec/iterables.md under-documents `range(end)` 1-arg form~~ **FIXED (Batch 4c)** (LOW)
 - **Doc claim**: `spec/iterables.md` lines 41, 54, 168 only mentions `range(start, end)` form.
@@ -62,10 +61,9 @@ Grouped by area: Lexer/Parser, Type System, Diagnostics, Numerics, Strings, Modu
 - **Implementation reality**: `crates/ynz-ast/src/nodes.rs:110, 133, 794` adds a `doc: Option<String>` field on FunctionDecl, ShapeDecl, OptionsDecl, and Field, independent of `is_exported`. The lexer attaches `///` to any next-following declaration. There is no compile error or warning for `///` on a private item.
 - **Severity**: MEDIUM — spec is more restrictive than implementation. Either lift the restriction in spec (cheap), or add a warning in the parser when `///` precedes a non-exported item.
 
-### 10. `background` does NOT support handle form (`let h = background fn()`) but M8 error gallery says it should reject explicitly (MEDIUM)
+### ~~10. `background` does NOT support handle form (`let h = background fn()`) but M8 error gallery says it should reject explicitly~~ **FIXED** (MEDIUM)
 - **Doc claim**: `spec/concurrency.md` lines 148–157 describes `let monitor = background watchHealth()` and `.send()/.receive()` as the long-running form. `examples/errors/m8_errors.ynz:64-68` says: "WHY: `let h = background foo()` (handle form) is rejected in M8. Background handles (.send/.receive) ship in v0.3."
-- **Implementation reality**: `Expr::Background` returns `Type::Nothing` (line 1139), so binding it to a `let` would type-check as `let h: nothing = ...`. There is no explicit "Storing the result of background is not yet supported" diagnostic.
-- **Severity**: MEDIUM — error gallery declares a diagnostic that doesn't actually fire as documented.
+- **Fix**: `crates/ynz-typeck/src/check.rs` `check_let` — early guard on `Expr::Background(_, bg_span)` emits "Storing the result of `background` is not yet supported." diagnostic and inserts `Type::Error` binding. `examples/errors/m8_errors.ynz` extended with `p5_background_handle_rejected` trigger. Typeck test `m8_background_let_binding_rejected` added.
 
 ### ~~11. spec/sensitive.md describes `--reveal-sensitive` flag — not in driver~~ **PARTIALLY FIXED (Batch 4c)** — deferred-status banner added; open-questions.md entry added (MEDIUM)
 - **Doc claim**: `spec/sensitive.md` lines 104–107 describes `ynz run entrypoint.ynz --reveal-sensitive` flag.

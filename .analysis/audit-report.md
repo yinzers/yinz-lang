@@ -16,7 +16,7 @@ Severity = execution order, not "whether to fix." Per Patrick's Rule 11, confirm
 |---|---:|---|
 | Critical | 5 | locked decisions violated / deterministic crashes / silent data corruption (3 open, 2 fixed Batch 7) |
 | High | 21 | shipped feature broken or misdocumented / large-impact UX / perf hotspots (2 fixed Batch 7: #16 runtime panic location, #17 ariadne render expect) |
-| Medium | 44 | drift, missed checks, minor UX |
+| Medium | 44 | drift, missed checks, minor UX (2 fixed this batch: `test` keyword reservation, `background` handle-form rejection) |
 | Low | 45 | polish, magic numbers, minor docs |
 | Verified Correct | 9 | doc-drift positives — explicitly noted to prevent re-flagging |
 
@@ -185,11 +185,11 @@ No genuine conflicts between analyzers.
 
 ### Doc-drift (MEDIUM)
 ~~`spec/operators.md` "Overloading" section describes a v1.0-deferred feature without flagging~~ **FIXED (Batch 4c)** — deferred-status banner added
-- `test` keyword not actually reserved in lexer — locked decision drift
+~~`test` keyword not actually reserved in lexer — locked decision drift~~ **FIXED** — `test` added to lexer banned-keyword arm; `m4_errors.ynz` trigger added; lex test `test_keyword_reserved_for_v013` added
 ~~`spec/main.md` mentions `cli.args()`, `process.exit()` — both are v0.8~~ **FIXED (Batch 4c)** — v0.8 status banners added
 ~~`spec/types.md` hidden-field auto-default contradicts demo file~~ **FIXED** — hidden-field-no-default check added to `collect_shapes`; external construction of hidden fields now rejected in `check_struct_lit`; demo and driver fixtures updated; 4 new typeck tests added.
 - `spec/doc-comments.md` "/// only on exported" — implementation attaches to all
-- `background` no handle-form rejection diagnostic — `examples/errors/m8_errors.ynz:64-68` says it should exist
+~~`background` no handle-form rejection diagnostic — `examples/errors/m8_errors.ynz:64-68` says it should exist~~ **FIXED** — `check_let` guards on `Expr::Background`; `m8_errors.ynz` trigger added; typeck test `m8_background_let_binding_rejected` added
 ~~`spec/sensitive.md` describes `--reveal-sensitive` flag that's not in driver~~ **FIXED (Batch 4c)** — deferred-status banner added; open-questions.md entry added
 ~~`design/decisions.md` "type aliases removed" ambiguous~~ **FIXED (Batch 4c)** — clarified: scalar aliases banned, union aliases supported
 - ~~`examples/basics/yinz.toml` uses `src/entrypoint.ynz`~~ **FIXED (Batch 4b)**

@@ -19,6 +19,18 @@ function p5_background_share_rejected() -> nothing {
     background p5_readData(s)
 }
 
+// WHY: `let h = background foo()` (handle form) must be a compile error in M8.
+// Background handles (.send/.receive) ship in v0.3. Without an explicit rejection,
+// the binding silently gets type `nothing` and the user has no signal anything is wrong.
+function p5_handleTarget() -> nothing {
+    print(`running`)
+}
+
+function p5_background_handle_rejected() -> nothing {
+    let h = background p5_handleTarget()
+    print(h)
+}
+
 // ────── positive reference case ──────
 
 function entrypoint() -> nothing {

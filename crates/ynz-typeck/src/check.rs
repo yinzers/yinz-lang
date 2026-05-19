@@ -367,6 +367,33 @@ impl<'b> Checker<'b> {
         annotation: Option<&AstType>,
         value: &Expr,
     ) {
+        // M8 P5 locked: `let h = background fn()` must be a compile error. Background
+        // handles (.send/.receive) ship in v0.3. Without this guard, the binding
+        // silently gets type `nothing` and the user has no signal anything went wrong.
+        if let Expr::Background(_, bg_span) = value {
+            self.diags.push(Diagnostic::error(
+                bg_span.clone(),
+                "Storing the result of `background` is not yet supported.",
+                "Drop the `let` binding — `background fn(...)` is a fire-and-forget statement in v0.1. \
+                 The background-handle form (`.send` / `.receive`) ships in v0.3.",
+                "`background fn(...)` schedules a function to run outside the current scope. \
+                 In v0.1 the result is discarded (no way to await or send messages). \
+                 Background handles will land in v0.3 per the concurrency roadmap.",
+            ));
+            self.scope.insert(
+                name.to_string(),
+                ScopeEntry {
+                    ty: Type::Error,
+                    is_const,
+                    is_param: false,
+                    is_loop_var: false,
+                    is_consumed: false,
+                    defined_at: name_span.clone(),
+                },
+            );
+            return;
+        }
+
         let annotated_ty = annotation.map(|t| self.ast_type_to_type(t));
         let value_ty = self.infer_expr(value, annotated_ty.as_ref());
 

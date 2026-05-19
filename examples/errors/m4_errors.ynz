@@ -47,6 +47,13 @@ abstract class Entity {
   name: string
 }
 
+// WHY: `test` is reserved for the built-in test framework (v0.13). Pre-reserving
+// now means existing code gets a clear message rather than a surprise breakage
+// when v0.13 ships. This is a locked design decision (design/mvp-scope.md:39).
+function test() -> nothing {
+  print(`this function name is reserved`)
+}
+
 // ────── M4 P2: Parser errors ──────
 
 // WHY: Prefix-form struct literal `Player { ... }` is banned — annotation-only
