@@ -2,7 +2,7 @@
 slug: m8-typeck-cross-file-resolution
 type: execution
 owner: Patrick Rizzardi
-status: active
+status: done
 files:
   - crates/ynz-typeck/src/**
   - crates/ynz-driver/src/build.rs
