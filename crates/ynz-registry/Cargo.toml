@@ -1,0 +1,11 @@
+[package]
+name = "ynz-registry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "SSOT feature registry for the Yinz compiler — parsed from registry/features.toml at build time"
+
+[build-dependencies]
+toml = "1.1.2"
