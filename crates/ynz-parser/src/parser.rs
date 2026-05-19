@@ -3180,12 +3180,24 @@ impl<'a> Parser<'a> {
                     }
                 }
                 _ => {
-                    self.diags.push(Diagnostic::error(
-                        self.current_span(),
-                        format!("Expected a variant name inside `options {name} {{ ... }}`."),
-                        "Write variant names as lowercase identifiers separated by commas.",
-                        "Each variant is a named label: `options Status { active, inactive, banned }`.",
-                    ));
+                    let span = self.current_span();
+                    let tok = self.peek().clone();
+                    // Give a specific error when a reserved keyword is used as a variant name.
+                    if let Some(kw) = token_as_keyword_name(&tok) {
+                        self.diags.push(Diagnostic::error(
+                            span,
+                            format!("`{kw}` is a reserved keyword and cannot be used as a variant name."),
+                            format!("Rename the variant — for example `{kw}Contract` or `{kw}Type`."),
+                            "Yinz reserves keywords like `options`, `shape`, `function`, `let`, etc. for the language. Variant names must be plain identifiers.",
+                        ));
+                    } else {
+                        self.diags.push(Diagnostic::error(
+                            span,
+                            format!("Expected a variant name inside `options {name} {{ ... }}`."),
+                            "Write variant names as lowercase identifiers separated by commas.",
+                            "Each variant is a named label: `options Status { active, inactive, banned }`.",
+                        ));
+                    }
                     self.advance();
                 }
             }
@@ -3455,12 +3467,23 @@ impl<'a> Parser<'a> {
                 (n, span)
             }
             _ => {
-                self.diags.push(Diagnostic::error(
-                    self.current_span(),
-                    "Expected a field name.",
-                    "Write `fieldName: Type` to declare a field.",
-                    "Fields need a name and a type.",
-                ));
+                let span = self.current_span();
+                let tok = self.peek().clone();
+                if let Some(kw) = token_as_keyword_name(&tok) {
+                    self.diags.push(Diagnostic::error(
+                        span,
+                        format!("`{kw}` is a reserved keyword and cannot be used as a field name."),
+                        format!("Rename the field — for example `{kw}Type` or `{kw}Value`."),
+                        "Yinz reserves keywords for the language. Field names must be plain identifiers.",
+                    ));
+                } else {
+                    self.diags.push(Diagnostic::error(
+                        span,
+                        "Expected a field name.",
+                        "Write `fieldName: Type` to declare a field.",
+                        "Fields need a name and a type.",
+                    ));
+                }
                 return None;
             }
         };
@@ -3705,6 +3728,41 @@ pub fn infix_bp(tok: &Token) -> Option<(u8, u8)> {
         Token::LtLt | Token::GtGt => Some((16, 17)),
         Token::Plus | Token::Minus => Some((18, 19)),
         Token::Star | Token::Slash | Token::Percent => Some((20, 21)),
+        _ => None,
+    }
+}
+
+/// If `tok` is a reserved keyword token, return its text so callers can emit
+/// "X is a reserved keyword" errors instead of generic "expected identifier".
+fn token_as_keyword_name(tok: &Token) -> Option<&'static str> {
+    match tok {
+        Token::Function  => Some("function"),
+        Token::Nothing   => Some("nothing"),
+        Token::Let       => Some("let"),
+        Token::Const     => Some("const"),
+        Token::True      => Some("true"),
+        Token::False     => Some("false"),
+        Token::If        => Some("if"),
+        Token::Else      => Some("else"),
+        Token::While     => Some("while"),
+        Token::For       => Some("for"),
+        Token::In        => Some("in"),
+        Token::Return    => Some("return"),
+        Token::Shape     => Some("shape"),
+        Token::Follows   => Some("follows"),
+        Token::Extends   => Some("extends"),
+        Token::Base      => Some("base"),
+        Token::Hidden    => Some("hidden"),
+        Token::Dynamic   => Some("dynamic"),
+        Token::None      => Some("none"),
+        Token::Options   => Some("options"),
+        Token::Is        => Some("is"),
+        Token::Errors    => Some("errors"),
+        Token::Wait      => Some("wait"),
+        Token::Background => Some("background"),
+        Token::Import    => Some("import"),
+        Token::Export    => Some("export"),
+        Token::Sensitive => Some("sensitive"),
         _ => None,
     }
 }
