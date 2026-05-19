@@ -13,4 +13,5 @@ ynz-diagnostics   = { workspace = true }
 ynz-ast           = { workspace = true }
 
 [dev-dependencies]
-insta = { workspace = true }
+insta        = { workspace = true }
+ynz-registry = { workspace = true }
