@@ -1223,6 +1223,31 @@ impl<'a> Parser<'a> {
             Token::While => Some(self.parse_while()),
             Token::For => Some(self.parse_for()),
             Token::Return => Some(self.parse_return()),
+            Token::Shape | Token::Base => {
+                let span = self.current_span();
+                self.diags.push(Diagnostic::error(
+                    span,
+                    "Shape declarations are not allowed inside function bodies.",
+                    "Move the `shape` declaration to the top level of the file, before the function that uses it.",
+                    "Shapes are type declarations — they define a data layout the whole file can use. Moving it to the top level also makes it available to other functions in the file.",
+                ));
+                self.advance(); // consume `shape` or `base`
+                while !matches!(self.peek(), Token::LBrace | Token::Eof) {
+                    self.advance();
+                }
+                if matches!(self.peek(), Token::LBrace) {
+                    self.advance(); // consume `{`
+                    let mut depth = 1usize;
+                    while depth > 0 && !matches!(self.peek(), Token::Eof) {
+                        match self.peek() {
+                            Token::LBrace => { depth += 1; self.advance(); }
+                            Token::RBrace => { depth -= 1; self.advance(); }
+                            _ => { self.advance(); }
+                        }
+                    }
+                }
+                None
+            }
             _ => {
                 // Parse the expression; if it resolves to a FieldAccess followed by
                 // `=`, it becomes a FieldAssign. Otherwise it's a bare expression stmt.
