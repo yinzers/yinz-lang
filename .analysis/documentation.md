@@ -9,9 +9,6 @@
 
 | File:line | Current | Suggested | Why |
 |---|---|---|---|
-| `crates/ynz-numerics/src/decimal128/ops.rs:163` | `subtract: bool` | `negate_b: bool` | param toggles `b`'s sign flip, not the outer op |
-| `crates/ynz-numerics/src/decimal128/ops.rs:249` | `coarse_is_a` | `large_is_a` | tracks which operand has the larger exponent |
-| `crates/ynz-numerics/src/decimal_n/ops.rs:29-30` | `a_off`, `b_off` | `a_pad`, `b_pad` | leading-zero padding count, not offset |
 | `crates/ynz-codegen/src/artifact.rs:73-86` | `a`,`b`,`c`,`d`,`e`,`f`,`g`,`h` (SHA-256 state) | `ha`..`hh` | FIPS uses single-letter; readability suffers in 30-line loop |
 | `crates/ynz-runtime/src/lib.rs:410` | `order_cap: i64 = 64` | extract `INITIAL_ORDER_CAP` | rationale missing |
 | `crates/ynz-runtime/src/lib.rs:429` | `map_alloc(16)` | `INITIAL_MAP_CAPACITY = 16` | tuning choice with 75% LF threshold |
@@ -27,12 +24,6 @@
 - **Functions**: `ynz_map_get`, `ynz_map_get_str`, `ynz_map_set`, `ynz_map_set_str`, `ynz_map_count`, `ynz_map_has`, `ynz_map_iter_get`, `ynz_map_iter_get_str`, `ynz_map_drop`
 - **Gap**: All `#[no_mangle] pub unsafe extern "C"` + `#[allow(clippy::missing_safety_doc)]` — no `# Safety` section. `ynz_siphash_str` at L374 DOES document → pattern inconsistent.
 - **Fix**: Add `/// # Safety\n/// - `map` must be a non-null pointer returned by `ynz_map_new` and not yet dropped.\n/// - `out` must point to a writable array of size N.`. Remove the `#[allow]` suppressions.
-
-## HIGH — `BigNum::mul` / `div` missing complexity annotations
-
-- **File**: `crates/ynz-numerics/src/decimal_n/ops.rs:183, 262`
-- **Gap**: Schoolbook O(n × m) double loop; compare `decimal128/wide.rs:94` which states `Time: O(256)`.
-- **Fix**: Add `/// Time: O(n × m); bounded by O(precision²).\n/// Space: O(n + m).` to both.
 
 ## HIGH — `map_grow_int`/`map_grow_str` side-effect contract undocumented
 
@@ -54,11 +45,6 @@
 - **File**: `crates/ynz-typeck/src/check.rs:87`
 - **Gap**: 16 fields in three functional groups (borrowed tables, mutable module state, flow-sensitive). Inline comments per field, no group header. `errors_success_narrowed` / `errors_consumed` reset per-function (L165-166); `maybe_non_none` / `union_narrowed` deliberately persist. Non-obvious; would mislead a new contributor.
 
-## MEDIUM — `decimal_n/ops.rs::div` missing double-rounding analysis
-
-- **File**: `crates/ynz-numerics/src/decimal_n/ops.rs:262` (vs `decimal128/ops.rs:340-367`)
-- **Gap**: decimal128 has detailed double-rounding-avoidance commentary; bignum equivalent is one line.
-
 ## MEDIUM — Missing crate-level docs
 
 - **Files**: `crates/ynz-parser/src/lib.rs:1`, `crates/ynz-codegen/src/lib.rs:1`, `crates/ynz-typeck/src/lib.rs:1`
@@ -68,11 +54,6 @@
 
 - **File**: `crates/ynz-runtime/src/lib.rs:300-360`
 - **Gap**: Standard IV constants used; no spec citation; no note that zero-key SipHash is OK for compiler-internal maps but NOT for user-facing maps with attacker-controlled keys. Future contributor might reuse this for user-facing hashing without realizing.
-
-## MEDIUM — `round_to_precision` complexity undocumented
-
-- **File**: `crates/ynz-numerics/src/decimal_n/bignum.rs:54`
-- **Gap**: Called after every arithmetic op. Composition `op → round → normalize → add_one` reads as possibly O(n²) without annotation.
 
 ## LOW — `Lexer` struct three-mode state machine undocumented
 
@@ -95,11 +76,6 @@
 - **File**: `crates/ynz-codegen/src/emit.rs:504`
 - **Gap**: Returns `{i64, i64}`. For pointer-typed success values, field 1 is pointer cast to i64. Caller must know the encoding. Currently unstated.
 
-## LOW — `encode_infinity` / `encode_qnan` missing docs
-
-- **File**: `crates/ynz-numerics/src/decimal128/bits.rs:166, 172`
-- **Gap**: Public functions used by `ops.rs` and `parse.rs`; lack the IEEE 754 reference that `encode_finite` (L139) has.
-
 ## LOW — `ExportTable::eq` coarse-equality risk only documented on the impl, not at the field comparison
 
 - **File**: `crates/ynz-typeck/src/exports.rs:35`
@@ -109,9 +85,9 @@
 
 ## Summary
 
-- Naming / magic constant fixes: 9
-- Missing function docs: 5 (encode_infinity/qnan, parse_toml_string, Lexer struct, tag_for)
-- Missing complexity analyses: 3 (BigNum mul/div/round_to_precision)
+- Naming / magic constant fixes: 6 (sha-256 state vars, runtime capacity constants)
+- Missing function docs: 4 (parse_toml_string, Lexer struct, tag_for, encode_infinity/qnan fixed)
+- Missing complexity analyses: 0 (BigNum mul/div/round_to_precision all annotated)
 - Missing operational docs (flow/side-effects/safety): 3 (build_module passes, map_grow side effects, FFI safety contracts)
 - Missing crate-level docs: 3 (parser, codegen, typeck lib.rs)
 - Undocumented business logic / rationale: 3 (sha256 rationale, SipHash zero-key justification, ExportTable coarse-eq risk)

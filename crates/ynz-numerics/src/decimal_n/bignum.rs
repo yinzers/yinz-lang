@@ -45,12 +45,17 @@ impl BigNum {
     }
 
     /// True if the value is zero (positive or negative).
+    ///
+    /// After `normalize()`, zero is canonically `digits = [0]` (a single zero digit),
+    /// so the check is O(1) rather than O(digits.len()).
     pub fn is_zero(&self) -> bool {
-        !self.is_infinity && !self.is_nan && self.digits.iter().all(|&d| d == 0)
+        !self.is_infinity && !self.is_nan && self.digits.len() == 1 && self.digits[0] == 0
     }
 
     /// Adjust this number to have exactly `precision` significant digits,
     /// using half-even rounding, and normalize the exponent.
+    ///
+    /// Time: O(precision) — single truncate pass + at most one additive carry pass. Space: O(1) — mutates in place.
     pub fn round_to_precision(&mut self) {
         if self.is_special() {
             return;
@@ -105,6 +110,12 @@ impl BigNum {
         while self.digits.len() > 1 && self.digits[0] == 0 {
             self.digits.remove(0);
         }
+        // Invariant: after normalize(), a non-zero value has digits[0] != 0,
+        // so is_zero() can check O(1) via `digits == [0]`.
+        debug_assert!(
+            self.digits.is_empty() || self.digits[0] != 0 || self.digits.len() == 1,
+            "normalize() invariant violated: non-zero value has leading zero digit"
+        );
     }
 
     fn add_one_to_digits(&mut self) {

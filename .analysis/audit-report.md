@@ -14,10 +14,10 @@ Severity = execution order, not "whether to fix." Per Patrick's Rule 11, confirm
 
 | Severity | Count | Notes |
 |---|---:|---|
-| Critical | 8 | locked decisions violated / deterministic crashes / silent data corruption |
-| High | 35 | shipped feature broken or misdocumented / large-impact UX / perf hotspots |
-| Medium | 50 | drift, missed checks, minor UX |
-| Low | 49 | polish, magic numbers, minor docs |
+| Critical | 7 | locked decisions violated / deterministic crashes / silent data corruption |
+| High | 26 | shipped feature broken or misdocumented / large-impact UX / perf hotspots |
+| Medium | 49 | drift, missed checks, minor UX |
+| Low | 47 | polish, magic numbers, minor docs |
 | Verified Correct | 9 | doc-drift positives — explicitly noted to prevent re-flagging |
 
 ---
@@ -31,7 +31,7 @@ Severity = execution order, not "whether to fix." Per Patrick's Rule 11, confirm
 - **`DiagnosticBucket::push` O(n²)** — Performance Critical + Adversarial #12 (low). Performance assessment wins — even bounded by 50-cap, algorithm pattern is wrong AND `has_errors()` repeatedly pays the cost.
 - **Stack overflow via deeply-nested expressions** — Adversarial #2 (critical) + Security #5 (medium) → critical (deterministic crash from a one-line `.ynz`).
 - **NUL byte string truncation** — Adversarial #11 → critical (silent wrong-output on `print(x)`).
-- **`src/` directory preference** — Bug #4 + Doc-drift #28 + Consolidation #1 (duplicate `find_project_root`) → grouped fix at `load.rs:164-172` plus update example yinz.toml.
+- **`src/` directory preference** — Bug #4 + Doc-drift #28 + Consolidation #1 (duplicate `find_project_root`) → **FIXED** (Batch 4b): `load.rs` now walks from project root directly; `examples/basics/` restructured to match spec; all affected fixtures updated.
 - **`type` keyword leak** — UX critical + Doc-drift #36 + the snapshot fixture text → fix snapshot fixture AND `spec/collections.md`.
 - **Error gallery commented-out triggers** — UX medium + Doc-drift #27 → single fix: restructure to auto-fire triggers (per `plan-invariants.md` `### Demo & Error Gallery`).
 - **Performance / forensics overlap** — `has_errors()` O(n) is folded into the DiagnosticBucket Critical fix (`error_count` field eliminates both at once).
@@ -63,10 +63,9 @@ No genuine conflicts between analyzers.
 - **Issue**: Type recursion capped at 16; expression and statement recursion unbounded. `((((...((x))...))))` of ~50k depth deterministically crashes the compiler with SIGABRT.
 - **Fix**: Add depth budget to `parse_expr` (256 limit), mirror in `check_expr` / `lower_expr`. Same teaching pattern as existing type-depth diagnostic.
 
-### 6. Symlink loop in project tree → infinite recursion
-- **File**: `crates/ynz-driver/src/load.rs:193-220`
-- **Issue**: `ln -s . src/self` then `ynz build` walks indefinitely. Stack overflow / unbounded heap.
-- **Fix**: Track canonical paths in a `HashSet` during walk; use `symlink_metadata()` instead of `is_dir()` so symlinks don't follow silently.
+### ~~6. Symlink loop in project tree → infinite recursion~~ FIXED (Batch 4b)
+- **File**: `crates/ynz-driver/src/load.rs`
+- `symlink_metadata()` instead of `is_dir()` prevents symlinks to dirs from being followed. Canonical-path `HashSet` detects hard-link cycles. Teaching diagnostic on detection.
 
 ### 7. NUL byte in string literal → silent runtime truncation
 - **Files**: `crates/ynz-parser/src/lexer.rs:782-784` (`\0` escape accepted), `crates/ynz-codegen/src/emit.rs:2850-2851` (emits as C string)
@@ -83,7 +82,7 @@ No genuine conflicts between analyzers.
 ## Phase 2 — HIGH (substantial impact; fix after Critical)
 
 ### Compiler logic / correctness
-10. `load_project` prefers `src/` despite recent commit removing it — `crates/ynz-driver/src/load.rs:164-172` + `build.rs:67` error message hardcoded to `src/`
+~~10. `load_project` prefers `src/` despite recent commit removing it~~ **FIXED (Batch 4b)**
 11. Map runtime `malloc`/`realloc` paths skip null-check → SIGSEGV on OOM — `crates/ynz-runtime/src/lib.rs:405-423, 534-545`
 13. `ynz_map_set_str` infinite-loop on full map if growth silently fails — `crates/ynz-runtime/src/lib.rs:629-656`
 14. `entrypoint → main` rename collides on multi-file projects — `crates/ynz-codegen/src/emit.rs:460-465, 815-819`
@@ -93,17 +92,16 @@ No genuine conflicts between analyzers.
 
 ### Security (after path-traversal fix from Critical-adjacent set)
 18. Path traversal via mid-path `..` in import — `crates/ynz-typeck/src/resolve_import.rs:59,69`
-19. Predictable temp filename for runtime lib (CWE-377 on shared CI) — `crates/ynz-driver/src/build.rs:182,310`
-20. Output binary clobber + TOCTOU between write and execute in `ynz run` — `crates/ynz-driver/src/build.rs:333` + `run.rs:21`
+~~19. Predictable temp filename for runtime lib (CWE-377 on shared CI)~~ **FIXED (Batch 4b)** — uses `tempfile::NamedTempFile`
+~~20. Output binary clobber + TOCTOU between write and execute in `ynz run`~~ **FIXED (Batch 4b)** — `ynz run` writes binary to per-invocation `tempdir()`
 21. Extremely long identifier (10MB) → unbounded heap — `crates/ynz-parser/src/lexer.rs:486-639` (cap identifier length, e.g. 1024)
 
 ### Reliability
-22. `.o` file stranded when rt_lib write or linker probe fails — `crates/ynz-driver/src/build.rs:295/311-331`
-23. Concurrent `ynz build` races on same `obj_path` — `crates/ynz-driver/src/build.rs:294`
+~~22. `.o` file stranded when rt_lib write or linker probe fails~~ **FIXED (Batch 4b)** — `CleanupGuard` drop impl removes `.o` on any early return
+~~23. Concurrent `ynz build` races on same `obj_path`~~ **FIXED (Batch 4b)** — all intermediates go into per-invocation `tempdir()`
 
 ### Performance
 24. `levenshtein` allocates full O(m×n) matrix per candidate — `crates/ynz-typeck/src/check.rs:3683-3700` — rolling DP + byte-level scan
-25. `BigNum::mul` carry cascade uses `Vec::insert(0, ...)` → O(n²) — `crates/ynz-numerics/src/decimal_n/ops.rs:239-243, 414`
 26. `detect_extends_cycles` uses `Vec.contains` on visited set (already inconsistent with `has_cycle` HashSet) — `crates/ynz-typeck/src/shapes.rs:474-495`
 27. `render()` eagerly clones every source string + builds line tables → O(total_source_bytes) per render — `crates/ynz-diagnostics/src/render.rs:55-59`
 
@@ -119,16 +117,15 @@ No genuine conflicts between analyzers.
 
 ### Documentation (HIGH)
 36. 9 unsafe FFI map functions missing `# Safety` contracts — `crates/ynz-runtime/src/lib.rs:568, 583, 605, 629, 664, 674, 688, 706, 732`
-37. `BigNum::mul` / `div` missing complexity annotations (decimal128 path documents this) — `crates/ynz-numerics/src/decimal_n/ops.rs:183, 262`
-38. `map_grow_int` / `map_grow_str` side-effect contract undocumented — `crates/ynz-runtime/src/lib.rs:464, 499` (×2 growth, 75% LF, slot pointers invalidated)
+37. `map_grow_int` / `map_grow_str` side-effect contract undocumented — `crates/ynz-runtime/src/lib.rs:464, 499` (×2 growth, 75% LF, slot pointers invalidated)
 
 ### UX (HIGH)
 39. `check.rs:444` parameter-reassignment WHY references shipped M4 as future
 40. `check.rs:1282-1287` "not defined" WHY is generic ("the program can't run")
 41. Render output prefixes WHY with `Note: Why:` double label — `crates/ynz-diagnostics/src/render.rs:76`
 42. `what_instead` used as caret label conflicts with prose-instruction content — `crates/ynz-diagnostics/src/render.rs:75`
-43. Single exit code 1 for all failure modes (compile vs infra indistinguishable for CI) — `crates/ynz-driver/src/main.rs:36-48`
-44. No success output from `ynz build` — `crates/ynz-driver/src/main.rs`
+~~43. Single exit code 1 for all failure modes~~ **FIXED (Batch 4b)** — `EXIT_COMPILE_ERROR=1`, `EXIT_INFRA_ERROR=2`
+~~44. No success output from `ynz build`~~ **FIXED (Batch 4b)** — prints `Build succeeded: <path>` to stdout
 45. No "did you mean?" for imports (`find_closest_name` exists but unused in import path) — `crates/ynz-typeck/src/resolve_import.rs:211-229`
 
 ### Redundancy (HIGH)
@@ -167,7 +164,6 @@ No genuine conflicts between analyzers.
 - SipHash `try_into().unwrap()` on infallible-but-undocumented slices — `crates/ynz-runtime/src/lib.rs:302-303, 336`
 
 ### Performance
-- `BigNum::is_zero()` O(P) — normalize invariant makes O(1)
 - Lexer allocates `String` per identifier (`String::from`) — significant on large files
 - Lexer allocates `String` per numeric literal to strip underscores
 
@@ -203,10 +199,10 @@ No genuine conflicts between analyzers.
 - `background` no handle-form rejection diagnostic — `examples/errors/m8_errors.ynz:64-68` says it should exist
 - `spec/sensitive.md` describes `--reveal-sensitive` flag that's not in driver
 - `design/decisions.md` "type aliases removed" ambiguous — union aliases ARE supported
-- `examples/basics/yinz.toml` uses `src/entrypoint.ynz` (contradicts recent commit `8440274`)
+- ~~`examples/basics/yinz.toml` uses `src/entrypoint.ynz`~~ **FIXED (Batch 4b)**
 - `spec/main.md` + `spec/config.md` mix `main()` / `entrypoint()` — Yinz term is `entrypoint`
 - `spec/modules.md` "stdlib no import needed" examples reference unshipped modules
-- `examples/basics/src/entrypoint.ynz` shadows `nums` and `score` in same scope (spec says no shadowing) — `:124, 168, 32, 135`
+- ~~`examples/basics/src/entrypoint.ynz` shadows `nums` and `score`~~ **FIXED (Batch 4b)** — files moved to project root; path references updated
 
 ---
 
@@ -222,17 +218,15 @@ No genuine conflicts between analyzers.
 - `Vec<Diagnostic>` ⇄ `DiagnosticBucket` round-trip silently drops `hidden_count`
 - `options_table::tag_for` returns `i8` but variants reach 255 — switch to `u8`
 - `errors_result_type` ABI contract for pointer types undocumented
-- `encode_infinity` / `encode_qnan` missing doc comments
 - `ExportTable::eq` coarse-equality risk documented on impl, not at field comparison
 - Float-to-string buffer can truncate — `crates/ynz-runtime/src/lib.rs:171-184`
 - `lex_decimal_number` accepts `3.` — spec inconsistency
 - `find_slot` early-return subtle but correct
 - `ynz_decimal_to_float` silent fallback to 0.0 — `crates/ynz-runtime/src/lib.rs:851-859`
-- `div_finite` exponent arithmetic on extremes — `crates/ynz-numerics/src/decimal128/ops.rs:86-88`
-- `link_objects` temp lib cleanup not in finally-pattern — `crates/ynz-driver/src/build.rs:182-237`
+- ~~`link_objects` temp lib cleanup not in finally-pattern~~ **FIXED (Batch 4b)** — `NamedTempFile` drop handles cleanup
 - Generic vs non-generic function name collision not caught — `crates/ynz-typeck/src/signatures.rs:80-91`
-- 11 magic-number rename opportunities in `ynz-numerics` and `ynz-runtime`
-- 9 documentation-naming improvements (`subtract` → `negate_b`, `a_off` → `a_pad`, etc.)
+- 8 magic-number rename opportunities in `ynz-runtime`
+- 6 documentation-naming improvements (sha-256 state vars, runtime capacity constants)
 - `Lexer` struct three-mode state machine undocumented
 - `parse_toml_string` parameter contract undocumented
 - Spec `overview.md` says "12 Golden Rules" — should be 13
@@ -276,7 +270,7 @@ These were checked and found accurate. Don't re-flag in future audits:
 
 Group A (independent — different crates, different files):
 - ynz-typeck files: Phase1 #1, #2; Phase2 #26; UX #39, #40, #46; redundancy #47; consolidation
-- ynz-driver files: Phase2 #10; Security #19, #20; UX #41, #44, #45
+- ynz-driver files: ~~Phase2 #10; Security #19, #20; UX #44~~ (FIXED Batch 4b); UX #41, #45 remain
 - ynz-codegen files: Phase2 #14; doc
 - ynz-runtime files: Phase2 #12, #13; doc
 - ynz-diagnostics files: Phase1 #8; Phase2 #27; UX #42, #43
@@ -284,8 +278,8 @@ Group A (independent — different crates, different files):
 - spec/ files: doc-drift #28-#35 (write changes only)
 
 Group B (sequential — depends on A):
-- LLVM IR flag (Phase1 #4) — after CLI exit-code rework (UX #44)
-- `--keep` flag (UX medium) — after CLI rework
+- LLVM IR flag (Phase1 #4) — after CLI exit-code rework (UX #44 — ~~exit codes FIXED Batch 4b~~; `--emit-ir` wiring remains)
+- ~~`--keep` flag (UX medium)~~ **FIXED (Batch 4b)**
 - Error-gallery restructure — after the underlying diagnostics fired
 
 Group C (low-risk parallel — different concerns):

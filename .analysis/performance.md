@@ -21,14 +21,6 @@
 - **Fix**: Two-row rolling DP → O(min(m,n)) space. Work on bytes (identifiers are ASCII). Early-exit when `|m-n| > threshold`.
 - **Gain**: O(m×n) → O(n) space; eliminates 2 allocs per candidate.
 
-## HIGH — `BigNum::mul` uses `Vec::insert(0, carry)` inside a loop — O(n²)
-
-- **File**: `crates/ynz-numerics/src/decimal_n/ops.rs:239-243`
-- **Complexity**: O(n) per `insert(0, ...)` × multiple carry iterations
-- **Issue**: After schoolbook multiply, carry-cascade reduction calls `result.insert(0, carry)` which is O(n) (shifts whole Vec). Same pattern `remove(0)` in `mul_single` (L414) during leading-zero stripping.
-- **Fix**: Reverse-scan that pre-allocates headroom for carry digits. For leading-zero strips, use byte-offset index slice (`&result[start..]`).
-- **Gain**: O(P²) → O(P) for the cleanup phase of P-digit arithmetic.
-
 ## HIGH — `detect_extends_cycles` uses `Vec::contains` in walk — O(n²)
 
 - **File**: `crates/ynz-typeck/src/shapes.rs:474-495`
@@ -64,18 +56,6 @@
 - **Issue**: `raw.chars().filter(|&c| c != '_').collect()` per hex/binary/decimal/float literal.
 - **Fix**: Inline byte-by-byte radix accumulator that skips `_`. Zero-alloc.
 
-## MEDIUM — `BigNum::is_zero()` is O(P)
-
-- **File**: `crates/ynz-numerics/src/decimal_n/bignum.rs:48-50`
-- **Issue**: `.digits.iter().all(|&d| d == 0)`. With normalization invariant, zero is canonically `digits = [0]` and check is O(1).
-- **Fix**: Enforce normalize-invariant (`digits[0] != 0` for non-zero). `is_zero()` becomes `digits.len() == 1 && digits[0] == 0`. Add debug-assert in `normalize()`.
-
-## LOW — `BigNum::div` long-division inner loop allocates per iteration
-
-- **File**: `crates/ynz-numerics/src/decimal_n/ops.rs:337-349`
-- **Issue**: `mul_single` and `sub_long` each return a new `Vec<u8>` per quotient digit. P+Q iterations × 2 allocations.
-- **Fix**: Pass `&mut Vec<u8>` scratch buffers. Prerequisite to the v0.4 Knuth Algorithm D replacement noted in the existing comment at L288-291.
-
 ---
 
 ## Already Performant (preserve)
@@ -92,10 +72,7 @@
 
 1. **DiagnosticBucket error_count field** — 5-line fix, fires on every error. Auto-fixes Medium #6.
 2. **detect_extends_cycles HashSet swap** — trivial, already inconsistent with neighbor code.
-3. **BigNum `insert(0)` / `remove(0)` shifts** — correctness-preserving perf for `number<N>`.
-4. **levenshtein rolling DP** — every typo error pays cost.
-5. **render() lazy Source fetch** — every render pays full-source cost.
-6. **BigNum normalize-invariant for `is_zero()` O(1)**
-7. **Lexer identifier byte-span tokens** — larger refactor; defer to dedicated lexer pass.
-8. **Numeric-literal underscore-strip** — minor.
-9. **BigNum div scratch buffers** — combine with Knuth D rewrite.
+3. **levenshtein rolling DP** — every typo error pays cost.
+4. **render() lazy Source fetch** — every render pays full-source cost.
+5. **Lexer identifier byte-span tokens** — larger refactor; defer to dedicated lexer pass.
+6. **Numeric-literal underscore-strip** — minor.

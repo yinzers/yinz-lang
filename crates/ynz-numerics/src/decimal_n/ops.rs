@@ -26,13 +26,13 @@ fn align(a: &BigNum, b: &BigNum) -> (Vec<u8>, Vec<u8>, i64) {
 /// Add two digit arrays (right-aligned, big-endian digits). Returns sum digits + carry.
 fn add_digits(a: &[u8], b: &[u8]) -> Vec<u8> {
     let len = a.len().max(b.len());
-    let a_off = len - a.len(); // leading zero pads for a
-    let b_off = len - b.len(); // leading zero pads for b
+    let a_pad = len - a.len(); // leading zero pads for a
+    let b_pad = len - b.len(); // leading zero pads for b
     let mut result = vec![0u8; len + 1];
     let mut carry = 0u8;
     for i in (0..len).rev() {
-        let da = if i >= a_off { a[i - a_off] } else { 0 };
-        let db = if i >= b_off { b[i - b_off] } else { 0 };
+        let da = if i >= a_pad { a[i - a_pad] } else { 0 };
+        let db = if i >= b_pad { b[i - b_pad] } else { 0 };
         let sum = da + db + carry;
         result[i + 1] = sum % 10;
         carry = sum / 10;
@@ -45,13 +45,13 @@ fn add_digits(a: &[u8], b: &[u8]) -> Vec<u8> {
 /// Left-pads the shorter array with leading zeros before subtracting.
 fn sub_digits(a: &[u8], b: &[u8]) -> Vec<u8> {
     let len = a.len().max(b.len());
-    let a_off = len - a.len(); // leading zeros needed for a
-    let b_off = len - b.len(); // leading zeros needed for b
+    let a_pad = len - a.len(); // leading zeros needed for a
+    let b_pad = len - b.len(); // leading zeros needed for b
     let mut result = vec![0u8; len];
     let mut borrow = 0i8;
     for i in (0..len).rev() {
-        let da = if i >= a_off { a[i - a_off] as i8 } else { 0 };
-        let db = if i >= b_off { b[i - b_off] as i8 } else { 0 };
+        let da = if i >= a_pad { a[i - a_pad] as i8 } else { 0 };
+        let db = if i >= b_pad { b[i - b_pad] as i8 } else { 0 };
         let mut diff = da - db - borrow;
         if diff < 0 {
             diff += 10;
@@ -180,6 +180,8 @@ pub fn sub(a: &BigNum, b: &BigNum) -> BigNum {
 }
 
 /// Multiply two BigNum values.
+///
+/// Time: O(n × m) where n = a.digits.len(), m = b.digits.len(). Space: O(n + m) for the result digit vector.
 pub fn mul(a: &BigNum, b: &BigNum) -> BigNum {
     let prec = max_precision(a.precision, b.precision);
 
@@ -229,19 +231,36 @@ pub fn mul(a: &BigNum, b: &BigNum) -> BigNum {
         }
     }
 
-    // Propagate carries (right-to-left). result[0] may still be ≥ 10 after this pass —
-    // it accumulates all cascaded carry and is NOT bounded to a single digit.
+    // Propagate carries right-to-left. result[0] accumulates all cascaded carry and
+    // may exceed a single digit after this pass.
     for i in (1..result.len()).rev() {
         result[i - 1] += result[i] / 10;
         result[i] %= 10;
     }
-    // Reduce result[0]: any value ≥ 10 means there are extra most-significant digits.
-    while result[0] >= 10 {
-        let carry = result[0] / 10;
-        result[0] %= 10;
-        result.insert(0, carry);
+    // Reduce result[0] without Vec::insert(0, carry) O(n) shifts.
+    // Count how many extra leading digits result[0] needs, then pre-extend once.
+    let mut head = result[0];
+    let mut extra_digits: Vec<u64> = Vec::new();
+    head %= 10; // keep the original slot's value after extracting carries
+    let mut carry = result[0] / 10;
+    while carry >= 10 {
+        extra_digits.push(carry % 10);
+        carry /= 10;
     }
-    let result_digits: Vec<u8> = result.iter().map(|&d| d as u8).collect();
+    if carry > 0 {
+        extra_digits.push(carry);
+    }
+    result[0] = head;
+    // extra_digits is least-significant-first; reverse for most-significant-first prepend.
+    // Build final digit array by pre-allocating the exact size needed.
+    let extra = extra_digits.len();
+    let mut result_digits: Vec<u8> = Vec::with_capacity(extra + result.len());
+    for d in extra_digits.into_iter().rev() {
+        result_digits.push(d as u8);
+    }
+    for d in result.iter() {
+        result_digits.push(*d as u8);
+    }
     let result_exp = a.exponent + b.exponent;
     let result_sign = a.sign ^ b.sign;
 
@@ -259,6 +278,8 @@ pub fn mul(a: &BigNum, b: &BigNum) -> BigNum {
 }
 
 /// Divide a by b, computing `precision` significant digits with half-even rounding.
+///
+/// Time: O(n × m) where n = a.digits.len(), m = b.digits.len(). Space: O(n + m) for the result digit vector.
 pub fn div(a: &BigNum, b: &BigNum) -> BigNum {
     let prec = max_precision(a.precision, b.precision);
 
@@ -334,17 +355,23 @@ pub fn div(a: &BigNum, b: &BigNum) -> BigNum {
     let divisor = &b.digits;
     let mut quotient = Vec::new();
     let mut remainder: Vec<u8> = Vec::new();
+    // Reuse scratch buffers across iterations to avoid per-step Vec allocation.
+    let mut mul_scratch: Vec<u8> = Vec::with_capacity(divisor.len() + 1);
+    let mut sub_scratch: Vec<u8> = Vec::new();
 
     for &digit in &dividend {
         remainder.push(digit);
         // Find how many times divisor fits into remainder
         let q = long_div_step(&remainder, divisor);
         quotient.push(q);
-        // Subtract q * divisor from remainder
-        remainder = sub_long(&remainder, &mul_single(divisor, q));
-        // Remove leading zeros from remainder
-        while remainder.len() > 1 && remainder[0] == 0 {
-            remainder.remove(0);
+        // Compute q × divisor into scratch buffer, then subtract.
+        mul_single_into(divisor, q, &mut mul_scratch);
+        sub_long_into(&remainder, &mul_scratch, &mut sub_scratch);
+        std::mem::swap(&mut remainder, &mut sub_scratch);
+        // Remove leading zeros from remainder without shifting.
+        let start = remainder.iter().position(|&d| d != 0).unwrap_or(remainder.len() - 1);
+        if start > 0 {
+            remainder.drain(0..start);
         }
     }
 
@@ -409,26 +436,49 @@ fn mul_single(digits: &[u8], factor: u8) -> Vec<u8> {
         carry = product / 10;
     }
     result[0] = carry;
-    // Remove leading zeros
-    while result.len() > 1 && result[0] == 0 {
-        result.remove(0);
-    }
-    result
+    // Strip leading zeros via slice-from-offset — no O(n) shift per removed zero.
+    let start = result.iter().position(|&d| d != 0).unwrap_or(result.len() - 1);
+    result[start..].to_vec()
 }
 
-/// Subtract b from a (digit arrays), returning |a - b|. Assumes a >= b.
-fn sub_long(a: &[u8], b: &[u8]) -> Vec<u8> {
-    // Pad both to same length
+/// Scratch-buffer variant of sub_long: writes `a - b` into `out`, reusing its allocation.
+fn sub_long_into(a: &[u8], b: &[u8], out: &mut Vec<u8>) {
     let len = a.len().max(b.len());
-    let a_padded: Vec<u8> = std::iter::repeat(0)
-        .take(len - a.len())
-        .chain(a.iter().copied())
-        .collect();
-    let b_padded: Vec<u8> = std::iter::repeat(0)
-        .take(len - b.len())
-        .chain(b.iter().copied())
-        .collect();
-    sub_digits(&a_padded, &b_padded)
+    let a_pad = len - a.len();
+    let b_pad = len - b.len();
+    out.clear();
+    out.resize(len, 0u8);
+    let mut borrow = 0i8;
+    for i in (0..len).rev() {
+        let da = if i >= a_pad { a[i - a_pad] as i8 } else { 0 };
+        let db = if i >= b_pad { b[i - b_pad] as i8 } else { 0 };
+        let mut diff = da - db - borrow;
+        if diff < 0 {
+            diff += 10;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        out[i] = diff as u8;
+    }
+}
+
+/// Scratch-buffer variant of mul_single: writes result into `out`, reusing its allocation.
+fn mul_single_into(digits: &[u8], factor: u8, out: &mut Vec<u8>) {
+    out.clear();
+    out.resize(digits.len() + 1, 0u8);
+    let mut carry = 0u8;
+    for i in (0..digits.len()).rev() {
+        let product = digits[i] * factor + carry;
+        out[i + 1] = product % 10;
+        carry = product / 10;
+    }
+    out[0] = carry;
+    // Strip leading zeros in place — drain is O(n) but fires at most once on the first slot.
+    let start = out.iter().position(|&d| d != 0).unwrap_or(out.len() - 1);
+    if start > 0 {
+        out.drain(0..start);
+    }
 }
 
 /// Compare digit arrays of potentially different lengths (compare magnitudes).

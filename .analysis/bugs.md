@@ -198,22 +198,6 @@ Uses Debug formatting of arbitrary Type variants. Two different Types whose Debu
 
 ---
 
-### Bug #17: `div_finite` exponent arithmetic in `div(0, finite)` may exceed encoding range
-
-**File**: `crates/ynz-numerics/src/decimal128/ops.rs:86-88`
-**Severity**: LOW
-**Category**: Logic Error / Numeric edge case
-
-**Issue**: When `av.is_zero()` and `bv` is finite-nonzero, the code returns:
-
-```rust
-return encode_finite(av.sign ^ bv.sign, av.exponent - bv.exponent, 0);
-```
-
-If `av.exponent = MIN_EXPONENT (-6176)` and `bv.exponent = MAX_EXPONENT (6111)`, then `av.exponent - bv.exponent = -12287`, which is out of range `[MIN_EXPONENT, MAX_EXPONENT]`. In debug builds, the assert at `encode_finite` line 142 panics; in release builds, the encoding silently produces garbage bits.
-
-This is reachable only on input values at the encoding extremes — but extreme values are exactly where users expect arithmetic to fail GRACEFULLY (NaN or subnormal), not produce garbage.
-
 ---
 
 ## LOWER SEVERITY / DESIGN OBSERVATIONS
@@ -267,7 +251,6 @@ If the linker invocation panics between `std::fs::write(&rt_lib_tmp, ...)` (line
 8. **Bug #9** — Dead-code fallback in `resolve_module_path`.
 9. **Bug #10** — Debug-formatted mangle names.
 10. **Bug #11** — `3.` accepted as float.
-11. **Bug #12** — div exponent overflow on extremes.
 
 ---
 
