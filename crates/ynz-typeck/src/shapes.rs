@@ -62,6 +62,16 @@ pub struct ShapeTable {
     pub union_aliases: HashMap<String, Type>,
     /// Options type names from this module — allows field type resolution to
     /// produce Type::Options for `options Foo { ... }` types used in shape fields.
+    ///
+    /// @design-decision SAME-FILE ONLY — cross-file imported options types are NOT visible here.
+    /// @rationale collect_shapes runs before collect_options and before imports are resolved,
+    ///            so only a same-file pre-scan is possible at this stage.
+    /// @cost-to-fix ~1 session: refactor type collection to a single pre-pass that collects
+    ///              all type names (shapes + options + imported symbols) before any field
+    ///              resolution runs. When that refactor ships, DELETE this field and the
+    ///              pre-scan in collect_shapes — it becomes dead weight superseded by the
+    ///              global type registry.
+    /// @trigger Adding a second file to a project + using an imported options type in a shape field.
     pub options_names: HashSet<String>,
 }
 
@@ -212,14 +222,24 @@ impl ShapeTable {
 ///
 /// Field types are resolved in a forward-reference-friendly two-pass approach.
 /// Inherited fields (from `extends`) are prepended to the child's field list.
-pub fn collect_shapes(module: &Module, diags: &mut DiagnosticBucket) -> ShapeTable {
+pub fn collect_shapes(
+    module: &Module,
+    imported_shapes: &HashMap<String, ShapeDef>,
+    imported_options: &HashMap<String, crate::options_table::OptionsEntry>,
+    diags: &mut DiagnosticBucket,
+) -> ShapeTable {
     let mut table = ShapeTable::empty();
 
-    // Pre-pass: collect options type names so field type resolution can recognize
-    // `options Foo { ... }` types used in shape field annotations.
+    // Seed the table with imported shapes so field type resolution sees them.
+    for (name, def) in imported_shapes {
+        table.shapes.insert(name.clone(), def.clone());
+    }
+
+    // Pre-pass: collect options type names (same-file AND imported) so field type
+    // resolution recognizes them as valid types.
     table.options_names = module.items.iter().filter_map(|i| {
         if let Item::OptionsDecl(o) = i { Some(o.name.clone()) } else { None }
-    }).collect();
+    }).chain(imported_options.keys().cloned()).collect();
 
     // Pre-pass: hoist AnonShape field types to named ShapeDecls so all subsequent
     // passes see only Named types. Synthetic name format: `__anon_ParentName_fieldName`.

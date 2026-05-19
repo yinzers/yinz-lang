@@ -67,16 +67,28 @@ fn build_project(root: &Path) -> BuildResult {
         return build_failed_diags(diags, &std::collections::HashMap::new());
     }
 
-    // Parse all files and collect object bytes.
-    let db = CompilerDb::default();
-    let mut object_files: Vec<PathBuf> = Vec::new();
+    // Pass 1: create ALL SourceFile inputs and register them before any query runs.
+    // This ensures cross-file import resolution can look up any project file by path
+    // using CompilerDb::source_by_path — without creating duplicate salsa inputs.
+    let mut db = CompilerDb::default();
     let mut all_source_texts: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
-    let mut had_error = false;
+    let mut source_files: Vec<(SourceFile, &crate::load::SourceEntry)> = Vec::new();
 
     for entry in &sources {
-        all_source_texts.insert(entry.path.display().to_string(), entry.text.clone());
-        let sf = SourceFile::new(&db, entry.path.display().to_string(), entry.text.clone());
+        let path_str = entry.path.display().to_string();
+        all_source_texts.insert(path_str.clone(), entry.text.clone());
+        let sf = SourceFile::new(&db, path_str, entry.text.clone());
+        db.register_source(sf);
+        source_files.push((sf, entry));
+    }
+
+    // Pass 2: run codegen for each file now that all SourceFiles are registered.
+    let mut object_files: Vec<PathBuf> = Vec::new();
+    let mut had_error = false;
+
+    for (sf, entry) in &source_files {
+        let sf = *sf;
         let codegen_out = codegen_query(&db, sf);
 
         let has_error = codegen_out

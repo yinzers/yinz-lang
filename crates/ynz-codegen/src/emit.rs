@@ -55,6 +55,7 @@ pub fn emit_artifact(
     generic_fn_table: &GenericFnTable,
     mono_table: &MonomorphizationTable,
     target_triple: Option<&str>,
+    imported_options: &std::collections::HashMap<String, ynz_typeck::options_table::OptionsEntry>,
 ) -> Result<CompiledArtifact, String> {
     Target::initialize_x86(&InitializationConfig::default());
 
@@ -89,6 +90,7 @@ pub fn emit_artifact(
         shape_table,
         generic_fn_table,
         mono_table,
+        imported_options,
     )?;
 
     module
@@ -131,13 +133,19 @@ fn build_module<'ctx, 'g>(
     shape_table: &'g ShapeTable,
     generic_fn_table: &'g GenericFnTable,
     mono_table: &'g MonomorphizationTable,
+    imported_options: &std::collections::HashMap<String, ynz_typeck::options_table::OptionsEntry>,
 ) -> Result<(), String> {
     let rt = RuntimeDecls::declare(ctx, module);
 
     // M6: collect options table for variant tag lookups during codegen.
     let mut options_diags = ynz_diagnostics::DiagnosticBucket::new();
-    let options_table =
+    let mut options_table =
         ynz_typeck::options_table::collect_options(&typed.module, &mut options_diags);
+    // Merge imported options so cross-file options types work in codegen
+    // (e.g. `Timeframe.daily` where Timeframe is imported from another file).
+    for (name, entry) in imported_options {
+        options_table.options.entry(name.clone()).or_insert_with(|| entry.clone());
+    }
 
     let zero_bits = ynz_numerics::parse("0").expect("decimal zero parse");
     let globals = ModuleGlobals {
@@ -3644,9 +3652,10 @@ fn to_c_string<'ctx>(
                     .builder
                     .build_struct_gep(struct_ty, shape_ptr, *field_idx as u32, field_name)
                     .map_err(|e| format!("GEP {field_name}: {e}"))?;
-                // Number (decimal128) fields are stored as i128 in the struct and
-                // must be passed as a pointer to to_c_string. All other field types
-                // are i64-wide and go through i64_bits_to.
+                // Fields use different LLVM types depending on the Yinz type:
+                //   Number (decimal128) → i128 → pass as pointer
+                //   Options            → i8   → zero-extend to i64, use as tag
+                //   everything else    → i64  → i64_bits_to
                 let field_val: BasicValueEnum = if matches!(field_ty, Type::Number { .. }) {
                     let i128t = cg.ctx.i128_type();
                     let raw = cg
@@ -3661,6 +3670,18 @@ fn to_c_string<'ctx>(
                         .build_store(slot, raw)
                         .map_err(|e| format!("{e}"))?;
                     slot.into()
+                } else if matches!(field_ty, Type::Options { .. }) {
+                    // Options stored as i8 tag — load as i8, zero-extend to i64.
+                    let raw = cg
+                        .builder
+                        .build_load(cg.ctx.i8_type(), gep, "dbg_opt_raw")
+                        .map_err(|e| format!("{e}"))?
+                        .into_int_value();
+                    let extended = cg
+                        .builder
+                        .build_int_z_extend(raw, cg.i64(), "dbg_opt_ext")
+                        .map_err(|e| format!("{e}"))?;
+                    extended.into()
                 } else {
                     let bits = cg
                         .builder
@@ -4129,6 +4150,17 @@ fn to_c_string<'ctx>(
                 let g = build_string_global(cg.ctx, cg.module, "<union>", "union_placeholder");
                 Ok(g.as_pointer_value())
             }
+        }
+
+        // Options type — val is the i64-extended i8 tag; delegate to options toString.
+        Type::Options { name } => {
+            // Cast i64 back to i8 for lower_options_to_string which expects an i8.
+            let tag_i64 = val.into_int_value();
+            let tag_i8 = cg.builder
+                .build_int_truncate(tag_i64, cg.ctx.i8_type(), "opt_tag_i8")
+                .map_err(|e| format!("{e}"))?;
+            lower_options_to_string(cg, tag_i8.into(), name)
+                .map(|v| v.into_pointer_value())
         }
 
         _ => Err(format!("codegen: cannot convert {:?} to string", ty)),

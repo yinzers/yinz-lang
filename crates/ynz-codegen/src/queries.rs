@@ -48,6 +48,7 @@ pub fn codegen_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<Codege
         &sig_output.generic_fn_table,
         &check.mono_table,
         None,
+        &sig_output.imported_options,
     ) {
         Ok(artifact) => Arc::new(CodegenOutput {
             artifact,

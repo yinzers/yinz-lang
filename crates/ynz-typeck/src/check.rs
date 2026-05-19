@@ -46,9 +46,14 @@ pub fn check(
     generic_fn_table: &GenericFnTable,
     generic_shape_table: &GenericShapeTable,
     intrinsics: &PrimitiveIntrinsicTable,
+    imported_options: &std::collections::HashMap<String, crate::options_table::OptionsEntry>,
 ) -> (TypedModule, MonomorphizationTable, DiagnosticBucket) {
     let mut diags = DiagnosticBucket::new();
-    let options_table = collect_options(module, &mut diags);
+    let mut options_table = collect_options(module, &mut diags);
+    // Merge imported options so function bodies can use cross-file options types.
+    for (name, entry) in imported_options {
+        options_table.options.entry(name.clone()).or_insert_with(|| entry.clone());
+    }
 
     let mut checker = Checker {
         intrinsics,
@@ -3766,7 +3771,7 @@ mod tests {
             vec![Type::Nothing],
             Type::Nothing,
         );
-        let shape_table = crate::shapes::collect_shapes(&module, &mut DiagnosticBucket::new());
+        let shape_table = crate::shapes::collect_shapes(&module, &Default::default(), &Default::default(), &mut DiagnosticBucket::new());
         let generic_shape_table =
             crate::shapes::collect_generic_shapes(&module, &mut DiagnosticBucket::new());
         let sig_table = crate::signatures::collect_signatures(
