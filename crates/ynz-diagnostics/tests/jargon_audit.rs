@@ -4,7 +4,7 @@
 // ban-list and their plain-English replacements.
 
 use std::path::{Path, PathBuf};
-use ynz_diagnostics::banned_jargon::BANNED_JARGON;
+use ynz_registry;
 
 fn crates_dir() -> PathBuf {
     // CARGO_MANIFEST_DIR points to crates/ynz-diagnostics/
@@ -160,11 +160,11 @@ fn no_banned_jargon_in_diagnostic_strings() {
 
         for (file, line_num, string_content) in find_diagnostic_strings(&content, &filename) {
             let lower = string_content.to_lowercase();
-            for &word in BANNED_JARGON {
-                let w = word.to_lowercase();
+            for entry in ynz_registry::banned_jargon() {
+                let w = entry.name.to_lowercase();
                 if contains_whole_word(&lower, &w) {
                     violations.push(format!(
-                        "{file}:{line_num}: diagnostic string contains banned word {word:?}: {string_content:?}"
+                        "{file}:{line_num}: diagnostic string contains banned word {:?}: {string_content:?}", entry.name
                     ));
                 }
             }

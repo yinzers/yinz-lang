@@ -37,11 +37,19 @@ fn keyword_iteration_finds_all() {
 // ---------------------------------------------------------------------------
 #[test]
 fn banned_jargon_lookup_by_name() {
-    let entry = ynz_registry::banned_jargon_lookup("PLACEHOLDER_JARGON_PHASE_2")
-        .expect("placeholder banned-jargon entry not found");
-    assert!(!entry.replacement.is_empty(), "replacement must not be empty");
+    let entry = ynz_registry::banned_jargon_lookup("infer")
+        .expect("'infer' banned-jargon entry not found (Phase 2 migration)");
+    assert_eq!(entry.replacement, "figure out automatically");
     assert!(!entry.reason.is_empty(), "reason must not be empty");
-    assert!(!entry.is_acronym, "placeholder is not an acronym");
+    assert!(!entry.is_acronym);
+}
+
+#[test]
+fn banned_jargon_lookup_acronym() {
+    let entry = ynz_registry::banned_jargon_lookup("ADT")
+        .expect("'ADT' banned-jargon entry not found (Phase 2 migration)");
+    assert!(entry.is_acronym);
+    assert_eq!(entry.replacement, "shape or options type");
 }
 
 #[test]
