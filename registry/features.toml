@@ -1154,10 +1154,64 @@ triggers = "Passing `--release` to `ynz build` (flag not yet recognized)"
 # ---------------------------------------------------------------------------
 
 [[diagnostic_template]]
-kind_name = "PLACEHOLDER_TEMPLATE_PHASE_6"
-what_template = "placeholder — Phase 6 populates this entry"
-what_instead_template = "placeholder — Phase 6 populates this entry"
-why_template = "placeholder — Phase 6 populates this entry"
+kind_name = "TypeMismatch"
+what_template = "Expected {expected} here."
+what_instead_template = "Change the value so it matches {expected}."
+why_template = "Yinz is strictly typed — every value must exactly match the expected type."
+
+[[diagnostic_template]]
+kind_name = "MutationOfConst"
+what_template = "`{binding}` is declared `const` and cannot be changed."
+what_instead_template = "Change `const {binding}` to `let {binding}` if you need to reassign it."
+why_template = "`const` bindings are immutable — the compiler can optimize them more aggressively and they signal intent to readers."
+
+[[diagnostic_template]]
+kind_name = "NotDefined"
+what_template = "`{name}` is not defined in this scope."
+what_instead_template = "Check the spelling, or declare `{name}` before using it."
+why_template = "Yinz requires every name to be declared before it's used."
+
+[[diagnostic_template]]
+kind_name = "MissingField"
+what_template = "Missing required field `{field}` in the shape literal."
+what_instead_template = "Add `{field}: <value>` to the shape literal."
+why_template = "`shape` values must set every field — there are no defaults unless declared `hidden`. This ensures construction sites are explicit."
+
+[[diagnostic_template]]
+kind_name = "HiddenAccess"
+what_template = "`{field}` is a hidden field — only accessible from within its declaring file."
+what_instead_template = "Use the methods or functions provided by that file to access `{field}`."
+why_template = "Hidden fields are an encapsulation boundary. Accessing them directly from outside the file would bypass the invariants the declaring file maintains."
+
+[[diagnostic_template]]
+kind_name = "ImportNotFound"
+what_template = "Imported module `{path}` was not found."
+what_instead_template = "Check that the path is correct (paths are root-relative, starting from the project's entry file)."
+why_template = "Yinz import paths are root-relative, not relative to the current file."
+
+[[diagnostic_template]]
+kind_name = "Consumed"
+what_template = "`{name}` was already given away and cannot be used again."
+what_instead_template = "Use `.copy()` before giving a value away if you need to keep using it."
+why_template = "Once a value is given (ownership transferred), the original binding no longer holds a valid value. Using it would be a use-after-move bug."
+
+[[diagnostic_template]]
+kind_name = "Borrowed"
+what_template = "`{name}` is already borrowed and cannot be given or reassigned while the borrow is active."
+what_instead_template = "End the borrow before giving or reassigning `{name}`."
+why_template = "Only one mutable borrow of a value can exist at a time. This prevents data races and use-after-move bugs."
+
+[[diagnostic_template]]
+kind_name = "MissingReturn"
+what_template = "This function does not return a value on all paths."
+what_instead_template = "Add a `return` statement in every branch, or ensure the last expression is the return value."
+why_template = "Every code path in a function that declares a return type must actually return a value of that type."
+
+[[diagnostic_template]]
+kind_name = "BannedKeyword"
+what_template = "`{keyword}` is not a Yinz keyword."
+what_instead_template = "{what_instead}"
+why_template = "{why}"
 
 # ---------------------------------------------------------------------------
 # [[muted_hint_domain]] — IDE inference domains per .claude/rules/inference.md.
@@ -1167,8 +1221,64 @@ why_template = "placeholder — Phase 6 populates this entry"
 # ---------------------------------------------------------------------------
 
 [[muted_hint_domain]]
-domain = "PLACEHOLDER_HINT_PHASE_6"
+domain = "variable_type"
 placement_category = "Addition"
-description = "placeholder — Phase 6 populates this entry"
+description = "Infers the type of a variable from its initializer expression"
 example_source = "let x = 42"
 example_hint_rendered = ": int (from 42)"
+
+[[muted_hint_domain]]
+domain = "function_param_type"
+placement_category = "Addition"
+description = "Infers a function parameter type from the call-site argument"
+example_source = "foo(x => x + 1)"
+example_hint_rendered = ": int"
+
+[[muted_hint_domain]]
+domain = "ownership_call_site"
+placement_category = "Informational"
+description = "Shows the ownership modifier the compiler infers at a function call site"
+example_source = "foo(player)"
+example_hint_rendered = "share (read-only — matches foo's signature)"
+
+[[muted_hint_domain]]
+domain = "wait_points"
+placement_category = "Addition"
+description = "Shows where the compiler auto-inserts a wait at an I/O suspension point"
+example_source = "db.fetch(\"users\")"
+example_hint_rendered = "wait (db.fetch may suspend on I/O)"
+
+[[muted_hint_domain]]
+domain = "lifetimes"
+placement_category = "Informational"
+description = "Shows inferred lifetimes (shown only on user request — usually noise)"
+example_source = "function foo(x: string) -> string { x }"
+example_hint_rendered = "'caller_scope"
+
+[[muted_hint_domain]]
+domain = "allocators"
+placement_category = "Addition"
+description = "Shows the inferred allocator for a new value inside an arena scope"
+example_source = "let temp = array<int>()"
+example_hint_rendered = ".in(scratch) — current arena"
+
+[[muted_hint_domain]]
+domain = "copy_points"
+placement_category = "Addition"
+description = "Shows where a trivially-copyable value is implicitly copied at a call site"
+example_source = "let n: int = 5"
+example_hint_rendered = ".copy (8 bytes, trivially copyable)"
+
+[[muted_hint_domain]]
+domain = "array_to_fixed_promotion"
+placement_category = "Replacement"
+description = "Shows when the compiler promotes array<T> to fixed<T> because the value is never grown"
+example_source = "let nums: array<int> = [1, 2, 3]"
+example_hint_rendered = "// promoted to fixed<int, 3> — never grown"
+
+[[muted_hint_domain]]
+domain = "let_to_const_promotion"
+placement_category = "Replacement"
+description = "Shows when a let binding is effectively const because it is never reassigned, mutated, or lent"
+example_source = "let count = 5"
+example_hint_rendered = "// effectively const — never reassigned"
