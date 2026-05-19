@@ -247,8 +247,27 @@ fn deferred_language_feature_test_keyword() {
 // ---------------------------------------------------------------------------
 #[test]
 fn muted_hint_domain_lookup() {
-    let entry = ynz_registry::muted_hint_domain_lookup("PLACEHOLDER_HINT_PHASE_6")
-        .expect("placeholder muted-hint domain not found");
+    let entry = ynz_registry::muted_hint_domain_lookup("variable_type")
+        .expect("variable_type muted-hint domain not found (Phase 6 migration)");
     assert_eq!(entry.placement_category, "Addition");
-    assert!(!entry.description.is_empty());
+    assert_eq!(entry.example_hint_rendered, ": int (from 42)");
+}
+
+#[test]
+fn diagnostic_template_lookup() {
+    let entry = ynz_registry::diagnostic_template_lookup("MutationOfConst")
+        .expect("MutationOfConst diagnostic template not found (Phase 6 migration)");
+    assert!(entry.what_template.contains("{binding}"));
+    assert!(entry.why_template.contains("const"));
+}
+
+#[test]
+fn all_muted_hint_placement_categories_valid() {
+    for entry in ynz_registry::muted_hint_domains() {
+        assert!(
+            matches!(entry.placement_category, "Addition" | "Replacement" | "Informational"),
+            "muted_hint_domain '{}' has invalid placement_category '{}'",
+            entry.domain, entry.placement_category
+        );
+    }
 }
