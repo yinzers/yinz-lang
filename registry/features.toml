@@ -980,13 +980,96 @@ since = "M4"
 # Required fields: name, substitute, why, ships_in, design_doc, triggers
 # ---------------------------------------------------------------------------
 
+# --- Sized float variants (ship in v2+ with GPU/embedded targets) ---
 [[deferred_language_feature]]
-name = "PLACEHOLDER_DEFERRED_LANG_PHASE_5A"
-substitute = "placeholder — Phase 5a populates this entry"
-why = "placeholder — Phase 5a populates this entry"
+name = "f32"
+substitute = "Use `float` (f64) for floating-point math. Sized floats ship in v2+ for GPU and embedded work."
+why = "Yinz keeps the numeric type system small in v0.1: `int` (i64), `float` (f64), `number` (decimal128). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
 ships_in = "v2+"
 design_doc = "design/mvp-scope.md"
-triggers = "placeholder — Phase 5a populates this entry"
+triggers = "Writing `f32` or `f64` as a type annotation in Yinz source"
+
+[[deferred_language_feature]]
+name = "f64"
+substitute = "Use `float` (f64) for floating-point math. `float` in Yinz is already f64."
+why = "Yinz keeps the numeric type system small in v0.1: `int` (i64), `float` (f64), `number` (decimal128). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
+ships_in = "v2+"
+design_doc = "design/mvp-scope.md"
+triggers = "Writing `f64` as a type annotation in Yinz source"
+
+# --- Sized integer variants (ship in v2+) ---
+[[deferred_language_feature]]
+name = "i8"
+substitute = "Use `int` for whole numbers. Sized integers ship in v2+ for embedded and kernel-mode work."
+why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
+ships_in = "v2+"
+design_doc = "design/mvp-scope.md"
+triggers = "Writing `i8` as a type annotation in Yinz source"
+
+[[deferred_language_feature]]
+name = "i16"
+substitute = "Use `int` for whole numbers. Sized integers ship in v2+ for embedded and kernel-mode work."
+why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
+ships_in = "v2+"
+design_doc = "design/mvp-scope.md"
+triggers = "Writing `i16` as a type annotation in Yinz source"
+
+[[deferred_language_feature]]
+name = "i32"
+substitute = "Use `int` for whole numbers. Sized integers ship in v2+ for embedded and kernel-mode work."
+why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
+ships_in = "v2+"
+design_doc = "design/mvp-scope.md"
+triggers = "Writing `i32` as a type annotation in Yinz source"
+
+[[deferred_language_feature]]
+name = "i64"
+substitute = "Use `int` for whole numbers. `int` in Yinz is already i64."
+why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit). Sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
+ships_in = "v2+"
+design_doc = "design/mvp-scope.md"
+triggers = "Writing `i64` as a type annotation in Yinz source"
+
+[[deferred_language_feature]]
+name = "u8"
+substitute = "Use `int` for non-negative whole numbers. Sized unsigned integers ship in v2+ for embedded and kernel-mode work."
+why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit signed). Unsigned and sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
+ships_in = "v2+"
+design_doc = "design/mvp-scope.md"
+triggers = "Writing `u8` as a type annotation in Yinz source"
+
+[[deferred_language_feature]]
+name = "u16"
+substitute = "Use `int` for non-negative whole numbers. Sized unsigned integers ship in v2+ for embedded and kernel-mode work."
+why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit signed). Unsigned and sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
+ships_in = "v2+"
+design_doc = "design/mvp-scope.md"
+triggers = "Writing `u16` as a type annotation in Yinz source"
+
+[[deferred_language_feature]]
+name = "u32"
+substitute = "Use `int` for non-negative whole numbers. Sized unsigned integers ship in v2+ for embedded and kernel-mode work."
+why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit signed). Unsigned and sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
+ships_in = "v2+"
+design_doc = "design/mvp-scope.md"
+triggers = "Writing `u32` as a type annotation in Yinz source"
+
+[[deferred_language_feature]]
+name = "u64"
+substitute = "Use `int` for non-negative whole numbers. `int` in Yinz covers 0 to 9.2 × 10^18 — bigger than any count a human writes by hand."
+why = "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit signed). Unsigned and sized variants add cognitive load without paying off for typical application code. They land with kernel-mode and embedded targets in v2+."
+ships_in = "v2+"
+design_doc = "design/mvp-scope.md"
+triggers = "Writing `u64` as a type annotation in Yinz source"
+
+# --- `test` keyword (reserved for v0.13 built-in testing) ---
+[[deferred_language_feature]]
+name = "test"
+substitute = "Use a different identifier. The built-in test framework ships in v0.13 and will use `test` as a keyword."
+why = "`test` is reserved for the built-in test framework shipping in v0.13. Pre-reserving it now means your existing code will not break when v0.13 ships."
+ships_in = "v0.13"
+design_doc = "design/mvp-scope.md"
+triggers = "Using `test` as an identifier in Yinz source"
 
 # ---------------------------------------------------------------------------
 # [[deferred_tooling_feature]] — reserved tooling features not yet shipped.

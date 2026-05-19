@@ -572,15 +572,15 @@ impl<'src> Lexer<'src> {
                 Token::Identifier(text.to_string())
             }
             // `test` is reserved for the built-in test framework shipping in v0.13.
-            // Reserving now means existing code using `test` as an identifier breaks
-            // with a clear message rather than a surprise incompatibility when v0.13 ships.
+            // Error text comes from the registry so it stays consistent with all other
+            // deferred-feature messages. Source: [[deferred_language_feature]] name="test"
             "test" => {
+                let entry = ynz_registry::deferred_language_feature_lookup("test")
+                    .expect("registry missing deferred_language_feature 'test'");
                 self.emit_banned_declaration_keyword(
                     start, self.pos, "test",
-                    "Use a different identifier. The built-in test framework ships in v0.13 \
-                     and will use `test` as a keyword.",
-                    "`test` is reserved for the built-in test framework (v0.13, per design/mvp-scope.md). \
-                     Pre-reserving it means your existing code will not break when v0.13 ships.",
+                    entry.substitute,
+                    entry.why,
                 );
                 Token::Identifier(text.to_string())
             }
@@ -670,22 +670,15 @@ impl<'src> Lexer<'src> {
                 );
                 Token::Identifier(text.to_string())
             }
-            // Sized numeric type names from C/Rust/Go — not part of the Yinz v0.1 numeric system.
-            // Yinz keeps the numeric type system small: `int` (i64), `float` (f64), `number`
-            // (decimal128). Sized variants land with kernel-mode + embedded support in v2+.
+            // Sized numeric types from C/Rust/Go — reserved, ship in v2+ with kernel/embedded targets.
+            // Error text is registry-driven; source: [[deferred_language_feature]] entries.
             "f32" | "f64" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" => {
+                let entry = ynz_registry::deferred_language_feature_lookup(text)
+                    .unwrap_or_else(|| panic!("registry missing deferred_language_feature {text:?}"));
                 self.emit_banned_declaration_keyword(
-                    start,
-                    self.pos,
-                    text,
-                    "Use `int` for whole numbers, `float` for fast-but-approximate decimals, \
-                     or `number` for exact decimals. Sized variants like `f32` ship in v2+ \
-                     for embedded and kernel-mode work.",
-                    "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit), \
-                     one fast-decimal type (`float`), and one exact-decimal type (`number`). Most programs \
-                     don't need sized variants; they add cognitive load without paying off for typical \
-                     application code. When v2+ ships kernel-mode and embedded targets, sized variants \
-                     land at the same time.",
+                    start, self.pos, text,
+                    entry.substitute,
+                    entry.why,
                 );
                 Token::Identifier(text.to_string())
             }
