@@ -14,7 +14,7 @@
 
 ### Active Workstreams
 - m8-typeck-cross-file-resolution (Patrick Rizzardi) — 4 files touched — 0/32 done — roadmap: v0-1-compiler — 2026-05-18
-- v0-2-m1-feature-inventory-sync (Patrick Rizzardi) — 15 files touched — 11/111 done — roadmap: v0-2-dev-loop-tooling — 2026-05-19
+- v0-2-m1-feature-inventory-sync (Patrick Rizzardi) — 15 files touched — 26/111 done — roadmap: v0-2-dev-loop-tooling — 2026-05-19
 <!-- RADAR-END -->
 
 ---
