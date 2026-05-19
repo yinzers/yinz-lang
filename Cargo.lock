@@ -1332,6 +1332,7 @@ dependencies = [
  "ynz-diagnostics",
  "ynz-numerics",
  "ynz-parser",
+ "ynz-registry",
  "ynz-typeck",
 ]
 
@@ -1341,6 +1342,7 @@ version = "0.1.0"
 dependencies = [
  "ariadne",
  "insta",
+ "ynz-registry",
 ]
 
 [[package]]
@@ -1402,6 +1404,7 @@ dependencies = [
  "ynz-ast",
  "ynz-diagnostics",
  "ynz-parser",
+ "ynz-registry",
 ]
 
 [[package]]
