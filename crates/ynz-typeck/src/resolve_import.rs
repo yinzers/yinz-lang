@@ -106,14 +106,27 @@ pub fn resolve_imports(
         let module_str = &import.source;
         let span = import.source_span.clone();
 
-        // Resolve the import path.
+        // Resolve the import path. Detect the no-yinz.toml case to give a better error.
+        let has_project_root = find_project_root(
+            std::path::Path::new(importer_path).parent().unwrap_or(std::path::Path::new("."))
+        ).is_some();
         let Some(resolved_path) = resolve_module_path(importer_path, module_str) else {
-            diags.push(Diagnostic::error(
-                span.clone(),
-                format!("Module \"{module_str}\" not found."),
-                format!("Check the module name and ensure the file exists at `{module_str}.ynz`. Paths are project-root-relative without the `.ynz` suffix."),
-                "Import paths point to `.ynz` files in the project. For a project with `yinz.toml`, paths are relative to the project root.",
-            ));
+            if !has_project_root && module_str.contains('/') {
+                // Cross-directory import with no project root — the most common cause.
+                diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("Module \"{module_str}\" not found — no `yinz.toml` in any parent directory."),
+                    "Add a `yinz.toml` at your project root so the compiler knows where to look. Single-file imports work without it; cross-directory imports need it.",
+                    "Cross-directory imports use paths relative to the `yinz.toml` location. Same-directory imports work without one.",
+                ));
+            } else {
+                diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("Module \"{module_str}\" not found."),
+                    format!("Check that `{module_str}.ynz` exists at the project root. Paths are project-root-relative without the `.ynz` suffix."),
+                    "Import paths point to `.ynz` files relative to the `yinz.toml` location.",
+                ));
+            }
             continue;
         };
 
