@@ -10,6 +10,14 @@ Severity = execution order, not "whether to fix." Per Patrick's Rule 11, confirm
 
 ## Round 4 closed: 2026-05-19. Remaining open items are explicitly deferred design decisions (destructuring milestone already shipped in commit 19d9d4c; inline shapes feature build queued; `--reveal-sensitive` flag pending; `f32` deferred to v2).
 
+## Round 5 items (2026-05-19 morning batch):
+- Item 1 (`--reveal-sensitive` flag) **FIXED** — driver flag + env-var propagation + runtime OnceLock + 2 integration tests
+- Item 2 (`f32` teaching diagnostic) **FIXED** — 10 sized-numeric-type rejections + 1 lex test
+- Item 3 (cross-file inline-shape integration test) **FIXED** — positive test added; negative test documents known v0.1 limitation (expected-type not threaded into untyped call args)
+- Item 4 (auto-promotion lint for repeated inline shapes) **FIXED** — Tier 3 warning at each use site when 2+ occurrences; 3 typeck tests
+- Item 5 (audit HIGH sweep) — Items 39 + 40 fixed code (parameter-reassignment WHY, not-defined WHY); Items 46/47 (test scaffold redundancy) remain open
+- Item 6 (NUL byte codegen defense) **FIXED** — `push_c_string_terminator` helper at all 3 string-emit sites in emit.rs
+
 ---
 
 ## Severity Summary (post-Round-4)
@@ -17,7 +25,7 @@ Severity = execution order, not "whether to fix." Per Patrick's Rule 11, confirm
 | Severity | Count | Notes |
 |---|---:|---|
 | Critical | 0 | All resolved |
-| High | 3 | Bug #11 (import diagnostic discrepancy), Bug #12 (dead-code import fallback), 9 unsafe FFI docs FIXED R4 |
+| High | 1 | #29 (spec/destructuring.md doc-drift) + items 46/47 (test scaffold redundancy) remain; items 39+40 FIXED Round5 |
 | Medium | ~10 | Partial/corrupt binary cleanup, orphan .o on SIGKILL, various UX/docs items |
 | Low | ~15 | Magic number renames FIXED R4, crate docs FIXED R4, various polish items remain |
 | Verified Correct | 9 | doc-drift positives — explicitly noted to prevent re-flagging |
@@ -125,8 +133,8 @@ No genuine conflicts between analyzers.
 ~~37. `map_grow_int` / `map_grow_str` side-effect contract undocumented~~ **FIXED (Batch 8)** — both functions now have doc comments naming the ×2 growth, 75% LF trigger, and slot-pointer invalidation contract.
 
 ### UX (HIGH)
-39. `check.rs:444` parameter-reassignment WHY references shipped M4 as future
-40. `check.rs:1282-1287` "not defined" WHY is generic ("the program can't run")
+~~39. `check.rs:444` parameter-reassignment WHY references shipped M4 as future~~ **FIXED (Batch Round5)** — WHY now reads "parameters are read-only by default" with concrete example; two tests updated (integration.rs + check.rs) with test-ratchet comments.
+~~40. `check.rs:1282-1287` "not defined" WHY is generic ("the program can't run")~~ **FIXED (Batch Round5)** — variable-not-defined WHY now says "`{name}` has no declaration in scope — declare it with `let {name} = ...` or check imports." Call-not-defined WHY names the missing function explicitly.
 ~~41. Render output prefixes WHY with `Note: Why:` double label~~ **FIXED (Batch 6.5)** — `"Why: "` prefix dropped.
 ~~42. `what_instead` used as caret label conflicts with prose-instruction content~~ **FIXED (Batch 6.6, infrastructure)** — `DiagnosticKind` enum + render restructured. Per-diagnostic migration ongoing.
 ~~43. Single exit code 1 for all failure modes~~ **FIXED (Batch 4b)** — `EXIT_COMPILE_ERROR=1`, `EXIT_INFRA_ERROR=2`

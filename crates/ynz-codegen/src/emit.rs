@@ -115,8 +115,6 @@ pub fn emit_artifact(
 struct ModuleGlobals<'ctx> {
     str_true: GlobalValue<'ctx>,
     str_false: GlobalValue<'ctx>,
-    /// Static "[REDACTED]" string for sensitive value print output (M8 P4).
-    str_redacted: GlobalValue<'ctx>,
     dec_zero: GlobalValue<'ctx>,
     panic_int_add: GlobalValue<'ctx>,
     panic_int_sub: GlobalValue<'ctx>,
@@ -170,7 +168,6 @@ fn build_module<'ctx, 'g>(
     let globals = ModuleGlobals {
         str_true: build_string_global(ctx, module, "true", ".str.true"),
         str_false: build_string_global(ctx, module, "false", ".str.false"),
-        str_redacted: build_string_global(ctx, module, "[REDACTED]", ".str.redacted"),
         dec_zero: build_decimal_global(ctx, module, zero_bits, ".dec.zero"),
         panic_int_add: build_string_global(ctx, module, "int overflow in '+'", ".panic.iadd"),
         panic_int_sub: build_string_global(ctx, module, "int overflow in '-'", ".panic.isub"),
@@ -2311,7 +2308,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
 
         Expr::StringLit(bytes, _) => {
             let mut null = bytes.clone();
-            null.push(0);
+            push_c_string_terminator(&mut null);
             let i8t = cg.i8();
             let arr_ty = i8t.array_type(null.len() as u32);
             let arr = i8t.const_array(
@@ -2982,7 +2979,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         ynz_ast::nodes::StringPart::Expr(_, _) => unreachable!(),
                     })
                     .collect();
-                bytes.push(0); // null-terminate
+                push_c_string_terminator(&mut bytes);
                 let i8t = cg.i8();
                 let arr_ty = i8t.array_type(bytes.len() as u32);
                 let arr = i8t.const_array(
@@ -3015,7 +3012,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         ynz_ast::nodes::StringPart::Lit(bytes, _) => {
                             // Emit the literal bytes as a global and append.
                             let mut b = bytes.clone();
-                            b.push(0);
+                            push_c_string_terminator(&mut b);
                             let i8t = cg.i8();
                             let arr_ty = i8t.array_type(b.len() as u32);
                             let arr = i8t.const_array(
@@ -3682,6 +3679,24 @@ fn lower_print<'ctx>(
     Ok(())
 }
 
+/// Terminate a byte vector as a C string, aborting with an ICE message if any
+/// embedded NUL is found.
+///
+/// The lexer rejects `\0` in string literals (Batch 5a.6), so this path should
+/// be unreachable in v0.1. If reached, an earlier compiler phase silently
+/// introduced a NUL — that is a compiler bug, not a user error.
+fn push_c_string_terminator(bytes: &mut Vec<u8>) {
+    if bytes.iter().any(|&b| b == 0) {
+        eprintln!(
+            "INTERNAL COMPILER ERROR: string literal contains an embedded NUL byte at codegen \
+             time. The lexer should have rejected this. Please file an issue at \
+             https://github.com/patrickrizzardi/ynz/issues with the source file."
+        );
+        std::process::abort();
+    }
+    bytes.push(0);
+}
+
 fn to_c_string<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     val: BasicValueEnum<'ctx>,
@@ -3690,8 +3705,25 @@ fn to_c_string<'ctx>(
     match ty {
         Type::String => Ok(val.into_pointer_value()),
 
-        // M8 P4: sensitive string → always prints [REDACTED].
-        Type::Sensitive { .. } => Ok(cg.globals.str_redacted.as_pointer_value()),
+        // M8 P4: sensitive string — delegate to the runtime, which checks
+        // YNZ_REVEAL_SENSITIVE at first call and returns either the raw pointer
+        // or a static "[REDACTED]" string accordingly.
+        Type::Sensitive { .. } => {
+            let call = cg
+                .builder
+                .build_call(
+                    cg.rt.ynz_sensitive_to_string,
+                    &[val.into()],
+                    "sens_str",
+                )
+                .map_err(|e| format!("{e}"))?;
+            let ptr = call
+                .try_as_basic_value()
+                .basic()
+                .ok_or("ynz_sensitive_to_string returned void")?
+                .into_pointer_value();
+            Ok(ptr)
+        }
 
         Type::Bool => cg
             .builder

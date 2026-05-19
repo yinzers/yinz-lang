@@ -2077,6 +2077,46 @@ fn test_keyword_reserved_for_v013() {
     );
 }
 
+// ── f32 / sized-numeric-type teaching diagnostics ────────────────────────────
+
+#[test]
+fn f32_keyword_rejected_with_teaching_diagnostic() {
+    // WHY: `f32` and friends are not Yinz numeric types in v0.1. Users coming
+    // from Rust/C/Go may write `let x: f32 = 1.5` — they need a clear redirect
+    // to `float` or `number`. Without this, the lexer produces a generic
+    // "unexpected token" cascade that gives no hint about what to use instead.
+    // Parser recovery: the banned keyword degrades to Identifier so downstream
+    // parsing can continue without a cascade of unrelated errors.
+    let sized_types = ["f32", "f64", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"];
+    for kw in sized_types {
+        let src = format!("let x: {kw} = 1");
+        let (toks, diags) = lex_with_diags(&src);
+        assert_eq!(
+            diags.len(),
+            1,
+            "exactly 1 diagnostic expected for `{kw}`, got {}:\n{:#?}",
+            diags.len(),
+            diags
+        );
+        assert!(
+            diags[0].what.contains(kw),
+            "`{kw}` diagnostic WHAT must mention the keyword, got: {:?}",
+            diags[0].what
+        );
+        assert!(
+            diags[0].what_instead.contains("int")
+                || diags[0].what_instead.contains("float")
+                || diags[0].what_instead.contains("number"),
+            "`{kw}` diagnostic WHAT_INSTEAD must redirect to a Yinz numeric type, got: {:?}",
+            diags[0].what_instead
+        );
+        assert!(
+            toks.iter().any(|t| matches!(t, Token::Identifier(_))),
+            "`{kw}` must degrade to Identifier after diagnostic"
+        );
+    }
+}
+
 // ── 5a security/robustness fixes ─────────────────────────────────────────────
 
 #[test]

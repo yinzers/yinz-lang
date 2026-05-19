@@ -150,8 +150,7 @@ Tracked so the help text reflects what currently ships and the design log rememb
   Target version: v0.X (TBD; tied to dedicated optimization pass milestone).
 - `--kernel` — kernel-mode build (no heap allocator, no panic-on-OOM, no threading).
   See `design/future/no-runtime-mode.md`. Target version: v0.3 per `design/mvp-scope.md`.
-- `--reveal-sensitive` — show all sensitive values in output (dev-only; stripped from release builds).
-  Target version: pending audit batch. Design is locked in `design/sensitive.md`.
+- `--reveal-sensitive` — **SHIPPED (2026-05-19 morning batch)**. Driver propagates `YNZ_REVEAL_SENSITIVE=1` to child process; runtime OnceLock reads it. Release-build stripping deferred to v0.X when `--release` flag lands.
 
 These flags are NOT in the v0.1 driver. Do not document them in `--help` until they ship.
 

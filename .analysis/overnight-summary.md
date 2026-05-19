@@ -48,37 +48,16 @@ Per `.analysis/audit-report.md` top section:
 
 ---
 
-## Deferred to your call (open questions for tomorrow)
+## Morning batch resolution (2026-05-19)
 
-These items I explicitly held back per your "stop and queue if it needs a decision" guardrail:
+All 6 items from the morning batch were resolved:
 
-### 1. `--reveal-sensitive` flag implementation
-
-- **Status**: locked design in `spec/sensitive.md`; flag doesn't exist in driver.
-- **Open call**: runtime-only flag, or compile-time gating? Where does the "reveal" wire through — runtime `print`, log output, or both? Stripping from release builds vs always-available debug only?
-- **My instinct**: runtime-only flag on `ynz run`, similar shape to `--keep` + `--emit-ir`. Stripped from release builds via a `cfg!(not(debug_assertions))` guard at the runtime side. But I held off because the "release-build stripping" decision crosses a design-doc boundary you should weigh in on.
-
-### 2. f32 teaching diagnostic
-
-- **Status**: `design/mvp-scope.md` says deferred to v2+. No user-facing teaching message exists for `let x: f32 = 1.0`.
-- **Open call**: ship the teaching diagnostic now (small fix), or genuinely defer?
-- **My instinct**: ship it. It's ~10 LOC in the lexer/typeck and matches the pattern used for `promise`/`future`/`goroutine` banned keywords. But your design call: if `f32` shows up before v2+, what should the message say? "Use `float` for now; sized variants ship in v2+" is the obvious answer.
-
-### 3. Inline shapes: cross-file integration test
-
-- **Status**: feature shipped (commit `30cdea6`). 10 same-file tests pass. The agent flagged that cross-file structural equivalence (same `{ a: int }` in two different files compiling against each other) was not explicitly tested.
-- **Open call**: do you want a multi-file integration test now, or trust the canonical-naming mechanism + same-file tests + the structural-typing design doc?
-- **My instinct**: small test is worth adding. Could ship in a 10-min follow-up.
-
-### 4. Inline shapes: auto-promotion lint
-
-- **Status**: per `design/inline-shape-types.md` "Open questions" — if a user writes the same inline type in 2+ places, suggest extraction to a named shape (Tier 3 lint).
-- **Open call**: not v0.1 since the linter infrastructure doesn't ship until v0.2.
-- **My recommendation**: queue for v0.2 linter milestone alongside the other Tier 3 suggestions in `design/linting.md`.
-
-### 5. Outstanding HIGH-severity audit items
-
-The audit-report still lists 3 High items. My quick check suggests at least one (Bug #11 import-diagnostic discrepancy) was already addressed in Batch 6 (`6.13` find_project_root unification) but the report wasn't fully struck. A 5-min audit-report sweep would close them.
+1. `--reveal-sensitive` flag **SHIPPED** — runtime-only, env-var propagation via `YNZ_REVEAL_SENSITIVE=1`, runtime `OnceLock<bool>` check in `ynz_sensitive_to_string`. Release-build stripping deferred to v0.X when `--release` lands.
+2. `f32` teaching diagnostic **SHIPPED** — 10 sized-numeric types (f32/f64/i8-i64/u8-u64) produce WHAT/WHAT-INSTEAD/WHY teaching diagnostic redirecting to `int`/`float`/`number`.
+3. Cross-file inline-shape test **SHIPPED** — positive test passes; negative test documents the known v0.1 limitation (expected-type not threaded into untyped call args).
+4. Auto-promotion lint **SHIPPED** — Tier 3 Warning at each use site when 2+ occurrences of the same inline shape. `assert_clean` updated to filter errors-only (Tier 3 warnings are informational).
+5. Audit HIGH sweep — items 39 and 40 fixed; report updated.
+6. NUL byte codegen defense **SHIPPED** — `push_c_string_terminator` helper at all 3 string-emit sites.
 
 ---
 

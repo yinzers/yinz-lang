@@ -170,6 +170,7 @@ impl<'b> Checker<'b> {
                 Item::ImportDecl(_) | Item::ConstDecl(_) | Item::ReExport(_) => {}
             }
         }
+        lint_repeated_inline_shapes(module, &mut self.diags);
     }
 
     fn check_function(&mut self, f: &FunctionDecl) {
@@ -490,7 +491,7 @@ impl<'b> Checker<'b> {
                     target_span.clone(),
                     format!("`{target}` is a parameter — parameters cannot be reassigned."),
                     format!("To work with a modified value, declare a new variable: `let my_{target} = {target}`"),
-                    "Yinz ownership modifiers that allow parameter mutation (`lend`) arrive in v0.1 milestone 4. Until then, parameters are read-only.",
+                    "In Yinz, function parameters are read-only by default. If you need to mutate the value, declare a `let` binding: `let my_name = name` then modify `my_name` instead.",
                 ));
             }
             Some(entry) if entry.is_loop_var => {
@@ -1278,7 +1279,10 @@ impl<'b> Checker<'b> {
             span.clone(),
             &candidates,
             format!("Check the spelling, or declare it: `let {name} = ...`"),
-            "Every name must be declared before it can be used.",
+            &format!(
+                "`{name}` has no declaration in scope. Declare it with `let {name} = ...` before \
+                 using it, or check whether it's defined in a file you haven't imported yet."
+            ),
         ));
         Type::Error
     }
@@ -1354,7 +1358,10 @@ impl<'b> Checker<'b> {
                     call.callee.span().clone(),
                     &candidates,
                     format!("Define `{name}` as a function or check the spelling."),
-                    "The compiler looks up every name you call. If a name doesn't exist, the program can't run.",
+                    &format!(
+                        "`{name}` is not defined as a function in this file or its imports. \
+                         Add `function {name}(...)` or import it from another file."
+                    ),
                 ));
                 for arg in &call.args {
                     self.infer_expr(arg, None);
@@ -3830,6 +3837,185 @@ fn suggest_conversion(lhs: &Type, rhs: &Type) -> String {
 /// Searches `candidates` for a Levenshtein-close alternative.  When one is
 /// found the `what_instead` reads "Did you mean `close`?"; otherwise
 /// `fallback_what_instead` is used.
+/// Tier 3 lint: emit a Warning at each use site when the same inline shape
+/// appears 2 or more times in the module. Suggests extracting to a named `shape`.
+///
+/// Per `.claude/rules/auto-promotion.md`: threshold = 2+ uses, Warning severity,
+/// emit at EVERY use site so the IDE underlines each one.
+///
+/// Synthetic compiler-generated shapes (non-`__anon__*`) are skipped — only
+/// user-written inline shapes trigger the lint.
+///
+/// Time: O(n) where n = number of type-annotation nodes in the module.
+/// Space: O(k) where k = number of distinct inline shapes.
+fn lint_repeated_inline_shapes(module: &Module, diags: &mut DiagnosticBucket) {
+    use crate::shapes::canonical_anon_name;
+
+    // Collect (canonical_name, rendered_fields, span) for every AnonShape in the module.
+    let mut uses: Vec<(String, String, SourceSpan)> = Vec::new();
+
+    collect_anon_uses_in_module(module, &mut uses, &canonical_anon_name);
+
+    // Count occurrences per canonical name.
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (name, _, _) in &uses {
+        *counts.entry(name.clone()).or_insert(0) += 1;
+    }
+
+    // Emit a Warning at each use site for shapes that appear 2+ times.
+    for (canonical, rendered, span) in &uses {
+        let n = *counts.get(canonical).unwrap_or(&0);
+        if n < 2 {
+            continue;
+        }
+        let fields_block = render_fields_block(rendered);
+        diags.push(Diagnostic::warning(
+            span.clone(),
+            format!("Inline shape `{rendered}` is used in {n} places."),
+            format!(
+                "Consider extracting to a named shape:\nshape SuggestedName {{\n{fields_block}\n}}\n\
+                 Then reference `SuggestedName` at each of the {n} use sites."
+            ),
+            "Inline shapes are the right tool for one-off types — they keep the type definition \
+             next to its only use. Repeated identical inline shapes duplicate the definition, so \
+             a future change has to be made in multiple places. A named shape gives one source \
+             of truth and a meaningful identifier in diagnostics.".to_string(),
+        ));
+    }
+}
+
+/// Walk a module and collect `(canonical_name, rendered, span)` for each `AnonShape`.
+fn collect_anon_uses_in_module(
+    module: &Module,
+    out: &mut Vec<(String, String, SourceSpan)>,
+    canonical: &impl Fn(&[ynz_ast::nodes::FieldDecl]) -> String,
+) {
+    for item in &module.items {
+        match item {
+            Item::Function(f) => {
+                collect_anon_uses_in_type(&f.return_type, out, canonical);
+                for param in &f.params {
+                    collect_anon_uses_in_type(&param.ty, out, canonical);
+                }
+                collect_anon_uses_in_stmts(&f.body.stmts, out, canonical);
+            }
+            Item::ShapeDecl(s) => {
+                for field in &s.fields {
+                    collect_anon_uses_in_type(&field.ty, out, canonical);
+                }
+            }
+            Item::ConstDecl(c) => {
+                if let Some(ty) = &c.ty {
+                    collect_anon_uses_in_type(ty, out, canonical);
+                }
+            }
+            Item::ImportDecl(_) | Item::OptionsDecl(_) | Item::ReExport(_) => {}
+        }
+    }
+}
+
+fn collect_anon_uses_in_type(
+    ty: &ynz_ast::nodes::Type,
+    out: &mut Vec<(String, String, SourceSpan)>,
+    canonical: &impl Fn(&[ynz_ast::nodes::FieldDecl]) -> String,
+) {
+    use ynz_ast::nodes::Type as AstType;
+    match ty {
+        AstType::AnonShape { fields, span } => {
+            let name = canonical(fields);
+            let rendered = render_inline_shape(fields);
+            out.push((name, rendered, span.clone()));
+            for field in fields {
+                collect_anon_uses_in_type(&field.ty, out, canonical);
+            }
+        }
+        AstType::Maybe { inner, .. } => collect_anon_uses_in_type(inner, out, canonical),
+        AstType::Union { variants, .. } => {
+            for v in variants {
+                collect_anon_uses_in_type(v, out, canonical);
+            }
+        }
+        AstType::Generic { args, .. } => {
+            for a in args {
+                collect_anon_uses_in_type(a, out, canonical);
+            }
+        }
+        AstType::ErrorCapable { inner, .. } => collect_anon_uses_in_type(inner, out, canonical),
+        AstType::Sensitive(inner) => collect_anon_uses_in_type(inner, out, canonical),
+        _ => {}
+    }
+}
+
+fn collect_anon_uses_in_stmts(
+    stmts: &[Stmt],
+    out: &mut Vec<(String, String, SourceSpan)>,
+    canonical: &impl Fn(&[ynz_ast::nodes::FieldDecl]) -> String,
+) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { ty: Some(ty), .. } => collect_anon_uses_in_type(ty, out, canonical),
+            Stmt::Let { .. }
+            | Stmt::Assign { .. }
+            | Stmt::Return { .. }
+            | Stmt::Expr(_)
+            | Stmt::If { .. }
+            | Stmt::Match { .. }
+            | Stmt::While { .. }
+            | Stmt::For { .. }
+            | Stmt::FieldAssign { .. }
+            | Stmt::IndexAssign { .. } => {}
+        }
+    }
+}
+
+
+/// Render an `AnonShape`'s fields as `{ field: type, ... }` for the WHAT message.
+fn render_inline_shape(fields: &[ynz_ast::nodes::FieldDecl]) -> String {
+    let mut sorted: Vec<_> = fields.iter().collect();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    let parts: Vec<String> = sorted
+        .iter()
+        .map(|f| format!("{}: {}", f.name, render_ast_type(&f.ty)))
+        .collect();
+    format!("{{ {} }}", parts.join(", "))
+}
+
+/// Render an `AnonShape`'s fields as a `shape` body block (2-space indent per field).
+fn render_fields_block(rendered: &str) -> String {
+    // `rendered` is like `{ a: int, b: string }` — strip outer braces, split on `, `.
+    let inner = rendered.trim_start_matches("{ ").trim_end_matches(" }");
+    inner
+        .split(", ")
+        .map(|f| format!("  {f}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_ast_type(ty: &ynz_ast::nodes::Type) -> String {
+    use ynz_ast::nodes::Type as AstType;
+    match ty {
+        AstType::Int => "int".to_string(),
+        AstType::Float => "float".to_string(),
+        AstType::Number { .. } => "number".to_string(),
+        AstType::Bool => "bool".to_string(),
+        AstType::Nothing => "nothing".to_string(),
+        AstType::Named(n, _) => n.clone(),
+        AstType::Maybe { inner, .. } => format!("maybe {}", render_ast_type(inner)),
+        AstType::AnonShape { fields, .. } => render_inline_shape(fields),
+        AstType::Generic { name, args, .. } => {
+            let arg_str: Vec<_> = args.iter().map(render_ast_type).collect();
+            format!("{}<{}>", name, arg_str.join(", "))
+        }
+        AstType::Union { variants, .. } => {
+            let parts: Vec<_> = variants.iter().map(render_ast_type).collect();
+            parts.join(" | ")
+        }
+        AstType::ErrorCapable { inner, .. } => format!("{} errors", render_ast_type(inner)),
+        AstType::Sensitive(inner) => format!("sensitive {}", render_ast_type(inner)),
+        _ => "?".to_string(),
+    }
+}
+
 fn make_not_defined_diag(
     name: &str,
     span: SourceSpan,

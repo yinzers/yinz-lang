@@ -670,6 +670,26 @@ impl<'src> Lexer<'src> {
                 );
                 Token::Identifier(text.to_string())
             }
+            // Sized numeric type names from C/Rust/Go — not part of the Yinz v0.1 numeric system.
+            // Yinz keeps the numeric type system small: `int` (i64), `float` (f64), `number`
+            // (decimal128). Sized variants land with kernel-mode + embedded support in v2+.
+            "f32" | "f64" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" => {
+                self.emit_banned_declaration_keyword(
+                    start,
+                    self.pos,
+                    text,
+                    "Use `int` for whole numbers, `float` for fast-but-approximate decimals, \
+                     or `number` for exact decimals. Sized variants like `f32` ship in v2+ \
+                     for embedded and kernel-mode work.",
+                    "Yinz keeps the numeric type system small in v0.1: one integer type (`int` = 64-bit), \
+                     one fast-decimal type (`float`), and one exact-decimal type (`number`). Most programs \
+                     don't need sized variants; they add cognitive load without paying off for typical \
+                     application code. When v2+ ships kernel-mode and embedded targets, sized variants \
+                     land at the same time.",
+                );
+                Token::Identifier(text.to_string())
+            }
+
             other => Token::Identifier(other.to_string()),
         };
         self.push_token(tok, start, self.pos);

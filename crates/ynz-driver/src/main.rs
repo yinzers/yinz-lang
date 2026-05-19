@@ -69,6 +69,10 @@ enum Command {
     ///
     /// Pass `--emit-ir` to write LLVM IR alongside the binary (as `<binary>.ll`).
     ///
+    /// Pass `--reveal-sensitive` to print sensitive values in plain text instead of
+    /// `[REDACTED]`. Dev only — this flag will be stripped from release builds
+    /// (`--release`, when it ships) to prevent accidental production leaks.
+    ///
     /// The compiled program's exit code is returned to your shell.
     /// Exit code 2 from ynz itself means an infrastructure problem
     /// (missing linker, can't read source, etc.) — your code may be fine.
@@ -81,6 +85,10 @@ enum Command {
         /// Dump LLVM IR alongside the compiled binary (writes to <binary>.ll).
         #[arg(long)]
         emit_ir: bool,
+        /// Dev only: print sensitive values in plain text instead of [REDACTED].
+        /// Will be stripped from release builds (`--release`) when it ships.
+        #[arg(long)]
+        reveal_sensitive: bool,
     },
 }
 
@@ -136,8 +144,8 @@ fn main() {
                 process::exit(code);
             }
         }
-        Command::Run { file, keep, emit_ir } => {
-            let code = run::run(&file, keep, emit_ir);
+        Command::Run { file, keep, emit_ir, reveal_sensitive } => {
+            let code = run::run(&file, keep, emit_ir, reveal_sensitive);
             process::exit(code);
         }
     }

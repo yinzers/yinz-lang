@@ -143,6 +143,11 @@ pub struct RuntimeDecls<'ctx> {
     // ynz_string_builder_drop(builder: *mut u8) → void
     pub ynz_string_builder_drop: FunctionValue<'ctx>,
 
+    // M8 P4 / reveal-sensitive: (ptr: *const u8) → *const u8
+    // Returns the raw pointer when YNZ_REVEAL_SENSITIVE=1, otherwise a static
+    // "[REDACTED]" string. Checked once per process via OnceLock.
+    pub ynz_sensitive_to_string: FunctionValue<'ctx>,
+
     // ── M8 P6: bignum arithmetic — `number<N>` for N > 34 ────────────────
     // Each function: (a: *const i8, b: *const i8, precision: i16) → *mut i8
     // Returns a heap-allocated C string (null-terminated decimal representation).
@@ -484,6 +489,11 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 module,
                 "ynz_string_builder_drop",
                 void.fn_type(&[ptr.into()], false),
+            ),
+            ynz_sensitive_to_string: declare_fn(
+                module,
+                "ynz_sensitive_to_string",
+                ptr.fn_type(&[ptr.into()], false),
             ),
             // M8 P6: bignum arithmetic — (ptr a, ptr b, i16 precision) → ptr
             ynz_bignum_add: declare_fn(

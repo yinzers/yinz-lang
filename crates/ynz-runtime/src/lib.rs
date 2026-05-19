@@ -229,6 +229,29 @@ pub unsafe extern "C" fn ynz_string_eq(a: *const u8, b: *const u8) -> i32 {
     (a_nfc == b_nfc) as i32
 }
 
+/// Format a `sensitive string` value for output.
+///
+/// Checks `YNZ_REVEAL_SENSITIVE` once per process (via `OnceLock`). If the env var
+/// is set to `"1"`, returns `raw_ptr` unchanged so the value prints normally.
+/// Otherwise returns a pointer to the static `"[REDACTED]"` string.
+///
+/// # Safety
+///
+/// `raw_ptr` must be a valid pointer to a null-terminated C string, or null.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_sensitive_to_string(raw_ptr: *const u8) -> *const u8 {
+    use std::sync::OnceLock;
+    static REVEAL: OnceLock<bool> = OnceLock::new();
+    let reveal = *REVEAL.get_or_init(|| {
+        std::env::var("YNZ_REVEAL_SENSITIVE").as_deref() == Ok("1")
+    });
+    if reveal {
+        raw_ptr
+    } else {
+        b"[REDACTED]\0".as_ptr()
+    }
+}
+
 unsafe fn cstr_to_str<'a>(p: *const u8) -> &'a str {
     if p.is_null() {
         return "<unknown operation>";

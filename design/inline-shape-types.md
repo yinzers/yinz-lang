@@ -67,9 +67,9 @@ Inline shapes are pure data — they have no inheritance or contract requirement
 
 ## Open questions (not addressed in v0.1-polish)
 
-1. **Auto-promotion lint**: when the same inline type appears in 2+ places, a Tier 3 lint should suggest extracting to a named `shape`. Not implemented yet — covered by `.claude/rules/auto-promotion.md`.
+1. **Auto-promotion lint**: when the same inline type appears in 2+ places, a Tier 3 lint emits a Warning at each use site suggesting extraction to a named `shape`. **SHIPPED (2026-05-19)** — implemented in `check.rs` `lint_repeated_inline_shapes`, 3 tests in `tests/check.rs`.
 
-2. **Cross-file structural equivalence**: currently two `{ a: int }` in different files produce the same canonical name and should work correctly. Integration tested only via same-file tests; cross-file case is untested.
+2. **Cross-file structural equivalence**: Positive case (passing a correctly-typed struct literal to an imported function) is tested and works. Negative case (passing a struct literal with wrong fields to an imported function) currently does NOT produce an error — the expected-type is not threaded into untyped call-argument checking. Fix requires threading the param's expected type into `check_call` argument evaluation. Test `cross_file_inline_shape_field_mismatch_documents_known_gap` in `tests/check.rs` tracks this gap.
 
 3. **Inline shapes in `follows` contracts**: deferred. The current implementation focuses on annotation positions only (`:` position). Contract signatures with inline shapes remain unsupported.
 

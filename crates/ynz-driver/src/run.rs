@@ -11,7 +11,12 @@ use crate::build::{build_into, FailureKind};
 /// When `keep` is true, the binary is left in place.
 ///
 /// When `emit_ir` is true, the LLVM IR is written alongside the binary as `<binary>.ll`.
-pub fn run(source_path: &Path, keep: bool, emit_ir: bool) -> i32 {
+///
+/// When `reveal_sensitive` is true, `YNZ_REVEAL_SENSITIVE=1` is set in the child
+/// process environment. The runtime reads this to print sensitive values in plain text
+/// instead of `[REDACTED]`. Dev-only flag; stripped from release builds when `--release`
+/// ships.
+pub fn run(source_path: &Path, keep: bool, emit_ir: bool, reveal_sensitive: bool) -> i32 {
     let bin_dir = match tempfile::tempdir() {
         Ok(d) => d,
         Err(e) => {
@@ -48,7 +53,11 @@ pub fn run(source_path: &Path, keep: bool, emit_ir: bool) -> i32 {
         }
     }
 
-    let status = process::Command::new(&binary).status().unwrap_or_else(|e| {
+    let mut cmd = process::Command::new(&binary);
+    if reveal_sensitive {
+        cmd.env("YNZ_REVEAL_SENSITIVE", "1");
+    }
+    let status = cmd.status().unwrap_or_else(|e| {
         eprintln!("ynz: failed to run `{}`: {e}", binary.display());
         process::exit(2);
     });

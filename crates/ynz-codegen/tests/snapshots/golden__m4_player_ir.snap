@@ -9,7 +9,6 @@ target triple = "x86_64-pc-linux-gnu"
 
 @.str.true = private unnamed_addr constant [5 x i8] c"true\00"
 @.str.false = private unnamed_addr constant [6 x i8] c"false\00"
-@.str.redacted = private unnamed_addr constant [11 x i8] c"[REDACTED]\00"
 @.dec.zero = private unnamed_addr constant i128 45235290231555418299757684020165476352
 @.panic.iadd = private unnamed_addr constant [20 x i8] c"int overflow in '+'\00"
 @.panic.isub = private unnamed_addr constant [20 x i8] c"int overflow in '-'\00"
@@ -159,6 +158,8 @@ declare void @ynz_string_builder_append(ptr, ptr)
 declare ptr @ynz_string_builder_finalize(ptr)
 
 declare void @ynz_string_builder_drop(ptr)
+
+declare ptr @ynz_sensitive_to_string(ptr)
 
 declare ptr @ynz_bignum_add(ptr, ptr, i32)
 
