@@ -15,6 +15,10 @@ openssh-client \
 vim \
 jq \
 bash-completion \
+build-essential \
+llvm-18-dev \
+clang-18 \
+libclang-18-dev \
 && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Docker (for spawning sibling containers via host socket)
@@ -30,18 +34,7 @@ RUN install -m 0755 -d /etc/apt/keyrings \
     && apt-get update && apt-get install -y --no-install-recommends gh \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# LLVM 18 + Clang 18
-# - llvm-18-dev: LLVM libraries + headers that inkwell/llvm-sys links against when
-#   building the ynz compiler itself (cargo build)
-# - clang-18: the system linker ynz invokes to turn .o files into native binaries
-#   (ynz build uses clang-18 as its first-choice linker)
-# - libclang-18-dev: libclang headers used by some inkwell binding code
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-       llvm-18-dev \
-       clang-18 \
-       libclang-18-dev \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 
 # Allow ubuntu user to run commands as root
 RUN echo "${USER} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
