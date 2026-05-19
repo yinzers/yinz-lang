@@ -69,7 +69,7 @@ pub fn load_project_config(root: &Path, diags: &mut DiagnosticBucket) -> Project
         Err(_) => return default_config(root),
     };
 
-    let mut entry = "src/entrypoint.ynz".to_string();
+    let mut entry = "entrypoint.ynz".to_string();
     let mut name = root
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -135,7 +135,7 @@ fn parse_toml_string(rest: &str) -> Option<String> {
 
 fn default_config(root: &Path) -> ProjectConfig {
     ProjectConfig {
-        entry: "src/entrypoint.ynz".to_string(),
+        entry: "entrypoint.ynz".to_string(),
         name: root
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -148,7 +148,7 @@ fn default_config(root: &Path) -> ProjectConfig {
 pub struct SourceEntry {
     /// Canonical file path (for diagnostics).
     pub path: PathBuf,
-    /// Module path relative to `src/` (no `.ynz` suffix) — used for mangling.
+    /// Module path relative to project root (no `.ynz` suffix) — used for mangling.
     #[allow(dead_code)]
     pub module_path: String,
     /// Source text.
@@ -157,8 +157,9 @@ pub struct SourceEntry {
 
 /// Load all `.ynz` files under the project root for a project build.
 ///
-/// Prefers `root/src/` if it exists (conventional layout), but falls back
-/// to walking the whole project root so projects with arbitrary layouts work.
+/// Walks from the project root (where `yinz.toml` lives). All `.ynz` files
+/// are included regardless of directory structure — the spec says paths are
+/// project-root-relative, no `src/` convention required.
 /// Returns entries sorted by path for deterministic ordering.
 pub fn load_project(root: &Path, diags: &mut DiagnosticBucket) -> Vec<SourceEntry> {
     let src_dir = root.join("src");
@@ -183,7 +184,7 @@ fn collect_ynz_files(
                 SourceSpan::new(dir.display().to_string(), 0, 0),
                 format!("Cannot read directory `{}`: {e}", dir.display()),
                 "Check that the directory exists and you have read permission.",
-                "`ynz build` walks `src/**/*.ynz` to find all source files.",
+                "`ynz build` walks all `.ynz` files from the project root.",
             ));
             return;
         }
@@ -212,7 +213,7 @@ fn collect_ynz_files(
                         SourceSpan::new(path.display().to_string(), 0, 0),
                         format!("Could not read `{}`: {e}", path.display()),
                         "Check that the file exists and you have read permission.",
-                        "All `.ynz` files under `src/` are compiled as part of the project.",
+                        "All `.ynz` files under the project root are compiled.",
                     ));
                 }
             }
