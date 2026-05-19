@@ -218,11 +218,19 @@ fn bom_crlf_build_succeeded() {
 // ---------------------------------------------------------------------------
 #[test]
 fn deferred_language_feature_lookup() {
-    let entry = ynz_registry::deferred_language_feature_lookup("PLACEHOLDER_DEFERRED_LANG_PHASE_5A")
-        .expect("placeholder deferred language feature not found");
+    let entry = ynz_registry::deferred_language_feature_lookup("f32")
+        .expect("f32 deferred_language_feature not found (Phase 5a migration)");
     assert_eq!(entry.ships_in, "v2+");
     assert!(!entry.why.is_empty());
-    assert!(!entry.design_doc.is_empty());
+    assert_eq!(entry.design_doc, "design/mvp-scope.md");
+}
+
+#[test]
+fn deferred_language_feature_test_keyword() {
+    let entry = ynz_registry::deferred_language_feature_lookup("test")
+        .expect("test deferred_language_feature not found (Phase 5a migration)");
+    assert_eq!(entry.ships_in, "v0.13");
+    assert!(!entry.substitute.is_empty());
 }
 
 // ---------------------------------------------------------------------------

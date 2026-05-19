@@ -11,7 +11,7 @@ license.workspace = true
 salsa             = { workspace = true }
 ynz-diagnostics   = { workspace = true }
 ynz-ast           = { workspace = true }
+ynz-registry      = { workspace = true }
 
 [dev-dependencies]
-insta        = { workspace = true }
-ynz-registry = { workspace = true }
+insta = { workspace = true }
