@@ -1,0 +1,139 @@
+# Feature Registry — SSOT for all Yinz language feature inventories.
+#
+# Parsed by crates/ynz-registry/build.rs at compile time.
+# Generates: target/.../<hash>/out/registry.rs (static arrays consumed by ynz-registry crate).
+#
+# Schema reference:  design/feature-registry.md
+# Project rule:      .claude/rules/feature-registry.md
+# Consumer API:      crates/ynz-registry/src/lib.rs
+#
+# Migration status (v0.2-M1):
+#   Phase 1 — placeholder entries (one per kind, proves schema + build pipeline)
+#   Phase 2 — [[banned_jargon]] fully populated (replaces crates/ynz-diagnostics/src/banned_jargon.rs)
+#   Phase 3 — [[primitive_intrinsic]] + [[type_attached_constant]] fully populated
+#   Phase 4 — [[keyword]] + [[banned_declaration_keyword]] fully populated
+#   Phase 5a — [[deferred_language_feature]] for existing lexer handlers
+#   Phase 5b — [[deferred_language_feature]] + [[deferred_tooling_feature]] from design/future/*.md
+#   Phase 6 — [[diagnostic_template]] + [[muted_hint_domain]] fully populated
+
+# ---------------------------------------------------------------------------
+# [[keyword]] — valid Yinz keywords emitted as typed tokens by the lexer.
+# Required fields: name, token, since
+# ---------------------------------------------------------------------------
+
+[[keyword]]
+name = "PLACEHOLDER_KEYWORD_PHASE_4"
+token = "Function"
+since = "M1"
+
+# ---------------------------------------------------------------------------
+# [[banned_declaration_keyword]] — keywords from other languages Yinz rejects
+# at lex time with a teaching error. Distinct from [[banned_jargon]] (prose).
+# Required fields: name, what_instead, why, since
+# ---------------------------------------------------------------------------
+
+[[banned_declaration_keyword]]
+name = "PLACEHOLDER_BDK_PHASE_4"
+what_instead = "placeholder — Phase 4 populates this entry"
+why = "placeholder — Phase 4 populates this entry"
+since = "M4"
+
+# ---------------------------------------------------------------------------
+# [[banned_jargon]] — words banned from user-facing compiler diagnostic prose.
+# Required fields: name, replacement, reason
+# Optional fields: is_acronym (bool, default false)
+# ---------------------------------------------------------------------------
+
+[[banned_jargon]]
+name = "PLACEHOLDER_JARGON_PHASE_2"
+replacement = "placeholder — Phase 2 populates this entry"
+reason = "placeholder — Phase 2 populates this entry"
+
+# ---------------------------------------------------------------------------
+# [[primitive_intrinsic]] — built-in functions and methods on primitive types.
+# Required fields: name, kind, return_type, since
+# kind: "print_type" | "free_fn" | "method" | "method_1arg"
+# receiver_type required when kind = "method" or "method_1arg"
+# param_types required when kind = "free_fn" or "method_1arg"
+# ---------------------------------------------------------------------------
+
+[[primitive_intrinsic]]
+name = "PLACEHOLDER_INTRINSIC_PHASE_3"
+kind = "method"
+receiver_type = "int"
+param_types = []
+return_type = "int"
+since = "M3"
+
+# ---------------------------------------------------------------------------
+# [[type_attached_constant]] — constants accessed as Type.name (e.g. int.max).
+# Required fields: type_name, const_name, value_type, value_literal, since
+# value_literal is a string (to avoid TOML precision loss for large integers).
+# ---------------------------------------------------------------------------
+
+[[type_attached_constant]]
+type_name = "int"
+const_name = "PLACEHOLDER_CONST_PHASE_3"
+value_type = "int"
+value_literal = "0"
+since = "M4"
+
+# ---------------------------------------------------------------------------
+# [[deferred_language_feature]] — reserved language features not yet shipped.
+# Required fields: name, substitute, why, ships_in, design_doc, triggers
+# ---------------------------------------------------------------------------
+
+[[deferred_language_feature]]
+name = "PLACEHOLDER_DEFERRED_LANG_PHASE_5A"
+substitute = "placeholder — Phase 5a populates this entry"
+why = "placeholder — Phase 5a populates this entry"
+ships_in = "v2+"
+design_doc = "design/mvp-scope.md"
+triggers = "placeholder — Phase 5a populates this entry"
+
+# ---------------------------------------------------------------------------
+# [[deferred_tooling_feature]] — reserved tooling features not yet shipped.
+# Required fields: name, substitute, why, ships_in, design_doc, triggers
+# ---------------------------------------------------------------------------
+
+[[deferred_tooling_feature]]
+name = "PLACEHOLDER_DEFERRED_TOOL_PHASE_5B"
+substitute = ""
+why = "placeholder — Phase 5b populates this entry"
+ships_in = "v0.3"
+design_doc = "design/future/no-runtime-mode.md"
+triggers = "placeholder — Phase 5b populates this entry"
+
+# ---------------------------------------------------------------------------
+# [[deferred_stdlib_api]] — RESERVED, zero entries in M1.
+# Each v0.6+ stdlib milestone populates its own entries.
+# Required fields (when populated): module, method, ships_in, design_doc
+# ---------------------------------------------------------------------------
+
+# (none in M1 — schema accommodated, population deferred to each stdlib milestone)
+
+# ---------------------------------------------------------------------------
+# [[diagnostic_template]] — canonical WHAT/WHAT-INSTEAD/WHY text for
+# reusable DiagnosticKind variants. Supports {placeholder} substitution.
+# Required fields: kind_name, what_template, what_instead_template, why_template
+# ---------------------------------------------------------------------------
+
+[[diagnostic_template]]
+kind_name = "PLACEHOLDER_TEMPLATE_PHASE_6"
+what_template = "placeholder — Phase 6 populates this entry"
+what_instead_template = "placeholder — Phase 6 populates this entry"
+why_template = "placeholder — Phase 6 populates this entry"
+
+# ---------------------------------------------------------------------------
+# [[muted_hint_domain]] — IDE inference domains per .claude/rules/inference.md.
+# Required fields: domain, placement_category, description, example_source,
+#                  example_hint_rendered
+# placement_category: "Addition" | "Replacement" | "Informational"
+# ---------------------------------------------------------------------------
+
+[[muted_hint_domain]]
+domain = "PLACEHOLDER_HINT_PHASE_6"
+placement_category = "Addition"
+description = "placeholder — Phase 6 populates this entry"
+example_source = "let x = 42"
+example_hint_rendered = ": int (from 42)"
