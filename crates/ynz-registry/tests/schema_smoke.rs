@@ -217,6 +217,15 @@ fn bom_crlf_build_succeeded() {
 // 7. Deferred-feature lookup sketch
 // ---------------------------------------------------------------------------
 #[test]
+fn deferred_tooling_feature_lookup() {
+    let entry = ynz_registry::deferred_tooling_features()
+        .find(|e| e.name == "--kernel")
+        .expect("--kernel deferred_tooling_feature not found (Phase 5b migration)");
+    assert_eq!(entry.ships_in, "v0.3");
+    assert_eq!(entry.design_doc, "design/future/no-runtime-mode.md");
+}
+
+#[test]
 fn deferred_language_feature_lookup() {
     let entry = ynz_registry::deferred_language_feature_lookup("f32")
         .expect("f32 deferred_language_feature not found (Phase 5a migration)");

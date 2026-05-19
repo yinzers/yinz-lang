@@ -383,7 +383,7 @@ Angle-bracket-parameterized sized integers (`int<8>`, `int<16>`, `int<32>`, `uin
 - **Substitute used pre-v2**: Use plain `int` (= i64) for all whole numbers. Covers ±9.2 × 10^18 — bigger than any count a human writes by hand. Precision loss vs sized variants only matters at FFI boundaries, which aren't in v0.1.
 - **Trigger to land**: Either (a) FFI work begins, OR (b) a real user workload needs to interop with a binary protocol that v0.1's byte-array helpers can't ergonomically handle.
 - **Locked design**: See `design/numeric-types.md` and `spec/numeric-types.md`
-- **Registry entries**: `[[deferred_language_feature]]` names `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64` — TBD M1 (P5a)
+- **Registry entries**: `[[deferred_language_feature]]` names `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64` — DONE M1 P5a
 
 ### Sized float variants (locked design, deferred from v0.1)
 
@@ -393,7 +393,7 @@ Single-precision (32-bit) IEEE 754 binary float.
 - **Substitute used pre-v2**: Use `float` (f64) for all binary-float math. Slower than f32 on SIMD-heavy workloads but correct.
 - **Trigger to land**: GPU dispatch begins OR ML stdlib begins.
 - **Locked design**: See `design/numeric-types.md` and `spec/numeric-types.md`
-- **Registry entries**: `[[deferred_language_feature]]` names `f32`, `f64` — TBD M1 (P5a)
+- **Registry entries**: `[[deferred_language_feature]]` names `f32`, `f64` — DONE M1 P5a
 
 ### Arbitrary-precision decimal (locked design, deferred from v0.1)
 
@@ -413,7 +413,7 @@ The `foreign` keyword and machinery to call C / C++ / Rust libraries from Yinz.
 - **Substitute used pre-v2**: Stdlib modules that need C interop (file I/O, networking, math) call C internally via compiler-private mechanisms. Users don't see this. If a user genuinely needs to call a third-party C library, they have to wait for v2+ or contribute to the stdlib.
 - **Trigger to land**: v2+ work begins OR a stdlib gap creates a real need.
 - **Locked design**: See `design/ffi.md` and `spec/ffi.md`
-- **Registry entries**: `[[deferred_language_feature]]` name `foreign` — TBD M1 (P5b, via `design/future/*.md` catalog)
+- **Registry entries**: `[[deferred_language_feature]]` name `foreign` — DONE M1 P5b
 
 ### GPU dispatch (locked design, deferred from v0.1)
 
@@ -423,7 +423,7 @@ The `gpu` call-site keyword and kernel compilation to GPU shader / compute langu
 - **Substitute used pre-v2**: None — `gpu` keyword is reserved but not parseable. Compile error if used.
 - **Trigger to land**: v2+ AND a real ML/compute workload requires it.
 - **Locked design**: See `design/gpu.md` and `spec/concurrency.md`
-- **Registry entries**: `[[deferred_language_feature]]` name `gpu` — TBD M1 (P5b)
+- **Registry entries**: `[[deferred_language_feature]]` name `gpu` — DONE M1 P5b
 
 ### ML stdlib (locked design, deferred from v0.1)
 

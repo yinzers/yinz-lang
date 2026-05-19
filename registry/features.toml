@@ -1076,13 +1076,68 @@ triggers = "Using `test` as an identifier in Yinz source"
 # Required fields: name, substitute, why, ships_in, design_doc, triggers
 # ---------------------------------------------------------------------------
 
+# --- `scratch` keyword — arena allocators (design/future/arena.md) ---
+[[deferred_language_feature]]
+name = "scratch"
+substitute = "Use regular `let` bindings for now. Arena allocators ship in v0.2 with the `scratch` scope keyword for scope-bounded memory pools."
+why = "Arena allocators give 10-100x faster allocation for scope-bounded workloads. The `scratch { ... }` syntax is locked but not yet implemented — v0.2 is the target."
+ships_in = "v0.2"
+design_doc = "design/future/arena.md"
+triggers = "Writing `scratch { ... }` in Yinz source (keyword not yet reserved — no current trigger)"
+
+# --- Self-referential shapes (design/future/self-references.md) ---
+[[deferred_language_feature]]
+name = "self-referential-shape"
+substitute = "Self-referential shapes are not yet supported. Use a `maybe T` field or restructure the data to avoid cycles."
+why = "Self-referential shapes (e.g. a `Node` with a `children: array<Node>` field) require relative/offset pointers. The compiler will detect these automatically in v0.3+ using Approach A (relative pointers) — no user-visible keyword needed."
+ships_in = "v0.3+"
+design_doc = "design/future/self-references.md"
+triggers = "Declaring a shape with a field whose type is the same shape — not yet enforced at compile time"
+
+# --- `foreign` keyword — FFI (design/mvp-scope.md v2+ section) ---
+[[deferred_language_feature]]
+name = "foreign"
+substitute = "Stdlib modules that need C interop (file I/O, networking, math) call C internally. User-facing FFI ships in v2+."
+why = "FFI has significant design surface: ownership across the boundary, type mapping, safety guarantees. Most v0.1 code does not need it. When v2+ ships, `foreign` will be the keyword for declaring foreign function bindings."
+ships_in = "v2+"
+design_doc = "design/mvp-scope.md"
+triggers = "Writing `foreign` as an identifier (not yet a reserved keyword)"
+
+# --- `gpu` keyword — GPU dispatch (design/mvp-scope.md v2+ section) ---
+[[deferred_language_feature]]
+name = "gpu"
+substitute = "GPU dispatch is not yet available. GPU compute workloads require v2+ and GPU dispatch support."
+why = "GPU dispatch requires kernel compilation to shader/compute languages — massive scope. It was tagged v2+ in the original design. When it ships, `gpu` will be the call-site keyword for dispatching to GPU kernels."
+ships_in = "v2+"
+design_doc = "design/mvp-scope.md"
+triggers = "Writing `gpu` as an identifier (not yet a reserved keyword)"
+
+# --- `--kernel` flag — no-runtime mode (design/future/no-runtime-mode.md) ---
 [[deferred_tooling_feature]]
-name = "PLACEHOLDER_DEFERRED_TOOL_PHASE_5B"
-substitute = ""
-why = "placeholder — Phase 5b populates this entry"
+name = "--kernel"
+substitute = "All programs currently require the full Yinz runtime. Bare-metal / kernel-mode targets ship in v0.3."
+why = "The `--kernel` (or `--bare`) compiler flag disables runtime-dependent features and requires the user to provide their own allocator, scheduler, and panic handler. Design is locked; implementation ships in v0.3."
 ships_in = "v0.3"
 design_doc = "design/future/no-runtime-mode.md"
-triggers = "placeholder — Phase 5b populates this entry"
+triggers = "Passing `--kernel` to `ynz build` (flag not yet recognized)"
+
+# --- Binary package format reservation (design/future/packages.md) ---
+[[deferred_tooling_feature]]
+name = "package-binary-format"
+substitute = "Compiled packages are not yet distributed. Source-level imports work within a single workspace. Binary package distribution ships in v0.2."
+why = "Yinz compiled packages must embed enough metadata for downstream consumers to do all compile-time analyses without re-parsing source. The binary format is reserved in v0.1 even though population happens in v0.2."
+ships_in = "v0.2"
+design_doc = "design/future/packages.md"
+triggers = "No user-facing trigger — binary format is a compiler-internal concern"
+
+# --- `--release` flag (design/future/release-mode.md) ---
+[[deferred_tooling_feature]]
+name = "--release"
+substitute = "All builds are currently debug builds (unoptimized, full debug info). Release builds ship in v0.4 or v0.5."
+why = "The `--release` flag enables LLVM optimization passes, strips debug info, and hardens panic/overflow behavior. Dev builds are the default; release builds are opt-in for production deployments."
+ships_in = "v0.4"
+design_doc = "design/future/release-mode.md"
+triggers = "Passing `--release` to `ynz build` (flag not yet recognized)"
 
 # ---------------------------------------------------------------------------
 # [[deferred_stdlib_api]] — RESERVED, zero entries in M1.
