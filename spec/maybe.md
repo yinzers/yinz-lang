@@ -104,7 +104,7 @@ let b: string | none = none
 ## Dot methods
 
 ```
-value.exists()      // does it have a value? → bool
+value.exists()      // does it have a value? → boolean
 value.or(default)   // get the value, or the fallback if none → T
 value.value         // get the raw value (compile error without an exists() check)
 ```

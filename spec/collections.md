@@ -136,7 +136,7 @@ rgb[5] = 100
 .count()            // number of items → number
 .unique()           // deduplicated copy
 .limit(n)           // cap to the first N items — returns new collection of at most N
-.contains(fn)       // does any item match? → bool
+.contains(fn)       // does any item match? → boolean
 .concat(other)      // combined copy — does not modify original
 .append(item)       // new collection with item added at the end
 .prepend(item)      // new collection with item added at the front
@@ -179,7 +179,7 @@ Map dot methods:
 .get(key)             // → maybe V (might not exist — see Maybe Types)
 .set(key, value)      // add or update one key
 .update({...})        // add or update multiple keys at once
-.has(key)             // does the key exist? → bool
+.has(key)             // does the key exist? → boolean
 .remove(key)          // delete by key
 .keys()               // → array<K>
 .values()             // → array<V>

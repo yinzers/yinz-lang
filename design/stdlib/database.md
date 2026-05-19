@@ -348,6 +348,59 @@ The caller gets a typed, structured error they can pattern match on — no strin
 
 ---
 
+## Embedded SQL Syntax + IDE Support
+
+The raw escape hatch needs a Yinz syntax that:
+
+1. Signals to the compiler "this content is SQL" so injection safety checks, compile-time validation, IDE coloring, and the formatter all engage
+2. Still passes typed parameters separately (never interpolated into the string)
+3. Looks natural in Yinz source
+
+**Open design question**: what is the syntax? Candidates:
+
+- `sql"INSERT INTO bars SELECT ..."` — a `sql` string prefix/tag (requires tagged string literals in the language)
+- `sql { INSERT INTO bars SELECT ... }` — a dedicated block keyword
+- `db.raw(sql"...", param1, param2)` — prefix inside the function call only
+
+The syntax decision belongs in the v0.24 execution plan's research phase. Whatever is chosen must be a single canonical form — no parallel `db.raw(string)` + `db.raw(sql"...")` options per `stdlib-design.md` Rule 2.
+
+**IDE coloring (ships with v0.24)**:
+
+The VSCode extension and LSP must provide SQL syntax coloring inside the embedded SQL construct. The LSP delivers this via embedded language injection — the same technique editors use for CSS-in-JS. The SQL content gets a SQL TextMate grammar scope injected at the boundaries of the construct. This is a v0.24 LSP feature, not v0.2.
+
+**Formatter behavior (ships with v0.24)**:
+
+`ynz fmt` formats SQL inside the embedded construct following standard SQL indentation conventions. Specific requirement from Patrick:
+
+- The first SQL keyword (`INSERT INTO`, `SELECT`, `FROM`, `WHERE`, `GROUP BY`, etc.) is indented at the surrounding `const`-indentation + project-standard indent width (2 or 4 spaces — decided when the formatter is designed in v0.2-M3; the same standard applies here)
+- Subsequent SQL lines follow standard SQL indentation relative to that baseline — column lists indented one level deeper than their keyword, `FROM`/`WHERE`/`GROUP BY` at the same level as `SELECT`, etc.
+
+Reference example (using 4-space indent, `const` at column 0):
+
+```
+const query = sql`
+    INSERT INTO bars
+    SELECT
+        symbol,
+        time_bucket(INTERVAL '5 minutes', timestamp) AS timestamp,
+        'fiveMinute'                                  AS timeframe,
+        count(*) < 5                                  AS incompleteBarData,
+        first(open  ORDER BY timestamp)               AS open,
+        max(high)                                     AS high,
+        min(low)                                      AS low,
+        last(close  ORDER BY timestamp)               AS close,
+        sum(volume)                                   AS volume,
+        sum(tradeCount)                               AS tradeCount
+    FROM bars
+    WHERE timeframe = 'oneMinute'
+    GROUP BY symbol, timestamp;
+`
+```
+
+The column-alignment of `AS alias` names (right-aligning the `AS` keyword across a column list) is optional — decide in the formatter research phase whether Yinz SQL formatting enforces that or leaves it to the user.
+
+---
+
 ## What This Does NOT Cover Yet
 
 - Exact query builder API / syntax

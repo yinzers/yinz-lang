@@ -49,7 +49,7 @@ Arguments come from the standard library, not from `entrypoint`'s parameters:
 ```
 function entrypoint() -> nothing {
   let args = cli.args()                    // all arguments → array<string>
-  let verbose = cli.flag(`verbose`)        // --verbose flag → bool
+  let verbose = cli.flag(`verbose`)        // --verbose flag → boolean
   let port = cli.option(`port`, `3000`)   // --port option → string with default
 }
 ```

@@ -921,7 +921,7 @@ impl<'a> Parser<'a> {
                 match name.as_str() {
                     "int" => Type::Int,
                     "float" => Type::Float,
-                    "bool" => Type::Bool,
+                    "boolean" => Type::Bool,
                     "number" => self.parse_number_type(),
                     "maybe" => self.parse_maybe_type(span, depth),
                     _ => {

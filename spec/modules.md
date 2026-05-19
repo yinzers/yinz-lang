@@ -25,7 +25,7 @@ export function createUser(data: UserInput) -> User errors {
 }
 
 // Private — only this file can use this
-function validateEmail(email: string) -> bool {
+function validateEmail(email: string) -> boolean {
   return email.contains(`@`)
 }
 ```

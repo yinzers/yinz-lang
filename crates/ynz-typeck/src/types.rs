@@ -142,7 +142,7 @@ pub fn type_name(t: &Type) -> String {
         Type::Int => "int".into(),
         Type::Float => "float".into(),
         Type::Number { .. } => "number".into(),
-        Type::Bool => "bool".into(),
+        Type::Bool => "boolean".into(),
         Type::Range { .. } => "range".into(),
         Type::Shape { name } => name.clone(),
         Type::Dynamic { contract } => format!("dynamic {contract}"),

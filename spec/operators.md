@@ -154,7 +154,7 @@ shape Addable {
 }
 
 shape Equatable {
-  equals(share self, share other: Self) -> bool
+  equals(share self, share other: Self) -> boolean
 }
 
 shape Comparable follows Equatable {
@@ -183,7 +183,7 @@ function add(share self: Vector2D, share other: Vector2D) -> Vector2D {
   return { x: self.x + other.x, y: self.y + other.y }
 }
 
-function equals(share self: Vector2D, share other: Vector2D) -> bool {
+function equals(share self: Vector2D, share other: Vector2D) -> boolean {
   return self.x == other.x && self.y == other.y
 }
 

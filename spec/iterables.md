@@ -151,7 +151,7 @@ If your iteration step can fail (I/O, network), follow the fallible contract ins
 shape ApiPager<T> follows FallibleIterable<T> {
   baseUrl: string
   hidden cursor: maybe string = none
-  hidden done: bool = false
+  hidden done: boolean = false
 }
 
 function next(lend self: ApiPager<T>) -> maybe T errors {

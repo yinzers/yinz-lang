@@ -29,7 +29,7 @@ The absolute minimum: the language compiles and runs a hello-world program. No s
 - Errors (`errors` keyword, flow-sensitive auto-propagation)
 - Ownership (`share`/`lend`/`give`/`copy`/`.freeze`)
 - Numeric types (`number` = decimal128 default, `number<N>` up to 4096, `float` = f64, `int` = i64)
-- Boolean type (`bool`, literals `true` / `false`)
+- Boolean type (`boolean`, literals `true` / `false`)
 - Concurrency keywords parse + type-check (`wait`, `background`) — runs SEQUENTIALLY (auto-parallelization comes in v0.3)
 - Iterables — built-in iteration over collections (`for (x in arr)`). Custom `follows Iterable<T>` is v1.0.
 - Modules (`import`, `export`, root-relative paths, aliases with `as`, duplicate-name compile error)

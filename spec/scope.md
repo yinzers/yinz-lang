@@ -46,7 +46,7 @@ function heal(lend player: Player) -> nothing {
   player.health = MAX_HEALTH          // accessible
 }
 
-function isDead(share player: Player) -> bool {
+function isDead(share player: Player) -> boolean {
   return player.health <= MIN_HEALTH  // accessible
 }
 ```

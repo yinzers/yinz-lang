@@ -176,7 +176,7 @@ function next(lend self: CircularBuffer<T>) -> maybe T {
 // I/O data — implements the fallible contract.
 shape ApiPager<T> follows FallibleIterable<T> {
   cursor: maybe string
-  hidden done: bool = false
+  hidden done: boolean = false
 }
 
 function next(lend self: ApiPager<T>) -> maybe T errors {

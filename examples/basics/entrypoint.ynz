@@ -31,11 +31,11 @@ function entrypoint() -> nothing {
   const playerName = `Cheddar`
   let score: int = 0
 
-  // Primitive types — int, float, number (decimal128), bool
+  // Primitive types — int, float, number (decimal128), boolean
   const startHealth: int = 100
   const damageMultiplier: float = 1.5
   const accountBalance: number = 1234.56     // decimal128, exact
-  const isActive: bool = true
+  const isActive: boolean = true
 
   // Arithmetic, comparison, boolean
   let combo = startHealth + 25
@@ -304,12 +304,12 @@ function fib(n: int) -> int {
 }
 
 // Mutual recursion — isEven calls isOdd and vice versa.
-function isEven(n: int) -> bool {
+function isEven(n: int) -> boolean {
   if (n == 0) { return true }
   return isOdd(n - 1)
 }
 
-function isOdd(n: int) -> bool {
+function isOdd(n: int) -> boolean {
   if (n == 0) { return false }
   return isEven(n - 1)
 }

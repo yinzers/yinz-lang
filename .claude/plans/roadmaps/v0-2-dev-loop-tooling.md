@@ -181,6 +181,19 @@ These are explicitly NOT v0.2 — listed here so a future chat reading this 3 mo
 - **Operator overloading + custom iterables** — v1.0 launch milestone.
 - **FFI, GPU, ML, markets, sized ints/floats, arbitrary-precision decimal** — v2+. Per the SSOT registry decision above, these get REGISTRY ENTRIES in M9 (so their compile errors are registry-driven) but no implementation.
 - **Self-hosting (Yinz compiler in Yinz)** — v2+.
+- **Embedded SQL IDE support (syntax coloring + formatting)** — Deferred to the database stdlib milestone (v0.6+). Rationale: the common case in Yinz is shapes + stdlib functions for DB access; raw SQL is the escape hatch for edge cases. The embedded SQL syntax (tagged template, block syntax, etc.) belongs in the database milestone design, not here — no point designing a syntax before the feature exists. IDE coloring and formatter support ship alongside that milestone. Formatting requirement to capture for that design: the first SQL keyword (`INSERT INTO`, `SELECT`, `FROM`, `WHERE`, etc.) is indented at the surrounding `const`-indentation + project-standard indent width (2 or 4 spaces — decided at design time); subsequent SQL lines follow standard SQL indentation from that baseline. Patrick's reference example:
+  ```
+  const query = sql`
+      INSERT INTO bars
+      SELECT
+          symbol,
+          time_bucket(INTERVAL '5 minutes', timestamp) AS timestamp,
+          ...
+      FROM bars
+      WHERE timeframe = 'oneMinute'
+      GROUP BY symbol, timestamp;
+  `
+  ```
 
 ## Risks
 

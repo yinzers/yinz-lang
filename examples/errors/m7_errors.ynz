@@ -42,10 +42,10 @@ function safeDivide(a: int, b: int) -> int errors {
 //   let y = x.or(0)
 // }
 
-// WHY: .failed() on a non-errors value — bool does not have .failed()
-// Uncomment to trigger: `bool does not have method 'failed'`
+// WHY: .failed() on a non-errors value — boolean does not have .failed()
+// Uncomment to trigger: `boolean does not have method 'failed'`
 // function badFailed() -> nothing {
-//   let x: bool = true
+//   let x: boolean = true
 //   if (x.failed()) {
 //     print(`wrong`)
 //   }
@@ -119,8 +119,8 @@ function splitCount() -> nothing {
 //   }
 // }
 
-// WHY: iterating over bool — not iterable
-// Uncomment to trigger: `bool is not iterable`
+// WHY: iterating over boolean — not iterable
+// Uncomment to trigger: `boolean is not iterable`
 // function iterateBool() -> nothing {
 //   for (x in true) {
 //     print(x.toString())

@@ -143,7 +143,7 @@ function loadConfig() -> Config {
 When you call an `errors` function, the result has these methods until you handle the error (or auto-propagation cascades it to the caller):
 
 ```ynz
-content.failed()           // did it fail? → bool
+content.failed()           // did it fail? → boolean
 content.message            // error description (only valid after .failed() check)
 content.suggestions        // array<string> of next steps (may be empty)
 content.trace              // array<Frame> — the call path

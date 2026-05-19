@@ -293,7 +293,7 @@ fn mangle_type(ty: &Type) -> String {
     match ty {
         Type::Int => "int".to_string(),
         Type::Float => "float".to_string(),
-        Type::Bool => "bool".to_string(),
+        Type::Bool => "boolean".to_string(),
         Type::String => "string".to_string(),
         Type::Nothing => "nothing".to_string(),
         Type::Shape { name } => name.clone(),

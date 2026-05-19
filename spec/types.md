@@ -61,7 +61,7 @@ function takeDamage(lend self: Player, amount: number) -> nothing {
   self.health = self.health - amount
 }
 
-function isAlive(share self: Player) -> bool {
+function isAlive(share self: Player) -> boolean {
   return self.health > 0
 }
 

@@ -73,7 +73,7 @@ Number of grapheme clusters. `O(n)` via `unicode-segmentation`.
 ### `.contains(substr)`
 
 ```
-.contains(substr: string) -> bool
+.contains(substr: string) -> boolean
 ```
 
 Returns `true` if `substr` appears anywhere in `self`. For patterns ≥ 16 bytes, uses SIMD-accelerated `memchr::memmem`. For patterns ≤ 15 bytes, uses scalar scan. Pure read. No allocation. `stdlib-design.md` Rule 1: no I/O.
@@ -93,7 +93,7 @@ Returns the byte-offset of the first occurrence of `substr`, or `none`. Same SIM
 ### `.startsWith(prefix)`
 
 ```
-.startsWith(prefix: string) -> bool
+.startsWith(prefix: string) -> boolean
 ```
 
 Returns `true` if `self` starts with `prefix`. Byte-level prefix check. `O(prefix.byteCount())`.
@@ -101,7 +101,7 @@ Returns `true` if `self` starts with `prefix`. Byte-level prefix check. `O(prefi
 ### `.endsWith(suffix)`
 
 ```
-.endsWith(suffix: string) -> bool
+.endsWith(suffix: string) -> boolean
 ```
 
 Returns `true` if `self` ends with `suffix`. Byte-level suffix check.

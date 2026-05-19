@@ -26,8 +26,8 @@ let v: float = 9.81
 let n = v.toNumber()     // 9.81 as number (exact decimal)
 let s = v.toString()     // "9.81"
 
-// Bool conversions
-let active: bool = true
+// Boolean conversions
+let active: boolean = true
 let s = active.toString() // "true"
 ```
 

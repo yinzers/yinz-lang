@@ -26,6 +26,25 @@
     "ynz",
     "clippy",
     "typeck",
-    "typecheck"
+    "typecheck",
+    "SSOT",
+    "stdlib",
+    "Stdlib",
+    "ynzfmt",
+    "postaudit",
+    "proptest",
+    "recompiles",
+    "UFCS",
+    "ints",
+    "codegen",
+    "extname",
+    "parameterless",
+    "HMAC",
+    "zstd",
+    "EBNF",
+    "dogfood",
+    "dogfooding",
+    "MPFR",
+    "autodiff"
   ]
 }
