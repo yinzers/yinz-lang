@@ -155,7 +155,7 @@ Always paired. `date.now()`, `date.from()`, comparisons, formatting, parsing. `d
 
 ## v0.11 — `db` (database)
 
-Postgres and MySQL to start. Additional drivers (SQLite, etc.) deferred to a later milestone.
+**DuckDB and Postgres to start, in that priority order**: DuckDB first (embedded, in-process — easiest "hello world with a database"), then Postgres (network database, client/server). **All other drivers (MySQL, SQLite, MariaDB, MS SQL, etc.) deferred until after v1.0 launch.**
 
 The `db` module is one of the most substantial stdlib entries — see `design/stdlib/database.md` for the full early design, including the embedded SQL syntax open question. Headline features:
 

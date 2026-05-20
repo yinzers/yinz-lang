@@ -10,7 +10,14 @@
 
 ## Scope (rough idea)
 
-A built-in `db` module supporting MySQL and Postgres to start. Additional drivers (SQLite, etc.) deferred to a later milestone.
+A built-in `db` module supporting **DuckDB and Postgres to start, in that priority order**:
+
+1. **DuckDB** (priority 1) — embedded analytical DB, in-process, zero-network-config. Easiest path to "hello world with a database" for Yinz users.
+2. **Postgres** (priority 2) — the network-database workhorse. Once DuckDB ships and the API shape is locked, Postgres gets implemented against that same surface.
+
+**All other drivers (MySQL, SQLite, MariaDB, MS SQL, etc.) deferred until after v1.0 launch.** Don't expand the matrix until DuckDB + Postgres are both shipping and stable.
+
+> **DuckDB vs Postgres architectural note**: DuckDB is embedded (in-process, no network). Postgres is client/server (TCP wire protocol). Several sections below ("binary wire protocol by default", connection pooling, TLS, network retries) apply to Postgres but NOT to DuckDB embedded. The `db` module surface should hide this distinction at the API level — the developer writes `db.query()` regardless — but the implementation diverges. Flagged as a discussion point in the "Discussion Points (not yet decided)" section below.
 
 ---
 
@@ -38,9 +45,9 @@ The compiler generates the exact byte-reading code for a given struct shape once
 
 ## Fix 2: Binary Wire Protocol by Default
 
-Both Postgres and MySQL support binary wire protocols (not just text). The text protocol sends everything as strings which must be parsed at runtime. The binary protocol sends typed bytes directly.
+**Applies to Postgres (and any future network-DB backend).** Postgres supports a binary wire protocol in addition to text. The text protocol sends everything as strings which must be parsed at runtime. The binary protocol sends typed bytes directly. Binary mode by default eliminates all string-parsing overhead for numbers, booleans, dates, and other primitive types.
 
-Binary mode by default eliminates all string-parsing overhead for numbers, booleans, dates, and other primitive types.
+**DuckDB embedded note**: DuckDB is in-process, so there is no wire protocol — values cross the FFI boundary as typed C-struct fields. The "binary mode" framing is moot for DuckDB; the same parsing-overhead-avoided goal is achieved structurally by virtue of not having a wire at all.
 
 ---
 
@@ -94,7 +101,7 @@ Postgres has a `COPY` command for bulk inserts that bypasses row-by-row INSERT o
 
 ## How Byte Translation Works
 
-The Postgres and MySQL wire protocols are public specifications defining exactly how every type is encoded:
+The Postgres wire protocol is a public specification defining exactly how every type is encoded:
 
 - `number` → 8-byte IEEE 754 float
 - `string` → 4-byte length prefix + UTF-8 bytes
@@ -102,6 +109,8 @@ The Postgres and MySQL wire protocols are public specifications defining exactly
 - `boolean` → 1 byte
 
 The Yinz compiler authors implement these translations once per supported database. Wire protocols don't change, so these translations never change. Given a user-defined type, the compiler generates a serializer and deserializer for that exact shape — one pass, no runtime lookups, no branching.
+
+**DuckDB note**: DuckDB has its own internal value representation (vectorized columnar). The compiler still generates a per-shape deserializer, but it reads from DuckDB's in-process result buffers via FFI rather than a wire protocol. Same end result (one pass, no intermediate allocation); different mechanism.
 
 ---
 
@@ -151,7 +160,28 @@ The goal is to push the structured layer far enough that raw SQL is rarely neede
 
 ### API shape
 
-No dot-chain notation. The Sequelize style (structured object/options) is a good starting point — worth evaluating whether we can improve on it, but don't start from scratch for the sake of it. Autocomplete works without dot notation because the stdlib defines the known types.
+**Top-level dot notation only — no chained query builders.** A single call on the `db` object (e.g., `db.findFirst(Order, {...})`, `db.findMany(Order, {...})`, `db.count(Order, {...})`) takes a structured options object that describes the entire query. We do NOT use the Laravel/Eloquent / Knex / Sequelize-scope chained-builder style.
+
+❌ **Banned (chained dot-method builder)**:
+```
+db.find(Order)
+  .where({ status: "shipped" })
+  .orderBy("createdAt", "desc")
+  .limit(10)
+```
+
+✅ **Yinz style (one top-level dot call + structured options)**:
+```
+let orders = db.findMany(Order, {
+    where:   { status: "shipped" },
+    orderBy: { createdAt: "desc" },
+    limit:   10,
+})
+```
+
+The Sequelize structured-object style is the closest existing reference and a good starting point — worth evaluating whether we can improve on it, but don't start from scratch for the sake of it. Autocomplete works because the options object's shape is fully typed against the model.
+
+Why no chaining: chained builders force you to mentally re-execute the chain to know the resulting SQL; they fragment the query across multiple lines that each look like a complete value; they make the type of each intermediate stage either incoherent (Sequelize) or absurdly complex (Knex with generics). One options object = one SQL statement, fully visible at one call site.
 
 ### Compiler as query advisor (Rule 11)
 
@@ -289,7 +319,7 @@ With schema-first types, the compiler knows the full schema at compile time. Que
 
 Each migration runs inside a single database transaction. If anything fails, the whole migration rolls back — the DB is left exactly as it was before the migration started. No partial state, no manual cleanup.
 
-Postgres supports transactional DDL natively. MySQL does not for DDL statements — this is a known limitation worth documenting when MySQL support is designed.
+Postgres and DuckDB both support transactional DDL natively (DuckDB is fully ACID, including for schema changes). If a non-transactional-DDL backend is added post-v1.0 (MySQL is the canonical example), the migration runner needs a separate code path that handles partial-failure recovery without transaction rollback — documented when that driver is added.
 
 ### Pre-flight schema validation
 
@@ -356,19 +386,25 @@ The raw escape hatch needs a Yinz syntax that:
 2. Still passes typed parameters separately (never interpolated into the string)
 3. Looks natural in Yinz source
 
-**Open design question**: what is the syntax? Candidates:
+**Direction (not fully locked — see Discussion Points)**: a `.raw` method on `db` (better name TBD) is the end goal. The SQL gets passed as a tagged-string-style literal so the compiler/IDE know "this is SQL, treat the content as SQL." Both pieces combine — they're not competing alternatives:
 
-- `sql"INSERT INTO bars SELECT ..."` — a `sql` string prefix/tag (requires tagged string literals in the language)
-- `sql { INSERT INTO bars SELECT ... }` — a dedicated block keyword
-- `db.raw(sql"...", param1, param2)` — prefix inside the function call only
+```
+let result = db.raw(sql`SELECT * FROM orders WHERE status = ?`, "shipped")
+```
 
-The syntax decision belongs in the v0.24 execution plan's research phase. Whatever is chosen must be a single canonical form — no parallel `db.raw(string)` + `db.raw(sql"...")` options per `stdlib-design.md` Rule 2.
+Here `.raw` is the call surface; `sql\`...\`` is how the string is passed so the IDE knows to syntax-highlight inside the backticks and the compiler engages injection-safety + (eventually) compile-time SQL validation. A plain string passed to `.raw` could also be supported — but plain strings get no IDE highlighting and no compile-time SQL checks, so the `sql\`...\`` form is the recommended path.
 
-**IDE coloring (ships with v0.24)**:
+**Open sub-questions**:
+- Is `.raw` the right name? Candidates: `.sql`, `.execute`, `.exec`. `.raw` is short but doesn't convey "this returns typed rows."
+- If plain strings are also accepted (no `sql\`...\`` tag), is that a parallel-API violation per `stdlib-design.md` Rule 2? Likely yes — pick one form.
 
-The VSCode extension and LSP must provide SQL syntax coloring inside the embedded SQL construct. The LSP delivers this via embedded language injection — the same technique editors use for CSS-in-JS. The SQL content gets a SQL TextMate grammar scope injected at the boundaries of the construct. This is a v0.24 LSP feature, not v0.2.
+The syntax decision belongs in the v0.11 execution plan's research phase. Whatever is chosen must be a single canonical form.
 
-**Formatter behavior (ships with v0.24)**:
+**IDE coloring (ships with v0.11)**:
+
+The VSCode extension and LSP must provide SQL syntax coloring inside the embedded SQL construct. The LSP delivers this via embedded language injection — the same technique editors use for CSS-in-JS. The SQL content gets a SQL TextMate grammar scope injected at the boundaries of the construct. This is a v0.11 LSP feature.
+
+**Formatter behavior (ships with v0.11)**:
 
 `ynz fmt` formats SQL inside the embedded construct following standard SQL indentation conventions. Specific requirement from Patrick:
 
@@ -401,11 +437,80 @@ The column-alignment of `AS alias` names (right-aligning the `AS` keyword across
 
 ---
 
+## Discussion Points (not yet decided)
+
+These are open questions Patrick wants to think through at design time. Captured here so they don't get lost. Not decisions — discussion seeds.
+
+### Auto-flush / auto-save semantics
+
+When a developer does `quote.save()` on a row-bound value, what actually hits the database and when?
+
+- **Immediate flush** (every `.save()` immediately writes to the DB): simplest mental model, but kills throughput on bulk operations where the developer mutates many rows in a loop.
+- **Auto-buffered with end-of-scope flush** (`.save()` queues the write; the buffer flushes when the surrounding scope ends, transaction commits, or the iterator/connection closes): better perf, but the user might be surprised that "save" doesn't immediately persist.
+- **Explicit `.flush()` required** after `.save()`: most predictable, but adds ceremony that other ORMs don't.
+
+Sub-question: does Yinz's ownership model give us a clean "flush on scope exit" mechanism (the same way arena `scratch` blocks auto-free on exit)? That would be the most Yinz-native answer — `.save()` queues, scope exit flushes, no explicit `.flush()` needed.
+
+DuckDB and Postgres have different buffering semantics under the hood (DuckDB is in-process so the cost asymmetry is different) — the surface API has to be the same but the implementation may differ.
+
+### Transactions — already a partial design
+
+Transactions are touched in two existing sections of this doc:
+- "Transaction scoping via ownership" (under "Things Sequelize Misses") — the idea that the ownership model could scope a transaction so forgetting to pass it is a compile error.
+- "Transaction config" (under "Connection Pool and Retry Configuration") — deadlock retry attempts, backoff, isolation level.
+- "Deadlock auto-retry for transactions" — automatic retry on deadlock with configurable backoff.
+
+Discussion seed: lock in the scope-binding API early so the whole stdlib is designed around it. Strawman:
+
+```
+db.transact(function (tx) {
+    let order = tx.find(Order, { id: 42 })
+    order.status = "shipped"
+    order.save()
+    // tx auto-commits on successful function exit, auto-rolls-back on error or panic
+})
+```
+
+The `tx` handle is the only thing that can write inside the transaction — there's no global `db.save()` accessible from inside the lambda. That makes "forgot to pass the transaction" a compile error structurally.
+
+### Gradual / accumulated mutations (build up state, save once)
+
+Pattern Patrick wants supported:
+
+```
+let order = db.find(Order, { id: 42 })
+order.status = "shipped"
+order.shippedAt = date.now()
+order.trackingNumber = "1Z999AA..."
+order.save()    // one INSERT/UPDATE round-trip, not three
+```
+
+Three mutations, one save. The compiler/runtime should accumulate the changes and emit a single UPDATE statement at `.save()` time, NOT three round-trips.
+
+This intersects with:
+- **Dirty-field tracking** (already flagged as "open question" in the CRUD Convenience Layer section) — Yinz's ownership model may give us a cleaner mechanism than Sequelize's per-instance dirty-state.
+- **Auto-flush semantics** above — if auto-flush is "on scope exit," then `.save()` becomes the explicit "I'm done mutating this row" marker.
+
+Sub-question: should there be a `db.build()` or similar primitive for the "construct a value from scratch, then INSERT once at the end" case? Or does annotation-driven literal construction (`const order: Order = { ... }`) + `.save()` cover it cleanly?
+
+### DuckDB-vs-Postgres surface unification
+
+DuckDB is embedded; Postgres is client/server. The user shouldn't care which one they're talking to at the API level — but several existing sections in this doc assume client/server semantics:
+
+- "Binary wire protocol by default" — irrelevant for DuckDB embedded (no wire)
+- "Connection pool and retry configuration" — pool/retry don't apply to embedded DuckDB
+- "TLS by default" — irrelevant for embedded
+- "Postgres COPY protocol" — DuckDB has an equivalent (Appender API + its own COPY). Worth designing the bulk-insert primitive once, with both backends implementing it.
+
+The unifying surface needs design work. Strawman: `db.connect(...)` returns a `Database` handle; the type of the connection string (`duckdb://path.db` vs `postgres://...`) determines which backend implementation is used; the user-facing API is identical on both.
+
+---
+
 ## What This Does NOT Cover Yet
 
 - Exact query builder API / syntax
 - Migrations
-- Transactions
-- Connection pooling
+- Transactions (transaction scope binding — see Discussion Points)
+- Connection pooling (Postgres-specific; N/A for DuckDB embedded)
 - Schema inference / compile-time schema validation
-- Additional drivers beyond MySQL and Postgres
+- Additional drivers beyond DuckDB and Postgres (deferred until after v1.0 launch)

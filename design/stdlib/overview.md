@@ -58,23 +58,24 @@ Each module ships in a specific Yinz version per `design/mvp-scope.md`. The gran
 | `cli` + `env` + `process` | **v0.8** | Tight trio; see [cli.md](cli.md) |
 | `json` | **v0.9** | Part of [data.md](data.md) |
 | `date` + `duration` | **v0.10** | Tight pair; see [dates.md](dates.md) |
-| `log` (basic) | **v0.11** | Logging framework v0.22 |
-| `random` | **v0.12** | |
-| Testing framework | **v0.13** | Language feature, not stdlib (`test` keyword) |
-| `regex` | **v0.14** | |
-| `http` client | **v0.15** | Three-tier API (helpers + builder + raw sockets) — see [http.md](http.md) |
-| `stats` | **v0.16** | Built on math |
-| `crypto` / `hash` | **v0.17** | SHA, AES, HMAC, KDF |
-| `compression` | **v0.18** | gzip, zstd, maybe brotli |
-| `terminal` | **v0.19** | ANSI colors, cursor |
-| `csv` | **v0.20** | Part of [data.md](data.md) |
-| `http.server` | **v0.21** | Builds on http client |
-| Logging framework | **v0.22** | Structured logging, sinks, filters; builds on basic `log` |
-| Process spawning | **v0.23** | `process.spawn`, pipes, signals; distinct from v0.8 `process` |
+| `db` (database) | **v0.11** | DuckDB + Postgres only at launch; other drivers (MySQL, SQLite, etc.) deferred until after v1.0. See [database.md](database.md) |
+| `log` (basic) | **v0.12** | Logging framework v0.23 |
+| `random` | **v0.13** | |
+| Testing framework | **v0.14** | Language feature, not stdlib (`test` keyword) |
+| `regex` | **v0.15** | |
+| `http` client | **v0.16** | Three-tier API (helpers + builder + raw sockets) — see [http.md](http.md) |
+| `stats` | **v0.17** | Built on math |
+| `crypto` / `hash` | **v0.18** | SHA, AES, HMAC, KDF |
+| `compression` | **v0.19** | gzip, zstd, maybe brotli |
+| `terminal` | **v0.20** | ANSI colors, cursor |
+| `csv` | **v0.21** | Part of [data.md](data.md) |
+| `http.server` | **v0.22** | Builds on http client |
+| Logging framework | **v0.23** | Structured logging, sinks, filters; builds on basic `log` |
+| Process spawning | **v0.24** | `process.spawn`, pipes, signals; distinct from v0.8 `process` |
 | `ml` / `tensor` | **v2+** | DEFERRED — see [ml.md](ml.md) and `design/mvp-scope.md#v2--deferred-features` |
 | `markets` | **v2+** | DEFERRED — see [markets.md](markets.md) and `design/mvp-scope.md#v2--deferred-features` |
 | TCP/UDP networking beyond `http` | **v2+** | DEFERRED |
-| Database drivers | **packages only** | Not in stdlib; community ships via package registry (v1.2+) |
+| Additional DB drivers (MySQL, SQLite, MariaDB, MS SQL, etc.) | **post-v1.0** | DuckDB + Postgres ship in stdlib at v0.11; other backends deferred until core is stable |
 
 For language features (not stdlib) — strings, collections, concurrency keywords — see the relevant `spec/*.md` and `design/*.md`. All language features ship in v0.1.
 
@@ -85,14 +86,14 @@ For language features (not stdlib) — strings, collections, concurrency keyword
 The questions that previously lived in `design/open-questions.md` have been resolved:
 
 - **Package manager design** — RESOLVED. See `design/packages.md`. Ships v0.5.
-- **Testing framework** — RESOLVED. Built into the language as the `test` keyword. See `design/testing.md`. Ships v0.13.
-- **Logging framework** — RESOLVED. Basic `log` ships v0.11; full framework v0.22.
-- **Regex** — Ships v0.14. Engine choice + detailed API designed at that version.
-- **Crypto / hashing** — Ships v0.17.
-- **Networking beyond HTTP** — Raw sockets at the bottom of the http module (v0.15) provide the floor. TCP/UDP as standalone modules deferred to v2+.
-- **Process spawning** — Ships v0.23.
+- **Testing framework** — RESOLVED. Built into the language as the `test` keyword. See `design/testing.md`. Ships v0.14.
+- **Logging framework** — RESOLVED. Basic `log` ships v0.12; full framework v0.23.
+- **Regex** — Ships v0.15. Engine choice + detailed API designed at that version.
+- **Crypto / hashing** — Ships v0.18.
+- **Networking beyond HTTP** — Raw sockets at the bottom of the http module (v0.16) provide the floor. TCP/UDP as standalone modules deferred to v2+.
+- **Process spawning** — Ships v0.24.
 - **Environment variables** — RESOLVED. `env` module ships in the v0.8 CLI trio.
-- **Compression** — Ships v0.18.
-- **Database drivers** — Not stdlib. Community packages from v1.2 onwards.
+- **Compression** — Ships v0.19.
+- **Database (`db` module)** — RESOLVED. Ships v0.11 with **DuckDB + Postgres only**. All other drivers (MySQL, SQLite, MariaDB, MS SQL, etc.) **deferred until after v1.0 launch**. See `design/stdlib/database.md`.
 
 Open questions remaining: the per-module API designs themselves (designed at each module's version turn). The list of modules is locked.

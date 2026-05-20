@@ -41,7 +41,7 @@ The standard library is always available. You don't import it. Just use it:
 ```ynz
 let x = math.sqrt(16)          // ships v0.7
 let content = file.read(`data.txt`)  // ships v0.6
-let response = http.get(`https://api.example.com`)  // ships v0.15
+let response = http.get(`https://api.example.com`)  // ships v0.16
 let now = date.now()            // ships v0.10
 ```
 
