@@ -4,6 +4,10 @@ use std::{
     time::Instant,
 };
 
+// Runtime library bytes — embedded at compile time, extracted to a temp file at link time.
+// Same mechanism as ynz-driver/src/build.rs. The ynz-watch build.rs emits YNZ_RT_LIB_PATH.
+static RUNTIME_LIB_BYTES: &[u8] = include_bytes!(env!("YNZ_RT_LIB_PATH"));
+
 use ynz_diagnostics::render;
 
 use crate::{
@@ -145,6 +149,16 @@ fn write_binary(object_bytes: &[u8], binary_path: &Path) -> Result<()> {
         reason: e.to_string(),
     })?;
 
+    // Extract embedded runtime library to a temp file for the linker.
+    let rt_tmp = tempfile::NamedTempFile::new().map_err(|e| WatchError::CodegenWrite {
+        path: binary_path.to_path_buf(),
+        reason: format!("could not create temp file for runtime library: {e}"),
+    })?;
+    fs::write(rt_tmp.path(), RUNTIME_LIB_BYTES).map_err(|e| WatchError::CodegenWrite {
+        path: binary_path.to_path_buf(),
+        reason: format!("could not write runtime library to temp file: {e}"),
+    })?;
+
     // Link — probe the same candidates as ynz build (clang-18 first).
     let linker = ["clang-18", "clang", "cc", "gcc", "g++"]
         .iter()
@@ -165,11 +179,13 @@ fn write_binary(object_bytes: &[u8], binary_path: &Path) -> Result<()> {
         .arg("-o")
         .arg(binary_path)
         .arg(&obj_path)
+        .arg(rt_tmp.path()) // runtime library: ynz_string_*, ynz_siphash_*, etc.
         .status()
         .map_err(|e| WatchError::CodegenWrite {
             path: binary_path.to_path_buf(),
             reason: format!("could not invoke linker `{linker}`: {e}"),
         })?;
+    // rt_tmp dropped here — linker already finished reading it.
 
     // Remove object file regardless of link outcome.
     let _ = fs::remove_file(&obj_path);

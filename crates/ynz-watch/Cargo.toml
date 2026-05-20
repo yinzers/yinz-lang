@@ -33,12 +33,14 @@ memory-stats.workspace = true
 # Ctrl+C signal handling (cross-platform; wraps SetConsoleCtrlHandler on Windows, signal(2) on Unix)
 ctrlc.workspace = true
 
+# Runtime library extraction to temp file during linking
+tempfile.workspace = true
+
 # Unix graceful child kill (SIGTERM + process group)
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["signal", "process"] }
 
 [dev-dependencies]
-tempfile.workspace = true
 assert_cmd.workspace = true
 predicates.workspace = true
 insta = { workspace = true, features = ["redactions"] }
