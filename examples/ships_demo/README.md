@@ -1,4 +1,6 @@
-# Ships Demo — Multi-Entry Project Layout Preview (v0.22)
+# `examples/ships_demo/` — Multi-Entry Project Layout Preview (v0.22)
+
+**Layout: multi-entry project** (N binaries that ship from one codebase). For the canonical single-entry shape that the other ~95% of Yinz projects use, see `../basics/` instead.
 
 > **Status: v0.22 preview, NOT YET BUILDABLE.** This directory demonstrates the proposed multi-entry project layout that lands with the package manager in v0.22. Today's compiler accepts only a single `entry = "..."` in `yinz.toml`. The `[entries]` table shown here is the v0.22 target schema — `ynz build` from this directory currently fails. Read these files as documentation-by-example, not as runnable code.
 

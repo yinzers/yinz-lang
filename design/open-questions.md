@@ -118,7 +118,9 @@ Pittsburgh-flavored pick (Pirates), 5-letter typo-resistant, library-ship vs bin
 
 ### Concrete example
 
-See `examples/ships_demo/` for a runnable-once-v0.22-lands demo project showing a single `yinz.toml` with three entries (two binary ships, one shared folder), root-relative cross-folder imports, and the build commands the `[entries]` table enables.
+See `examples/ships_demo/` for a runnable-once-v0.22-lands demo project showing a single `yinz.toml` with two binary ships, one shared folder, root-relative cross-folder imports, and the build commands the `[entries]` table enables.
+
+Single-entry layout (the v0.1 default, ~95% case) is demonstrated by `examples/basics/` — same one-yinz.toml model but with `entry =` instead of `[entries]`, and no `ships/` folder needed. See `examples/README.md` for when to pick which.
 
 ### What v0.22 has to add to the compiler
 

@@ -1,5 +1,7 @@
 # `examples/basics/` — Yinz v0.1 Language Showcase
 
+**Layout: single-entry project** (the canonical Yinz shape for ~95% of projects). One `yinz.toml`, one `entrypoint.ynz`, code organized into `services/` and `utils/` subfolders imported root-relatively. No `[entries]` table, no `ships/` folder — that's only for multi-entry projects (see `../ships_demo/` for that layout, available in v0.22).
+
 A single growing project that demonstrates **every v0.1 language feature** as it ships. Compile + run after each milestone to see the language in action.
 
 ## How to run
