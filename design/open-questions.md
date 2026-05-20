@@ -132,6 +132,21 @@ Single-entry layout (the v0.1 default, ~95% case) is demonstrated by `examples/p
 
 These are all incremental over today's single-entry compiler. No new IR, no new typeck pass — just driver/manifest/CLI plumbing.
 
+### Diagnostic: pre-v0.22 builds of a multi-entry project
+
+**Observation captured 2026-05-20 from sweeping `examples/stadium-fleet/`** (the multi-entry preview demo). When today's single-entry compiler is pointed at a directory that contains multiple `entrypoint()` functions — which is the natural shape of a multi-entry project even before `[entries]` parsing lands — it produces this diagnostic:
+
+> Error: Project has more than one `entrypoint` function — defined in `…/ships/concessions/entrypoint.ynz` and `…/ships/scoreboard/entrypoint.ynz`.
+
+That's *technically correct* (the single-entry rule says exactly one entry per project), but it's the wrong **teaching** message for someone who's intentionally trying out the multi-entry layout per `examples/stadium-fleet/`. They get told "you have too many entrypoints" instead of "you're using the multi-entry layout; `[entries]` table parsing arrives in v0.22."
+
+**v0.22 fix**: when the parser sees a project with no `entry =` but with multiple files containing `entrypoint()` functions, OR when it sees a `[entries]` table at all, the diagnostic should switch from "more than one `entrypoint`" to a multi-entry-aware path:
+
+- If `[entries]` is present in yinz.toml → parse it, build the named entries (the new behavior).
+- If multiple `entrypoint` functions exist with no `[entries]` table → emit a teaching diagnostic that points the user at `examples/stadium-fleet/` and `examples/README.md` for the multi-entry layout, suggesting they add an `[entries]` table.
+
+The current "more than one entrypoint" error message is a candidate to rewrite as a `entries-table-suggestion` lint that fires post-parse, ahead of the single-entry uniqueness check, so the user gets the welcoming "did you mean multi-entry?" message rather than the harsh "too many entrypoints" error.
+
 ### Cargo feature-unification problem
 
 When workspace support is designed, the Cargo feature unification problem must be addressed explicitly: in Cargo, when multiple workspace members share a dependency, Cargo unifies all enabled features into one build — so a feature enabled by any member is enabled for all of them, even members that shouldn't have it. This causes unwanted build dependencies (e.g., needing cmake on machines building only a subset of the workspace) and binary size inflation.
