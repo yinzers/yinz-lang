@@ -19,6 +19,8 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Later (idea bin — not committed)
 
+- [ ] **lsp-vs-cli-exact-divergence** — `regression_lsp_vs_cli_divergence` currently asserts boolean error-presence agreement (CLI exits non-zero ↔ LSP publishes ≥1 diagnostic). Exact diagnostic count matching requires `ynz build --json` structured output (ariadne pretty-print is unreliable to count via regex). Add a `--json` output mode to `ynz-driver` then tighten this test to count-level assertions. Deferred from v0.2-M2 Phase 8.
+
 - [ ] **lsp-completion-typeck-receiver-narrowing** — wire `module_signatures_query` into the LSP completion handler to narrow after-dot completions by the receiver's actual type (e.g. `score.` shows only `int` methods when `score: int`). Requires `type_of_expression_at_offset(db, source, byte_offset) -> Option<Type>` helper in ynz-typeck (not yet exposed). Deferred from v0.2-M2 Phase 4; the registry adapter correctly filters by receiver type when given `Some("int")` — the LSP server always passes `None` until this is wired. Trigger: when ynz-typeck exposes a per-offset type query.
 
 - [ ] **vscode-extension-ci-workflow** — GitHub Actions to build + publish `tooling/vscode-ynz/` on release tags (currently manual). Deferred from v0.2-M2 Phase 7; M2 ships extension via local cargo+npm or marketplace publish, no CI yet. Pick up whenever marketplace publishing automation is wanted OR when a non-Patrick contributor needs to repro the build.

@@ -145,6 +145,18 @@ impl HarnessClient {
             lsp_server::Message::Request(_) => json!({ "_unexpected": "server_request" }),
         })
     }
+
+    /// Like recv_response() but with a timeout; returns None if nothing arrives.
+    /// Unlike try_recv_timeout(), notifications include their `params` field.
+    pub fn try_recv_with_params(&self, dur: std::time::Duration) -> Option<Value> {
+        self.conn.receiver.recv_timeout(dur).ok().map(|msg| match msg {
+            lsp_server::Message::Response(r) => r.result.unwrap_or(serde_json::Value::Null),
+            lsp_server::Message::Notification(n) => {
+                json!({ "_notification": n.method, "params": n.params })
+            }
+            lsp_server::Message::Request(_) => json!({ "_unexpected": "server_request" }),
+        })
+    }
 }
 
 // ─── Subprocess harness ───────────────────────────────────────────────────────
@@ -202,6 +214,13 @@ impl SubprocessHarness {
     }
 
     pub fn kill(mut self) {
+        self.child.kill().ok();
+        self.child.wait().ok();
+    }
+}
+
+impl Drop for SubprocessHarness {
+    fn drop(&mut self) {
         self.child.kill().ok();
         self.child.wait().ok();
     }
