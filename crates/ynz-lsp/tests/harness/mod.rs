@@ -218,3 +218,10 @@ impl SubprocessHarness {
         self.child.wait().ok();
     }
 }
+
+impl Drop for SubprocessHarness {
+    fn drop(&mut self) {
+        self.child.kill().ok();
+        self.child.wait().ok();
+    }
+}

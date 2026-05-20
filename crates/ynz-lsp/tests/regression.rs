@@ -154,7 +154,7 @@ fn regression_lsp_vs_cli_divergence() {
             .args(["build", path.to_str().expect("path is valid UTF-8")])
             .output();
 
-        let cli_count = match cli_output {
+        let cli_has_errors = match cli_output {
             Err(_) => {
                 eprintln!(
                     "regression_lsp_vs_cli_divergence: could not run CLI for {}; skipping",
@@ -163,24 +163,26 @@ fn regression_lsp_vs_cli_divergence() {
                 continue;
             }
             Ok(output) => {
-                // Count "error[" occurrences in stderr as a proxy for error count.
-                // The CLI prints one error block per diagnostic.
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                stderr.matches("error[").count() + stderr.matches("Error:").count()
+                // CLI exits non-zero when there are errors. stderr content is ariadne
+                // pretty-printed; we do NOT count individual diagnostics here because
+                // ariadne's rendering (spans, notes, suggestions) produces variable line
+                // counts per diagnostic. Exact count matching requires `ynz build --json`
+                // (structured output not yet implemented — tracked in todos.md
+                // "lsp-vs-cli-exact-divergence"). The invariant we CAN assert reliably
+                // is: CLI sees errors ↔ LSP sees errors (boolean agreement).
+                !output.status.success()
             }
         };
 
-        // Allow a tolerance of ±2: the LSP may group related spans differently
-        // from the CLI (which prints each span separately), and multi-error
-        // recovery can differ slightly between the two pipelines.
-        let tolerance = 2usize;
-        let diff = lsp_count.abs_diff(cli_count);
-        assert!(
-            diff <= tolerance,
-            "LSP vs CLI diagnostic count divergence for {} exceeds tolerance {}: \
-             LSP={lsp_count}, CLI={cli_count}",
+        let lsp_has_errors = lsp_count > 0;
+        assert_eq!(
+            lsp_has_errors, cli_has_errors,
+            "LSP vs CLI error presence disagreement for {}: \
+             LSP reported {} diagnostics (has_errors={lsp_has_errors}), \
+             CLI exited with success={} (has_errors={cli_has_errors})",
             path.display(),
-            tolerance
+            lsp_count,
+            !cli_has_errors
         );
     }
 }
