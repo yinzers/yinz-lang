@@ -161,6 +161,7 @@ fn write_binary(object_bytes: &[u8], binary_path: &Path) -> Result<()> {
         .unwrap_or("cc");
 
     let status = Command::new(linker)
+        .arg("-no-pie") // LLVM emits non-PIC relocations; -no-pie matches (mirrors ynz build)
         .arg("-o")
         .arg(binary_path)
         .arg(&obj_path)
