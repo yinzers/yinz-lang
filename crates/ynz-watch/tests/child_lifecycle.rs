@@ -44,7 +44,7 @@ fn check_mode_does_not_spawn_child() {
 
     let mut current_child: Option<ChildHandle> = None;
 
-    let _outcome = rebuild_one(&mut db, &path, &path, &out_dir, true, &mut current_child);
+    let _outcome = rebuild_one(&mut db, &path, &path, &out_dir, true, &mut current_child, false);
 
     assert!(
         current_child.is_none(),

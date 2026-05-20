@@ -182,10 +182,10 @@ fn write_binary(object_bytes: &[u8], binary_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Shared binary-write + child-spawn logic, called by both text-mode and JSON-mode paths.
+/// Binary-write + child-spawn step, shared between text-mode and JSON-mode paths.
 ///
 /// Takes the raw `RebuildOutcome` (already timed) and produces the final `CycleOutcome`.
-/// Used to avoid duplicating the write + spawn logic across rebuild_one and rebuild_one_with_emitter.
+/// Calling this from both paths keeps the write + spawn logic in one place.
 ///
 /// Time: O(object_bytes) for link + O(1) for spawn. Space: O(object_bytes).
 fn finish_rebuild(
