@@ -212,20 +212,18 @@ fn collect_ynz_files(
         if meta.file_type().is_symlink() {
             // Resolve to check for cycles; skip symlinks that point to directories.
             if let Ok(canon) = std::fs::canonicalize(&path) {
-                if canon.is_dir() {
-                    if !visited.insert(canon.clone()) {
-                        diags.push(Diagnostic::error(
-                            SourceSpan::new(path.display().to_string(), 0, 0),
-                            format!(
-                                "Symbolic-link cycle detected in project tree at `{}`.",
-                                path.display()
-                            ),
-                            "Remove the cycle, or replace the symlink with a real directory.",
-                            "Yinz walks the project tree to find `.ynz` source files. \
-                             A cycle of symlinks would loop forever. \
-                             The walk skips symlinks that lead back into the project.",
-                        ));
-                    }
+                if canon.is_dir() && !visited.insert(canon.clone()) {
+                    diags.push(Diagnostic::error(
+                        SourceSpan::new(path.display().to_string(), 0, 0),
+                        format!(
+                            "Symbolic-link cycle detected in project tree at `{}`.",
+                            path.display()
+                        ),
+                        "Remove the cycle, or replace the symlink with a real directory.",
+                        "Yinz walks the project tree to find `.ynz` source files. \
+                         A cycle of symlinks would loop forever. \
+                         The walk skips symlinks that lead back into the project.",
+                    ));
                     // Skip symlinked directories entirely (cycle or not).
                 }
                 // Symlinks to .ynz files are handled below through the is_dir() == false path.

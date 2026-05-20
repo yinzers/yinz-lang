@@ -47,6 +47,7 @@ pub fn module_identifier(source_path: &str) -> String {
 }
 
 /// Emit a relocatable object file for an M5 program.
+#[allow(clippy::too_many_arguments)]
 pub fn emit_artifact(
     source_path: &str,
     typed_module: &TypedModule,
@@ -142,6 +143,7 @@ struct ModuleGlobals<'ctx> {
 /// Generic functions are lowered during Pass 2 by iterating `mono_table` entries, not
 /// by walking the AST's `Item::Function` list — by Pass 2 every generic call site has
 /// already been collected into `mono_table` by the typeck pass.
+#[allow(clippy::too_many_arguments)]
 fn build_module<'ctx, 'g>(
     ctx: &'ctx Context,
     module: &'g Module<'ctx>,
@@ -3686,7 +3688,7 @@ fn lower_print<'ctx>(
 /// be unreachable in v0.1. If reached, an earlier compiler phase silently
 /// introduced a NUL — that is a compiler bug, not a user error.
 fn push_c_string_terminator(bytes: &mut Vec<u8>) {
-    if bytes.iter().any(|&b| b == 0) {
+    if bytes.contains(&0u8) {
         eprintln!(
             "INTERNAL COMPILER ERROR: string literal contains an embedded NUL byte at codegen \
              time. The lexer should have rejected this. Please file an issue at \

@@ -22,7 +22,7 @@ files:
 # Plan: v0.2-M2 — LSP Thin Slice + VSCode Plugin
 
 Created: 2026-05-20
-Status: in_progress — Phase 0 COMPLETE (code-reviewer PASS, awaiting user commit confirmation). Phase 1 next.
+Status: in_progress — Phase 1 COMPLETE (code-reviewer pending). Phase 2 next.
 
 ## Context & Why
 
@@ -381,22 +381,22 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 8. Move the winning spike's deps into `crates/ynz-lsp/Cargo.toml` `[dependencies]` (the real crate, not the spike subdir). Delete the loser's `_spike/<loser>/` directory.
 
 **Acceptance criteria** (observable conditions that define DONE):
-- [ ] Both spikes built, ran, and published at least one LSP diagnostic visible via the test harness
-- [ ] `MEASUREMENTS.md` documents the measurement methodology AND the recorded values for both frameworks (lines of plumbing, deps, async/sync notes)
-- [ ] `MEASUREMENTS.md` records each candidate's **last-commit date and open-issue count as of spike day** (tower-lsp's original repo reportedly went unmaintained late 2025; the maintained fork story must be locked here, not assumed). If the winning candidate's last meaningful commit is >6 months stale OR open-issue count >50 OR a critical-bug issue is open and unaddressed, document the migration cost-estimate inline (estimated effort to swap to the alternative if needed mid-M2 or in M5).
-- [ ] `design/lsp.md` framework section contains a locked decision with explicit rationale tied to the recorded measurements (not vibes)
-- [ ] `crates/ynz-lsp/Cargo.toml` `[dependencies]` lists ONLY the winning framework's deps, with EXACT version pinned (no `*`, no caret range alone — pin minor for risk control given the maintenance-status concern)
-- [ ] Loser spike directory removed from tree (preserved in git history)
-- [ ] `cargo build --workspace` succeeds
-- [ ] `cargo test --workspace` still passes (no behavior change to compiler)
+- [x] Both spikes built, ran, and published at least one LSP diagnostic visible via the test harness
+- [x] `MEASUREMENTS.md` documents the measurement methodology AND the recorded values for both frameworks (lines of plumbing, deps, async/sync notes)
+- [x] `MEASUREMENTS.md` records each candidate's **last-commit date and open-issue count as of spike day** (tower-lsp's original repo reportedly went unmaintained late 2025; the maintained fork story must be locked here, not assumed). If the winning candidate's last meaningful commit is >6 months stale OR open-issue count >50 OR a critical-bug issue is open and unaddressed, document the migration cost-estimate inline (estimated effort to swap to the alternative if needed mid-M2 or in M5).
+- [x] `design/lsp.md` framework section contains a locked decision with explicit rationale tied to the recorded measurements (not vibes)
+- [x] `crates/ynz-lsp/Cargo.toml` `[dependencies]` lists ONLY the winning framework's deps, with EXACT version pinned (no `*`, no caret range alone — pin minor for risk control given the maintenance-status concern)
+- [x] Loser spike directory removed from tree (preserved in git history)
+- [x] `cargo build --workspace` succeeds
+- [x] `cargo test --workspace` still passes (no behavior change to compiler)
 
 **Quality gate**:
-- [ ] No `// TODO` / `// FIXME` / `// HACK` left in any retained file
-- [ ] MEASUREMENTS.md cites specific file:line counts and benchmark values; no hand-wavy "tower-lsp felt cleaner"
-- [ ] design/lsp.md framework section has the same one-line-decision-plus-WHY format as decisions in `state.md`
-- [ ] No new banned-jargon in design/lsp.md
-- [ ] `cargo clippy --workspace -- -D warnings` passes
-- [ ] No commented-out code
+- [x] No `// TODO` / `// FIXME` / `// HACK` left in any retained file
+- [x] MEASUREMENTS.md cites specific file:line counts and benchmark values; no hand-wavy "tower-lsp felt cleaner"
+- [x] design/lsp.md framework section has the same one-line-decision-plus-WHY format as decisions in `state.md`
+- [x] No new banned-jargon in design/lsp.md
+- [x] `cargo clippy --workspace -- -D warnings` passes
+- [x] No commented-out code
 
 **Verification**:
 - `cargo build --workspace 2>&1 | grep 'warning\|error'` — clean

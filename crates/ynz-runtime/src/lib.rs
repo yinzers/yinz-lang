@@ -248,7 +248,7 @@ pub unsafe extern "C" fn ynz_sensitive_to_string(raw_ptr: *const u8) -> *const u
     if reveal {
         raw_ptr
     } else {
-        b"[REDACTED]\0".as_ptr()
+        c"[REDACTED]".as_ptr().cast()
     }
 }
 
