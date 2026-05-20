@@ -33,4 +33,4 @@ These files are INTENTIONALLY broken — they're not meant to compile. The point
 
 ## Companion: `examples/basics/`
 
-The `examples/basics/src/main.ynz` file is the parallel success-path showcase — every feature working in context. Together, basics + errors give end-to-end coverage of what Yinz produces in both happy-path and error-path cases.
+The `examples/basics/entrypoint.ynz` file is the parallel success-path showcase — every feature working in context. Together, basics + errors give end-to-end coverage of what Yinz produces in both happy-path and error-path cases.

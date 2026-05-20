@@ -460,11 +460,11 @@ fn parse_error_gate_prevents_cascade_noise() {
 }
 
 #[test]
-fn empty_file_missing_main_produces_diagnostic() {
+fn empty_file_missing_entrypoint_produces_diagnostic() {
     let output = run("");
     assert!(
         !output.diagnostics.is_empty(),
-        "Empty file must produce a 'no main function' diagnostic"
+        "Empty file must produce a 'no entrypoint function' diagnostic"
     );
     assert!(
         output.diagnostics[0].what.contains("entrypoint"),
@@ -474,11 +474,11 @@ fn empty_file_missing_main_produces_diagnostic() {
 }
 
 #[test]
-fn main_with_wrong_return_type_produces_diagnostic() {
+fn entrypoint_with_wrong_return_type_produces_diagnostic() {
     let output = run(r#"function entrypoint() -> string { print(`hi`) }"#);
     assert!(
         !output.diagnostics.is_empty(),
-        "Wrong return type on main must produce a diagnostic"
+        "Wrong return type on entrypoint must produce a diagnostic"
     );
 }
 
@@ -685,7 +685,7 @@ function entrypoint() -> nothing { }"#,
 }
 
 #[test]
-fn missing_main_produces_diagnostic() {
+fn missing_entrypoint_produces_diagnostic() {
     // WHY: guard M1's invariant — a module without entrypoint is a compile error.
     // This must hold even with multi-function M3 modules.
     let out = assert_errors(r#"function helper() -> nothing { }"#, 1);
@@ -693,13 +693,13 @@ fn missing_main_produces_diagnostic() {
 }
 
 #[test]
-fn main_with_parameters_produces_diagnostic() {
+fn entrypoint_with_parameters_produces_diagnostic() {
     // WHY: `entrypoint` must have no parameters. The signature pre-pass catches this.
     assert_errors(r#"function entrypoint(x: int) -> nothing { }"#, 1);
 }
 
 #[test]
-fn m3_main_with_non_nothing_return_type_produces_diagnostic() {
+fn m3_entrypoint_with_non_nothing_return_type_produces_diagnostic() {
     // WHY: `entrypoint() -> int` is wrong. The signature pre-pass catches this.
     let out = assert_errors(r#"function entrypoint() -> int { return 0 }"#, 1);
     assert!(out.diagnostics[0].what.contains("entrypoint"));

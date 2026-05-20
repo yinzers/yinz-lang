@@ -19,7 +19,7 @@ parent: v0-1-compiler
 
 **Parent milestone**: see `.claude/plans/active/v0-1-compiler.md` for the v0.1 roadmap.
 
-End-to-end walking skeleton. `function main() -> nothing { print("hello, yinz") }` compiles and runs. Proves the full pipeline (lex → parse → typeck → codegen → link → execute) works, with salsa wiring in place from the start.
+End-to-end walking skeleton. `function entrypoint() -> nothing { print("hello, yinz") }` compiles and runs. Proves the full pipeline (lex → parse → typeck → codegen → link → execute) works, with salsa wiring in place from the start.
 
 **Outcome**: COMPLETE (2026-05-12) — 51 tests green, `ynz run hello.ynz` outputs `hello, yinz`. Shipped at commit `820bfdc`. Tagged `v0.1.0-m1` after merge.
 
@@ -153,7 +153,7 @@ Yinz project structure is root-relative, flat discovery. `yinz.toml` defines the
 **PR scope**: `ynz-parser::lex` salsa query takes source text and returns a `TokenStream`. Handles only what M1 needs: identifiers, the keywords `function` and `nothing`, string literals, `(`, `)`, `{`, `}`, `->`, and whitespace/newlines (skipped). Multi-error: unknown characters and unterminated strings produce diagnostics, lexer continues to next sensible boundary.
 **Branch**: `feat/lexer`
 **Est. lines**: ~400
-**Objective**: Lexing the M1 source `function main() -> nothing { print("hello, yinz") }` produces the expected token stream (asserted against a snapshot) and produces zero diagnostics.
+**Objective**: Lexing the M1 source `function entrypoint() -> nothing { print("hello, yinz") }` produces the expected token stream (asserted against a snapshot) and produces zero diagnostics.
 
 **Spec decision locked in this phase:** string-literal contents in M1 are UTF-8 byte sequences passed through unchanged from source to codegen. The lexer does NOT decode them into a `String` — they're stored as `Vec<u8>` on the `StringLit` token. ASCII source is the common path; non-ASCII bytes (e.g., `"café"`) are accepted and round-trip as raw bytes to `puts`. No `\n` / `\t` / `\"` escape processing in M1 (escape decoding lands with the M2 strings work). Source files MUST be valid UTF-8; non-UTF-8 source bytes produce a three-part diagnostic at file load time (`ynz-driver` responsibility, not the lexer).
 

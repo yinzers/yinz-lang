@@ -39,7 +39,7 @@ Status: m2_planning
 - The compiler is structured as queries (salsa) so v0.2 LSP can wrap them without restructuring.
 
 **Success criteria for M1 (this milestone's contract):**
-- `ynz run hello.ynz` where the source is `function main() -> nothing { print("hello, yinz") }` compiles and prints exactly `hello, yinz\n` and exits 0.
+- `ynz run hello.ynz` where the source is `function entrypoint() -> nothing { print("hello, yinz") }` compiles and prints exactly `hello, yinz\n` and exits 0.
 - The full pipeline (lex → parse → typeck → codegen → link) runs as salsa queries, not as straight function calls.
 - A deliberately broken source file produces a three-part error message (WHAT/WHAT-INSTEAD/WHY) rendered by `ariadne` with the correct span.
 
@@ -159,7 +159,7 @@ Yinz project structure is root-relative, flat discovery. `yinz.toml` defines the
 ## Roadmap (milestones)
 
 ### Milestone 1 (M1): Hello-world end-to-end — single session
-End-to-end walking skeleton. `function main() -> nothing { print("hello, yinz") }` compiles and runs. Proves the full pipeline (lex → parse → typeck → codegen → link → execute) works, with salsa wiring in place from the start.
+End-to-end walking skeleton. `function entrypoint() -> nothing { print("hello, yinz") }` compiles and runs. Proves the full pipeline (lex → parse → typeck → codegen → link → execute) works, with salsa wiring in place from the start.
 **Flag**: N/A
 **Status**: COMPLETE (2026-05-12) — 51 tests green, `ynz run hello.ynz` outputs `hello, yinz`
 
@@ -329,7 +329,7 @@ Full Unicode strings with SSO (23-byte inline, 24-byte struct) + SIMD UTF-8 vali
 **Branch**: `feat/lexer`
 **Flag**: N/A
 **Est. lines**: ~400
-**Objective**: Lexing the M1 source `function main() -> nothing { print("hello, yinz") }` produces the expected token stream (asserted against a snapshot) and produces zero diagnostics.
+**Objective**: Lexing the M1 source `function entrypoint() -> nothing { print("hello, yinz") }` produces the expected token stream (asserted against a snapshot) and produces zero diagnostics.
 **Why this phase exists**: Lexing is the first salsa input → output query. Establishes the salsa pattern that every later compiler stage will follow.
 **Current-state anchors**:
 - `spec/variables.md`, `spec/functions.md`, `spec/strings.md` — for token shapes (identifiers, keywords, string literals).
@@ -349,9 +349,9 @@ Full Unicode strings with SSO (23-byte inline, 24-byte struct) + SIMD UTF-8 vali
 4. Error cases: unknown byte → diagnostic + skip byte + continue. Unterminated string → diagnostic at the opening quote + recover at next newline or `}`.
 5. Mechanical scope-creep gate: add a `#[test] fn m1_token_variant_count_locked()` test asserting `std::mem::variant_count::<Token>()` (or a manual count via match-exhaustive helper if the unstable intrinsic isn't available) equals the M1 count. Bumping the count fails the test until the inline `// test-ratchet: M2 adds N for {feature}` marker is present. The test-ratchet hook (global) enforces the marker requirement on Edit/Write.
 6. Tests: snapshot of the token stream for the M1 source. Negative tests for:
-   - `function main() -> nothing { print("oops` (unterminated string)
-   - `function main() -> nothing { print($) }` (unknown char)
-   - `function main() -> nothing { print("café") }` (non-ASCII bytes inside string — should lex clean and produce a `StringLit` with the UTF-8 bytes intact)
+   - `function entrypoint() -> nothing { print("oops` (unterminated string)
+   - `function entrypoint() -> nothing { print($) }` (unknown char)
+   - `function entrypoint() -> nothing { print("café") }` (non-ASCII bytes inside string — should lex clean and produce a `StringLit` with the UTF-8 bytes intact)
    - Empty source (zero tokens, no diagnostics)
    - Whitespace-only source (zero tokens, no diagnostics)
    Each negative test asserts the diagnostic count AND that the lexer still produced a recoverable token stream (no panic, no early bail).
@@ -401,7 +401,7 @@ Full Unicode strings with SSO (23-byte inline, 24-byte struct) + SIMD UTF-8 vali
    - Negative: missing `->` between `()` and return type → three-part diagnostic, parser recovers and produces an AST with a placeholder `Type::Error` node.
    - Negative: missing closing `}` → diagnostic at end-of-file with span pointing to the unclosed `{`.
    - Negative: `print` called with no arguments → currently this parses fine (no arg list typing yet); add to M2's test list, not M1.
-   - Adversarial: trailing garbage after the function (`function main() -> nothing { } extra }`) — parser emits "unexpected token after function decl" diagnostic, recovers cleanly to EOF.
+   - Adversarial: trailing garbage after the function (`function entrypoint() -> nothing { } extra }`) — parser emits "unexpected token after function decl" diagnostic, recovers cleanly to EOF.
    - Adversarial: empty source — `Module` is produced with zero items, zero diagnostics. (Note: typeck then emits "no `main` defined" — that test lives in P5.)
    - Adversarial: source with only whitespace and a comment — same shape as empty source, zero items, zero diagnostics.
    - Adversarial: BOM-prefixed source (`\u{FEFF}` at byte 0) — lexer-level concern technically, but the parser must not crash if the lexer passes through a leading BOM. Decide: skip BOM in lexer (M1) → parser sees no BOM token, identical to non-BOM source.
@@ -451,8 +451,8 @@ Full Unicode strings with SSO (23-byte inline, 24-byte struct) + SIMD UTF-8 vali
 3. Check pass: walk top-level declarations, verify `main` exists with `() -> nothing` signature. For each function, check the parse-error gate first; if clean, walk the body, type each `Expr`, verify call sites match callee signature. Emit three-part diagnostics on mismatch.
 4. Tests (all with `// WHY:` comments):
    - **Happy path**: clean M1 source type-checks with empty diagnostic bucket.
-   - **Missing `main`**: empty AST (zero items) → three-part diagnostic about needing `function main()`. (Covers reviewer adversarial case "empty source file".)
-   - **Wrong `main` return type**: `function main() -> string { ... }` → three-part diagnostic.
+   - **Missing `main`**: empty AST (zero items) → three-part diagnostic about needing `function entrypoint()`. (Covers reviewer adversarial case "empty source file".)
+   - **Wrong `main` return type**: `function entrypoint() -> string { ... }` → three-part diagnostic.
    - **Wrong `main` arity**: `function main(x: string) -> nothing { ... }` → three-part diagnostic about `main` taking no parameters.
    - **Undefined identifier**: `print(unknownIdent)` → three-part diagnostic about the unresolved name.
    - **Type mismatch (the real test)**: a fixture using the test-only `_test_takes_nothing` builtin called with a string literal (`_test_takes_nothing("hi")`) → three-part diagnostic about expected `nothing`, got `string`. THIS is the test that covers the load-bearing type-mismatch path. Built with the `#[cfg(test)]` builtin helper so M1 doesn't ship with integer literals just to enable the test.
@@ -571,7 +571,7 @@ Full Unicode strings with SSO (23-byte inline, 24-byte struct) + SIMD UTF-8 vali
 4. `run <file>`: invoke `build`, then `std::process::Command::new(binary).status()` and propagate exit code.
 5. **Malformed fixture content (locked):** `tests/fixtures/broken_main.ynz` contains:
    ```
-   function main() {
+   function entrypoint() {
      print("missing return type")
    }
    ```
@@ -638,7 +638,7 @@ Full Unicode strings with SSO (23-byte inline, 24-byte struct) + SIMD UTF-8 vali
 
 **Headline integration test (M2 contract)**:
 ```ynz
-function main() -> nothing {
+function entrypoint() -> nothing {
   let price = 0.1 + 0.2          // number, exact 0.3
   let count: int = 42
   let active = true
@@ -1406,13 +1406,13 @@ decisions made under time pressure from compounding into retroactive rewrites.
    teaching diagnostic + Identifier recovery token). The banned-jargon entry for
    `type` lands in M4 P1 alongside the lexer change.
 
-5. **Every milestone from M4 onward grows `examples/basics/src/main.ynz` and
+5. **Every milestone from M4 onward grows `examples/basics/entrypoint.ynz` and
    `examples/errors/m{N}_errors.ynz`.** Per `.claude/rules/plan-invariants.md`
    `### Demo & Error Gallery` subsection (added 2026-05-16): each phase that
    adds executable surface MUST extend the basics demo (showing the new feature
    in context) AND the error gallery (intentional triggers for every new
    compile-error class). M1/M2/M3 retroactive demo + gallery files exist at
-   `examples/basics/src/main.ynz` and `examples/errors/m1_errors.ynz`,
+   `examples/basics/entrypoint.ynz` and `examples/errors/m1_errors.ynz`,
    `m2_errors.ynz`, `m3_errors.ynz` — M5/M6/M7/M8 plans must continue the
    incremental additions. The basics project covers EVERY v0.1 language feature
    (M1–M8) in one growing demo; stdlib modules (v0.5+) get their own per-module

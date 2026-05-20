@@ -29,7 +29,7 @@ parent: v0-1-compiler
 
 **Headline integration test (M2 contract)**:
 ```ynz
-function main() -> nothing {
+function entrypoint() -> nothing {
   let price = 0.1 + 0.2          // number, exact 0.3
   let count: int = 42
   let active = true

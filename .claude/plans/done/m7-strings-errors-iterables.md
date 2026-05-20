@@ -67,7 +67,7 @@ Splitting (e.g., "M7a strings, M7b errors+iterables") would force a transient st
 4. NFC canonical equivalence for `ynz_string_eq` (M3 catch-up closed).
 5. `file.lines(path)` — or a stub thereof — returns a `FallibleIterable<string>`. For-loop over a fallible iterable inside an `errors` function auto-propagates per-step errors. `.orSkipFailures()` and `.withErrors()` adapters work.
 6. All four source `REPLACE-AT M7` markers removed; all three codegen for-loop special-cases unwound; M3 `range()` typeck special-case unwound.
-7. `examples/basics/src/main.ynz` extended to demo strings + errors + iterables in context. `examples/errors/m7_errors.ynz` triggers every new diagnostic class.
+7. `examples/basics/entrypoint.ynz` extended to demo strings + errors + iterables in context. `examples/errors/m7_errors.ynz` triggers every new diagnostic class.
 8. Tag `v0.1.0-m7` cut on main. ~750 tests target (up from 631).
 
 ---
@@ -168,7 +168,7 @@ These four decisions answer the four Pre-Draft questions confirmed in chat 2026-
 - **P1 AST**: still `InterpolatedString(Vec<StringPart>)` — every string IS an interpolated string at the AST level (parts list may be a single Lit chunk if no `${}` appeared).
 - **P2 parser**: simpler — no "is this `"..."` or backtick?" branching at string entry. Every string-literal call site produces an InterpolatedString.
 - **spec/strings.md**: section rewrite — remove all references to double-quote strings. All examples use backticks. Update the "two quote forms" table to a one-form description.
-- **examples/basics/src/main.ynz**: sweep — convert any remaining `"..."` literals (M1-M6 era) to backtick form. May need a migration phase as part of P5 demo-extension OR a one-time conversion in P0.
+- **examples/basics/entrypoint.ynz**: sweep — convert any remaining `"..."` literals (M1-M6 era) to backtick form. May need a migration phase as part of P5 demo-extension OR a one-time conversion in P0.
 - **All M1-M6 fixtures**: must convert `"..."` to `` `...` `` since double-quote form no longer exists. THIS IS A BREAKING CHANGE TO EVERY EXISTING FIXTURE. Migration approach: one-time sed-pass in P0 step (new step) converts `"..."` to `` `...` ``; verify by re-running every M1-M6 fixture and confirming identical stdout.
 - **P1 MUST include unterminated-`${` negative fixture**: `` `hi ${name` `` (forgot `}`) produces a three-part diagnostic; lexer error recovery doesn't run off into the next 50 lines.
 - **Banned-jargon list**: no new entries needed for the syntax decision itself.
@@ -316,7 +316,7 @@ For each M7 runtime dependency above, the `--kernel` mode (v0.3+) behavior is lo
 
 ### Demo & Error Gallery
 
-- **`examples/basics/src/main.ynz` MUST be extended in P5** to demonstrate every M7 feature in context:
+- **`examples/basics/entrypoint.ynz` MUST be extended in P5** to demonstrate every M7 feature in context:
   - String interpolation in a real message
   - Multi-line strings with interpolation
   - `.contains` / `.indexOf` / `.substring` in a parsing example
@@ -1106,7 +1106,7 @@ If you find yourself adding code that touches any item above, STOP and either re
 ---
 
 ### Phase 5: Fixtures + demo + error gallery + audit
-**PR scope**: Extend `examples/basics/src/main.ynz` with M7 features in context. Create `examples/errors/m7_errors.ynz`. Comprehensive cross-feature fixtures (strings + errors + iterables interacting). Final audit pass.
+**PR scope**: Extend `examples/basics/entrypoint.ynz` with M7 features in context. Create `examples/errors/m7_errors.ynz`. Comprehensive cross-feature fixtures (strings + errors + iterables interacting). Final audit pass.
 **Branch**: `feat/m7-fixtures-demo`
 **Flag**: N/A
 **Est. lines**: ~400 (mostly Yinz source)
@@ -1114,11 +1114,11 @@ If you find yourself adding code that touches any item above, STOP and either re
 **Objective**: Hands-on UX validation. Every new M7 surface used in a realistic context. Every diagnostic class triggered.
 
 **Current-state anchors**:
-- `examples/basics/src/main.ynz` — current state after M5 + M6 extensions
+- `examples/basics/entrypoint.ynz` — current state after M5 + M6 extensions
 - `examples/errors/m6_errors.ynz` — pattern for the per-milestone gallery
 
 **Files (expected scope)**:
-- `examples/basics/src/main.ynz` — extended with strings/errors/iterables sections
+- `examples/basics/entrypoint.ynz` — extended with strings/errors/iterables sections
 - `examples/errors/m7_errors.ynz` — NEW comprehensive error trigger file
 - `crates/ynz-driver/tests/fixtures/m7_*.ynz` — additional cross-feature fixtures (strings + errors + iterables interacting)
 - `crates/ynz-diagnostics/tests/jargon_audit.rs` — verify final M7 surface has no banned jargon
@@ -1126,7 +1126,7 @@ If you find yourself adding code that touches any item above, STOP and either re
 **Deviation rule**: Standard. P5 may discover gaps requiring small follow-ups to earlier phases — note in PR description.
 
 **Steps**:
-1. Extend `examples/basics/src/main.ynz` with sections demonstrating:
+1. Extend `examples/basics/entrypoint.ynz` with sections demonstrating:
     - String interpolation in a "scoreboard" message (uses int + string + shape interpolation)
     - Multi-line string in a multi-paragraph console output
     - `.contains` / `.indexOf` / `.substring` in a parsing-a-game-command example
@@ -1174,7 +1174,7 @@ If you find yourself adding code that touches any item above, STOP and either re
     - `m7_frame_stack_lazy_init.ynz` — first call to an `errors` function on a freshly-spawned thread (or `main`'s first call before any other) — verify lazy thread-local frame stack allocates correctly; first `ynz_frame_push` doesn't panic
     - `m7_nfc_cross_boundary_concat.ynz` — `"e" + "́"` (combining acute), where both operands are formally NFC-known (NFC of single-byte ASCII + NFC of a single combining-mark code point) but the concat result is NFD (canonically equivalent to `"é"`). Verify the concat sets `is_nfc_known = false` per the propagation table (subtle edge: the RESULT is non-NFC even though both operands had the bit set, because combining marks recompose with their base). Verify `ynz_string_eq("é", "é") == true` via slow path. **THIS REFINES P0 STEP 2**: concat result is NFC-known iff BOTH operands had the bit set AND NEITHER operand ends in a combining-class code point NOR starts with one. Update the table in P0 to reflect this nuance.
     - `m7_for_loop_fallible_propagation_timing.ynz` — fallible iter whose `next()` returns an error on the third call. Wrap in an errors function. Assert: loop body runs twice (first two successful items), error propagates on third call BEFORE the loop body sees the value, frame stack is balanced (no extra frames left after propagation), trace correctly shows the cascade. The auto-propagation timing for for-loop bodies is "at the iter's `next()` call, NOT at the loop-variable's first use in the body" — this fixture locks the timing.
-4. Snapshot stdout/stderr for `examples/basics/src/main.ynz` and `examples/errors/m7_errors.ynz`. Patrick reviews + signs off.
+4. Snapshot stdout/stderr for `examples/basics/entrypoint.ynz` and `examples/errors/m7_errors.ynz`. Patrick reviews + signs off.
 
    **STOP-CONDITION** (closes reviewer Required Fix #10): if Patrick reviews and finds a demo class wrong (UX issue, confusing error wording, missing feature in context), P5 does NOT merge. The failing class is escalated to one of:
    - A follow-up phase (`feat/m7-fix-<area>`) addressing the specific failure — if the issue is implementation, not design.
@@ -1199,7 +1199,7 @@ If you find yourself adding code that touches any item above, STOP and either re
 8. Update `.claude/todos.md`: close M7-completed items; surface M8 catch-up obligations (modules, imports, doc comments, sensitive, concurrency keyword parsing, bignum reservation).
 
 **Acceptance criteria** (P5 status — 2026-05-18):
-- [x] `examples/basics/src/main.ynz` demonstrates every M7 feature in context (strings, errors, iterables, user-defined iterator shape)
+- [x] `examples/basics/entrypoint.ynz` demonstrates every M7 feature in context (strings, errors, iterables, user-defined iterator shape)
 - [x] `examples/errors/m7_errors.ynz` created with 19 `// WHY:` triggers covering M7 compile-error classes
 - [ ] Both files have insta stdout/stderr snapshots (deferred — requires insta harness wiring in P6)
 - [ ] Patrick reviews + signs off on both files
@@ -1213,7 +1213,7 @@ If you find yourself adding code that touches any item above, STOP and either re
 - [x] Every M7 error class has ≥ 1 negative fixture (via m7_errors.ynz gallery + m7_errors_unhandled.ynz)
 - [x] No regression on M1-M6 fixtures (cargo test --workspace passes 782/782)
 
-**Verification**: `cargo test --workspace` (782 tests, all pass); manual review of `examples/basics/src/main.ynz` and `examples/errors/m7_errors.ynz`.
+**Verification**: `cargo test --workspace` (782 tests, all pass); manual review of `examples/basics/entrypoint.ynz` and `examples/errors/m7_errors.ynz`.
 
 ---
 

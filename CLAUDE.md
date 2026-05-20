@@ -66,7 +66,7 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 ## When Working on This Project
 
 - **Yinz is NOT object-oriented.** Data shapes hold fields + contract signatures; methods are standalone functions; `value.method()` is parser-level sugar for `method(value)` (UFCS — both call forms work). NO methods inside shape declarations; NO `override` keyword; `extends` is data-only inheritance. See `.claude/rules/non-oop.md` for the full model — this is the most common modeling mistake to drift back into. Locked r10–r13 (2026-05-16).
-- **Every milestone plan MUST grow the canonical demo project + error gallery.** Per `.claude/rules/plan-invariants.md` `### Demo & Error Gallery` subsection: each phase that adds executable surface MUST extend `examples/basics/src/main.ynz` with the new feature in context AND extend `examples/errors/m{N}_errors.ynz` with intentional triggers for every new compile error class. This is how Patrick reviews the language UX after each phase — without it, features ship and never get hands-on validation. The basics project covers EVERY v0.1 language feature (M1–M8) in one growing demo; stdlib modules (v0.5+) get their own per-module example projects.
+- **Every milestone plan MUST grow the canonical demo project + error gallery.** Per `.claude/rules/plan-invariants.md` `### Demo & Error Gallery` subsection: each phase that adds executable surface MUST extend `examples/basics/entrypoint.ynz` with the new feature in context AND extend `examples/errors/m{N}_errors.ynz` with intentional triggers for every new compile error class. This is how Patrick reviews the language UX after each phase — without it, features ship and never get hands-on validation. The basics project covers EVERY v0.1 language feature (M1–M8) in one growing demo; stdlib modules (v0.5+) get their own per-module example projects.
 - Check every proposed language feature against all 12 golden rules before suggesting it
 - Always use Yinz terms — see `.claude/rules/naming.md` for the full reference
 - Spec files are written for a HS grad — short sections, example-heavy, plain English
@@ -86,8 +86,8 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 
 ```bash
 # CLI commands (spec — not yet implemented)
-ynz build main.ynz
-ynz run main.ynz
+ynz build entrypoint.ynz
+ynz run entrypoint.ynz
 ```
 
 ---

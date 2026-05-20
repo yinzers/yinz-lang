@@ -6,7 +6,7 @@ status: done
 files:
   - crates/ynz-typeck/src/**
   - crates/ynz-driver/src/build.rs
-  - examples/basics/src/entrypoint.ynz
+  - examples/basics/entrypoint.ynz
   - examples/errors/m8_errors.ynz
 created: 2026-05-18
 last_updated: 2026-05-18
@@ -82,7 +82,7 @@ M8 Phase 2 shipped import/export **grammar** (AST nodes, parser, `is_exported` f
 - Single-file programs with no imports: unchanged — kernel-mode still works.
 
 ### Demo & Error Gallery
-- `examples/basics/src/entrypoint.ynz`: add a multi-file demo showing `import { Timeframe } from "timeframes"` and a shape with a `Timeframe` field — the success path. Add as a comment block since the demo is a single-file project; alternatively restructure the basics example to be a two-file project.
+- `examples/basics/entrypoint.ynz`: add a multi-file demo showing `import { Timeframe } from "timeframes"` and a shape with a `Timeframe` field — the success path. Add as a comment block since the demo is a single-file project; alternatively restructure the basics example to be a two-file project.
 - `examples/errors/m8_errors.ynz`: add intentional triggers for each new error class introduced:
   - `import { Missing } from "nonexistent"` — missing module // WHY: missing-module diagnostic class
   - `import { notExported } from "has_exports"` — missing export // WHY: missing-export diagnostic class
@@ -228,7 +228,7 @@ M8 Phase 2 shipped import/export **grammar** (AST nodes, parser, `is_exported` f
 - [ ] ConstDecl and ReExport handling documented with explicit @design-decision comments in check.rs:139
 - [ ] Integration test: two-file project with cross-file function call → correct output
 - [ ] `cargo test` green including driver integration tests
-- [ ] `examples/basics/src/entrypoint.ynz` extended with cross-file usage example
+- [ ] `examples/basics/entrypoint.ynz` extended with cross-file usage example
 - [ ] `examples/errors/m8_errors.ynz` extended with all five new error trigger cases
 
 ## Quality Checklist

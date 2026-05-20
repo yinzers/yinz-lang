@@ -9,7 +9,7 @@ files:
   - crates/ynz-codegen/**
   - crates/ynz-diagnostics/**
   - crates/ynz-driver/tests/fixtures/**
-  - examples/basics/src/main.ynz
+  - examples/basics/entrypoint.ynz
   - examples/errors/m6_errors.ynz
   - design/options.md
   - design/unions.md
@@ -48,7 +48,7 @@ Status: approved 2026-05-18 (r2 after plan-reviewer round 1 PASS)
 - Union LLVM layout follows a mechanical decision table (mirrors `design/maybe.md`).
 
 **Success criteria for M6:**
-- `examples/basics/src/main.ynz` extended with an M6 section showing: an `options` declaration + value use; a union type + `is` narrowing in a multi-case `if`; an options multi-case; fallible conversion (`"42".toInt()` → handled `maybe int`); early-return narrowing on `.exists()`. The whole file still runs end-to-end.
+- `examples/basics/entrypoint.ynz` extended with an M6 section showing: an `options` declaration + value use; a union type + `is` narrowing in a multi-case `if`; an options multi-case; fallible conversion (`"42".toInt()` → handled `maybe int`); early-return narrowing on `.exists()`. The whole file still runs end-to-end.
 - `examples/errors/m6_errors.ynz` created and intentionally triggers every new compile-error class M6 introduces (non-exhaustive options multi-case, non-exhaustive union multi-case, `is` on a non-union scrutinee, accessing `.value` after a falsy early return without negation narrowing — actually, that ONE works now; etc.).
 - `m3_is_type_deferral.ynz` updated: deferral diagnostic gone; the fixture is now a runnable union example with stdout snapshot.
 - `m2_*_parse_deferred.ynz` fixtures updated: deferral diagnostic gone; runnable `.toInt()` example with stdout snapshot.
@@ -348,7 +348,7 @@ Per `.claude/rules/plan-invariants.md`. Each subsection lists testable assertion
 
 Per `.claude/rules/plan-invariants.md` `### Demo & Error Gallery` requirement.
 
-**examples/basics/src/main.ynz** — extended progressively across P3a, P3b, P4, P6 (per the per-phase obligation). Final M6 section covers:
+**examples/basics/entrypoint.ynz** — extended progressively across P3a, P3b, P4, P6 (per the per-phase obligation). Final M6 section covers:
 - Declare a small `options Status { pending, active, banned }` and use `Status.active` as a value.
 - Print via `Status.active.toString()` (which lowers to a stdlib codegen path returning the variant name).
 - Multi-case `if (status) { Status.active => ..., Status.pending => ..., Status.banned => ... }` showing exhaustiveness in practice.
@@ -557,7 +557,7 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 - `crates/ynz-typeck/tests/check.rs` — new tests (options-only)
 - `crates/ynz-driver/tests/fixtures/` — `m6_options_*` typeck-only fixtures (compile-time, no run yet — P4a wires codegen)
 - `examples/errors/m6_errors.ynz` — CREATE in this phase; add the options-related error classes here (non-exhaustive options multi-case; comparison-between-options; ambiguous-shorthand; function-vs-shorthand collision; single-variant-options rejection; 256+-variant options rejection). Per the `### Demo & Error Gallery` per-phase obligation.
-- `examples/basics/src/main.ynz` — extend with M6 options demo (declare `options Status { pending, active, banned }`; print `Status.active.toString()` deferred to P4 codegen; for P3a, declare + use via assignment + comparison). Per the per-phase obligation.
+- `examples/basics/entrypoint.ynz` — extend with M6 options demo (declare `options Status { pending, active, banned }`; print `Status.active.toString()` deferred to P4 codegen; for P3a, declare + use via assignment + comparison). Per the per-phase obligation.
 **Deviation rule**: NO union typeck logic in this PR (P3b owns). NO codegen changes (P4 owns). NO docs changes beyond inline rustdoc.
 **Steps**:
 1. **OptionsValue AST representation** (LOCKED — picks here, not at coding time): re-use `Expr::FieldAccess` for `OptionsName.variantName`. Typeck distinguishes at lookup time: if `FieldAccess.receiver` resolves to a type name (not a value) AND the receiver's "type" is an options type, it's an OptionsValue; lookup variant in `OptionsTable`. Otherwise fall back to shape-field-access logic. Rationale: AST stays minimal; the same `Foo.bar` syntax serves both contexts; disambiguation lives in one place (typeck `FieldAccess` handler).
@@ -579,7 +579,7 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 8. **`.toString()` on options values** — typeck registration: each options type gets a `.toString() -> string` method via `OptionsTable`. Codegen in P4.
 9. **m3 deferral diagnostic message update**: the `MatchPatternKind::Variant` deferral now points to "M6 phase 3a" (this phase) — but since this phase IMPLEMENTS it, the deferral diagnostic for variant arms is REMOVED. The `MatchPatternKind::IsType` deferral diagnostic stays, pointing to "M6 phase 3b" (next phase).
 10. **Add to `examples/errors/m6_errors.ynz`** (create file): the options-related error cases listed in Files (each with `// WHY:` comment).
-11. **Add to `examples/basics/src/main.ynz`**: M6 options section showing declaration + value use + comparison + multi-case dispatch. Final `.toString()` line marked `// after P4 codegen lands`.
+11. **Add to `examples/basics/entrypoint.ynz`**: M6 options section showing declaration + value use + comparison + multi-case dispatch. Final `.toString()` line marked `// after P4 codegen lands`.
 **Acceptance criteria**:
 - [ ] Options decl + value typeck working; positive + negative fixtures.
 - [ ] Built-in `SortOrder { asc, desc }` and `Comparison { equal, greater, less }` available without import.
@@ -592,7 +592,7 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 - [ ] `.toInt()` etc. added to `intrinsics.rs` for all source types per step 7.
 - [ ] `.toInt()` on bool rejected with diagnostic.
 - [ ] `examples/errors/m6_errors.ynz` created with options error cases (and grows in P3b/P4 for union/narrowing cases).
-- [ ] `examples/basics/src/main.ynz` extended with M6 options section.
+- [ ] `examples/basics/entrypoint.ynz` extended with M6 options section.
 - [ ] Full `cargo test --workspace` green.
 - [ ] Jargon audit clean.
 - [ ] `cargo clippy --workspace -- -D warnings` clean.
@@ -600,7 +600,7 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 - [ ] Every new diagnostic has WHAT/WHAT-INSTEAD/WHY per banned_jargon audit.
 - [ ] The two locked diagnostics (`||` non-propagation in P3b, ambiguous-shorthand here) match the exact text locked in this plan.
 - [ ] No M5 fixture broken; no M3 fixture's stderr snapshot broken (the variant-arm portion of M3 deferrals is REMOVED here since P3a implements it).
-**Verification**: `cargo test -p ynz-typeck` shows ~20 new tests; `./target/debug/ynz run examples/errors/m6_errors.ynz` produces all options-related error classes; `./target/debug/ynz run examples/basics/src/main.ynz` runs through the new M6 options section.
+**Verification**: `cargo test -p ynz-typeck` shows ~20 new tests; `./target/debug/ynz run examples/errors/m6_errors.ynz` produces all options-related error classes; `./target/debug/ynz run examples/basics/entrypoint.ynz` runs through the new M6 options section.
 
 ---
 
@@ -626,7 +626,7 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 - `crates/ynz-typeck/tests/check.rs` — comprehensive union + narrowing tests
 - `crates/ynz-driver/tests/fixtures/` — `m6_union_*`, `m6_narrow_*`, `m6_neg_*` typeck-only fixtures
 - `examples/errors/m6_errors.ynz` — extend with union/narrowing error cases (this phase adds: non-exhaustive union multi-case; `is Type` on non-union; `is Type` with type not in union; `.foo` access without `is`; union `Foo | Foo`; non-adjacent duplicate `Foo | Bar | Foo`; single-variant union; namespace shadow for `is X`; `||` non-propagation diagnostic; reassignment invalidates; `lend` call invalidates; non-recognized-exit form for early-return; redundant `is Foo` INFO diagnostic; nested-narrowing edge cases)
-- `examples/basics/src/main.ynz` — extend with M6 union + narrowing demo (classify-account union; early-return narrowing example; `.toInt()` runtime conversion final line — codegen lands in P4 but typeck approves here)
+- `examples/basics/entrypoint.ynz` — extend with M6 union + narrowing demo (classify-account union; early-return narrowing example; `.toInt()` runtime conversion final line — codegen lands in P4 but typeck approves here)
 **Deviation rule**: NO codegen changes (P4 owns). NO docs changes beyond inline rustdoc. If a locked rule in P0 docs is wrong, STOP and revise plan + docs.
 **Steps**:
 1. **Union types**: walk `Type::Union`; build a flat variant list (each variant must be a concrete shape or built-in primitive). Reject (per Safety invariant): single-variant union; duplicate variants regardless of position (`Foo | Foo`, `Foo | Bar | Foo`); union including `none` (typeck rewrites to `maybe<T>` semantically); union nested via reference (out of scope — reject with hint).
@@ -644,7 +644,7 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 13. **Compute union layout decisions**: for each `Type::Union` encountered, compute its layout per the locked decision table (Performance invariant); cache in `UnionLayoutTable` keyed by canonical variant set. P4 codegen consumes this cache.
 14. **m3 `IsType` deferral diagnostic REMOVED**: the AST variant is now fully implemented; remove the deferral path; remove the M3 fixture's stderr snapshot at the end of this phase (replace with stdout snapshot in P5).
 15. **Extend `examples/errors/m6_errors.ynz`** with all union + narrowing cases per Files list above (each with `// WHY:` comment).
-16. **Extend `examples/basics/src/main.ynz`** with the classify-account union example + early-return narrowing example + `.toInt()` runtime conversion line. The `.toString()` and runtime conversion lines compile but won't run end-to-end until P4 lands codegen; mark them with `// runs after P4 codegen`.
+16. **Extend `examples/basics/entrypoint.ynz`** with the classify-account union example + early-return narrowing example + `.toInt()` runtime conversion line. The `.toString()` and runtime conversion lines compile but won't run end-to-end until P4 lands codegen; mark them with `// runs after P4 codegen`.
 **Acceptance criteria**:
 - [ ] Union typeck working; positive + negative fixtures per Adversarial Test Cases.
 - [ ] All narrowing rules from `design/narrowing.md` (locked in P0) have positive + negative fixtures.
@@ -771,7 +771,7 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 - [ ] `m6_float_to_int_nan.ynz`, `m6_float_to_int_out_of_range.ynz` compile + run + match stdout snapshots.
 - [ ] `m6_string_to_int_whitespace_sign.ynz` compiles + runs through the full test-vector table from the locked parsing rule.
 - [ ] `m6_multicase_options.ynz` compiles + runs + matches stdout snapshot, with `switch` instruction in IR snapshot.
-- [ ] **Per-phase Demo + Gallery obligation**: `examples/basics/src/main.ynz` M6 section runs end-to-end after P4 (the `.toString()` and runtime conversion lines from P3a/P3b that were marked `// runs after P4 codegen` now run). `examples/errors/m6_errors.ynz` extended with any P4-specific error cases (e.g., if any new errors emerge during codegen — typically just confirmation that P3-time errors still fire end-to-end).
+- [ ] **Per-phase Demo + Gallery obligation**: `examples/basics/entrypoint.ynz` M6 section runs end-to-end after P4 (the `.toString()` and runtime conversion lines from P3a/P3b that were marked `// runs after P4 codegen` now run). `examples/errors/m6_errors.ynz` extended with any P4-specific error cases (e.g., if any new errors emerge during codegen — typically just confirmation that P3-time errors still fire end-to-end).
 - [ ] Full `cargo test --workspace` green; new fixtures add to total; M5 fixtures still green.
 - [ ] `cargo clippy --workspace -- -D warnings` clean.
 **Quality gate**:
@@ -838,7 +838,7 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 ---
 
 ### Phase 6: Demo + Error Gallery + Verification + Tag
-**PR scope**: Extend `examples/basics/src/main.ynz` with the M6 section per `### Demo & Error Gallery` invariant. Create `examples/errors/m6_errors.ynz`. Run full verification sweep: TODO sweep, catch-up audit, jargon audit, immutable-test audit, plan-invariant audit. Bump `Cargo.toml` to `0.1.0-m6`. Tag `v0.1.0-m6`. Update master plan to mark M6 SHIPPED.
+**PR scope**: Extend `examples/basics/entrypoint.ynz` with the M6 section per `### Demo & Error Gallery` invariant. Create `examples/errors/m6_errors.ynz`. Run full verification sweep: TODO sweep, catch-up audit, jargon audit, immutable-test audit, plan-invariant audit. Bump `Cargo.toml` to `0.1.0-m6`. Tag `v0.1.0-m6`. Update master plan to mark M6 SHIPPED.
 **Branch**: `feat/m6-verification`
 **Flag**: N/A
 **Est. lines**: ~400 (demo + error gallery + state/todos + CHANGELOG)
@@ -846,13 +846,13 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 **Objective**: M6 is shipped, tagged, and the master plan's M7 milestone paragraph is ready for `/plan M7`.
 **Why this phase exists**: per `.claude/rules/plan-invariants.md` and the M5 plan exemplar — every milestone closes with verification + tag.
 **Current-state anchors**:
-- `examples/basics/src/main.ynz` — current state has M1+M2+M3+M4+M5 sections; M6 appends below
+- `examples/basics/entrypoint.ynz` — current state has M1+M2+M3+M4+M5 sections; M6 appends below
 - `examples/errors/m5_errors.ynz` — exemplar for the error-gallery format
 - `.claude/plans/done/m5-generics.md` P6 — exemplar for the verification phase
 - `Cargo.toml` — `package.version = "0.1.0-m5"` (M6 bumps to `0.1.0-m6`)
 - `CHANGELOG.md` (if exists; check during phase) — append M6 entry
 **Files (expected scope)**:
-- `examples/basics/src/main.ynz` — append M6 section
+- `examples/basics/entrypoint.ynz` — append M6 section
 - `examples/errors/m6_errors.ynz` — new file
 - `Cargo.toml` (workspace + all member packages) — version bump
 - `CHANGELOG.md` — M6 section
@@ -862,7 +862,7 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 - `.claude/plans/active/m6-options-unions.md` — phase statuses updated; eventually moved to `done/` post-merge
 **Deviation rule**: NO new features. Verification + tag only. Document any deviation.
 **Steps**:
-1. Extend `examples/basics/src/main.ynz` per the demo content listed in `### Demo & Error Gallery`. Run it; assert stdout matches expectations.
+1. Extend `examples/basics/entrypoint.ynz` per the demo content listed in `### Demo & Error Gallery`. Run it; assert stdout matches expectations.
 2. Create `examples/errors/m6_errors.ynz` per the error gallery content listed in `### Demo & Error Gallery`. Run it; assert every expected error class fires.
 3. Add stdout/stderr snapshots for both files via `insta`.
 4. TODO sweep: grep for `TODO`, `FIXME`, `// REPLACE-AT M6`, `// CATCH-UP M6`, `// will do later`, `// M7+` in source. Resolve or document each.
@@ -879,7 +879,7 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 15. Move `m6-options-unions.md` plan file to `.claude/plans/done/`.
 16. Update master plan `.claude/plans/active/v0-1-compiler.md`: M6 paragraph status → "shipped"; M7 paragraph cross-refs M6 narrowing infrastructure.
 **Acceptance criteria**:
-- [x] `examples/basics/src/main.ynz` runs end-to-end through every milestone (M1-M6) demonstrated.
+- [x] `examples/basics/entrypoint.ynz` runs end-to-end through every milestone (M1-M6) demonstrated.
 - [x] `examples/errors/m6_errors.ynz` produces every M6 error class (9 errors fired).
 - [x] All catch-up obligations closed or formally re-owned.
 - [x] Jargon audit clean.
@@ -896,7 +896,7 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 - [ ] No outstanding M6 work items in any persistence file.
 - [ ] Every M6 design doc (`design/options.md`, `design/unions.md`, `design/narrowing.md`) cross-references at least one fixture that demonstrates its locked decisions.
 - [ ] CHANGELOG entry reads like a user-facing release note, not an internal log.
-**Verification**: `./target/debug/ynz run examples/basics/src/main.ynz` produces expected stdout; `git tag --list 'v0.1.0-m6'` shows the tag; `cargo test --workspace` total ≥ 640 (per the relaxed acceptance criterion above).
+**Verification**: `./target/debug/ynz run examples/basics/entrypoint.ynz` produces expected stdout; `git tag --list 'v0.1.0-m6'` shows the tag; `cargo test --workspace` total ≥ 640 (per the relaxed acceptance criterion above).
 
 ---
 
@@ -906,7 +906,7 @@ Each error in the file has a `// WHY:` comment naming the diagnostic class. The 
 - [ ] All M6 surface lowers to correct LLVM IR per the locked decision tables; IR snapshots assert.
 - [ ] All M5 + M4 + M3 + M2 + M1 fixtures still pass without modification (except the catch-up fixtures renamed in P5).
 - [ ] Every new compile-error class follows WHAT/WHAT-INSTEAD/WHY; jargon audit clean.
-- [ ] `examples/basics/src/main.ynz` demonstrates each M6 feature in a realistic context.
+- [ ] `examples/basics/entrypoint.ynz` demonstrates each M6 feature in a realistic context.
 - [ ] `examples/errors/m6_errors.ynz` triggers every M6 error class with `// WHY:` comments.
 - [ ] No `TODO`/`FIXME`/`REPLACE-AT M6`/`CATCH-UP M6`/`will do later` in source.
 - [ ] `Cargo.toml` bumped, tag `v0.1.0-m6` created, CHANGELOG section written.
