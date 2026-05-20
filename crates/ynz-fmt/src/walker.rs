@@ -15,6 +15,7 @@ use ynz_ast::nodes::{
     OwnershipModifier, Param, PostfixOpKind, ReExport, ShapeDecl, Stmt, StringPart, Type, TypePath,
     UnaryOpKind,
 };
+use ynz_diagnostics::SourceSpan;
 
 use crate::comment_merge::CommentContext;
 use crate::render::{fits_on_one_line, indent};
@@ -463,6 +464,34 @@ fn emit_for_header(var: &str, destructure_pattern: &Option<Vec<ForDestructureBin
         }
         None => var.to_string(),
     }
+}
+
+/// Emit an empty array literal `[]` that has commented-out content inside.
+///
+/// The normal `emit_expr` path has no access to the comment context and would
+/// produce `[]`, silently dropping the comments. This function uses `ctx.between`
+/// on the array's source span to recover the comments and re-emit them at the
+/// correct indentation level, preserving user intent.
+fn emit_empty_array_with_comments(
+    span: &SourceSpan,
+    ind: usize,
+    ctx: &CommentContext<'_>,
+) -> String {
+    let elem_indent = indent(ind + 1);
+    let close_indent = indent(ind);
+    let (leading, floating) = ctx.between(span.start, span.end);
+    if leading.is_empty() && floating.is_empty() {
+        return "[]".to_string();
+    }
+    let mut out = String::from("[\n");
+    for c in &floating {
+        out.push_str(&format!("{elem_indent}{}\n", normalize_comment_text(&c.text)));
+    }
+    for c in &leading {
+        out.push_str(&format!("{elem_indent}{}\n", normalize_comment_text(&c.text)));
+    }
+    out.push_str(&format!("{close_indent}]"));
+    out
 }
 
 fn emit_match_pattern(p: &MatchPattern) -> String {
@@ -1057,6 +1086,14 @@ fn emit_block_with_comments(
                         .unwrap_or(ctx.source.len())
                 }
             }
+            // Let/const with an empty array whose span covers multiple lines (has
+            // commented-out elements): advance past the array's closing `]` so those
+            // comments are not re-claimed as leading comments for the next statement.
+            Stmt::Let { value: Expr::ArrayLit { elements, span: arr_span }, .. }
+                if elements.is_empty() && arr_span.end > arr_span.start + 2 =>
+            {
+                arr_span.end
+            }
             _ => ctx.source[stmt_start..]
                 .find('\n')
                 .map(|i| stmt_start + i)
@@ -1167,7 +1204,20 @@ fn emit_stmt_with_inline(s: &Stmt, ind: usize, ctx: &CommentContext<'_>, inline:
                 .as_ref()
                 .map(|t| format!(": {}", emit_type(t)))
                 .unwrap_or_default();
-            let code = format!("{prefix}{kw} {name}{ty_s} = {}", emit_expr(value, 0));
+            // Special case: empty array/fixed literal that may have commented-out
+            // elements inside. emit_expr has no ctx and would produce `[]`, dropping
+            // the comments. When the span covers more than `[]`, use ctx.between to
+            // recover and re-emit them at the correct indentation.
+            let value_s = if let Expr::ArrayLit { elements, span } = value {
+                if elements.is_empty() && span.end > span.start + 2 {
+                    emit_empty_array_with_comments(span, ind, ctx)
+                } else {
+                    emit_expr(value, 0)
+                }
+            } else {
+                emit_expr(value, 0)
+            };
+            let code = format!("{prefix}{kw} {name}{ty_s} = {value_s}");
             place(&prefix, code, inline)
         }
         Stmt::Assign { target, value, .. } => {
