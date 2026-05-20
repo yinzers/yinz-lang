@@ -60,20 +60,24 @@ pub fn resolve_target(path: &Path) -> Result<WatchTarget> {
     }
 
     // For directory paths: walk up to find the nearest yinz.toml.
-    let hint_dir = if path.is_dir() {
-        path.to_path_buf()
-    } else {
-        // Non-existent path — treat as a directory hint (might be a project subdir).
-        path.to_path_buf()
+    // Make the hint absolute before walking up — canonicalize("") fails on Linux,
+    // so we must never let an empty/relative path reach find_project_root.
+    let hint_dir = {
+        let p = if path.is_dir() { path.to_path_buf() } else { path.to_path_buf() };
+        if p.is_absolute() {
+            p
+        } else {
+            std::env::current_dir().unwrap_or_default().join(&p)
+        }
     };
 
     let root = find_project_root(&hint_dir).ok_or_else(|| WatchError::NoProjectFile {
         root: hint_dir.clone(),
     })?;
 
-    // Canonicalize so all stored source paths are absolute. The import resolver
-    // (resolve_module_path in ynz-typeck) also canonicalizes, so both sides must
-    // agree on the key format for source_by_path lookups to succeed.
+    // root is now guaranteed absolute (walk started from absolute hint_dir).
+    // Canonicalize to resolve any remaining symlinks so stored paths match what
+    // ynz-typeck's resolve_module_path returns after its own canonicalize call.
     let root = std::fs::canonicalize(&root).unwrap_or(root);
 
     resolve_project(&root, &hint_dir)
