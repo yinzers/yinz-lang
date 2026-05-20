@@ -974,7 +974,7 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 
 ## Post-Ship Fixes (2026-05-20)
 
-Five bugs found immediately after v0.2.0-m4 shipped, all during real-world use on `trading-v4`. All fixed, committed, and pushed to main.
+Seven bugs found immediately after v0.2.0-m4 shipped, all during real-world use on `trading-v4`. All fixed, committed, and pushed to main.
 
 ### Fix 1 — Text-mode rebuilds were completely silent on file save (c3fa69c)
 
@@ -1007,6 +1007,20 @@ Five bugs found immediately after v0.2.0-m4 shipped, all during real-world use o
 **Additional bug**: `parse_entry_from_toml` only handled `entry = "..."` (single-entry), not `[entries]` table format (multi-entry projects).
 
 **Fix**: Added `find_project_root` that walks UP the directory tree to find `yinz.toml`. Added `parse_entries_table_from_toml` and `pick_entry_from_hint` — for multi-entry projects, the user's hint path (path components) is matched against entry values to pick the right entry. Three new tests: walk-up behavior, multi-entry selection, isolation.
+
+### Fix 6 — Single-file path mode skips loading shared project files (3582754)
+
+**Root cause**: When the user passes a `.ynz` file directly (`ynz watch tooling/x/entry.ynz`), `resolve_target` entered single-file mode and only registered that one file in the salsa DB. Cross-module imports resolved on disk but `source_by_path` always returned `None` because shared files were never registered.
+
+**Fix**: Added `resolve_project_with_entry` — when a `.ynz` file is passed AND a `yinz.toml` exists anywhere above it, load all project files (full project mode) but use the explicitly-passed file as the entry point. True single-file mode (no `yinz.toml` anywhere above) is unchanged.
+
+### Fix 7 — Watch linker missing `clang-18` probe and `-no-pie` flag (5a9f624 + ac9367c)
+
+**Root cause 1**: `write_binary()` in `rebuild.rs` hardcoded `Command::new("cc")`. Devcontainers with `clang-18` but not `cc` hit `No such file or directory` on every non-check rebuild. `ynz build` already had `find_linker()` probing `["clang-18", "clang", "cc", "gcc", "g++"]` — watch was written independently and didn't reuse it.
+
+**Root cause 2**: `write_binary()` also omitted the `-no-pie` linker flag that `ynz build` passes. LLVM emits non-PIC relocations; modern Linux distros default to PIE linking. Without `-no-pie` the linker fails with `R_X86_64_32 against .rodata.str1.16 can not be used when making a PIE object`. Both added to graveyard.
+
+**Fix**: Replaced hardcoded `"cc"` with the same probe loop as `ynz build`. Added `-no-pie` flag, matching `build.rs:525`.
 
 ## Anti-Pattern Callouts
 
