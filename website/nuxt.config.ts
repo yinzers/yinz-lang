@@ -13,7 +13,13 @@ export default defineNuxtConfig({
     payloadExtraction: 'client',
   },
 
-  modules: ['@nuxt/fonts'],
+  modules: [
+    '@nuxt/fonts',
+    'nuxt-schema-org',
+    'nuxt-og-image',
+    '@nuxtjs/sitemap',
+    '@nuxt/image',
+  ],
 
   css: ['~/assets/css/tailwind.css'],
 
@@ -31,7 +37,25 @@ export default defineNuxtConfig({
     },
   },
 
-  components: [
+  // SEO — site identity (used by sitemap, schema-org, og-image)
+  site: {
+    url: 'https://yinzlang.com',
+    name: 'Yinz',
+    description: 'Yinz — Rust-level performance, TypeScript-level readability. v0.2 in progress.',
+  },
+
+  // Sitemap: exclude internal gallery routes
+  sitemap: {
+    exclude: ['/_dev/**'],
+  },
+
+  // @nuxt/image: ipx provider for build-time optimization
+  image: {
+    provider: 'ipx',
+    formats: ['avif', 'webp'],
+  },
+
+    components: [
     // pathPrefix: false so components/primitives/YFoo.vue registers as <YFoo />
     // (not <PrimitivesYFoo />)
     { path: '~/components', pathPrefix: false },

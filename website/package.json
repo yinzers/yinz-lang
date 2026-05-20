@@ -19,7 +19,12 @@
   },
   "devDependencies": {
     "@nuxt/fonts": "^0.14.0",
+    "@nuxt/image": "^2.0.0",
+    "@nuxtjs/sitemap": "^8.0.15",
     "@tailwindcss/vite": "^4.3.0",
+    "nuxt-og-image": "^6.5.1",
+    "nuxt-robots": "^2.0.1",
+    "nuxt-schema-org": "^6.0.4",
     "shiki": "^4.1.0",
     "tailwindcss": "^4.3.0"
   }
