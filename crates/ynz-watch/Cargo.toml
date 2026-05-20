@@ -30,6 +30,9 @@ chrono = { workspace = true, features = ["serde"] }
 # Cross-platform RSS polling for Layer 3 memory defense
 memory-stats.workspace = true
 
+# Ctrl+C signal handling (cross-platform; wraps SetConsoleCtrlHandler on Windows, signal(2) on Unix)
+ctrlc.workspace = true
+
 # Unix graceful child kill (SIGTERM + process group)
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["signal", "process"] }

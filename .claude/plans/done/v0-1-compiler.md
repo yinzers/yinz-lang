@@ -721,7 +721,7 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 **Branch**: `feat/numerics-runtime`
 **Flag**: N/A
 **Est. lines**: ~2500 (decimal128 is the bulk; conformance test harness ~800)
-**Status**: COMPLETE (2026-05-12) — commit 59fcee2, 118 tests green, PR open at https://github.com/patrickrizzardi/ynz/pull/new/feat/numerics-runtime (awaiting `gh auth login` for CLI creation). Key correctness fixes: `round_half_even` using `2*r vs divisor`, alignment threshold `aligned_digits > 68`, single-signal division rounding `(d35*b+r) vs (5*b)`. Big-O docs added: `U256::div_rem` O(256) binary long division, Knuth Algorithm D replacement target at v0.4.
+**Status**: COMPLETE (2026-05-12) — commit 59fcee2, 118 tests green, PR open at https://github.com/yinzers/yinz-lang/pull/new/feat/numerics-runtime (awaiting `gh auth login` for CLI creation). Key correctness fixes: `round_half_even` using `2*r vs divisor`, alignment threshold `aligned_digits > 68`, single-signal division rounding `(d35*b+r) vs (5*b)`. Big-O docs added: `U256::div_rem` O(256) binary long division, Knuth Algorithm D replacement target at v0.4.
 **Objective**: `ynz-numerics` passes the IEEE 754-2008 decimal128 conformance test vectors AND a differential test against Python `decimal` on 10k random `(a, b, op)` tuples. `ynz-runtime` builds to a static archive on Linux + macOS. The driver's link step finds and includes the archive.
 **Why this phase exists**: Decimal128 correctness is the load-bearing v0.1 promise. Shipping it as a standalone, separately-testable crate with a conformance gate eliminates the "we'll validate it once it's wired up" duct-tape pattern. If `ynz-numerics` doesn't pass IEEE 754 conformance, nothing downstream matters.
 

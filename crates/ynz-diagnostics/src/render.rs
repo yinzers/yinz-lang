@@ -125,7 +125,7 @@ pub fn render(
 
     let has_errors = sorted.iter().any(|d| matches!(d.severity, Severity::Error));
     if has_errors {
-        let url = "https://github.com/patrickrizzardi/ynz/issues";
+        let url = "https://github.com/yinzers/yinz-lang/issues";
         if colors {
             // Bold + underline the URL with ANSI codes.
             writeln!(
