@@ -1,6 +1,6 @@
 # Session State: ynz
 
-**Last Updated**: 2026-05-20 (v0.2.0-m4 post-ship fix: ynz watch now actually rebuilds on file save)
+**Last Updated**: 2026-05-20 (ynz watch post-ship: 4 bugs fixed during trading-v4 real-world use — rebuilds work, no feedback loop, multi-entry yinz.toml supported, blank-terminal-clear fixed)
 
 ---
 

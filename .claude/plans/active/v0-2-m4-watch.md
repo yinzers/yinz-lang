@@ -974,7 +974,7 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 
 ## Post-Ship Fixes (2026-05-20)
 
-Three bugs found immediately after v0.2.0-m4 shipped. All fixed, committed, and pushed to main.
+Four bugs found immediately after v0.2.0-m4 shipped, all during real-world use on `trading-v4`. All fixed, committed, and pushed to main.
 
 ### Fix 1 — Text-mode rebuilds were completely silent on file save (c3fa69c)
 
@@ -987,6 +987,12 @@ Three bugs found immediately after v0.2.0-m4 shipped. All fixed, committed, and 
 **Root cause**: `notify 8.x` sets `WatchMask::OPEN` by default. Every rebuild calls `fs::read_to_string` which fires `IN_OPEN` → debouncer delivers it as `WatchEvent::Changed` → another rebuild → another open → infinite loop at ~1 rebuild/100ms.
 
 **Fix**: Added `WatchDb::source_unchanged(path, text)` — checks if the on-disk content matches what's in the shadow DB. If identical, `rebuild_one_with_emitter` returns early (no UI, no compile). Added `force: bool` param to skip this guard for the initial build (shadow pre-populated by `from_target` before first compile). Event-triggered rebuilds pass `force: false`; initial build passes `force: true`.
+
+### Fix 4 — Terminal clear fires on IN_OPEN no-change skips, blanking output (c510769)
+
+**Root cause**: `ui::clear` was called in `event_loop.rs` on EVERY `WatchEvent::Changed`, including the IN_OPEN no-change skips that return early from `rebuild_one_with_emitter`. Each skip cleared the visible terminal area without printing anything, producing a wall of blank space below error output.
+
+**Fix**: Removed `ui::clear` from `event_loop.rs`. Moved it into `rebuild_one_with_emitter` right before `print_building`, after the `source_unchanged` no-change guard. Added `no_clear: bool` param threaded through `run_rebuild_cycle`. Initial build passes `no_clear=true` (don't wipe startup output); event-triggered rebuilds pass `config.no_clear` (honours `--no-clear` flag).
 
 ### Fix 3 — Walk up to find `yinz.toml` + `[entries]` multi-entry support (27b3c98)
 
