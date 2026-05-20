@@ -110,10 +110,19 @@ Single source of truth for all feature inventories. `registry/features.toml` + `
 
 **Design doc:** `design/fmt.md`
 
-### v0.2-M4: `ynz watch` (planned)
+### v0.2-M4: `ynz watch` (shipping)
 
-- Recompile-on-save with sub-second turnaround
-- Daemon vs simple-loop decided in M4 research phase
+**Design doc:** `design/watch.md`
+
+**Locked decisions**:
+- **Architecture: daemon** — one long-running process holds one `CompilerDb`; file events mutate `SourceFile.text` salsa inputs; downstream queries invalidate automatically. Sub-second target depends on this.
+- **Default behavior: build + run** — `ynz watch foo.ynz` rebuilds AND re-executes on every save. `--check` skips the run step (CI gates, build-only use case).
+- **Output: clear-screen by default** — `--no-clear` preserves scrollback for CI logs.
+- **`--json` ships in M4 (not deferred)** — emits NDJSON event stream on stdout; schema includes `schema_version: "v0.2-m4-unstable"` field; stable + semver-bound at v0.2.0 final.
+- **Memory defense: three layers** — (1) salsa LRU caps per query, (2) periodic DB drop + recreate every N=500 rebuilds or 4h, (3) `memory-stats` RSS polling with soft-warn at 1GB + hard-stop at 4GB.
+- **File watching: `notify = "8"` + `notify-debouncer-mini = "0.7"`** — cross-platform; debouncer-only coalescing (100ms window).
+- **Process group kill** — child spawned in own process group via `nix::unistd::setsid()` (Unix); SIGTERM → 2s grace → SIGKILL. Catches double-forked children.
+- **Shadow source state** — `WatchDb` holds `HashMap<PathBuf, String>` outside salsa; DB rebuild repopulates salsa from shadow. Shadow is source of truth; salsa is derived cache.
 
 ### v0.2-M5: LSP Full + v0.2.0 Release (planned)
 
