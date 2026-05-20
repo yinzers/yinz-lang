@@ -145,15 +145,29 @@ fn write_binary(object_bytes: &[u8], binary_path: &Path) -> Result<()> {
         reason: e.to_string(),
     })?;
 
-    // Link.
-    let status = Command::new("cc")
+    // Link — probe the same candidates as ynz build (clang-18 first).
+    let linker = ["clang-18", "clang", "cc", "gcc", "g++"]
+        .iter()
+        .find(|&&c| {
+            std::process::Command::new(c)
+                .arg("--version")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        })
+        .copied()
+        .unwrap_or("cc");
+
+    let status = Command::new(linker)
         .arg("-o")
         .arg(binary_path)
         .arg(&obj_path)
         .status()
         .map_err(|e| WatchError::CodegenWrite {
             path: binary_path.to_path_buf(),
-            reason: format!("could not invoke linker `cc`: {e}"),
+            reason: format!("could not invoke linker `{linker}`: {e}"),
         })?;
 
     // Remove object file regardless of link outcome.
