@@ -266,6 +266,9 @@ pub fn rebuild_one_with_emitter(
     // pre-populated by WatchDb::from_target; content will appear unchanged even though
     // no prior compile has run. Event-triggered rebuilds pass false.
     force: bool,
+    // no_clear=true: skip terminal clear before printing build status (--no-clear flag or
+    // initial build where we don't want to wipe any prior output).
+    no_clear: bool,
 ) -> (CycleOutcome, bool) {
     let start = Instant::now();
     let mut epipe = false;
@@ -321,6 +324,7 @@ pub fn rebuild_one_with_emitter(
     db.update_source(changed_path, text);
 
     if !json_mode {
+        ui::clear(no_clear);
         ui::print_building(&entry_path.display().to_string());
     }
 

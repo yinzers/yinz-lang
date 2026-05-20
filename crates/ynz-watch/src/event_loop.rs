@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    ui::{self, print_file_removed},
+    ui::print_file_removed,
     watcher::{FileWatcher, WatchEvent},
     WatchConfig,
 };
@@ -67,10 +67,8 @@ pub fn run_event_loop<F>(
                 if shutdown.load(Ordering::SeqCst) {
                     break;
                 }
-                // Clear before rebuild status so we don't interleave with child stdout.
-                // Flushing the status line BEFORE the callback starts prevents garbled output
-                // when the child prints continuously (plan-review Round 2 adversarial concern).
-                ui::clear(config.no_clear);
+                // Clear is deferred into rebuild_one_with_emitter, right before print_building,
+                // so no-change skips (IN_OPEN feedback events) don't blank the terminal.
                 on_change(&path);
                 // print_watching() omitted here: on_change callback includes the idle prompt
                 // via print_success / print_errors; adding it again would double the line.

@@ -133,6 +133,7 @@ fn build_end_outcome_ok_on_success() {
         &mut current_child,
         Some(&mut emitter_box),
         true, // force: skip no-change guard, test always runs one build
+        true, // no_clear: tests run headless
     );
 
     let bytes = shared.lock().unwrap().clone();
@@ -176,6 +177,7 @@ fn build_start_precedes_build_end() {
         &mut current_child,
         Some(&mut emitter_box),
         true, // force: skip no-change guard
+        true, // no_clear: tests run headless
     );
 
     let bytes = shared.lock().unwrap().clone();
@@ -225,6 +227,7 @@ fn diagnostic_events_emitted_on_compile_error() {
         &mut current_child,
         Some(&mut emitter_box),
         true, // force: skip no-change guard
+        true, // no_clear: tests run headless
     );
 
     let bytes = shared.lock().unwrap().clone();
