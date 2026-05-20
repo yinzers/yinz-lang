@@ -44,7 +44,7 @@ print(config)
 ```
 // Pass to services that actually need the secret
 let conn = database.connect(dbPass.reveal())
-let res = http.post(url, { headers: { authorization: apiKey.reveal() } })
+let res = request.post(url, { headers: { authorization: apiKey.reveal() } })
 ```
 
 The IDE warns when you reveal in output:

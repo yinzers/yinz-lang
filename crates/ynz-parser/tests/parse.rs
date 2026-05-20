@@ -1347,7 +1347,7 @@ fn number_bracket_syntax_produces_migration_diagnostic() {
     // parse it or emit the old deferral. This guards against the old bracket form
     // slipping back in if parse_number_type is refactored.
     //
-    // test-ratchet: M8 P0 replaces the old deferral check (which tested `why.contains("v0.8")`)
+    // test-ratchet: M8 P0 replaces the old deferral check (which tested `why.contains("v0.7")`)
     // with a migration-diagnostic check. The old test was: `number[128]` → deferral.
     // New behavior: `number[128]` → migration redirect; `number<128>` → deferral.
     let output = parse("function entrypoint() -> nothing { let x: number[128] = 0 }");

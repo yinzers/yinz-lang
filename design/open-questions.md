@@ -27,26 +27,41 @@ When the trigger fires (a real use case needs metaprogramming), Patrick decides 
 
 ---
 
-## HTTP Module Design — Three-Tier API
+## Network Module Design — `request` and `server` (HTTP, both directions)
 
-When v0.16 (`http` client) comes up for implementation, the module needs a focused design session. The general shape is locked but specifics need work:
+When v0.15 (`request`, outbound) and v0.21 (`server`, inbound) come up for implementation, each needs a focused design session. General shape is locked; specifics need work.
 
-**Tier 1 — High-level helpers:** `http.get(url)`, `http.post(url, body)`, `http.put`, `http.delete`, `http.websocket(url)`. The common-case API, dot-method-first.
+### `request` (v0.15) — outbound, three-tier
 
-**Tier 2 — Mid-level request builder:** `http.request().method("GET").header(...).timeout(5).send()` for cases that don't fit the simple helpers. Step-by-step style — every operation gets its own line.
+**Tier 1 — High-level helpers:** `request.get(url)`, `request.post(url, body)`, `request.put(url, body)`, `request.delete(url)`, `request.websocket(url)`. The common-case API, dot-method-first.
+
+**Tier 2 — Mid-level builder:** `request.build()` returns a configurable Request value; the caller mutates it step-by-step (`req.method("PATCH")`, `req.header(name, value)`, `req.timeout(5)`, then `req.send()`). No method chaining per Golden Rule 7.
 
 **Tier 3 — Low-level socket access:** `net.tcp.connect(host, port)` returning a raw socket. The floor of the user-accessible network stack. Framework authors can build their own routing layer, their own protocol implementations, anything on top of this. Going lower means FFI (deferred to v2+).
 
-**Open sub-questions for the v0.16 design session:**
+**Open sub-questions for the v0.15 design session:**
 
-- Exact dot-method names for the high-level tier (`http.get` vs `http.fetch` vs `http.request`?)
+- Exact dot-method names for the builder configuration (`.method(...)` vs `.setMethod(...)`?, `.header(name, value)` vs `.headers({...})` plural?)
 - WebSocket lifecycle — connect, message events, close handling. Builds on FallibleIterable contract per `design/iterables.md`?
 - TLS configuration — defaults to validating certs; how to opt out for self-signed in dev?
 - Streaming bodies — for large uploads/downloads, can the body be an iterable?
 - Cookie handling — first-class or always manual headers?
 - Proxy support — env var detection (`HTTP_PROXY`) automatic, or always explicit?
 
-These get answered when v0.16 is up to design. Not blockers for v0.1-v0.15.
+### `server` (v0.21) — inbound
+
+Module-singleton API: `server.route(method, path, handler)`, `server.middleware(fn)`, `server.listen(port)`. Shares `Request` / `Response` types with `request`.
+
+**Open sub-questions for the v0.21 design session:**
+
+- Handler signature shape — single `Request` argument vs split (`req`, `params`, `body`)?
+- Middleware composition — ordering rules, short-circuit / abort semantics
+- Path matching — `:id` placeholders, wildcard segments, regex routes?
+- Multi-server-per-process — single singleton enough, or do we need a `Server` instance type for niche cases (admin port + public port)?
+- Error handler hook — how does an unhandled `errors` propagation surface as a 5xx?
+- Static file serving — bundled in `server`, or separate module?
+
+These get answered when each version is up to design. Not blockers for v0.1-v0.14.
 
 ---
 
@@ -64,9 +79,9 @@ Yinz's `follows` constraints are simpler — no blanket impls, no `impl<T: Bound
 
 ---
 
-## Workspace / Multi-Package Projects (v0.5+)
+## Workspace / Multi-Package Projects (v0.22+)
 
-### Proposed model (discussed 2026-05-18 — to be formally decided at v0.5 planning)
+### Proposed model (discussed 2026-05-18 — to be formally decided at v0.22 planning)
 
 Root-relative imports + tree shaking make most of the TypeScript monorepo machinery unnecessary. The proposed model:
 

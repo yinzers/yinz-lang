@@ -279,7 +279,7 @@ fn deferred_language_feature_lookup() {
 fn deferred_language_feature_test_keyword() {
     let entry = ynz_registry::deferred_language_feature_lookup("test")
         .expect("test deferred_language_feature not found (Phase 5a migration)");
-    assert_eq!(entry.ships_in, "v0.14");
+    assert_eq!(entry.ships_in, "v0.13");
     assert!(!entry.substitute.is_empty());
 }
 

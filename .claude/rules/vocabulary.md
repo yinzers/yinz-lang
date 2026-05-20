@@ -142,7 +142,7 @@ Capital letter = type. Everything else = lowercase. This is universal:
 - `Player`, `Warrior`, `Config`, `Request` — types (PascalCase)
 - `player`, `score`, `health` — values (camelCase)
 - `function`, `let`, `const`, `shape`, `options`, `wait` — keywords (lowercase)
-- `file`, `http`, `date`, `math` — modules (lowercase)
+- `file`, `request`, `date`, `math` — modules (lowercase)
 
 When module and type share a base name, casing distinguishes them:
 - `Date` = the type returned by `date.now()`

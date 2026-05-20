@@ -66,7 +66,7 @@ Yinz inherits Go's choice. "`ynz build` produces a binary that runs anywhere" is
 
 `musl libc` has known performance differences from `glibc` in some areas:
 - `musl`'s malloc is notably slower than `glibc`'s tcmalloc-derived allocator for multithreaded workloads. **Mitigated** by Yinz's per-request arena allocator (per `design/future/arena.md`) — most allocation paths in Yinz code don't use libc malloc directly.
-- DNS resolution has known limitations (musl doesn't support `/etc/nsswitch.conf` plugins, doesn't fall back to TCP for large responses on older versions). **Mitigated** by Yinz's network stdlib using its own resolver where appropriate (decision deferred to v0.16 http milestone).
+- DNS resolution has known limitations (musl doesn't support `/etc/nsswitch.conf` plugins, doesn't fall back to TCP for large responses on older versions). **Mitigated** by Yinz's network stdlib using its own resolver where appropriate (decision deferred to v0.15 `request` milestone).
 
 For workloads where these specific musl limitations matter, `--dynamic-glibc` is the escape valve. The default favors deployability.
 

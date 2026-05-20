@@ -68,9 +68,9 @@ See [Testing](testing.md) for the full test spec.
 ## Package management
 
 ```
-ynz add http-server          // install
+ynz add markdown-parser          // install
 ynz add graphics@1.2.0       // specific version
-ynz remove http-server       // uninstall
+ynz remove markdown-parser       // uninstall
 ynz update                   // update all
 ynz publish                  // publish to registry
 ```

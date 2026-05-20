@@ -15,12 +15,12 @@ export shape User {
 }
 
 export function fetchUser(id: string) -> User errors {
-  let response = http.get(`https://api.example.com/users/${id}`)
+  let response = request.get(`https://api.example.com/users/${id}`)
   return response.json()
 }
 
 export function createUser(data: UserInput) -> User errors {
-  let response = http.post(`https://api.example.com/users`, { body: data })
+  let response = request.post(`https://api.example.com/users`, { body: data })
   return response.json()
 }
 
@@ -39,10 +39,10 @@ Two states: exported or private. No `pub`, no `pub(crate)`, no visibility modifi
 The standard library is always available. You don't import it. Just use it:
 
 ```ynz
-let x = math.sqrt(16)          // ships v0.7
-let content = file.read(`data.txt`)  // ships v0.6
-let response = http.get(`https://api.example.com`)  // ships v0.16
-let now = date.now()            // ships v0.10
+let x = math.sqrt(16)          // ships v0.6
+let content = file.read(`data.txt`)  // ships v0.5
+let response = request.get(`https://api.example.com`)  // ships v0.15
+let now = date.now()            // ships v0.9
 ```
 
 The compiler knows the entire standard library. The IDE shows stdlib methods in autocomplete automatically. Tree shaking strips anything you don't actually call.
@@ -113,7 +113,7 @@ File path = import path. No configuration, no mapping, no barrel files required.
 ### Installed packages — just the package name
 
 ```
-import { serve } from `http-server`
+import { parseMarkdown } from `markdown-parser`
 import { parseCSV } from `csv-tools`
 ```
 

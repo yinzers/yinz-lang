@@ -135,7 +135,7 @@ The teaching mission is a first-class language goal — see `design/teaching-mis
 ---
 
 **13. Capital letter = type. Everything else = lowercase.**
-Scan any line of code. Capital letter = type. No capital = not a type. Modules are lowercase (`http`, `file`, `math`). Types are PascalCase (`Player`, `Response`, `Date`). Functions, variables, keywords — all lowercase. The same base name can exist in both casings: `Date` is the type, `date` is the module.
+Scan any line of code. Capital letter = type. No capital = not a type. Modules are lowercase (`request`, `file`, `math`). Types are PascalCase (`Player`, `Response`, `Date`). Functions, variables, keywords — all lowercase. The same base name can exist in both casings: `Date` is the type, `date` is the module; `Request` is the type, `request` is the module.
 
 *Why*: Zero-cost scannability. Reading code is faster when the type system is visually encoded in casing. No context-reading required to distinguish a module call from a type annotation. Any pair of eyes — experienced or new — instantly knows what category they're looking at.
 

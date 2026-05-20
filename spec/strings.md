@@ -121,7 +121,7 @@ for c in `café` {
 }
 ```
 
-For grapheme clusters (what humans see as one character, including emoji), use `.graphemes()` — available in v0.6+.
+For grapheme clusters (what humans see as one character, including emoji), use `.graphemes()` — available in v0.5+.
 
 ---
 

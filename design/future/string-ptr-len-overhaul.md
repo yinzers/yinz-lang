@@ -1,6 +1,6 @@
 # String Representation Overhaul — `{ptr, len}` Slices
 
-**Status**: Locked direction, full implementation deferred. Target version TBD (probably alongside v0.6 file I/O or whenever a real use case for embedded NUL bytes lands).
+**Status**: Locked direction, full implementation deferred. Target version TBD (probably alongside v0.5 file I/O or whenever a real use case for embedded NUL bytes lands).
 
 User spec target: `spec/strings.md` (already partially describes the SSO layout that anticipates this overhaul).
 
@@ -19,7 +19,7 @@ For v0.1, strings are C strings (NUL-terminated). The lexer rejects `\0` in stri
 C strings have three problems Yinz will eventually need to solve:
 
 1. **No embedded NUL bytes**. Today this is a footgun — `` `hello\0world` `` would silently truncate at runtime if the lexer didn't reject `\0` up-front. Real use cases that need embedded NULs:
-   - **File I/O reading binary as a string-ish container** (v0.6 file stdlib). Binary data has NULs everywhere.
+   - **File I/O reading binary as a string-ish container** (v0.5 file stdlib). Binary data has NULs everywhere.
    - **FFI with C libraries that use length-prefixed buffers** (any future, even though FFI is v2+).
    - **Network protocols** (HTTP/2, gRPC, etc.) where some headers contain NULs.
 

@@ -57,7 +57,7 @@ All configuration is via named parameters on a single call — no chaining. Name
 
 Any stdlib API that owns a long-running loop is supervised by default. The user can override with explicit config, but the default behavior is safety-by-default. Examples:
 
-- `http.listen(8080)` — request handlers run in supervised tasks (covered in `design/future/http-framework.md`)
+- `server.listen(8080)` — request handlers run in supervised tasks (covered in `design/future/http-framework.md`)
 - `queue.consume(handler)` — message processing runs in supervised tasks
 - `file.watch(path, handler)` — fs event handlers run in supervised tasks
 - `websocket.serve(handler)` — connection handlers run in supervised tasks

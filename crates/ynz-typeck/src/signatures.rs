@@ -97,7 +97,7 @@ pub fn collect_signatures(
                             f.span.clone(),
                             "`entrypoint` must have no parameters.",
                             "Change the declaration to `function entrypoint() -> nothing { ... }`",
-                            "`entrypoint` is where the program starts. It takes no arguments — use `process.args` to read command-line inputs (arriving in v0.8).",
+                            "`entrypoint` is where the program starts. It takes no arguments — use `process.args` to read command-line inputs (arriving in v0.7).",
                         ));
                     }
                     if ret != Type::Nothing && ret != Type::Error {

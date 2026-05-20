@@ -38,8 +38,8 @@ The ownership system already forces callers to declare intent at the call site. 
 **Standard library tagging**:
 
 Built-in stdlib functions are tagged internally:
-- `file.write()`, `http.post()`, `http.put()`, `http.delete()` → writes
-- `file.read()`, `http.get()` → reads
+- `file.write()`, `request.post()`, `request.put()`, `request.delete()` → writes
+- `file.read()`, `request.get()` → reads
 
 Multiple stdlib writes to the same resource auto-sequence. Writes to different resources can parallelize.
 
@@ -63,8 +63,8 @@ sendConfirmationEmail(order)   // only starts after payment
 
 External API calls where the compiler can't see the relationship:
 ```
-wait http.post("stripe.com/charge", data)
-http.post("email.com/send", receipt)
+wait request.post("stripe.com/charge", data)
+request.post("email.com/send", receipt)
 ```
 
 **When `wait` is NOT necessary**:

@@ -22,13 +22,13 @@ The 2026 consensus is unambiguous: UTF-8 is the right internal encoding. Yinz ad
 
 ## File I/O Encoding Default: UTF-8
 
-When the standard library reads a text file (v0.6 `file.read(path)`, etc.), the default encoding is **UTF-8 unconditionally**. Not `locale.getpreferredencoding()`. Not Windows ANSI codepage. UTF-8.
+When the standard library reads a text file (v0.5 `file.read(path)`, etc.), the default encoding is **UTF-8 unconditionally**. Not `locale.getpreferredencoding()`. Not Windows ANSI codepage. UTF-8.
 
 Python made the OPPOSITE choice in Python 3.0 (2008) — `open()` used the OS-preferred encoding, which is cp1252 on Windows. Result: code that worked on Linux/macOS silently broke on Windows when it hit non-ASCII data. PEP 686 to fix this was proposed in 2022 and is targeting Python 3.15 — 17+ years of cross-platform encoding bugs. Java made the same mistake until Java 18 (JEP 400, March 2022) finally defaulted JVM file I/O to UTF-8.
 
 For users who genuinely need a non-UTF-8 encoding (legacy data files, specific protocols), the API takes an explicit parameter: `file.read(path, encoding: .latin1)`. The DEFAULT path is UTF-8 because that's the modern correct answer.
 
-This decision belongs to the v0.6 file system milestone but is locked here NOW so the v0.6 implementer doesn't reach for `locale.getpreferredencoding()` out of habit.
+This decision belongs to the v0.5 file system milestone but is locked here NOW so the v0.5 implementer doesn't reach for `locale.getpreferredencoding()` out of habit.
 
 ---
 
@@ -169,7 +169,7 @@ For every string-producing operation, whether the result carries `is_nfc_known =
 | `.toUpperCase()` / `.toLowerCase()` | FALSE | Case folding produces NFD code points in many cases (Turkish-I, Greek, etc.) |
 | `.toString()` on primitives | TRUE | ASCII only |
 | `.toString()` on user shape | FALSE (conservative) | User-defined formatting may produce NFD |
-| `string.fromBytes(bytes)` (v0.6+) | FALSE | Runtime byte input may not be normalized |
+| `string.fromBytes(bytes)` (v0.5+) | FALSE | Runtime byte input may not be normalized |
 | Single code point from `s.get(n)` | FALSE | A single code point in isolation cannot be verified NFC without context |
 
 **Fast path for `ynz_string_eq`:** if both strings have `is_nfc_known = true`, byte-compare directly. Slow path: normalize both via `unicode-normalization::nfc()` then byte-compare.
@@ -202,10 +202,10 @@ A second CI job is required alongside the normal x86_64 job. This job sets `RUST
 
 ## What This Doc Does NOT Cover
 
-- **The user-facing API** (methods like `.split()`, `.toUpperCase()`, etc.) — that's `spec/strings.md` and the v0.6+ stdlib expansion.
+- **The user-facing API** (methods like `.split()`, `.toUpperCase()`, etc.) — that's `spec/strings.md` and the v0.5+ stdlib expansion.
 - **Indexing semantics** (code-point vs byte vs grapheme) — covered in `design/collections.md` "String Methods" section.
 - **Locale-sensitive operations** (case conversion in Turkish locale, etc.) — open question for the stdlib design (see `design/stdlib/strings.md` when written). Brief preview: locale-sensitive operations MUST take an explicit locale parameter; no system-locale-default for security-critical comparisons.
-- **Internationalization library** (Unicode normalization NFC/NFD/NFKC/NFKD, locale-aware sort, etc.) — likely v0.20+ stdlib expansion.
+- **Internationalization library** (Unicode normalization NFC/NFD/NFKC/NFKD, locale-aware sort, etc.) — likely v0.19+ stdlib expansion.
 
 ---
 

@@ -10,10 +10,10 @@
 
 <!-- RADAR-START -->
 ### Active Roadmaps
-- v0-2-dev-loop-tooling (patrick) — 0 active plans — 2026-05-20
+- v0-2-dev-loop-tooling (patrick) — 1 active plans — 2026-05-20
 
 ### Active Workstreams
-*(no active workstreams)*
+- v0-2-m4-watch (Patrick Rizzardi) — 9 files touched — 0/120 done — roadmap: v0-2-dev-loop-tooling — 2026-05-20
 <!-- RADAR-END -->
 
 ---
@@ -60,8 +60,8 @@ cargo fmt --all
 - [2026-05-12] **Bracket sugar for `.get()` and `.set()` on all collections AND maps**: `arr[i]`, `m["key"]`, `s[i]` all desugar to `.get()`. Writes via `arr[i] = v` desugar to `.set()`. Strings immutable (no write sugar). Types reject bracket access entirely — forces dot for fields. Reverses earlier no-`map[key]` decision. See `design/collections.md`.
 - [2026-05-12] **Iterable contract = two types (`Iterable[T]`, `FallibleIterable[T]`)**: In-memory collections follow `Iterable[T]`; I/O sources follow `FallibleIterable[T]`. Same `for` syntax; compiler infers fallibility from the source's contract and auto-propagates errors when needed. Stdlib adapters `.orSkipFailures()` and `.withErrors()` for ergonomic fallible-to-infallible conversion. See `design/iterables.md` + `spec/iterables.md`.
 - [2026-05-12] **Import aliases + duplicate-name compile error**: TS-style `{ name as renamed }` and `namespace as renamed`. Duplicate names (including stdlib-vs-local collisions) refuse to silently pick — compile error forces aliasing. See `design/modules.md` + `spec/modules.md`.
-- [2026-05-12] **Lock file = TOML, flat array of `[[package]]` tables**: Same format as `yinz.toml`. Diff-friendly, manually editable in emergencies. Install mechanism (content-addressed global cache, hard-links, parallel resolver, lazy integrity) aims for bun-class speed — v0.5 work. See `design/packages.md` + `spec/packages.md`.
-- [2026-05-12] **Granular versioning sequence (23 versions to v1.0 + 3 post-launch versions)**: Each version ships ONE focused thing. v0.1 = core language only. v0.2 = LSP+watch+fmt. v0.3 = auto-parallelization. v0.4 = linting tier. v0.5 = package manager. v0.6-v0.23 = stdlib modules. v1.0 = stability + grammar lock. See `design/mvp-scope.md`.
+- [2026-05-12] **Lock file = TOML, flat array of `[[package]]` tables**: Same format as `yinz.toml`. Diff-friendly, manually editable in emergencies. Install mechanism (content-addressed global cache, hard-links, parallel resolver, lazy integrity) aims for bun-class speed — v0.22 work. See `design/packages.md` + `spec/packages.md`.
+- [2026-05-12; package mgr moved to v0.22 on 2026-05-20] **Granular versioning sequence (24 versions to v1.0 + 3 post-launch versions)**: Each version ships ONE focused thing. v0.1 = core language only. v0.2 = LSP+watch+fmt. v0.3 = auto-parallelization. v0.4 = linting tier. v0.5–v0.21 + v0.23–v0.24 = stdlib modules. v0.22 = package manager (moved late so it lands into a stable-ish language — no public release until v1.0 means early-shipping the package manager would just churn packages every pre-v1.0 breaking change). v1.0 = stability + grammar lock. See `design/mvp-scope.md`.
 - [2026-05-12] **"Compiler IS the linter" — no separate `ynz lint` command**: Third tier of compiler diagnostics (suggestions). Customization via `[lint]` in `yinz.toml` ships v1.x. See `design/linting.md`.
 - [2026-05-12] **Teaching mission codified**: All diagnostics follow WHAT/WHAT-INSTEAD/WHY three-part format. Enforced by Diagnostic constructor. IDE muted hints extend this to all teaching surfaces. See `design/teaching-mission.md`, `design/ide-hints.md`.
 - [2026-05-12] **Compiler error style spec + jargon audit**: `design/compiler-errors.md` is the canonical style spec. Banned-jargon list enforced by `crates/ynz-diagnostics/src/banned_jargon.rs`. See `design/compiler-errors.md`.

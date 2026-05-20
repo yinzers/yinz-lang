@@ -1,6 +1,6 @@
 # `--release` Flag for Optimized Builds
 
-**Status**: Locked, target version TBD (tied to a dedicated optimization pass milestone — probably v0.4 or v0.5 when the compiler's perf work begins in earnest).
+**Status**: Locked, target version TBD (tied to a dedicated optimization pass milestone — probably v0.4 alongside the linting tier, or a later perf-focused slot if scope demands).
 
 User spec target: `spec/tooling.md` gets a `--release` flag section when implemented.
 

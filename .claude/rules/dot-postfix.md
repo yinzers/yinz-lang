@@ -73,7 +73,7 @@ This matches Yinz's broader "self-documenting syntax" rule (Golden Rule 2). A jr
 
 - **Ownership modifiers** (`share`/`lend`/`give`) are NOT body-level dot-postfix operations. They're inferred at call sites from the callee's signature and rendered as IDE muted hints. See `.claude/rules/inference.md`.
 - **Operator overloading** at definition time uses bare-signature contract syntax inside `shape` blocks (per `.claude/rules/non-oop.md`). The dot-postfix rule applies at call sites; contract declarations are a different syntactic position.
-- **Module imports** (`http.get(url)`) follow the same rule — `http` is a module name; `.get(url)` is a function call with parens. Consistent.
+- **Module imports** (`request.get(url)`) follow the same rule — `request` is a module name; `.get(url)` is a function call with parens. Consistent.
 
 ---
 

@@ -9,7 +9,7 @@ Capital letter = type. Everything else = lowercase. This is universal and absolu
 Player, Warrior, Config, Request, Response, Date, Duration, Database
 
 // Modules — lowercase
-file.read(), http.get(), date.now(), math.sqrt(), json.parse()
+file.read(), request.get(), date.now(), math.sqrt(), json.parse()
 
 // Functions — lowercase camelCase
 function fetchUser(), function processOrder()

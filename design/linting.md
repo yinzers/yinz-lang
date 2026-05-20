@@ -208,7 +208,7 @@ The "compiler-as-teacher" tier. About code quality, performance, and pedagogy, n
 | `debug-prints-in-production` | `print()` calls in non-test code (configurable scope) — suggest `log` module |
 | `large-background-copy` | `background fn(largeData)` where `data` is reused after — `.give` or restructure |
 
-**Module-specific rules ship with each module's version** (v0.6 file system rules, v0.7 math rules, etc.). They're not in the v0.4 launch set; they expand the suggestion tier as the stdlib grows.
+**Module-specific rules ship with each module's version** (v0.5 file system rules, v0.6 math rules, etc.). They're not in the v0.4 launch set; they expand the suggestion tier as the stdlib grows.
 
 ---
 

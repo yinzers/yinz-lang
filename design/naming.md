@@ -33,8 +33,8 @@ PascalCase is exclusively for types. Everything else is lowercase camelCase — 
 ```
 Player          // type
 player          // variable
-http            // module
-http.get()      // module function
+request         // module
+request.get()   // module function
 fetchUser       // function name
 let userName    // variable
 ```
