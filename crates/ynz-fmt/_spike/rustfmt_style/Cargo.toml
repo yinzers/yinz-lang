@@ -1,0 +1,13 @@
+[package]
+name = "ynz-fmt-spike-rustfmt"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "ynz-fmt-spike-rustfmt"
+path = "src/main.rs"
+
+[dependencies]
+ynz-parser      = { workspace = true }
+ynz-ast         = { workspace = true }
+ynz-diagnostics = { workspace = true }

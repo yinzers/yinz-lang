@@ -1,0 +1,8 @@
+// nested_expr.ynz: nested arithmetic with inline comments
+function compute() -> int {
+  const a = 10 // left value
+  const b = 20 // right value
+  const c = 5 // scale factor
+  const result = (a + b) * c // compute product
+  return result // done
+}
