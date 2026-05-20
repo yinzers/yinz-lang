@@ -91,23 +91,25 @@ fn cross_file_errors_publish_to_correct_uri() {
 }
 
 #[test]
-fn concurrent_did_change_reflects_last_change() {
+fn concurrent_did_change_produces_two_notifications_without_panic() {
+    // WHY: verifies that back-to-back didChange events are each processed and each
+    // produce a publishDiagnostics notification, with no panic or dropped events.
+    // The lsp-server dispatch loop serializes them; this test confirms the server
+    // stays stable under rapid successive mutations.
     let h = InProcessHarness::new().start_server();
     h.initialize();
     h.did_open("file:///concurrent.ynz", "let x: int = 1");
     next_notif(&h); // drain didOpen diagnostic
 
-    // Queue two didChange notifications back-to-back before draining
+    // Queue two didChange notifications before draining (back-to-back)
     h.did_change("file:///concurrent.ynz", "let x: int = 2", 2);
     h.did_change("file:///concurrent.ynz", "let x: int = 3", 3);
 
-    // With lsp-server's synchronous single-thread dispatch, both notifications
-    // are processed in order. We should get two publishDiagnostics notifications.
-    // The SECOND one reflects version 3.
-    let _first = next_notif(&h).expect("first didChange should produce publishDiagnostics");
-    let second = next_notif(&h).expect("second didChange should produce publishDiagnostics");
-    // Both complete without panic — the server serializes concurrent changes correctly.
-    assert!(!second.is_null(), "second didChange diagnostic publish must not be null");
+    // Both must produce a notification without panic; lsp-server serializes them
+    let _first = next_notif(&h).expect("first didChange must produce publishDiagnostics");
+    let second = next_notif(&h).expect("second didChange must produce publishDiagnostics");
+    // Notification structure is non-null (harness wraps as object with _notification key)
+    assert!(second.is_object(), "second publishDiagnostics must be a valid notification object");
 }
 
 #[test]

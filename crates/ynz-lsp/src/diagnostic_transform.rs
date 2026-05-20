@@ -35,16 +35,17 @@ pub fn to_lsp_diagnostic(
     let related_information = if d.related.is_empty() {
         None
     } else {
+        // Thin slice: only emit related-info for same-file spans where `text`/`table` are valid.
+        // Cross-file related-info requires per-file text lookup (deferred — no caller supplies
+        // a multi-file resolver yet); cross-file entries are silently omitted rather than
+        // emitting ranges computed against the wrong file's bytes.
         let info: Vec<_> = d
             .related
             .iter()
+            .filter(|rs| rs.span.file == d.span.file)
             .filter_map(|rs| {
                 let uri = path_to_uri(&rs.span.file)?;
-                // Related spans may be in a different file; rebuild the line table for that file.
-                // For same-file related spans, using `table` would be cheaper, but we don't
-                // track per-span ownership here. Phase 5 (hover) can optimize if needed.
-                let rel_table = LineTable::new(text);
-                let rel_range = span_to_range(text, &rel_table, rs.span.start, rs.span.end, encoding);
+                let rel_range = span_to_range(text, table, rs.span.start, rs.span.end, encoding);
                 Some(DiagnosticRelatedInformation {
                     location: Location { uri, range: rel_range },
                     message: rs.label.clone(),
@@ -92,25 +93,12 @@ pub fn path_to_uri(path: &str) -> Option<Url> {
         .or_else(|| Url::parse(path).ok())
 }
 
-/// Helper: convert a whole `DiagnosticBucket` for one document.
-///
-/// All diagnostics in `bucket` must have `span.file` matching the document
-/// that `text`/`table` describe. The caller (server.rs) groups by span.file
-/// before calling this function.
-pub fn bucket_to_lsp_diagnostics(
-    bucket: &ynz_diagnostics::DiagnosticBucket,
-    text: &str,
-    table: &LineTable,
-    encoding: PositionEncoding,
-) -> Vec<Diagnostic> {
-    bucket.iter().map(|d| to_lsp_diagnostic(d, text, table, encoding)).collect()
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use lsp_types::Position;
-    use ynz_diagnostics::{DiagnosticBucket, Diagnostic as YnzDiag, Severity, SourceSpan};
+    use ynz_diagnostics::{Diagnostic as YnzDiag, Severity, SourceSpan};
 
     fn make_diag(severity: Severity, start: usize, end: usize) -> YnzDiag {
         YnzDiag {
@@ -170,15 +158,6 @@ mod tests {
         let lsp = to_lsp_diagnostic(&d, text, &table, PositionEncoding::Utf8);
         assert_eq!(lsp.range.start, Position { line: 0, character: 0 });
         assert_eq!(lsp.range.end, Position { line: 0, character: 3 });
-    }
-
-    #[test]
-    fn empty_bucket_produces_no_diagnostics() {
-        let text = "let x = 5";
-        let table = LineTable::new(text);
-        let bucket = DiagnosticBucket::new();
-        let lsp_diags = bucket_to_lsp_diagnostics(&bucket, text, &table, PositionEncoding::Utf8);
-        assert!(lsp_diags.is_empty());
     }
 
     #[test]
