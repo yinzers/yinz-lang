@@ -1,0 +1,63 @@
+name: website-build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - '.github/workflows/website.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - '.github/workflows/website.yml'
+
+# Cancel superseded runs on the same PR / branch
+concurrency:
+  group: website-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build website (SSG)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.2.21'
+
+      - name: Cache bun store
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('website/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: website/node_modules
+          key: node-modules-${{ runner.os }}-${{ hashFiles('website/bun.lock') }}
+
+      - name: Install dependencies
+        working-directory: website
+        run: bun install --frozen-lockfile
+
+      - name: Type check
+        working-directory: website
+        run: bunx nuxi typecheck
+
+      - name: Generate (SSG)
+        working-directory: website
+        run: bun run generate
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: website-public
+          path: website/.output/public/
+          retention-days: 7
