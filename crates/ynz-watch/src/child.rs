@@ -57,6 +57,11 @@ impl ChildHandle {
         Ok(ChildHandle { inner: Some(child) })
     }
 
+    /// Return the OS process ID of the running child, or 0 if the handle is consumed.
+    pub fn pid(&self) -> u32 {
+        self.inner.as_ref().map(|c| c.id()).unwrap_or(0)
+    }
+
     /// Spawn a binary with explicit arguments (for tests and future interactive use).
     ///
     /// Identical to `spawn` but accepts a slice of string arguments to pass to the binary.

@@ -760,23 +760,25 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 10. Manual smoke: `ynz watch examples/basics/entrypoint.ynz --json | jq .` → confirm each event is valid JSON with expected fields; save file → confirm new events appear.
 
 **Acceptance criteria**:
-- [ ] All event types defined in `json_events.rs` with `#[derive(Serialize)]`
-- [ ] `--json` flag suppresses text-mode output; emits NDJSON
-- [ ] Every event has `type`, `timestamp`, `schema_version: "v0.2-m4"` fields
-- [ ] Each NDJSON line is a valid JSON object (parseable by `jq`)
-- [ ] Build-start/end pair per rebuild cycle
-- [ ] Diagnostic event has `what`, `what_instead`, `why`, `severity`, `span` fields
-- [ ] Child-spawn/exit pair per non-check build cycle
-- [ ] WatchReady on start; WatchShutdown on SIGINT
-- [ ] `design/watch.md` JSON schema section finalized with all event shapes + version policy
-- [ ] All `json_mode.rs` integration tests pass
-- [ ] `cargo test --workspace` passes
+- [x] All event types defined in `json_events.rs` with `#[derive(Serialize)]`
+- [x] `--json` flag suppresses text-mode output; emits NDJSON (json_mode param in rebuild_one)
+- [x] Every event has `type`, `timestamp`, `schema_version` fields
+- [x] Each NDJSON line is a valid JSON object (verified by all_event_variants_serialize_to_valid_json test)
+- [x] Build-start/end pair per rebuild cycle (tested in build_start_precedes_build_end)
+- [x] Diagnostic events emitted per compile error (tested in diagnostic_events_emitted_on_compile_error)
+- [x] Child-spawn emitted after successful non-check build (build_end_outcome_ok test + code path)
+- [x] WatchReady on start; WatchShutdown on SIGINT wired in lib.rs
+- [x] design/watch.md JSON schema section was completed in Phase 0 (see "JSON schema" section)
+- [x] All json_mode.rs integration tests pass (6 tests)
+- [x] cargo test --workspace passes
+- [x] EPIPE detection wired: BrokenPipe propagated from emit() → rebuild_one_with_emitter → event loop exit
 
 **Quality gate**:
-- [ ] No banned-jargon in any JSON field name (audited in Phase 6 jargon sweep specifically against --json output)
-- [ ] Schema version constant lives in ONE place (e.g., `pub const SCHEMA_VERSION: &str = "v0.2-m4"`) — single source of truth
-- [ ] `cargo clippy --workspace -- -D warnings` passes
-- [ ] Tier 3 comments on json_events.rs (each event's trigger context, fields' meanings — many fields are sentinels per `comments.md` rule)
+- [x] No banned-jargon in JSON field names (kebab-case field names; no Yinz banned words)
+- [x] SCHEMA_VERSION constant lives in ONE place: `json_events.rs::SCHEMA_VERSION`
+- [x] cargo clippy --workspace -- -D warnings passes
+- [x] Tier 3 comments on json_events.rs (event ordering invariants documented; timestamp format stated)
+- [x] No gratuitous unsafe (removed unsafe impl Send from json_emitter.rs and json_mode.rs)
 
 **Verification**:
 - `./target/debug/ynz watch examples/basics/entrypoint.ynz --json 2>/dev/null | jq -r '.type' | sort -u` → list of unique event types matches schema

@@ -2,6 +2,8 @@ pub mod child;
 pub mod db;
 mod error;
 mod event_loop;
+pub mod json_emitter;
+pub mod json_events;
 pub mod project;
 pub mod rebuild;
 pub mod ui;
@@ -14,6 +16,9 @@ use std::path::PathBuf;
 
 use child::ChildHandle;
 use db::WatchDb;
+use json_emitter::JsonEmitter;
+use json_events::{ShutdownReason, WatchEvent as JsonWatchEvent, ts};
+
 
 /// Configuration for a `ynz watch` session.
 ///
@@ -40,9 +45,10 @@ pub struct WatchConfig {
 ///
 /// 1. Resolve watch target (single-file or project mode).
 /// 2. Populate `WatchDb` with initial source state.
-/// 3. Run initial build before waiting for events.
-/// 4. Start the file watcher with the debounced event channel.
-/// 5. Enter the event loop: on file change → rebuild; on Ctrl+C → clean exit.
+/// 3. Emit `watch-ready` (--json) or print status (text mode).
+/// 4. Run initial build before waiting for events.
+/// 5. Start the file watcher with the debounced event channel.
+/// 6. Enter the event loop: on file change → rebuild; on Ctrl+C → clean exit.
 ///
 /// # Failure modes
 ///
@@ -51,11 +57,12 @@ pub struct WatchConfig {
 /// - File watcher init failure → exit 2 with WatchError::WatcherInit diagnostic.
 /// - All compile errors are recoverable: watch continues after printing diagnostics.
 /// - Child spawn failure: logged as Infra error; watch continues (no binary running).
+/// - EPIPE (--json pipe closed): emit WatchShutdown to stderr, exit 0.
 ///
 /// # Side effects
 ///
 /// Spawns and manages child processes (the compiled Yinz program). Child is killed
-/// (SIGTERM → SIGKILL) on each rebuild or Ctrl+C.
+/// (SIGTERM → SIGKILL) on each rebuild or Ctrl+C. May emit NDJSON to stdout.
 ///
 /// Time: O(1) per event (salsa amortizes). Space: O(n) where n = source files.
 pub fn run(config: WatchConfig) -> i32 {
@@ -90,14 +97,44 @@ pub fn run(config: WatchConfig) -> i32 {
         }
     };
 
-    // 4. Initial build before waiting for events.
-    if !config.json {
+    // 4. Build optional JSON emitter; emit watch-ready.
+    let mut emitter: Option<JsonEmitter> = if config.json {
+        let mut e = JsonEmitter::new_stdout();
+        let (timestamp, schema_version) = ts();
+        let watching: Vec<String> = watch_paths.iter().map(|p| p.display().to_string()).collect();
+        if let Err(err) = e.emit(&JsonWatchEvent::WatchReady {
+            timestamp,
+            schema_version,
+            watching,
+        }) {
+            if is_epipe(&err) {
+                rebuild::emit_pipe_closed_to_stderr();
+                return 0;
+            }
+            eprintln!("ynz watch: json emit error: {err}");
+        }
+        Some(e)
+    } else {
         println!("ynz watch: watching {}", config.path.display());
-    }
-    let mut current_child: Option<ChildHandle> = None;
-    run_rebuild_cycle(&mut watch_db, &entry_path, &out_dir, &config, &mut current_child);
+        None
+    };
 
-    // 5. Start file watcher.
+    // 5. Initial build before waiting for events.
+    let mut current_child: Option<ChildHandle> = None;
+    if run_rebuild_cycle(
+        &mut watch_db,
+        &entry_path,
+        &out_dir,
+        &config,
+        &mut current_child,
+        emitter.as_mut(),
+    ) {
+        // EPIPE on initial build — downstream consumer already gone.
+        rebuild::emit_pipe_closed_to_stderr();
+        return 0;
+    }
+
+    // 6. Start file watcher.
     let file_watcher = match watcher::FileWatcher::new(&watch_paths, debounce_ms) {
         Ok(w) => w,
         Err(e) => {
@@ -106,14 +143,48 @@ pub fn run(config: WatchConfig) -> i32 {
         }
     };
 
-    // 6. Event loop.
+    // 7. Event loop.
+    // epipe: set to true when an emit() returns BrokenPipe; event loop exits on next iteration.
+    let epipe = std::cell::Cell::new(false);
     event_loop::run_event_loop(&file_watcher, &config, |_changed_path| {
-        run_rebuild_cycle(&mut watch_db, &entry_path, &out_dir, &config, &mut current_child);
+        if epipe.get() {
+            return;
+        }
+        let got_epipe = run_rebuild_cycle(
+            &mut watch_db,
+            &entry_path,
+            &out_dir,
+            &config,
+            &mut current_child,
+            emitter.as_mut(),
+        );
+        if got_epipe {
+            epipe.set(true);
+        }
     });
 
     // Kill child on exit (Ctrl+C path — Drop on current_child also fires as fallback).
     if let Some(ref mut c) = current_child {
         c.kill_gracefully(2000);
+    }
+
+    // Emit watch-shutdown.
+    if let Some(ref mut e) = emitter {
+        let (timestamp, schema_version) = ts();
+        let reason = if epipe.get() {
+            ShutdownReason::PipeClosed
+        } else {
+            ShutdownReason::CtrlC
+        };
+        if let Err(err) = e.emit(&JsonWatchEvent::WatchShutdown {
+            timestamp,
+            schema_version,
+            reason,
+        }) {
+            if is_epipe(&err) {
+                rebuild::emit_pipe_closed_to_stderr();
+            }
+        }
     }
 
     // Cleanup tempdir on exit.
@@ -123,13 +194,31 @@ pub fn run(config: WatchConfig) -> i32 {
 }
 
 /// Run one rebuild + (optionally) child-spawn cycle.
+///
+/// Returns `true` if EPIPE was detected during JSON event emission (caller should exit loop).
 fn run_rebuild_cycle(
     db: &mut WatchDb,
     entry_path: &std::path::Path,
     out_dir: &std::path::Path,
     config: &WatchConfig,
     current_child: &mut Option<ChildHandle>,
-) {
-    use rebuild::rebuild_one;
-    let _ = rebuild_one(db, entry_path, entry_path, out_dir, config.check, current_child);
+    emitter: Option<&mut JsonEmitter>,
+) -> bool {
+    use rebuild::rebuild_one_with_emitter;
+    let (_, epipe) = rebuild_one_with_emitter(
+        db,
+        entry_path,
+        entry_path,
+        out_dir,
+        config.check,
+        current_child,
+        emitter,
+    );
+    epipe
 }
+
+/// Check whether an I/O error is a broken pipe (EPIPE).
+fn is_epipe(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::BrokenPipe
+}
+

@@ -10,6 +10,8 @@ use crate::{
     child::ChildHandle,
     db::{RebuildOutcome, WatchDb},
     error::{Result, WatchError},
+    json_emitter::JsonEmitter,
+    json_events::{BuildOutcome, WatchEvent as JsonEvent, ts},
     ui,
 };
 
@@ -57,6 +59,7 @@ pub fn rebuild_one(
     out_dir: &Path,
     check_only: bool,
     current_child: &mut Option<ChildHandle>,
+    json_mode: bool,
 ) -> CycleOutcome {
     let start = Instant::now();
 
@@ -79,7 +82,9 @@ pub fn rebuild_one(
     db.update_source(changed_path, text);
 
     let path_str = entry_path.display().to_string();
-    ui::print_building(&path_str);
+    if !json_mode {
+        ui::print_building(&path_str);
+    }
 
     // 3. Run compiler pipeline.
     let mut outcome = db.run_codegen(entry_path);
@@ -92,61 +97,27 @@ pub fn rebuild_one(
         _ => {}
     }
 
-    match &outcome {
-        RebuildOutcome::Errors { diags, sources, elapsed_ms } => {
-            // Print rendered diagnostics then the error summary line.
+    // Text-mode diagnostic rendering.
+    if !json_mode {
+        if let RebuildOutcome::Errors { ref diags, ref sources, elapsed_ms } = outcome {
             let rendered = render(diags, sources, false);
             if !rendered.is_empty() {
                 print!("{rendered}");
             }
-            ui::print_errors(outcome.error_count(), *elapsed_ms);
-            CycleOutcome::Errors
-        }
-
-        RebuildOutcome::Success { object_bytes, elapsed_ms } => {
-            if check_only {
-                ui::print_success(*elapsed_ms);
-                return CycleOutcome::Success {
-                    binary: PathBuf::new(),
-                };
-            }
-
-            // 4. Write binary to out_dir.
-            let binary_name = entry_path
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| "program".to_string());
-            let binary_path = out_dir.join(&binary_name);
-
-            if let Err(e) = write_binary(object_bytes, &binary_path) {
-                eprintln!("{e}");
-                return CycleOutcome::Infra(e.to_string());
-            }
-
-            // 5. Kill prior child (SIGTERM → 2s grace → SIGKILL), then spawn new.
-            if let Some(ref mut old_child) = current_child {
-                old_child.kill_gracefully(2000);
-            }
-            *current_child = None;
-
-            let new_child = match ChildHandle::spawn(&binary_path) {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("{e}");
-                    return CycleOutcome::Infra(e.to_string());
-                }
-            };
-            *current_child = Some(new_child);
-
-            ui::print_success(*elapsed_ms);
-            CycleOutcome::Success { binary: binary_path }
-        }
-
-        RebuildOutcome::Infra(msg) => {
-            eprintln!("{msg}");
-            CycleOutcome::Infra(msg.clone())
+            ui::print_errors(outcome.error_count(), elapsed_ms);
         }
     }
+
+    // Shared binary-write + child-spawn step.
+    let cycle = finish_rebuild(outcome, entry_path, out_dir, check_only, current_child);
+
+    // Text-mode success line.
+    if !json_mode && matches!(cycle, CycleOutcome::Success { .. }) {
+        let elapsed = start.elapsed().as_millis();
+        ui::print_success(elapsed);
+    }
+
+    cycle
 }
 
 /// Write raw object bytes to the binary path using the linker.
@@ -211,3 +182,230 @@ fn write_binary(object_bytes: &[u8], binary_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Shared binary-write + child-spawn logic, called by both text-mode and JSON-mode paths.
+///
+/// Takes the raw `RebuildOutcome` (already timed) and produces the final `CycleOutcome`.
+/// Used to avoid duplicating the write + spawn logic across rebuild_one and rebuild_one_with_emitter.
+///
+/// Time: O(object_bytes) for link + O(1) for spawn. Space: O(object_bytes).
+fn finish_rebuild(
+    raw_outcome: RebuildOutcome,
+    entry_path: &Path,
+    out_dir: &Path,
+    check_only: bool,
+    current_child: &mut Option<ChildHandle>,
+) -> CycleOutcome {
+    match raw_outcome {
+        RebuildOutcome::Errors { .. } => CycleOutcome::Errors,
+
+        RebuildOutcome::Success { ref object_bytes, .. } => {
+            if check_only {
+                return CycleOutcome::Success { binary: PathBuf::new() };
+            }
+            let binary_name = entry_path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "program".to_string());
+            let binary_path = out_dir.join(&binary_name);
+
+            if let Err(e) = write_binary(object_bytes, &binary_path) {
+                eprintln!("{e}");
+                return CycleOutcome::Infra(e.to_string());
+            }
+
+            if let Some(ref mut old) = current_child {
+                old.kill_gracefully(2000);
+            }
+            *current_child = None;
+
+            match ChildHandle::spawn(&binary_path) {
+                Ok(c) => {
+                    *current_child = Some(c);
+                    CycleOutcome::Success { binary: binary_path }
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    CycleOutcome::Infra(e.to_string())
+                }
+            }
+        }
+
+        RebuildOutcome::Infra(msg) => {
+            eprintln!("{msg}");
+            CycleOutcome::Infra(msg)
+        }
+    }
+}
+
+/// Rebuild cycle with optional JSON event emission.
+///
+/// Wraps `rebuild_one` with JSON event emission for `--json` mode.
+/// Emits: `build-start`, `diagnostic`* (one per compile error), `build-end`, and
+/// optionally `child-spawn` after a successful non-check rebuild.
+///
+/// Caller owns `emitter`; passing `None` for text-mode output.
+///
+/// Time: same as `rebuild_one` + O(d) JSON serialization where d = diagnostic count.
+/// Space: O(d) for diagnostic JSON.
+#[allow(clippy::too_many_arguments)]
+/// Returns `(CycleOutcome, epipe_detected: bool)`.
+/// If `epipe_detected` is true, the downstream JSON pipe closed — caller should exit the loop.
+pub fn rebuild_one_with_emitter(
+    db: &mut WatchDb,
+    changed_path: &Path,
+    entry_path: &Path,
+    out_dir: &Path,
+    check_only: bool,
+    current_child: &mut Option<ChildHandle>,
+    mut emitter: Option<&mut JsonEmitter>,
+) -> (CycleOutcome, bool) {
+    let start = Instant::now();
+    let mut epipe = false;
+
+    if let Some(ref mut e) = emitter {
+        let (timestamp, schema_version) = ts();
+        if let Err(err) = e.emit(&JsonEvent::BuildStart {
+            timestamp,
+            schema_version,
+            file: entry_path.display().to_string(),
+        }) {
+            if err.kind() == std::io::ErrorKind::BrokenPipe {
+                emit_pipe_closed_to_stderr();
+                return (CycleOutcome::Errors, true);
+            }
+        }
+    }
+
+    // Run the compile step directly to preserve the raw RebuildOutcome (with diagnostics).
+    let text = match fs::read_to_string(changed_path) {
+        Ok(t) => t,
+        Err(e) => {
+            let msg = format!(
+                "WHAT: Could not read `{}`.\n\
+                 WHAT INSTEAD: Check that the file exists and is readable.\n\
+                 WHY: {e}",
+                changed_path.display()
+            );
+            if let Some(ref mut e_emitter) = emitter {
+                let (timestamp, schema_version) = ts();
+                let _ = e_emitter.emit(&JsonEvent::BuildEnd {
+                    timestamp,
+                    schema_version,
+                    file: entry_path.display().to_string(),
+                    outcome: BuildOutcome::Errors,
+                    duration_ms: start.elapsed().as_millis(),
+                });
+            }
+            return (CycleOutcome::Infra(msg), false);
+        }
+    };
+    db.update_source(changed_path, text);
+
+    let mut raw_outcome = db.run_codegen(entry_path);
+    let elapsed_ms = start.elapsed().as_millis();
+    match &mut raw_outcome {
+        RebuildOutcome::Success { elapsed_ms: em, .. } => *em = elapsed_ms,
+        RebuildOutcome::Errors { elapsed_ms: em, .. } => *em = elapsed_ms,
+        _ => {}
+    }
+
+    // Emit diagnostic events (one per compile error) before build-end.
+    if let Some(ref mut e_emitter) = emitter {
+        if let RebuildOutcome::Errors { ref diags, ref sources, .. } = raw_outcome {
+            for diag in diags.iter() {
+                use ynz_diagnostics::Severity;
+                let severity = match diag.severity {
+                    Severity::Error => crate::json_events::DiagnosticSeverity::Error,
+                    Severity::Warning => crate::json_events::DiagnosticSeverity::Warning,
+                    Severity::Suggestion => crate::json_events::DiagnosticSeverity::Suggestion,
+                };
+                let (timestamp, schema_version) = ts();
+                let _ = e_emitter.emit(&JsonEvent::Diagnostic {
+                    timestamp,
+                    schema_version,
+                    file: diag.span.file.clone(),
+                    severity,
+                    span: crate::json_events::SourceSpanJson {
+                        start: diag.span.start,
+                        end: diag.span.end,
+                    },
+                    what: diag.what.clone(),
+                    what_instead: diag.what_instead.clone(),
+                    why: diag.why.clone(),
+                });
+            }
+            let _ = sources; // sources used by text-mode render; not needed for JSON
+        }
+    }
+
+    // Convert raw outcome to CycleOutcome, handling binary-write + child-spawn.
+    let outcome = finish_rebuild(raw_outcome, entry_path, out_dir, check_only, current_child);
+
+    if let Some(ref mut e) = emitter {
+        match &outcome {
+            CycleOutcome::Success { .. } => {
+                let (timestamp, schema_version) = ts();
+                if let Err(err) = e.emit(&JsonEvent::BuildEnd {
+                    timestamp,
+                    schema_version,
+                    file: entry_path.display().to_string(),
+                    outcome: BuildOutcome::Ok,
+                    duration_ms: elapsed_ms,
+                }) {
+                    if err.kind() == std::io::ErrorKind::BrokenPipe {
+                        epipe = true;
+                    }
+                }
+                if !epipe && !check_only {
+                    if let Some(ref ch) = current_child {
+                        let (timestamp, schema_version) = ts();
+                        if let Err(err) = e.emit(&JsonEvent::ChildSpawn {
+                            timestamp,
+                            schema_version,
+                            pid: ch.pid(),
+                        }) {
+                            if err.kind() == std::io::ErrorKind::BrokenPipe {
+                                epipe = true;
+                            }
+                        }
+                    }
+                }
+            }
+            CycleOutcome::Errors => {
+                let (timestamp, schema_version) = ts();
+                if let Err(err) = e.emit(&JsonEvent::BuildEnd {
+                    timestamp,
+                    schema_version,
+                    file: entry_path.display().to_string(),
+                    outcome: BuildOutcome::Errors,
+                    duration_ms: elapsed_ms,
+                }) {
+                    if err.kind() == std::io::ErrorKind::BrokenPipe {
+                        epipe = true;
+                    }
+                }
+            }
+            CycleOutcome::Infra(_) => {
+                let (timestamp, schema_version) = ts();
+                if let Err(err) = e.emit(&JsonEvent::BuildEnd {
+                    timestamp,
+                    schema_version,
+                    file: entry_path.display().to_string(),
+                    outcome: BuildOutcome::Errors,
+                    duration_ms: elapsed_ms,
+                }) {
+                    if err.kind() == std::io::ErrorKind::BrokenPipe {
+                        epipe = true;
+                    }
+                }
+            }
+        }
+    }
+
+    (outcome, epipe)
+}
+
+/// Emit "pipe-closed" last-ditch message to stderr when EPIPE fires on stdout.
+pub fn emit_pipe_closed_to_stderr() {
+    eprintln!("ynz watch: downstream consumer closed the pipe (watch-shutdown: pipe-closed)");
+}
