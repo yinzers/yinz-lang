@@ -1,0 +1,11 @@
+// File header
+// A simple math module
+
+/// Returns the absolute value of x.
+function abs(x: int) -> int {
+  // Negative branch
+  if (x < 0) {
+    return 0 - x  // negate
+  }
+  return x  // already positive
+}

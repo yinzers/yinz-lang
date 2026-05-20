@@ -1,0 +1,3 @@
+function aVeryLongFunctionNameThatExceedsOneHundredCharactersAndShouldNotHaveArbitraryLineBreaksInserted() -> nothing {
+  print(`done`)
+}

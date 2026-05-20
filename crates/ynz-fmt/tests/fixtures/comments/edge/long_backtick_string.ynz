@@ -1,0 +1,3 @@
+function longString() -> string {
+  return `This is a very long string that exceeds one hundred characters and should never be re-flowed inside the backticks no matter how long it gets because backtick content is opaque to the formatter.`
+}

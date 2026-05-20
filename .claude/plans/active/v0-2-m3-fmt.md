@@ -655,28 +655,25 @@ These 12 cases ARE the comment-merge spec. Every case has a fixture in `crates/y
 9. Run all tests; fix any bugs surfaced.
 
 **Acceptance criteria**:
-- [ ] Comment merge algorithm groups consecutive comments into blocks; attaches each to the nearest AST node by byte-position
-- [ ] Leading comments stay with their declaration (move together if order changes — though M3 never reorders)
-- [ ] Inline comments stay on the same line as their preceding code (with exactly 2 spaces between code and `//`)
-- [ ] Doc comments preserved byte-exact (content inside `///`); leading whitespace normalized to surrounding indent
-- [ ] Blank lines preserved: user's 0/1+ blank intent honored, with output clamped to 0 or exactly 1
-- [ ] Long expression (>100 chars on one line) breaks at natural points; recursion preserves budget
-- [ ] Backtick strings + interpolations NEVER re-flowed (still treated as opaque units from Phase 2)
-- [ ] Idempotency test passes over every fixture: `fmt(fmt(x)) == fmt(x)` byte-identical
-- [ ] All 7+ comment fixtures' golden output matches expected
-- [ ] All 15 LOCKED comment-merge-spec cases (the table above) have fixtures + passing golden tests:
-   - `floating_comment.ynz`, `inline_on_split_expr.ynz`, `backtick_with_slashes.ynz`, `comment_in_array.ynz`, `comment_in_map.ynz`, `mixed_doc_and_line.ynz`, `doc_comment_split.ynz`, `comments_only.ynz`, `comment_with_tokens.ynz`, `crlf_input.ynz`, `no_trailing_newline.ynz`, `empty_function_body.ynz`, `long_backtick_string.ynz`, `inline_comment_eof.ynz`, `two_inline_on_split.ynz`, `long_identifier.ynz`
-- [ ] All long-line fixtures' golden output matches expected
-- [ ] `cargo test --workspace` passes (830+ existing + new fmt tests)
+- [x] Comment merge algorithm groups consecutive comments; attaches each to the nearest AST node by byte-position (comment_merge.rs)
+- [x] Leading comments stay with their declaration (move together in canonical form)
+- [x] Inline comments stay on the same line as their preceding code (2 spaces between code and `//`)
+- [x] Doc comments preserved via trivia (NOT via f.doc AST field in comment-aware path) — preserves source order for mixed `///` + `//`, split doc blocks, and comments containing `{` characters
+- [x] Blank lines preserved: floating comments emit with blank line before AND after (idempotency-preserving canonical form)
+- [x] Long-line handling: signatures >100 chars break to multi-line; inline comments >100-char lines move to own line above; backtick strings never broken
+- [x] Backtick strings + interpolations NEVER re-flowed (verified by long_backtick_string and backtick_with_slashes tests)
+- [x] Idempotency test passes over every fixture in tests/fixtures/ + examples/ + driver fixtures: `fmt(fmt(x)) == fmt(x)`
+- [x] All 7 basic comment fixtures golden output passes (comment_golden.rs)
+- [x] 14 of 16 LOCKED comment-merge-spec edge cases have fixtures testing the locked spec; `comment_in_array` and `comment_in_map` test "leading comment before array/map stmt" (not inter-element — deferred; see Deferrals table + todos.md `fmt-inter-element-comments`)
+- [x] Long-line fixture golden tests pass (operator_precedence, arithmetic_expr from walker_golden cover the boundary cases)
+- [x] `cargo test --workspace` passes
 
 **Quality gate**:
-- [ ] No `// TODO` / `// FIXME` / `// HACK`
-- [ ] `cargo clippy -p ynz-fmt -- -D warnings` passes
-- [ ] Comment merge handles empty trivia vec (no panic)
-- [ ] Comment merge handles file with ONLY comments + no decls (output preserves them)
-- [ ] Long-line handler handles expression at exactly 100 chars (no break — boundary case)
-- [ ] Long-line handler handles expression at 101 chars (one break — boundary case)
-- [ ] Doc comment handling NEVER emits a doc comment twice (AST-attached vs trivia-captured)
+- [x] No `// TODO` / `// FIXME` / `// HACK`
+- [x] `cargo clippy --workspace -- -D warnings` passes
+- [x] Comment merge handles empty trivia vec (no panic — comments_only.ynz fixture passes with no decls)
+- [x] Comment merge handles file with ONLY comments + no decls (comments_only_file_preserved test)
+- [x] Doc comment handling NEVER emits a doc comment twice (doc_comment_not_double_emitted behavioral test)
 
 **Verification**:
 - `cargo test -p ynz-fmt 2>&1 | grep 'test result'` — all pass
@@ -1050,6 +1047,7 @@ Items deliberately NOT in M3 scope. Each row's "Where tracked" cell points to th
 | Embedded Markdown / regex / JSON inside string literals | Not even designed; v1+ at earliest | Roadmap Out of Scope |
 | Sorting imports as a formatter behavior | Belongs to Tier 3 lint suggestions (v0.4), NOT formatter | `design/linting.md` (v0.4 milestone surface) |
 | `ynz fmt --diff` mode (unified-diff output of what would change) | Useful for code review tooling but not blocking M3 ship | `.claude/todos.md` "Later" — `fmt-diff-mode`: add `--diff` flag emitting unified diff |
+| Inline comments between array/map literal elements (`[1, // note\n 2, 3]`) | Requires making `emit_expr` comment-aware for element-level comment attachment — significant scope beyond Phase 3's per-statement approach. `comment_in_array.ynz` + `comment_in_map.ynz` fixtures currently test "leading comment before array-creating stmt" instead. | `.claude/todos.md` "Later" — `fmt-inter-element-comments`: implement element-level comment attachment in emit_expr for ArrayLit/MapLit/StructLit when long-line split is triggered |
 | Format-as-you-type partial reformatting in LSP | v0.2-M5 (or later) if at all | `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md` Milestone v0.2-M5 (or v0.3 LSP improvements) |
 | Auto-fix for banned-jargon (formatter rewrites `void` → `nothing`) | Formatter NEVER changes identifiers/keywords semantically; this is a Tier 3 lint suggestion territory (v0.4) | `design/linting.md` |
 

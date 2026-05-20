@@ -1,0 +1,8 @@
+function logic(x: int) -> int {
+  // Check for zero
+  if (x == 0) {
+    return 0
+  }
+  // Non-zero path
+  return x + 1
+}

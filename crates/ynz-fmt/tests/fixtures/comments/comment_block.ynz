@@ -1,0 +1,6 @@
+// First line of a multi-line comment block
+// Second line of the same block
+// Third line
+function describe() -> nothing {
+  print(`described`)
+}

@@ -16,9 +16,10 @@ use ynz_ast::nodes::{
     TypePath, UnaryOpKind,
 };
 
+use crate::comment_merge::CommentContext;
 use crate::render::{fits_on_one_line, indent};
 
-// ── Public entry point ────────────────────────────────────────────────────────
+// ── Public entry point (comment-aware) ────────────────────────────────────────
 
 /// Emit a complete module as a canonical Yinz string. Caller is responsible for any comment interleaving.
 ///
@@ -65,7 +66,8 @@ fn emit_function(f: &FunctionDecl, ind: usize) -> String {
 
     let params: Vec<String> = f.params.iter().map(emit_param).collect();
     let ret = emit_type(&f.return_type);
-    let errors = if f.errors_capable { " errors" } else { "" };
+    // errors suffix is already carried by Type::ErrorCapable in f.return_type; do not double-emit
+    let errors = "";
     let generics = emit_generics(&f.generics);
 
     // Try single-line signature first
@@ -650,5 +652,397 @@ pub fn emit_type(ty: &Type) -> String {
             format!("{{ {fs} }}")
         }
         Type::Error => "<ERROR>".into(),
+    }
+}
+
+// ── Comment-aware emission ─────────────────────────────────────────
+//
+// These functions thread a `CommentContext` through the AST walk, attaching
+// `//` comments at statement, item, and field boundaries.
+//
+// Architecture:
+// - Module items get leading+floating comments before them and inline comments
+//   after them (on the same source line as the item's opening token).
+// - Block statements get leading+inline comments the same way.
+// - Shape fields get inline comments.
+// - Doc comments are emitted from the AST fields (`FunctionDecl.doc`,
+//   `ShapeDecl.doc`, `FieldDecl.doc`) — NOT from the trivia vec — to avoid
+//   double-emission.
+
+/// Emit a complete module with comments interleaved from the `CommentContext`.
+///
+/// Returns a string ending with exactly one trailing newline.
+pub fn emit_module_with_comments(module: &Module, ctx: &CommentContext<'_>) -> String {
+    if module.items.is_empty() {
+        return emit_floating_comments(ctx, 0, ctx.source.len());
+    }
+
+    let mut out = String::new();
+    let mut prev_end: usize = 0;
+
+    for item in &module.items {
+        let item_start = item_span_start(item);
+
+        // Collect ALL comments in [prev_end, item_start), including doc-comments.
+        // Doc comments are emitted via trivia (in source-byte order) rather than
+        // via the AST's f.doc/s.doc fields to preserve ordering when a `//` comment
+        // and a `///` comment appear in mixed order, and to preserve "split doc blocks"
+        // (two `///` blocks separated by a blank line).
+        let (leading, floating) = ctx.between(prev_end, item_start);
+
+        // Blank-line separator between items
+        if !out.is_empty() {
+            out.push('\n');
+        }
+
+        // Floating comments: a blank line BEFORE and AFTER the comment group (canonical form).
+        // This ensures the floating classification is stable on re-format runs (idempotent).
+        if !floating.is_empty() {
+            for c in &floating {
+                out.push_str(&normalize_comment_text(&c.text));
+                out.push('\n');
+            }
+            // Blank line after the floating group — keeps ≥1 blank between comment and item
+            out.push('\n');
+        }
+
+        // Leading comments (directly above item, no blank between comment and item)
+        for c in &leading {
+            out.push_str(&normalize_comment_text(&c.text));
+            out.push('\n');
+        }
+
+        // Item itself
+        let item_text = emit_item_with_comments(item, 0, ctx);
+        out.push_str(&item_text);
+        out.push('\n');
+
+        prev_end = item_span_end_for_comments(item, ctx);
+    }
+
+    // Any trailing comments after the last item
+    let last_item_end = prev_end;
+    let trailing = emit_floating_comments(ctx, last_item_end, ctx.source.len());
+    if !trailing.is_empty() {
+        out.push_str(&trailing);
+    }
+
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+fn emit_floating_comments(ctx: &CommentContext<'_>, from: usize, to: usize) -> String {
+    let mut out = String::new();
+    for c in ctx.comments.iter().filter(|c| {
+        c.span.start >= from && c.span.start < to && !CommentContext::is_doc_comment(c)
+    }) {
+        out.push_str(&normalize_comment_text(&c.text));
+        out.push('\n');
+    }
+    out
+}
+
+fn normalize_comment_text(text: &str) -> String {
+    // Strip trailing \r (CRLF input normalization)
+    text.trim_end_matches('\r').to_string()
+}
+
+fn item_span_start(item: &Item) -> usize {
+    match item {
+        Item::Function(f) => f.span.start,
+        Item::ShapeDecl(s) => s.span.start,
+        Item::ImportDecl(i) => i.span.start,
+        Item::ConstDecl(c) => c.span.start,
+        Item::ReExport(r) => r.span.start,
+        Item::OptionsDecl(o) => o.span.start,
+    }
+}
+
+fn item_span_end_for_comments(item: &Item, ctx: &CommentContext<'_>) -> usize {
+    // Use body.span.end for functions to avoid the FunctionDecl.span.end pointing
+    // to the next token after `}`.
+    match item {
+        Item::Function(f) => f.body.span.end,
+        Item::ShapeDecl(s) => s.span.end,
+        Item::ImportDecl(i) => ctx.source[i.span.start..]
+            .find('\n')
+            .map(|x| i.span.start + x)
+            .unwrap_or(ctx.source.len()),
+        Item::ConstDecl(c) => ctx.source[c.span.start..]
+            .find('\n')
+            .map(|x| c.span.start + x)
+            .unwrap_or(ctx.source.len()),
+        Item::ReExport(r) => r.span.end,
+        Item::OptionsDecl(o) => o.span.end,
+    }
+}
+
+fn emit_item_with_comments(item: &Item, ind: usize, ctx: &CommentContext<'_>) -> String {
+    match item {
+        Item::Function(f) => emit_function_with_comments(f, ind, ctx),
+        Item::ShapeDecl(s) => emit_shape_with_comments(s, ind, ctx),
+        // Non-body items: use the plain emitter (comments handled at module level)
+        other => emit_item(other, ind),
+    }
+}
+
+fn emit_function_with_comments(f: &FunctionDecl, ind: usize, ctx: &CommentContext<'_>) -> String {
+    let prefix = indent(ind);
+    let export = if f.is_exported { "export " } else { "" };
+
+    // Doc comments are emitted via trivia at the module level (in source order),
+    // NOT here — so we can preserve mixed `///` + `//` ordering and split doc blocks.
+    let mut out = String::new();
+    let params: Vec<String> = f.params.iter().map(emit_param).collect();
+    let ret = emit_type(&f.return_type);
+    // errors suffix is already carried by Type::ErrorCapable in f.return_type; do not double-emit
+    let errors = "";
+    let generics = emit_generics(&f.generics);
+
+    let sig_single = format!(
+        "{prefix}{export}function {name}{generics}({params}) -> {ret}{errors}",
+        name = f.name,
+        params = params.join(", "),
+    );
+    let sig = if fits_on_one_line(&format!("{sig_single} {{")) {
+        format!("{sig_single} {{")
+    } else {
+        let ind2 = indent(ind + 1);
+        let params_ml = params
+            .iter()
+            .map(|p| format!("{ind2}{p}"))
+            .collect::<Vec<_>>()
+            .join(",\n");
+        format!("{prefix}{export}function {name}{generics}(\n{params_ml}\n{prefix}) -> {ret}{errors} {{",
+            name = f.name)
+    };
+
+    // Use the function's span start as the block anchor — any comment on a line after
+    // the `function` keyword line is eligible as a leading comment for the first statement.
+    // Avoids rfind('{') which can land on `{` characters inside comments.
+    let body = emit_block_with_comments(&f.body, ind + 1, ctx, f.span.start);
+    out.push_str(&format!("{sig}{body}{prefix}}}"));
+    out
+}
+
+fn emit_shape_with_comments(s: &ShapeDecl, ind: usize, ctx: &CommentContext<'_>) -> String {
+    let prefix = indent(ind);
+    let export = if s.is_exported { "export " } else { "" };
+    let base = if s.is_base { "base " } else { "" };
+    let generics = emit_generics(&s.generics);
+
+    if let Some(alias) = &s.alias_ty {
+        return format!("{prefix}{export}shape {}{generics} = {}", s.name, emit_type(alias));
+    }
+
+    // Doc comments emitted via trivia at module level — not here.
+    let mut out = String::new();
+    let extends = s
+        .extends
+        .as_ref()
+        .map(|(n, _)| format!(" extends {n}"))
+        .unwrap_or_default();
+    let follows = if s.follows.is_empty() {
+        String::new()
+    } else {
+        let ns = s.follows.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ");
+        format!(" follows {ns}")
+    };
+
+    out.push_str(&format!(
+        "{prefix}{export}{base}shape {}{generics}{extends}{follows} {{\n",
+        s.name
+    ));
+
+    for field in &s.fields {
+        // Inline comment on the field's source line
+        let inline = ctx
+            .inline_comment_after(field.span.start)
+            .unwrap_or_default();
+        let field_text = emit_field(field, ind + 1);
+        out.push_str(&format!("{field_text}{inline}\n"));
+    }
+
+    for sig in &s.contract_sigs {
+        out.push_str(&emit_contract_sig(sig, ind + 1));
+        out.push('\n');
+    }
+
+    out.push_str(&format!("{prefix}}}"));
+    out
+}
+
+/// Emit a block with comment-aware statement rendering.
+///
+/// `block_open_pos`: the byte position of the opening `{` (used to anchor
+/// the leading-comment window for the first statement).
+fn emit_block_with_comments(
+    block: &Block,
+    ind: usize,
+    ctx: &CommentContext<'_>,
+    block_open_pos: usize,
+) -> String {
+    if block.stmts.is_empty() {
+        return " ".to_string();
+    }
+
+    let mut out = String::from("\n");
+    let mut prev_end = block_open_pos;
+
+    for stmt in &block.stmts {
+        let stmt_start = stmt_span_start(stmt);
+        let prefix = indent(ind);
+
+        // Leading/floating comments for this statement (include all kinds, no doc-comment filter)
+        let (leading, floating) = ctx.between(prev_end, stmt_start);
+
+        // Floating comments (there's a blank line before this stmt — emit them first)
+        for c in &floating {
+            out.push_str(&format!("{prefix}{}\n", normalize_comment_text(&c.text)));
+        }
+
+        // Leading comments (directly above stmt)
+        for c in &leading {
+            out.push_str(&format!("{prefix}{}\n", normalize_comment_text(&c.text)));
+        }
+
+        // Inline comment on the same source line as this stmt
+        let inline = ctx.inline_comment_after(stmt_start).unwrap_or_default();
+
+        // Emit statement
+        let stmt_text = emit_stmt_with_inline(stmt, ind, ctx, &inline);
+        out.push_str(&stmt_text);
+        out.push('\n');
+
+        // Update prev_end:
+        // - Compound stmts (if/while/for/match): advance to the closing `}` position so that
+        //   comments INSIDE the body are not re-claimed as leading comments for the next stmt.
+        // - Simple stmts: advance to end of first source line (span.end may cross lines for
+        //   stmts ending in InterpolatedString).
+        prev_end = match stmt {
+            Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => {
+                body.span.end
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                if let Some(b) = else_arm {
+                    b.span.end
+                } else if let Some(a) = arms.last() {
+                    a.body.span.end
+                } else {
+                    ctx.source[stmt_start..].find('\n').map(|i| stmt_start + i).unwrap_or(ctx.source.len())
+                }
+            }
+            _ => ctx.source[stmt_start..]
+                .find('\n')
+                .map(|i| stmt_start + i)
+                .unwrap_or(ctx.source.len()),
+        };
+    }
+    out
+}
+
+fn stmt_span_start(s: &Stmt) -> usize {
+    match s {
+        Stmt::Let { span, .. }
+        | Stmt::Assign { span, .. }
+        | Stmt::Return { span, .. }
+        | Stmt::If { span, .. }
+        | Stmt::Match { span, .. }
+        | Stmt::While { span, .. }
+        | Stmt::For { span, .. }
+        | Stmt::FieldAssign { span, .. }
+        | Stmt::IndexAssign { span, .. } => span.start,
+        Stmt::Expr(e) => e.span().start,
+    }
+}
+
+/// Emit a statement, appending an optional inline comment (already formatted as `  // text`).
+///
+/// When the full line (code + inline comment) would exceed `LINE_WIDTH`, the inline comment
+/// is moved to its own line directly above the statement at the same indent. This preserves
+/// the comment's locality without extending the line past the width limit.
+fn emit_stmt_with_inline(s: &Stmt, ind: usize, ctx: &CommentContext<'_>, inline: &str) -> String {
+    use crate::render::LINE_WIDTH;
+    let prefix = indent(ind);
+
+    /// Helper: if `code + inline` exceeds LINE_WIDTH, move inline comment above code.
+    fn place(prefix: &str, code: String, inline: &str) -> String {
+        if inline.is_empty() {
+            return code;
+        }
+        if code.len() + inline.len() > LINE_WIDTH {
+            // Inline loses meaning when the line is too long — move above
+            let comment = inline.trim_start();
+            format!("{prefix}{comment}\n{code}")
+        } else {
+            format!("{code}{inline}")
+        }
+    }
+
+    match s {
+        Stmt::Let { is_const, name, ty, value, .. } => {
+            let kw = if *is_const { "const" } else { "let" };
+            let ty_s = ty.as_ref().map(|t| format!(": {}", emit_type(t))).unwrap_or_default();
+            let code = format!("{prefix}{kw} {name}{ty_s} = {}", emit_expr(value, 0));
+            place(&prefix, code, inline)
+        }
+        Stmt::Assign { target, value, .. } => {
+            let code = format!("{prefix}{target} = {}", emit_expr(value, 0));
+            place(&prefix, code, inline)
+        }
+        Stmt::Return { value, .. } => {
+            let v = value.as_ref().map(|v| format!(" {}", emit_expr(v, 0))).unwrap_or_default();
+            let code = format!("{prefix}return{v}");
+            place(&prefix, code, inline)
+        }
+        Stmt::Expr(e) => {
+            let code = format!("{prefix}{}", emit_expr(e, 0));
+            place(&prefix, code, inline)
+        }
+        Stmt::If { cond, body, span, .. } => {
+            // Use the `if` keyword position as block anchor (safe — no rfind that can hit
+            // `{` inside comment text).
+            let body_s = emit_block_with_comments(body, ind + 1, ctx, span.start);
+            format!("{prefix}if ({}) {{{body_s}{prefix}}}", emit_expr(cond, 0))
+        }
+        Stmt::Match { scrutinee, arms, else_arm, span, .. } => {
+            let ind2 = indent(ind + 1);
+            let arms_s = arms
+                .iter()
+                .map(|arm| {
+                    let pattern = emit_match_pattern(&arm.pattern);
+                    let body = emit_block_with_comments(&arm.body, ind + 2, ctx, arm.arrow_span.start);
+                    format!("{ind2}{pattern} => {{{body}{ind2}}}")
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let else_s = else_arm.as_ref().map(|b| {
+                let body = emit_block_with_comments(b, ind + 2, ctx, span.start);
+                format!("\n{ind2}else => {{{body}{ind2}}}")
+            }).unwrap_or_default();
+            format!("{prefix}if ({}) {{\n{arms_s}{else_s}\n{prefix}}}", emit_expr(scrutinee, 0))
+        }
+        Stmt::While { cond, body, span, .. } => {
+            let body_s = emit_block_with_comments(body, ind + 1, ctx, span.start);
+            format!("{prefix}while ({}) {{{body_s}{prefix}}}", emit_expr(cond, 0))
+        }
+        Stmt::For { var, iter, body, span, .. } => {
+            let body_s = emit_block_with_comments(body, ind + 1, ctx, span.start);
+            format!("{prefix}for ({var} in {}) {{{body_s}{prefix}}}", emit_expr(iter, 0))
+        }
+        Stmt::FieldAssign { target, value, .. } => {
+            format!("{prefix}{} = {}{inline}", emit_expr(target, 0), emit_expr(value, 0))
+        }
+        Stmt::IndexAssign { receiver, index, value, .. } => {
+            format!(
+                "{prefix}{}[{}] = {}{}",
+                emit_expr(receiver, 0),
+                emit_expr(index, 0),
+                emit_expr(value, 0),
+                inline
+            )
+        }
     }
 }

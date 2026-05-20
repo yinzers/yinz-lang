@@ -1,0 +1,9 @@
+function first() -> nothing {
+  print(`first`)
+}
+
+// This comment has a blank line below it before the next function
+
+function second() -> nothing {
+  print(`second`)
+}

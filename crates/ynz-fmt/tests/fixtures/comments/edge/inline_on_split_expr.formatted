@@ -1,0 +1,5 @@
+function withInlineOnLongLine(alpha: string, beta: string, gamma: string, delta: string) -> string {
+  // assembled from all four long parameter names here
+  const resultantValue = alpha + beta + gamma + delta
+  return resultantValue
+}

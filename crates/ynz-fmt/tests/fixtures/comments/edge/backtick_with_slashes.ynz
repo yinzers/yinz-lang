@@ -1,0 +1,3 @@
+function makeUrl() -> string {
+  return `http://example.com/path`
+}
