@@ -1,4 +1,3 @@
-import * as path from 'path';
 import * as vscode from 'vscode';
 import {
     LanguageClient,
@@ -9,7 +8,7 @@ import {
 
 let client: LanguageClient | undefined;
 
-export function activate(context: vscode.ExtensionContext): void {
+export const activate = (context: vscode.ExtensionContext): void => {
     const serverPath = vscode.workspace
         .getConfiguration('yinz')
         .get<string>('server.path', 'ynz-lsp');
@@ -42,10 +41,8 @@ export function activate(context: vscode.ExtensionContext): void {
     });
 
     context.subscriptions.push({
-        dispose: () => client?.stop(),
+        dispose: () => { client?.stop(); },
     });
-}
+};
 
-export function deactivate(): Thenable<void> | undefined {
-    return client?.stop();
-}
+export const deactivate = (): Thenable<void> | undefined => client?.stop();

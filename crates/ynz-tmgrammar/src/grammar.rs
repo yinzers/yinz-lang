@@ -9,7 +9,14 @@ use serde_json::{json, Value};
 /// - Literals (booleans, numbers, strings) → standard scopes
 /// - Comments → standard `comment.*` scopes
 pub fn build_grammar() -> Value {
-    let keywords: Vec<String> = ynz_registry::keywords().map(|e| e.name.to_string()).collect();
+    // Exclude literal-value keywords (true, false, none) — they're covered by
+    // #literals with a more specific scope. Keywords are matched after literals
+    // in the outer patterns array, so this is defense-in-depth.
+    let literal_kws: std::collections::HashSet<&str> = ["true", "false", "none"].iter().copied().collect();
+    let keywords: Vec<String> = ynz_registry::keywords()
+        .filter(|e| !literal_kws.contains(e.name))
+        .map(|e| e.name.to_string())
+        .collect();
     let banned: Vec<String> =
         ynz_registry::banned_declaration_keywords().map(|e| e.name.to_string()).collect();
     let deferred: Vec<String> =
@@ -26,10 +33,10 @@ pub fn build_grammar() -> Value {
         "patterns": [
             { "include": "#comments" },
             { "include": "#strings" },
+            { "include": "#literals" },
             { "include": "#banned-keywords" },
             { "include": "#deferred-features" },
-            { "include": "#keywords" },
-            { "include": "#literals" }
+            { "include": "#keywords" }
         ],
         "repository": {
             "comments": {
@@ -88,12 +95,12 @@ pub fn build_grammar() -> Value {
                         "match": "\\bnone\\b"
                     },
                     {
-                        "name": "constant.numeric.integer.ynz",
-                        "match": "\\b[0-9][0-9_]*\\b"
-                    },
-                    {
                         "name": "constant.numeric.float.ynz",
                         "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*\\b"
+                    },
+                    {
+                        "name": "constant.numeric.integer.ynz",
+                        "match": "\\b[0-9][0-9_]*\\b"
                     }
                 ]
             }

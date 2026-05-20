@@ -11,6 +11,9 @@
       "include": "#strings"
     },
     {
+      "include": "#literals"
+    },
+    {
       "include": "#banned-keywords"
     },
     {
@@ -18,9 +21,6 @@
     },
     {
       "include": "#keywords"
-    },
-    {
-      "include": "#literals"
     }
   ],
   "repository": {
@@ -50,7 +50,7 @@
       "name": "invalid.illegal"
     },
     "keywords": {
-      "match": "\\b(background|sensitive|function|nothing|follows|extends|dynamic|options|return|hidden|errors|import|export|const|false|while|shape|true|else|base|Self|self|none|wait|let|for|if|in|is)\\b",
+      "match": "\\b(background|sensitive|function|nothing|follows|extends|dynamic|options|return|hidden|errors|import|export|const|while|shape|else|base|Self|self|wait|let|for|if|in|is)\\b",
       "name": "keyword.control.ynz"
     },
     "literals": {
@@ -64,12 +64,12 @@
           "name": "constant.language.null.ynz"
         },
         {
-          "match": "\\b[0-9][0-9_]*\\b",
-          "name": "constant.numeric.integer.ynz"
-        },
-        {
           "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*\\b",
           "name": "constant.numeric.float.ynz"
+        },
+        {
+          "match": "\\b[0-9][0-9_]*\\b",
+          "name": "constant.numeric.integer.ynz"
         }
       ]
     },

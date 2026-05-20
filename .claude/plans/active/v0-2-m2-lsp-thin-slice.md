@@ -22,7 +22,7 @@ files:
 # Plan: v0.2-M2 — LSP Thin Slice + VSCode Plugin
 
 Created: 2026-05-20
-Status: in_progress — Phase 6 COMPLETE (code-reviewer pending). Phase 7 next.
+Status: in_progress — Phase 6 COMPLETE (BLOCK fixed). Phase 7 next.
 
 ## Context & Why
 
@@ -849,12 +849,12 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 **Quality gate**:
 - [x] No `// TODO` / `// FIXME` / `// HACK`
-- [ ] No hardcoded keyword/banned/deferred lists in `crates/ynz-tmgrammar/src/` — all sourced from `ynz-registry`
+- [x] No hardcoded keyword/banned/deferred lists in `crates/ynz-tmgrammar/src/` — all sourced from `ynz-registry`
 - [x] Grammar is valid TextMate JSON (parseable; passes a small structural validation in the snapshot test)
 - [x] Generated grammar uses simple Oniguruma-compatible regex only (no lookbehind / nested captures — verified by the snapshot test or a small parse-check)
 - [x] `package.json` has no obvious typos in extension manifest fields (validated by `npx vsce ls` or similar in the test pipeline if installed; otherwise reviewer-verified)
 - [x] No `node_modules/` committed (`.gitignore` checked)
-- [ ] No `.vsix` checked in (`.gitignore` checked)
+- [x] No `.vsix` checked in (`.gitignore` checked)
 
 **Verification**:
 - `cargo test -p ynz-tmgrammar` — snapshot passes
