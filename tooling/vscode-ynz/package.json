@@ -6,6 +6,10 @@
   "publisher": "yinz-lang",
   "preview": true,
   "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/patrickrizzardi/ynz"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
