@@ -92,7 +92,7 @@ The server's `initialize` response advertises exactly these capabilities:
 - `referencesProvider` — find-refs
 - `renameProvider` — rename
 - `documentFormattingProvider` — format-on-save (needs v0.2-M3 `ynz-fmt`)
-- `inlayHintProvider` — muted-hint surfaces per `design/inference.md`
+- `inlayHintProvider` — muted-hint surfaces per `.claude/rules/inference.md`
 - `codeActionProvider` — code actions
 - `semanticTokensProvider` — semantic highlighting beyond TextMate
 
@@ -143,9 +143,16 @@ Both consume `lsp-types` (official Microsoft-blessed type definitions).
 
 **Decision criterion:** Choose the framework with the smaller plumbing+test footprint while not forcing async semantics over the salsa DB. If both pass, default to `tower-lsp` (more active, more sample code, simpler request-handler shape).
 
-**Locked decision:** *(Phase 1 fills in the winning framework name, rationale, and version pinned here)*
+**Locked decision: `lsp-server = "0.7.9"` (rust-analyzer crate)**
 
-**This choice carries through to v0.2-M5.** The framework is not re-decided when the full LSP expands go-to-def, rename, etc. The lock is here to prevent the re-decision from happening under time pressure.
+Rationale (from `crates/ynz-lsp/_spike/MEASUREMENTS.md`):
+- **Natural `&mut CompilerDb` ownership**: lsp-server's synchronous dispatch loop owns the DB directly. Every `didChange` mutation and every `check_query` read is a plain function call — no `Arc<Mutex<...>>` wrapper needed.
+- **Smaller footprint**: 102 transitive deps, 17 MB debug binary vs 189 deps / 53 MB for tower-lsp. Less to audit, less to compile.
+- **Simpler test harness**: in-process sync tests call handler functions directly; no `tokio::test` runtime setup.
+- **Better maintenance**: `lsp-server 0.7.9` published 2024-07-12 by the rust-analyzer team (actively maintained). `tower-lsp 0.20.0` published 2023-09-11; original repo declared unmaintained; maintained fork `tower-lsp-f 0.25.0-beta3` is beta.
+- **Architecture fit**: single-threaded dispatch (which our model requires) maps naturally to lsp-server's sync model. tower-lsp's async model adds boilerplate that adds no value for this architecture.
+
+**This choice carries through to v0.2-M5.** When M5 adds go-to-def/rename/find-refs, the sync model scales via salsa snapshots (`Snapshot<CompilerDb>` for concurrent reads; main loop retains `&mut CompilerDb` for mutations). No framework migration needed.
 
 ---
 
@@ -207,7 +214,7 @@ The following LSP capabilities are explicitly out of scope for v0.2-M2. Each wil
 - `textDocument/references` — find-refs (requires cross-file use-site tracking)
 - `textDocument/rename` — requires careful salsa invalidation across files
 - `textDocument/formatting` — format-on-save; delegates to v0.2-M3's `ynz-fmt` library
-- `textDocument/inlayHint` — muted-hint surfaces per `design/inference.md` three placement categories (Addition / Replacement / Informational)
+- `textDocument/inlayHint` — muted-hint surfaces per `.claude/rules/inference.md` three placement categories (Addition / Replacement / Informational)
 - `textDocument/codeAction` — code actions and quick-fixes
 - `textDocument/semanticTokens` — semantic highlighting richer than TextMate
 - Doc-comment integration in hover body (rich `///` comment content in `textDocument/hover`)

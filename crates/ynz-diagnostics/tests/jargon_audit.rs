@@ -180,3 +180,94 @@ fn no_banned_jargon_in_diagnostic_strings() {
         );
     }
 }
+
+/// Build the LSP-rendered message string from three components — mirrors the format
+/// used by `ynz-lsp::diagnostic_transform::to_lsp_diagnostic`.
+fn lsp_message(what: &str, what_instead: &str, why: &str) -> String {
+    format!("{}\n\nWHAT INSTEAD: {}\n\nWHY: {}", what, what_instead, why)
+}
+
+/// Walk every diagnostic site and check the LSP-rendered form for banned jargon.
+#[test]
+fn no_banned_jargon_in_lsp_rendered_messages() {
+    let mut violations: Vec<String> = Vec::new();
+    let banned: Vec<_> = ynz_registry::banned_jargon().collect();
+
+    for path in collect_rs_files(&crates_dir()) {
+        if is_exempt(&path) {
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let filename = path.display().to_string();
+
+        // Extract all three-argument diagnostic construction sites and build
+        // the LSP message string (WHAT\n\nWHAT INSTEAD: X\n\nWHY: Y).
+        // We extract strings greedily from each site; for a three-argument call,
+        // the first 3 strings are (what, what_instead, why) in that order.
+        let mut site_strings: Vec<String> = Vec::new();
+        let mut in_ctx = false;
+        let mut depth: usize = 0;
+        let mut site_count = 0;
+
+        for line in content.lines() {
+            if line.contains("Diagnostic::error(")
+                || line.contains("Diagnostic::warning(")
+                || line.contains("Diagnostic::suggestion(")
+            {
+                in_ctx = true;
+                depth = 0;
+                site_count = 0;
+            }
+
+            if in_ctx {
+                for (_, _, s) in find_diagnostic_strings(line, &filename) {
+                    site_strings.push(s);
+                    site_count += 1;
+                }
+                for c in line.chars() {
+                    match c {
+                        '(' => depth += 1,
+                        ')' => {
+                            if depth > 0 {
+                                depth -= 1;
+                            }
+                            if depth == 0 {
+                                in_ctx = false;
+                                // Build LSP message if we collected at least 3 strings
+                                if site_strings.len() >= 3 {
+                                    let msg = lsp_message(&site_strings[0], &site_strings[1], &site_strings[2]);
+                                    let lower = msg.to_lowercase();
+                                    for entry in &banned {
+                                        let w = entry.name.to_lowercase();
+                                        if contains_whole_word(&lower, &w) {
+                                            violations.push(format!(
+                                                "LSP-rendered message contains banned word {:?}: {:?}",
+                                                entry.name, msg
+                                            ));
+                                        }
+                                    }
+                                }
+                                site_strings.clear();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    if !violations.is_empty() {
+        panic!(
+            "Banned jargon found in {} LSP-rendered diagnostic message(s):\n{}\n\n\
+             See design/compiler-errors.md for replacements.",
+            violations.len(),
+            violations.join("\n")
+        );
+    }
+}

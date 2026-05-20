@@ -1,0 +1,5 @@
+// Fixture with intentional errors for diagnostic tests.
+function entrypoint() -> nothing {
+    let x: int = "not an int"
+    let y: boolean = 42
+}

@@ -1204,8 +1204,7 @@ impl<'b> Checker<'b> {
                     if let Some(sig) = self.sig_table.fns.get(name) {
                         let has_share_param = sig
                             .param_ownerships
-                            .iter()
-                            .any(|o| *o == Some(OwnershipModifier::Share));
+                            .contains(&Some(OwnershipModifier::Share));
                         if has_share_param {
                             self.diags.push(Diagnostic::error(
                                 inner.span().clone(),

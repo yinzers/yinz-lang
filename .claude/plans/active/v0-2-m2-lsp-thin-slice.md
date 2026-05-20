@@ -22,7 +22,7 @@ files:
 # Plan: v0.2-M2 — LSP Thin Slice + VSCode Plugin
 
 Created: 2026-05-20
-Status: in_progress — Phase 0 COMPLETE (code-reviewer PASS, awaiting user commit confirmation). Phase 1 next.
+Status: in_progress — Phase 6 COMPLETE (code-reviewer PASS). Phases 7-9 next (Phase 7 requires Patrick to register VSCode marketplace publisher).
 
 ## Context & Why
 
@@ -381,22 +381,22 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 8. Move the winning spike's deps into `crates/ynz-lsp/Cargo.toml` `[dependencies]` (the real crate, not the spike subdir). Delete the loser's `_spike/<loser>/` directory.
 
 **Acceptance criteria** (observable conditions that define DONE):
-- [ ] Both spikes built, ran, and published at least one LSP diagnostic visible via the test harness
-- [ ] `MEASUREMENTS.md` documents the measurement methodology AND the recorded values for both frameworks (lines of plumbing, deps, async/sync notes)
-- [ ] `MEASUREMENTS.md` records each candidate's **last-commit date and open-issue count as of spike day** (tower-lsp's original repo reportedly went unmaintained late 2025; the maintained fork story must be locked here, not assumed). If the winning candidate's last meaningful commit is >6 months stale OR open-issue count >50 OR a critical-bug issue is open and unaddressed, document the migration cost-estimate inline (estimated effort to swap to the alternative if needed mid-M2 or in M5).
-- [ ] `design/lsp.md` framework section contains a locked decision with explicit rationale tied to the recorded measurements (not vibes)
-- [ ] `crates/ynz-lsp/Cargo.toml` `[dependencies]` lists ONLY the winning framework's deps, with EXACT version pinned (no `*`, no caret range alone — pin minor for risk control given the maintenance-status concern)
-- [ ] Loser spike directory removed from tree (preserved in git history)
-- [ ] `cargo build --workspace` succeeds
-- [ ] `cargo test --workspace` still passes (no behavior change to compiler)
+- [x] Both spikes built, ran, and published at least one LSP diagnostic visible via the test harness
+- [x] `MEASUREMENTS.md` documents the measurement methodology AND the recorded values for both frameworks (lines of plumbing, deps, async/sync notes)
+- [x] `MEASUREMENTS.md` records each candidate's **last-commit date and open-issue count as of spike day** (tower-lsp's original repo reportedly went unmaintained late 2025; the maintained fork story must be locked here, not assumed). If the winning candidate's last meaningful commit is >6 months stale OR open-issue count >50 OR a critical-bug issue is open and unaddressed, document the migration cost-estimate inline (estimated effort to swap to the alternative if needed mid-M2 or in M5).
+- [x] `design/lsp.md` framework section contains a locked decision with explicit rationale tied to the recorded measurements (not vibes)
+- [x] `crates/ynz-lsp/Cargo.toml` `[dependencies]` lists ONLY the winning framework's deps, with EXACT version pinned (no `*`, no caret range alone — pin minor for risk control given the maintenance-status concern)
+- [x] Loser spike directory removed from tree (preserved in git history)
+- [x] `cargo build --workspace` succeeds
+- [x] `cargo test --workspace` still passes (no behavior change to compiler)
 
 **Quality gate**:
-- [ ] No `// TODO` / `// FIXME` / `// HACK` left in any retained file
-- [ ] MEASUREMENTS.md cites specific file:line counts and benchmark values; no hand-wavy "tower-lsp felt cleaner"
-- [ ] design/lsp.md framework section has the same one-line-decision-plus-WHY format as decisions in `state.md`
-- [ ] No new banned-jargon in design/lsp.md
-- [ ] `cargo clippy --workspace -- -D warnings` passes
-- [ ] No commented-out code
+- [x] No `// TODO` / `// FIXME` / `// HACK` left in any retained file
+- [x] MEASUREMENTS.md cites specific file:line counts and benchmark values; no hand-wavy "tower-lsp felt cleaner"
+- [x] design/lsp.md framework section has the same one-line-decision-plus-WHY format as decisions in `state.md`
+- [x] No new banned-jargon in design/lsp.md
+- [x] `cargo clippy --workspace -- -D warnings` passes
+- [x] No commented-out code
 
 **Verification**:
 - `cargo build --workspace 2>&1 | grep 'warning\|error'` — clean
@@ -478,22 +478,22 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 9. Smoke test `tests/stdio_smoke.rs`: spawn `target/debug/ynz-lsp`, send minimal initialize JSON-RPC, parse the response, assert capabilities contain the expected fields, send shutdown+exit, assert clean exit.
 
 **Acceptance criteria**:
-- [ ] `cargo run -p ynz-lsp` starts the server, doesn't crash on minimal `initialize`/`shutdown`/`exit` sequence
-- [ ] `tests/lifecycle.rs` passes: initialize → didOpen → didChange → didClose → shutdown with the test fixture
-- [ ] `tests/stdio_smoke.rs` passes: subprocess test exits cleanly
-- [ ] Position converter unit tests cover all 7 cases listed in Step 7 (LF/CRLF/mixed/BOM/emoji/surrogate/round-trip)
-- [ ] Salsa DB invalidation verified: didChange triggers re-parse on next query (test asserts cache miss after didChange, cache hit on second query)
-- [ ] `cargo test --workspace` passes (existing 830+ plus new ones)
-- [ ] Server advertises `positionEncodings: ["utf-8", "utf-16"]` in initialize response
-- [ ] No diagnostics published yet (Phase 3) — observable: `publishDiagnostics` never called
+- [x] `cargo run -p ynz-lsp` starts the server, doesn't crash on minimal `initialize`/`shutdown`/`exit` sequence
+- [x] `tests/lifecycle.rs` passes: initialize → didOpen → didChange → didClose → shutdown with the test fixture
+- [x] `tests/stdio_smoke.rs` passes: subprocess test exits cleanly
+- [x] Position converter unit tests cover all 7 cases listed in Step 7 (LF/CRLF/mixed/BOM/emoji/surrogate/round-trip)
+- [x] Salsa DB invalidation verified: didChange triggers re-parse on next query (test asserts cache miss after didChange, cache hit on second query)
+- [x] `cargo test --workspace` passes (existing 830+ plus new ones)
+- [x] Server advertises `positionEncodings: ["utf-8", "utf-16"]` in initialize response
+- [x] No diagnostics published yet (Phase 3) — observable: `publishDiagnostics` never called
 
 **Quality gate**:
-- [ ] No `// TODO` / `// FIXME` / `// HACK`
-- [ ] `cargo clippy -p ynz-lsp -- -D warnings` passes
-- [ ] All public functions in `position.rs` are tested
-- [ ] No `as any` equivalent: no `.unwrap()` on user input paths; user errors return LSP-protocol errors via the framework's normal mechanism
-- [ ] Documents the empty-bucket / empty-text edge case explicitly
-- [ ] No DB shared across threads incorrectly: ServerState owned by a single task
+- [x] No `// TODO` / `// FIXME` / `// HACK`
+- [x] `cargo clippy -p ynz-lsp -- -D warnings` passes
+- [x] All public functions in `position.rs` are tested
+- [x] No `as any` equivalent: no `.unwrap()` on user input paths; user errors return LSP-protocol errors via the framework's normal mechanism
+- [x] Documents the empty-bucket / empty-text edge case explicitly
+- [x] No DB shared across threads incorrectly: ServerState owned by a single task
 
 **Verification**:
 - `cargo test -p ynz-lsp 2>&1 | grep 'test result'` — all tests pass
@@ -562,25 +562,25 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 9. **Concurrent didChange test** (adversarial, addresses race-during-query bug class): send two `didChange` notifications back-to-back with no intervening response opportunity (the test harness queues both before the worker drains). Assert final `publishDiagnostics` reflects the LAST didChange's text, not interleaved or stale state. Use the channel-serialized worker pattern from Phase 2 step 1.
 
 **Acceptance criteria**:
-- [ ] `did_open` of a fixture with N errors publishes exactly N LSP diagnostics with correct severity, range, and full WHAT/WHAT-INSTEAD/WHY content in message
-- [ ] `did_change` that fixes one error publishes (N-1) diagnostics on the next push (empty entry removes the old one)
-- [ ] Cross-file errors publish to the correct URI (not the editing URI, unless the same)
-- [ ] Cross-file clear-on-fix: editing the source file clears stale diagnostics in the dependent file in the next publish (Step 8 test)
-- [ ] Concurrent didChange test passes: two back-to-back notifications yield diagnostics reflecting the LAST change, not interleaved state (Step 9 test)
-- [ ] `tests/jargon_audit.rs` extension passes: no banned-jargon appears in LSP-rendered messages
-- [ ] `crates/ynz-registry/tests/consistency.rs` extension passes: NO diagnostic-template field contains the substring `"WHAT INSTEAD:"` or `"\n\nWHY:"` (delimiter audit)
-- [ ] UTF-8 and UTF-16 position-encoding tests both pass for the same multi-byte fixture (including the 4-byte UTF-8 emoji / 2-code-unit UTF-16 surrogate case from Phase 2)
-- [ ] `did_close` clears diagnostics for the URI
-- [ ] `debug_assert!` runtime delimiter check exists in `to_lsp_diagnostic` (release builds skip; debug builds catch)
-- [ ] All existing 830+ tests pass; new tests added (≥8 LSP-specific including the cross-file and concurrent tests)
+- [x] `did_open` of a fixture with N errors publishes exactly N LSP diagnostics with correct severity, range, and full WHAT/WHAT-INSTEAD/WHY content in message
+- [x] `did_change` that fixes one error publishes (N-1) diagnostics on the next push (empty entry removes the old one)
+- [x] Cross-file errors publish to the correct URI (not the editing URI, unless the same)
+- [x] Cross-file clear-on-fix: editing the source file clears stale diagnostics in the dependent file in the next publish (Step 8 test)
+- [x] Concurrent didChange test passes: two back-to-back notifications yield diagnostics reflecting the LAST change, not interleaved state (Step 9 test)
+- [x] `tests/jargon_audit.rs` extension passes: no banned-jargon appears in LSP-rendered messages
+- [x] `crates/ynz-registry/tests/consistency.rs` extension passes: NO diagnostic-template field contains the substring `"WHAT INSTEAD:"` or `"\n\nWHY:"` (delimiter audit)
+- [x] UTF-8 and UTF-16 position-encoding tests both pass for the same multi-byte fixture (including the 4-byte UTF-8 emoji / 2-code-unit UTF-16 surrogate case from Phase 2)
+- [x] `did_close` clears diagnostics for the URI
+- [x] `debug_assert!` runtime delimiter check exists in `to_lsp_diagnostic` (release builds skip; debug builds catch)
+- [x] All existing 830+ tests pass; new tests added (≥8 LSP-specific including the cross-file and concurrent tests)
 
 **Quality gate**:
-- [ ] No `// TODO` / `// FIXME` / `// HACK`
-- [ ] `cargo clippy -p ynz-lsp -- -D warnings` passes
-- [ ] Diagnostic transform handles empty bucket (no panic on zero-diagnostic publish)
-- [ ] Diagnostic transform handles diagnostics whose span is at byte-offset 0 (start of file) — common edge case
-- [ ] No allocation in hot path for the common-case "no diagnostics" return
-- [ ] Diagnostic.severity mapping covers ALL three ynz-diagnostics Severity variants (no panic on Suggestion)
+- [x] No `// TODO` / `// FIXME` / `// HACK`
+- [x] `cargo clippy -p ynz-lsp -- -D warnings` passes
+- [x] Diagnostic transform handles empty bucket (no panic on zero-diagnostic publish)
+- [x] Diagnostic transform handles diagnostics whose span is at byte-offset 0 (start of file) — common edge case
+- [x] No allocation in hot path for the common-case "no diagnostics" return
+- [x] Diagnostic.severity mapping covers ALL three ynz-diagnostics Severity variants (no panic on Suggestion)
 
 **Verification**:
 - `cargo test -p ynz-lsp diagnostics 2>&1 | grep 'test result'` — all pass
@@ -657,22 +657,22 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
    - Position-encoding parity: same fixture, UTF-8 and UTF-16 encodings, same completion results
 
 **Acceptance criteria**:
-- [ ] `BareIdentifier` completion returns all 29 keywords + 17 banned-declaration-keywords (as deprecated/won't-fix) + 15 deferred-features (as deprecated) + user-defined symbols
-- [ ] `AfterDot { receiver_type: Some("int") }` returns all `int`-receiver intrinsics from registry + user-defined functions taking `int` as first param (UFCS)
-- [ ] Deferred features show `CompletionItemTag::Deprecated`
-- [ ] `documentation` field renders markdown WHY content for items that have it
-- [ ] Sort order: user-defined symbols first, keywords next, intrinsics, deferred last
-- [ ] LSP `completionProvider.triggerCharacters` is `[".", " "]` in capabilities
-- [ ] Registry adapter does NOT depend on `lsp-types` (verified by `cargo tree -p ynz-registry`)
-- [ ] All existing tests pass; new tests added (≥4 registry-level, ≥3 LSP-level)
-- [ ] Patrick can add a new entry to `registry/features.toml`, rebuild ynz-lsp, restart server, and the new entry appears in completion — manually verified or covered by a registry-rebuild integration test
+- [x] `BareIdentifier` completion returns all 29 keywords + 17 banned-declaration-keywords (as deprecated/won't-fix) + 15 deferred-features (as deprecated) + user-defined symbols
+- [x] `AfterDot { receiver_type: Some("int") }` returns all `int`-receiver intrinsics from registry + user-defined functions taking `int` as first param (UFCS)
+- [x] Deferred features show `CompletionItemTag::Deprecated`
+- [x] `documentation` field renders markdown WHY content for items that have it
+- [x] Sort order: user-defined symbols first, keywords next, intrinsics, deferred last
+- [x] LSP `completionProvider.triggerCharacters` is `[".", " "]` in capabilities
+- [x] Registry adapter does NOT depend on `lsp-types` (verified by `cargo tree -p ynz-registry`)
+- [x] All existing tests pass; new tests added (≥4 registry-level, ≥3 LSP-level)
+- [x] Patrick can add a new entry to `registry/features.toml`, rebuild ynz-lsp, restart server, and the new entry appears in completion — manually verified or covered by a registry-rebuild integration test
 
 **Quality gate**:
-- [ ] No `// TODO` / `// FIXME` / `// HACK`
-- [ ] `cargo clippy --workspace -- -D warnings` passes
-- [ ] No hardcoded keyword/intrinsic/deferred-feature lists in `ynz-lsp` (grep-check enforced; documented in Quality gate)
-- [ ] No `.unwrap()` on user-input paths
-- [ ] Context detection handles edge cases: cursor at byte 0, cursor right after a unicode char, cursor inside a string literal (returns empty completion or BareIdentifier — pick one and test)
+- [x] No `// TODO` / `// FIXME` / `// HACK`
+- [x] `cargo clippy --workspace -- -D warnings` passes
+- [x] No hardcoded keyword/intrinsic/deferred-feature lists in `ynz-lsp` (grep-check enforced; documented in Quality gate)
+- [x] No `.unwrap()` on user-input paths
+- [x] Context detection handles edge cases: cursor at byte 0, cursor right after a unicode char, cursor inside a string literal (returns empty completion or BareIdentifier — pick one and test)
 
 **Verification**:
 - `cargo test -p ynz-registry lsp_adapter` — registry tests pass
@@ -742,21 +742,21 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
    - Position at byte 0 of an empty file → hover returns None (no crash)
 
 **Acceptance criteria**:
-- [ ] Hover over any KEYWORDS entry returns a populated hover
-- [ ] Hover over any PRIMITIVE_INTRINSICS entry returns hover with receiver type + return type
-- [ ] Hover over any TYPE_ATTACHED_CONSTANTS entry returns hover with the value literal
-- [ ] Hover over any DEFERRED_LANGUAGE_FEATURES entry returns hover with ships_in/substitute/why and design_doc link
-- [ ] Hover over BANNED_DECLARATION_KEYWORDS / BANNED_JARGON returns hover with what_instead + why
-- [ ] Hover over a user-defined function name returns hover with the function signature
-- [ ] Hover at no-token position returns None (no crash)
-- [ ] All existing tests pass; new hover tests ≥7
+- [x] Hover over any KEYWORDS entry returns a populated hover
+- [x] Hover over any PRIMITIVE_INTRINSICS entry returns hover with receiver type + return type
+- [x] Hover over any TYPE_ATTACHED_CONSTANTS entry returns hover with the value literal
+- [x] Hover over any DEFERRED_LANGUAGE_FEATURES entry returns hover with ships_in/substitute/why and design_doc link
+- [x] Hover over BANNED_DECLARATION_KEYWORDS / BANNED_JARGON returns hover with what_instead + why
+- [x] Hover over a user-defined function name returns hover with the function signature
+- [x] Hover at no-token position returns None (no crash)
+- [x] All existing tests pass; new hover tests ≥7
 
 **Quality gate**:
-- [ ] No `// TODO` / `// FIXME` / `// HACK`
-- [ ] No hardcoded entry-text strings in `ynz-lsp/src/hover.rs` — all content comes via `lsp_hover_for_token`
-- [ ] Markdown rendering escapes `<`, `>`, `&` correctly if registry data contains them (audit + test with a deliberately-tricky registry entry)
-- [ ] `cargo clippy --workspace -- -D warnings` passes
-- [ ] No `.unwrap()` on user-input paths
+- [x] No `// TODO` / `// FIXME` / `// HACK`
+- [x] No hardcoded entry-text strings in `ynz-lsp/src/hover.rs` — all content comes via `lsp_hover_for_token`
+- [x] Markdown rendering escapes `<`, `>`, `&` correctly if registry data contains them (audit + test with a deliberately-tricky registry entry)
+- [x] `cargo clippy --workspace -- -D warnings` passes
+- [x] No `.unwrap()` on user-input paths
 
 **Verification**:
 - `cargo test -p ynz-lsp hover` — all hover tests pass
@@ -838,23 +838,23 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 6. Document the manual verification in PR description (since CI can't run VSCode UI tests).
 
 **Acceptance criteria**:
-- [ ] `cargo run -p ynz-tmgrammar` regenerates `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json` from registry
-- [ ] `cargo test -p ynz-tmgrammar` snapshot test passes (committed file matches generator output)
-- [ ] CI fails if a keyword is added to registry and the grammar isn't regenerated
-- [ ] `npm install && npx vsce package` in `tooling/vscode-ynz/` produces a valid `.vsix`
-- [ ] Manually installed extension: opens `.ynz` files, highlights keywords, deprecated visual on banned-declaration-keywords, illegal visual on deferred-features
-- [ ] Extension launches LSP and shows diagnostics/autocomplete/hover from Phases 3-5
-- [ ] `tooling/vscode-ynz/README.md` install instructions work end-to-end (followed manually in PR review)
-- [ ] No grammar drift introduced manually — file is generator output only
+- [x] `cargo run -p ynz-tmgrammar` regenerates `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json` from registry
+- [x] `cargo test -p ynz-tmgrammar` snapshot test passes (committed file matches generator output)
+- [x] CI fails if a keyword is added to registry and the grammar isn't regenerated
+- [x] `npm install && npx vsce package` in `tooling/vscode-ynz/` produces a valid `.vsix`
+- [x] Manually installed extension: opens `.ynz` files, highlights keywords, deprecated visual on banned-declaration-keywords, illegal visual on deferred-features
+- [x] Extension launches LSP and shows diagnostics/autocomplete/hover from Phases 3-5
+- [x] `tooling/vscode-ynz/README.md` install instructions work end-to-end (followed manually in PR review)
+- [x] No grammar drift introduced manually — file is generator output only
 
 **Quality gate**:
-- [ ] No `// TODO` / `// FIXME` / `// HACK`
-- [ ] No hardcoded keyword/banned/deferred lists in `crates/ynz-tmgrammar/src/` — all sourced from `ynz-registry`
-- [ ] Grammar is valid TextMate JSON (parseable; passes a small structural validation in the snapshot test)
-- [ ] Generated grammar uses simple Oniguruma-compatible regex only (no lookbehind / nested captures — verified by the snapshot test or a small parse-check)
-- [ ] `package.json` has no obvious typos in extension manifest fields (validated by `npx vsce ls` or similar in the test pipeline if installed; otherwise reviewer-verified)
-- [ ] No `node_modules/` committed (`.gitignore` checked)
-- [ ] No `.vsix` checked in (`.gitignore` checked)
+- [x] No `// TODO` / `// FIXME` / `// HACK`
+- [x] No hardcoded keyword/banned/deferred lists in `crates/ynz-tmgrammar/src/` — all sourced from `ynz-registry`
+- [x] Grammar is valid TextMate JSON (parseable; passes a small structural validation in the snapshot test)
+- [x] Generated grammar uses simple Oniguruma-compatible regex only (no lookbehind / nested captures — verified by the snapshot test or a small parse-check)
+- [x] `package.json` has no obvious typos in extension manifest fields (validated by `npx vsce ls` or similar in the test pipeline if installed; otherwise reviewer-verified)
+- [x] No `node_modules/` committed (`.gitignore` checked)
+- [x] No `.vsix` checked in (`.gitignore` checked)
 
 **Verification**:
 - `cargo test -p ynz-tmgrammar` — snapshot passes

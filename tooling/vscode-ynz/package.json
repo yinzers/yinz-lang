@@ -1,0 +1,59 @@
+{
+  "name": "yinz",
+  "displayName": "Yinz Language",
+  "description": "Yinz language support: syntax highlighting, inline diagnostics, autocomplete, and hover docs powered by ynz-lsp",
+  "version": "0.2.0-m2",
+  "publisher": "<placeholder-set-in-phase-7>",
+  "preview": true,
+  "license": "MIT OR Apache-2.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:ynz"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "ynz",
+        "aliases": ["Yinz", "ynz"],
+        "extensions": [".ynz"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ynz",
+        "scopeName": "source.ynz",
+        "path": "./syntaxes/ynz.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Yinz",
+      "properties": {
+        "yinz.server.path": {
+          "type": "string",
+          "default": "ynz-lsp",
+          "description": "Path to the ynz-lsp binary. Defaults to 'ynz-lsp' (must be on PATH)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -p tsconfig.json --watch",
+    "package": "vsce package --no-yarn"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^8.1.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.22.0",
+    "typescript": "^5.3.0"
+  }
+}

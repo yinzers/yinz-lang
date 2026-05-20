@@ -1,4 +1,3 @@
 fn main() {
-    println!("ynz-lsp v{} (not yet implemented)", env!("CARGO_PKG_VERSION"));
-    std::process::exit(0);
+    ynz_lsp::run_stdio();
 }

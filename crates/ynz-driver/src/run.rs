@@ -66,7 +66,7 @@ pub fn run(source_path: &Path, keep: bool, emit_ir: bool, reveal_sensitive: bool
         // Consume the TempDir without running its cleanup — both the directory
         // and the binary inside it persist after this function returns. The
         // user is told where to find it.
-        let kept_dir = bin_dir.into_path();
+        let kept_dir = bin_dir.keep();
         println!("Binary kept at: {}", binary.display());
         let _ = kept_dir;
     }

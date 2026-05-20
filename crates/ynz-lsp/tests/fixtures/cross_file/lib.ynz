@@ -1,0 +1,4 @@
+// Cross-file fixture: lib has its own errors for routing tests.
+function helper() -> nothing {
+    let x: int = "wrong type"
+}
