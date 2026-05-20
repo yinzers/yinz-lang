@@ -33,15 +33,27 @@ pub use error::{CheckResult, FmtError};
 ///   the standard `ynz-diagnostics` renderer and ask the user to fix the errors first.
 /// - `FmtError::InvalidInput` — infrastructure problem (non-UTF-8 bytes, etc.).
 pub fn format(source: &str) -> Result<String, FmtError> {
+    format_named(source, "<fmt>")
+}
+
+/// Format a complete Yinz source file, labelling diagnostics with the given filename.
+///
+/// Like [`format`], but `ParseError` diagnostics carry `name` as their source label so that
+/// callers can render them with the real file path or `"<stdin>"` instead of `"<fmt>"`.
+///
+/// # Errors
+///
+/// Same as [`format`].
+pub fn format_named(source: &str, name: &str) -> Result<String, FmtError> {
     let db = ynz_parser::CompilerDb::default();
-    let sf = ynz_parser::SourceFile::new(&db, "<fmt>".into(), source.into());
+    let sf = ynz_parser::SourceFile::new(&db, name.into(), source.into());
     let output = ynz_parser::parse_query(&db, sf);
 
     if !output.diagnostics.is_empty() {
         return Err(FmtError::ParseError(output.diagnostics.clone()));
     }
 
-    let (_tokens, comments) = ynz_parser::lex_with_trivia("<fmt>", source);
+    let (_tokens, comments) = ynz_parser::lex_with_trivia(name, source);
     let ctx = comment_merge::CommentContext::new(&comments, source);
     Ok(walker::emit_module_with_comments(&output.module, &ctx))
 }

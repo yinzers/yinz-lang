@@ -65,7 +65,11 @@ impl<'a> CommentContext<'a> {
                 // so we use `>=` here. For all subsequent items, `>` correctly excludes
                 // inline comments that appear on the SAME line as the previous item's last
                 // token (those belong to the previous item, not the upcoming one).
-                let after_prev = if prev_end == 0 { cline >= prev_line } else { cline > prev_line };
+                let after_prev = if prev_end == 0 {
+                    cline >= prev_line
+                } else {
+                    cline > prev_line
+                };
                 after_prev && cline < node_line
             })
             .collect();
@@ -115,10 +119,7 @@ impl<'a> CommentContext<'a> {
         let node_line = self.line_of(node_start);
         self.comments
             .iter()
-            .find(|c| {
-                self.line_of(c.span.start) == node_line
-                    && c.span.start > node_start
-            })
+            .find(|c| self.line_of(c.span.start) == node_line && c.span.start > node_start)
             .map(|c| {
                 // Strip trailing \r from the comment text (CRLF input normalization)
                 let text = c.text.trim_end_matches('\r');

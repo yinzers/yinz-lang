@@ -19,6 +19,10 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Later (idea bin — not committed)
 
+- [ ] **fmt-inter-arm-comments** — comments placed BETWEEN two match arms (`pattern1 => stmt\n// comment\npattern2 => stmt`) are silently dropped by the formatter. The `trailing-comment-after-last-arm` fix landed in Phase 4 captures AFTER the last arm; BETWEEN arms is a pre-existing bug (confirmed pre-fix on `main`). `When triggered:` fix when implementing Phase 3.5 or Phase 4 follow-up on comment attachment; add a `comment_between_arms.ynz` fixture to scope the bug explicitly. See `crates/ynz-fmt/src/walker.rs` `Stmt::Match` emit code for the fix location.
+
+- [ ] **parser-infinite-loop-on-error-gallery-fixtures** — `v0_2_m1_errors.ynz` and `m1_errors.ynz` cause the parser to hang (infinite loop on error recovery). Pre-existing bug, predates the formatter. The `idempotency.rs` and `semantic_roundtrip.rs` and `mass_rewrite.rs` tests explicitly skip these two files. `When triggered:` fix when the parser's error-recovery loop is audited for termination guarantees (likely as part of the v0.3 parser hardening pass).
+
 - [ ] **lsp-vs-cli-exact-divergence** — `regression_lsp_vs_cli_divergence` currently asserts boolean error-presence agreement (CLI exits non-zero ↔ LSP publishes ≥1 diagnostic). Exact diagnostic count matching requires `ynz build --json` structured output (ariadne pretty-print is unreliable to count via regex). Add a `--json` output mode to `ynz-driver` then tighten this test to count-level assertions. Deferred from v0.2-M2 Phase 8.
 
 - [ ] **lsp-completion-typeck-receiver-narrowing** — wire `module_signatures_query` into the LSP completion handler to narrow after-dot completions by the receiver's actual type (e.g. `score.` shows only `int` methods when `score: int`). Requires `type_of_expression_at_offset(db, source, byte_offset) -> Option<Type>` helper in ynz-typeck (not yet exposed). Deferred from v0.2-M2 Phase 4; the registry adapter correctly filters by receiver type when given `Some("int")` — the LSP server always passes `None` until this is wired. Trigger: when ynz-typeck exposes a per-offset type query.

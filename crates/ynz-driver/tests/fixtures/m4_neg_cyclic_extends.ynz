@@ -1,5 +1,10 @@
-shape A extends B { x: int }
-shape B extends A { y: int }
+shape A extends B {
+  x: int
+}
+
+shape B extends A {
+  y: int
+}
 
 function entrypoint() -> nothing {
   print(1)

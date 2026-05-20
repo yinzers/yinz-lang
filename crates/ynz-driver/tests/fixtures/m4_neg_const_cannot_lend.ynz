@@ -1,4 +1,6 @@
-shape Box { value: int }
+shape Box {
+  value: int
+}
 
 function mutate(lend b: Box) -> nothing {
   b.value = 99

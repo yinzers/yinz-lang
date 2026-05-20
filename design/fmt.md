@@ -165,7 +165,7 @@ Prettier-style: full AST reflow. Original whitespace is discarded. Output is a p
 - **Body statements**: 2-space indent. Each statement on its own line.
 - **Comment attachment**: leading comments (within 2 lines above a stmt, no blank line between) stay with their stmt. Inline comments (on the same source line as code) emit inline with 2 spaces between code and `//`.
 - **Backtick strings**: opaque units. Never re-flowed. Reconstructed from AST parts (preserves byte content of all interpolated expressions).
-- **Blank lines**: ≤1 blank line between top-level declarations. Preserved from original if user had 1+; suppressed if user had 0.
+- **Blank lines**: ≤1 blank line between top-level declarations. Preserved from original if user had 1+; suppressed if user had 0. **Inside function bodies (between statements): blank lines are NOT preserved.** The canonical form produces zero blank lines between statements. Rationale: top-level blank lines are logical section separators (between exported functions, shapes, etc.) and are meaningful to preserve; blank lines inside function bodies are stylistic whitespace-preferences that vary per developer and would create non-canonical output. The formatter's job is one canonical form; inside bodies, that form has no inter-statement blanks.
 - **Trailing newline**: always added if missing.
 
 ### Why This Was Empirically Verified (Not Assumed)

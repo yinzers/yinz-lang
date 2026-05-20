@@ -1,0 +1,26 @@
+// This file is intentionally non-canonical.
+// Run: ynz fmt examples/fmt_demo/messy.ynz to see the formatter rewrite it.
+// To check without rewriting: ynz fmt --check examples/fmt_demo/messy.ynz (exits 1).
+//
+// This file is EXCLUDED from ynz fmt --all because examples/fmt_demo/ has no
+// yinz.toml project root.  It stays non-canonical forever as the demo fixture.
+
+function   greet(  name :  string  )  ->  string  {
+  return   `Hello,   ${name}!`
+}
+
+function   add(  x:int,    y:int  )  ->  int  {
+  let   result=x+y
+  return   result
+}
+
+shape    Point   {
+  x  :  int
+  y   :  int
+}
+
+function   distance(  a:  Point  ,  b:  Point  )  ->  float  {
+  let   dx =  a.x  - b.x
+  let   dy =  a.y  - b.y
+  return   dx * dx  +  dy  *  dy
+}

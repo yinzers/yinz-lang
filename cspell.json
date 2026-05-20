@@ -82,6 +82,26 @@
     "tower-lsp",
     "lsp-server",
     "lsp-types",
-    "tmLanguage"
+    "tmLanguage",
+    "canonicality",
+    "bignum",
+    "binop",
+    "normalisation",
+    "simdutf",
+    "memchr",
+    "unicase",
+    "libunwind",
+    "stringifiability",
+    "codepoint",
+    "scrutinee",
+    "stmts",
+    "fcmp",
+    "fptosi",
+    "memcopy",
+    "sadd",
+    "ssub",
+    "smul",
+    "alloca",
+    "libynz"
   ]
 }

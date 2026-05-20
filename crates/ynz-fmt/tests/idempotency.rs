@@ -16,7 +16,8 @@ fn check_idempotent(path: &Path) {
         Ok(formatted) => {
             let formatted2 = ynz_fmt::format(&formatted).expect("format(format(x)) failed");
             assert_eq!(
-                formatted, formatted2,
+                formatted,
+                formatted2,
                 "formatter is not idempotent on {}",
                 path.display()
             );
@@ -43,7 +44,10 @@ fn walk_ynz_files(dir: &Path) -> Vec<std::path::PathBuf> {
 fn all_walker_fixtures_are_idempotent() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let files = walk_ynz_files(&base);
-    assert!(!files.is_empty(), "no fixture files found under tests/fixtures");
+    assert!(
+        !files.is_empty(),
+        "no fixture files found under tests/fixtures"
+    );
     for file in &files {
         check_idempotent(file);
     }
@@ -69,8 +73,8 @@ fn all_examples_are_idempotent() {
         // Some error-gallery files have pre-existing parser infinite loops
         // (the parser gets stuck recovering from certain malformed constructs).
         // Skip them — these are parser bugs predating the formatter.
-        let is_known_parser_hang = path_str.contains("v0_2_m1_errors")
-            || path_str.contains("m1_errors");
+        let is_known_parser_hang =
+            path_str.contains("v0_2_m1_errors") || path_str.contains("m1_errors");
         if is_known_parser_hang {
             continue;
         }

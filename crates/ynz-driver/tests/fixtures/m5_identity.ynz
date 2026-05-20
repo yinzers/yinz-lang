@@ -1,4 +1,7 @@
-function identity<T>(give value: T) -> T { return value }
+function identity<T>(give value: T) -> T {
+  return value
+}
+
 function entrypoint() -> nothing {
   print(identity(42))
 }

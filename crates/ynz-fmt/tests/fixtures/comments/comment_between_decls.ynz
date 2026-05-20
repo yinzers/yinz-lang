@@ -1,6 +1,7 @@
 function first() -> nothing {
   print(`first`)
 }
+
 // This comment belongs to second
 function second() -> nothing {
   print(`second`)

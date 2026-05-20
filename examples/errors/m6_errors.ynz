@@ -5,17 +5,29 @@
 // Run via the existing m{N}_errors.ynz snapshot harness in crates/ynz-driver/tests.
 
 // WHY: non-exhaustive options multi-case — missing variant named in diagnostic
-options Status { pending, active, banned }
+options Status {
+  pending
+  active
+  banned
+}
+
 function nonExhaustiveOptions(s: Status) -> nothing {
   if (s) {
-    active  => print(`active`)
-    pending => print(`pending`)
+    active => {
+      print(`active`)
+    }
+    pending => {
+      print(`pending`)
+    }
     // 'banned' is missing — compile error
+
   }
 }
 
 // WHY: single-variant options is rejected — symmetric with single-variant union
-options Single { only }
+options Single {
+  only
+}
 
 // WHY: empty options is rejected — must have ≥2 variants
 options Empty { }
@@ -26,7 +38,11 @@ function boolToInt() -> nothing {
 }
 
 // WHY: cross-options-type comparison is rejected — different tag namespaces
-options Visibility { visible, invisible }
+options Visibility {
+  visible
+  invisible
+}
+
 function crossOptionsCompare(s: Status, v: Visibility) -> nothing {
   let eq = s == v
 }
@@ -37,16 +53,31 @@ function badVariant() -> nothing {
 }
 
 // WHY: non-exhaustive union multi-case — missing variant named in diagnostic
-shape Circle { radius: float }
-shape Square { side: float }
-shape Triangle { width: float
-  height: float }
+shape Circle {
+  radius: float
+}
+
+shape Square {
+  side: float
+}
+
+shape Triangle {
+  width: float
+  height: float
+}
+
 shape AnyShape = Circle | Square | Triangle
+
 function nonExhaustiveUnion(s: AnyShape) -> nothing {
   if (s) {
-    is Circle => print(`circle`)
-    is Square => print(`square`)
+    is Circle => {
+      print(`circle`)
+    }
+    is Square => {
+      print(`square`)
+    }
     // Triangle missing — compile error
+
   }
 }
 
@@ -54,8 +85,12 @@ function nonExhaustiveUnion(s: AnyShape) -> nothing {
 function isOnString() -> nothing {
   let msg: string = `hello`
   if (msg) {
-    is Circle => print(`never`)
-    else => print(`other`)
+    is Circle => {
+      print(`never`)
+    }
+    else => {
+      print(`other`)
+    }
   }
 }
 

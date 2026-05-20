@@ -1,4 +1,6 @@
-base shape Entity { name: string }
+base shape Entity {
+  name: string
+}
 
 function entrypoint() -> nothing {
   let e: Entity = { name: `ghost` }

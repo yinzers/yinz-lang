@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.2.0-m3] — 2026-05-20 — `ynz fmt` Formatter
+
+Commit range: v0.2.0-m2..v0.2.0-m3
+
+### What changed
+
+Before v0.2-M3: Yinz had no canonical style enforcement. Every developer formatted `.ynz` files by hand; pre-commit hooks had no machine-readable gate; the LSP had no format-on-save target to call.
+
+After v0.2-M3: `ynz fmt` ships as both a zero-config CLI subcommand and a stable library API (`ynz-fmt`) that v0.2-M5's LSP `textDocument/formatting` handler will consume.
+
+**New crate: `ynz-fmt`** — zero-config Yinz source formatter:
+- `format(source: &str) -> Result<String, FmtError>` — the stable library API consumed by v0.2-M5 LSP
+- `check(source: &str) -> Result<CheckResult, FmtError>` — read-only canonicality check
+- Prettier-style full AST reflow: same program → same output regardless of original whitespace
+- Comment preservation: leading, inline, and trailing `//` comments attached to their AST nodes; floating comments emitted in-place
+- Backtick strings: never reflowed (content preserved byte-exact)
+- Idempotency guaranteed: `format(format(x)) == format(x)` for all parser-valid inputs
+- Semantic safety: `parse(format(x)).ast == parse(x).ast` modulo trivia (verified by round-trip property test)
+
+**CLI: `ynz fmt`**:
+- `ynz fmt <file>` — rewrite in-place with atomic same-dir tempfile rename
+- `ynz fmt --all [dir]` — walk `yinz.toml` project and format every `.ynz` file (continues on per-file parse errors)
+- `ynz fmt --check [--all] <path>` — read-only CI gate: exits 1 if any file would change; prints `Would reformat: <path>`
+- `ynz fmt --stdin` — format stdin, write canonical output to stdout (used by editor pipelines)
+
+**Mass-rewrite**: all existing `.ynz` source files in the repo were canonicalized by the formatter in this milestone. From this PR forward, every `.ynz` commit is canonical.
+
+**Semver stability**: `ynz-fmt` library API is frozen at v0.2-M3. Breaking changes require a major-version bump once v0.2.0 ships.
+
+Note: `textDocument/formatting` (LSP format-on-save) ships in v0.2-M5; M3 ships the library that M5 will call.
+
+---
+
 ## [0.2.0-m2] — 2026-05-20 — LSP Thin Slice + VSCode Extension
 
 Commit range: v0.2.0-m1..v0.2.0-m2

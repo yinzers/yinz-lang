@@ -4,5 +4,5 @@ function entrypoint() -> nothing {
   let active = true
   print(price)
   print(count * count - 1)
-  print(active && (count > 0))
+  print(active && count > 0)
 }

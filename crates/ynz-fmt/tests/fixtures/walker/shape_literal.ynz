@@ -2,6 +2,7 @@ shape Point {
   x: int
   y: int
 }
+
 function makePoint(x: int, y: int) -> nothing {
   const p: Point = { x: x, y: y }
   print(p.x)

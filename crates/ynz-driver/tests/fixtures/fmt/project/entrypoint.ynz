@@ -1,3 +1,3 @@
 function entrypoint() -> nothing {
-  print(`hello, yinz`)
+  print(`fmt project test`)
 }

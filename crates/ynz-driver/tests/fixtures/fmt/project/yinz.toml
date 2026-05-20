@@ -1,0 +1,3 @@
+name = "fmt-test-project"
+version = "0.1.0"
+entry = "entrypoint.ynz"

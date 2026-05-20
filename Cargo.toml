@@ -16,7 +16,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0-m2"
+version = "0.2.0-m3"
 edition = "2021"
 rust-version = "1.80"
 authors = ["The Yinz Contributors"]
@@ -33,6 +33,7 @@ clap = { version = "4.6.1", features = ["derive"] }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 tempfile = "3.14.0"
 assert_cmd = "2"
+predicates = "3"
 
 # Cross-crate workspace deps
 ynz-registry    = { path = "crates/ynz-registry" }

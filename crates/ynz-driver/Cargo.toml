@@ -24,3 +24,5 @@ ynz-fmt         = { workspace = true }
 [dev-dependencies]
 insta      = { workspace = true }
 assert_cmd = { workspace = true }
+predicates = { workspace = true }
+tempfile   = { workspace = true }

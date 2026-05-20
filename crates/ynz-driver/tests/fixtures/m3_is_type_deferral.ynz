@@ -2,14 +2,24 @@
 // `is TypeName =>` pattern matching now works (M6 P3b shipped it).
 // This fixture was previously a deferral diagnostic; now it's a runnable demo.
 
-shape Circle { radius: float }
-shape Square { side: float }
+shape Circle {
+  radius: float
+}
+
+shape Square {
+  side: float
+}
+
 shape Figure = Circle | Square
 
 function describe(figure: Figure) -> string {
   if (figure) {
-    is Circle => return `circle`
-    is Square => return `square`
+    is Circle => {
+      return `circle`
+    }
+    is Square => {
+      return `square`
+    }
   }
   return `unknown`
 }

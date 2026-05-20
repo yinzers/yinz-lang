@@ -115,7 +115,7 @@ enum Command {
         #[arg(long, conflicts_with = "stdin")]
         all: bool,
         /// Read-only check: exit 0 if canonical, exit 1 if file(s) would change.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "stdin")]
         check: bool,
         /// Read source on stdin; write formatted output to stdout.
         #[arg(long, conflicts_with = "all", conflicts_with = "file")]

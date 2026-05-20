@@ -6,27 +6,21 @@ function entrypoint() -> nothing {
   // Basic success case
   let a: maybe<int> = `42`.toInt()
   print(a.or(0).toString())
-
   // Whitespace + sign
   let b: maybe<int> = `  +17  `.toInt()
   print(b.or(0).toString())
-
   // Negative
   let c: maybe<int> = `-99`.toInt()
   print(c.or(0).toString())
-
   // Empty string → none
   let d: maybe<int> = ``.toInt()
   print(d.or(-1).toString())
-
   // Hex prefix → none (rejected)
   let e: maybe<int> = `0x1A`.toInt()
   print(e.or(-1).toString())
-
   // Fractional → none (toInt requires integer digits only)
   let f: maybe<int> = `42.5`.toInt()
   print(f.or(-1).toString())
-
   // Trailing garbage → none
   let g: maybe<int> = `42 hello`.toInt()
   print(g.or(-1).toString())

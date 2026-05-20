@@ -14,8 +14,7 @@ fn golden(subpath: &str) {
     let expected = std::fs::read_to_string(&expected_path)
         .unwrap_or_else(|_| panic!("golden not found: {}", expected_path.display()));
 
-    let got = ynz_fmt::format(&source)
-        .unwrap_or_else(|e| panic!("format error on {subpath}: {e}"));
+    let got = ynz_fmt::format(&source).unwrap_or_else(|e| panic!("format error on {subpath}: {e}"));
     assert_eq!(got, expected, "comment golden mismatch for {subpath}");
 
     // Idempotency check
@@ -159,15 +158,24 @@ fn inline_comment_has_two_spaces_before_slashes() {
 fn crlf_input_becomes_lf_output() {
     let source = "function f() -> nothing {\r\n  let x = 1\r\n}\r\n";
     let got = ynz_fmt::format(source).expect("format failed");
-    assert!(!got.contains('\r'), "CRLF input must produce LF-only output");
+    assert!(
+        !got.contains('\r'),
+        "CRLF input must produce LF-only output"
+    );
 }
 
 #[test]
 fn comments_only_file_preserved() {
     let source = "// just a comment\n// and another\n";
     let got = ynz_fmt::format(source).expect("format failed");
-    assert!(got.contains("// just a comment"), "standalone comment must be preserved");
-    assert!(got.contains("// and another"), "standalone comment must be preserved");
+    assert!(
+        got.contains("// just a comment"),
+        "standalone comment must be preserved"
+    );
+    assert!(
+        got.contains("// and another"),
+        "standalone comment must be preserved"
+    );
 }
 
 #[test]

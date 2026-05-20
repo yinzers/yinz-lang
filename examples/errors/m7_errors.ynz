@@ -6,7 +6,6 @@
 //
 // All triggers fire on a single compile (Yinz multi-errors up to 50/compile).
 // Positive reference functions are included to confirm happy paths still hold.
-
 // ────── errors keyword diagnostics ──────
 
 function readFile(path: string) -> string errors {

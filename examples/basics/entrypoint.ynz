@@ -1,4 +1,5 @@
 // examples/basics/entrypoint.ynz
+// Format this file with: ynz fmt examples/basics/entrypoint.ynz — output is byte-identical (canonical).
 //
 // The Yinz v0.1 Language Showcase — grows milestone-by-milestone.
 // Compile + run with: ./target/debug/ynz run examples/basics/
@@ -22,6 +23,7 @@
 // Cross-file symbol resolution: cross-file CALLS ship in v0.2; the syntax and
 // multi-file project structure ship here in v0.1.
 import { newPlayer, greet } from `services/players`
+
 import { clamp, square } from `utils/math_extra`
 
 function entrypoint() -> nothing {
@@ -29,33 +31,27 @@ function entrypoint() -> nothing {
   print(`Yinz v0.1 language showcase`)
   print(`===========================`)
   print(``)
-
   // ────── M2: variables, arithmetic, primitives, conversions ──────
   print(`M2 — variables, arithmetic, primitives:`)
-
   // let vs const (M2 const-reassignment check)
   const playerName = `Cheddar`
   let score: int = 0
-
   // Primitive types — int, float, number (decimal128), boolean
   const startHealth: int = 100
   const damageMultiplier: float = 1.5
-  const accountBalance: number = 1234.56     // decimal128, exact
+  const accountBalance: number = 1234.56  // decimal128, exact
   const isActive: boolean = true
-
   // Arithmetic, comparison, boolean
   let combo = startHealth + 25
   combo = combo * 2
   combo = combo - 50
   combo = combo / 3
-
   // Bitwise operators
   const flagRead: int = 1
   const flagWrite: int = 2
   const flagExecute: int = 4
   const perms = flagRead | flagWrite
   const hasExecute = (perms & flagExecute) != 0
-
   // Polymorphic print across primitive types
   print(playerName)
   print(combo)
@@ -64,44 +60,35 @@ function entrypoint() -> nothing {
   print(isActive)
   print(perms)
   print(hasExecute)
-
   // M2 conversion intrinsic: .toString()
   const scoreText = score.toString()
   print(scoreText)
-
   print(``)
-
   // ────── M3: control flow + user-defined functions ──────
   print(`M3 — control flow + user functions:`)
-
   // if + early return demoed via the helper functions below
   print(classifyHealth(startHealth))
   print(classifyHealth(50))
   print(classifyHealth(10))
-
   // Multi-case if (M3 match form with else => catch-all)
   const grade = letterGrade(85)
   print(grade)
-
   // while loop
   let countdown = 3
   while (countdown > 0) {
     print(countdown)
     countdown = countdown - 1
   }
-
   // for + range
   let sum = 0
   for (i in range(1, 6)) {
     sum = sum + i
   }
   print(sum)  // 1+2+3+4+5 = 15
-
   // Recursion (mutual recursion exercised by isEven/isOdd below)
-  print(fib(10))      // 55
-  print(isEven(8))    // true
-  print(isOdd(7))     // true
-
+  print(fib(10))  // 55
+  print(isEven(8))  // true
+  print(isOdd(7))  // true
   // ────── M4: shapes + functions + ownership ──────
   // P2 (parser) shipped: shape declarations, field access, struct literals,
   //   .copy()/.freeze() postfix ops, dynamic types, ownership modifiers on params.
@@ -117,81 +104,72 @@ function entrypoint() -> nothing {
   greetPlayer(p)
   healPlayer(p, 20)
   greetPlayer(p)
-
   // ────── M5: generics + collections + maybe ──────
   print(``)
   print(`M5 — generics + collections:`)
-
   // Generic function — identity<T> infers T from argument
   print(identity(42))
   print(identity(`generic`))
-
   // array<T>: heap-growable, literal init
   let nums: array<int> = [10, 20, 30]
   nums.add(40)
   print(nums.count())
   print(nums[0].or(-1))
-
   // fixed<T>: stack-allocated, size locked
   let tags: fixed<int> = [100, 200, 300]
   print(tags.count())
   print(tags[2].or(-1))
-
   // maybe<T>: absence without null
   let score: maybe<int> = none
   print(score.or(0))
-
   // map<K,V>: hash map with string keys
   let lookup: map<string, int> = { `alice`: 90, `bob`: 85 }
   print(lookup[`alice`].or(0))
   print(lookup.count())
-
   // ────── M6: options + unions + narrowing ──────
   print(`M6 — options, unions, narrowing:`)
-
   // Options: declaration + value use + multi-case
   let status: Status = Status.active
   print(status.toString())
   if (status) {
-    active  => print(`active`)
-    pending => print(`pending`)
-    banned  => print(`banned`)
+    active => {
+      print(`active`)
+    }
+    pending => {
+      print(`pending`)
+    }
+    banned => {
+      print(`banned`)
+    }
   }
-
   // Options equality
   let eq = status == Status.active
   print(eq.toString())
-
   // Fallible conversions
   let parsed: maybe<int> = `42`.toInt()
   print(parsed.or(0).toString())
-  let fromFloat: maybe<int> = (3.14).toInt()
+  let fromFloat: maybe<int> = 3.14.toInt()
   print(fromFloat.or(-1).toString())
-  let fromInt: int = (99).toInt()
+  let fromInt: int = 99.toInt()
   print(fromInt.toString())
-
   // Early-return narrowing on maybe<T>
   let nums: array<int> = [10, 20, 30]
   let first = firstOrDefault(nums)
   print(first.toString())
-
   // ────── M7: strings, errors, iterables ──────
   print(``)
   print(`M7 — full strings, errors, iterables:`)
-
   // String interpolation in a real message
   const playerName2 = `Alice`
   const playerScore = 150
   const msg = `Player ${playerName2} scored ${playerScore} points!`
   print(msg)
-
   // Multi-line string with trim
   const announcement = `
   Welcome to the tournament!
   Top player: ${playerName2}
 `
   print(announcement.trim())
-
   // String methods
   const bio = `  Hello, World!  `
   print(bio.trim())
@@ -202,47 +180,39 @@ function entrypoint() -> nothing {
   print(`hello`.endsWith(`lo`).toString())
   const idx = `hello world`.indexOf(`world`)
   print(idx.or(-1).toString())
-
   // Code point iteration — counts 4 code points in "café"
   let charCount = 0
   for (c in `café`) {
     charCount = charCount + 1
   }
   print(charCount.toString())
-
   // String splitting
   const csv = `a,b,c,d`
   const parts = csv.split(`,`)
   print(parts.count().toString())
-
   // errors keyword — fallible function with .or() fallback
   const ratio = safeDivide(10, 2).or(0)
   print(ratio.toString())
-
   // errors with .failed() check (function always succeeds here)
   const ok = safeDivide(10, 5)
   if (ok.failed()) {
     print(`safeDivide failed`)
   }
   print(ok.toString())
-
   // for loop with first-class range
   let r = range(0, 3)
   for (i in r) {
     print(`range item: ${i}`)
   }
-
   // for loop over string characters
   for (c in `abc`) {
     print(`char: ${c}`)
   }
-
   // User-defined iterable shape — Countdown counts down from N
   let cd: Countdown = { from: 3, current: 0 }
   for (n in cd) {
     print(n.toString())
   }
-
   // ────── M8: bignum (number<N> for N > 34) ──────
   let a: number<100> = 0.1
   let b: number<100> = 0.2
@@ -251,7 +221,6 @@ function entrypoint() -> nothing {
   print(`M8 — bignum (number<100>):`)
   print(`  0.1 + 0.2 = (see next line)`)
   print(c)
-
   // ────── M8: modules (syntax demo) ──────
   // Import statements above bring names from companion modules into scope.
   // Cross-file CALLS (using newPlayer / clamp etc. here) ship in v0.2 when
@@ -263,13 +232,6 @@ function entrypoint() -> nothing {
   print(`  import { newPlayer, greet } from services/players`)
   print(`  import { clamp, square } from utils/math_extra`)
   print(`  Multi-file build: ALL .ynz files under src/ compiled + linked.`)
-
-  // ────── Deferred features (v0.2+) ──────
-  // arena scratch { let temp: array<int> = [...] }  // v0.2 — design/future/arena.md
-  // verified { let raw = rawMemory(64) }              // v0.3+ — vocabulary.md
-  // Self-referential shapes                           // v0.3+ — design/future/self-references.md
-  // Union codegen (classifyAccount) — requires P4 codegen
-  // newPlayer("Patrick")                              // v0.2 — cross-file calls need cross-file typeck
 }
 
 // ────── M3 helper functions ──────
@@ -289,12 +251,22 @@ function classifyHealth(hp: int) -> string {
 function letterGrade(percent: int) -> string {
   // Multi-case form — each arm is a value pattern; `else =>` is the catch-all
   if (percent) {
-    100 => return `A+`
+    100 => {
+      return `A+`
+    }
     else => {
-      if (percent >= 90) { return `A` }
-      if (percent >= 80) { return `B` }
-      if (percent >= 70) { return `C` }
-      if (percent >= 60) { return `D` }
+      if (percent >= 90) {
+        return `A`
+      }
+      if (percent >= 80) {
+        return `B`
+      }
+      if (percent >= 70) {
+        return `C`
+      }
+      if (percent >= 60) {
+        return `D`
+      }
       return `F`
     }
   }
@@ -311,15 +283,18 @@ function fib(n: int) -> int {
 
 // Mutual recursion — isEven calls isOdd and vice versa.
 function isEven(n: int) -> boolean {
-  if (n == 0) { return true }
+  if (n == 0) {
+    return true
+  }
   return isOdd(n - 1)
 }
 
 function isOdd(n: int) -> boolean {
-  if (n == 0) { return false }
+  if (n == 0) {
+    return false
+  }
   return isEven(n - 1)
 }
-
 
 // ────── M4: shapes + UFCS methods + ownership ──────
 
@@ -344,25 +319,46 @@ function identity<T>(give value: T) -> T {
 
 // ────── M6: options + unions + narrowing ──────
 
-options Status { pending, active, banned }
+options Status {
+  pending
+  active
+  banned
+}
 
-shape ActiveAccount { name: string }
-shape BannedAccount { reason: string }
-shape PendingAccount { email: string }
+shape ActiveAccount {
+  name: string
+}
+
+shape BannedAccount {
+  reason: string
+}
+
+shape PendingAccount {
+  email: string
+}
+
 shape AccountResult = ActiveAccount | BannedAccount | PendingAccount
 
 function classifyAccount(account: AccountResult) -> string {
   if (account) {
-    is ActiveAccount  => return `OK`
-    is BannedAccount  => return `DENIED`
-    is PendingAccount => return `WAIT`
+    is ActiveAccount => {
+      return `OK`
+    }
+    is BannedAccount => {
+      return `DENIED`
+    }
+    is PendingAccount => {
+      return `WAIT`
+    }
   }
   return `UNKNOWN`
 }
 
 function firstOrDefault(share nums: array<int>) -> int {
   let r = nums.first()
-  if (!r.exists()) { return -1 }
+  if (!r.exists()) {
+    return -1
+  }
   return r.value
 }
 
@@ -391,21 +387,16 @@ function next(lend self: Countdown) -> maybe<int> {
   return result
 }
 
-
 // ────── v0.1-polish: inline / anonymous shape types ──────
 
 // Inline shape in a let binding — type defined at the point of use.
 function demoInlineShapes() -> nothing {
   let point: { x: int, y: int } = { x: 3, y: 4 }
   print(`point x=${point.x} y=${point.y}`)
-
   // Inline shape in fixed<T> + for-loop destructuring (the motivating example).
-  const intervals: fixed<{ minutes: int }> = [
-    { minutes: 5 },
-    { minutes: 15 },
-    { minutes: 60 },
-  ]
-  for ({ minutes } in intervals) {
+  const intervals: fixed<{ minutes: int }> = [{ minutes: 5 }, { minutes: 15 }, { minutes: 60 }]
+  for (__shape in intervals) {
+    let minutes = __shape.minutes
     print(`interval: ${minutes} minutes`)
   }
 }

@@ -12,8 +12,8 @@
 use ynz_ast::nodes::{
     BinOpKind, Block, ConstDecl, ContractSig, Expr, FieldDecl, FunctionDecl, GenericParam,
     ImportDecl, ImportKind, Item, MatchPattern, MatchPatternKind, Module, OptionsDecl,
-    OwnershipModifier, Param, PostfixOpKind, ReExport, ShapeDecl, Stmt, StringPart, Type,
-    TypePath, UnaryOpKind,
+    OwnershipModifier, Param, PostfixOpKind, ReExport, ShapeDecl, Stmt, StringPart, Type, TypePath,
+    UnaryOpKind,
 };
 
 use crate::comment_merge::CommentContext;
@@ -137,7 +137,11 @@ fn emit_shape(s: &ShapeDecl, ind: usize) -> String {
 
     // Union type alias: `shape Foo = A | B`
     if let Some(alias) = &s.alias_ty {
-        return format!("{prefix}{export}shape {}{generics} = {}", s.name, emit_type(alias));
+        return format!(
+            "{prefix}{export}shape {}{generics} = {}",
+            s.name,
+            emit_type(alias)
+        );
     }
 
     let mut out = String::new();
@@ -253,7 +257,14 @@ fn emit_options(o: &OptionsDecl, ind: usize) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    format!("{prefix}{export}options {} {{\n{variants}\n{prefix}}}", o.name)
+    if variants.is_empty() {
+        format!("{prefix}{export}options {} {{ }}", o.name)
+    } else {
+        format!(
+            "{prefix}{export}options {} {{\n{variants}\n{prefix}}}",
+            o.name
+        )
+    }
 }
 
 fn emit_import(i: &ImportDecl) -> String {
@@ -281,11 +292,10 @@ fn emit_import(i: &ImportDecl) -> String {
 fn emit_top_const(c: &ConstDecl, ind: usize) -> String {
     let prefix = indent(ind);
     let export = if c.is_exported { "export " } else { "" };
-    let ty = c
-        .ty
-        .as_ref()
-        .map(|t| format!(": {}", emit_type(t)))
-        .unwrap_or_default();
+    let ty =
+        c.ty.as_ref()
+            .map(|t| format!(": {}", emit_type(t)))
+            .unwrap_or_default();
     format!(
         "{prefix}{export}const {}{ty} = {}",
         c.name,
@@ -384,7 +394,10 @@ fn emit_stmt(s: &Stmt, ind: usize) -> String {
         }
         Stmt::While { cond, body, .. } => {
             let body_s = emit_block(body, ind + 1);
-            format!("{prefix}while ({}) {{{body_s}{prefix}}}", emit_expr(cond, 0))
+            format!(
+                "{prefix}while ({}) {{{body_s}{prefix}}}",
+                emit_expr(cond, 0)
+            )
         }
         Stmt::For {
             var, iter, body, ..
@@ -525,7 +538,9 @@ pub fn emit_expr(e: &Expr, min_bp: u8) -> String {
             format!("{recv}.{method}({})", a.join(", "))
         }
 
-        Expr::FieldAccess { receiver, field, .. } => {
+        Expr::FieldAccess {
+            receiver, field, ..
+        } => {
             format!("{}.{field}", emit_expr(receiver, 0))
         }
 
@@ -537,7 +552,9 @@ pub fn emit_expr(e: &Expr, min_bp: u8) -> String {
             format!("{}.{op_s}()", emit_expr(receiver, 0))
         }
 
-        Expr::IndexAccess { receiver, index, .. } => {
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => {
             format!("{}[{}]", emit_expr(receiver, 0), emit_expr(index, 0))
         }
 
@@ -547,7 +564,14 @@ pub fn emit_expr(e: &Expr, min_bp: u8) -> String {
             if fits_on_one_line(&single_line) {
                 single_line
             } else {
-                format!("[\n{}\n]", elems.iter().map(|e| format!("  {e}")).collect::<Vec<_>>().join(",\n"))
+                format!(
+                    "[\n{}\n]",
+                    elems
+                        .iter()
+                        .map(|e| format!("  {e}"))
+                        .collect::<Vec<_>>()
+                        .join(",\n")
+                )
             }
         }
 
@@ -562,7 +586,11 @@ pub fn emit_expr(e: &Expr, min_bp: u8) -> String {
             } else {
                 format!(
                     "{{\n{}\n}}",
-                    pairs.iter().map(|p| format!("  {p}")).collect::<Vec<_>>().join(",\n")
+                    pairs
+                        .iter()
+                        .map(|p| format!("  {p}"))
+                        .collect::<Vec<_>>()
+                        .join(",\n")
                 )
             }
         }
@@ -578,7 +606,10 @@ pub fn emit_expr(e: &Expr, min_bp: u8) -> String {
             } else {
                 format!(
                     "{{\n{}\n}}",
-                    fs.iter().map(|f| format!("  {f}")).collect::<Vec<_>>().join(",\n")
+                    fs.iter()
+                        .map(|f| format!("  {f}"))
+                        .collect::<Vec<_>>()
+                        .join(",\n")
                 )
             }
         }
@@ -625,18 +656,27 @@ pub fn emit_type(ty: &Type) -> String {
         Type::Int => "int".into(),
         Type::Float => "float".into(),
         Type::Bool => "boolean".into(),
-        // precision is always 34 in v0.1 (non-34 parsed with a diagnostic); formatter
-        // emits `number` for all precision values — update when M8 permits precision[N].
-        Type::Number { .. } => "number".into(),
+        // Precision 34 is the default and emits as bare `number`.
+        // Non-34 precisions (e.g. `number<100>` for bignum) emit the full `number<N>` form
+        // so the formatter never silently discards the user's annotation.
+        Type::Number { precision } => {
+            if *precision == 34 {
+                "number".into()
+            } else {
+                format!("number<{precision}>")
+            }
+        }
         Type::Named(n, _) => n.clone(),
         Type::Maybe { inner, .. } => format!("maybe<{}>", emit_type(inner)),
         Type::Generic { name, args, .. } => {
             let a = args.iter().map(emit_type).collect::<Vec<_>>().join(", ");
             format!("{name}<{a}>")
         }
-        Type::Union { variants, .. } => {
-            variants.iter().map(emit_type).collect::<Vec<_>>().join(" | ")
-        }
+        Type::Union { variants, .. } => variants
+            .iter()
+            .map(emit_type)
+            .collect::<Vec<_>>()
+            .join(" | "),
         Type::Dynamic { contract, .. } => format!("dynamic {contract}"),
         Type::TypeParam { name, .. } => name.clone(),
         Type::ErrorCapable { inner, .. } => format!("{} errors", emit_type(inner)),
@@ -735,9 +775,11 @@ pub fn emit_module_with_comments(module: &Module, ctx: &CommentContext<'_>) -> S
 
 fn emit_floating_comments(ctx: &CommentContext<'_>, from: usize, to: usize) -> String {
     let mut out = String::new();
-    for c in ctx.comments.iter().filter(|c| {
-        c.span.start >= from && c.span.start < to && !CommentContext::is_doc_comment(c)
-    }) {
+    for c in ctx
+        .comments
+        .iter()
+        .filter(|c| c.span.start >= from && c.span.start < to && !CommentContext::is_doc_comment(c))
+    {
         out.push_str(&normalize_comment_text(&c.text));
         out.push('\n');
     }
@@ -834,7 +876,11 @@ fn emit_shape_with_comments(s: &ShapeDecl, ind: usize, ctx: &CommentContext<'_>)
     let generics = emit_generics(&s.generics);
 
     if let Some(alias) = &s.alias_ty {
-        return format!("{prefix}{export}shape {}{generics} = {}", s.name, emit_type(alias));
+        return format!(
+            "{prefix}{export}shape {}{generics} = {}",
+            s.name,
+            emit_type(alias)
+        );
     }
 
     // Doc comments emitted via trivia at module level — not here.
@@ -847,7 +893,12 @@ fn emit_shape_with_comments(s: &ShapeDecl, ind: usize, ctx: &CommentContext<'_>)
     let follows = if s.follows.is_empty() {
         String::new()
     } else {
-        let ns = s.follows.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ");
+        let ns = s
+            .follows
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
         format!(" follows {ns}")
     };
 
@@ -925,13 +976,30 @@ fn emit_block_with_comments(
             Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => {
                 body.span.end
             }
-            Stmt::Match { arms, else_arm, .. } => {
+            Stmt::Match {
+                arms,
+                else_arm,
+                span,
+                ..
+            } => {
+                // Advance past the closing `}` of the match statement so that comments
+                // BETWEEN the last arm and the `}` are not re-claimed as leading comments
+                // for the next statement.
                 if let Some(b) = else_arm {
                     b.span.end
                 } else if let Some(a) = arms.last() {
-                    a.body.span.end
+                    // Use the match span.end (past the closing `}`) rather than the last
+                    // arm body's span.end so inter-arm trailing comments don't re-appear.
+                    if span.end > 0 {
+                        span.end
+                    } else {
+                        a.body.span.end
+                    }
                 } else {
-                    ctx.source[stmt_start..].find('\n').map(|i| stmt_start + i).unwrap_or(ctx.source.len())
+                    ctx.source[stmt_start..]
+                        .find('\n')
+                        .map(|i| stmt_start + i)
+                        .unwrap_or(ctx.source.len())
                 }
             }
             _ => ctx.source[stmt_start..]
@@ -940,6 +1008,28 @@ fn emit_block_with_comments(
                 .unwrap_or(ctx.source.len()),
         };
     }
+
+    // Emit trailing comments after the last statement, before the closing `}`.
+    // Only applies to BRACE blocks (explicit `{...}`).  Brace-less arm bodies
+    // (from `pattern => single_stmt` arms) have `block.span.end` pointing to the
+    // NEXT outer token (the match's `}`), so their "trailing region" is actually at
+    // the enclosing match block level — captured by the Stmt::Match trailing-comment
+    // logic instead.  We detect brace blocks by checking that the byte just before
+    // `span.end` is `}`.
+    let is_brace_block = block.span.end > 0
+        && ctx.source.as_bytes().get(block.span.end.wrapping_sub(1)) == Some(&b'}');
+
+    if is_brace_block {
+        let prefix = indent(ind);
+        let (trailing_leading, trailing_floating) = ctx.between(prev_end, block.span.end);
+        for c in &trailing_floating {
+            out.push_str(&format!("{prefix}{}\n", normalize_comment_text(&c.text)));
+        }
+        for c in &trailing_leading {
+            out.push_str(&format!("{prefix}{}\n", normalize_comment_text(&c.text)));
+        }
+    }
+
     out
 }
 
@@ -982,9 +1072,18 @@ fn emit_stmt_with_inline(s: &Stmt, ind: usize, ctx: &CommentContext<'_>, inline:
     }
 
     match s {
-        Stmt::Let { is_const, name, ty, value, .. } => {
+        Stmt::Let {
+            is_const,
+            name,
+            ty,
+            value,
+            ..
+        } => {
             let kw = if *is_const { "const" } else { "let" };
-            let ty_s = ty.as_ref().map(|t| format!(": {}", emit_type(t))).unwrap_or_default();
+            let ty_s = ty
+                .as_ref()
+                .map(|t| format!(": {}", emit_type(t)))
+                .unwrap_or_default();
             let code = format!("{prefix}{kw} {name}{ty_s} = {}", emit_expr(value, 0));
             place(&prefix, code, inline)
         }
@@ -993,7 +1092,10 @@ fn emit_stmt_with_inline(s: &Stmt, ind: usize, ctx: &CommentContext<'_>, inline:
             place(&prefix, code, inline)
         }
         Stmt::Return { value, .. } => {
-            let v = value.as_ref().map(|v| format!(" {}", emit_expr(v, 0))).unwrap_or_default();
+            let v = value
+                .as_ref()
+                .map(|v| format!(" {}", emit_expr(v, 0)))
+                .unwrap_or_default();
             let code = format!("{prefix}return{v}");
             place(&prefix, code, inline)
         }
@@ -1001,41 +1103,146 @@ fn emit_stmt_with_inline(s: &Stmt, ind: usize, ctx: &CommentContext<'_>, inline:
             let code = format!("{prefix}{}", emit_expr(e, 0));
             place(&prefix, code, inline)
         }
-        Stmt::If { cond, body, span, .. } => {
+        Stmt::If {
+            cond, body, span, ..
+        } => {
             // Use the `if` keyword position as block anchor (safe — no rfind that can hit
             // `{` inside comment text).
             let body_s = emit_block_with_comments(body, ind + 1, ctx, span.start);
             format!("{prefix}if ({}) {{{body_s}{prefix}}}", emit_expr(cond, 0))
         }
-        Stmt::Match { scrutinee, arms, else_arm, span, .. } => {
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            span,
+            ..
+        } => {
             let ind2 = indent(ind + 1);
-            let arms_s = arms
-                .iter()
-                .map(|arm| {
-                    let pattern = emit_match_pattern(&arm.pattern);
-                    let body = emit_block_with_comments(&arm.body, ind + 2, ctx, arm.arrow_span.start);
-                    format!("{ind2}{pattern} => {{{body}{ind2}}}")
+            let mut arm_parts: Vec<String> = Vec::new();
+            let mut prev_arm_end: usize = span.start;
+
+            for arm in arms {
+                // Comments between the previous arm (or match open) and this arm
+                let arm_start = arm.arrow_span.start;
+                let (leading, floating) = ctx.between(prev_arm_end, arm_start);
+                let mut arm_prefix = String::new();
+                for c in &floating {
+                    arm_prefix.push_str(&format!("{ind2}{}\n", normalize_comment_text(&c.text)));
+                }
+                for c in &leading {
+                    arm_prefix.push_str(&format!("{ind2}{}\n", normalize_comment_text(&c.text)));
+                }
+                let pattern = emit_match_pattern(&arm.pattern);
+                let body = emit_block_with_comments(&arm.body, ind + 2, ctx, arm.arrow_span.start);
+                arm_parts.push(format!("{arm_prefix}{ind2}{pattern} => {{{body}{ind2}}}"));
+                prev_arm_end = arm.body.span.end;
+            }
+
+            // Trailing comments after the last arm (before the closing `}` of the match).
+            //
+            // For brace-less arms (`pattern => single_stmt`), `arm.body.span.end` points
+            // to the match's `}` (not the arm's closing brace — there is none).  The
+            // trailing comment lives BEFORE that `}`, so we compute `last_arm_end` as
+            // the end of the last stmt's source line instead.
+            //
+            // For brace arms (`pattern => { stmts }`), `arm.body.span.end` points past
+            // the arm's `}`, and trailing comments (if any) between the arm `}` and the
+            // match `}` are after that position — so we can use it directly.
+            let last_arm_end = if let Some(b) = else_arm.as_ref() {
+                b.span.end
+            } else if let Some(last_arm) = arms.last() {
+                let is_brace_arm = last_arm.body.span.end > 0
+                    && ctx
+                        .source
+                        .as_bytes()
+                        .get(last_arm.body.span.end.wrapping_sub(1))
+                        == Some(&b'}');
+                if is_brace_arm {
+                    last_arm.body.span.end
+                } else {
+                    // Brace-less arm: find end of the last stmt's source line.
+                    let stmt_start = last_arm
+                        .body
+                        .stmts
+                        .last()
+                        .map(stmt_span_start)
+                        .unwrap_or(last_arm.arrow_span.end);
+                    ctx.source[stmt_start..]
+                        .find('\n')
+                        .map(|i| stmt_start + i)
+                        .unwrap_or(ctx.source.len())
+                }
+            } else {
+                span.start
+            };
+            let trailing_match = {
+                let (leading, floating) = ctx.between(last_arm_end, span.end);
+                let mut t = String::new();
+                for c in &floating {
+                    t.push_str(&format!("{ind2}{}\n", normalize_comment_text(&c.text)));
+                }
+                for c in &leading {
+                    t.push_str(&format!("{ind2}{}\n", normalize_comment_text(&c.text)));
+                }
+                t
+            };
+
+            let arms_s = arm_parts.join("\n");
+            let else_s = else_arm
+                .as_ref()
+                .map(|b| {
+                    let body = emit_block_with_comments(b, ind + 2, ctx, span.start);
+                    format!("\n{ind2}else => {{{body}{ind2}}}")
                 })
-                .collect::<Vec<_>>()
-                .join("\n");
-            let else_s = else_arm.as_ref().map(|b| {
-                let body = emit_block_with_comments(b, ind + 2, ctx, span.start);
-                format!("\n{ind2}else => {{{body}{ind2}}}")
-            }).unwrap_or_default();
-            format!("{prefix}if ({}) {{\n{arms_s}{else_s}\n{prefix}}}", emit_expr(scrutinee, 0))
+                .unwrap_or_default();
+
+            let trailing_part = if trailing_match.is_empty() {
+                String::new()
+            } else {
+                format!("\n{trailing_match}")
+            };
+
+            format!(
+                "{prefix}if ({}) {{\n{arms_s}{else_s}{trailing_part}\n{prefix}}}",
+                emit_expr(scrutinee, 0)
+            )
         }
-        Stmt::While { cond, body, span, .. } => {
+        Stmt::While {
+            cond, body, span, ..
+        } => {
             let body_s = emit_block_with_comments(body, ind + 1, ctx, span.start);
-            format!("{prefix}while ({}) {{{body_s}{prefix}}}", emit_expr(cond, 0))
+            format!(
+                "{prefix}while ({}) {{{body_s}{prefix}}}",
+                emit_expr(cond, 0)
+            )
         }
-        Stmt::For { var, iter, body, span, .. } => {
+        Stmt::For {
+            var,
+            iter,
+            body,
+            span,
+            ..
+        } => {
             let body_s = emit_block_with_comments(body, ind + 1, ctx, span.start);
-            format!("{prefix}for ({var} in {}) {{{body_s}{prefix}}}", emit_expr(iter, 0))
+            format!(
+                "{prefix}for ({var} in {}) {{{body_s}{prefix}}}",
+                emit_expr(iter, 0)
+            )
         }
         Stmt::FieldAssign { target, value, .. } => {
-            format!("{prefix}{} = {}{inline}", emit_expr(target, 0), emit_expr(value, 0))
+            format!(
+                "{prefix}{} = {}{inline}",
+                emit_expr(target, 0),
+                emit_expr(value, 0)
+            )
         }
-        Stmt::IndexAssign { receiver, index, value, .. } => {
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => {
             format!(
                 "{prefix}{}[{}] = {}{}",
                 emit_expr(receiver, 0),

@@ -1,0 +1,40 @@
+// v0.2-M3 Error Gallery: formatter errors
+//
+// Run with: ynz fmt <file> or ynz fmt --check <file> or echo "..." | ynz fmt --stdin
+//
+// Each trigger below is a COMMENT showing what command or input would trigger
+// the error class.  This gallery documents the formatter's error surface; unlike
+// the compiler error galleries, these errors come from the CLI, not the Yinz
+// language parser.
+
+// WHY: parse error — formatter refuses to rewrite a file with syntax errors.
+//   Command: ynz fmt examples/errors/v0_2_m3_errors.ynz (this file itself has no
+//   parse errors — see broken_for_parse_error_test.ynz for a broken example).
+//   The formatter exits 1 and prints the parse diagnostic to stderr.
+
+// WHY: file not found — infra error, exit 2.
+//   Command: ynz fmt /nonexistent/path.ynz
+//   Output: "ynz fmt: cannot read `/nonexistent/path.ynz`: No such file or directory"
+
+// WHY: --all outside project — infra error, exit 2.
+//   Command: ynz fmt --all /tmp
+//   Output: "ynz fmt: no `yinz.toml` found above `/tmp` — pass a path directly..."
+
+// WHY: --check mismatch — source error, exit 1.
+//   Command: ynz fmt --check examples/fmt_demo/messy.ynz
+//   Output: "Would reformat: examples/fmt_demo/messy.ynz"
+//   The fmt_demo file is intentionally non-canonical.
+
+// WHY: stdin parse error — exit 1.
+//   Command: echo "function broken() -> nothing { let x = 1" | ynz fmt --stdin
+//   Output: parse diagnostic on stderr, exit 1.
+
+function entrypoint() -> nothing {
+  print(`v0.2-M3 error gallery loaded — see comment triggers above`)
+  // WHY: intentional type mismatch — the formatter exits 1 when fed source with
+  // compile errors (parse errors trigger FmtError::ParseError; typeck errors below
+  // are caught by `ynz build` / `ynz run`, not `ynz fmt`).
+  // To see the formatter's own parse-error path:
+  //   echo "function broken() -> nothing { let x = 1" | ynz fmt --stdin
+  let _x: int = "this is a string"
+}

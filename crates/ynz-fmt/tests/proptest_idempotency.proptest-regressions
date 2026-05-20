@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 18f2ff63f04abd62800020628d2df087717f11ebd26f362c3d9f6be1f40c89b8 # shrinks to module = Module { items: [Function(FunctionDecl { name: "foo", generics: [], params: [], return_type: Int, body: Block { stmts: [Let { is_const: false, name: "foo", name_span: SourceSpan { file: "", start: 0, end: 0 }, ty: None, value: InterpolatedString([Lit([], SourceSpan { file: "", start: 0, end: 0 })], SourceSpan { file: "", start: 0, end: 0 }), span: SourceSpan { file: "", start: 0, end: 0 } }, Expr(InterpolatedString([Lit([], SourceSpan { file: "", start: 0, end: 0 })], SourceSpan { file: "", start: 0, end: 0 }))], span: SourceSpan { file: "", start: 0, end: 0 } }, span: SourceSpan { file: "", start: 0, end: 0 }, name_span: SourceSpan { file: "", start: 0, end: 0 }, errors_capable: false, is_exported: false, doc: None })], span: SourceSpan { file: "", start: 0, end: 0 } }

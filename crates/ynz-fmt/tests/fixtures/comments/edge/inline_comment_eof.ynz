@@ -1,1 +1,2 @@
-function f() -> nothing {} // trailing
+function f() -> nothing { }
+// trailing

@@ -1,4 +1,6 @@
-shape Token { id: int }
+shape Token {
+  id: int
+}
 
 function consume(give t: Token) -> nothing {
   print(t.id)

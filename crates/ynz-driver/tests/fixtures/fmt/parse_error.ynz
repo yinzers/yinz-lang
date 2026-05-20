@@ -1,0 +1,3 @@
+// WHY: intentional parse error — missing closing `}` on function body
+function broken() -> nothing {
+  let x = 1

@@ -275,3 +275,55 @@ fn no_banned_jargon_in_lsp_rendered_messages() {
         );
     }
 }
+
+/// Audit formatter-emitted CLI messages for banned jargon.
+///
+/// Scope: messages the formatter writes to the USER via stderr/stdout
+/// (e.g. "ynz fmt: rewrote ...", "Would reformat: ...", parse error renders).
+/// Explicitly EXCLUDED: Yinz source content that the formatter passes through
+/// byte-exact — a user can legitimately write `// type` in a comment and the
+/// formatter must not be flagged for that.
+#[test]
+fn fmt_cli_messages_contain_no_banned_jargon() {
+    let banned: Vec<_> = ynz_registry::banned_jargon().collect();
+
+    // These are the fixed-text portions of formatter CLI messages.
+    // Dynamic file paths are excluded (they're user data, not our messages).
+    let fmt_messages = [
+        "ynz fmt: cannot read",
+        "ynz fmt: cannot write temp file",
+        "ynz fmt: cannot rename",
+        "ynz fmt: rewrote",
+        "ynz fmt: invalid input",
+        "ynz fmt: no `yinz.toml` found above",
+        "pass a path directly or create a yinz.toml project",
+        "ynz fmt: provide a file path or use --all or --stdin",
+        "ynz fmt: cannot read stdin",
+        "Would reformat:",
+        // FmtError display strings
+        "source has parse errors; fix those first",
+    ];
+
+    let mut violations: Vec<String> = Vec::new();
+    for msg in &fmt_messages {
+        let lower = msg.to_lowercase();
+        for entry in &banned {
+            let w = entry.name.to_lowercase();
+            if contains_whole_word(&lower, &w) {
+                violations.push(format!(
+                    "Formatter CLI message contains banned word {:?}: {:?}",
+                    entry.name, msg
+                ));
+            }
+        }
+    }
+
+    if !violations.is_empty() {
+        panic!(
+            "Banned jargon found in {} formatter CLI message(s):\n{}\n\n\
+             See design/compiler-errors.md for replacements.",
+            violations.len(),
+            violations.join("\n")
+        );
+    }
+}
