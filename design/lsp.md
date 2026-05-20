@@ -92,7 +92,7 @@ The server's `initialize` response advertises exactly these capabilities:
 - `referencesProvider` — find-refs
 - `renameProvider` — rename
 - `documentFormattingProvider` — format-on-save (needs v0.2-M3 `ynz-fmt`)
-- `inlayHintProvider` — muted-hint surfaces per `design/inference.md`
+- `inlayHintProvider` — muted-hint surfaces per `.claude/rules/inference.md`
 - `codeActionProvider` — code actions
 - `semanticTokensProvider` — semantic highlighting beyond TextMate
 
@@ -214,7 +214,7 @@ The following LSP capabilities are explicitly out of scope for v0.2-M2. Each wil
 - `textDocument/references` — find-refs (requires cross-file use-site tracking)
 - `textDocument/rename` — requires careful salsa invalidation across files
 - `textDocument/formatting` — format-on-save; delegates to v0.2-M3's `ynz-fmt` library
-- `textDocument/inlayHint` — muted-hint surfaces per `design/inference.md` three placement categories (Addition / Replacement / Informational)
+- `textDocument/inlayHint` — muted-hint surfaces per `.claude/rules/inference.md` three placement categories (Addition / Replacement / Informational)
 - `textDocument/codeAction` — code actions and quick-fixes
 - `textDocument/semanticTokens` — semantic highlighting richer than TextMate
 - Doc-comment integration in hover body (rich `///` comment content in `textDocument/hover`)
