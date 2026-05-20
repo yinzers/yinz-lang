@@ -19,6 +19,8 @@ ynz-ast         = { workspace = true }
 ynz-parser      = { workspace = true }
 ynz-typeck      = { workspace = true }
 ynz-codegen     = { workspace = true }
+ynz-fmt         = { workspace = true }
 
 [dev-dependencies]
-insta = { workspace = true }
+insta      = { workspace = true }
+assert_cmd = { workspace = true }

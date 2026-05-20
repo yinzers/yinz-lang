@@ -86,11 +86,29 @@ Single source of truth for all feature inventories. `registry/features.toml` + `
 
 **Design doc:** `design/lsp.md`
 
-### v0.2-M3: `ynz fmt` (planned)
+### v0.2-M3: `ynz fmt` (active — tag `v0.2.0-m3` pending)
 
-- `ynz fmt path.ynz` / `ynz fmt --all` / `ynz fmt --check`
-- Zero-config. Yinz has one style.
-- `ynz-fmt` library crate ready for v0.2-M5's LSP format-on-save wiring.
+**Locked decisions (2026-05-20):**
+- CLI flag set: `ynz fmt <path>`, `--all` (walk `yinz.toml` project), `--check` (CI gate), `--stdin` (editor/LSP pipe)
+- Comment handling: additive `lex_with_trivia()` re-lex pass in `ynz-parser` — captures every `//` + `///` span without altering the existing `lex()` path
+- Registry consumer only: formatter reads keyword spellings, banned-jargon, and reserved-name protection from `ynz-registry`; adds zero new registry entries
+- Algorithm: decided by Phase 1 empirical spike (prettier-style vs rustfmt-style — locked measurement gates in `design/fmt.md`)
+- Zero config: one canonical output per AST; no `.ynzfmt.toml`
+- Safety invariant: `parse(fmt(x)).ast == parse(x).ast` modulo trivia — verified by Phase 4 property test
+
+**What ships:**
+- `ynz-fmt` library crate (`format(source) -> Result<String, FmtError>`) — consumed by v0.2-M5 LSP `textDocument/formatting`
+- Four CLI modes in `ynz-driver`: single-file, `--all`, `--check`, `--stdin`
+- Idempotency + semantic round-trip property tests
+- Mass-rewrite of all existing `.ynz` examples to canonical form
+
+**Explicitly out of scope (deferred):**
+- `textDocument/formatting` LSP wiring — v0.2-M5
+- `format_range(source, range)` API — v0.2-M5 if proven necessary
+- Embedded SQL formatting — v0.6+ database stdlib milestone
+- Import sorting — v0.4 Tier 3 lint suggestions
+
+**Design doc:** `design/fmt.md`
 
 ### v0.2-M4: `ynz watch` (planned)
 

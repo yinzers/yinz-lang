@@ -353,24 +353,24 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 13. Run `./target/debug/ynz build crates/ynz-driver/tests/fixtures/m3_fib.ynz` — confirms existing build path unchanged
 
 **Acceptance criteria** (observable conditions that define DONE):
-- [ ] `design/fmt.md` exists with the 7 content sections enumerated in Step 1
-- [ ] `design/mvp-scope.md` v0.2-M3 entry mentions all locked decisions (CLI scope full set, comment-handling re-lex, registry-consumer, algorithm-deferred-to-Phase-1)
-- [ ] `CLAUDE.md` Project Layout table has a row for `crates/ynz-fmt/`
-- [ ] `cargo build --workspace` succeeds with the new empty crate
-- [ ] `cargo test --workspace` passes (830+ tests, no regressions)
-- [ ] `./target/debug/ynz fmt --help` prints help for the new subcommand with all four flags listed
-- [ ] `./target/debug/ynz fmt foo.ynz` prints "not yet implemented", exits 1
-- [ ] `./target/debug/ynz run crates/ynz-driver/tests/fixtures/m3_fib.ynz` prints `55` (regression check)
-- [ ] `_spike/` directory exists for Phase 1 to use
-- [ ] `.claude/todos.md` "Later" section contains `lsp-range-formatting` and `fmt-diff-mode` entries verbatim (per Patrick's `deferrals-must-be-tracked` rule)
+- [x] `design/fmt.md` exists with the 7 content sections enumerated in Step 1
+- [x] `design/mvp-scope.md` v0.2-M3 entry mentions all locked decisions (CLI scope full set, comment-handling re-lex, registry-consumer, algorithm-deferred-to-Phase-1)
+- [x] `CLAUDE.md` Project Layout table has a row for `crates/ynz-fmt/`
+- [x] `cargo build --workspace` succeeds with the new empty crate
+- [x] `cargo test --workspace` passes (830+ tests, no regressions)
+- [x] `./target/debug/ynz fmt --help` prints help for the new subcommand with all four flags listed
+- [x] `./target/debug/ynz fmt foo.ynz` prints "not yet implemented", exits 1
+- [x] `./target/debug/ynz run crates/ynz-driver/tests/fixtures/m3_fib.ynz` prints `55` (regression check)
+- [x] `_spike/` directory exists for Phase 1 to use
+- [x] `.claude/todos.md` "Later" section contains `lsp-range-formatting` and `fmt-diff-mode` entries verbatim (per Patrick's `deferrals-must-be-tracked` rule)
 
 **Quality gate** (observable facts to confirm — check BEFORE moving to next phase):
-- [ ] No `// TODO` / `// FIXME` / `// HACK` left in any new file
-- [ ] No new banned-jargon in user-facing prose (design/fmt.md is for engineers — "infer" is OK there per `.claude/rules/inference.md` dual-audience disclaimer; never in user-rendered text)
-- [ ] No `as any` / `#[allow(...)]` swallows
-- [ ] `design/fmt.md` cross-references `design/compiler-language.md`, `design/feature-registry.md`, `design/lsp.md`, `.claude/rules/inference.md`, roadmap
-- [ ] No commented-out code; no orphan files
-- [ ] `cargo clippy --workspace -- -D warnings` passes
+- [x] No `// TODO` / `// FIXME` / `// HACK` left in any new file
+- [x] No new banned-jargon in user-facing prose (design/fmt.md is for engineers — "infer" is OK there per `.claude/rules/inference.md` dual-audience disclaimer; never in user-rendered text)
+- [x] No `as any` / `#[allow(...)]` swallows
+- [x] `design/fmt.md` cross-references `design/compiler-language.md`, `design/feature-registry.md`, `design/lsp.md`, `.claude/rules/inference.md`, roadmap
+- [x] No commented-out code; no orphan files
+- [x] `cargo clippy --workspace -- -D warnings` passes
 
 **Verification**:
 - `cargo build --workspace 2>&1 | tail -5` — clean

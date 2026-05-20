@@ -1,4 +1,5 @@
 mod build;
+mod fmt;
 mod load;
 mod run;
 
@@ -90,6 +91,36 @@ enum Command {
         #[arg(long)]
         reveal_sensitive: bool,
     },
+    /// Format a Yinz source file or project in canonical style.
+    ///
+    /// Modes:
+    ///
+    ///   Single file: `ynz fmt foo.ynz` — rewrites in-place (atomic write).
+    ///
+    ///   Project: `ynz fmt --all [dir]` — walks yinz.toml project and formats every .ynz file.
+    ///
+    ///   Check: `ynz fmt --check foo.ynz` — read-only; exit 0 if canonical, exit 1 if file
+    ///   would change. Prints which files would change. No filesystem writes.
+    ///
+    ///   Stdin: `ynz fmt --stdin` — read source on stdin, write formatted result to stdout.
+    ///
+    /// Exit codes:
+    ///   0 — success / already canonical
+    ///   1 — source has parse errors OR (for --check) file(s) would change
+    ///   2 — infrastructure error (can't read/write file, missing yinz.toml for --all)
+    Fmt {
+        /// Source file to format (omit when using --all or --stdin).
+        file: Option<PathBuf>,
+        /// Walk the yinz.toml project and format every .ynz file.
+        #[arg(long, conflicts_with = "stdin")]
+        all: bool,
+        /// Read-only check: exit 0 if canonical, exit 1 if file(s) would change.
+        #[arg(long)]
+        check: bool,
+        /// Read source on stdin; write formatted output to stdout.
+        #[arg(long, conflicts_with = "all", conflicts_with = "file")]
+        stdin: bool,
+    },
 }
 
 fn main() {
@@ -154,6 +185,15 @@ fn main() {
             reveal_sensitive,
         } => {
             let code = run::run(&file, keep, emit_ir, reveal_sensitive);
+            process::exit(code);
+        }
+        Command::Fmt {
+            file,
+            all,
+            check,
+            stdin,
+        } => {
+            let code = fmt::fmt(file.as_deref(), all, check, stdin);
             process::exit(code);
         }
     }
