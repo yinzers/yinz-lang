@@ -1,0 +1,11 @@
+services:
+  web:
+    image: oven/bun:1.2.21-alpine
+    working_dir: /app
+    volumes:
+      - ./:/app
+    ports:
+      - "6002:3000"
+    # Installs deps on every `up` so bun.lock changes are picked up automatically.
+    # Polling watcher is configured in nuxt.config.ts for WSL2 hot-reload support.
+    command: sh -c "bun install && bun run dev --host 0.0.0.0"

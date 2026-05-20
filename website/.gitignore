@@ -1,0 +1,13 @@
+# Nuxt build artifacts
+.nuxt/
+.output/
+
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Bun lockfile is checked in; ignore nothing
