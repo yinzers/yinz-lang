@@ -1,5 +1,8 @@
+pub mod db;
 mod error;
 mod event_loop;
+pub mod project;
+mod rebuild;
 pub mod ui;
 pub mod watcher;
 
@@ -7,6 +10,8 @@ pub use error::{Result, WatchError};
 pub use watcher::{FileWatcher, WatchEvent};
 
 use std::path::PathBuf;
+
+use db::WatchDb;
 
 /// Configuration for a `ynz watch` session.
 ///
@@ -28,12 +33,63 @@ pub struct WatchConfig {
 ///   0 — clean exit (Ctrl+C, pipe-closed)
 ///   1 — compile failure
 ///   2 — infrastructure error (watcher init failed, no yinz.toml, OOM hard-stop, etc.)
+///
+/// # Flow
+///
+/// 1. Resolve watch target (single-file or project mode).
+/// 2. Populate `WatchDb` with initial source state.
+/// 3. Run initial build before waiting for events.
+/// 4. Start the file watcher with the debounced event channel.
+/// 5. Enter the event loop: on file change → rebuild; on Ctrl+C → clean exit.
+///
+/// # Failure modes
+///
+/// - No yinz.toml in project mode → exit 2 with WatchError::NoProjectFile diagnostic.
+/// - Source file unreadable at init → exit 2 with WatchError::SourceRead diagnostic.
+/// - File watcher init failure → exit 2 with WatchError::WatcherInit diagnostic.
+/// - All compile errors are recoverable: watch continues after printing diagnostics.
+///
+/// Time: O(1) per event (salsa amortizes). Space: O(n) where n = source files.
 pub fn run(config: WatchConfig) -> i32 {
     let debounce_ms = watcher::read_debounce_ms();
 
-    let paths = watcher::single_file_paths(&config.path);
+    // 1. Resolve watch target.
+    let target = match project::resolve_target(&config.path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("{e}");
+            return 2;
+        }
+    };
 
-    let file_watcher = match watcher::FileWatcher::new(&paths, debounce_ms) {
+    let entry_path = target.entry.clone();
+    let watch_paths: Vec<PathBuf> = if let Some(ref root) = target.project_root {
+        vec![root.clone()]
+    } else {
+        watcher::single_file_paths(&config.path)
+    };
+
+    // 2. Populate WatchDb.
+    let mut watch_db = WatchDb::from_target(&target);
+
+    // 3. Allocate per-pid tempdir for compiled binaries.
+    let out_dir_path = std::env::temp_dir().join(format!("ynz-watch-{}", std::process::id()));
+    let out_dir = match std::fs::create_dir_all(&out_dir_path).map(|_| out_dir_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("ynz watch: could not create temp dir: {e}");
+            return 2;
+        }
+    };
+
+    // 4. Initial build before waiting for events.
+    if !config.json {
+        println!("ynz watch: watching {}", config.path.display());
+    }
+    run_rebuild_cycle(&mut watch_db, &entry_path, &out_dir, &config);
+
+    // 5. Start file watcher.
+    let file_watcher = match watcher::FileWatcher::new(&watch_paths, debounce_ms) {
         Ok(w) => w,
         Err(e) => {
             eprintln!("{e}");
@@ -41,21 +97,27 @@ pub fn run(config: WatchConfig) -> i32 {
         }
     };
 
-    if !config.json {
-        println!("ynz watch: watching {}", config.path.display());
-    }
-
-    event_loop::run_event_loop(&file_watcher, &config, |path| {
-        if config.json {
-            // --json emitter wired in a later milestone; log to stderr for now so stdout stays NDJSON-clean.
-            eprintln!("[file change] {}", path.display());
-        } else {
-            // Placeholder rebuild callback: logs the change + reports instant success.
-            // Replaced by real compilation (check_query + codegen_query) when the DB layer lands.
-            ui::print_building(&path.display().to_string());
-            ui::print_success(0);
-        }
+    // 6. Event loop.
+    event_loop::run_event_loop(&file_watcher, &config, |_changed_path| {
+        run_rebuild_cycle(&mut watch_db, &entry_path, &out_dir, &config);
+        // Child spawn, --json events, and memory defense are layered in by their
+        // respective modules (child.rs, json_emitter.rs, memory.rs).
     });
+
+    // Cleanup tempdir on exit.
+    let _ = std::fs::remove_dir_all(&out_dir);
 
     0
 }
+
+/// Run one rebuild + (optionally) child-spawn cycle.
+fn run_rebuild_cycle(
+    db: &mut WatchDb,
+    entry_path: &std::path::Path,
+    out_dir: &std::path::Path,
+    config: &WatchConfig,
+) {
+    use rebuild::rebuild_one;
+    let _ = rebuild_one(db, entry_path, entry_path, out_dir, config.check);
+}
+
