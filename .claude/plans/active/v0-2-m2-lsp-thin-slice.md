@@ -22,7 +22,7 @@ files:
 # Plan: v0.2-M2 — LSP Thin Slice + VSCode Plugin
 
 Created: 2026-05-20
-Status: in_progress — Phase 1 COMPLETE (code-reviewer pending). Phase 2 next.
+Status: in_progress — Phase 2 COMPLETE (code-reviewer PASS after 2 rounds). Phase 3 next.
 
 ## Context & Why
 
@@ -478,22 +478,22 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 9. Smoke test `tests/stdio_smoke.rs`: spawn `target/debug/ynz-lsp`, send minimal initialize JSON-RPC, parse the response, assert capabilities contain the expected fields, send shutdown+exit, assert clean exit.
 
 **Acceptance criteria**:
-- [ ] `cargo run -p ynz-lsp` starts the server, doesn't crash on minimal `initialize`/`shutdown`/`exit` sequence
-- [ ] `tests/lifecycle.rs` passes: initialize → didOpen → didChange → didClose → shutdown with the test fixture
-- [ ] `tests/stdio_smoke.rs` passes: subprocess test exits cleanly
-- [ ] Position converter unit tests cover all 7 cases listed in Step 7 (LF/CRLF/mixed/BOM/emoji/surrogate/round-trip)
-- [ ] Salsa DB invalidation verified: didChange triggers re-parse on next query (test asserts cache miss after didChange, cache hit on second query)
-- [ ] `cargo test --workspace` passes (existing 830+ plus new ones)
-- [ ] Server advertises `positionEncodings: ["utf-8", "utf-16"]` in initialize response
-- [ ] No diagnostics published yet (Phase 3) — observable: `publishDiagnostics` never called
+- [x] `cargo run -p ynz-lsp` starts the server, doesn't crash on minimal `initialize`/`shutdown`/`exit` sequence
+- [x] `tests/lifecycle.rs` passes: initialize → didOpen → didChange → didClose → shutdown with the test fixture
+- [x] `tests/stdio_smoke.rs` passes: subprocess test exits cleanly
+- [x] Position converter unit tests cover all 7 cases listed in Step 7 (LF/CRLF/mixed/BOM/emoji/surrogate/round-trip)
+- [x] Salsa DB invalidation verified: didChange triggers re-parse on next query (test asserts cache miss after didChange, cache hit on second query)
+- [x] `cargo test --workspace` passes (existing 830+ plus new ones)
+- [x] Server advertises `positionEncodings: ["utf-8", "utf-16"]` in initialize response
+- [x] No diagnostics published yet (Phase 3) — observable: `publishDiagnostics` never called
 
 **Quality gate**:
-- [ ] No `// TODO` / `// FIXME` / `// HACK`
-- [ ] `cargo clippy -p ynz-lsp -- -D warnings` passes
-- [ ] All public functions in `position.rs` are tested
+- [x] No `// TODO` / `// FIXME` / `// HACK`
+- [x] `cargo clippy -p ynz-lsp -- -D warnings` passes
+- [x] All public functions in `position.rs` are tested
 - [ ] No `as any` equivalent: no `.unwrap()` on user input paths; user errors return LSP-protocol errors via the framework's normal mechanism
-- [ ] Documents the empty-bucket / empty-text edge case explicitly
-- [ ] No DB shared across threads incorrectly: ServerState owned by a single task
+- [x] Documents the empty-bucket / empty-text edge case explicitly
+- [x] No DB shared across threads incorrectly: ServerState owned by a single task
 
 **Verification**:
 - `cargo test -p ynz-lsp 2>&1 | grep 'test result'` — all tests pass

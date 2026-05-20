@@ -1,6 +1,6 @@
 use lsp_types::{
-    CompletionOptions, HoverProviderCapability, ServerCapabilities, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextDocumentSyncOptions,
+    CompletionOptions, HoverProviderCapability, PositionEncodingKind, ServerCapabilities,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
 };
 
 /// The position encoding this server prefers. UTF-8 means LSP Position.character == byte offset,
@@ -14,8 +14,13 @@ pub enum PositionEncoding {
     Utf16,
 }
 
-pub fn server_capabilities() -> ServerCapabilities {
+pub fn server_capabilities(encoding: PositionEncoding) -> ServerCapabilities {
+    let position_encoding = match encoding {
+        PositionEncoding::Utf8 => PositionEncodingKind::UTF8,
+        PositionEncoding::Utf16 => PositionEncodingKind::UTF16,
+    };
     ServerCapabilities {
+        position_encoding: Some(position_encoding),
         text_document_sync: Some(TextDocumentSyncCapability::Options(
             TextDocumentSyncOptions {
                 open_close: Some(true),
@@ -35,11 +40,33 @@ pub fn server_capabilities() -> ServerCapabilities {
 
 /// Negotiate position encoding from the client's advertised list.
 /// Prefers UTF-8; falls back to UTF-16 (the LSP default).
-pub fn negotiate_encoding(client_encodings: Option<&[String]>) -> PositionEncoding {
+pub fn negotiate_encoding(client_encodings: Option<&[PositionEncodingKind]>) -> PositionEncoding {
     if let Some(encodings) = client_encodings {
-        if encodings.iter().any(|e| e == "utf-8") {
+        if encodings.iter().any(|e| e.as_str() == "utf-8") {
             return PositionEncoding::Utf8;
         }
     }
     PositionEncoding::Utf16
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn negotiation_picks_utf8_when_offered() {
+        let encodings = vec![PositionEncodingKind::UTF8, PositionEncodingKind::UTF16];
+        assert_eq!(negotiate_encoding(Some(&encodings)), PositionEncoding::Utf8);
+    }
+
+    #[test]
+    fn negotiation_falls_back_to_utf16_when_no_utf8() {
+        let encodings = vec![PositionEncodingKind::UTF16];
+        assert_eq!(negotiate_encoding(Some(&encodings)), PositionEncoding::Utf16);
+    }
+
+    #[test]
+    fn negotiation_falls_back_to_utf16_when_none() {
+        assert_eq!(negotiate_encoding(None), PositionEncoding::Utf16);
+    }
 }

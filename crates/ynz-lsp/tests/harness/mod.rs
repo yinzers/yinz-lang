@@ -1,3 +1,6 @@
+// Each test file includes only the subset it needs; suppress dead-code for the remainder.
+#![allow(dead_code)]
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 

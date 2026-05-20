@@ -9,10 +9,7 @@ use lsp_types::{
     InitializeParams, InitializeResult, ServerInfo,
 };
 
-use crate::{
-    capabilities::{negotiate_encoding, server_capabilities, FALLBACK_ENCODING, PREFERRED_ENCODING},
-    state::ServerState,
-};
+use crate::{capabilities::negotiate_encoding, capabilities::server_capabilities, state::ServerState};
 
 /// Entry point for stdio JSON-RPC mode. Runs until `exit` is received.
 pub fn run_stdio() {
@@ -31,36 +28,37 @@ pub fn serve(connection: Connection) {
 
 /// Perform the LSP initialize handshake and return the negotiated position encoding.
 fn handshake(connection: &Connection) -> crate::capabilities::PositionEncoding {
+    // I/O-init: framework guarantees deserialization; panic surfaces unrecoverable stdio breakage
     let (id, params_value) = connection.initialize_start().expect("initialize_start failed");
-    let params: InitializeParams = serde_json::from_value(params_value).unwrap_or_default();
 
-    let client_encodings: Option<Vec<String>> = params
+    let params: InitializeParams = match serde_json::from_value(params_value) {
+        Ok(p) => p,
+        Err(e) => {
+            // Malformed initialize params — log and use defaults (safe; we can still serve)
+            eprintln!("ynz-lsp: malformed InitializeParams, using defaults: {e}");
+            InitializeParams::default()
+        }
+    };
+
+    let client_encodings = params
         .capabilities
         .general
         .as_ref()
-        .and_then(|g| g.position_encodings.as_ref())
-        .map(|encs| encs.iter().map(|e| format!("{:?}", e)).collect());
+        .and_then(|g| g.position_encodings.as_deref());
 
-    let encoding = negotiate_encoding(client_encodings.as_deref());
-    let chosen_str = match encoding {
-        crate::capabilities::PositionEncoding::Utf8 => PREFERRED_ENCODING,
-        crate::capabilities::PositionEncoding::Utf16 => FALLBACK_ENCODING,
-    };
+    let encoding = negotiate_encoding(client_encodings);
 
     let result = InitializeResult {
-        capabilities: server_capabilities(),
+        // positionEncoding lives inside ServerCapabilities per LSP 3.17 spec §3.15
+        capabilities: server_capabilities(encoding),
         server_info: Some(ServerInfo {
             name: "ynz-lsp".to_string(),
             version: Some(env!("CARGO_PKG_VERSION").to_string()),
         }),
     };
 
-    let mut result_value = serde_json::to_value(result).expect("serialize InitializeResult");
-    // Inject positionEncoding into the result (lsp-types doesn't expose this field directly)
-    if let Some(obj) = result_value.as_object_mut() {
-        obj.insert("positionEncoding".to_string(), serde_json::json!(chosen_str));
-    }
-
+    // I/O-init: framework guarantees serialization; panic surfaces unrecoverable stdio breakage
+    let result_value = serde_json::to_value(result).expect("serialize InitializeResult");
     connection.initialize_finish(id, result_value).expect("initialize_finish failed");
     encoding
 }

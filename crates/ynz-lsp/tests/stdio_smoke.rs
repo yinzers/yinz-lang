@@ -22,6 +22,8 @@ fn stdio_initialize_shutdown() {
     let result = &msg["result"];
     assert_eq!(result["capabilities"]["hoverProvider"], json!(true));
     assert!(result["capabilities"]["completionProvider"].is_object());
+    // positionEncoding belongs inside ServerCapabilities (LSP 3.17 spec §3.15)
+    assert_eq!(result["capabilities"]["positionEncoding"], json!("utf-16")); // client sent no encodings
     assert!(result["serverInfo"]["name"] == "ynz-lsp");
 
     h.send(&json!({"jsonrpc":"2.0","method":"initialized","params":{}}));
