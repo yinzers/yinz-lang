@@ -3,6 +3,9 @@ use lsp_types::{
     Documentation, MarkupContent, MarkupKind, Position,
 };
 use ynz_registry::{CompletionContext, CompletionKind, RegistryCompletionItem};
+use ynz_typeck::signatures::SignatureTable;
+use ynz_typeck::shapes::ShapeTable;
+use ynz_typeck::types::type_name;
 
 use crate::{capabilities::PositionEncoding, position::LineTable};
 
@@ -46,9 +49,10 @@ pub fn detect_context<'a>(text: &str, cursor_offset: usize) -> CompletionContext
             }
         }
 
-        // Thin slice: receiver type narrowing via typeck is deferred — we return all
-        // methods as best-effort candidates. Typeck integration (module_signatures_query)
-        // is deferred because it requires per-offset AST lookup not yet exposed.
+        // Receiver type narrowing via typeck is deferred: requires
+        // `type_of_expression_at_offset` in ynz-typeck (not yet exposed).
+        // Until then, all primitive methods appear as best-effort candidates.
+        // Tracked: .claude/todos.md "lsp-completion-typeck-receiver-narrowing".
         CompletionContext::AfterDot { receiver_type: None }
     } else {
         CompletionContext::BareIdentifier
@@ -94,17 +98,64 @@ pub fn to_lsp_completion_item(rci: RegistryCompletionItem) -> CompletionItem {
     }
 }
 
+/// Build user-defined function + shape completion items from typeck output.
+/// These are inserted at sort_priority 0 (before all registry items).
+pub fn user_symbol_items(sig_table: &SignatureTable, shape_table: &ShapeTable) -> Vec<CompletionItem> {
+    let mut items: Vec<CompletionItem> = Vec::new();
+
+    for (name, sig) in &sig_table.fns {
+        let param_str = sig.params.iter()
+            .map(|(pname, ptype)| format!("{pname}: {}", type_name(ptype)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let detail = format!("function {name}({param_str}) -> {}", type_name(&sig.ret));
+        items.push(CompletionItem {
+            label: name.clone(),
+            kind: Some(CompletionItemKind::FUNCTION),
+            detail: Some(detail),
+            sort_text: Some(format!("{:04}_{name}", 0u16)),
+            ..Default::default()
+        });
+    }
+
+    for name in shape_table.shapes.keys() {
+        items.push(CompletionItem {
+            label: name.clone(),
+            kind: Some(CompletionItemKind::CLASS),
+            detail: Some(format!("shape {name}")),
+            sort_text: Some(format!("{:04}_{name}", 10u16)),
+            ..Default::default()
+        });
+    }
+
+    items
+}
+
 /// Build the LSP `CompletionList` for the given cursor position in `text`.
+/// Merges user-defined symbols (from typeck) before registry items.
 pub fn completion_list(
     text: &str,
     table: &LineTable,
     position: Position,
     encoding: PositionEncoding,
+    sig_table: Option<&SignatureTable>,
+    shape_table: Option<&ShapeTable>,
 ) -> Option<CompletionList> {
     let cursor_offset = table.position_to_byte_offset(text, position, encoding)?;
     let context = detect_context(text, cursor_offset);
+
+    let mut items: Vec<CompletionItem> = Vec::new();
+
+    // User-defined symbols come first (sort_priority 0-10) for BareIdentifier context
+    if matches!(context, CompletionContext::BareIdentifier) {
+        if let (Some(sig), Some(shapes)) = (sig_table, shape_table) {
+            items.extend(user_symbol_items(sig, shapes));
+        }
+    }
+
+    // Registry items (keywords, intrinsics, deferred features, etc.)
     let registry_items = ynz_registry::lsp_completion_items(&context);
-    let items: Vec<CompletionItem> = registry_items.into_iter().map(to_lsp_completion_item).collect();
+    items.extend(registry_items.into_iter().map(to_lsp_completion_item));
 
     Some(CompletionList { is_incomplete: false, items })
 }

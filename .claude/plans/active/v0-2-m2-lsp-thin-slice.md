@@ -22,7 +22,7 @@ files:
 # Plan: v0.2-M2 — LSP Thin Slice + VSCode Plugin
 
 Created: 2026-05-20
-Status: in_progress — Phase 4 COMPLETE (code-reviewer pending). Phase 5 next.
+Status: in_progress — Phase 4 COMPLETE (BLOCK fixed). Phase 5 next.
 
 ## Context & Why
 

@@ -117,9 +117,14 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
         let uri = &params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
 
+        let sig_output = state.source_file_for(uri)
+            .map(|sf| ynz_typeck::queries::module_signatures_query(&state.db, sf));
+
         let list = state.text_for(uri).and_then(|text| {
             let table = state.line_table_for(uri)?;
-            completion_list(text, table, position, state.encoding)
+            let sig_table = sig_output.as_ref().map(|o| &o.sig_table);
+            let shape_table = sig_output.as_ref().map(|o| &o.shape_table);
+            completion_list(text, table, position, state.encoding, sig_table, shape_table)
         });
 
         let result = match list {

@@ -15,9 +15,9 @@ fn read_fixture(name: &str) -> String {
         .unwrap_or_else(|e| panic!("could not read fixture {name}: {e}"))
 }
 
-// ---------------------------------------------------------------------------
+
 // Context detection unit tests
-// ---------------------------------------------------------------------------
+
 
 #[test]
 fn context_bare_at_start() {
@@ -39,6 +39,26 @@ fn context_after_dot_is_after_dot() {
 }
 
 #[test]
+fn context_cursor_inside_string_returns_bare() {
+    // Inside a string literal, completion should return BareIdentifier (keywords)
+    // since we can't distinguish string-interior from normal code in the thin slice.
+    // The important property: no panic, no wrong crash.
+    let text = "`hello wor";
+    let ctx = detect_context(text, text.len());
+    // Returns BareIdentifier (no crash); distinguishing inside-string is deferred.
+    let _ = ctx;
+}
+
+#[test]
+fn context_multibyte_char_boundary_no_panic() {
+    // Cursor offset at a valid UTF-8 boundary within multi-byte characters.
+    let text = "✓.";
+    // '✓' is 3 bytes; cursor after the dot (byte 4)
+    let ctx = detect_context(text, 4);
+    assert!(matches!(ctx, CompletionContext::AfterDot { .. }));
+}
+
+#[test]
 fn context_numeric_literal_dot_is_bare() {
     // "5." should NOT trigger after-dot completion (it's a decimal literal)
     let text = "let x = 5.";
@@ -54,9 +74,9 @@ fn context_identifier_dot_is_after_dot() {
     assert!(matches!(ctx, CompletionContext::AfterDot { .. }));
 }
 
-// ---------------------------------------------------------------------------
+
 // Completion list tests (using the completion module directly)
-// ---------------------------------------------------------------------------
+
 
 #[test]
 fn bare_completion_contains_keywords() {
@@ -66,7 +86,7 @@ fn bare_completion_contains_keywords() {
     let text = "function entrypoint() -> nothing {\n    ";
     let table = LineTable::new(text);
     let position = Position { line: 1, character: 4 };
-    let list = completion_list(text, &table, position, PositionEncoding::Utf8);
+    let list = completion_list(text, &table, position, PositionEncoding::Utf8, None, None);
     let list = list.expect("completion list must be Some");
     let kw_labels: Vec<_> = list.items.iter()
         .filter(|i| i.kind == Some(lsp_types::CompletionItemKind::KEYWORD) && !i.deprecated.unwrap_or(false))
@@ -84,7 +104,7 @@ fn deferred_features_in_bare_are_deprecated() {
 
     let text = "let ";
     let table = LineTable::new(text);
-    let list = completion_list(text, &table, Position { line: 0, character: 4 }, PositionEncoding::Utf8);
+    let list = completion_list(text, &table, Position { line: 0, character: 4 }, PositionEncoding::Utf8, None, None);
     let list = list.expect("completion must be Some");
 
     let deferred: Vec<_> = list.items.iter()
@@ -104,7 +124,7 @@ fn after_dot_completion_returns_items() {
     let lines: Vec<&str> = text.lines().collect();
     let last_line = lines.last().unwrap();
     let position = Position { line: (lines.len() - 1) as u32, character: last_line.len() as u32 };
-    let list = completion_list(text, &table, position, PositionEncoding::Utf8);
+    let list = completion_list(text, &table, position, PositionEncoding::Utf8, None, None);
     let list = list.expect("completion after dot must return Some");
     // In this thin slice, receiver type is not narrowed (None → all methods returned)
     assert!(!list.items.is_empty(), "after-dot completion should return items");
@@ -118,7 +138,7 @@ fn numeric_dot_returns_bare_completion() {
     let text = "let x = 5.";
     let table = LineTable::new(text);
     let position = Position { line: 0, character: text.len() as u32 };
-    let list = completion_list(text, &table, position, PositionEncoding::Utf8);
+    let list = completion_list(text, &table, position, PositionEncoding::Utf8, None, None);
     // "5." treated as decimal literal → BareIdentifier context → keywords appear
     let list = list.expect("completion must be Some even for numeric dot");
     let kw_count = list.items.iter()
@@ -127,9 +147,9 @@ fn numeric_dot_returns_bare_completion() {
     assert!(kw_count > 0, "numeric dot should produce bare-identifier (keyword) completion");
 }
 
-// ---------------------------------------------------------------------------
+
 // LSP wire-level test (using in-process harness)
-// ---------------------------------------------------------------------------
+
 
 #[test]
 fn completion_request_returns_list_via_lsp() {

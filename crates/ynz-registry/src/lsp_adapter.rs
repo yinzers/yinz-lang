@@ -5,9 +5,9 @@
 //! crate translates those to `lsp_types` shapes. This keeps `ynz-registry` as
 //! a foundational crate with no editor-tool deps.
 
-// ---------------------------------------------------------------------------
+
 // Completion items
-// ---------------------------------------------------------------------------
+
 
 /// The context at the cursor when a completion is requested.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -86,8 +86,8 @@ pub fn lsp_completion_items(context: &CompletionContext<'_>) -> Vec<RegistryComp
                     sort_priority: 900,
                 });
             }
-            // Free functions (e.g. print, panic)
-            for e in crate::primitive_intrinsics().filter(|e| e.kind == "free_fn" || e.kind == "print_type") {
+            // Free functions (e.g. range)
+            for e in crate::primitive_intrinsics().filter(|e| e.kind == "free_fn") {
                 items.push(RegistryCompletionItem {
                     label: e.name.to_string(),
                     kind: CompletionKind::FreeFn,
@@ -97,6 +97,9 @@ pub fn lsp_completion_items(context: &CompletionContext<'_>) -> Vec<RegistryComp
                     sort_priority: 150,
                 });
             }
+            // Primitive type names (int, float, string, etc.) — kind "print_type"
+            // entries are type constructors, not free functions; excluded from completion
+            // because they appear as keywords/type-annotations, not as call expressions.
         }
 
         CompletionContext::AfterDot { receiver_type } => {
@@ -154,9 +157,9 @@ pub fn lsp_completion_items(context: &CompletionContext<'_>) -> Vec<RegistryComp
     items
 }
 
-// ---------------------------------------------------------------------------
+
 // Hover content
-// ---------------------------------------------------------------------------
+
 
 /// High-level hover category.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
