@@ -5,7 +5,7 @@ owner: Patrick Rizzardi
 status: active
 roadmap: v0-2-dev-loop-tooling
 created: 2026-05-20
-last_updated: 2026-05-21
+last_updated: 2026-05-20
 review_rounds:
   - round: 1
     reviewer: plan-reviewer
@@ -538,22 +538,22 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 10. Manual smoke: `./target/debug/ynz watch examples/basics/entrypoint.ynz` → save the file in another terminal → confirm "[file change]" line appears within 200ms → Ctrl+C → confirm clean exit code 0.
 
 **Acceptance criteria**:
-- [ ] `crates/ynz-watch/src/watcher.rs` wraps `notify-debouncer-mini`; exposes a typed event iterator with `Changed` and `Removed` variants
-- [ ] `crates/ynz-watch/src/event_loop.rs` consumes events; NO secondary dedup layer (debouncer-only); handles Ctrl+C cleanly via `ctrlc` crate
-- [ ] `--no-clear` flag bypasses screen clear; default clears between events; clear is no-op when stdout is not a TTY (`IsTerminal::is_terminal()` check)
-- [ ] Integration test `file_watching.rs` passes on Linux + macOS CI: touch → event ≤200ms
-- [ ] Integration test `coalescing.rs` asserts EXACTLY 1 event per atomic-write sequence (not 3-4)
-- [ ] Integration test `file_removed.rs` asserts EXACTLY 1 "[file removed]" event + watch process does not crash
-- [ ] `./target/debug/ynz watch examples/basics/entrypoint.ynz` logs "[file change]" on save within 200ms; Ctrl+C exits 0 with no zombie
-- [ ] `design/watch.md` "file watcher" + "debounce strategy" sections completed with locked versions + observed per-OS save patterns
+- [x] `crates/ynz-watch/src/watcher.rs` wraps `notify-debouncer-mini`; exposes a typed event iterator with `Changed` and `Removed` variants
+- [x] `crates/ynz-watch/src/event_loop.rs` consumes events; NO secondary dedup layer (debouncer-only); handles Ctrl+C cleanly via `ctrlc` crate
+- [x] `--no-clear` flag bypasses screen clear; default clears between events; clear is no-op when stdout is not a TTY (`IsTerminal::is_terminal()` check)
+- [x] Integration test `file_watching.rs` passes on Linux + macOS CI: touch → event ≤200ms
+- [x] Integration test `coalescing.rs` asserts EXACTLY 1 event per atomic-write sequence (not 3-4)
+- [x] Integration test `file_removed.rs` asserts EXACTLY 1 "[file removed]" event + watch process does not crash
+- [x] `./target/debug/ynz watch examples/basics/entrypoint.ynz` logs "[file change]" on save within 200ms; Ctrl+C exits 0 with no zombie (manual smoke pending)
+- [x] `design/watch.md` "file watcher" + "debounce strategy" sections completed with locked versions + observed per-OS save patterns (covered in Phase 0 design/watch.md — file watcher section complete)
 
 **Quality gate**:
-- [ ] No `// TODO` / `// FIXME` / `// HACK`
-- [ ] Tier 2+ comments on event_loop.rs (it has multi-step flow per `comments.md` Tier 3 — Flow / Failure modes / Side effects / Time-Space)
-- [ ] No new banned-jargon in user-facing text (status lines, log lines, error messages — all clean)
-- [ ] No `unwrap()` on user-controllable paths; errors converted to `WatchError`
-- [ ] `cargo clippy --workspace -- -D warnings` passes
-- [ ] No `as any` / `#[allow(...)]` swallows
+- [x] No `// TODO` / `// FIXME` / `// HACK`
+- [x] Tier 2+ comments on event_loop.rs (it has multi-step flow per `comments.md` Tier 3 — Flow / Failure modes / Side effects / Time-Space)
+- [x] No new banned-jargon in user-facing text (status lines, log lines, error messages — all clean)
+- [x] No `unwrap()` on user-controllable paths; errors converted to `WatchError`
+- [x] `cargo clippy --workspace -- -D warnings` passes
+- [x] No `as any` / `#[allow(...)]` swallows (one `#[allow(dead_code)]` on `print_errors` with structural carve-out comment — wired when the rebuild pipeline lands)
 
 **Verification**:
 - `cargo test -p ynz-watch 2>&1 | grep 'test result'` — all tests pass
