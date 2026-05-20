@@ -89,7 +89,7 @@ These are LOCKED before any v0.2 execution plan starts. Each milestone's executi
 
 ### Milestone v0.2-M1: Feature Inventory & Sync Architecture
 **Value delivered**: Every existing scattered registry (banned jargon, primitive intrinsics, reserved deferred features, type-attached constants, diagnostic templates, muted-hint domain table from `design/inference.md`) lives in one SSOT registry. Consistency tests catch new entries that miss a consumer. The compiler's behavior is unchanged from v0.1 — this is a refactor + foundation, not a feature. Future v0.N+ work has ONE place to declare new features AND a project-wide rule that says "you MUST add it there." Drift class closes permanently because the next 30 milestones can't accidentally bypass the registry — the plan-invariant check, graveyard entry, and CLAUDE.md rule all enforce it.
-**Execution plan**: `v0-2-m1-feature-inventory-sync` (status: planned)
+**Execution plan**: `v0-2-m1-feature-inventory-sync` (status: shipped — tag v0.2.0-m1, 2026-05-20)
 **Depends on**: nothing — first up in v0.2
 **Rough scope (deliverables, not phase-by-phase — that's for the execution plan)**:
 
