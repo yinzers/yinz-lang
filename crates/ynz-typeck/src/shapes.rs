@@ -240,9 +240,18 @@ pub fn collect_shapes(
 
     // Pre-pass: collect options type names (same-file AND imported) so field type
     // resolution recognizes them as valid types.
-    table.options_names = module.items.iter().filter_map(|i| {
-        if let Item::OptionsDecl(o) = i { Some(o.name.clone()) } else { None }
-    }).chain(imported_options.keys().cloned()).collect();
+    table.options_names = module
+        .items
+        .iter()
+        .filter_map(|i| {
+            if let Item::OptionsDecl(o) = i {
+                Some(o.name.clone())
+            } else {
+                None
+            }
+        })
+        .chain(imported_options.keys().cloned())
+        .collect();
 
     // Pre-pass: hoist AnonShape types to named ShapeDecls so all subsequent passes see
     // only Named types. Synthetic names are content-based (canonical) so structurally
@@ -410,7 +419,11 @@ pub fn collect_shapes(
                 ));
                 continue;
             }
-            let ty = if let AstType::AnonShape { fields: anon_fields, .. } = &field.ty {
+            let ty = if let AstType::AnonShape {
+                fields: anon_fields,
+                ..
+            } = &field.ty
+            {
                 Type::Shape {
                     name: canonical_anon_name(anon_fields),
                 }
@@ -446,10 +459,7 @@ pub fn collect_shapes(
                     )
                 } else {
                     (
-                        format!(
-                            "Provide one — `hidden {}: {} = <value>`.",
-                            field.name, tn
-                        ),
+                        format!("Provide one — `hidden {}: {} = <value>`.", field.name, tn),
                         format!(
                             "Hidden fields can't be set by code in other files. Without a default, \
                              external construction would leave the field in an undefined state. \
@@ -830,10 +840,7 @@ fn ast_type_short_name(ty: &AstType) -> String {
 /// synthetic named ShapeDecl. The synthesized name is content-based (canonical) so that
 /// structurally identical inline shapes share the same synthetic name regardless of
 /// where they appear.
-fn collect_anon_shapes_in_type(
-    ast_ty: &AstType,
-    out: &mut Vec<ynz_ast::nodes::ShapeDecl>,
-) {
+fn collect_anon_shapes_in_type(ast_ty: &AstType, out: &mut Vec<ynz_ast::nodes::ShapeDecl>) {
     match ast_ty {
         AstType::AnonShape { fields, span } => {
             let synth_name = canonical_anon_name(fields);

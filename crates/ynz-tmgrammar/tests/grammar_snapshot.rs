@@ -20,8 +20,7 @@ fn committed_grammar_matches_generator_output() {
          Run `cargo run -p ynz-tmgrammar` to generate it."
     );
 
-    let committed_raw = std::fs::read_to_string(&committed_path)
-        .expect("read committed grammar");
+    let committed_raw = std::fs::read_to_string(&committed_path).expect("read committed grammar");
     let committed: serde_json::Value =
         serde_json::from_str(&committed_raw).expect("parse committed grammar JSON");
 

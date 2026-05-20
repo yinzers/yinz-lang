@@ -62,7 +62,10 @@ mod tests {
     #[test]
     fn negotiation_falls_back_to_utf16_when_no_utf8() {
         let encodings = vec![PositionEncodingKind::UTF16];
-        assert_eq!(negotiate_encoding(Some(&encodings)), PositionEncoding::Utf16);
+        assert_eq!(
+            negotiate_encoding(Some(&encodings)),
+            PositionEncoding::Utf16
+        );
     }
 
     #[test]

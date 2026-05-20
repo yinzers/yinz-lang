@@ -37,7 +37,8 @@ impl<'a> ariadne::Cache<str> for SourceCache<'a> {
                 .sources
                 .get(id)
                 .ok_or_else(|| format!("unknown source file: {id}"))?;
-            self.parsed.insert(id.to_string(), Source::from(text.clone()));
+            self.parsed
+                .insert(id.to_string(), Source::from(text.clone()));
         }
         Ok(self.parsed.get(id).unwrap())
     }

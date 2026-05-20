@@ -44,7 +44,9 @@ fn parse_type(s: &str) -> Type {
         s if s.starts_with("array<") && s.ends_with('>') => Type::BuiltinArray {
             elem: Box::new(parse_type(&s[6..s.len() - 1])),
         },
-        other => panic!("intrinsics: unknown type string in registry: {other:?} — update parse_type()"),
+        other => {
+            panic!("intrinsics: unknown type string in registry: {other:?} — update parse_type()")
+        }
     }
 }
 
@@ -76,22 +78,26 @@ fn build_table(since_filter: impl Fn(&str) -> bool) -> PrimitiveIntrinsicTable {
                 ));
             }
             "method" => {
-                let recv = parse_type(
-                    entry.receiver_type.unwrap_or_else(|| {
-                        panic!("registry method entry '{}' missing receiver_type", entry.name)
-                    }),
-                );
+                let recv = parse_type(entry.receiver_type.unwrap_or_else(|| {
+                    panic!(
+                        "registry method entry '{}' missing receiver_type",
+                        entry.name
+                    )
+                }));
                 methods.push((recv, entry.name, parse_type(entry.return_type)));
             }
             "method_1arg" => {
-                let recv = parse_type(
-                    entry.receiver_type.unwrap_or_else(|| {
-                        panic!("registry method_1arg entry '{}' missing receiver_type", entry.name)
-                    }),
-                );
+                let recv = parse_type(entry.receiver_type.unwrap_or_else(|| {
+                    panic!(
+                        "registry method_1arg entry '{}' missing receiver_type",
+                        entry.name
+                    )
+                }));
                 assert_eq!(
-                    entry.param_types.len(), 1,
-                    "method_1arg '{}' must have exactly 1 param_type in registry", entry.name
+                    entry.param_types.len(),
+                    1,
+                    "method_1arg '{}' must have exactly 1 param_type in registry",
+                    entry.name
                 );
                 methods_1arg.push((
                     recv,
@@ -100,7 +106,10 @@ fn build_table(since_filter: impl Fn(&str) -> bool) -> PrimitiveIntrinsicTable {
                     parse_type(entry.return_type),
                 ));
             }
-            other => panic!("intrinsics: unknown kind {other:?} in registry for entry '{}'", entry.name),
+            other => panic!(
+                "intrinsics: unknown kind {other:?} in registry for entry '{}'",
+                entry.name
+            ),
         }
     }
 

@@ -41,11 +41,11 @@
 pub mod builtins;
 pub mod check;
 pub mod exports;
-pub mod resolve_import;
 pub mod generics;
 pub mod intrinsics;
 pub mod options_table;
 pub mod queries;
+pub mod resolve_import;
 pub mod return_paths;
 pub mod scope;
 pub mod shapes;

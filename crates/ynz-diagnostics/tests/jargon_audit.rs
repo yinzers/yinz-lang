@@ -240,7 +240,11 @@ fn no_banned_jargon_in_lsp_rendered_messages() {
                                 in_ctx = false;
                                 // Build LSP message if we collected at least 3 strings
                                 if site_strings.len() >= 3 {
-                                    let msg = lsp_message(&site_strings[0], &site_strings[1], &site_strings[2]);
+                                    let msg = lsp_message(
+                                        &site_strings[0],
+                                        &site_strings[1],
+                                        &site_strings[2],
+                                    );
                                     let lower = msg.to_lowercase();
                                     for entry in &banned {
                                         let w = entry.name.to_lowercase();

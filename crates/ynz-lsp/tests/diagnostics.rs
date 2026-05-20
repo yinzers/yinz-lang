@@ -6,8 +6,7 @@ fn read_fixture(name: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(name);
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("could not read fixture {name}: {e}"))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("could not read fixture {name}: {e}"))
 }
 
 /// Read the next notification from the server within the given timeout.
@@ -28,7 +27,10 @@ fn did_open_error_fixture_publishes_diagnostics_with_content() {
     // (the harness returns params directly for notifications)
     // has_errors.ynz has at least 2 errors (double-quoted string + type mismatch)
     // We assert the notification arrived and contains diagnostic content
-    assert!(!msg.is_null(), "publishDiagnostics payload must not be null");
+    assert!(
+        !msg.is_null(),
+        "publishDiagnostics payload must not be null"
+    );
 }
 
 #[test]
@@ -37,7 +39,10 @@ fn did_open_clean_fixture_publishes_diagnostics_notification() {
     h.initialize();
     let text = read_fixture("basic.ynz");
     h.did_open("file:///basic.ynz", &text);
-    assert!(next_notif(&h).is_some(), "expected publishDiagnostics after didOpen on clean file");
+    assert!(
+        next_notif(&h).is_some(),
+        "expected publishDiagnostics after didOpen on clean file"
+    );
 }
 
 #[test]
@@ -49,7 +54,10 @@ fn did_close_clears_diagnostics() {
     next_notif(&h); // drain didOpen diagnostic
 
     h.did_close("file:///close_test.ynz");
-    assert!(next_notif(&h).is_some(), "expected publishDiagnostics clear after didClose");
+    assert!(
+        next_notif(&h).is_some(),
+        "expected publishDiagnostics clear after didClose"
+    );
 }
 
 #[test]
@@ -79,13 +87,17 @@ fn cross_file_errors_publish_to_correct_uri() {
         .diagnostics
         .iter()
         .all(|d| d.span.file == lib_path);
-    assert!(all_on_lib_file, "lib.ynz diagnostics should reference lib.ynz's path, not main.ynz");
+    assert!(
+        all_on_lib_file,
+        "lib.ynz diagnostics should reference lib.ynz's path, not main.ynz"
+    );
 
     // check_query on main: main has no errors
     let main_sf = state.source_file_for(&main_uri).unwrap();
     let main_check = check_query(&state.db, main_sf);
     assert_eq!(
-        main_check.diagnostics.len(), 0,
+        main_check.diagnostics.len(),
+        0,
         "main.ynz has no errors — cross-file errors should not bleed over"
     );
 }
@@ -109,17 +121,19 @@ fn concurrent_did_change_produces_two_notifications_without_panic() {
     let _first = next_notif(&h).expect("first didChange must produce publishDiagnostics");
     let second = next_notif(&h).expect("second didChange must produce publishDiagnostics");
     // Notification structure is non-null (harness wraps as object with _notification key)
-    assert!(second.is_object(), "second publishDiagnostics must be a valid notification object");
+    assert!(
+        second.is_object(),
+        "second publishDiagnostics must be a valid notification object"
+    );
 }
 
 #[test]
 fn diagnostic_message_contains_what_what_instead_why() {
+    use ynz_diagnostics::{Diagnostic as YnzDiag, Severity, SourceSpan};
     use ynz_lsp::{
-        capabilities::PositionEncoding,
-        diagnostic_transform::to_lsp_diagnostic,
+        capabilities::PositionEncoding, diagnostic_transform::to_lsp_diagnostic,
         position::LineTable,
     };
-    use ynz_diagnostics::{Diagnostic as YnzDiag, Severity, SourceSpan};
 
     let text = "let x: int = 5";
     let table = LineTable::new(text);
@@ -133,19 +147,28 @@ fn diagnostic_message_contains_what_what_instead_why() {
         kind: None,
     };
     let lsp = to_lsp_diagnostic(&d, text, &table, PositionEncoding::Utf8);
-    assert!(lsp.message.contains("This is the WHAT"), "WHAT missing from message");
-    assert!(lsp.message.contains("WHAT INSTEAD: This is the WHAT INSTEAD"), "WHAT INSTEAD missing");
-    assert!(lsp.message.contains("WHY: This is the WHY"), "WHY missing from message");
+    assert!(
+        lsp.message.contains("This is the WHAT"),
+        "WHAT missing from message"
+    );
+    assert!(
+        lsp.message
+            .contains("WHAT INSTEAD: This is the WHAT INSTEAD"),
+        "WHAT INSTEAD missing"
+    );
+    assert!(
+        lsp.message.contains("WHY: This is the WHY"),
+        "WHY missing from message"
+    );
 }
 
 #[test]
 fn utf8_and_utf16_ranges_differ_for_multibyte() {
+    use ynz_diagnostics::{Diagnostic as YnzDiag, Severity, SourceSpan};
     use ynz_lsp::{
-        capabilities::PositionEncoding,
-        diagnostic_transform::to_lsp_diagnostic,
+        capabilities::PositionEncoding, diagnostic_transform::to_lsp_diagnostic,
         position::LineTable,
     };
-    use ynz_diagnostics::{Diagnostic as YnzDiag, Severity, SourceSpan};
 
     // "✓" is 3 UTF-8 bytes; the span covers bytes 3-6 (the second ✓)
     let text = "✓✓✓";

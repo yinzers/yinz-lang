@@ -2087,7 +2087,9 @@ fn f32_keyword_rejected_with_teaching_diagnostic() {
     // "unexpected token" cascade that gives no hint about what to use instead.
     // Parser recovery: the banned keyword degrades to Identifier so downstream
     // parsing can continue without a cascade of unrelated errors.
-    let sized_types = ["f32", "f64", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"];
+    let sized_types = [
+        "f32", "f64", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
+    ];
     for kw in sized_types {
         let src = format!("let x: {kw} = 1");
         let (toks, diags) = lex_with_diags(&src);
@@ -2126,7 +2128,11 @@ fn hardening_identifier_too_long_produces_diagnostic() {
     // must not hang or OOM.
     let long_id: String = "a".repeat(2000);
     let (_, diags) = lex_with_diags(&long_id);
-    assert_eq!(diags.len(), 1, "Exactly one diagnostic expected for over-long identifier");
+    assert_eq!(
+        diags.len(),
+        1,
+        "Exactly one diagnostic expected for over-long identifier"
+    );
     assert!(
         diags[0].what.contains("1024"),
         "Diagnostic must mention the 1024 limit, got: {:?}",
@@ -2155,7 +2161,12 @@ fn hardening_leading_underscore_hex_rejected() {
     // WHY: `0x_FF` has a leading separator that the spec forbids. The validator
     // missed it before this fix; now it must produce exactly one diagnostic.
     let (_, diags) = lex_with_diags("let bad = 0x_FF");
-    assert_eq!(diags.len(), 1, "Exactly one diagnostic expected for 0x_FF, got: {:?}", diags);
+    assert_eq!(
+        diags.len(),
+        1,
+        "Exactly one diagnostic expected for 0x_FF, got: {:?}",
+        diags
+    );
     assert!(
         diags[0].what.contains("_"),
         "Diagnostic must mention the underscore, got: {:?}",
@@ -2167,7 +2178,12 @@ fn hardening_leading_underscore_hex_rejected() {
 fn hardening_leading_underscore_binary_rejected() {
     // WHY: Same as the hex case — `0b_1010` must be rejected for the same reason.
     let (_, diags) = lex_with_diags("let bad = 0b_1010");
-    assert_eq!(diags.len(), 1, "Exactly one diagnostic expected for 0b_1010, got: {:?}", diags);
+    assert_eq!(
+        diags.len(),
+        1,
+        "Exactly one diagnostic expected for 0b_1010, got: {:?}",
+        diags
+    );
     assert!(
         diags[0].what.contains("_"),
         "Diagnostic must mention the underscore, got: {:?}",
@@ -2204,7 +2220,12 @@ fn hardening_nul_byte_in_string_rejected() {
     // lexer so the silent-truncation footgun never reaches the runtime.
     // `hello\0world` — the NUL would silently truncate to `hello` at print time.
     let (_, diags) = lex_with_diags("`hello\\0world`");
-    assert_eq!(diags.len(), 1, "Exactly one diagnostic expected for NUL escape, got: {:?}", diags);
+    assert_eq!(
+        diags.len(),
+        1,
+        "Exactly one diagnostic expected for NUL escape, got: {:?}",
+        diags
+    );
     assert!(
         diags[0].what.contains("\\0") || diags[0].what.contains("NUL"),
         "Diagnostic must mention the NUL escape, got: {:?}",
@@ -2217,7 +2238,12 @@ fn hardening_bare_dot_float_rejected() {
     // WHY: `3.` without a fractional digit is ambiguous — could be a float literal
     // or a typo. The compiler must reject it with a clear diagnostic.
     let (_, diags) = lex_with_diags("let x = 3.");
-    assert_eq!(diags.len(), 1, "Exactly one diagnostic expected for `3.`, got: {:?}", diags);
+    assert_eq!(
+        diags.len(),
+        1,
+        "Exactly one diagnostic expected for `3.`, got: {:?}",
+        diags
+    );
     assert!(
         diags[0].what.contains("Decimal") || diags[0].what.contains("decimal"),
         "Diagnostic must mention the missing digits, got: {:?}",
@@ -2252,8 +2278,7 @@ fn hardening_double_quote_multiline_one_error() {
     // The diagnostic span must point at just the opening `"` (position 0), not
     // the full string content.
     assert_eq!(
-        double_quote_diags[0].span.start,
-        0,
+        double_quote_diags[0].span.start, 0,
         "Diagnostic span must start at the opening `\"`"
     );
 }

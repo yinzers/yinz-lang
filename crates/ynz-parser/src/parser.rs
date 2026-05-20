@@ -601,13 +601,28 @@ impl<'a> Parser<'a> {
                 let mut guessed = String::new();
                 while matches!(
                     self.peek(),
-                    Token::Identifier(_) | Token::Slash | Token::Dot | Token::LBracket | Token::RBracket
+                    Token::Identifier(_)
+                        | Token::Slash
+                        | Token::Dot
+                        | Token::LBracket
+                        | Token::RBracket
                 ) {
                     match self.peek().clone() {
-                        Token::Identifier(n) => { guessed.push_str(&n); self.advance(); }
-                        Token::Slash => { guessed.push('/'); self.advance(); }
-                        Token::Dot => { guessed.push('.'); self.advance(); }
-                        _ => { self.advance(); }
+                        Token::Identifier(n) => {
+                            guessed.push_str(&n);
+                            self.advance();
+                        }
+                        Token::Slash => {
+                            guessed.push('/');
+                            self.advance();
+                        }
+                        Token::Dot => {
+                            guessed.push('.');
+                            self.advance();
+                        }
+                        _ => {
+                            self.advance();
+                        }
                     }
                 }
                 let suggestion = if guessed.is_empty() {
@@ -1258,9 +1273,17 @@ impl<'a> Parser<'a> {
                     let mut depth = 1usize;
                     while depth > 0 && !matches!(self.peek(), Token::Eof) {
                         match self.peek() {
-                            Token::LBrace => { depth += 1; self.advance(); }
-                            Token::RBrace => { depth -= 1; self.advance(); }
-                            _ => { self.advance(); }
+                            Token::LBrace => {
+                                depth += 1;
+                                self.advance();
+                            }
+                            Token::RBrace => {
+                                depth -= 1;
+                                self.advance();
+                            }
+                            _ => {
+                                self.advance();
+                            }
                         }
                     }
                 }
@@ -1973,7 +1996,10 @@ impl<'a> Parser<'a> {
                 self.parse_block()
             } else {
                 let span = SourceSpan::new(self.file, start, self.current_span().end);
-                Block { stmts: vec![], span }
+                Block {
+                    stmts: vec![],
+                    span,
+                }
             };
             let span = SourceSpan::new(self.file, start, body.span.end);
             return Stmt::For {
@@ -2074,18 +2100,25 @@ impl<'a> Parser<'a> {
         loop {
             match self.peek() {
                 Token::RBrace | Token::Eof => break,
-                Token::Comma => { self.advance(); }
+                Token::Comma => {
+                    self.advance();
+                }
                 Token::Identifier(_) => {
                     let field_span = self.current_span();
                     let field_name = if let Token::Identifier(n) = self.peek().clone() {
                         self.advance();
                         n
-                    } else { unreachable!() };
+                    } else {
+                        unreachable!()
+                    };
 
                     let var_name = if matches!(self.peek(), Token::Identifier(n) if n == "as") {
                         self.advance(); // consume `as`
                         match self.peek().clone() {
-                            Token::Identifier(n) => { self.advance(); n }
+                            Token::Identifier(n) => {
+                                self.advance();
+                                n
+                            }
                             _ => {
                                 self.diags.push(Diagnostic::error(
                                     self.current_span(),
@@ -2100,7 +2133,11 @@ impl<'a> Parser<'a> {
                         field_name.clone()
                     };
 
-                    fields.push(FieldBinding { field: field_name, var: var_name, span: field_span });
+                    fields.push(FieldBinding {
+                        field: field_name,
+                        var: var_name,
+                        span: field_span,
+                    });
                 }
                 _ => {
                     self.diags.push(Diagnostic::error(
@@ -2155,7 +2192,10 @@ impl<'a> Parser<'a> {
                 var: "__shape".to_string(),
                 var_span: span.clone(),
                 iter,
-                body: Block { stmts: vec![], span: span.clone() },
+                body: Block {
+                    stmts: vec![],
+                    span: span.clone(),
+                },
                 span,
             };
         }
@@ -2189,7 +2229,10 @@ impl<'a> Parser<'a> {
             var: "__shape".to_string(),
             var_span: item_span,
             iter,
-            body: Block { stmts: desugared_stmts, span: body_span },
+            body: Block {
+                stmts: desugared_stmts,
+                span: body_span,
+            },
             span: full_span,
         }
     }
@@ -3240,31 +3283,59 @@ impl<'a> Parser<'a> {
         let mut fields = Vec::new();
 
         // Empty shape value.
-        if matches!(self.peek(), Token::RBrace) { self.advance(); return fields; }
+        if matches!(self.peek(), Token::RBrace) {
+            self.advance();
+            return fields;
+        }
         if matches!(self.peek(), Token::Eof) {
-            self.diags.push(Diagnostic::error(self.eof_span(), "Missing `}` to close this shape value.", "Add `}` after the last field.", "Every `{` in a shape value must be matched with a `}`."));
+            self.diags.push(Diagnostic::error(
+                self.eof_span(),
+                "Missing `}` to close this shape value.",
+                "Add `}` after the last field.",
+                "Every `{` in a shape value must be matched with a `}`.",
+            ));
             return fields;
         }
 
         // Parse first field (no leading comma required).
-        if let Some(f) = self.parse_struct_lit_one_field() { fields.push(f); }
+        if let Some(f) = self.parse_struct_lit_one_field() {
+            fields.push(f);
+        }
 
         // Subsequent fields — comma required, trailing comma OK.
         loop {
             match self.peek() {
-                Token::RBrace => { self.advance(); break; }
+                Token::RBrace => {
+                    self.advance();
+                    break;
+                }
                 Token::Eof => {
-                    self.diags.push(Diagnostic::error(self.eof_span(), "Missing `}` to close this shape value.", "Add `}` after the last field.", "Every `{` in a shape value must be matched with a `}`."));
+                    self.diags.push(Diagnostic::error(
+                        self.eof_span(),
+                        "Missing `}` to close this shape value.",
+                        "Add `}` after the last field.",
+                        "Every `{` in a shape value must be matched with a `}`.",
+                    ));
                     break;
                 }
                 Token::Comma => {
                     self.advance();
-                    if matches!(self.peek(), Token::RBrace) { self.advance(); break; }
-                    if matches!(self.peek(), Token::Eof) {
-                        self.diags.push(Diagnostic::error(self.eof_span(), "Missing `}` to close this shape value.", "Add `}` after the last field.", "Every `{` in a shape value must be matched with a `}`."));
+                    if matches!(self.peek(), Token::RBrace) {
+                        self.advance();
                         break;
                     }
-                    if let Some(f) = self.parse_struct_lit_one_field() { fields.push(f); }
+                    if matches!(self.peek(), Token::Eof) {
+                        self.diags.push(Diagnostic::error(
+                            self.eof_span(),
+                            "Missing `}` to close this shape value.",
+                            "Add `}` after the last field.",
+                            "Every `{` in a shape value must be matched with a `}`.",
+                        ));
+                        break;
+                    }
+                    if let Some(f) = self.parse_struct_lit_one_field() {
+                        fields.push(f);
+                    }
                 }
                 _ => {
                     self.diags.push(Diagnostic::error(
@@ -3319,7 +3390,11 @@ impl<'a> Parser<'a> {
             return None;
         }
         let value = self.parse_expr(0);
-        Some(StructLitField { name: field_name, name_span, value })
+        Some(StructLitField {
+            name: field_name,
+            name_span,
+            value,
+        })
     }
 
     // ── M5 P3c: map literal ──────────────────────────────────────────────────
@@ -4009,32 +4084,32 @@ pub fn infix_bp(tok: &Token) -> Option<(u8, u8)> {
 /// "X is a reserved keyword" errors instead of generic "expected identifier".
 fn token_as_keyword_name(tok: &Token) -> Option<&'static str> {
     match tok {
-        Token::Function  => Some("function"),
-        Token::Nothing   => Some("nothing"),
-        Token::Let       => Some("let"),
-        Token::Const     => Some("const"),
-        Token::True      => Some("true"),
-        Token::False     => Some("false"),
-        Token::If        => Some("if"),
-        Token::Else      => Some("else"),
-        Token::While     => Some("while"),
-        Token::For       => Some("for"),
-        Token::In        => Some("in"),
-        Token::Return    => Some("return"),
-        Token::Shape     => Some("shape"),
-        Token::Follows   => Some("follows"),
-        Token::Extends   => Some("extends"),
-        Token::Base      => Some("base"),
-        Token::Hidden    => Some("hidden"),
-        Token::Dynamic   => Some("dynamic"),
-        Token::None      => Some("none"),
-        Token::Options   => Some("options"),
-        Token::Is        => Some("is"),
-        Token::Errors    => Some("errors"),
-        Token::Wait      => Some("wait"),
+        Token::Function => Some("function"),
+        Token::Nothing => Some("nothing"),
+        Token::Let => Some("let"),
+        Token::Const => Some("const"),
+        Token::True => Some("true"),
+        Token::False => Some("false"),
+        Token::If => Some("if"),
+        Token::Else => Some("else"),
+        Token::While => Some("while"),
+        Token::For => Some("for"),
+        Token::In => Some("in"),
+        Token::Return => Some("return"),
+        Token::Shape => Some("shape"),
+        Token::Follows => Some("follows"),
+        Token::Extends => Some("extends"),
+        Token::Base => Some("base"),
+        Token::Hidden => Some("hidden"),
+        Token::Dynamic => Some("dynamic"),
+        Token::None => Some("none"),
+        Token::Options => Some("options"),
+        Token::Is => Some("is"),
+        Token::Errors => Some("errors"),
+        Token::Wait => Some("wait"),
         Token::Background => Some("background"),
-        Token::Import    => Some("import"),
-        Token::Export    => Some("export"),
+        Token::Import => Some("import"),
+        Token::Export => Some("export"),
         Token::Sensitive => Some("sensitive"),
         _ => None,
     }

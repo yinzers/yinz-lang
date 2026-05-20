@@ -25,15 +25,13 @@ fn make_temp_project(suffix: &str) -> std::path::PathBuf {
             .subsec_nanos()
     ));
     std::fs::create_dir_all(&dir).expect("create temp dir");
-    std::fs::write(dir.join("yinz.toml"), "[project]\nname = \"test\"\n")
-        .expect("write yinz.toml");
+    std::fs::write(dir.join("yinz.toml"), "[project]\nname = \"test\"\n").expect("write yinz.toml");
     dir
 }
 
 fn check_file_with_import(dir: &std::path::Path, import_path: &str) -> CheckOutput {
-    let main_src = format!(
-        "import {{ x }} from `{import_path}`\nfunction entrypoint() -> nothing {{}}"
-    );
+    let main_src =
+        format!("import {{ x }} from `{import_path}`\nfunction entrypoint() -> nothing {{}}");
     let main_path = dir.join("main.ynz");
     std::fs::write(&main_path, &main_src).expect("write main.ynz");
 
@@ -54,9 +52,8 @@ fn check_file_with_registered_import(
     target_path: &std::path::Path,
     target_src: &str,
 ) -> CheckOutput {
-    let main_src = format!(
-        "import {{ x }} from `{import_path}`\nfunction entrypoint() -> nothing {{}}"
-    );
+    let main_src =
+        format!("import {{ x }} from `{import_path}`\nfunction entrypoint() -> nothing {{}}");
     let main_path = dir.join("main.ynz");
     std::fs::write(&main_path, &main_src).expect("write main.ynz");
 
@@ -190,8 +187,11 @@ fn import_via_symlink_escape_blocked() {
             .subsec_nanos()
     ));
     std::fs::create_dir_all(&elsewhere).expect("create elsewhere dir");
-    std::fs::write(elsewhere.join("file.ynz"), "export function x() -> int { return 1 }")
-        .expect("write outside file");
+    std::fs::write(
+        elsewhere.join("file.ynz"),
+        "export function x() -> int { return 1 }",
+    )
+    .expect("write outside file");
 
     // Create a symlink inside the project that points outside.
     let link_path = dir.join("escape_link");
@@ -330,8 +330,7 @@ fn directory_name_with_dots_resolves() {
     let target_src = "export function x() -> int { return 1 }";
     std::fs::write(&target, target_src).expect("write file.ynz");
 
-    let output =
-        check_file_with_registered_import(&dir, "dir.with.dots/file", &target, target_src);
+    let output = check_file_with_registered_import(&dir, "dir.with.dots/file", &target, target_src);
     let path_errors: Vec<_> = output
         .diagnostics
         .iter()

@@ -1,0 +1,48 @@
+// examples/errors/v0_2_m2_errors.ynz
+//
+// v0.2-M2 LSP UX demonstration file.
+// This file is intentionally broken in several ways to show how the Yinz
+// extension surfaces diagnostics, hover content, and autocomplete in VSCode.
+//
+// Run `ynz build examples/errors/v0_2_m2_errors.ynz` to see the CLI rendering.
+// Open in VSCode with the Yinz extension to see the LSP rendering side-by-side.
+
+// ─── Section 1: Deferred-feature hover ───────────────────────────────────────
+//
+// WHY: `f32` is a deferred language feature (ships in v2+). The LSP marks it
+// deprecated in autocomplete AND shows hover content with:
+//   "Ships in: v2+  Substitute: float (f64)  Why deferred: ..."
+// Try hovering over `f32` below to see the registry-driven hover popup.
+
+function deferredFeatureDemo() -> nothing {
+  let x: f32 = 1.0
+}
+
+// ─── Section 2: Banned declaration keyword hover ─────────────────────────────
+//
+// WHY: `type` is banned as a declaration keyword — Yinz uses `shape`.
+// The LSP hover over `type` shows: "Not a Yinz term: type → use shape instead"
+// The compiler error shows the three-part WHAT/WHAT-INSTEAD/WHY format.
+
+type Player = nothing
+
+// ─── Section 3: Type mismatch diagnostic ─────────────────────────────────────
+//
+// WHY: A type mismatch is the most common diagnostic. This verifies that
+// WHAT/WHAT-INSTEAD/WHY content flows from the compiler through the LSP
+// transform and renders as a squiggle in the editor.
+
+function typeMismatchDemo() -> nothing {
+  let score: int = `not an int`
+}
+
+// ─── Section 4: Autocomplete cursor positions ────────────────────────────────
+//
+// WHY: Documents the cursor positions where autocomplete fires.
+// Place your cursor after the `.` on the line below and trigger completion
+// (Ctrl+Space) to see all int primitive methods: toString, toFloat, abs, etc.
+
+function autocompleteDemo() -> nothing {
+  const score: int = 42
+  const result = score.
+}

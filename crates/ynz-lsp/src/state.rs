@@ -53,7 +53,8 @@ impl ServerState {
     pub fn update_document(&mut self, uri: &Url, new_text: String) {
         if let Some(sf) = self.source_file_for(uri) {
             sf.set_text(&mut self.db).to(new_text.clone());
-            self.line_tables.insert(uri.clone(), LineTable::new(&new_text));
+            self.line_tables
+                .insert(uri.clone(), LineTable::new(&new_text));
             self.open_documents.insert(uri.clone(), new_text);
         }
     }
@@ -81,5 +82,7 @@ impl ServerState {
 /// Convert a file URI to the path string used in salsa inputs and diagnostic spans.
 /// Uses the URI's path component; falls back to the full URI string for non-file URIs.
 pub fn uri_to_path(uri: &Url) -> String {
-    uri.to_file_path().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| uri.to_string())
+    uri.to_file_path()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| uri.to_string())
 }

@@ -1,6 +1,6 @@
 # Session State: ynz
 
-**Last Updated**: 2026-05-19 (v0.1.0 SHIPPED: M1–M8 complete, 830 tests, tag v0.1.0; all plans archived to done/; v0.2-M1 planning in progress)
+**Last Updated**: 2026-05-20 (v0.2.0-m2 SHIPPED: LSP thin slice + VSCode extension, 1028 tests, tag v0.2.0-m2)
 
 ---
 
@@ -10,10 +10,11 @@
 
 <!-- RADAR-START -->
 ### Active Roadmaps
-- v0-2-dev-loop-tooling (patrick) — 1 active plans — 2026-05-20
+- v0-2-dev-loop-tooling (patrick) — 2 active plans — 2026-05-20
 
 ### Active Workstreams
-- v0-2-m2-lsp-thin-slice (Patrick Rizzardi) — 10 files touched — 113/155 done — roadmap: v0-2-dev-loop-tooling — 2026-05-20
+- v0-2-m2-lsp-thin-slice (Patrick Rizzardi) — 10 files touched — 125/155 done — roadmap: v0-2-dev-loop-tooling — 2026-05-20
+- v0-2-m3-fmt (Patrick Rizzardi) — 9 files touched — 0/137 done — roadmap: v0-2-dev-loop-tooling — 2026-05-20
 <!-- RADAR-END -->
 
 ---
@@ -84,6 +85,7 @@ cargo fmt --all
 - [2026-05-18] **M7 STARTED — P0 doc lockdown active (branch chore/m7-doc-lockdown)**: 4 locked decisions from pre-draft confirmed: (1) SSO ships in M7 (23-byte inline, 24-byte struct, tag byte at offset 23); (2) SIMD UTF-8 ships in M7 (`simdutf8` crate); (3) Synthesized iterator wrappers (`ArrayIter<T>`, `FixedIter<T,N>`, `MapIter<K,V>`, `StringCodePointIter`) + muted-hint surface deferred to v0.2 LSP; (4) Full base error shape ships: `.message`, `.suggestions`, `.trace` (`array<Frame>`), `.source` (`SourceLoc`), compile-time-emitted frame stack (NOT libunwind). P0 additional locks: single backtick-only string form (removed double-quote form), `.orSkipFailures()` is PURE (no I/O — separate `.logSkippedFailuresTo(sink)` for logging), `.withErrors()` returns `Iterable<maybe T errors>` (NOT `Iterable<Result<T>>`), `Frame.line` is `maybe int` one-based, `unicase` crate for case-folding, `unicode-normalization` + NFC cache bit, MapEntry dual destructuring forms. Plan: `.claude/plans/active/m7-strings-errors-iterables.md`.
 - [2026-05-18] **M6 SHIPPED (tag v0.1.0-m6, 631 tests)**: All 8 phases P0–P6 done via PRs #25+#26. options types (i8 tags, exhaustiveness, toString), union types (tagged-struct, is-narrowing, shape aliases), fallible conversions (.toInt/.toFloat/.toNumber on float/number/string), early-return narrowing, 3 new design docs, M2+M3 catch-up closed. Plan archived: `.claude/plans/done/m6-options-unions.md`.
 - [2026-05-17] **M5 FULLY SHIPPED (tag v0.1.0-m5, 574 tests)**: All 8 phases P0–P6 done via PRs #17–#24. Generics engine (MonomorphizationTable, GenericFnTable, GenericShapeTable, follows constraints), BuiltinArray/Fixed/Maybe/Map typeck, LLVM codegen (ynz_array_* runtime, {i64,i64} maybe, SipHash-2-4, Swiss Tables), 5 runnable fixtures, examples/basics M4+M5 showcase, m5_errors gallery. Plan archived: `.claude/plans/done/m5-generics.md`.
+- [2026-05-20] **v0.2-M2 SHIPPED (tag v0.2.0-m2, 1028 tests)**: ynz-lsp crate (JSON-RPC stdio server, salsa-backed diagnostics/completion/hover), VSCode extension (.vsix at https://github.com/patrickrizzardi/ynz/releases/latest/download/yinz-latest.vsix), registry-derived TM grammar (crates/ynz-tmgrammar). LSP wraps salsa queries; every registry entry auto-appears in IDE. Devcontainer wired. Plan: `.claude/plans/done/v0-2-m2-lsp-thin-slice.md`.
 
 ---
 

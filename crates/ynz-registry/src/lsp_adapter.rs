@@ -5,9 +5,7 @@
 //! crate translates those to `lsp_types` shapes. This keeps `ynz-registry` as
 //! a foundational crate with no editor-tool deps.
 
-
 // Completion items
-
 
 /// The context at the cursor when a completion is requested.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,7 +67,10 @@ pub fn lsp_completion_items(context: &CompletionContext<'_>) -> Vec<RegistryComp
                 items.push(RegistryCompletionItem {
                     label: e.name.to_string(),
                     kind: CompletionKind::BannedKeyword,
-                    detail: Some(format!("not a Yinz keyword — use {} instead", e.what_instead)),
+                    detail: Some(format!(
+                        "not a Yinz keyword — use {} instead",
+                        e.what_instead
+                    )),
                     documentation: Some(e.why.to_string()),
                     deprecated: true,
                     sort_priority: 800,
@@ -80,7 +81,10 @@ pub fn lsp_completion_items(context: &CompletionContext<'_>) -> Vec<RegistryComp
                 items.push(RegistryCompletionItem {
                     label: e.name.to_string(),
                     kind: CompletionKind::DeferredFeature,
-                    detail: Some(format!("ships in {} — use {} for now", e.ships_in, e.substitute)),
+                    detail: Some(format!(
+                        "ships in {} — use {} for now",
+                        e.ships_in, e.substitute
+                    )),
                     documentation: Some(e.why.to_string()),
                     deprecated: true,
                     sort_priority: 900,
@@ -91,7 +95,11 @@ pub fn lsp_completion_items(context: &CompletionContext<'_>) -> Vec<RegistryComp
                 items.push(RegistryCompletionItem {
                     label: e.name.to_string(),
                     kind: CompletionKind::FreeFn,
-                    detail: Some(format!("({}) -> {}", e.param_types.join(", "), e.return_type)),
+                    detail: Some(format!(
+                        "({}) -> {}",
+                        e.param_types.join(", "),
+                        e.return_type
+                    )),
                     documentation: None,
                     deprecated: false,
                     sort_priority: 150,
@@ -106,9 +114,10 @@ pub fn lsp_completion_items(context: &CompletionContext<'_>) -> Vec<RegistryComp
             match receiver_type {
                 Some(rtype) => {
                     // Primitive methods for this receiver type
-                    for e in crate::primitive_intrinsics()
-                        .filter(|e| e.receiver_type == Some(rtype) && (e.kind == "method" || e.kind == "method_1arg"))
-                    {
+                    for e in crate::primitive_intrinsics().filter(|e| {
+                        e.receiver_type == Some(rtype)
+                            && (e.kind == "method" || e.kind == "method_1arg")
+                    }) {
                         let param_str = if e.param_types.is_empty() {
                             String::new()
                         } else {
@@ -117,7 +126,10 @@ pub fn lsp_completion_items(context: &CompletionContext<'_>) -> Vec<RegistryComp
                         items.push(RegistryCompletionItem {
                             label: format!("{}()", e.name),
                             kind: CompletionKind::PrimitiveMethod,
-                            detail: Some(format!("{rtype}.{}({param_str}) -> {}", e.name, e.return_type)),
+                            detail: Some(format!(
+                                "{rtype}.{}({param_str}) -> {}",
+                                e.name, e.return_type
+                            )),
                             documentation: None,
                             deprecated: false,
                             sort_priority: 200,
@@ -128,7 +140,10 @@ pub fn lsp_completion_items(context: &CompletionContext<'_>) -> Vec<RegistryComp
                         items.push(RegistryCompletionItem {
                             label: e.const_name.to_string(),
                             kind: CompletionKind::TypeAttachedConstant,
-                            detail: Some(format!("{}: {} = {}", e.const_name, e.value_type, e.value_literal)),
+                            detail: Some(format!(
+                                "{}: {} = {}",
+                                e.const_name, e.value_type, e.value_literal
+                            )),
                             documentation: None,
                             deprecated: false,
                             sort_priority: 210,
@@ -137,13 +152,18 @@ pub fn lsp_completion_items(context: &CompletionContext<'_>) -> Vec<RegistryComp
                 }
                 None => {
                     // Unknown receiver — suggest all primitive methods (best-effort)
-                    for e in crate::primitive_intrinsics()
-                        .filter(|e| e.receiver_type.is_some() && (e.kind == "method" || e.kind == "method_1arg"))
-                    {
+                    for e in crate::primitive_intrinsics().filter(|e| {
+                        e.receiver_type.is_some() && (e.kind == "method" || e.kind == "method_1arg")
+                    }) {
                         items.push(RegistryCompletionItem {
                             label: format!("{}()", e.name),
                             kind: CompletionKind::PrimitiveMethod,
-                            detail: Some(format!("{}.{}() -> {}", e.receiver_type.unwrap_or("?"), e.name, e.return_type)),
+                            detail: Some(format!(
+                                "{}.{}() -> {}",
+                                e.receiver_type.unwrap_or("?"),
+                                e.name,
+                                e.return_type
+                            )),
                             documentation: None,
                             deprecated: false,
                             sort_priority: 200,
@@ -157,9 +177,7 @@ pub fn lsp_completion_items(context: &CompletionContext<'_>) -> Vec<RegistryComp
     items
 }
 
-
 // Hover content
-
 
 /// High-level hover category.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -187,10 +205,7 @@ pub fn lsp_hover_for_token(name: &str) -> Option<HoverContent> {
     // Keywords
     if let Some(e) = crate::keyword_lookup(name) {
         return Some(HoverContent {
-            markdown_body: format!(
-                "## Keyword: `{}`\n\nIntroduced in {}.",
-                e.name, e.since
-            ),
+            markdown_body: format!("## Keyword: `{}`\n\nIntroduced in {}.", e.name, e.since),
             kind: HoverKind::Keyword,
         });
     }
@@ -210,15 +225,18 @@ pub fn lsp_hover_for_token(name: &str) -> Option<HoverContent> {
         };
         return Some(HoverContent {
             markdown_body: detail,
-            kind: if e.receiver_type.is_some() { HoverKind::PrimitiveMethod } else { HoverKind::FreeFn },
+            kind: if e.receiver_type.is_some() {
+                HoverKind::PrimitiveMethod
+            } else {
+                HoverKind::FreeFn
+            },
         });
     }
 
     // Type-attached constants — token may be "int.max" or just "max"
     // Try both forms.
-    let type_const_match = crate::type_attached_constants().find(|e| {
-        e.const_name == name || format!("{}.{}", e.type_name, e.const_name) == name
-    });
+    let type_const_match = crate::type_attached_constants()
+        .find(|e| e.const_name == name || format!("{}.{}", e.type_name, e.const_name) == name);
     if let Some(e) = type_const_match {
         return Some(HoverContent {
             markdown_body: format!(
@@ -238,7 +256,10 @@ pub fn lsp_hover_for_token(name: &str) -> Option<HoverContent> {
         if !e.design_doc.is_empty() {
             body.push_str(&format!("\n\n[Design doc]({})", e.design_doc));
         }
-        return Some(HoverContent { markdown_body: body, kind: HoverKind::DeferredFeature });
+        return Some(HoverContent {
+            markdown_body: body,
+            kind: HoverKind::DeferredFeature,
+        });
     }
 
     // Banned declaration keywords
@@ -273,24 +294,40 @@ mod tests {
     #[test]
     fn bare_identifier_returns_all_keywords() {
         let items = lsp_completion_items(&CompletionContext::BareIdentifier);
-        let kw_labels: Vec<_> = items.iter()
+        let kw_labels: Vec<_> = items
+            .iter()
             .filter(|i| i.kind == CompletionKind::Keyword)
             .map(|i| i.label.as_str())
             .collect();
-        assert!(kw_labels.len() >= 29, "expected ≥29 keywords, got {}", kw_labels.len());
-        assert!(kw_labels.contains(&"function"), "function keyword must appear");
+        assert!(
+            kw_labels.len() >= 29,
+            "expected ≥29 keywords, got {}",
+            kw_labels.len()
+        );
+        assert!(
+            kw_labels.contains(&"function"),
+            "function keyword must appear"
+        );
         assert!(kw_labels.contains(&"let"), "let keyword must appear");
     }
 
     #[test]
     fn bare_identifier_deferred_features_are_deprecated() {
         let items = lsp_completion_items(&CompletionContext::BareIdentifier);
-        let deferred: Vec<_> = items.iter()
+        let deferred: Vec<_> = items
+            .iter()
             .filter(|i| i.kind == CompletionKind::DeferredFeature)
             .collect();
-        assert!(!deferred.is_empty(), "deferred features must appear in BareIdentifier");
+        assert!(
+            !deferred.is_empty(),
+            "deferred features must appear in BareIdentifier"
+        );
         for d in &deferred {
-            assert!(d.deprecated, "deferred feature '{}' must be marked deprecated", d.label);
+            assert!(
+                d.deprecated,
+                "deferred feature '{}' must be marked deprecated",
+                d.label
+            );
         }
     }
 
@@ -310,15 +347,23 @@ mod tests {
             receiver_type: Some("nonexistent"),
         });
         // Unknown type: returns empty (no methods registered for "nonexistent")
-        let method_count = items.iter().filter(|i| i.kind == CompletionKind::PrimitiveMethod).count();
+        let method_count = items
+            .iter()
+            .filter(|i| i.kind == CompletionKind::PrimitiveMethod)
+            .count();
         assert_eq!(method_count, 0, "no methods for unknown receiver type");
     }
 
     #[test]
     fn after_dot_none_receiver_returns_all_methods() {
-        let items = lsp_completion_items(&CompletionContext::AfterDot { receiver_type: None });
+        let items = lsp_completion_items(&CompletionContext::AfterDot {
+            receiver_type: None,
+        });
         // None receiver returns all registered methods as best-effort
-        assert!(!items.is_empty(), "best-effort: all methods when receiver is unknown");
+        assert!(
+            !items.is_empty(),
+            "best-effort: all methods when receiver is unknown"
+        );
     }
 
     #[test]
@@ -327,7 +372,10 @@ mod tests {
         assert!(h.is_some(), "hover for 'function' should return Some");
         let h = h.unwrap();
         assert_eq!(h.kind, HoverKind::Keyword);
-        assert!(h.markdown_body.contains("function"), "body should mention the keyword");
+        assert!(
+            h.markdown_body.contains("function"),
+            "body should mention the keyword"
+        );
     }
 
     #[test]
@@ -336,26 +384,41 @@ mod tests {
         assert!(h.is_some(), "hover for 'max' (int.max) should return Some");
         let h = h.unwrap();
         assert_eq!(h.kind, HoverKind::TypeAttachedConstant);
-        assert!(h.markdown_body.contains("9223372036854775807"), "int.max value must appear in hover");
+        assert!(
+            h.markdown_body.contains("9223372036854775807"),
+            "int.max value must appear in hover"
+        );
     }
 
     #[test]
     fn hover_deferred_feature() {
         // "gpu" is a deferred language feature
         let h = lsp_hover_for_token("gpu");
-        assert!(h.is_some(), "hover for deferred feature 'gpu' should return Some");
+        assert!(
+            h.is_some(),
+            "hover for deferred feature 'gpu' should return Some"
+        );
         let h = h.unwrap();
         assert_eq!(h.kind, HoverKind::DeferredFeature);
-        assert!(h.markdown_body.contains("Ships in"), "deferred hover must mention ships_in");
+        assert!(
+            h.markdown_body.contains("Ships in"),
+            "deferred hover must mention ships_in"
+        );
     }
 
     #[test]
     fn hover_banned_keyword_type() {
         let h = lsp_hover_for_token("type");
-        assert!(h.is_some(), "hover for banned keyword 'type' should return Some");
+        assert!(
+            h.is_some(),
+            "hover for banned keyword 'type' should return Some"
+        );
         let h = h.unwrap();
         assert_eq!(h.kind, HoverKind::BannedDeclarationKeyword);
-        assert!(h.markdown_body.contains("shape"), "hover for 'type' must mention 'shape' as alternative");
+        assert!(
+            h.markdown_body.contains("shape"),
+            "hover for 'type' must mention 'shape' as alternative"
+        );
     }
 
     #[test]
@@ -367,7 +430,10 @@ mod tests {
     #[test]
     fn hover_banned_jargon_returns_replacement_and_reason() {
         let h = lsp_hover_for_token("propagate");
-        assert!(h.is_some(), "banned jargon 'propagate' must have hover content");
+        assert!(
+            h.is_some(),
+            "banned jargon 'propagate' must have hover content"
+        );
         let h = h.unwrap();
         assert_eq!(h.kind, HoverKind::BannedJargon);
         assert!(

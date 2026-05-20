@@ -163,7 +163,10 @@ fn build_module<'ctx, 'g>(
     // Merge imported options so cross-file options types work in codegen
     // (e.g. `Timeframe.daily` where Timeframe is imported from another file).
     for (name, entry) in imported_options {
-        options_table.options.entry(name.clone()).or_insert_with(|| entry.clone());
+        options_table
+            .options
+            .entry(name.clone())
+            .or_insert_with(|| entry.clone());
     }
 
     let zero_bits = ynz_numerics::parse("0").expect("decimal zero parse");
@@ -328,8 +331,15 @@ fn mangle_type(ty: &Type) -> String {
         }
         Type::TypeParam { name } => format!("tparam_{name}"),
         Type::Number { precision } => format!("number_{precision}"),
-        Type::Range { element, end_inclusive } => {
-            format!("range_{}{}", mangle_type(element), if *end_inclusive { "_inc" } else { "" })
+        Type::Range {
+            element,
+            end_inclusive,
+        } => {
+            format!(
+                "range_{}{}",
+                mangle_type(element),
+                if *end_inclusive { "_inc" } else { "" }
+            )
         }
         Type::BuiltinMap { key, val } => {
             format!("map_{}_{}", mangle_type(key), mangle_type(val))
@@ -348,7 +358,9 @@ fn mangle_type(ty: &Type) -> String {
         // caught all type errors and stopped compilation. Panic here so it's
         // visible immediately if it ever does (instead of silently emitting a
         // mangled name that causes a mysterious linker error).
-        Type::Error => panic!("Type::Error reached mangle_type — compilation should have stopped at typeck"),
+        Type::Error => {
+            panic!("Type::Error reached mangle_type — compilation should have stopped at typeck")
+        }
     }
 }
 
@@ -3140,11 +3152,41 @@ fn lower_binop<'ctx>(
     let (lhs, rhs) = coerce_to_bignum_pair(cg, lhs, rhs, lhs_ty, rhs_ty)?;
 
     match (op, lhs_ty) {
-        (Add, Type::Int) => int_arith_overflow(cg, lhs.into_int_value(), rhs.into_int_value(), op, lhs_e.span().start as u32),
-        (Sub, Type::Int) => int_arith_overflow(cg, lhs.into_int_value(), rhs.into_int_value(), op, lhs_e.span().start as u32),
-        (Mul, Type::Int) => int_arith_overflow(cg, lhs.into_int_value(), rhs.into_int_value(), op, lhs_e.span().start as u32),
-        (Div, Type::Int) => int_divrem(cg, lhs.into_int_value(), rhs.into_int_value(), false, lhs_e.span().start as u32),
-        (Rem, Type::Int) => int_divrem(cg, lhs.into_int_value(), rhs.into_int_value(), true, lhs_e.span().start as u32),
+        (Add, Type::Int) => int_arith_overflow(
+            cg,
+            lhs.into_int_value(),
+            rhs.into_int_value(),
+            op,
+            lhs_e.span().start as u32,
+        ),
+        (Sub, Type::Int) => int_arith_overflow(
+            cg,
+            lhs.into_int_value(),
+            rhs.into_int_value(),
+            op,
+            lhs_e.span().start as u32,
+        ),
+        (Mul, Type::Int) => int_arith_overflow(
+            cg,
+            lhs.into_int_value(),
+            rhs.into_int_value(),
+            op,
+            lhs_e.span().start as u32,
+        ),
+        (Div, Type::Int) => int_divrem(
+            cg,
+            lhs.into_int_value(),
+            rhs.into_int_value(),
+            false,
+            lhs_e.span().start as u32,
+        ),
+        (Rem, Type::Int) => int_divrem(
+            cg,
+            lhs.into_int_value(),
+            rhs.into_int_value(),
+            true,
+            lhs_e.span().start as u32,
+        ),
 
         (Add, Type::Float) => cg
             .builder
@@ -3235,7 +3277,12 @@ fn lower_binop<'ctx>(
             cg.builder
                 .build_call(
                     cg.rt.panic_div_by_zero,
-                    &[cg.globals.panic_dec_rem.as_pointer_value().into(), file_ptr.into(), zero32.into(), zero32.into()],
+                    &[
+                        cg.globals.panic_dec_rem.as_pointer_value().into(),
+                        file_ptr.into(),
+                        zero32.into(),
+                        zero32.into(),
+                    ],
                     "",
                 )
                 .map_err(|e| format!("{e}"))?;
@@ -3408,7 +3455,12 @@ fn int_arith_overflow<'ctx>(
     cg.builder
         .build_call(
             cg.rt.panic_overflow,
-            &[msg_g.as_pointer_value().into(), file_ptr.into(), offset_val.into(), zero_col.into()],
+            &[
+                msg_g.as_pointer_value().into(),
+                file_ptr.into(),
+                offset_val.into(),
+                zero_col.into(),
+            ],
             "",
         )
         .map_err(|e| format!("{e}"))?;
@@ -3448,7 +3500,12 @@ fn int_divrem<'ctx>(
     cg.builder
         .build_call(
             cg.rt.panic_div_by_zero,
-            &[msg.as_pointer_value().into(), file_ptr.into(), offset_val.into(), zero_col.into()],
+            &[
+                msg.as_pointer_value().into(),
+                file_ptr.into(),
+                offset_val.into(),
+                zero_col.into(),
+            ],
             "",
         )
         .map_err(|e| format!("{e}"))?;
@@ -3544,7 +3601,12 @@ fn decimal_div<'ctx>(
     cg.builder
         .build_call(
             cg.rt.panic_div_by_zero,
-            &[cg.globals.panic_dec_div.as_pointer_value().into(), file_ptr.into(), zero32.into(), zero32.into()],
+            &[
+                cg.globals.panic_dec_div.as_pointer_value().into(),
+                file_ptr.into(),
+                zero32.into(),
+                zero32.into(),
+            ],
             "",
         )
         .map_err(|e| format!("{e}"))?;
@@ -3713,11 +3775,7 @@ fn to_c_string<'ctx>(
         Type::Sensitive { .. } => {
             let call = cg
                 .builder
-                .build_call(
-                    cg.rt.ynz_sensitive_to_string,
-                    &[val.into()],
-                    "sens_str",
-                )
+                .build_call(cg.rt.ynz_sensitive_to_string, &[val.into()], "sens_str")
                 .map_err(|e| format!("{e}"))?;
             let ptr = call
                 .try_as_basic_value()
@@ -4340,11 +4398,11 @@ fn to_c_string<'ctx>(
         Type::Options { name } => {
             // Cast i64 back to i8 for lower_options_to_string which expects an i8.
             let tag_i64 = val.into_int_value();
-            let tag_i8 = cg.builder
+            let tag_i8 = cg
+                .builder
                 .build_int_truncate(tag_i64, cg.ctx.i8_type(), "opt_tag_i8")
                 .map_err(|e| format!("{e}"))?;
-            lower_options_to_string(cg, tag_i8.into(), name)
-                .map(|v| v.into_pointer_value())
+            lower_options_to_string(cg, tag_i8.into(), name).map(|v| v.into_pointer_value())
         }
 
         _ => Err(format!("codegen: cannot convert {:?} to string", ty)),
@@ -5594,7 +5652,9 @@ fn lower_options_to_string<'ctx>(
 
     for (i, variant) in entry.variants.iter().enumerate() {
         // Use the display string if provided, otherwise fall back to the variant name.
-        let display = entry.display_strings.get(i)
+        let display = entry
+            .display_strings
+            .get(i)
             .and_then(|d| d.as_deref())
             .unwrap_or(variant.as_str());
         let tag_const = cg.ctx.i8_type().const_int(i as u64, false);

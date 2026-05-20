@@ -127,8 +127,8 @@ pub fn resolve_imports(
     let mut result = ResolvedImport::empty();
     let mut bound_names: std::collections::HashSet<String> = Default::default();
 
-    let importer_canonical = std::fs::canonicalize(importer_path)
-        .unwrap_or_else(|_| PathBuf::from(importer_path));
+    let importer_canonical =
+        std::fs::canonicalize(importer_path).unwrap_or_else(|_| PathBuf::from(importer_path));
 
     for import in imports {
         let module_str = &import.source;
@@ -153,8 +153,7 @@ pub fn resolve_imports(
         }
 
         // Resolve the import path. Detect the no-yinz.toml case to give a better error.
-        let has_project_root =
-            find_project_root(std::path::Path::new(importer_path)).is_some();
+        let has_project_root = find_project_root(std::path::Path::new(importer_path)).is_some();
         let Some(resolved_path) = resolve_module_path(importer_path, module_str) else {
             if !has_project_root && module_str.contains('/') {
                 // Cross-directory import with no project root — the most common cause.
@@ -198,16 +197,27 @@ pub fn resolve_imports(
         }
 
         // Get or build the ExportTable for the imported file using the same db.
-        let export_table = load_export_table(db, &resolved_path, module_str, &span, visiting, diags);
+        let export_table =
+            load_export_table(db, &resolved_path, module_str, &span, visiting, diags);
 
         // Resolve named vs namespace imports.
         match &import.kind {
             ImportKind::Named(items) => {
                 for item in items {
-                    bind_named_import(item, &export_table, module_str, &mut bound_names, &mut result, diags);
+                    bind_named_import(
+                        item,
+                        &export_table,
+                        module_str,
+                        &mut bound_names,
+                        &mut result,
+                        diags,
+                    );
                 }
             }
-            ImportKind::Namespace { local_name, local_name_span } => {
+            ImportKind::Namespace {
+                local_name,
+                local_name_span,
+            } => {
                 let local = local_name;
                 if !bound_names.insert(local.clone()) {
                     diags.push(Diagnostic::error(
@@ -223,10 +233,14 @@ pub fn resolve_imports(
                     result.shapes.insert(format!("{local}.{name}"), def.clone());
                 }
                 for (name, entry) in &export_table.options {
-                    result.options.insert(format!("{local}.{name}"), entry.clone());
+                    result
+                        .options
+                        .insert(format!("{local}.{name}"), entry.clone());
                 }
                 for (name, sig) in &export_table.functions {
-                    result.functions.insert(format!("{local}.{name}"), sig.clone());
+                    result
+                        .functions
+                        .insert(format!("{local}.{name}"), sig.clone());
                 }
             }
         }
@@ -253,7 +267,9 @@ fn bind_named_import(
     let found_fn = export_table.functions.get(exported);
 
     if found_shape.is_none() && found_options.is_none() && found_fn.is_none() {
-        let mut exported_names: Vec<&str> = export_table.shapes.keys()
+        let mut exported_names: Vec<&str> = export_table
+            .shapes
+            .keys()
             .chain(export_table.options.keys())
             .chain(export_table.functions.keys())
             .map(|s| s.as_str())
@@ -278,7 +294,9 @@ fn bind_named_import(
         diags.push(Diagnostic::error(
             span,
             format!("Import name `{local}` is already bound by a previous import."),
-            format!("Use a different local name: `import {{ {exported} as otherName }} from \"...\"`"),
+            format!(
+                "Use a different local name: `import {{ {exported} as otherName }} from \"...\"`"
+            ),
             "Each imported name must be unique in the local scope.",
         ));
         return;
@@ -344,7 +362,9 @@ fn load_export_table(
 
     // Propagate parse errors as a summary diagnostic rather than re-emitting
     // every individual error under the importer's path.
-    let parse_errors: Vec<_> = parse.diagnostics.iter()
+    let parse_errors: Vec<_> = parse
+        .diagnostics
+        .iter()
         .filter(|d| d.severity == ynz_diagnostics::Severity::Error)
         .collect();
     if !parse_errors.is_empty() {
@@ -366,5 +386,10 @@ fn load_export_table(
 
     visiting.remove(resolved_path);
 
-    collect_exports(&parse.module, &sig_output.shape_table, &options_table, &sig_output.sig_table)
+    collect_exports(
+        &parse.module,
+        &sig_output.shape_table,
+        &options_table,
+        &sig_output.sig_table,
+    )
 }

@@ -1,7 +1,7 @@
 use lsp_types::{
     Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, Range, Url,
 };
-use ynz_diagnostics::{Severity, Diagnostic as YnzDiagnostic};
+use ynz_diagnostics::{Diagnostic as YnzDiagnostic, Severity};
 
 use crate::{capabilities::PositionEncoding, position::LineTable};
 
@@ -30,7 +30,10 @@ pub fn to_lsp_diagnostic(
         Severity::Suggestion => DiagnosticSeverity::HINT,
     };
 
-    let message = format!("{}\n\nWHAT INSTEAD: {}\n\nWHY: {}", d.what, d.what_instead, d.why);
+    let message = format!(
+        "{}\n\nWHAT INSTEAD: {}\n\nWHY: {}",
+        d.what, d.what_instead, d.why
+    );
 
     let related_information = if d.related.is_empty() {
         None
@@ -47,12 +50,19 @@ pub fn to_lsp_diagnostic(
                 let uri = path_to_uri(&rs.span.file)?;
                 let rel_range = span_to_range(text, table, rs.span.start, rs.span.end, encoding);
                 Some(DiagnosticRelatedInformation {
-                    location: Location { uri, range: rel_range },
+                    location: Location {
+                        uri,
+                        range: rel_range,
+                    },
                     message: rs.label.clone(),
                 })
             })
             .collect();
-        if info.is_empty() { None } else { Some(info) }
+        if info.is_empty() {
+            None
+        } else {
+            Some(info)
+        }
     };
 
     Diagnostic {
@@ -82,7 +92,10 @@ fn span_to_range(
     } else {
         end_pos
     };
-    Range { start: start_pos, end: end_pos }
+    Range {
+        start: start_pos,
+        end: end_pos,
+    }
 }
 
 /// Convert a file path to a URI. Returns `None` if the path cannot be resolved.
@@ -92,7 +105,6 @@ pub fn path_to_uri(path: &str) -> Option<Url> {
         .ok()
         .or_else(|| Url::parse(path).ok())
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -156,8 +168,20 @@ mod tests {
         // "let" on line 0, bytes 0-3
         let d = make_diag(Severity::Error, 0, 3);
         let lsp = to_lsp_diagnostic(&d, text, &table, PositionEncoding::Utf8);
-        assert_eq!(lsp.range.start, Position { line: 0, character: 0 });
-        assert_eq!(lsp.range.end, Position { line: 0, character: 3 });
+        assert_eq!(
+            lsp.range.start,
+            Position {
+                line: 0,
+                character: 0
+            }
+        );
+        assert_eq!(
+            lsp.range.end,
+            Position {
+                line: 0,
+                character: 3
+            }
+        );
     }
 
     #[test]

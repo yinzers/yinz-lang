@@ -606,7 +606,11 @@ mod tests {
         let zero_at_min_exp = encode_finite(false, MIN_EXPONENT, 0);
         let one_at_max_exp = encode_finite(false, MAX_EXPONENT, 1);
         let result = decode(div(zero_at_min_exp, one_at_max_exp));
-        assert_eq!(result.kind, D128Kind::Finite, "div(0@MIN_EXP, 1@MAX_EXP) must be finite");
+        assert_eq!(
+            result.kind,
+            D128Kind::Finite,
+            "div(0@MIN_EXP, 1@MAX_EXP) must be finite"
+        );
         assert!(result.is_zero(), "div(0@MIN_EXP, 1@MAX_EXP) must be zero");
         assert!(!result.sign, "div(+0@MIN_EXP, +1@MAX_EXP) must be +0");
 
@@ -615,7 +619,11 @@ mod tests {
         let zero_at_max_exp = encode_finite(false, MAX_EXPONENT, 0);
         let one_at_min_exp = encode_finite(false, MIN_EXPONENT, 1);
         let result2 = decode(div(zero_at_max_exp, one_at_min_exp));
-        assert_eq!(result2.kind, D128Kind::Finite, "div(0@MAX_EXP, 1@MIN_EXP) must be finite");
+        assert_eq!(
+            result2.kind,
+            D128Kind::Finite,
+            "div(0@MAX_EXP, 1@MIN_EXP) must be finite"
+        );
         assert!(result2.is_zero(), "div(0@MAX_EXP, 1@MIN_EXP) must be zero");
         assert!(!result2.sign, "div(+0@MAX_EXP, +1@MIN_EXP) must be +0");
 

@@ -1,10 +1,10 @@
 use lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionItemTag, CompletionList,
-    Documentation, MarkupContent, MarkupKind, Position,
+    CompletionItem, CompletionItemKind, CompletionItemTag, CompletionList, Documentation,
+    MarkupContent, MarkupKind, Position,
 };
 use ynz_registry::{CompletionContext, CompletionKind, RegistryCompletionItem};
-use ynz_typeck::signatures::SignatureTable;
 use ynz_typeck::shapes::ShapeTable;
+use ynz_typeck::signatures::SignatureTable;
 use ynz_typeck::types::type_name;
 
 use crate::{capabilities::PositionEncoding, position::LineTable};
@@ -19,14 +19,20 @@ pub fn detect_context<'a>(text: &str, cursor_offset: usize) -> CompletionContext
 
     // Walk backwards past the cursor to find the character just before it
     let bytes = before.as_bytes();
-    let last_char = bytes.iter().rev().find(|&&b| !b.is_ascii_whitespace()).copied();
+    let last_char = bytes
+        .iter()
+        .rev()
+        .find(|&&b| !b.is_ascii_whitespace())
+        .copied();
 
     if last_char == Some(b'.') {
         // After-dot context: walk left of the '.' to find the receiver token
         // Numeric literal disambiguation: if the previous non-whitespace byte before
         // the '.' is an ASCII digit AND the char before THAT digit is NOT an
         // identifier-continue char, this is a numeric literal — return no context.
-        let pos_of_dot = before.trim_end_matches(|c: char| c.is_ascii_whitespace()).len();
+        let pos_of_dot = before
+            .trim_end_matches(|c: char| c.is_ascii_whitespace())
+            .len();
         if pos_of_dot == 0 {
             return CompletionContext::BareIdentifier;
         }
@@ -40,7 +46,10 @@ pub fn detect_context<'a>(text: &str, cursor_offset: usize) -> CompletionContext
         // Check if this looks like a numeric literal (e.g. `5.`)
         let last_byte = prev_non_ws.as_bytes().last().copied().unwrap_or(0);
         if last_byte.is_ascii_digit() {
-            let second_last = prev_non_ws.as_bytes().get(prev_non_ws.len().wrapping_sub(2)).copied();
+            let second_last = prev_non_ws
+                .as_bytes()
+                .get(prev_non_ws.len().wrapping_sub(2))
+                .copied();
             let is_identifier_continue = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
             let preceded_by_ident = second_last.map(is_identifier_continue).unwrap_or(false);
             if !preceded_by_ident {
@@ -53,7 +62,9 @@ pub fn detect_context<'a>(text: &str, cursor_offset: usize) -> CompletionContext
         // `type_of_expression_at_offset` in ynz-typeck (not yet exposed).
         // Until then, all primitive methods appear as best-effort candidates.
         // Tracked: .claude/todos.md "lsp-completion-typeck-receiver-narrowing".
-        CompletionContext::AfterDot { receiver_type: None }
+        CompletionContext::AfterDot {
+            receiver_type: None,
+        }
     } else {
         CompletionContext::BareIdentifier
     }
@@ -105,11 +116,16 @@ const USER_SHAPE_SORT_PRIORITY: u16 = 10;
 
 /// Build user-defined function + shape completion items from typeck output.
 /// These are inserted before all registry items (sort_priority 0-10).
-pub fn user_symbol_items(sig_table: &SignatureTable, shape_table: &ShapeTable) -> Vec<CompletionItem> {
+pub fn user_symbol_items(
+    sig_table: &SignatureTable,
+    shape_table: &ShapeTable,
+) -> Vec<CompletionItem> {
     let mut items: Vec<CompletionItem> = Vec::new();
 
     for (name, sig) in &sig_table.fns {
-        let param_str = sig.params.iter()
+        let param_str = sig
+            .params
+            .iter()
             .map(|(pname, ptype)| format!("{pname}: {}", type_name(ptype)))
             .collect::<Vec<_>>()
             .join(", ");
@@ -162,5 +178,8 @@ pub fn completion_list(
     let registry_items = ynz_registry::lsp_completion_items(&context);
     items.extend(registry_items.into_iter().map(to_lsp_completion_item));
 
-    Some(CompletionList { is_incomplete: false, items })
+    Some(CompletionList {
+        is_incomplete: false,
+        items,
+    })
 }
