@@ -34,19 +34,7 @@ docker compose -f website/docker-compose.yml exec web bun run generate
 
 Output lands in `website/.output/public/` — this is the static site artifact.
 
----
 
-## Deployment (DigitalOcean App Platform)
-
-See Phase 7 of `.claude/plans/active/webpage-foundation.md` for the full deployment spec. Summary:
-
-- Production target: **DigitalOcean App Platform** (static site tier)
-- Build command: `bun run generate`
-- Output directory: `.output/public/`
-- Config: `website/.do/app.yaml` (ships in Phase 7)
-- Dockerfile: `website/Dockerfile` (ships in Phase 7)
-
-Patrick handles DNS + App Platform wiring. See the plan for step-by-step instructions.
 
 ---
 
