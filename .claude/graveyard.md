@@ -242,3 +242,23 @@ Add entries via `/learn` when a project-specific mistake pattern is identified. 
 **Severity**: critical — infrastructure bugs that produce non-obvious error messages ("No src/ directory", empty path crashes) with no clear path to the fix without reading source code.
 
 **Originating incident**: M8 P2 shipped 2026-05-18. All three bugs discovered 2026-05-19 during first real-world use (trading-v4 project). Total fix time: ~2 hours.
+
+---
+
+## ynz watch Hardcoded `cc` Linker — 2026-05-20
+
+**Scope**: `crates/ynz-watch/src/rebuild.rs` — any code that spawns the linker from the watch rebuild path.
+
+**Cause**: `write_binary()` in `rebuild.rs` hardcoded `Command::new("cc")`. The existing `ynz build` path (`crates/ynz-driver/src/build.rs`) already had a `find_linker()` probe that tries `clang-18`, `clang`, `cc`, `gcc`, `g++` in order. Watch was written independently and didn't reuse it. Devcontainers with LLVM/clang-18 installed but not `cc` (no build-essential) hit `No such file or directory` on every non-check rebuild.
+
+**Detection**: `ynz watch` produces `could not invoke linker \`cc\`: No such file or directory` on a container that has `clang-18` but not `cc`.
+
+**Constraint**: Any new code path that invokes the system linker MUST use `find_linker()` from `crates/ynz-driver/src/build.rs` (or an equivalent probe). Never hardcode `"cc"`. The probe order is `["clang-18", "clang", "cc", "gcc", "g++"]` — `clang-18` is first because it ships with LLVM 18 which is already required to run ynz.
+
+**Bouncer checks**:
+- [ ] For diffs touching any file under `crates/ynz-watch/` that adds `Command::new`: check that it does NOT contain the literal `Command::new("cc")`. Match → BLOCK.
+- [ ] For diffs that add a new linker invocation anywhere: verify `find_linker` or equivalent probe is used. Hardcoded linker names (`"cc"`, `"gcc"`, `"g++"`, `"ld"`) → WARNING.
+
+**Severity**: high — `ynz watch` (default mode, not `--check`) silently fails to spawn the compiled program on every rebuild in any container that has LLVM installed but not build-essential.
+
+**Originating incident**: Discovered 2026-05-20 during first real-world `ynz watch` use on trading-v4 devcontainer.
