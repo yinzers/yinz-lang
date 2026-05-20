@@ -12,6 +12,7 @@ members = [
     "crates/ynz-registry",
     "crates/ynz-lsp",
     "crates/ynz-tmgrammar",
+    "crates/ynz-fmt",
 ]
 
 [workspace.package]
@@ -31,6 +32,7 @@ clap = { version = "4.6.1", features = ["derive"] }
 
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 tempfile = "3.14.0"
+assert_cmd = "2"
 
 # Cross-crate workspace deps
 ynz-registry    = { path = "crates/ynz-registry" }
@@ -40,3 +42,4 @@ ynz-parser       = { path = "crates/ynz-parser" }
 ynz-typeck       = { path = "crates/ynz-typeck" }
 ynz-codegen      = { path = "crates/ynz-codegen" }
 ynz-numerics     = { path = "crates/ynz-numerics" }
+ynz-fmt          = { path = "crates/ynz-fmt" }

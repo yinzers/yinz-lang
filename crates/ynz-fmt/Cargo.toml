@@ -1,0 +1,14 @@
+[package]
+name = "ynz-fmt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license = "MIT"
+description = "Zero-config Yinz source formatter — library crate consumed by `ynz fmt` and the LSP format-on-save handler."
+
+[dependencies]
+ynz-parser      = { workspace = true }
+ynz-ast         = { workspace = true }
+ynz-registry    = { workspace = true }
+ynz-diagnostics = { workspace = true }

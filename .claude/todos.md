@@ -35,6 +35,14 @@ Global cross-workstream items only. Granular per-chat work lives in:
 - [ ] Wire up GitHub Actions CI (ci.yml already written, just needs configuration)
 - [ ] macOS CI golden hash for ynz-codegen
 
+- [ ] **lsp-range-formatting** — add `format_range(source, range)` to ynz-fmt library + textDocument/rangeFormatting LSP handler. Deferred from v0.2-M3 (whole-file formatting was enough for editor format-on-save). Pick up IF v0.2-M5 LSP proves a need.
+
+- [ ] **fmt-diff-mode** — add `ynz fmt --diff` flag emitting unified diff of what would change. Deferred from v0.2-M3 (not blocking ship; useful for code review tooling). No specific trigger; nice-to-have.
+
+- [ ] **update-plan-invariants-entrypoint-path** — update `.claude/rules/plan-invariants.md` to point at `examples/basics/entrypoint.ynz` (NOT `src/entrypoint.ynz` which is stale; actual path verified 2026-05-20). Trivial doc edit; do whenever passing through the rule file.
+
+- [ ] **per-phase-rule-reminder-block-in-code-reviewer-prompts** — extend each phase's Exit Sequence code-reviewer prompt to explicitly remind the agent about `~/.claude/rules/comments.md` + Golden Rule 11 WHY-quality + Yinz vocabulary (per agent-dispatch-rule-reminders memory). Deferred from v0.2-M3 round 1 review; non-blocking but tracked.
+
 ## Done (recent)
 
 - [x] **M6 complete (tag pending v0.1.0-m6, 631 tests)** — options+unions+narrowing: options types (i8 tags, multi-case, toString), union types (tagged-struct, Is-arm narrowing), fallible conversions (.toInt/.toFloat/.toNumber), early-return narrowing, shape aliases (shape S = A|B), string parsing runtime. Plan moved to done/. M2+M3 catch-up items closed.
