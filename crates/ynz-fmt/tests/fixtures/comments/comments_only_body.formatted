@@ -1,0 +1,7 @@
+// File header
+
+function planned() -> nothing {
+  // step 1: fetch
+  // step 2: transform
+  // step 3: insert
+}

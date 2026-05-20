@@ -936,6 +936,23 @@ fn emit_block_with_comments(
     block_open_pos: usize,
 ) -> String {
     if block.stmts.is_empty() {
+        // Check for comments inside the empty body (e.g. planned-out functions with only
+        // `//` notes and no code yet).  Without this, `{ // plan\n// more }` collapses to
+        // `{ }` and the comments are silently dropped.
+        if block.span.end > 0 {
+            let prefix = indent(ind);
+            let (leading, floating) = ctx.between(block_open_pos, block.span.end);
+            if !leading.is_empty() || !floating.is_empty() {
+                let mut out = String::from("\n");
+                for c in &floating {
+                    out.push_str(&format!("{prefix}{}\n", normalize_comment_text(&c.text)));
+                }
+                for c in &leading {
+                    out.push_str(&format!("{prefix}{}\n", normalize_comment_text(&c.text)));
+                }
+                return out;
+            }
+        }
         return " ".to_string();
     }
 

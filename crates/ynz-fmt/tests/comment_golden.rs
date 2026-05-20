@@ -141,6 +141,15 @@ fn long_identifier() {
     golden("edge/long_identifier");
 }
 
+// ── Empty-body comment preservation ──────────────────────────────────────────
+
+#[test]
+fn comments_only_body_preserved() {
+    // WHY: a function body with only // comments and no statements must not be
+    // collapsed to `{ }` — that silently deletes the user's planning notes.
+    golden("comments_only_body");
+}
+
 // ── Behavioral invariants ─────────────────────────────────────────────────────
 
 #[test]
