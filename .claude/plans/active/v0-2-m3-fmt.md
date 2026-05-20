@@ -440,7 +440,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 9. Update `design/fmt.md` algorithm-choice section: state the choice, name the measurements that drove it, lock the choice for v0.2-M5+.
 10. **Copy MEASUREMENTS.md content into `design/fmt.md`** as a permanent record under a new "Algorithm spike measurements (v0.2-M3 Phase 1)" subsection BEFORE deleting `_spike/`. The git-history-only argument doesn't survive contact with future re-litigation; the design doc must hold the evidence. Then delete the losing spike's directory (preserved in git history). Retain `_spike/MEASUREMENTS.md` + winning spike until Phase 2 supersedes; Phase 2 deletes them both (the content already lives in `design/fmt.md`).
 
-**Decisions made**: Algorithm = **prettier-style** (full AST reflow). Both spikes passed Gate 1 (idempotency) and Gate 2 (49/49 = 100% comment placement accuracy). Prettier chosen for canonicality — a fundamental requirement that the LOC tie-break cannot override. Locked in `design/fmt.md` "Algorithm Choice" section.
+**Decisions made**: Algorithm = **prettier-style** (full AST reflow). Both spikes passed Gate 1 (idempotency) and Gate 2 (50/50 = 100% comment placement accuracy). Prettier chosen for canonicality — same program → same output regardless of original formatting. LOC tie-break (376 vs 421) nominally favors rustfmt but canonicality is not negotiable. Decision locked in `design/fmt.md` "Algorithm Choice" section. Rustfmt spike preserved in git history at commit `051844b`.
 
 **Acceptance criteria**:
 - [x] Both spikes built, ran against all 5 fixtures, produced output captured in `_spike/output/`
