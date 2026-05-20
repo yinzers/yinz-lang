@@ -142,7 +142,7 @@ Both spikes passed all numeric gates. Prettier-style was chosen for canonicality
 
 **Gate 1 (idempotency)**: both spikes produced byte-identical output over 5 iterations on all 5 fixtures (10/10 fixture × style combinations). Both algorithms converge.
 
-**Gate 2 (comment placement)**: both spikes scored 49/49 = 100% exact placement on 49 curated `//` comments across the fixture suite (> 95% gate threshold).
+**Gate 2 (comment placement)**: both spikes scored 50/50 = 100% exact placement on 50 curated `//` comments across the fixture suite (> 95% gate threshold).
 
 **Tie-break (LOC)**: rustfmt slightly smaller (376 vs 421 LOC, 10.7% difference — just outside the 10% default-to-prettier window). Nominally favors rustfmt.
 
@@ -249,20 +249,20 @@ Empirical evidence from the Phase 1 spike. Full raw data in `crates/ynz-fmt/_spi
 
 | Fixture | Comments |
 |---------|---------|
-| `long_signature.ynz` | 5 |
+| `long_signature.ynz` | 6 |
 | `nested_expr.ynz` | 6 |
 | `comment_heavy.ynz` | 17 |
 | `multiline_string.ynz` | 8 |
 | `shape_decl.ynz` | 13 |
-| **Total** | **49** |
+| **Total** | **50** |
 
 ### Gate 1: Idempotency (5 iterations, byte-identical check)
 
 All 10 fixture × style combinations: PASS.
 
-### Gate 2: Comment Placement (49 comments, exact/near/wrong)
+### Gate 2: Comment Placement (50 comments, exact/near/wrong)
 
-Both spikes: 49/49 = 100% exact placement.
+Both spikes: 50/50 = 100% exact placement.
 
 ### Tie-break
 
