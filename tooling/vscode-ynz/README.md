@@ -23,8 +23,14 @@ cp target/release/ynz-lsp ~/.local/bin/  # or any directory on your PATH
 
 ### Option A — From GitHub Release (current method)
 
-1. Download `yinz-0.2.0-m2.vsix` from the [latest release](https://github.com/patrickrizzardi/ynz/releases/tag/ynz-vscode-v0.2.0-m2)
-2. Install: `code --install-extension yinz-0.2.0-m2.vsix`
+Always-current stable URL (updates automatically with each release):
+
+```bash
+curl -L https://github.com/patrickrizzardi/ynz/releases/latest/download/yinz-latest.vsix -o yinz-latest.vsix
+code --install-extension yinz-latest.vsix
+```
+
+Or download a specific version from the [releases page](https://github.com/patrickrizzardi/ynz/releases).
 
 ### Option B — VSCode Marketplace (coming soon)
 
