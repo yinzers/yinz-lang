@@ -14,13 +14,23 @@ fn banned_jargon_all_have_replacement_and_reason() {
     let mut violations = Vec::new();
     for entry in ynz_registry::banned_jargon() {
         if entry.replacement.is_empty() {
-            violations.push(format!("[[banned_jargon]] '{name}': replacement is empty", name = entry.name));
+            violations.push(format!(
+                "[[banned_jargon]] '{name}': replacement is empty",
+                name = entry.name
+            ));
         }
         if entry.reason.is_empty() {
-            violations.push(format!("[[banned_jargon]] '{name}': reason is empty", name = entry.name));
+            violations.push(format!(
+                "[[banned_jargon]] '{name}': reason is empty",
+                name = entry.name
+            ));
         }
     }
-    assert!(violations.is_empty(), "banned_jargon invariant violations:\n{}", violations.join("\n"));
+    assert!(
+        violations.is_empty(),
+        "banned_jargon invariant violations:\n{}",
+        violations.join("\n")
+    );
 }
 
 #[test]
@@ -30,7 +40,8 @@ fn banned_jargon_names_are_unique() {
     names.sort_unstable();
     names.dedup();
     assert_eq!(
-        names.len(), total,
+        names.len(),
+        total,
         "banned_jargon has duplicate names — each name must be unique"
     );
 }
@@ -44,19 +55,35 @@ fn deferred_language_features_have_required_fields() {
     let mut violations = Vec::new();
     for entry in ynz_registry::deferred_language_features() {
         if entry.why.is_empty() {
-            violations.push(format!("[[deferred_language_feature]] '{name}': why is empty", name = entry.name));
+            violations.push(format!(
+                "[[deferred_language_feature]] '{name}': why is empty",
+                name = entry.name
+            ));
         }
         if entry.ships_in.is_empty() {
-            violations.push(format!("[[deferred_language_feature]] '{name}': ships_in is empty", name = entry.name));
+            violations.push(format!(
+                "[[deferred_language_feature]] '{name}': ships_in is empty",
+                name = entry.name
+            ));
         }
         if entry.design_doc.is_empty() {
-            violations.push(format!("[[deferred_language_feature]] '{name}': design_doc is empty", name = entry.name));
+            violations.push(format!(
+                "[[deferred_language_feature]] '{name}': design_doc is empty",
+                name = entry.name
+            ));
         }
         if entry.triggers.is_empty() {
-            violations.push(format!("[[deferred_language_feature]] '{name}': triggers is empty", name = entry.name));
+            violations.push(format!(
+                "[[deferred_language_feature]] '{name}': triggers is empty",
+                name = entry.name
+            ));
         }
     }
-    assert!(violations.is_empty(), "deferred_language_feature invariant violations:\n{}", violations.join("\n"));
+    assert!(
+        violations.is_empty(),
+        "deferred_language_feature invariant violations:\n{}",
+        violations.join("\n")
+    );
 }
 
 #[test]
@@ -64,16 +91,29 @@ fn deferred_tooling_features_have_required_fields() {
     let mut violations = Vec::new();
     for entry in ynz_registry::deferred_tooling_features() {
         if entry.why.is_empty() {
-            violations.push(format!("[[deferred_tooling_feature]] '{name}': why is empty", name = entry.name));
+            violations.push(format!(
+                "[[deferred_tooling_feature]] '{name}': why is empty",
+                name = entry.name
+            ));
         }
         if entry.ships_in.is_empty() {
-            violations.push(format!("[[deferred_tooling_feature]] '{name}': ships_in is empty", name = entry.name));
+            violations.push(format!(
+                "[[deferred_tooling_feature]] '{name}': ships_in is empty",
+                name = entry.name
+            ));
         }
         if entry.design_doc.is_empty() {
-            violations.push(format!("[[deferred_tooling_feature]] '{name}': design_doc is empty", name = entry.name));
+            violations.push(format!(
+                "[[deferred_tooling_feature]] '{name}': design_doc is empty",
+                name = entry.name
+            ));
         }
     }
-    assert!(violations.is_empty(), "deferred_tooling_feature invariant violations:\n{}", violations.join("\n"));
+    assert!(
+        violations.is_empty(),
+        "deferred_tooling_feature invariant violations:\n{}",
+        violations.join("\n")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -127,7 +167,11 @@ fn type_attached_constants_have_parseable_value_literals() {
             }
         }
     }
-    assert!(violations.is_empty(), "type_attached_constant invariant violations:\n{}", violations.join("\n"));
+    assert!(
+        violations.is_empty(),
+        "type_attached_constant invariant violations:\n{}",
+        violations.join("\n")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -163,7 +207,11 @@ fn primitive_intrinsics_have_valid_kinds() {
             ));
         }
     }
-    assert!(violations.is_empty(), "primitive_intrinsic invariant violations:\n{}", violations.join("\n"));
+    assert!(
+        violations.is_empty(),
+        "primitive_intrinsic invariant violations:\n{}",
+        violations.join("\n")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -183,16 +231,29 @@ fn muted_hint_domains_have_valid_placement_categories() {
             ));
         }
         if entry.description.is_empty() {
-            violations.push(format!("[[muted_hint_domain]] '{domain}': description is empty", domain = entry.domain));
+            violations.push(format!(
+                "[[muted_hint_domain]] '{domain}': description is empty",
+                domain = entry.domain
+            ));
         }
         if entry.example_source.is_empty() {
-            violations.push(format!("[[muted_hint_domain]] '{domain}': example_source is empty", domain = entry.domain));
+            violations.push(format!(
+                "[[muted_hint_domain]] '{domain}': example_source is empty",
+                domain = entry.domain
+            ));
         }
         if entry.example_hint_rendered.is_empty() {
-            violations.push(format!("[[muted_hint_domain]] '{domain}': example_hint_rendered is empty", domain = entry.domain));
+            violations.push(format!(
+                "[[muted_hint_domain]] '{domain}': example_hint_rendered is empty",
+                domain = entry.domain
+            ));
         }
     }
-    assert!(violations.is_empty(), "muted_hint_domain invariant violations:\n{}", violations.join("\n"));
+    assert!(
+        violations.is_empty(),
+        "muted_hint_domain invariant violations:\n{}",
+        violations.join("\n")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -204,16 +265,29 @@ fn diagnostic_templates_have_all_three_parts() {
     let mut violations = Vec::new();
     for entry in ynz_registry::diagnostic_templates() {
         if entry.what_template.is_empty() {
-            violations.push(format!("[[diagnostic_template]] '{kind_name}': what_template is empty", kind_name = entry.kind_name));
+            violations.push(format!(
+                "[[diagnostic_template]] '{kind_name}': what_template is empty",
+                kind_name = entry.kind_name
+            ));
         }
         if entry.what_instead_template.is_empty() {
-            violations.push(format!("[[diagnostic_template]] '{kind_name}': what_instead_template is empty", kind_name = entry.kind_name));
+            violations.push(format!(
+                "[[diagnostic_template]] '{kind_name}': what_instead_template is empty",
+                kind_name = entry.kind_name
+            ));
         }
         if entry.why_template.is_empty() {
-            violations.push(format!("[[diagnostic_template]] '{kind_name}': why_template is empty", kind_name = entry.kind_name));
+            violations.push(format!(
+                "[[diagnostic_template]] '{kind_name}': why_template is empty",
+                kind_name = entry.kind_name
+            ));
         }
     }
-    assert!(violations.is_empty(), "diagnostic_template invariant violations:\n{}", violations.join("\n"));
+    assert!(
+        violations.is_empty(),
+        "diagnostic_template invariant violations:\n{}",
+        violations.join("\n")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -225,13 +299,23 @@ fn keywords_have_populated_fields() {
     let mut violations = Vec::new();
     for entry in ynz_registry::keywords() {
         if entry.token.is_empty() {
-            violations.push(format!("[[keyword]] '{name}': token is empty", name = entry.name));
+            violations.push(format!(
+                "[[keyword]] '{name}': token is empty",
+                name = entry.name
+            ));
         }
         if entry.since.is_empty() {
-            violations.push(format!("[[keyword]] '{name}': since is empty", name = entry.name));
+            violations.push(format!(
+                "[[keyword]] '{name}': since is empty",
+                name = entry.name
+            ));
         }
     }
-    assert!(violations.is_empty(), "keyword invariant violations:\n{}", violations.join("\n"));
+    assert!(
+        violations.is_empty(),
+        "keyword invariant violations:\n{}",
+        violations.join("\n")
+    );
 }
 
 #[test]
@@ -239,13 +323,23 @@ fn banned_declaration_keywords_have_teaching_text() {
     let mut violations = Vec::new();
     for entry in ynz_registry::banned_declaration_keywords() {
         if entry.what_instead.is_empty() {
-            violations.push(format!("[[banned_declaration_keyword]] '{name}': what_instead is empty", name = entry.name));
+            violations.push(format!(
+                "[[banned_declaration_keyword]] '{name}': what_instead is empty",
+                name = entry.name
+            ));
         }
         if entry.why.is_empty() {
-            violations.push(format!("[[banned_declaration_keyword]] '{name}': why is empty", name = entry.name));
+            violations.push(format!(
+                "[[banned_declaration_keyword]] '{name}': why is empty",
+                name = entry.name
+            ));
         }
     }
-    assert!(violations.is_empty(), "banned_declaration_keyword invariant violations:\n{}", violations.join("\n"));
+    assert!(
+        violations.is_empty(),
+        "banned_declaration_keyword invariant violations:\n{}",
+        violations.join("\n")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -266,28 +360,74 @@ fn no_registry_field_contains_lsp_delimiter_substrings() {
 
     let check = |kind: &str, name: &str, field: &str, value: &str, violations: &mut Vec<String>| {
         if value.contains(D1) {
-            violations.push(format!("[{kind}] '{name}' field '{field}' contains LSP delimiter '{D1}'"));
+            violations.push(format!(
+                "[{kind}] '{name}' field '{field}' contains LSP delimiter '{D1}'"
+            ));
         }
         if value.contains(D2) {
-            violations.push(format!("[{kind}] '{name}' field '{field}' contains LSP delimiter '\\n\\nWHY:'"));
+            violations.push(format!(
+                "[{kind}] '{name}' field '{field}' contains LSP delimiter '\\n\\nWHY:'"
+            ));
         }
     };
 
     for e in ynz_registry::diagnostic_templates() {
-        check("diagnostic_template", e.kind_name, "what_template", e.what_template, &mut violations);
-        check("diagnostic_template", e.kind_name, "what_instead_template", e.what_instead_template, &mut violations);
-        check("diagnostic_template", e.kind_name, "why_template", e.why_template, &mut violations);
+        check(
+            "diagnostic_template",
+            e.kind_name,
+            "what_template",
+            e.what_template,
+            &mut violations,
+        );
+        check(
+            "diagnostic_template",
+            e.kind_name,
+            "what_instead_template",
+            e.what_instead_template,
+            &mut violations,
+        );
+        check(
+            "diagnostic_template",
+            e.kind_name,
+            "why_template",
+            e.why_template,
+            &mut violations,
+        );
     }
     for e in ynz_registry::banned_jargon() {
         check("banned_jargon", e.name, "reason", e.reason, &mut violations);
     }
     for e in ynz_registry::banned_declaration_keywords() {
-        check("banned_declaration_keyword", e.name, "what_instead", e.what_instead, &mut violations);
-        check("banned_declaration_keyword", e.name, "why", e.why, &mut violations);
+        check(
+            "banned_declaration_keyword",
+            e.name,
+            "what_instead",
+            e.what_instead,
+            &mut violations,
+        );
+        check(
+            "banned_declaration_keyword",
+            e.name,
+            "why",
+            e.why,
+            &mut violations,
+        );
     }
     for e in ynz_registry::deferred_language_features() {
-        check("deferred_language_feature", e.name, "why", e.why, &mut violations);
-        check("deferred_language_feature", e.name, "substitute", e.substitute, &mut violations);
+        check(
+            "deferred_language_feature",
+            e.name,
+            "why",
+            e.why,
+            &mut violations,
+        );
+        check(
+            "deferred_language_feature",
+            e.name,
+            "substitute",
+            e.substitute,
+            &mut violations,
+        );
     }
 
     assert!(

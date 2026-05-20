@@ -12,15 +12,18 @@ pub fn build_grammar() -> Value {
     // Exclude literal-value keywords (true, false, none) — they're covered by
     // #literals with a more specific scope. Keywords are matched after literals
     // in the outer patterns array, so this is defense-in-depth.
-    let literal_kws: std::collections::HashSet<&str> = ["true", "false", "none"].iter().copied().collect();
+    let literal_kws: std::collections::HashSet<&str> =
+        ["true", "false", "none"].iter().copied().collect();
     let keywords: Vec<String> = ynz_registry::keywords()
         .filter(|e| !literal_kws.contains(e.name))
         .map(|e| e.name.to_string())
         .collect();
-    let banned: Vec<String> =
-        ynz_registry::banned_declaration_keywords().map(|e| e.name.to_string()).collect();
-    let deferred: Vec<String> =
-        ynz_registry::deferred_language_features().map(|e| e.name.to_string()).collect();
+    let banned: Vec<String> = ynz_registry::banned_declaration_keywords()
+        .map(|e| e.name.to_string())
+        .collect();
+    let deferred: Vec<String> = ynz_registry::deferred_language_features()
+        .map(|e| e.name.to_string())
+        .collect();
 
     let kw_pattern = build_word_boundary_regex(&keywords);
     let banned_pattern = build_word_boundary_regex(&banned);
@@ -138,28 +141,44 @@ mod tests {
     fn keyword_pattern_contains_function() {
         let g = build_grammar();
         let kw_pattern = g["repository"]["keywords"]["match"].as_str().unwrap_or("");
-        assert!(kw_pattern.contains("function"), "keyword pattern must include 'function'");
+        assert!(
+            kw_pattern.contains("function"),
+            "keyword pattern must include 'function'"
+        );
     }
 
     #[test]
     fn banned_pattern_contains_class() {
         let g = build_grammar();
-        let banned_pattern = g["repository"]["banned-keywords"]["match"].as_str().unwrap_or("");
-        assert!(banned_pattern.contains("class"), "banned pattern must include 'class'");
+        let banned_pattern = g["repository"]["banned-keywords"]["match"]
+            .as_str()
+            .unwrap_or("");
+        assert!(
+            banned_pattern.contains("class"),
+            "banned pattern must include 'class'"
+        );
     }
 
     #[test]
     fn deferred_pattern_contains_gpu() {
         let g = build_grammar();
-        let deferred = g["repository"]["deferred-features"]["match"].as_str().unwrap_or("");
-        assert!(deferred.contains("gpu"), "deferred pattern must include 'gpu'");
+        let deferred = g["repository"]["deferred-features"]["match"]
+            .as_str()
+            .unwrap_or("");
+        assert!(
+            deferred.contains("gpu"),
+            "deferred pattern must include 'gpu'"
+        );
     }
 
     #[test]
     fn regex_pattern_has_word_boundaries() {
         let g = build_grammar();
         let kw = g["repository"]["keywords"]["match"].as_str().unwrap_or("");
-        assert!(kw.starts_with("\\b("), "keyword regex must start with word boundary \\b(");
+        assert!(
+            kw.starts_with("\\b("),
+            "keyword regex must start with word boundary \\b("
+        );
         assert!(kw.ends_with(")\\b"), "keyword regex must end with )\\b");
     }
 }

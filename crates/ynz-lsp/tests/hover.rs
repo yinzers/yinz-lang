@@ -17,7 +17,9 @@ fn tokenize(src: &str) -> Vec<ynz_parser::token::Spanned<ynz_parser::token::Toke
 }
 
 fn make_sig() -> ynz_typeck::signatures::SignatureTable {
-    ynz_typeck::signatures::SignatureTable { fns: std::collections::HashMap::new() }
+    ynz_typeck::signatures::SignatureTable {
+        fns: std::collections::HashMap::new(),
+    }
 }
 
 #[test]
@@ -26,11 +28,17 @@ fn hover_function_keyword() {
     let tokens = tokenize(src);
     let table = LineTable::new(src);
     let h = hover_response(&tokens, &make_sig(), src, &table, 0, PositionEncoding::Utf8);
-    assert!(h.is_some(), "hover over 'function' keyword should return Some");
+    assert!(
+        h.is_some(),
+        "hover over 'function' keyword should return Some"
+    );
     if let Some(h) = h {
         use lsp_types::HoverContents;
         if let HoverContents::Markup(mc) = h.contents {
-            assert!(mc.value.contains("function"), "hover must mention the keyword");
+            assert!(
+                mc.value.contains("function"),
+                "hover must mention the keyword"
+            );
         }
     }
 }
@@ -49,22 +57,34 @@ fn hover_user_defined_function() {
     let table = LineTable::new(src);
 
     let mut fns = HashMap::new();
-    fns.insert("myFunc".to_string(), FunctionSig {
-        params: vec![("n".to_string(), Type::Int)],
-        param_ownerships: vec![None],
-        ret: Type::String,
-        decl_span: SourceSpan::new("test.ynz", 0, 0),
-    });
+    fns.insert(
+        "myFunc".to_string(),
+        FunctionSig {
+            params: vec![("n".to_string(), Type::Int)],
+            param_ownerships: vec![None],
+            ret: Type::String,
+            decl_span: SourceSpan::new("test.ynz", 0, 0),
+        },
+    );
     let sig = SignatureTable { fns };
 
     let h = hover_response(&tokens, &sig, src, &table, 2, PositionEncoding::Utf8);
-    assert!(h.is_some(), "hover over user-defined function name should return Some");
+    assert!(
+        h.is_some(),
+        "hover over user-defined function name should return Some"
+    );
     if let Some(h) = h {
         use lsp_types::HoverContents;
         if let HoverContents::Markup(mc) = h.contents {
-            assert!(mc.value.contains("myFunc"), "hover must include function name");
+            assert!(
+                mc.value.contains("myFunc"),
+                "hover must include function name"
+            );
             assert!(mc.value.contains("int"), "hover must include param type");
-            assert!(mc.value.contains("string"), "hover must include return type");
+            assert!(
+                mc.value.contains("string"),
+                "hover must include return type"
+            );
         }
     }
 }
@@ -86,7 +106,10 @@ fn hover_at_byte_zero_of_empty_file_returns_none() {
     let tokens = tokenize(src);
     let table = LineTable::new(src);
     let h = hover_response(&tokens, &make_sig(), src, &table, 0, PositionEncoding::Utf8);
-    assert!(h.is_none(), "hover at byte 0 of empty file should return None");
+    assert!(
+        h.is_none(),
+        "hover at byte 0 of empty file should return None"
+    );
 }
 
 #[test]
@@ -112,7 +135,10 @@ fn hover_registry_content_with_angle_brackets_does_not_crash() {
     let table = LineTable::new(src);
     // "range" is a free function intrinsic — lsp_hover_for_token should return Some
     let h = hover_response(&tokens, &make_sig(), src, &table, 0, PositionEncoding::Utf8);
-    assert!(h.is_some(), "hover over 'range' intrinsic should return Some");
+    assert!(
+        h.is_some(),
+        "hover over 'range' intrinsic should return Some"
+    );
     if let Some(h) = h {
         use lsp_types::HoverContents;
         if let HoverContents::Markup(mc) = h.contents {
@@ -128,20 +154,29 @@ fn hover_request_via_lsp_returns_response() {
 
     let h = InProcessHarness::new().start_server();
     h.initialize();
-    h.did_open("file:///hover_test.ynz", "function entrypoint() -> nothing { }");
+    h.did_open(
+        "file:///hover_test.ynz",
+        "function entrypoint() -> nothing { }",
+    );
     h.try_recv_timeout(std::time::Duration::from_millis(100)); // drain diagnostic
 
     // Send hover request at position 0 (over "function" keyword)
-    h.conn.sender.send(lsp_server::Message::Request(lsp_server::Request {
-        id: lsp_server::RequestId::from(20i32),
-        method: "textDocument/hover".to_string(),
-        params: json!({
-            "textDocument": { "uri": "file:///hover_test.ynz" },
-            "position": { "line": 0, "character": 0 }
-        }),
-    })).unwrap();
+    h.conn
+        .sender
+        .send(lsp_server::Message::Request(lsp_server::Request {
+            id: lsp_server::RequestId::from(20i32),
+            method: "textDocument/hover".to_string(),
+            params: json!({
+                "textDocument": { "uri": "file:///hover_test.ynz" },
+                "position": { "line": 0, "character": 0 }
+            }),
+        }))
+        .unwrap();
 
     let response = h.recv_response();
     // Hover at position 0 over "function" should return a populated result
-    assert!(response.get("error").is_none(), "hover response must not contain an error: {response}");
+    assert!(
+        response.get("error").is_none(),
+        "hover response must not contain an error: {response}"
+    );
 }

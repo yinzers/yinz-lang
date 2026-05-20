@@ -57,7 +57,9 @@ fn collect_ynz_files(dir: &Path) -> Vec<PathBuf> {
 /// "module not registered" diagnostics in single-file mode.
 fn import_free_basics_fixtures() -> Vec<PathBuf> {
     let mut files = collect_ynz_files(&workspace_root().join("examples/basics/services"));
-    files.extend(collect_ynz_files(&workspace_root().join("examples/basics/utils")));
+    files.extend(collect_ynz_files(
+        &workspace_root().join("examples/basics/utils"),
+    ));
     assert!(
         !files.is_empty(),
         "examples/basics/services/ and utils/ must contain at least one .ynz file"
@@ -125,9 +127,8 @@ fn sweep_basics_fixtures_have_no_diagnostics() {
     // If the LSP reports diagnostics for any of them, a parser or typeck
     // regression broke valid user code.
     for path in &import_free_basics_fixtures() {
-        let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
-            panic!("failed to read basics fixture {}: {}", path.display(), e)
-        });
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("failed to read basics fixture {}: {}", path.display(), e));
         let uri = path_to_uri(path);
 
         let client = InProcessHarness::new().start_server();
@@ -171,9 +172,8 @@ fn sweep_error_fixtures_have_diagnostics() {
     let mut tested = 0usize;
 
     for path in &fixtures {
-        let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
-            panic!("failed to read error fixture {}: {}", path.display(), e)
-        });
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("failed to read error fixture {}: {}", path.display(), e));
         let uri = path_to_uri(path);
 
         let client = InProcessHarness::new().start_server();
@@ -224,9 +224,8 @@ fn sweep_all_fixtures_completion_returns() {
     let mut tested = 0usize;
 
     for path in &all_example_fixtures() {
-        let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
-            panic!("failed to read fixture {}: {}", path.display(), e)
-        });
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("failed to read fixture {}: {}", path.display(), e));
         let uri = path_to_uri(path);
 
         let client = InProcessHarness::new().start_server();
@@ -234,7 +233,10 @@ fn sweep_all_fixtures_completion_returns() {
 
         // Drain the diagnostic notification first.
         if open_and_drain_diagnostics(&client, &uri, &text).is_none() {
-            eprintln!("SKIP completion for {}: server unresponsive", path.display());
+            eprintln!(
+                "SKIP completion for {}: server unresponsive",
+                path.display()
+            );
             continue;
         }
 
@@ -285,9 +287,8 @@ fn sweep_all_fixtures_hover_returns() {
     let mut tested = 0usize;
 
     for path in &all_example_fixtures() {
-        let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
-            panic!("failed to read fixture {}: {}", path.display(), e)
-        });
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("failed to read fixture {}: {}", path.display(), e));
         let uri = path_to_uri(path);
 
         let client = InProcessHarness::new().start_server();

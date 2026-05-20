@@ -19,7 +19,10 @@ fn did_open_triggers_publish_diagnostics() {
     h.did_open("file:///test.ynz", "function entrypoint() -> nothing { }");
     // Phase 3: didOpen now triggers publishDiagnostics
     let msg = h.try_recv_timeout(Duration::from_millis(300));
-    assert!(msg.is_some(), "expected publishDiagnostics notification after didOpen");
+    assert!(
+        msg.is_some(),
+        "expected publishDiagnostics notification after didOpen"
+    );
 }
 
 #[test]
@@ -30,7 +33,10 @@ fn did_change_triggers_publish_diagnostics() {
     h.try_recv_timeout(Duration::from_millis(200)); // drain didOpen diagnostic
     h.did_change("file:///test.ynz", "let x: int = 2", 2);
     let msg = h.try_recv_timeout(Duration::from_millis(300));
-    assert!(msg.is_some(), "expected publishDiagnostics notification after didChange");
+    assert!(
+        msg.is_some(),
+        "expected publishDiagnostics notification after didChange"
+    );
 }
 
 #[test]
@@ -41,7 +47,10 @@ fn did_close_sends_empty_publish_diagnostics() {
     h.try_recv_timeout(Duration::from_millis(200)); // drain didOpen diagnostic
     h.did_close("file:///test.ynz");
     let msg = h.try_recv_timeout(Duration::from_millis(300));
-    assert!(msg.is_some(), "expected publishDiagnostics clear after didClose");
+    assert!(
+        msg.is_some(),
+        "expected publishDiagnostics clear after didClose"
+    );
 }
 
 #[test]
@@ -62,7 +71,10 @@ fn salsa_cache_invalidated_on_did_change() {
     let uri: lsp_types::Url = "file:///test.ynz".parse().unwrap();
 
     // Open with a known-good program.
-    state.open_document(uri.clone(), "function entrypoint() -> nothing { }".to_string());
+    state.open_document(
+        uri.clone(),
+        "function entrypoint() -> nothing { }".to_string(),
+    );
     let sf: SourceFile = state.source_file_for(&uri).unwrap();
 
     // Run check_query once — result gets memoized by salsa.
@@ -70,7 +82,10 @@ fn salsa_cache_invalidated_on_did_change() {
     let ptr_before = Arc::as_ptr(&result_before);
 
     // Update the document — salsa should invalidate the cached query.
-    state.update_document(&uri, "function entrypoint() -> nothing { let x: int = 99 }".to_string());
+    state.update_document(
+        &uri,
+        "function entrypoint() -> nothing { let x: int = 99 }".to_string(),
+    );
     let sf2: SourceFile = state.source_file_for(&uri).unwrap();
 
     // Re-run check_query — must produce a NEW Arc (cache miss after input change).

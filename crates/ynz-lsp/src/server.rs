@@ -38,7 +38,9 @@ pub fn serve(connection: Connection) {
 /// Perform the LSP initialize handshake and return the negotiated position encoding.
 fn handshake(connection: &Connection) -> crate::capabilities::PositionEncoding {
     // I/O-init: framework guarantees deserialization; panic surfaces unrecoverable stdio breakage
-    let (id, params_value) = connection.initialize_start().expect("initialize_start failed");
+    let (id, params_value) = connection
+        .initialize_start()
+        .expect("initialize_start failed");
 
     let params: InitializeParams = match serde_json::from_value(params_value) {
         Ok(p) => p,
@@ -68,7 +70,9 @@ fn handshake(connection: &Connection) -> crate::capabilities::PositionEncoding {
 
     // I/O-init: framework guarantees serialization; panic surfaces unrecoverable stdio breakage
     let result_value = serde_json::to_value(result).expect("serialize InitializeResult");
-    connection.initialize_finish(id, result_value).expect("initialize_finish failed");
+    connection
+        .initialize_finish(id, result_value)
+        .expect("initialize_finish failed");
     encoding
 }
 
@@ -118,17 +122,24 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
-        let lex_output = state.source_file_for(uri)
+        let lex_output = state
+            .source_file_for(uri)
             .map(|sf| ynz_parser::queries::lex_query(&state.db, sf));
-        let sig_output = state.source_file_for(uri)
+        let sig_output = state
+            .source_file_for(uri)
             .map(|sf| ynz_typeck::queries::module_signatures_query(&state.db, sf));
 
-        let empty_sig = ynz_typeck::signatures::SignatureTable { fns: std::collections::HashMap::new() };
+        let empty_sig = ynz_typeck::signatures::SignatureTable {
+            fns: std::collections::HashMap::new(),
+        };
         let hover = lex_output.as_ref().and_then(|lex| {
             let text = state.text_for(uri)?;
             let table = state.line_table_for(uri)?;
             let byte_offset = table.position_to_byte_offset(text, position, state.encoding)?;
-            let sig = sig_output.as_ref().map(|o| &o.sig_table).unwrap_or(&empty_sig);
+            let sig = sig_output
+                .as_ref()
+                .map(|o| &o.sig_table)
+                .unwrap_or(&empty_sig);
             hover_response(&lex.tokens, sig, text, table, byte_offset, state.encoding)
         });
 
@@ -157,14 +168,22 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
         let uri = &params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
 
-        let sig_output = state.source_file_for(uri)
+        let sig_output = state
+            .source_file_for(uri)
             .map(|sf| ynz_typeck::queries::module_signatures_query(&state.db, sf));
 
         let list = state.text_for(uri).and_then(|text| {
             let table = state.line_table_for(uri)?;
             let sig_table = sig_output.as_ref().map(|o| &o.sig_table);
             let shape_table = sig_output.as_ref().map(|o| &o.shape_table);
-            completion_list(text, table, position, state.encoding, sig_table, shape_table)
+            completion_list(
+                text,
+                table,
+                position,
+                state.encoding,
+                sig_table,
+                shape_table,
+            )
         });
 
         let result = match list {
@@ -185,18 +204,12 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
     connection.sender.send(Message::Response(response)).ok();
 }
 
-fn handle_notification(
-    connection: &Connection,
-    state: &mut ServerState,
-    notif: Notification,
-) {
+fn handle_notification(connection: &Connection, state: &mut ServerState, notif: Notification) {
     match notif.method.as_str() {
         Initialized::METHOD => {}
 
         DidOpenTextDocument::METHOD => {
-            if let Ok(params) =
-                serde_json::from_value::<DidOpenTextDocumentParams>(notif.params)
-            {
+            if let Ok(params) = serde_json::from_value::<DidOpenTextDocumentParams>(notif.params) {
                 let uri = params.text_document.uri;
                 let text = params.text_document.text;
                 state.open_document(uri.clone(), text);
@@ -205,8 +218,7 @@ fn handle_notification(
         }
 
         DidChangeTextDocument::METHOD => {
-            if let Ok(params) =
-                serde_json::from_value::<DidChangeTextDocumentParams>(notif.params)
+            if let Ok(params) = serde_json::from_value::<DidChangeTextDocumentParams>(notif.params)
             {
                 let uri = params.text_document.uri;
                 let version = params.text_document.version;
@@ -218,9 +230,7 @@ fn handle_notification(
         }
 
         DidCloseTextDocument::METHOD => {
-            if let Ok(params) =
-                serde_json::from_value::<DidCloseTextDocumentParams>(notif.params)
-            {
+            if let Ok(params) = serde_json::from_value::<DidCloseTextDocumentParams>(notif.params) {
                 let uri = params.text_document.uri;
                 // Clear squiggles for the closed document.
                 publish_diagnostics(connection, uri.clone(), vec![], None);
@@ -247,7 +257,9 @@ fn run_and_publish_diagnostics(
     uri: &Url,
     version: Option<i32>,
 ) {
-    let Some(sf) = state.source_file_for(uri) else { return };
+    let Some(sf) = state.source_file_for(uri) else {
+        return;
+    };
 
     let check_output = ynz_typeck::queries::check_query(&state.db, sf);
     let encoding = state.encoding;
@@ -304,7 +316,11 @@ pub fn publish_diagnostics(
     diagnostics: Vec<lsp_types::Diagnostic>,
     version: Option<i32>,
 ) {
-    let params = lsp_types::PublishDiagnosticsParams { uri, diagnostics, version };
+    let params = lsp_types::PublishDiagnosticsParams {
+        uri,
+        diagnostics,
+        version,
+    };
     let notif = Notification::new("textDocument/publishDiagnostics".to_string(), params);
     connection.sender.send(Message::Notification(notif)).ok();
 }

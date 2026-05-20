@@ -11,8 +11,10 @@ fn design_future_dir() -> PathBuf {
     // CARGO_MANIFEST_DIR = .../crates/ynz-registry
     // parent() x2 → workspace root
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap()  // crates/
-        .parent().unwrap()  // workspace root
+        .parent()
+        .unwrap() // crates/
+        .parent()
+        .unwrap() // workspace root
         .join("design")
         .join("future")
 }
@@ -20,14 +22,35 @@ fn design_future_dir() -> PathBuf {
 /// Files in design/future/ that intentionally have no registry entry.
 /// Rationale for each in the comment.
 const SKIP: &[(&str, &str)] = &[
-    ("index.md",               "index file, not a feature doc"),
-    ("inline-shape-types.md",  "shipped in v0.1-polish — no deferred entry needed"),
-    ("auto-soa.md",            "codegen-only optimization, no user-facing token"),
-    ("concurrency.md",         "covered by M8 wait/background keywords, no deferred token"),
-    ("http-framework.md",      "deferred_stdlib_api kind, zero M1 entries per schema"),
-    ("panic-safety.md",        "covered by errors keyword + panic isolation, no deferred token"),
-    ("string-ptr-len-overhaul.md", "compiler-internal representation change, no user token"),
-    ("supervisor.md",          "deferred_stdlib_api kind, zero M1 entries per schema"),
+    ("index.md", "index file, not a feature doc"),
+    (
+        "inline-shape-types.md",
+        "shipped in v0.1-polish — no deferred entry needed",
+    ),
+    (
+        "auto-soa.md",
+        "codegen-only optimization, no user-facing token",
+    ),
+    (
+        "concurrency.md",
+        "covered by M8 wait/background keywords, no deferred token",
+    ),
+    (
+        "http-framework.md",
+        "deferred_stdlib_api kind, zero M1 entries per schema",
+    ),
+    (
+        "panic-safety.md",
+        "covered by errors keyword + panic isolation, no deferred token",
+    ),
+    (
+        "string-ptr-len-overhaul.md",
+        "compiler-internal representation change, no user token",
+    ),
+    (
+        "supervisor.md",
+        "deferred_stdlib_api kind, zero M1 entries per schema",
+    ),
 ];
 
 fn is_skipped(filename: &str) -> bool {
@@ -85,8 +108,10 @@ fn every_future_doc_has_a_registry_entry_or_is_skipped() {
 #[test]
 fn every_registry_entry_design_doc_exists() {
     let workspace_root = design_future_dir()
-        .parent().unwrap()  // design/
-        .parent().unwrap()  // workspace root
+        .parent()
+        .unwrap() // design/
+        .parent()
+        .unwrap() // workspace root
         .to_path_buf();
 
     let mut broken = Vec::new();

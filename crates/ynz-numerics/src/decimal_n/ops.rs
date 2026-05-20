@@ -369,7 +369,10 @@ pub fn div(a: &BigNum, b: &BigNum) -> BigNum {
         sub_long_into(&remainder, &mul_scratch, &mut sub_scratch);
         std::mem::swap(&mut remainder, &mut sub_scratch);
         // Remove leading zeros from remainder without shifting.
-        let start = remainder.iter().position(|&d| d != 0).unwrap_or(remainder.len() - 1);
+        let start = remainder
+            .iter()
+            .position(|&d| d != 0)
+            .unwrap_or(remainder.len() - 1);
         if start > 0 {
             remainder.drain(0..start);
         }
@@ -437,7 +440,10 @@ fn mul_single(digits: &[u8], factor: u8) -> Vec<u8> {
     }
     result[0] = carry;
     // Strip leading zeros via slice-from-offset — no O(n) shift per removed zero.
-    let start = result.iter().position(|&d| d != 0).unwrap_or(result.len() - 1);
+    let start = result
+        .iter()
+        .position(|&d| d != 0)
+        .unwrap_or(result.len() - 1);
     result[start..].to_vec()
 }
 

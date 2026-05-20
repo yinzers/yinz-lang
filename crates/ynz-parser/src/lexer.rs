@@ -455,7 +455,10 @@ impl<'src> Lexer<'src> {
                 self.pos = end;
                 self.diags.push(Diagnostic::error(
                     SourceSpan::new(self.file, start, end),
-                    format!("The character `{}` is not valid here.", byte_as_char_display(self.src, start, end)),
+                    format!(
+                        "The character `{}` is not valid here.",
+                        byte_as_char_display(self.src, start, end)
+                    ),
                     "Remove or replace this character.",
                     "Yinz source files may only contain ASCII text and UTF-8 string content.",
                 ));
@@ -576,7 +579,8 @@ impl<'src> Lexer<'src> {
             "test" => {
                 let entry = ynz_registry::deferred_language_feature_lookup("test")
                     .expect("registry missing deferred_language_feature 'test'");
-                let (what_instead, why) = ynz_diagnostics::deferred_feature::render_deferred_feature(entry);
+                let (what_instead, why) =
+                    ynz_diagnostics::deferred_feature::render_deferred_feature(entry);
                 self.emit_banned_declaration_keyword(start, self.pos, "test", what_instead, why);
                 Token::Identifier(text.to_string())
             }
@@ -669,9 +673,12 @@ impl<'src> Lexer<'src> {
             // Sized numeric types from C/Rust/Go — reserved, ship in v2+ with kernel/embedded targets.
             // Error text is registry-driven via render_deferred_feature().
             "f32" | "f64" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" => {
-                let entry = ynz_registry::deferred_language_feature_lookup(text)
-                    .unwrap_or_else(|| panic!("registry missing deferred_language_feature {text:?}"));
-                let (what_instead, why) = ynz_diagnostics::deferred_feature::render_deferred_feature(entry);
+                let entry =
+                    ynz_registry::deferred_language_feature_lookup(text).unwrap_or_else(|| {
+                        panic!("registry missing deferred_language_feature {text:?}")
+                    });
+                let (what_instead, why) =
+                    ynz_diagnostics::deferred_feature::render_deferred_feature(entry);
                 self.emit_banned_declaration_keyword(start, self.pos, text, what_instead, why);
                 Token::Identifier(text.to_string())
             }
@@ -1095,7 +1102,11 @@ impl<'src> Lexer<'src> {
         // Phase 2 — optional fractional part (only if `.` is followed by a digit).
         // `3.` followed by EOF, whitespace, or an operator is an error — ambiguous intent.
         // `42.toString()` is fine — `.` followed by a letter is a method-call dot, not decimal.
-        let next_after_dot = self.pos.checked_add(1).and_then(|i| self.src.get(i)).copied();
+        let next_after_dot = self
+            .pos
+            .checked_add(1)
+            .and_then(|i| self.src.get(i))
+            .copied();
         if self.pos < self.src.len()
             && self.src[self.pos] == b'.'
             && !matches!(next_after_dot, Some(b'0'..=b'9'))
@@ -1254,7 +1265,6 @@ impl<'src> Lexer<'src> {
             why,
         ));
     }
-
 
     /// Advance past non-whitespace bytes to recover from a malformed literal.
     fn skip_to_whitespace(&mut self) {

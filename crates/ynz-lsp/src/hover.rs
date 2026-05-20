@@ -100,7 +100,9 @@ pub fn hover_response(
 
     // Typeck fallback: user-defined function signature
     if let Some(sig) = sig_table.fns.get(&token_name) {
-        let param_str = sig.params.iter()
+        let param_str = sig
+            .params
+            .iter()
             .map(|(pname, ptype)| format!("{pname}: {}", type_name(ptype)))
             .collect::<Vec<_>>()
             .join(", ");
@@ -125,8 +127,8 @@ pub fn hover_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ynz_parser::lexer::lex;
     use std::collections::HashMap;
+    use ynz_parser::lexer::lex;
     use ynz_typeck::signatures::SignatureTable;
 
     fn tokenize(src: &str) -> Vec<Spanned<Token>> {
@@ -170,7 +172,9 @@ mod tests {
     }
 
     fn make_sig() -> SignatureTable {
-        SignatureTable { fns: HashMap::new() }
+        SignatureTable {
+            fns: HashMap::new(),
+        }
     }
 
     #[test]
@@ -179,9 +183,19 @@ mod tests {
         let tokens = tokenize(src);
         let table = LineTable::new(src);
         let result = hover_response(&tokens, &make_sig(), src, &table, 3, PositionEncoding::Utf8);
-        assert!(result.is_some(), "hovering over 'function' keyword should return Some");
-        if let Some(Hover { contents: HoverContents::Markup(mc), .. }) = result {
-            assert!(mc.value.contains("function"), "hover body must mention the keyword");
+        assert!(
+            result.is_some(),
+            "hovering over 'function' keyword should return Some"
+        );
+        if let Some(Hover {
+            contents: HoverContents::Markup(mc),
+            ..
+        }) = result
+        {
+            assert!(
+                mc.value.contains("function"),
+                "hover body must mention the keyword"
+            );
         }
     }
 

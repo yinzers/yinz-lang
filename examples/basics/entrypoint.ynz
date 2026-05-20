@@ -1,7 +1,13 @@
-// examples/basics/src/entrypoint.ynz
+// examples/basics/entrypoint.ynz
 //
 // The Yinz v0.1 Language Showcase — grows milestone-by-milestone.
 // Compile + run with: ./target/debug/ynz run examples/basics/
+//
+// v0.2-M2 — Open this file in VSCode (with the Yinz extension installed) to see:
+//   • Hover docs on every keyword — try hovering over `function`, `let`, `shape`, etc.
+//   • Autocomplete after typing `int.` — shows all primitive int methods
+//   • Inline diagnostics — see examples/errors/v0_2_m2_errors.ynz for intentional triggers
+//   Install: https://github.com/patrickrizzardi/ynz/releases/latest/download/yinz-latest.vsix
 //
 // M8: this file is now the ENTRYPOINT of a multi-file project.
 // Companion modules: services/players.ynz, utils/math_extra.ynz

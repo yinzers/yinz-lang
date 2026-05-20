@@ -242,9 +242,8 @@ pub unsafe extern "C" fn ynz_string_eq(a: *const u8, b: *const u8) -> i32 {
 pub unsafe extern "C" fn ynz_sensitive_to_string(raw_ptr: *const u8) -> *const u8 {
     use std::sync::OnceLock;
     static REVEAL: OnceLock<bool> = OnceLock::new();
-    let reveal = *REVEAL.get_or_init(|| {
-        std::env::var("YNZ_REVEAL_SENSITIVE").as_deref() == Ok("1")
-    });
+    let reveal =
+        *REVEAL.get_or_init(|| std::env::var("YNZ_REVEAL_SENSITIVE").as_deref() == Ok("1"));
     if reveal {
         raw_ptr
     } else {
@@ -491,43 +490,53 @@ pub struct YnzMap {
 unsafe fn map_alloc(capacity: i64) -> *mut YnzMap {
     let hdr = malloc(std::mem::size_of::<YnzMap>()) as *mut YnzMap;
     if hdr.is_null() {
-        eprintln!("RUNTIME ERROR: Out of memory while allocating a new map. \
+        eprintln!(
+            "RUNTIME ERROR: Out of memory while allocating a new map. \
                   The program tried to create a map but the system couldn't \
                   allocate memory. Yinz aborts rather than continuing with \
-                  an inconsistent map.");
+                  an inconsistent map."
+        );
         std::process::abort();
     }
     let ctrl = malloc(capacity as usize) as *mut u8;
     if ctrl.is_null() {
-        eprintln!("RUNTIME ERROR: Out of memory while allocating a new map. \
+        eprintln!(
+            "RUNTIME ERROR: Out of memory while allocating a new map. \
                   The program tried to create a map but the system couldn't \
                   allocate memory. Yinz aborts rather than continuing with \
-                  an inconsistent map.");
+                  an inconsistent map."
+        );
         std::process::abort();
     }
     let keys = malloc((capacity as usize) * 8) as *mut i64;
     if keys.is_null() {
-        eprintln!("RUNTIME ERROR: Out of memory while allocating a new map. \
+        eprintln!(
+            "RUNTIME ERROR: Out of memory while allocating a new map. \
                   The program tried to create a map but the system couldn't \
                   allocate memory. Yinz aborts rather than continuing with \
-                  an inconsistent map.");
+                  an inconsistent map."
+        );
         std::process::abort();
     }
     let vals = malloc((capacity as usize) * 8) as *mut i64;
     if vals.is_null() {
-        eprintln!("RUNTIME ERROR: Out of memory while allocating a new map. \
+        eprintln!(
+            "RUNTIME ERROR: Out of memory while allocating a new map. \
                   The program tried to create a map but the system couldn't \
                   allocate memory. Yinz aborts rather than continuing with \
-                  an inconsistent map.");
+                  an inconsistent map."
+        );
         std::process::abort();
     }
     let order_cap: i64 = INITIAL_ORDER_CAP;
     let order = malloc((order_cap as usize) * 8) as *mut i64;
     if order.is_null() {
-        eprintln!("RUNTIME ERROR: Out of memory while allocating a new map. \
+        eprintln!(
+            "RUNTIME ERROR: Out of memory while allocating a new map. \
                   The program tried to create a map but the system couldn't \
                   allocate memory. Yinz aborts rather than continuing with \
-                  an inconsistent map.");
+                  an inconsistent map."
+        );
         std::process::abort();
     }
     std::ptr::write_bytes(ctrl, CTRL_EMPTY, capacity as usize);
@@ -583,9 +592,11 @@ unsafe fn find_insert_slot(map: *const YnzMap, hash: u64) -> usize {
         }
         probes += 1;
         if probes >= cap {
-            eprintln!("RUNTIME ERROR: Map full and unable to grow. \
+            eprintln!(
+                "RUNTIME ERROR: Map full and unable to grow. \
                       This should be impossible — please file a compiler bug with \
-                      the program that triggered it.");
+                      the program that triggered it."
+            );
             std::process::abort();
         }
         idx = (idx + 1) & (cap - 1);
@@ -612,26 +623,32 @@ unsafe fn map_grow_int(map: *mut YnzMap) {
     let new_cap = old_cap * 2;
     let new_ctrl = malloc(new_cap as usize) as *mut u8;
     if new_ctrl.is_null() {
-        eprintln!("RUNTIME ERROR: Out of memory while growing a map. \
+        eprintln!(
+            "RUNTIME ERROR: Out of memory while growing a map. \
                   The program tried to insert into a map but the system couldn't \
                   allocate more memory. Yinz aborts rather than continuing with \
-                  an inconsistent map.");
+                  an inconsistent map."
+        );
         std::process::abort();
     }
     let new_keys = malloc((new_cap as usize) * 8) as *mut i64;
     if new_keys.is_null() {
-        eprintln!("RUNTIME ERROR: Out of memory while growing a map. \
+        eprintln!(
+            "RUNTIME ERROR: Out of memory while growing a map. \
                   The program tried to insert into a map but the system couldn't \
                   allocate more memory. Yinz aborts rather than continuing with \
-                  an inconsistent map.");
+                  an inconsistent map."
+        );
         std::process::abort();
     }
     let new_vals = malloc((new_cap as usize) * 8) as *mut i64;
     if new_vals.is_null() {
-        eprintln!("RUNTIME ERROR: Out of memory while growing a map. \
+        eprintln!(
+            "RUNTIME ERROR: Out of memory while growing a map. \
                   The program tried to insert into a map but the system couldn't \
                   allocate more memory. Yinz aborts rather than continuing with \
-                  an inconsistent map.");
+                  an inconsistent map."
+        );
         std::process::abort();
     }
     std::ptr::write_bytes(new_ctrl, CTRL_EMPTY, new_cap as usize);
@@ -673,26 +690,32 @@ unsafe fn map_grow_str(map: *mut YnzMap) {
     let new_cap = old_cap * 2;
     let new_ctrl = malloc(new_cap as usize) as *mut u8;
     if new_ctrl.is_null() {
-        eprintln!("RUNTIME ERROR: Out of memory while growing a map. \
+        eprintln!(
+            "RUNTIME ERROR: Out of memory while growing a map. \
                   The program tried to insert into a map but the system couldn't \
                   allocate more memory. Yinz aborts rather than continuing with \
-                  an inconsistent map.");
+                  an inconsistent map."
+        );
         std::process::abort();
     }
     let new_keys = malloc((new_cap as usize) * 8) as *mut i64;
     if new_keys.is_null() {
-        eprintln!("RUNTIME ERROR: Out of memory while growing a map. \
+        eprintln!(
+            "RUNTIME ERROR: Out of memory while growing a map. \
                   The program tried to insert into a map but the system couldn't \
                   allocate more memory. Yinz aborts rather than continuing with \
-                  an inconsistent map.");
+                  an inconsistent map."
+        );
         std::process::abort();
     }
     let new_vals = malloc((new_cap as usize) * 8) as *mut i64;
     if new_vals.is_null() {
-        eprintln!("RUNTIME ERROR: Out of memory while growing a map. \
+        eprintln!(
+            "RUNTIME ERROR: Out of memory while growing a map. \
                   The program tried to insert into a map but the system couldn't \
                   allocate more memory. Yinz aborts rather than continuing with \
-                  an inconsistent map.");
+                  an inconsistent map."
+        );
         std::process::abort();
     }
     std::ptr::write_bytes(new_ctrl, CTRL_EMPTY, new_cap as usize);
@@ -732,10 +755,12 @@ unsafe fn order_push(map: *mut YnzMap, key: i64) {
             (new_cap as usize) * 8,
         ) as *mut i64;
         if new_order.is_null() {
-            eprintln!("RUNTIME ERROR: Out of memory while growing a map's insertion-order tracking. \
+            eprintln!(
+                "RUNTIME ERROR: Out of memory while growing a map's insertion-order tracking. \
                       The program tried to insert into a map but the system couldn't \
                       allocate more memory. Yinz aborts rather than continuing with \
-                      an inconsistent map.");
+                      an inconsistent map."
+            );
             std::process::abort();
         }
         (*map).insert_order = new_order;
@@ -854,9 +879,11 @@ pub unsafe extern "C" fn ynz_map_set_str(map: *mut YnzMap, key: *const u8, value
     while *(*map).ctrl.add(idx) != CTRL_EMPTY && *(*map).ctrl.add(idx) != CTRL_DELETED {
         probes += 1;
         if probes >= cap {
-            eprintln!("RUNTIME ERROR: Map full and unable to grow. \
+            eprintln!(
+                "RUNTIME ERROR: Map full and unable to grow. \
                       This should be impossible — please file a compiler bug with \
-                      the program that triggered it.");
+                      the program that triggered it."
+            );
             std::process::abort();
         }
         idx = (idx + 1) & (cap - 1);
@@ -972,18 +999,22 @@ pub unsafe extern "C" fn ynz_array_new() -> *mut YnzArray {
     let cap: i64 = INITIAL_ARRAY_CAPACITY;
     let data = malloc((cap as usize) * 8) as *mut u8;
     if data.is_null() {
-        eprintln!("RUNTIME ERROR: Out of memory while allocating a new array. \
+        eprintln!(
+            "RUNTIME ERROR: Out of memory while allocating a new array. \
                   The program tried to create an array but the system couldn't \
                   allocate memory. Yinz aborts rather than continuing with \
-                  an inconsistent state.");
+                  an inconsistent state."
+        );
         std::process::abort();
     }
     let hdr = malloc(std::mem::size_of::<YnzArray>()) as *mut YnzArray;
     if hdr.is_null() {
-        eprintln!("RUNTIME ERROR: Out of memory while allocating a new array. \
+        eprintln!(
+            "RUNTIME ERROR: Out of memory while allocating a new array. \
                   The program tried to create an array but the system couldn't \
                   allocate memory. Yinz aborts rather than continuing with \
-                  an inconsistent state.");
+                  an inconsistent state."
+        );
         std::process::abort();
     }
     (*hdr) = YnzArray { data, len: 0, cap };
@@ -1005,10 +1036,12 @@ pub unsafe extern "C" fn ynz_array_push(arr: *mut YnzArray, value: i64) {
             (new_cap as usize) * 8,
         ) as *mut u8;
         if new_data.is_null() {
-            eprintln!("RUNTIME ERROR: Out of memory while growing an array. \
+            eprintln!(
+                "RUNTIME ERROR: Out of memory while growing an array. \
                       The program tried to push to an array but the system couldn't \
                       allocate more memory. Yinz aborts rather than continuing with \
-                      an inconsistent state.");
+                      an inconsistent state."
+            );
             std::process::abort();
         }
         (*arr).data = new_data;
@@ -2499,7 +2532,11 @@ mod array_runtime {
             for i in 0..16i64 {
                 ynz_array_push(arr, i * 100);
             }
-            assert_eq!(ynz_array_count(arr), 16, "must have 16 elements after growth");
+            assert_eq!(
+                ynz_array_count(arr),
+                16,
+                "must have 16 elements after growth"
+            );
             let mut out = [0i64; 2];
             ynz_array_get(arr, 15, &mut out);
             assert_eq!(out, [1, 1500], "element 15 must be 15*100 = 1500");
@@ -2574,9 +2611,11 @@ unsafe fn bignum_binop(
     let result = op(&an, &bn_val);
     let s = format_bignum(&result);
     let cstr = std::ffi::CString::new(s).unwrap_or_else(|_| {
-        eprintln!("INTERNAL ERROR: bignum formatting produced an unexpected NUL byte. \
+        eprintln!(
+            "INTERNAL ERROR: bignum formatting produced an unexpected NUL byte. \
                   This is a compiler bug — please file an issue at \
-                  https://github.com/yinz-lang/yinz/issues with the source file attached.");
+                  https://github.com/yinz-lang/yinz/issues with the source file attached."
+        );
         std::process::abort();
     });
     cstr.into_raw()

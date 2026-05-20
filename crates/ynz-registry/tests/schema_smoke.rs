@@ -34,8 +34,14 @@ fn keyword_lookup_miss_returns_none() {
 #[test]
 fn keyword_iteration_finds_all() {
     let names: Vec<&str> = ynz_registry::keywords().map(|e| e.name).collect();
-    assert!(names.contains(&"function"), "expected 'function' in keyword iteration; got: {names:?}");
-    assert!(names.contains(&"wait"), "expected 'wait' in keyword iteration; got: {names:?}");
+    assert!(
+        names.contains(&"function"),
+        "expected 'function' in keyword iteration; got: {names:?}"
+    );
+    assert!(
+        names.contains(&"wait"),
+        "expected 'wait' in keyword iteration; got: {names:?}"
+    );
     assert_eq!(names.len(), 29, "expected 29 keywords");
 }
 
@@ -83,7 +89,9 @@ fn primitive_intrinsic_method_lookup() {
 #[test]
 fn primitive_intrinsic_method_1arg_lookup() {
     let mut found = ynz_registry::primitive_intrinsic_methods("int", "wrappingAdd");
-    let entry = found.next().expect("int.wrappingAdd not found (Phase 3 migration)");
+    let entry = found
+        .next()
+        .expect("int.wrappingAdd not found (Phase 3 migration)");
     assert_eq!(entry.kind, "method_1arg");
     assert_eq!(entry.param_types, &["int"]);
     assert_eq!(entry.return_type, "int");
@@ -127,13 +135,22 @@ fn type_attached_constant_number_epsilon() {
 #[test]
 fn lsp_autocomplete_sweep() {
     let keyword_names: Vec<&str> = ynz_registry::keywords().map(|e| e.name).collect();
-    let intrinsic_names: Vec<&str> = ynz_registry::primitive_intrinsics().map(|e| e.name).collect();
+    let intrinsic_names: Vec<&str> = ynz_registry::primitive_intrinsics()
+        .map(|e| e.name)
+        .collect();
 
-    let all: Vec<&str> = keyword_names.iter().chain(intrinsic_names.iter()).copied().collect();
+    let all: Vec<&str> = keyword_names
+        .iter()
+        .chain(intrinsic_names.iter())
+        .copied()
+        .collect();
 
     // Prove the sweep produces at least one entry per kind.
     assert!(!keyword_names.is_empty(), "keyword list must not be empty");
-    assert!(!intrinsic_names.is_empty(), "intrinsic list must not be empty");
+    assert!(
+        !intrinsic_names.is_empty(),
+        "intrinsic list must not be empty"
+    );
     assert!(all.len() >= 2, "combined list must have at least 2 entries");
 
     // Prove fuzzy filtering works (contains check — stand-in for prefix/fuzzy match).
@@ -203,14 +220,38 @@ fn render_template_no_substitutions() {
 fn bom_crlf_build_succeeded() {
     // If the build script ran without panic, BOM/CRLF handling worked.
     // Verify by checking that at least one entry of each kind is present.
-    assert!(ynz_registry::keywords().count() >= 1, "[[keyword]] entries present");
-    assert!(ynz_registry::banned_jargon().count() >= 1, "[[banned_jargon]] entries present");
-    assert!(ynz_registry::primitive_intrinsics().count() >= 1, "[[primitive_intrinsic]] entries present");
-    assert!(ynz_registry::type_attached_constants().count() >= 1, "[[type_attached_constant]] entries present");
-    assert!(ynz_registry::deferred_language_features().count() >= 1, "[[deferred_language_feature]] entries present");
-    assert!(ynz_registry::deferred_tooling_features().count() >= 1, "[[deferred_tooling_feature]] entries present");
-    assert!(ynz_registry::diagnostic_templates().count() >= 1, "[[diagnostic_template]] entries present");
-    assert!(ynz_registry::muted_hint_domains().count() >= 1, "[[muted_hint_domain]] entries present");
+    assert!(
+        ynz_registry::keywords().count() >= 1,
+        "[[keyword]] entries present"
+    );
+    assert!(
+        ynz_registry::banned_jargon().count() >= 1,
+        "[[banned_jargon]] entries present"
+    );
+    assert!(
+        ynz_registry::primitive_intrinsics().count() >= 1,
+        "[[primitive_intrinsic]] entries present"
+    );
+    assert!(
+        ynz_registry::type_attached_constants().count() >= 1,
+        "[[type_attached_constant]] entries present"
+    );
+    assert!(
+        ynz_registry::deferred_language_features().count() >= 1,
+        "[[deferred_language_feature]] entries present"
+    );
+    assert!(
+        ynz_registry::deferred_tooling_features().count() >= 1,
+        "[[deferred_tooling_feature]] entries present"
+    );
+    assert!(
+        ynz_registry::diagnostic_templates().count() >= 1,
+        "[[diagnostic_template]] entries present"
+    );
+    assert!(
+        ynz_registry::muted_hint_domains().count() >= 1,
+        "[[muted_hint_domain]] entries present"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -265,9 +306,13 @@ fn diagnostic_template_lookup() {
 fn all_muted_hint_placement_categories_valid() {
     for entry in ynz_registry::muted_hint_domains() {
         assert!(
-            matches!(entry.placement_category, "Addition" | "Replacement" | "Informational"),
+            matches!(
+                entry.placement_category,
+                "Addition" | "Replacement" | "Informational"
+            ),
             "muted_hint_domain '{}' has invalid placement_category '{}'",
-            entry.domain, entry.placement_category
+            entry.domain,
+            entry.placement_category
         );
     }
 }

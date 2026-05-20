@@ -2,7 +2,7 @@
 // Schema reference: design/feature-registry.md #deferred_language_feature
 
 pub use ynz_registry::{
-    DeferredLanguageFeatureEntry, deferred_language_feature_lookup, deferred_language_features,
+    deferred_language_feature_lookup, deferred_language_features, DeferredLanguageFeatureEntry,
 };
 
 /// Render a deferred-feature entry into the (what_instead, why) pair that
@@ -12,6 +12,8 @@ pub use ynz_registry::{
 /// token (sized numerics, `test`, future keywords). Centralising the call
 /// here means any future consumer (codegen, LSP) uses the same rendering
 /// without re-implementing the registry lookup.
-pub fn render_deferred_feature(entry: &DeferredLanguageFeatureEntry) -> (&'static str, &'static str) {
+pub fn render_deferred_feature(
+    entry: &DeferredLanguageFeatureEntry,
+) -> (&'static str, &'static str) {
     (entry.substitute, entry.why)
 }

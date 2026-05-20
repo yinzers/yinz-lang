@@ -52,7 +52,10 @@ pub fn check(
     let mut options_table = collect_options(module, &mut diags);
     // Merge imported options so function bodies can use cross-file options types.
     for (name, entry) in imported_options {
-        options_table.options.entry(name.clone()).or_insert_with(|| entry.clone());
+        options_table
+            .options
+            .entry(name.clone())
+            .or_insert_with(|| entry.clone());
     }
 
     let mut checker = Checker {
@@ -2750,14 +2753,19 @@ impl<'b> Checker<'b> {
         is_struct_literal: bool,
     ) {
         let display_name = if shape_name.starts_with("__anon__") {
-            type_name(&Type::Shape { name: shape_name.to_string() })
+            type_name(&Type::Shape {
+                name: shape_name.to_string(),
+            })
         } else {
             shape_name.to_string()
         };
         let suggestion = find_closest_name(field, available);
         let what_instead = match suggestion {
             Some(close) => format!("Did you mean `{close}`?"),
-            None => format!("`{display_name}` has these fields: {}", available.join(", ")),
+            None => format!(
+                "`{display_name}` has these fields: {}",
+                available.join(", ")
+            ),
         };
         let why = if is_struct_literal {
             "Shape values can only set fields declared on the shape."
@@ -2901,7 +2909,9 @@ impl<'b> Checker<'b> {
         };
 
         let display_name = if shape_name.starts_with("__anon__") {
-            type_name(&Type::Shape { name: shape_name.clone() })
+            type_name(&Type::Shape {
+                name: shape_name.clone(),
+            })
         } else {
             shape_name.clone()
         };
@@ -2959,10 +2969,7 @@ impl<'b> Checker<'b> {
 
         // Check each provided field: name must exist and value type must match.
         for lit_field in fields {
-            let found_field = shape_def
-                .fields
-                .iter()
-                .find(|f| f.name == lit_field.name);
+            let found_field = shape_def.fields.iter().find(|f| f.name == lit_field.name);
             match found_field {
                 None => {
                     let available: Vec<&str> = shape_def
@@ -2980,8 +2987,9 @@ impl<'b> Checker<'b> {
                     );
                     self.infer_expr(&lit_field.value, None);
                 }
-                Some(field_def) if field_def.is_hidden
-                    && lit_field.name_span.file != shape_def.defined_at.file =>
+                Some(field_def)
+                    if field_def.is_hidden
+                        && lit_field.name_span.file != shape_def.defined_at.file =>
                 {
                     // External file is trying to set a hidden field at construction time.
                     let declaring_file = std::path::Path::new(&shape_def.defined_at.file)
@@ -2992,11 +3000,7 @@ impl<'b> Checker<'b> {
                         let mut chars = lit_field.name.chars();
                         match chars.next() {
                             Some(first) if first.is_alphabetic() => {
-                                format!(
-                                    "with{}{}",
-                                    first.to_uppercase(),
-                                    chars.as_str()
-                                )
+                                format!("with{}{}", first.to_uppercase(), chars.as_str())
                             }
                             _ => format!("with_{}", lit_field.name),
                         }
@@ -3705,7 +3709,9 @@ pub fn type_attached_const_type(type_name: &str, const_name: &str) -> Option<Typ
         "int" => Type::Int,
         "float" => Type::Float,
         "number" => Type::Number { precision: 34 },
-        other => panic!("type_attached_const_type: unknown value_type {other:?} for {type_name}.{const_name}"),
+        other => panic!(
+            "type_attached_const_type: unknown value_type {other:?} for {type_name}.{const_name}"
+        ),
     })
 }
 
@@ -3971,7 +3977,6 @@ fn collect_anon_uses_in_stmts(
     }
 }
 
-
 /// Render an `AnonShape`'s fields as `{ field: type, ... }` for the WHAT message.
 fn render_inline_shape(fields: &[ynz_ast::nodes::FieldDecl]) -> String {
     let mut sorted: Vec<_> = fields.iter().collect();
@@ -4157,7 +4162,12 @@ mod tests {
             vec![Type::Nothing],
             Type::Nothing,
         );
-        let shape_table = crate::shapes::collect_shapes(&module, &Default::default(), &Default::default(), &mut DiagnosticBucket::new());
+        let shape_table = crate::shapes::collect_shapes(
+            &module,
+            &Default::default(),
+            &Default::default(),
+            &mut DiagnosticBucket::new(),
+        );
         let generic_shape_table =
             crate::shapes::collect_generic_shapes(&module, &mut DiagnosticBucket::new());
         let sig_table = crate::signatures::collect_signatures(

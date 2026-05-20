@@ -33,25 +33,44 @@ fn keyword_count_matches_lexer() {
 #[test]
 fn all_m1_keywords_in_registry() {
     let names: Vec<&str> = ynz_registry::keywords().map(|e| e.name).collect();
-    for kw in &["function", "nothing", "let", "const", "true", "false",
-                "if", "else", "while", "for", "in", "return"] {
-        assert!(names.contains(kw), "M1 keyword {kw:?} missing from registry");
+    for kw in &[
+        "function", "nothing", "let", "const", "true", "false", "if", "else", "while", "for", "in",
+        "return",
+    ] {
+        assert!(
+            names.contains(kw),
+            "M1 keyword {kw:?} missing from registry"
+        );
     }
 }
 
 #[test]
 fn m4_keywords_in_registry() {
     let names: Vec<&str> = ynz_registry::keywords().map(|e| e.name).collect();
-    for kw in &["shape", "follows", "extends", "base", "hidden", "dynamic", "Self", "self"] {
-        assert!(names.contains(kw), "M4 keyword {kw:?} missing from registry");
+    for kw in &[
+        "shape", "follows", "extends", "base", "hidden", "dynamic", "Self", "self",
+    ] {
+        assert!(
+            names.contains(kw),
+            "M4 keyword {kw:?} missing from registry"
+        );
     }
 }
 
 #[test]
 fn m5_through_m8_keywords_in_registry() {
     let names: Vec<&str> = ynz_registry::keywords().map(|e| e.name).collect();
-    for kw in &["none", "options", "is", "errors",
-                "import", "export", "sensitive", "wait", "background"] {
+    for kw in &[
+        "none",
+        "options",
+        "is",
+        "errors",
+        "import",
+        "export",
+        "sensitive",
+        "wait",
+        "background",
+    ] {
         assert!(names.contains(kw), "keyword {kw:?} missing from registry");
     }
 }
@@ -59,8 +78,16 @@ fn m5_through_m8_keywords_in_registry() {
 #[test]
 fn keyword_token_fields_are_populated() {
     for entry in ynz_registry::keywords() {
-        assert!(!entry.token.is_empty(), "keyword {:?} has empty token field", entry.name);
-        assert!(!entry.since.is_empty(), "keyword {:?} has empty since field", entry.name);
+        assert!(
+            !entry.token.is_empty(),
+            "keyword {:?} has empty token field",
+            entry.name
+        );
+        assert!(
+            !entry.since.is_empty(),
+            "keyword {:?} has empty since field",
+            entry.name
+        );
     }
 }
 
@@ -80,25 +107,40 @@ fn banned_decl_keyword_count_matches_lexer() {
 
 #[test]
 fn oop_banned_keywords_in_registry() {
-    let names: Vec<&str> = ynz_registry::banned_declaration_keywords().map(|e| e.name).collect();
+    let names: Vec<&str> = ynz_registry::banned_declaration_keywords()
+        .map(|e| e.name)
+        .collect();
     for kw in &["type", "struct", "class", "interface", "enum", "abstract"] {
-        assert!(names.contains(kw), "OOP banned keyword {kw:?} missing from registry");
+        assert!(
+            names.contains(kw),
+            "OOP banned keyword {kw:?} missing from registry"
+        );
     }
 }
 
 #[test]
 fn concurrency_banned_keywords_in_registry() {
-    let names: Vec<&str> = ynz_registry::banned_declaration_keywords().map(|e| e.name).collect();
+    let names: Vec<&str> = ynz_registry::banned_declaration_keywords()
+        .map(|e| e.name)
+        .collect();
     for kw in &["async", "await", "promise", "future", "goroutine"] {
-        assert!(names.contains(kw), "concurrency banned keyword {kw:?} missing from registry");
+        assert!(
+            names.contains(kw),
+            "concurrency banned keyword {kw:?} missing from registry"
+        );
     }
 }
 
 #[test]
 fn visibility_banned_keywords_in_registry() {
-    let names: Vec<&str> = ynz_registry::banned_declaration_keywords().map(|e| e.name).collect();
+    let names: Vec<&str> = ynz_registry::banned_declaration_keywords()
+        .map(|e| e.name)
+        .collect();
     for kw in &["pub", "private", "protected", "public"] {
-        assert!(names.contains(kw), "visibility banned keyword {kw:?} missing from registry");
+        assert!(
+            names.contains(kw),
+            "visibility banned keyword {kw:?} missing from registry"
+        );
     }
 }
 

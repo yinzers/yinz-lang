@@ -10,8 +10,7 @@ fn read_fixture(name: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(name);
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("could not read fixture {name}: {e}"))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("could not read fixture {name}: {e}"))
 }
 
 /// Open a file and return the diagnostics from the first publishDiagnostics
@@ -138,9 +137,8 @@ fn regression_lsp_vs_cli_divergence() {
 
     for entry in &entries {
         let path = entry.path();
-        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-            panic!("failed to read {}: {}", path.display(), e)
-        });
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
         let uri = format!("file://{}", path.display());
 
         // Count diagnostics from the LSP pipeline.
@@ -176,7 +174,8 @@ fn regression_lsp_vs_cli_divergence() {
 
         let lsp_has_errors = lsp_count > 0;
         assert_eq!(
-            lsp_has_errors, cli_has_errors,
+            lsp_has_errors,
+            cli_has_errors,
             "LSP vs CLI error presence disagreement for {}: \
              LSP reported {} diagnostics (has_errors={lsp_has_errors}), \
              CLI exited with success={} (has_errors={cli_has_errors})",

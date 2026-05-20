@@ -106,8 +106,8 @@ pub fn build_into(source_path: &Path, output_dir: &Path) -> BuildResult {
 fn build_with_output_dir(source_path: &Path, output_dir: Option<&Path>) -> BuildResult {
     // Canonicalize to absolute path so find_project_root never returns ""
     // when the user runs `ynz run relative/path.ynz` from the project root.
-    let source_abs = std::fs::canonicalize(source_path)
-        .unwrap_or_else(|_| source_path.to_path_buf());
+    let source_abs =
+        std::fs::canonicalize(source_path).unwrap_or_else(|_| source_path.to_path_buf());
 
     let project_root = if source_abs.is_dir() {
         Some(source_abs.clone())
@@ -557,7 +557,11 @@ fn build_single_file(source_path: &Path, output_dir: Option<&Path>) -> BuildResu
             let stderr_output = render_warnings(&codegen_out.diagnostics, &sources);
             let ir_text = {
                 let ir = &codegen_out.artifact.ir_text;
-                if ir.is_empty() { None } else { Some(ir.clone()) }
+                if ir.is_empty() {
+                    None
+                } else {
+                    Some(ir.clone())
+                }
             };
             BuildResult {
                 binary: Some(binary_path),

@@ -25,7 +25,11 @@ impl LineTable {
                 starts.push(i + 1);
             }
         }
-        Self { starts, total_bytes: text.len(), has_bom }
+        Self {
+            starts,
+            total_bytes: text.len(),
+            has_bom,
+        }
     }
 
     /// Convert a byte offset to an LSP Position.
@@ -38,7 +42,10 @@ impl LineTable {
         byte_offset: usize,
         encoding: PositionEncoding,
     ) -> Position {
-        let line = self.starts.partition_point(|&s| s <= byte_offset).saturating_sub(1);
+        let line = self
+            .starts
+            .partition_point(|&s| s <= byte_offset)
+            .saturating_sub(1);
         let line_start = self.starts[line];
         let line_slice = &text[line_start..byte_offset.min(text.len())];
 
@@ -53,7 +60,10 @@ impl LineTable {
             character = character.saturating_sub(2);
         }
 
-        Position { line: line as u32, character }
+        Position {
+            line: line as u32,
+            character,
+        }
     }
 
     /// Convert an LSP Position to a byte offset. Returns `None` if out of bounds.
@@ -68,7 +78,11 @@ impl LineTable {
             return None;
         }
         let line_start = self.starts[line];
-        let line_end = self.starts.get(line + 1).copied().unwrap_or(self.total_bytes);
+        let line_end = self
+            .starts
+            .get(line + 1)
+            .copied()
+            .unwrap_or(self.total_bytes);
         let line_text = &text[line_start..line_end];
 
         // BOM on line 0: LSP character 1 corresponds to byte 3 (after the 3-byte BOM).
@@ -125,8 +139,14 @@ mod tests {
     fn lf_basic() {
         let t = "abc\nde";
         let tbl = LineTable::new(t);
-        assert_eq!(tbl.byte_offset_to_position(t, 4, PositionEncoding::Utf8), pos(1, 0));
-        assert_eq!(tbl.position_to_byte_offset(t, pos(1, 0), PositionEncoding::Utf8), Some(4));
+        assert_eq!(
+            tbl.byte_offset_to_position(t, 4, PositionEncoding::Utf8),
+            pos(1, 0)
+        );
+        assert_eq!(
+            tbl.position_to_byte_offset(t, pos(1, 0), PositionEncoding::Utf8),
+            Some(4)
+        );
     }
 
     // GIVEN text="ab\r\ncd", utf-8
@@ -136,8 +156,14 @@ mod tests {
     fn crlf_basic() {
         let t = "ab\r\ncd";
         let tbl = LineTable::new(t);
-        assert_eq!(tbl.byte_offset_to_position(t, 4, PositionEncoding::Utf8), pos(1, 0));
-        assert_eq!(tbl.position_to_byte_offset(t, pos(1, 0), PositionEncoding::Utf8), Some(4));
+        assert_eq!(
+            tbl.byte_offset_to_position(t, 4, PositionEncoding::Utf8),
+            pos(1, 0)
+        );
+        assert_eq!(
+            tbl.position_to_byte_offset(t, pos(1, 0), PositionEncoding::Utf8),
+            Some(4)
+        );
     }
 
     // GIVEN text="a\r\nb", utf-8
@@ -147,7 +173,10 @@ mod tests {
     fn crlf_boundary() {
         let t = "a\r\nb";
         let tbl = LineTable::new(t);
-        assert_eq!(tbl.byte_offset_to_position(t, 2, PositionEncoding::Utf8), pos(0, 2));
+        assert_eq!(
+            tbl.byte_offset_to_position(t, 2, PositionEncoding::Utf8),
+            pos(0, 2)
+        );
     }
 
     // GIVEN text="\u{FEFF}ab" (BOM-prefixed), utf-8
@@ -160,9 +189,15 @@ mod tests {
         let t = "\u{FEFF}ab";
         let tbl = LineTable::new(t);
         // Byte 3 ('a') → character 1 (not 3); BOM counts as 1 char
-        assert_eq!(tbl.byte_offset_to_position(t, 3, PositionEncoding::Utf8), pos(0, 1));
+        assert_eq!(
+            tbl.byte_offset_to_position(t, 3, PositionEncoding::Utf8),
+            pos(0, 1)
+        );
         // Round-trip: character 1 → byte 3
-        assert_eq!(tbl.position_to_byte_offset(t, pos(0, 1), PositionEncoding::Utf8), Some(3));
+        assert_eq!(
+            tbl.position_to_byte_offset(t, pos(0, 1), PositionEncoding::Utf8),
+            Some(3)
+        );
     }
 
     // ✓ (U+2713, 3 UTF-8 bytes / 1 UTF-16 code unit)
@@ -171,8 +206,14 @@ mod tests {
     fn three_byte_char_utf8_vs_utf16() {
         let t = "✓✓";
         let tbl = LineTable::new(t);
-        assert_eq!(tbl.byte_offset_to_position(t, 3, PositionEncoding::Utf8), pos(0, 3));
-        assert_eq!(tbl.byte_offset_to_position(t, 3, PositionEncoding::Utf16), pos(0, 1));
+        assert_eq!(
+            tbl.byte_offset_to_position(t, 3, PositionEncoding::Utf8),
+            pos(0, 3)
+        );
+        assert_eq!(
+            tbl.byte_offset_to_position(t, 3, PositionEncoding::Utf16),
+            pos(0, 1)
+        );
     }
 
     // 😀 (U+1F600, 4 UTF-8 bytes / 2 UTF-16 code units)
@@ -182,8 +223,14 @@ mod tests {
     fn emoji_utf8_vs_utf16() {
         let t = "a\u{1F600}b";
         let tbl = LineTable::new(t);
-        assert_eq!(tbl.byte_offset_to_position(t, 5, PositionEncoding::Utf8), pos(0, 5));
-        assert_eq!(tbl.byte_offset_to_position(t, 5, PositionEncoding::Utf16), pos(0, 3));
+        assert_eq!(
+            tbl.byte_offset_to_position(t, 5, PositionEncoding::Utf8),
+            pos(0, 5)
+        );
+        assert_eq!(
+            tbl.byte_offset_to_position(t, 5, PositionEncoding::Utf16),
+            pos(0, 3)
+        );
     }
 
     // Round-trip: position_to_byte_offset(byte_offset_to_position(N)) == Some(N)
@@ -200,7 +247,11 @@ mod tests {
                 for enc in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
                     let pos = tbl.byte_offset_to_position(t, offset, enc);
                     let back = tbl.position_to_byte_offset(t, pos, enc);
-                    assert_eq!(back, Some(offset), "round-trip failed: text={t:?} offset={offset} enc={enc:?}");
+                    assert_eq!(
+                        back,
+                        Some(offset),
+                        "round-trip failed: text={t:?} offset={offset} enc={enc:?}"
+                    );
                 }
             }
         }
@@ -211,8 +262,17 @@ mod tests {
     fn empty_text() {
         let t = "";
         let tbl = LineTable::new(t);
-        assert_eq!(tbl.byte_offset_to_position(t, 0, PositionEncoding::Utf8), pos(0, 0));
-        assert_eq!(tbl.position_to_byte_offset(t, pos(0, 0), PositionEncoding::Utf8), Some(0));
-        assert_eq!(tbl.position_to_byte_offset(t, pos(0, 1), PositionEncoding::Utf8), None);
+        assert_eq!(
+            tbl.byte_offset_to_position(t, 0, PositionEncoding::Utf8),
+            pos(0, 0)
+        );
+        assert_eq!(
+            tbl.position_to_byte_offset(t, pos(0, 0), PositionEncoding::Utf8),
+            Some(0)
+        );
+        assert_eq!(
+            tbl.position_to_byte_offset(t, pos(0, 1), PositionEncoding::Utf8),
+            None
+        );
     }
 }

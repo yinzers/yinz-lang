@@ -1845,15 +1845,15 @@ fn incremental_rebuild_invalidates_when_imported_signature_changes() {
     std::fs::create_dir_all(&dir).expect("create temp dir");
 
     // yinz.toml required for cross-directory import resolution.
-    std::fs::write(dir.join("yinz.toml"), "[project]\nname = \"test\"\n")
-        .expect("write yinz.toml");
+    std::fs::write(dir.join("yinz.toml"), "[project]\nname = \"test\"\n").expect("write yinz.toml");
 
     let b_path = dir.join("b.ynz");
     let a_path = dir.join("a.ynz");
 
     // v1: fileB exports `foo(x: int) -> int`. fileA imports and calls `foo(42)`.
     let file_b_v1 = "export function foo(x: int) -> int { return x }";
-    let file_a_src = "import { foo } from `b`\nfunction entrypoint() -> nothing { let r = foo(42) }";
+    let file_a_src =
+        "import { foo } from `b`\nfunction entrypoint() -> nothing { let r = foo(42) }";
 
     std::fs::write(&b_path, file_b_v1).expect("write b.ynz v1");
     std::fs::write(&a_path, file_a_src).expect("write a.ynz");
@@ -1868,11 +1868,14 @@ fn incremental_rebuild_invalidates_when_imported_signature_changes() {
     db.register_source(sf_a);
 
     let output1 = check_query(&db, sf_a);
-    let v1_errors: Vec<_> = output1.diagnostics.iter()
+    let v1_errors: Vec<_> = output1
+        .diagnostics
+        .iter()
         .filter(|d| d.severity == ynz_diagnostics::Severity::Error)
         .collect();
     assert_eq!(
-        v1_errors.len(), 0,
+        v1_errors.len(),
+        0,
         "v1: foo(int)->int + call foo(42) should typecheck clean; got: {:#?}",
         v1_errors
     );
@@ -1883,7 +1886,9 @@ fn incremental_rebuild_invalidates_when_imported_signature_changes() {
     sf_b.set_text(&mut db).to(file_b_v2.to_string());
 
     let output2 = check_query(&db, sf_a);
-    let v2_errors: Vec<_> = output2.diagnostics.iter()
+    let v2_errors: Vec<_> = output2
+        .diagnostics
+        .iter()
         .filter(|d| d.severity == ynz_diagnostics::Severity::Error)
         .collect();
     // After fix: foo(42) passes int to a function expecting string — must produce >= 1 error.
@@ -1915,10 +1920,15 @@ function entrypoint() -> nothing {}
 "#,
         1,
     );
-    let has_msg = output.diagnostics.iter().any(|d| {
-        d.what.contains("`bar`") && d.what.contains("no default value")
-    });
-    assert!(has_msg, "Expected hidden-no-default diagnostic, got: {:#?}", output.diagnostics);
+    let has_msg = output
+        .diagnostics
+        .iter()
+        .any(|d| d.what.contains("`bar`") && d.what.contains("no default value"));
+    assert!(
+        has_msg,
+        "Expected hidden-no-default diagnostic, got: {:#?}",
+        output.diagnostics
+    );
 }
 
 #[test]
@@ -1935,10 +1945,15 @@ function entrypoint() -> nothing {}
 "#,
         1,
     );
-    let suggests_none = output.diagnostics.iter().any(|d| {
-        d.what_instead.contains("none")
-    });
-    assert!(suggests_none, "Expected `none` suggestion for maybe-typed field, got: {:#?}", output.diagnostics);
+    let suggests_none = output
+        .diagnostics
+        .iter()
+        .any(|d| d.what_instead.contains("none"));
+    assert!(
+        suggests_none,
+        "Expected `none` suggestion for maybe-typed field, got: {:#?}",
+        output.diagnostics
+    );
 }
 
 #[test]
@@ -1946,7 +1961,8 @@ fn same_file_construction_can_omit_hidden_field() {
     // WHY: hidden fields can be omitted at construction (defaults fill in), and
     //      same-file code CAN set them explicitly too — the file boundary is what
     //      gates the construction-time set, not the hidden flag alone.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 shape Foo {
     name: string
     hidden bar: int = 0
@@ -1956,7 +1972,8 @@ function entrypoint() -> nothing {
     const x: Foo = { name: `hello` }
     print(x.name)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
@@ -1979,27 +1996,53 @@ fn external_file_construction_cannot_set_hidden_field() {
     let player_path = dir.join("player.ynz");
     let main_path = dir.join("entrypoint.ynz");
 
-    std::fs::write(&player_path,
-        "export shape Player { name: string hidden secret: int = 0 }").expect("write player.ynz");
-    std::fs::write(&main_path,
+    std::fs::write(
+        &player_path,
+        "export shape Player { name: string hidden secret: int = 0 }",
+    )
+    .expect("write player.ynz");
+    std::fs::write(
+        &main_path,
         "import { Player } from `player`\n\
          function entrypoint() -> nothing {\n\
              const p: Player = { name: `Alice`, secret: 42 }\n\
-         }").expect("write entrypoint.ynz");
+         }",
+    )
+    .expect("write entrypoint.ynz");
 
     let mut db = CompilerDb::default();
-    let sf_player = SourceFile::new(&db, player_path.display().to_string(), std::fs::read_to_string(&player_path).unwrap());
-    let sf_main = SourceFile::new(&db, main_path.display().to_string(), std::fs::read_to_string(&main_path).unwrap());
+    let sf_player = SourceFile::new(
+        &db,
+        player_path.display().to_string(),
+        std::fs::read_to_string(&player_path).unwrap(),
+    );
+    let sf_main = SourceFile::new(
+        &db,
+        main_path.display().to_string(),
+        std::fs::read_to_string(&main_path).unwrap(),
+    );
     db.register_source(sf_player);
     db.register_source(sf_main);
 
     let output = check_query(&db, sf_main);
-    let errors: Vec<_> = output.diagnostics.iter()
+    let errors: Vec<_> = output
+        .diagnostics
+        .iter()
         .filter(|d| d.severity == ynz_diagnostics::Severity::Error)
         .collect();
-    assert!(!errors.is_empty(), "Expected hidden-set-from-external diagnostic; got 0 errors. Diagnostics: {:#?}", output.diagnostics);
-    let has_hidden_msg = errors.iter().any(|d| d.what.contains("`secret`") && d.what.contains("hidden"));
-    assert!(has_hidden_msg, "Expected the hidden-set diagnostic; got: {:#?}", errors);
+    assert!(
+        !errors.is_empty(),
+        "Expected hidden-set-from-external diagnostic; got 0 errors. Diagnostics: {:#?}",
+        output.diagnostics
+    );
+    let has_hidden_msg = errors
+        .iter()
+        .any(|d| d.what.contains("`secret`") && d.what.contains("hidden"));
+    assert!(
+        has_hidden_msg,
+        "Expected the hidden-set diagnostic; got: {:#?}",
+        errors
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -2019,10 +2062,15 @@ function entrypoint() -> nothing {
         1,
     );
     // test-ratchet: diagnostic wording updated to avoid "result" (banned jargon).
-    let has_msg = output.diagnostics.iter().any(|d| {
-        d.what.contains("Capturing the output of `background`")
-    });
-    assert!(has_msg, "Expected handle-form rejection diagnostic, got: {:#?}", output.diagnostics);
+    let has_msg = output
+        .diagnostics
+        .iter()
+        .any(|d| d.what.contains("Capturing the output of `background`"));
+    assert!(
+        has_msg,
+        "Expected handle-form rejection diagnostic, got: {:#?}",
+        output.diagnostics
+    );
 }
 
 // ── Inline / anonymous shape types (v0.1-polish) ──────────────────────────────
@@ -2030,64 +2078,85 @@ function entrypoint() -> nothing {
 #[test]
 fn anon_shape_basic_annotation_works() {
     // WHY: minimal inline shape — must compile clean and bind fields correctly.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 function entrypoint() -> nothing {
   let p: { a: int, b: string } = { a: 1, b: `hi` }
   print(p.b)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn anon_shape_field_order_irrelevant_for_equivalence() {
     // WHY: structural typing — {a:int, b:int} and {b:int, a:int} must be the same type
     //      so that passing one where the other is expected compiles clean.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 function takesAB(p: { a: int, b: int }) -> nothing { print(`${p.a}`) }
 function entrypoint() -> nothing {
   let x: { b: int, a: int } = { a: 1, b: 2 }
   takesAB(x)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn anon_shape_unknown_field_rejected() {
     // WHY: setting a field not declared in the inline shape must be caught — the type
     //      contract says exactly which fields exist.
-    let output = assert_errors(r#"
+    let output = assert_errors(
+        r#"
 function entrypoint() -> nothing {
   let x: { a: int } = { a: 1, b: 2 }
 }
-"#, 1);
+"#,
+        1,
+    );
     let has_msg = output.diagnostics.iter().any(|d| d.what.contains("`b`"));
-    assert!(has_msg, "Expected unknown-field diagnostic mentioning `b`; got: {:#?}", output.diagnostics);
+    assert!(
+        has_msg,
+        "Expected unknown-field diagnostic mentioning `b`; got: {:#?}",
+        output.diagnostics
+    );
 }
 
 #[test]
 fn anon_shape_missing_field_rejected() {
     // WHY: declared field not provided at construction must error — forces complete
     //      initialization just like named shapes.
-    let output = assert_errors(r#"
+    let output = assert_errors(
+        r#"
 function entrypoint() -> nothing {
   let x: { a: int, b: int } = { a: 1 }
 }
-"#, 1);
+"#,
+        1,
+    );
     let has_msg = output.diagnostics.iter().any(|d| d.what.contains("`b`"));
-    assert!(has_msg, "Expected missing-field diagnostic; got: {:#?}", output.diagnostics);
+    assert!(
+        has_msg,
+        "Expected missing-field diagnostic; got: {:#?}",
+        output.diagnostics
+    );
 }
 
 #[test]
 fn anon_shape_named_shape_are_different_types() {
     // WHY: nominal typing for named shapes — `shape Foo { a: int }` and `{ a: int }`
     //      do NOT interconvert; the user must pick one or the other.
-    let output = assert_errors(r#"
+    let output = assert_errors(
+        r#"
 shape Foo { a: int }
 function entrypoint() -> nothing {
   let x: Foo = { a: 1 }
   let y: { a: int } = x
 }
-"#, 1);
+"#,
+        1,
+    );
     let has_mismatch = output.diagnostics.iter().any(|d| {
         d.what.contains("cannot produce")
             || d.what.contains("mismatch")
@@ -2095,26 +2164,33 @@ function entrypoint() -> nothing {
             || d.what.contains("is declared as")
             || d.what.contains("This value is")
     });
-    assert!(has_mismatch, "Expected type-mismatch diagnostic; got: {:#?}", output.diagnostics);
+    assert!(
+        has_mismatch,
+        "Expected type-mismatch diagnostic; got: {:#?}",
+        output.diagnostics
+    );
 }
 
 #[test]
 fn anon_shape_nested_works() {
     // WHY: inline shapes can be nested in their own type annotations — the inner
     //      anon shape is hoisted to its own canonical synthetic name.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 function entrypoint() -> nothing {
   let p: { outer: { inner: int } } = { outer: { inner: 42 } }
   print(`${p.outer.inner}`)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn anon_shape_in_fixed_works_with_for_destructure() {
     // WHY: Patrick's motivating example — inline shape in fixed<T>, iterated with
     //      destructuring. End-to-end integration with destructuring from commit 19d9d4c.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 function entrypoint() -> nothing {
   const intervals: fixed<{ minutes: int }> = [
     { minutes: 5 },
@@ -2125,26 +2201,30 @@ function entrypoint() -> nothing {
     print(`${minutes}`)
   }
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn anon_shape_field_access_works() {
     // WHY: field access on an anon-shape-typed binding must resolve field types.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 function entrypoint() -> nothing {
   let p: { x: int, y: int } = { x: 3, y: 4 }
   let sum: int = p.x + p.y
   print(`${sum}`)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn anon_shape_as_function_param_works() {
     // WHY: inline shapes in function parameter type position must compile clean —
     //      the function signature pre-pass must hoist the anon shape.
-    assert_clean(r#"
+    assert_clean(
+        r#"
 function area(rect: { w: int, h: int }) -> int {
   return rect.w * rect.h
 }
@@ -2152,7 +2232,8 @@ function entrypoint() -> nothing {
   let r: { w: int, h: int } = { w: 5, h: 3 }
   print(`${area(r)}`)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
@@ -2167,14 +2248,20 @@ function entrypoint() -> nothing {
   let p: { a: int, hidden b: int } = { a: 1 }
 }
 "#);
-    let errors: Vec<_> = output.diagnostics.iter()
+    let errors: Vec<_> = output
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
     assert!(!errors.is_empty(), "Expected at least 1 error; got none");
-    let has_hidden_msg = errors.iter().any(|d| {
-        d.what.contains("Inline shape types cannot have `hidden`")
-    });
-    assert!(has_hidden_msg, "Expected hidden-in-inline-shape diagnostic; got: {:#?}", errors);
+    let has_hidden_msg = errors
+        .iter()
+        .any(|d| d.what.contains("Inline shape types cannot have `hidden`"));
+    assert!(
+        has_hidden_msg,
+        "Expected hidden-in-inline-shape diagnostic; got: {:#?}",
+        errors
+    );
 }
 
 // ── Auto-promotion lint: repeated inline shapes ───────────────────────────────
@@ -2193,8 +2280,10 @@ function entrypoint() -> nothing { f1({ a: 1, b: `hi` })  f2({ a: 2, b: `yo` }) 
     let warnings: Vec<_> = output
         .diagnostics
         .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning)
-            && d.what.contains("used in 2 places"))
+        .filter(|d| {
+            matches!(d.severity, ynz_diagnostics::Severity::Warning)
+                && d.what.contains("used in 2 places")
+        })
         .collect();
     assert_eq!(
         warnings.len(),
@@ -2222,8 +2311,9 @@ function entrypoint() -> nothing { f1({ a: 1 })  f2({ b: `hi` }) }
     let repeated_warnings: Vec<_> = output
         .diagnostics
         .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning)
-            && d.what.contains("used in"))
+        .filter(|d| {
+            matches!(d.severity, ynz_diagnostics::Severity::Warning) && d.what.contains("used in")
+        })
         .collect();
     assert!(
         repeated_warnings.is_empty(),
@@ -2244,8 +2334,10 @@ function entrypoint() -> nothing {}
     let warnings: Vec<_> = output
         .diagnostics
         .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning)
-            && d.what.contains("used in 2 places"))
+        .filter(|d| {
+            matches!(d.severity, ynz_diagnostics::Severity::Warning)
+                && d.what.contains("used in 2 places")
+        })
         .collect();
     assert_eq!(
         warnings.len(),
@@ -2274,8 +2366,7 @@ fn cross_file_inline_shape_structural_equivalence_positive() {
             .subsec_nanos()
     ));
     std::fs::create_dir_all(&dir).expect("create temp dir");
-    std::fs::write(dir.join("yinz.toml"), "[project]\nname = \"test\"\n")
-        .expect("write yinz.toml");
+    std::fs::write(dir.join("yinz.toml"), "[project]\nname = \"test\"\n").expect("write yinz.toml");
 
     let a_src = "export function takesAB(p: { a: int, b: string }) -> nothing { print(p.b) }";
     let b_src = "import { takesAB } from `a`\n\
@@ -2334,8 +2425,7 @@ fn cross_file_inline_shape_field_mismatch_documents_known_gap() {
             .subsec_nanos()
     ));
     std::fs::create_dir_all(&dir).expect("create temp dir");
-    std::fs::write(dir.join("yinz.toml"), "[project]\nname = \"test\"\n")
-        .expect("write yinz.toml");
+    std::fs::write(dir.join("yinz.toml"), "[project]\nname = \"test\"\n").expect("write yinz.toml");
 
     let a_src = "export function takesAB(p: { a: int, b: string }) -> nothing { print(p.b) }";
     let b_src = "import { takesAB } from `a`\n\

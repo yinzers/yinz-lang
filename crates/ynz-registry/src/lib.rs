@@ -1,10 +1,10 @@
-mod schema;
 pub mod lsp_adapter;
-pub use schema::*;
+mod schema;
 pub use lsp_adapter::{
-    CompletionContext, CompletionKind, HoverContent, HoverKind, RegistryCompletionItem,
-    lsp_completion_items, lsp_hover_for_token,
+    lsp_completion_items, lsp_hover_for_token, CompletionContext, CompletionKind, HoverContent,
+    HoverKind, RegistryCompletionItem,
 };
+pub use schema::*;
 
 // Static arrays baked at compile time from registry/features.toml.
 include!(concat!(env!("OUT_DIR"), "/registry.rs"));
@@ -21,11 +21,14 @@ pub fn keyword_lookup(name: &str) -> Option<&'static KeywordEntry> {
     KEYWORDS.iter().find(|e| e.name == name)
 }
 
-pub fn banned_declaration_keywords() -> impl Iterator<Item = &'static BannedDeclarationKeywordEntry> {
+pub fn banned_declaration_keywords() -> impl Iterator<Item = &'static BannedDeclarationKeywordEntry>
+{
     BANNED_DECLARATION_KEYWORDS.iter()
 }
 
-pub fn banned_declaration_keyword_lookup(name: &str) -> Option<&'static BannedDeclarationKeywordEntry> {
+pub fn banned_declaration_keyword_lookup(
+    name: &str,
+) -> Option<&'static BannedDeclarationKeywordEntry> {
     BANNED_DECLARATION_KEYWORDS.iter().find(|e| e.name == name)
 }
 
@@ -46,14 +49,18 @@ pub fn primitive_intrinsic_methods<'a>(
     receiver_type: &'a str,
     name: &'a str,
 ) -> impl Iterator<Item = &'static PrimitiveIntrinsicEntry> + 'a {
-    PRIMITIVE_INTRINSICS.iter().filter(move |e| {
-        e.receiver_type == Some(receiver_type) && e.name == name
-    })
+    PRIMITIVE_INTRINSICS
+        .iter()
+        .filter(move |e| e.receiver_type == Some(receiver_type) && e.name == name)
 }
 
 /// Look up a free function by name (returns all matching overloads).
-pub fn primitive_free_fns(name: &str) -> impl Iterator<Item = &'static PrimitiveIntrinsicEntry> + '_ {
-    PRIMITIVE_INTRINSICS.iter().filter(move |e| e.kind == "free_fn" && e.name == name)
+pub fn primitive_free_fns(
+    name: &str,
+) -> impl Iterator<Item = &'static PrimitiveIntrinsicEntry> + '_ {
+    PRIMITIVE_INTRINSICS
+        .iter()
+        .filter(move |e| e.kind == "free_fn" && e.name == name)
 }
 
 pub fn type_attached_constants() -> impl Iterator<Item = &'static TypeAttachedConstantEntry> {
@@ -73,7 +80,9 @@ pub fn deferred_language_features() -> impl Iterator<Item = &'static DeferredLan
     DEFERRED_LANGUAGE_FEATURES.iter()
 }
 
-pub fn deferred_language_feature_lookup(name: &str) -> Option<&'static DeferredLanguageFeatureEntry> {
+pub fn deferred_language_feature_lookup(
+    name: &str,
+) -> Option<&'static DeferredLanguageFeatureEntry> {
     DEFERRED_LANGUAGE_FEATURES.iter().find(|e| e.name == name)
 }
 
@@ -86,7 +95,9 @@ pub fn diagnostic_templates() -> impl Iterator<Item = &'static DiagnosticTemplat
 }
 
 pub fn diagnostic_template_lookup(kind_name: &str) -> Option<&'static DiagnosticTemplateEntry> {
-    DIAGNOSTIC_TEMPLATES.iter().find(|e| e.kind_name == kind_name)
+    DIAGNOSTIC_TEMPLATES
+        .iter()
+        .find(|e| e.kind_name == kind_name)
 }
 
 pub fn muted_hint_domains() -> impl Iterator<Item = &'static MutedHintDomainEntry> {
@@ -121,7 +132,9 @@ pub fn render_template(template: &str, vars: &std::collections::HashMap<&str, &s
                         match chars.next() {
                             Some('}') => break,
                             Some(c) => key.push(c),
-                            None => panic!("render_template: unclosed '{{' in template: {template:?}"),
+                            None => {
+                                panic!("render_template: unclosed '{{' in template: {template:?}")
+                            }
                         }
                     }
                     let value = vars.get(key.as_str()).unwrap_or_else(|| {

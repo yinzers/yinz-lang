@@ -55,9 +55,18 @@ pub fn module_signatures_query(
     let mut diag_bucket = ynz_diagnostics::DiagnosticBucket::new();
 
     // Collect import declarations from this module.
-    let import_decls: Vec<&ImportDecl> = parse.module.items.iter().filter_map(|i| {
-        if let Item::ImportDecl(d) = i { Some(d) } else { None }
-    }).collect();
+    let import_decls: Vec<&ImportDecl> = parse
+        .module
+        .items
+        .iter()
+        .filter_map(|i| {
+            if let Item::ImportDecl(d) = i {
+                Some(d)
+            } else {
+                None
+            }
+        })
+        .collect();
 
     // Resolve imports to get cross-file shapes, options, and functions.
     // Uses a passed-in visiting set to detect circular imports.
@@ -67,7 +76,13 @@ pub fn module_signatures_query(
 
     // Import resolution reads imported files from disk using the SAME salsa db.
     // Using the same db avoids "Cannot change database mid-query" panics from salsa.
-    let imported = resolve_imports(&import_decls, importer_path_str, db, &mut visiting, &mut diag_bucket);
+    let imported = resolve_imports(
+        &import_decls,
+        importer_path_str,
+        db,
+        &mut visiting,
+        &mut diag_bucket,
+    );
 
     // Shapes first — function signatures need them for type resolution.
     // Pass imported shapes and options so field type annotations can reference them.
@@ -112,7 +127,10 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
     let mut merged_sig_table = sig_output.sig_table.clone();
     for (name, sig) in &sig_output.imported_fns {
         // Local declarations take priority — don't override with imported.
-        merged_sig_table.fns.entry(name.clone()).or_insert_with(|| sig.clone());
+        merged_sig_table
+            .fns
+            .entry(name.clone())
+            .or_insert_with(|| sig.clone());
     }
 
     let (typed, mono_table, check_diags) = check(

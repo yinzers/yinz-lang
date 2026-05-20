@@ -53,10 +53,12 @@ impl HarnessClient {
         // Send initialized notification
         self.conn
             .sender
-            .send(lsp_server::Message::Notification(lsp_server::Notification {
-                method: "initialized".to_string(),
-                params: json!({}),
-            }))
+            .send(lsp_server::Message::Notification(
+                lsp_server::Notification {
+                    method: "initialized".to_string(),
+                    params: json!({}),
+                },
+            ))
             .unwrap();
         // Read the initialize response
         self.recv_response()
@@ -65,40 +67,46 @@ impl HarnessClient {
     pub fn did_open(&self, uri: &str, text: &str) {
         self.conn
             .sender
-            .send(lsp_server::Message::Notification(lsp_server::Notification {
-                method: "textDocument/didOpen".to_string(),
-                params: json!({
-                    "textDocument": {
-                        "uri": uri,
-                        "languageId": "ynz",
-                        "version": 1,
-                        "text": text
-                    }
-                }),
-            }))
+            .send(lsp_server::Message::Notification(
+                lsp_server::Notification {
+                    method: "textDocument/didOpen".to_string(),
+                    params: json!({
+                        "textDocument": {
+                            "uri": uri,
+                            "languageId": "ynz",
+                            "version": 1,
+                            "text": text
+                        }
+                    }),
+                },
+            ))
             .unwrap();
     }
 
     pub fn did_change(&self, uri: &str, new_text: &str, version: i32) {
         self.conn
             .sender
-            .send(lsp_server::Message::Notification(lsp_server::Notification {
-                method: "textDocument/didChange".to_string(),
-                params: json!({
-                    "textDocument": { "uri": uri, "version": version },
-                    "contentChanges": [{ "text": new_text }]
-                }),
-            }))
+            .send(lsp_server::Message::Notification(
+                lsp_server::Notification {
+                    method: "textDocument/didChange".to_string(),
+                    params: json!({
+                        "textDocument": { "uri": uri, "version": version },
+                        "contentChanges": [{ "text": new_text }]
+                    }),
+                },
+            ))
             .unwrap();
     }
 
     pub fn did_close(&self, uri: &str) {
         self.conn
             .sender
-            .send(lsp_server::Message::Notification(lsp_server::Notification {
-                method: "textDocument/didClose".to_string(),
-                params: json!({ "textDocument": { "uri": uri } }),
-            }))
+            .send(lsp_server::Message::Notification(
+                lsp_server::Notification {
+                    method: "textDocument/didClose".to_string(),
+                    params: json!({ "textDocument": { "uri": uri } }),
+                },
+            ))
             .unwrap();
     }
 
@@ -112,22 +120,22 @@ impl HarnessClient {
             }))
             .unwrap();
         self.recv_response(); // consume the Ok response
-        // exit is fire-and-forget — server may have already closed its channel after shutdown
+                              // exit is fire-and-forget — server may have already closed its channel after shutdown
         self.conn
             .sender
-            .send(lsp_server::Message::Notification(lsp_server::Notification {
-                method: "exit".to_string(),
-                params: json!({}),
-            }))
+            .send(lsp_server::Message::Notification(
+                lsp_server::Notification {
+                    method: "exit".to_string(),
+                    params: json!({}),
+                },
+            ))
             .ok();
     }
 
     /// Read the next response from the server (blocks).
     pub fn recv_response(&self) -> Value {
         match self.conn.receiver.recv().unwrap() {
-            lsp_server::Message::Response(r) => {
-                r.result.unwrap_or(serde_json::Value::Null)
-            }
+            lsp_server::Message::Response(r) => r.result.unwrap_or(serde_json::Value::Null),
             lsp_server::Message::Notification(n) => {
                 json!({ "_notification": n.method, "params": n.params })
             }
@@ -139,23 +147,31 @@ impl HarnessClient {
 
     /// Try to read a message with a timeout. Returns None if nothing arrives.
     pub fn try_recv_timeout(&self, dur: std::time::Duration) -> Option<Value> {
-        self.conn.receiver.recv_timeout(dur).ok().map(|msg| match msg {
-            lsp_server::Message::Response(r) => r.result.unwrap_or_default(),
-            lsp_server::Message::Notification(n) => json!({ "_notification": n.method }),
-            lsp_server::Message::Request(_) => json!({ "_unexpected": "server_request" }),
-        })
+        self.conn
+            .receiver
+            .recv_timeout(dur)
+            .ok()
+            .map(|msg| match msg {
+                lsp_server::Message::Response(r) => r.result.unwrap_or_default(),
+                lsp_server::Message::Notification(n) => json!({ "_notification": n.method }),
+                lsp_server::Message::Request(_) => json!({ "_unexpected": "server_request" }),
+            })
     }
 
     /// Like recv_response() but with a timeout; returns None if nothing arrives.
     /// Unlike try_recv_timeout(), notifications include their `params` field.
     pub fn try_recv_with_params(&self, dur: std::time::Duration) -> Option<Value> {
-        self.conn.receiver.recv_timeout(dur).ok().map(|msg| match msg {
-            lsp_server::Message::Response(r) => r.result.unwrap_or(serde_json::Value::Null),
-            lsp_server::Message::Notification(n) => {
-                json!({ "_notification": n.method, "params": n.params })
-            }
-            lsp_server::Message::Request(_) => json!({ "_unexpected": "server_request" }),
-        })
+        self.conn
+            .receiver
+            .recv_timeout(dur)
+            .ok()
+            .map(|msg| match msg {
+                lsp_server::Message::Response(r) => r.result.unwrap_or(serde_json::Value::Null),
+                lsp_server::Message::Notification(n) => {
+                    json!({ "_notification": n.method, "params": n.params })
+                }
+                lsp_server::Message::Request(_) => json!({ "_unexpected": "server_request" }),
+            })
     }
 }
 
@@ -185,7 +201,11 @@ impl SubprocessHarness {
             .unwrap_or_else(|_| panic!("failed to spawn {:?}", binary));
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
-        Self { child, stdin, stdout }
+        Self {
+            child,
+            stdin,
+            stdout,
+        }
     }
 
     pub fn send(&mut self, msg: &Value) {

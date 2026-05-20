@@ -124,7 +124,10 @@ fn main() {
                         if let Some(ir) = &result.ir_text {
                             let ir_path = binary.with_extension("ll");
                             if let Err(e) = std::fs::write(&ir_path, ir) {
-                                eprintln!("ynz: could not write IR to `{}`: {e}", ir_path.display());
+                                eprintln!(
+                                    "ynz: could not write IR to `{}`: {e}",
+                                    ir_path.display()
+                                );
                                 process::exit(EXIT_INFRA_ERROR);
                             }
                             println!("LLVM IR written to: {}", ir_path.display());
@@ -144,7 +147,12 @@ fn main() {
                 process::exit(code);
             }
         }
-        Command::Run { file, keep, emit_ir, reveal_sensitive } => {
+        Command::Run {
+            file,
+            keep,
+            emit_ir,
+            reveal_sensitive,
+        } => {
             let code = run::run(&file, keep, emit_ir, reveal_sensitive);
             process::exit(code);
         }
