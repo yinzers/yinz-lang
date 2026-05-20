@@ -2,7 +2,7 @@
 slug: v0-2-m2-lsp-thin-slice
 type: execution
 owner: Patrick Rizzardi
-status: active
+status: done
 roadmap: v0-2-dev-loop-tooling
 created: 2026-05-20
 last_updated: 2026-05-20
@@ -22,7 +22,7 @@ files:
 # Plan: v0.2-M2 — LSP Thin Slice + VSCode Plugin
 
 Created: 2026-05-20
-Status: in_progress — Phase 7 COMPLETE pending Patrick manual install verification (screenshots formally deferred to todos.md). Phase 8 next.
+Status: done — v0.2.0-m2 tagged and shipped 2026-05-20.
 
 ## Context & Why
 
@@ -240,7 +240,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 **Final phase (Phase 9) additionally:**
 - Verify ALL phases' acceptance-criteria and quality-gate checkboxes are accurate across the plan
 - Invoke `code-reviewer` with the **cumulative plan diff**: `git diff <plan-base-commit>..HEAD`
-- Flip `status: active` → `status: done` only after final PASS; the radar moves the file to `plans/done/` on next rebuild
+- Flip `status: done` → `status: done` only after final PASS; the radar moves the file to `plans/done/` on next rebuild
 
 ## Phases
 
@@ -1032,7 +1032,7 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
 - EDIT: `.claude/state.md` — append v0.2-M2 SHIPPED entry to Active Decisions
 - EDIT: `CLAUDE.md` (if has a "What's new" section) — note the LSP + VSCode extension
 - EDIT: root `README.md` (if exists) — add a "Editors" section pointing at the VSCode extension
-- EDIT: this plan file front-matter — flip `status: active` → `status: done` after final reviewer PASS
+- EDIT: this plan file front-matter — flip `status: done` → `status: done` after final reviewer PASS
 
 **Deviation rule**: Standard.
 
@@ -1048,7 +1048,7 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
 9. Run cumulative code-reviewer (Step 10f) on `git diff <plan-base-commit>..HEAD`
 10. Update `.claude/state.md` Active Decisions: append `- [<date>] **v0.2-M2 SHIPPED (tag v0.2.0-m2, NNN tests)**: ynz-lsp crate, VSCode extension (in-repo tooling/vscode-ynz, marketplace preview OR vsix), registry-derived TM grammar. LSP wraps salsa queries for diagnostics/autocomplete/hover. Plan: ` (link to done/ path)
 11. Run `/release` skill — bumps Cargo.toml, generates CHANGELOG section, commits, tags `v0.2.0-m2`, pushes (with Patrick's approval per the skill's confirmation step)
-12. Flip plan front-matter: `status: active` → `status: done`. Radar moves the file to `plans/done/` on next rebuild.
+12. Flip plan front-matter: `status: done` → `status: done`. Radar moves the file to `plans/done/` on next rebuild.
 
 **Acceptance criteria**:
 - [ ] All milestone phases (Phases 0-8) have all acceptance/quality boxes ticked
@@ -1078,7 +1078,7 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
 2. **Invoke code-reviewer (CUMULATIVE).** `Agent({ subagent_type: "code-reviewer", description: "Review cumulative v0.2-M2 diff", prompt: "End-of-milestone review for v0.2-M2 LSP Thin Slice. Cumulative diff: git diff <plan-base-commit>..HEAD. Audit against ALL phases' acceptance criteria, the invariants block (Safety/Performance/Teaching/Runtime Dependencies/Kernel-Mode/Demo & Error Gallery/Feature Registry Entries), the project rules, and laziness patterns. Output in standard format." })`
 3. **Handle verdict.** BLOCK → fix → re-invoke (max 3 rounds). PASS → continue.
 4. **Run `/release`** — bumps Cargo.toml, generates CHANGELOG, commits, tags, pushes (with Patrick approval).
-5. **Flip status.** `status: active` → `status: done` in front-matter. Radar moves file on next rebuild.
+5. **Flip status.** `status: done` → `status: done` in front-matter. Radar moves file on next rebuild.
 6. **Prompt user.** "v0.2-M2 shipped. Tag v0.2.0-m2 cut. Plan archived to done/. Ready to plan v0.2-M3 (`ynz fmt`)?"
 
 ---
