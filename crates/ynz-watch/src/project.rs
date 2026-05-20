@@ -44,16 +44,17 @@ pub struct WatchSourceFile {
 /// Time: O(n) where n = number of .ynz files in project. Space: O(n).
 pub fn resolve_target(path: &Path) -> Result<WatchTarget> {
     if path.is_file() {
-        let text = std::fs::read_to_string(path).map_err(|e| WatchError::SourceRead {
-            path: path.to_path_buf(),
+        let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let text = std::fs::read_to_string(&canonical).map_err(|e| WatchError::SourceRead {
+            path: canonical.clone(),
             reason: e.to_string(),
         })?;
         return Ok(WatchTarget {
             sources: vec![WatchSourceFile {
-                path: path.to_path_buf(),
+                path: canonical.clone(),
                 text,
             }],
-            entry: path.to_path_buf(),
+            entry: canonical,
             project_root: None,
         });
     }
@@ -69,6 +70,11 @@ pub fn resolve_target(path: &Path) -> Result<WatchTarget> {
     let root = find_project_root(&hint_dir).ok_or_else(|| WatchError::NoProjectFile {
         root: hint_dir.clone(),
     })?;
+
+    // Canonicalize so all stored source paths are absolute. The import resolver
+    // (resolve_module_path in ynz-typeck) also canonicalizes, so both sides must
+    // agree on the key format for source_by_path lookups to succeed.
+    let root = std::fs::canonicalize(&root).unwrap_or(root);
 
     resolve_project(&root, &hint_dir)
 }
