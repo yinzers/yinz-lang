@@ -39,7 +39,7 @@ use crate::{
 /// Time: O(1) per event  Space: O(1)
 pub fn run_event_loop<F>(
     watcher: &FileWatcher,
-    config: &WatchConfig,
+    _config: &WatchConfig,
     mut on_change: F,
 ) where
     F: FnMut(&PathBuf),
