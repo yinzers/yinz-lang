@@ -10,8 +10,8 @@
 //! - Every AST variant is handled exhaustively — no `_ => unimplemented!()`.
 
 use ynz_ast::nodes::{
-    BinOpKind, Block, ConstDecl, ContractSig, Expr, FieldDecl, FunctionDecl, GenericParam,
-    ImportDecl, ImportKind, Item, MatchPattern, MatchPatternKind, Module, OptionsDecl,
+    BinOpKind, Block, ConstDecl, ContractSig, Expr, FieldDecl, ForDestructureBinding, FunctionDecl,
+    GenericParam, ImportDecl, ImportKind, Item, MatchPattern, MatchPatternKind, Module, OptionsDecl,
     OwnershipModifier, Param, PostfixOpKind, ReExport, ShapeDecl, Stmt, StringPart, Type, TypePath,
     UnaryOpKind,
 };
@@ -321,11 +321,19 @@ fn emit_reexport(r: &ReExport) -> String {
 /// Emit a block's contents. Returns a string that STARTS with `\n` and ends before the
 /// closing `}`. Callers append `}` themselves.
 fn emit_block(block: &Block, ind: usize) -> String {
-    if block.stmts.is_empty() {
-        return " ".to_string(); // `function f() -> nothing { }` — single space
+    emit_block_skipping(block, ind, 0)
+}
+
+/// Like `emit_block` but skips the first `skip` statements.
+/// Used by for-loop destructuring to drop the synthetic `let field = __shape.field` statements
+/// that the parser prepended; the formatter re-emits the original `{field}` header instead.
+fn emit_block_skipping(block: &Block, ind: usize, skip: usize) -> String {
+    let stmts = block.stmts.get(skip..).unwrap_or(&[]);
+    if stmts.is_empty() {
+        return " ".to_string();
     }
     let mut out = String::from("\n");
-    for stmt in &block.stmts {
+    for stmt in stmts {
         out.push_str(&emit_stmt(stmt, ind));
         out.push('\n');
     }
@@ -400,11 +408,20 @@ fn emit_stmt(s: &Stmt, ind: usize) -> String {
             )
         }
         Stmt::For {
-            var, iter, body, ..
+            var,
+            iter,
+            body,
+            destructure_pattern,
+            ..
         } => {
-            let body_s = emit_block(body, ind + 1);
+            // When destructure_pattern is present, the parser prepended N synthetic
+            // `let field = __shape.field` statements to the body. Skip them — the
+            // formatter emits the original `{field, ...}` syntax in the header instead.
+            let skip = destructure_pattern.as_ref().map_or(0, |b| b.len());
+            let body_s = emit_block_skipping(body, ind + 1, skip);
+            let header = emit_for_header(var, destructure_pattern);
             format!(
-                "{prefix}for ({var} in {}) {{{body_s}{prefix}}}",
+                "{prefix}for ({header} in {}) {{{body_s}{prefix}}}",
                 emit_expr(iter, 0)
             )
         }
@@ -424,6 +441,27 @@ fn emit_stmt(s: &Stmt, ind: usize) -> String {
                 emit_expr(value, 0)
             )
         }
+    }
+}
+
+/// Emit the loop-variable portion of a `for (… in iter)` header.
+///
+/// - Plain loop (`for (x in iter)`): returns `"x"`.
+/// - Shape destructuring (`for ({ field, field as alias } in iter)`): reconstructs
+///   the original `{ field, field as alias }` syntax from the stored bindings.
+fn emit_for_header(var: &str, destructure_pattern: &Option<Vec<ForDestructureBinding>>) -> String {
+    match destructure_pattern {
+        Some(bindings) => {
+            let fields: Vec<String> = bindings
+                .iter()
+                .map(|b| match &b.alias {
+                    Some(alias) => format!("{} as {alias}", b.field),
+                    None => b.field.clone(),
+                })
+                .collect();
+            format!("{{{}}}",fields.join(", "))
+        }
+        None => var.to_string(),
     }
 }
 
@@ -1050,6 +1088,34 @@ fn emit_block_with_comments(
     out
 }
 
+/// Like `emit_block_with_comments` but skips the first `skip` statements.
+/// Used to hide the synthetic `let field = __shape.field` desugared bindings
+/// that the parser prepends to for-loop destructuring bodies.
+fn emit_block_with_comments_skipping(
+    block: &Block,
+    ind: usize,
+    ctx: &CommentContext<'_>,
+    block_open_pos: usize,
+    skip: usize,
+) -> String {
+    if skip == 0 {
+        return emit_block_with_comments(block, ind, ctx, block_open_pos);
+    }
+    // Advance block_open_pos past the skipped statements so leading comments
+    // for the first real statement are correctly attributed.
+    let first_real_pos = block
+        .stmts
+        .get(skip)
+        .map(|s| stmt_span_start(s))
+        .unwrap_or(block_open_pos);
+
+    // Build a synthetic block with the first `skip` stmts removed.
+    let mut trimmed = block.clone();
+    trimmed.stmts = block.stmts.get(skip..).unwrap_or(&[]).to_vec();
+
+    emit_block_with_comments(&trimmed, ind, ctx, first_real_pos.saturating_sub(1))
+}
+
 fn stmt_span_start(s: &Stmt) -> usize {
     match s {
         Stmt::Let { span, .. }
@@ -1239,11 +1305,14 @@ fn emit_stmt_with_inline(s: &Stmt, ind: usize, ctx: &CommentContext<'_>, inline:
             iter,
             body,
             span,
+            destructure_pattern,
             ..
         } => {
-            let body_s = emit_block_with_comments(body, ind + 1, ctx, span.start);
+            let skip = destructure_pattern.as_ref().map_or(0, |b| b.len());
+            let body_s = emit_block_with_comments_skipping(body, ind + 1, ctx, span.start, skip);
+            let header = emit_for_header(var, destructure_pattern);
             format!(
-                "{prefix}for ({var} in {}) {{{body_s}{prefix}}}",
+                "{prefix}for ({header} in {}) {{{body_s}{prefix}}}",
                 emit_expr(iter, 0)
             )
         }

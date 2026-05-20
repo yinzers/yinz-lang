@@ -17,10 +17,10 @@
 use ynz_diagnostics::SourceSpan;
 
 use crate::nodes::{
-    Block, CallExpr, ConstDecl, ContractSig, Expr, FieldDecl, FunctionDecl, GenericParam,
-    ImportDecl, ImportItem, ImportKind, Item, MatchArm, MatchPattern, MatchPatternKind, Module,
-    OptionsDecl, OwnershipModifier, Param, PostfixOpKind, ReExport, ReExportItem, ReceiverKind,
-    ShapeDecl, Stmt, StringPart, StructLitField, Type, TypePath,
+    Block, CallExpr, ConstDecl, ContractSig, Expr, FieldDecl, ForDestructureBinding, FunctionDecl,
+    GenericParam, ImportDecl, ImportItem, ImportKind, Item, MatchArm, MatchPattern,
+    MatchPatternKind, Module, OptionsDecl, OwnershipModifier, Param, PostfixOpKind, ReExport,
+    ReExportItem, ReceiverKind, ShapeDecl, Stmt, StringPart, StructLitField, Type, TypePath,
 };
 
 /// Compare two `Module` ASTs for semantic equality, ignoring span/position
@@ -152,13 +152,18 @@ fn normalize_stmt(stmt: Stmt) -> Stmt {
             span: zero_span(),
         },
         Stmt::For {
-            var, iter, body, ..
+            var,
+            iter,
+            body,
+            destructure_pattern,
+            ..
         } => Stmt::For {
             var,
             var_span: zero_span(),
             iter: normalize_expr(iter),
             body: normalize_block(body),
             span: zero_span(),
+            destructure_pattern,
         },
         Stmt::Return { value, .. } => Stmt::Return {
             value: value.map(normalize_expr),
@@ -487,6 +492,7 @@ fn normalize_reexport_item(mut item: ReExportItem) -> ReExportItem {
 const _: fn(OwnershipModifier) = |_| {};
 const _: fn(ReceiverKind) = |_| {};
 const _: fn(PostfixOpKind) = |_| {};
+const _: fn(ForDestructureBinding) = |_| {};
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
 

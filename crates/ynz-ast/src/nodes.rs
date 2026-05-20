@@ -177,6 +177,19 @@ pub struct Block {
     pub span: SourceSpan,
 }
 
+/// One binding in a for-loop shape-destructuring pattern.
+///
+/// Represents `{ field }` or `{ field as alias }` in `for ({ field } in iter)`.
+/// The formatter uses this to reconstruct the original syntax from the desugared AST.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForDestructureBinding {
+    /// The field name on the shape being iterated.
+    pub field: String,
+    /// A renamed local variable, e.g. `Some("mins")` for `{ minutes as mins }`.
+    /// `None` means the local variable has the same name as the field.
+    pub alias: Option<String>,
+}
+
 /// A single statement.
 ///
 /// Variant count is pinned by the milestone-locked tests in the test suite.
@@ -243,12 +256,21 @@ pub enum Stmt {
     /// In M3, `iter` must be a `range(...)` call — enforced by typeck (P3).
     /// Parser accepts any expression so M7's `Iterable[T]` protocol requires
     /// only a typeck change, not a parser change.
+    ///
+    /// `destructure_pattern` is `Some(bindings)` when the source used shape
+    /// destructuring (`for ({ field, field as alias } in iter)`).  The desugared
+    /// `var` + `body` fields are still populated for typeck/codegen; the formatter
+    /// uses `destructure_pattern` to reconstruct the original surface syntax.
     For {
         var: String,
         var_span: SourceSpan,
         iter: Expr,
         body: Block,
         span: SourceSpan,
+        /// Present when the loop used `for ({ field, ... } in iter)` shape
+        /// destructuring.  `None` for plain `for (x in iter)` and map-entry
+        /// `for ((k, v) in map)` loops.
+        destructure_pattern: Option<Vec<ForDestructureBinding>>,
     },
 
     /// An early `return [value]`.

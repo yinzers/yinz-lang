@@ -277,6 +277,7 @@ mod tests {
                 iter: err_expr(),
                 body: return_block(),
                 span: span(),
+                destructure_pattern: None,
             }],
             span: span(),
         };

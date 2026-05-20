@@ -15,7 +15,7 @@
 
 ### Active Workstreams
 - v0-2-m4-watch (Patrick Rizzardi) — 9 files touched — 90/121 done — roadmap: v0-2-dev-loop-tooling — 2026-05-20 (post-ship bugs fixed — see Post-Ship Fixes section)
-- webpage-foundation (Patrick Rizzardi) — 3 files touched — 0/125 done — roadmap: webpage-docs — 2026-05-20
+- webpage-foundation (Patrick Rizzardi) — 3 files touched — 22/125 done — roadmap: webpage-docs — 2026-05-20
 <!-- RADAR-END -->
 
 ---

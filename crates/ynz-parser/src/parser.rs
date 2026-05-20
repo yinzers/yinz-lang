@@ -16,8 +16,8 @@
 /// Every AST node carries a SourceSpan so downstream stages can point
 /// diagnostics at exact source locations.
 use ynz_ast::nodes::{
-    BinOpKind, Block, CallExpr, ConstDecl, ContractSig, Expr, FieldDecl, FunctionDecl,
-    GenericParam, ImportDecl, ImportItem, ImportKind, Item, MatchArm, MatchPattern,
+    BinOpKind, Block, CallExpr, ConstDecl, ContractSig, Expr, FieldDecl, ForDestructureBinding,
+    FunctionDecl, GenericParam, ImportDecl, ImportItem, ImportKind, Item, MatchArm, MatchPattern,
     MatchPatternKind, Module, OptionsDecl, OwnershipModifier, Param, PostfixOpKind, ReExport,
     ReExportItem, ReceiverKind, ShapeDecl, Stmt, StructLitField, Type, TypePath, UnaryOpKind,
 };
@@ -2008,6 +2008,7 @@ impl<'a> Parser<'a> {
                 iter: Expr::Error(span.clone()),
                 body,
                 span,
+                destructure_pattern: None,
             };
         }
 
@@ -2066,6 +2067,7 @@ impl<'a> Parser<'a> {
                     span: span.clone(),
                 },
                 span,
+                destructure_pattern: None,
             };
         }
 
@@ -2077,6 +2079,7 @@ impl<'a> Parser<'a> {
             iter,
             body,
             span: SourceSpan::new(self.file, start, end),
+            destructure_pattern: None,
         }
     }
 
@@ -2197,6 +2200,7 @@ impl<'a> Parser<'a> {
                     span: span.clone(),
                 },
                 span,
+                destructure_pattern: None,
             };
         }
 
@@ -2204,6 +2208,19 @@ impl<'a> Parser<'a> {
         let body_end = user_body.span.end;
         let body_span = user_body.span.clone();
         let item_span = body_span.clone();
+
+        // Build the formatter's surface representation before desugaring.
+        let destructure_pattern: Vec<ForDestructureBinding> = fields
+            .iter()
+            .map(|f| ForDestructureBinding {
+                field: f.field.clone(),
+                alias: if f.var != f.field {
+                    Some(f.var.clone())
+                } else {
+                    None
+                },
+            })
+            .collect();
 
         // Desugar: prepend `let field = __shape.field` for each binding.
         let mut desugared_stmts: Vec<Stmt> = fields
@@ -2234,6 +2251,7 @@ impl<'a> Parser<'a> {
                 span: body_span,
             },
             span: full_span,
+            destructure_pattern: Some(destructure_pattern),
         }
     }
 
@@ -2343,6 +2361,7 @@ impl<'a> Parser<'a> {
                     span: span.clone(),
                 },
                 span,
+                destructure_pattern: None,
             };
         }
 
@@ -2393,6 +2412,7 @@ impl<'a> Parser<'a> {
                 span: body_span,
             },
             span: full_span,
+            destructure_pattern: None,
         }
     }
 
