@@ -1,6 +1,6 @@
 # Session State: ynz
 
-**Last Updated**: 2026-05-20 (ynz watch post-ship: 4 bugs fixed during trading-v4 real-world use — rebuilds work, no feedback loop, multi-entry yinz.toml supported, blank-terminal-clear fixed)
+**Last Updated**: 2026-05-20 (ynz watch 7 post-ship bugs fixed + ynz fmt destructuring fix — all shipped to main)
 
 ---
 
@@ -15,7 +15,7 @@
 
 ### Active Workstreams
 - v0-2-m4-watch (Patrick Rizzardi) — 9 files touched — 90/121 done — roadmap: v0-2-dev-loop-tooling — 2026-05-20 (post-ship bugs fixed — see Post-Ship Fixes section)
-- webpage-foundation (Patrick Rizzardi) — 3 files touched — 22/125 done — roadmap: webpage-docs — 2026-05-20
+- webpage-foundation (Patrick Rizzardi) — 3 files touched — 0/125 done — roadmap: webpage-docs — 2026-05-20
 <!-- RADAR-END -->
 
 ---
@@ -80,6 +80,8 @@ cargo fmt --all
 - [2026-05-16] **M4 P3b complete (3508e7b, merged)**: `extends` field inheritance + cycle detection, `follows` contract verification, `Type::Dynamic`. 96 typeck tests green.
 - [2026-05-17] **M4 P3c complete (7c86f6a, branch feat/m4-ownership, PR open)**: `is_consumed` scope tracking, use-after-give, const-cannot-be-lent/given. All 5 const deep-immutability paths covered. 102 typeck tests green. PR: https://github.com/yinzers/yinz-lang/pull/new/feat/m4-ownership
 - [2026-05-17] **M4 merged to main (direct merge by patrick)**: feat/m4-verification (P3c–P7 bundled — ownership, codegen, fixtures, v0.1.0-m4 prep) landed on main. Cargo.toml at `0.1.0-m4`. Tag `v0.1.0-m4` local.
+- [2026-05-20] **ynz fmt destructuring fix (bc31315)**: `ynz fmt` was emitting `for (__shape in intervals) { let minutes = __shape.minutes ... }` instead of preserving `for ({minutes, timeframe} in intervals)`. Root cause: parser desugars at parse time; formatter saw only the desugared AST. Fix: added `destructure_pattern: Option<Vec<ForDestructureBinding>>` to `Stmt::For`; parser stores original bindings before desugaring; formatter reconstructs original header and skips the synthetic let bindings when emitting the body. Typeck/codegen unchanged.
+- [2026-05-20] **v0.2-M4 watch post-ship: 7 bugs fixed during trading-v4 real-world use** (c3fa69c + 27b3c98 + c510769 + 481c405 + 3582754 + 5a9f624 + ac9367c + 9aec37d): (1) text-mode UI completely silent; (2) notify IN_OPEN feedback loop; (3) double Watching prompt; (4) terminal clear on no-change skips; (5) yinz.toml walk-up + [entries] multi-entry support; (6) single-file mode skipped loading shared project files for imports; (7) hardcoded cc linker + missing -no-pie + missing runtime library. All shipped to main.
 - [2026-05-20] **v0.2-M4 watch bug fixed (c3fa69c)**: Three bugs: (1) rebuild_one_with_emitter had no text-mode UI output — print_building/print_success/print_errors never called on file-change events; (2) notify 8.x watches IN_OPEN causing infinite rebuild loop — fixed via content-equality guard against shadow DB (force=true bypasses for initial build); (3) double "✓ Watching…" prompt removed. Watch now correctly rebuilds exactly once per real user edit.
 - [2026-05-20] **v0.2-M2 SHIPPED (tag v0.2.0-m2, 1028 tests)**: ynz-lsp crate (JSON-RPC stdio, salsa-backed diagnostics/completion/hover), VSCode extension (.vsix + stable URL yinz-latest.vsix), registry-derived TM grammar (ynz-tmgrammar). Every registry entry auto-appears in IDE. Plan: `.claude/plans/done/v0-2-m2-lsp-thin-slice.md`.
 - [2026-05-17] **M5 plan approved + Phase 0 shipped (524ca2e, branch chore/m5-doc-lockdown)**: Generics + Collections + Maybe<T> milestone planned and plan-reviewer Round 2 PASS. Locked decisions: `maybe<T>` moves from M6 to M5 (cleanest .get() API); map = Swiss Tables + SipHash-2-4 + perfect-hash for static-key literals; for-loop over built-in collections is typeck+codegen special-case with REPLACE-AT M7 markers; auto-promotion `array<T>` → `fixed<T>` ships codegen-only in M5 (Tier 3 lint defers to v0.4, muted hint defers to v0.2). 8-phase plan (P0-P6). P0 (doc lockdown — master plan M5/M6/M7 paragraphs updated to `<>`, design/maybe.md created with 9-row LLVM lowering decision table + 10-row flow-sensitive .value rules + 9-row none-inference rules + documented v0.1 cycle-leak limitation, spec/maybe.md syntax-updated) SHIPPED on branch `chore/m5-doc-lockdown`, awaiting merge to main. Plan: `.claude/plans/active/m5-generics.md`.
