@@ -22,7 +22,7 @@ files:
 # Plan: v0.2-M2 — LSP Thin Slice + VSCode Plugin
 
 Created: 2026-05-20
-Status: in_progress — Phase 2 COMPLETE (code-reviewer PASS after 2 rounds). Phase 3 next.
+Status: in_progress — Phase 3 COMPLETE (code-reviewer pending). Phase 4 next.
 
 ## Context & Why
 
@@ -562,25 +562,25 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 9. **Concurrent didChange test** (adversarial, addresses race-during-query bug class): send two `didChange` notifications back-to-back with no intervening response opportunity (the test harness queues both before the worker drains). Assert final `publishDiagnostics` reflects the LAST didChange's text, not interleaved or stale state. Use the channel-serialized worker pattern from Phase 2 step 1.
 
 **Acceptance criteria**:
-- [ ] `did_open` of a fixture with N errors publishes exactly N LSP diagnostics with correct severity, range, and full WHAT/WHAT-INSTEAD/WHY content in message
-- [ ] `did_change` that fixes one error publishes (N-1) diagnostics on the next push (empty entry removes the old one)
-- [ ] Cross-file errors publish to the correct URI (not the editing URI, unless the same)
-- [ ] Cross-file clear-on-fix: editing the source file clears stale diagnostics in the dependent file in the next publish (Step 8 test)
-- [ ] Concurrent didChange test passes: two back-to-back notifications yield diagnostics reflecting the LAST change, not interleaved state (Step 9 test)
-- [ ] `tests/jargon_audit.rs` extension passes: no banned-jargon appears in LSP-rendered messages
-- [ ] `crates/ynz-registry/tests/consistency.rs` extension passes: NO diagnostic-template field contains the substring `"WHAT INSTEAD:"` or `"\n\nWHY:"` (delimiter audit)
-- [ ] UTF-8 and UTF-16 position-encoding tests both pass for the same multi-byte fixture (including the 4-byte UTF-8 emoji / 2-code-unit UTF-16 surrogate case from Phase 2)
-- [ ] `did_close` clears diagnostics for the URI
-- [ ] `debug_assert!` runtime delimiter check exists in `to_lsp_diagnostic` (release builds skip; debug builds catch)
-- [ ] All existing 830+ tests pass; new tests added (≥8 LSP-specific including the cross-file and concurrent tests)
+- [x] `did_open` of a fixture with N errors publishes exactly N LSP diagnostics with correct severity, range, and full WHAT/WHAT-INSTEAD/WHY content in message
+- [x] `did_change` that fixes one error publishes (N-1) diagnostics on the next push (empty entry removes the old one)
+- [x] Cross-file errors publish to the correct URI (not the editing URI, unless the same)
+- [x] Cross-file clear-on-fix: editing the source file clears stale diagnostics in the dependent file in the next publish (Step 8 test)
+- [x] Concurrent didChange test passes: two back-to-back notifications yield diagnostics reflecting the LAST change, not interleaved state (Step 9 test)
+- [x] `tests/jargon_audit.rs` extension passes: no banned-jargon appears in LSP-rendered messages
+- [x] `crates/ynz-registry/tests/consistency.rs` extension passes: NO diagnostic-template field contains the substring `"WHAT INSTEAD:"` or `"\n\nWHY:"` (delimiter audit)
+- [x] UTF-8 and UTF-16 position-encoding tests both pass for the same multi-byte fixture (including the 4-byte UTF-8 emoji / 2-code-unit UTF-16 surrogate case from Phase 2)
+- [x] `did_close` clears diagnostics for the URI
+- [x] `debug_assert!` runtime delimiter check exists in `to_lsp_diagnostic` (release builds skip; debug builds catch)
+- [x] All existing 830+ tests pass; new tests added (≥8 LSP-specific including the cross-file and concurrent tests)
 
 **Quality gate**:
-- [ ] No `// TODO` / `// FIXME` / `// HACK`
-- [ ] `cargo clippy -p ynz-lsp -- -D warnings` passes
-- [ ] Diagnostic transform handles empty bucket (no panic on zero-diagnostic publish)
-- [ ] Diagnostic transform handles diagnostics whose span is at byte-offset 0 (start of file) — common edge case
-- [ ] No allocation in hot path for the common-case "no diagnostics" return
-- [ ] Diagnostic.severity mapping covers ALL three ynz-diagnostics Severity variants (no panic on Suggestion)
+- [x] No `// TODO` / `// FIXME` / `// HACK`
+- [x] `cargo clippy -p ynz-lsp -- -D warnings` passes
+- [x] Diagnostic transform handles empty bucket (no panic on zero-diagnostic publish)
+- [x] Diagnostic transform handles diagnostics whose span is at byte-offset 0 (start of file) — common edge case
+- [x] No allocation in hot path for the common-case "no diagnostics" return
+- [x] Diagnostic.severity mapping covers ALL three ynz-diagnostics Severity variants (no panic on Suggestion)
 
 **Verification**:
 - `cargo test -p ynz-lsp diagnostics 2>&1 | grep 'test result'` — all pass

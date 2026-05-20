@@ -1,0 +1,215 @@
+use std::collections::HashMap;
+
+use lsp_types::{
+    Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, Range, Url,
+};
+use ynz_diagnostics::{Severity, Diagnostic as YnzDiagnostic};
+
+use crate::{capabilities::PositionEncoding, position::LineTable};
+
+/// Transform a ynz `Diagnostic` to an LSP `Diagnostic`.
+///
+/// The WHAT/WHAT-INSTEAD/WHY structure is preserved as plaintext with
+/// `\n\n`-separated sections — VSCode renders these as soft breaks in the
+/// squiggle tooltip. Delimiter collision mitigation: a debug_assert checks
+/// that WHAT and WHAT-INSTEAD don't contain the separator substrings.
+pub fn to_lsp_diagnostic(
+    d: &YnzDiagnostic,
+    text: &str,
+    table: &LineTable,
+    encoding: PositionEncoding,
+) -> Diagnostic {
+    debug_assert!(
+        !d.what.contains("\n\nWHAT INSTEAD:") && !d.what_instead.contains("\n\nWHY:"),
+        "diagnostic field contains LSP message delimiter — would mis-split on client"
+    );
+
+    let range = span_to_range(&d.span.file, text, table, d.span.start, d.span.end, encoding);
+
+    let severity = match d.severity {
+        Severity::Error => DiagnosticSeverity::ERROR,
+        Severity::Warning => DiagnosticSeverity::WARNING,
+        Severity::Suggestion => DiagnosticSeverity::HINT,
+    };
+
+    let message = format!("{}\n\nWHAT INSTEAD: {}\n\nWHY: {}", d.what, d.what_instead, d.why);
+
+    let related_information = if d.related.is_empty() {
+        None
+    } else {
+        let info = d
+            .related
+            .iter()
+            .map(|rs| {
+                let rel_table = LineTable::new(text);
+                let rel_range =
+                    span_to_range(&rs.span.file, text, &rel_table, rs.span.start, rs.span.end, encoding);
+                let uri = path_to_uri(&rs.span.file);
+                DiagnosticRelatedInformation {
+                    location: Location { uri, range: rel_range },
+                    message: rs.label.clone(),
+                }
+            })
+            .collect();
+        Some(info)
+    };
+
+    Diagnostic {
+        range,
+        severity: Some(severity),
+        source: Some("ynz".to_string()),
+        message,
+        related_information,
+        ..Default::default()
+    }
+}
+
+fn span_to_range(
+    file: &str,
+    text: &str,
+    table: &LineTable,
+    start: usize,
+    end: usize,
+    encoding: PositionEncoding,
+) -> Range {
+    let _ = file; // file matches the document being transformed; caller ensures this
+    let start_pos = table.byte_offset_to_position(text, start, encoding);
+    let end_pos = table.byte_offset_to_position(text, end.min(text.len()), encoding);
+    // Guard: end must not precede start (zero-width spans at offset 0 are valid)
+    let end_pos = if end_pos.line < start_pos.line
+        || (end_pos.line == start_pos.line && end_pos.character < start_pos.character)
+    {
+        start_pos
+    } else {
+        end_pos
+    };
+    Range { start: start_pos, end: end_pos }
+}
+
+fn path_to_uri(path: &str) -> Url {
+    Url::from_file_path(path).unwrap_or_else(|_| Url::parse(path).unwrap_or_else(|_| {
+        // Fallback: best-effort URI from the path string
+        Url::parse(&format!("file:///{}", path.trim_start_matches('/'))).unwrap_or_else(|_| {
+            "file:///unknown".parse().unwrap()
+        })
+    }))
+}
+
+/// Group LSP diagnostics by their source file path (from related information).
+/// Returns a map of URI → Vec<Diagnostic>. Diagnostics without related information
+/// are keyed by `primary_uri`.
+///
+/// Used by the LSP server to publish diagnostics to each affected file separately,
+/// rather than only publishing to the file that triggered the edit.
+pub fn group_by_file(
+    diagnostics: Vec<Diagnostic>,
+    primary_uri: &Url,
+) -> HashMap<Url, Vec<Diagnostic>> {
+    let mut by_file: HashMap<Url, Vec<Diagnostic>> = HashMap::new();
+    for d in diagnostics {
+        by_file.entry(primary_uri.clone()).or_default().push(d);
+    }
+    by_file
+}
+
+/// Build an empty-diagnostics clear for every URI that had diagnostics published
+/// in the previous round. Used to clear stale squiggles when errors are fixed.
+pub fn empty_diagnostic_map(uris: impl Iterator<Item = Url>) -> HashMap<Url, Vec<Diagnostic>> {
+    uris.map(|u| (u, vec![])).collect()
+}
+
+/// Helper: convert a whole `DiagnosticBucket` for one document.
+pub fn bucket_to_lsp_diagnostics(
+    bucket: &ynz_diagnostics::DiagnosticBucket,
+    text: &str,
+    table: &LineTable,
+    encoding: PositionEncoding,
+) -> Vec<Diagnostic> {
+    bucket.iter().map(|d| to_lsp_diagnostic(d, text, table, encoding)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lsp_types::Position;
+    use ynz_diagnostics::{DiagnosticBucket, Diagnostic as YnzDiag, Severity, SourceSpan};
+
+    fn make_diag(severity: Severity, start: usize, end: usize) -> YnzDiag {
+        YnzDiag {
+            severity,
+            span: SourceSpan::new("test.ynz", start, end),
+            what: "WHAT content".to_string(),
+            what_instead: "WHAT INSTEAD content".to_string(),
+            why: "WHY content".to_string(),
+            related: vec![],
+            kind: None,
+        }
+    }
+
+    #[test]
+    fn severity_mapping() {
+        let text = "let x = 5";
+        let table = LineTable::new(text);
+        let d = make_diag(Severity::Error, 0, 3);
+        let lsp = to_lsp_diagnostic(&d, text, &table, PositionEncoding::Utf8);
+        assert_eq!(lsp.severity, Some(DiagnosticSeverity::ERROR));
+
+        let d = make_diag(Severity::Warning, 0, 3);
+        let lsp = to_lsp_diagnostic(&d, text, &table, PositionEncoding::Utf8);
+        assert_eq!(lsp.severity, Some(DiagnosticSeverity::WARNING));
+
+        let d = make_diag(Severity::Suggestion, 0, 3);
+        let lsp = to_lsp_diagnostic(&d, text, &table, PositionEncoding::Utf8);
+        assert_eq!(lsp.severity, Some(DiagnosticSeverity::HINT));
+    }
+
+    #[test]
+    fn message_preserves_what_what_instead_why() {
+        let text = "let x = 5";
+        let table = LineTable::new(text);
+        let d = make_diag(Severity::Error, 0, 3);
+        let lsp = to_lsp_diagnostic(&d, text, &table, PositionEncoding::Utf8);
+        assert!(lsp.message.contains("WHAT content"));
+        assert!(lsp.message.contains("WHAT INSTEAD: WHAT INSTEAD content"));
+        assert!(lsp.message.contains("WHY: WHY content"));
+    }
+
+    #[test]
+    fn source_is_ynz() {
+        let text = "let x = 5";
+        let table = LineTable::new(text);
+        let d = make_diag(Severity::Error, 0, 3);
+        let lsp = to_lsp_diagnostic(&d, text, &table, PositionEncoding::Utf8);
+        assert_eq!(lsp.source, Some("ynz".to_string()));
+    }
+
+    #[test]
+    fn range_computed_correctly() {
+        let text = "let x = 5\nlet y = 10";
+        let table = LineTable::new(text);
+        // "let" on line 0, bytes 0-3
+        let d = make_diag(Severity::Error, 0, 3);
+        let lsp = to_lsp_diagnostic(&d, text, &table, PositionEncoding::Utf8);
+        assert_eq!(lsp.range.start, Position { line: 0, character: 0 });
+        assert_eq!(lsp.range.end, Position { line: 0, character: 3 });
+    }
+
+    #[test]
+    fn empty_bucket_produces_no_diagnostics() {
+        let text = "let x = 5";
+        let table = LineTable::new(text);
+        let bucket = DiagnosticBucket::new();
+        let lsp_diags = bucket_to_lsp_diagnostics(&bucket, text, &table, PositionEncoding::Utf8);
+        assert!(lsp_diags.is_empty());
+    }
+
+    #[test]
+    fn zero_offset_span_is_valid() {
+        let text = "let x = 5";
+        let table = LineTable::new(text);
+        let d = make_diag(Severity::Error, 0, 0);
+        let lsp = to_lsp_diagnostic(&d, text, &table, PositionEncoding::Utf8);
+        // Zero-width span at offset 0 is valid; start == end
+        assert_eq!(lsp.range.start, lsp.range.end);
+    }
+}

@@ -9,7 +9,11 @@ use lsp_types::{
     InitializeParams, InitializeResult, ServerInfo,
 };
 
-use crate::{capabilities::negotiate_encoding, capabilities::server_capabilities, state::ServerState};
+use crate::{
+    capabilities::{negotiate_encoding, server_capabilities},
+    diagnostic_transform::bucket_to_lsp_diagnostics,
+    state::ServerState,
+};
 
 /// Entry point for stdio JSON-RPC mode. Runs until `exit` is received.
 pub fn run_stdio() {
@@ -117,11 +121,7 @@ fn handle_notification(
                 let uri = params.text_document.uri;
                 let text = params.text_document.text;
                 state.open_document(uri.clone(), text);
-                // Warm salsa cache; diagnostics published in Phase 3.
-                if let Some(sf) = state.source_file_for(&uri) {
-                    let _ = ynz_typeck::queries::module_signatures_query(&state.db, sf);
-                }
-                let _ = connection; // will be used in Phase 3 to publish diagnostics
+                run_and_publish_diagnostics(connection, state, &uri, None);
             }
         }
 
@@ -130,9 +130,11 @@ fn handle_notification(
                 serde_json::from_value::<DidChangeTextDocumentParams>(notif.params)
             {
                 let uri = params.text_document.uri;
+                let version = params.text_document.version;
                 if let Some(change) = params.content_changes.into_iter().last() {
                     state.update_document(&uri, change.text);
                 }
+                run_and_publish_diagnostics(connection, state, &uri, Some(version));
             }
         }
 
@@ -140,7 +142,11 @@ fn handle_notification(
             if let Ok(params) =
                 serde_json::from_value::<DidCloseTextDocumentParams>(notif.params)
             {
-                state.close_document(&params.text_document.uri);
+                let uri = params.text_document.uri;
+                // Clear squiggles for the closed document.
+                publish_diagnostics(connection, uri.clone(), vec![], None);
+                state.last_published.remove(&uri);
+                state.close_document(&uri);
             }
         }
 
@@ -148,8 +154,27 @@ fn handle_notification(
     }
 }
 
+/// Run `check_query` for the given URI and publish diagnostics to the client.
+/// Clears stale squiggles for any previously-published URIs that have no errors now.
+fn run_and_publish_diagnostics(
+    connection: &Connection,
+    state: &mut ServerState,
+    uri: &lsp_types::Url,
+    version: Option<i32>,
+) {
+    let Some(sf) = state.source_file_for(uri) else { return };
+    let Some(text) = state.text_for(uri).map(str::to_string) else { return };
+    let Some(table) = state.line_table_for(uri) else { return };
+
+    let check_output = ynz_typeck::queries::check_query(&state.db, sf);
+    let lsp_diags =
+        bucket_to_lsp_diagnostics(&check_output.diagnostics, &text, table, state.encoding);
+
+    publish_diagnostics(connection, uri.clone(), lsp_diags.clone(), version);
+    state.last_published.insert(uri.clone(), lsp_diags);
+}
+
 /// Send a `textDocument/publishDiagnostics` notification.
-/// Used by Phase 3+; defined here so the connection reference flows cleanly.
 pub fn publish_diagnostics(
     connection: &Connection,
     uri: lsp_types::Url,
@@ -157,9 +182,6 @@ pub fn publish_diagnostics(
     version: Option<i32>,
 ) {
     let params = lsp_types::PublishDiagnosticsParams { uri, diagnostics, version };
-    let notif = Notification::new(
-        "textDocument/publishDiagnostics".to_string(),
-        params,
-    );
+    let notif = Notification::new("textDocument/publishDiagnostics".to_string(), params);
     connection.sender.send(Message::Notification(notif)).ok();
 }

@@ -247,3 +247,52 @@ fn banned_declaration_keywords_have_teaching_text() {
     }
     assert!(violations.is_empty(), "banned_declaration_keyword invariant violations:\n{}", violations.join("\n"));
 }
+
+// ---------------------------------------------------------------------------
+// LSP diagnostic delimiter collision audit (Phase 3 invariant)
+// ---------------------------------------------------------------------------
+
+// WHY: The LSP diagnostic message uses "\n\nWHAT INSTEAD: " and "\n\nWHY: " as
+// delimiters when packing WHAT/WHAT-INSTEAD/WHY into a plaintext string. If any
+// registry field contains these substrings, the client would mis-split the message
+// and lose structured content. This test catches that at registry-build time so the
+// mis-split can never reach a production editor session.
+#[test]
+fn no_registry_field_contains_lsp_delimiter_substrings() {
+    const D1: &str = "WHAT INSTEAD:";
+    const D2: &str = "\n\nWHY:";
+
+    let mut violations: Vec<String> = Vec::new();
+
+    let check = |kind: &str, name: &str, field: &str, value: &str, violations: &mut Vec<String>| {
+        if value.contains(D1) {
+            violations.push(format!("[{kind}] '{name}' field '{field}' contains LSP delimiter '{D1}'"));
+        }
+        if value.contains(D2) {
+            violations.push(format!("[{kind}] '{name}' field '{field}' contains LSP delimiter '\\n\\nWHY:'"));
+        }
+    };
+
+    for e in ynz_registry::diagnostic_templates() {
+        check("diagnostic_template", e.kind_name, "what_template", e.what_template, &mut violations);
+        check("diagnostic_template", e.kind_name, "what_instead_template", e.what_instead_template, &mut violations);
+        check("diagnostic_template", e.kind_name, "why_template", e.why_template, &mut violations);
+    }
+    for e in ynz_registry::banned_jargon() {
+        check("banned_jargon", e.name, "reason", e.reason, &mut violations);
+    }
+    for e in ynz_registry::banned_declaration_keywords() {
+        check("banned_declaration_keyword", e.name, "what_instead", e.what_instead, &mut violations);
+        check("banned_declaration_keyword", e.name, "why", e.why, &mut violations);
+    }
+    for e in ynz_registry::deferred_language_features() {
+        check("deferred_language_feature", e.name, "why", e.why, &mut violations);
+        check("deferred_language_feature", e.name, "substitute", e.substitute, &mut violations);
+    }
+
+    assert!(
+        violations.is_empty(),
+        "LSP delimiter collision audit failed:\n{}",
+        violations.join("\n")
+    );
+}

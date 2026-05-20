@@ -13,38 +13,35 @@ fn initialize_returns_capabilities() {
 }
 
 #[test]
-fn did_open_accepted() {
+fn did_open_triggers_publish_diagnostics() {
     let h = InProcessHarness::new().start_server();
     h.initialize();
-    // didOpen should not crash and server should remain responsive.
     h.did_open("file:///test.ynz", "function entrypoint() -> nothing { }");
-    // No publishDiagnostics in Phase 2 (that's Phase 3).
-    // Verify no unexpected message arrives within a short window.
-    let unexpected = h.try_recv_timeout(Duration::from_millis(50));
-    assert!(
-        unexpected.is_none(),
-        "unexpected message from server after didOpen: {unexpected:?}"
-    );
+    // Phase 3: didOpen now triggers publishDiagnostics
+    let msg = h.try_recv_timeout(Duration::from_millis(300));
+    assert!(msg.is_some(), "expected publishDiagnostics notification after didOpen");
 }
 
 #[test]
-fn did_change_accepted() {
+fn did_change_triggers_publish_diagnostics() {
     let h = InProcessHarness::new().start_server();
     h.initialize();
     h.did_open("file:///test.ynz", "let x: int = 1");
+    h.try_recv_timeout(Duration::from_millis(200)); // drain didOpen diagnostic
     h.did_change("file:///test.ynz", "let x: int = 2", 2);
-    let unexpected = h.try_recv_timeout(Duration::from_millis(50));
-    assert!(unexpected.is_none(), "unexpected message after didChange: {unexpected:?}");
+    let msg = h.try_recv_timeout(Duration::from_millis(300));
+    assert!(msg.is_some(), "expected publishDiagnostics notification after didChange");
 }
 
 #[test]
-fn did_close_accepted() {
+fn did_close_sends_empty_publish_diagnostics() {
     let h = InProcessHarness::new().start_server();
     h.initialize();
     h.did_open("file:///test.ynz", "let x: int = 1");
+    h.try_recv_timeout(Duration::from_millis(200)); // drain didOpen diagnostic
     h.did_close("file:///test.ynz");
-    let unexpected = h.try_recv_timeout(Duration::from_millis(50));
-    assert!(unexpected.is_none(), "unexpected message after didClose: {unexpected:?}");
+    let msg = h.try_recv_timeout(Duration::from_millis(300));
+    assert!(msg.is_some(), "expected publishDiagnostics clear after didClose");
 }
 
 #[test]

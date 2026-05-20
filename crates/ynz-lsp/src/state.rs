@@ -17,6 +17,9 @@ pub struct ServerState {
     pub open_documents: HashMap<Url, String>,
     /// Pre-computed line-offset tables per open document.
     pub line_tables: HashMap<Url, LineTable>,
+    /// Last set of diagnostics published per URI. Used to clear stale squiggles
+    /// when a file is fixed (push empty list) and to avoid redundant publishes.
+    pub last_published: HashMap<Url, Vec<lsp_types::Diagnostic>>,
     /// Negotiated position encoding for this session.
     pub encoding: PositionEncoding,
     /// Set by `shutdown` request; `exit` checks this.
@@ -29,6 +32,7 @@ impl ServerState {
             db: CompilerDb::default(),
             open_documents: HashMap::new(),
             line_tables: HashMap::new(),
+            last_published: HashMap::new(),
             encoding,
             shutdown_requested: false,
         }
