@@ -1,0 +1,94 @@
+{
+  "fileTypes": [
+    "ynz"
+  ],
+  "name": "Yinz",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#banned-keywords"
+    },
+    {
+      "include": "#deferred-features"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#literals"
+    }
+  ],
+  "repository": {
+    "banned-keywords": {
+      "match": "\\b(interface|goroutine|protected|abstract|promise|private|switch|struct|future|public|match|class|async|await|type|enum|pub)\\b",
+      "name": "invalid.deprecated"
+    },
+    "comments": {
+      "patterns": [
+        {
+          "match": "//.*$",
+          "name": "comment.line.double-slash.ynz"
+        },
+        {
+          "match": "///.*$",
+          "name": "comment.line.doc.ynz"
+        },
+        {
+          "begin": "/\\*",
+          "end": "\\*/",
+          "name": "comment.block.ynz"
+        }
+      ]
+    },
+    "deferred-features": {
+      "match": "\\b(self-referential-shape|scratch|foreign|test|f32|f64|i16|i32|i64|u16|u32|u64|gpu|i8|u8)\\b",
+      "name": "invalid.illegal"
+    },
+    "keywords": {
+      "match": "\\b(background|sensitive|function|nothing|follows|extends|dynamic|options|return|hidden|errors|import|export|const|false|while|shape|true|else|base|Self|self|none|wait|let|for|if|in|is)\\b",
+      "name": "keyword.control.ynz"
+    },
+    "literals": {
+      "patterns": [
+        {
+          "match": "\\b(true|false)\\b",
+          "name": "constant.language.boolean.ynz"
+        },
+        {
+          "match": "\\bnone\\b",
+          "name": "constant.language.null.ynz"
+        },
+        {
+          "match": "\\b[0-9][0-9_]*\\b",
+          "name": "constant.numeric.integer.ynz"
+        },
+        {
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*\\b",
+          "name": "constant.numeric.float.ynz"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "begin": "`",
+          "end": "`",
+          "name": "string.template.ynz",
+          "patterns": [
+            {
+              "begin": "\\$\\{",
+              "end": "\\}",
+              "name": "variable.other.interpolation.ynz"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "scopeName": "source.ynz"
+}

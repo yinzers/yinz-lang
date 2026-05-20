@@ -3,3 +3,8 @@ target/
 *.o
 *.bc
 Cargo.lock.bak
+
+# VSCode extension build artifacts
+tooling/vscode-ynz/node_modules/
+tooling/vscode-ynz/out/
+tooling/vscode-ynz/*.vsix

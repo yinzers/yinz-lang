@@ -1651,6 +1651,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ynz-tmgrammar"
+version = "0.2.0-m1"
+dependencies = [
+ "serde_json",
+ "ynz-registry",
+]
+
+[[package]]
 name = "ynz-typeck"
 version = "0.2.0-m1"
 dependencies = [

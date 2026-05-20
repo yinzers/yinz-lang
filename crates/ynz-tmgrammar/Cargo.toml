@@ -1,0 +1,19 @@
+[package]
+name = "ynz-tmgrammar"
+description = "Generates tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json from the SSOT registry"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+ynz-registry = { workspace = true }
+serde_json = "1"
+
+[[bin]]
+name = "ynz-tmgrammar"
+path = "src/main.rs"
+
+[lib]
+name = "ynz_tmgrammar"
+path = "src/lib.rs"

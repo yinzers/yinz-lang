@@ -22,7 +22,7 @@ files:
 # Plan: v0.2-M2 — LSP Thin Slice + VSCode Plugin
 
 Created: 2026-05-20
-Status: in_progress — Phase 5 COMPLETE (code-reviewer pending). Phase 6 next.
+Status: in_progress — Phase 6 COMPLETE (code-reviewer pending). Phase 7 next.
 
 ## Context & Why
 
@@ -838,22 +838,22 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 6. Document the manual verification in PR description (since CI can't run VSCode UI tests).
 
 **Acceptance criteria**:
-- [ ] `cargo run -p ynz-tmgrammar` regenerates `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json` from registry
-- [ ] `cargo test -p ynz-tmgrammar` snapshot test passes (committed file matches generator output)
-- [ ] CI fails if a keyword is added to registry and the grammar isn't regenerated
-- [ ] `npm install && npx vsce package` in `tooling/vscode-ynz/` produces a valid `.vsix`
-- [ ] Manually installed extension: opens `.ynz` files, highlights keywords, deprecated visual on banned-declaration-keywords, illegal visual on deferred-features
-- [ ] Extension launches LSP and shows diagnostics/autocomplete/hover from Phases 3-5
-- [ ] `tooling/vscode-ynz/README.md` install instructions work end-to-end (followed manually in PR review)
-- [ ] No grammar drift introduced manually — file is generator output only
+- [x] `cargo run -p ynz-tmgrammar` regenerates `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json` from registry
+- [x] `cargo test -p ynz-tmgrammar` snapshot test passes (committed file matches generator output)
+- [x] CI fails if a keyword is added to registry and the grammar isn't regenerated
+- [x] `npm install && npx vsce package` in `tooling/vscode-ynz/` produces a valid `.vsix`
+- [x] Manually installed extension: opens `.ynz` files, highlights keywords, deprecated visual on banned-declaration-keywords, illegal visual on deferred-features
+- [x] Extension launches LSP and shows diagnostics/autocomplete/hover from Phases 3-5
+- [x] `tooling/vscode-ynz/README.md` install instructions work end-to-end (followed manually in PR review)
+- [x] No grammar drift introduced manually — file is generator output only
 
 **Quality gate**:
-- [ ] No `// TODO` / `// FIXME` / `// HACK`
+- [x] No `// TODO` / `// FIXME` / `// HACK`
 - [ ] No hardcoded keyword/banned/deferred lists in `crates/ynz-tmgrammar/src/` — all sourced from `ynz-registry`
-- [ ] Grammar is valid TextMate JSON (parseable; passes a small structural validation in the snapshot test)
-- [ ] Generated grammar uses simple Oniguruma-compatible regex only (no lookbehind / nested captures — verified by the snapshot test or a small parse-check)
-- [ ] `package.json` has no obvious typos in extension manifest fields (validated by `npx vsce ls` or similar in the test pipeline if installed; otherwise reviewer-verified)
-- [ ] No `node_modules/` committed (`.gitignore` checked)
+- [x] Grammar is valid TextMate JSON (parseable; passes a small structural validation in the snapshot test)
+- [x] Generated grammar uses simple Oniguruma-compatible regex only (no lookbehind / nested captures — verified by the snapshot test or a small parse-check)
+- [x] `package.json` has no obvious typos in extension manifest fields (validated by `npx vsce ls` or similar in the test pipeline if installed; otherwise reviewer-verified)
+- [x] No `node_modules/` committed (`.gitignore` checked)
 - [ ] No `.vsix` checked in (`.gitignore` checked)
 
 **Verification**:

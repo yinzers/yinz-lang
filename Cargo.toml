@@ -11,6 +11,7 @@ members = [
     "crates/ynz-runtime",
     "crates/ynz-registry",
     "crates/ynz-lsp",
+    "crates/ynz-tmgrammar",
 ]
 
 [workspace.package]
