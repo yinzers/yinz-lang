@@ -20,6 +20,7 @@ ynz-parser      = { workspace = true }
 ynz-typeck      = { workspace = true }
 ynz-codegen     = { workspace = true }
 ynz-fmt         = { workspace = true }
+ynz-watch       = { workspace = true }
 
 [dev-dependencies]
 insta      = { workspace = true }

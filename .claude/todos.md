@@ -49,6 +49,14 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 - [ ] **per-phase-rule-reminder-block-in-code-reviewer-prompts** — extend each phase's Exit Sequence code-reviewer prompt to explicitly remind the agent about `~/.claude/rules/comments.md` + Golden Rule 11 WHY-quality + Yinz vocabulary (per agent-dispatch-rule-reminders memory). Deferred from v0.2-M3 round 1 review; non-blocking but tracked.
 
+- [ ] **watch-interactive-commands** — press 'r' to rebuild, 'q' to quit, etc. in `ynz watch`. Deferred from v0.2-M4; not blocking ship. Pick up IF terminal-only users surface real demand. Locked design pointer in `design/watch.md` future-proofing section.
+
+- [ ] **watch-lsp-shared-daemon** — investigate sharing the long-lived `CompilerDb` between `ynz-watch` and `ynz-lsp`. Deferred from v0.2-M4 (independent daemons OK for M4). Pick up IF v0.3 needs both running concurrently against the same project.
+
+- [ ] **watch-windows-validation** — full Windows validation pass: RSS via `memory-stats`, child kill via TerminateProcess, process group via `CREATE_NEW_PROCESS_GROUP`. Implementation present from M4 but tested manually only. Pick up when Yinz formally supports Windows.
+
+- [ ] **watch-json-schema-stabilize** — at v0.2.0 final tag, drop `-unstable` suffix from `--json` `schema_version` field; commit to semver-bound schema changes. Locked trigger: v0.2.0 release.
+
 ## Done (recent)
 
 - [x] **M6 complete (tag pending v0.1.0-m6, 631 tests)** — options+unions+narrowing: options types (i8 tags, multi-case, toString), union types (tagged-struct, Is-arm narrowing), fallible conversions (.toInt/.toFloat/.toNumber), early-return narrowing, shape aliases (shape S = A|B), string parsing runtime. Plan moved to done/. M2+M3 catch-up items closed.

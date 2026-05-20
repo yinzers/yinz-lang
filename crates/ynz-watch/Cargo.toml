@@ -1,0 +1,41 @@
+[package]
+name = "ynz-watch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Watch daemon — rebuild-on-save for Yinz programs"
+
+[dependencies]
+ynz-parser.workspace = true
+ynz-ast.workspace = true
+ynz-typeck.workspace = true
+ynz-codegen.workspace = true
+ynz-registry.workspace = true
+ynz-diagnostics.workspace = true
+salsa.workspace = true
+
+# File watching (pinned stable; 9.0.0-rc.* rejected — still rc)
+notify.workspace = true
+notify-debouncer-mini.workspace = true
+
+# Serialization for --json mode
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+# Timestamps for --json events
+chrono = { workspace = true, features = ["serde"] }
+
+# Cross-platform RSS polling for Layer 3 memory defense
+memory-stats.workspace = true
+
+# Unix graceful child kill (SIGTERM + process group)
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true, features = ["signal", "process"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+assert_cmd.workspace = true
+predicates.workspace = true
+insta = { workspace = true, features = ["redactions"] }

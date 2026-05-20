@@ -37,6 +37,7 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 | `crates/ynz-lsp/` | LSP server — wraps existing salsa queries in JSON-RPC, consumes `ynz-registry` for autocomplete/hover/diagnostics |
 | `crates/ynz-tmgrammar/` | TextMate grammar generator — reads `ynz-registry`, emits `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json` |
 | `crates/ynz-fmt/` | Formatter library — zero-config canonical Yinz formatting, consumed by `ynz fmt` subcommand and v0.2-M5 LSP format-on-save |
+| `crates/ynz-watch/` | Watch daemon — long-running terminal command for rebuild-on-save + re-run; consumes salsa-backed compiler queries shared with the rest of the workspace |
 | `tooling/vscode-ynz/` | VSCode extension — spawns `ynz-lsp`, ships syntax highlighting and language association |
 | `.claude/rules/` | Detailed rule files (loaded on demand) |
 | `CLAUDE.md` | This file — rules for Claude |

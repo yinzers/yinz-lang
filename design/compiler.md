@@ -135,15 +135,11 @@ The multi-pass type system supports this: Pass 1 (type signatures) is almost alw
 
 ## Watch Mode Implementation
 
-`ynz watch` runs a file system watcher. On change:
+`ynz watch` is a long-running daemon holding one `CompilerDb`. File saves mutate `SourceFile.text` salsa inputs; salsa invalidates and recomputes only the changed query results. Target: sub-second warm rebuild for single-file edits.
 
-1. Detect changed files via OS file watcher (inotify/kqueue/FSEvents)
-2. Walk the import graph to find affected files
-3. Invalidate caches for affected files
-4. Recompile incrementally (in parallel where possible)
-5. If `--run`: restart the running process with the new binary
+Quick-start: `ynz watch foo.ynz` — builds + re-runs on every save. `--check` skips the run step. `--json` emits a structured NDJSON event stream on stdout.
 
-Target: sub-second full cycle for single-file changes with warm cache.
+See `design/watch.md` for full architecture: daemon model, file-watcher integration, child process lifecycle, `--json` schema, memory-defense layers (LRU caps + periodic DB rebuild + RSS polling), debounce strategy, and cross-platform notes.
 
 ---
 
