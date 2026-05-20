@@ -10,10 +10,9 @@
 
 <!-- RADAR-START -->
 ### Active Roadmaps
-- v0-2-dev-loop-tooling (patrick) — 2 active plans — 2026-05-20
+- v0-2-dev-loop-tooling (patrick) — 1 active plans — 2026-05-20
 
 ### Active Workstreams
-- v0-2-m2-lsp-thin-slice (Patrick Rizzardi) — 10 files touched — 131/155 done — roadmap: v0-2-dev-loop-tooling — 2026-05-20
 - v0-2-m3-fmt (Patrick Rizzardi) — 9 files touched — 0/137 done — roadmap: v0-2-dev-loop-tooling — 2026-05-20
 <!-- RADAR-END -->
 
