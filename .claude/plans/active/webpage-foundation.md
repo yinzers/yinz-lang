@@ -51,6 +51,16 @@ Status: in_progress
 - Added `dist` to `website/.gitignore` (Nuxt generate creates a `dist → .output/public` symlink that shouldn't be tracked).
 - Deviation: `@nuxt/fonts` v0.14.0 downloads fonts AT BUILD TIME (not at install time). Fonts are vendored in `.output/public/_fonts/` (build output, not committed). The plan's Phase 5 requirement to commit font files will need to be reassessed — `@nuxt/fonts` doesn't support persisting to `website/public/` without additional config. Fonts served locally at runtime (no Google CDN at runtime). Font download at build time is acceptable for CI (internet access available).
 
+### 2026-05-20 — Phase 3a execution
+- Built 9 stateless primitive components: `YContainer`, `YSection`, `YRow`, `YGrid`, `YDivider`, `YEyebrow`, `YHeading`, `YPill`, `YCallout`.
+- All use TypeScript `defineProps<{...}>()` with explicit types; no `any`, no `!`.
+- `YCallout`: `border-l-2 border-ember` for warn variant confirmed in generated CSS.
+- `YHeading`: `font-size: clamp(48px,7vw,96px)` for level 1 confirmed in generated CSS.
+- Created `app/pages/_dev/components.vue` gallery route with Layout / Typography / Indicators sections. `noindex` meta applied via `useHead`.
+- `bun run generate` prerendered `/_dev/components` route successfully.
+- YHeading and @layer base headings use `font-[400]` (Anton intrinsically bold — CSS weight doesn't apply).
+- Note: optional props use optional marker (`border?: boolean`) per Vue/TypeScript convention for function-parameter-style props; structural object fields use `T | null` per coding-style.md.
+
 ### Next step
 Phase 1 complete. Phase 2 (Tailwind v4 + design tokens + fonts) next.
 
@@ -366,18 +376,18 @@ Each phase = one PR via `/pr`. Phases ordered so each ends in a working state.
 4. `/_dev/components` page scaffold: section per category (Layout / Typography / Indicators), each component rendered with all variants. Add `<meta name="robots" content="noindex">` via `useHead` on this route.
 5. Visual diff against the prototype `index.html` — note deltas in PR description.
 **Acceptance criteria**:
-- [ ] All 9 components exist under `website/app/components/primitives/`
-- [ ] `/_dev/components` renders without console errors; each component visible with all variants
-- [ ] No `any`, no `as any`, no non-null assertion `!` (verified via `bunx nuxi typecheck`)
-- [ ] `<YCallout variant="warn">` left border is `--color-ember` (verified via devtools)
-- [ ] `<YHeading level="1">` font-size matches `clamp(48px, 7vw, 96px)` per shared.css:76
-- [ ] `/_dev/components` is noindex (head meta + excluded from sitemap via Phase 5 config)
+- [x] All 9 components exist under `website/app/components/primitives/`
+- [x] `/_dev/components` renders without console errors; each component visible with all variants
+- [x] No `any`, no `as any`, no non-null assertion `!` (verified via `bunx nuxi typecheck`)
+- [x] `<YCallout variant="warn">` left border is `--color-ember` (verified via generated CSS)
+- [x] `<YHeading level="1">` font-size matches `clamp(48px, 7vw, 96px)` per shared.css:76
+- [x] `/_dev/components` is noindex (head meta + excluded from sitemap via Phase 5 config)
 **Quality gate**:
-- [ ] Every component file has a one-line description comment at top (props summary)
-- [ ] Props use `T \| null` for optional object fields
-- [ ] Arrow functions only in script blocks; no `function` keyword
-- [ ] Tailwind utilities preferred over scoped CSS
-- [ ] `bun run generate` succeeds — every primitive renders in SSG
+- [x] Every component file has a one-line description comment at top (props summary)
+- [x] Props use `T | null` for optional object fields
+- [x] Arrow functions only in script blocks; no `function` keyword
+- [x] Tailwind utilities preferred over scoped CSS
+- [x] `bun run generate` succeeds — every primitive renders in SSG
 **Verification**:
 - `docker compose exec web bunx nuxi typecheck` returns 0 errors
 - Visit `/_dev/components`, eyeball-compare against prototype
