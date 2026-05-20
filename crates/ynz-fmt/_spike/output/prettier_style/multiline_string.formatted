@@ -1,0 +1,10 @@
+// multiline_string.ynz: backtick strings with interpolation
+// Tests that the formatter treats backtick content as opaque.
+// ${...} interpolations are reconstructed from AST parts correctly.
+function buildMessage(first: string, last: string) -> string {
+  // Combine the two name parts
+  const full = `${first} ${last}`  // full name built from parts
+  // Wrap the full name in a greeting
+  const greeting = `Hello, ${full}!`  // greeting with interpolation
+  return greeting  // return the complete string
+}

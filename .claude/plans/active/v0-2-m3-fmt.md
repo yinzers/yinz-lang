@@ -440,22 +440,24 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 9. Update `design/fmt.md` algorithm-choice section: state the choice, name the measurements that drove it, lock the choice for v0.2-M5+.
 10. **Copy MEASUREMENTS.md content into `design/fmt.md`** as a permanent record under a new "Algorithm spike measurements (v0.2-M3 Phase 1)" subsection BEFORE deleting `_spike/`. The git-history-only argument doesn't survive contact with future re-litigation; the design doc must hold the evidence. Then delete the losing spike's directory (preserved in git history). Retain `_spike/MEASUREMENTS.md` + winning spike until Phase 2 supersedes; Phase 2 deletes them both (the content already lives in `design/fmt.md`).
 
+**Decisions made**: Algorithm = **prettier-style** (full AST reflow). Both spikes passed Gate 1 (idempotency) and Gate 2 (50/50 = 100% comment placement accuracy). Prettier chosen for canonicality — same program → same output regardless of original formatting. LOC tie-break (376 vs 421) nominally favors rustfmt but canonicality is not negotiable. Decision locked in `design/fmt.md` "Algorithm Choice" section. Rustfmt spike preserved in git history at commit `051844b`.
+
 **Acceptance criteria**:
-- [ ] Both spikes built, ran against all 5 fixtures, produced output captured in `_spike/output/`
-- [ ] `MEASUREMENTS.md` documents the methodology AND recorded values for both spikes (idempotency results, comment-placement scores, LOC counts)
-- [ ] `MEASUREMENTS.md` records a specific failure-mode-by-fixture matrix (no hand-wavy "rustfmt style felt cleaner")
-- [ ] `design/fmt.md` algorithm section contains a locked decision with explicit rationale tied to the recorded measurements
-- [ ] Loser spike directory removed from tree (preserved in git history)
-- [ ] `cargo build --workspace` succeeds
-- [ ] `cargo test --workspace` still passes (no behavior change to compiler; spike is opt-in `cargo run -p ynz-fmt-spike-<style>`)
+- [x] Both spikes built, ran against all 5 fixtures, produced output captured in `_spike/output/`
+- [x] `MEASUREMENTS.md` documents the methodology AND recorded values for both spikes (idempotency results, comment-placement scores, LOC counts)
+- [x] `MEASUREMENTS.md` records a specific failure-mode-by-fixture matrix (no hand-wavy "rustfmt style felt cleaner")
+- [x] `design/fmt.md` algorithm section contains a locked decision with explicit rationale tied to the recorded measurements
+- [x] Loser spike directory removed from tree (preserved in git history)
+- [x] `cargo build --workspace` succeeds
+- [x] `cargo test --workspace` still passes (no behavior change to compiler; spike is opt-in `cargo run -p ynz-fmt-spike-<style>`)
 
 **Quality gate**:
-- [ ] No `// TODO` / `// FIXME` / `// HACK` left in any retained file
-- [ ] MEASUREMENTS.md cites specific fixture:line and observed-output pairs; no vague claims
-- [ ] design/fmt.md algorithm section has the one-line-decision-plus-WHY format
-- [ ] No new banned-jargon in design/fmt.md
-- [ ] `cargo clippy --workspace -- -D warnings` passes
-- [ ] No commented-out code
+- [x] No `// TODO` / `// FIXME` / `// HACK` left in any retained file
+- [x] MEASUREMENTS.md cites specific fixture:line and observed-output pairs; no vague claims
+- [x] design/fmt.md algorithm section has the one-line-decision-plus-WHY format
+- [x] No new banned-jargon in design/fmt.md
+- [x] `cargo clippy --workspace -- -D warnings` passes
+- [x] No commented-out code
 
 **Verification**:
 - `cargo build --workspace 2>&1 | grep 'warning\|error'` — clean

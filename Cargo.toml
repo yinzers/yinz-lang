@@ -13,6 +13,7 @@ members = [
     "crates/ynz-lsp",
     "crates/ynz-tmgrammar",
     "crates/ynz-fmt",
+    "crates/ynz-fmt/_spike/prettier_style",
 ]
 
 [workspace.package]
