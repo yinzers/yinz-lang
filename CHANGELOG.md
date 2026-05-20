@@ -59,7 +59,7 @@ After v0.2-M2: `.ynz` files in VSCode (or Cursor) get inline red squiggles with 
 - Configurable `yinz.server.path` setting
 - Devcontainer: auto-builds `ynz-lsp` on container create, auto-installs the extension from the marketplace once published
 
-**Distribution:** `.vsix` at `https://github.com/patrickrizzardi/ynz/releases/latest/download/yinz-latest.vsix` (always the most recent build). Marketplace publish deferred — Azure DevOps org provisioning blocked; tracked in todos.
+**Distribution:** `.vsix` at `https://github.com/yinzers/yinz-lang/releases/latest/download/yinz-latest.vsix` (always the most recent build). Marketplace publish deferred — Azure DevOps org provisioning blocked; tracked in todos.
 
 ### New registry adapter (`ynz-registry`)
 

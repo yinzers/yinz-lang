@@ -8,7 +8,7 @@
   "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/patrickrizzardi/ynz"
+    "url": "https://github.com/yinzers/yinz-lang"
   },
   "engines": {
     "vscode": "^1.85.0"

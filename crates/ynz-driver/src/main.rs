@@ -22,7 +22,7 @@ const ICE_BANNER: &str = "\
 \u{2502}  may be fine. The details below help us fix the bug.            \u{2502}\n\
 \u{2502}                                                                 \u{2502}\n\
 \u{2502}  Please file an issue at:                                       \u{2502}\n\
-\u{2502}  https://github.com/patrickrizzardi/ynz/issues                  \u{2502}\n\
+\u{2502}  https://github.com/yinzers/yinz-lang/issues                  \u{2502}\n\
 \u{2502}                                                                 \u{2502}\n\
 \u{2502}  For a full backtrace, re-run with:                             \u{2502}\n\
 \u{2502}  RUST_BACKTRACE=1 ynz build <your-file>                        \u{2502}\n\
