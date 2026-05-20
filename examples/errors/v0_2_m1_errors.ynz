@@ -1,7 +1,7 @@
 // v0.2-M1 Error Gallery
 //
 // Intentional triggers for every registry-driven error path introduced or
-// migrated in v0.2-M1. Each trigger has a WHY: comment naming the diagnostic class.
+// migrated in v0.2-M1. Each trigger has a // WHY: comment naming the diagnostic class.
 //
 // Run: ynz run examples/errors/v0_2_m1_errors.ynz  (expects compile errors)
 // Used for hands-on validation of diagnostic quality after each registry migration.
@@ -11,17 +11,23 @@
 // WHY: [[deferred_language_feature]] — sized types reserved, ship in v2+
 // ---------------------------------------------------------------------------
 
-function deferredSizedInts() -> nothing {
-    let x: i8 = 5      // WHY: i8 — deferred, substitute = use `int`
-    let y: i16 = 5     // WHY: i16 — deferred
-    let z: i32 = 5     // WHY: i32 — deferred
-    let w: i64 = 5     // WHY: i64 — deferred
-    let a: u8 = 5      // WHY: u8 — deferred
+function deferredSizedFloats() -> nothing {
+    let x: f32 = 5.0   // WHY: f32 — deferred, substitute = use `float`
+    let y: f64 = 5.0   // WHY: f64 — deferred, substitute = use `float`
+}
+
+function deferredSignedInts() -> nothing {
+    let a: i8 = 5      // WHY: i8 — deferred, substitute = use `int`
+    let b: i16 = 5     // WHY: i16 — deferred
+    let c: i32 = 5     // WHY: i32 — deferred
+    let d: i64 = 5     // WHY: i64 — deferred, `int` is already i64
+}
+
+function deferredUnsignedInts() -> nothing {
+    let a: u8 = 5      // WHY: u8 — deferred, substitute = use `int`
     let b: u16 = 5     // WHY: u16 — deferred
     let c: u32 = 5     // WHY: u32 — deferred
     let d: u64 = 5     // WHY: u64 — deferred
-    let e: f32 = 5.0   // WHY: f32 — deferred, substitute = use `float`
-    let f: f64 = 5.0   // WHY: f64 — deferred
 }
 
 // ---------------------------------------------------------------------------
@@ -34,13 +40,8 @@ function deferredTestKeyword() -> nothing {
 }
 
 // ---------------------------------------------------------------------------
-// Banned jargon in hypothetical diagnostic — checked at CI time by jargon_audit
-// (no runtime trigger; jargon_audit.rs scans source at CI time)
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Type-attached constant wrong-type access
-// WHY: type_attached_const_type — registry lookup fails, produces undefined error
+// WHY: registry lookup fails → undefined-field error
 // ---------------------------------------------------------------------------
 
 function wrongTypeConstant() -> nothing {
@@ -48,13 +49,41 @@ function wrongTypeConstant() -> nothing {
 }
 
 // ---------------------------------------------------------------------------
-// Banned declaration keywords — OOP keywords redirected (Phase 4)
+// Banned declaration keywords — OOP keywords (Phase 4)
 // WHY: [[banned_declaration_keyword]] entries — OOP drift detection
+// Each line fires a teaching error with what_instead + why from the registry
 // ---------------------------------------------------------------------------
 
-// class Player { }         // WHY: class → use shape
-// struct Config { }        // WHY: struct → use shape
-// enum Status { }          // WHY: enum → use options
-// interface Foo { }        // WHY: interface → use shape + follows
-// type Alias = int         // WHY: type → use shape (but only as declaration keyword)
-// abstract shape Foo { }   // WHY: abstract → use base shape
+class Player { }
+
+struct Config { }
+
+enum Status { }
+
+interface Drawable { }
+
+abstract shape BaseEntity { }
+
+// ---------------------------------------------------------------------------
+// Banned declaration keywords — concurrency keywords (Phase 4)
+// WHY: [[banned_declaration_keyword]] — Yinz uses wait/background instead
+// ---------------------------------------------------------------------------
+
+function asyncExample() -> nothing {
+    async function inner() -> nothing { }   // WHY: async banned, use wait at call site
+}
+
+// ---------------------------------------------------------------------------
+// Banned jargon (Phase 2) — sampled triggers
+// WHY: [[banned_jargon]] — these words must not appear in user-facing diagnostic
+// prose. The jargon_audit.rs CI test catches them in compiler source.
+// These triggers exist to validate the jargon_audit test still runs.
+// (jargon_audit is a source-code scanner, not a runtime test — these
+// function names contain jargon words to verify the scanner's exclusion
+// of non-diagnostic contexts works correctly.)
+// ---------------------------------------------------------------------------
+
+function sampleJargonContextValidation() -> nothing {
+    // The jargon_audit test scans diagnostic *strings*, not identifiers.
+    // No runtime trigger needed here; jargon_audit.rs is the validator.
+}

@@ -572,16 +572,12 @@ impl<'src> Lexer<'src> {
                 Token::Identifier(text.to_string())
             }
             // `test` is reserved for the built-in test framework shipping in v0.13.
-            // Error text comes from the registry so it stays consistent with all other
-            // deferred-feature messages. Source: [[deferred_language_feature]] name="test"
+            // Error text is registry-driven via render_deferred_feature().
             "test" => {
                 let entry = ynz_registry::deferred_language_feature_lookup("test")
                     .expect("registry missing deferred_language_feature 'test'");
-                self.emit_banned_declaration_keyword(
-                    start, self.pos, "test",
-                    entry.substitute,
-                    entry.why,
-                );
+                let (what_instead, why) = ynz_diagnostics::deferred_feature::render_deferred_feature(entry);
+                self.emit_banned_declaration_keyword(start, self.pos, "test", what_instead, why);
                 Token::Identifier(text.to_string())
             }
             // M8 banned visibility keywords — Yinz uses `export` or private-by-default
@@ -671,15 +667,12 @@ impl<'src> Lexer<'src> {
                 Token::Identifier(text.to_string())
             }
             // Sized numeric types from C/Rust/Go — reserved, ship in v2+ with kernel/embedded targets.
-            // Error text is registry-driven; source: [[deferred_language_feature]] entries.
+            // Error text is registry-driven via render_deferred_feature().
             "f32" | "f64" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" => {
                 let entry = ynz_registry::deferred_language_feature_lookup(text)
                     .unwrap_or_else(|| panic!("registry missing deferred_language_feature {text:?}"));
-                self.emit_banned_declaration_keyword(
-                    start, self.pos, text,
-                    entry.substitute,
-                    entry.why,
-                );
+                let (what_instead, why) = ynz_diagnostics::deferred_feature::render_deferred_feature(entry);
+                self.emit_banned_declaration_keyword(start, self.pos, text, what_instead, why);
                 Token::Identifier(text.to_string())
             }
 

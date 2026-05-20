@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.2.0-m1] — 2026-05-20 — Feature Inventory & Sync (SSOT Registry)
+
+Commit range: v0.1.0..v0.2.0-m1
+PRs: #37 (P0), #38 (P1), #39 (P2), #40 (P3), #41 (P4), #42 (P5a), #43 (P5b), #44 (P6), #45 (P7), #46 (P8)
+
+### What changed
+
+Before v0.2-M1: feature inventories lived in 7+ scattered locations — `banned_jargon.rs`, `intrinsics.rs`, `check.rs`, `lexer.rs`, `builtins.rs`, `emit.rs`, and a design-doc-only muted-hint catalog. Adding `int.max` in M4 P5 touched five of them. No tool enforced sync.
+
+After v0.2-M1: one file (`registry/features.toml`) is the canonical source for all of those. Every consumer derives from it via `crates/ynz-registry/`'s `build.rs`-driven code generation.
+
+**New crate: `ynz-registry`** — parses `registry/features.toml` at compile time, emits typed static arrays, exposes adapter functions per `*Table` convention.
+
+**`registry/features.toml`** — 158+ entries across 9 entry kinds:
+- `[[keyword]]` — 29 valid Yinz keywords with token variant and milestone tag
+- `[[banned_declaration_keyword]]` — 17 OOP/concurrency/visibility keywords rejected at lex time with teaching errors
+- `[[banned_jargon]]` — 55 words banned from user-facing diagnostic prose (with replacements and reasons)
+- `[[primitive_intrinsic]]` — 37 built-in functions/methods on primitive types (print_type, free_fn, method, method_1arg)
+- `[[type_attached_constant]]` — 8 constants (`int.max/min`, `float.max/min/epsilon`, `number.max/min/epsilon`) with exact value_literals for both typeck and codegen
+- `[[deferred_language_feature]]` — 18 reserved language features with substitute/why/ships_in/design_doc (sized numerics, test, scratch, foreign, gpu, self-referential shapes)
+- `[[deferred_tooling_feature]]` — 3 reserved tooling features (`--kernel`, `--release`, package binary format)
+- `[[diagnostic_template]]` — 10 canonical WHAT/WHAT-INSTEAD/WHY templates for all DiagnosticKind variants
+- `[[muted_hint_domain]]` — 9 IDE inference domains from `.claude/rules/inference.md` (v0.2-M2 LSP wires consumers)
+
+**Migrated consumers** (data removed from Rust, reads from registry):
+- `crates/ynz-diagnostics/src/banned_jargon.rs` — thin adapter (5 lines)
+- `crates/ynz-typeck/src/intrinsics.rs` — `PrimitiveIntrinsicTable` built from registry at construction time
+- `crates/ynz-typeck/src/check.rs` — `type_attached_const_type()` is a registry lookup
+- `crates/ynz-codegen/src/emit.rs` — `emit_type_const()` parses `value_literal` from registry
+- `crates/ynz-typeck/src/builtins.rs` — `STRING_METHODS` const removed; check.rs reads registry iterator
+- `crates/ynz-parser/src/lexer.rs` — deferred-feature handlers read `substitute`/`why` from registry
+
+**New tests** (44 total):
+- `crates/ynz-registry/tests/consistency.rs` — 10 tests enforcing invariants across all 9 entry kinds
+- `crates/ynz-registry/tests/design_future_sync.rs` — bidirectional sync: every `design/future/*.md` maps to a registry entry or an explicit SKIP with rationale
+- `crates/ynz-parser/tests/keyword_sync.rs` — 10 tests pinning keyword + banned-declaration-keyword counts; prevents registry/lexer drift
+- `crates/ynz-registry/tests/schema_smoke.rs` — extended with real-entry assertions for each migrated kind
+
+**874 tests total, 0 failures.** All pre-existing fixtures produce identical output.
+
+---
+
 ## [0.1.0] — 2026-05-18 — v0.1.0: All M1–M8 language features shipped
 
 Commit range: v0.1.0-m7..v0.1.0

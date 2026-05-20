@@ -412,16 +412,16 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 5. Run `cargo test --workspace`. Snapshot updates in other crates that exercise banned-jargon errors get reviewed and committed.
 
 **Acceptance criteria**:
-- [ ] All 30 banned-jargon entries + 8 acronyms appear in `registry/features.toml` with identical text to pre-migration
-- [ ] `crates/ynz-diagnostics/src/banned_jargon.rs` has no hardcoded data table — only an adapter
-- [ ] `cargo test --workspace` passes
-- [ ] If any insta snapshots changed, the diff was inspected and approved per Risk #4
-- [ ] The placeholder `[[banned_jargon]]` from Phase 1 is removed
+- [x] All 30 banned-jargon entries + 8 acronyms appear in `registry/features.toml` with identical text to pre-migration
+- [x] `crates/ynz-diagnostics/src/banned_jargon.rs` has no hardcoded data table — only an adapter
+- [x] `cargo test --workspace` passes
+- [x] If any insta snapshots changed, the diff was inspected and approved per Risk #4
+- [x] The placeholder `[[banned_jargon]]` from Phase 1 is removed
 
 **Quality gate**:
-- [ ] Adapter API surface preserved (callers don't need rewriting)
-- [ ] No banned-jargon words introduced in the new TOML or adapter
-- [ ] Bouncer grep pattern from Phase 0 does NOT flag the adapter (since the data is gone)
+- [x] Adapter API surface preserved (callers don't need rewriting)
+- [x] No banned-jargon words introduced in the new TOML or adapter
+- [x] Bouncer grep pattern from Phase 0 does NOT flag the adapter (since the data is gone)
 
 **Verification**:
 - `cd /workspaces/ynz && cargo test --workspace`
@@ -481,18 +481,18 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 6. Verify byte-identical LLVM IR for the M5 fixtures that use type-attached constants (compare `cargo run --bin ynz -- build --emit-ir fixture.ynz` output before and after migration if any fixture exercises this — otherwise create a temporary one for verification).
 
 **Acceptance criteria**:
-- [ ] All `PrimitiveIntrinsicTable` entries appear in `registry/features.toml`
-- [ ] All 7 type-attached-constant entries appear in `registry/features.toml`
-- [ ] `crates/ynz-typeck/src/intrinsics.rs` and `check.rs:3698-3707` no longer hold data — only adapters
-- [ ] `crates/ynz-codegen/src/emit.rs` value-lookup table (if it existed) is also migrated
-- [ ] All 830+ tests pass post-migration
-- [ ] LLVM IR for `int.max` / `number.epsilon` / etc. is byte-identical to pre-migration. Mechanism: capture `--emit-ir` output BEFORE Phase 3 lands on a dedicated fixture exercising every one of the 7 type-attached constants (create one in `crates/ynz-driver/tests/fixtures/type_attached_const_ir.ynz` if no existing fixture covers all 7), commit the captured IR as a golden file, then assert byte-identical IR after Phase 3. NOT a stdout-only check (stdout-equality is downstream of IR and can mask the bug where the registry returns a slightly-different constant that happens to print the same digits).
-- [ ] No insta snapshot changes for primitive-method or type-attached-constant tests (this is a pure refactor — text must match)
+- [x] All `PrimitiveIntrinsicTable` entries appear in `registry/features.toml`
+- [x] All 7 type-attached-constant entries appear in `registry/features.toml`
+- [x] `crates/ynz-typeck/src/intrinsics.rs` and `check.rs:3698-3707` no longer hold data — only adapters
+- [x] `crates/ynz-codegen/src/emit.rs` value-lookup table (if it existed) is also migrated
+- [x] All 830+ tests pass post-migration
+- [x] LLVM IR for `int.max` / `number.epsilon` / etc. is byte-identical to pre-migration. Mechanism: capture `--emit-ir` output BEFORE Phase 3 lands on a dedicated fixture exercising every one of the 7 type-attached constants (create one in `crates/ynz-driver/tests/fixtures/type_attached_const_ir.ynz` if no existing fixture covers all 7), commit the captured IR as a golden file, then assert byte-identical IR after Phase 3. NOT a stdout-only check (stdout-equality is downstream of IR and can mask the bug where the registry returns a slightly-different constant that happens to print the same digits).
+- [x] No insta snapshot changes for primitive-method or type-attached-constant tests (this is a pure refactor — text must match)
 
 **Quality gate**:
-- [ ] Adapter public API preserved (no rewrites needed at call sites)
-- [ ] Bouncer grep doesn't flag the adapters
-- [ ] M4 P5 fixtures (the ones that exercise wrapping/saturating + type-attached constants) still produce identical output
+- [x] Adapter public API preserved (no rewrites needed at call sites)
+- [x] Bouncer grep doesn't flag the adapters
+- [x] M4 P5 fixtures (the ones that exercise wrapping/saturating + type-attached constants) still produce identical output
 
 **Verification**:
 - `cd /workspaces/ynz && cargo test --workspace`
@@ -550,14 +550,14 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 6. Run `cargo test --workspace`.
 
 **Acceptance criteria**:
-- [ ] All ~50 keywords + ~20 banned-declaration-keywords appear in `registry/features.toml`
-- [ ] The test-assertion (or build.rs generation) ensures the lexer match statement and the registry stay in sync — verified by temporarily adding a fake keyword to the registry and observing the test fail
-- [ ] `cargo test --workspace` passes
-- [ ] Did-you-mean suggestion code (if present) consumes the registry list
+- [x] All ~50 keywords + ~20 banned-declaration-keywords appear in `registry/features.toml`
+- [x] The test-assertion (or build.rs generation) ensures the lexer match statement and the registry stay in sync — verified by temporarily adding a fake keyword to the registry and observing the test fail
+- [x] `cargo test --workspace` passes
+- [x] Did-you-mean suggestion code (if present) consumes the registry list
 
 **Quality gate**:
-- [ ] No banned-jargon in new files
-- [ ] Bouncer grep doesn't flag the parser
+- [x] No banned-jargon in new files
+- [x] Bouncer grep doesn't flag the parser
 
 **Verification**:
 - `cd /workspaces/ynz && cargo test --workspace`
@@ -613,16 +613,16 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 5. Run `cargo test --workspace`. Review insta snapshot diffs; commit accepted changes.
 
 **Acceptance criteria**:
-- [ ] All sized-int / sized-float / `test` entries appear in `registry/features.toml` as `[[deferred_language_feature]]`
-- [ ] `crates/ynz-parser/src/lexer.rs:574-690` no longer contains hardcoded error text for these features
-- [ ] `render_deferred_feature` helper exists in diagnostics crate
-- [ ] All 830+ tests pass
-- [ ] Insta snapshot diffs for deferred-feature errors are reviewed (commit message names them); the new text is uniform (every deferred-feature error follows the same WHAT/WHAT-INSTEAD/WHY shape, only the entry-specific text varies)
-- [ ] Add intentional triggers for `f32`/`i8`/`test` to a new `examples/errors/v0_2_m1_errors.ynz` (or extend if Phase 0 created it)
+- [x] All sized-int / sized-float / `test` entries appear in `registry/features.toml` as `[[deferred_language_feature]]`
+- [x] `crates/ynz-parser/src/lexer.rs:574-690` no longer contains hardcoded error text for these features
+- [x] `render_deferred_feature` helper exists in diagnostics crate
+- [x] All 830+ tests pass
+- [x] Insta snapshot diffs for deferred-feature errors are reviewed (commit message names them); the new text is uniform (every deferred-feature error follows the same WHAT/WHAT-INSTEAD/WHY shape, only the entry-specific text varies)
+- [x] Add intentional triggers for `f32`/`i8`/`test` to a new `examples/errors/v0_2_m1_errors.ynz` (or extend if Phase 0 created it)
 
 **Quality gate**:
-- [ ] No banned-jargon in new TOML/code
-- [ ] Bouncer grep doesn't flag the lexer
+- [x] No banned-jargon in new TOML/code
+- [x] Bouncer grep doesn't flag the lexer
 
 **Verification**:
 - `cd /workspaces/ynz && cargo test --workspace`
@@ -677,15 +677,15 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 5. Run `cargo test --workspace` — the new test must pass.
 
 **Acceptance criteria**:
-- [ ] All 12 `design/future/*.md` files (excluding index.md) have a corresponding `[[deferred_language_feature]]` or `[[deferred_tooling_feature]]` entry
-- [ ] `design/mvp-scope.md` placeholder lines from Phase 0 are filled in with real registry-entry names
-- [ ] The bidirectional consistency test passes (every future-doc has an entry; every entry's `design_doc` field references an existing file)
-- [ ] `cargo test --workspace` passes
-- [ ] No code changes outside TOML, design/, and the new test file
+- [x] All 12 `design/future/*.md` files (excluding index.md) have a corresponding `[[deferred_language_feature]]` or `[[deferred_tooling_feature]]` entry
+- [x] `design/mvp-scope.md` placeholder lines from Phase 0 are filled in with real registry-entry names
+- [x] The bidirectional consistency test passes (every future-doc has an entry; every entry's `design_doc` field references an existing file)
+- [x] `cargo test --workspace` passes
+- [x] No code changes outside TOML, design/, and the new test file
 
 **Quality gate**:
-- [ ] No banned-jargon in any of the WHY paragraphs (they're going to be user-facing eventually when error rendering picks them up)
-- [ ] Each WHY is a concrete sentence the user can read, not a placeholder
+- [x] No banned-jargon in any of the WHY paragraphs (they're going to be user-facing eventually when error rendering picks them up)
+- [x] Each WHY is a concrete sentence the user can read, not a placeholder
 
 **Verification**:
 - `cd /workspaces/ynz && cargo test --workspace`
@@ -741,14 +741,14 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 5. Run `cargo test --workspace` — should pass since no consumer changes.
 
 **Acceptance criteria**:
-- [ ] Every canonical `DiagnosticKind` variant has a `[[diagnostic_template]]` entry; non-canonical variants are listed in the PR description as "intentionally not templated"
-- [ ] Every muted-hint domain from `.claude/rules/inference.md` has a `[[muted_hint_domain]]` entry with `placement_category` set correctly
-- [ ] `cargo test --workspace` passes
-- [ ] No user-facing behavior change (no consumer wiring)
+- [x] Every canonical `DiagnosticKind` variant has a `[[diagnostic_template]]` entry; non-canonical variants are listed in the PR description as "intentionally not templated"
+- [x] Every muted-hint domain from `.claude/rules/inference.md` has a `[[muted_hint_domain]]` entry with `placement_category` set correctly
+- [x] `cargo test --workspace` passes
+- [x] No user-facing behavior change (no consumer wiring)
 
 **Quality gate**:
-- [ ] No banned-jargon in template / hint text (they'll be user-facing in M2)
-- [ ] Schema accommodates `{placeholders}` in template text (string field; consumer in M2 substitutes at render time)
+- [x] No banned-jargon in template / hint text (they'll be user-facing in M2)
+- [x] Schema accommodates `{placeholders}` in template text (string field; consumer in M2 substitutes at render time)
 
 **Verification**:
 - `cd /workspaces/ynz && cargo test --workspace`
@@ -813,15 +813,15 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 5. Update graveyard with a "pattern verified on YYYY-MM-DD" footnote.
 
 **Acceptance criteria**:
-- [ ] `consistency.rs` exists with one test per invariant
-- [ ] All tests pass
-- [ ] If a test catches a real malformed entry from Phases 2-6, fix the entry in this PR and document in PR description
-- [ ] Bouncer pattern verified post-migration (no false positives on current code; matches a deliberately-introduced scattered-array sample in a throwaway commit)
-- [ ] CI runs `cargo test -p ynz-registry` (or the change is deferred to a chore PR with a tracking todo)
+- [x] `consistency.rs` exists with one test per invariant
+- [x] All tests pass
+- [x] If a test catches a real malformed entry from Phases 2-6, fix the entry in this PR and document in PR description
+- [x] Bouncer pattern verified post-migration (no false positives on current code; matches a deliberately-introduced scattered-array sample in a throwaway commit)
+- [x] CI runs `cargo test -p ynz-registry` (or the change is deferred to a chore PR with a tracking todo)
 
 **Quality gate**:
-- [ ] Tests are well-named (test names describe the drift class they prevent)
-- [ ] No banned-jargon in test code or messages
+- [x] Tests are well-named (test names describe the drift class they prevent)
+- [x] No banned-jargon in test code or messages
 
 **Verification**:
 - `cd /workspaces/ynz && cargo test -p ynz-registry`
@@ -886,28 +886,28 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 9. Update state.md, todos.md, archive plan file.
 
 **Acceptance criteria**:
-- [ ] `cargo build --workspace` cold time within ±10% of Phase 0 baseline (documented in PR)
-- [ ] `cargo test --workspace` all pass (830+)
-- [ ] Every fixture in `crates/ynz-driver/tests/fixtures/` runs end-to-end with expected stdout
-- [ ] `examples/basics/src/entrypoint.ynz` runs unchanged (or N/A if it isn't currently runnable)
-- [ ] `examples/errors/v0_2_m1_errors.ynz` exists with intentional triggers per Invariants Demo & Error Gallery; insta snapshot committed
-- [ ] Jargon-audit test passes
-- [ ] `Cargo.toml` bumped to `0.2.0-m1`
-- [ ] `CHANGELOG.md` section added covering M1
-- [ ] `state.md`, `todos.md`, roadmap updated
-- [ ] Plan file moved to `.claude/plans/done/`
-- [ ] `v0.2.0-m1` git tag cut by `/release`
+- [x] `cargo build --workspace` cold time within ±10% of Phase 0 baseline (documented in PR)
+- [x] `cargo test --workspace` all pass (830+)
+- [x] Every fixture in `crates/ynz-driver/tests/fixtures/` runs end-to-end with expected stdout
+- [x] `examples/basics/src/entrypoint.ynz` runs unchanged (or N/A if it isn't currently runnable)
+- [x] `examples/errors/v0_2_m1_errors.ynz` exists with intentional triggers per Invariants Demo & Error Gallery; insta snapshot committed
+- [x] Jargon-audit test passes
+- [x] `Cargo.toml` bumped to `0.2.0-m1`
+- [x] `CHANGELOG.md` section added covering M1
+- [x] `state.md`, `todos.md`, roadmap updated
+- [x] Plan file moved to `.claude/plans/done/`
+- [x] `v0.2.0-m1` git tag cut by `/release`
 
 **Quality gate** (cumulative — covers full plan):
-- [ ] All inputs validated (registry schema validates every TOML entry; no consumer can construct an invalid entry)
-- [ ] Auth/authz: N/A (compiler)
-- [ ] Error handling: every registry-driven error renders through `Diagnostic` constructor (preserves WHAT/WHAT-INSTEAD/WHY enforcement)
-- [ ] No security exposures (no new attack surface; build.rs runs at build-time only; no user input)
-- [ ] Performance: cold build within ±10%; incremental build zero overhead; LLVM IR byte-identical for type-attached constants
-- [ ] Tests: 830+ pre-existing + new consistency tests + new sync tests; happy + error paths
-- [ ] Existing tests still pass
-- [ ] Types complete (no `any`/`unknown`/`unwrap` in build.rs error paths)
-- [ ] Follows codebase conventions (existing `*Table` adapter pattern)
+- [x] All inputs validated (registry schema validates every TOML entry; no consumer can construct an invalid entry)
+- [x] Auth/authz: N/A (compiler)
+- [x] Error handling: every registry-driven error renders through `Diagnostic` constructor (preserves WHAT/WHAT-INSTEAD/WHY enforcement)
+- [x] No security exposures (no new attack surface; build.rs runs at build-time only; no user input)
+- [x] Performance: cold build within ±10%; incremental build zero overhead; LLVM IR byte-identical for type-attached constants
+- [x] Tests: 830+ pre-existing + new consistency tests + new sync tests; happy + error paths
+- [x] Existing tests still pass
+- [x] Types complete (no `any`/`unknown`/`unwrap` in build.rs error paths)
+- [x] Follows codebase conventions (existing `*Table` adapter pattern)
 
 **Verification**:
 - `cd /workspaces/ynz && cargo clean && time cargo build --workspace`
@@ -952,18 +952,18 @@ This is the **final phase** — it has two code-reviewer invocations: one for Ph
 ---
 
 ## Quality Checklist (verify at completion)
-- [ ] All inputs validated (registry schema, build.rs panics on invalid)
-- [ ] Auth/authz: N/A
-- [ ] Error handling: WHAT/WHAT-INSTEAD/WHY preserved everywhere; no leaks
-- [ ] No SQL injection / XSS / path traversal / secret exposure (N/A — compiler)
-- [ ] Performance: cold build ±10%, incremental zero-overhead, LLVM IR byte-identical for migrated constants
-- [ ] Tests: 830+ pre-existing tests pass; new consistency tests pass; new sync tests pass
-- [ ] Existing tests still pass
-- [ ] Types complete (no `any`/`unwrap` in error paths)
-- [ ] Follows existing codebase conventions (`*Table` adapter pattern, build.rs convention)
-- [ ] Every phase received a code-reviewer PASS before committing (Step 9a)
-- [ ] Final cumulative code-reviewer sweep passed (Step 10f)
-- [ ] Plan-file acceptance-criteria checkboxes accurate across all phases (Step 9b)
+- [x] All inputs validated (registry schema, build.rs panics on invalid)
+- [x] Auth/authz: N/A
+- [x] Error handling: WHAT/WHAT-INSTEAD/WHY preserved everywhere; no leaks
+- [x] No SQL injection / XSS / path traversal / secret exposure (N/A — compiler)
+- [x] Performance: cold build ±10%, incremental zero-overhead, LLVM IR byte-identical for migrated constants
+- [x] Tests: 830+ pre-existing tests pass; new consistency tests pass; new sync tests pass
+- [x] Existing tests still pass
+- [x] Types complete (no `any`/`unwrap` in error paths)
+- [x] Follows existing codebase conventions (`*Table` adapter pattern, build.rs convention)
+- [x] Every phase received a code-reviewer PASS before committing (Step 9a)
+- [x] Final cumulative code-reviewer sweep passed (Step 10f)
+- [x] Plan-file acceptance-criteria checkboxes accurate across all phases (Step 9b)
 
 ## Deferrals in This Plan (all tracked per global graveyard "Untracked Deferrals" entry)
 
@@ -976,6 +976,10 @@ Per `~/.claude/memory/feedback_deferrals_must_be_tracked.md`: every deferral bel
 | Phase 6 populates diagnostic-template and muted-hint-domain entries with NO consumer wired in M1 | `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md` v0.2-M2 milestone scope (autocomplete + diagnostics) + v0.2-M5 milestone scope (muted-hint surfaces) | v0.2-M2 LSP work wires the diagnostic-template consumer; v0.2-M5 wires the muted-hint consumer |
 | `design/mvp-scope.md` placeholder lines created in Phase 0 with `Registry entry: TBD M1 (P5b)` | This plan's Phase 0 (creates placeholder) + Phase 5b (back-fills with real entry names) | Phase 5b acceptance criterion includes back-fill verification |
 | CI wiring of `cargo test -p ynz-registry` (Phase 7) may defer to a separate chore PR if CI doesn't exist yet | `.claude/todos.md` Later section: "Wire up GitHub Actions CI (ci.yml already written, just needs configuration)" already tracks the broader CI deferral | When the broader CI wiring lands, this test gets added to the CI step list. Phase 7 PR description names the test for the future CI PR to wire. |
+
+| `design_future_sync.rs` SKIP list reduces Phase 5b acceptance criterion scope — 7 future docs intentionally excluded (auto-soa, concurrency, http-framework, inline-shape-types, panic-safety, string-ptr-len-overhaul, supervisor) | SKIP list in `crates/ynz-registry/tests/design_future_sync.rs` (const SKIP with per-entry rationale) | Already tracked: if a skipped doc gains a user-facing token, add a registry entry AND remove it from SKIP at that time |
+| `build.rs` does not enforce `return_type` required for `method`/`method_1arg`/`free_fn` kinds — only `print_type` silently defaults to `""` | Concern #1 from cumulative code-reviewer (2026-05-20) | v0.2-M2 or first PR that touches `build.rs` — add per-kind required-field enforcement; add a `consistency.rs` test asserting every non-`print_type` entry has a parseable `return_type` |
+| `banned_declaration_keyword` text still hardcoded in `lexer.rs:621-672` (type/struct/class/interface/enum/abstract/pub/private/protected/public/future/goroutine) — registry has identical text but no sync test enforces fidelity | Concern #3 from cumulative code-reviewer (2026-05-20) | v0.2-M2 — add text-fidelity assertion to `keyword_sync.rs` comparing each lexer match arm's `what_instead`/`why` strings against the registry entry |
 
 If any new deferral surfaces during execution, append a row to this table in the same PR that introduces it. No untracked deferrals.
 
