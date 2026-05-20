@@ -25,10 +25,7 @@ pub fn lex(file: &str, source: &str) -> (Vec<Spanned<Token>>, DiagnosticBucket) 
 /// The formatter consumes `comments` to re-attach `//` trivia to AST nodes.
 ///
 /// The source bytes MUST be valid UTF-8 (the driver verifies this before calling).
-pub fn lex_with_trivia(
-    file: &str,
-    source: &str,
-) -> (Vec<Spanned<Token>>, Vec<Comment>) {
+pub fn lex_with_trivia(file: &str, source: &str) -> (Vec<Spanned<Token>>, Vec<Comment>) {
     let mut lex = Lexer::new(file, source, true);
     lex.run();
     let comments = lex.trivia_comments.unwrap_or_default();
@@ -64,7 +61,11 @@ impl<'src> Lexer<'src> {
             diags: DiagnosticBucket::new(),
             interp_depth_stack: Vec::new(),
             after_interp_end: false,
-            trivia_comments: if capture_trivia { Some(Vec::new()) } else { None },
+            trivia_comments: if capture_trivia {
+                Some(Vec::new())
+            } else {
+                None
+            },
         }
     }
 

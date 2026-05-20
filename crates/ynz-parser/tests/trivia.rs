@@ -41,7 +41,9 @@ fn line_comment_before_function() {
 
 #[test]
 fn inline_comment_after_statement() {
-    assert!(tokens_equal("function f() -> nothing { let x = 1 // inline\n }"));
+    assert!(tokens_equal(
+        "function f() -> nothing { let x = 1 // inline\n }"
+    ));
 }
 
 #[test]
@@ -70,7 +72,9 @@ fn comment_between_two_functions() {
 
 #[test]
 fn comment_in_shape_field() {
-    assert!(tokens_equal("shape Foo {\n  x: int // x field\n  y: int // y field\n}"));
+    assert!(tokens_equal(
+        "shape Foo {\n  x: int // x field\n  y: int // y field\n}"
+    ));
 }
 
 #[test]
@@ -92,7 +96,10 @@ fn double_slash_inside_backtick_is_not_a_comment() {
     let (plain, _) = lex(FILE, source);
     let (trivia, comments) = lex_with_trivia(FILE, source);
     assert_eq!(plain, trivia);
-    assert!(comments.is_empty(), "// inside backtick must not be captured as comment");
+    assert!(
+        comments.is_empty(),
+        "// inside backtick must not be captured as comment"
+    );
 }
 
 #[test]
@@ -139,8 +146,14 @@ fn error_unterminated_backtick_at_eof() {
     let source = "let x = `hello";
     let (plain, plain_diags) = lex(FILE, source);
     let (trivia, _comments) = lex_with_trivia(FILE, source);
-    assert_eq!(plain, trivia, "token streams must match on unterminated backtick");
-    assert!(!plain_diags.is_empty(), "plain lex must emit diagnostic for unterminated backtick");
+    assert_eq!(
+        plain, trivia,
+        "token streams must match on unterminated backtick"
+    );
+    assert!(
+        !plain_diags.is_empty(),
+        "plain lex must emit diagnostic for unterminated backtick"
+    );
 }
 
 #[test]
@@ -157,7 +170,11 @@ fn error_empty_input() {
     let (trivia, comments) = lex_with_trivia(FILE, "");
     assert_eq!(plain, trivia);
     assert!(comments.is_empty());
-    assert_eq!(plain.len(), 1, "empty input should produce exactly one Eof token");
+    assert_eq!(
+        plain.len(),
+        1,
+        "empty input should produce exactly one Eof token"
+    );
 }
 
 #[test]
@@ -167,7 +184,10 @@ fn error_bom_only() {
     let (plain, _) = lex(FILE, source);
     let (trivia, comments) = lex_with_trivia(FILE, source);
     assert_eq!(plain, trivia);
-    assert!(comments.is_empty(), "BOM-only input should produce no comments");
+    assert!(
+        comments.is_empty(),
+        "BOM-only input should produce no comments"
+    );
 }
 
 // ── Comment capture correctness tests ────────────────────────────────────────────
@@ -188,7 +208,10 @@ fn captures_doc_comment() {
     let (_tokens, comments) = lex_with_trivia(FILE, source);
     assert_eq!(comments.len(), 1);
     assert_eq!(comments[0].kind, CommentKind::DocComment);
-    assert!(comments[0].text.starts_with("///"), "doc comment text must start with ///");
+    assert!(
+        comments[0].text.starts_with("///"),
+        "doc comment text must start with ///"
+    );
 }
 
 #[test]
