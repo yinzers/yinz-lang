@@ -61,6 +61,16 @@ impl WatchDb {
         self.source_files.insert(path.to_path_buf(), sf);
     }
 
+    /// Return true if `text` is identical to the last-known shadow content for `path`.
+    ///
+    /// Used to suppress rebuilds triggered by our own `fs::read_to_string` calls — notify
+    /// 8.x watches `IN_OPEN` so every rebuild read fires a new inotify event. Skipping the
+    /// rebuild when content is unchanged breaks the feedback loop without losing any real
+    /// user-initiated changes (salsa would return the cached result anyway).
+    pub fn source_unchanged(&self, path: &Path, text: &str) -> bool {
+        self.sources.get(path).is_some_and(|existing| existing == text)
+    }
+
     /// Update a source file in both the shadow store and the salsa DB.
     ///
     /// Shadow is written FIRST so a mid-update panic leaves the shadow consistent.

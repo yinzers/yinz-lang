@@ -79,6 +79,10 @@ pub fn rebuild_one(
     };
 
     // 2. Update DB (shadow FIRST, then salsa input).
+    // Skip if unchanged — prevents IN_OPEN feedback loop from notify 8.x.
+    if db.source_unchanged(changed_path, &text) {
+        return CycleOutcome::Infra("no-change".into());
+    }
     db.update_source(changed_path, text);
 
     let path_str = entry_path.display().to_string();
@@ -258,9 +262,15 @@ pub fn rebuild_one_with_emitter(
     check_only: bool,
     current_child: &mut Option<ChildHandle>,
     mut emitter: Option<&mut JsonEmitter>,
+    // force=true: skip the no-change guard. Set for the initial build where the shadow is
+    // pre-populated by WatchDb::from_target; content will appear unchanged even though
+    // no prior compile has run. Event-triggered rebuilds pass false.
+    force: bool,
 ) -> (CycleOutcome, bool) {
     let start = Instant::now();
     let mut epipe = false;
+
+    let json_mode = emitter.is_some();
 
     if let Some(ref mut e) = emitter {
         let (timestamp, schema_version) = ts();
@@ -299,7 +309,20 @@ pub fn rebuild_one_with_emitter(
             return (CycleOutcome::Infra(msg), false);
         }
     };
+
+    // Break the IN_OPEN feedback loop: notify 8.x watches IN_OPEN, so every
+    // fs::read_to_string fires a new inotify event. If content is identical to
+    // the shadow state, skip the rebuild — no user-visible change occurred.
+    // `force` bypasses this for the initial build (shadow pre-populated, no prior compile).
+    if !force && db.source_unchanged(changed_path, &text) {
+        return (CycleOutcome::Infra("no-change".into()), false);
+    }
+
     db.update_source(changed_path, text);
+
+    if !json_mode {
+        ui::print_building(&entry_path.display().to_string());
+    }
 
     let mut raw_outcome = db.run_codegen(entry_path);
     let elapsed_ms = start.elapsed().as_millis();
@@ -335,6 +358,17 @@ pub fn rebuild_one_with_emitter(
                 });
             }
             let _ = sources; // sources used by text-mode render; not needed for JSON
+        }
+    }
+
+    // Text-mode: render diagnostics before finish_rebuild moves raw_outcome.
+    if !json_mode {
+        if let RebuildOutcome::Errors { ref diags, ref sources, elapsed_ms } = raw_outcome {
+            let rendered = ynz_diagnostics::render(diags, sources, false);
+            if !rendered.is_empty() {
+                print!("{rendered}");
+            }
+            ui::print_errors(raw_outcome.error_count(), elapsed_ms);
         }
     }
 
@@ -400,6 +434,11 @@ pub fn rebuild_one_with_emitter(
                 }
             }
         }
+    }
+
+    // Text-mode success line.
+    if !json_mode && matches!(outcome, CycleOutcome::Success { .. }) {
+        ui::print_success(start.elapsed().as_millis());
     }
 
     (outcome, epipe)

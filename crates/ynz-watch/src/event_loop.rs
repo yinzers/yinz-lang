@@ -15,14 +15,16 @@ use crate::{
 /// # Flow
 ///
 /// 1. Install Ctrl+C handler that sets the shutdown flag.
-/// 2. Print "Watching…" idle prompt.
-/// 3. Block on the next debounced file event from the watcher.
-/// 4. On `Changed(path)`:  log "[file change] <path>" + call the rebuild callback.
-/// 5. On `Removed(path)`:  log "[file removed] <path>" via `ui::print_file_removed`;
+/// 2. Block on the next debounced file event from the watcher.
+/// 3. On `Changed(path)`: clear terminal + call the rebuild callback.
+///    The callback (`rebuild_one_with_emitter`) prints "✓ Watching…" at the end of
+///    every cycle via `print_success` / `print_errors` — do NOT call `print_watching()`
+///    here or the prompt doubles.
+/// 4. On `Removed(path)`:  log "[file removed] <path>" via `ui::print_file_removed`;
 ///    do NOT crash; do NOT trigger a rebuild (shadow state retains last-known text —
 ///    handled by rebuild callback when it receives None from disk read).
-/// 6. After each event, check shutdown flag; exit cleanly if set.
-/// 7. On watcher channel close (watcher dropped): exit cleanly.
+/// 5. After each event, check shutdown flag; exit cleanly if set.
+/// 6. On watcher channel close (watcher dropped): exit cleanly.
 ///
 /// # Failure modes
 ///
@@ -49,8 +51,6 @@ pub fn run_event_loop<F>(
         shutdown_clone.store(true, Ordering::SeqCst);
     })
     .expect("ynz watch: could not install Ctrl+C handler");
-
-    ui::print_watching();
 
     loop {
         if shutdown.load(Ordering::SeqCst) {

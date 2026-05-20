@@ -130,6 +130,7 @@ pub fn run(config: WatchConfig) -> i32 {
         &config,
         &mut current_child,
         emitter.as_mut(),
+        true, // force: shadow pre-populated by from_target; no prior compile to diff against
     ) {
         // EPIPE on initial build — downstream consumer already gone.
         rebuild::emit_pipe_closed_to_stderr();
@@ -170,6 +171,7 @@ pub fn run(config: WatchConfig) -> i32 {
             &config,
             &mut current_child,
             emitter.as_mut(),
+            false, // not force: skip if content unchanged (prevents IN_OPEN feedback loop)
         );
         if got_epipe {
             epipe.set(true);
@@ -275,6 +277,7 @@ fn run_rebuild_cycle(
     config: &WatchConfig,
     current_child: &mut Option<ChildHandle>,
     emitter: Option<&mut JsonEmitter>,
+    force: bool,
 ) -> bool {
     use rebuild::rebuild_one_with_emitter;
     let (_, epipe) = rebuild_one_with_emitter(
@@ -285,6 +288,7 @@ fn run_rebuild_cycle(
         config.check,
         current_child,
         emitter,
+        force,
     );
     epipe
 }
