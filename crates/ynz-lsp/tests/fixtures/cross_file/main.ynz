@@ -1,0 +1,4 @@
+// Cross-file fixture: main entry point. No errors in this file.
+function entrypoint() -> nothing {
+    print(`hello`)
+}

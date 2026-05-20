@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use lsp_types::{
     Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, Range, Url,
 };
@@ -24,7 +22,7 @@ pub fn to_lsp_diagnostic(
         "diagnostic field contains LSP message delimiter — would mis-split on client"
     );
 
-    let range = span_to_range(&d.span.file, text, table, d.span.start, d.span.end, encoding);
+    let range = span_to_range(text, table, d.span.start, d.span.end, encoding);
 
     let severity = match d.severity {
         Severity::Error => DiagnosticSeverity::ERROR,
@@ -37,21 +35,23 @@ pub fn to_lsp_diagnostic(
     let related_information = if d.related.is_empty() {
         None
     } else {
-        let info = d
+        let info: Vec<_> = d
             .related
             .iter()
-            .map(|rs| {
+            .filter_map(|rs| {
+                let uri = path_to_uri(&rs.span.file)?;
+                // Related spans may be in a different file; rebuild the line table for that file.
+                // For same-file related spans, using `table` would be cheaper, but we don't
+                // track per-span ownership here. Phase 5 (hover) can optimize if needed.
                 let rel_table = LineTable::new(text);
-                let rel_range =
-                    span_to_range(&rs.span.file, text, &rel_table, rs.span.start, rs.span.end, encoding);
-                let uri = path_to_uri(&rs.span.file);
-                DiagnosticRelatedInformation {
+                let rel_range = span_to_range(text, &rel_table, rs.span.start, rs.span.end, encoding);
+                Some(DiagnosticRelatedInformation {
                     location: Location { uri, range: rel_range },
                     message: rs.label.clone(),
-                }
+                })
             })
             .collect();
-        Some(info)
+        if info.is_empty() { None } else { Some(info) }
     };
 
     Diagnostic {
@@ -65,14 +65,12 @@ pub fn to_lsp_diagnostic(
 }
 
 fn span_to_range(
-    file: &str,
     text: &str,
     table: &LineTable,
     start: usize,
     end: usize,
     encoding: PositionEncoding,
 ) -> Range {
-    let _ = file; // file matches the document being transformed; caller ensures this
     let start_pos = table.byte_offset_to_position(text, start, encoding);
     let end_pos = table.byte_offset_to_position(text, end.min(text.len()), encoding);
     // Guard: end must not precede start (zero-width spans at offset 0 are valid)
@@ -86,39 +84,19 @@ fn span_to_range(
     Range { start: start_pos, end: end_pos }
 }
 
-fn path_to_uri(path: &str) -> Url {
-    Url::from_file_path(path).unwrap_or_else(|_| Url::parse(path).unwrap_or_else(|_| {
-        // Fallback: best-effort URI from the path string
-        Url::parse(&format!("file:///{}", path.trim_start_matches('/'))).unwrap_or_else(|_| {
-            "file:///unknown".parse().unwrap()
-        })
-    }))
-}
-
-/// Group LSP diagnostics by their source file path (from related information).
-/// Returns a map of URI → Vec<Diagnostic>. Diagnostics without related information
-/// are keyed by `primary_uri`.
-///
-/// Used by the LSP server to publish diagnostics to each affected file separately,
-/// rather than only publishing to the file that triggered the edit.
-pub fn group_by_file(
-    diagnostics: Vec<Diagnostic>,
-    primary_uri: &Url,
-) -> HashMap<Url, Vec<Diagnostic>> {
-    let mut by_file: HashMap<Url, Vec<Diagnostic>> = HashMap::new();
-    for d in diagnostics {
-        by_file.entry(primary_uri.clone()).or_default().push(d);
-    }
-    by_file
-}
-
-/// Build an empty-diagnostics clear for every URI that had diagnostics published
-/// in the previous round. Used to clear stale squiggles when errors are fixed.
-pub fn empty_diagnostic_map(uris: impl Iterator<Item = Url>) -> HashMap<Url, Vec<Diagnostic>> {
-    uris.map(|u| (u, vec![])).collect()
+/// Convert a file path to a URI. Returns `None` if the path cannot be resolved.
+/// Caller is responsible for skipping related-info items whose URI returns None.
+pub fn path_to_uri(path: &str) -> Option<Url> {
+    Url::from_file_path(path)
+        .ok()
+        .or_else(|| Url::parse(path).ok())
 }
 
 /// Helper: convert a whole `DiagnosticBucket` for one document.
+///
+/// All diagnostics in `bucket` must have `span.file` matching the document
+/// that `text`/`table` describe. The caller (server.rs) groups by span.file
+/// before calling this function.
 pub fn bucket_to_lsp_diagnostics(
     bucket: &ynz_diagnostics::DiagnosticBucket,
     text: &str,

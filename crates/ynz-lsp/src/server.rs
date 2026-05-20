@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use lsp_server::{Connection, Message, Notification, Request, Response};
 use lsp_types::{
     notification::{
@@ -6,12 +8,13 @@ use lsp_types::{
     },
     request::{Initialize, Request as _, Shutdown},
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    InitializeParams, InitializeResult, ServerInfo,
+    InitializeParams, InitializeResult, ServerInfo, Url,
 };
 
 use crate::{
     capabilities::{negotiate_encoding, server_capabilities},
-    diagnostic_transform::bucket_to_lsp_diagnostics,
+    diagnostic_transform::{path_to_uri, to_lsp_diagnostic},
+    position::LineTable,
     state::ServerState,
 };
 
@@ -155,23 +158,67 @@ fn handle_notification(
 }
 
 /// Run `check_query` for the given URI and publish diagnostics to the client.
-/// Clears stale squiggles for any previously-published URIs that have no errors now.
+///
+/// Diagnostics are routed per `span.file` — a cross-file diagnostic publishes to
+/// its origin file's URI, not necessarily the editing file's URI. This matches the
+/// LSP expectation: squiggles appear in the file where the error physically lives.
+///
+/// Stale squiggles are cleared for any URI that had diagnostics in the previous round
+/// but has none in the current round.
 fn run_and_publish_diagnostics(
     connection: &Connection,
     state: &mut ServerState,
-    uri: &lsp_types::Url,
+    uri: &Url,
     version: Option<i32>,
 ) {
     let Some(sf) = state.source_file_for(uri) else { return };
-    let Some(text) = state.text_for(uri).map(str::to_string) else { return };
-    let Some(table) = state.line_table_for(uri) else { return };
 
     let check_output = ynz_typeck::queries::check_query(&state.db, sf);
-    let lsp_diags =
-        bucket_to_lsp_diagnostics(&check_output.diagnostics, &text, table, state.encoding);
+    let encoding = state.encoding;
 
-    publish_diagnostics(connection, uri.clone(), lsp_diags.clone(), version);
-    state.last_published.insert(uri.clone(), lsp_diags);
+    // Group diagnostics by their span.file (the file where the error physically lives).
+    let mut by_file: HashMap<String, Vec<lsp_types::Diagnostic>> = HashMap::new();
+    for d in check_output.diagnostics.iter() {
+        let file_uri = path_to_uri(&d.span.file);
+        let file_uri = file_uri.as_ref().unwrap_or(uri); // fall back to editing file
+
+        let file_text = state.open_documents.get(file_uri).map(String::as_str);
+        let text = file_text.unwrap_or_default();
+        let lsp_d = if let Some(table) = state.line_tables.get(file_uri) {
+            to_lsp_diagnostic(d, text, table, encoding)
+        } else {
+            let tmp_table = LineTable::new(text);
+            to_lsp_diagnostic(d, text, &tmp_table, encoding)
+        };
+        by_file.entry(d.span.file.clone()).or_default().push(lsp_d);
+    }
+
+    // Build the this-round publication map (URI → diagnostics).
+    let mut this_round: HashMap<Url, Vec<lsp_types::Diagnostic>> = HashMap::new();
+    for (file_path, diags) in by_file {
+        let file_uri = path_to_uri(&file_path).unwrap_or_else(|| uri.clone());
+        this_round.entry(file_uri).or_default().extend(diags);
+    }
+
+    // The editing file always gets a publish (possibly empty) so clients
+    // clear stale squiggles when errors are fixed.
+    this_round.entry(uri.clone()).or_default();
+
+    // Publish to each URI affected this round.
+    for (file_uri, diags) in &this_round {
+        let ver = if file_uri == uri { version } else { None };
+        publish_diagnostics(connection, file_uri.clone(), diags.clone(), ver);
+    }
+
+    // Clear stale URIs from the previous round that have no diagnostics now.
+    let prev_uris: Vec<Url> = state.last_published.keys().cloned().collect();
+    for prev_uri in prev_uris {
+        if !this_round.contains_key(&prev_uri) {
+            publish_diagnostics(connection, prev_uri, vec![], None);
+        }
+    }
+
+    state.last_published = this_round;
 }
 
 /// Send a `textDocument/publishDiagnostics` notification.
