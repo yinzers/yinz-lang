@@ -43,6 +43,11 @@
 
   /* --- Layout --- */
   --container-max: 1240px;
+
+  /* --- Breakpoints — source: shared.css @media thresholds --- */
+  --breakpoint-sm: 600px;   /* mobile drawer hides, 2-col layouts */
+  --breakpoint-md: 900px;   /* footer/grid 4-col, section wider padding */
+  --breakpoint-lg: 1240px;  /* matches container max */
 }
 
 @layer base {

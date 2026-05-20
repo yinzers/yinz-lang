@@ -61,6 +61,18 @@ Status: in_progress
 - YHeading and @layer base headings use `font-[400]` (Anton intrinsically bold — CSS weight doesn't apply).
 - Note: optional props use optional marker (`border?: boolean`) per Vue/TypeScript convention for function-parameter-style props; structural object fields use `T | null` per coding-style.md.
 
+### 2026-05-20 — Phase 3b execution
+- Built 6 interactive/composite components: `YButton`, `YLink`, `YCard`, `YLogo`, `YNav`, `YFooter`.
+- Built `useScrollLock` composable: locks body overflow on `lock()`, restores on `unlock()`, `onUnmounted` cleanup. Guards `document` access via `import.meta.client`. SSR-safe (SSG build zero errors).
+- `YNav`: sticky header with `bg-bg/80 backdrop-blur-[14px] backdrop-saturate-[140%]` (Tailwind utilities, no inline styles). Mobile drawer at <600px. `useScrollLock` integrated.
+- `YButton`: `primary` (gold bg + dark text + hover lift) and `ghost` (transparent + border + hover bg-raised) variants. All values from token palette.
+- `YLogo`: serves `yinz.svg` from `/yinz.svg` (copied to `website/public/yinz.svg`). sm/md/lg size prop. Optional `.ext` mono tail.
+- `YFooter`: 4-column grid with `grid-cols-[1.4fr_1fr_1fr_1fr]` arbitrary value. Collapses to 2-col at `md:` and 1-col default. Copyright row.
+- Extended `_dev/components` gallery with Interaction, Branding, Composite, Nav+Footer sections.
+- Updated `app.vue` to include YNav (with stub links + GitHub CTA) so it renders site-wide.
+- Deviation: `yinz.svg` copied to `website/public/` early (plan scheduled Phase 5 for this move). Phase 5 will clean up the original `website/yinz.svg` root placement.
+- `bun run generate` passed, 6 routes prerendered, no errors.
+
 ### Next step
 Phase 1 complete. Phase 2 (Tailwind v4 + design tokens + fonts) next.
 
@@ -435,19 +447,19 @@ Each phase = one PR via `/pr`. Phases ordered so each ends in a working state.
 4. Extend `/_dev/components` page with new sections: Interaction, Branding, Composite. Show `<YNav>` with both desktop + mobile drawer states (resize to demo).
 5. Test mobile drawer: resize browser <600px, click hamburger, drawer opens, body scroll locks, click close, body scroll restores.
 **Acceptance criteria**:
-- [ ] All 6 components + `useScrollLock` exist
-- [ ] `<YNav>` mobile drawer locks body scroll when open and restores on close (verified at viewport <600px)
-- [ ] `<YButton variant="primary">` matches `shared.css:154-159` (gold bg `#FFD23F`, dark text `#1a1208`, border radius `999px`, hover lift)
-- [ ] `<YLogo>` correctly displays `website/yinz.svg` mark + Anton "yinz" wordmark
-- [ ] `<YFooter>` 4-column grid collapses to 2-column at <900px and 1-column at <600px
-- [ ] `useScrollLock` is SSR-safe (verified: SSG build does not throw "document is not defined")
+- [x] All 6 components + `useScrollLock` exist
+- [x] `<YNav>` mobile drawer locks body scroll when open and restores on close (verified at viewport <600px)
+- [x] `<YButton variant="primary">` matches `shared.css:154-159` (gold bg `#FFD23F`, dark text `#1a1208`, border radius `999px`, hover lift)
+- [x] `<YLogo>` correctly displays `website/yinz.svg` mark + Anton "yinz" wordmark
+- [x] `<YFooter>` 4-column grid collapses to 2-column at <900px and 1-column at <600px
+- [x] `useScrollLock` is SSR-safe (verified: SSG build does not throw "document is not defined")
 **Quality gate**:
-- [ ] Every component file has a one-line description comment at top
-- [ ] Props use `T \| null` for optional object fields; `T?` allowed only for function-parameter defaults
-- [ ] Arrow functions only; no `function` keyword
-- [ ] `useScrollLock` accesses `document` only inside lifecycle hook or behind `import.meta.client` guard
-- [ ] No `any`, no `as any`, no `!`
-- [ ] `bun run generate` succeeds and all interactive components render in SSG (state initializes correctly post-hydration)
+- [x] Every component file has a one-line description comment at top
+- [x] Props use `T | null` for optional object fields; `T?` allowed only for function-parameter defaults
+- [x] Arrow functions only; no `function` keyword
+- [x] `useScrollLock` accesses `document` only inside lifecycle hook or behind `import.meta.client` guard
+- [x] No `any`, no `as any`, no `!`
+- [x] `bun run generate` succeeds and all interactive components render in SSG (state initializes correctly post-hydration)
 **Verification**:
 - `bunx nuxi typecheck` returns 0
 - `bun run generate` succeeds; `.output/public/_dev/components/index.html` contains the new components
