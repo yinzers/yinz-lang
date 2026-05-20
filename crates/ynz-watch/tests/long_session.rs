@@ -1,4 +1,4 @@
-/// Phase 5 memory safety tests.
+/// Long-session memory safety tests: 10k-rebuild loop + RSS polling + Layer 2 DB-rebuild round-trip.
 ///
 /// The 10k-rebuild synthetic test (long_session_10k_rebuilds) is marked #[ignore]
 /// because it takes ~5 minutes. Run explicitly with:

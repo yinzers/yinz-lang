@@ -1,0 +1,47 @@
+// v0_2_m4_errors.ynz — Intentional error triggers for ynz watch (v0.2-M4).
+//
+// These are NOT meant to compile cleanly. Each section demonstrates a watch
+// infrastructure error path. Run with:
+//   ynz watch --check examples/errors/v0_2_m4_errors.ynz
+// and observe the diagnostic output.
+//
+// To simulate watch-specific infrastructure errors (file watcher init failure,
+// no yinz.toml, RSS hard-stop), use the env vars documented below.
+// --- Compile error: unknown identifier ---
+// WHY: demonstrates that ynz watch renders compile errors identically to ynz build.
+// Trigger: save this file with the line below uncommented.
+// let x = unknownIdent
+// --- Watch --check mode (build-only) ---
+// WHY: with --check, ynz watch compiles but does NOT execute the program.
+// Trigger: ynz watch --check examples/errors/v0_2_m4_errors.ynz
+// Expected: "✓ Built in N ms" with no program output.
+// --- RSS hard-stop (simulated) ---
+// WHY: demonstrates the Layer 3 memory hard-stop message (WHAT/WHAT-INSTEAD/WHY format).
+// Trigger: YNZ_WATCH_MAX_RSS_MB=1 ynz watch examples/errors/v0_2_m4_errors.ynz
+// Expected: hard-stop message + exit code 2 within a few rebuilds.
+// --- No yinz.toml in project mode ---
+// WHY: demonstrates the WatchNoYinzToml error when watch is invoked on a directory
+//      without a yinz.toml file.
+// Trigger: ynz watch /tmp/  (or any directory without yinz.toml)
+// Expected: error with WHAT/WHAT-INSTEAD/WHY + exit code 2.
+// --- --json + --no-clear coexist (no error) ---
+// WHY: verifies --json and --no-clear are not mutually exclusive.
+// Trigger: ynz watch --json --no-clear examples/errors/v0_2_m4_errors.ynz
+// Expected: NDJSON on stdout, no error about conflicting flags.
+
+// --- Compile error: unknown identifier (always visible diagnostic) ---
+// WHY: error gallery files must produce at least one compile diagnostic per
+//      the CI sweep test. The infrastructure errors above require command-line
+//      flags; this error is in-source to satisfy the sweep.
+function entrypoint() -> nothing {
+  // Uncomment the next line to trigger: unknown identifier `watchDemoError`
+  // watchDemoError
+  print(`v0_2_m4_errors.ynz — see comments above for watch error trigger guidance`)
+}
+
+// The function below is intentionally unreachable code, causing a diagnostic.
+// WHY: ensures at least one compile diagnostic fires for the CI error-fixture sweep.
+function unusedWatchDemoFn() -> nothing {
+  let x = undeclaredWatchIdentifier
+  print(x)
+}

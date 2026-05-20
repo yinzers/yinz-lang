@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.2.0-m4] — 2026-05-20 — `ynz watch` Rebuild-on-Save Daemon
+
+Commit range: v0.2.0-m3..v0.2.0-m4
+
+### What changed
+
+Before v0.2-M4: developers had to manually re-run `ynz run` after every source change. The compiler had no incremental-rebuild daemon and no way to watch the filesystem.
+
+After v0.2-M4: `ynz watch` ships — a long-running terminal command that recompiles `.ynz` files on every save and re-executes the program. Sub-second warm rebuilds via a long-lived salsa `CompilerDb`. Designed for vim/neovim users, CI pipelines, and anyone who prefers a terminal-first dev loop.
+
+**New crate: `ynz-watch`** — the watch daemon:
+- `ynz watch <file.ynz>` — watch a single file; rebuild + re-run on every save
+- `ynz watch <project/>` — project mode (requires `yinz.toml`); watches all `.ynz` files
+- `--check` — build only, no execution (CI gate; exits 1 on first-build compile failure)
+- `--json` — emit NDJSON event stream on stdout: `watch-ready`, `build-start`, `diagnostic`, `build-end`, `child-spawn`, `child-exit`, `watch-shutdown`; schema version field `"v0.2-m4-unstable"` (semver-stable at v0.2.0)
+- `--no-clear` — preserve terminal scrollback between rebuild cycles (CI logs, debugging the watcher)
+
+**Salsa LRU caps**: lex(128), parse(128), module_signatures(128), check(64), codegen(32) — compiler emits less memory over long sessions.
+
+**Three-layer memory defense** for 24h+ continuous operation:
+- Layer 1: salsa LRU caps per query (above)
+- Layer 2: periodic `CompilerDb` drop+recreate every N=500 rebuilds or 4h (shadow `HashMap<PathBuf, String>` preserves source state across rebuild — zero source-state loss)
+- Layer 3: RSS polling via `memory-stats` crate; soft warn at 1GB (rate-limited 1/60s), hard-stop at 4GB with WHAT/WHAT-INSTEAD/WHY exit message
+
+**Child process safety**: child spawned in own process group (`setsid`/`CREATE_NEW_PROCESS_GROUP`); SIGTERM → 2s grace → SIGKILL on every rebuild cycle; Drop impl prevents zombie processes on panic.
+
+**EPIPE handling**: `ynz watch --json | head -1` → `head` exits → watch detects `BrokenPipe` on next emit, emits `WatchShutdown { reason: "pipe-closed" }` to stderr, exits 0.
+
+**Demo**: `examples/watch_demo/` — minimal yinz.toml project; edit the print message and save to see the rebuild cycle live.
+
+### Deferred to follow-up
+
+- `YNZ_WATCH_LRU_*` runtime env-var LRU tuning: documented in `design/watch.md`, not yet wired to `set_lru_capacity` — tracked in `todos.md` as `watch-lru-runtime-tuning`
+- Interactive watch commands (`r` to rebuild, `q` to quit) — tracked as `watch-interactive-commands`
+- `yinz.toml` hot-reload during watch — deferred to v0.5 package-manager milestone
+- Windows full validation pass — tracked as `watch-windows-validation`
+
 ## [0.2.0-m3] — 2026-05-20 — `ynz fmt` Formatter
 
 Commit range: v0.2.0-m2..v0.2.0-m3

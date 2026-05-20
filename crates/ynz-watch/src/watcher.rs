@@ -166,6 +166,11 @@ pub fn single_file_paths(path: &Path) -> Vec<PathBuf> {
 mod tests {
     use super::*;
 
+    // WHY (all read_debounce_ms tests): the debounce window controls event coalescing —
+    //      too small = spurious rebuilds; invalid env var must fall back silently (not panic).
+    //      If the fallback breaks, a misconfigured env var crashes the watcher before the
+    //      first file event. Tests cover the default, custom, invalid, and zero cases.
+
     #[test]
     fn read_debounce_ms_default() {
         std::env::remove_var("YNZ_WATCH_DEBOUNCE_MS");

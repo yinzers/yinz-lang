@@ -57,16 +57,19 @@ pub fn print_file_removed(path: &str) {
 mod tests {
     use super::*;
 
+    // WHY: ui primitives must never panic — a panic in print_watching() aborts the
+    //      daemon mid-cycle and leaves a zombie child. Tests run in a non-TTY context
+    //      which is the most likely place panics would occur (clear() skips ANSI).
+
     #[test]
     fn clear_no_clear_is_noop() {
-        // Smoke test: clear with no_clear=true must not panic.
+        // no_clear=true → always a no-op regardless of TTY status.
         clear(true);
     }
 
     #[test]
     fn status_lines_do_not_panic() {
-        // These write to stdout; in test context stdout is not a TTY.
-        // Just verify they don't panic.
+        // Each call must not panic in a non-TTY test context.
         print_building("foo.ynz");
         print_success(123);
         print_errors(3, 456);

@@ -229,6 +229,10 @@ mod tests {
     use super::*;
     use crate::project::WatchSourceFile;
 
+    // WHY (all db unit tests): WatchDb's shadow source state is the load-bearing invariant
+    //      for Layer 2 periodic DB rebuild. If shadow ↔ salsa diverge, rebuild_db() silently
+    //      empties salsa and watch reports 0 errors on broken code (silent-wrong-output class).
+
     fn make_db(sources: &[(&str, &str)]) -> WatchDb {
         let entries: Vec<WatchSourceFile> = sources
             .iter()

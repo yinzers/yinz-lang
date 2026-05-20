@@ -19,7 +19,7 @@ use child::ChildHandle;
 use db::WatchDb;
 use json_emitter::JsonEmitter;
 use json_events::{ShutdownReason, WatchEvent as JsonWatchEvent, ts};
-use memory::{MemoryConfig, RssCheckResult, check_rss, hard_stop_message, read_mb_env};
+use memory::{MemoryConfig, RssCheckResult, check_rss, hard_stop_message};
 
 
 /// Configuration for a `ynz watch` session.
@@ -146,8 +146,8 @@ pub fn run(config: WatchConfig) -> i32 {
     };
 
     // 7. Memory config (Layer 2: periodic rebuild; Layer 3: RSS hard-stop).
-    let rebuild_after_n = read_mb_env("YNZ_WATCH_REBUILD_AFTER", 500);
-    let rebuild_after_hours = read_mb_env("YNZ_WATCH_REBUILD_AFTER_HOURS", 4);
+    let rebuild_after_n = memory::read_u64_env("YNZ_WATCH_REBUILD_AFTER", 500);
+    let rebuild_after_hours = memory::read_u64_env("YNZ_WATCH_REBUILD_AFTER_HOURS", 4);
     let rebuild_after_duration = std::time::Duration::from_secs(rebuild_after_hours * 3600);
     let mem_config = MemoryConfig::default();
     let mut last_warn: Option<std::time::Instant> = None;
