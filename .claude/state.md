@@ -1,6 +1,6 @@
 # Session State: ynz
 
-**Last Updated**: 2026-05-20 (v0.2.0-m2 SHIPPED: LSP thin slice + VSCode extension, 1028 tests, tag v0.2.0-m2)
+**Last Updated**: 2026-05-20 (v0.2.0-m3 SHIPPED: ynz fmt formatter + CLI, 1143 tests, tag v0.2.0-m3)
 
 ---
 
