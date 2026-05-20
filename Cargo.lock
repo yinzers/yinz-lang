@@ -1699,15 +1699,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ynz-fmt-spike-rustfmt"
-version = "0.2.0-m2"
-dependencies = [
- "ynz-ast",
- "ynz-diagnostics",
- "ynz-parser",
-]
-
-[[package]]
 name = "ynz-lsp"
 version = "0.2.0-m2"
 dependencies = [

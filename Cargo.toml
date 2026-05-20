@@ -14,7 +14,6 @@ members = [
     "crates/ynz-tmgrammar",
     "crates/ynz-fmt",
     "crates/ynz-fmt/_spike/prettier_style",
-    "crates/ynz-fmt/_spike/rustfmt_style",
 ]
 
 [workspace.package]
