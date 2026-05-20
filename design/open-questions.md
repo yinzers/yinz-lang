@@ -81,7 +81,7 @@ Yinz's `follows` constraints are simpler — no blanket impls, no `impl<T: Bound
 
 ## Workspace / Multi-Package Projects (v0.22+)
 
-### Proposed model (discussed 2026-05-18 — to be formally decided at v0.22 planning)
+### Proposed model (discussed 2026-05-18, ships convention locked 2026-05-20)
 
 Root-relative imports + tree shaking make most of the TypeScript monorepo machinery unnecessary. The proposed model:
 
@@ -89,13 +89,46 @@ Root-relative imports + tree shaking make most of the TypeScript monorepo machin
 - **`[entries]` table for named entrypoints**:
   ```toml
   [entries]
-  users   = "services/users/entrypoint.ynz"
-  orders  = "services/orders/entrypoint.ynz"
-  gateway = "services/gateway/entrypoint.ynz"
+  calculator = "ships/calculator/entrypoint.ynz"
+  greeter    = "ships/greeter/entrypoint.ynz"
+  gateway    = "ships/gateway/entrypoint.ynz"
   ```
-- **CLI entry override**: `ynz build users` or `ynz build services/users/entrypoint.ynz` — building one service doesn't require a per-service toml.
-- **Shared code is just a folder**: `shared/`, `lib/`, or any name. Imported root-relatively from any service. No barrel files, no path mapping, no package.json workspace:* dance.
-- **Service-level dep override for the rare conflict case**: when two services genuinely need different versions of the same third-party dep, an `[entries.users.dependencies]` override table (or similar) resolves it without splitting into separate toml files.
+- **CLI entry override**: `ynz build calculator` or `ynz build ships/calculator/entrypoint.ynz` — building one ship doesn't require a per-ship toml.
+- **Shared code is just a folder**: `shared/`, `lib/`, or any name. Imported root-relatively from any ship. No barrel files, no path mapping, no package.json workspace:* dance.
+- **Ship-level dep override for the rare conflict case**: when two ships genuinely need different versions of the same third-party dep, an `[entries.calculator.dependencies]` override table (or similar) resolves it without splitting into separate toml files.
+
+### Vocabulary — "ships"
+
+Each named entry in `[entries]` is a **ship**. The fleet metaphor matches the model: each ship is one binary that sails independently to its users, but they're all built from one project, share one yinz.toml, and share one lockfile.
+
+The **`ships/` folder** is the canonical convention for housing each ship's entrypoint:
+
+```
+project/
+  yinz.toml              # [entries] declares the fleet
+  shared/                # plain folder, root-relative imports
+  ships/
+    calculator/entrypoint.ynz
+    greeter/entrypoint.ynz
+```
+
+**The folder name is a convention, not a requirement.** `[entries]` accepts any path; `apps/`, `services/`, `bin/`, anything works. But the canonical Yinz convention — used in scaffolding (`ynz ship new <name>` when it lands), examples (`examples/ships_demo/`), and docs — is `ships/`.
+
+Pittsburgh-flavored pick (Pirates), 5-letter typo-resistant, library-ship vs binary-ship distinction reads cleanly, and `ynz ship new` is good CLI ergonomics.
+
+### Concrete example
+
+See `examples/ships_demo/` for a runnable-once-v0.22-lands demo project showing a single `yinz.toml` with three entries (two binary ships, one shared folder), root-relative cross-folder imports, and the build commands the `[entries]` table enables.
+
+### What v0.22 has to add to the compiler
+
+1. `[entries]` parsing in yinz.toml (alongside / mutually exclusive with single `entry =`).
+2. `ynz build <name>` arg-or-flag plumbing that resolves a name from `[entries]` to a path.
+3. `ynz build` (no arg) loops through every `[entries]` member and produces each binary.
+4. Default-build-target rule: if only `entry =` is set, today's behavior; if only `[entries]` is set, no-arg build builds all; if both are set, the table wins.
+5. Workspace-root discovery from a subdirectory: walk up to find the `yinz.toml`, then resolve paths relative to that.
+
+These are all incremental over today's single-entry compiler. No new IR, no new typeck pass — just driver/manifest/CLI plumbing.
 
 ### Cargo feature-unification problem
 

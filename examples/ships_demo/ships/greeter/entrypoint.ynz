@@ -1,0 +1,9 @@
+// greeter — a binary ship that uses string helpers from /shared.
+
+import { capitalize } from `shared/strings`
+
+function entrypoint() -> nothing {
+  let name = `patrick`
+  let greeting = capitalize(name)
+  print(`hello, ${greeting}!`)
+}

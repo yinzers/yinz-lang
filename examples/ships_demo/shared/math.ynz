@@ -1,0 +1,19 @@
+// Math helpers exported for use by other ships in the workspace.
+
+export function sum(share nums: fixed<int, 4>) -> int {
+  let total = 0
+  for (n in nums) {
+    total = total + n
+  }
+  return total
+}
+
+export function max(share nums: fixed<int, 4>) -> int {
+  let biggest = nums[0]
+  for (n in nums) {
+    if (n > biggest) {
+      biggest = n
+    }
+  }
+  return biggest
+}

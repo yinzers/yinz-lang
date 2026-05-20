@@ -1,0 +1,10 @@
+// String helpers exported for use by other ships in the workspace.
+
+export function capitalize(share s: string) -> string {
+  if (s.length == 0) {
+    return s
+  }
+  let first = s[0].toUpperCase()
+  let rest = s.slice(1, s.length)
+  return first + rest
+}
