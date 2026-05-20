@@ -28,7 +28,7 @@ After v0.2-M4: `ynz watch` ships — a long-running terminal command that recomp
 
 **EPIPE handling**: `ynz watch --json | head -1` → `head` exits → watch detects `BrokenPipe` on next emit, emits `WatchShutdown { reason: "pipe-closed" }` to stderr, exits 0.
 
-**Demo**: `examples/watch_demo/` — minimal yinz.toml project; edit the print message and save to see the rebuild cycle live.
+**Demo**: `examples/incline-watcher/` — minimal yinz.toml project; edit the print message and save to see the rebuild cycle live.
 
 ### Deferred to follow-up
 

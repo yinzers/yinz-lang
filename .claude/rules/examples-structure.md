@@ -37,7 +37,7 @@ Loose `.ynz` files exercising specific compiler/tool behavior. Not Yinz projects
 
 - **`primantis-orders/`** — per-milestone compile-error gallery (one file per M1-M8 + v0.2-M1-M3).
 - **`burgh-poem/`** — formatter input demo (`messy.ynz`).
-- **`watch-demo/`** *(coming v0.2-M4)* — file-watcher demonstration.
+- **`incline-watcher/`** — `ynz watch` file-watcher demonstration (v0.2-M4). Themed as the Duquesne Incline tracking its elevation.
 
 Galleries SHOULD have a `README.md` explaining what's exercised and why.
 

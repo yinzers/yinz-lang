@@ -8,4 +8,6 @@ Cargo.lock.bak
 tooling/vscode-ynz/node_modules/
 tooling/vscode-ynz/out/
 tooling/vscode-ynz/*.vsix
-examples/basics/bin
+# Build outputs for example projects — `ynz build examples/<name>/` writes here.
+# Matches `bin` directly inside any example project root.
+examples/*/bin

@@ -1,0 +1,12 @@
+// Watch this project with: ynz watch examples/incline-watcher/
+//
+// Theme: the Duquesne Incline tracking its current elevation up Mt Washington.
+// Edit the elevation on the line below and save — watch rebuilds and re-executes
+// within a second, simulating the incline's position-update cycle.
+//
+// Try --json for structured-event output, --check to skip the execute step,
+// --no-clear to preserve scrollback.
+
+function entrypoint() -> nothing {
+  print(`Duquesne Incline — current elevation: 200 feet (edit this line and save)`)
+}

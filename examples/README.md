@@ -56,9 +56,9 @@ Themed around Primanti's-style restaurant orders going wrong (wrong toppings, mi
 
 `messy.ynz` is intentionally badly-formatted Yinz code. Run `ynz fmt examples/burgh-poem/messy.ynz` to see canonical Yinz formatting applied (or `ynz fmt --check` to see the unified diff). Not a project — single file.
 
-### `watch-demo/` *(coming with v0.2-M4)*
+### `incline-watcher/` — `ynz watch` file-watcher demo
 
-The `ynz watch` file-watcher demo. Ships when the M4 watch milestone wraps.
+Themed as the Duquesne Incline tracking its current elevation up Mt Washington. Edit the elevation in `entrypoint.ynz` and save; `ynz watch examples/incline-watcher/` rebuilds and re-executes within a second. Try `--json` for structured-event output, `--check` to skip the execute step, `--no-clear` to preserve scrollback. Ships in v0.2-M4.
 
 ---
 

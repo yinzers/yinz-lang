@@ -349,7 +349,7 @@ Two architectural sub-questions decided locally (no Patrick input needed):
 ### Demo & Error Gallery
 
 - `examples/basics/entrypoint.ynz`: ADD a top-of-file comment block: `// Watch this file with: ynz watch examples/basics/entrypoint.ynz — saves trigger rebuild + re-run. For build-only (no execute), pass --check.` No NEW Yinz language code added (M4 ships no new language features).
-- **NEW dedicated watch demo** `examples/watch_demo/`: a `yinz.toml`-rooted minimal project with one `entrypoint.ynz` that prints a SIMPLE message (e.g., `"watch demo, build #1"`) — NO counter file, NO sibling-state mutation (Safety invariant "ynz watch NEVER writes to source files" enforced; the demo MUST NOT violate it). The build number is hard-coded in source; Patrick changes it by editing the source line, which is the actual demo (the rebuild cycle). Top-of-file comment: `// Run: ynz watch examples/watch_demo/ — edit the print message on the next line and save; watch rebuilds and re-executes within a second. Try --json for structured-event output, --check to skip the execute step, --no-clear to preserve scrollback.` This project IS canonical (covered by M3 formatter).
+- **NEW dedicated watch demo** `examples/incline-watcher/`: a `yinz.toml`-rooted minimal project with one `entrypoint.ynz` that prints a SIMPLE message (e.g., `"watch demo, build #1"`) — NO counter file, NO sibling-state mutation (Safety invariant "ynz watch NEVER writes to source files" enforced; the demo MUST NOT violate it). The build number is hard-coded in source; Patrick changes it by editing the source line, which is the actual demo (the rebuild cycle). Top-of-file comment: `// Run: ynz watch examples/incline-watcher/ — edit the print message on the next line and save; watch rebuilds and re-executes within a second. Try --json for structured-event output, --check to skip the execute step, --no-clear to preserve scrollback.` This project IS canonical (covered by M3 formatter).
 - `examples/errors/v0_2_m4_errors.ynz`: NEW file. Intentional triggers for every NEW error path watch introduces:
   - File watcher init failure (simulated via mock if needed in Phase 1)
   - `--check` AND `--run` both passed (mutually exclusive flag error)
@@ -359,7 +359,7 @@ Two architectural sub-questions decided locally (no Patrick input needed):
   - `--json` AND `--no-clear` both passed (no conflict — both can coexist; no error here; commented as such for completeness)
   - Each trigger has a `// WHY:` comment naming the diagnostic class (consistent with M3's `v0_2_m3_errors.ynz` precedent)
 - `insta` stdout/stderr snapshots in Phase 6 for the `v0_2_m4_errors.ynz` CLI render
-- Phase 4 includes adding `examples/watch_demo/` to the project list `ynz fmt --all` walks (no special handling; standard `yinz.toml` project root)
+- Phase 4 includes adding `examples/incline-watcher/` to the project list `ynz fmt --all` walks (no special handling; standard `yinz.toml` project root)
 
 ### Feature Registry Entries
 
@@ -864,10 +864,10 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 
 ### Phase 6: Verification sweep + cumulative review + v0.2.0-m4 tag prep
 
-**PR scope**: End-of-milestone verification per `/plan` Step 10. TODO sweep, todos.md cross-check, shortcut detection, Quality Checklist verification, plan-file persistence pass, final cumulative code-reviewer invocation. Demo & Error Gallery extension (NEW `examples/watch_demo/` project + NEW `examples/errors/v0_2_m4_errors.ynz`). Bump `Cargo.toml` workspace version to `0.2.0-m4`. Cross-platform smoke tests on Linux + macOS. Cut `v0.2.0-m4` tag (release-skill-driven, separate from this PR).
+**PR scope**: End-of-milestone verification per `/plan` Step 10. TODO sweep, todos.md cross-check, shortcut detection, Quality Checklist verification, plan-file persistence pass, final cumulative code-reviewer invocation. Demo & Error Gallery extension (NEW `examples/incline-watcher/` project + NEW `examples/errors/v0_2_m4_errors.ynz`). Bump `Cargo.toml` workspace version to `0.2.0-m4`. Cross-platform smoke tests on Linux + macOS. Cut `v0.2.0-m4` tag (release-skill-driven, separate from this PR).
 **Branch**: `chore/v0-2-m4-verification`
 **Flag**: N/A
-**Est. lines**: ~400 (examples/watch_demo/ ~80, examples/errors/v0_2_m4_errors.ynz ~60, jargon audit extension ~30, cross-platform CI matrix tweaks ~30, Cargo.toml + CHANGELOG ~30, plan checklist updates ~50, perf measurement notes ~30, design/watch.md final pass ~30, insta snapshot fixtures ~60)
+**Est. lines**: ~400 (examples/incline-watcher/ ~80, examples/errors/v0_2_m4_errors.ynz ~60, jargon audit extension ~30, cross-platform CI matrix tweaks ~30, Cargo.toml + CHANGELOG ~30, plan checklist updates ~50, perf measurement notes ~30, design/watch.md final pass ~30, insta snapshot fixtures ~60)
 **Ships via**: `/pr` (then `/release` cuts the tag separately)
 
 **Objective**: Close out the milestone with the standard verification gate. Ensure every acceptance criterion across Phases 0-5 is met. Catch issues per-phase reviews missed.
@@ -882,7 +882,7 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 - `examples/errors/` — companion to existing m1/m2/m3 error galleries
 
 **Files (expected scope)**:
-- NEW: `examples/watch_demo/yinz.toml` + `examples/watch_demo/entrypoint.ynz` — minimal project demonstrating watch's full feature set (build + run, --check, --json, --no-clear). Top-of-file comment documents how to exercise each.
+- NEW: `examples/incline-watcher/yinz.toml` + `examples/incline-watcher/entrypoint.ynz` — minimal project demonstrating watch's full feature set (build + run, --check, --json, --no-clear). Top-of-file comment documents how to exercise each.
 - NEW: `examples/errors/v0_2_m4_errors.ynz` — intentional triggers for every watch-introduced error path (per Demo & Error Gallery subsection)
 - EDIT: `examples/basics/entrypoint.ynz` — top-of-file comment block referencing watch
 - EDIT: `Cargo.toml` — `version = "0.2.0-m4"` (workspace package)
@@ -902,10 +902,10 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
    - Salsa LRU: was the Phase 5 step 1 research actually done? Confirm decision documented in design/watch.md.
 4. **Quality Checklist verification** (per `/plan` Step 10d): tick every box in the milestone-wide Quality Checklist below with evidence.
 5. **Plan-file final persistence pass** (per `/plan` Step 10e): ensure every phase's acceptance criteria + quality gate checkbox is in the correct state. Bump `last_updated:`.
-6. **Cross-platform smoke**: run `cargo test --workspace` on Linux + macOS CI matrix. Manual smoke per-OS: `ynz watch examples/watch_demo/` → save → verify clean rebuild + run cycle on each OS.
+6. **Cross-platform smoke**: run `cargo test --workspace` on Linux + macOS CI matrix. Manual smoke per-OS: `ynz watch examples/incline-watcher/` → save → verify clean rebuild + run cycle on each OS.
 7. **Perf measurement** (per Performance invariants): measure cold-start, warm-rebuild, event-to-build-start latency, child-spawn overhead, --json output latency. Document in design/watch.md "Measurement (Phase 6)" subsection. ANY ceiling breach = BLOCK pending profile + fix; not a budget raise.
 8. **Demo & Error Gallery extension**:
-   - Create `examples/watch_demo/yinz.toml` + `examples/watch_demo/entrypoint.ynz`. Entrypoint prints a counter that's incremented per build (writes a small `.ynz-watch-demo.counter` sibling file). Demonstrates: live program output, rebuild cycle visible, --json shows ChildExit + ChildSpawn pairs.
+   - Create `examples/incline-watcher/yinz.toml` + `examples/incline-watcher/entrypoint.ynz`. Entrypoint prints a counter that's incremented per build (writes a small `.ynz-watch-demo.counter` sibling file). Demonstrates: live program output, rebuild cycle visible, --json shows ChildExit + ChildSpawn pairs.
    - Create `examples/errors/v0_2_m4_errors.ynz` with intentional triggers for: file watcher init fail (simulated via mock), no yinz.toml in project mode, child spawn failure (binary not executable simulated), RSS hard-stop (via env override), mutually-exclusive-flags-when-none-exist (commented as "no error here, --check + --json coexist").
    - Update `examples/basics/entrypoint.ynz` top-of-file comment per Demo & Error Gallery subsection.
    - Run `ynz fmt --all` to canonicalize new files (M3 formatter handles this).
@@ -919,7 +919,7 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 - [x] No `TODO` / `FIXME` / `HACK` left in any M4 code (grep clean)
 - [x] All Phase 0-5 deferrals tracked in `.claude/todos.md` (watch-interactive-commands, watch-lsp-shared-daemon, watch-windows-validation, watch-json-schema-stabilize, watch-lru-runtime-tuning)
 - [x] Cross-platform smoke on Linux CI (all 46 tests pass; macOS manual smoke deferred to watch-windows-validation todo)
-- [x] examples/watch_demo/ ships + works (builds: `Build succeeded: /workspaces/ynz/examples/watch_demo/bin`)
+- [x] examples/incline-watcher/ ships + works (builds: `Build succeeded: /workspaces/ynz/examples/incline-watcher/bin`)
 - [x] examples/errors/v0_2_m4_errors.ynz exists with compile diagnostic + infrastructure error comments
 - [x] examples/basics/entrypoint.ynz has watch-related top-of-file comment
 - [x] jargon_audit.rs extended with watch_cli_messages_contain_no_banned_jargon test; passes
@@ -937,7 +937,7 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 **Verification**:
 - `cargo test --workspace 2>&1 | grep 'test result' | grep -v ': ok' || echo CLEAN` — all pass
 - `cargo test --workspace -- --include-ignored 2>&1 | grep 'long_session'` — long-session test passes
-- `grep -rnE 'TODO|FIXME|HACK|XXX' crates/ynz-watch/ examples/watch_demo/ examples/errors/v0_2_m4_errors.ynz` — empty output
+- `grep -rnE 'TODO|FIXME|HACK|XXX' crates/ynz-watch/ examples/incline-watcher/ examples/errors/v0_2_m4_errors.ynz` — empty output
 - Plan front-matter `status:` flipped to `done` post-cumulative-PASS
 
 **Exit Sequence (Phase 6 specifics):**
