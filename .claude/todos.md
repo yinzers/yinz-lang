@@ -37,6 +37,8 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 - [ ] **lsp-range-formatting** — add `format_range(source, range)` to ynz-fmt library + textDocument/rangeFormatting LSP handler. Deferred from v0.2-M3 (whole-file formatting was enough for editor format-on-save). Pick up IF v0.2-M5 LSP proves a need.
 
+- [ ] **fmt-inter-element-comments** — implement element-level comment attachment in `emit_expr` for `ArrayLit`/`MapLit`/`StructLit` when long-line split is triggered. Locked spec: `[1, // note\n 2, 3]` → comment moves to own line ABOVE element 2 at element indent. Deferred from v0.2-M3 Phase 3 because it requires making `emit_expr` comment-aware (significant scope); Phase 3's `comment_in_array.ynz` tests the leading-comment-before-stmt case instead. Implement when taking up Phase 3.5 or Phase 4.
+
 - [ ] **fmt-diff-mode** — add `ynz fmt --diff` flag emitting unified diff of what would change. Deferred from v0.2-M3 (not blocking ship; useful for code review tooling). No specific trigger; nice-to-have.
 
 - [ ] **update-plan-invariants-entrypoint-path** — update `.claude/rules/plan-invariants.md` to point at `examples/basics/entrypoint.ynz` (NOT `src/entrypoint.ynz` which is stale; actual path verified 2026-05-20). Trivial doc edit; do whenever passing through the rule file.

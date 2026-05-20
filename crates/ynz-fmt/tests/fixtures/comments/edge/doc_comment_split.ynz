@@ -1,0 +1,6 @@
+/// First doc block.
+
+/// Second doc block (separate).
+function documented() -> nothing {
+  print(`documented`)
+}

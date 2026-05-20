@@ -1,0 +1,5 @@
+function makeMap() -> nothing {
+  // Leading comment before a map-literal statement
+  let scores: map<string, int> = { `alice`: 90, `bob`: 85 }
+  print(scores.length())
+}

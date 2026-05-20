@@ -1,0 +1,6 @@
+function tokenLike() -> nothing {
+  // const x = 5
+  // function foo() -> nothing {}
+  // shape Bar {}
+  print(`done`)
+}

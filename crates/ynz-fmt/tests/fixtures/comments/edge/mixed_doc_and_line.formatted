@@ -1,0 +1,5 @@
+/// Greets the user.
+// Additional note about this function
+function greet(name: string) -> nothing {
+  print(`Hello, ${name}!`)
+}

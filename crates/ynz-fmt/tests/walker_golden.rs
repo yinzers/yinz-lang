@@ -1,7 +1,7 @@
 //! Golden tests for the AST walker: format a .ynz fixture, compare against .formatted.
 //!
-//! Phase 2 scope: no comments — the input fixtures have none. All 15 fixtures cover
-//! a different AST node category per the Phase 2 plan.
+//! Scope: comment-free fixtures covering one AST node category each. Every test also
+//! asserts idempotency: `format(format(x)) == format(x)` byte-identical.
 
 use std::path::Path;
 
@@ -120,6 +120,21 @@ fn let_const() {
 #[test]
 fn operator_precedence() {
     golden("operator_precedence");
+}
+
+// ── Regression tests ──────────────────────────────────────────────────────────
+
+#[test]
+fn errors_capable_suffix_not_doubled() {
+    // WHY: FunctionDecl.errors_capable (bool) and Type::ErrorCapable both carry the
+    //      `errors` suffix. Prior to this fix, the formatter appended BOTH, producing
+    //      `-> string errors errors`. A future refactor that "helpfully" re-enables the
+    //      errors_capable flag would break this test — the test catches that regression.
+    let source = "function readConfig() -> string errors { return `ok` }\n";
+    let got = ynz_fmt::format(source).expect("format failed");
+    let count = got.matches(" errors").count();
+    assert_eq!(count, 1, "expected exactly one ` errors` in output, got {count}: {got}");
+    assert!(!got.contains("errors errors"), "double errors suffix: {got}");
 }
 
 // ── Specific invariant tests ──────────────────────────────────────────────────

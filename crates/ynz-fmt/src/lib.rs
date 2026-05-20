@@ -16,6 +16,7 @@
 //! This API is frozen at v0.2-M3. Backwards-incompatible changes require a major-version
 //! bump once `v0.2.0` ships.
 
+pub(crate) mod comment_merge;
 mod error;
 pub(crate) mod render;
 pub mod walker;
@@ -40,7 +41,9 @@ pub fn format(source: &str) -> Result<String, FmtError> {
         return Err(FmtError::ParseError(output.diagnostics.clone()));
     }
 
-    Ok(walker::emit_module(&output.module))
+    let (_tokens, comments) = ynz_parser::lex_with_trivia("<fmt>", source);
+    let ctx = comment_merge::CommentContext::new(&comments, source);
+    Ok(walker::emit_module_with_comments(&output.module, &ctx))
 }
 
 /// Check whether a source file is already in canonical form without rewriting it.
