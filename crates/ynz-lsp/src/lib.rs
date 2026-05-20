@@ -1,4 +1,5 @@
 pub mod capabilities;
+pub mod completion;
 pub mod diagnostic_transform;
 pub mod position;
 pub mod server;

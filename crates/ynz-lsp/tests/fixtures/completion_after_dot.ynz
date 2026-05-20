@@ -1,0 +1,5 @@
+// Fixture for after-dot completion tests.
+function entrypoint() -> nothing {
+    let score: int = 100
+    let x: int = 5
+}

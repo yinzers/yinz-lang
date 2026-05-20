@@ -31,7 +31,7 @@ impl InProcessHarness {
 
 /// Client side of the in-process harness.
 pub struct HarnessClient {
-    conn: lsp_server::Connection,
+    pub conn: lsp_server::Connection,
 }
 
 impl HarnessClient {

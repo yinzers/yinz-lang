@@ -22,7 +22,7 @@ files:
 # Plan: v0.2-M2 — LSP Thin Slice + VSCode Plugin
 
 Created: 2026-05-20
-Status: in_progress — Phase 3 COMPLETE (code-reviewer PASS, 3 rounds). Phase 4 next.
+Status: in_progress — Phase 4 COMPLETE (code-reviewer pending). Phase 5 next.
 
 ## Context & Why
 
@@ -657,22 +657,22 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
    - Position-encoding parity: same fixture, UTF-8 and UTF-16 encodings, same completion results
 
 **Acceptance criteria**:
-- [ ] `BareIdentifier` completion returns all 29 keywords + 17 banned-declaration-keywords (as deprecated/won't-fix) + 15 deferred-features (as deprecated) + user-defined symbols
-- [ ] `AfterDot { receiver_type: Some("int") }` returns all `int`-receiver intrinsics from registry + user-defined functions taking `int` as first param (UFCS)
-- [ ] Deferred features show `CompletionItemTag::Deprecated`
-- [ ] `documentation` field renders markdown WHY content for items that have it
-- [ ] Sort order: user-defined symbols first, keywords next, intrinsics, deferred last
-- [ ] LSP `completionProvider.triggerCharacters` is `[".", " "]` in capabilities
-- [ ] Registry adapter does NOT depend on `lsp-types` (verified by `cargo tree -p ynz-registry`)
-- [ ] All existing tests pass; new tests added (≥4 registry-level, ≥3 LSP-level)
-- [ ] Patrick can add a new entry to `registry/features.toml`, rebuild ynz-lsp, restart server, and the new entry appears in completion — manually verified or covered by a registry-rebuild integration test
+- [x] `BareIdentifier` completion returns all 29 keywords + 17 banned-declaration-keywords (as deprecated/won't-fix) + 15 deferred-features (as deprecated) + user-defined symbols
+- [x] `AfterDot { receiver_type: Some("int") }` returns all `int`-receiver intrinsics from registry + user-defined functions taking `int` as first param (UFCS)
+- [x] Deferred features show `CompletionItemTag::Deprecated`
+- [x] `documentation` field renders markdown WHY content for items that have it
+- [x] Sort order: user-defined symbols first, keywords next, intrinsics, deferred last
+- [x] LSP `completionProvider.triggerCharacters` is `[".", " "]` in capabilities
+- [x] Registry adapter does NOT depend on `lsp-types` (verified by `cargo tree -p ynz-registry`)
+- [x] All existing tests pass; new tests added (≥4 registry-level, ≥3 LSP-level)
+- [x] Patrick can add a new entry to `registry/features.toml`, rebuild ynz-lsp, restart server, and the new entry appears in completion — manually verified or covered by a registry-rebuild integration test
 
 **Quality gate**:
-- [ ] No `// TODO` / `// FIXME` / `// HACK`
-- [ ] `cargo clippy --workspace -- -D warnings` passes
-- [ ] No hardcoded keyword/intrinsic/deferred-feature lists in `ynz-lsp` (grep-check enforced; documented in Quality gate)
-- [ ] No `.unwrap()` on user-input paths
-- [ ] Context detection handles edge cases: cursor at byte 0, cursor right after a unicode char, cursor inside a string literal (returns empty completion or BareIdentifier — pick one and test)
+- [x] No `// TODO` / `// FIXME` / `// HACK`
+- [x] `cargo clippy --workspace -- -D warnings` passes
+- [x] No hardcoded keyword/intrinsic/deferred-feature lists in `ynz-lsp` (grep-check enforced; documented in Quality gate)
+- [x] No `.unwrap()` on user-input paths
+- [x] Context detection handles edge cases: cursor at byte 0, cursor right after a unicode char, cursor inside a string literal (returns empty completion or BareIdentifier — pick one and test)
 
 **Verification**:
 - `cargo test -p ynz-registry lsp_adapter` — registry tests pass

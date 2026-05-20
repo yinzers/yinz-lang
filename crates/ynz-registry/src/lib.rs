@@ -1,5 +1,10 @@
 mod schema;
+pub mod lsp_adapter;
 pub use schema::*;
+pub use lsp_adapter::{
+    CompletionContext, CompletionKind, HoverContent, HoverKind, RegistryCompletionItem,
+    lsp_completion_items, lsp_hover_for_token,
+};
 
 // Static arrays baked at compile time from registry/features.toml.
 include!(concat!(env!("OUT_DIR"), "/registry.rs"));

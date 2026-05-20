@@ -1,0 +1,5 @@
+// Fixture for bare-identifier completion tests.
+// Cursor positions for testing are noted as offset comments.
+function entrypoint() -> nothing {
+    let score: int = 42
+}

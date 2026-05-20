@@ -6,13 +6,14 @@ use lsp_types::{
         DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Initialized,
         Notification as _,
     },
-    request::{Initialize, Request as _, Shutdown},
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    InitializeParams, InitializeResult, ServerInfo, Url,
+    request::{Completion, Initialize, Request as _, Shutdown},
+    CompletionParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, InitializeParams, InitializeResult, ServerInfo, Url,
 };
 
 use crate::{
     capabilities::{negotiate_encoding, server_capabilities},
+    completion::completion_list,
     diagnostic_transform::{path_to_uri, to_lsp_diagnostic},
     position::LineTable,
     state::ServerState,
@@ -100,6 +101,36 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
         connection.sender.send(Message::Response(response)).ok();
         return;
     }
+    if req.method == Completion::METHOD {
+        let params: CompletionParams = match serde_json::from_value(req.params) {
+            Ok(p) => p,
+            Err(e) => {
+                let response = Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::InvalidParams as i32,
+                    format!("invalid completion params: {e}"),
+                );
+                connection.sender.send(Message::Response(response)).ok();
+                return;
+            }
+        };
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        let list = state.text_for(uri).and_then(|text| {
+            let table = state.line_table_for(uri)?;
+            completion_list(text, table, position, state.encoding)
+        });
+
+        let result = match list {
+            Some(l) => serde_json::to_value(l).unwrap_or(serde_json::Value::Null),
+            None => serde_json::Value::Null,
+        };
+        let response = Response::new_ok(req.id, result);
+        connection.sender.send(Message::Response(response)).ok();
+        return;
+    }
+
     // Unhandled request — send method-not-found error.
     let response = Response::new_err(
         req.id,
