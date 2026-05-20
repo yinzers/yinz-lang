@@ -30,8 +30,6 @@ pub fn print_success(elapsed_ms: u128) {
 }
 
 /// Print the "compile error" status line.
-// CARVE-OUT: part of the public ui surface; callers land when the rebuild pipeline is wired.
-#[allow(dead_code)]
 pub fn print_errors(count: usize, elapsed_ms: u128) {
     if count == 1 {
         println!("✗ 1 error in {elapsed_ms}ms");

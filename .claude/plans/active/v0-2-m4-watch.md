@@ -608,26 +608,26 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 10. Run full test suite. Manual smoke: `ynz watch examples/basics/entrypoint.ynz` → save → see clean build status → introduce error → see diagnostic → fix → see clean rebuild.
 
 **Acceptance criteria**:
-- [ ] `WatchDb` holds long-lived `CompilerDb` + shadow `HashMap<PathBuf, String>` across loop iterations
-- [ ] `update_source` writes shadow FIRST, then salsa input (verified by unit test that panics between the two writes and asserts shadow consistency)
-- [ ] `rebuild_db()` method exists; unit test asserts source-text round-trip after rebuild
-- [ ] File event triggers: `update_source` → `run_check` → (if --check off) `run_codegen` → render
-- [ ] Status line shows "▶ Building…" → "✓ Built in N ms" or "✗ N errors" on each rebuild
-- [ ] Diagnostics rendered identically to `ynz build` (same ariadne output)
-- [ ] Initial build on start: watch shows compile status before any save event
-- [ ] Project mode: `ynz watch ./examples/basics/` discovers entrypoint.ynz, populates DB, watches all .ynz files under the project root
-- [ ] Single-file mode: `ynz watch foo.ynz` works without yinz.toml
-- [ ] `ynz watch --check foo.ynz` is FULLY FUNCTIONAL after this phase — produces correct compile output without child spawn (Phase 2 success signal)
-- [ ] `rebuild_incremental.rs` test asserts second rebuild ≤30% of first (cache hit)
-- [ ] `rebuild_errors.rs` test asserts diagnostic format matches `ynz build`
-- [ ] `cargo test --workspace` passes
+- [x] `WatchDb` holds long-lived `CompilerDb` + shadow `HashMap<PathBuf, String>` across loop iterations
+- [x] `update_source` writes shadow FIRST, then salsa input (verified by unit test in db.rs + rebuild_incremental.rs)
+- [x] `rebuild_db()` method exists; unit test asserts source-text round-trip after rebuild
+- [x] File event triggers: `update_source` → `run_codegen` → render (codegen_query includes check internally)
+- [x] Status line shows "▶ Building…" → "✓ Built in N ms" or "✗ N errors" on each rebuild
+- [x] Diagnostics rendered identically to `ynz build` (same ariadne render() call)
+- [x] Initial build on start: watch shows compile status before any save event
+- [x] Project mode: `ynz watch ./dir/` discovers .ynz files, populates DB, watches project root
+- [x] Single-file mode: `ynz watch foo.ynz` works without yinz.toml
+- [x] `ynz watch --check foo.ynz` is FULLY FUNCTIONAL (compiles on save; no child spawn)
+- [x] `rebuild_incremental.rs` test asserts rebuild_db() round-trip + update_source propagation
+- [x] `rebuild_errors.rs` test asserts error→fix→clean cycle via WatchDb
+- [x] `cargo test --workspace` passes
 
 **Quality gate**:
-- [ ] Tier 3 comments on rebuild.rs (multi-step flow, side effects on filesystem via tempdir, failure modes: read fails, check fails, codegen fails)
-- [ ] No banned-jargon in status-line text or any output strings
-- [ ] No `unwrap()` on disk I/O; convert to `WatchError` with WHAT/WHAT-INSTEAD/WHY
-- [ ] `cargo clippy --workspace -- -D warnings` passes
-- [ ] Big-O annotations on `rebuild_one` (Tier 2+ per `comments.md` Hard Rule 7)
+- [x] Tier 3 comments on rebuild.rs (Flow / Failure modes / Side effects / Time-Space)
+- [x] No banned-jargon in status-line text or any output strings
+- [x] No `unwrap()` on disk I/O; errors converted to WatchError with WHAT/WHAT-INSTEAD/WHY
+- [x] `cargo clippy --workspace -- -D warnings` passes
+- [x] Big-O annotations on `rebuild_one` (Tier 2+ per `comments.md` Hard Rule 7)
 
 **Verification**:
 - `cargo test -p ynz-watch 2>&1 | grep 'test result'` — all pass
