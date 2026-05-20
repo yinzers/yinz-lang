@@ -1,8 +1,9 @@
+pub mod child;
 pub mod db;
 mod error;
 mod event_loop;
 pub mod project;
-mod rebuild;
+pub mod rebuild;
 pub mod ui;
 pub mod watcher;
 
@@ -11,6 +12,7 @@ pub use watcher::{FileWatcher, WatchEvent};
 
 use std::path::PathBuf;
 
+use child::ChildHandle;
 use db::WatchDb;
 
 /// Configuration for a `ynz watch` session.
@@ -48,6 +50,12 @@ pub struct WatchConfig {
 /// - Source file unreadable at init → exit 2 with WatchError::SourceRead diagnostic.
 /// - File watcher init failure → exit 2 with WatchError::WatcherInit diagnostic.
 /// - All compile errors are recoverable: watch continues after printing diagnostics.
+/// - Child spawn failure: logged as Infra error; watch continues (no binary running).
+///
+/// # Side effects
+///
+/// Spawns and manages child processes (the compiled Yinz program). Child is killed
+/// (SIGTERM → SIGKILL) on each rebuild or Ctrl+C.
 ///
 /// Time: O(1) per event (salsa amortizes). Space: O(n) where n = source files.
 pub fn run(config: WatchConfig) -> i32 {
@@ -86,7 +94,8 @@ pub fn run(config: WatchConfig) -> i32 {
     if !config.json {
         println!("ynz watch: watching {}", config.path.display());
     }
-    run_rebuild_cycle(&mut watch_db, &entry_path, &out_dir, &config);
+    let mut current_child: Option<ChildHandle> = None;
+    run_rebuild_cycle(&mut watch_db, &entry_path, &out_dir, &config, &mut current_child);
 
     // 5. Start file watcher.
     let file_watcher = match watcher::FileWatcher::new(&watch_paths, debounce_ms) {
@@ -99,10 +108,13 @@ pub fn run(config: WatchConfig) -> i32 {
 
     // 6. Event loop.
     event_loop::run_event_loop(&file_watcher, &config, |_changed_path| {
-        run_rebuild_cycle(&mut watch_db, &entry_path, &out_dir, &config);
-        // Child spawn, --json events, and memory defense are layered in by their
-        // respective modules (child.rs, json_emitter.rs, memory.rs).
+        run_rebuild_cycle(&mut watch_db, &entry_path, &out_dir, &config, &mut current_child);
     });
+
+    // Kill child on exit (Ctrl+C path — Drop on current_child also fires as fallback).
+    if let Some(ref mut c) = current_child {
+        c.kill_gracefully(2000);
+    }
 
     // Cleanup tempdir on exit.
     let _ = std::fs::remove_dir_all(&out_dir);
@@ -116,8 +128,8 @@ fn run_rebuild_cycle(
     entry_path: &std::path::Path,
     out_dir: &std::path::Path,
     config: &WatchConfig,
+    current_child: &mut Option<ChildHandle>,
 ) {
     use rebuild::rebuild_one;
-    let _ = rebuild_one(db, entry_path, entry_path, out_dir, config.check);
+    let _ = rebuild_one(db, entry_path, entry_path, out_dir, config.check, current_child);
 }
-

@@ -7,6 +7,7 @@ use std::{
 use ynz_diagnostics::render;
 
 use crate::{
+    child::ChildHandle,
     db::{RebuildOutcome, WatchDb},
     error::{Result, WatchError},
     ui,
@@ -14,15 +15,15 @@ use crate::{
 
 /// Outcome of a single rebuild-and-maybe-spawn cycle.
 pub enum CycleOutcome {
-    // CARVE-OUT: `binary` is part of the public CycleOutcome contract; consumed by callers that spawn the compiled program.
-    #[allow(dead_code)]
     /// Build succeeded; binary written to the given path.
+    // CARVE-OUT: `binary` consumed by --json ChildSpawn event emitters.
+    #[allow(dead_code)]
     Success { binary: PathBuf },
     /// Build produced compile errors (already rendered to stdout).
     Errors,
+    /// Infrastructure failure (read error, codegen write failure, etc.).
     // CARVE-OUT: String payload exposed for callers that surface infra failures (--json emitters, log sinks).
     #[allow(dead_code)]
-    /// Infrastructure failure (read error, codegen write failure, etc.).
     Infra(String),
 }
 
@@ -33,25 +34,29 @@ pub enum CycleOutcome {
 /// 1. Read the changed file from disk and update the DB.
 /// 2. Run `codegen_query` via `db.run_codegen(entry_path)`.
 /// 3. On errors: render diagnostics and return `CycleOutcome::Errors`.
-/// 4. On success: write the object bytes to `out_dir/binary`, return the path.
+/// 4. On success (non-check): kill prior child (SIGTERM → 2s → SIGKILL), spawn new.
 ///
 /// # Failure modes
 ///
 /// - File unreadable: returns `CycleOutcome::Infra` with WHAT/WHAT-INSTEAD/WHY.
 /// - Object-write failure (disk full, permissions): returns `CycleOutcome::Infra`.
 /// - Compile errors: returns `CycleOutcome::Errors` after rendering diagnostics.
+/// - Child spawn failure: returns `CycleOutcome::Infra`; no child is left running.
 ///
 /// # Side effects
 ///
 /// Writes status lines to stdout via `ui::`. Writes the compiled binary to `out_dir`.
+/// Kills the prior child process (via SIGTERM → SIGKILL grace period).
 ///
-/// Time: O(1) amortized (salsa caches unchanged queries). Space: O(object_bytes) per cycle.
+/// Time: O(1) amortized (salsa caches unchanged queries) + up to 2s SIGTERM grace.
+/// Space: O(object_bytes) per cycle.
 pub fn rebuild_one(
     db: &mut WatchDb,
     changed_path: &Path,
     entry_path: &Path,
     out_dir: &Path,
     check_only: bool,
+    current_child: &mut Option<ChildHandle>,
 ) -> CycleOutcome {
     let start = Instant::now();
 
@@ -101,7 +106,6 @@ pub fn rebuild_one(
         RebuildOutcome::Success { object_bytes, elapsed_ms } => {
             if check_only {
                 ui::print_success(*elapsed_ms);
-                // --check: no binary written, return a dummy path.
                 return CycleOutcome::Success {
                     binary: PathBuf::new(),
                 };
@@ -118,6 +122,21 @@ pub fn rebuild_one(
                 eprintln!("{e}");
                 return CycleOutcome::Infra(e.to_string());
             }
+
+            // 5. Kill prior child (SIGTERM → 2s grace → SIGKILL), then spawn new.
+            if let Some(ref mut old_child) = current_child {
+                old_child.kill_gracefully(2000);
+            }
+            *current_child = None;
+
+            let new_child = match ChildHandle::spawn(&binary_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("{e}");
+                    return CycleOutcome::Infra(e.to_string());
+                }
+            };
+            *current_child = Some(new_child);
 
             ui::print_success(*elapsed_ms);
             CycleOutcome::Success { binary: binary_path }
