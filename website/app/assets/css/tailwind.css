@@ -1,0 +1,100 @@
+@import "tailwindcss";
+
+/* ===================================================================
+   Yinz design tokens — source: /tmp/yinz-design/yinz/project/shared.css
+   Palette: coal background, Pittsburgh gold, steel cream
+   Font swap: Anton (display) + Inter (body) + JetBrains Mono (code)
+   =================================================================== */
+
+@theme {
+  /* --- Colors --- */
+  --color-bg:         #14110d;
+  --color-bg-raised:  #1c1814;
+  --color-bg-elev:    #221d18;
+  --color-bg-card:    #1a1611;
+  --color-line:       #2a241d;
+  --color-line-strong:#3a3127;
+
+  --color-ink:        #f2ebdc;
+  --color-ink-mute:   #b5ad9c;
+  --color-ink-dim:    #79715f;
+
+  --color-gold:       #ffd23f;    /* primary accent — Pittsburgh gold */
+  --color-gold-deep:  #fcb514;    /* Pirates gold, deeper */
+  --color-gold-soft:  #fff3b8;    /* highlight text on dark */
+  --color-gold-glow:  #ffd23f33;
+
+  --color-ember:      #c8442a;    /* error / used sparingly */
+  --color-river:      #5a8fa3;    /* code keyword teal — three rivers */
+  --color-moss:       #8aa66b;    /* code string green */
+  --color-rust:       #d28a4a;    /* code number/type */
+  --color-plum:       #b88ec9;    /* code special */
+
+  /* --- Border radii --- */
+  --radius-sm: 6px;
+  --radius:    10px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+
+  /* --- Typography --- */
+  --font-display: "Anton", ui-sans-serif, system-ui, sans-serif;
+  --font-sans:    "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* --- Layout --- */
+  --container-max: 1240px;
+}
+
+@layer base {
+  html, body {
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    background-color: var(--color-bg);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Faint warm grain — adds depth, matches prototype */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background:
+      radial-gradient(1200px 700px at 80% -10%, #2a1f10 0%, transparent 60%),
+      radial-gradient(900px 600px at -10% 110%, #1d160e 0%, transparent 60%);
+    opacity: 0.9;
+  }
+
+  a {
+    color: var(--color-gold);
+    text-decoration: none;
+  }
+  a:hover {
+    color: var(--color-gold-soft);
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+    font-weight: 400; /* Anton only ships at 400 — the typeface is intrinsically bold */
+    letter-spacing: -0.02em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h1 { font-size: clamp(48px, 7vw, 96px); line-height: 0.98; letter-spacing: -0.035em; }
+  h2 { font-size: clamp(28px, 3.4vw, 44px); line-height: 1.05; letter-spacing: -0.025em; }
+  h3 { font-size: clamp(20px, 1.8vw, 24px); line-height: 1.2; }
+  h4 { font-size: 16px; line-height: 1.3; }
+
+  p { margin: 0; text-wrap: pretty; }
+
+  code, pre, kbd { font-family: var(--font-mono); }
+}

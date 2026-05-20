@@ -11,3 +11,5 @@ node_modules/
 !.env.example
 
 # Bun lockfile is checked in; ignore nothing
+# Dangling symlink created by `bun run generate` (dist → .output/public)
+dist

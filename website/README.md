@@ -47,3 +47,29 @@ See Phase 7 of `.claude/plans/active/webpage-foundation.md` for the full deploym
 - Dockerfile: `website/Dockerfile` (ships in Phase 7)
 
 Patrick handles DNS + App Platform wiring. See the plan for step-by-step instructions.
+
+---
+
+## Design tokens
+
+All color, font, radius, and spacing values come from `website/app/assets/css/tailwind.css` — a `@theme` block that maps the Yinz palette to Tailwind v4 utilities.
+
+Historical reference: `/tmp/yinz-design/yinz/project/shared.css` (the design prototype CSS). **Do not import it** — the tokens were extracted from it; it is not a build dependency.
+
+**Using tokens in components:**
+
+```html
+<!-- color -->
+<div class="bg-bg text-ink border border-line">...</div>
+<span class="text-gold">Pittsburgh gold</span>
+
+<!-- typography -->
+<h1 class="font-display">Anton headline</h1>
+<p class="font-sans">Inter body</p>
+<code class="font-mono">JetBrains Mono</code>
+
+<!-- radii -->
+<div class="rounded rounded-lg">...</div>
+```
+
+**Font delivery**: `@nuxt/fonts` downloads Anton, Inter, and JetBrains Mono from Google Fonts at build time and serves them from `/_fonts/` in the generated output. Production builds require internet access to Google Fonts at build time; the browser never hits Google CDN at runtime. See the Phase 5 vendoring deferral in `.claude/plans/active/webpage-foundation.md` for the follow-up tracking committing vendored font files for hermetic builds.
