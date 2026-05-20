@@ -3754,7 +3754,7 @@ fn push_c_string_terminator(bytes: &mut Vec<u8>) {
         eprintln!(
             "INTERNAL COMPILER ERROR: string literal contains an embedded NUL byte at codegen \
              time. The lexer should have rejected this. Please file an issue at \
-             https://github.com/patrickrizzardi/ynz/issues with the source file."
+             https://github.com/yinzers/yinz-lang/issues with the source file."
         );
         std::process::abort();
     }

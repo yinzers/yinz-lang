@@ -917,7 +917,7 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
 8. **Token-leak audit (mandatory regardless of path)**: run `git log -p <plan-base-commit>..HEAD | grep -E '([a-zA-Z0-9]{52}|[a-zA-Z0-9]{84}|ghp_[a-zA-Z0-9]{36}|pat_[a-zA-Z0-9]+)'` — Azure DevOps PATs are 52 chars, GitHub classic tokens are 40 chars (`ghp_` prefix), GitHub fine-grained tokens are 84 chars (`pat_` prefix). Empty result = no token leaked across the milestone. Document this audit run in the PR description with the exact command + the empty result. If non-empty result, STOP — rotate the leaked token, force-rewrite history (consult Patrick), do NOT merge.
 
 **Acceptance criteria**:
-- [x] Either: extension installable via `code --install-extension yinz` (marketplace path), OR extension installable via downloaded `.vsix` from a GitHub release — .vsix at https://github.com/patrickrizzardi/ynz/releases/tag/ynz-vscode-v0.2.0-m2
+- [x] Either: extension installable via `code --install-extension yinz` (marketplace path), OR extension installable via downloaded `.vsix` from a GitHub release — .vsix at https://github.com/yinzers/yinz-lang/releases/tag/ynz-vscode-v0.2.0-m2
 - [x] Install instructions in `tooling/vscode-ynz/README.md` work end-to-end — README updated to GitHub release download path; manual install verification pending Patrick
 - [ ] Three screenshots committed in `tooling/vscode-ynz/screenshots/` — DEFERRED: tracked in todos.md `vscode-extension-screenshots` entry; screenshots require working local install, which was blocked by publisher registration failure
 - [x] `package.json` has a real publisher value (not placeholder) — set to `yinz-lang`

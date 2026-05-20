@@ -26,11 +26,11 @@ cp target/release/ynz-lsp ~/.local/bin/  # or any directory on your PATH
 Always-current stable URL (updates automatically with each release):
 
 ```bash
-curl -L https://github.com/patrickrizzardi/ynz/releases/latest/download/yinz-latest.vsix -o yinz-latest.vsix
+curl -L https://github.com/yinzers/yinz-lang/releases/latest/download/yinz-latest.vsix -o yinz-latest.vsix
 code --install-extension yinz-latest.vsix
 ```
 
-Or download a specific version from the [releases page](https://github.com/patrickrizzardi/ynz/releases).
+Or download a specific version from the [releases page](https://github.com/yinzers/yinz-lang/releases).
 
 ### Option B — VSCode Marketplace (coming soon)
 
