@@ -5,7 +5,7 @@ owner: Patrick Rizzardi
 status: active
 roadmap: v0-2-dev-loop-tooling
 created: 2026-05-20
-last_updated: 2026-05-20
+last_updated: 2026-05-20 (post-ship bugs fixed — see Post-Ship Fixes section)
 review_rounds:
   - round: 1
     reviewer: plan-reviewer
@@ -971,6 +971,30 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 - [ ] Every phase received a code-reviewer PASS before committing
 - [ ] Final cumulative code-reviewer sweep passed
 - [ ] Plan-file acceptance-criteria checkboxes accurate across all phases
+
+## Post-Ship Fixes (2026-05-20)
+
+Three bugs found immediately after v0.2.0-m4 shipped. All fixed, committed, and pushed to main.
+
+### Fix 1 — Text-mode rebuilds were completely silent on file save (c3fa69c)
+
+**Root cause**: `rebuild_one_with_emitter` had no text-mode UI output. `print_building`, `print_success`, and `print_errors` were only called from `rebuild_one`, but `lib.rs` always routes through `rebuild_one_with_emitter`. Result: every file-change event compiled silently — UI was completely dark.
+
+**Fix**: Added text-mode UI calls (`print_building` after no-change guard, `print_errors` before `finish_rebuild`, `print_success` after) in `rebuild_one_with_emitter`. Removed now-redundant `print_watching()` from `run_event_loop` start (doubles the idle prompt since every rebuild cycle already ends with it).
+
+### Fix 2 — `notify 8.x` IN_OPEN feedback loop (c3fa69c)
+
+**Root cause**: `notify 8.x` sets `WatchMask::OPEN` by default. Every rebuild calls `fs::read_to_string` which fires `IN_OPEN` → debouncer delivers it as `WatchEvent::Changed` → another rebuild → another open → infinite loop at ~1 rebuild/100ms.
+
+**Fix**: Added `WatchDb::source_unchanged(path, text)` — checks if the on-disk content matches what's in the shadow DB. If identical, `rebuild_one_with_emitter` returns early (no UI, no compile). Added `force: bool` param to skip this guard for the initial build (shadow pre-populated by `from_target` before first compile). Event-triggered rebuilds pass `force: false`; initial build passes `force: true`.
+
+### Fix 3 — Walk up to find `yinz.toml` + `[entries]` multi-entry support (27b3c98)
+
+**Root cause**: `resolve_project` only checked the exact path passed for `yinz.toml`. Yinz convention is that `yinz.toml` lives at the project root only — subdirectory paths like `ynz watch ships/scripts/backfill` always failed.
+
+**Additional bug**: `parse_entry_from_toml` only handled `entry = "..."` (single-entry), not `[entries]` table format (multi-entry projects).
+
+**Fix**: Added `find_project_root` that walks UP the directory tree to find `yinz.toml`. Added `parse_entries_table_from_toml` and `pick_entry_from_hint` — for multi-entry projects, the user's hint path (path components) is matched against entry values to pick the right entry. Three new tests: walk-up behavior, multi-entry selection, isolation.
 
 ## Anti-Pattern Callouts
 
