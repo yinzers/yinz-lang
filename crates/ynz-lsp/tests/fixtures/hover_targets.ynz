@@ -1,0 +1,6 @@
+// Hover test fixture — each line has hover targets for LSP hover tests.
+// function keyword, int.max constant, deferred feature gpu (via comments)
+function entrypoint() -> nothing {
+    let x: int = 42
+    print(x.toString())
+}

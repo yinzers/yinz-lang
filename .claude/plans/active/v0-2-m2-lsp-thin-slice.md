@@ -22,7 +22,7 @@ files:
 # Plan: v0.2-M2 — LSP Thin Slice + VSCode Plugin
 
 Created: 2026-05-20
-Status: in_progress — Phase 4 COMPLETE (BLOCK fixed). Phase 5 next.
+Status: in_progress — Phase 5 COMPLETE (code-reviewer pending). Phase 6 next.
 
 ## Context & Why
 
@@ -742,21 +742,21 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
    - Position at byte 0 of an empty file → hover returns None (no crash)
 
 **Acceptance criteria**:
-- [ ] Hover over any KEYWORDS entry returns a populated hover
-- [ ] Hover over any PRIMITIVE_INTRINSICS entry returns hover with receiver type + return type
-- [ ] Hover over any TYPE_ATTACHED_CONSTANTS entry returns hover with the value literal
-- [ ] Hover over any DEFERRED_LANGUAGE_FEATURES entry returns hover with ships_in/substitute/why and design_doc link
-- [ ] Hover over BANNED_DECLARATION_KEYWORDS / BANNED_JARGON returns hover with what_instead + why
-- [ ] Hover over a user-defined function name returns hover with the function signature
-- [ ] Hover at no-token position returns None (no crash)
-- [ ] All existing tests pass; new hover tests ≥7
+- [x] Hover over any KEYWORDS entry returns a populated hover
+- [x] Hover over any PRIMITIVE_INTRINSICS entry returns hover with receiver type + return type
+- [x] Hover over any TYPE_ATTACHED_CONSTANTS entry returns hover with the value literal
+- [x] Hover over any DEFERRED_LANGUAGE_FEATURES entry returns hover with ships_in/substitute/why and design_doc link
+- [x] Hover over BANNED_DECLARATION_KEYWORDS / BANNED_JARGON returns hover with what_instead + why
+- [x] Hover over a user-defined function name returns hover with the function signature
+- [x] Hover at no-token position returns None (no crash)
+- [x] All existing tests pass; new hover tests ≥7
 
 **Quality gate**:
-- [ ] No `// TODO` / `// FIXME` / `// HACK`
-- [ ] No hardcoded entry-text strings in `ynz-lsp/src/hover.rs` — all content comes via `lsp_hover_for_token`
-- [ ] Markdown rendering escapes `<`, `>`, `&` correctly if registry data contains them (audit + test with a deliberately-tricky registry entry)
-- [ ] `cargo clippy --workspace -- -D warnings` passes
-- [ ] No `.unwrap()` on user-input paths
+- [x] No `// TODO` / `// FIXME` / `// HACK`
+- [x] No hardcoded entry-text strings in `ynz-lsp/src/hover.rs` — all content comes via `lsp_hover_for_token`
+- [x] Markdown rendering escapes `<`, `>`, `&` correctly if registry data contains them (audit + test with a deliberately-tricky registry entry)
+- [x] `cargo clippy --workspace -- -D warnings` passes
+- [x] No `.unwrap()` on user-input paths
 
 **Verification**:
 - `cargo test -p ynz-lsp hover` — all hover tests pass

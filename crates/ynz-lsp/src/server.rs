@@ -6,15 +6,16 @@ use lsp_types::{
         DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Initialized,
         Notification as _,
     },
-    request::{Completion, Initialize, Request as _, Shutdown},
+    request::{Completion, HoverRequest, Initialize, Request as _, Shutdown},
     CompletionParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, InitializeParams, InitializeResult, ServerInfo, Url,
+    DidOpenTextDocumentParams, HoverParams, InitializeParams, InitializeResult, ServerInfo, Url,
 };
 
 use crate::{
     capabilities::{negotiate_encoding, server_capabilities},
     completion::completion_list,
     diagnostic_transform::{path_to_uri, to_lsp_diagnostic},
+    hover::hover_response,
     position::LineTable,
     state::ServerState,
 };
@@ -101,6 +102,45 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
         connection.sender.send(Message::Response(response)).ok();
         return;
     }
+    if req.method == HoverRequest::METHOD {
+        let params: HoverParams = match serde_json::from_value(req.params) {
+            Ok(p) => p,
+            Err(e) => {
+                let response = Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::InvalidParams as i32,
+                    format!("invalid hover params: {e}"),
+                );
+                connection.sender.send(Message::Response(response)).ok();
+                return;
+            }
+        };
+        let uri = &params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        let lex_output = state.source_file_for(uri)
+            .map(|sf| ynz_parser::queries::lex_query(&state.db, sf));
+        let sig_output = state.source_file_for(uri)
+            .map(|sf| ynz_typeck::queries::module_signatures_query(&state.db, sf));
+
+        let empty_sig = ynz_typeck::signatures::SignatureTable { fns: std::collections::HashMap::new() };
+        let hover = lex_output.as_ref().and_then(|lex| {
+            let text = state.text_for(uri)?;
+            let table = state.line_table_for(uri)?;
+            let byte_offset = table.position_to_byte_offset(text, position, state.encoding)?;
+            let sig = sig_output.as_ref().map(|o| &o.sig_table).unwrap_or(&empty_sig);
+            hover_response(&lex.tokens, sig, text, table, byte_offset, state.encoding)
+        });
+
+        let result = match hover {
+            Some(h) => serde_json::to_value(h).unwrap_or(serde_json::Value::Null),
+            None => serde_json::Value::Null,
+        };
+        let response = Response::new_ok(req.id, result);
+        connection.sender.send(Message::Response(response)).ok();
+        return;
+    }
+
     if req.method == Completion::METHOD {
         let params: CompletionParams = match serde_json::from_value(req.params) {
             Ok(p) => p,
