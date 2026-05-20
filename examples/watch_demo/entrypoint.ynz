@@ -1,0 +1,9 @@
+// Watch this project with: ynz watch examples/watch_demo/
+//
+// Edit the message on the line below and save — watch rebuilds and re-executes within a second.
+// Try --json for structured-event output, --check to skip the execute step,
+// --no-clear to preserve scrollback.
+
+function entrypoint() -> nothing {
+  print(`watch demo — edit this line and save to see the rebuild cycle`)
+}

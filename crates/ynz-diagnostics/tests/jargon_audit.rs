@@ -327,3 +327,72 @@ fn fmt_cli_messages_contain_no_banned_jargon() {
         );
     }
 }
+
+// WHY: ynz watch emits status lines, error messages, and --help text to the user's terminal.
+//      These strings bypass the `Diagnostic::*` constructor path (which the main jargon audit
+//      scans), so they need a dedicated check. A banned word like "infer" or "null" in a
+//      status line would be the same UX failure as in a compiler error.
+#[test]
+fn watch_cli_messages_contain_no_banned_jargon() {
+    let banned: Vec<_> = ynz_registry::banned_jargon().collect();
+
+    // Fixed-text portions of watch CLI messages (dynamic values like paths/sizes excluded).
+    let watch_messages = [
+        // ui.rs status lines
+        "▶ Building",
+        "✓ Built in",
+        "✗ 1 error in",
+        "✗ errors in",
+        "✓ Watching",
+        // event_loop.rs + watcher.rs log lines
+        "file watcher channel closed unexpectedly; exiting",
+        "file watcher error",
+        "ynz watch: watching",
+        "ynz watch: using filesystem polling on this mount; rebuild may lag",
+        // memory.rs + lib.rs memory messages
+        "memory warning",
+        "this is the safety stop",
+        "rebuild the compiler state more often",
+        "This releases accumulated compiler cache more frequently",
+        "memory polling unavailable on this platform",
+        "hard-stop disabled for this session",
+        // WatchError Display strings (error.rs)
+        "ynz watch could not subscribe to",
+        "Check that the path exists and is readable",
+        "The file system watcher must be able to read the target path",
+        "requires a `yinz.toml` at",
+        "project boundary is undefined",
+        "Pass a single `.ynz` file instead",
+        "The compiled binary",
+        "could not be executed",
+        "Check that the temp directory",
+        "The watch daemon reads source files",
+        "Memory polling failed",
+        "The memory hard-stop safety net",
+        "An I/O operation failed in the watch daemon",
+        "Check that the file system is accessible",
+    ];
+
+    let mut violations: Vec<String> = Vec::new();
+    for msg in &watch_messages {
+        let lower = msg.to_lowercase();
+        for entry in &banned {
+            let w = entry.name.to_lowercase();
+            if contains_whole_word(&lower, &w) {
+                violations.push(format!(
+                    "Watch CLI message contains banned word {:?}: {:?}",
+                    entry.name, msg
+                ));
+            }
+        }
+    }
+
+    if !violations.is_empty() {
+        panic!(
+            "Banned jargon found in {} watch CLI message(s):\n{}\n\n\
+             See design/compiler-errors.md for replacements.",
+            violations.len(),
+            violations.join("\n")
+        );
+    }
+}

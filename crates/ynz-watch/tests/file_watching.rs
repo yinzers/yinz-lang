@@ -13,6 +13,9 @@ use std::{
 use tempfile::TempDir;
 use ynz_watch::{ui, watcher, FileWatcher, WatchEvent};
 
+// WHY: file events must arrive within 200ms of the save or the "sub-second rebuild" promise
+//      is broken even before the compiler starts. If this flaps, investigate the notify/debouncer
+//      version or CI disk I/O; do NOT widen the timeout as a first response.
 #[test]
 fn file_change_event_delivered_within_200ms() {
     let dir = TempDir::new().unwrap();
@@ -56,6 +59,9 @@ fn file_change_event_delivered_within_200ms() {
     );
 }
 
+// WHY: ui functions are the only user-visible output from ynz watch; a panic in any of
+//      them aborts the entire daemon. Non-TTY context is the most common test environment
+//      and also the most likely to trigger edge cases (ANSI sequences ignored, no flush).
 #[test]
 fn ui_functions_smoke() {
     // Verify all pub ui functions are callable without panicking in a non-TTY context.

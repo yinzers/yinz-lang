@@ -116,18 +116,26 @@ pub fn hard_stop_message(rss_mb: u64, threshold_mb: u64, args: &str) -> String {
     )
 }
 
-/// Read a u64 MB value from an env var, falling back to `default_mb`.
-pub fn read_mb_env(var: &str, default_mb: u64) -> u64 {
+/// Read a u64 value from an env var, falling back to `default`.
+///
+/// Used for MB thresholds (YNZ_WATCH_MAX_RSS_MB), rebuild counts
+/// (YNZ_WATCH_REBUILD_AFTER), and hour durations (YNZ_WATCH_REBUILD_AFTER_HOURS).
+pub fn read_u64_env(var: &str, default: u64) -> u64 {
     match std::env::var(var) {
         Ok(s) => match s.parse::<u64>() {
             Ok(v) if v > 0 => v,
             _ => {
-                eprintln!("ynz watch: {var}={s:?} is not a valid number; using {default_mb}");
-                default_mb
+                eprintln!("ynz watch: {var}={s:?} is not a valid number; using {default}");
+                default
             }
         },
-        Err(_) => default_mb,
+        Err(_) => default,
     }
+}
+
+/// Convenience alias for `read_u64_env` — explicitly for MB-denominated env vars.
+pub fn read_mb_env(var: &str, default_mb: u64) -> u64 {
+    read_u64_env(var, default_mb)
 }
 
 #[cfg(test)]

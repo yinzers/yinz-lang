@@ -1,4 +1,4 @@
-/// Integration tests for Phase 2 incremental rebuild via salsa.
+/// Integration tests for incremental rebuild via salsa: shadow-state propagation + DB rebuild + counter reset.
 ///
 /// Verifies that the salsa cache is hot on the second rebuild (edit with no AST change)
 /// and that `WatchDb::rebuild_db()` preserves source state across the DB drop+recreate.

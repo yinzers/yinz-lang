@@ -152,6 +152,11 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    // WHY (all project tests): resolve_target is the entry point for every watch session —
+    //      wrong path resolution silently watches the wrong files (missed rebuilds) or crashes
+    //      with a confusing error. Single-file mode and project mode are distinct code paths;
+    //      both must be verified.
+
     #[test]
     fn single_file_mode() {
         let dir = TempDir::new().unwrap();

@@ -3,6 +3,8 @@
 //
 // The Yinz v0.1 Language Showcase — grows milestone-by-milestone.
 // Compile + run with: ./target/debug/ynz run examples/basics/
+// Watch this file with: ynz watch examples/basics/ — saves trigger rebuild + re-run.
+//   Pass --check for build-only (no execute). Pass --json for structured event output.
 //
 // v0.2-M2 — Open this file in VSCode (with the Yinz extension installed) to see:
 //   • Hover docs on every keyword — try hovering over `function`, `let`, `shape`, etc.
