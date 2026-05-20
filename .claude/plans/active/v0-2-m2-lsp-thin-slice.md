@@ -22,7 +22,7 @@ files:
 # Plan: v0.2-M2 — LSP Thin Slice + VSCode Plugin
 
 Created: 2026-05-20
-Status: in_progress — Phase 6 COMPLETE (BLOCK fixed). Phase 7 next.
+Status: in_progress — Phase 6 COMPLETE (code-reviewer PASS). Phases 7-9 next (Phase 7 requires Patrick to register VSCode marketplace publisher).
 
 ## Context & Why
 
