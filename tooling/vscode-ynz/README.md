@@ -42,4 +42,4 @@ ext install yinz-lang.yinz
 
 ## Screenshots
 
-Screenshots coming soon — see [`tooling/vscode-ynz/screenshots/`](https://github.com/patrickrizzardi/ynz/tree/main/tooling/vscode-ynz/screenshots) once the extension is verified.
+Screenshots are tracked for a follow-up commit once the extension is installed and verified locally. Install the extension and open `examples/basics/src/entrypoint.ynz` to see syntax highlighting, hover docs, autocomplete, and inline diagnostics in action.
