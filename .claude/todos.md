@@ -77,3 +77,14 @@ Global cross-workstream items only. Granular per-chat work lives in:
 - [x] **Design-lockdown (PRs #5 + #14)** — `shape` keyword locked, 3 rule files, 5 graveyard entries, Golden Rules updated.
 - [x] **M2 complete (c39fe8a, tag v0.1.0-m2)** — Numerics, variables, arithmetic. 118+ tests.
 - [x] **M1 compiler end-to-end** — `ynz run hello.ynz` → `hello, yinz`.
+
+## webpage-foundation deferred items (2026-05-20)
+
+**[webpage] Font vendoring** — @nuxt/fonts 0.14.0 downloads fonts at build time (not committed to repo). CI needs internet access for Google Fonts. Fix when: DO App Platform build fails network-restricted OR Google Fonts rate-limits CI.
+- What: configure @nuxt/fonts to write to `website/public/_fonts/` so font files can be committed
+- Why deferred: @nuxt/fonts 0.14.0 doesn't support source-dir output; needs module upgrade or custom Nitro plugin
+- Cost to fix: 1 session (research module config, write custom copy script or upgrade module version)
+- Trigger: DO build fails, Google Fonts rate-limits, or security policy prohibits outbound build-time requests
+
+**[webpage] CSP for Shiki inline styles** — Any future CSP at DO edge or via `nuxt-security` MUST allow `style-src 'unsafe-inline'` OR migrate Shiki to class-based theming (`{ colorReplacements: ... }` or CSS classes mode). Fix before M7 launch when CSP is configured.
+- Trigger: M7 launch — when deploying to production and adding security headers

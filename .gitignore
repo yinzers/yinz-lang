@@ -11,3 +11,8 @@ tooling/vscode-ynz/*.vsix
 # Build outputs for example projects — `ynz build examples/<name>/` writes here.
 # Matches `bin` directly inside any example project root.
 examples/*/bin
+
+# Website build artifacts (belt-and-suspenders; website/.gitignore is primary)
+website/node_modules/
+website/.nuxt/
+website/.output/

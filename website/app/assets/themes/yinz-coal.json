@@ -1,0 +1,62 @@
+{
+  "$schema": "vscode://schemas/color-theme",
+  "name": "yinz-coal",
+  "_comment": "Shiki theme for Yinz — token colors mapped from shared.css palette",
+  "type": "dark",
+  "colors": {
+    "editor.background": "#1a1611",
+    "editor.foreground": "#f2ebdc"
+  },
+  "tokenColors": [
+    {
+      "name": "Keywords",
+      "scope": ["keyword", "keyword.control"],
+      "settings": { "foreground": "#5a8fa3" }
+    },
+    {
+      "name": "Strings (template literals)",
+      "scope": ["string", "string.template", "string.quoted"],
+      "settings": { "foreground": "#8aa66b" }
+    },
+    {
+      "name": "Numbers",
+      "scope": ["constant.numeric"],
+      "settings": { "foreground": "#d28a4a" }
+    },
+    {
+      "name": "Booleans and null",
+      "scope": ["constant.language"],
+      "settings": { "foreground": "#b88ec9" }
+    },
+    {
+      "name": "Comments",
+      "scope": ["comment", "comment.line", "comment.block", "comment.line.doc"],
+      "settings": { "foreground": "#79715f", "fontStyle": "italic" }
+    },
+    {
+      "name": "Banned / invalid keywords",
+      "scope": ["invalid.deprecated", "invalid.illegal"],
+      "settings": { "foreground": "#c8442a" }
+    },
+    {
+      "name": "Operators",
+      "scope": ["keyword.operator"],
+      "settings": { "foreground": "#b5ad9c" }
+    },
+    {
+      "name": "Function names",
+      "scope": ["entity.name.function", "support.function"],
+      "settings": { "foreground": "#ffd23f" }
+    },
+    {
+      "name": "Types and storage",
+      "scope": ["storage.type", "entity.name.type", "entity.name.class"],
+      "settings": { "foreground": "#d28a4a" }
+    },
+    {
+      "name": "Module / namespace",
+      "scope": ["entity.name.namespace", "support.module"],
+      "settings": { "foreground": "#b88ec9" }
+    }
+  ]
+}
