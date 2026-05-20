@@ -2,7 +2,7 @@
 
 Rules every Yinz stdlib module must follow. Distinct from `.claude/rules/language-design.md` (which covers language features) — this file covers stdlib API contracts.
 
-Loaded when designing or reviewing any new stdlib module (v0.6 file system, v0.7 math, v0.8 cli/env/process, v0.9 json, v0.10 date/duration, v0.11 log, v0.12 random, v0.13 testing, v0.14 regex, v0.15 http, etc.).
+Loaded when designing or reviewing any new stdlib module (v0.6 file system, v0.7 math, v0.8 cli/env/process, v0.9 json, v0.10 date/duration, v0.11 db (DuckDB + Postgres only), v0.12 log, v0.13 random, v0.14 testing, v0.15 regex, v0.16 http, etc.).
 
 ---
 
@@ -121,7 +121,7 @@ For the rare case where a stdlib FREE function takes two arguments of the same t
 
 **Why this rule exists**: Go's `encoding/json` uses runtime reflection. Issue #5683 (filed 2013, closed FrozenDueToAge — Go's compatibility guarantee prevents the fix) tracks the perf gap. `easyjson` (codegen-based) is 4-5× faster per its own README; in some hot paths, reflection consumes ~50% of CPU time in Go web services. The decision to ship reflection-based serialization in stdlib is permanent in Go because the API can't change without breaking semver.
 
-When Yinz designs the JSON module (v0.9), the marshal/unmarshal API uses compiler-generated specialized serializers per `shape`. The compiler emits a typed serializer at the time the `shape` is declared (or at first serialization use). Same rule applies to any future serialization formats (CSV v0.20, msgpack/cbor if added).
+When Yinz designs the JSON module (v0.9), the marshal/unmarshal API uses compiler-generated specialized serializers per `shape`. The compiler emits a typed serializer at the time the `shape` is declared (or at first serialization use). Same rule applies to any future serialization formats (CSV v0.21, msgpack/cbor if added).
 
 This rule should be cross-referenced into `design/stdlib/data.md` (when written) and the v0.9 milestone plan.
 
@@ -131,7 +131,7 @@ This rule should be cross-referenced into `design/stdlib/data.md` (when written)
 
 ## Rule 7: Regex Engine Is Linear-Time NFA Only — No PCRE Backtracking
 
-**The rule**: Yinz's stdlib regex (when designed in v0.14 per `design/mvp-scope.md`) MUST be a linear-time NFA-based engine (RE2-style). Backtracking engines (PCRE, Python `re`, Ruby `=~`, PHP) are explicitly rejected. No backreferences, no lookahead/lookbehind, no possessive quantifiers in stdlib regex.
+**The rule**: Yinz's stdlib regex (when designed in v0.15 per `design/mvp-scope.md`) MUST be a linear-time NFA-based engine (RE2-style). Backtracking engines (PCRE, Python `re`, Ruby `=~`, PHP) are explicitly rejected. No backreferences, no lookahead/lookbehind, no possessive quantifiers in stdlib regex.
 
 **Why this rule exists**: backtracking regex engines have exponential worst-case complexity. A pattern like `(a+)+$` against a long string of `a`s followed by a non-matching character explores O(2^n) states. Cloudflare's July 2, 2019 global outage was caused by exactly this — a WAF regex with catastrophic backtracking exhausted CPU globally for 27 minutes (per Cloudflare's own post-mortem at https://blog.cloudflare.com/details-of-the-cloudflare-outage-on-july-2-2019/). Cloudflare subsequently switched their WAF from PCRE to RE2-inspired.
 
@@ -139,9 +139,9 @@ Python `re` and Ruby `=~` are still backtracking engines. Production services th
 
 **For users who genuinely need backreferences (rare — usually a parsing job)**: those use cases should use a parser combinator library (when one ships in stdlib or as a third-party package), not regex. Regex is for pattern matching; full grammar parsing is a parser's job.
 
-**Implementation**: when v0.14 designs the regex module, the locked target is RE2 or a Yinz-native NFA implementation matching RE2's semantics (linear-time guarantee, no backtracking-required features). Lock this as the v0.14 design's first principle.
+**Implementation**: when v0.15 designs the regex module, the locked target is RE2 or a Yinz-native NFA implementation matching RE2's semantics (linear-time guarantee, no backtracking-required features). Lock this as the v0.15 design's first principle.
 
-This rule should be cross-referenced into a future `design/stdlib/regex.md` when written. Until then, it lives here to prevent the v0.14 designer from defaulting to PCRE-style features out of habit.
+This rule should be cross-referenced into a future `design/stdlib/regex.md` when written. Until then, it lives here to prevent the v0.15 designer from defaulting to PCRE-style features out of habit.
 
 ---
 
@@ -167,7 +167,7 @@ The cost of scalar implementations compounds: every JSON parse, every HTTP heade
 
 **Fallback path**: when targeting an architecture without the relevant SIMD intrinsics (some embedded targets, kernel-mode `--kernel` builds), the compiler emits the scalar implementation. Same correctness, slower. The SIMD path is the documented default for production builds.
 
-This rule should be cross-referenced into the v0.9 (`json`), v0.14 (`regex`), and any future bytes-touching stdlib module designs. The decisions about specific algorithms can defer to those milestones; the COMMITMENT to SIMD where available is locked here.
+This rule should be cross-referenced into the v0.9 (`json`), v0.15 (`regex`), and any future bytes-touching stdlib module designs. The decisions about specific algorithms can defer to those milestones; the COMMITMENT to SIMD where available is locked here.
 
 ---
 

@@ -571,7 +571,7 @@ impl<'src> Lexer<'src> {
                 );
                 Token::Identifier(text.to_string())
             }
-            // `test` is reserved for the built-in test framework shipping in v0.13.
+            // `test` is reserved for the built-in test framework shipping in v0.14.
             // Error text is registry-driven via render_deferred_feature().
             "test" => {
                 let entry = ynz_registry::deferred_language_feature_lookup("test")

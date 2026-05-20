@@ -184,7 +184,7 @@ A language feature that is reserved at the lexer/parser level but whose full imp
 | `name` | string | yes | The token or syntax that triggers this error (e.g. `"f32"`, `"test"`, `"gpu"`) |
 | `substitute` | string | yes | What to use instead right now. Empty string if no current substitute. |
 | `why` | string | yes | Why this is deferred. Must be user-readable — no jargon. |
-| `ships_in` | string | yes | Target version string (`"v2+"`, `"v0.13"`, `"v0.2"`, etc.) |
+| `ships_in` | string | yes | Target version string (`"v2+"`, `"v0.14"`, `"v0.2"`, etc.) |
 | `design_doc` | string | yes | Path to the design doc (from repo root). Use `"design/mvp-scope.md"` for items covered there rather than a dedicated future doc. |
 | `triggers` | string | yes | What user code makes this error fire. `"none — no token reserved yet"` if not yet reserved. |
 
@@ -201,8 +201,8 @@ triggers = "Writing `f32` or `f64` as a type annotation in Yinz source"
 [[deferred_language_feature]]
 name = "test"
 substitute = ""
-why = "`test` is reserved for the built-in test framework shipping in v0.13. Pre-reserving it means your existing code will not break when v0.13 ships."
-ships_in = "v0.13"
+why = "`test` is reserved for the built-in test framework shipping in v0.14. Pre-reserving it means your existing code will not break when v0.14 ships."
+ships_in = "v0.14"
 design_doc = "design/mvp-scope.md"
 triggers = "Using `test` as an identifier"
 ```

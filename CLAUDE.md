@@ -31,8 +31,12 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 | `/spec/` | Language specification — for users of Yinz |
 | `/design/` | Design decisions and open questions — for contributors |
 | `design/feature-registry.md` | SSOT registry schema + carve-out policy (see `registry/features.toml`) |
+| `design/lsp.md` | LSP server architecture — salsa wiring, JSON-RPC dispatch, capability negotiation, framework choice rationale, self-hosting migration plan |
 | `registry/features.toml` | Single source of truth for all feature inventories (keywords, jargon, intrinsics, deferred features, hint domains) |
 | `crates/ynz-registry/` | Crate that parses `registry/features.toml` + generates typed Rust constants via `build.rs` |
+| `crates/ynz-lsp/` | LSP server — wraps existing salsa queries in JSON-RPC, consumes `ynz-registry` for autocomplete/hover/diagnostics |
+| `crates/ynz-tmgrammar/` | TextMate grammar generator — reads `ynz-registry`, emits `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json` |
+| `tooling/vscode-ynz/` | VSCode extension — spawns `ynz-lsp`, ships syntax highlighting and language association |
 | `.claude/rules/` | Detailed rule files (loaded on demand) |
 | `CLAUDE.md` | This file — rules for Claude |
 

@@ -29,7 +29,7 @@ When the trigger fires (a real use case needs metaprogramming), Patrick decides 
 
 ## HTTP Module Design — Three-Tier API
 
-When v0.15 (`http` client) comes up for implementation, the module needs a focused design session. The general shape is locked but specifics need work:
+When v0.16 (`http` client) comes up for implementation, the module needs a focused design session. The general shape is locked but specifics need work:
 
 **Tier 1 — High-level helpers:** `http.get(url)`, `http.post(url, body)`, `http.put`, `http.delete`, `http.websocket(url)`. The common-case API, dot-method-first.
 
@@ -37,7 +37,7 @@ When v0.15 (`http` client) comes up for implementation, the module needs a focus
 
 **Tier 3 — Low-level socket access:** `net.tcp.connect(host, port)` returning a raw socket. The floor of the user-accessible network stack. Framework authors can build their own routing layer, their own protocol implementations, anything on top of this. Going lower means FFI (deferred to v2+).
 
-**Open sub-questions for the v0.15 design session:**
+**Open sub-questions for the v0.16 design session:**
 
 - Exact dot-method names for the high-level tier (`http.get` vs `http.fetch` vs `http.request`?)
 - WebSocket lifecycle — connect, message events, close handling. Builds on FallibleIterable contract per `design/iterables.md`?
@@ -46,7 +46,7 @@ When v0.15 (`http` client) comes up for implementation, the module needs a focus
 - Cookie handling — first-class or always manual headers?
 - Proxy support — env var detection (`HTTP_PROXY`) automatic, or always explicit?
 
-These get answered when v0.15 is up to design. Not blockers for v0.1-v0.14.
+These get answered when v0.16 is up to design. Not blockers for v0.1-v0.15.
 
 ---
 

@@ -53,11 +53,58 @@ The absolute minimum: the language compiles and runs a hello-world program. No s
 
 ## v0.2 — Dev-loop tooling
 
-LSP + `ynz watch` + `ynz fmt`. All shipped together as one milestone because they're the same kind of feature: making the development loop fast and pleasant.
+LSP + `ynz watch` + `ynz fmt`. Shipped as five milestones in the `v0-2-dev-loop-tooling` roadmap.
 
-- **LSP** — autocomplete, hover, go-to-definition, rename, inline errors. Built on the salsa queries the v0.1 compiler already uses (see `design/compiler-language.md`).
-- **`ynz watch`** — recompile-on-save with sub-second turnaround for typical changes
-- **`ynz fmt`** — canonical code formatter (no config — Yinz has one style)
+### v0.2-M1: Feature Inventory & SSOT Registry (shipped — tag `v0.2.0-m1`)
+
+Single source of truth for all feature inventories. `registry/features.toml` + `crates/ynz-registry/` replace the scattered per-crate tables.
+
+### v0.2-M2: LSP Thin Slice + VSCode Plugin (this milestone)
+
+**In scope:**
+- `ynz-lsp` binary — JSON-RPC stdio server backed by existing salsa queries
+- VSCode extension (`tooling/vscode-ynz/`) — spawns `ynz-lsp`, ships syntax highlighting
+- Autocomplete (registry-driven: keywords, intrinsics, type constants, deferred-features marked deprecated)
+- Inline diagnostics with WHAT/WHAT-INSTEAD/WHY content preserved end-to-end
+- Hover docs for every registered keyword, intrinsic, type constant, and deferred feature
+- TextMate grammar generated from registry (`crates/ynz-tmgrammar/`) — committed + consistency-tested
+- VSCode marketplace publish as preview (`.vsix` fallback if verification stalls)
+
+**Locked decisions:**
+- LSP framework: `tower-lsp` vs `lsp-server` — decided by Phase 1 research spike; locks for v0.2-M5
+- Extension home: in-repo subdir `tooling/vscode-ynz/` (atomic version bumps, single source of truth)
+- Marketplace: preview publish in M2; `.vsix` fallback if objective friction triggers fire
+- TextMate grammar: registry-derived — `crates/ynz-tmgrammar` generates, committed artifact, consistency-tested
+
+**Explicitly out of scope (deferred to v0.2-M5):**
+- `textDocument/definition` (go-to-def), `textDocument/references` (find-refs), `textDocument/rename`
+- `textDocument/formatting` / `textDocument/rangeFormatting` (waits on v0.2-M3 `ynz-fmt`)
+- `textDocument/inlayHint` (muted-hint surfaces per `design/inference.md`)
+- `textDocument/codeAction`, `textDocument/semanticTokens`
+- Doc-comment integration in hover, pull-diagnostics model, structured `Diagnostic.data`
+- `Diagnostic.code` / `Diagnostic.codeDescription` fields
+
+**Design doc:** `design/lsp.md`
+
+### v0.2-M3: `ynz fmt` (planned)
+
+- `ynz fmt path.ynz` / `ynz fmt --all` / `ynz fmt --check`
+- Zero-config. Yinz has one style.
+- `ynz-fmt` library crate ready for v0.2-M5's LSP format-on-save wiring.
+
+### v0.2-M4: `ynz watch` (planned)
+
+- Recompile-on-save with sub-second turnaround
+- Daemon vs simple-loop decided in M4 research phase
+
+### v0.2-M5: LSP Full + v0.2.0 Release (planned)
+
+- Go-to-def, find-refs, rename, format-on-save (via `ynz-fmt`), muted-hint surfaces, code actions, semantic tokens
+- Pull-diagnostics model, structured `Diagnostic.data`, `Diagnostic.code` fields
+- Doc-comment integration in hover
+- `textDocument/inlayHint` for the three placement categories from `design/inference.md`
+- `textDocument/codeAction`, `textDocument/semanticTokens`
+- Cuts the `v0.2.0` release tag
 
 ---
 
@@ -155,7 +202,7 @@ Always paired. `date.now()`, `date.from()`, comparisons, formatting, parsing. `d
 
 ## v0.11 — `db` (database)
 
-Postgres and MySQL to start. Additional drivers (SQLite, etc.) deferred to a later milestone.
+**DuckDB and Postgres to start, in that priority order**: DuckDB first (embedded, in-process — easiest "hello world with a database"), then Postgres (network database, client/server). **All other drivers (MySQL, SQLite, MariaDB, MS SQL, etc.) deferred until after v1.0 launch.**
 
 The `db` module is one of the most substantial stdlib entries — see `design/stdlib/database.md` for the full early design, including the embedded SQL syntax open question. Headline features:
 

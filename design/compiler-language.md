@@ -57,6 +57,8 @@ Both frontends also share the **SSOT feature registry** (`registry/features.toml
 
 This is non-negotiable. If we don't commit to salsa from day 1, the LSP is a 6-month side-quest later instead of a few weeks.
 
+The LSP and CLI also share the **SSOT feature registry** (`registry/features.toml`, parsed by `crates/ynz-registry/build.rs`). The registry is the single source of truth for keyword lists, banned-jargon words, primitive intrinsics, type-attached constants, deferred-feature catalog, and IDE muted-hint domains. The CLI reads the registry to generate diagnostics; the LSP reads the same registry to generate autocomplete suggestions and hover docs. Without the registry, "what keywords should autocomplete show?" and "what muted hints should the IDE display?" have no single place to ask — they drift as the feature set grows. See `design/feature-registry.md` for the schema and migration plan, and `design/lsp.md` for how the LSP consumes it.
+
 ---
 
 ## Known costs

@@ -1062,12 +1062,12 @@ ships_in = "v2+"
 design_doc = "design/mvp-scope.md"
 triggers = "Writing `u64` as a type annotation in Yinz source"
 
-# --- `test` keyword (reserved for v0.13 built-in testing) ---
+# --- `test` keyword (reserved for v0.14 built-in testing) ---
 [[deferred_language_feature]]
 name = "test"
-substitute = "Use a different identifier. The built-in test framework ships in v0.13 and will use `test` as a keyword."
-why = "`test` is reserved for the built-in test framework shipping in v0.13. Pre-reserving it now means your existing code will not break when v0.13 ships."
-ships_in = "v0.13"
+substitute = "Use a different identifier. The built-in test framework ships in v0.14 and will use `test` as a keyword."
+why = "`test` is reserved for the built-in test framework shipping in v0.14. Pre-reserving it now means your existing code will not break when v0.14 ships."
+ships_in = "v0.14"
 design_doc = "design/mvp-scope.md"
 triggers = "Using `test` as an identifier in Yinz source"
 

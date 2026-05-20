@@ -68,7 +68,7 @@ test "creates a user" {
 
 **Why `setup` / `teardown` over `beforeEach` / `afterEach`**: Plain English. Matches Golden Rule 12 (human-readable over jargon). A jr dev reads "setup the test environment" / "tear down the test environment" without needing prior context.
 
-**Why parameterless in v0.13**: Most tests don't need test metadata (current test name, etc.) inside setup. Adding an optional `setup(testInfo) { ... }` form can come later if real use cases surface — it doesn't break the parameterless default.
+**Why parameterless in v0.14**: Most tests don't need test metadata (current test name, etc.) inside setup. Adding an optional `setup(testInfo) { ... }` form can come later if real use cases surface — it doesn't break the parameterless default.
 
 ---
 
@@ -172,11 +172,11 @@ By default:
 - Files naturally have isolated state (each `setup file { db.connect(...) }` opens its own connection)
 - Auto-parallelization (v0.3) doesn't apply directly — it analyzes pure-code dependencies, but tests touch external state the compiler can't see
 
-**Deferred to v0.14+ (NOT v0.13):**
+**Deferred to v0.15+ (NOT v0.14):**
 - `parallel file` declaration at top of file to enable within-file parallelism
 - `sequential "resource-name"` declarations to serialize files sharing a resource
 
-For v0.13, users are responsible for test isolation — the runner does NOT auto-sandbox files (no isolated DB schemas per file, etc.). The typical pattern is for `setup file` to scope its own state. Refinement features ship if real demand surfaces.
+For v0.14, users are responsible for test isolation — the runner does NOT auto-sandbox files (no isolated DB schemas per file, etc.). The typical pattern is for `setup file` to scope its own state. Refinement features ship if real demand surfaces.
 
 ---
 
