@@ -4,7 +4,7 @@ type: roadmap
 owner: patrick
 status: active
 created: 2026-05-18
-last_updated: 2026-05-18
+last_updated: 2026-05-20
 milestones:
   - v0-2-m1-feature-inventory-sync
   - v0-2-m2-lsp-thin-slice
@@ -164,7 +164,16 @@ Likely 6-8 phases. Sequencing note: can begin once v0.2-M1's keyword/type/intrin
 **Value delivered**: The thin LSP shipped in v0.2-M2 expands to a full editor experience: **go-to-definition, find-references, rename, format-on-save** (delegates to v0.2-M3's `ynz-fmt` library), **muted-hint surfaces** per `design/inference.md` + `design/ide-hints.md` (folds in the M7-deferred muted-hint work that was held for "v0.2 LSP"), and the deferred-to-v0.2 sweep of items from `todos.md` "Soon" section (hidden-field default eval, dynamic dispatch call-site coercion, UFCS const-lend check). Cuts the **v0.2.0 release tag**.
 **Execution plan**: `v0-2-m5-lsp-full-and-release` (status: planned)
 **Depends on**: v0.2-M1 (registry), v0.2-M2 (thin LSP foundation it builds on), v0.2-M3 (`ynz-fmt` for format-on-save). v0.2-M4 not a hard dep, but if v0.2-M4 chose daemon mode, M5 reuses that infrastructure.
-**Rough scope**: salsa-query-backed go-to-def + find-references + rename (rename specifically needs careful salsa invalidation), `textDocument/formatting` handler wiring v0.2-M3's library, `textDocument/codeLens` if it makes sense for muted-hint informational category, the three muted-hint placement categories from `design/inference.md` (Addition / Replacement / Informational) — each gets a concrete LSP implementation, sweep of `todos.md` "Soon" items, `examples/basics/src/entrypoint.ynz` extension showing every v0.2 LSP feature in action, `examples/errors/v0_2_errors.ynz` for any new compile errors landed by the registry rewrites, VSCode extension v0.2 update notes, CHANGELOG entry, `Cargo.toml` bump to `0.2.0`, `v0.2.0` tag cut, retro entry on what worked / what didn't for v0.3 planning. Realistically 10-15 phases.
+**Rough scope**: salsa-query-backed go-to-def + find-references + rename (rename specifically needs careful salsa invalidation), `textDocument/formatting` handler wiring v0.2-M3's library, the three muted-hint placement categories from `design/inference.md` (Addition / Replacement / Informational) — each gets a concrete LSP implementation, sweep of `todos.md` "Soon" items, `examples/basics/src/entrypoint.ynz` extension showing every v0.2 LSP feature in action, `examples/errors/v0_2_errors.ynz` for any new compile errors landed by the registry rewrites, VSCode extension v0.2 update notes, CHANGELOG entry, `Cargo.toml` bump to `0.2.0`, `v0.2.0` tag cut, retro entry on what worked / what didn't for v0.3 planning. Realistically 10-15 phases.
+
+**M2 deferrals landing in M5 (from `.claude/plans/active/v0-2-m2-lsp-thin-slice.md` Deferrals table):**
+- `textDocument/inlayHint` — muted-hint surfaces (the LSP method specifically; M2 shipped no inlay hints)
+- `textDocument/codeAction` — code actions and quick-fixes
+- `textDocument/semanticTokens` — semantic highlighting richer than TextMate grammar
+- Doc-comment integration in `textDocument/hover` body (rich `///` comment content; Phase 5 best-effort, full support here)
+- Pull-diagnostics model — LSP 3.17 `textDocument/diagnostic` pull model as alternative to current push-via-publishDiagnostics
+- `Diagnostic.code` + `Diagnostic.codeDescription` fields (DiagnosticKind name + link; deferred from M2 Phase 3)
+- Structured `Diagnostic.data` field — client-side rendering of WHAT/WHAT-INSTEAD/WHY as separate JSON fields (plaintext `message` stays as fallback)
 
 ## Out of Scope
 

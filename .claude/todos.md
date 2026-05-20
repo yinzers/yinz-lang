@@ -19,6 +19,8 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Later (idea bin — not committed)
 
+- [ ] **vscode-extension-ci-workflow** — GitHub Actions to build + publish `tooling/vscode-ynz/` on release tags (currently manual). Deferred from v0.2-M2 Phase 7; M2 ships extension via local cargo+npm or marketplace publish, no CI yet. Pick up whenever marketplace publishing automation is wanted OR when a non-Patrick contributor needs to repro the build.
+
 - [ ] **Jargon-CI sweep** — add a CI script that greps `design/*.md`, `spec/*.md`, all `.claude/rules/*.md`, and crate source files for banned-jargon words. Scope: extend `crates/ynz-diagnostics/src/banned_jargon.rs` AND add a doc-grep CI step.
 - [ ] Wire up GitHub Actions CI (ci.yml already written, just needs configuration)
 - [ ] macOS CI golden hash for ynz-codegen

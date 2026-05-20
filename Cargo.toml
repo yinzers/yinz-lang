@@ -10,6 +10,7 @@ members = [
     "crates/ynz-numerics",
     "crates/ynz-runtime",
     "crates/ynz-registry",
+    "crates/ynz-lsp",
 ]
 
 [workspace.package]

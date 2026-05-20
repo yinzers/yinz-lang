@@ -1,0 +1,13 @@
+[package]
+name = "ynz-lsp"
+description = "Yinz Language Server — JSON-RPC stdio server backed by salsa queries"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[[bin]]
+name = "ynz-lsp"
+path = "src/main.rs"

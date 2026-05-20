@@ -1360,6 +1360,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ynz-lsp"
+version = "0.2.0-m1"
+
+[[package]]
 name = "ynz-numerics"
 version = "0.2.0-m1"
 dependencies = [
