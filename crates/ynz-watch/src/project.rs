@@ -45,6 +45,15 @@ pub struct WatchSourceFile {
 pub fn resolve_target(path: &Path) -> Result<WatchTarget> {
     if path.is_file() {
         let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+
+        // If there's a yinz.toml above this file, use project mode — registering only
+        // the entry file causes cross-module imports to fail (shared files not in DB).
+        if let Some(root) = find_project_root(canonical.parent().unwrap_or(&canonical)) {
+            let root = std::fs::canonicalize(&root).unwrap_or(root);
+            return resolve_project_with_entry(&root, &canonical);
+        }
+
+        // True single-file mode: no yinz.toml anywhere above — imports unsupported.
         let text = std::fs::read_to_string(&canonical).map_err(|e| WatchError::SourceRead {
             path: canonical.clone(),
             reason: e.to_string(),
@@ -99,6 +108,23 @@ fn find_project_root(start: &Path) -> Option<PathBuf> {
             _ => return None,
         }
     }
+}
+
+/// Resolve all `.ynz` files under a project root with an explicit entry file.
+///
+/// Used when the user passed a `.ynz` file path directly but a `yinz.toml` exists
+/// above it — we load all project files so cross-module imports resolve correctly,
+/// but honour the user's explicit entry instead of reading it from `yinz.toml`.
+fn resolve_project_with_entry(root: &Path, entry: &Path) -> Result<WatchTarget> {
+    let mut sources = Vec::new();
+    let mut visited = HashSet::new();
+    collect_ynz_files(root, &mut sources, &mut visited)?;
+    sources.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(WatchTarget {
+        entry: entry.to_path_buf(),
+        sources,
+        project_root: Some(root.to_path_buf()),
+    })
 }
 
 /// Resolve all `.ynz` files under a project root using `yinz.toml`.
