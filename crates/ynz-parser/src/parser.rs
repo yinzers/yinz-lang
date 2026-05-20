@@ -2009,6 +2009,7 @@ impl<'a> Parser<'a> {
                 body,
                 span,
                 destructure_pattern: None,
+            map_destructure_pattern: None,
             };
         }
 
@@ -2068,6 +2069,7 @@ impl<'a> Parser<'a> {
                 },
                 span,
                 destructure_pattern: None,
+            map_destructure_pattern: None,
             };
         }
 
@@ -2080,6 +2082,7 @@ impl<'a> Parser<'a> {
             body,
             span: SourceSpan::new(self.file, start, end),
             destructure_pattern: None,
+            map_destructure_pattern: None,
         }
     }
 
@@ -2201,6 +2204,7 @@ impl<'a> Parser<'a> {
                 },
                 span,
                 destructure_pattern: None,
+            map_destructure_pattern: None,
             };
         }
 
@@ -2252,6 +2256,7 @@ impl<'a> Parser<'a> {
             },
             span: full_span,
             destructure_pattern: Some(destructure_pattern),
+            map_destructure_pattern: None,
         }
     }
 
@@ -2362,6 +2367,7 @@ impl<'a> Parser<'a> {
                 },
                 span,
                 destructure_pattern: None,
+            map_destructure_pattern: None,
             };
         }
 
@@ -2413,6 +2419,7 @@ impl<'a> Parser<'a> {
             },
             span: full_span,
             destructure_pattern: None,
+            map_destructure_pattern: Some((key_name, val_name)),
         }
     }
 

@@ -278,6 +278,7 @@ mod tests {
                 body: return_block(),
                 span: span(),
                 destructure_pattern: None,
+                map_destructure_pattern: None,
             }],
             span: span(),
         };

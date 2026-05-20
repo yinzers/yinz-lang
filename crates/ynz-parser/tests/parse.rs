@@ -100,6 +100,7 @@ fn m3_stmt_variant_count_locked() {
             body: empty_block.clone(),
             span: span(0, 0),
             destructure_pattern: None,
+            map_destructure_pattern: None,
         },
         Return {
             value: None,
@@ -323,6 +324,7 @@ fn m4_stmt_variant_count_locked() {
             body: empty_block.clone(),
             span: span(0, 0),
             destructure_pattern: None,
+            map_destructure_pattern: None,
         },
         Return {
             value: None,
@@ -486,6 +488,7 @@ fn m5_stmt_variant_count_locked() {
             body: empty_block.clone(),
             span: span(0, 0),
             destructure_pattern: None,
+            map_destructure_pattern: None,
         },
         Return {
             value: None,

@@ -156,6 +156,7 @@ fn normalize_stmt(stmt: Stmt) -> Stmt {
             iter,
             body,
             destructure_pattern,
+            map_destructure_pattern,
             ..
         } => Stmt::For {
             var,
@@ -164,6 +165,7 @@ fn normalize_stmt(stmt: Stmt) -> Stmt {
             body: normalize_block(body),
             span: zero_span(),
             destructure_pattern,
+            map_destructure_pattern,
         },
         Stmt::Return { value, .. } => Stmt::Return {
             value: value.map(normalize_expr),

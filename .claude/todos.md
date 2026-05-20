@@ -59,6 +59,8 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 - [ ] **watch-json-schema-stabilize** — at v0.2.0 final tag, drop `-unstable` suffix from `--json` `schema_version` field; commit to semver-bound schema changes. Locked trigger: v0.2.0 release.
 
+- [ ] **lsp-salsa-cancellation** — salsa 0.26 queries are not cancellable mid-execution; a long `references_for_offset` scan blocks subsequent `didChange` notifications. Acceptable in v0.2-M5 thin-slice dispatch model (single-threaded; in-flight completes before mutations). Trigger: a user reports typing-freeze during a cross-file references scan, OR v0.3+ multi-window editing surfaces measurable contention. Fix: investigate salsa snapshot API (`Snapshot<CompilerDb>`) for concurrent reads; main loop retains `&mut` for mutations, references/refs/rename run on snapshots. Cross-reference: `design/lsp.md` "Concurrency model" section, `crates/ynz-lsp/src/server.rs` main dispatch.
+
 ## Done (recent)
 
 - [x] **M6 complete (tag pending v0.1.0-m6, 631 tests)** — options+unions+narrowing: options types (i8 tags, multi-case, toString), union types (tagged-struct, Is-arm narrowing), fallible conversions (.toInt/.toFloat/.toNumber), early-return narrowing, shape aliases (shape S = A|B), string parsing runtime. Plan moved to done/. M2+M3 catch-up items closed.

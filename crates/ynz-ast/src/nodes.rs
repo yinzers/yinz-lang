@@ -268,9 +268,12 @@ pub enum Stmt {
         body: Block,
         span: SourceSpan,
         /// Present when the loop used `for ({ field, ... } in iter)` shape
-        /// destructuring.  `None` for plain `for (x in iter)` and map-entry
-        /// `for ((k, v) in map)` loops.
+        /// destructuring.  `None` for plain `for (x in iter)` and map-entry loops.
         destructure_pattern: Option<Vec<ForDestructureBinding>>,
+        /// Present when the loop used `for ((key, value) in map)` map-entry
+        /// destructuring.  `None` for plain and shape-destructuring loops.
+        /// Tuple is `(key_name, val_name)` as written in source.
+        map_destructure_pattern: Option<(String, String)>,
     },
 
     /// An early `return [value]`.

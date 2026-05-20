@@ -413,14 +413,18 @@ fn emit_stmt(s: &Stmt, ind: usize) -> String {
             iter,
             body,
             destructure_pattern,
+            map_destructure_pattern,
             ..
         } => {
-            // When destructure_pattern is present, the parser prepended N synthetic
-            // `let field = __shape.field` statements to the body. Skip them — the
-            // formatter emits the original `{field, ...}` syntax in the header instead.
-            let skip = destructure_pattern.as_ref().map_or(0, |b| b.len());
+            // Skip synthetic `let field = __shape.field` / `let k = __entry.key` stmts
+            // prepended by the parser during desugaring.
+            let skip = if map_destructure_pattern.is_some() {
+                2 // key_binding + val_binding
+            } else {
+                destructure_pattern.as_ref().map_or(0, |b| b.len())
+            };
             let body_s = emit_block_skipping(body, ind + 1, skip);
-            let header = emit_for_header(var, destructure_pattern);
+            let header = emit_for_header(var, destructure_pattern, map_destructure_pattern);
             format!(
                 "{prefix}for ({header} in {}) {{{body_s}{prefix}}}",
                 emit_expr(iter, 0)
@@ -450,7 +454,14 @@ fn emit_stmt(s: &Stmt, ind: usize) -> String {
 /// - Plain loop (`for (x in iter)`): returns `"x"`.
 /// - Shape destructuring (`for ({ field, field as alias } in iter)`): reconstructs
 ///   the original `{ field, field as alias }` syntax from the stored bindings.
-fn emit_for_header(var: &str, destructure_pattern: &Option<Vec<ForDestructureBinding>>) -> String {
+fn emit_for_header(
+    var: &str,
+    destructure_pattern: &Option<Vec<ForDestructureBinding>>,
+    map_destructure_pattern: &Option<(String, String)>,
+) -> String {
+    if let Some((key, val)) = map_destructure_pattern {
+        return format!("({key}, {val})");
+    }
     match destructure_pattern {
         Some(bindings) => {
             let fields: Vec<String> = bindings
@@ -460,7 +471,7 @@ fn emit_for_header(var: &str, destructure_pattern: &Option<Vec<ForDestructureBin
                     None => b.field.clone(),
                 })
                 .collect();
-            format!("{{{}}}",fields.join(", "))
+            format!("{{{}}}", fields.join(", "))
         }
         None => var.to_string(),
     }
@@ -1356,11 +1367,16 @@ fn emit_stmt_with_inline(s: &Stmt, ind: usize, ctx: &CommentContext<'_>, inline:
             body,
             span,
             destructure_pattern,
+            map_destructure_pattern,
             ..
         } => {
-            let skip = destructure_pattern.as_ref().map_or(0, |b| b.len());
+            let skip = if map_destructure_pattern.is_some() {
+                2
+            } else {
+                destructure_pattern.as_ref().map_or(0, |b| b.len())
+            };
             let body_s = emit_block_with_comments_skipping(body, ind + 1, ctx, span.start, skip);
-            let header = emit_for_header(var, destructure_pattern);
+            let header = emit_for_header(var, destructure_pattern, map_destructure_pattern);
             format!(
                 "{prefix}for ({header} in {}) {{{body_s}{prefix}}}",
                 emit_expr(iter, 0)
