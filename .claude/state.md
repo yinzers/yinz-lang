@@ -1,6 +1,6 @@
 # Session State: ynz
 
-**Last Updated**: 2026-05-20 (v0.2.0-m3 SHIPPED: ynz fmt formatter + CLI, 1143 tests, tag v0.2.0-m3)
+**Last Updated**: 2026-05-20 (v0.2.0-m4 SHIPPED: ynz watch daemon, 46 new tests, tag v0.2.0-m4)
 
 ---
 
@@ -11,9 +11,10 @@
 <!-- RADAR-START -->
 ### Active Roadmaps
 - v0-2-dev-loop-tooling (patrick) — 1 active plans — 2026-05-20
+- webpage-docs (Patrick Rizzardi) — 0 active plans — 2026-05-20
 
 ### Active Workstreams
-- v0-2-m4-watch (Patrick Rizzardi) — 9 files touched — 13/120 done — roadmap: v0-2-dev-loop-tooling — 2026-05-21
+- v0-2-m4-watch (Patrick Rizzardi) — 9 files touched — 90/121 done — roadmap: v0-2-dev-loop-tooling — 2026-05-20
 <!-- RADAR-END -->
 
 ---
