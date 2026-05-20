@@ -116,7 +116,7 @@ Status: done — v0.2.0-m2 tagged and shipped 2026-05-20.
 | LSP exposes existing compiler bugs that CLI users hadn't hit (LSP runs check on every keystroke; bugs surface that batch builds skipped) | High | Low | Acknowledged risk per roadmap. Bugs surfaced get triaged: if M2 phase work can fix in <50 lines, fix in M2; otherwise add to `.claude/todos.md` "Soon" section. Roadmap budgets M5 for this. |
 | Integration tests for LSP require spawning subprocesses; flaky on CI under load | Medium | Low | Two-tier test harness: pure-Rust in-process tests against the LSP service struct directly (fast, no fork) AND a smaller end-to-end stdio test that proves wire format works (one test per major request type, marked `#[ignore]`-able if CI gets flaky). Phase 8 covers the harness design. |
 | Cargo.toml workspace bump to `0.2.0-m2` collides with mid-flight uncommitted work in other branches | Low | Low | Phase 9 (verification + tag) is intentionally the LAST phase; the bump happens after all other phases merge to main. No parallel work expected during M2 — Patrick is solo dev. |
-| Self-hosting transition (v2+) — `ynz-lsp` and `tooling/vscode-ynz` would need re-implementation in Yinz | Low (timing) | Low | Same status as `ynz-registry` build.rs: documented in `design/lsp.md` "Self-hosting migration plan" subsection. TOML parsing already required for `yinz.toml` (per `design/packages.md`); JSON-RPC parsing is a stdlib `v0.9 json` module concern. No M2 work needed. |
+| Self-hosting transition (v2+) — `ynz-lsp` and `tooling/vscode-ynz` would need re-implementation in Yinz | Low (timing) | Low | Same status as `ynz-registry` build.rs: documented in `design/lsp.md` "Self-hosting migration plan" subsection. TOML parsing already required for `yinz.toml` (per `design/packages.md`); JSON-RPC parsing is a stdlib `v0.8 json` module concern. No M2 work needed. |
 | Patrick burns out on marketplace publishing dance and stalls the milestone | Low | Medium | Explicit Phase 7 fork: if marketplace setup blocks for >30min of cumulative friction, abort to `.vsix` fallback. Marketplace publish becomes a follow-up issue, NOT a v0.2-M2 gate. Acceptance criterion for Phase 7 PASSES on `.vsix` ship; marketplace publish is a stretch goal. |
 
 ## Questions
@@ -777,7 +777,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 **Objective**: Patrick can clone the repo, build the LSP, install the extension locally via `code --install-extension`, and edit `.ynz` files in VSCode with syntax highlighting + LSP features wired in.
 
-**Why this phase exists**: Until an extension exists, the LSP has no client; the M2 deliverables are invisible. Without registry-derived grammar, adding a keyword in v0.5+ would require manual edits to the grammar file. The two are bundled because they're tightly coupled — the extension references the grammar artifact, and an isolated grammar PR would have nothing using it.
+**Why this phase exists**: Until an extension exists, the LSP has no client; the M2 deliverables are invisible. Without registry-derived grammar, adding a keyword in any later version would require manual edits to the grammar file. The two are bundled because they're tightly coupled — the extension references the grammar artifact, and an isolated grammar PR would have nothing using it.
 
 **Current-state anchors**:
 - `crates/ynz-registry/src/lib.rs` `keywords()` adapter

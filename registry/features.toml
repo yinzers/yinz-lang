@@ -1062,12 +1062,12 @@ ships_in = "v2+"
 design_doc = "design/mvp-scope.md"
 triggers = "Writing `u64` as a type annotation in Yinz source"
 
-# --- `test` keyword (reserved for v0.14 built-in testing) ---
+# --- `test` keyword (reserved for v0.13 built-in testing) ---
 [[deferred_language_feature]]
 name = "test"
-substitute = "Use a different identifier. The built-in test framework ships in v0.14 and will use `test` as a keyword."
-why = "`test` is reserved for the built-in test framework shipping in v0.14. Pre-reserving it now means your existing code will not break when v0.14 ships."
-ships_in = "v0.14"
+substitute = "Use a different identifier. The built-in test framework ships in v0.13 and will use `test` as a keyword."
+why = "`test` is reserved for the built-in test framework shipping in v0.13. Pre-reserving it now means your existing code will not break when v0.13 ships."
+ships_in = "v0.13"
 design_doc = "design/mvp-scope.md"
 triggers = "Using `test` as an identifier in Yinz source"
 
@@ -1133,15 +1133,35 @@ triggers = "No user-facing trigger — binary format is a compiler-internal conc
 # --- `--release` flag (design/future/release-mode.md) ---
 [[deferred_tooling_feature]]
 name = "--release"
-substitute = "All builds are currently debug builds (unoptimized, full debug info). Release builds ship in v0.4 or v0.5."
+substitute = "All builds are currently debug builds (unoptimized, full debug info). Release builds ship in v0.4 (or a later perf-focused slot)."
 why = "The `--release` flag enables LLVM optimization passes, strips debug info, and hardens panic/overflow behavior. Dev builds are the default; release builds are opt-in for production deployments."
 ships_in = "v0.4"
 design_doc = "design/future/release-mode.md"
 triggers = "Passing `--release` to `ynz build` (flag not yet recognized)"
 
+# --- v0.2-M4 watch daemon deferred features ---
+
+# Interactive commands (press 'r' to rebuild, 'q' to quit, etc.) — deferred from M4.
+[[deferred_tooling_feature]]
+name = "ynz-watch-interactive-commands"
+substitute = "ynz watch v0.2-M4 ships a non-interactive loop only. Keyboard commands (r = rebuild, q = quit, p = pause) are deferred to v0.3+."
+why = "Interactive commands require a raw-mode terminal event loop alongside the file-event loop. The architecture is compatible (both would live in event_loop.rs) but the UX design for which keys do what needs more user feedback from the non-interactive version first."
+ships_in = "v0.3+"
+design_doc = "design/watch.md"
+triggers = "No user-facing trigger in v0.2-M4 — non-interactive loop only"
+
+# Config file — explicitly rejected by Yinz zero-config ethos.
+[[deferred_tooling_feature]]
+name = "ynz-watch-config-file"
+substitute = "Use env vars for watch tuning (YNZ_WATCH_DEBOUNCE_MS, YNZ_WATCH_MAX_RSS_MB, etc.). No .ynzwatch.toml config file exists or will be added."
+why = "EXPLICIT REJECTION (not a deferral). A per-watch config file would add discovery logic, schema versioning, and documentation overhead for parameters most users never touch. Yinz's zero-config ethos means env vars only. If overwhelming user demand emerges, this decision can be revisited with a concrete use case."
+ships_in = "never — explicit rejection"
+design_doc = "design/watch.md"
+triggers = "N/A — this feature is explicitly rejected, not deferred"
+
 # ---------------------------------------------------------------------------
 # [[deferred_stdlib_api]] — RESERVED, zero entries in M1.
-# Each v0.6+ stdlib milestone populates its own entries.
+# Each v0.5+ stdlib milestone populates its own entries.
 # Required fields (when populated): module, method, ships_in, design_doc
 # ---------------------------------------------------------------------------
 
@@ -1212,6 +1232,38 @@ kind_name = "BannedKeyword"
 what_template = "`{keyword}` is not a Yinz keyword."
 what_instead_template = "{what_instead}"
 why_template = "{why}"
+
+# --- v0.2-M4 watch diagnostic templates ---
+
+[[diagnostic_template]]
+kind_name = "WatchNoYinzToml"
+what_template = "`ynz watch` in project mode requires a `yinz.toml` at `{root}`."
+what_instead_template = "Pass a single `.ynz` file instead (`ynz watch foo.ynz`), or create a `yinz.toml` project file at the directory root."
+why_template = "Project mode discovers which `.ynz` files to watch by reading `yinz.toml`. Without it, the project boundary is undefined."
+
+[[diagnostic_template]]
+kind_name = "WatchChildSpawnFailed"
+what_template = "The compiled binary `{binary}` could not be executed."
+what_instead_template = "Check that the temp directory (`$TMPDIR`) has free space and execute permissions. Run `ls -la $TMPDIR` to verify."
+why_template = "{reason}. The build succeeded but the resulting binary could not be started as a child process."
+
+[[diagnostic_template]]
+kind_name = "WatchFsWatcherInitFailed"
+what_template = "`ynz watch` could not subscribe to `{path}`."
+what_instead_template = "Check that the path exists and is readable. Run `ls {path}` to verify."
+why_template = "{reason}. The file system watcher must be able to read the target path to deliver change events."
+
+[[diagnostic_template]]
+kind_name = "WatchRssHardStop"
+what_template = "ynz watch hit {rss_mb}MB memory; this is the safety stop (ceiling: {threshold_mb}MB)."
+what_instead_template = "Run `ynz watch {args}` to restart. If this happens frequently, set `YNZ_WATCH_REBUILD_AFTER=200` (default 500) to rebuild the compiler state more often."
+why_template = "The watch daemon accumulates salsa cache over time. The periodic DB rebuild (every 500 rebuilds by default) normally keeps memory bounded, but long sessions with large projects may exceed the ceiling. Lowering `YNZ_WATCH_REBUILD_AFTER` releases cache more frequently."
+
+[[diagnostic_template]]
+kind_name = "WatchMemoryPollingUnavailable"
+what_template = "ynz watch: memory polling is unavailable on this platform."
+what_instead_template = "The memory hard-stop safety net (`YNZ_WATCH_MAX_RSS_MB`) is disabled for this session. Watch will continue running."
+why_template = "The `memory-stats` crate could not read process RSS on this platform (rare — typically affects chroot environments without /proc). Without RSS polling, the Layer 3 hard-stop cannot fire. Layers 1 (LRU caps) and 2 (periodic DB rebuild) remain active."
 
 # ---------------------------------------------------------------------------
 # [[muted_hint_domain]] — IDE inference domains per .claude/rules/inference.md.

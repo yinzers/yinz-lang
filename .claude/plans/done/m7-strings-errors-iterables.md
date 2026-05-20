@@ -36,7 +36,7 @@ Status: done
 - `FallibleIterable<T>` needs the `errors` keyword to express `next() -> maybe T errors`.
 - New string methods like `.toInt()` (M6 closed `.toInt()` on strings) and the future `.replace(regex, fn)` need `maybe T` / `T errors` return types — strings and errors share the same vocabulary.
 - The for-loop generalization to `Iterable<T>` is the natural place to add string iteration (`for c in "café"`), which forces string codegen to mature past M1's `puts` skeleton.
-- File I/O (v0.6+) is the canonical motivator for `FallibleIterable<T>`; ship `errors` + iterables together so the v0.6 design doesn't require a re-plumbing pass.
+- File I/O (v0.5+) is the canonical motivator for `FallibleIterable<T>`; ship `errors` + iterables together so the v0.5 design doesn't require a re-plumbing pass.
 
 Splitting (e.g., "M7a strings, M7b errors+iterables") would force a transient state where strings can't express their fallible methods cleanly — net more work, not less.
 
@@ -131,7 +131,7 @@ These four decisions answer the four Pre-Draft questions confirmed in chat 2026-
 2. **String iteration default — code points or graphemes?** `for c in "café"` — does each `c` step a code point or a grapheme cluster? Recommendation: code points (matches `s.get(n)` default per `spec/strings.md`). Graphemes available via `s.graphemes()` returning `Iterable<string>`. Lock in P0.
 3. **`Frame.line` zero-based or one-based?** Both have precedent. Recommendation: one-based (matches editor / compiler error line numbering convention). Lock in P0.
 4. **Stack-trace truncation behavior — at 1024 frames** — silent truncation with sentinel frame, or panic?  Recommendation: silent truncation; the user can still see what's at the top + bottom of the stack which is what matters for debugging. The truncation point gets a sentinel `Frame { file: "<truncated at depth 1024>", line: -1, function: "<...>" }`.
-5. **`file.lines(path)` — ships as M7 stub or full v0.6 implementation?** Recommendation: ship a one-page minimal `file.lines()` implementation in M7 (just `BufReader::lines` wrapped to expose `next() -> maybe string errors`) so we have a real fallible iterable to test. Full v0.6 file system module supersedes it later with same surface.
+5. **`file.lines(path)` — ships as M7 stub or full v0.5 implementation?** Recommendation: ship a one-page minimal `file.lines()` implementation in M7 (just `BufReader::lines` wrapped to expose `next() -> maybe string errors`) so we have a real fallible iterable to test. Full v0.5 file system module supersedes it later with same surface.
 
 ### LOCKED 2026-05-18 — String syntax: unified backticks, one form
 
@@ -159,7 +159,7 @@ These four decisions answer the four Pre-Draft questions confirmed in chat 2026-
 - `` \` `` — literal backtick character
 - `\${` — literal `${` sequence (only needed when writing docs about Yinz interpolation syntax)
 - `\n`, `\t`, `\\`, `\r`, `\0` — standard control chars
-- NOT `\u{...}` — deferred to v0.6+ stdlib expansion
+- NOT `\u{...}` — deferred to v0.5+ stdlib expansion
 
 **Implementation impact on M7 phases**:
 - **P0 step 15 (escape rules)**: rewrites to the table above. Single-form lexer; `\`` and `\${` are the new entries vs M6's existing string-escape behavior.
@@ -295,7 +295,7 @@ Per `### Kernel-Mode Behavior` below + `design/future/no-runtime-mode.md`, every
 - **`MapIter<K, V>`** (renamed/clarified from M5's `MapEntry` iteration): depends on M5's `ynz_map_iter_*` symbols (no NEW).
 - **`FallibleIterable` adapters (`.orSkipFailures`, `.withErrors`, `.logSkippedFailuresTo`)**: implemented as wrapper shapes in stdlib; depend on `errors` runtime indirectly. `.orSkipFailures` and `.withErrors` are PURE (no new runtime symbol). `.logSkippedFailuresTo(sink)` calls `sink.write(message)` on each skip — `sink` is a `LogSink`-following shape (M7 ships `terminal.stderr` and `terminal.stdout` as the two M7 LogSink-followers).
 - **`terminal.stderr` / `terminal.stdout` (`LogSink`)**: NEW runtime symbols `ynz_terminal_stderr_write`, `ynz_terminal_stdout_write` (or one shared `ynz_log_write(fd, ...)`).
-- **`file.lines(path)` stub**: depends on libc `fopen`/`fread`/`fclose`. NEW symbol `ynz_file_open_for_lines`, `ynz_file_read_line`, `ynz_file_close`. Stub-quality only — v0.6 will replace.
+- **`file.lines(path)` stub**: depends on libc `fopen`/`fread`/`fclose`. NEW symbol `ynz_file_open_for_lines`, `ynz_file_read_line`, `ynz_file_close`. Stub-quality only — v0.5 will replace.
 
 ### Kernel-Mode Behavior
 
@@ -308,7 +308,7 @@ For each M7 runtime dependency above, the `--kernel` mode (v0.3+) behavior is lo
 - **String search SIMD**: same as UTF-8 validation — pure compute, works in kernel mode where SIMD is available.
 - **`errors` runtime**: `ynz_error_new` allocates the error struct. **COMPILE ERROR in `--kernel` mode** without a plug-in allocator. Trace frame stack is a thread-local — **WORKS in `--kernel`** if the kernel provides a thread-local storage mechanism. P0 documents what the kernel must provide.
 - **`ynz_frame_push` / `ynz_frame_pop`**: pure thread-local writes. **WORKS in `--kernel` mode**.
-- **`file.lines(path)` stub**: depends on libc file I/O. **COMPILE ERROR in `--kernel` mode** (file I/O not generally available in kernel modules; kernel-specific file APIs would be a v0.6+ FFI binding).
+- **`file.lines(path)` stub**: depends on libc file I/O. **COMPILE ERROR in `--kernel` mode** (file I/O not generally available in kernel modules; kernel-specific file APIs would be a v0.5+ FFI binding).
 - **`Iterable<T>` over heap-allocated collections**: same `--kernel` rules as the underlying collection (array/map = error unless plug-in alloc; fixed/range = always work).
 - **`unicode-segmentation` for grapheme access**: pure compute (no allocation in the call path we use). **Works in `--kernel` mode**.
 
@@ -347,14 +347,14 @@ Restated as the bottom-line guardrail:
 - Bignum `number<N>` for N > 34 — M8
 - IDE muted-hint surfaces — v0.2 LSP
 - Tier 3 lint suggestions — v0.4 lint tier
-- Full file system module (`file.read`, `file.write`, `file.exists`, etc.) — v0.6 (M7 ships only `file.lines` stub for FallibleIterable testing)
-- HTTP / network / database stdlib — v0.15+
-- Regex (`s.find(pattern)` style) — v0.14 (already locked to RE2-style per `.claude/rules/stdlib-design.md` Rule 7)
-- Locale-aware `.toLowerCaseLocale(locale)` — v0.6+ stdlib (M7 ships locale-invariant only)
-- `string.fromBytes(bytes)` constructor — v0.6+ (M7 strings only constructed from literal source bytes or runtime concat)
+- Full file system module (`file.read`, `file.write`, `file.exists`, etc.) — v0.5 (M7 ships only `file.lines` stub for FallibleIterable testing)
+- HTTP / network / database stdlib — v0.14+
+- Regex (`s.find(pattern)` style) — v0.13 (already locked to RE2-style per `.claude/rules/stdlib-design.md` Rule 7)
+- Locale-aware `.toLowerCaseLocale(locale)` — v0.5+ stdlib (M7 ships locale-invariant only)
+- `string.fromBytes(bytes)` constructor — v0.5+ (M7 strings only constructed from literal source bytes or runtime concat)
 - Stack-trace .toString() formatting customization — v0.2+ (M7 ships a default formatter)
 - `errors` propagation through closures — v0.3+ (closures don't exist in v0.1)
-- `errors` types other than the base shape (typed stdlib errors like `DatabaseError`) — v0.16+ (`design/stdlib/database.md` written against this; not in v0.1 scope)
+- `errors` types other than the base shape (typed stdlib errors like `DatabaseError`) — v0.15+ (`design/stdlib/database.md` written against this; not in v0.1 scope)
 - Async iteration / `wait` in iterators — v0.3+
 - libunwind / backtrace-crate integration — never (we use compile-time emitted frames)
 - Higher-kinded `Iterable<F<_>>` style abstractions — NEVER in v0.1
@@ -509,7 +509,7 @@ If you find yourself adding code that touches any item above, STOP and either re
    | `.toUpperCase()` / `.toLowerCase()` | **FALSE** — case folding produces NFD code points in many cases (Turkish-I, Greek, etc.) | Cannot assume NFC; force slow path |
    | `.toString()` on primitives (int → "42", bool → "true", etc.) | TRUE | ASCII only |
    | `.toString()` on user shape | UNKNOWN — set to FALSE conservatively unless shape declares a `nfc-known` annotation | Safest default; user can opt in |
-   | `string.fromBytes(bytes)` (v0.6+ — deferred) | FALSE always | Runtime byte input may not be normalized |
+   | `string.fromBytes(bytes)` (v0.5+ — deferred) | FALSE always | Runtime byte input may not be normalized |
    | `ynz_string_codepoint_at(s, n).value` (single code point) | FALSE | A single code point in isolation cannot be verified NFC without context; cheaper to assume false |
 
    `ynz_string_eq` fast path: both sides have `is_nfc_known = true` → byte-compare. Slow path: normalize-both-via-`unicode-normalization::nfc()`-then-byte-compare. Document the table in `design/strings.md`.
@@ -537,7 +537,7 @@ If you find yourself adding code that touches any item above, STOP and either re
     - User shapes write `function next(lend self: TheirShape) -> maybe T` (or `maybe T errors` for FallibleIterable).
     Document the contract-T resolution table in `design/iterables.md`.
 
-11. **Lock adapter logging semantics — `.orSkipFailures()` is PURE** (no I/O side effects). The previous draft had `.orSkipFailures()` log each skip to stderr; that violates `stdlib-design.md` Rule 1 (pure-named methods must be pure). REVISED: `.orSkipFailures()` silently drops failed iterations and continues. For users who want logging, ship a separate composable builder `.logSkippedFailuresTo(sink)` which takes a `LogSink` (initially just `terminal.stderr` and `terminal.stdout` in M7; expandable in v0.6+ stdlib). The user composes them: `iter.logSkippedFailuresTo(terminal.stderr).orSkipFailures()`. Two methods, two explicit names, no hidden side effects. Lock the `LogSink` shape spec in P0:
+11. **Lock adapter logging semantics — `.orSkipFailures()` is PURE** (no I/O side effects). The previous draft had `.orSkipFailures()` log each skip to stderr; that violates `stdlib-design.md` Rule 1 (pure-named methods must be pure). REVISED: `.orSkipFailures()` silently drops failed iterations and continues. For users who want logging, ship a separate composable builder `.logSkippedFailuresTo(sink)` which takes a `LogSink` (initially just `terminal.stderr` and `terminal.stdout` in M7; expandable in v0.5+ stdlib). The user composes them: `iter.logSkippedFailuresTo(terminal.stderr).orSkipFailures()`. Two methods, two explicit names, no hidden side effects. Lock the `LogSink` shape spec in P0:
     ```
     shape LogSink {
         write(lend self, message: string) -> nothing
@@ -562,9 +562,9 @@ If you find yourself adding code that touches any item above, STOP and either re
 
 13. **Lock MapEntry destructuring forms**: `for (entry in m) { entry.key; entry.value }` (single-binding) AND `for ((k, v) in m) { ... }` (tuple-destructure). Both desugar identically at codegen. Document.
 
-14. **Lock string iteration default**: `for c in "café"` steps by CODE POINT (matches `s.get(n)` default). Document that grapheme iteration is opt-in via `.graphemes()` returning `Iterable<string>` (deferred to v0.6+ — for now, `.graphemeAt(n)` is the only grapheme access).
+14. **Lock string iteration default**: `for c in "café"` steps by CODE POINT (matches `s.get(n)` default). Document that grapheme iteration is opt-in via `.graphemes()` returning `Iterable<string>` (deferred to v0.5+ — for now, `.graphemeAt(n)` is the only grapheme access).
 
-15. **Lock multi-line string escape rules**: backtick-quoted strings interpret `\n`, `\t`, `\\`, `\``, `${`, but NOT `\u{...}` (deferred to v0.6+). Document.
+15. **Lock multi-line string escape rules**: backtick-quoted strings interpret `\n`, `\t`, `\\`, `\``, `${`, but NOT `\u{...}` (deferred to v0.5+). Document.
 
 16. **Lock interpolation expression evaluation semantics**: `` `${x}-${x}` `` evaluates `x` ONCE per occurrence in source (TWO evaluations for two `${x}`s). Repeated identical expressions are NOT memoized. This matches user-written `x.toString() + "-" + x.toString()` — two evaluations. If `x` has side effects, both fire. Document in `spec/strings.md` with a worked example.
 
@@ -1305,15 +1305,15 @@ If you find yourself adding code that touches any item above, STOP and either re
 - **Muted IDE hints for SSO inline, errors auto-prop point, iter `.items()` insertion**: deferred to v0.2 LSP per `inference.md`. M7 emits the data side-tables (SsoReport, AutoPropReport, IterWrapperReport salsa queries). Recorded.
 - **Tier 3 lint suggestions** for any M7 surface: deferred to v0.4 lint tier. Recorded.
 - **xxhash3 fast opt-in for `map<K, V>`**: still deferred from M5. Recorded.
-- **Full `file` stdlib module** (`file.read`, `file.write`, etc.): v0.6 supersedes M7's `file.lines` stub. The stub stays with same surface API; the implementation gets replaced. Recorded.
+- **Full `file` stdlib module** (`file.read`, `file.write`, etc.): v0.5 supersedes M7's `file.lines` stub. The stub stays with same surface API; the implementation gets replaced. Recorded.
 - **SIMD acceleration for grapheme iteration**: M7 uses `unicode-segmentation` scalar. SIMD grapheme detection (Daniel Lemire's published technique) is v0.2+ polish. Recorded.
-- **Locale-aware `.toLowerCaseLocale(locale)` / `.toUpperCaseLocale(locale)`**: v0.6+ stdlib expansion. M7 ships locale-invariant only. Recorded.
-- **Typed stdlib errors** (e.g., `DatabaseError`): the base error shape ships in M7; per-domain typed errors land with their respective stdlib modules (v0.15+ http; v0.16+ database; etc.). Recorded.
+- **Locale-aware `.toLowerCaseLocale(locale)` / `.toUpperCaseLocale(locale)`**: v0.5+ stdlib expansion. M7 ships locale-invariant only. Recorded.
+- **Typed stdlib errors** (e.g., `DatabaseError`): the base error shape ships in M7; per-domain typed errors land with their respective stdlib modules (v0.14+ http; v0.15+ database; etc.). Recorded.
 - **Stack-trace .toString() formatter customization**: v0.2+ — M7 ships a default formatter. Recorded.
 - **`unicode-normalization` NFC normalization perf**: if profiling shows NFC normalization dominates string-equality hot paths, consider SIMD-accelerated NFC (research target; no current implementation in stdlib). Recorded as v0.2+ revisit.
 - **Closure errors-propagation**: closures don't exist in v0.1. When they ship (v0.3+), they must NOT carry narrowing facts (per `design/narrowing.md` row for `maybe` closures). Same rule applies to errors-capable values. Recorded.
 - **Async iter / `wait` in iterators**: v0.3+ — M7 ships sequential FallibleIterable only. Recorded.
-- **Range improvements**: M7 ships Range as a minimal shape (`start, end, hidden current`). Adding `.contains(n)`, `.toArray()`, step parameters, etc. is v0.6+ collections-stdlib expansion. Recorded.
+- **Range improvements**: M7 ships Range as a minimal shape (`start, end, hidden current`). Adding `.contains(n)`, `.toArray()`, step parameters, etc. is v0.5+ collections-stdlib expansion. Recorded.
 
 ---
 
@@ -1321,7 +1321,7 @@ If you find yourself adding code that touches any item above, STOP and either re
 
 M8 (modules + imports + doc comments + sensitive + concurrency keyword parsing + bignum reservation) must pick up:
 
-- **`file.lines` stub → full v0.6 file module placeholder**: M7 ships a minimal `file.lines` implementation in `ynz-runtime`. M8 doesn't change this — the v0.6 file module supersedes. But M8's module system must support importing `file.lines` from the stdlib namespace. Surface in M8 plan.
+- **`file.lines` stub → full v0.5 file module placeholder**: M7 ships a minimal `file.lines` implementation in `ynz-runtime`. M8 doesn't change this — the v0.5 file module supersedes. But M8's module system must support importing `file.lines` from the stdlib namespace. Surface in M8 plan.
 - **`Iterable<T>` and `FallibleIterable<T>` contract shapes in stdlib namespace**: M7 makes them built-in. M8's module system handles them as built-ins (no `import` needed). Verify in M8.
 - **`Range` shape in stdlib namespace**: same — built-in, no import. Verify in M8.
 - **Error trace formatting in user-facing CLI errors** (e.g., `ynz run myprogram.ynz` when the program errors out): M7 ships the trace; M8's CLI doesn't change the format but verifies the surface. M8 plan should sanity-check this.

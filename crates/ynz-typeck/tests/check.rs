@@ -275,7 +275,7 @@ fn number_plus_float_is_type_error_with_both_options() {
 #[test]
 fn percent_on_number_produces_specific_error() {
     // WHY: `number % number` emits a special error pointing at the `math` module
-    // in v0.7, not just "type mismatch". If the message is generic, the developer
+    // in v0.6, not just "type mismatch". If the message is generic, the developer
     // doesn't know that `.rem()` is the right approach.
     let output = assert_errors(
         "function entrypoint() -> nothing { let a = 0.1\nlet b = 0.2\nlet c = a % b }",

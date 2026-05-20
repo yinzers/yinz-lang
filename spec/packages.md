@@ -7,11 +7,11 @@ Add, remove, and update dependencies with `ynz` commands.
 ## Commands
 
 ```
-ynz add http-server                  // install a package
+ynz add markdown-parser                  // install a package
 ynz add graphics@1.2.0               // install a specific version
-ynz remove http-server               // uninstall
+ynz remove markdown-parser               // uninstall
 ynz update                           // update all to latest compatible
-ynz update http-server               // update one package
+ynz update markdown-parser               // update one package
 ynz publish                          // publish your package to the registry
 ```
 
@@ -21,7 +21,7 @@ ynz publish                          // publish your package to the registry
 
 ```toml
 [dependencies]
-http-server = "1.2.0"
+markdown-parser = "1.2.0"
 graphics = "0.9.0"
 
 [dev-dependencies]
@@ -53,7 +53,7 @@ version = 1
 # from each package's "dependencies" list when ynz install runs.
 
 [[package]]
-name = "http-client"
+name = "redis-driver"
 version = "2.4.0"
 source = "registry+https://yinz.pkg/v1"
 checksum = "sha256:abc123def456..."
@@ -93,7 +93,7 @@ dependencies = []
 
 **Diamond dependencies (same package, two versions):**
 
-If `http-client` needs `json 1.0.3` and `markdown-parser` needs `json 2.0.0`, both versions show up in the lock file. The `name version` reference disambiguates which one each parent uses. The compiler keeps them separately linked so they don't interfere.
+If `redis-driver` needs `json 1.0.3` and `markdown-parser` needs `json 2.0.0`, both versions show up in the lock file. The `name version` reference disambiguates which one each parent uses. The compiler keeps them separately linked so they don't interfere.
 
 ---
 

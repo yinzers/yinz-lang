@@ -2059,16 +2059,16 @@ fn m8_pub_banned_keyword_produces_diagnostic() {
 
 #[test]
 fn test_keyword_reserved_for_v014() {
-    // WHY: `test` is reserved in v0.1 for the v0.14 built-in test framework.
+    // WHY: `test` is reserved in v0.1 for the v0.13 built-in test framework.
     //      Without this check, users who name a function or shape `test`
-    //      will have working code that suddenly breaks when v0.14 ships.
+    //      will have working code that suddenly breaks when v0.13 ships.
     //      The reservation gives them a clear message now rather than a
     //      surprise incompatibility later.
     let (toks, diags) = lex_with_diags("function test() -> nothing {}");
     assert_eq!(diags.len(), 1, "One diagnostic expected for `test`");
     assert!(
-        diags[0].what.contains("`test`") || diags[0].what_instead.contains("v0.14"),
-        "Diagnostic must mention `test` or redirect to v0.14, got: {:?}",
+        diags[0].what.contains("`test`") || diags[0].what_instead.contains("v0.13"),
+        "Diagnostic must mention `test` or redirect to v0.13, got: {:?}",
         diags[0]
     );
     assert!(

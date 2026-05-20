@@ -398,13 +398,13 @@ Here `.raw` is the call surface; `sql\`...\`` is how the string is passed so the
 - Is `.raw` the right name? Candidates: `.sql`, `.execute`, `.exec`. `.raw` is short but doesn't convey "this returns typed rows."
 - If plain strings are also accepted (no `sql\`...\`` tag), is that a parallel-API violation per `stdlib-design.md` Rule 2? Likely yes — pick one form.
 
-The syntax decision belongs in the v0.11 execution plan's research phase. Whatever is chosen must be a single canonical form.
+The syntax decision belongs in the v0.10 execution plan's research phase. Whatever is chosen must be a single canonical form.
 
-**IDE coloring (ships with v0.11)**:
+**IDE coloring (ships with v0.10)**:
 
-The VSCode extension and LSP must provide SQL syntax coloring inside the embedded SQL construct. The LSP delivers this via embedded language injection — the same technique editors use for CSS-in-JS. The SQL content gets a SQL TextMate grammar scope injected at the boundaries of the construct. This is a v0.11 LSP feature.
+The VSCode extension and LSP must provide SQL syntax coloring inside the embedded SQL construct. The LSP delivers this via embedded language injection — the same technique editors use for CSS-in-JS. The SQL content gets a SQL TextMate grammar scope injected at the boundaries of the construct. This is a v0.10 LSP feature.
 
-**Formatter behavior (ships with v0.11)**:
+**Formatter behavior (ships with v0.10)**:
 
 `ynz fmt` formats SQL inside the embedded construct following standard SQL indentation conventions. Specific requirement from Patrick:
 

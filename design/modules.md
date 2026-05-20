@@ -102,7 +102,7 @@ import { Player } from "external/legacy"
 //     import { Player as LegacyPlayer } from "external/legacy"
 ```
 
-Same rule applies to namespace imports (`import http from "..."` collisions) and to local-vs-stdlib name collisions (a local module named `math` colliding with `stdlib/math`).
+Same rule applies to namespace imports (`import request from "..."` collisions) and to local-vs-stdlib name collisions (a local module named `math` colliding with `stdlib/math`).
 
 **Why**: Silent picking is a TypeScript / JavaScript footgun — last-import-wins semantics cause subtle bugs when refactors reorder imports. Forcing the user to disambiguate makes the code's intent explicit and refactor-safe. Same principle as `maybe`: if there's ambiguity, the compiler refuses to guess.
 

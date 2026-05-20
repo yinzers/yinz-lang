@@ -19,8 +19,8 @@ function entrypoint() -> nothing {
 ```
 function entrypoint() -> nothing errors {
   let config = file.read(`config.ynz`)
-  let server = http.serve(3000)
-  server.start()
+  server.route(`GET`, `/`, indexHandler)
+  server.listen(3000)
 }
 ```
 
@@ -42,7 +42,7 @@ The function is always called `entrypoint`. The file name is flexible — `app.y
 
 ## Command-line arguments
 
-> **Status**: This section uses the `cli` module, which ships in **v0.8**. In v0.1, command-line arguments are not yet available via the standard library.
+> **Status**: This section uses the `cli` module, which ships in **v0.7**. In v0.1, command-line arguments are not yet available via the standard library.
 
 Arguments come from the standard library, not from `entrypoint`'s parameters:
 
@@ -60,7 +60,7 @@ See [Tooling](tooling.md) for the full CLI spec.
 
 ## Exit codes
 
-> **Status**: This section uses the `process` module, which ships in **v0.8**. In v0.1, exit codes are not yet available via the standard library.
+> **Status**: This section uses the `process` module, which ships in **v0.7**. In v0.1, exit codes are not yet available via the standard library.
 
 ```
 function entrypoint() -> nothing {

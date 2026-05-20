@@ -170,7 +170,7 @@ for c in "café" {
 }
 ```
 
-Uses `StringCodePointIter` wrapper shape. Default = code points. For grapheme iteration, use `.graphemes()` — deferred to v0.6+.
+Uses `StringCodePointIter` wrapper shape. Default = code points. For grapheme iteration, use `.graphemes()` — deferred to v0.5+.
 
 ---
 

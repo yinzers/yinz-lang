@@ -84,7 +84,7 @@ This file compiles, runs, and prints exactly `0.3\n1763\ntrue\n` on both Linux a
 ## Architectural decisions locked at M2 planning
 
 - **Two runtime crates: `ynz-numerics` (pure Rust, internal-use decimal128) + `ynz-runtime` (umbrella, C-ABI, `staticlib` target).** Single-crate dual-output was rejected — the shim layer is real work, not a cargo flag.
-- **Decimal128 in M2 = IEEE 754 decimal128 core operations only.** Add, subtract, multiply, divide, negate, abs, compare. No sqrt, ln, exp, sin, fma, rem. No `%` on `number` (compile error pointing at v0.7 `math` module). Integer `%` and float `%` work (LLVM `srem` / `frem`).
+- **Decimal128 in M2 = IEEE 754 decimal128 core operations only.** Add, subtract, multiply, divide, negate, abs, compare. No sqrt, ln, exp, sin, fma, rem. No `%` on `number` (compile error pointing at v0.6 `math` module). Integer `%` and float `%` work (LLVM `srem` / `frem`).
 - **Codegen calls into runtime via plain C-ABI extern fns.** `extern "C" ynz_decimal_add(*const Decimal128Bits, *const Decimal128Bits, *mut Decimal128Bits)`. `Decimal128Bits` is `[u8; 16]`.
 - **Integer overflow check codegen = LLVM checked-arithmetic intrinsics.** `llvm.sadd.with.overflow.i64`, `llvm.ssub.with.overflow.i64`, `llvm.smul.with.overflow.i64`. Each op produces `{i64, i1}`; the `i1` flag branches to a runtime panic stub on true.
 - **Decimal-by-zero, int-by-zero**: runtime panic. **Float-by-zero**: returns IEEE infinity per binary64 spec.
@@ -147,7 +147,7 @@ This file compiles, runs, and prints exactly `0.3\n1763\ntrue\n` on both Linux a
 **PR scope**: Extend `ynz-ast::nodes` with `Stmt::Let`, `Stmt::Assign`, `Expr::IntLit`/`NumberLit`/`BoolLit`/`BinOp`/`UnaryOp`/`MethodCall`. Add `Type::Int`/`Float`/`Number`/`Bool`. Implement Pratt-style precedence climbing per `spec/operators.md`.
 **Branch**: `feat/m2-parser`
 **Est. lines**: ~700
-**Status**: COMPLETE (2026-05-12) — commit 6cee795 on main. 30 parse tests green. Key decisions: Pratt BP table encoded as `infix_bp()` (pub for spec-parity test); `is_stmt_boundary()` recovery avoids consuming `}` / keywords as atoms; `parse_method_call` handles `receiver.method(args)`; `number[N]` deferral diagnostic for N != 34 points at v0.8; `parser_precedence_table_matches_spec` test reads spec at runtime and asserts BP/level alignment.
+**Status**: COMPLETE (2026-05-12) — commit 6cee795 on main. 30 parse tests green. Key decisions: Pratt BP table encoded as `infix_bp()` (pub for spec-parity test); `is_stmt_boundary()` recovery avoids consuming `}` / keywords as atoms; `parse_method_call` handles `receiver.method(args)`; `number[N]` deferral diagnostic for N != 34 points at v0.7; `parser_precedence_table_matches_spec` test reads spec at runtime and asserts BP/level alignment.
 
 **Precedence-climbing strategy**: Pratt-style. Each token has a left binding power; parser recursively gathers operands while next operator's left BP exceeds the current minimum. Unary operators right-associative prefix at BP 12; method-call `.` and call-parens `(...)` left-associative postfix at BP 13.
 
@@ -176,7 +176,7 @@ This file compiles, runs, and prints exactly `0.3\n1763\ntrue\n` on both Linux a
 | `+ - * /` | `number, number` | `number` | IEEE decimal128 via runtime |
 | `%` | `int, int` | `int` | truncating; LLVM `srem` |
 | `%` | `float, float` | `float` | LLVM `frem` |
-| `%` | `number, number` | **compile error** | pointing at v0.7 `math` module |
+| `%` | `number, number` | **compile error** | pointing at v0.6 `math` module |
 | `< <= > >= == !=` | `T, T` (same numeric T) | `bool` | |
 | `&& ||` | `bool, bool` | `bool` | short-circuit |
 | `& | ^` | `int, int` | `int` | |

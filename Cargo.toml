@@ -13,6 +13,7 @@ members = [
     "crates/ynz-lsp",
     "crates/ynz-tmgrammar",
     "crates/ynz-fmt",
+    "crates/ynz-watch",
 ]
 
 [workspace.package]
@@ -35,6 +36,16 @@ tempfile = "3.14.0"
 assert_cmd = "2"
 predicates = "3"
 
+# Watch daemon deps (locked versions — notify 9.0.0-rc.* rejected, still rc)
+notify              = "8"
+notify-debouncer-mini = "0.7"
+memory-stats        = "1.2"
+nix                 = { version = "0.31", features = ["signal", "process"] }
+ctrlc               = "3"
+chrono              = { version = "0.4", features = ["serde"] }
+serde               = { version = "1", features = ["derive"] }
+serde_json          = "1"
+
 # Cross-crate workspace deps
 ynz-registry    = { path = "crates/ynz-registry" }
 ynz-diagnostics = { path = "crates/ynz-diagnostics" }
@@ -44,3 +55,4 @@ ynz-typeck       = { path = "crates/ynz-typeck" }
 ynz-codegen      = { path = "crates/ynz-codegen" }
 ynz-numerics     = { path = "crates/ynz-numerics" }
 ynz-fmt          = { path = "crates/ynz-fmt" }
+ynz-watch        = { path = "crates/ynz-watch" }

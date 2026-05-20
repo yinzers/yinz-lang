@@ -690,11 +690,11 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 ### Architectural decisions locked at M2 planning
 
 - **Two runtime crates: `ynz-numerics` (pure Rust, internal-use decimal128) + `ynz-runtime` (umbrella, C-ABI, `staticlib` target).** `ynz-numerics` is a normal Rust dep usable by the compiler (constant folding, test conformance). `ynz-runtime` re-exports it via `#[no_mangle] extern "C"` shims and builds to `libynz_rt.a`. Generated binaries link against `libynz_rt.a`; the compiler uses `ynz-numerics` directly. **Why two crates, not one with dual `crate-type = ["staticlib", "rlib"]`:** the C-ABI shim layer needs panic-handler glue and (eventually) heap-allocator glue that has no place in the pure decimal implementation. Splitting keeps `ynz-numerics` test-pure and lets `ynz-runtime` grow without polluting it. Single-crate dual-output was rejected as duct-tape framing — the shim layer is real work, not a cargo flag.
-- **Decimal128 in M2 = IEEE 754 decimal128 core operations only.** Add, subtract, multiply, divide, negate, abs, compare. Quantize / rescale / round (used internally for arithmetic) are implementation details, not user surface. **No** sqrt, ln, exp, sin, fma, rem — these belong in the `math` module (v0.7). **No** `%` modulo on `number` — `number % number` is a compile error in M2 pointing at "the math module will provide `.rem()` in v0.7." Integer `%` and float `%` work normally (LLVM `srem` / `frem`).
+- **Decimal128 in M2 = IEEE 754 decimal128 core operations only.** Add, subtract, multiply, divide, negate, abs, compare. Quantize / rescale / round (used internally for arithmetic) are implementation details, not user surface. **No** sqrt, ln, exp, sin, fma, rem — these belong in the `math` module (v0.6). **No** `%` modulo on `number` — `number % number` is a compile error in M2 pointing at "the math module will provide `.rem()` in v0.6." Integer `%` and float `%` work normally (LLVM `srem` / `frem`).
 - **Codegen calls into runtime via plain C-ABI extern fns.** `extern "C" ynz_decimal_add(*const Decimal128Bits, *const Decimal128Bits, *mut Decimal128Bits)` — pass-by-pointer to avoid LLVM struct-ABI traps. `Decimal128Bits` is `[u8; 16]` (16 bytes = 128 bits) at the ABI boundary; Rust side decodes to its internal representation. This matches the IEEE 754 decimal128 storage format (BID — binary integer significand) so the bits CAN round-trip through the runtime without conversion.
 - **Integer overflow check codegen = LLVM checked-arithmetic intrinsics.** `llvm.sadd.with.overflow.i64`, `llvm.ssub.with.overflow.i64`, `llvm.smul.with.overflow.i64`. Each op produces `{i64, i1}`; the `i1` flag branches to a runtime panic stub on true. No escape valve in M2 (per the deferral above) — every `int` arithmetic op gets the check. Performance hit on the overflow check path is acceptable for v0.1; LLVM's instcombine collapses the check on constant operands.
 - **Decimal-by-zero, int-by-zero**: runtime panic (three-part, source-spanned, "use `if (denom != 0)` to guard division" suggestion). **Float-by-zero**: returns IEEE infinity per binary64 spec (no panic — this is correct IEEE behavior and `float` users opt into it).
-- **Operator `%` (modulo)**: M2 ships `%` for `int` (LLVM `srem`) and `float` (LLVM `frem`, returns NaN on zero divisor per IEEE). `number % number` is a compile error pointing at v0.7 `math` module. **Spec update required**: add `%` to `spec/operators.md` arithmetic list — currently missing.
+- **Operator `%` (modulo)**: M2 ships `%` for `int` (LLVM `srem`) and `float` (LLVM `frem`, returns NaN on zero divisor per IEEE). `number % number` is a compile error pointing at v0.6 `math` module. **Spec update required**: add `%` to `spec/operators.md` arithmetic list — currently missing.
 - **Number literal forms**: M2 lexer accepts decimal (`42`, `3.14`, `1e5`, `2.5e-3`), hex integer (`0x2A`), binary integer (`0b1010`), and underscores for readability (`1_000_000`, `0xDEAD_BEEF`). **No** octal — too rarely useful, the form is a footgun (leading-zero ambiguity). Fractional hex/binary not supported.
 - **Integer division**: truncates toward zero (matches LLVM `sdiv`, Rust, C, Go). `5 / 2 == 2`, `-5 / 2 == -2`. No surprise.
 - **Mixed-precision `number[N]` arithmetic in M2**: not yet applicable since N is locked to 34. The promotion/narrowing logic is M8's problem. M2's typeck rejects `number[N]` for `N != 34` at parse-binding time with the deferral diagnostic.
@@ -712,7 +712,7 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
   - `env!("CARGO_MANIFEST_DIR")` + relative path rejected: ties path resolution to the source tree, breaks for installed binaries.
   - `cargo:rustc-env` is the documented mechanism for build-script → compiler-env data flow. Standard Rust pattern. Survives `cargo install` (the env var becomes baked into the binary at install time — which is correct, the install target dir is where `libynz_rt.a` ended up).
   - `cargo:rerun-if-changed=build.rs` line included so build.rs doesn't re-run on every build.
-  - Fallback for `ynz install`-style installs (not in v0.1; documented for later): when the driver can't find `libynz_rt.a` at the baked-in path, emit a three-part diagnostic. This is a v0.5 (package manager) concern; M2 just bakes the workspace path.
+  - Fallback for `ynz install`-style installs (not in v0.1; documented for later): when the driver can't find `libynz_rt.a` at the baked-in path, emit a three-part diagnostic. This is a v0.22 (package manager) concern; M2 just bakes the workspace path.
 
 ---
 
@@ -870,7 +870,7 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 **Branch**: `feat/m2-parser`
 **Flag**: N/A
 **Est. lines**: ~700
-**Status**: COMPLETE (2026-05-12) — commit 6cee795 on main. 30 parse tests green, full workspace 0 failures. Key decisions: Pratt BP table encoded as infix_bp() (pub for spec-parity test); `is_stmt_boundary()` recovery avoids consuming `}` / keywords as atoms; `parse_call` updated for comma-separated multi-arg; `parse_method_call` handles receiver.method(args); `number[N]` deferral diagnostic for N != 34 points at v0.8; `spec/operators.md` precedence table updated to include `%` at level 3; `parser_precedence_table_matches_spec` test reads spec at runtime and asserts BP/level alignment; typeck gets minimal stubs (M2 Expr/Stmt/Type arms → Type::Error) so M1 tests stay green.
+**Status**: COMPLETE (2026-05-12) — commit 6cee795 on main. 30 parse tests green, full workspace 0 failures. Key decisions: Pratt BP table encoded as infix_bp() (pub for spec-parity test); `is_stmt_boundary()` recovery avoids consuming `}` / keywords as atoms; `parse_call` updated for comma-separated multi-arg; `parse_method_call` handles receiver.method(args); `number[N]` deferral diagnostic for N != 34 points at v0.7; `spec/operators.md` precedence table updated to include `%` at level 3; `parser_precedence_table_matches_spec` test reads spec at runtime and asserts BP/level alignment; typeck gets minimal stubs (M2 Expr/Stmt/Type arms → Type::Error) so M1 tests stay green.
 **Objective**: M2 source parses to the snapshot AST with zero diagnostics. Malformed expressions (`let x = 1 +`, `let : int = 5`, `let x: int = 1.5`, `let x = }`, `print(1, 2, 3)`) produce three-part diagnostics; parser recovers per the strategy from M1 P4.
 
 **Current-state anchors**:
@@ -975,7 +975,7 @@ Two inconsistencies discovered during M2 planning. Both must be fixed in the sam
 | `+ - * /` | `number, number` | `number` | IEEE decimal128 via runtime |
 | `%` | `int, int` | `int` | truncating; LLVM `srem` |
 | `%` | `float, float` | `float` | LLVM `frem` (NaN on zero) |
-| `%` | `number, number` | **compile error** | pointing at v0.7 `math` module |
+| `%` | `number, number` | **compile error** | pointing at v0.6 `math` module |
 | `< <= > >= == !=` | `T, T` (same numeric T) | `bool` | |
 | `== !=` | `bool, bool` | `bool` | |
 | `== !=` | `string, string` | `bool` | byte-equality in M2 (Unicode-aware comparison is M7) |
@@ -1358,7 +1358,7 @@ Each section is a final guardrail against scope creep — explicit redundancy wi
 - Iterables — M7
 - Modules — M8
 - `ynz watch`, `ynz fmt`, LSP — v0.2 (separate plan)
-- `ynz test`, the test runner — v0.13 (separate plan)
+- `ynz test`, the test runner — v0.12 (separate plan)
 
 If you find yourself adding code that touches any item above, STOP and either re-plan this milestone or escalate the work to its proper milestone.
 
@@ -1415,6 +1415,6 @@ decisions made under time pressure from compounding into retroactive rewrites.
    `examples/basics/src/main.ynz` and `examples/errors/m1_errors.ynz`,
    `m2_errors.ynz`, `m3_errors.ynz` — M5/M6/M7/M8 plans must continue the
    incremental additions. The basics project covers EVERY v0.1 language feature
-   (M1–M8) in one growing demo; stdlib modules (v0.6+) get their own per-module
+   (M1–M8) in one growing demo; stdlib modules (v0.5+) get their own per-module
    example projects. Cross-references: project `CLAUDE.md` "When Working on This
    Project" + `.claude/rules/plan-invariants.md` `### Demo & Error Gallery`.

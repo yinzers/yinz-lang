@@ -2,6 +2,7 @@ mod build;
 mod fmt;
 mod load;
 mod run;
+mod watch;
 
 use std::{path::PathBuf, process};
 
@@ -121,6 +122,47 @@ enum Command {
         #[arg(long, conflicts_with = "all", conflicts_with = "file")]
         stdin: bool,
     },
+    /// Watch a Yinz source file or project for changes and rebuild on every save.
+    ///
+    /// Modes:
+    ///
+    ///   Single file: `ynz watch foo.ynz` — watches `foo.ynz`; rebuilds + re-runs on save.
+    ///
+    ///   Project: `ynz watch .` or `ynz watch ./path/` — reads `yinz.toml` at the root;
+    ///   watches all `.ynz` files; rebuilds + re-runs on any save.
+    ///
+    /// Flags:
+    ///
+    ///   `--check`    — build only; do not execute the program after a successful build.
+    ///                  Exit code 1 on first-build compile failure (useful for CI).
+    ///
+    ///   `--json`     — emit a structured NDJSON event stream on stdout instead of
+    ///                  normal status lines. One JSON object per line. See `design/watch.md`
+    ///                  for the full event schema.
+    ///
+    ///   `--no-clear` — do not clear the terminal between rebuild cycles. Useful when
+    ///                  watching CI logs or debugging the watcher itself.
+    ///
+    /// Tuning (via environment variables, documented in `design/watch.md`):
+    ///   YNZ_WATCH_DEBOUNCE_MS, YNZ_WATCH_REBUILD_AFTER, YNZ_WATCH_MAX_RSS_MB, etc.
+    ///
+    /// Exit codes:
+    ///   0 — clean exit (Ctrl+C or pipe closed)
+    ///   1 — first-build compile failure with --check
+    ///   2 — infrastructure error (can't start watcher, no yinz.toml, memory hard-stop)
+    Watch {
+        /// Source file or project root directory to watch (defaults to current directory).
+        file: Option<PathBuf>,
+        /// Build only; do not execute the compiled program.
+        #[arg(long)]
+        check: bool,
+        /// Emit structured NDJSON event stream on stdout instead of normal status output.
+        #[arg(long)]
+        json: bool,
+        /// Do not clear the terminal between rebuild cycles.
+        #[arg(long)]
+        no_clear: bool,
+    },
 }
 
 fn main() {
@@ -194,6 +236,15 @@ fn main() {
             stdin,
         } => {
             let code = fmt::fmt(file.as_deref(), all, check, stdin);
+            process::exit(code);
+        }
+        Command::Watch {
+            file,
+            check,
+            json,
+            no_clear,
+        } => {
+            let code = watch::watch(file.as_deref(), check, json, no_clear);
             process::exit(code);
         }
     }

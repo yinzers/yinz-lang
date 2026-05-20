@@ -196,7 +196,7 @@ CI fails if a keyword is added to the registry without regenerating the grammar.
 `ynz-lsp` is currently written in Rust (the bootstrap compiler's language). It will eventually be rewritten in Yinz when the language reaches self-hosting (v2+).
 
 **Migration prerequisites:**
-- `json` stdlib module (v0.9) — needed for JSON-RPC message parsing
+- `json` stdlib module (v0.8) — needed for JSON-RPC message parsing
 - Network/stdio I/O primitives — needed for the stdio transport layer
 - Self-hosted `ynz-registry` — the TOML parser and codegen loop, currently in `build.rs`
 

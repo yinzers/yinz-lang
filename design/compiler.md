@@ -66,7 +66,7 @@ Yinz inherits Go's choice. "`ynz build` produces a binary that runs anywhere" is
 
 `musl libc` has known performance differences from `glibc` in some areas:
 - `musl`'s malloc is notably slower than `glibc`'s tcmalloc-derived allocator for multithreaded workloads. **Mitigated** by Yinz's per-request arena allocator (per `design/future/arena.md`) — most allocation paths in Yinz code don't use libc malloc directly.
-- DNS resolution has known limitations (musl doesn't support `/etc/nsswitch.conf` plugins, doesn't fall back to TCP for large responses on older versions). **Mitigated** by Yinz's network stdlib using its own resolver where appropriate (decision deferred to v0.16 http milestone).
+- DNS resolution has known limitations (musl doesn't support `/etc/nsswitch.conf` plugins, doesn't fall back to TCP for large responses on older versions). **Mitigated** by Yinz's network stdlib using its own resolver where appropriate (decision deferred to v0.15 `request` milestone).
 
 For workloads where these specific musl limitations matter, `--dynamic-glibc` is the escape valve. The default favors deployability.
 
@@ -135,15 +135,11 @@ The multi-pass type system supports this: Pass 1 (type signatures) is almost alw
 
 ## Watch Mode Implementation
 
-`ynz watch` runs a file system watcher. On change:
+`ynz watch` is a long-running daemon holding one `CompilerDb`. File saves mutate `SourceFile.text` salsa inputs; salsa invalidates and recomputes only the changed query results. Target: sub-second warm rebuild for single-file edits.
 
-1. Detect changed files via OS file watcher (inotify/kqueue/FSEvents)
-2. Walk the import graph to find affected files
-3. Invalidate caches for affected files
-4. Recompile incrementally (in parallel where possible)
-5. If `--run`: restart the running process with the new binary
+Quick-start: `ynz watch foo.ynz` — builds + re-runs on every save. `--check` skips the run step. `--json` emits a structured NDJSON event stream on stdout.
 
-Target: sub-second full cycle for single-file changes with warm cache.
+See `design/watch.md` for full architecture: daemon model, file-watcher integration, child process lifecycle, `--json` schema, memory-defense layers (LRU caps + periodic DB rebuild + RSS polling), debounce strategy, and cross-platform notes.
 
 ---
 

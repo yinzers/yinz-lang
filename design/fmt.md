@@ -234,7 +234,7 @@ The tempfile MUST be in the same directory as the target (not `/tmp/`) to avoid 
 
 - **`textDocument/formatting` LSP wiring** — deferred to v0.2-M5. The library API (`format(source: &str) -> Result<String, FmtError>`) is the only hook M5 needs.
 - **`format_range(source, range)`** — deferred to v0.2-M5 if proven necessary. Range formatting is hard; whole-file is enough for format-on-save.
-- **Embedded SQL formatting** — deferred to database stdlib milestone (v0.6+).
+- **Embedded SQL formatting** — deferred to database stdlib milestone (v0.5+).
 - **Embedded Markdown / regex / JSON** — not designed; v1+ at earliest.
 - **Import sorting** — belongs to Tier 3 lint suggestions (v0.4), not the formatter.
 - **Self-hosting migration** — formatter rewritten in Yinz when self-hosting lands (v2+).

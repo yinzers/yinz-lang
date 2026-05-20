@@ -2,7 +2,7 @@
 
 **Status**: Locked, v0.3+ implementation. Ships after v0.2 stdlib basics (concurrency, supervisor, allocators) are in.
 
-User spec target: `spec/stdlib/http.md` (when implemented).
+User spec target: `spec/stdlib/network.md` (when implemented).
 
 ---
 
@@ -32,7 +32,7 @@ Every HTTP framework in every language eventually grows this. In Yinz, it's the 
 ### Basic (supervised by default)
 
 ```ynz
-let server = http.listen(8080)
+let server = server.listen(8080)
 server.handle("/users", getUsers)
 server.handle("/orders", placeOrder)
 ```
@@ -45,7 +45,7 @@ Behind the scenes:
 The IDE shows muted hints indicating the supervision policy:
 
 ```ynz
-let server = http.listen(8080)
+let server = server.listen(8080)
 //          ^ muted: " (supervised: per-request isolation, restart accept loop on panic)"
 //            hover-tooltip explains the default and shows how to customize
 ```
@@ -53,7 +53,7 @@ let server = http.listen(8080)
 ### Custom supervision policy
 
 ```ynz
-let server = http.listen(8080, supervise: {
+let server = server.listen(8080, supervise: {
   onPanic: (e: Panic, request: Request) => {
     alerting.page("HTTP handler crashed", e, request.method, request.path)
   },
@@ -67,7 +67,7 @@ The `supervise` config option overrides specific behaviors. Unspecified fields f
 ### Disabling supervision (advanced — strongly discouraged)
 
 ```ynz
-let server = http.listen(8080, supervise: false)
+let server = server.listen(8080, supervise: false)
 //                                        ^ panics now bubble up to main
 ```
 
@@ -104,7 +104,7 @@ In dev mode (`ynz run` not `ynz build --release`), the response includes the pan
 Users can override the default 500 handler:
 
 ```ynz
-let server = http.listen(8080, on500: (e: Panic, request: Request) -> Response {
+let server = server.listen(8080, on500: (e: Panic, request: Request) -> Response {
   // custom error response — log to monitoring, return a custom error page, etc.
 })
 ```
@@ -132,13 +132,13 @@ Depends on v0.2 stdlib basics (concurrency, supervisor helpers, allocators).
 The v0.3+ milestone plan must address:
 
 - Protocol support: HTTP/1.1 baseline, HTTP/2 for v1.0?, HTTP/3 (QUIC) as a separate milestone?
-- TLS: built-in via system libraries, or stdlib? `https.listen()` separate from `http.listen()`?
+- TLS: built-in via system libraries, or stdlib? `https.listen()` separate from `server.listen()`?
 - Routing: simple `server.handle("/path", fn)` for v0.3, more advanced patterns (path params, middleware chains) later?
 - Performance: zero-copy from network buffer to handler? Sendfile for static assets?
-- Static file serving: bundled in `http`, or separate `static.serve()` module?
+- Static file serving: bundled in `server`, or separate `static.serve()` module?
 - Middleware ordering: how does user compose multiple middleware? Chain syntax? Decorator-style?
 
-These are stdlib design questions — `design/stdlib/http.md` is the right place for the detailed design. This doc is the supervision-by-default contract; everything else can be designed when the milestone is scheduled.
+These are stdlib design questions — `design/stdlib/network.md` is the right place for the detailed design. This doc is the supervision-by-default contract; everything else can be designed when the milestone is scheduled.
 
 ---
 

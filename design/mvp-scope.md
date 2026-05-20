@@ -37,7 +37,7 @@ The absolute minimum: the language compiles and runs a hello-world program. No s
 - Doc comments (`///`)
 - Sensitive type modifier (auto-redact in output)
 - Operators (built-in `+`, `-`, `*`, `/`, `%`, `&&`, `||`, `!`, comparison, bitwise). Operator overloading is v1.0.
-- Test keyword reserved in parser (rejected at compile until v0.14)
+- Test keyword reserved in parser (rejected at compile until v0.13)
 
 **Built-in globals:**
 - `print(value)` — output to stdout
@@ -105,15 +105,24 @@ Single source of truth for all feature inventories. `registry/features.toml` + `
 **Explicitly out of scope (deferred):**
 - `textDocument/formatting` LSP wiring — v0.2-M5
 - `format_range(source, range)` API — v0.2-M5 if proven necessary
-- Embedded SQL formatting — v0.6+ database stdlib milestone
+- Embedded SQL formatting — v0.5+ database stdlib milestone
 - Import sorting — v0.4 Tier 3 lint suggestions
 
 **Design doc:** `design/fmt.md`
 
-### v0.2-M4: `ynz watch` (planned)
+### v0.2-M4: `ynz watch` (shipping)
 
-- Recompile-on-save with sub-second turnaround
-- Daemon vs simple-loop decided in M4 research phase
+**Design doc:** `design/watch.md`
+
+**Locked decisions**:
+- **Architecture: daemon** — one long-running process holds one `CompilerDb`; file events mutate `SourceFile.text` salsa inputs; downstream queries invalidate automatically. Sub-second target depends on this.
+- **Default behavior: build + run** — `ynz watch foo.ynz` rebuilds AND re-executes on every save. `--check` skips the run step (CI gates, build-only use case).
+- **Output: clear-screen by default** — `--no-clear` preserves scrollback for CI logs.
+- **`--json` ships in M4 (not deferred)** — emits NDJSON event stream on stdout; schema includes `schema_version: "v0.2-m4-unstable"` field; stable + semver-bound at v0.2.0 final.
+- **Memory defense: three layers** — (1) salsa LRU caps per query, (2) periodic DB drop + recreate every N=500 rebuilds or 4h, (3) `memory-stats` RSS polling with soft-warn at 1GB + hard-stop at 4GB.
+- **File watching: `notify = "8"` + `notify-debouncer-mini = "0.7"`** — cross-platform; debouncer-only coalescing (100ms window).
+- **Process group kill** — child spawned in own process group via `nix::unistd::setsid()` (Unix); SIGTERM → 2s grace → SIGKILL. Catches double-forked children.
+- **Shadow source state** — `WatchDb` holds `HashMap<PathBuf, String>` outside salsa; DB rebuild repopulates salsa from shadow. Shadow is source of truth; salsa is derived cache.
 
 ### v0.2-M5: LSP Full + v0.2.0 Release (planned)
 
@@ -158,25 +167,15 @@ The compiler starts emitting the third severity tier — suggestions — during 
 
 No separate `ynz lint` command — the compiler IS the linter. Customization (config file) comes in v1.x.
 
-**Co-shipping candidate: `--release` flag** — LLVM `-O3`, strip debug info, disable dev-only flags. Locked direction; see `design/future/release-mode.md`. May ship in v0.4 alongside the linting work or slip to v0.5; both are perf-focused milestones where release-build engineering fits.
+**Co-shipping candidate: `--release` flag** — LLVM `-O3`, strip debug info, disable dev-only flags. Locked direction; see `design/future/release-mode.md`. May ship in v0.4 alongside the linting work, or slip to a later perf-focused slot if scope demands.
 
 ---
 
-## v0.5 — Package manager
-
-`ynz add`, `ynz remove`, `ynz update`, `ynz install` + lock file (`yinz.lock`, TOML format). See `design/packages.md` for the full design.
-
-**Source types supported:** git URLs, local paths. No public registry yet — the registry is v1.2 (after the language stabilizes at v1.0).
-
-Install mechanism targets bun-class speed (content-addressed cache, hard-links, parallel resolver).
-
----
-
-## v0.6 — File system (tight trio)
+## v0.5 — File system (tight trio)
 
 Three modules bundled together because they're tightly coupled:
 
-**Co-shipping candidate: `{ptr, len}` string overhaul** — migrating strings from NUL-terminated C strings to `{ptr, len}` slices. v0.6 is the most likely landing slot because file I/O is the first stdlib that needs embedded-NUL-safe strings (reading binary as a string-typed buffer). See `design/future/string-ptr-len-overhaul.md`. May slip later if file-I/O doesn't actually need embedded NULs in v0.6.
+**Co-shipping candidate: `{ptr, len}` string overhaul** — migrating strings from NUL-terminated C strings to `{ptr, len}` slices. v0.5 is the most likely landing slot because file I/O is the first stdlib that needs embedded-NUL-safe strings (reading binary as a string-typed buffer). See `design/future/string-ptr-len-overhaul.md`. May slip later if file-I/O doesn't actually need embedded NULs in v0.5.
 
 - **`file`** — read, write, append, exists, delete
 - **`path`** — join, dirname, basename, extname, normalize, isAbsolute
@@ -186,7 +185,7 @@ Module-specific lint suggestions ship with this version (e.g., "prefer `path.joi
 
 ---
 
-## v0.7 — `math`
+## v0.6 — `math`
 
 Self-contained module. sqrt, abs, min/max, floor/ceil/round, trig (sin/cos/tan and inverses), log/exp, pow, constants (`math.pi`, `math.e`, etc.).
 
@@ -194,7 +193,7 @@ Module-specific lint suggestions: "prefer `math.pi` over hardcoded 3.14159."
 
 ---
 
-## v0.8 — CLI essentials (tight trio)
+## v0.7 — CLI essentials (tight trio)
 
 Three modules bundled — all about "running as a program":
 
@@ -206,19 +205,19 @@ See `design/stdlib/cli.md` for the full design (TBD when this version is up).
 
 ---
 
-## v0.9 — `json`
+## v0.8 — `json`
 
 Parse, stringify, prettify. Universal data interchange.
 
 ---
 
-## v0.10 — `date` + `duration` (tight pair)
+## v0.9 — `date` + `duration` (tight pair)
 
 Always paired. `date.now()`, `date.from()`, comparisons, formatting, parsing. `duration` construction, arithmetic, conversion (seconds/minutes/hours/days).
 
 ---
 
-## v0.11 — `db` (database)
+## v0.10 — `db` (database)
 
 **DuckDB and Postgres to start, in that priority order**: DuckDB first (embedded, in-process — easiest "hello world with a database"), then Postgres (network database, client/server). **All other drivers (MySQL, SQLite, MariaDB, MS SQL, etc.) deferred until after v1.0 launch.**
 
@@ -236,11 +235,11 @@ The `db` module is one of the most substantial stdlib entries — see `design/st
 - Syntax coloring for SQL inside the raw escape hatch construct
 - Format-on-save: SQL content formatted with standard SQL indentation, first keyword (`INSERT INTO`, `SELECT`, `FROM`, etc.) indented at surrounding `const`-indentation + project-standard indent width
 
-**Hard dependencies**: v0.6 (file — schema snapshot files), v0.10 (date/duration — timestamp wire deserialization).
+**Hard dependencies**: v0.5 (file — schema snapshot files), v0.9 (date/duration — timestamp wire deserialization).
 
 ---
 
-## v0.12 — `log` (basic)
+## v0.11 — `log` (basic)
 
 `log.info()`, `log.warn()`, `log.error()`, `log.debug()`. Starter logging — the full framework (structured logging, sinks, filters, log levels per module) ships in v0.23.
 
@@ -248,15 +247,15 @@ Module-specific lint suggestion: "prefer `log.info()` over `print()` in non-test
 
 ---
 
-## v0.13 — `random`
+## v0.12 — `random`
 
 Tiny module. `random.int(min, max)`, `random.float()`, `random.choice(array)`, `random.shuffle(array)`, `random.seed(n)` for deterministic testing.
 
 ---
 
-## v0.14 — Testing framework (`test` keyword + `ynz test`)
+## v0.13 — Testing framework (`test` keyword + `ynz test`)
 
-The `test` keyword has been reserved in the parser since v0.1. v0.14 ships the runner.
+The `test` keyword has been reserved in the parser since v0.1. v0.13 ships the runner.
 
 Includes:
 - `test "description" { ... }` blocks
@@ -274,76 +273,92 @@ See `design/testing.md` for the full design.
 
 `parallel file` declaration to enable within-file test parallelism. `sequential "resource-name"` declarations to serialize files that share a resource (e.g., two test files both writing to the `users` DB table).
 
-- **Why v0.15+**: v0.14 ships with file-level parallelism only. The 95% case is "files in parallel, tests within a file sequential" and it works fine. Adding refinements upfront creates complexity for everyone to solve a problem only large test suites hit.
-- **Substitute used pre-v0.15+**: Users are responsible for test isolation. `setup file { db.connect(...) }` opens a per-file connection. Files that genuinely share state should be designed differently or use `--serial` mode.
-- **Trigger to land**: v0.15+ if real demand surfaces (e.g., a project with massive test files that need within-file parallelism, or users reporting they can't isolate cross-file state cleanly).
+- **Why v0.14+**: v0.13 ships with file-level parallelism only. The 95% case is "files in parallel, tests within a file sequential" and it works fine. Adding refinements upfront creates complexity for everyone to solve a problem only large test suites hit.
+- **Substitute used pre-v0.14+**: Users are responsible for test isolation. `setup file { db.connect(...) }` opens a per-file connection. Files that genuinely share state should be designed differently or use `--serial` mode.
+- **Trigger to land**: v0.14+ if real demand surfaces (e.g., a project with massive test files that need within-file parallelism, or users reporting they can't isolate cross-file state cleanly).
 - **Locked design**: See `design/testing.md` and `spec/testing.md`
 
 ---
 
-## v0.15 — `regex`
+## v0.14 — `regex`
 
 Substantial design surface (engine choice, flags, captures, replace). Gets its own milestone.
 
 ---
 
-## v0.16 — `http` client
+## v0.15 — `request` (outbound HTTP client)
 
 Three-tier API design (see HTTP open question in `design/open-questions.md` to be designed when this version is up):
 
-1. **High-level helpers** — `http.get(url)`, `http.post(url, body)`, `http.put`, `http.delete`, `http.websocket(url)`
-2. **Mid-level request builder** — `http.request().method("GET").header(...).timeout(5).send()` for cases not covered by helpers
+1. **High-level helpers** — `request.get(url)`, `request.post(url, body)`, `request.put(url, body)`, `request.delete(url)`, `request.websocket(url)`
+2. **Mid-level builder** — `request.build()` returns a configurable Request value; configure step-by-step (`req.method("PATCH")`, `req.header(name, value)`, `req.timeout(5)`, `req.send()`) — no chaining per Golden Rule 7
 3. **Low-level socket access** — `net.tcp.connect(host, port)` returning a raw socket. The floor of the user-accessible network stack (anything lower is FFI territory).
 
 With TLS support from day 1 in this version.
 
+**Naming note**: the module is called `request` (not `http`) so the direction is unambiguous on read — `request.get(url)` is clearly outbound. The inbound counterpart is `server` (v0.21). Shared `Request`/`Response` types (capital — they're types per Rule 13) live in both modules' surface; both directions touch them since HTTP semantics are direction-agnostic at the message level.
+
 ---
 
-## v0.17 — `stats`
+## v0.16 — `stats`
 
 mean, median, mode, stddev, variance, percentile, histogram. Built on `math`.
 
 ---
 
-## v0.18 — `crypto` / `hash`
+## v0.17 — `crypto` / `hash`
 
 SHA-256, SHA-512, AES-GCM, HMAC, key derivation (PBKDF2/Argon2). Careful design needed.
 
 ---
 
-## v0.19 — `compression`
+## v0.18 — `compression`
 
 gzip, zstd, optionally brotli. Wraps system libs via the compiler-internal FFI (since user-facing FFI is v2+).
 
 ---
 
-## v0.20 — `terminal`
+## v0.19 — `terminal`
 
 ANSI colors, cursor positioning, terminal-size detection. For richer CLI output.
 
 ---
 
-## v0.21 — `csv`
+## v0.20 — `csv`
 
 Read, write, optionally streaming for huge files. Less common than JSON but useful.
 
 ---
 
-## v0.22 — `http.server`
+## v0.21 — `server` (inbound HTTP server)
 
-Builds on `http` client. Routing, middleware, request/response abstractions. Substantial module.
+Builds on the `request` module (v0.15) — shares the `Request`/`Response` types and the underlying HTTP wire-protocol implementation. Adds the inbound side: routing, middleware, request/response handler abstractions. Substantial module.
+
+**API shape (locked at v0.21 design time, not now):** module-level functions on the singleton `server` namespace — `server.route(method, path, handler)`, `server.middleware(fn)`, `server.listen(port)`. The single-server-per-process case is overwhelmingly the norm; multi-server is rare enough to handle as a v1+ extension if real demand surfaces.
+
+---
+
+## v0.22 — Package manager
+
+`ynz add`, `ynz remove`, `ynz update`, `ynz install` + lock file (`yinz.lock`, TOML format). See `design/packages.md` for the full design.
+
+**Source types supported:** git URLs, local paths. No public registry yet — the registry is v1.2 (after the language stabilizes at v1.0).
+
+Install mechanism targets bun-class speed (content-addressed cache, hard-links, parallel resolver).
+
+**Why this version (late in the v0 train)**: There is no public release until v1.0. Shipping the package manager early would mean every pre-v1.0 breaking language change cracks every package — packages would live in an unstable language for ~17 releases. Landing it at v0.22 puts packages into a stable-ish language with the stdlib mostly built (so packages have real APIs to depend on), and gives the package manager one polish cycle before v1.0's backwards-compat promise kicks in. Per `design/versioning.md`, pre-v1.0 has no compatibility guarantee, so the early-shipped value (ecosystem bootstrap, "fill gaps with packages") doesn't accrue until there's a public community — which is v1.0.
 
 ---
 
 ## v0.23 — Logging framework
 
-Structured logging on top of v0.12's basic `log` module. Sinks (file, stdout, syslog), filters, log levels per module, structured fields, contextual loggers.
+Structured logging on top of v0.11's basic `log` module. Sinks (file, stdout, syslog), filters, log levels per module, structured fields, contextual loggers.
 
 ---
 
 ## v0.24 — Process spawning
 
-`process.spawn(cmd, args)`, pipes (stdin/stdout/stderr), signal handling beyond `onShutdown`. Distinct from v0.8's `process.exit/.pid/.isRunning` (which are about the current process).
+`process.spawn(cmd, args)`, pipes (stdin/stdout/stderr), signal handling beyond `onShutdown`. Distinct from v0.7's `process.exit/.pid/.isRunning` (which are about the current process).
 
 ---
 
@@ -369,7 +384,7 @@ User-defined types can `follows Add`, `follows Subtract`, etc. and use `+`, `-`,
 
 User types can implement `Iterable<T>` or `FallibleIterable<T>` and be iterated with `for`.
 
-- **Why this version**: Built-in `for` over collections (`array`, `fixed`, `map`, ranges) works without this. Built-in `for` over fallible iterables like `file.lines()` works in v0.6. Custom user types implementing the contracts is the extension that ships at v1.0.
+- **Why this version**: Built-in `for` over collections (`array`, `fixed`, `map`, ranges) works without this. Built-in `for` over fallible iterables like `file.lines()` works in v0.5. Custom user types implementing the contracts is the extension that ships at v1.0.
 - **Substitute used pre-v1.0**: Users with iterable-like data expose a `.items()` method returning `array<T>` and `for (item in foo.items())`. Lossy compared to true iteration (materializes the whole collection) but works.
 - **Locked design**: See `design/iterables.md` and `spec/iterables.md`
 
@@ -399,16 +414,16 @@ A way to mark stdlib functions / language features as deprecated, with compiler 
 
 ## v1.2 — Public package registry
 
-Built in Yinz itself. The dogfood milestone — by v1.2 we have everything needed (http.server v0.22, file system v0.6, env v0.8, JSON v0.9, logging framework v0.23, crypto v0.18, compression v0.19), and building the registry in Yinz proves the language can build real services. If we can't, that's a signal the language has gaps to fix.
+Built in Yinz itself. The dogfood milestone — by v1.2 we have everything needed (server v0.21, file system v0.5, env v0.7, JSON v0.8, logging framework v0.23, crypto v0.17, compression v0.18, package manager v0.22), and building the registry in Yinz proves the language can build real services. If we can't, that's a signal the language has gaps to fix.
 
 Registry isn't deployed publicly until shortly before this version ships. The language launch (v1.0) uses git URLs + local paths for packages until v1.2.
 
-### Public Package Registry (locked design, deferred from v0.5)
+### Public Package Registry (locked design, deferred from v0.22)
 
 Server-side infrastructure for hosting and serving Yinz packages — the `ynz add some-package` discovery + download flow against a public registry.
 
 - **Why this version**: The language isn't publicly launched until v1.0. Before launch, breaking changes are fine; there's no community of authors to support. After v1.0 stabilizes, building the registry — in Yinz itself, as the project's first major dogfooding test — proves the language can build real services.
-- **Substitute used pre-v1.2**: Package manager (v0.5) supports git URLs and local paths. `ynz add github:user/repo` works fine. Public registry isn't required for the package manager to be useful.
+- **Substitute used pre-v1.2**: Package manager (v0.22) supports git URLs and local paths. `ynz add github:user/repo` works fine. Public registry isn't required for the package manager to be useful.
 - **Trigger to land**: v1.2 milestone, after v1.0 launch stabilizes.
 - **Locked design**: See `design/packages.md`
 
@@ -528,7 +543,7 @@ Three questions:
 
 1. **Does it stand alone as a focused thing?** If yes, candidate for its own version. If it's part of a tightly-coupled pair (file+path+directory; date+duration; cli+env+process), bundle them.
 2. **Does the v0.1 syntax surface depend on it?** If yes, it's v0.1. Things that change every function signature (ownership) can't defer.
-3. **Does it unlock the most value for the next version's work?** (Order versions for value compounding — LSP early so everyone benefits, package manager before stdlib ramp so people can fill gaps with third-party packages, etc.)
+3. **Does it unlock the most value for the next version's work?** (Order versions for value compounding — LSP early so everyone benefits, stdlib ramp before the package manager so packages land into stable APIs rather than churning every release, etc.)
 
 When in doubt, defer to a later version. We can always pull features forward when they prove easy; pushing them back is harder once users depend on them.
 
@@ -540,7 +555,7 @@ Some modules are bundled into one version because designing/shipping them separa
 
 | Bundle | Why bundled |
 |--------|------------|
-| `file` + `path` + `directory` (v0.6) | `file.read()` needs `path` for argument types. `directory` is the iteration form of `file`. All three together. |
-| `cli` + `env` + `process` (v0.8) | Every CLI tool needs all three. Designing them together keeps conventions consistent. |
-| `date` + `duration` (v0.10) | Durations only make sense in relation to dates. Arithmetic between them is the same module's concern. |
+| `file` + `path` + `directory` (v0.5) | `file.read()` needs `path` for argument types. `directory` is the iteration form of `file`. All three together. |
+| `cli` + `env` + `process` (v0.7) | Every CLI tool needs all three. Designing them together keeps conventions consistent. |
+| `date` + `duration` (v0.9) | Durations only make sense in relation to dates. Arithmetic between them is the same module's concern. |
 | LSP + `ynz watch` + `ynz fmt` (v0.2) | All dev-loop tooling — landing them together gives the dev experience a single noticeable jump rather than three small ones. |

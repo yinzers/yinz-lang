@@ -42,7 +42,7 @@ Built-in collections formally follow `Iterable<T>` through compiler-synthesized 
 
 **`next()` is `alwaysinline`** for built-in wrappers in optimized builds: LLVM `alwaysinline` attribute ensures no `call @next_array_iter` remains in `-O2` IR. For-loop over built-in collection emits no heap allocation (`alloca` only for the wrapper struct).
 
-**String iteration default (locked):** `for c in "café"` steps by **code point** (not grapheme). Each `c` is a 1-character `string`. Grapheme iteration is opt-in via `.graphemes()` — deferred to v0.6+. This matches `.get(n)` default semantics.
+**String iteration default (locked):** `for c in "café"` steps by **code point** (not grapheme). Each `c` is a 1-character `string`. Grapheme iteration is opt-in via `.graphemes()` — deferred to v0.5+. This matches `.get(n)` default semantics.
 
 ---
 
@@ -85,7 +85,7 @@ shape FallibleIterable<T> {
 | `map<K,V>.entries()` | `Iterable<Entry<K,V>>` |
 | `range(start, end)` | `Iterable<int>` |
 | `file.lines(path)` | `FallibleIterable<string>` |
-| `http.stream(url)` | `FallibleIterable<Response>` |
+| `request.stream(url)` | `FallibleIterable<Response>` |
 | Paginated API clients | `FallibleIterable<T>` |
 
 **Compiler behavior at for-loop sites:**
@@ -126,7 +126,7 @@ shape LogSink {
 }
 ```
 
-In M7, `terminal.stderr` and `terminal.stdout` follow `LogSink`. The v0.6+ stdlib expands this to file sinks and user-defined sinks.
+In M7, `terminal.stderr` and `terminal.stdout` follow `LogSink`. The v0.5+ stdlib expands this to file sinks and user-defined sinks.
 
 `.withErrors()` returns `Iterable<maybe T errors>` (NOT `Iterable<Result<T>>`). `Result` is on the banned-jargon list. Each iteration step yields an errors-capable maybe-value; the user inspects it with standard `.failed()` / `.message` / `.or()` machinery. Example:
 
@@ -181,7 +181,7 @@ shape ApiPager<T> follows FallibleIterable<T> {
 
 function next(lend self: ApiPager<T>) -> maybe T errors {
   if (self.done) { return none }
-  const response = http.get(self.buildUrl())   // can fail
+  const response = request.get(self.buildUrl())   // can fail
   self.cursor = response.nextCursor
   self.done = response.nextCursor.exists() == false
   return response.item

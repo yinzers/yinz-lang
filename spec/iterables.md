@@ -40,7 +40,7 @@ You almost never think about which contract is which — the compiler picks base
 | `map<K, V>.entries()` | `Iterable<Entry<K, V>>` |
 | `range(start, end)` | `Iterable<int>` |
 | `file.lines(path)` | `FallibleIterable<string>` |
-| `http.stream(url)` | `FallibleIterable<Response>` |
+| `request.stream(url)` | `FallibleIterable<Response>` |
 | Paginated API clients | `FallibleIterable<T>` |
 
 The `for` syntax is the same either way. What changes is that a fallible loop requires your function to be marked `errors` (or you handle the failures explicitly).
@@ -204,7 +204,7 @@ function next(lend self: ApiPager<T>) -> maybe T errors {
   if (self.done) {
     return none
   }
-  const response = http.get(self.buildUrl())   // can fail — errors propagates
+  const response = request.get(self.buildUrl())   // can fail — errors propagates
   self.cursor = response.nextCursor
   self.done = response.nextCursor.exists() == false
   return response.item

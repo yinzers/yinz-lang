@@ -76,7 +76,7 @@ Status: pending_approval
 **Out of M3 scope (deferred — see Deferrals table at end)**:
 - `textDocument/formatting` / `textDocument/rangeFormatting` LSP handler wiring — that's v0.2-M5's job; M3 ships the library API M5 will call.
 - `format_range(source, range)` API for LSP range-formatting — M3 ships whole-file formatting only. Range formatting is genuinely hard (where do you re-flow? Where do you stop?) and the LSP doesn't need it for format-on-save (which is whole-file). Deferred to v0.2-M5 if proven necessary.
-- Embedded SQL formatting inside `sql`...`` template literals — explicitly out of v0.2 per roadmap (deferred to database stdlib milestone, v0.6+).
+- Embedded SQL formatting inside `sql`...`` template literals — explicitly out of v0.2 per roadmap (deferred to database stdlib milestone, v0.5+).
 - Embedded Markdown / regex / JSON inside string literals — not even designed; v1+ at earliest.
 - Sorting imports — a Tier 3 lint suggestion concern (v0.4), NOT a formatter behavior. M3 leaves import order untouched.
 - Format-as-you-type partial reformatting in the LSP — v0.2-M5 (or later) if at all.
@@ -238,7 +238,7 @@ Open architectural question for Phase 1 research spike (NOT a blocker; spike dec
 ### Teaching
 - Formatter PARSE errors are reported using the EXISTING `ynz-diagnostics` machinery (WHAT/WHAT-INSTEAD/WHY format). When `ynz fmt foo.ynz` hits a parse error, it prints the same diagnostic `ynz build foo.ynz` would.
 - `ynz fmt --check` output is teaching-friendly: "Would reformat: foo.ynz (3 changes)" with optional `--diff` for unified-diff view (deferred to Phase 5 — see CLI scope below if `--diff` ships).
-- NEW design doc: `design/fmt.md` — architectural reference: algorithm choice rationale (Phase 1 output), comment merge strategy, library API contract, future-proofing for v0.6+ embedded SQL formatting.
+- NEW design doc: `design/fmt.md` — architectural reference: algorithm choice rationale (Phase 1 output), comment merge strategy, library API contract, future-proofing for v0.5+ embedded SQL formatting.
 - No new `.claude/rules/` files (no new project-rule surface; `feature-registry.md` already covers the registry-consumer rule M3 follows).
 - No new banned-jargon words slip into formatter-emitted text — `tests/jargon_audit.rs` extended in Phase 5 to walk every string the formatter produces (error messages, `--check` output).
 
@@ -340,7 +340,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 **Deviation rule**: Executor MAY touch files not listed if the change serves the planned work. Document each deviation in the PR description; if it's its own concern, split.
 
 **Steps**:
-1. Write `design/fmt.md` covering: goals (zero-config, opinionated), library + CLI architecture, comment-handling strategy (re-lex trivia pass — additive `lex_with_trivia()` in `ynz-parser`), registry-consumer status (formatter reads keyword spellings from `ynz-registry`), algorithm-choice placeholder section (filled in by Phase 1), API contract (`format(source) -> Result<String, FmtError>`), future-proofing section (embedded SQL deferred to v0.6+; range-formatting deferred to M5 if needed), self-hosting migration plan (formatter rewrites in Yinz when self-hosting lands v2+)
+1. Write `design/fmt.md` covering: goals (zero-config, opinionated), library + CLI architecture, comment-handling strategy (re-lex trivia pass — additive `lex_with_trivia()` in `ynz-parser`), registry-consumer status (formatter reads keyword spellings from `ynz-registry`), algorithm-choice placeholder section (filled in by Phase 1), API contract (`format(source) -> Result<String, FmtError>`), future-proofing section (embedded SQL deferred to v0.5+; range-formatting deferred to M5 if needed), self-hosting migration plan (formatter rewrites in Yinz when self-hosting lands v2+)
 2. Update `design/mvp-scope.md:89-93` v0.2-M3 entry: enumerate CLI flags (`ynz fmt <path>`, `--all`, `--check`, `--stdin`), state comment-handling approach (re-lex trivia pass), state registry-consumer status, state algorithm-deferred-to-Phase-1 (placeholder)
 3. Update `CLAUDE.md` Project Layout: add row for `crates/ynz-fmt/`
 4. Scaffold `crates/ynz-fmt/`: Cargo.toml with deps; src/lib.rs with API stubs returning "not yet implemented"; src/error.rs with `FmtError` + `CheckResult` enums; _spike/.gitkeep
@@ -1044,7 +1044,7 @@ Items deliberately NOT in M3 scope. Each row's "Where tracked" cell points to th
 |---|---|---|
 | `textDocument/formatting` LSP handler wiring | M3 ships the library API; M5 wires it | `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md` Milestone v0.2-M5 scope (format-on-save bullet) |
 | `format_range(source, range)` API for LSP `textDocument/rangeFormatting` | Whole-file formatting is enough for editor format-on-save; range-formatting is hard and unproven need | `.claude/todos.md` "Later" — `lsp-range-formatting`: design + implement IF v0.2-M5 proves a need |
-| Embedded SQL formatting inside `sql`...`` template literals | Out of v0.2 per roadmap (deferred to database stdlib milestone v0.6+) | `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md` Out of Scope section (already lists this) |
+| Embedded SQL formatting inside `sql`...`` template literals | Out of v0.2 per roadmap (deferred to database stdlib milestone v0.5+) | `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md` Out of Scope section (already lists this) |
 | Embedded Markdown / regex / JSON inside string literals | Not even designed; v1+ at earliest | Roadmap Out of Scope |
 | Sorting imports as a formatter behavior | Belongs to Tier 3 lint suggestions (v0.4), NOT formatter | `design/linting.md` (v0.4 milestone surface) |
 | `ynz fmt --diff` mode (unified-diff output of what would change) | Useful for code review tooling but not blocking M3 ship | `.claude/todos.md` "Later" — `fmt-diff-mode`: add `--diff` flag emitting unified diff |

@@ -46,7 +46,7 @@ Five feature areas remain before v0.1 can ship:
 
 1. **Modules** — currently the driver compiles ONE `.ynz` file. Real projects need `import`/`export` across files. Single-file is the duct-tape-est thing in the compiler today.
 2. **Doc comments** — `///` is currently silently treated as `//` by the lexer. The spec says doc strings attach to exported items and survive through the AST for the future `ynz doc` tool (v1.1).
-3. **`sensitive` modifier** — type-system surface so secret values auto-redact in `print()` + interpolation. The env-based source (`env.get()` returns `sensitive string`) ships v0.8; M8 ships the type machinery + the manual `sensitive(literal)` constructor.
+3. **`sensitive` modifier** — type-system surface so secret values auto-redact in `print()` + interpolation. The env-based source (`env.get()` returns `sensitive string`) ships v0.7; M8 ships the type machinery + the manual `sensitive(literal)` constructor.
 4. **Concurrency keywords** — `wait` and `background` must PARSE and TYPE-CHECK so code can be written today; real auto-parallelization arrives v0.3. M8 = parse + typeck + sequential lowering (`wait foo()` = `foo()`; `background foo()` = `foo()` with return discarded; background ownership rules per design/concurrency.md enforced).
 5. **Bignum `number<N>` for N > 34** — the M2 load-bearing carry-over. Multi-u128 coefficient + bignum add/sub/mul/div + mixed-precision promotion + narrowing-warning rounding. This is the v0.1 "exact decimal at any reasonable precision" promise; if M8 drops anything, it isn't this.
 
@@ -97,12 +97,12 @@ M7 shipped 2026-05-18; this is the next milestone on the v0-1-compiler roadmap. 
 | Plan shape | Single execution plan, sequenced phases (P0–P8) |
 | Module depth | Full v0.1 spec: project-root-relative paths, named + namespace imports, `as` aliases, duplicate-name compile error, re-export, unused-import warning, circular references via multi-pass |
 | Concurrency scope | Parse + typeck + sequential lowering (`wait` = direct call; `background` = direct call + return discard + ownership-`.share` rejection) |
-| Sensitive scope | Full type-system surface; manual `sensitive(literal)` source; env-based source defers to v0.8 |
+| Sensitive scope | Full type-system surface; manual `sensitive(literal)` source; env-based source defers to v0.7 |
 | Bignum scope | Full IEEE 754-2008 conformance — multi-u128 chunked coefficient, all 4 ops, mixed-precision promotion, narrowing rounding warning. This is the load-bearing `number` promise. |
 | Doc-comment scope | Lexer recognizes `///`; parser attaches to AST; doc strings preserved through pipeline for v1.1 `ynz doc` |
 | Number syntax migration | `number[N]` → `number<N>` lands in P0 doc-lockdown (parser change + integration test snapshot update) |
 | File discovery | Walk `src/**/*.ynz`, parse all in parallel, codegen tree-shakes unused functions from binary |
-| yinz.toml fields | Three: `entry`, `name`, `version`. Unknown fields warn (forward-compat). v0.5 adds `[dependencies]`; v1.x adds `[lint]`. |
+| yinz.toml fields | Three: `entry`, `name`, `version`. Unknown fields warn (forward-compat). v0.22 adds `[dependencies]`; v1.x adds `[lint]`. |
 | Banned-jargon additions | Concurrency (`async`, `await`, `promise`, `future`, `goroutine`) + visibility (`pub`, `private`, `protected`, `public`). |
 | Master plan tracking | P0 flips M8 status `planned`→`active` in v0-1-compiler.md; P8 release flips `active`→`done`. |
 | Release scope | Tag + audit, no public launch. v1.0 is public launch per mvp-scope.md. |
@@ -132,7 +132,7 @@ M7 shipped 2026-05-18; this is the next milestone on the v0-1-compiler roadmap. 
 | Background-task ownership rule (`.share` rejection) | Low | Compiler accepts dangling-borrow patterns | M4 already has ownership analysis (`is_consumed`, etc.). Reuse the infrastructure: when `background foo(arg)` is type-checked, if `foo`'s signature is `share`, reject. The compiler already knows ownership modifiers. |
 | Doc-comment lexer regression | Low | `//` comments accidentally tokenize as `///` | Lexer test: explicit fixtures for `///`, `////` (treated as `///` content), `// regular`, `// ///` (regular comment containing slashes), `///\n///\n///` (multi-line attach). |
 | Module circular-import detection | Medium | Compiler hangs or stack-overflows on a graph with no cycle, OR misses a real cycle and produces incoherent typeck output | Multi-pass design eliminates the hang risk (no recursive resolution). Add an explicit cycle test: `a.ynz import b; b.ynz import a` — compiles cleanly. Also test: file imports itself (`a.ynz import a`) — should be a compile error (self-import is nonsense, even though circular through B is fine). |
-| yinz.toml schema bikeshed creep | Low | P2 derails on "what fields ship now" debate | Locked above: `entry`, `name`, `version` ONLY. Unknown fields warn. Defer everything else to v0.5/v1.x. |
+| yinz.toml schema bikeshed creep | Low | P2 derails on "what fields ship now" debate | Locked above: `entry`, `name`, `version` ONLY. Unknown fields warn. Defer everything else to v0.22/v1.x. |
 | Number syntax migration breaks user code | Low | M2-era fixtures use `number[N]` syntax | Grep fixture corpus: only `m2_bignum_deferral.ynz` uses `number[100]`. Update one fixture + the snapshot. No user code exists outside the test corpus. |
 | Release audit surfaces critical bugs | Medium | P8 release tag delayed by emergency fix-up cycle | This is the POINT of the audit. Treat P8 as variable-length: 1-2 days if clean, 3-5 if findings need fixing. Per CLAUDE.md rule 11 (no priority deflection), every confirmed audit finding gets fixed before tag. |
 | Banned-jargon false positives | Low | Diagnostic tests fail on legitimate prose using `async` in a non-Yinz-jargon way | The list governs USER-FACING diagnostic strings only (`crates/ynz-diagnostics/src/banned_jargon.rs`). Spec/design prose is exempt (per dual-audience rule in `.claude/rules/inference.md`). |
@@ -268,7 +268,7 @@ For Tier 3 lints deferred to v0.4, the muted-hint protocol still defers to v0.4 
 **Why this phase exists**: M5–M7 followed this pattern (doc lockdown FIRST, then code) — prevents the "code shipped but spec/design didn't keep up" failure mode. Catches scope drift before any compiler change.
 **Current-state anchors**:
 - `crates/ynz-parser/src/parser.rs:454` — `parse_number_type` consumes `[N]`; migrate to `<N>` (verify it doesn't conflict with generic syntax for OTHER types).
-- `crates/ynz-driver/tests/integration.rs:222–234` — `m2_bignum_deferral_produces_diagnostic`; the diagnostic message changes from "v0.8" / "M8" to "available starting at `number<35>`" once bignum lands (Phase 6). In P0 the syntax migration is the only change.
+- `crates/ynz-driver/tests/integration.rs:222–234` — `m2_bignum_deferral_produces_diagnostic`; the diagnostic message changes from "v0.7" / "M8" to "available starting at `number<35>`" once bignum lands (Phase 6). In P0 the syntax migration is the only change.
 - `crates/ynz-driver/tests/fixtures/m2_bignum_deferral.ynz` — update from `number[100]` to `number<100>`.
 - `.claude/plans/active/v0-1-compiler.md:206-211` — M8 milestone block; flip status `planned` → `active`.
 - `CHANGELOG.md` — seed `[Unreleased]` section with M8 header.
@@ -292,7 +292,7 @@ For Tier 3 lints deferred to v0.4, the muted-hint protocol still defers to v0.4 
 8. **Capture M7 bench baseline** (the named reference P6 will compare against): `cargo bench --bench decimal128_hot_path -- --save-baseline m7_baseline`. Commit the baseline file path (or proof of its capture) into the PR description so P6 can reproduce. If no decimal128 bench exists yet, ADD one in P0 measuring the four ops at N=34 with a fixed test corpus (10 randomly-but-seeded operand pairs); the m7_baseline value is what those benches produce on commit `b24a1b0`.
 9. Run plan-radar rebuild (handled automatically by Stop hook).
 **Acceptance criteria**:
-- [ ] `number<100>` parses successfully and produces the v0.8/M8 deferral diagnostic at typeck (existing behavior, new syntax).
+- [ ] `number<100>` parses successfully and produces the v0.7/M8 deferral diagnostic at typeck (existing behavior, new syntax).
 - [ ] `number[100]` produces a three-part migration diagnostic pointing at `<N>` syntax. Test: new fixture `crates/ynz-parser/tests/fixtures/number_bracket_migration.ynz`.
 - [ ] `cargo test --workspace` green; the only snapshot changes are the M2 fixture + the new bracket-migration test.
 - [ ] `cargo clippy --workspace -- -D warnings` green.
@@ -435,7 +435,7 @@ For Tier 3 lints deferred to v0.4, the muted-hint protocol still defers to v0.4 
    - Circular imports: zero special handling needed — Pass-0 sees all files, Pass-1 sees all signatures, resolution is whole-graph.
    - Self-import (`a.ynz` imports `a`): compile error — "A file cannot import from itself."
 7. **Codegen mangling**: function `foo` in `services/players.ynz` mangles to `services__players__foo` (or similar) to avoid collisions. Tree-shaking proceeds from the entrypoint's reachability graph; unused exports get stripped.
-8. **Demo restructure**: split `examples/basics/src/entrypoint.ynz` into the layout above. Each file gets its M1–M7 features split logically: `services/players.ynz` (shapes, methods), `services/inventory.ynz` (collections + maps + options), `utils/math_extra.ynz` (UFCS helpers for ints/floats), `services/index.ynz` (re-export demo for v0.5 prep).
+8. **Demo restructure**: split `examples/basics/src/entrypoint.ynz` into the layout above. Each file gets its M1–M7 features split logically: `services/players.ynz` (shapes, methods), `services/inventory.ynz` (collections + maps + options), `utils/math_extra.ynz` (UFCS helpers for ints/floats), `services/index.ynz` (re-export demo for v0.22 prep).
 9. **Error gallery extension**: add module-error triggers to `examples/errors/m8_errors.ynz` (one trigger per error class enumerated above).
 10. **Test corpus**: ~10 new fixture projects, each a self-contained directory under `crates/ynz-driver/tests/fixtures/m8_modules_*/`. Each fixture has its own `yinz.toml` + `src/*.ynz`.
 **Acceptance criteria**:
@@ -513,7 +513,7 @@ cargo test --workspace
 **Flag**: N/A
 **Est. lines**: ~600 (AST/parser ~100, typeck ~200, codegen + runtime ~200, tests ~100)
 **Ships via**: `/pr`
-**Objective**: Type-system surface for sensitive values is complete. Manual sources work today; env-based sources defer to v0.8.
+**Objective**: Type-system surface for sensitive values is complete. Manual sources work today; env-based sources defer to v0.7.
 **Why this phase exists**: Security primitive. The accidental-secret-leak pattern is the #1 secret exposure category (per `design/sensitive.md` rationale). Auto-redaction by default closes the gap.
 **Current-state anchors**:
 - `crates/ynz-typeck/src/types.rs` — Type enum (20 variants); M8 adds `Sensitive(Box<Type>)`. New count 21.
@@ -532,7 +532,7 @@ cargo test --workspace
 - `crates/ynz-driver/tests/fixtures/m8_sensitive_*.ynz` (~6 fixtures: basic redaction, .reveal(), propagation through ops, .length returns plain int, multiple sensitive in interpolation, --reveal-sensitive flag override)
 - `examples/basics/src/entrypoint.ynz` (sensitive section demonstrating apiKey-like pattern)
 - `examples/errors/m8_errors.ynz` (sensitive in print without .reveal — no error, but `.reveal()` in print context produces a Tier 3 lint suggestion)
-**Deviation rule**: P4 must NOT introduce env stdlib (`env.get()`). v0.8 owns that.
+**Deviation rule**: P4 must NOT introduce env stdlib (`env.get()`). v0.7 owns that.
 **Steps**:
 1. Add `Type::Sensitive(Box<Type>)` to Type enum. Update variant-count test ratchet.
 2. Parse `sensitive T` in type-position contexts (variable annotation, field type, parameter type, return type).
@@ -567,7 +567,7 @@ cargo test --workspace
 5. `.reveal()` method on `sensitive T` returns `T` (strips the modifier). Typeck implements as a special-case body operation per `.claude/rules/dot-postfix.md` (parens for actions).
 6. Codegen: sensitive string = `{ bytes_ptr, len, capacity, is_sensitive_tag: u8 }` (extend existing string struct OR wrap in a new struct — TBD at implementation; prefer extending if SSO byte budget allows).
 7. Print path: `print(sensitive_string)` lowers to `ynz_print_sensitive`. `ynz_print_sensitive` checks the tag and emits `[REDACTED]` or the underlying bytes per `--reveal-sensitive` runtime flag.
-8. `--reveal-sensitive` CLI flag on `ynz run`. NOT on `ynz build --release` (per spec — flag stripped from release binaries; but in v0.1 we don't HAVE release builds yet, so the flag works on debug runs only — defer the "stripped from release" check to v0.5's release-mode work, document in `### Forward-Compatibility Constraints` of this plan).
+8. `--reveal-sensitive` CLI flag on `ynz run`. NOT on `ynz build --release` (per spec — flag stripped from release binaries; but in v0.1 we don't HAVE release builds yet, so the flag works on debug runs only — defer the "stripped from release" check to v0.4 release-mode work, document in `### Forward-Compatibility Constraints` of this plan).
 9. Interpolation: `` `key: ${apiKey}` `` where `apiKey` is sensitive → interpolated result is `sensitive string` AND the runtime substitutes `[REDACTED]` at the interpolation site for the embedded value.
 10. Demo + error gallery extensions.
 **Acceptance criteria**:
@@ -954,7 +954,7 @@ These four suggestions are filed as "P-phase fixture corpus expansion" — they 
 - **Auto-parallelization** (`wait`/`background` runtime dependency graph + thread pool) — v0.3 per mvp-scope.md
 - **Background handle communication** (`.send()`/`.receive()`) — v0.3 per design/concurrency.md
 - **Database operations under concurrency** (`db.insert()` sequencing) — MVP2 per design/concurrency.md
-- **`env.get()` returning `sensitive string` by default** — v0.8 per mvp-scope.md
+- **`env.get()` returning `sensitive string` by default** — v0.7 per mvp-scope.md
 - **`ynz doc` static API documentation generator** — v1.1 per mvp-scope.md
 - **LSP / muted-hint IDE surfaces** — v0.2 per mvp-scope.md
 - **Tier 3 lint suggestions** (`unused-import` warning is in scope as a parse/typeck warning, but the proactive lint tier `unnecessary-wait`, `doc-on-private-item`, `prefer-explicit-precision-when-mixing` etc. defer to v0.4)
@@ -969,11 +969,11 @@ These four suggestions are filed as "P-phase fixture corpus expansion" — they 
 - **GPU dispatch** — v2+ per mvp-scope.md
 - **Arena allocators in user code** (`arena scratch { ... }` blocks) — v0.2 per design/future/arena.md
 - **Arena allocators in compiler internals** (compile-speed optimization) — M8 polish per design/decisions.md; deferred as a v0.2 follow-up since it's a perf optimization, not a user-facing v0.1 feature. Documented in `.claude/todos.md` after this plan lands.
-- **Sensitive `--reveal-sensitive` flag stripped from `ynz build --release`** — v0.5 release-mode work (no release-mode in v0.1)
+- **Sensitive `--reveal-sensitive` flag stripped from `ynz build --release`** — v0.4 release-mode work (no release-mode in v0.1)
 - **Verified `{ }` blocks (unsafe escape hatch)** — v0.3+ per vocabulary.md
 - **Self-references** — v0.3+ per design/future/self-references.md
 - **Kernel-mode** (`--kernel` flag + plug-in allocator API) — v0.3+ per design/future/no-runtime-mode.md
-- **Public registry, package install, lock file** — v0.5 per design/packages.md
+- **Public registry, package install, lock file** — v0.22 per design/packages.md
 - **Lint customization config** (`[lint]` in yinz.toml) — v1.x per design/linting.md
 
 ---
@@ -982,13 +982,13 @@ These four suggestions are filed as "P-phase fixture corpus expansion" — they 
 
 Constraints M8 must preserve so v0.2+ can land cleanly:
 
-- **`--reveal-sensitive` runtime flag stripped from release builds (v0.5)**: M8 ships this flag on `ynz run` for debug-mode override. v0.5 release-build work must add a compile-time check that strips the flag from release-mode binaries. M8 design assumes this future work — no flag-aware codegen in M8.
+- **`--reveal-sensitive` runtime flag stripped from release builds (v0.4)**: M8 ships this flag on `ynz run` for debug-mode override. v0.4 release-build work must add a compile-time check that strips the flag from release-mode binaries. M8 design assumes this future work — no flag-aware codegen in M8.
 - **Background-task handle (v0.3)**: M8 rejects `let h = background foo()` (the handle form). v0.3 lifts this rejection and adds `.send()`/`.receive()` on a `Background<T>` type. M8's grammar (`Expr::Background(Box<Expr>)`) already supports the parse tree — v0.3 adds typeck + codegen for the handle.
-- **Module re-export resolution depth (v0.5)**: M8 implements single-hop re-export (`export { X } from "..."`). Multi-hop chains work transitively via the same Pass-0 ExportTable. v0.5 may add cycle-detection in re-export chains (rare). M8's typeck already detects circular RE-EXPORTS (vs circular imports, which are fine).
+- **Module re-export resolution depth (v0.22)**: M8 implements single-hop re-export (`export { X } from "..."`). Multi-hop chains work transitively via the same Pass-0 ExportTable. v0.22 may add cycle-detection in re-export chains (rare). M8's typeck already detects circular RE-EXPORTS (vs circular imports, which are fine).
 - **Bignum precision cap (v2+)**: M8 caps at `number<4096>`. v2+ may lift this to truly arbitrary precision — when that happens, the existing `number<N>` storage layout (chunked-u128) generalizes cleanly. The 4096 limit is a precision-validity check at parse/typeck time, not a fundamental storage limitation.
-- **Stdlib auto-import (v0.6+)**: M8 has no stdlib modules. The auto-import infrastructure (compiler knows the stdlib without `import` statements) ships with the first stdlib module in v0.6 (`file` + `path` + `directory`). M8's module resolver assumes "stdlib is empty for now" — when v0.6 lands, the resolver adds a special-case lookup for `<stdlib-module-name>` BEFORE consulting the project's user files.
+- **Stdlib auto-import (v0.5+)**: M8 has no stdlib modules. The auto-import infrastructure (compiler knows the stdlib without `import` statements) ships with the first stdlib module in v0.5 (`file` + `path` + `directory`). M8's module resolver assumes "stdlib is empty for now" — when v0.5 lands, the resolver adds a special-case lookup for `<stdlib-module-name>` BEFORE consulting the project's user files.
 - **LSP per-file salsa caching (v0.2)**: M8 multi-file driver creates one `SourceFile` salsa input per file. v0.2 LSP work depends on this granularity for edit-one-file-don't-re-parse-the-world incremental rebuilds. M8 codegen must keep cross-file dependencies expressed at the salsa-query level, not collapsed into one module-wide blob.
-- **yinz.toml schema evolution (v0.5+)**: M8 ships 3 fields (`entry`, `name`, `version`). Unknown fields emit a warning (per Step 5a locked decision). v0.5 will add `[dependencies]` table; v1.x will add `[lint]` table. M8's parser must be lenient — unknown TOML keys/tables don't error.
+- **yinz.toml schema evolution (v0.22+)**: M8 ships 3 fields (`entry`, `name`, `version`). Unknown fields emit a warning (per Step 5a locked decision). v0.22 will add `[dependencies]` table; v1.x will add `[lint]` table. M8's parser must be lenient — unknown TOML keys/tables don't error.
 - **`--kernel` mode compile errors for malloc-dependent features (v0.3+)**: When v0.3 lands kernel-mode, the compiler must emit a compile error for `number<N>` with N > 34 (heap allocation required) AND `sensitive` runtime print (depends on print which depends on libc) AND background handles (depend on scheduler). M8 must annotate these features as "requires runtime" in the codegen pass — the annotation is a future-Bouncer check, not user-visible in M8.
 
 ---

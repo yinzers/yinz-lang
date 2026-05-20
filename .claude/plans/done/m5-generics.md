@@ -48,7 +48,7 @@ Status: approved (Patrick OK 2026-05-17) — Phase 0 SHIPPED (commit `524ca2e`, 
 
 ## Context & Why
 
-**Goal.** Ship M5 of the Yinz v0.1 compiler — the milestone that introduces type parameters (the universal machinery that makes the rest of the language work). When M5 ships, users can write generic functions and shapes, instantiate built-in `array<T>` / `fixed<T>` / `map<K, V>` collections, bracket-index them safely (`arr[0]`, `m["key"]`) returning `maybe<T>`, iterate them with `for (x in collection)`, and lean on the `maybe<T>` primitive throughout. The milestone closes the M4-locked auto-promotion obligation (`array<T>` → `fixed<T>` codegen surface) and unblocks all downstream collections-using milestones (M6 options/unions, M7 strings/errors/iterables, every stdlib module from v0.6 onward).
+**Goal.** Ship M5 of the Yinz v0.1 compiler — the milestone that introduces type parameters (the universal machinery that makes the rest of the language work). When M5 ships, users can write generic functions and shapes, instantiate built-in `array<T>` / `fixed<T>` / `map<K, V>` collections, bracket-index them safely (`arr[0]`, `m["key"]`) returning `maybe<T>`, iterate them with `for (x in collection)`, and lean on the `maybe<T>` primitive throughout. The milestone closes the M4-locked auto-promotion obligation (`array<T>` → `fixed<T>` codegen surface) and unblocks all downstream collections-using milestones (M6 options/unions, M7 strings/errors/iterables, every stdlib module from v0.5 onward).
 
 **Why now.** M4 shipped (`tag v0.1.0-m4`, 316 tests, `shapes + UFCS + ownership`). Without M5, every milestone after M4 is paralyzed — M6 narrowing on union types needs the generics engine to express `maybe T`, M7 strings need `array<byte>` semantics for byte slicing, every stdlib module needs `array<T>`/`map<K,V>` to express its surface. Continuing without M5 means stdlib design drift: design docs reference `array<T>` semantics that the compiler can't yet validate.
 
@@ -264,7 +264,7 @@ The `none` literal produces a type `maybe<T>` for some unknown T. T is resolved 
 | Modifies existing data | No | Greenfield additions; no schema changes. M4 invariants carry forward. |
 | Third-party integration | Yes | inkwell (LLVM), salsa, ariadne, optional `hashbrown` (internal use), system linker. No new system-level deps in produced binaries beyond libc (and the `ynz_*` runtime library M4 already established). |
 | Changes existing endpoints | No | — |
-| Wrong foundational choice cascades | Yes | The generics engine is load-bearing for every milestone v0.6+. Wrong-shape decisions made here propagate into the stdlib design. Monomorphization vs runtime dispatch is the biggest "cannot undo" choice — locked to monomorph (per `design/generics.md`). |
+| Wrong foundational choice cascades | Yes | The generics engine is load-bearing for every milestone v0.5+. Wrong-shape decisions made here propagate into the stdlib design. Monomorphization vs runtime dispatch is the biggest "cannot undo" choice — locked to monomorph (per `design/generics.md`). |
 
 **Mitigations applied:**
 - Plan-reviewer pass before any phase begins (Step 7 of /plan).

@@ -184,7 +184,7 @@ A language feature that is reserved at the lexer/parser level but whose full imp
 | `name` | string | yes | The token or syntax that triggers this error (e.g. `"f32"`, `"test"`, `"gpu"`) |
 | `substitute` | string | yes | What to use instead right now. Empty string if no current substitute. |
 | `why` | string | yes | Why this is deferred. Must be user-readable — no jargon. |
-| `ships_in` | string | yes | Target version string (`"v2+"`, `"v0.14"`, `"v0.2"`, etc.) |
+| `ships_in` | string | yes | Target version string (`"v2+"`, `"v0.13"`, `"v0.2"`, etc.) |
 | `design_doc` | string | yes | Path to the design doc (from repo root). Use `"design/mvp-scope.md"` for items covered there rather than a dedicated future doc. |
 | `triggers` | string | yes | What user code makes this error fire. `"none — no token reserved yet"` if not yet reserved. |
 
@@ -201,8 +201,8 @@ triggers = "Writing `f32` or `f64` as a type annotation in Yinz source"
 [[deferred_language_feature]]
 name = "test"
 substitute = ""
-why = "`test` is reserved for the built-in test framework shipping in v0.14. Pre-reserving it means your existing code will not break when v0.14 ships."
-ships_in = "v0.14"
+why = "`test` is reserved for the built-in test framework shipping in v0.13. Pre-reserving it means your existing code will not break when v0.13 ships."
+ships_in = "v0.13"
 design_doc = "design/mvp-scope.md"
 triggers = "Using `test` as an identifier"
 ```
@@ -213,7 +213,7 @@ Same schema as `[[deferred_language_feature]]` but for tooling-side deferrals (c
 
 ### `[[deferred_stdlib_api]]` *(RESERVED — no M1 entries)*
 
-Schema accommodated for v0.6+ stdlib module migrations. Each v0.6+ milestone populates its own entries; M1 ships zero.
+Schema accommodated for v0.5+ stdlib module migrations. Each v0.5+ milestone populates its own entries; M1 ships zero.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -280,9 +280,9 @@ Every locked deferred feature documented in `design/future/*.md` gets a `[[defer
 | `no-runtime-mode.md` | `deferred_tooling_feature` | `--kernel` flag | v0.3 |
 | `packages.md` | `deferred_tooling_feature` | binary package format reservation | v0.2 |
 | `panic-safety.md` | Covered by `errors` keyword (M7) — no deferred entry | N/A — already shipped | v0.2 |
-| `release-mode.md` | `deferred_tooling_feature` | `--release` flag | v0.4 or v0.5 |
+| `release-mode.md` | `deferred_tooling_feature` | `--release` flag | v0.4 (or a later perf-focused slot) |
 | `self-references.md` | `deferred_language_feature` | self-referential detection (compiler feature, no keyword) | v0.3+ |
-| `string-ptr-len-overhaul.md` | Compiler-internal; no user-facing token | N/A — implementation detail | TBD (v0.6+) |
+| `string-ptr-len-overhaul.md` | Compiler-internal; no user-facing token | N/A — implementation detail | TBD (v0.5+) |
 | `supervisor.md` | `deferred_stdlib_api` (RESERVED kind — zero entries in M1) | N/A — stdlib module | v0.2 |
 | `index.md` | Skip — this is the index, not a feature doc | N/A | N/A |
 
@@ -379,7 +379,7 @@ Yinz is planned to self-host (compiler written in Yinz) at v2+. The registry's i
 
 **Source of truth** (`registry/features.toml`): pure TOML — language-agnostic. Survives unchanged through the Rust→Yinz transition. No migration required.
 
-**Code generator** (`crates/ynz-registry/build.rs`): currently Rust. At self-hosting time, this becomes `build.ynz` with the same semantics. The TOML parsing uses Yinz's stdlib v0.5+ package-manager TOML parser (the same one used for `yinz.toml`). The generated Rust output becomes generated Yinz.
+**Code generator** (`crates/ynz-registry/build.rs`): currently Rust. At self-hosting time, this becomes `build.ynz` with the same semantics. The TOML parsing uses Yinz's stdlib v0.22+ package-manager TOML parser (the same one used for `yinz.toml`). The generated Rust output becomes generated Yinz.
 
 **Consumers** (e.g., `crates/ynz-diagnostics/src/banned_jargon.rs`): currently Rust adapters. At self-hosting time, they become Yinz modules.
 
