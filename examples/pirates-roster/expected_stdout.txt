@@ -1,21 +1,21 @@
-Yinz v0.1 language showcase
-===========================
+Pittsburgh Pirates Roster — Yinz v0.1 Showcase
+==============================================
 
 M2 — variables, arithmetic, primitives:
-Cheddar
-66
+Clemente
+2000
 0.00000000000000000000000000000
-1234.56
+1234567.89
 true
 3
 false
 0
 
 M3 — control flow + user functions:
-healthy
-wounded
-critical
-B
+solid hitter
+slumping
+headed for the minors
+power slot
 3
 2
 1
@@ -25,58 +25,58 @@ true
 true
 
 M4 — shapes + methods + ownership:
-Cheddar
-Cheddar
+Roberto Clemente
+Roberto Clemente
 
 M5 — generics + collections:
 42
 generic
 4
-10
+317
 3
-300
+8
 0
-90
+3000
 2
 M6 — options, unions, narrowing:
-active
-active
+starting
+starting lineup
 true
-42
+21
 3
 99
-10
+3
 
 M7 — full strings, errors, iterables:
-Player Alice scored 150 points!
-Welcome to the tournament!
-  Top player: Alice
-Hello, World!
-HELLO
-world
+Pirates win 7-2! Your announcer: Bob Walk.
+Welcome to PNC Park!
+  Tonight's starter: Bob Walk.
+Raise the Jolly Roger!
+GO BUCS
+three rivers
 true
 true
 true
-6
+8
 4
-4
-5
-2
-range item: 0
-range item: 1
-range item: 2
-char: a
-char: b
-char: c
+3
+317
+250
+inning: 1
+inning: 2
+inning: 3
+letter: B
+letter: U
+letter: C
 3
 2
 1
 
-M8 — bignum (number<100>):
+M8 — bignum (number<100>) for exact payroll math:
   0.1 + 0.2 = (see next line)
 0.3
 
 M8 — modules, multi-file project:
-  import { newPlayer, greet } from services/players
+  import { newPirate, announce } from services/players
   import { clamp, square } from utils/math_extra
-  Multi-file build: ALL .ynz files under src/ compiled + linked.
+  Multi-file build: ALL .ynz files in the project compiled + linked.

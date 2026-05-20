@@ -2,7 +2,7 @@
 //
 // These are NOT meant to compile cleanly. Each section demonstrates a watch
 // infrastructure error path. Run with:
-//   ynz watch --check examples/errors/v0_2_m4_errors.ynz
+//   ynz watch --check examples/primantis-orders/v0_2_m4_errors.ynz
 // and observe the diagnostic output.
 //
 // To simulate watch-specific infrastructure errors (file watcher init failure,
@@ -13,11 +13,11 @@
 // let x = unknownIdent
 // --- Watch --check mode (build-only) ---
 // WHY: with --check, ynz watch compiles but does NOT execute the program.
-// Trigger: ynz watch --check examples/errors/v0_2_m4_errors.ynz
+// Trigger: ynz watch --check examples/primantis-orders/v0_2_m4_errors.ynz
 // Expected: "✓ Built in N ms" with no program output.
 // --- RSS hard-stop (simulated) ---
 // WHY: demonstrates the Layer 3 memory hard-stop message (WHAT/WHAT-INSTEAD/WHY format).
-// Trigger: YNZ_WATCH_MAX_RSS_MB=1 ynz watch examples/errors/v0_2_m4_errors.ynz
+// Trigger: YNZ_WATCH_MAX_RSS_MB=1 ynz watch examples/primantis-orders/v0_2_m4_errors.ynz
 // Expected: hard-stop message + exit code 2 within a few rebuilds.
 // --- No yinz.toml in project mode ---
 // WHY: demonstrates the WatchNoYinzToml error when watch is invoked on a directory
@@ -26,7 +26,7 @@
 // Expected: error with WHAT/WHAT-INSTEAD/WHY + exit code 2.
 // --- --json + --no-clear coexist (no error) ---
 // WHY: verifies --json and --no-clear are not mutually exclusive.
-// Trigger: ynz watch --json --no-clear examples/errors/v0_2_m4_errors.ynz
+// Trigger: ynz watch --json --no-clear examples/primantis-orders/v0_2_m4_errors.ynz
 // Expected: NDJSON on stdout, no error about conflicting flags.
 
 // --- Compile error: unknown identifier (always visible diagnostic) ---

@@ -1,8 +1,10 @@
-// examples/errors/m4_errors.ynz
+// examples/primantis-orders/m4_errors.ynz
 //
 // Every M4 lexer-level compile error in one file (P1 scope only).
 // P2+ error classes are added by their respective phases.
-// Run: ./target/debug/ynz build examples/errors/m4_errors.ynz
+// Themed: Primanti's kitchen — orders going sideways during the rush.
+//
+// Run: ./target/debug/ynz build examples/primantis-orders/m4_errors.ynz
 //
 // Yinz multi-errors up to 50 per compile — all diagnostics below fire in one run.
 
@@ -11,39 +13,39 @@
 // WHY: `type` is banned at the lexer level. M4 P1 redirects to `shape`.
 // Users from TypeScript hit this first — the diagnostic teaches `shape` as
 // the single unambiguous keyword for all data type declarations.
-type Player {
+type Sandwich {
   name: string
 }
 
 // WHY: `struct` is banned. Users from Rust/C reach for this.
 // Redirected to `shape` with a note that Yinz uses one keyword for all shapes.
-struct Enemy {
-  health: int
+struct Order {
+  ticketNumber: int
 }
 
 // WHY: `class` is banned. Users from Java/Swift reach for this.
 // Diagnostic explicitly mentions the non-OOP model: data in `shape`,
 // behavior in standalone functions.
-class Weapon {
-  damage: int
+class Topping {
+  weightOz: int
 }
 
 // WHY: `interface` is banned. Users from TypeScript/Java reach for this.
 // Redirected to `shape` + `follows` — the Yinz contract pattern.
-interface Damageable {
-  takeDamage(lend self, amount: int) -> nothing
+interface Stackable {
+  addLayer(lend self, ingredient: string) -> nothing
 }
 
 // WHY: `enum` is banned. Users from any typed language reach for this.
 // Redirected to `options` — the Yinz human-readable term for named value sets.
-enum Status {
-  active
-  inactive
+enum BreadStatus {
+  fresh
+  stale
 }
 
 // WHY: `abstract` is banned. Users from Java/C# reach for this.
 // Redirected to `base shape` — the Yinz form for a non-instantiable shape.
-abstract class Entity {
+abstract class MenuItem {
   name: string
 }
 
@@ -56,17 +58,17 @@ function test() -> nothing {
 
 // ────── M4 P2: Parser errors ──────
 
-// WHY: Prefix-form struct literal `Player { ... }` is banned — annotation-only
-//      form is required. Parser redirects to `let p: Player = { ... }` form.
+// WHY: Prefix-form struct literal `Sandwich { ... }` is banned — annotation-only
+//      form is required. Parser redirects to `let s: Sandwich = { ... }` form.
 function prefixStructLit() -> nothing {
-  let p = Player { name: `Patrick` }
+  let s = Sandwich { name: `Pitts-burgher` }
 }
 
 // WHY: Method body inside a shape is banned — Yinz is not OOP.
 //      Parser emits teaching diagnostic telling user to move the function outside.
-shape BadShape {
-  function greet() -> string {
-    return `hi`
+shape BadKitchen {
+  function announce() -> string {
+    return `order's up`
   }
 }
 
@@ -74,27 +76,27 @@ shape BadShape {
 
 // WHY: Struct literal missing a required field.
 //      P3a check_struct_lit validates all visible fields are present.
-shape Player { name: string health: int }
+shape Sandwich { name: string priceCents: int }
 function missingField() -> nothing {
-  let p: Player = { name: `Patrick` }
+  let s: Sandwich = { name: `Pitts-burgher` }
 }
 
-// WHY: Field type mismatch — health expects int, got string.
+// WHY: Field type mismatch — priceCents expects int, got string.
 function wrongFieldType() -> nothing {
-  let p: Player = { name: `Patrick`, health: `one hundred` }
+  let s: Sandwich = { name: `Pitts-burgher`, priceCents: `one thousand` }
 }
 
 // WHY: `base shape` cannot be instantiated directly.
-base shape Entity { name: string }
+base shape MenuItem { name: string }
 function instantiateBase() -> nothing {
-  let e: Entity = { name: `ghost` }
+  let m: MenuItem = { name: `mystery item` }
 }
 
 // WHY: `const` binding — field mutation rejected.
 //      Demonstrates const deep-immutability (one of the five const paths from plan invariants).
 function constFieldMutation() -> nothing {
-  const p: Player = { name: `Patrick`, health: 100 }
-  p.health = 50
+  const s: Sandwich = { name: `Pitts-burgher`, priceCents: 1100 }
+  s.priceCents = 50
 }
 
 // ────── Hidden-field errors ──────
@@ -103,7 +105,7 @@ function constFieldMutation() -> nothing {
 // construction would leave the field uninitialized. This triggers the
 // "hidden field has no default" diagnostic from collect_shapes.
 shape NoDefault {
-    hidden bar: int
+    hidden ingredientCount: int
 }
 
 // WHY: external construction cannot set a hidden field. The multi-file case

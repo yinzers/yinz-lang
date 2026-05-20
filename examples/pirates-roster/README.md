@@ -2,7 +2,7 @@
 
 **Layout: single-entry project** (the canonical Yinz shape for ~95% of projects). One `yinz.toml`, one `entrypoint.ynz`, code organized into `services/` and `utils/` subfolders imported root-relatively. No `[entries]` table, no `ships/` folder — that's only for multi-entry projects (see `../stadium-fleet/` for that layout, available in v0.22).
 
-**Theme (in-progress):** Pittsburgh Pirates roster — players, stats, lineups. The Pittsburgh sports universe theming is being rolled across `entrypoint.ynz` + companion modules; until that lands, the demo uses generic player/game vocabulary while still exercising every v0.1 feature.
+**Theme:** Pittsburgh Pirates roster — players (Clemente, Wagner), stats (career hits, batting averages in thousandths, scouting flags), and lineups (starting / bench / IL via `options LineupStatus`). The entrypoint walks M1–M8 features in baseball-flavored context; companion modules (`services/players.ynz` for the `Pirate` shape, `utils/math_extra.ynz` for stat math) export reusable helpers.
 
 A single growing project that demonstrates **every v0.1 language feature** as it ships. Compile + run after each milestone to see the language in action.
 

@@ -1,26 +1,30 @@
-// This file is intentionally non-canonical.
-// Run: ynz fmt examples/fmt_demo/messy.ynz to see the formatter rewrite it.
-// To check without rewriting: ynz fmt --check examples/fmt_demo/messy.ynz (exits 1).
+// This file is intentionally non-canonical — n'at.
+// Run: ynz fmt examples/burgh-poem/messy.ynz to see the formatter rewrite it.
+// To check without rewriting: ynz fmt --check examples/burgh-poem/messy.ynz (exits 1).
 //
-// This file is EXCLUDED from ynz fmt --all because examples/fmt_demo/ has no
+// This file is EXCLUDED from ynz fmt --all because examples/burgh-poem/ has no
 // yinz.toml project root.  It stays non-canonical forever as the demo fixture.
+//
+// Theme: a Pittsburgh fan greeting + counting beers + measuring the distance
+// between two stadium seats. Real Yinz constructs (functions, shapes), deliberately
+// spaced out so the formatter has plenty to clean up.
 
-function   greet(  name :  string  )  ->  string  {
-  return   `Hello,   ${name}!`
+function   cheer(  name :  string  )  ->  string  {
+  return   `Yinz ready, ${name}? Let's go Bucs!`
 }
 
-function   add(  x:int,    y:int  )  ->  int  {
-  let   result=x+y
-  return   result
+function   totalBeers(  x:int,    y:int  )  ->  int  {
+  let   round=x+y
+  return   round
 }
 
-shape    Point   {
-  x  :  int
-  y   :  int
+shape    StadiumSeat   {
+  row  :  int
+  seat   :  int
 }
 
-function   distance(  a:  Point  ,  b:  Point  )  ->  float  {
-  let   dx =  a.x  - b.x
-  let   dy =  a.y  - b.y
-  return   dx * dx  +  dy  *  dy
+function   rowDistance(  a:  StadiumSeat  ,  b:  StadiumSeat  )  ->  float  {
+  let   dRow =  a.row  - b.row
+  let   dSeat =  a.seat  - b.seat
+  return   dRow * dRow  +  dSeat  *  dSeat
 }

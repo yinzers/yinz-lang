@@ -3,7 +3,9 @@
 // Intentional triggers for every registry-driven error path introduced or
 // migrated in v0.2-M1. Each trigger has a // WHY: comment naming the diagnostic class.
 //
-// Run: ynz run examples/errors/v0_2_m1_errors.ynz  (expects compile errors)
+// Themed: Primanti's kitchen — orders going sideways during the rush.
+//
+// Run: ynz run examples/primantis-orders/v0_2_m1_errors.ynz  (expects compile errors)
 // Used for hands-on validation of diagnostic quality after each registry migration.
 
 // ---------------------------------------------------------------------------

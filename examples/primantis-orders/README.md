@@ -2,7 +2,7 @@
 
 **Layout: gallery** (loose `.ynz` files, no `yinz.toml`). Not a Yinz project — these files are standalone scripts the compiler ingests one at a time to show error diagnostics.
 
-**Theme (in-progress):** Primanti's-style restaurant orders going wrong. Wrong toppings, missing ingredients, fire in the kitchen — each milestone's error classes triggered with restaurant-themed code. The rewrite-to-theme is rolling milestone-by-milestone; until each file lands its theming pass, the existing generic triggers stay in place (still demonstrate the same diagnostics).
+**Theme:** Primanti's kitchen — orders going sideways during the rush. Each milestone's error classes triggered with restaurant-flavored code (sandwiches, orders, tabs, toppings). Deeper theming on the M1/M2/M4 files; the remaining files have a themed header + light variable renames with the error-trigger patterns kept identical to the originals.
 
 One file per milestone showing every compile error that milestone's diagnostics can produce. Yinz multi-errors (up to 50 per compile per `design/compiler-errors.md`), so each file demonstrates many simultaneous diagnostics in one compile run.
 

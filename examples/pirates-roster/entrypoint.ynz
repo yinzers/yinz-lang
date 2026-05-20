@@ -1,20 +1,18 @@
-// examples/basics/entrypoint.ynz
-// Format this file with: ynz fmt examples/basics/entrypoint.ynz — output is byte-identical (canonical).
+// examples/pirates-roster/entrypoint.ynz
+// Format this file with: ynz fmt examples/pirates-roster/entrypoint.ynz — output is byte-identical (canonical).
 //
-// The Yinz v0.1 Language Showcase — grows milestone-by-milestone.
-// Compile + run with: ./target/debug/ynz run examples/basics/
-// Watch this file with: ynz watch examples/basics/ — saves trigger rebuild + re-run.
-//   Pass --check for build-only (no execute). Pass --json for structured event output.
+// The Yinz v0.1 Language Showcase — Pirates-themed, grows milestone-by-milestone.
+// Compile + run with: ./target/debug/ynz run examples/pirates-roster/
 //
 // v0.2-M2 — Open this file in VSCode (with the Yinz extension installed) to see:
 //   • Hover docs on every keyword — try hovering over `function`, `let`, `shape`, etc.
 //   • Autocomplete after typing `int.` — shows all primitive int methods
-//   • Inline diagnostics — see examples/errors/v0_2_m2_errors.ynz for intentional triggers
-//   Install: https://github.com/patrickrizzardi/ynz/releases/latest/download/yinz-latest.vsix
+//   • Inline diagnostics — see examples/primantis-orders/v0_2_m2_errors.ynz for intentional triggers
+//   Install: https://github.com/yinzers/yinz-lang/releases/latest/download/yinz-latest.vsix
 //
 // M8: this file is now the ENTRYPOINT of a multi-file project.
-// Companion modules: services/players.ynz, utils/math_extra.ynz
-// See examples/basics/README.md for what each section demonstrates.
+// Companion modules: services/players.ynz (Pirate roster), utils/math_extra.ynz (stats math)
+// See examples/pirates-roster/README.md for what each section demonstrates.
 //
 // Current coverage: M1 + M2 + M3 + M4 + M5 + M6 + M7 + M8 (modules, doc comments,
 // sensitive, concurrency keywords, bignum).
@@ -22,257 +20,247 @@
 // .claude/rules/plan-invariants.md `### Demo & Error Gallery` requirement.
 
 // M8 module imports — bring names from companion modules into scope.
-// Cross-file symbol resolution: cross-file CALLS ship in v0.2; the syntax and
-// multi-file project structure ship here in v0.1.
-import { newPlayer, greet } from `services/players`
+// Cross-file CALLS ship in v0.2; the syntax and multi-file project structure ship here in v0.1.
+import { newPirate, announce } from `services/players`
 
 import { clamp, square } from `utils/math_extra`
 
 function entrypoint() -> nothing {
   // ────── M1: hello-world end-to-end ──────
-  print(`Yinz v0.1 language showcase`)
-  print(`===========================`)
+  print(`Pittsburgh Pirates Roster — Yinz v0.1 Showcase`)
+  print(`==============================================`)
   print(``)
   // ────── M2: variables, arithmetic, primitives, conversions ──────
   print(`M2 — variables, arithmetic, primitives:`)
   // let vs const (M2 const-reassignment check)
-  const playerName = `Cheddar`
-  let score: int = 0
+  const pirateName = `Clemente`
+  let runsScored: int = 0
   // Primitive types — int, float, number (decimal128), boolean
-  const startHealth: int = 100
-  const damageMultiplier: float = 1.5
-  const accountBalance: number = 1234.56  // decimal128, exact
-  const isActive: boolean = true
+  const startCareerHits: int = 3000
+  const battingAvg: float = 0.317
+  const careerEarnings: number = 1234567.89  // decimal128, exact dollars + cents
+  const isHallOfFamer: boolean = true
   // Arithmetic, comparison, boolean
-  let combo = startHealth + 25
+  let combo = startCareerHits + 25
   combo = combo * 2
   combo = combo - 50
   combo = combo / 3
-  // Bitwise operators
-  const flagRead: int = 1
-  const flagWrite: int = 2
-  const flagExecute: int = 4
-  const perms = flagRead | flagWrite
-  const hasExecute = (perms & flagExecute) != 0
+  // Bitwise operators — encoding scouting flags
+  const flagSpeed: int = 1
+  const flagPower: int = 2
+  const flagDefense: int = 4
+  const scoutingFlags = flagSpeed | flagPower
+  const hasDefense = (scoutingFlags & flagDefense) != 0
   // Polymorphic print across primitive types
-  print(playerName)
+  print(pirateName)
   print(combo)
-  print(damageMultiplier)
-  print(accountBalance)
-  print(isActive)
-  print(perms)
-  print(hasExecute)
+  print(battingAvg)
+  print(careerEarnings)
+  print(isHallOfFamer)
+  print(scoutingFlags)
+  print(hasDefense)
   // M2 conversion intrinsic: .toString()
-  const scoreText = score.toString()
-  print(scoreText)
+  const runsText = runsScored.toString()
+  print(runsText)
   print(``)
   // ────── M3: control flow + user-defined functions ──────
   print(`M3 — control flow + user functions:`)
   // if + early return demoed via the helper functions below
-  print(classifyHealth(startHealth))
-  print(classifyHealth(50))
-  print(classifyHealth(10))
+  print(classifyBatter(280))   // .280 — solid
+  print(classifyBatter(250))   // .250 — slumping (>=230 but <270)
+  print(classifyBatter(180))   // .180 — needs the minors
   // Multi-case if (M3 match form with else => catch-all)
-  const grade = letterGrade(85)
-  print(grade)
-  // while loop
-  let countdown = 3
-  while (countdown > 0) {
-    print(countdown)
-    countdown = countdown - 1
+  const tier = lineupSlot(3)
+  print(tier)
+  // while loop — count down outs in an inning
+  let outsRemaining = 3
+  while (outsRemaining > 0) {
+    print(outsRemaining)
+    outsRemaining = outsRemaining - 1
   }
-  // for + range
-  let sum = 0
+  // for + range — innings 1 through 5
+  let totalRuns = 0
   for (i in range(1, 6)) {
-    sum = sum + i
+    totalRuns = totalRuns + i
   }
-  print(sum)  // 1+2+3+4+5 = 15
-  // Recursion (mutual recursion exercised by isEven/isOdd below)
-  print(fib(10))  // 55
+  print(totalRuns)  // 1+2+3+4+5 = 15
+  // Recursion + mutual recursion exercised below
+  print(fib(10))    // 55 — generic math demo
   print(isEven(8))  // true
-  print(isOdd(7))  // true
+  print(isOdd(7))   // true
   // ────── M4: shapes + functions + ownership ──────
-  // P2 (parser) shipped: shape declarations, field access, struct literals,
-  //   .copy()/.freeze() postfix ops, dynamic types, ownership modifiers on params.
-  // After M4 P3a (typeck): struct literals type-check against annotated shape
-  // After M4 P3b (typeck): extends + follows + dynamic dispatch work
-  // After M4 P3c (typeck): full borrow-check enforced
-  // After M4 P4 (codegen): end-to-end compile + run
-  // After M4 P5 (catch-up): int.max, int.min, number.epsilon, .wrappingAdd() etc.
-  // ────── M4: shapes + UFCS methods + ownership ──────
   print(``)
   print(`M4 — shapes + methods + ownership:`)
-  let p: Player = { name: `Cheddar`, health: 100 }
-  greetPlayer(p)
-  healPlayer(p, 20)
-  greetPlayer(p)
+  let roberto: Pirate = { name: `Roberto Clemente`, careerHits: 3000 }
+  announceBatter(roberto)
+  recordHit(roberto, 1)
+  announceBatter(roberto)
   // ────── M5: generics + collections + maybe ──────
   print(``)
   print(`M5 — generics + collections:`)
   // Generic function — identity<T> infers T from argument
   print(identity(42))
   print(identity(`generic`))
-  // array<T>: heap-growable, literal init
-  let nums: array<int> = [10, 20, 30]
-  nums.add(40)
-  print(nums.count())
-  print(nums[0].or(-1))
-  // fixed<T>: stack-allocated, size locked
-  let tags: fixed<int> = [100, 200, 300]
-  print(tags.count())
-  print(tags[2].or(-1))
+  // array<T>: heap-growable, batting averages in thousandths (317 = .317)
+  let battingAverages: array<int> = [317, 282, 295]
+  battingAverages.add(308)
+  print(battingAverages.count())
+  print(battingAverages[0].or(-1))
+  // fixed<T>: stack-allocated, size locked — three retired Pirates numbers
+  let retiredNumbers: fixed<int> = [1, 4, 8]
+  print(retiredNumbers.count())
+  print(retiredNumbers[2].or(-1))
   // maybe<T>: absence without null
-  let score: maybe<int> = none
-  print(score.or(0))
-  // map<K,V>: hash map with string keys
-  let lookup: map<string, int> = { `alice`: 90, `bob`: 85 }
-  print(lookup[`alice`].or(0))
-  print(lookup.count())
+  let nextHitter: maybe<int> = none
+  print(nextHitter.or(0))
+  // map<K,V>: hash map with string keys — Pirates career hit leaders
+  let hitLeaders: map<string, int> = { `clemente`: 3000, `wagner`: 3420 }
+  print(hitLeaders[`clemente`].or(0))
+  print(hitLeaders.count())
   // ────── M6: options + unions + narrowing ──────
   print(`M6 — options, unions, narrowing:`)
-  // Options: declaration + value use + multi-case
-  let status: Status = Status.active
-  print(status.toString())
-  if (status) {
-    active => {
-      print(`active`)
+  // Options: lineup status — declaration + value use + multi-case
+  let slot: LineupStatus = LineupStatus.starting
+  print(slot.toString())
+  if (slot) {
+    starting => {
+      print(`starting lineup`)
     }
-    pending => {
-      print(`pending`)
+    bench => {
+      print(`on the bench`)
     }
-    banned => {
-      print(`banned`)
+    injuredList => {
+      print(`on the IL`)
     }
   }
   // Options equality
-  let eq = status == Status.active
-  print(eq.toString())
-  // Fallible conversions
-  let parsed: maybe<int> = `42`.toInt()
-  print(parsed.or(0).toString())
+  let isStarter = slot == LineupStatus.starting
+  print(isStarter.toString())
+  // Fallible conversions — parsing jersey numbers from strings
+  let parsedJersey: maybe<int> = `21`.toInt()
+  print(parsedJersey.or(0).toString())
   let fromFloat: maybe<int> = 3.14.toInt()
   print(fromFloat.or(-1).toString())
   let fromInt: int = 99.toInt()
   print(fromInt.toString())
   // Early-return narrowing on maybe<T>
-  let nums: array<int> = [10, 20, 30]
-  let first = firstOrDefault(nums)
-  print(first.toString())
+  let scores: array<int> = [3, 5, 7]
+  let firstInningRuns = firstOrDefault(scores)
+  print(firstInningRuns.toString())
   // ────── M7: strings, errors, iterables ──────
   print(``)
   print(`M7 — full strings, errors, iterables:`)
-  // String interpolation in a real message
-  const playerName2 = `Alice`
-  const playerScore = 150
-  const msg = `Player ${playerName2} scored ${playerScore} points!`
-  print(msg)
-  // Multi-line string with trim
-  const announcement = `
-  Welcome to the tournament!
-  Top player: ${playerName2}
+  // String interpolation — game-night announcement
+  const announcer = `Bob Walk`
+  const finalScore = 7
+  const announcement = `Pirates win ${finalScore}-2! Your announcer: ${announcer}.`
+  print(announcement)
+  // Multi-line string with trim — pre-game intro
+  const intro = `
+  Welcome to PNC Park!
+  Tonight's starter: ${announcer}.
 `
-  print(announcement.trim())
-  // String methods
-  const bio = `  Hello, World!  `
-  print(bio.trim())
-  print(`hello`.toUpperCase())
-  print(`WORLD`.toLowerCase())
-  print(`hello`.contains(`ell`).toString())
-  print(`hello`.startsWith(`hel`).toString())
-  print(`hello`.endsWith(`lo`).toString())
-  const idx = `hello world`.indexOf(`world`)
+  print(intro.trim())
+  // String methods — broadcaster catchphrases
+  const slogan = `  Raise the Jolly Roger!  `
+  print(slogan.trim())
+  print(`go bucs`.toUpperCase())
+  print(`THREE RIVERS`.toLowerCase())
+  print(`Pittsburgh`.contains(`burgh`).toString())
+  print(`Pirates`.startsWith(`Pir`).toString())
+  print(`Clemente`.endsWith(`nte`).toString())
+  const idx = `Roberto Clemente`.indexOf(`Clemente`)
   print(idx.or(-1).toString())
-  // Code point iteration — counts 4 code points in "café"
+  // Code point iteration — 4 code points in "café"
   let charCount = 0
   for (c in `café`) {
     charCount = charCount + 1
   }
   print(charCount.toString())
-  // String splitting
-  const csv = `a,b,c,d`
-  const parts = csv.split(`,`)
+  // String splitting — comma-separated career stats (hits,homers,RBIs)
+  const careerLine = `3000,240,1305`
+  const parts = careerLine.split(`,`)
   print(parts.count().toString())
   // errors keyword — fallible function with .or() fallback
-  const ratio = safeDivide(10, 2).or(0)
-  print(ratio.toString())
-  // errors with .failed() check (function always succeeds here)
-  const ok = safeDivide(10, 5)
-  if (ok.failed()) {
-    print(`safeDivide failed`)
+  // 127 hits / 400 atBats → .317 batting average (returned in thousandths)
+  const avg = battingAverage(127, 400).or(0)
+  print(avg.toString())
+  // errors with .failed() check — would fail if atBats == 0
+  const okAvg = battingAverage(50, 200)
+  if (okAvg.failed()) {
+    print(`battingAverage failed`)
   }
-  print(ok.toString())
-  // for loop with first-class range
-  let r = range(0, 3)
+  print(okAvg.toString())
+  // for loop with first-class range — innings 1-3
+  let r = range(1, 4)
   for (i in r) {
-    print(`range item: ${i}`)
+    print(`inning: ${i}`)
   }
-  // for loop over string characters
-  for (c in `abc`) {
-    print(`char: ${c}`)
+  // for loop over string characters — Pirates rallying cry
+  for (c in `BUC`) {
+    print(`letter: ${c}`)
   }
-  // User-defined iterable shape — Countdown counts down from N
-  let cd: Countdown = { from: 3, current: 0 }
-  for (n in cd) {
+  // User-defined iterable shape — InningClock counts outs from 3 down to 1
+  let clock: InningClock = { startOuts: 3, current: 0 }
+  for (n in clock) {
     print(n.toString())
   }
   // ────── M8: bignum (number<N> for N > 34) ──────
-  let a: number<100> = 0.1
-  let b: number<100> = 0.2
-  let c: number<100> = a + b
+  let teamPayroll: number<100> = 0.1
+  let bonus: number<100> = 0.2
+  let totalCompensation: number<100> = teamPayroll + bonus
   print(``)
-  print(`M8 — bignum (number<100>):`)
+  print(`M8 — bignum (number<100>) for exact payroll math:`)
   print(`  0.1 + 0.2 = (see next line)`)
-  print(c)
+  print(totalCompensation)
   // ────── M8: modules (syntax demo) ──────
   // Import statements above bring names from companion modules into scope.
-  // Cross-file CALLS (using newPlayer / clamp etc. here) ship in v0.2 when
+  // Cross-file CALLS (using newPirate / announce / clamp here) ship in v0.2 when
   // the typeck learns to resolve symbols across compilation units.
   // In v0.1 the import/export SYNTAX is locked and the multi-file driver works
-  // (all .ynz files under src/ are compiled and linked together).
+  // (all .ynz files under the project root are compiled and linked together).
   print(``)
   print(`M8 — modules, multi-file project:`)
-  print(`  import { newPlayer, greet } from services/players`)
+  print(`  import { newPirate, announce } from services/players`)
   print(`  import { clamp, square } from utils/math_extra`)
-  print(`  Multi-file build: ALL .ynz files under src/ compiled + linked.`)
+  print(`  Multi-file build: ALL .ynz files in the project compiled + linked.`)
 }
 
 // ────── M3 helper functions ──────
 
-// Classify health into a status string. Uses early return.
-function classifyHealth(hp: int) -> string {
-  if (hp >= 75) {
-    return `healthy`
+// Classify a batting average (in thousandths — 280 = .280) into a status string.
+// Uses early return.
+function classifyBatter(avgThousandths: int) -> string {
+  if (avgThousandths >= 270) {
+    return `solid hitter`
   }
-  if (hp >= 25) {
-    return `wounded`
+  if (avgThousandths >= 230) {
+    return `slumping`
   }
-  return `critical`
+  return `headed for the minors`
 }
 
-// Multi-case `if (value) { arms => ... else => ... }` for letter grading.
-function letterGrade(percent: int) -> string {
+// Multi-case `if (value) { arms => ... else => ... }` for lineup slot description.
+function lineupSlot(spot: int) -> string {
   // Multi-case form — each arm is a value pattern; `else =>` is the catch-all
-  if (percent) {
-    100 => {
-      return `A+`
+  if (spot) {
+    1 => {
+      return `leadoff`
     }
     else => {
-      if (percent >= 90) {
-        return `A`
+      if (spot == 3) {
+        return `power slot`
       }
-      if (percent >= 80) {
-        return `B`
+      if (spot == 4) {
+        return `cleanup`
       }
-      if (percent >= 70) {
-        return `C`
+      if (spot == 9) {
+        return `pitcher slot (DH-less NL throwback)`
       }
-      if (percent >= 60) {
-        return `D`
-      }
-      return `F`
+      return `middle of the order`
     }
   }
-  return `F`  // unreachable but typeck requires every path returns
+  return `unknown`  // unreachable but typeck requires every path returns
 }
 
 // Classic recursive fib — exercises user-defined function with int param + recursion.
@@ -300,17 +288,17 @@ function isOdd(n: int) -> boolean {
 
 // ────── M4: shapes + UFCS methods + ownership ──────
 
-shape Player {
+shape Pirate {
   name: string
-  health: int
+  careerHits: int
 }
 
-function greetPlayer(share self: Player) -> nothing {
+function announceBatter(share self: Pirate) -> nothing {
   print(self.name)
 }
 
-function healPlayer(lend self: Player, amount: int) -> nothing {
-  self.health = self.health + amount
+function recordHit(lend self: Pirate, count: int) -> nothing {
+  self.careerHits = self.careerHits + count
 }
 
 // ────── M5: generics + collections + maybe ──────
@@ -321,36 +309,36 @@ function identity<T>(give value: T) -> T {
 
 // ────── M6: options + unions + narrowing ──────
 
-options Status {
-  pending
-  active
-  banned
+options LineupStatus {
+  bench
+  starting
+  injuredList
 }
 
-shape ActiveAccount {
+shape StartingLineup {
   name: string
 }
 
-shape BannedAccount {
+shape OnBench {
   reason: string
 }
 
-shape PendingAccount {
-  email: string
+shape OnInjuredList {
+  injury: string
 }
 
-shape AccountResult = ActiveAccount | BannedAccount | PendingAccount
+shape RosterDecision = StartingLineup | OnBench | OnInjuredList
 
-function classifyAccount(account: AccountResult) -> string {
-  if (account) {
-    is ActiveAccount => {
-      return `OK`
+function classifyRoster(decision: RosterDecision) -> string {
+  if (decision) {
+    is StartingLineup => {
+      return `PLAYING`
     }
-    is BannedAccount => {
-      return `DENIED`
+    is OnBench => {
+      return `BENCH`
     }
-    is PendingAccount => {
-      return `WAIT`
+    is OnInjuredList => {
+      return `IL`
     }
   }
   return `UNKNOWN`
@@ -366,25 +354,26 @@ function firstOrDefault(share nums: array<int>) -> int {
 
 // ────── M7: strings, errors, iterables ──────
 
-// safeDivide: an errors-capable function — caller uses .or() or .failed()
-function safeDivide(a: int, b: int) -> int errors {
-  return a / b
+// battingAverage: an errors-capable function — caller uses .or() or .failed().
+// Returns the average in thousandths (e.g., 127 hits / 400 atBats → 317).
+function battingAverage(hits: int, atBats: int) -> int errors {
+  return (hits * 1000) / atBats
 }
 
-// Countdown: user-defined iterable shape — walks 3, 2, 1 sequence
-shape Countdown {
-  from: int
+// InningClock: user-defined iterable shape — counts outs from 3 down to 1.
+shape InningClock {
+  startOuts: int
   hidden current: int = 0
 }
 
-// next: standalone function satisfying the Iterable<int> protocol for Countdown.
-// Returns the next value or none when exhausted.
-function next(lend self: Countdown) -> maybe<int> {
-  if (self.current >= self.from) {
+// next: standalone function satisfying the Iterable<int> protocol for InningClock.
+// Returns the next out count or none when the inning is over.
+function next(lend self: InningClock) -> maybe<int> {
+  if (self.current >= self.startOuts) {
     return none
   }
-  let items: fixed<int> = [3, 2, 1]
-  let result = items.get(self.current)
+  let outs: fixed<int> = [3, 2, 1]
+  let result = outs.get(self.current)
   self.current = self.current + 1
   return result
 }
@@ -393,12 +382,12 @@ function next(lend self: Countdown) -> maybe<int> {
 
 // Inline shape in a let binding — type defined at the point of use.
 function demoInlineShapes() -> nothing {
-  let point: { x: int, y: int } = { x: 3, y: 4 }
-  print(`point x=${point.x} y=${point.y}`)
-  // Inline shape in fixed<T> + for-loop destructuring (the motivating example).
-  const intervals: fixed<{ minutes: int }> = [{ minutes: 5 }, { minutes: 15 }, { minutes: 60 }]
-  for (__shape in intervals) {
+  let seat: { row: int, number: int } = { row: 3, number: 4 }
+  print(`seat row=${seat.row} number=${seat.number}`)
+  // Inline shape in fixed<T> + for-loop destructuring — game intermission lengths.
+  const intermissions: fixed<{ minutes: int }> = [{ minutes: 5 }, { minutes: 15 }, { minutes: 60 }]
+  for (__shape in intermissions) {
     let minutes = __shape.minutes
-    print(`interval: ${minutes} minutes`)
+    print(`intermission: ${minutes} minutes`)
   }
 }

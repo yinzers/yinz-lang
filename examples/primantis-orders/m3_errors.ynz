@@ -1,7 +1,9 @@
-// examples/errors/m3_errors.ynz
+// examples/primantis-orders/m3_errors.ynz
 //
 // Every M3 compile error in one file (includes all M1 + M2 error classes via prior milestone files).
-// Run: ./target/debug/ynz build examples/errors/m3_errors.ynz
+// Themed: Primanti's kitchen — orders going sideways during the rush.
+//
+// Run: ./target/debug/ynz build examples/primantis-orders/m3_errors.ynz
 
 function missingReturnPath(x: int) -> int {
   // WHY: not all code paths return a value. Typeck's return-path analysis

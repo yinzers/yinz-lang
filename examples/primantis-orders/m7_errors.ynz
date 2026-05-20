@@ -1,4 +1,4 @@
-// examples/errors/m7_errors.ynz
+// examples/primantis-orders/m7_errors.ynz
 //
 // Intentional compile-error gallery for M7: strings, errors keyword, iterables.
 // Every declaration below triggers a specific diagnostic class.

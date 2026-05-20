@@ -1,22 +1,22 @@
-// services/players.ynz — exported shapes and functions for player management.
+// services/players.ynz — exported shapes and functions for Pirates roster management.
 // Demonstrates: export shape, export function, doc comments, UFCS across modules.
 
-/// A player in the game world. Tracks name and current health.
-export shape Player {
-  /// The player's display name.
+/// A Pittsburgh Pirate. Tracks display name and career hit total.
+export shape Pirate {
+  /// The player's display name (e.g., "Roberto Clemente").
   name: string
-  /// Current hit points. Starts at 100.
-  health: int
+  /// Career hits at the major-league level. Starts at 0 for rookies.
+  careerHits: int
 }
 
-export function newPlayer(name: string) -> Player {
-  return { name: name, health: 100 }
+export function newPirate(name: string) -> Pirate {
+  return { name: name, careerHits: 0 }
 }
 
-export function greet(player: Player) -> string {
-  return `Hello, ${player.name}!`
+export function announce(player: Pirate) -> string {
+  return `Now batting: ${player.name}!`
 }
 
-export function heal(player: Player, amount: int) -> Player {
-  return { name: player.name, health: player.health + amount }
+export function recordHits(player: Pirate, count: int) -> Pirate {
+  return { name: player.name, careerHits: player.careerHits + count }
 }

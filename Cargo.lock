@@ -2233,14 +2233,14 @@ checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "ynz-ast"
-version = "0.2.0-m3"
+version = "0.2.0-m4"
 dependencies = [
  "ynz-diagnostics",
 ]
 
 [[package]]
 name = "ynz-codegen"
-version = "0.2.0-m3"
+version = "0.2.0-m4"
 dependencies = [
  "inkwell",
  "insta",
@@ -2255,7 +2255,7 @@ dependencies = [
 
 [[package]]
 name = "ynz-diagnostics"
-version = "0.2.0-m3"
+version = "0.2.0-m4"
 dependencies = [
  "ariadne",
  "insta",
@@ -2264,7 +2264,7 @@ dependencies = [
 
 [[package]]
 name = "ynz-driver"
-version = "0.2.0-m3"
+version = "0.2.0-m4"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -2282,7 +2282,7 @@ dependencies = [
 
 [[package]]
 name = "ynz-fmt"
-version = "0.2.0-m3"
+version = "0.2.0-m4"
 dependencies = [
  "proptest",
  "ynz-ast",
@@ -2293,7 +2293,7 @@ dependencies = [
 
 [[package]]
 name = "ynz-lsp"
-version = "0.2.0-m3"
+version = "0.2.0-m4"
 dependencies = [
  "lsp-server",
  "lsp-types",
@@ -2309,14 +2309,14 @@ dependencies = [
 
 [[package]]
 name = "ynz-numerics"
-version = "0.2.0-m3"
+version = "0.2.0-m4"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "ynz-parser"
-version = "0.2.0-m3"
+version = "0.2.0-m4"
 dependencies = [
  "insta",
  "salsa",
@@ -2327,14 +2327,14 @@ dependencies = [
 
 [[package]]
 name = "ynz-registry"
-version = "0.2.0-m3"
+version = "0.2.0-m4"
 dependencies = [
  "toml",
 ]
 
 [[package]]
 name = "ynz-runtime"
-version = "0.2.0-m3"
+version = "0.2.0-m4"
 dependencies = [
  "memchr",
  "simdutf8",
@@ -2346,7 +2346,7 @@ dependencies = [
 
 [[package]]
 name = "ynz-tmgrammar"
-version = "0.2.0-m3"
+version = "0.2.0-m4"
 dependencies = [
  "serde_json",
  "ynz-registry",
@@ -2354,7 +2354,7 @@ dependencies = [
 
 [[package]]
 name = "ynz-typeck"
-version = "0.2.0-m3"
+version = "0.2.0-m4"
 dependencies = [
  "insta",
  "salsa",
@@ -2366,7 +2366,7 @@ dependencies = [
 
 [[package]]
 name = "ynz-watch"
-version = "0.2.0-m3"
+version = "0.2.0-m4"
 dependencies = [
  "assert_cmd",
  "chrono",

@@ -8,7 +8,7 @@
 // language parser.
 
 // WHY: parse error — formatter refuses to rewrite a file with syntax errors.
-//   Command: ynz fmt examples/errors/v0_2_m3_errors.ynz (this file itself has no
+//   Command: ynz fmt examples/primantis-orders/v0_2_m3_errors.ynz (this file itself has no
 //   parse errors — see broken_for_parse_error_test.ynz for a broken example).
 //   The formatter exits 1 and prints the parse diagnostic to stderr.
 

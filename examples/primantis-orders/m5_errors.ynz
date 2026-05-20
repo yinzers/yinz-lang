@@ -1,7 +1,9 @@
-// examples/errors/m5_errors.ynz
+// examples/primantis-orders/m5_errors.ynz
 //
 // M5 compile-error gallery — intentionally triggers every M5 diagnostic class.
-// Run: ./target/debug/ynz run examples/errors/m5_errors.ynz
+// Themed: Primanti's kitchen — orders going sideways during the rush.
+//
+// Run: ./target/debug/ynz run examples/primantis-orders/m5_errors.ynz
 // Expected: multiple compile errors, exit non-zero.
 //
 // Each trigger has a // WHY: comment naming the diagnostic class.

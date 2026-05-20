@@ -1,4 +1,5 @@
-// String helpers exported for use by other ships in the workspace.
+// Announcement helpers shared between every ship in the stadium fleet.
+// Used by ships/concessions/entrypoint.ynz to format PA broadcasts.
 
 export function capitalize(share s: string) -> string {
   if (s.length == 0) {

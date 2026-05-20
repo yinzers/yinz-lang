@@ -1,4 +1,5 @@
-// Math helpers exported for use by other ships in the workspace.
+// Scoring helpers shared between every ship in the stadium fleet.
+// Currently used by ships/scoreboard/entrypoint.ynz to tally runs per inning.
 
 export function sum(share nums: fixed<int, 4>) -> int {
   let total = 0

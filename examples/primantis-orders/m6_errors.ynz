@@ -1,4 +1,4 @@
-// examples/errors/m6_errors.ynz
+// examples/primantis-orders/m6_errors.ynz
 //
 // Intentional compile-error gallery for M6: options, unions, and narrowing.
 // Every declaration below triggers a specific diagnostic class.

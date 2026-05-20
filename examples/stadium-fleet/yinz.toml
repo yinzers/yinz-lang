@@ -5,16 +5,20 @@
 # every named entry. Shared code lives in a plain folder and is imported
 # root-relatively.
 #
+# Theme: stadium services — two ships sharing a ballpark. The scoreboard
+# tallies runs each inning; concessions broadcasts food specials. Both
+# import from /shared.
+#
 # v0.22 preview — [entries] is not yet supported by the compiler. Today's
 # yinz.toml has a single `entry = "..."` field. v0.22 adds [entries] for
 # multi-binary projects.
 
-name = "ships-demo"
+name = "stadium-fleet"
 version = "0.1.0"
 
 [entries]
-calculator = "ships/calculator/entrypoint.ynz"
-greeter    = "ships/greeter/entrypoint.ynz"
+scoreboard  = "ships/scoreboard/entrypoint.ynz"
+concessions = "ships/concessions/entrypoint.ynz"
 
 # No `entry =` at the top level — when [entries] is present, the user picks
-# one with `ynz build <name>`. `ynz build` (no arg) builds every entry.
+# one with `ynz build <name>`. `ynz build` (no arg) builds every ship.

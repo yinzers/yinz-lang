@@ -1,4 +1,4 @@
-// examples/errors/m8_errors.ynz
+// examples/primantis-orders/m8_errors.ynz
 //
 // Intentional compile-error gallery for M8: modules, concurrency keywords,
 // bignum, and the number[N] → number<N> migration.

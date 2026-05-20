@@ -1,0 +1,14 @@
+// scoreboard — a binary ship that tallies runs each inning. Imports stat helpers from /shared.
+//
+// Imports are root-relative from the project root (where yinz.toml lives).
+// No package-name / workspace-member indirection needed.
+
+import { sum, max } from `shared/scoring`
+
+function entrypoint() -> nothing {
+  // Runs scored in the first four innings: 3, 1, 4, 1.
+  let inningRuns: fixed<int, 4> = [3, 1, 4, 1]
+  let totalRuns = sum(inningRuns)
+  let bigInning = max(inningRuns)
+  print(`total runs = ${totalRuns}, biggest inning = ${bigInning} runs`)
+}

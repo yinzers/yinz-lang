@@ -1,33 +1,34 @@
-// examples/errors/m1_errors.ynz
+// examples/primantis-orders/m1_errors.ynz
 //
 // Every M1 compile error in one file. Compiler multi-errors up to 50 per compile.
+// Themed as a Primanti's kitchen where the orders are coming out wrong.
 //
-// Run: ./target/debug/ynz build examples/errors/m1_errors.ynz
+// Run: ./target/debug/ynz build examples/primantis-orders/m1_errors.ynz
 // Expected: every error below produces a three-part WHAT/WHAT-INSTEAD/WHY diagnostic.
 
 // WHY: banned-keyword diagnostic for `fn` — Yinz uses `function` keyword.
 //      Tests the lexer's banned-jargon path (lexer recovers as Identifier).
-fn shouldBeFunction() -> nothing {
-  print(`never reached`)
+fn cookSandwich() -> nothing {
+  print(`order's up`)
 }
 
 // WHY: unterminated string literal. Tests the lexer's recovery path —
 //      diagnostic at the opening quote span; lexer continues to next sensible boundary.
-function unterminated() -> nothing {
-  print(`missing closing quote
+function unterminatedOrder() -> nothing {
+  print(`pastrami slaw fries on the sandwich
 }
 
 // WHY: unknown character `$` in source. Tests the lexer's unknown-byte recovery.
-function unknownChar() -> nothing {
+function unknownTopping() -> nothing {
   print($)
 }
 
 // WHY: type mismatch — function declares `-> nothing` but the body returns a string.
 //      Tests typeck's return-type check against function signature.
-function typeMismatch() -> nothing {
-  return `this is a string"
+function wrongOrderType() -> nothing {
+  return `capicola provolone egg"
 }
 
 // WHY: missing body — `function name() -> nothing` with no `{` body.
 //      Tests parser's required-body enforcement (per r9 lock: `function` always has body).
-function noBody() -> nothing
+function emptyKitchen() -> nothing

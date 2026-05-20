@@ -1,10 +1,10 @@
-// examples/errors/v0_2_m2_errors.ynz
+// examples/primantis-orders/v0_2_m2_errors.ynz
 //
 // v0.2-M2 LSP UX demonstration file.
 // This file is intentionally broken in several ways to show how the Yinz
 // extension surfaces diagnostics, hover content, and autocomplete in VSCode.
 //
-// Run `ynz build examples/errors/v0_2_m2_errors.ynz` to see the CLI rendering.
+// Run `ynz build examples/primantis-orders/v0_2_m2_errors.ynz` to see the CLI rendering.
 // Open in VSCode with the Yinz extension to see the LSP rendering side-by-side.
 
 // ─── Section 1: Deferred-feature hover ───────────────────────────────────────

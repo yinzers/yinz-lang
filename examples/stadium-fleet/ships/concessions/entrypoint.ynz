@@ -1,0 +1,9 @@
+// concessions — a binary ship that broadcasts food specials over the PA. Uses string helpers.
+
+import { capitalize } from `shared/announcements`
+
+function entrypoint() -> nothing {
+  let special = `primanti's coleslaw sandwich`
+  let headline = capitalize(special)
+  print(`Tonight's special: ${headline}!`)
+}

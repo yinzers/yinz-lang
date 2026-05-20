@@ -1,6 +1,8 @@
-// utils/math_extra.ynz — exported math utility functions.
+// utils/math_extra.ynz — exported math utility functions used by the roster demo.
 // Demonstrates: export function, standalone functions usable via UFCS.
 
+// clamp a value into [low, high]. Used to keep stats inside reasonable bounds
+// (e.g., a batting average can't exceed 1.000 = 1000 thousandths).
 export function clamp(value: int, low: int, high: int) -> int {
   if (value < low) {
     return low
@@ -11,6 +13,7 @@ export function clamp(value: int, low: int, high: int) -> int {
   return value
 }
 
+// square a number. Used in some Pirates-era statistics like SLG and OPS components.
 export function square(n: int) -> int {
   return n * n
 }
