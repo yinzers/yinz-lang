@@ -4,6 +4,7 @@ mod error;
 mod event_loop;
 pub mod json_emitter;
 pub mod json_events;
+pub mod memory;
 pub mod project;
 pub mod rebuild;
 pub mod ui;
@@ -18,6 +19,7 @@ use child::ChildHandle;
 use db::WatchDb;
 use json_emitter::JsonEmitter;
 use json_events::{ShutdownReason, WatchEvent as JsonWatchEvent, ts};
+use memory::{MemoryConfig, RssCheckResult, check_rss, hard_stop_message, read_mb_env};
 
 
 /// Configuration for a `ynz watch` session.
@@ -143,13 +145,24 @@ pub fn run(config: WatchConfig) -> i32 {
         }
     };
 
-    // 7. Event loop.
+    // 7. Memory config (Layer 2: periodic rebuild; Layer 3: RSS hard-stop).
+    let rebuild_after_n = read_mb_env("YNZ_WATCH_REBUILD_AFTER", 500);
+    let rebuild_after_hours = read_mb_env("YNZ_WATCH_REBUILD_AFTER_HOURS", 4);
+    let rebuild_after_duration = std::time::Duration::from_secs(rebuild_after_hours * 3600);
+    let mem_config = MemoryConfig::default();
+    let mut last_warn: Option<std::time::Instant> = None;
+    let mut rss_unavailable_logged = false;
+
+    // 8. Event loop.
     // epipe: set to true when an emit() returns BrokenPipe; event loop exits on next iteration.
+    // oom_stop: set to true when RSS exceeds hard-stop ceiling; exits 2.
     let epipe = std::cell::Cell::new(false);
+    let oom_stop = std::cell::Cell::new(false);
     event_loop::run_event_loop(&file_watcher, &config, |_changed_path| {
-        if epipe.get() {
+        if epipe.get() || oom_stop.get() {
             return;
         }
+
         let got_epipe = run_rebuild_cycle(
             &mut watch_db,
             &entry_path,
@@ -160,6 +173,62 @@ pub fn run(config: WatchConfig) -> i32 {
         );
         if got_epipe {
             epipe.set(true);
+            return;
+        }
+
+        // Layer 2: periodic DB rebuild.
+        if watch_db.should_periodic_rebuild(rebuild_after_n, rebuild_after_duration) {
+            watch_db.rebuild_db();
+        }
+
+        // Layer 3: RSS polling.
+        if !rss_unavailable_logged {
+            match check_rss(&mem_config, &mut last_warn) {
+                RssCheckResult::Ok => {}
+                RssCheckResult::Warn { rss_mb, threshold_mb } => {
+                    if !config.json {
+                        eprintln!(
+                            "ynz watch: memory warning — {rss_mb}MB (threshold: {threshold_mb}MB)"
+                        );
+                    }
+                    if let Some(ref mut e) = emitter {
+                        let (timestamp, schema_version) = ts();
+                        let _ = e.emit(&JsonWatchEvent::MemoryWarning {
+                            timestamp,
+                            schema_version,
+                            rss_mb,
+                            threshold_mb,
+                        });
+                    }
+                }
+                RssCheckResult::Stop { rss_mb, threshold_mb } => {
+                    let msg = hard_stop_message(rss_mb, threshold_mb, &config.path.display().to_string());
+                    eprintln!("{msg}");
+                    if let Some(ref mut e) = emitter {
+                        let (timestamp, schema_version) = ts();
+                        let _ = e.emit(&JsonWatchEvent::MemoryStop {
+                            timestamp,
+                            schema_version,
+                            rss_mb,
+                            threshold_mb,
+                        });
+                    }
+                    oom_stop.set(true);
+                }
+                RssCheckResult::Unavailable => {
+                    rss_unavailable_logged = true;
+                    eprintln!("ynz watch: memory polling unavailable on this platform; \
+                               hard-stop disabled for this session");
+                    if let Some(ref mut e) = emitter {
+                        let (timestamp, schema_version) = ts();
+                        let _ = e.emit(&JsonWatchEvent::MemoryUnavailable {
+                            timestamp,
+                            schema_version,
+                            reason: "polling unavailable on this platform".into(),
+                        });
+                    }
+                }
+            }
         }
     });
 
@@ -168,7 +237,10 @@ pub fn run(config: WatchConfig) -> i32 {
         c.kill_gracefully(2000);
     }
 
-    // Emit watch-shutdown.
+    // Emit watch-shutdown. Exit 2 on OOM hard-stop.
+    if oom_stop.get() {
+        return 2;
+    }
     if let Some(ref mut e) = emitter {
         let (timestamp, schema_version) = ts();
         let reason = if epipe.get() {

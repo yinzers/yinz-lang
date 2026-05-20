@@ -22,7 +22,8 @@ pub struct LexOutput {
 /// This is a salsa-tracked query: when `source.text` or `source.path` changes,
 /// salsa automatically re-runs the lex and invalidates all downstream queries
 /// that depend on the result.
-#[salsa::tracked]
+// lru = 128: lex is cheap to recompute; keep more results in the salsa cache.
+#[salsa::tracked(lru = 128)]
 pub fn lex_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<LexOutput> {
     let path = source.path(db);
     let text = source.text(db);
@@ -49,7 +50,8 @@ pub struct ParseOutput {
 ///
 /// This is a salsa-tracked query that depends on `lex_query`. Changing the source
 /// text will re-run both the lexer and the parser automatically.
-#[salsa::tracked]
+// lru = 128: parse is cheap; keep more results in the salsa cache.
+#[salsa::tracked(lru = 128)]
 pub fn parse_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<ParseOutput> {
     let lex = lex_query(db, source);
     let path = source.path(db);
