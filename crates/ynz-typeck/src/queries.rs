@@ -46,7 +46,8 @@ pub struct CheckOutput {
 ///
 /// Cross-file import resolution happens here so shape field type annotations
 /// can reference imported shapes and options types.
-#[salsa::tracked]
+// lru = 128: signature computation is moderate cost; keep more results cached.
+#[salsa::tracked(lru = 128)]
 pub fn module_signatures_query(
     db: &dyn SourceFileRegistry,
     source: SourceFile,
@@ -112,7 +113,8 @@ pub fn module_signatures_query(
 ///
 /// Depends on `module_signatures_query` for the signature table.
 /// Depends on `parse_query` for the AST.
-#[salsa::tracked]
+// lru = 64: typechecking is moderately expensive; smaller cap than parse/signatures.
+#[salsa::tracked(lru = 64)]
 pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<CheckOutput> {
     let parse = parse_query(db, source);
     let sig_output = module_signatures_query(db, source);

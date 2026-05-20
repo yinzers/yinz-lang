@@ -17,7 +17,8 @@ pub struct CodegenOutput {
 ///
 /// Salsa-tracked — depends on `check_query`. Skips emission if there are
 /// type errors (avoids emitting broken object files).
-#[salsa::tracked]
+// lru = 32: codegen is the heaviest query; smallest cache cap to bound memory.
+#[salsa::tracked(lru = 32)]
 pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<CodegenOutput> {
     let check = check_query(db, source);
     let mut diagnostics = check.diagnostics.clone();

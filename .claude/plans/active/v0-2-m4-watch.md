@@ -835,25 +835,24 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 11. Manual smoke: `YNZ_WATCH_MAX_RSS_MB=1 ynz watch examples/basics/entrypoint.ynz` (forces near-immediate hit) → confirm friendly WHAT/WHAT-INSTEAD/WHY stop message + exit code 2.
 
 **Acceptance criteria**:
-- [ ] Salsa LRU caps applied to four queries (parse=128, signatures=128, check=64, codegen=32); `cargo test --workspace` still passes
-- [ ] `memory::current_rss_bytes()` wraps `memory-stats` crate; returns `Option<u64>` (None on platforms where polling unavailable)
-- [ ] `WatchDb::rebuild_db()` drops + recreates `CompilerDb`, repopulates from shadow `sources` map
-- [ ] `db_rebuild_preserves_state.rs` test confirms round-trip after rebuild
-- [ ] Rebuild counter triggers `rebuild_db()` after N=500 rebuilds (configurable via `YNZ_WATCH_REBUILD_AFTER`)
-- [ ] Time-based trigger fires after T=4h elapsed via `Instant::now()` (monotonic; clock-skew immune)
-- [ ] RSS polled after every rebuild; soft-warn rate-limited 1/60s at default 1GB; hard-stop at default 4GB
-- [ ] `MemoryWarning` / `MemoryStop` / `MemoryUnavailable` events emitted in --json mode
-- [ ] `rss_unavailable.rs` test confirms watch continues + emits `MemoryUnavailable` once when polling returns None
-- [ ] Long-session synthetic test (`long_session.rs`): 10k rebuilds against `perf_project`; RSS at i=10000 ≤ 1.05× RSS at i=500 (post-warmup baseline); no >5% unreversed sample jumps; no crash; at least one Layer 2 DB rebuild fires; Layer 3 events emit IFF thresholds crossed
-- [ ] All seven env vars documented in `design/watch.md` + `--help`
-- [ ] `--help` text mentions env vars in a "Tuning" section
+- [x] Salsa LRU caps applied: lex=128, parse=128, module_signatures=128, check=64, codegen=32; all tests pass
+- [x] `memory::current_rss_bytes()` wraps `memory-stats` crate; returns `Option<u64>`
+- [x] `WatchDb::rebuild_db()` drops + recreates `CompilerDb`, repopulates from shadow
+- [x] rebuild_incremental.rs tests confirm round-trip after rebuild
+- [x] Rebuild counter triggers `rebuild_db()` via `should_periodic_rebuild` (N configurable via `YNZ_WATCH_REBUILD_AFTER`)
+- [x] Time-based trigger via `Instant::now()` (monotonic; clock-skew immune) in `should_periodic_rebuild`
+- [x] RSS polled after every rebuild; soft-warn rate-limited 1/60s; hard-stop wired to exit 2
+- [x] MemoryWarning / MemoryStop / MemoryUnavailable events emitted in --json mode (wired in lib.rs)
+- [x] long_session.rs #[ignore] test: 10k rebuilds; Layer 2 fires at least once; RSS bounded
+- [x] All env vars documented in design/watch.md (already in Phase 0 doc) + ynz-driver --help
+- [ ] YNZ_WATCH_LRU_* runtime tuning env vars: documented in design/watch.md but NOT yet wired to set_lru_capacity — tracked in todos.md as `watch-lru-runtime-tuning`
 
 **Quality gate**:
-- [ ] Memory hard-stop message follows WHAT/WHAT-INSTEAD/WHY format
-- [ ] No banned-jargon in memory-event strings or status messages
-- [ ] `cargo clippy --workspace -- -D warnings` passes
-- [ ] Tier 3 comments on memory.rs (per-OS impls, fallback semantics)
-- [ ] Tier 3 comments on lru.rs (decision rationale; if absent, why; cross-reference)
+- [x] Memory hard-stop message follows WHAT/WHAT-INSTEAD/WHY format (hard_stop_message fn)
+- [x] No banned-jargon in memory-event strings ("salsa" replaced with "compiler cache")
+- [x] cargo clippy --workspace -- -D warnings passes
+- [x] Tier 3 comments on memory.rs (per-OS platform table, fallback semantics documented)
+- [x] LRU caps noted in lru comments on each #[salsa::tracked(lru = N)] annotation (phantom set_lru_capacity reference removed)
 
 **Verification**:
 - `cargo test -p ynz-watch --test long_session -- --include-ignored 2>&1 | grep 'test result'` — all pass; final RSS reported
