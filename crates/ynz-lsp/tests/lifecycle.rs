@@ -58,7 +58,7 @@ fn shutdown_exit_sequence() {
 fn salsa_cache_invalidated_on_did_change() {
     use std::sync::Arc;
     use ynz_lsp::{capabilities::PositionEncoding, state::ServerState};
-    use ynz_parser::{db::SourceFile, queries::parse_query};
+    use ynz_parser::db::SourceFile;
     use ynz_typeck::queries::check_query;
 
     let mut state = ServerState::new(PositionEncoding::Utf8);

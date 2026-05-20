@@ -112,13 +112,14 @@ impl HarnessClient {
             }))
             .unwrap();
         self.recv_response(); // consume the Ok response
+        // exit is fire-and-forget — server may have already closed its channel after shutdown
         self.conn
             .sender
             .send(lsp_server::Message::Notification(lsp_server::Notification {
                 method: "exit".to_string(),
                 params: json!({}),
             }))
-            .unwrap();
+            .ok();
     }
 
     /// Read the next response from the server (blocks).

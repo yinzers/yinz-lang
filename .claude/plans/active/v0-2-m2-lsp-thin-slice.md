@@ -491,7 +491,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - [x] No `// TODO` / `// FIXME` / `// HACK`
 - [x] `cargo clippy -p ynz-lsp -- -D warnings` passes
 - [x] All public functions in `position.rs` are tested
-- [ ] No `as any` equivalent: no `.unwrap()` on user input paths; user errors return LSP-protocol errors via the framework's normal mechanism
+- [x] No `as any` equivalent: no `.unwrap()` on user input paths; user errors return LSP-protocol errors via the framework's normal mechanism
 - [x] Documents the empty-bucket / empty-text edge case explicitly
 - [x] No DB shared across threads incorrectly: ServerState owned by a single task
 
