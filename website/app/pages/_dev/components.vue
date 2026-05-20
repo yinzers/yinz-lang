@@ -1,6 +1,28 @@
 <script setup lang="ts">
 // Internal component gallery — noindex, never linked from public pages
 useHead({ meta: [{ name: 'robots', content: 'noindex' }] })
+
+// Code examples for YCode gallery
+const yinzSnippet = `// pirates-roster/entrypoint.ynz — M4 demo
+shape Player {
+  name: string
+  health: int
+  active: bool
+}
+
+function greet(share self: Player) -> string {
+  // returns a greeting string using template literal
+  const msg = \`Hello, I am \` + self.name
+  return msg
+}
+
+const p: Player = { name: \`Patrick\`, health: 100, active: true }
+const absent = none       // none is the absent value
+p.greet()                 // Hello, I am Patrick`
+
+const shortSnippet = `const x = 42
+let name = "yinz"
+// comment here`
 </script>
 
 <template>
@@ -113,6 +135,27 @@ useHead({ meta: [{ name: 'robots', content: 'noindex' }] })
         <YCard class="p-6">
           <p class="text-ink">YCard content surface with bg-card + border.</p>
         </YCard>
+      </div>
+    </section>
+
+    <!-- Code blocks -->
+    <section class="mb-16">
+      <YEyebrow class="mb-4">Code blocks</YEyebrow>
+      <YHeading :level="3" class="mb-6">YCode — Yinz syntax highlighting via Shiki</YHeading>
+
+      <div class="space-y-6">
+        <YCode
+          :code="yinzSnippet"
+          lang="yinz"
+          filename="entrypoint.ynz"
+          :showLineNumbers="true"
+        />
+        <YCode
+          :code="shortSnippet"
+          lang="yinz"
+          :filename="null"
+          :showLineNumbers="false"
+        />
       </div>
     </section>
 

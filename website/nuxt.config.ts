@@ -7,6 +7,12 @@ export default defineNuxtConfig({
 
   ssr: true,
 
+  // Inline SSR content into HTML so code highlighting works without JS
+  experimental: {
+    // 'client' = full-static: SSR HTML in initial response + payload in separate files
+    payloadExtraction: 'client',
+  },
+
   modules: ['@nuxt/fonts'],
 
   css: ['~/assets/css/tailwind.css'],
@@ -24,6 +30,12 @@ export default defineNuxtConfig({
       subsets: ['latin'],
     },
   },
+
+  components: [
+    // pathPrefix: false so components/primitives/YFoo.vue registers as <YFoo />
+    // (not <PrimitivesYFoo />)
+    { path: '~/components', pathPrefix: false },
+  ],
 
   vite: {
     plugins: [tailwindcss()],

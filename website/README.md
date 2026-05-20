@@ -73,3 +73,19 @@ Historical reference: `/tmp/yinz-design/yinz/project/shared.css` (the design pro
 ```
 
 **Font delivery**: `@nuxt/fonts` downloads Anton, Inter, and JetBrains Mono from Google Fonts at build time and serves them from `/_fonts/` in the generated output. Production builds require internet access to Google Fonts at build time; the browser never hits Google CDN at runtime. See the Phase 5 vendoring deferral in `.claude/plans/active/webpage-foundation.md` for the follow-up tracking committing vendored font files for hermetic builds.
+
+---
+
+## Yinz grammar sync
+
+`<YCode>` uses `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json` as the source of truth for Yinz syntax highlighting. The `build/sync-ynz-grammar.ts` script copies it to `website/app/assets/grammars/ynz.tmLanguage.json` and verifies the sha256 matches.
+
+The `pregenerate` and `prebuild` scripts run sync automatically before any build. To run manually:
+
+```bash
+docker compose exec web bun run sync-grammar
+```
+
+The vendored copy in `app/assets/grammars/` is checked into git so developers can browse the site without running the sync first. If the VSCode extension grammar changes, pull main and run sync-grammar — the prebuild hook handles it automatically otherwise.
+
+**Grammar coverage as of Phase 4**: keywords, comments, numbers, booleans/null, string template literals (backtick), banned/deferred keyword highlighting. Function names and type names are not yet in the grammar — these appear in plain foreground color. See PR description for coverage gaps.

@@ -7,7 +7,10 @@
     "dev": "nuxt dev",
     "generate": "nuxt generate",
     "preview": "nuxt preview",
-    "postinstall": "nuxt prepare"
+    "postinstall": "nuxt prepare",
+    "sync-grammar": "bun run ./build/sync-ynz-grammar.ts",
+    "prebuild": "bun run sync-grammar",
+    "pregenerate": "bun run sync-grammar"
   },
   "dependencies": {
     "nuxt": "^4.4.6",
@@ -17,6 +20,7 @@
   "devDependencies": {
     "@nuxt/fonts": "^0.14.0",
     "@tailwindcss/vite": "^4.3.0",
+    "shiki": "^4.1.0",
     "tailwindcss": "^4.3.0"
   }
 }
