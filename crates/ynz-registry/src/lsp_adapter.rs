@@ -256,8 +256,8 @@ pub fn lsp_hover_for_token(name: &str) -> Option<HoverContent> {
     if let Some(e) = crate::banned_jargon_lookup(name) {
         return Some(HoverContent {
             markdown_body: format!(
-                "## Not a Yinz term: `{}`\n\n**What to use instead:** `{}`",
-                e.name, e.replacement
+                "## Not a Yinz term: `{}`\n\n**What to use instead:** `{}`\n\n**Why:** {}",
+                e.name, e.replacement, e.reason
             ),
             kind: HoverKind::BannedJargon,
         });
@@ -362,6 +362,26 @@ mod tests {
     fn hover_unregistered_token_returns_none() {
         let h = lsp_hover_for_token("thiswillneverberegistered_xyz");
         assert!(h.is_none(), "unregistered token must return None");
+    }
+
+    #[test]
+    fn hover_banned_jargon_returns_replacement_and_reason() {
+        let h = lsp_hover_for_token("propagate");
+        assert!(h.is_some(), "banned jargon 'propagate' must have hover content");
+        let h = h.unwrap();
+        assert_eq!(h.kind, HoverKind::BannedJargon);
+        assert!(
+            h.markdown_body.contains("What to use instead"),
+            "hover for banned jargon must include 'What to use instead'"
+        );
+        assert!(
+            h.markdown_body.contains("Why:"),
+            "hover for banned jargon must include 'Why:' (reason field)"
+        );
+        assert!(
+            h.markdown_body.contains("auto-propagate"),
+            "hover must include the replacement text"
+        );
     }
 
     #[test]

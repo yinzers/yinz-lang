@@ -102,6 +102,27 @@ fn token_at_offset_returns_range() {
 }
 
 #[test]
+fn hover_registry_content_with_angle_brackets_does_not_crash() {
+    // WHY: registry entries like intrinsic return types contain `<>` (e.g. "range<int>",
+    // "maybe<int>"). In LSP markdown, backtick code spans make `<>` HTML-inert.
+    // This test verifies that the hover pipeline doesn't panic on such content
+    // and that the body is a valid non-empty string.
+    let src = "range";
+    let tokens = tokenize(src);
+    let table = LineTable::new(src);
+    // "range" is a free function intrinsic — lsp_hover_for_token should return Some
+    let h = hover_response(&tokens, &make_sig(), src, &table, 0, PositionEncoding::Utf8);
+    assert!(h.is_some(), "hover over 'range' intrinsic should return Some");
+    if let Some(h) = h {
+        use lsp_types::HoverContents;
+        if let HoverContents::Markup(mc) = h.contents {
+            assert!(!mc.value.is_empty(), "hover body must not be empty");
+            assert!(mc.value.contains("range"), "body must mention 'range'");
+        }
+    }
+}
+
+#[test]
 fn hover_request_via_lsp_returns_response() {
     use serde_json::json;
 
