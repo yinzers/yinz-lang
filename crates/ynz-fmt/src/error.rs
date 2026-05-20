@@ -14,8 +14,6 @@ pub enum FmtError {
     ParseError(DiagnosticBucket),
     /// Infrastructure error (non-UTF-8 input, missing file, etc.).
     InvalidInput(String),
-    /// Formatter logic is not yet implemented.
-    Unimplemented,
 }
 
 impl std::fmt::Display for FmtError {
@@ -23,7 +21,6 @@ impl std::fmt::Display for FmtError {
         match self {
             FmtError::ParseError(_) => write!(f, "source has parse errors; fix those first"),
             FmtError::InvalidInput(msg) => write!(f, "invalid input: {msg}"),
-            FmtError::Unimplemented => write!(f, "not yet implemented"),
         }
     }
 }

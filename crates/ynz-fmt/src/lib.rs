@@ -17,6 +17,8 @@
 //! bump once `v0.2.0` ships.
 
 mod error;
+pub(crate) mod render;
+pub mod walker;
 
 pub use error::{CheckResult, FmtError};
 
@@ -29,9 +31,16 @@ pub use error::{CheckResult, FmtError};
 /// - `FmtError::ParseError` — the source has parse errors; the caller should display them with
 ///   the standard `ynz-diagnostics` renderer and ask the user to fix the errors first.
 /// - `FmtError::InvalidInput` — infrastructure problem (non-UTF-8 bytes, etc.).
-/// - `FmtError::Unimplemented` — the formatter is not yet wired up.
-pub fn format(_source: &str) -> Result<String, FmtError> {
-    Err(FmtError::Unimplemented)
+pub fn format(source: &str) -> Result<String, FmtError> {
+    let db = ynz_parser::CompilerDb::default();
+    let sf = ynz_parser::SourceFile::new(&db, "<fmt>".into(), source.into());
+    let output = ynz_parser::parse_query(&db, sf);
+
+    if !output.diagnostics.is_empty() {
+        return Err(FmtError::ParseError(output.diagnostics.clone()));
+    }
+
+    Ok(walker::emit_module(&output.module))
 }
 
 /// Check whether a source file is already in canonical form without rewriting it.

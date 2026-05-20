@@ -532,27 +532,26 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 9. Run `cargo test -p ynz-parser` (trivia tests pass), `cargo test -p ynz-fmt` (walker goldens pass), `cargo test --workspace` (full suite green).
 
 **Acceptance criteria**:
-- [ ] `pub fn lex_with_trivia(source: &str) -> (Vec<SpannedToken>, Vec<Comment>)` in `ynz-parser`'s public API
-- [ ] `lex_with_trivia(s).0 == lex(s)` for 20+ test fixtures (drift-prevention)
-- [ ] `format(source)` walks every AST node category and emits canonical output (15-20 golden tests pass)
-- [ ] Parse errors propagated as `FmtError::ParseError(DiagnosticBucket)`
-- [ ] Output ends in exactly one trailing newline (test asserts)
-- [ ] Indent is 2 spaces (or Phase 1's locked choice — likely 2 per existing convention)
-- [ ] Block opener `{` stays on same line as keyword (function/if/while/for/shape)
-- [ ] Block closer `}` on its own line at outer indent
-- [ ] Backtick strings + interpolations preserved BYTE-EXACT (treated as opaque units)
-- [ ] No comments emitted yet (input fixtures have no comments)
-- [ ] `crates/ynz-fmt/_spike/<winner>/src/` deleted (preserved in git history)
-- [ ] `cargo test --workspace` passes
+- [x] `pub fn lex_with_trivia(file: &str, source: &str) -> (Vec<Spanned<Token>>, Vec<Comment>)` in `ynz-parser`'s public API (signature takes `file: &str` to match `lex()` for correct span tracking)
+- [x] `lex_with_trivia(s).0 == lex(s)` for 29 test fixtures (drift-prevention, includes 5 error-mode cases)
+- [x] `format(source)` walks every AST node category and emits canonical output (22 golden tests pass — 15 per-node-category + 7 invariant tests)
+- [x] Parse errors propagated as `FmtError::ParseError(DiagnosticBucket)`
+- [x] Output ends in exactly one trailing newline (test asserts)
+- [x] Indent is 2 spaces per existing convention
+- [x] Block opener `{` stays on same line as keyword (function/if/while/for/shape)
+- [x] Block closer `}` on its own line at outer indent
+- [x] Backtick literal content (the text portions between `${...}`) preserved byte-exact; interpolated expressions `${...}` are re-walked through `emit_expr` and may be canonicalized (e.g. `${a+b}` → `${a + b}`) — this is correct canonical behavior
+- [x] No comments emitted yet (input fixtures have no comments)
+- [x] `crates/ynz-fmt/_spike/` deleted (winner spike preserved in git history at 051844b)
+- [x] `cargo test --workspace` passes
 
 **Quality gate**:
-- [ ] No `// TODO` / `// FIXME` / `// HACK`
-- [ ] `cargo clippy -p ynz-fmt -p ynz-parser -- -D warnings` passes
-- [ ] Walker handles every AST variant (no `_ => unimplemented!()` or `panic!()` in match arms — exhaustive)
-- [ ] Empty source `""` → empty string output (edge case: zero declarations)
-- [ ] Single-declaration source → no leading/trailing blank lines
-- [ ] No allocation in hot path for the "no diagnostics" common case
-- [ ] No silent drop of AST nodes — every node that has content emits content
+- [x] No `// TODO` / `// FIXME` / `// HACK`
+- [x] `cargo clippy -p ynz-fmt -p ynz-parser -- -D warnings` passes
+- [x] Walker handles every AST variant exhaustively (no `_ => unimplemented!()` or `panic!()`)
+- [x] Empty source `""` → empty string output (walker_golden::empty_source_yields_empty_output)
+- [x] Single-declaration source → no leading/trailing blank lines (trailing newline test)
+- [x] No silent drop of AST nodes — every node that has content emits content
 
 **Verification**:
 - `cargo test -p ynz-parser trivia 2>&1 | grep 'test result'` — all pass

@@ -1,0 +1,7 @@
+function double(x: int) -> int {
+  return x + x
+}
+function entrypoint() -> nothing {
+  const result = double(21)
+  print(result.toString())
+}

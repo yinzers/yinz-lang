@@ -1,0 +1,7 @@
+function sum(n: int) -> int {
+  let total = 0
+  for (i in range(n)) {
+    total = total + i
+  }
+  return total
+}

@@ -1,0 +1,14 @@
+function describe(x: int) -> string {
+  if (x) {
+    1 => {
+      return `one`
+    }
+    2 => {
+      return `two`
+    }
+    else => {
+      return `other`
+    }
+  }
+  return `zero`
+}
