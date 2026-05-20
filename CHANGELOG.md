@@ -1,5 +1,55 @@
 # Changelog
 
+## [0.2.0-m2] — 2026-05-20 — LSP Thin Slice + VSCode Extension
+
+Commit range: v0.2.0-m1..v0.2.0-m2
+PRs: #47 (P0), #54 (P1–P6), #55 (P7), #56 (P8), #57 (P9)
+
+### What changed
+
+Before v0.2-M2: Yinz had a compiler but no editor story. Every feature in the SSOT registry (built in M1) had teaching content — `why` fields, `substitute` recommendations, `ships_in` metadata — but none of it was visible in an editor.
+
+After v0.2-M2: `.ynz` files in VSCode (or Cursor) get inline red squiggles with the full WHAT/WHAT-INSTEAD/WHY teaching content, autocomplete of every keyword and primitive method, and hover docs sourced directly from the SSOT registry. Adding a keyword or deferred feature to `registry/features.toml` in any future version makes it appear in the editor automatically — no manual LSP changes needed.
+
+**New crate: `ynz-lsp`** — JSON-RPC-over-stdio Language Server backed by the existing salsa queries:
+- `textDocument/didOpen` / `didChange` / `didClose` — updates the live salsa DB, triggers incremental re-check
+- `textDocument/publishDiagnostics` — pushes WHAT/WHAT-INSTEAD/WHY diagnostics from `check_query` to the editor after every change
+- `textDocument/completion` — registry-driven: keywords, primitive intrinsics filtered by receiver type, type-attached constants, deferred features (marked deprecated), user-defined symbols from `module_signatures_query`
+- `textDocument/hover` — registry lookup first (all 9 entry kinds), falls back to typeck symbol table for user-defined functions and shapes
+- Position encoding: UTF-8 preferred, UTF-16 fallback — byte-accurate to the compiler's internal `SourceSpan` representation
+
+**New crate: `ynz-tmgrammar`** — binary that reads `ynz-registry` and emits `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json`. A snapshot test fails CI if the committed grammar drifts from registry content.
+
+**New subdir: `tooling/vscode-ynz/`** — VSCode extension that spawns `ynz-lsp` and wires it to `.ynz` files:
+- Syntax highlighting from the registry-derived TextMate grammar
+- LSP client connecting to `ynz-lsp` over stdio
+- Configurable `yinz.server.path` setting
+- Devcontainer: auto-builds `ynz-lsp` on container create, auto-installs the extension from the marketplace once published
+
+**Distribution:** `.vsix` at `https://github.com/patrickrizzardi/ynz/releases/latest/download/yinz-latest.vsix` (always the most recent build). Marketplace publish deferred — Azure DevOps org provisioning blocked; tracked in todos.
+
+### New registry adapter (`ynz-registry`)
+
+Two new adapter functions added to `ynz-registry/src/lsp_adapter.rs` (projections of existing data — no new registry entries):
+- `lsp_completion_items(CompletionContext)` → `Vec<RegistryCompletionItem>` — filters by context (bare identifier vs after-dot)
+- `lsp_hover_for_token(name)` → `Option<HoverContent>` — covers all 9 entry kinds
+
+`ynz-registry` has no dependency on `lsp-types` — the LSP crate translates registry shapes to LSP protocol shapes.
+
+### Tests
+
+**1028 tests total, 0 failures.** +198 new LSP-specific tests across the milestone:
+- Lifecycle (initialize/didOpen/didChange/didClose/shutdown)
+- Diagnostics (WHAT/WHAT-INSTEAD/WHY content, cross-file clear-on-fix, concurrent didChange)
+- Completion (registry-driven, receiver-type filtering, deprecated deferred features)
+- Hover (all 9 registry entry kinds, user-defined symbols, markdown injection safety)
+- Integration sweep (every example fixture: zero-error baseline, error-gallery has-errors, completion/hover no-crash)
+- Regression (zero-diagnostic pin, teaching-content pin, LSP-vs-CLI boolean divergence)
+- Performance (#[ignore]; cold init <500ms, incremental <100ms, completion/hover <50ms)
+- Stdio smoke (full wire-format sequence via real subprocess)
+
+---
+
 ## [0.2.0-m1] — 2026-05-20 — Feature Inventory & Sync (SSOT Registry)
 
 Commit range: v0.1.0..v0.2.0-m1
