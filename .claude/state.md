@@ -1,6 +1,6 @@
 # Session State: ynz
 
-**Last Updated**: 2026-05-20 (ynz watch 7 post-ship bugs fixed + ynz fmt destructuring fix — all shipped to main)
+**Last Updated**: 2026-05-20 (ynz watch 7 bugs + ynz fmt 4 bugs: __shape/__entry desugar leaking, comments dropped from empty arrays, comments dropped from empty map literals)
 
 ---
 
@@ -10,11 +10,12 @@
 
 <!-- RADAR-START -->
 ### Active Roadmaps
-- v0-2-dev-loop-tooling (patrick) — 1 active plans — 2026-05-20
+- v0-2-dev-loop-tooling (patrick) — 2 active plans — 2026-05-20
 - webpage-docs (Patrick Rizzardi) — 1 active plans — 2026-05-20
 
 ### Active Workstreams
 - v0-2-m4-watch (Patrick Rizzardi) — 9 files touched — 90/121 done — roadmap: v0-2-dev-loop-tooling — 2026-05-20 (post-ship bugs fixed — see Post-Ship Fixes section)
+- v0-2-m5-lsp-full-and-release (Patrick Rizzardi) — 16 files touched — 0/215 done — roadmap: v0-2-dev-loop-tooling — 2026-05-20 (plan-reviewer Round 1 BLOCK addressed — 10 Required Fixes + 5 Concerns + 6 Adversarial cases folded in; see Reviewer History at bottom)
 - webpage-foundation (Patrick Rizzardi) — 3 files touched — 0/125 done — roadmap: webpage-docs — 2026-05-20
 <!-- RADAR-END -->
 
@@ -80,6 +81,8 @@ cargo fmt --all
 - [2026-05-16] **M4 P3b complete (3508e7b, merged)**: `extends` field inheritance + cycle detection, `follows` contract verification, `Type::Dynamic`. 96 typeck tests green.
 - [2026-05-17] **M4 P3c complete (7c86f6a, branch feat/m4-ownership, PR open)**: `is_consumed` scope tracking, use-after-give, const-cannot-be-lent/given. All 5 const deep-immutability paths covered. 102 typeck tests green. PR: https://github.com/yinzers/yinz-lang/pull/new/feat/m4-ownership
 - [2026-05-17] **M4 merged to main (direct merge by patrick)**: feat/m4-verification (P3c–P7 bundled — ownership, codegen, fixtures, v0.1.0-m4 prep) landed on main. Cargo.toml at `0.1.0-m4`. Tag `v0.1.0-m4` local.
+- [2026-05-20] **ynz fmt map-entry destructuring fix (f139b30)**: `for ((key, value) in m)` was emitting `__entry` internals. Added `map_destructure_pattern: Option<(String, String)>` to `Stmt::For`; formatter reconstructs `(k, v)` header and skips 2 synthetic let bindings.
+- [2026-05-20] **ynz fmt empty-array comment preservation (1b4dbf8)**: Comments inside empty array literals were dropped. Fixed via `ctx.between(span)` check in `emit_stmt_with_inline` + advancing `prev_end` past the array span.
 - [2026-05-20] **ynz fmt destructuring fix (bc31315)**: `ynz fmt` was emitting `for (__shape in intervals) { let minutes = __shape.minutes ... }` instead of preserving `for ({minutes, timeframe} in intervals)`. Root cause: parser desugars at parse time; formatter saw only the desugared AST. Fix: added `destructure_pattern: Option<Vec<ForDestructureBinding>>` to `Stmt::For`; parser stores original bindings before desugaring; formatter reconstructs original header and skips the synthetic let bindings when emitting the body. Typeck/codegen unchanged.
 - [2026-05-20] **v0.2-M4 watch post-ship: 7 bugs fixed during trading-v4 real-world use** (c3fa69c + 27b3c98 + c510769 + 481c405 + 3582754 + 5a9f624 + ac9367c + 9aec37d): (1) text-mode UI completely silent; (2) notify IN_OPEN feedback loop; (3) double Watching prompt; (4) terminal clear on no-change skips; (5) yinz.toml walk-up + [entries] multi-entry support; (6) single-file mode skipped loading shared project files for imports; (7) hardcoded cc linker + missing -no-pie + missing runtime library. All shipped to main.
 - [2026-05-20] **v0.2-M4 watch bug fixed (c3fa69c)**: Three bugs: (1) rebuild_one_with_emitter had no text-mode UI output — print_building/print_success/print_errors never called on file-change events; (2) notify 8.x watches IN_OPEN causing infinite rebuild loop — fixed via content-equality guard against shadow DB (force=true bypasses for initial build); (3) double "✓ Watching…" prompt removed. Watch now correctly rebuilds exactly once per real user edit.
