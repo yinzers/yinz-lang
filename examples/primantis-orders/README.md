@@ -1,4 +1,8 @@
-# `examples/errors/` — Per-Milestone Compile-Error Gallery
+# `examples/primantis-orders/` — Per-Milestone Compile-Error Gallery
+
+**Layout: gallery** (loose `.ynz` files, no `yinz.toml`). Not a Yinz project — these files are standalone scripts the compiler ingests one at a time to show error diagnostics.
+
+**Theme (in-progress):** Primanti's-style restaurant orders going wrong. Wrong toppings, missing ingredients, fire in the kitchen — each milestone's error classes triggered with restaurant-themed code. The rewrite-to-theme is rolling milestone-by-milestone; until each file lands its theming pass, the existing generic triggers stay in place (still demonstrate the same diagnostics).
 
 One file per milestone showing every compile error that milestone's diagnostics can produce. Yinz multi-errors (up to 50 per compile per `design/compiler-errors.md`), so each file demonstrates many simultaneous diagnostics in one compile run.
 
@@ -6,9 +10,9 @@ One file per milestone showing every compile error that milestone's diagnostics 
 
 ```bash
 source $HOME/.cargo/env
-./target/debug/ynz build examples/errors/m1_errors.ynz   # prints all M1 errors
-./target/debug/ynz build examples/errors/m2_errors.ynz   # M1 + M2 errors
-./target/debug/ynz build examples/errors/m3_errors.ynz   # M1 + M2 + M3 errors
+./target/debug/ynz build examples/primantis-orders/m1_errors.ynz   # prints all M1 errors
+./target/debug/ynz build examples/primantis-orders/m2_errors.ynz   # M1 + M2 errors
+./target/debug/ynz build examples/primantis-orders/m3_errors.ynz   # M1 + M2 + M3 errors
 # ... and so on per milestone
 ```
 
@@ -31,6 +35,6 @@ These files are INTENTIONALLY broken — they're not meant to compile. The point
 
 `.claude/rules/plan-invariants.md` `### Demo & Error Gallery` subsection: every phase that adds new compile-error classes MUST extend the corresponding milestone gallery file with intentional triggers. Each trigger has a `// WHY:` comment naming the diagnostic class. This gives Patrick a visible reference for the language's teaching diagnostics — the human-eyes-on layer that automated snapshot tests can't replace.
 
-## Companion: `examples/basics/`
+## Companion: `examples/pirates-roster/`
 
-The `examples/basics/entrypoint.ynz` file is the parallel success-path showcase — every feature working in context. Together, basics + errors give end-to-end coverage of what Yinz produces in both happy-path and error-path cases.
+The `examples/pirates-roster/entrypoint.ynz` file is the parallel success-path showcase — every feature working in context. Together, `pirates-roster/` + `primantis-orders/` give end-to-end coverage of what Yinz produces in both happy-path and error-path cases.

@@ -116,7 +116,7 @@ fn check_rss_warn_is_rate_limited() {
 //      means they don't know to restart.
 #[test]
 fn hard_stop_message_format() {
-    let msg = hard_stop_message(4096, 4096, "examples/basics/entrypoint.ynz");
+    let msg = hard_stop_message(4096, 4096, "examples/pirates-roster/entrypoint.ynz");
     assert!(msg.contains("WHAT:"), "missing WHAT");
     assert!(msg.contains("WHAT INSTEAD:"), "missing WHAT INSTEAD");
     assert!(msg.contains("WHY:"), "missing WHY");

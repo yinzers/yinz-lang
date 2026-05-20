@@ -12,8 +12,8 @@ files:
   - crates/ynz-diagnostics/**
   - crates/ynz-driver/**
   - tests/**
-  - examples/basics/entrypoint.ynz
-  - examples/errors/m5_errors.ynz
+  - examples/pirates-roster/entrypoint.ynz
+  - examples/primantis-orders/m5_errors.ynz
   - design/generics.md
   - design/maybe.md
   - design/collections.md
@@ -773,25 +773,25 @@ The `none` literal produces a type `maybe<T>` for some unknown T. T is resolved 
 
 ---
 
-### Phase 5: Driver integration + M5 fixture suite + examples/basics + examples/errors
+### Phase 5: Driver integration + M5 fixture suite + examples/pirates-roster + examples/primantis-orders
 
-**PR scope**: Wire all M5 phases together in the driver. Add the M5 fixture suite (`crates/ynz-driver/tests/fixtures/m5_*.ynz`). Extend `examples/basics/entrypoint.ynz` with M5 features in context (generic function, generic shape, all three collections, maybe, bracket access, for-iteration). Create `examples/errors/m5_errors.ynz` exercising every M5 compile-error class. Ensure the M5 success-criteria program (from the Context section above) runs end-to-end.
+**PR scope**: Wire all M5 phases together in the driver. Add the M5 fixture suite (`crates/ynz-driver/tests/fixtures/m5_*.ynz`). Extend `examples/pirates-roster/entrypoint.ynz` with M5 features in context (generic function, generic shape, all three collections, maybe, bracket access, for-iteration). Create `examples/primantis-orders/m5_errors.ynz` exercising every M5 compile-error class. Ensure the M5 success-criteria program (from the Context section above) runs end-to-end.
 **Branch**: `feat/m5-driver-fixtures-examples`
 **Flag**: N/A
 **Est. lines**: ~800 (mostly .ynz files + integration test wiring)
 **Ships via**: `/pr`
-**Objective**: After P5, `cargo test --workspace` runs every M5 fixture through the full compile + run pipeline. `examples/basics/entrypoint.ynz` demonstrates every v0.1 feature through M5 in one growing program. `examples/errors/m5_errors.ynz` triggers every M5-class diagnostic in one file. Both files are reviewed by Patrick (hands-on UX validation per `.claude/rules/plan-invariants.md` `### Demo & Error Gallery`).
+**Objective**: After P5, `cargo test --workspace` runs every M5 fixture through the full compile + run pipeline. `examples/pirates-roster/entrypoint.ynz` demonstrates every v0.1 feature through M5 in one growing program. `examples/primantis-orders/m5_errors.ynz` triggers every M5-class diagnostic in one file. Both files are reviewed by Patrick (hands-on UX validation per `.claude/rules/plan-invariants.md` `### Demo & Error Gallery`).
 **Why this phase exists**: Per `### Demo & Error Gallery` invariant — every M5+ phase that adds executable surface MUST extend these two files. This phase consolidates all of M5's contributions and the success-criteria program in one verifiable bundle.
 **Current-state anchors**:
 - `crates/ynz-driver/tests/fixtures/m4_*.ynz` — existing M4 fixture pattern
-- `examples/basics/entrypoint.ynz` — already has M1-M4 demonstrations
-- `examples/errors/m4_errors.ynz` — already has M4 error triggers
+- `examples/pirates-roster/entrypoint.ynz` — already has M1-M4 demonstrations
+- `examples/primantis-orders/m4_errors.ynz` — already has M4 error triggers
 **Files (expected scope)**:
 - `crates/ynz-driver/tests/fixtures/m5_*.ynz` — 12+ fixtures covering every M5 feature
 - `crates/ynz-driver/tests/integration.rs` — wire fixtures into the test harness
-- `examples/basics/entrypoint.ynz` — extend with M5 features
-- `examples/errors/m5_errors.ynz` — CREATE; trigger every M5 compile-error class
-- `examples/errors/Cargo.toml` (or analog) — wire m5_errors into the gallery
+- `examples/pirates-roster/entrypoint.ynz` — extend with M5 features
+- `examples/primantis-orders/m5_errors.ynz` — CREATE; trigger every M5 compile-error class
+- `examples/primantis-orders/Cargo.toml` (or analog) — wire m5_errors into the gallery
 **Deviation rule**: NO new compiler logic in this phase. If a fixture exposes a bug, the bug fix goes in a separate PR (back to whichever phase owns it).
 **Steps**:
 1. Create the M5 success-criteria fixture (the full program from the Context section above).
@@ -813,16 +813,16 @@ The `none` literal produces a type `maybe<T>` for some unknown T. T is resolved 
     - `m5_map_mutation_during_iter.ynz` — `for (entry in m) { m.set("new", v) }`. Locked behavior: COMPILE ERROR with three-part diagnostic citing the `lend self` on `.set()` colliding with the iteration's outstanding share-borrow. (Borrow check from M4 already handles this — fixture confirms it works through the new map iteration machinery.)
     - `m5_generic_through_dynamic.ynz` — `findMax(items: array<dynamic Comparable>)`. Locked behavior: monomorphizes ONCE for `dynamic Comparable` as the element type (dynamic IS the concrete type at the boundary). Fixture asserts a single monomorph entry, not one per concrete Comparable.
 3. Wire each fixture into `crates/ynz-driver/tests/integration.rs` — each runs `ynz run` and asserts stdout + exit code.
-4. Extend `examples/basics/entrypoint.ynz` with M5 features in context. Use realistic names; show the feature doing real work (not `print(identity(5))` but a small useful pattern).
-5. Create `examples/errors/m5_errors.ynz`. One file demonstrating EVERY M5 compile error class (compiler multi-errors up to 50 per compile). Each trigger has a `// WHY:` comment naming the diagnostic class.
-6. Add insta snapshot for `examples/errors/m5_errors.ynz` stderr (asserts the diagnostic output matches the committed golden).
-7. Manual review pass: patrick reads `examples/basics/entrypoint.ynz` and `examples/errors/m5_errors.ynz` and confirms the UX feels right. If diagnostic wording feels off, fix it (small enough PR scope to absorb).
+4. Extend `examples/pirates-roster/entrypoint.ynz` with M5 features in context. Use realistic names; show the feature doing real work (not `print(identity(5))` but a small useful pattern).
+5. Create `examples/primantis-orders/m5_errors.ynz`. One file demonstrating EVERY M5 compile error class (compiler multi-errors up to 50 per compile). Each trigger has a `// WHY:` comment naming the diagnostic class.
+6. Add insta snapshot for `examples/primantis-orders/m5_errors.ynz` stderr (asserts the diagnostic output matches the committed golden).
+7. Manual review pass: patrick reads `examples/pirates-roster/entrypoint.ynz` and `examples/primantis-orders/m5_errors.ynz` and confirms the UX feels right. If diagnostic wording feels off, fix it (small enough PR scope to absorb).
 **Acceptance criteria**:
 - [ ] M5 success-criteria fixture compiles, runs, produces expected stdout, exits 0
 - [ ] 12+ per-feature fixtures pass
-- [ ] `examples/basics/entrypoint.ynz` demonstrates every M5 feature in context
-- [ ] `examples/errors/m5_errors.ynz` triggers every M5 error class
-- [ ] stderr snapshot for `examples/errors/m5_errors.ynz` matches the committed golden
+- [ ] `examples/pirates-roster/entrypoint.ynz` demonstrates every M5 feature in context
+- [ ] `examples/primantis-orders/m5_errors.ynz` triggers every M5 error class
+- [ ] stderr snapshot for `examples/primantis-orders/m5_errors.ynz` matches the committed golden
 - [ ] All M1-M4 fixtures still pass
 - [ ] Patrick has read and signed off on both examples files
 **Quality gate**:
@@ -830,7 +830,7 @@ The `none` literal produces a type `maybe<T>` for some unknown T. T is resolved 
 - [ ] Each `// WHY:` comment in m5_errors.ynz names the diagnostic class
 - [ ] Examples files use realistic names (no `foo`/`bar`/`baz`)
 - [ ] Examples files step-by-step (no chaining)
-**Verification**: `cargo test --workspace` green; `./target/debug/ynz run examples/basics/entrypoint.ynz` produces expected stdout; `./target/debug/ynz build examples/errors/m5_errors.ynz` produces expected stderr.
+**Verification**: `cargo test --workspace` green; `./target/debug/ynz run examples/pirates-roster/entrypoint.ynz` produces expected stdout; `./target/debug/ynz build examples/primantis-orders/m5_errors.ynz` produces expected stderr.
 
 ---
 
@@ -1018,8 +1018,8 @@ For each M5 runtime dependency above, the `--kernel` mode (v0.3+) behavior is lo
 
 ### Demo & Error Gallery
 
-- **`examples/basics/entrypoint.ynz` MUST be extended in P5** to demonstrate every M5 feature in context. Each feature should appear in a small but realistic snippet (not `print(identity(5))` alone — show a generic function used in actual computation; show a map carrying real data; show a for-loop doing real work).
-- **`examples/errors/m5_errors.ynz` MUST be created in P5** with intentional triggers for every M5 compile-error class. Each trigger has a `// WHY:` comment naming the diagnostic class. One file produces ALL the M5 diagnostics in a single compile (per `design/compiler-errors.md` 50-error cap, well within bound).
+- **`examples/pirates-roster/entrypoint.ynz` MUST be extended in P5** to demonstrate every M5 feature in context. Each feature should appear in a small but realistic snippet (not `print(identity(5))` alone — show a generic function used in actual computation; show a map carrying real data; show a for-loop doing real work).
+- **`examples/primantis-orders/m5_errors.ynz` MUST be created in P5** with intentional triggers for every M5 compile-error class. Each trigger has a `// WHY:` comment naming the diagnostic class. One file produces ALL the M5 diagnostics in a single compile (per `design/compiler-errors.md` 50-error cap, well within bound).
 - **Both files get insta stdout/stderr snapshots** committed to the repo. Updating these snapshots requires a `// test-ratchet: <reason>` marker.
 - **Patrick must read and sign off on both files before P5 merges** — this is the hands-on UX validation that automated tests can't replace.
 

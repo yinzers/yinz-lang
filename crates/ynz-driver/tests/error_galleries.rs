@@ -21,7 +21,7 @@ fn galleries_dir() -> PathBuf {
         .unwrap()
         .parent()
         .unwrap()
-        .join("examples/errors")
+        .join("examples/primantis-orders")
 }
 
 fn gallery(name: &str) -> PathBuf {

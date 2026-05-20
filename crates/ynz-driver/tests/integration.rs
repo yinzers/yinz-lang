@@ -1305,17 +1305,17 @@ fn examples_basics_runs_end_to_end() {
         .unwrap()
         .parent()
         .unwrap()
-        .join("examples/basics");
+        .join("examples/pirates-roster");
     let golden = std::fs::read_to_string(project_root.join("expected_stdout.txt"))
-        .expect("examples/basics/expected_stdout.txt must exist");
+        .expect("examples/pirates-roster/expected_stdout.txt must exist");
     let (stdout, stderr, code) = ynz_run_stdout(&project_root);
     assert_eq!(
         code, 0,
-        "examples/basics must compile and run; stderr:\n{stderr}"
+        "examples/pirates-roster must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(
         stdout, golden,
-        "stdout must match examples/basics/expected_stdout.txt"
+        "stdout must match examples/pirates-roster/expected_stdout.txt"
     );
 }
 

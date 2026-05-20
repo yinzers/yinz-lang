@@ -21,7 +21,7 @@ files:
   - .claude/rules/plan-invariants.md
   - .claude/graveyard.md
   - CLAUDE.md
-  - examples/errors/v0_2_m1_errors.ynz
+  - examples/primantis-orders/v0_2_m1_errors.ynz
 ---
 
 # Plan: v0.2-M1 — Feature Inventory & Sync Architecture
@@ -174,8 +174,8 @@ None outstanding. Three answered this session:
 - No new compile-error path introduced for kernel-mode programs that the existing scattered registries didn't already produce.
 
 ### Demo & Error Gallery
-- `examples/basics/entrypoint.ynz`: NO extension required. This milestone is a refactor with no new user-facing language feature. Per `.claude/rules/plan-invariants.md` "Demo & Error Gallery": features that ship without user-facing surface don't need entrypoint extensions. State this explicitly in the Phase 8 PR description.
-- `examples/errors/v0_2_m1_errors.ynz`: NEW file. Intentional triggers for every registry-driven error path:
+- `examples/pirates-roster/entrypoint.ynz`: NO extension required. This milestone is a refactor with no new user-facing language feature. Per `.claude/rules/plan-invariants.md` "Demo & Error Gallery": features that ship without user-facing surface don't need entrypoint extensions. State this explicitly in the Phase 8 PR description.
+- `examples/primantis-orders/v0_2_m1_errors.ynz`: NEW file. Intentional triggers for every registry-driven error path:
   - All sized-integer reservations (`f32`, `f64`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`)
   - The `test` keyword
   - At least one banned-jargon trigger per migrated category (`type`, `class`, `void`, `null`, `infer`, `monad`, `try`)
@@ -595,7 +595,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 **Current-state anchors**:
 - `crates/ynz-parser/src/lexer.rs:574-690` — current deferred handlers
-- `examples/errors/m*_errors.ynz` — existing snapshot-tested fixture files (find which ones exercise sized-int errors and `test` keyword)
+- `examples/primantis-orders/m*_errors.ynz` — existing snapshot-tested fixture files (find which ones exercise sized-int errors and `test` keyword)
 
 **Files (expected scope)**:
 - UPDATE `registry/features.toml` — add `[[deferred_language_feature]]` entries for: `f32`, `f64`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64` (each with `substitute = "int"` or `substitute = "float"` or `substitute = "number"`, `why = "..."`, `ships_in = "v2+"`, `design_doc = "design/mvp-scope.md"`) and `test` (`substitute = ""` since there's no current substitute, `why = "..."`, `ships_in = "v0.12"`, `design_doc = "design/mvp-scope.md"`)
@@ -618,7 +618,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - [x] `render_deferred_feature` helper exists in diagnostics crate
 - [x] All 830+ tests pass
 - [x] Insta snapshot diffs for deferred-feature errors are reviewed (commit message names them); the new text is uniform (every deferred-feature error follows the same WHAT/WHAT-INSTEAD/WHY shape, only the entry-specific text varies)
-- [x] Add intentional triggers for `f32`/`i8`/`test` to a new `examples/errors/v0_2_m1_errors.ynz` (or extend if Phase 0 created it)
+- [x] Add intentional triggers for `f32`/`i8`/`test` to a new `examples/primantis-orders/v0_2_m1_errors.ynz` (or extend if Phase 0 created it)
 
 **Quality gate**:
 - [x] No banned-jargon in new TOML/code
@@ -626,7 +626,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 **Verification**:
 - `cd /workspaces/ynz && cargo test --workspace`
-- `cd /workspaces/ynz && ./target/debug/ynz run examples/errors/v0_2_m1_errors.ynz 2>&1 | head -100`
+- `cd /workspaces/ynz && ./target/debug/ynz run examples/primantis-orders/v0_2_m1_errors.ynz 2>&1 | head -100`
 
 **Exit Sequence — RUN THESE STEPS (not a checklist; these are actions to execute):**
 
@@ -849,7 +849,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 ---
 
 ### Phase 8: Verification, Demo & Error Gallery, Tag `v0.2.0-m1`
-**PR scope**: Full-system verification phase. Extend examples/errors with the new error gallery file, sanity-check examples/basics still runs unchanged (it shouldn't — this is a refactor), bump `Cargo.toml` to `0.2.0-m1`, commit, tag, optionally publish (but Yinz isn't on crates.io yet — skip).
+**PR scope**: Full-system verification phase. Extend examples/primantis-orders with the new error gallery file, sanity-check examples/pirates-roster still runs unchanged (it shouldn't — this is a refactor), bump `Cargo.toml` to `0.2.0-m1`, commit, tag, optionally publish (but Yinz isn't on crates.io yet — skip).
 **Branch**: `feat/v0-2-m1-verification-and-tag`
 **Flag**: N/A
 **Est. lines**: ~200 (fixture additions + version bump + CHANGELOG)
@@ -858,13 +858,13 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 **Why this phase exists**: Per Yinz convention (v0.1.0-m4, v0.1.0-m5, v0.1.0-m6, v0.1.0-m7), each milestone gets an intermediate tag for traceability. Step 10 of /plan also requires this verification phase.
 
 **Current-state anchors**:
-- `examples/basics/entrypoint.ynz` — current contents (should run unchanged post-M1)
+- `examples/pirates-roster/entrypoint.ynz` — current contents (should run unchanged post-M1)
 - `Cargo.toml` (workspace + per-crate) — current version `0.1.0`
 - `CHANGELOG.md` if exists
 - `.claude/plans/done/m{4,5,6,7}-*.md` — pattern for M1 plan archival
 
 **Files (expected scope)**:
-- NEW or UPDATE `examples/errors/v0_2_m1_errors.ynz` — finalize all intentional triggers from Phases 5a, 5b, 6 (banned-jargon triggers, deferred-feature triggers, type-attached-constant misuse, muted-hint placeholder — though no consumer for that yet, so just data)
+- NEW or UPDATE `examples/primantis-orders/v0_2_m1_errors.ynz` — finalize all intentional triggers from Phases 5a, 5b, 6 (banned-jargon triggers, deferred-feature triggers, type-attached-constant misuse, muted-hint placeholder — though no consumer for that yet, so just data)
 - UPDATE `Cargo.toml` (workspace + all crates) — bump version to `0.2.0-m1`
 - UPDATE `CHANGELOG.md` — generate section from merged PRs since `v0.1.0` per `/release` skill
 - UPDATE `.claude/state.md` — append M1-complete decision row (with WHY); status: M1 SHIPPED
@@ -872,14 +872,14 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - MOVE `.claude/plans/active/v0-2-m1-feature-inventory-sync.md` → `.claude/plans/done/` (or flip front-matter `status: done` and let the radar move it — verify which mechanism the project uses)
 - UPDATE `.claude/plans/roadmaps/v0-2-dev-loop-tooling.md` — mark v0.2-M1 milestone as `status: shipped`
 
-**Deviation rule**: Standard. `examples/basics/entrypoint.ynz` extension is N/A this phase per Demo & Error Gallery decision in Invariants section.
+**Deviation rule**: Standard. `examples/pirates-roster/entrypoint.ynz` extension is N/A this phase per Demo & Error Gallery decision in Invariants section.
 
 **Steps**:
 1. Run `cargo clean && time cargo build --workspace` — capture final cold build time; compare to Phase 0 baseline. Must be within ±10% per Invariants.
 2. Run `cargo test --workspace` — all 830+ tests must pass.
 3. Run every fixture in `crates/ynz-driver/tests/fixtures/` end-to-end (`./target/debug/ynz run fixture.ynz`); compare stdout to expected. Spot-check on at least: `hello.ynz`, `m3_fib.ynz`, `m4_player.ynz`, an M5/M6/M7/M8 fixture if available.
-4. Run `examples/basics/entrypoint.ynz` if it's executable (`./target/debug/ynz run examples/basics/entrypoint.ynz`). Output must match pre-M1.
-5. Run `examples/errors/v0_2_m1_errors.ynz` and snapshot stderr (insta).
+4. Run `examples/pirates-roster/entrypoint.ynz` if it's executable (`./target/debug/ynz run examples/pirates-roster/entrypoint.ynz`). Output must match pre-M1.
+5. Run `examples/primantis-orders/v0_2_m1_errors.ynz` and snapshot stderr (insta).
 6. Re-run the jargon-audit test (`tests/jargon_audit.rs` per Invariants Teaching section).
 7. Bump versions, generate CHANGELOG, commit.
 8. Open PR; after merge, invoke `/release` to cut `v0.2.0-m1` tag.
@@ -889,8 +889,8 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - [x] `cargo build --workspace` cold time within ±10% of Phase 0 baseline (documented in PR)
 - [x] `cargo test --workspace` all pass (830+)
 - [x] Every fixture in `crates/ynz-driver/tests/fixtures/` runs end-to-end with expected stdout
-- [x] `examples/basics/entrypoint.ynz` runs unchanged (or N/A if it isn't currently runnable)
-- [x] `examples/errors/v0_2_m1_errors.ynz` exists with intentional triggers per Invariants Demo & Error Gallery; insta snapshot committed
+- [x] `examples/pirates-roster/entrypoint.ynz` runs unchanged (or N/A if it isn't currently runnable)
+- [x] `examples/primantis-orders/v0_2_m1_errors.ynz` exists with intentional triggers per Invariants Demo & Error Gallery; insta snapshot committed
 - [x] Jargon-audit test passes
 - [x] `Cargo.toml` bumped to `0.2.0-m1`
 - [x] `CHANGELOG.md` section added covering M1

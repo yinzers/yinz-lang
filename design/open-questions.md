@@ -112,15 +112,15 @@ project/
     greeter/entrypoint.ynz
 ```
 
-**The folder name is a convention, not a requirement.** `[entries]` accepts any path; `apps/`, `services/`, `bin/`, anything works. But the canonical Yinz convention — used in scaffolding (`ynz ship new <name>` when it lands), examples (`examples/ships_demo/`), and docs — is `ships/`.
+**The folder name is a convention, not a requirement.** `[entries]` accepts any path; `apps/`, `services/`, `bin/`, anything works. But the canonical Yinz convention — used in scaffolding (`ynz ship new <name>` when it lands), examples (`examples/stadium-fleet/`), and docs — is `ships/`.
 
 Pittsburgh-flavored pick (Pirates), 5-letter typo-resistant, library-ship vs binary-ship distinction reads cleanly, and `ynz ship new` is good CLI ergonomics.
 
 ### Concrete example
 
-See `examples/ships_demo/` for a runnable-once-v0.22-lands demo project showing a single `yinz.toml` with two binary ships, one shared folder, root-relative cross-folder imports, and the build commands the `[entries]` table enables.
+See `examples/stadium-fleet/` for a runnable-once-v0.22-lands demo project showing a single `yinz.toml` with two binary ships, one shared folder, root-relative cross-folder imports, and the build commands the `[entries]` table enables.
 
-Single-entry layout (the v0.1 default, ~95% case) is demonstrated by `examples/basics/` — same one-yinz.toml model but with `entry =` instead of `[entries]`, and no `ships/` folder needed. See `examples/README.md` for when to pick which.
+Single-entry layout (the v0.1 default, ~95% case) is demonstrated by `examples/pirates-roster/` — same one-yinz.toml model but with `entry =` instead of `[entries]`, and no `ships/` folder needed. See `examples/README.md` for when to pick which.
 
 ### What v0.22 has to add to the compiler
 

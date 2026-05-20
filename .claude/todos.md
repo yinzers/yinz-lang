@@ -47,7 +47,7 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 - [ ] **fmt-diff-mode** — add `ynz fmt --diff` flag emitting unified diff of what would change. Deferred from v0.2-M3 (not blocking ship; useful for code review tooling). No specific trigger; nice-to-have.
 
-- [ ] **update-plan-invariants-entrypoint-path** — update `.claude/rules/plan-invariants.md` to point at `examples/basics/entrypoint.ynz` (NOT `src/entrypoint.ynz` which is stale; actual path verified 2026-05-20). Trivial doc edit; do whenever passing through the rule file.
+- [ ] **update-plan-invariants-entrypoint-path** — update `.claude/rules/plan-invariants.md` to point at `examples/pirates-roster/entrypoint.ynz` (NOT `src/entrypoint.ynz` which is stale; actual path verified 2026-05-20). Trivial doc edit; do whenever passing through the rule file.
 
 - [ ] **per-phase-rule-reminder-block-in-code-reviewer-prompts** — extend each phase's Exit Sequence code-reviewer prompt to explicitly remind the agent about `~/.claude/rules/comments.md` + Golden Rule 11 WHY-quality + Yinz vocabulary (per agent-dispatch-rule-reminders memory). Deferred from v0.2-M3 round 1 review; non-blocking but tracked.
 

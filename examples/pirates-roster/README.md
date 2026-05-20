@@ -1,6 +1,8 @@
-# `examples/basics/` — Yinz v0.1 Language Showcase
+# `examples/pirates-roster/` — Yinz v0.1 Language Showcase
 
-**Layout: single-entry project** (the canonical Yinz shape for ~95% of projects). One `yinz.toml`, one `entrypoint.ynz`, code organized into `services/` and `utils/` subfolders imported root-relatively. No `[entries]` table, no `ships/` folder — that's only for multi-entry projects (see `../ships_demo/` for that layout, available in v0.22).
+**Layout: single-entry project** (the canonical Yinz shape for ~95% of projects). One `yinz.toml`, one `entrypoint.ynz`, code organized into `services/` and `utils/` subfolders imported root-relatively. No `[entries]` table, no `ships/` folder — that's only for multi-entry projects (see `../stadium-fleet/` for that layout, available in v0.22).
+
+**Theme (in-progress):** Pittsburgh Pirates roster — players, stats, lineups. The Pittsburgh sports universe theming is being rolled across `entrypoint.ynz` + companion modules; until that lands, the demo uses generic player/game vocabulary while still exercising every v0.1 feature.
 
 A single growing project that demonstrates **every v0.1 language feature** as it ships. Compile + run after each milestone to see the language in action.
 
@@ -8,7 +10,7 @@ A single growing project that demonstrates **every v0.1 language feature** as it
 
 ```bash
 source $HOME/.cargo/env
-./target/debug/ynz run examples/basics/
+./target/debug/ynz run examples/pirates-roster/
 ```
 
 ## What each milestone adds
@@ -39,6 +41,6 @@ When they ship, they replace the placeholder comments with real demo content.
 
 `.claude/rules/plan-invariants.md` `### Demo & Error Gallery` subsection: every milestone phase that adds executable surface MUST extend this file with the new feature in context. This is the human-eyes-on layer for the language UX — Patrick reviews each phase's demo to ensure the feature feels right before it ships.
 
-## Companion: `examples/errors/`
+## Companion: `examples/primantis-orders/`
 
-The per-milestone error gallery (`examples/errors/m{N}_errors.ynz`) shows every compile error each milestone introduces. Each phase also extends the gallery for its milestone.
+The per-milestone error gallery (`examples/primantis-orders/m{N}_errors.ynz`) shows every compile error each milestone introduces. Each phase also extends the gallery for its milestone.

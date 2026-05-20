@@ -449,8 +449,8 @@ This plan covers ONLY Milestone 4 in detail. M1–M3 are shipped (`done/`); M5�
 ## Phases
 
 > **READ FIRST (r17 added Demo & Error Gallery requirement)**: Per `.claude/rules/plan-invariants.md` `### Demo & Error Gallery` subsection (added 2026-05-16 per r17), every M4 phase that adds executable surface MUST also:
-> - **Extend `examples/basics/entrypoint.ynz`** with the new feature in context (showing it doing real work, not isolated `print(featureName())`)
-> - **Extend `examples/errors/m4_errors.ynz`** with intentional triggers for every new compile-error class added by that phase (each trigger gets a `// WHY:` comment naming the diagnostic class)
+> - **Extend `examples/pirates-roster/entrypoint.ynz`** with the new feature in context (showing it doing real work, not isolated `print(featureName())`)
+> - **Extend `examples/primantis-orders/m4_errors.ynz`** with intentional triggers for every new compile-error class added by that phase (each trigger gets a `// WHY:` comment naming the diagnostic class)
 > - Both files get `insta` stdout/stderr snapshots in the phase's verification step
 >
 > The basics demo grows M1→M8 (one project; every v0.1 feature in context). The error gallery is per-milestone (`m4_errors.ynz` builds on the patterns established in `m1_errors.ynz`/`m2_errors.ynz`/`m3_errors.ynz` which exist as the retroactive baseline). Patrick reviews each phase's UX via these files — features that ship without hands-on demo + error-experience review go un-validated until users hit them.

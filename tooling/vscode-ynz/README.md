@@ -48,4 +48,4 @@ ext install yinz-lang.yinz
 
 ## Screenshots
 
-Screenshots are tracked for a follow-up commit once the extension is installed and verified locally. Install the extension and open `examples/basics/entrypoint.ynz` to see syntax highlighting, hover docs, autocomplete, and inline diagnostics in action.
+Screenshots are tracked for a follow-up commit once the extension is installed and verified locally. Install the extension and open `examples/pirates-roster/entrypoint.ynz` to see syntax highlighting, hover docs, autocomplete, and inline diagnostics in action.

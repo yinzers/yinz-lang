@@ -15,7 +15,7 @@ review_rounds:
   - round: 2
     reviewer: plan-reviewer
     verdict: BLOCK
-    required_fixes_addressed: 5/5  # Cargo.toml version contingency; entrypoint.ynz path discrepancy + new examples/fmt_demo/messy.ynz demo; assert_cmd workspace dep; Phase 4 mass-rewrite uses library not CLI (atomic-write ordering hole closed); Demo & Error Gallery rule fully met with fmt_demo fixture.
+    required_fixes_addressed: 5/5  # Cargo.toml version contingency; entrypoint.ynz path discrepancy + new examples/burgh-poem/messy.ynz demo; assert_cmd workspace dep; Phase 4 mass-rewrite uses library not CLI (atomic-write ordering hole closed); Demo & Error Gallery rule fully met with fmt_demo fixture.
     concerns_addressed: 5/5  # ast_eq sibling-order mutation test #7; Phase 1 fixture comment-counts pre-counted to exactly 50; per-phase rule-reminder moved to todos.md; Phase 5 jargon AC restates scope; UTF-8 behavior locked NOW (trust invariant; convert at boundary).
     adversarial_addressed: 3/3  # concurrent --all processes (single-process assumption locked); symlink rewrite (follows + rename — locked); dangling doc-comment (walker emits as orphan trivia — Phase 2 test added).
   - round: 3
@@ -32,8 +32,8 @@ files:
   - design/fmt.md
   - design/mvp-scope.md
   - CLAUDE.md
-  - examples/basics/entrypoint.ynz
-  - examples/errors/v0_2_m3_errors.ynz
+  - examples/pirates-roster/entrypoint.ynz
+  - examples/primantis-orders/v0_2_m3_errors.ynz
   - Cargo.toml
 depends_on: [v0-2-m1-feature-inventory-sync, v0-2-m2-lsp-thin-slice]
 ---
@@ -57,7 +57,7 @@ Status: pending_approval
 - 11 workspace crates (M2 added `ynz-lsp` and `ynz-tmgrammar`). `Cargo.toml:18` is currently at `0.2.0-m1` (verified 2026-05-20). v0.2-M2's final phase (Phase 9 per `.claude/plans/active/v0-2-m2-lsp-thin-slice.md`) bumps to `0.2.0-m2` and cuts the tag; M3 Phase 0 begins from `main` AFTER that bump lands. **Contingency**: if for any reason M2's tag-cut DOES NOT include the version bump when M3 Phase 0 starts, Phase 0 takes over the `0.2.0-m1 → 0.2.0-m2` bump as a prerequisite step (added to Phase 0 acceptance criteria conditionally — checked at start of Phase 0). Phase 6 of M3 always does the `<previous> → 0.2.0-m3` bump regardless.
 - The Yinz parser is hand-written recursive-descent + Pratt for expressions (`crates/ynz-parser/src/parser.rs`, 4118 lines). The lexer (`crates/ynz-parser/src/lexer.rs`, 1314 lines) **skips `//` line comments entirely** — only `///` doc-comments survive into the AST as `Token::DocComment`. The formatter must reconstruct `//` comment positions via a separate trivia-emitting lex pass.
 - `crates/ynz-ast/src/nodes.rs` (830 lines) defines every node carrying a `SourceSpan` — byte-offsets the formatter uses to align comments with surrounding nodes.
-- Existing source convention (verified by reading `examples/basics/entrypoint.ynz`): 2-space indent, backtick strings, `//` line comments + `///` doc-comments only (no `/* */`), no trailing semicolons.
+- Existing source convention (verified by reading `examples/pirates-roster/entrypoint.ynz`): 2-space indent, backtick strings, `//` line comments + `///` doc-comments only (no `/* */`), no trailing semicolons.
 - `crates/ynz-registry/src/lib.rs:16-80` exposes `keywords()`, `banned_jargon()`, `deferred_language_features()`, etc. — the formatter consumes these for keyword spellings and reserved-name protection (no fork of the keyword list).
 
 **Constraints (locked from roadmap + this planning session)**:
@@ -82,12 +82,12 @@ Status: pending_approval
 - Format-as-you-type partial reformatting in the LSP — v0.2-M5 (or later) if at all.
 
 **Success criteria**:
-- `ynz fmt examples/basics/entrypoint.ynz` rewrites the file in canonical form; running it again is a no-op (idempotent).
+- `ynz fmt examples/pirates-roster/entrypoint.ynz` rewrites the file in canonical form; running it again is a no-op (idempotent).
 - `ynz fmt --all` in a project dir formats every `.ynz` file under the project root.
-- `ynz fmt --check examples/basics/entrypoint.ynz` exits 0 if already canonical, exits 1 with a list of files that would change otherwise.
+- `ynz fmt --check examples/pirates-roster/entrypoint.ynz` exits 0 if already canonical, exits 1 with a list of files that would change otherwise.
 - `cat foo.ynz | ynz fmt --stdin` writes the formatted result to stdout, exits 0 on success or 1 on parse error.
 - `ynz_fmt::format(source: &str) -> Result<String, FmtError>` is the library API. v0.2-M5's LSP calls it from the `textDocument/formatting` handler with no logic in between.
-- Every example in `examples/basics/` + `examples/errors/` + `crates/ynz-driver/tests/fixtures/` round-trips: `fmt(file) == file` (the existing examples ARE in canonical form after Phase 4 normalizes them once, then stay canonical).
+- Every example in `examples/pirates-roster/` + `examples/primantis-orders/` + `crates/ynz-driver/tests/fixtures/` round-trips: `fmt(file) == file` (the existing examples ARE in canonical form after Phase 4 normalizes them once, then stay canonical).
 - `cargo test --workspace` passes (830+ existing + new fmt-specific tests).
 - Tag cut: `v0.2.0-m3` (intermediate; v0.2.0 final ships at v0.2-M5).
 
@@ -98,7 +98,7 @@ Status: pending_approval
 - Implication: `//` comments are LEXED-AWAY before the parser ever sees them. Doc comments `///` survive as tokens and end up on AST nodes (function/shape declarations, per parser.rs:149 and :3615).
 - The formatter must reconstruct `//` positions via a separate trivia-emitting pass. **Locked approach**: add a `pub fn lex_with_trivia(source: &str) -> (Vec<SpannedToken>, Vec<Comment>)` to `ynz-parser` — same lexer logic but the `Comment` vec captures every `//` + `///` token with its byte-span. No effect on the existing `lex(source)` path used by parser. Additive.
 
-**Existing source convention (verified 2026-05-20 from `examples/basics/entrypoint.ynz`)**:
+**Existing source convention (verified 2026-05-20 from `examples/pirates-roster/entrypoint.ynz`)**:
 - 2-space indent for blocks (functions, if/while/for bodies)
 - Backtick strings (`` `text` ``), NOT double-quote strings
 - `//` line comments only; no `/* */` block comments observed in any source file (verified `grep '/\*' examples/ crates/*/tests/fixtures/`)
@@ -150,7 +150,7 @@ The LSP in v0.2-M5 calls `format(source)` from its `textDocument/formatting` han
 |------|-----------|--------|------------|
 | Algorithm choice (prettier vs rustfmt) wrong, requires migration mid-M3 | Medium | Medium | Phase 1 spike builds BOTH against a curated "hard cases" suite (long signatures, deeply nested exprs, comment-heavy code). Lock decision in `design/fmt.md` so v0.3+ doesn't re-litigate. |
 | Comment placement bugs ship — `// comment` ends up on wrong line after format | High | High | Phase 3 dedicated to comment merge. Tests cover: leading comments before declarations, inline comments at end of line, comments inside expressions (rare but possible), comments between elements of an array/map literal. Golden files for each placement. |
-| Idempotency bug ships — `fmt(fmt(x)) != fmt(x)` — breaks CI gate users | Medium | High | Phase 4 has explicit `fmt(fmt(x)) == fmt(x)` property test running across all `examples/basics/` + `examples/errors/` + `crates/ynz-driver/tests/fixtures/` content. Proptest fuzz over arbitrary parser-valid input as the deeper guarantee. |
+| Idempotency bug ships — `fmt(fmt(x)) != fmt(x)` — breaks CI gate users | Medium | High | Phase 4 has explicit `fmt(fmt(x)) == fmt(x)` property test running across all `examples/pirates-roster/` + `examples/primantis-orders/` + `crates/ynz-driver/tests/fixtures/` content. Proptest fuzz over arbitrary parser-valid input as the deeper guarantee. |
 | Formatter alters semantics — `parse(fmt(x)) != parse(x)` modulo trivia | Low | Critical | Phase 4 also includes a semantic round-trip property test: parse the formatted output, compare the AST modulo trivia/spans against the original AST. Fails CI if the formatter ever produces a semantically different program. |
 | Re-lex trivia pass diverges from `lex()` (drift between the two lex functions) | Medium | Medium | `lex_with_trivia()` is implemented BY DELEGATING to the existing lexer with a "capture trivia" flag, NOT a copy-pasted parallel function. Single source of truth for tokenization. Phase 2 implements via an internal `Lexer::lex_capturing(trivia: bool)` method that both `lex` and `lex_with_trivia` call with different flags. |
 | Backtick string interpolation breaks under format — `${...}` inside `` ` `` strings re-formatted incorrectly | Medium | High | Backtick strings + interpolation are tokenized as a complex multi-token sequence in lexer.rs (BacktickStart / BacktickContent / InterpolationStart / InterpolationEnd / BacktickEnd). Formatter MUST treat the entire backtick literal as a unit — never re-flow content inside. Phase 2 tests cover multi-line backtick strings, single-line interpolation, multi-line interpolation. |
@@ -261,11 +261,11 @@ Open architectural question for Phase 1 research spike (NOT a blocker; spike dec
 
 ### Demo & Error Gallery
 
-**Path-discrepancy note** (locked this round): `.claude/rules/plan-invariants.md` `### Demo & Error Gallery` says the demo entrypoint lives at `examples/basics/entrypoint.ynz`. Actual on-disk path is `examples/basics/entrypoint.ynz` (verified 2026-05-20). The rule's path is STALE — the project was restructured at some point and the rule wasn't updated. **This plan treats the actual on-disk path as canonical** (`examples/basics/entrypoint.ynz`). A separate follow-up will update the rule file (added to `.claude/todos.md` "Later" as `update-plan-invariants-entrypoint-path` in Phase 0 Step 9 alongside the other deferrals).
+**Path-discrepancy note** (locked this round): `.claude/rules/plan-invariants.md` `### Demo & Error Gallery` says the demo entrypoint lives at `examples/pirates-roster/entrypoint.ynz`. Actual on-disk path is `examples/pirates-roster/entrypoint.ynz` (verified 2026-05-20). The rule's path is STALE — the project was restructured at some point and the rule wasn't updated. **This plan treats the actual on-disk path as canonical** (`examples/pirates-roster/entrypoint.ynz`). A separate follow-up will update the rule file (added to `.claude/todos.md` "Later" as `update-plan-invariants-entrypoint-path` in Phase 0 Step 9 alongside the other deferrals).
 
-- `examples/basics/entrypoint.ynz`: ADD a top-of-file comment block: `// Format this file with: ynz fmt examples/basics/entrypoint.ynz — output is byte-identical (file is already canonical).` No NEW Yinz language code added (M3 ships no new language features).
-- **NEW dedicated formatter demo** `examples/fmt_demo/messy.ynz` (per Demo & Error Gallery rule spirit — adds executable demo surface for the formatter feature): a deliberately non-canonical `.ynz` file with extra spaces, irregular indent, inline comments at odd positions, etc. Top-of-file comment: `// This file is intentionally non-canonical. Run: ynz fmt examples/fmt_demo/messy.ynz to see the formatter rewrite it. To check without rewriting: ynz fmt --check examples/fmt_demo/messy.ynz (exits 1).` This file is EXCLUDED from Phase 4's mass-rewrite by living OUTSIDE any `yinz.toml` project root (`examples/fmt_demo/` has no `yinz.toml`; `ynz fmt --all` requires one and won't enter the dir). Phase 4's mass-rewrite Step 4 explicitly skips `examples/fmt_demo/`. The fixture stays non-canonical forever as the demo. Verified idempotent in a different sense: `ynz fmt messy.ynz` → outputs the canonical form on stdout/file, but the GIT-checked-in `messy.ynz` stays messy.
-- `examples/errors/v0_2_m3_errors.ynz`: NEW file. Intentional triggers for every NEW error path the formatter introduces:
+- `examples/pirates-roster/entrypoint.ynz`: ADD a top-of-file comment block: `// Format this file with: ynz fmt examples/pirates-roster/entrypoint.ynz — output is byte-identical (file is already canonical).` No NEW Yinz language code added (M3 ships no new language features).
+- **NEW dedicated formatter demo** `examples/burgh-poem/messy.ynz` (per Demo & Error Gallery rule spirit — adds executable demo surface for the formatter feature): a deliberately non-canonical `.ynz` file with extra spaces, irregular indent, inline comments at odd positions, etc. Top-of-file comment: `// This file is intentionally non-canonical. Run: ynz fmt examples/burgh-poem/messy.ynz to see the formatter rewrite it. To check without rewriting: ynz fmt --check examples/burgh-poem/messy.ynz (exits 1).` This file is EXCLUDED from Phase 4's mass-rewrite by living OUTSIDE any `yinz.toml` project root (`examples/burgh-poem/` has no `yinz.toml`; `ynz fmt --all` requires one and won't enter the dir). Phase 4's mass-rewrite Step 4 explicitly skips `examples/burgh-poem/`. The fixture stays non-canonical forever as the demo. Verified idempotent in a different sense: `ynz fmt messy.ynz` → outputs the canonical form on stdout/file, but the GIT-checked-in `messy.ynz` stays messy.
+- `examples/primantis-orders/v0_2_m3_errors.ynz`: NEW file. Intentional triggers for every NEW error path the formatter introduces:
   - Parse error in input (formatter falls back to "print diagnostic, exit 1, write nothing")
   - File not found (infra error, exit 2)
   - `--all` outside a `yinz.toml` project root (infra error: "ynz fmt --all requires a yinz.toml project; pass a path instead")
@@ -334,7 +334,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - EDIT: `.claude/todos.md` — ADD durable-home entries for deferred items per Patrick's `deferrals-must-be-tracked` rule:
   - `- [ ] **lsp-range-formatting** — add `format_range(source, range)` to ynz-fmt library + textDocument/rangeFormatting LSP handler. Deferred from v0.2-M3 (whole-file formatting was enough for editor format-on-save). Pick up IF v0.2-M5 LSP proves a need.`
   - `- [ ] **fmt-diff-mode** — add `ynz fmt --diff` flag emitting unified diff of what would change. Deferred from v0.2-M3 (not blocking ship; useful for code review tooling). No specific trigger; nice-to-have.`
-  - `- [ ] **update-plan-invariants-entrypoint-path** — update .claude/rules/plan-invariants.md to point at examples/basics/entrypoint.ynz (NOT src/entrypoint.ynz which is stale; actual path verified 2026-05-20). Trivial doc edit; do whenever passing through the rule file.`
+  - `- [ ] **update-plan-invariants-entrypoint-path** — update .claude/rules/plan-invariants.md to point at examples/pirates-roster/entrypoint.ynz (NOT src/entrypoint.ynz which is stale; actual path verified 2026-05-20). Trivial doc edit; do whenever passing through the rule file.`
   - `- [ ] **per-phase-rule-reminder-block-in-code-reviewer-prompts** — extend each phase's Exit Sequence code-reviewer prompt to explicitly remind the agent about `~/.claude/rules/comments.md` + Golden Rule 11 WHY-quality + Yinz vocabulary (per agent-dispatch-rule-reminders memory). Deferred from v0.2-M3 round 1 review; non-blocking but tracked.`
 
 **Deviation rule**: Executor MAY touch files not listed if the change serves the planned work. Document each deviation in the PR description; if it's its own concern, split.
@@ -405,8 +405,8 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 **Current-state anchors**:
 - `crates/ynz-fmt/_spike/.gitkeep` from Phase 0
 - `crates/ynz-fmt/Cargo.toml` from Phase 0 (deps locked)
-- `examples/basics/entrypoint.ynz` (canonical reference for "common Yinz idiom")
-- `examples/errors/m4_errors.ynz` through `m8_errors.ynz` (comment-heavy code samples)
+- `examples/pirates-roster/entrypoint.ynz` (canonical reference for "common Yinz idiom")
+- `examples/primantis-orders/m4_errors.ynz` through `m8_errors.ynz` (comment-heavy code samples)
 - `crates/ynz-parser/src/parser.rs:149` + `:3615` (where doc comments enter the AST — informs how spikes handle them)
 
 **Files (expected scope)**:
@@ -559,7 +559,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - `cargo test -p ynz-parser trivia 2>&1 | grep 'test result'` — all pass
 - `cargo test -p ynz-fmt walker_golden 2>&1 | grep 'test result'` — all pass
 - `cargo test --workspace 2>&1 | grep 'test result'` — full suite green
-- Manual probe: `cat examples/basics/entrypoint.ynz | head -50 > /tmp/test.ynz; cargo run --release -p ynz-fmt --bin format-test -- /tmp/test.ynz` (if a thin binary is added for manual testing) — outputs a canonical version
+- Manual probe: `cat examples/pirates-roster/entrypoint.ynz | head -50 > /tmp/test.ynz; cargo run --release -p ynz-fmt --bin format-test -- /tmp/test.ynz` (if a thin binary is added for manual testing) — outputs a canonical version
 
 **Exit Sequence:**
 
@@ -680,7 +680,7 @@ These 12 cases ARE the comment-merge spec. Every case has a fixture in `crates/y
 **Verification**:
 - `cargo test -p ynz-fmt 2>&1 | grep 'test result'` — all pass
 - `cargo test --workspace 2>&1 | grep 'test result'` — full suite green
-- Manual probe: `cargo run -p ynz-fmt --bin format-test -- examples/basics/entrypoint.ynz` (if test binary exists) — comments in their right places
+- Manual probe: `cargo run -p ynz-fmt --bin format-test -- examples/pirates-roster/entrypoint.ynz` (if test binary exists) — comments in their right places
 
 **Exit Sequence:**
 
@@ -705,7 +705,7 @@ These 12 cases ARE the comment-merge spec. Every case has a fixture in `crates/y
 **Why this phase exists**: shipping a formatter without semantic-round-trip tests is reckless. Shipping it without an example corpus already in canonical form means every subsequent diff is polluted by formatting changes. Both happen in one PR so the reviewer attention concentrates: "this is the day all .ynz files become canonical."
 
 **Current-state anchors**:
-- All `.ynz` files in `examples/basics/`, `examples/errors/`, `crates/*/tests/fixtures/` — to be mass-rewritten
+- All `.ynz` files in `examples/pirates-roster/`, `examples/primantis-orders/`, `crates/*/tests/fixtures/` — to be mass-rewritten
 - `crates/ynz-fmt/src/lib.rs` — `format()` from Phase 3 (feature-complete)
 - `crates/ynz-fmt/tests/idempotency.rs` from Phase 3 (extended this phase to also run semantic round-trip)
 - `crates/ynz-ast/src/nodes.rs` — AST node definitions (semantic-equality helper extends here)
@@ -723,7 +723,7 @@ These 12 cases ARE the comment-merge spec. Every case has a fixture in `crates/y
   - For each generated program: assert `fmt(fmt(s)) == fmt(s)` and `ast_eq_modulo_trivia(parse(s), parse(fmt(s)))`.
   - Shrink on failure.
 - NEW: `crates/ynz-fmt/tests/mass_rewrite.rs` — `#[ignore]`-marked test that performs the mass-rewrite via the library API. Run on-demand; deleted at the start of Phase 5 (preserved in git history). See Step 4 for details.
-- NEW: `examples/fmt_demo/messy.ynz` — the dedicated formatter demo file (Demo & Error Gallery invariant). Excluded from the mass-rewrite walker. STAYS non-canonical.
+- NEW: `examples/burgh-poem/messy.ynz` — the dedicated formatter demo file (Demo & Error Gallery invariant). Excluded from the mass-rewrite walker. STAYS non-canonical.
 - DIFF: every `.ynz` file under `examples/`, `crates/*/tests/fixtures/` rewritten to canonical form via the Step 4 library-driven test (NOT `ynz fmt --all` — that CLI mode lands in Phase 5)
 - DIFF: any insta snapshots that reference fixture line numbers (likely few — most snapshots match diagnostic content, not exact file shapes)
 
@@ -731,7 +731,7 @@ These 12 cases ARE the comment-merge spec. Every case has a fixture in `crates/y
 
 **Steps**:
 1. Implement `crates/ynz-ast/src/equality.rs::ast_eq_modulo_trivia(a, b)`: recursive structural compare; skip `SourceSpan` fields; for `DocComment` AST attachments, compare presence + position (which AST nodes carry them) — content variation is acceptable as long as the same content is present at the same logical position.
-2. Write `tests/semantic_roundtrip.rs`: for every fixture in `examples/basics/`, `examples/errors/`, `crates/ynz-driver/tests/fixtures/`, `crates/ynz-fmt/tests/fixtures/`:
+2. Write `tests/semantic_roundtrip.rs`: for every fixture in `examples/pirates-roster/`, `examples/primantis-orders/`, `crates/ynz-driver/tests/fixtures/`, `crates/ynz-fmt/tests/fixtures/`:
    - `let original_ast = parse(content);`
    - `let formatted = format(content)?;`
    - `let reformatted_ast = parse(&formatted);`
@@ -747,7 +747,7 @@ These 12 cases ARE the comment-merge spec. Every case has a fixture in `crates/y
    - **Shrink iterations**: 10000 (proptest default)
    - **Quality gate on the strategy**: a smoke test (`tests/proptest_smoke.rs`) generates 100 ASTs from the strategy WITHOUT running the property; asserts ≥95% produce non-trivial output (`format(ast).len() > 20`). If <95%, the strategy is biased toward trivial cases and must be fixed. This catches "the random generator emits empty modules 80% of the time" failures up front.
    - **For each generated AST**: render via `format()` → re-parse → assert `ast_eq_modulo_trivia(original, reparsed)`; render again → assert byte-identical (idempotency); shrink on failure to a minimal counterexample.
-4. **Mass-rewrite via library, NOT CLI (Phase 5 dependency hole avoided)**. The production CLI's atomic same-dir tempfile-rename logic does NOT land until Phase 5. Phase 4's mass-rewrite uses a temporary `#[ignore]`-marked test in `crates/ynz-fmt/tests/mass_rewrite.rs` that walks `examples/` + `crates/*/tests/fixtures/` + `examples/errors/` (EXPLICITLY EXCLUDING `examples/fmt_demo/` — the dedicated formatter demo file lives there and stays non-canonical), calls `ynz_fmt::format(content)` for each file, and writes the result via `std::fs::write(path, formatted)` (naive write — acceptable because: (a) this is a one-shot human-supervised PR; (b) the operation is internal to the Phase 4 PR; (c) the only risk of non-atomic write is mid-operation crash leaving a half-written file, which is recoverable from git). Run via `cargo test -p ynz-fmt mass_rewrite -- --ignored --nocapture`. Phase 5 ships the production atomic-write CLI code; this test-binary is DELETED at the start of Phase 5 (preserved in git history).
+4. **Mass-rewrite via library, NOT CLI (Phase 5 dependency hole avoided)**. The production CLI's atomic same-dir tempfile-rename logic does NOT land until Phase 5. Phase 4's mass-rewrite uses a temporary `#[ignore]`-marked test in `crates/ynz-fmt/tests/mass_rewrite.rs` that walks `examples/` + `crates/*/tests/fixtures/` + `examples/primantis-orders/` (EXPLICITLY EXCLUDING `examples/burgh-poem/` — the dedicated formatter demo file lives there and stays non-canonical), calls `ynz_fmt::format(content)` for each file, and writes the result via `std::fs::write(path, formatted)` (naive write — acceptable because: (a) this is a one-shot human-supervised PR; (b) the operation is internal to the Phase 4 PR; (c) the only risk of non-atomic write is mid-operation crash leaving a half-written file, which is recoverable from git). Run via `cargo test -p ynz-fmt mass_rewrite -- --ignored --nocapture`. Phase 5 ships the production atomic-write CLI code; this test-binary is DELETED at the start of Phase 5 (preserved in git history).
 5. Visual inspection of the diff: confirm every change is purely formatting (whitespace, line breaks, indent). No identifier renames, no statement reorders, no semantic change.
 6. Run `cargo test --workspace` — every existing test must still pass against the formatted fixtures.
 7. **Re-run Phase 3's idempotency test against the POST-REWRITE fixture tree** (not just the pre-rewrite version): `cargo test -p ynz-fmt idempotency`. The test enumerates fixture paths at compile time; after the mass-rewrite, the paths point to files that have been changed in-tree. The test MUST PASS byte-identical on the rewritten corpus. If it doesn't, the formatter is non-idempotent and the rewrite is invalid — STOP, fix the formatter, re-run from Step 4.
@@ -815,9 +815,9 @@ These 12 cases ARE the comment-merge spec. Every case has a fixture in `crates/y
 - NEW: `crates/ynz-driver/tests/fixtures/fmt/` — fixtures for the CLI tests (already-canonical files, non-canonical files, files with parse errors, a small yinz.toml project)
 - EDIT: `crates/ynz-fmt/src/lib.rs` — finalize the API rustdoc (semver-stability note; document that v0.2-M5 LSP consumes `format()`); add `#[doc(hidden)]` to anything not part of the public contract
 - EDIT: `crates/ynz-diagnostics/tests/jargon_audit.rs` — extend to load every formatter-emitted error message + `--check` output and assert no banned-jargon
-- NEW: `examples/errors/v0_2_m3_errors.ynz` — intentional error triggers per the Demo & Error Gallery invariant: parse error in input, file not found, --all without yinz.toml, --check mismatch — each with `// WHY:` comment naming the class
+- NEW: `examples/primantis-orders/v0_2_m3_errors.ynz` — intentional error triggers per the Demo & Error Gallery invariant: parse error in input, file not found, --all without yinz.toml, --check mismatch — each with `// WHY:` comment naming the class
 - DELETE: `crates/ynz-fmt/tests/mass_rewrite.rs` — temporary test from Phase 4. The production CLI (this phase) supersedes it; Phase 4's rewrite already executed, so the test has no remaining purpose. Preserved in git history.
-- EDIT: `examples/basics/entrypoint.ynz` — ADD top-of-file comment block: `// Format this file with: ynz fmt examples/basics/entrypoint.ynz — output is byte-identical (canonical).`
+- EDIT: `examples/pirates-roster/entrypoint.ynz` — ADD top-of-file comment block: `// Format this file with: ynz fmt examples/pirates-roster/entrypoint.ynz — output is byte-identical (canonical).`
 - **Deviation**: `predicates = "3"` added to `[workspace.dependencies]` (Cargo.toml) and `[dev-dependencies]` of `crates/ynz-driver/Cargo.toml` — required for `assert_cmd`'s `.stderr(predicates::str::contains(...))` fluent API in `fmt_cli.rs`. Not listed in original plan files scope; added to paper-trail here per deviation rule.
 - **Deviation**: `tempfile = { workspace = true }` added to `crates/ynz-driver/Cargo.toml` dev-dependencies — `tempfile` was already a workspace dep (used by other crates); this binds the existing dep for use in `fmt_cli.rs` integration test helper (`tempfile::tempdir()`). Minor bind, not a new dep addition.
 - **Deviation**: All four mode handlers implemented in the existing `crates/ynz-driver/src/fmt.rs` rather than as submodule files (`fmt/single.rs`, `fmt/project.rs`, `fmt/check.rs`, `fmt/stdin.rs`). Same logic, simpler file structure. The deviation rule permits this.
@@ -868,14 +868,14 @@ These 12 cases ARE the comment-merge spec. Every case has a fixture in `crates/y
    - Each public function: document inputs/outputs/errors
    - Note that the v0.2-M5 LSP will consume `format()` — backwards-incompatible changes need a major-version bump
 8. Extend `crates/ynz-diagnostics/tests/jargon_audit.rs`: iterate over a representative set of formatter inputs that trigger error messages; collect every ENGLISH error/diagnostic string the formatter writes to stdout/stderr (CLI messages: `ynz fmt: rewrote {path}`, `Would reformat: {path}`, parse-error renders); assert no banned-jargon appears. **DO NOT audit the formatted Yinz source code itself** — Yinz source legitimately contains words from the banned-jargon list (e.g., a user can write `// type` in a comment; the formatter preserves it byte-exact and the audit must NOT false-positive that). Scope the audit to: messages the formatter emits to the USER, not source content the formatter merely passes through.
-9. Create `examples/errors/v0_2_m3_errors.ynz` with the intentional triggers per Demo & Error Gallery invariant.
-10. Add top-of-file comment to `examples/basics/entrypoint.ynz` (and run `ynz fmt` on it to keep it canonical).
+9. Create `examples/primantis-orders/v0_2_m3_errors.ynz` with the intentional triggers per Demo & Error Gallery invariant.
+10. Add top-of-file comment to `examples/pirates-roster/entrypoint.ynz` (and run `ynz fmt` on it to keep it canonical).
 11. Run `cargo test --workspace`; fix any breakage.
 
 **Acceptance criteria**:
 - [x] All four CLI modes work end-to-end as specified in Steps 1-4
 - [x] `cargo test -p ynz-driver fmt_cli` passes all 10 integration tests (12 tests, 10+ required)
-- [x] `ynz fmt --check examples/basics/entrypoint.ynz` exits 0 (file is canonical from Phase 4 mass-rewrite)
+- [x] `ynz fmt --check examples/pirates-roster/entrypoint.ynz` exits 0 (file is canonical from Phase 4 mass-rewrite)
 - [x] `ynz fmt --check` on a deliberately non-canonical file exits 1 and prints `Would reformat:` to stderr
 - [x] `echo "let x = 1" | ynz fmt --stdin` outputs `let x = 1\n` (or whatever Phase 1's algorithm produces — single statement, canonical) and exits 0
 - [x] `ynz fmt nonexistent.ynz` exits 2 with infra error message
@@ -883,8 +883,8 @@ These 12 cases ARE the comment-merge spec. Every case has a fixture in `crates/y
 - [x] `ynz fmt foo.ynz` does NOT bump the file's mtime if the file was already canonical (atomic-write-on-difference path)
 - [x] `ynz-fmt` library API rustdoc explains semver stability + LSP consumption
 - [x] Jargon audit extension passes for all formatter-emitted text (CLI messages + diagnostics ONLY; Yinz source-content passthrough is EXCLUDED from the audit per Step 8 scope)
-- [x] `examples/errors/v0_2_m3_errors.ynz` exists with intentional triggers + `// WHY:` comments
-- [x] `examples/basics/entrypoint.ynz` has the top-of-file format-this-file comment + remains canonical
+- [x] `examples/primantis-orders/v0_2_m3_errors.ynz` exists with intentional triggers + `// WHY:` comments
+- [x] `examples/pirates-roster/entrypoint.ynz` has the top-of-file format-this-file comment + remains canonical
 - [x] `cargo test --workspace` passes
 
 **Quality gate**:
@@ -900,13 +900,13 @@ These 12 cases ARE the comment-merge spec. Every case has a fixture in `crates/y
 - `cargo test -p ynz-driver fmt 2>&1 | grep 'test result'` — all pass
 - `cargo test --workspace 2>&1 | grep 'test result'` — full suite green
 - Manual: `./target/debug/ynz fmt --help` shows all four flags with help text
-- Manual: `./target/debug/ynz fmt examples/basics/entrypoint.ynz; echo "exit: $?"` — exit 0, no rewrite
+- Manual: `./target/debug/ynz fmt examples/pirates-roster/entrypoint.ynz; echo "exit: $?"` — exit 0, no rewrite
 - Manual: `echo 'let   x   =   1' | ./target/debug/ynz fmt --stdin` — `let x = 1\n` output
 
 **Exit Sequence:**
 
 1. **Persist plan state.** Tick checkboxes; bump `last_updated:`.
-2. **Invoke code-reviewer.** `Agent({ subagent_type: "code-reviewer", description: "Review Phase 5", prompt: "Review the diff for Phase 5 of plan at .claude/plans/active/v0-2-m3-fmt.md. Diff: git diff main..HEAD. Focus areas: (a) atomic file writes (no partial-write corruption risk); (b) --check is truly read-only — test asserts no filesystem mutation; (c) library API rustdoc accurately documents what v0.2-M5 LSP will consume; (d) examples/errors/v0_2_m3_errors.ynz triggers cover every distinct error path. Output in standard format." })`
+2. **Invoke code-reviewer.** `Agent({ subagent_type: "code-reviewer", description: "Review Phase 5", prompt: "Review the diff for Phase 5 of plan at .claude/plans/active/v0-2-m3-fmt.md. Diff: git diff main..HEAD. Focus areas: (a) atomic file writes (no partial-write corruption risk); (b) --check is truly read-only — test asserts no filesystem mutation; (c) library API rustdoc accurately documents what v0.2-M5 LSP will consume; (d) examples/primantis-orders/v0_2_m3_errors.ynz triggers cover every distinct error path. Output in standard format." })`
 3. **Handle verdict.** BLOCK → fix → re-invoke. PASS → continue.
 4. **Prompt user.** "Phase 5 done. CLI wired. Ready to commit and move to Phase 6 (verification + tag)?"
 5. **Do NOT start Phase 6** until user confirms.
@@ -944,7 +944,7 @@ These 12 cases ARE the comment-merge spec. Every case has a fixture in `crates/y
 3. **Shortcut detection**: scan `crates/ynz-fmt/src/**` for: `unimplemented!()`, `todo!()`, `panic!("...")` in non-test code, hardcoded literal strings that should be configurable (line width, indent width — confirm they're named constants not magic numbers).
 4. **Quality checklist verification**: walk every Invariant subsection's bullets; assert each is verified by a passing test or explicit invariant check.
 5. **Performance measurement**:
-   - Time `ynz fmt examples/basics/entrypoint.ynz` (release build, 5 runs, median) — assert <100ms
+   - Time `ynz fmt examples/pirates-roster/entrypoint.ynz` (release build, 5 runs, median) — assert <100ms
    - Generate a 5000-line synthetic `.ynz` file (5000 function-decl statements with arithmetic bodies); time `ynz fmt` — assert <500ms
    - Time `ynz fmt --all examples/` over ~100 files — assert <2s
    - Time `lex_with_trivia` vs `lex` on entrypoint.ynz, 100 iterations each — assert overhead <20%
@@ -974,7 +974,7 @@ These 12 cases ARE the comment-merge spec. Every case has a fixture in `crates/y
 - [ ] `v0.2.0-m3` tag created and pushed (with user approval) — pending /release invocation
 - [x] Plan `status: active` → `status: done`; `last_updated:` bumped
 - [x] All 830+ existing tests pass; new fmt-specific tests pass; proptest passes; semantic round-trip passes
-- [x] `examples/basics/entrypoint.ynz` and `examples/errors/v0_2_m3_errors.ynz` round-trip canonically
+- [x] `examples/pirates-roster/entrypoint.ynz` and `examples/primantis-orders/v0_2_m3_errors.ynz` round-trip canonically
 
 **Quality gate**:
 - [x] No `// TODO` / `// FIXME` / `// HACK` anywhere in M3-touched code
@@ -1008,7 +1008,7 @@ These 12 cases ARE the comment-merge spec. Every case has a fixture in `crates/y
 - [x] Error handling: specific messages, no stack traces to user, proper exit codes (0/1/2)
 - [x] No silent failures — every parse error reaches the user via the diagnostic renderer
 - [x] No `as any` equivalent: no `.unwrap()` on user-input paths; no Rust `unreachable!()` reachable from input
-- [x] Performance: format speed budgets met (Phase 6 measurements — 41ms entrypoint.ynz, 16ms 3000-line synthetic, <50ms examples/basics project)
+- [x] Performance: format speed budgets met (Phase 6 measurements — 41ms entrypoint.ynz, 16ms 3000-line synthetic, <50ms examples/pirates-roster project)
 - [x] Tests: happy path + error cases + edge cases (long lines, comment blocks, backtick strings) + idempotency + semantic round-trip + proptest fuzz
 - [x] Existing 830+ tests still pass
 - [x] Types are complete (no `as any`, no excessive `.unwrap()`)

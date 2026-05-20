@@ -9,9 +9,9 @@ Recorded at Phase 6 verification, 2026-05-20.
 
 | Benchmark | Budget | Actual | Status |
 |---|---|---|---|
-| `ynz fmt examples/basics/entrypoint.ynz` (median of 5) | < 100 ms | **41 ms** | ✓ |
+| `ynz fmt examples/pirates-roster/entrypoint.ynz` (median of 5) | < 100 ms | **41 ms** | ✓ |
 | `ynz fmt <3000-line synthetic .ynz>` | < 500 ms | **16 ms** | ✓ |
-| `ynz fmt --check --all examples/basics/` (1 file) | < 2 s | **44 ms** | ✓ |
+| `ynz fmt --check --all examples/pirates-roster/` (1 file) | < 2 s | **44 ms** | ✓ |
 
 ## Notes
 

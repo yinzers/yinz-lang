@@ -346,7 +346,7 @@ Builds on the `request` module (v0.15) — shares the `Request`/`Response` types
 
 Install mechanism targets bun-class speed (content-addressed cache, hard-links, parallel resolver).
 
-**Multi-entry projects ship in v0.22 too** — the `[entries]` table in `yinz.toml` (one project, multiple named binaries) lands here alongside `[dependencies]`. Each named entry is a **ship**; the canonical folder convention is `ships/<name>/entrypoint.ynz` plus a top-level `shared/` for cross-ship code. See `examples/ships_demo/` for the layout and `design/open-questions.md` "Workspace / Multi-Package Projects" for the locked rationale.
+**Multi-entry projects ship in v0.22 too** — the `[entries]` table in `yinz.toml` (one project, multiple named binaries) lands here alongside `[dependencies]`. Each named entry is a **ship**; the canonical folder convention is `ships/<name>/entrypoint.ynz` plus a top-level `shared/` for cross-ship code. See `examples/stadium-fleet/` for the layout and `design/open-questions.md` "Workspace / Multi-Package Projects" for the locked rationale.
 
 **Why this version (late in the v0 train)**: There is no public release until v1.0. Shipping the package manager early would mean every pre-v1.0 breaking language change cracks every package — packages would live in an unstable language for ~17 releases. Landing it at v0.22 puts packages into a stable-ish language with the stdlib mostly built (so packages have real APIs to depend on), and gives the package manager one polish cycle before v1.0's backwards-compat promise kicks in. Per `design/versioning.md`, pre-v1.0 has no compatibility guarantee, so the early-shipped value (ecosystem bootstrap, "fill gaps with packages") doesn't accrue until there's a public community — which is v1.0.
 

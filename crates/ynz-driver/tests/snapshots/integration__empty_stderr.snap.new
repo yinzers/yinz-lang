@@ -1,0 +1,20 @@
+---
+source: crates/ynz-driver/tests/integration.rs
+assertion_line: 123
+expression: stderr
+---
+Error: This file has no `entrypoint` function.
+   ╭─[ /tmp/ynz-main/crates/ynz-driver/tests/fixtures/empty.ynz:1:1 ]
+   │
+ 1 │ 
+   │ │ 
+   │ ╰─ Add an entrypoint function:
+  function entrypoint() -> nothing {
+    ...
+  }
+   │ 
+   │ Note: Every Yinz program needs an `entrypoint` function — that is where execution starts.
+───╯
+
+If any of these errors are confusing or unhelpful, please open an issue:
+  https://github.com/yinzers/yinz-lang/issues

@@ -14,8 +14,8 @@ files:
   - design/mvp-scope.md
   - design/compiler-language.md
   - CLAUDE.md
-  - examples/basics/entrypoint.ynz
-  - examples/errors/v0_2_m2_errors.ynz
+  - examples/pirates-roster/entrypoint.ynz
+  - examples/primantis-orders/v0_2_m2_errors.ynz
   - Cargo.toml
 ---
 
@@ -157,8 +157,8 @@ None outstanding. Four answered this session before plan draft:
 
 ### Safety
 - All 830+ existing tests pass post-milestone (`cargo test --workspace`)
-- No previously-valid `.ynz` program becomes rejected by the compiler — verified by full test suite + every `examples/basics` and `examples/errors` fixture compile-runs identically
-- No previously-rejected `.ynz` program becomes accepted — verified by `examples/errors/*.ynz` snapshot stability
+- No previously-valid `.ynz` program becomes rejected by the compiler — verified by full test suite + every `examples/pirates-roster` and `examples/primantis-orders` fixture compile-runs identically
+- No previously-rejected `.ynz` program becomes accepted — verified by `examples/primantis-orders/*.ynz` snapshot stability
 - `ynz build` and `ynz run` exit codes, stdout, stderr are byte-identical to pre-M2 for every existing fixture
 - The `ynz-lsp` binary, when not running, has ZERO effect on compilation
 - New crate `ynz-lsp` does NOT depend on `ynz-codegen` (LSP has no need for codegen; isolating it keeps the LSP startup fast and avoids inkwell linkage in the LSP binary)
@@ -166,7 +166,7 @@ None outstanding. Four answered this session before plan draft:
 
 ### Performance
 
-**Targets are INITIAL BUDGETS, not spec-derived hard requirements.** They are calibrated against (a) typical rust-analyzer numbers for similar workloads (rust-analyzer publishes <1s cold init on small projects, <100ms keystroke-to-diagnostic-update via salsa) and (b) Yinz compiler measured numbers: `cargo run -p ynz-driver -- run examples/basics/entrypoint.ynz` runs the full pipeline (parse → typeck → codegen → link) in ~3s today, of which check_query (the LSP's hot path) is a small fraction. If the budget is exceeded during Phase 8 measurement, EITHER fix the slow path OR raise the budget with a documented rationale — but DO NOT silently let the budget rot. The numbers below are the bar Phase 8 enforces.
+**Targets are INITIAL BUDGETS, not spec-derived hard requirements.** They are calibrated against (a) typical rust-analyzer numbers for similar workloads (rust-analyzer publishes <1s cold init on small projects, <100ms keystroke-to-diagnostic-update via salsa) and (b) Yinz compiler measured numbers: `cargo run -p ynz-driver -- run examples/pirates-roster/entrypoint.ynz` runs the full pipeline (parse → typeck → codegen → link) in ~3s today, of which check_query (the LSP's hot path) is a small fraction. If the budget is exceeded during Phase 8 measurement, EITHER fix the slow path OR raise the budget with a documented rationale — but DO NOT silently let the budget rot. The numbers below are the bar Phase 8 enforces.
 
 - LSP startup: server initialization + first `didOpen` response (initial diagnostics) on a 100-line `.ynz` file: <500ms cold (machine class: dev workstation comparable to GitHub Actions ubuntu-latest; release build)
 - LSP incremental: keystroke → updated diagnostics for a single-file edit: <100ms p95 on a 500-line `.ynz` file (salsa memoization is doing the work; verified by integration-test timing assertions)
@@ -217,12 +217,12 @@ None outstanding. Four answered this session before plan draft:
 - `design/future/no-runtime-mode.md` cross-reference: the LSP is a host-tool, not a kernel-runtime; same status as `ynz fmt` (when it ships in v0.2-M3).
 
 ### Demo & Error Gallery
-- `examples/basics/entrypoint.ynz`: ADD a top-of-file comment block: `// Open this file in VSCode with the Yinz extension installed to see: hover docs on every keyword, autocomplete after typing 'int.', inline diagnostics for intentional errors (see examples/errors/v0_2_m2_errors.ynz).` No NEW Yinz language code added (M2 ships no new language features per the no-new-language-features constraint).
-- `examples/errors/v0_2_m2_errors.ynz`: NEW file. Intentional triggers for every NEW error path the LSP introduces:
+- `examples/pirates-roster/entrypoint.ynz`: ADD a top-of-file comment block: `// Open this file in VSCode with the Yinz extension installed to see: hover docs on every keyword, autocomplete after typing 'int.', inline diagnostics for intentional errors (see examples/primantis-orders/v0_2_m2_errors.ynz).` No NEW Yinz language code added (M2 ships no new language features per the no-new-language-features constraint).
+- `examples/primantis-orders/v0_2_m2_errors.ynz`: NEW file. Intentional triggers for every NEW error path the LSP introduces:
   - LSP-specific: any error class introduced by LSP request handlers (likely none — the LSP renders existing diagnostics, doesn't generate new ones)
   - LSP autocomplete behavior demonstration triggers: place a `.` after a known primitive type, after a user-defined shape value, at the start of a line — show what each context surfaces (commentary in the file documents the expected autocomplete; not a compile-error file per se, but a UX-demonstration file)
 - A `tooling/vscode-ynz/screenshots/` directory with 3-5 PNG screenshots of the extension in action: hover, autocomplete, inline diagnostic. Linked from the extension README.
-- Each error trigger has a `// WHY:` comment naming the diagnostic class (consistent with `examples/errors/v0_2_m1_errors.ynz` precedent)
+- Each error trigger has a `// WHY:` comment naming the diagnostic class (consistent with `examples/primantis-orders/v0_2_m1_errors.ynz` precedent)
 - `insta` stdout/stderr snapshots in Phase 9 for the `v0_2_m2_errors.ynz` CLI render (LSP-side rendering tested via integration tests, not insta snapshots)
 
 ### Feature Registry Entries
@@ -373,7 +373,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 **Steps**:
 1. Implement the `tower-lsp` spike: `crates/ynz-lsp/_spike/tower_lsp/Cargo.toml` adds `tower-lsp = "...latest..."`, `lsp-types`, `tokio = { version = "1", features = ["full"] }`, `serde_json`. `src/main.rs` implements `LanguageServer` trait with `async fn initialize/initialized/shutdown` and `async fn did_open` that creates a `CompilerDb`, registers the file as a `SourceFile`, runs `check_query`, transforms one diagnostic to LSP `Diagnostic`, calls `client.publish_diagnostics(...)`. Connect via `Server::new(tokio::io::stdin(), tokio::io::stdout(), socket)` for stdio.
 2. Implement the `lsp-server` spike: `crates/ynz-lsp/_spike/lsp_server/Cargo.toml` adds `lsp-server = "0.7"`, `lsp-types`, `crossbeam-channel`, `serde_json`. `src/main.rs` opens stdio Connection, drives the request loop manually, handles `initialize`/`shutdown`/`didOpen` with the same CompilerDb-query-publish flow.
-3. Both spikes use the same `examples/basics/entrypoint.ynz` as the test input.
+3. Both spikes use the same `examples/pirates-roster/entrypoint.ynz` as the test input.
 4. Run both: `cd crates/ynz-lsp/_spike/tower_lsp && cargo run -- <stdio harness>` and equivalent. Use a simple test harness (could be a hand-written shell script that pipes JSON-RPC messages and asserts the diagnostic shows up).
 5. Measure each across: total lines of plumbing (excluding query/registry logic which is shared), required Cargo deps, async/sync handler ergonomics with salsa's DB ownership, integration-test setup cost, observed memory at idle, observed time-to-first-diagnostic.
 6. Write `MEASUREMENTS.md` with the table. Apply the locked decision criterion from the Research Findings section: smaller plumbing+test footprint without forcing async semantics over salsa DB. Default to `tower-lsp` if both pass.
@@ -834,7 +834,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
    - `tsconfig.json`: target ES2020, module Node16, strict, declaration: false, outDir: "./out"
    - `README.md`: explains install flow (build `ynz-lsp` via `cargo build -p ynz-lsp`, copy/symlink to PATH or set `yinz.server.path`, package extension via `npm install && npx vsce package`, install via `code --install-extension yinz-0.2.0-m2.vsix`)
 4. Regenerate grammar: `cargo run -p ynz-tmgrammar`. Commit the output.
-5. End-to-end manual verification: install the extension locally, open `examples/basics/entrypoint.ynz` in VSCode, see syntax highlighting + LSP-driven diagnostics + autocomplete + hover.
+5. End-to-end manual verification: install the extension locally, open `examples/pirates-roster/entrypoint.ynz` in VSCode, see syntax highlighting + LSP-driven diagnostics + autocomplete + hover.
 6. Document the manual verification in PR description (since CI can't run VSCode UI tests).
 
 **Acceptance criteria**:
@@ -860,7 +860,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - `cargo test -p ynz-tmgrammar` — snapshot passes
 - `cargo run -p ynz-tmgrammar && git diff --exit-code tooling/vscode-ynz/syntaxes/` — empty diff (grammar in sync)
 - `cd tooling/vscode-ynz && npm install && npx vsce package --no-yarn` — produces a .vsix
-- Manual: install extension, open `examples/basics/entrypoint.ynz`, observe LSP features working
+- Manual: install extension, open `examples/pirates-roster/entrypoint.ynz`, observe LSP features working
 
 **Exit Sequence:** Standard. Code-reviewer focus prompt: "is the grammar generator the ONLY source of `ynz.tmLanguage.json`? Is the snapshot test sufficient to catch drift? Does the VSCode extension's `extension.ts` correctly handle the case where the `ynz-lsp` binary is missing from PATH (does it surface a useful error to the user)?"
 
@@ -922,7 +922,7 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
 - [ ] Three screenshots committed in `tooling/vscode-ynz/screenshots/` — DEFERRED: tracked in todos.md `vscode-extension-screenshots` entry; screenshots require working local install, which was blocked by publisher registration failure
 - [x] `package.json` has a real publisher value (not placeholder) — set to `yinz-lang`
 - [x] CHANGELOG.md exists with v0.2.0-m2 entry (if marketplace path)
-- [ ] Patrick can install on a fresh VSCode and open `examples/basics/entrypoint.ynz`, see LSP features working — pending Patrick manual verification
+- [ ] Patrick can install on a fresh VSCode and open `examples/pirates-roster/entrypoint.ynz`, see LSP features working — pending Patrick manual verification
 - [x] If fallback path: `.claude/todos.md` updated with `marketplace-publish-followup` + `vscode-extension-screenshots` entries; trigger #3 fired ("Marketplace requires account setup Patrick cannot single-handedly resolve in one session" — Azure DevOps org provisioning page non-functional, PAT could not be generated)
 - [x] **Token-leak audit (Step 8)**: audit ran (`git log -p HEAD | grep -E '([a-zA-Z0-9]{52}|...|ghp_...|pat_...)'`); only Cargo.lock checksums matched — no PATs/tokens committed
 
@@ -944,7 +944,7 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
 
 ### Phase 8: Integration-test sweep + LSP smoke fixture
 
-**PR scope**: Comprehensive end-to-end integration tests using the in-process harness from Phase 2: open every `examples/basics` and `examples/errors` fixture, send each LSP request type at multiple positions, assert responses. One additional subprocess-spawn smoke test covers the full stdio wire format from a fresh process. Verify no regressions, no flake.
+**PR scope**: Comprehensive end-to-end integration tests using the in-process harness from Phase 2: open every `examples/pirates-roster` and `examples/primantis-orders` fixture, send each LSP request type at multiple positions, assert responses. One additional subprocess-spawn smoke test covers the full stdio wire format from a fresh process. Verify no regressions, no flake.
 **Branch**: `test/v0-2-m2-lsp-integration-sweep`
 **Flag**: N/A
 **Est. lines**: ~500 (integration test cases ~350, fixtures ~80, regression-check helpers ~70)
@@ -955,8 +955,8 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
 **Why this phase exists**: Phases 3-5 each added scoped tests; Phase 8 stitches them into a comprehensive sweep that runs every LSP feature against every example. The sweep is the contract subsequent milestones (M3 fmt, M4 watch, M5 LSP-full) refactor against.
 
 **Current-state anchors**:
-- `examples/basics/entrypoint.ynz` — Yinz language demo, all v0.1 features
-- `examples/errors/*.ynz` — error gallery per milestone (m1 through m8, plus v0_2_m1, plus v0_2_m2 added later in Phase 9)
+- `examples/pirates-roster/entrypoint.ynz` — Yinz language demo, all v0.1 features
+- `examples/primantis-orders/*.ynz` — error gallery per milestone (m1 through m8, plus v0_2_m1, plus v0_2_m2 added later in Phase 9)
 - `crates/ynz-lsp/tests/harness/mod.rs` from Phase 2 — in-process LSP client
 
 **Files (expected scope)**:
@@ -969,7 +969,7 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
 **Deviation rule**: Standard.
 
 **Steps**:
-1. Integration sweep iterates over a hardcoded list of fixtures (every file under `examples/basics/src/` and `examples/errors/`):
+1. Integration sweep iterates over a hardcoded list of fixtures (every file under `examples/pirates-roster/src/` and `examples/primantis-orders/`):
    - For each: didOpen → assert diagnostics count matches expectation (zero or "many")
    - For each: cursor at start, mid, end → request completion → assert at least keywords appear
    - For each: cursor at known token positions → request hover → assert markdown body is non-empty for registry-known tokens
@@ -977,12 +977,12 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
 3. Stdio smoke extension: full lifecycle PLUS at least one completion + hover request over the wire, asserting the response JSON is well-formed
 4. Performance tests: open a 100-line fixture, time the initial diagnostic response (assert <500ms); apply a single-char didChange, time the next diagnostic (assert <100ms); request completion (assert <50ms); request hover (assert <50ms). Use `std::time::Instant`. Run in release mode for tight timings.
 5. Run the full workspace test suite to ensure no regressions: `cargo test --workspace`
-6. Run all `examples/basics/entrypoint.ynz` and `examples/errors/*.ynz` through `./target/debug/ynz run` (where applicable) and `./target/debug/ynz build` — assert CLI output is byte-identical to a pre-M2 baseline captured at the start of this milestone
+6. Run all `examples/pirates-roster/entrypoint.ynz` and `examples/primantis-orders/*.ynz` through `./target/debug/ynz run` (where applicable) and `./target/debug/ynz build` — assert CLI output is byte-identical to a pre-M2 baseline captured at the start of this milestone
 7. Audit pass: `grep -rn "as any\|unwrap()\|TODO\|FIXME" crates/ynz-lsp/` (manual check; sanity)
-8. **LSP-vs-CLI divergence check**: for every fixture in `examples/errors/*.ynz`, run BOTH the CLI (`./target/debug/ynz build <fixture>`) and the LSP (in-process harness — open the fixture, capture published diagnostics). Assert the count of distinct (file, span, what) tuples MATCHES between the two paths. Log any divergence with the fixture name + diff. Acceptance: zero divergence across the gallery. This catches the "LSP renders different diagnostics than CLI" failure mode mentioned in Risk Row #9 ("LSP exposes existing compiler bugs") — making bug surfacing visible rather than hidden.
+8. **LSP-vs-CLI divergence check**: for every fixture in `examples/primantis-orders/*.ynz`, run BOTH the CLI (`./target/debug/ynz build <fixture>`) and the LSP (in-process harness — open the fixture, capture published diagnostics). Assert the count of distinct (file, span, what) tuples MATCHES between the two paths. Log any divergence with the fixture name + diff. Acceptance: zero divergence across the gallery. This catches the "LSP renders different diagnostics than CLI" failure mode mentioned in Risk Row #9 ("LSP exposes existing compiler bugs") — making bug surfacing visible rather than hidden.
 
 **Acceptance criteria**:
-- [x] Sweep covers every fixture file in `examples/basics/src/` and `examples/errors/` — verified by an assertion that the test iterates a non-empty fixture list and visits each
+- [x] Sweep covers every fixture file in `examples/pirates-roster/src/` and `examples/primantis-orders/` — verified by an assertion that the test iterates a non-empty fixture list and visits each
 - [x] Performance tests pass in release mode (4 #[ignore] tests; run via `cargo test --release -p ynz-lsp -- --ignored`) (assertions in the test file are the bar)
 - [x] Stdio smoke extension passes (full initialize→completion→hover→shutdown sequence)
 - [x] No new compiler-binary output regressions — 1028 workspace tests green
@@ -1001,7 +1001,7 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
 - `cargo test -p ynz-lsp 2>&1 | grep 'test result'` — all pass
 - `cargo test --release -p ynz-lsp -- --ignored performance` — perf tests pass
 - `cargo test --workspace 2>&1 | grep 'test result'` — full green
-- `for f in examples/basics/src/*.ynz examples/errors/*.ynz; do echo "$f"; ./target/debug/ynz build "$f" > /dev/null && echo OK || echo FAIL; done` — no surprises
+- `for f in examples/pirates-roster/src/*.ynz examples/primantis-orders/*.ynz; do echo "$f"; ./target/debug/ynz build "$f" > /dev/null && echo OK || echo FAIL; done` — no surprises
 
 **Exit Sequence:** Standard.
 
@@ -1009,7 +1009,7 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
 
 ### Phase 9: Verification, demo, error gallery, tag v0.2.0-m2
 
-**PR scope**: Final sweep. Run TODO scan across the milestone diff (lift any orphaned items into `.claude/todos.md`). Run jargon audit + clippy. Update `examples/basics/entrypoint.ynz` with the "open in VSCode to see X" comment block. Write `examples/errors/v0_2_m2_errors.ynz`. Final cumulative code-reviewer sweep. Bump `Cargo.toml` workspace version to `0.2.0-m2`. Cut tag. Update root README + state.md.
+**PR scope**: Final sweep. Run TODO scan across the milestone diff (lift any orphaned items into `.claude/todos.md`). Run jargon audit + clippy. Update `examples/pirates-roster/entrypoint.ynz` with the "open in VSCode to see X" comment block. Write `examples/primantis-orders/v0_2_m2_errors.ynz`. Final cumulative code-reviewer sweep. Bump `Cargo.toml` workspace version to `0.2.0-m2`. Cut tag. Update root README + state.md.
 **Branch**: `chore/v0-2-m2-release`
 **Flag**: N/A
 **Est. lines**: ~250 (entrypoint.ynz comment + v0_2_m2_errors.ynz + Cargo.toml bump + state.md + README ~250)
@@ -1020,14 +1020,14 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
 **Why this phase exists**: The roadmap's release ritual (Step 10 cumulative review + Step 11 tag) closes the milestone cleanly and produces a checkpoint that v0.2-M3 can depend on.
 
 **Current-state anchors**:
-- `examples/basics/entrypoint.ynz` — v0.1 demo with comments per milestone
-- `examples/errors/` — per-milestone gallery; `v0_2_m1_errors.ynz` from previous milestone
+- `examples/pirates-roster/entrypoint.ynz` — v0.1 demo with comments per milestone
+- `examples/primantis-orders/` — per-milestone gallery; `v0_2_m1_errors.ynz` from previous milestone
 - `Cargo.toml` workspace.package.version = `0.2.0-m1`
 - `.claude/state.md` Active Decisions section
 
 **Files (expected scope)**:
-- EDIT: `examples/basics/entrypoint.ynz` — add top-of-file comment block documenting the v0.2-M2 LSP UX (see Demo & Error Gallery invariant)
-- NEW: `examples/errors/v0_2_m2_errors.ynz` — error-gallery file for M2-introduced error/UX surfaces (commentary-driven UX-demo per the invariant)
+- EDIT: `examples/pirates-roster/entrypoint.ynz` — add top-of-file comment block documenting the v0.2-M2 LSP UX (see Demo & Error Gallery invariant)
+- NEW: `examples/primantis-orders/v0_2_m2_errors.ynz` — error-gallery file for M2-introduced error/UX surfaces (commentary-driven UX-demo per the invariant)
 - EDIT: `Cargo.toml` — `workspace.package.version = "0.2.0-m2"`
 - EDIT: `.claude/state.md` — append v0.2-M2 SHIPPED entry to Active Decisions
 - EDIT: `CLAUDE.md` (if has a "What's new" section) — note the LSP + VSCode extension
@@ -1039,8 +1039,8 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
 **Steps**:
 1. TODO sweep: `grep -rn "TODO\|FIXME\|HACK\|XXX\|PLACEHOLDER" crates/ynz-lsp crates/ynz-tmgrammar tooling/ design/lsp.md` — for any hits, move to `.claude/todos.md` and remove the inline comment
 2. Quality Checklist verification (the "Quality Checklist" block below): tick each box with evidence
-3. Update `examples/basics/entrypoint.ynz`: top-of-file comment block per the Demo & Error Gallery invariant ("open this file in VSCode with the Yinz extension installed to see hover docs on every keyword, autocomplete after typing `int.`, inline diagnostics for intentional errors at `examples/errors/v0_2_m2_errors.ynz`"). No new Yinz CODE — only the comment.
-4. Write `examples/errors/v0_2_m2_errors.ynz`: a UX-demo file with intentional errors plus commentary documenting expected LSP behavior. Each section has a `// WHY:` heading. Sections: hover-over-deferred-feature (e.g. `let x: f32 = 1.0` triggers the f32-deferred-feature error AND demonstrates hover content); autocomplete-after-dot demo (cursor positions noted in comments); banned-declaration-keyword demo (`type Foo = ...` triggers ban + the LSP hover shows what-instead).
+3. Update `examples/pirates-roster/entrypoint.ynz`: top-of-file comment block per the Demo & Error Gallery invariant ("open this file in VSCode with the Yinz extension installed to see hover docs on every keyword, autocomplete after typing `int.`, inline diagnostics for intentional errors at `examples/primantis-orders/v0_2_m2_errors.ynz`"). No new Yinz CODE — only the comment.
+4. Write `examples/primantis-orders/v0_2_m2_errors.ynz`: a UX-demo file with intentional errors plus commentary documenting expected LSP behavior. Each section has a `// WHY:` heading. Sections: hover-over-deferred-feature (e.g. `let x: f32 = 1.0` triggers the f32-deferred-feature error AND demonstrates hover content); autocomplete-after-dot demo (cursor positions noted in comments); banned-declaration-keyword demo (`type Foo = ...` triggers ban + the LSP hover shows what-instead).
 5. Run the FULL test suite: `cargo test --workspace --release` — must be green
 6. Run `cargo clippy --workspace -- -D warnings`
 7. Run `cargo fmt --all --check` — must be clean
@@ -1053,8 +1053,8 @@ If none of the above triggered, Phase 7 ships marketplace publish (Step 4 succee
 **Acceptance criteria**:
 - [ ] All milestone phases (Phases 0-8) have all acceptance/quality boxes ticked
 - [x] No orphaned TODOs/FIXMEs/etc. in the milestone diff
-- [x] `examples/basics/entrypoint.ynz` has the v0.2-M2 LSP comment block
-- [x] `examples/errors/v0_2_m2_errors.ynz` exists with 4 `// WHY:` sections (deferred-feature hover, banned-keyword hover, type mismatch, autocomplete cursor demo)
+- [x] `examples/pirates-roster/entrypoint.ynz` has the v0.2-M2 LSP comment block
+- [x] `examples/primantis-orders/v0_2_m2_errors.ynz` exists with 4 `// WHY:` sections (deferred-feature hover, banned-keyword hover, type mismatch, autocomplete cursor demo)
 - [x] `cargo test --workspace --release` passes — 1028/0
 - [ ] `cargo clippy --workspace -- -D warnings` passes
 - [x] `cargo fmt --all --check` clean

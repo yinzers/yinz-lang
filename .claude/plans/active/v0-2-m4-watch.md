@@ -27,8 +27,8 @@ files:
   - design/compiler.md
   - design/mvp-scope.md
   - CLAUDE.md
-  - examples/basics/entrypoint.ynz
-  - examples/errors/v0_2_m4_errors.ynz
+  - examples/pirates-roster/entrypoint.ynz
+  - examples/primantis-orders/v0_2_m4_errors.ynz
   - Cargo.toml
 depends_on: [v0-2-m1-feature-inventory-sync]
 ---
@@ -97,10 +97,10 @@ Status: pending_approval
 - `ynz watch --release` mode (cross-reference: `--release` flag itself ships post-v0.1, currently TBD per `design/mvp-scope.md`) — defer until `--release` exists.
 
 **Success criteria**:
-- `ynz watch examples/basics/entrypoint.ynz` builds the file, runs it, prints output, waits. On next save: rebuilds, kills old child, runs new child. Cycle stays sub-second on warm cache for single-file edits.
-- `ynz watch --check examples/basics/entrypoint.ynz` builds on save; does NOT execute the program; prints "✓ build passed" or diagnostic output.
-- `ynz watch --json examples/basics/entrypoint.ynz` emits one NDJSON event per line on stdout: `build-start`, `build-end`, `diagnostic`, `child-spawn`, `child-exit`, `memory-warning`. Schema stable; documented.
-- `ynz watch ./examples/basics/` builds + runs the project's entrypoint. Saves to any `.ynz` file under the project trigger a rebuild.
+- `ynz watch examples/pirates-roster/entrypoint.ynz` builds the file, runs it, prints output, waits. On next save: rebuilds, kills old child, runs new child. Cycle stays sub-second on warm cache for single-file edits.
+- `ynz watch --check examples/pirates-roster/entrypoint.ynz` builds on save; does NOT execute the program; prints "✓ build passed" or diagnostic output.
+- `ynz watch --json examples/pirates-roster/entrypoint.ynz` emits one NDJSON event per line on stdout: `build-start`, `build-end`, `diagnostic`, `child-spawn`, `child-exit`, `memory-warning`. Schema stable; documented.
+- `ynz watch ./examples/pirates-roster/` builds + runs the project's entrypoint. Saves to any `.ynz` file under the project trigger a rebuild.
 - After 10,000 simulated rebuilds (synthetic test), process RSS stays bounded under 1GB. After 24h continuous operation (manual smoke test), watch self-recovers via the periodic DB rebuild without crashing.
 - Ctrl+C exits cleanly: child killed within 2s, no zombies.
 - `cargo test --workspace` passes (1143+ existing tests + new M4 tests).
@@ -194,7 +194,7 @@ Event-ordering invariants (consumers can rely on):
 |------|-----------|--------|------------|
 | Salsa 0.26 LRU API absent or unstable; periodic-rebuild has subtle bugs that compound over hours | Medium | High | Phase 5 first step inspects salsa 0.26 source/docs and locks LRU strategy. Long-running test (10k synthetic rebuild cycles) runs in CI on every PR touching Phase 5 code. If LRU absent, Layer 2 (periodic rebuild) + Layer 3 (RSS hard stop) carry full load — explicitly designed redundant. |
 | File-event coalescing wrong on macOS — atomic-write editor saves trigger 3+ rebuilds | Medium | Medium | `notify-debouncer-mini` with 100ms window is industry-standard (cargo-watch uses similar). Phase 1 integration test simulates VSCode-style atomic-write (write tempfile + rename) on Linux + macOS containers; asserts ≤1 rebuild per save. CI runs both platforms. |
-| Child process kill race — SIGTERM sent, child ignores, SIGKILL fires mid-stdin-write, terminal state corrupted | Low | Medium | 2s SIGTERM grace; SIGKILL fallback. Watch resets terminal via `\x1bc` or similar on every cycle if `--no-clear` not set. Manual test on M7's interactive `examples/basics/entrypoint.ynz` if it has any `terminal.readLine()` calls (likely doesn't at M3 — confirmed). |
+| Child process kill race — SIGTERM sent, child ignores, SIGKILL fires mid-stdin-write, terminal state corrupted | Low | Medium | 2s SIGTERM grace; SIGKILL fallback. Watch resets terminal via `\x1bc` or similar on every cycle if `--no-clear` not set. Manual test on M7's interactive `examples/pirates-roster/entrypoint.ynz` if it has any `terminal.readLine()` calls (likely doesn't at M3 — confirmed). |
 | Child program takes >2s to terminate; user's save events queue up indefinitely | Medium | Medium | Locked design: watch processes one event at a time. Events arriving during a build/run cycle are coalesced into "one pending rebuild" — multiple saves during one cycle collapse to a single next rebuild. Documented in `design/watch.md` + `--help`. |
 | `--json` schema cracks between M4 ship and v0.2.0 final — automation tools break | Low | Medium | Schema includes `schema_version` field. Consumers pin a version. Schema changes between intermediate tags (v0.2.0-m4 → v0.2.0-m5) are allowed per pre-v1.0 policy (see `design/versioning.md`); document changes in CHANGELOG. After v0.2.0, semver applies. |
 | Long-session memory growth ships despite multi-layer defense — user's watch process slowly OOMs | Low | High | 10k-cycle synthetic test (Phase 5) catches steady-state leaks. Manual 24h smoke test catches periodic-rebuild bugs (e.g., rebuild fires correctly but doesn't actually free memory). RSS hard-stop at 4GB is the safety net — at worst user sees friendly stop message + restart hint. |
@@ -348,9 +348,9 @@ Two architectural sub-questions decided locally (no Patrick input needed):
 
 ### Demo & Error Gallery
 
-- `examples/basics/entrypoint.ynz`: ADD a top-of-file comment block: `// Watch this file with: ynz watch examples/basics/entrypoint.ynz — saves trigger rebuild + re-run. For build-only (no execute), pass --check.` No NEW Yinz language code added (M4 ships no new language features).
+- `examples/pirates-roster/entrypoint.ynz`: ADD a top-of-file comment block: `// Watch this file with: ynz watch examples/pirates-roster/entrypoint.ynz — saves trigger rebuild + re-run. For build-only (no execute), pass --check.` No NEW Yinz language code added (M4 ships no new language features).
 - **NEW dedicated watch demo** `examples/watch_demo/`: a `yinz.toml`-rooted minimal project with one `entrypoint.ynz` that prints a SIMPLE message (e.g., `"watch demo, build #1"`) — NO counter file, NO sibling-state mutation (Safety invariant "ynz watch NEVER writes to source files" enforced; the demo MUST NOT violate it). The build number is hard-coded in source; Patrick changes it by editing the source line, which is the actual demo (the rebuild cycle). Top-of-file comment: `// Run: ynz watch examples/watch_demo/ — edit the print message on the next line and save; watch rebuilds and re-executes within a second. Try --json for structured-event output, --check to skip the execute step, --no-clear to preserve scrollback.` This project IS canonical (covered by M3 formatter).
-- `examples/errors/v0_2_m4_errors.ynz`: NEW file. Intentional triggers for every NEW error path watch introduces:
+- `examples/primantis-orders/v0_2_m4_errors.ynz`: NEW file. Intentional triggers for every NEW error path watch introduces:
   - File watcher init failure (simulated via mock if needed in Phase 1)
   - `--check` AND `--run` both passed (mutually exclusive flag error)
   - No `yinz.toml` at watch root in project mode
@@ -535,7 +535,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 7. Write file-removal integration test: touch + delete a `.ynz` file in a watched dir, assert exactly one "[file removed]" line, assert watch process does NOT crash.
 8. Update `design/watch.md` "file watcher" section: confirm `notify = "8.2"` + `notify-debouncer-mini = "0.7"` (locked); document observed editor-save event patterns per OS.
 9. Run `cargo build --workspace` + `cargo test --workspace`.
-10. Manual smoke: `./target/debug/ynz watch examples/basics/entrypoint.ynz` → save the file in another terminal → confirm "[file change]" line appears within 200ms → Ctrl+C → confirm clean exit code 0.
+10. Manual smoke: `./target/debug/ynz watch examples/pirates-roster/entrypoint.ynz` → save the file in another terminal → confirm "[file change]" line appears within 200ms → Ctrl+C → confirm clean exit code 0.
 
 **Acceptance criteria**:
 - [x] `crates/ynz-watch/src/watcher.rs` wraps `notify-debouncer-mini`; exposes a typed event iterator with `Changed` and `Removed` variants
@@ -544,7 +544,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - [x] Integration test `file_watching.rs` passes on Linux + macOS CI: touch → event ≤200ms
 - [x] Integration test `coalescing.rs` asserts EXACTLY 1 event per atomic-write sequence (not 3-4)
 - [x] Integration test `file_removed.rs` asserts EXACTLY 1 "[file removed]" event + watch process does not crash
-- [x] `./target/debug/ynz watch examples/basics/entrypoint.ynz` logs "[file change]" on save within 200ms; Ctrl+C exits 0 with no zombie (manual smoke pending)
+- [x] `./target/debug/ynz watch examples/pirates-roster/entrypoint.ynz` logs "[file change]" on save within 200ms; Ctrl+C exits 0 with no zombie (manual smoke pending)
 - [x] `design/watch.md` "file watcher" + "debounce strategy" sections completed with locked versions + observed per-OS save patterns (covered in Phase 0 design/watch.md — file watcher section complete)
 
 **Quality gate**:
@@ -605,7 +605,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 7. Write integration test `rebuild_incremental.rs`: spawn watch, save file twice with no AST change between, assert second rebuild ≤30% the duration of first (salsa cache hit).
 8. Write integration test `rebuild_errors.rs`: start watch on a clean file, save with intentional error (e.g., unknown identifier), assert diagnostic rendered (parse stdout for "WHAT:" header), save a fix, assert clean build.
 9. Update `design/watch.md` with the rebuild + project mode + initial build details.
-10. Run full test suite. Manual smoke: `ynz watch examples/basics/entrypoint.ynz` → save → see clean build status → introduce error → see diagnostic → fix → see clean rebuild.
+10. Run full test suite. Manual smoke: `ynz watch examples/pirates-roster/entrypoint.ynz` → save → see clean build status → introduce error → see diagnostic → fix → see clean rebuild.
 
 **Acceptance criteria**:
 - [x] `WatchDb` holds long-lived `CompilerDb` + shadow `HashMap<PathBuf, String>` across loop iterations
@@ -680,7 +680,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
    - Test 3: Spawn watch, wait for build, send SIGINT to watch; assert exit code 0 AND `ps` shows no child PID still alive.
    - Test 4: Spawn watch with `--check`; save file; assert no child PID logged anywhere in stdout/stderr.
 7. Update `design/watch.md` "child process lifecycle" section.
-8. Manual smoke: `ynz watch examples/basics/entrypoint.ynz` → confirm program runs → save → confirm old run interrupted + new run starts → Ctrl+C → confirm clean exit + no zombie.
+8. Manual smoke: `ynz watch examples/pirates-roster/entrypoint.ynz` → confirm program runs → save → confirm old run interrupted + new run starts → Ctrl+C → confirm clean exit + no zombie.
 
 **Acceptance criteria**:
 - [x] `ChildHandle` Drop impl kills child unconditionally (tested in drop_kills_child_no_zombie)
@@ -701,7 +701,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 
 **Verification**:
 - `cargo test -p ynz-watch --test child_lifecycle 2>&1 | grep 'test result'` — 4 tests pass
-- Manual: `ynz watch examples/basics/entrypoint.ynz`, modify file, observe old output interrupted + new output, Ctrl+C, verify no leftover process via `ps aux | grep entrypoint`
+- Manual: `ynz watch examples/pirates-roster/entrypoint.ynz`, modify file, observe old output interrupted + new output, Ctrl+C, verify no leftover process via `ps aux | grep entrypoint`
 
 **Exit Sequence — RUN THESE STEPS:** (same shape; reminders on comments.md + Rule 11 + Yinz vocabulary)
 
@@ -757,7 +757,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 7. Wire `event_loop.rs` to emit `WatchReady` on startup (with list of watched paths), `WatchShutdown` on Ctrl+C.
 8. Write integration tests in `json_mode.rs`. Use `assert_cmd` + `predicates` for stdout parsing.
 9. Finalize `design/watch.md` JSON schema section.
-10. Manual smoke: `ynz watch examples/basics/entrypoint.ynz --json | jq .` → confirm each event is valid JSON with expected fields; save file → confirm new events appear.
+10. Manual smoke: `ynz watch examples/pirates-roster/entrypoint.ynz --json | jq .` → confirm each event is valid JSON with expected fields; save file → confirm new events appear.
 
 **Acceptance criteria**:
 - [x] All event types defined in `json_events.rs` with `#[derive(Serialize)]`
@@ -781,7 +781,7 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 - [x] No gratuitous unsafe (removed unsafe impl Send from json_emitter.rs and json_mode.rs)
 
 **Verification**:
-- `./target/debug/ynz watch examples/basics/entrypoint.ynz --json 2>/dev/null | jq -r '.type' | sort -u` → list of unique event types matches schema
+- `./target/debug/ynz watch examples/pirates-roster/entrypoint.ynz --json 2>/dev/null | jq -r '.type' | sort -u` → list of unique event types matches schema
 - `cargo test -p ynz-watch --test json_mode 2>&1 | grep 'test result'` — all tests pass
 
 **Exit Sequence — RUN THESE STEPS:** (same shape; reminders on comments.md + Rule 11 + Yinz vocabulary)
@@ -832,7 +832,7 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 8. Write `rss_unavailable.rs` test (NEW per plan-review adversarial): inject `memory_stats() = None` via a feature-flag mock in `crates/ynz-watch/src/memory.rs`; spawn watch; assert `MemoryUnavailable` event emitted once; watch continues without hard-stop.
 9. Write `db_rebuild_preserves_state.rs` test (NEW per plan-review concern): populate shadow with 3 files; call `rebuild_db()`; assert each file's source text + last parse output match pre-rebuild values.
 10. Update `design/watch.md` memory section with locked thresholds, env vars, layer descriptions.
-11. Manual smoke: `YNZ_WATCH_MAX_RSS_MB=1 ynz watch examples/basics/entrypoint.ynz` (forces near-immediate hit) → confirm friendly WHAT/WHAT-INSTEAD/WHY stop message + exit code 2.
+11. Manual smoke: `YNZ_WATCH_MAX_RSS_MB=1 ynz watch examples/pirates-roster/entrypoint.ynz` (forces near-immediate hit) → confirm friendly WHAT/WHAT-INSTEAD/WHY stop message + exit code 2.
 
 **Acceptance criteria**:
 - [x] Salsa LRU caps applied: lex=128, parse=128, module_signatures=128, check=64, codegen=32; all tests pass
@@ -856,7 +856,7 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 
 **Verification**:
 - `cargo test -p ynz-watch --test long_session -- --include-ignored 2>&1 | grep 'test result'` — all pass; final RSS reported
-- Manual: `YNZ_WATCH_MAX_RSS_MB=1 ynz watch examples/basics/entrypoint.ynz` → triggers stop within a few rebuilds → friendly message → exit code 2
+- Manual: `YNZ_WATCH_MAX_RSS_MB=1 ynz watch examples/pirates-roster/entrypoint.ynz` → triggers stop within a few rebuilds → friendly message → exit code 2
 
 **Exit Sequence — RUN THESE STEPS:** (same shape; reminders on comments.md + Rule 11 + Yinz vocabulary)
 
@@ -864,10 +864,10 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 
 ### Phase 6: Verification sweep + cumulative review + v0.2.0-m4 tag prep
 
-**PR scope**: End-of-milestone verification per `/plan` Step 10. TODO sweep, todos.md cross-check, shortcut detection, Quality Checklist verification, plan-file persistence pass, final cumulative code-reviewer invocation. Demo & Error Gallery extension (NEW `examples/watch_demo/` project + NEW `examples/errors/v0_2_m4_errors.ynz`). Bump `Cargo.toml` workspace version to `0.2.0-m4`. Cross-platform smoke tests on Linux + macOS. Cut `v0.2.0-m4` tag (release-skill-driven, separate from this PR).
+**PR scope**: End-of-milestone verification per `/plan` Step 10. TODO sweep, todos.md cross-check, shortcut detection, Quality Checklist verification, plan-file persistence pass, final cumulative code-reviewer invocation. Demo & Error Gallery extension (NEW `examples/watch_demo/` project + NEW `examples/primantis-orders/v0_2_m4_errors.ynz`). Bump `Cargo.toml` workspace version to `0.2.0-m4`. Cross-platform smoke tests on Linux + macOS. Cut `v0.2.0-m4` tag (release-skill-driven, separate from this PR).
 **Branch**: `chore/v0-2-m4-verification`
 **Flag**: N/A
-**Est. lines**: ~400 (examples/watch_demo/ ~80, examples/errors/v0_2_m4_errors.ynz ~60, jargon audit extension ~30, cross-platform CI matrix tweaks ~30, Cargo.toml + CHANGELOG ~30, plan checklist updates ~50, perf measurement notes ~30, design/watch.md final pass ~30, insta snapshot fixtures ~60)
+**Est. lines**: ~400 (examples/watch_demo/ ~80, examples/primantis-orders/v0_2_m4_errors.ynz ~60, jargon audit extension ~30, cross-platform CI matrix tweaks ~30, Cargo.toml + CHANGELOG ~30, plan checklist updates ~50, perf measurement notes ~30, design/watch.md final pass ~30, insta snapshot fixtures ~60)
 **Ships via**: `/pr` (then `/release` cuts the tag separately)
 
 **Objective**: Close out the milestone with the standard verification gate. Ensure every acceptance criterion across Phases 0-5 is met. Catch issues per-phase reviews missed.
@@ -878,13 +878,13 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 - All Phase 0-5 work complete on main
 - `Cargo.toml:18` at `0.2.0-m3` going to `0.2.0-m4`
 - `CHANGELOG.md` — append v0.2.0-m4 section
-- `examples/basics/entrypoint.ynz` (per Demo & Error Gallery subsection — add watch-related top comment)
-- `examples/errors/` — companion to existing m1/m2/m3 error galleries
+- `examples/pirates-roster/entrypoint.ynz` (per Demo & Error Gallery subsection — add watch-related top comment)
+- `examples/primantis-orders/` — companion to existing m1/m2/m3 error galleries
 
 **Files (expected scope)**:
 - NEW: `examples/watch_demo/yinz.toml` + `examples/watch_demo/entrypoint.ynz` — minimal project demonstrating watch's full feature set (build + run, --check, --json, --no-clear). Top-of-file comment documents how to exercise each.
-- NEW: `examples/errors/v0_2_m4_errors.ynz` — intentional triggers for every watch-introduced error path (per Demo & Error Gallery subsection)
-- EDIT: `examples/basics/entrypoint.ynz` — top-of-file comment block referencing watch
+- NEW: `examples/primantis-orders/v0_2_m4_errors.ynz` — intentional triggers for every watch-introduced error path (per Demo & Error Gallery subsection)
+- EDIT: `examples/pirates-roster/entrypoint.ynz` — top-of-file comment block referencing watch
 - EDIT: `Cargo.toml` — `version = "0.2.0-m4"` (workspace package)
 - EDIT: `CHANGELOG.md` — new `v0.2.0-m4` section with the milestone summary
 - EDIT: `tests/jargon_audit.rs` — extend to walk `crates/ynz-watch/` (mirrors Phase 5 of M3 plan; check banned jargon doesn't leak)
@@ -906,8 +906,8 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 7. **Perf measurement** (per Performance invariants): measure cold-start, warm-rebuild, event-to-build-start latency, child-spawn overhead, --json output latency. Document in design/watch.md "Measurement (Phase 6)" subsection. ANY ceiling breach = BLOCK pending profile + fix; not a budget raise.
 8. **Demo & Error Gallery extension**:
    - Create `examples/watch_demo/yinz.toml` + `examples/watch_demo/entrypoint.ynz`. Entrypoint prints a counter that's incremented per build (writes a small `.ynz-watch-demo.counter` sibling file). Demonstrates: live program output, rebuild cycle visible, --json shows ChildExit + ChildSpawn pairs.
-   - Create `examples/errors/v0_2_m4_errors.ynz` with intentional triggers for: file watcher init fail (simulated via mock), no yinz.toml in project mode, child spawn failure (binary not executable simulated), RSS hard-stop (via env override), mutually-exclusive-flags-when-none-exist (commented as "no error here, --check + --json coexist").
-   - Update `examples/basics/entrypoint.ynz` top-of-file comment per Demo & Error Gallery subsection.
+   - Create `examples/primantis-orders/v0_2_m4_errors.ynz` with intentional triggers for: file watcher init fail (simulated via mock), no yinz.toml in project mode, child spawn failure (binary not executable simulated), RSS hard-stop (via env override), mutually-exclusive-flags-when-none-exist (commented as "no error here, --check + --json coexist").
+   - Update `examples/pirates-roster/entrypoint.ynz` top-of-file comment per Demo & Error Gallery subsection.
    - Run `ynz fmt --all` to canonicalize new files (M3 formatter handles this).
 9. **insta snapshots**: stdout/stderr snapshots for v0_2_m4_errors.ynz CLI runs; locks the diagnostic shapes against regression.
 10. **Jargon audit**: extend `tests/jargon_audit.rs` to walk `crates/ynz-watch/` strings (matches M3 Phase 5 pattern). Run + confirm clean.
@@ -921,8 +921,8 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 - [ ] Cross-platform smoke green on Linux + macOS CI
 - [ ] All Performance ceilings measured; documented in design/watch.md
 - [ ] `examples/watch_demo/` ships + works (`ynz watch examples/watch_demo/` exits cleanly on Ctrl+C)
-- [ ] `examples/errors/v0_2_m4_errors.ynz` exists with all error triggers
-- [ ] `examples/basics/entrypoint.ynz` has watch-related top-of-file comment
+- [ ] `examples/primantis-orders/v0_2_m4_errors.ynz` exists with all error triggers
+- [ ] `examples/pirates-roster/entrypoint.ynz` has watch-related top-of-file comment
 - [ ] insta snapshots for v0_2_m4_errors.ynz committed
 - [ ] `tests/jargon_audit.rs` extended to walk `crates/ynz-watch/` + passes
 - [ ] `Cargo.toml` workspace version = `0.2.0-m4`
@@ -940,7 +940,7 @@ Env vars: `YNZ_WATCH_REBUILD_AFTER`, `YNZ_WATCH_REBUILD_AFTER_HOURS`, `YNZ_WATCH
 **Verification**:
 - `cargo test --workspace 2>&1 | grep 'test result' | grep -v ': ok' || echo CLEAN` — all pass
 - `cargo test --workspace -- --include-ignored 2>&1 | grep 'long_session'` — long-session test passes
-- `grep -rnE 'TODO|FIXME|HACK|XXX' crates/ynz-watch/ examples/watch_demo/ examples/errors/v0_2_m4_errors.ynz` — empty output
+- `grep -rnE 'TODO|FIXME|HACK|XXX' crates/ynz-watch/ examples/watch_demo/ examples/primantis-orders/v0_2_m4_errors.ynz` — empty output
 - Plan front-matter `status:` flipped to `done` post-cumulative-PASS
 
 **Exit Sequence (Phase 6 specifics):**

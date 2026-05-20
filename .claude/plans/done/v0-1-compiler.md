@@ -1406,13 +1406,13 @@ decisions made under time pressure from compounding into retroactive rewrites.
    teaching diagnostic + Identifier recovery token). The banned-jargon entry for
    `type` lands in M4 P1 alongside the lexer change.
 
-5. **Every milestone from M4 onward grows `examples/basics/entrypoint.ynz` and
-   `examples/errors/m{N}_errors.ynz`.** Per `.claude/rules/plan-invariants.md`
+5. **Every milestone from M4 onward grows `examples/pirates-roster/entrypoint.ynz` and
+   `examples/primantis-orders/m{N}_errors.ynz`.** Per `.claude/rules/plan-invariants.md`
    `### Demo & Error Gallery` subsection (added 2026-05-16): each phase that
    adds executable surface MUST extend the basics demo (showing the new feature
    in context) AND the error gallery (intentional triggers for every new
    compile-error class). M1/M2/M3 retroactive demo + gallery files exist at
-   `examples/basics/entrypoint.ynz` and `examples/errors/m1_errors.ynz`,
+   `examples/pirates-roster/entrypoint.ynz` and `examples/primantis-orders/m1_errors.ynz`,
    `m2_errors.ynz`, `m3_errors.ynz` — M5/M6/M7/M8 plans must continue the
    incremental additions. The basics project covers EVERY v0.1 language feature
    (M1–M8) in one growing demo; stdlib modules (v0.5+) get their own per-module

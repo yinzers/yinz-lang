@@ -5,7 +5,7 @@
 // regressions where a new language feature breaks the pipeline end-to-end.
 //
 // Design constraints:
-// - examples/basics/entrypoint.ynz has cross-module import statements that
+// - examples/pirates-roster/entrypoint.ynz has cross-module import statements that
 //   produce "module not registered" diagnostics when opened in single-file
 //   context (no project root / yinz.toml). It is excluded from the
 //   zero-diagnostics assertion but included in the crash-safety sweeps.
@@ -56,31 +56,31 @@ fn collect_ynz_files(dir: &Path) -> Vec<PathBuf> {
 /// entrypoint.ynz is excluded because its import statements produce expected
 /// "module not registered" diagnostics in single-file mode.
 fn import_free_basics_fixtures() -> Vec<PathBuf> {
-    let mut files = collect_ynz_files(&workspace_root().join("examples/basics/services"));
+    let mut files = collect_ynz_files(&workspace_root().join("examples/pirates-roster/services"));
     files.extend(collect_ynz_files(
-        &workspace_root().join("examples/basics/utils"),
+        &workspace_root().join("examples/pirates-roster/utils"),
     ));
     assert!(
         !files.is_empty(),
-        "examples/basics/services/ and utils/ must contain at least one .ynz file"
+        "examples/pirates-roster/services/ and utils/ must contain at least one .ynz file"
     );
     files
 }
 
 fn all_basics_fixtures() -> Vec<PathBuf> {
-    let files = collect_ynz_files(&workspace_root().join("examples/basics"));
+    let files = collect_ynz_files(&workspace_root().join("examples/pirates-roster"));
     assert!(
         !files.is_empty(),
-        "examples/basics/ must contain at least one .ynz file"
+        "examples/pirates-roster/ must contain at least one .ynz file"
     );
     files
 }
 
 fn error_fixtures() -> Vec<PathBuf> {
-    let files = collect_ynz_files(&workspace_root().join("examples/errors"));
+    let files = collect_ynz_files(&workspace_root().join("examples/primantis-orders"));
     assert!(
         !files.is_empty(),
-        "examples/errors/ must contain at least one .ynz file"
+        "examples/primantis-orders/ must contain at least one .ynz file"
     );
     files
 }
@@ -123,7 +123,7 @@ fn open_and_drain_diagnostics(
 
 #[test]
 fn sweep_basics_fixtures_have_no_diagnostics() {
-    // WHY: The import-free files in examples/basics/ are clean showcase files.
+    // WHY: The import-free files in examples/pirates-roster/ are clean showcase files.
     // If the LSP reports diagnostics for any of them, a parser or typeck
     // regression broke valid user code.
     for path in &import_free_basics_fixtures() {
@@ -160,7 +160,7 @@ fn sweep_basics_fixtures_have_no_diagnostics() {
 
 #[test]
 fn sweep_error_fixtures_have_diagnostics() {
-    // WHY: Every file in examples/errors/ contains at least one intentional
+    // WHY: Every file in examples/primantis-orders/ contains at least one intentional
     // error. If the LSP reports zero diagnostics, the diagnostic pipeline is
     // broken or the fixture no longer exercises the error class.
     //

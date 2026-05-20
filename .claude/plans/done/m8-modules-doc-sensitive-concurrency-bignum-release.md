@@ -7,8 +7,8 @@ roadmap: v0-1-compiler
 depends_on: [m7-strings-errors-iterables]
 files:
   - crates/**
-  - examples/basics/**
-  - examples/errors/m8_errors.ynz
+  - examples/pirates-roster/**
+  - examples/primantis-orders/m8_errors.ynz
   - examples/multi-file/**
   - design/modules.md
   - design/doc-comments.md
@@ -50,7 +50,7 @@ Five feature areas remain before v0.1 can ship:
 4. **Concurrency keywords** — `wait` and `background` must PARSE and TYPE-CHECK so code can be written today; real auto-parallelization arrives v0.3. M8 = parse + typeck + sequential lowering (`wait foo()` = `foo()`; `background foo()` = `foo()` with return discarded; background ownership rules per design/concurrency.md enforced).
 5. **Bignum `number<N>` for N > 34** — the M2 load-bearing carry-over. Multi-u128 coefficient + bignum add/sub/mul/div + mixed-precision promotion + narrowing-warning rounding. This is the v0.1 "exact decimal at any reasonable precision" promise; if M8 drops anything, it isn't this.
 
-Plus the syntax migration `number[N]` → `number<N>` (parser is out of sync with design/spec; M5 locked `<>` for generics in 2026-05-17), banned-jargon additions for concurrency + visibility vocabulary, the demo extension (`examples/basics/` becomes a multi-file project), the error gallery (`examples/errors/m8_errors.ynz`), an audit sweep, and the **v0.1.0** tag.
+Plus the syntax migration `number[N]` → `number<N>` (parser is out of sync with design/spec; M5 locked `<>` for generics in 2026-05-17), banned-jargon additions for concurrency + visibility vocabulary, the demo extension (`examples/pirates-roster/` becomes a multi-file project), the error gallery (`examples/primantis-orders/m8_errors.ynz`), an audit sweep, and the **v0.1.0** tag.
 
 ### Why now
 M7 shipped 2026-05-18; this is the next milestone on the v0-1-compiler roadmap. Patrick's instruction: "if M8 has to drop something, it isn't bignum." Master plan line 211: bignum is non-negotiable because v0.1 promises exact-decimal-at-any-reasonable-precision.
@@ -64,8 +64,8 @@ M7 shipped 2026-05-18; this is the next milestone on the v0-1-compiler roadmap. 
 
 ### Success criteria
 - All five M8 feature areas implemented per spec, with passing fixtures.
-- Multi-file `examples/basics/` project compiles + runs end-to-end demonstrating M1–M8.
-- `examples/errors/m8_errors.ynz` triggers every M8 compile-error class.
+- Multi-file `examples/pirates-roster/` project compiles + runs end-to-end demonstrating M1–M8.
+- `examples/primantis-orders/m8_errors.ynz` triggers every M8 compile-error class.
 - All 782 M7 tests still pass; M8 adds an additional ~120-200 tests.
 - `m2_bignum_deferral` fixture either deleted or updated (the catch-up marker M2 left).
 - `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`, `cargo fmt --check` all green.
@@ -235,14 +235,14 @@ For Tier 3 lints deferred to v0.4, the muted-hint protocol still defers to v0.4 
 - **Bignum**: COMPILE ERROR in `--kernel` mode for `number<N>` with N > 34 unless user provides an allocator via the v0.3+ plug-in API (per `design/future/no-runtime-mode.md`). N ≤ 34 works (hardware path, no allocation). Error format: WHAT/WHAT-INSTEAD/WHY pointing to the plug-in allocator spec.
 
 ### Demo & Error Gallery
-- **`examples/basics/`** becomes a multi-file project after P2:
-  - `examples/basics/yinz.toml` (entry = `src/entrypoint.ynz`, name = `basics`, version = `0.1.0`)
-  - `examples/basics/entrypoint.ynz` (top-level — imports + glue + runs all sections)
-  - `examples/basics/src/services/players.ynz` (exported shapes, exported functions — demonstrates `import { ... }` form)
-  - `examples/basics/src/services/inventory.ynz` (exported namespace — demonstrates `import inventory from "..."` form)
-  - `examples/basics/src/utils/math_extra.ynz` (exported standalone functions, demonstrates UFCS across files)
+- **`examples/pirates-roster/`** becomes a multi-file project after P2:
+  - `examples/pirates-roster/yinz.toml` (entry = `src/entrypoint.ynz`, name = `basics`, version = `0.1.0`)
+  - `examples/pirates-roster/entrypoint.ynz` (top-level — imports + glue + runs all sections)
+  - `examples/pirates-roster/src/services/players.ynz` (exported shapes, exported functions — demonstrates `import { ... }` form)
+  - `examples/pirates-roster/src/services/inventory.ynz` (exported namespace — demonstrates `import inventory from "..."` form)
+  - `examples/pirates-roster/src/utils/math_extra.ynz` (exported standalone functions, demonstrates UFCS across files)
   - Each M8 phase adds its section to `entrypoint.ynz`: doc comments on player/inventory items (P3), `sensitive` API-key demo (P4), `wait`/`background` in a checkout flow (P5), high-precision astro calc with `number<200>` (P6).
-- **`examples/errors/m8_errors.ynz`**: per-phase additions to the gallery — one fixture file containing intentional triggers for every M8 compile-error class:
+- **`examples/primantis-orders/m8_errors.ynz`**: per-phase additions to the gallery — one fixture file containing intentional triggers for every M8 compile-error class:
   - P0: number-syntax migration error (`number[34]` rejected, suggest `<>`)
   - P2 (modules): relative path (`"./foo"`), wildcard import (`import *`), default export (`export default`), duplicate-name collision, missing-export, side-effect import (`import "x"` with no binding), circular self-import (`a.ynz import a`)
   - P4 (sensitive): `.reveal()` in print context, mixed sensitive + non-sensitive in interpolation that loses sensitivity (this should NOT happen — but the test enforces propagation)
@@ -286,7 +286,7 @@ For Tier 3 lints deferred to v0.4, the muted-hint protocol still defers to v0.4 
 2. Migrate `parse_number_type`: consume `Token::Lt` instead of `Token::LBracket`; expect `Token::Gt` instead of `Token::RBracket`. Diagnostic strings updated from `number[N]` → `number<N>` in the error suggestions.
 3. Add PARSER-level redirect for `number[`: in `parse_number_type`, when the next token after `number` is `Token::LBracket` (not `Token::Lt`), emit a three-part diagnostic `Use number<N> — angle brackets for type parameters. M5 unified all generic syntax (array<T>, map<K,V>, number<N>) on <>.`. Then consume the bracketed body for error recovery (skip until matching `]`) and return `Type::Error`. The redirect happens at the PARSER (parse_number_type sees the token after `number`), not the lexer — the lexer emits `Token::Number` then `Token::LBracket` independently; only the parser has the multi-token context required to know "the user wrote `number[N]` meaning the type form, not `someArray[i]` meaning index access." Diagnostic is graceful migration aid; pre-v1.0 the bracket form is gone, but the error teaches the new syntax.
 4. Update the M2 fixture and snapshot. Old snap content `number[100]` → `number<100>`; M8 message stays "available starting at `number<35>`" (still N != 34 message, since bignum hasn't shipped yet in P0).
-5. Update `examples/basics/entrypoint.ynz` if it shows `number[34]` anywhere (it doesn't per grep — number type usage is plain `number`).
+5. Update `examples/pirates-roster/entrypoint.ynz` if it shows `number[34]` anywhere (it doesn't per grep — number type usage is plain `number`).
 6. Update v0-1-compiler.md M8 status to `active`, bump `last_updated`.
 7. Seed `CHANGELOG.md` `[Unreleased]` section with `## M8 — Modules, Doc Comments, Sensitive, Concurrency Keywords, Bignum`.
 8. **Capture M7 bench baseline** (the named reference P6 will compare against): `cargo bench --bench decimal128_hot_path -- --save-baseline m7_baseline`. Commit the baseline file path (or proof of its capture) into the PR description so P6 can reproduce. If no decimal128 bench exists yet, ADD one in P0 measuring the four ops at N=34 with a fixed test corpus (10 randomly-but-seeded operand pairs); the m7_baseline value is what those benches produce on commit `b24a1b0`.
@@ -348,7 +348,7 @@ For Tier 3 lints deferred to v0.4, the muted-hint protocol still defers to v0.4 
 6. Update `crates/ynz-diagnostics/src/banned_jargon.rs` BANNED_JARGON list with the 9 entries.
 7. Update lexer test snapshot count.
 8. Update the existing token-variant-count test in `crates/ynz-typeck/tests/check.rs:1248` with `// test-ratchet: M8 P1 adds 6 keyword tokens — Import, Export, Sensitive, Wait, Background, DocComment. Count 64→70.`
-9. Extend `examples/errors/m8_errors.ynz` with intentional triggers for each banned-jargon and the `number[` migration diagnostic (already added in P0; P1 adds 9 more error triggers).
+9. Extend `examples/primantis-orders/m8_errors.ynz` with intentional triggers for each banned-jargon and the `number[` migration diagnostic (already added in P0; P1 adds 9 more error triggers).
 **Acceptance criteria**:
 - [ ] All 6 new keyword tokens tokenize correctly in isolation (one test per keyword).
 - [ ] `/// foo` tokenizes as `DocComment { content: "foo", break_after: false }` when followed by another doc or an item (one leading space stripped).
@@ -378,7 +378,7 @@ For Tier 3 lints deferred to v0.4, the muted-hint protocol still defers to v0.4 
 **Flag**: N/A
 **Est. lines**: ~800 (driver: ~200; parser: ~150; typeck: ~250; tests: ~200). Soft size limit — split into 2a/2b if needed (see Deviation rule).
 **Ships via**: `/pr`
-**Objective**: A real multi-file Yinz project compiles end-to-end. `examples/basics/` is restructured into the multi-file layout described in `## Demo & Error Gallery`.
+**Objective**: A real multi-file Yinz project compiles end-to-end. `examples/pirates-roster/` is restructured into the multi-file layout described in `## Demo & Error Gallery`.
 **Why this phase exists**: Modules unlock everything downstream — doc comments are most interesting on cross-file exports; sensitive types are passed via cross-file imports; concurrency keywords need cross-file dependency analysis (long term). And single-file is the M1 duct-tape that has to go before v0.1.0 ships.
 **Current-state anchors**:
 - `crates/ynz-driver/src/main.rs:14-31` — CLI: `Build`/`Run` take a single `file: PathBuf`. M8 changes this: take a project root or an entrypoint file; if file, find the nearest `yinz.toml` ancestor.
@@ -398,13 +398,13 @@ For Tier 3 lints deferred to v0.4, the muted-hint protocol still defers to v0.4 
 - `crates/ynz-typeck/src/check.rs` (cross-file symbol resolution, duplicate-name detection, unused-import warning)
 - `crates/ynz-typeck/src/scope.rs` (module-level symbol table)
 - `crates/ynz-codegen/src/emit.rs` (mangled symbol names by module path; tree-shaking remains in place)
-- `examples/basics/yinz.toml` (NEW)
-- `examples/basics/entrypoint.ynz` (top-level imports + glue)
-- `examples/basics/src/services/players.ynz` (NEW)
-- `examples/basics/src/services/inventory.ynz` (NEW)
-- `examples/basics/src/utils/math_extra.ynz` (NEW)
-- `examples/basics/src/services/index.ynz` (NEW — re-export demo)
-- `examples/errors/m8_errors.ynz` (extend with module errors)
+- `examples/pirates-roster/yinz.toml` (NEW)
+- `examples/pirates-roster/entrypoint.ynz` (top-level imports + glue)
+- `examples/pirates-roster/src/services/players.ynz` (NEW)
+- `examples/pirates-roster/src/services/inventory.ynz` (NEW)
+- `examples/pirates-roster/src/utils/math_extra.ynz` (NEW)
+- `examples/pirates-roster/src/services/index.ynz` (NEW — re-export demo)
+- `examples/primantis-orders/m8_errors.ynz` (extend with module errors)
 - `crates/ynz-driver/tests/integration.rs` (~10 new test functions: single-file fallback, multi-file project, circular imports, duplicate-name error, missing-export error, unused-import warning, wildcard rejection, default-export rejection, relative-path rejection, side-effect-import rejection)
 - `crates/ynz-driver/tests/fixtures/m8_modules_*` (NEW — ~10 fixture projects, each a directory with yinz.toml + src/*.ynz)
 **Deviation rule**: P2 must not introduce doc comments / sensitive / concurrency / bignum grammar. If you find yourself reaching into one of those areas while wiring modules, STOP — file it as a separate phase. If P2 grows past ~1000 lines, SPLIT into P2a (driver + load_project + yinz.toml) and P2b (parser grammar + typeck cross-file + fixture suite + demo restructure).
@@ -435,12 +435,12 @@ For Tier 3 lints deferred to v0.4, the muted-hint protocol still defers to v0.4 
    - Circular imports: zero special handling needed — Pass-0 sees all files, Pass-1 sees all signatures, resolution is whole-graph.
    - Self-import (`a.ynz` imports `a`): compile error — "A file cannot import from itself."
 7. **Codegen mangling**: function `foo` in `services/players.ynz` mangles to `services__players__foo` (or similar) to avoid collisions. Tree-shaking proceeds from the entrypoint's reachability graph; unused exports get stripped.
-8. **Demo restructure**: split `examples/basics/entrypoint.ynz` into the layout above. Each file gets its M1–M7 features split logically: `services/players.ynz` (shapes, methods), `services/inventory.ynz` (collections + maps + options), `utils/math_extra.ynz` (UFCS helpers for ints/floats), `services/index.ynz` (re-export demo for v0.22 prep).
-9. **Error gallery extension**: add module-error triggers to `examples/errors/m8_errors.ynz` (one trigger per error class enumerated above).
+8. **Demo restructure**: split `examples/pirates-roster/entrypoint.ynz` into the layout above. Each file gets its M1–M7 features split logically: `services/players.ynz` (shapes, methods), `services/inventory.ynz` (collections + maps + options), `utils/math_extra.ynz` (UFCS helpers for ints/floats), `services/index.ynz` (re-export demo for v0.22 prep).
+9. **Error gallery extension**: add module-error triggers to `examples/primantis-orders/m8_errors.ynz` (one trigger per error class enumerated above).
 10. **Test corpus**: ~10 new fixture projects, each a self-contained directory under `crates/ynz-driver/tests/fixtures/m8_modules_*/`. Each fixture has its own `yinz.toml` + `src/*.ynz`.
 **Acceptance criteria**:
-- [ ] `./target/debug/ynz run examples/basics/entrypoint.ynz` runs successfully and prints the M1–M7 demo output (no regression).
-- [ ] `./target/debug/ynz run examples/basics/` (project root) also runs successfully.
+- [ ] `./target/debug/ynz run examples/pirates-roster/entrypoint.ynz` runs successfully and prints the M1–M7 demo output (no regression).
+- [ ] `./target/debug/ynz run examples/pirates-roster/` (project root) also runs successfully.
 - [ ] Circular import test (`a` imports `b`, `b` imports `a`, both define a shape used by the other) compiles cleanly.
 - [ ] Duplicate-name test produces the spec's exact three-part diagnostic.
 - [ ] Missing-export test produces a three-part diagnostic naming the missing item + suggesting the closest available export.
@@ -456,7 +456,7 @@ For Tier 3 lints deferred to v0.4, the muted-hint protocol still defers to v0.4 
 - [ ] **Salsa cache invalidation works per-file** — editing `players.ynz` does NOT re-parse `inventory.ynz`. **Test mechanism**: use salsa's `durability` + `revision` accessors (via `db.report_untracked_read`) OR a manual parse-counter wrapping the `parse_query` function (an `Arc<AtomicU64>` incremented inside the query body, only readable in test mode behind a `#[cfg(test)]` gate). After building the project initially, edit `players.ynz` text (via `source_file.set_text(&mut db, new_text)`), call `parse_query(&db, players_source)` — counter increments by 1. Call `parse_query(&db, inventory_source)` — counter does NOT increment (salsa returns the memoized result).
 **Verification**:
 ```bash
-./target/debug/ynz run examples/basics/
+./target/debug/ynz run examples/pirates-roster/
 cargo test -p ynz-driver m8_modules
 cargo test --workspace
 ```
@@ -481,8 +481,8 @@ cargo test --workspace
 - `crates/ynz-parser/tests/parse.rs` (doc-comment attachment tests; ~15 new tests)
 - `crates/ynz-typeck/src/check.rs` (preserve through typeck — likely no logic, just passthrough)
 - `crates/ynz-codegen/src/emit.rs` (emit `!llvm.dbg` metadata for source location; doc strings preserved on the AST for v1.1)
-- `examples/basics/src/services/players.ynz` (add `///` comments on exported items — demo)
-- `examples/errors/m8_errors.ynz` (add: doc comment broken by blank line not attached)
+- `examples/pirates-roster/src/services/players.ynz` (add `///` comments on exported items — demo)
+- `examples/primantis-orders/m8_errors.ynz` (add: doc comment broken by blank line not attached)
 **Deviation rule**: P3 must NOT add doc-on-private-item warning (that's v0.4 lint). M8 spec says "no effect on generated docs" — silent preservation.
 **Steps**:
 1. Add `doc: Option<String>` to FunctionDecl, ShapeDecl, OptionsDecl, ExportConst, Field. `None` = no doc.
@@ -490,8 +490,8 @@ cargo test --workspace
 3. Blank-line break detection is **delegated to the lexer's `break_after` flag** (set in P1; see P1 Step 4 worked examples). The parser does NOT re-scan whitespace — it reads only the boolean flag. This is the mechanism that makes the spec's "blank line breaks association" rule concrete and uneliminable.
 4. Field doc-comment attachment: same logic, applied inside `parse_shape_body`.
 5. Multi-line doc test: `\n/// line1\n/// line2\n` → attached string is `"line1\nline2"`.
-6. Add `///` comments to exported items in `examples/basics/src/services/players.ynz` to demonstrate the feature.
-7. Add intentional broken-attachment trigger to `examples/errors/m8_errors.ynz`.
+6. Add `///` comments to exported items in `examples/pirates-roster/src/services/players.ynz` to demonstrate the feature.
+7. Add intentional broken-attachment trigger to `examples/primantis-orders/m8_errors.ynz`.
 **Acceptance criteria**:
 - [ ] `/// fetches a user.\nexport function fetchUser() ...` parses with `doc = Some("fetches a user.")` on the FunctionDecl.
 - [ ] Multi-line: `/// line1\n/// line2\nexport function ...` → `doc = Some("line1\nline2")`.
@@ -530,8 +530,8 @@ cargo test --workspace
 - `crates/ynz-runtime/src/lib.rs` (ynz_print_sensitive function)
 - `crates/ynz-driver/src/main.rs` (--reveal-sensitive flag handling for `ynz run`)
 - `crates/ynz-driver/tests/fixtures/m8_sensitive_*.ynz` (~6 fixtures: basic redaction, .reveal(), propagation through ops, .length returns plain int, multiple sensitive in interpolation, --reveal-sensitive flag override)
-- `examples/basics/entrypoint.ynz` (sensitive section demonstrating apiKey-like pattern)
-- `examples/errors/m8_errors.ynz` (sensitive in print without .reveal — no error, but `.reveal()` in print context produces a Tier 3 lint suggestion)
+- `examples/pirates-roster/entrypoint.ynz` (sensitive section demonstrating apiKey-like pattern)
+- `examples/primantis-orders/m8_errors.ynz` (sensitive in print without .reveal — no error, but `.reveal()` in print context produces a Tier 3 lint suggestion)
 **Deviation rule**: P4 must NOT introduce env stdlib (`env.get()`). v0.7 owns that.
 **Steps**:
 1. Add `Type::Sensitive(Box<Type>)` to Type enum. Update variant-count test ratchet.
@@ -606,8 +606,8 @@ cargo test --workspace
 - `crates/ynz-typeck/src/check.rs` (typeck Wait/Background; background-share rejection per design/concurrency.md ownership rules; background ownership inference: if return value used after, infer `.copy()`; if not, infer `.give()`)
 - `crates/ynz-codegen/src/emit.rs` (Wait = direct call; Background = direct call + return discard for statement form)
 - `crates/ynz-driver/tests/fixtures/m8_concurrency_*.ynz` (~6 fixtures: wait on stdlib-like call, background fire-and-forget, background with give-inferred, background with copy-inferred, background-share rejected, background on share function rejected)
-- `examples/basics/entrypoint.ynz` (concurrency section)
-- `examples/errors/m8_errors.ynz` (background-share rejection trigger)
+- `examples/pirates-roster/entrypoint.ynz` (concurrency section)
+- `examples/primantis-orders/m8_errors.ynz` (background-share rejection trigger)
 **Deviation rule**: P5 must NOT implement auto-parallelization (v0.3) or background handles (`.send`/`.receive` — v0.3). The handle form `let h = background foo()` is a compile error in M8 with a three-part diagnostic pointing at v0.3.
 **Steps**:
 1. Add `Expr::Wait(Box<Expr>, SourceSpan)` and `Expr::Background(Box<Expr>, SourceSpan)` to AST.
@@ -688,8 +688,8 @@ cargo test --workspace
 - `crates/ynz-numerics/tests/properties.rs` (proptest: commutativity, associativity, round-trip)
 - `crates/ynz-driver/tests/fixtures/m8_bignum_*.ynz` (~8 fixtures: basic number<100>, mixed-precision promotion, narrowing warning, exact decimal math at N=200, N=4096 boundary, N=5000 deferral, addition/subtraction/multiplication/division correctness)
 - `crates/ynz-driver/tests/integration.rs` (UPDATE `m2_bignum_deferral_produces_diagnostic` to assert success now — bignum landed; the catch-up marker fires)
-- `examples/basics/entrypoint.ynz` (bignum section with `number<200>` astro-physics-style calc)
-- `examples/errors/m8_errors.ynz` (number<5000> too-large trigger; narrowing assignment warning)
+- `examples/pirates-roster/entrypoint.ynz` (bignum section with `number<200>` astro-physics-style calc)
+- `examples/primantis-orders/m8_errors.ynz` (number<5000> too-large trigger; narrowing assignment warning)
 **Deviation rule**: P6 must NOT change the 34-digit hot path. The decimal128 implementation in `crates/ynz-numerics/src/decimal128/` stays byte-identical (`cargo bench` confirms within 5%).
 **Steps**:
 1. **Storage model (LOCKED)**: **heap-allocated, single-owner, value-semantics**. `decimal_n::BigNum { precision: u16, chunks: *mut u128 /* heap-allocated array of ⌈N/34⌉ u128s */, sign: bool, exponent: i32 }`. The codegen passes bignum values as a 16-byte struct `{ precision: u16, sign: bool, exponent: i32, pad, chunks: *mut u128 }` with the chunks array on the heap. Total in-place footprint = 16 bytes (the struct). Heap footprint per binding = ⌈N/34⌉ * 16 bytes. At N=4096, 120 chunks * 16 = 1920 bytes; that's slightly above the design doc's "~1.7 KB" rough estimate but within the predictable-performance bound (the design doc estimates the COEFFICIENT bytes only; the bookkeeping overhead is fine).
@@ -758,30 +758,30 @@ cargo test --workspace
 ---
 
 ### Phase 7: Final fixtures + demo polish + M8 errors gallery completion
-**PR scope**: All M8 fixtures consolidated; `examples/basics/` end-to-end demo runs all M1–M8 features; `examples/errors/m8_errors.ynz` triggers every M8 compile-error class; final pass on the integration test suite for v0.1 surface.
+**PR scope**: All M8 fixtures consolidated; `examples/pirates-roster/` end-to-end demo runs all M1–M8 features; `examples/primantis-orders/m8_errors.ynz` triggers every M8 compile-error class; final pass on the integration test suite for v0.1 surface.
 **Branch**: `feat/m8-fixtures-demo`
 **Flag**: N/A
 **Est. lines**: ~300
 **Ships via**: `/pr`
 **Objective**: All loose ends from P1–P6 closed. Demo + error gallery complete. patrick's hands-on UX review surface ready.
-**Why this phase exists**: M5/M6/M7 each had a dedicated fixtures + demo phase (M7 P5). Concentrating this work in one PR makes the demo review focused: patrick runs `examples/basics/` once, runs `examples/errors/m8_errors.ynz` once, and gives a thumbs-up or itemizes UX gaps.
+**Why this phase exists**: M5/M6/M7 each had a dedicated fixtures + demo phase (M7 P5). Concentrating this work in one PR makes the demo review focused: patrick runs `examples/pirates-roster/` once, runs `examples/primantis-orders/m8_errors.ynz` once, and gives a thumbs-up or itemizes UX gaps.
 **Current-state anchors**: Each prior M8 phase added partial fixtures + demo content. P7 consolidates, fills gaps, and ensures every M8 feature has at least one fixture demonstrating the success path AND one error trigger.
 **Files (expected scope)**:
 - `crates/ynz-driver/tests/fixtures/m8_*.ynz` (any missing fixtures filled in)
-- `examples/basics/entrypoint.ynz` (final pass — every section flows, M8 features integrated with M1–M7)
-- `examples/basics/src/services/*.ynz` (polish — comments cleaned, doc comments on every export, sensitive used in a realistic API-key pattern, concurrency in a realistic checkout flow, bignum in a realistic high-precision calc)
-- `examples/basics/README.md` (UPDATE the milestone table to mark M8 as shipped)
-- `examples/errors/m8_errors.ynz` (every M8 compile-error class triggered; one comment per trigger explaining what it tests)
-- `examples/errors/README.md` (UPDATE)
+- `examples/pirates-roster/entrypoint.ynz` (final pass — every section flows, M8 features integrated with M1–M7)
+- `examples/pirates-roster/src/services/*.ynz` (polish — comments cleaned, doc comments on every export, sensitive used in a realistic API-key pattern, concurrency in a realistic checkout flow, bignum in a realistic high-precision calc)
+- `examples/pirates-roster/README.md` (UPDATE the milestone table to mark M8 as shipped)
+- `examples/primantis-orders/m8_errors.ynz` (every M8 compile-error class triggered; one comment per trigger explaining what it tests)
+- `examples/primantis-orders/README.md` (UPDATE)
 - `crates/ynz-driver/tests/integration.rs` (final integration tests for full-pipeline M8)
 **Deviation rule**: P7 must NOT introduce new language features. Anything found in P7 that requires new feature work goes BACK to P1–P6 as a fix — P7 is consolidation only.
 **Steps**:
-1. Run `examples/basics/entrypoint.ynz` end-to-end. Capture stdout. Compare to expected golden output for each M-section.
-2. Run `examples/errors/m8_errors.ynz` in report-only mode (Yinz multi-errors). Capture stderr. Compare to expected golden diagnostic stream.
+1. Run `examples/pirates-roster/entrypoint.ynz` end-to-end. Capture stdout. Compare to expected golden output for each M-section.
+2. Run `examples/primantis-orders/m8_errors.ynz` in report-only mode (Yinz multi-errors). Capture stderr. Compare to expected golden diagnostic stream.
 3. Identify gaps — any M8 feature without a basics-demo section? Any compile-error class without a gallery trigger? Fill them.
 4. Polish: rewrite any awkward demo prose; ensure every section uses real Yinz operations from the current scope (per `.claude/rules/dot-postfix.md` examples rule).
 5. README updates: milestone table marked, deferred-features list refreshed (anything M8 newly closed gets removed; v0.2/v0.3 entries verified accurate).
-6. Final integration test: a single `examples_basics_runs_end_to_end` test that builds + runs + asserts stdout matches the golden file. **Golden file location**: `examples/basics/expected_stdout.txt` (committed to the repo; regenerated only when patrick approves a demo behavior change). P7 also commits `examples/basics/expected_stdout.txt.regenerate.sh` — a script that runs the demo and writes the captured stdout to the golden file. Reviewer protocol: if `examples_basics_runs_end_to_end` fails, EITHER the demo regressed (fix the regression) OR the demo intentionally changed (run the regenerate script + commit the new golden + explain the change in PR description). Never blind-update the golden.
+6. Final integration test: a single `examples_basics_runs_end_to_end` test that builds + runs + asserts stdout matches the golden file. **Golden file location**: `examples/pirates-roster/expected_stdout.txt` (committed to the repo; regenerated only when patrick approves a demo behavior change). P7 also commits `examples/pirates-roster/expected_stdout.txt.regenerate.sh` — a script that runs the demo and writes the captured stdout to the golden file. Reviewer protocol: if `examples_basics_runs_end_to_end` fails, EITHER the demo regressed (fix the regression) OR the demo intentionally changed (run the regenerate script + commit the new golden + explain the change in PR description). Never blind-update the golden.
 7. **Combined-feature integration fixtures** (NEW per Required Fix #10 from plan-review — catches combinatorial bugs that per-feature fixtures miss). Add at minimum these three fixture projects:
    - `crates/ynz-driver/tests/fixtures/m8_combo_modules_sensitive_concurrency/` — multi-file project where one module exports a `sensitive` API-key type, another module imports it, and the third module calls a `background` request function that takes the sensitive value as a `give` argument. Asserts: import resolution preserves sensitivity, redaction happens at print across module boundaries, `background` ownership inference picks `.give()` correctly.
    - `crates/ynz-driver/tests/fixtures/m8_combo_modules_bignum_interpolation/` — multi-file project where module A defines a high-precision constant `let CHAOTIC_INITIAL: number<200> = ...`, module B imports it and computes `CHAOTIC_INITIAL * x` returning `number<200>`, module C imports both and interpolates the result into a string `` `Result: ${value}` ``. Asserts: bignum survives across module boundaries, interpolation handles `number<N>` for N > 34, the formatted string matches Python `decimal`'s output bit-for-bit.
@@ -789,9 +789,9 @@ cargo test --workspace
 
    Each fixture project gets its own integration test that builds, runs, and asserts golden output. Failure of any combo test = combinatorial bug; routed to the responsible phase (P2/P4/P5/P6) for fix, NOT a P7 issue.
 **Acceptance criteria**:
-- [ ] `./target/debug/ynz run examples/basics/` runs successfully and produces the golden output (`examples/basics/expected_stdout.txt`).
-- [ ] `examples/errors/m8_errors.ynz` triggers EVERY M8 compile-error class (count: ~20 distinct triggers).
-- [ ] `examples/basics/README.md` accurately reflects M8 status.
+- [ ] `./target/debug/ynz run examples/pirates-roster/` runs successfully and produces the golden output (`examples/pirates-roster/expected_stdout.txt`).
+- [ ] `examples/primantis-orders/m8_errors.ynz` triggers EVERY M8 compile-error class (count: ~20 distinct triggers).
+- [ ] `examples/pirates-roster/README.md` accurately reflects M8 status.
 - [ ] No feature added in P1-P6 lacks a basics-demo section.
 - [ ] No compile-error class added in P1-P6 lacks an m8_errors gallery trigger.
 - [ ] All three combined-feature integration tests pass (`m8_combo_modules_sensitive_concurrency`, `m8_combo_modules_bignum_interpolation`, `m8_combo_doc_sensitive_bignum`).
@@ -800,7 +800,7 @@ cargo test --workspace
 - [ ] patrick runs the demo manually and confirms UX feels right (golden output review).
 - [ ] patrick runs the error gallery manually and confirms diagnostics teach properly.
 - [ ] No "TODO" / "PLACEHOLDER" / `// will add later` comments in any M8 fixture/demo.
-**Verification**: `./target/debug/ynz run examples/basics/` + `./target/debug/ynz run --max-errors 100 examples/errors/m8_errors.ynz` + `cargo test --workspace`.
+**Verification**: `./target/debug/ynz run examples/pirates-roster/` + `./target/debug/ynz run --max-errors 100 examples/primantis-orders/m8_errors.ynz` + `cargo test --workspace`.
 
 ---
 
@@ -918,7 +918,7 @@ Non-blocking concerns also addressed:
 - M7 baseline commit named: `v0.1.0-m7` / `b24a1b0`. P0 Step 8 captures the named baseline via `cargo bench --save-baseline m7_baseline`.
 - Salsa cache invalidation test mechanism specified: parse-counter `Arc<AtomicU64>` (`#[cfg(test)]`-gated) + assert edit-one-file does-not-bump-other-file's counter.
 - Tree-shaking test mechanism specified: `nm -g <binary>` symbol dump + string-literal grep for `UNUSED_MARKER_xyz` (full strip, not just symbol).
-- Golden output file location: `examples/basics/expected_stdout.txt`, committed; regenerate via committed script with explicit reviewer protocol.
+- Golden output file location: `examples/pirates-roster/expected_stdout.txt`, committed; regenerate via committed script with explicit reviewer protocol.
 - P6 hot-path "simplification" anti-pattern added to Anti-Pattern Callouts.
 
 No push-backs filed against any required fix — all ten represented real silent-bug or anti-pattern risks the original draft did not adequately defend against.
@@ -935,7 +935,7 @@ All 5 non-blocking concerns addressed pre-implementation:
 
 4. **P5 Step 7 duplicate numbering** → Fixed: steps now run 1–10 (was 1, 2, ..., 7, 7, 8, 9 — duplicate 7 from a Step 6 insertion).
 
-5. **Demo restructure byte-identical assertion** → Implicit in P2 acceptance criterion 1 ("prints the M1-M7 demo output (no regression)") but worth surfacing: a byte-equality assertion is the failure mode the integration test catches. The `expected_stdout.txt` golden (P7) is the canonical comparison artifact; P2's "no regression" claim is verified by running the existing M7 demo command and capturing baseline stdout BEFORE the split, then asserting the restructured demo produces byte-identical output AFTER the split. P2 executor: run `./target/debug/ynz run examples/basics/entrypoint.ynz > /tmp/m7_baseline_stdout.txt` before any restructure, then diff post-restructure output against the baseline. Lock the protocol.
+5. **Demo restructure byte-identical assertion** → Implicit in P2 acceptance criterion 1 ("prints the M1-M7 demo output (no regression)") but worth surfacing: a byte-equality assertion is the failure mode the integration test catches. The `expected_stdout.txt` golden (P7) is the canonical comparison artifact; P2's "no regression" claim is verified by running the existing M7 demo command and capturing baseline stdout BEFORE the split, then asserting the restructured demo produces byte-identical output AFTER the split. P2 executor: run `./target/debug/ynz run examples/pirates-roster/entrypoint.ynz > /tmp/m7_baseline_stdout.txt` before any restructure, then diff post-restructure output against the baseline. Lock the protocol.
 
 Additional non-binding suggested adversarial cases from round 2 (not required, but tracked for potential P6/P4/P2 fixture-corpus expansion):
 - **Bignum negative-precision deep-narrow** (5000 → 10 with complex trailing carry chains) — augments row 14

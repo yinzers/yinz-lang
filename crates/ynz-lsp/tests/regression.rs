@@ -127,9 +127,9 @@ fn regression_lsp_vs_cli_divergence() {
         return;
     }
 
-    let error_dir = workspace_root.join("examples/errors");
+    let error_dir = workspace_root.join("examples/primantis-orders");
     let mut entries: Vec<_> = std::fs::read_dir(&error_dir)
-        .expect("examples/errors must be readable")
+        .expect("examples/primantis-orders must be readable")
         .flatten()
         .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("ynz"))
         .collect();
