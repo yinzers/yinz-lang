@@ -98,8 +98,13 @@ pub fn to_lsp_completion_item(rci: RegistryCompletionItem) -> CompletionItem {
     }
 }
 
+/// Sort priorities for user-defined symbols. Must be < registry keyword priority (100)
+/// so user symbols appear first in the sorted completion list.
+const USER_FN_SORT_PRIORITY: u16 = 0;
+const USER_SHAPE_SORT_PRIORITY: u16 = 10;
+
 /// Build user-defined function + shape completion items from typeck output.
-/// These are inserted at sort_priority 0 (before all registry items).
+/// These are inserted before all registry items (sort_priority 0-10).
 pub fn user_symbol_items(sig_table: &SignatureTable, shape_table: &ShapeTable) -> Vec<CompletionItem> {
     let mut items: Vec<CompletionItem> = Vec::new();
 
@@ -113,7 +118,7 @@ pub fn user_symbol_items(sig_table: &SignatureTable, shape_table: &ShapeTable) -
             label: name.clone(),
             kind: Some(CompletionItemKind::FUNCTION),
             detail: Some(detail),
-            sort_text: Some(format!("{:04}_{name}", 0u16)),
+            sort_text: Some(format!("{:04}_{name}", USER_FN_SORT_PRIORITY)),
             ..Default::default()
         });
     }
@@ -123,7 +128,7 @@ pub fn user_symbol_items(sig_table: &SignatureTable, shape_table: &ShapeTable) -
             label: name.clone(),
             kind: Some(CompletionItemKind::CLASS),
             detail: Some(format!("shape {name}")),
-            sort_text: Some(format!("{:04}_{name}", 10u16)),
+            sort_text: Some(format!("{:04}_{name}", USER_SHAPE_SORT_PRIORITY)),
             ..Default::default()
         });
     }

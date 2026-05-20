@@ -39,14 +39,13 @@ fn context_after_dot_is_after_dot() {
 }
 
 #[test]
-fn context_cursor_inside_string_returns_bare() {
-    // Inside a string literal, completion should return BareIdentifier (keywords)
-    // since we can't distinguish string-interior from normal code in the thin slice.
-    // The important property: no panic, no wrong crash.
+fn context_cursor_inside_string_no_panic_and_returns_bare() {
+    // WHY: thin-slice detect_context does not distinguish string-interior from
+    // normal code; it returns BareIdentifier. This test verifies no panic AND
+    // that the fallback produces the expected BareIdentifier context.
     let text = "`hello wor";
     let ctx = detect_context(text, text.len());
-    // Returns BareIdentifier (no crash); distinguishing inside-string is deferred.
-    let _ = ctx;
+    assert_eq!(ctx, CompletionContext::BareIdentifier);
 }
 
 #[test]
@@ -77,6 +76,71 @@ fn context_identifier_dot_is_after_dot() {
 
 // Completion list tests (using the completion module directly)
 
+
+#[test]
+fn completion_list_with_user_fns_includes_them() {
+    use ynz_lsp::{completion::completion_list, position::LineTable};
+    use lsp_types::Position;
+    use std::collections::HashMap;
+    use ynz_typeck::{signatures::{FunctionSig, SignatureTable}, types::Type};
+    use ynz_typeck::shapes::ShapeTable;
+    use ynz_diagnostics::SourceSpan;
+
+    let text = "let ";
+    let table = LineTable::new(text);
+    let position = Position { line: 0, character: 4 };
+
+    let mut fns = HashMap::new();
+    fns.insert("myUserFunction".to_string(), FunctionSig {
+        params: vec![("x".to_string(), Type::Int)],
+        param_ownerships: vec![None],
+        ret: Type::Nothing,
+        decl_span: SourceSpan::new("test.ynz", 0, 0),
+    });
+    let sig_table = SignatureTable { fns };
+    let shape_table = ShapeTable { shapes: HashMap::new(), union_aliases: HashMap::new(), options_names: std::collections::HashSet::new() };
+
+    let list = completion_list(text, &table, position, PositionEncoding::Utf8, Some(&sig_table), Some(&shape_table));
+    let list = list.expect("completion must be Some");
+    let labels: Vec<_> = list.items.iter().map(|i| i.label.as_str()).collect();
+    assert!(labels.contains(&"myUserFunction"), "user-defined function must appear in completion");
+    let user_item = list.items.iter().find(|i| i.label == "myUserFunction").unwrap();
+    assert_eq!(user_item.kind, Some(lsp_types::CompletionItemKind::FUNCTION));
+}
+
+#[test]
+fn user_symbols_sort_before_keywords() {
+    use ynz_lsp::{completion::completion_list, position::LineTable};
+    use lsp_types::Position;
+    use std::collections::HashMap;
+    use ynz_typeck::{signatures::{FunctionSig, SignatureTable}, types::Type};
+    use ynz_typeck::shapes::ShapeTable;
+    use ynz_diagnostics::SourceSpan;
+
+    let text = "let ";
+    let table = LineTable::new(text);
+    let position = Position { line: 0, character: 4 };
+
+    let mut fns = HashMap::new();
+    fns.insert("myFn".to_string(), FunctionSig {
+        params: vec![],
+        param_ownerships: vec![],
+        ret: Type::Nothing,
+        decl_span: SourceSpan::new("test.ynz", 0, 0),
+    });
+    let sig_table = SignatureTable { fns };
+    let shape_table = ShapeTable { shapes: HashMap::new(), union_aliases: HashMap::new(), options_names: std::collections::HashSet::new() };
+
+    let list = completion_list(text, &table, position, PositionEncoding::Utf8, Some(&sig_table), Some(&shape_table));
+    let list = list.expect("completion must be Some");
+
+    let user_item = list.items.iter().find(|i| i.label == "myFn").unwrap();
+    let kw_item = list.items.iter().find(|i| i.label == "function" && i.kind == Some(lsp_types::CompletionItemKind::KEYWORD)).unwrap();
+
+    let user_sort = user_item.sort_text.as_deref().unwrap_or("");
+    let kw_sort = kw_item.sort_text.as_deref().unwrap_or("");
+    assert!(user_sort < kw_sort, "user symbol ({user_sort}) must sort before keyword ({kw_sort})");
+}
 
 #[test]
 fn bare_completion_contains_keywords() {
@@ -174,6 +238,6 @@ fn completion_request_returns_list_via_lsp() {
     let response = h.recv_response();
     // Response may be Null (no items at position 0 = inside a comment) or a CompletionList
     // Either way it must not be an error object
-    assert!(!response.is_object() || !response.get("error").is_some(),
-        "completion response must not be an error: {response}");
+    assert!(response.get("error").is_none(),
+        "completion response must not contain an error field: {response}");
 }
