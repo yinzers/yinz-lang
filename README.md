@@ -133,6 +133,17 @@ ynz --help          # full CLI help
 
 ---
 
+## Editor support (VSCode)
+
+The **Yinz Language** extension provides syntax highlighting, inline diagnostics, autocomplete, and hover docs for `.ynz` files.
+
+- **GitHub Release**: download `yinz-0.2.0-m2.vsix` from the [latest release](https://github.com/patrickrizzardi/ynz/releases/tag/ynz-vscode-v0.2.0-m2) and run `code --install-extension yinz-0.2.0-m2.vsix`
+- **Manual install**: see [`tooling/vscode-ynz/README.md`](tooling/vscode-ynz/README.md) for local build + install instructions
+
+The extension requires the `ynz-lsp` binary on your PATH: `cargo build -p ynz-lsp --release && cp target/release/ynz-lsp ~/.local/bin/`
+
+---
+
 ## Status
 
 The compiler is in active development. See [`design/mvp-scope.md`](design/mvp-scope.md) for the milestone roadmap, and [`.claude/plans/active/v0-1-compiler.md`](.claude/plans/active/v0-1-compiler.md) for the current v0.1 implementation plan.

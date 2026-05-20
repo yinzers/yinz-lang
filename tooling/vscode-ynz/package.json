@@ -3,9 +3,13 @@
   "displayName": "Yinz Language",
   "description": "Yinz language support: syntax highlighting, inline diagnostics, autocomplete, and hover docs powered by ynz-lsp",
   "version": "0.2.0-m2",
-  "publisher": "<placeholder-set-in-phase-7>",
+  "publisher": "yinz-lang",
   "preview": true,
   "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/patrickrizzardi/ynz"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },

@@ -21,14 +21,24 @@ cp target/release/ynz-lsp ~/.local/bin/  # or any directory on your PATH
 
 ## Install
 
-### Option A — From `.vsix` (current method)
+### Option A — From GitHub Release (current method)
 
-1. Build: `cd tooling/vscode-ynz && npm install && npx vsce package`
-2. Install: `code --install-extension yinz-0.2.0-m2.vsix`
+Always-current stable URL (updates automatically with each release):
 
-### Option B — Marketplace (coming in Phase 7)
+```bash
+curl -L https://github.com/patrickrizzardi/ynz/releases/latest/download/yinz-latest.vsix -o yinz-latest.vsix
+code --install-extension yinz-latest.vsix
+```
 
-Once the publisher account is configured: search "Yinz Language" in the VSCode Extensions panel.
+Or download a specific version from the [releases page](https://github.com/patrickrizzardi/ynz/releases).
+
+### Option B — VSCode Marketplace (coming soon)
+
+Once published: search **"Yinz Language"** in the VSCode Extensions panel, or:
+
+```
+ext install yinz-lang.yinz
+```
 
 ## Configuration
 
@@ -38,4 +48,4 @@ Once the publisher account is configured: search "Yinz Language" in the VSCode E
 
 ## Screenshots
 
-Screenshots will be added in Phase 7 once the extension is verified against a running LSP.
+Screenshots are tracked for a follow-up commit once the extension is installed and verified locally. Install the extension and open `examples/basics/src/entrypoint.ynz` to see syntax highlighting, hover docs, autocomplete, and inline diagnostics in action.

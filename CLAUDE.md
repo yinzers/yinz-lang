@@ -112,6 +112,12 @@ Two project-local skills handle the ship cycle:
 
 Don't wait to be asked. If you see "ready to ship" signals, surface them.
 
+**VSCode extension release convention** — every milestone release that touches `tooling/vscode-ynz/` MUST attach TWO `.vsix` assets to the GitHub release:
+1. `yinz-{version}.vsix` — versioned artifact
+2. `yinz-latest.vsix` — always overwritten (`--clobber`) so the stable URL never changes:
+   `https://github.com/patrickrizzardi/ynz/releases/latest/download/yinz-latest.vsix`
+
+This stable URL is how external projects pin to the Yinz extension without updating their install script every release. Never skip the `yinz-latest.vsix` upload.
 
 ---
 

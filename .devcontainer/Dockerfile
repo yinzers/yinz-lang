@@ -47,6 +47,11 @@ WORKDIR /home/${USER}
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
 ENV PATH="/home/${USER}/.cargo/bin:${PATH}"
 
+# Node.js (for VSCode extension build toolchain)
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - \
+    && sudo apt-get install -y --no-install-recommends nodejs \
+    && sudo apt-get clean && sudo rm -rf /var/lib/apt/lists/*
+
 # Claude Code CLI
 RUN curl -fsSL https://claude.ai/install.sh | bash
 ENV PATH="/home/${USER}/.local/bin:${PATH}"

@@ -64,14 +64,24 @@
   "containerEnv": {
     "ANTHROPIC_MODEL": "${localEnv:ANTHROPIC_MODEL}"
   },
+  // Build ynz-lsp and the VSCode extension .vsix once on container creation.
+  // ynz-lsp ends up at ~/.local/bin/ynz-lsp (already on PATH from Dockerfile).
+  // The .vsix is built at tooling/vscode-ynz/; install it from the VSCode
+  // Extensions panel (... menu → Install from VSIX) until the marketplace
+  // extension (yinz-lang.yinz) is published and auto-installs from the list below.
+  "postCreateCommand": "source $HOME/.cargo/env && cargo build -p ynz-lsp --release && cp target/release/ynz-lsp ~/.local/bin/ynz-lsp && cd tooling/vscode-ynz && npm install && npm run build && npx vsce package --no-yarn",
   "customizations": {
     "vscode": {
       "extensions": [
         "edwinhuish.better-comments-next",
         "chunsen.bracket-select",
         "streetsidesoftware.code-spell-checker",
-        "anthropic.claude-code"
-      ]
+        "anthropic.claude-code",
+        "yinz-lang.yinz"
+      ],
+      "settings": {
+        "yinz.server.path": "ynz-lsp"
+      }
     }
   }
 }

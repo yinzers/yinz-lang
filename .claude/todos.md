@@ -23,6 +23,12 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 - [ ] **vscode-extension-ci-workflow** — GitHub Actions to build + publish `tooling/vscode-ynz/` on release tags (currently manual). Deferred from v0.2-M2 Phase 7; M2 ships extension via local cargo+npm or marketplace publish, no CI yet. Pick up whenever marketplace publishing automation is wanted OR when a non-Patrick contributor needs to repro the build.
 
+- [ ] **marketplace-publish-followup** — register VSCode publisher `yinz-lang` and run `vsce publish --pre-release`. Objectively-triggered fallback fired during v0.2-M2 Phase 7 per trigger #3: "Marketplace requires account setup Patrick can't single-handedly resolve in one session" — Azure DevOps org provisioning page non-functional; PAT could not be generated; publisher account could not be created. Extension shipped as .vsix at https://github.com/patrickrizzardi/ynz/releases/tag/ynz-vscode-v0.2.0-m2 instead.
+
+- [ ] **vscode-extension-screenshots** — take 3 screenshots of the installed Yinz extension: hover.png (hover over a keyword), autocomplete.png (completion popup after `int.`), diagnostic.png (red squiggle on an error). Commit to `tooling/vscode-ynz/screenshots/` and update the README screenshots section. Deferred from v0.2-M2 Phase 7 because publisher registration was blocked (no working extension to screenshot against a marketplace listing).
+
+- [ ] **vscode-extension-visual-polish** — a potential post-Phase 9 pass on extension UX. Known items: (1) diagnostic message `\n\n` shows as raw text in the Problems panel — need a better separator strategy for non-markdown surfaces; (2) shape field completion after `.` requires `type_of_expression_at_offset` in typeck (already in lsp-completion-typeck-receiver-narrowing entry above); (3) screenshots once marketplace or .vsix is verified working. Other candidates TBD — leave scope open for discussion when we get there.
+
 - [ ] **Jargon-CI sweep** — add a CI script that greps `design/*.md`, `spec/*.md`, all `.claude/rules/*.md`, and crate source files for banned-jargon words. Scope: extend `crates/ynz-diagnostics/src/banned_jargon.rs` AND add a doc-grep CI step.
 - [ ] Wire up GitHub Actions CI (ci.yml already written, just needs configuration)
 - [ ] macOS CI golden hash for ynz-codegen
