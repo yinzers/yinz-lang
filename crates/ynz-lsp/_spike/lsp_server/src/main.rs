@@ -6,7 +6,6 @@
 
 use lsp_server::{Connection, Message, Notification};
 use lsp_types::notification::{DidChangeTextDocument, DidOpenTextDocument, Notification as _};
-use lsp_types::request::{Shutdown, Request as _};
 use lsp_types::*;
 
 // Simulates CompilerDb: update() needs &mut self (like salsa input mutations),
