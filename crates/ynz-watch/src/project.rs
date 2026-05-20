@@ -24,12 +24,21 @@ pub struct WatchSourceFile {
 /// Resolve the watch target from the CLI path arg.
 ///
 /// Single-file mode: `path.ynz` — watches only that file.
-/// Project mode: `./dir/` or implicit `.` — reads `yinz.toml`, walks `.ynz` files.
+/// Project mode: directory path — walks UP to find nearest `yinz.toml`, then watches all
+/// `.ynz` files under the project root.
+///
+/// # `yinz.toml` entry formats supported
+///
+/// Single-entry:   `entry = "entrypoint.ynz"`
+/// Multi-entry:    `[entries]\nbackfill = "ships/backfill.ynz"\n...`
+///
+/// For multi-entry projects, the directory hint is used to pick the matching entry.
+/// If the hint matches exactly one entry (by path prefix) it is selected automatically.
 ///
 /// # Failure modes
 ///
 /// - Source file unreadable → `WatchError::SourceRead`
-/// - Directory without `yinz.toml` → `WatchError::NoProjectFile`
+/// - No `yinz.toml` found anywhere up the directory tree → `WatchError::NoProjectFile`
 /// - Directory read failure → `WatchError::Io`
 ///
 /// Time: O(n) where n = number of .ynz files in project. Space: O(n).
@@ -39,30 +48,64 @@ pub fn resolve_target(path: &Path) -> Result<WatchTarget> {
             path: path.to_path_buf(),
             reason: e.to_string(),
         })?;
-        Ok(WatchTarget {
+        return Ok(WatchTarget {
             sources: vec![WatchSourceFile {
                 path: path.to_path_buf(),
                 text,
             }],
             entry: path.to_path_buf(),
             project_root: None,
-        })
-    } else {
-        resolve_project(path)
-    }
-}
-
-/// Resolve all `.ynz` files under a project root (requires `yinz.toml`).
-fn resolve_project(root: &Path) -> Result<WatchTarget> {
-    let toml_path = root.join("yinz.toml");
-    if !toml_path.exists() {
-        return Err(WatchError::NoProjectFile {
-            root: root.to_path_buf(),
         });
     }
 
-    // Read entry point from yinz.toml (minimal parse: just "entry = ...").
-    let entry_name = parse_entry_from_toml(&toml_path).unwrap_or_else(|| "entrypoint.ynz".to_string());
+    // For directory paths: walk up to find the nearest yinz.toml.
+    let hint_dir = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        // Non-existent path — treat as a directory hint (might be a project subdir).
+        path.to_path_buf()
+    };
+
+    let root = find_project_root(&hint_dir).ok_or_else(|| WatchError::NoProjectFile {
+        root: hint_dir.clone(),
+    })?;
+
+    resolve_project(&root, &hint_dir)
+}
+
+/// Walk up from `start` to find the nearest directory containing `yinz.toml`.
+fn find_project_root(start: &Path) -> Option<PathBuf> {
+    let mut current = if start.is_dir() {
+        start.to_path_buf()
+    } else {
+        start.parent()?.to_path_buf()
+    };
+    loop {
+        if current.join("yinz.toml").exists() {
+            return Some(current);
+        }
+        match current.parent() {
+            Some(p) if p != current => current = p.to_path_buf(),
+            _ => return None,
+        }
+    }
+}
+
+/// Resolve all `.ynz` files under a project root using `yinz.toml`.
+///
+/// `hint` is the path the user originally passed — used to select the right entry
+/// in multi-entry projects.
+fn resolve_project(root: &Path, hint: &Path) -> Result<WatchTarget> {
+    let toml_path = root.join("yinz.toml");
+
+    // Try [entries] table first, then fall back to `entry = "..."`.
+    let entry_name = if let Some(entries) = parse_entries_table_from_toml(&toml_path) {
+        pick_entry_from_hint(&entries, root, hint)
+            .unwrap_or_else(|| entries.into_values().next().unwrap_or_else(|| "entrypoint.ynz".to_string()))
+    } else {
+        parse_entry_from_toml(&toml_path).unwrap_or_else(|| "entrypoint.ynz".to_string())
+    };
+
     let entry = root.join(&entry_name);
 
     let mut sources = Vec::new();
@@ -77,11 +120,78 @@ fn resolve_project(root: &Path) -> Result<WatchTarget> {
     })
 }
 
-/// Parse `entry = "..."` from a minimal yinz.toml.
+/// Parse `[entries]` table from yinz.toml: returns map of name → relative path.
+///
+/// Returns `None` if no `[entries]` section is present.
+fn parse_entries_table_from_toml(path: &Path) -> Option<std::collections::HashMap<String, String>> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut in_entries = false;
+    let mut map = std::collections::HashMap::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[entries]" {
+            in_entries = true;
+            continue;
+        }
+        if trimmed.starts_with('[') {
+            in_entries = false;
+            continue;
+        }
+        if in_entries {
+            if let Some((key, val)) = trimmed.split_once('=') {
+                let key = key.trim().to_string();
+                let val = val.trim().trim_matches('"').trim_matches('\'').to_string();
+                if !key.is_empty() && !val.is_empty() {
+                    map.insert(key, val);
+                }
+            }
+        }
+    }
+    if map.is_empty() { None } else { Some(map) }
+}
+
+/// Pick the best entry from a multi-entry map given the user's hint path.
+///
+/// Match strategy: find any entry whose value (relative to root) shares a path component
+/// with the hint. E.g. hint `ships/scripts/backfill` matches entry path
+/// `scripts/backfill/entrypoint.ynz` because `scripts/backfill` appears in both.
+fn pick_entry_from_hint(
+    entries: &std::collections::HashMap<String, String>,
+    root: &Path,
+    hint: &Path,
+) -> Option<String> {
+    // Normalise hint relative to root if possible.
+    let hint_rel = hint.strip_prefix(root).unwrap_or(hint);
+    let hint_str = hint_rel.to_string_lossy().replace('\\', "/");
+
+    // Exact name match first (e.g. user passed the entry name literally).
+    if let Some(v) = entries.get(hint_str.as_str()) {
+        return Some(v.clone());
+    }
+
+    // Path-component match: pick the entry whose path contains all components of the hint.
+    let hint_parts: Vec<&str> = hint_str.split('/').filter(|s| !s.is_empty()).collect();
+    let mut best: Option<&str> = None;
+    for val in entries.values() {
+        let val_norm = val.replace('\\', "/");
+        let matches = hint_parts.iter().all(|part| val_norm.contains(part));
+        if matches {
+            best = Some(val);
+            break;
+        }
+    }
+    best.map(|s| s.to_string())
+}
+
+/// Parse `entry = "..."` from a minimal yinz.toml (single-entry format).
 fn parse_entry_from_toml(path: &Path) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     for line in text.lines() {
         let line = line.trim();
+        // Skip lines inside a [section] — only want top-level entry = "..."
+        if line.starts_with('[') {
+            continue;
+        }
         if let Some(rest) = line.strip_prefix("entry") {
             let rest = rest.trim();
             if let Some(rest) = rest.strip_prefix('=') {
@@ -171,8 +281,13 @@ mod tests {
 
     #[test]
     fn project_mode_requires_yinz_toml() {
+        // WHY: if no yinz.toml is found anywhere up the tree from an isolated temp dir,
+        //      we must return NoProjectFile — not silently watch nothing.
         let dir = TempDir::new().unwrap();
-        let result = resolve_target(dir.path());
+        // Use a sub-subdir that is fully isolated (no yinz.toml anywhere above in /tmp).
+        let sub = dir.path().join("a").join("b");
+        std::fs::create_dir_all(&sub).unwrap();
+        let result = resolve_target(&sub);
         assert!(matches!(result, Err(WatchError::NoProjectFile { .. })));
     }
 
@@ -187,5 +302,39 @@ mod tests {
         assert_eq!(target.sources.len(), 2);
         assert_eq!(target.project_root, Some(dir.path().to_path_buf()));
         assert_eq!(target.entry, dir.path().join("main.ynz"));
+    }
+
+    #[test]
+    fn project_mode_walks_up_to_find_yinz_toml() {
+        // WHY: yinz.toml is always at project root, never in subdirectories. Passing a
+        //      subdir (e.g. `ynz watch ships/scripts/backfill`) must find root yinz.toml.
+        let dir = TempDir::new().unwrap();
+        let sub = dir.path().join("ships").join("scripts").join("backfill");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(dir.path().join("yinz.toml"), "entry = \"main.ynz\"\n").unwrap();
+        std::fs::write(dir.path().join("main.ynz"), "// main\n").unwrap();
+
+        let target = resolve_target(&sub).unwrap();
+        assert_eq!(target.project_root, Some(dir.path().to_path_buf()));
+        assert_eq!(target.entry, dir.path().join("main.ynz"));
+    }
+
+    #[test]
+    fn project_mode_multi_entry_picks_matching_entry() {
+        // WHY: [entries] table multi-entry projects must use the hint path to select
+        //      the right entry — otherwise `ynz watch ships/backfill` always runs the
+        //      wrong entry or fails.
+        let dir = TempDir::new().unwrap();
+        let sub = dir.path().join("ships").join("backfill");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(
+            dir.path().join("yinz.toml"),
+            "[project]\nname = \"trading\"\n\n[entries]\nbackfill = \"ships/backfill/entrypoint.ynz\"\nother = \"ships/other/entrypoint.ynz\"\n",
+        ).unwrap();
+        std::fs::write(sub.join("entrypoint.ynz"), "// backfill\n").unwrap();
+
+        let target = resolve_target(&sub).unwrap();
+        assert_eq!(target.project_root, Some(dir.path().to_path_buf()));
+        assert_eq!(target.entry, dir.path().join("ships/backfill/entrypoint.ynz"));
     }
 }
