@@ -1,0 +1,7 @@
+import { greet, farewell } from `services/users`
+
+import helpers from `utils/helpers`
+
+function entrypoint() -> nothing {
+  greet(`world`)
+}

@@ -1,6 +1,7 @@
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 use crate::token::{Spanned, Token};
+use crate::trivia::{Comment, CommentKind};
 
 /// Lex a single source file.
 ///
@@ -10,9 +11,28 @@ use crate::token::{Spanned, Token};
 ///
 /// The source bytes MUST be valid UTF-8 (the driver verifies this before calling).
 pub fn lex(file: &str, source: &str) -> (Vec<Spanned<Token>>, DiagnosticBucket) {
-    let mut lex = Lexer::new(file, source);
+    let mut lex = Lexer::new(file, source, false);
     lex.run();
     (lex.tokens, lex.diags)
+}
+
+/// Lex a single source file, additionally capturing every `//` and `///` comment.
+///
+/// Returns `(tokens, comments)` where `tokens` is byte-identical to what [`lex`] would
+/// return for the same input, and `comments` is a sorted-by-position vec of every
+/// `//` line comment and `///` doc-comment in the source.
+///
+/// The formatter consumes `comments` to re-attach `//` trivia to AST nodes.
+///
+/// The source bytes MUST be valid UTF-8 (the driver verifies this before calling).
+pub fn lex_with_trivia(
+    file: &str,
+    source: &str,
+) -> (Vec<Spanned<Token>>, Vec<Comment>) {
+    let mut lex = Lexer::new(file, source, true);
+    lex.run();
+    let comments = lex.trivia_comments.unwrap_or_default();
+    (lex.tokens, comments)
 }
 
 struct Lexer<'src> {
@@ -29,10 +49,13 @@ struct Lexer<'src> {
     /// normal lex cycle — we just closed an interpolation and are back inside
     /// the surrounding backtick string literal.
     after_interp_end: bool,
+    /// When `Some`, every `//` and `///` comment encountered is appended here.
+    /// `None` when called via `lex()` (trivia not needed).
+    trivia_comments: Option<Vec<Comment>>,
 }
 
 impl<'src> Lexer<'src> {
-    fn new(file: &'src str, source: &'src str) -> Self {
+    fn new(file: &'src str, source: &'src str, capture_trivia: bool) -> Self {
         Self {
             file,
             src: source.as_bytes(),
@@ -41,6 +64,7 @@ impl<'src> Lexer<'src> {
             diags: DiagnosticBucket::new(),
             interp_depth_stack: Vec::new(),
             after_interp_end: false,
+            trivia_comments: if capture_trivia { Some(Vec::new()) } else { None },
         }
     }
 
@@ -85,9 +109,21 @@ impl<'src> Lexer<'src> {
                     self.lex_doc_comment();
                     return; // DocComment token emitted; let run() call us again.
                 }
-                // Regular `//` comment — skip to end of line.
+                // Regular `//` comment — skip to end of line; capture if trivia mode.
+                let comment_start = self.pos;
                 while self.pos < self.src.len() && self.src[self.pos] != b'\n' {
                     self.pos += 1;
+                }
+                if let Some(comments) = &mut self.trivia_comments {
+                    let text = std::str::from_utf8(&self.src[comment_start..self.pos])
+                        .unwrap_or("")
+                        .to_string();
+                    let span = SourceSpan::new(self.file, comment_start, self.pos);
+                    comments.push(Comment {
+                        kind: CommentKind::LineComment,
+                        text,
+                        span,
+                    });
                 }
                 continue;
             }
@@ -141,6 +177,19 @@ impl<'src> Lexer<'src> {
             start,
             line_end,
         );
+
+        // Also capture this doc-comment in the trivia vec when in trivia mode.
+        if let Some(comments) = &mut self.trivia_comments {
+            let full_text = std::str::from_utf8(&self.src[start..line_end])
+                .unwrap_or("")
+                .to_string();
+            let span = SourceSpan::new(self.file, start, line_end);
+            comments.push(Comment {
+                kind: CommentKind::DocComment,
+                text: full_text,
+                span,
+            });
+        }
     }
 
     /// Read-only lookahead from `scan_start` to determine whether a blank line

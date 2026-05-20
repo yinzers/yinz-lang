@@ -1,0 +1,7 @@
+function constants() -> nothing {
+  const pi: number = 3
+  let count = 0
+  count = count + 1
+  print(pi)
+  print(count)
+}

@@ -1,0 +1,5 @@
+shape Player {
+  name: string
+  health: int
+  active: boolean
+}

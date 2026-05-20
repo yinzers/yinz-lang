@@ -12,3 +12,7 @@ ynz-parser      = { workspace = true }
 ynz-ast         = { workspace = true }
 ynz-registry    = { workspace = true }
 ynz-diagnostics = { workspace = true }
+
+[[example]]
+name = "gen_golden"
+path = "examples/gen_golden.rs"

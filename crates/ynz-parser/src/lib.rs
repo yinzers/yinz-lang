@@ -29,8 +29,11 @@ pub mod lexer;
 pub mod parser;
 pub mod queries;
 pub mod token;
+pub mod trivia;
 pub use parser::infix_bp;
 
 pub use db::{CompilerDb, SourceFile, SourceFileRegistry};
+pub use lexer::lex_with_trivia;
 pub use queries::{lex_query, parse_query, LexOutput, ParseOutput};
 pub use token::{Spanned, Token};
+pub use trivia::{Comment, CommentKind};
