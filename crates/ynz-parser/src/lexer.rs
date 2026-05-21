@@ -1,4 +1,4 @@
-use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
+use ynz_diagnostics::{Diagnostic, DiagnosticBucket, DiagnosticKind, SourceSpan};
 
 use crate::token::{Spanned, Token};
 use crate::trivia::{Comment, CommentKind};
@@ -1308,12 +1308,19 @@ impl<'src> Lexer<'src> {
         what_instead: &str,
         why: &str,
     ) {
-        self.diags.push(Diagnostic::warning(
-            SourceSpan::new(self.file, start, end),
-            format!("`{keyword}` is not a keyword in Yinz."),
-            what_instead,
-            why,
-        ));
+        // DiagnosticKind::BannedKeyword carries the keyword so the LSP code-action
+        // handler can build a quick-fix without re-parsing the source text.
+        self.diags.push(
+            Diagnostic::warning(
+                SourceSpan::new(self.file, start, end),
+                format!("`{keyword}` is not a keyword in Yinz."),
+                what_instead,
+                why,
+            )
+            .with_kind(DiagnosticKind::BannedKeyword {
+                keyword: keyword.to_string(),
+            }),
+        );
     }
 
     /// Advance past non-whitespace bytes to recover from a malformed literal.

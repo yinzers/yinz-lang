@@ -1,8 +1,8 @@
 use lsp_types::{
-    CompletionOptions, HoverProviderCapability, InlayHintOptions, InlayHintServerCapabilities,
-    OneOf, PositionEncodingKind, RenameOptions, ServerCapabilities,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
-    WorkDoneProgressOptions,
+    CodeActionOptions, CodeActionProviderCapability, CompletionOptions, HoverProviderCapability,
+    InlayHintOptions, InlayHintServerCapabilities, OneOf, PositionEncodingKind, RenameOptions,
+    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextDocumentSyncOptions, WorkDoneProgressOptions,
 };
 
 /// The position encoding this server prefers. UTF-8 means LSP Position.character == byte offset,
@@ -53,6 +53,13 @@ pub fn server_capabilities(encoding: PositionEncoding) -> ServerCapabilities {
             work_done_progress_options: WorkDoneProgressOptions {
                 work_done_progress: None,
             },
+        })),
+        code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
+            code_action_kinds: Some(vec![lsp_types::CodeActionKind::QUICKFIX]),
+            work_done_progress_options: WorkDoneProgressOptions {
+                work_done_progress: None,
+            },
+            resolve_provider: Some(false),
         })),
         ..Default::default()
     }

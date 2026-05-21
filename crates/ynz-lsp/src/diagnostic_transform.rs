@@ -1,5 +1,6 @@
 use lsp_types::{
-    Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, Range, Url,
+    Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, NumberOrString, Range,
+    Url,
 };
 use ynz_diagnostics::{Diagnostic as YnzDiagnostic, Severity};
 
@@ -65,12 +66,20 @@ pub fn to_lsp_diagnostic(
         }
     };
 
+    // code is the PascalCase DiagnosticKind name — used by code-action handler to
+    // identify which quick-fix to offer. Phase 9 adds data + codeDescription.
+    let code = d
+        .kind
+        .as_ref()
+        .map(|k| NumberOrString::String(k.kind_name().to_string()));
+
     Diagnostic {
         range,
         severity: Some(severity),
         source: Some("ynz".to_string()),
         message,
         related_information,
+        code,
         ..Default::default()
     }
 }

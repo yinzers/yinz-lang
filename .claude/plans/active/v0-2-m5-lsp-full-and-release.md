@@ -5,7 +5,7 @@ owner: Patrick Rizzardi
 status: active
 roadmap: v0-2-dev-loop-tooling
 created: 2026-05-20
-last_updated: 2026-05-21 (Phase 6 complete — rename + format-on-save + inlay hints; Phases 0-6 all done)
+last_updated: 2026-05-21 (Phase 7 complete — code actions; Phases 0-7 all done)
 files:
   - crates/ynz-lsp/**
   - crates/ynz-typeck/src/**
@@ -990,19 +990,19 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
    - Multi-diagnostic position: returns ALL applicable actions
 
 **Acceptance criteria**:
-- [ ] `code_action.rs` exports `code_action_response`
-- [ ] Registry adapters `lsp_code_action_label_for` + `lsp_code_action_replacement_for` exist
-- [ ] `capabilities.rs` advertises code-action with `QUICKFIX` kind
-- [ ] Test count: at least 5 covering 3+ diagnostic kinds + no-fix case + multi-diag case
-- [ ] All code-action labels follow "Replace `X` with `Y`" or registry-driven label format (consistent shape across all fixes)
-- [ ] No new banned-jargon in code-action labels
-- [ ] `cargo test --workspace` green
+- [x] `code_action.rs` exports `code_action_response`
+- [x] Registry adapters `lsp_code_action_label_for` + `lsp_code_action_replacement_for` exist
+- [x] `capabilities.rs` advertises code-action with `QUICKFIX` kind
+- [x] Test count: at least 5 covering 3+ diagnostic kinds + no-fix case + multi-diag case (7 tests)
+- [x] All code-action labels follow "Replace `X` with `Y`" or registry-driven label format (consistent shape across all fixes)
+- [x] No new banned-jargon in code-action labels
+- [x] `cargo test --workspace` green
 
 **Quality gate**:
-- [ ] No `unwrap()` outside tests
-- [ ] Tier 2 rustdoc on `code_action_response` explaining: which diagnostics get fixes, which don't (registry-driven)
-- [ ] No hardcoded diagnostic-kind strings in code_action.rs — all flow through registry adapters
-- [ ] No commented-out code
+- [x] No `unwrap()` outside tests
+- [x] Tier 2 rustdoc on `code_action_response` explaining: which diagnostics get fixes, which don't (registry-driven)
+- [x] No hardcoded diagnostic-kind strings in code_action.rs — all flow through registry adapters
+- [x] No commented-out code
 
 **Verification**: `cargo test -p ynz-lsp code_action` + workspace.
 
