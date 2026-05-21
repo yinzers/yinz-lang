@@ -2,10 +2,10 @@
 slug: v0-2-m5-lsp-full-and-release
 type: execution
 owner: Patrick Rizzardi
-status: active
+status: done
 roadmap: v0-2-dev-loop-tooling
 created: 2026-05-20
-last_updated: 2026-05-21 (Phase 12 automated steps complete + cumulative code-reviewer PASS; awaiting Patrick: push → PR → merge → /release)
+last_updated: 2026-05-21 (COMPLETE — v0.2.0 tag cut, GitHub release created, vsix attached, plan status: done)
 files:
   - crates/ynz-lsp/**
   - crates/ynz-typeck/src/**
