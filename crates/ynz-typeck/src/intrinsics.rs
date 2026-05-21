@@ -61,6 +61,16 @@ fn build_table(since_filter: impl Fn(&str) -> bool) -> PrimitiveIntrinsicTable {
         if !since_filter(entry.since) {
             continue;
         }
+        // Generic collection types use bare base names in the registry so the LSP
+        // completion system can match them via prefix stripping. Their type-checker
+        // dispatch is handled by builtins.rs pattern matching, not by this scalar
+        // intrinsic table — skip them here to avoid parse_type() panics.
+        if matches!(
+            entry.receiver_type,
+            Some("array") | Some("fixed") | Some("maybe") | Some("map")
+        ) {
+            continue;
+        }
         match entry.kind {
             "print_type" => {
                 let ty = parse_type(entry.name);

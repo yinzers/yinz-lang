@@ -32,6 +32,7 @@
 
 use lsp_types::{
     InlayHint, InlayHintKind, InlayHintLabel, MarkupContent, MarkupKind, Position, Range,
+    TextEdit,
 };
 use ynz_typeck::{
     array_to_fixed_promotion_hints, copy_point_hints, let_to_const_promotion_hints,
@@ -76,15 +77,55 @@ fn make_hint(
     kind: InlayHintKind,
     domain: &str,
 ) -> InlayHint {
+    make_hint_with_edit(pos, label, kind, domain, None)
+}
+
+fn make_hint_with_edit(
+    pos: Position,
+    label: String,
+    kind: InlayHintKind,
+    domain: &str,
+    text_edits: Option<Vec<TextEdit>>,
+) -> InlayHint {
     InlayHint {
         position: pos,
         label: InlayHintLabel::String(label),
         kind: Some(kind),
-        text_edits: None,
+        text_edits,
         tooltip: tooltip(domain),
         padding_left: None,
         padding_right: None,
         data: None,
+    }
+}
+
+/// Build the TextEdit that inserts `: TypeName` at byte `insert_at` when clicked.
+fn type_insertion_edit(
+    text: &str,
+    insert_at: usize,
+    type_text: &str,
+    table: &crate::position::LineTable,
+    encoding: crate::capabilities::PositionEncoding,
+) -> TextEdit {
+    let pos = table.byte_offset_to_position(text, insert_at.min(text.len()), encoding);
+    TextEdit {
+        range: lsp_types::Range { start: pos, end: pos },
+        new_text: format!(": {type_text}"),
+    }
+}
+
+/// Build the TextEdit that replaces `let` (3 bytes at `let_start`) with `const`.
+fn let_to_const_edit(
+    text: &str,
+    let_start: usize,
+    table: &crate::position::LineTable,
+    encoding: crate::capabilities::PositionEncoding,
+) -> TextEdit {
+    let start = table.byte_offset_to_position(text, let_start.min(text.len()), encoding);
+    let end = table.byte_offset_to_position(text, (let_start + 3).min(text.len()), encoding);
+    TextEdit {
+        range: lsp_types::Range { start, end },
+        new_text: "const".to_string(),
     }
 }
 
@@ -131,11 +172,13 @@ pub fn inlay_hint_response(
     for h in variable_type_hints(&state.db, sf) {
         if !in_viewport(h.position, vp_start, vp_end) { continue; }
         if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
-            hints.push(make_hint(
+            let edit = type_insertion_edit(text, h.position, &h.type_text, table, state.encoding);
+            hints.push(make_hint_with_edit(
                 pos,
                 format!(": {}", h.type_text),
                 InlayHintKind::TYPE,
                 "variable_type",
+                Some(vec![edit]),
             ));
         }
     }
@@ -187,11 +230,13 @@ pub fn inlay_hint_response(
     for h in let_to_const_promotion_hints(&state.db, sf) {
         if !in_viewport(h.position, vp_start, vp_end) { continue; }
         if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
-            hints.push(make_hint(
+            let edit = let_to_const_edit(text, h.position, table, state.encoding);
+            hints.push(make_hint_with_edit(
                 pos,
                 h.label.clone(),
                 InlayHintKind::TYPE,
                 "let_to_const_promotion",
+                Some(vec![edit]),
             ));
         }
     }

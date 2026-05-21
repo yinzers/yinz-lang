@@ -40,6 +40,8 @@ pub enum DiagnosticKind {
     MissingReturn,
     /// A banned keyword was used.
     BannedKeyword { keyword: String },
+    /// An imported name is never referenced in the file.
+    UnusedImport { name: String },
 }
 
 impl DiagnosticKind {
@@ -57,6 +59,7 @@ impl DiagnosticKind {
             DiagnosticKind::Borrowed => "Borrowed",
             DiagnosticKind::MissingReturn => "MissingReturn",
             DiagnosticKind::BannedKeyword { .. } => "BannedKeyword",
+            DiagnosticKind::UnusedImport { .. } => "UnusedImport",
         }
     }
 
@@ -73,6 +76,7 @@ impl DiagnosticKind {
             DiagnosticKind::Borrowed => "borrowed".to_string(),
             DiagnosticKind::MissingReturn => "missing return".to_string(),
             DiagnosticKind::BannedKeyword { keyword } => format!("`{keyword}` not valid here"),
+            DiagnosticKind::UnusedImport { name } => format!("`{name}` never used"),
         }
     }
 }

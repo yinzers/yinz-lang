@@ -18,6 +18,29 @@ fn state_single(path: &str, src: &str) -> (ServerState, lsp_types::Url) {
     (state, uri)
 }
 
+/// Build a two-file state with a known project root for auto-import tests.
+/// `root` must be an absolute path. Returns (state, importer_uri).
+fn state_two_files(
+    root: &std::path::Path,
+    exporter_rel: &str,
+    exporter_src: &str,
+    importer_rel: &str,
+    importer_src: &str,
+) -> (ServerState, lsp_types::Url) {
+    let mut state = ServerState::new(PositionEncoding::Utf8);
+    state.project_root = Some(root.to_path_buf());
+
+    let exp_path = root.join(exporter_rel);
+    let exp_uri = lsp_types::Url::from_file_path(&exp_path).expect("valid exporter path");
+    state.open_document(exp_uri, exporter_src.to_string());
+
+    let imp_path = root.join(importer_rel);
+    let imp_uri = lsp_types::Url::from_file_path(&imp_path).expect("valid importer path");
+    state.open_document(imp_uri.clone(), importer_src.to_string());
+
+    (state, imp_uri)
+}
+
 fn full_range(src: &str) -> lsp_types::Range {
     let table = LineTable::new(src);
     let start = table.byte_offset_to_position(src, 0, PositionEncoding::Utf8);
@@ -206,5 +229,311 @@ fn test_code_action_response_under_50ms() {
         elapsed.as_millis() < 50,
         "code_action_response took {}ms; budget is 50ms",
         elapsed.as_millis()
+    );
+}
+
+// ─── Auto-import: NotDefined → suggest import from exporting file ─────────────
+
+#[test]
+// WHY: The core auto-import invariant — when a name resolves to `NotDefined` in the
+// current file but IS exported from another registered file, the lightbulb must offer
+// `import { Name } from \`path\``. If this regresses, users get no help on cross-file
+// symbol usage, which is the most common new-file workflow.
+fn auto_import_suggests_shape_from_other_file() {
+    let root = std::path::Path::new("/tmp/ynz_autoimport_shape");
+    let exporter_src = "export shape Player {\n  name: string\n  health: int\n}\n";
+    let importer_src = "function main() -> nothing {\n  let p: Player = { name: \"x\", health: 1 }\n}\n";
+
+    let (state, imp_uri) = state_two_files(
+        root,
+        "models/player.ynz",
+        exporter_src,
+        "entrypoint.ynz",
+        importer_src,
+    );
+
+    let range = range_at(importer_src, "Player");
+    let actions = code_action_response(&state, &imp_uri, range);
+
+    let titles: Vec<&str> = actions
+        .iter()
+        .filter_map(|a| {
+            if let lsp_types::CodeActionOrCommand::CodeAction(ca) = a {
+                Some(ca.title.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    assert!(
+        titles.iter().any(|t| t.contains("Player") && t.contains("models/player")),
+        "expected auto-import action for Player; got: {titles:?}"
+    );
+}
+
+#[test]
+// WHY: Exported functions should also get auto-import offers, not just shapes.
+// Functions are the most common import target in Yinz (data + standalone fns model).
+fn auto_import_suggests_function_from_other_file() {
+    let root = std::path::Path::new("/tmp/ynz_autoimport_fn");
+    let exporter_src = "export function greet(name: string) -> string {\n  return \"hello\"\n}\n";
+    let importer_src = "function main() -> nothing {\n  greet(\"world\")\n}\n";
+
+    let (state, imp_uri) = state_two_files(
+        root,
+        "utils/greeting.ynz",
+        exporter_src,
+        "entrypoint.ynz",
+        importer_src,
+    );
+
+    let range = range_at(importer_src, "greet");
+    let actions = code_action_response(&state, &imp_uri, range);
+
+    let titles: Vec<&str> = actions
+        .iter()
+        .filter_map(|a| {
+            if let lsp_types::CodeActionOrCommand::CodeAction(ca) = a {
+                Some(ca.title.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    assert!(
+        titles.iter().any(|t| t.contains("greet") && t.contains("utils/greeting")),
+        "expected auto-import for greet; got: {titles:?}"
+    );
+}
+
+#[test]
+// WHY: When the name is genuinely unknown (not exported by any registered file),
+// no auto-import action must be produced. Spurious lightbulbs that insert wrong
+// imports are more disruptive than no lightbulb at all.
+fn auto_import_no_action_when_not_exported_anywhere() {
+    let root = std::path::Path::new("/tmp/ynz_autoimport_none");
+    let exporter_src = "export shape Player { name: string }\n";
+    let importer_src = "function main() -> nothing {\n  let x: GhostType = 1\n}\n";
+
+    let (state, imp_uri) = state_two_files(
+        root,
+        "models/player.ynz",
+        exporter_src,
+        "entrypoint.ynz",
+        importer_src,
+    );
+
+    let range = range_at(importer_src, "GhostType");
+    let actions = code_action_response(&state, &imp_uri, range);
+
+    let auto_import_actions: Vec<_> = actions
+        .iter()
+        .filter(|a| {
+            if let lsp_types::CodeActionOrCommand::CodeAction(ca) = a {
+                ca.title.starts_with("Import")
+            } else {
+                false
+            }
+        })
+        .collect();
+
+    assert!(
+        auto_import_actions.is_empty(),
+        "must not suggest import for name not exported anywhere; got: {auto_import_actions:?}"
+    );
+}
+
+#[test]
+// WHY: The generated import text must follow Yinz import syntax exactly:
+// `import { Name } from \`path/without/extension\`` on its own line.
+// A malformed import string would cause a parse error in the user's file.
+fn auto_import_edit_produces_correct_import_text() {
+    let root = std::path::Path::new("/tmp/ynz_autoimport_edit");
+    let exporter_src = "export shape Order { id: string }\n";
+    let importer_src = "function main() -> nothing {\n  let o: Order = { id: \"x\" }\n}\n";
+
+    let (state, imp_uri) = state_two_files(
+        root,
+        "services/orders.ynz",
+        exporter_src,
+        "entrypoint.ynz",
+        importer_src,
+    );
+
+    let range = range_at(importer_src, "Order");
+    let actions = code_action_response(&state, &imp_uri, range);
+
+    let import_action = actions.iter().find_map(|a| {
+        if let lsp_types::CodeActionOrCommand::CodeAction(ca) = a {
+            if ca.title.contains("Order") { Some(ca) } else { None }
+        } else {
+            None
+        }
+    });
+
+    let action = import_action.expect("auto-import action must exist for Order");
+    let edit = action.edit.as_ref().expect("action must have edit");
+    let changes = edit.changes.as_ref().expect("edit must have changes");
+    let edits = changes.get(&imp_uri).expect("changes must contain importer uri");
+    assert_eq!(edits.len(), 1, "exactly one TextEdit");
+    assert_eq!(
+        edits[0].new_text,
+        "import { Order } from `services/orders`\n",
+        "import text must follow Yinz syntax"
+    );
+    // Insertion must be at the start of the file (no prior imports).
+    assert_eq!(
+        edits[0].range.start,
+        lsp_types::Position { line: 0, character: 0 },
+        "insert at top when no prior imports"
+    );
+}
+
+#[test]
+// WHY: When the file already has imports, the new import must be inserted AFTER the
+// last existing one, not at the top. Inserting at the top would create out-of-order
+// imports that might confuse future readers (and auto-formatters).
+fn auto_import_inserts_after_existing_imports() {
+    let root = std::path::Path::new("/tmp/ynz_autoimport_after");
+    let orders_src = "export shape Order { id: string }\n";
+    let users_src = "export shape User { name: string }\n";
+    // importer already has one import; new one should land after it.
+    let importer_src = "import { User } from `services/users`\n\nfunction main() -> nothing {\n  let o: Order = { id: \"x\" }\n}\n";
+
+    let mut state = ServerState::new(PositionEncoding::Utf8);
+    let root_buf = root.to_path_buf();
+    state.project_root = Some(root_buf);
+
+    for (rel, src) in [
+        ("services/orders.ynz", orders_src),
+        ("services/users.ynz", users_src),
+        ("entrypoint.ynz", importer_src),
+    ] {
+        let path = root.join(rel);
+        let uri = lsp_types::Url::from_file_path(&path).unwrap();
+        state.open_document(uri, src.to_string());
+    }
+
+    let imp_path = root.join("entrypoint.ynz");
+    let imp_uri = lsp_types::Url::from_file_path(&imp_path).unwrap();
+    let range = range_at(importer_src, "Order");
+    let actions = code_action_response(&state, &imp_uri, range);
+
+    let action = actions.iter().find_map(|a| {
+        if let lsp_types::CodeActionOrCommand::CodeAction(ca) = a {
+            if ca.title.contains("Order") { Some(ca) } else { None }
+        } else {
+            None
+        }
+    }).expect("auto-import action must exist for Order");
+
+    let edit = action.edit.as_ref().unwrap();
+    let changes = edit.changes.as_ref().unwrap();
+    let edits = changes.get(&imp_uri).unwrap();
+    // Insertion must NOT be at line 0 (which already has the User import).
+    assert!(
+        edits[0].range.start.line > 0,
+        "new import must land after existing import, not at line 0; got line {}",
+        edits[0].range.start.line
+    );
+}
+
+// ─── Remove unused import ────────────────────────────────────────────────────
+
+#[test]
+// WHY: An UnusedImport warning must produce a "Remove unused import" quick-fix
+// that deletes the entire import line. Without this, the user has no lightbulb
+// for the yellow squiggle and must delete the line by hand.
+fn unused_import_produces_remove_action() {
+    let root = std::path::Path::new("/tmp/ynz_unused_import_action");
+    // exporter exports `greet` but importer never calls it.
+    let exporter_src = "export function greet(name: string) -> string {\n  return `hi`\n}\n";
+    let importer_src = "import { greet } from `utils/greeting`\n\nfunction main() -> nothing {\n  let x = 1\n}\n";
+
+    let (state, imp_uri) = state_two_files(
+        root,
+        "utils/greeting.ynz",
+        exporter_src,
+        "entrypoint.ynz",
+        importer_src,
+    );
+
+    let range = range_at(importer_src, "greet");
+    let actions = code_action_response(&state, &imp_uri, range);
+
+    let remove_action = actions.iter().find_map(|a| {
+        if let lsp_types::CodeActionOrCommand::CodeAction(ca) = a {
+            if ca.title.contains("Remove unused import") {
+                Some(ca)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    });
+
+    assert!(
+        remove_action.is_some(),
+        "expected a 'Remove unused import' code action; got: {:?}",
+        actions.iter().filter_map(|a| {
+            if let lsp_types::CodeActionOrCommand::CodeAction(ca) = a { Some(ca.title.as_str()) } else { None }
+        }).collect::<Vec<_>>()
+    );
+
+    let action = remove_action.unwrap();
+    let edit = action.edit.as_ref().expect("action must have an edit");
+    let changes = edit.changes.as_ref().expect("edit must have changes");
+    let edits = changes.get(&imp_uri).expect("changes must contain importer uri");
+    assert_eq!(edits.len(), 1, "exactly one TextEdit");
+    // The edit must delete the entire first line (the import statement).
+    assert_eq!(edits[0].new_text, "", "edit must delete text (new_text is empty)");
+    assert_eq!(edits[0].range.start.line, 0, "edit starts at line 0");
+}
+
+#[test]
+// WHY: A used import must NOT produce a remove-import code action. Spuriously
+// offering "Remove unused import" when the symbol is used would corrupt working
+// code if the user accepts the action. This test writes real files to disk so
+// cross-file import resolution succeeds and the function enters referenced_names.
+fn used_import_produces_no_remove_action() {
+    let root = std::path::Path::new("/tmp/ynz_used_import_no_action");
+    let exporter_src = "export function greet(name: string) -> string {\n  return `hi`\n}\n";
+    let importer_src =
+        "import { greet } from `utils/greeting`\n\nfunction main() -> nothing {\n  greet(`world`)\n}\n";
+
+    // Write real files so import resolution can find them on disk.
+    std::fs::create_dir_all(root.join("utils")).unwrap();
+    std::fs::write(root.join("utils/greeting.ynz"), exporter_src).unwrap();
+    std::fs::write(root.join("entrypoint.ynz"), importer_src).unwrap();
+    std::fs::write(root.join("yinz.toml"), "[project]\nname = \"test\"\nentry = \"entrypoint.ynz\"\n").unwrap();
+
+    let (state, imp_uri) = state_two_files(
+        root,
+        "utils/greeting.ynz",
+        exporter_src,
+        "entrypoint.ynz",
+        importer_src,
+    );
+
+    let range = range_at(importer_src, "greet");
+    let actions = code_action_response(&state, &imp_uri, range);
+
+    let remove_actions: Vec<_> = actions
+        .iter()
+        .filter(|a| {
+            if let lsp_types::CodeActionOrCommand::CodeAction(ca) = a {
+                ca.title.contains("Remove unused import")
+            } else {
+                false
+            }
+        })
+        .collect();
+
+    assert!(
+        remove_actions.is_empty(),
+        "must not offer remove-import action for a used import; got: {remove_actions:?}"
     );
 }

@@ -1,8 +1,11 @@
 use lsp_types::{
-    CodeActionOptions, CodeActionProviderCapability, CompletionOptions, HoverProviderCapability,
+    CodeActionOptions, CodeActionProviderCapability, CompletionOptions, DocumentLinkOptions,
+    FileOperationFilter, FileOperationPattern, FileOperationPatternKind,
+    FileOperationRegistrationOptions, FoldingRangeProviderCapability, HoverProviderCapability,
     InlayHintOptions, InlayHintServerCapabilities, OneOf, PositionEncodingKind, RenameOptions,
-    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TextDocumentSyncOptions, WorkDoneProgressOptions,
+    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+    WorkDoneProgressOptions, WorkspaceFileOperationsServerCapabilities,
+    WorkspaceServerCapabilities,
 };
 use crate::semantic_tokens::semantic_tokens_options;
 
@@ -63,7 +66,34 @@ pub fn server_capabilities(encoding: PositionEncoding) -> ServerCapabilities {
             resolve_provider: Some(false),
         })),
         semantic_tokens_provider: Some(semantic_tokens_options()),
+        document_link_provider: Some(DocumentLinkOptions {
+            resolve_provider: Some(false),
+            work_done_progress_options: WorkDoneProgressOptions::default(),
+        }),
+        folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+        document_symbol_provider: Some(OneOf::Left(true)),
+        workspace_symbol_provider: Some(OneOf::Left(true)),
+        workspace: Some(WorkspaceServerCapabilities {
+            file_operations: Some(WorkspaceFileOperationsServerCapabilities {
+                did_rename: Some(ynz_file_op_filter()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
         ..Default::default()
+    }
+}
+
+fn ynz_file_op_filter() -> FileOperationRegistrationOptions {
+    FileOperationRegistrationOptions {
+        filters: vec![FileOperationFilter {
+            scheme: Some("file".to_string()),
+            pattern: FileOperationPattern {
+                glob: "**/*.ynz".to_string(),
+                matches: Some(FileOperationPatternKind::File),
+                options: None,
+            },
+        }],
     }
 }
 

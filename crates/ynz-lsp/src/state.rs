@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::{Path, PathBuf}};
 
 use lsp_types::Url;
 use salsa::Setter as _;
@@ -40,6 +40,10 @@ pub struct ServerState {
     pub encoding: PositionEncoding,
     /// Set by `shutdown` request; `exit` checks this.
     pub shutdown_requested: bool,
+    /// Project root directory (contains `yinz.toml`). Set from the LSP Initialize
+    /// `rootUri`/`rootPath`, or inferred lazily on first file open. `None` in
+    /// single-file mode (no `yinz.toml` found anywhere).
+    pub project_root: Option<PathBuf>,
 }
 
 impl ServerState {
@@ -51,6 +55,67 @@ impl ServerState {
             last_published: HashMap::new(),
             encoding,
             shutdown_requested: false,
+            project_root: None,
+        }
+    }
+
+    /// Set the project root from a file URI (e.g. `rootUri` from Initialize).
+    /// Walks up from the URI's directory to find the nearest `yinz.toml`.
+    /// If a root is found, immediately indexes all `.ynz` files in the project
+    /// so cross-file completion and auto-import work without the user opening each file.
+    pub fn set_project_root_from_uri(&mut self, uri: &Url) {
+        if self.project_root.is_some() {
+            return;
+        }
+        if let Ok(path) = uri.to_file_path() {
+            if let Some(root) = find_project_root(&path) {
+                self.project_root = Some(root.clone());
+                self.index_project_files(&root);
+            }
+        }
+    }
+
+    /// Infer project root lazily from a file path when no rootUri was provided.
+    pub fn infer_project_root_from_file(&mut self, file_path: &str) {
+        if self.project_root.is_some() {
+            return;
+        }
+        if let Some(root) = find_project_root(Path::new(file_path)) {
+            self.project_root = Some(root.clone());
+            self.index_project_files(&root);
+        }
+    }
+
+    /// Walk `root` and register every `.ynz` file in the salsa db (read from disk).
+    /// Already-registered files (open documents) are skipped. This runs once when the
+    /// project root is discovered so cross-file queries see the whole project, not just
+    /// the files the user has already opened.
+    fn index_project_files(&mut self, root: &Path) {
+        self.index_dir(root);
+    }
+
+    /// Public entry point for `serve()` which calls this before `main_loop`.
+    pub fn index_project_files_pub(&mut self, root: &Path) {
+        self.index_dir(root);
+    }
+
+    fn index_dir(&mut self, dir: &Path) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                self.index_dir(&path);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("ynz") {
+                let path_str = path.to_string_lossy().into_owned();
+                // Skip files already registered (open documents take priority).
+                if self.db.source_by_path(&path_str).is_some() {
+                    continue;
+                }
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    let sf = SourceFile::new(&self.db, path_str, text);
+                    self.db.register_source(sf);
+                }
+            }
         }
     }
 
@@ -101,4 +166,34 @@ pub fn uri_to_path(uri: &Url) -> String {
     uri.to_file_path()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| uri.to_string())
+}
+
+/// Walk up from `start` to find the nearest ancestor directory containing `yinz.toml`.
+/// Returns `None` in single-file mode (no project manifest found).
+pub fn find_project_root(start: &Path) -> Option<PathBuf> {
+    let mut current = if start.is_dir() {
+        start.to_path_buf()
+    } else {
+        start.parent()?.to_path_buf()
+    };
+    loop {
+        if current.join("yinz.toml").exists() {
+            return Some(current);
+        }
+        match current.parent() {
+            Some(p) if p != current => current = p.to_path_buf(),
+            _ => return None,
+        }
+    }
+}
+
+/// Compute the project-root-relative import path for a source file.
+///
+/// Given `/project/root/services/users.ynz` and root `/project/root`,
+/// returns `services/users` (forward-slash separated, no `.ynz` extension).
+pub fn import_path_for_file(file_path: &str, project_root: &Path) -> Option<String> {
+    let path = Path::new(file_path);
+    let rel = path.strip_prefix(project_root).ok()?;
+    let without_ext = rel.with_extension("");
+    Some(without_ext.to_string_lossy().replace('\\', "/"))
 }

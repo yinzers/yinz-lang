@@ -113,24 +113,36 @@ pub fn lsp_completion_items(context: &CompletionContext<'_>) -> Vec<RegistryComp
         CompletionContext::AfterDot { receiver_type } => {
             match receiver_type {
                 Some(rtype) => {
+                    // Strip generic params for matching: "array<int>" → "array".
+                    // Registry entries use the base type name (e.g. "array", "fixed")
+                    // so they match any concrete instantiation.
+                    let base_type = rtype.split('<').next().unwrap_or(rtype);
+
                     // Primitive methods for this receiver type
                     for e in crate::primitive_intrinsics().filter(|e| {
-                        e.receiver_type == Some(rtype)
+                        e.receiver_type == Some(base_type)
                             && (e.kind == "method" || e.kind == "method_1arg")
                     }) {
-                        let param_str = if e.param_types.is_empty() {
-                            String::new()
-                        } else {
-                            e.param_types.join(", ").to_string()
-                        };
+                        // For generic collections, replace placeholder "T" with the
+                        // concrete element type extracted from the receiver (e.g. "int").
+                        let elem = rtype
+                            .strip_prefix(&format!("{base_type}<"))
+                            .and_then(|s| s.strip_suffix('>'))
+                            .unwrap_or("T");
+                        let return_display = e.return_type.replace('T', elem);
+                        let param_str = e.param_types
+                            .iter()
+                            .map(|p| p.replace('T', elem))
+                            .collect::<Vec<_>>()
+                            .join(", ");
                         items.push(RegistryCompletionItem {
                             label: format!("{}()", e.name),
                             kind: CompletionKind::PrimitiveMethod,
                             detail: Some(format!(
-                                "{rtype}.{}({param_str}) -> {}",
-                                e.name, e.return_type
+                                "{rtype}.{}({param_str}) -> {return_display}",
+                                e.name,
                             )),
-                            documentation: None,
+                            documentation: e.doc.map(|d| d.to_string()),
                             deprecated: false,
                             sort_priority: 200,
                         });
@@ -212,7 +224,7 @@ pub fn lsp_hover_for_token(name: &str) -> Option<HoverContent> {
 
     // Primitive intrinsics (methods + free fns) — match by name, return first overload
     if let Some(e) = crate::primitive_intrinsics().find(|e| e.name == name) {
-        let detail = if let Some(rt) = e.receiver_type {
+        let mut detail = if let Some(rt) = e.receiver_type {
             format!(
                 "## `{rt}.{}()`\n\nReceiver: `{rt}`  \nReturns: `{}`  \nIntroduced in {}.",
                 e.name, e.return_type, e.since
@@ -223,6 +235,10 @@ pub fn lsp_hover_for_token(name: &str) -> Option<HoverContent> {
                 e.name, e.return_type, e.since
             )
         };
+        if let Some(doc) = e.doc {
+            detail.push_str("\n\n");
+            detail.push_str(doc);
+        }
         return Some(HoverContent {
             markdown_body: detail,
             kind: if e.receiver_type.is_some() {

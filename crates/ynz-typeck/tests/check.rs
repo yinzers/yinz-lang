@@ -2454,3 +2454,47 @@ fn cross_file_inline_shape_field_mismatch_documents_known_gap() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+// WHY: `{ field: UnknownType }` in an inline shape must produce a compile error just
+// like `shape Foo { field: UnknownType }` in a named shape. Before this fix the
+// validation was silently skipped for synthetic/anon shapes, letting `Timeframe` (or
+// any other unimported options/shape type) pass through as Type::Error with no
+// diagnostic — user had no idea the import was missing.
+fn anon_shape_unknown_field_type_errors() {
+    let output = assert_errors(
+        r#"
+function entrypoint() -> nothing {
+  const intervals: fixed<{ minutes: int, timeframe: Timeframe }> = []
+}
+"#,
+        1,
+    );
+    let has_msg = output.diagnostics.iter().any(|d| d.what.contains("Timeframe"));
+    assert!(
+        has_msg,
+        "Expected diagnostic mentioning `Timeframe` for unknown type in inline shape; got: {:#?}",
+        output.diagnostics
+    );
+}
+
+#[test]
+// WHY: unknown types nested inside `maybe<T>` or `array<T>` inside an inline shape
+// must also error — the validation must recurse through container types, not just
+// check the top-level field type.
+fn anon_shape_unknown_type_in_maybe_field_errors() {
+    let output = assert_errors(
+        r#"
+function entrypoint() -> nothing {
+  let x: { val: maybe<GhostType> } = { val: none }
+}
+"#,
+        1,
+    );
+    let has_msg = output.diagnostics.iter().any(|d| d.what.contains("GhostType"));
+    assert!(
+        has_msg,
+        "Expected diagnostic mentioning `GhostType` in maybe field; got: {:#?}",
+        output.diagnostics
+    );
+}

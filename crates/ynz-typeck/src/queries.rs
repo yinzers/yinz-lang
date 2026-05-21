@@ -1,13 +1,15 @@
 use std::{collections::HashSet, sync::Arc};
 
-use ynz_ast::nodes::{ImportDecl, Item};
-use ynz_diagnostics::DiagnosticBucket;
+use ynz_ast::nodes::{ImportDecl, ImportKind, Item};
+use ynz_diagnostics::{Diagnostic, DiagnosticBucket, DiagnosticKind};
 use ynz_parser::{parse_query, SourceFile, SourceFileRegistry};
 
 use crate::{
     check::{check, TypedModule},
+    exports::{collect_exports, ExportTable},
     generics::{GenericFnTable, GenericShapeTable, MonomorphizationTable},
     intrinsics::PrimitiveIntrinsicTable,
+    options_table::collect_options,
     resolve_import::resolve_imports,
     shapes::{collect_generic_shapes, collect_shapes, ShapeTable},
     signatures::{collect_generic_signatures, collect_signatures, FunctionSig, SignatureTable},
@@ -109,6 +111,24 @@ pub fn module_signatures_query(
     })
 }
 
+/// Returns the symbols this file exports — used by the LSP auto-import code action.
+///
+/// Salsa-tracked so the result is re-used across auto-import lookups on unchanged files.
+// lru = 128: cheap to compute; keep a broad cache for cross-file auto-import sweeps.
+#[salsa::tracked(lru = 128)]
+pub fn exports_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<ExportTable> {
+    let parse = parse_query(db, source);
+    let sig_output = module_signatures_query(db, source);
+    let mut dummy = DiagnosticBucket::new();
+    let options_table = collect_options(&parse.module, &mut dummy);
+    Arc::new(collect_exports(
+        &parse.module,
+        &sig_output.shape_table,
+        &options_table,
+        &sig_output.sig_table,
+    ))
+}
+
 /// Pass 2: type-check all function bodies.
 ///
 /// Depends on `module_signatures_query` for the signature table.
@@ -135,7 +155,7 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
             .or_insert_with(|| sig.clone());
     }
 
-    let (typed, mono_table, check_diags) = check(
+    let (typed, mono_table, check_diags, referenced_names) = check(
         &parse.module,
         &merged_sig_table,
         &sig_output.shape_table,
@@ -146,6 +166,37 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
     );
     for d in check_diags.into_iter() {
         all_diags.push(d);
+    }
+
+    // Emit UnusedImport warnings for named imports whose local name was never
+    // resolved during the check pass. Namespace imports (`import ns from "..."`)
+    // are excluded — their dotted references (`ns.Shape`) require separate tracking
+    // that is not yet implemented.
+    for item in &parse.module.items {
+        let Item::ImportDecl(decl) = item else {
+            continue;
+        };
+        let ImportKind::Named(import_items) = &decl.kind else {
+            continue;
+        };
+        for import_item in import_items {
+            if !referenced_names.contains(&import_item.local_name) {
+                all_diags.push(
+                    Diagnostic::warning(
+                        import_item.local_name_span.clone(),
+                        format!("`{}` is imported but never used.", import_item.local_name),
+                        format!(
+                            "Remove `{}` from the import list, or use it somewhere in this file.",
+                            import_item.local_name
+                        ),
+                        "Unused imports add noise — every import signals to readers that this file depends on that symbol.",
+                    )
+                    .with_kind(DiagnosticKind::UnusedImport {
+                        name: import_item.local_name.clone(),
+                    }),
+                );
+            }
+        }
     }
 
     Arc::new(CheckOutput {

@@ -1289,6 +1289,12 @@ what_template = "`{keyword}` is not a Yinz keyword."
 what_instead_template = "{what_instead}"
 why_template = "{why}"
 
+[[diagnostic_template]]
+kind_name = "UnusedImport"
+what_template = "`{name}` is imported but never used."
+what_instead_template = "Remove `{name}` from the import list, or use it somewhere in this file."
+why_template = "Unused imports add noise — every import signals to readers that this file depends on that symbol."
+
 # --- v0.2-M4 watch diagnostic templates ---
 
 [[diagnostic_template]]
@@ -1320,6 +1326,459 @@ kind_name = "WatchMemoryPollingUnavailable"
 what_template = "ynz watch: memory polling is unavailable on this platform."
 what_instead_template = "The memory hard-stop safety net (`YNZ_WATCH_MAX_RSS_MB`) is disabled for this session. Watch will continue running."
 why_template = "The `memory-stats` crate could not read process RSS on this platform (rare — typically affects chroot environments without /proc). Without RSS polling, the Layer 3 hard-stop cannot fire. Layers 1 (LRU caps) and 2 (periodic DB rebuild) remain active."
+
+# ---------------------------------------------------------------------------
+# [[primitive_intrinsic]] — maybe<T> methods
+# receiver_type = "maybe" matches any maybe<T> via prefix stripping in lsp_adapter.
+# ---------------------------------------------------------------------------
+
+[[primitive_intrinsic]]
+name = "exists"
+kind = "method"
+receiver_type = "maybe"
+param_types = []
+return_type = "boolean"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "or"
+kind = "method_1arg"
+receiver_type = "maybe"
+param_types = ["T"]
+return_type = "T"
+since = "M4"
+
+# ---------------------------------------------------------------------------
+# [[primitive_intrinsic]] — map<K,V> methods
+# receiver_type = "map" matches any map<K,V> via prefix stripping in lsp_adapter.
+# ---------------------------------------------------------------------------
+
+[[primitive_intrinsic]]
+name = "get"
+kind = "method_1arg"
+receiver_type = "map"
+param_types = ["K"]
+return_type = "maybe<V>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "find"
+kind = "method_1arg"
+receiver_type = "map"
+param_types = ["K"]
+return_type = "maybe<V>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "has"
+kind = "method_1arg"
+receiver_type = "map"
+param_types = ["K"]
+return_type = "boolean"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "set"
+kind = "method_1arg"
+receiver_type = "map"
+param_types = ["K"]
+return_type = "nothing"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "remove"
+kind = "method_1arg"
+receiver_type = "map"
+param_types = ["K"]
+return_type = "nothing"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "clear"
+kind = "method"
+receiver_type = "map"
+param_types = []
+return_type = "nothing"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "count"
+kind = "method"
+receiver_type = "map"
+param_types = []
+return_type = "int"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "keys"
+kind = "method"
+receiver_type = "map"
+param_types = []
+return_type = "array<K>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "values"
+kind = "method"
+receiver_type = "map"
+param_types = []
+return_type = "array<V>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "entries"
+kind = "method"
+receiver_type = "map"
+param_types = []
+return_type = "array<{key: K, value: V}>"
+since = "M4"
+
+# ---------------------------------------------------------------------------
+# [[primitive_intrinsic]] — array<T> methods (gaps: find, set, map)
+# receiver_type = "array" matches any array<T> via prefix stripping in lsp_adapter.
+# ---------------------------------------------------------------------------
+
+[[primitive_intrinsic]]
+name = "add"
+kind = "method_1arg"
+receiver_type = "array"
+param_types = ["T"]
+return_type = "nothing"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "remove"
+kind = "method_1arg"
+receiver_type = "array"
+param_types = ["T"]
+return_type = "nothing"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "removeFirst"
+kind = "method"
+receiver_type = "array"
+param_types = []
+return_type = "nothing"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "removeLast"
+kind = "method"
+receiver_type = "array"
+param_types = []
+return_type = "nothing"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "clear"
+kind = "method"
+receiver_type = "array"
+param_types = []
+return_type = "nothing"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "get"
+kind = "method_1arg"
+receiver_type = "array"
+param_types = ["int"]
+return_type = "maybe<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "first"
+kind = "method"
+receiver_type = "array"
+param_types = []
+return_type = "maybe<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "last"
+kind = "method"
+receiver_type = "array"
+param_types = []
+return_type = "maybe<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "count"
+kind = "method"
+receiver_type = "array"
+param_types = []
+return_type = "int"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "contains"
+kind = "method_1arg"
+receiver_type = "array"
+param_types = ["T"]
+return_type = "boolean"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "sort"
+kind = "method"
+receiver_type = "array"
+param_types = []
+return_type = "array<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "sortFast"
+kind = "method"
+receiver_type = "array"
+param_types = []
+return_type = "array<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "sortStrict"
+kind = "method"
+receiver_type = "array"
+param_types = []
+return_type = "array<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "filter"
+kind = "method_1arg"
+receiver_type = "array"
+param_types = ["T -> boolean"]
+return_type = "array<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "unique"
+kind = "method"
+receiver_type = "array"
+param_types = []
+return_type = "array<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "limit"
+kind = "method_1arg"
+receiver_type = "array"
+param_types = ["int"]
+return_type = "array<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "copy"
+kind = "method"
+receiver_type = "array"
+param_types = []
+return_type = "array<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "append"
+kind = "method_1arg"
+receiver_type = "array"
+param_types = ["T"]
+return_type = "array<T>"
+since = "M4"
+doc = "Returns a new array with the item added at the end — the original is unchanged. To grow the array in-place (no copy), use `.add()` instead."
+
+[[primitive_intrinsic]]
+name = "prepend"
+kind = "method_1arg"
+receiver_type = "array"
+param_types = ["T"]
+return_type = "array<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "concat"
+kind = "method_1arg"
+receiver_type = "array"
+param_types = ["array<T>"]
+return_type = "array<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "freeze"
+kind = "method"
+receiver_type = "array"
+param_types = []
+return_type = "fixed<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "find"
+kind = "method_1arg"
+receiver_type = "array"
+param_types = ["T -> boolean"]
+return_type = "maybe<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "set"
+kind = "method_1arg"
+receiver_type = "array"
+param_types = ["int"]
+return_type = "nothing"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "map"
+kind = "method_1arg"
+receiver_type = "array"
+param_types = ["T -> U"]
+return_type = "array<U>"
+since = "M4"
+
+# ---------------------------------------------------------------------------
+# [[primitive_intrinsic]] — fixed<T> methods
+# receiver_type = "fixed" matches any fixed<T> via prefix stripping in lsp_adapter.
+# ---------------------------------------------------------------------------
+
+[[primitive_intrinsic]]
+name = "get"
+kind = "method_1arg"
+receiver_type = "fixed"
+param_types = ["int"]
+return_type = "maybe<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "first"
+kind = "method"
+receiver_type = "fixed"
+param_types = []
+return_type = "maybe<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "last"
+kind = "method"
+receiver_type = "fixed"
+param_types = []
+return_type = "maybe<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "count"
+kind = "method"
+receiver_type = "fixed"
+param_types = []
+return_type = "int"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "contains"
+kind = "method_1arg"
+receiver_type = "fixed"
+param_types = ["T"]
+return_type = "boolean"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "set"
+kind = "method_1arg"
+receiver_type = "fixed"
+param_types = ["int"]
+return_type = "nothing"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "sort"
+kind = "method"
+receiver_type = "fixed"
+param_types = []
+return_type = "fixed<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "sortFast"
+kind = "method"
+receiver_type = "fixed"
+param_types = []
+return_type = "fixed<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "sortStrict"
+kind = "method"
+receiver_type = "fixed"
+param_types = []
+return_type = "fixed<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "filter"
+kind = "method_1arg"
+receiver_type = "fixed"
+param_types = ["T -> boolean"]
+return_type = "fixed<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "unique"
+kind = "method"
+receiver_type = "fixed"
+param_types = []
+return_type = "fixed<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "limit"
+kind = "method_1arg"
+receiver_type = "fixed"
+param_types = ["int"]
+return_type = "fixed<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "copy"
+kind = "method"
+receiver_type = "fixed"
+param_types = []
+return_type = "fixed<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "append"
+kind = "method_1arg"
+receiver_type = "fixed"
+param_types = ["T"]
+return_type = "fixed<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "prepend"
+kind = "method_1arg"
+receiver_type = "fixed"
+param_types = ["T"]
+return_type = "fixed<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "concat"
+kind = "method_1arg"
+receiver_type = "fixed"
+param_types = ["fixed<T>"]
+return_type = "fixed<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "freeze"
+kind = "method"
+receiver_type = "fixed"
+param_types = []
+return_type = "fixed<T>"
+since = "M4"
+
+[[primitive_intrinsic]]
+name = "find"
+kind = "method_1arg"
+receiver_type = "fixed"
+param_types = ["T -> boolean"]
+return_type = "maybe<T>"
+since = "M4"
 
 # ---------------------------------------------------------------------------
 # [[muted_hint_domain]] — IDE inference domains per .claude/rules/inference.md.

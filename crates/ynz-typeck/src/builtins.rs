@@ -2,6 +2,7 @@ use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 use crate::types::{type_name, Type};
 
+
 /// Dispatch a method call on `sensitive T`, returning the result type.
 ///
 /// Implements the M8 propagation table: methods that return string from string

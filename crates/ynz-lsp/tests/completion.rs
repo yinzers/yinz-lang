@@ -382,6 +382,169 @@ fn after_dot_with_no_receiver_type_shows_all_methods() {
     );
 }
 
+// Snippet template tests
+
+#[test]
+// WHY: Snippet format on the `function` keyword guarantees the editor's tab-stop
+//      machinery fires — without SNIPPET format the `${1:name}` literal text is
+//      inserted verbatim instead of becoming an interactive placeholder. This test
+//      catches any regression where format is accidentally dropped or set to PlainText.
+fn function_keyword_has_snippet_format() {
+    use lsp_types::Position;
+    use ynz_lsp::{completion::completion_list, position::LineTable};
+
+    let text = "fun";
+    let table = LineTable::new(text);
+    let position = Position { line: 0, character: 3 };
+    let list = completion_list(text, &table, position, PositionEncoding::Utf8, None, None, None)
+        .expect("completion must be Some");
+
+    let fn_kw = list
+        .items
+        .iter()
+        .find(|i| i.label == "function" && i.kind == Some(lsp_types::CompletionItemKind::KEYWORD))
+        .expect("'function' keyword must appear in completion list");
+
+    assert_eq!(
+        fn_kw.insert_text_format,
+        Some(lsp_types::InsertTextFormat::SNIPPET),
+        "'function' keyword item must use SNIPPET insert_text_format"
+    );
+    let insert_text = fn_kw.insert_text.as_deref().expect("'function' must have insert_text");
+    assert!(
+        insert_text.contains("${1:name}"),
+        "'function' snippet must contain a name tab stop; got: {insert_text:?}"
+    );
+}
+
+#[test]
+// WHY: User-defined functions must use SNIPPET format so param tab stops are active.
+//      Without it the inserted text `heal(${1:amount})` is literal, not interactive.
+//      This test also verifies the `self` param is skipped — including it as a tab
+//      stop forces the user to fill in the receiver, breaking UFCS dot-call ergonomics.
+fn user_defined_fn_has_snippet_with_param_tab_stops() {
+    use lsp_types::Position;
+    use std::collections::HashMap;
+    use ynz_diagnostics::SourceSpan;
+    use ynz_lsp::{completion::completion_list, position::LineTable};
+    use ynz_typeck::shapes::ShapeTable;
+    use ynz_typeck::{
+        signatures::{FunctionSig, SignatureTable},
+        types::Type,
+    };
+
+    let text = "he";
+    let table = LineTable::new(text);
+    let position = Position { line: 0, character: 2 };
+
+    let mut fns = HashMap::new();
+    fns.insert(
+        "heal".to_string(),
+        FunctionSig {
+            params: vec![
+                ("self".to_string(), Type::Shape { name: "Player".to_string() }),
+                ("amount".to_string(), Type::Int),
+            ],
+            param_ownerships: vec![None, None],
+            ret: Type::Nothing,
+            decl_span: SourceSpan::new("test.ynz", 0, 0),
+        },
+    );
+    let sig_table = SignatureTable { fns };
+    let shape_table = ShapeTable {
+        shapes: HashMap::new(),
+        union_aliases: HashMap::new(),
+        options_names: std::collections::HashSet::new(),
+    };
+
+    let list = completion_list(
+        text, &table, position, PositionEncoding::Utf8,
+        Some(&sig_table), Some(&shape_table), None,
+    )
+    .expect("completion must be Some");
+
+    let heal_item = list
+        .items
+        .iter()
+        .find(|i| i.label == "heal")
+        .expect("user-defined 'heal' function must appear");
+
+    assert_eq!(
+        heal_item.insert_text_format,
+        Some(lsp_types::InsertTextFormat::SNIPPET),
+        "user fn item must use SNIPPET format"
+    );
+    let snippet = heal_item.insert_text.as_deref().expect("heal must have insert_text");
+    assert!(
+        snippet.contains("${1:amount}"),
+        "snippet must have tab stop for 'amount'; got: {snippet:?}"
+    );
+    assert!(
+        !snippet.contains("self"),
+        "snippet must not include 'self' parameter; got: {snippet:?}"
+    );
+}
+
+#[test]
+// WHY: A function with only a `self` parameter should still produce a valid snippet
+//      (cursor inside the empty parens via $0). Without this, `greet($0)` regresses
+//      to either an empty string or a plain `greet()` that loses the cursor placement.
+fn user_defined_fn_self_only_snippet_has_cursor_stop() {
+    use lsp_types::Position;
+    use std::collections::HashMap;
+    use ynz_diagnostics::SourceSpan;
+    use ynz_lsp::{completion::completion_list, position::LineTable};
+    use ynz_typeck::shapes::ShapeTable;
+    use ynz_typeck::{
+        signatures::{FunctionSig, SignatureTable},
+        types::Type,
+    };
+
+    let text = "gr";
+    let table = LineTable::new(text);
+    let position = Position { line: 0, character: 2 };
+
+    let mut fns = HashMap::new();
+    fns.insert(
+        "greet".to_string(),
+        FunctionSig {
+            params: vec![("self".to_string(), Type::Shape { name: "Player".to_string() })],
+            param_ownerships: vec![None],
+            ret: Type::String,
+            decl_span: SourceSpan::new("test.ynz", 0, 0),
+        },
+    );
+    let sig_table = SignatureTable { fns };
+    let shape_table = ShapeTable {
+        shapes: HashMap::new(),
+        union_aliases: HashMap::new(),
+        options_names: std::collections::HashSet::new(),
+    };
+
+    let list = completion_list(
+        text, &table, position, PositionEncoding::Utf8,
+        Some(&sig_table), Some(&shape_table), None,
+    )
+    .expect("completion must be Some");
+
+    let greet_item = list
+        .items
+        .iter()
+        .find(|i| i.label == "greet")
+        .expect("user-defined 'greet' function must appear");
+
+    assert_eq!(
+        greet_item.insert_text_format,
+        Some(lsp_types::InsertTextFormat::SNIPPET),
+        "self-only fn item must still use SNIPPET format"
+    );
+    let snippet = greet_item.insert_text.as_deref().expect("greet must have insert_text");
+    assert_eq!(
+        snippet, "greet($0)",
+        "self-only fn snippet must be 'greet($0)'; got: {snippet:?}"
+    );
+}
+
 // LSP wire-level test (using in-process harness)
 
 #[test]
@@ -484,4 +647,47 @@ fn anon_shapes_excluded_from_completion() {
         !labels.iter().any(|l| l.starts_with("__anon__")),
         "synthetic __anon__ shapes must not appear in completion; got: {labels:?}"
     );
+}
+
+#[test]
+// WHY: cross_file_completion_items must appear in Ctrl+Space suggestions with
+// additionalTextEdits that insert the import. Without this, users type an exported
+// symbol, get "No suggestions", and have to manually write the import — exactly
+// the friction the feature exists to eliminate.
+fn cross_file_items_appear_in_completion_with_import_edit() {
+    use lsp_types::Position;
+    use ynz_lsp::{capabilities::PositionEncoding, completion::cross_file_completion_items, position::LineTable, state::ServerState};
+
+    let root = std::path::Path::new("/tmp/ynz_cross_completion");
+    let exporter_src = "export shape Order { id: string }\nexport function processOrder(o: Order) -> nothing { }\n";
+    let importer_src = "function main() -> nothing { }\n";
+
+    let mut state = ServerState::new(PositionEncoding::Utf8);
+    state.project_root = Some(root.to_path_buf());
+
+    let exp_path = root.join("services/orders.ynz");
+    let exp_uri = lsp_types::Url::from_file_path(&exp_path).unwrap();
+    state.open_document(exp_uri, exporter_src.to_string());
+
+    let imp_path = root.join("entrypoint.ynz");
+    let imp_uri = lsp_types::Url::from_file_path(&imp_path).unwrap();
+    state.open_document(imp_uri.clone(), importer_src.to_string());
+
+    let table = LineTable::new(importer_src);
+    let items = cross_file_completion_items(&state, &imp_uri, importer_src, &table, None, None);
+
+    let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+    assert!(labels.contains(&"Order"), "exported shape must appear in cross-file completion; got: {labels:?}");
+    assert!(labels.contains(&"processOrder"), "exported function must appear; got: {labels:?}");
+
+    // Every cross-file item must carry an additionalTextEdits with the import line.
+    for item in items.iter().filter(|i| i.label == "Order" || i.label == "processOrder") {
+        let edits = item.additional_text_edits.as_ref()
+            .unwrap_or_else(|| panic!("{} must have additionalTextEdits", item.label));
+        assert_eq!(edits.len(), 1);
+        assert!(
+            edits[0].new_text.contains("services/orders"),
+            "{} import text must contain the path; got: {:?}", item.label, edits[0].new_text
+        );
+    }
 }

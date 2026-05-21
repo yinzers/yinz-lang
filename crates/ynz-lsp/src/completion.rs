@@ -1,13 +1,14 @@
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionItemTag, CompletionList, Documentation,
-    MarkupContent, MarkupKind, Position,
+    InsertTextFormat, MarkupContent, MarkupKind, Position, Range, TextEdit,
 };
 use ynz_registry::{CompletionContext, CompletionKind, RegistryCompletionItem};
 use ynz_typeck::shapes::ShapeTable;
 use ynz_typeck::signatures::SignatureTable;
 use ynz_typeck::types::type_name;
+use ynz_parser::SourceFileRegistry as _;
 
-use crate::{capabilities::PositionEncoding, position::LineTable};
+use crate::{capabilities::PositionEncoding, position::LineTable, state::{import_path_for_file, ServerState}};
 
 /// Detect the completion context from the source text and cursor byte offset.
 pub fn detect_context<'a>(text: &str, cursor_offset: usize) -> CompletionContext<'a> {
@@ -140,6 +141,9 @@ pub fn to_lsp_completion_item(rci: RegistryCompletionItem) -> CompletionItem {
     // sort_text pads priority to 3 digits so lexicographic sort == numeric sort
     let sort_text = Some(format!("{:04}_{}", rci.sort_priority, rci.label));
 
+    let snippet = keyword_snippet(&rci.label);
+    let insert_text_format = snippet.as_ref().map(|_| InsertTextFormat::SNIPPET);
+
     CompletionItem {
         label: rci.label,
         kind: Some(kind),
@@ -148,14 +152,63 @@ pub fn to_lsp_completion_item(rci: RegistryCompletionItem) -> CompletionItem {
         deprecated: Some(rci.deprecated),
         tags,
         sort_text,
+        insert_text: snippet,
+        insert_text_format,
         ..Default::default()
     }
+}
+
+/// Build a call-site snippet for a user-defined function.
+///
+/// Parameters named `self` are skipped — in UFCS dot-call syntax the receiver is
+/// already present before the `.`; inserting it as a tab stop would confuse rather
+/// than help. All other parameters become `${N:paramName}` tab stops. When no
+/// non-self parameters exist the snippet is `name($0)` (cursor inside the parens).
+fn fn_snippet(name: &str, params: &[(String, ynz_typeck::types::Type)]) -> String {
+    let non_self: Vec<&str> = params
+        .iter()
+        .map(|(pname, _)| pname.as_str())
+        .filter(|pname| *pname != "self")
+        .collect();
+
+    if non_self.is_empty() {
+        return format!("{name}($0)");
+    }
+
+    let tab_stops = non_self
+        .iter()
+        .enumerate()
+        .map(|(i, pname)| format!("${{{n}:{pname}}}", n = i + 1))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!("{name}({tab_stops})")
+}
+
+/// Return a snippet string for keywords that benefit from template expansion,
+/// or `None` for keywords where plain insertion is the right behaviour.
+fn keyword_snippet(label: &str) -> Option<String> {
+    let s = match label {
+        "function" => "function ${1:name}(${2:params}) -> ${3:nothing} {\n\t$0\n}",
+        "shape"    => "shape ${1:Name} {\n\t${2:field}: ${3:string}\n}",
+        "options"  => "options ${1:Name} {\n\t${2:variant1},\n\t${3:variant2},\n}",
+        "let"      => "let ${1:name} = $0",
+        "const"    => "const ${1:name} = $0",
+        "if"       => "if ($1) {\n\t$0\n}",
+        "for"      => "for ($1 in $2) {\n\t$0\n}",
+        "return"   => "return $0",
+        "import"   => "import { $1 } from `$2`",
+        _          => return None,
+    };
+    Some(s.to_string())
 }
 
 /// Sort priorities for user-defined symbols. Must be < registry keyword priority (100)
 /// so user symbols appear first in the sorted completion list.
 const USER_FN_SORT_PRIORITY: u16 = 0;
 const USER_SHAPE_SORT_PRIORITY: u16 = 10;
+/// Cross-file importable symbols rank between current-file symbols and keywords.
+const CROSS_FILE_SORT_PRIORITY: u16 = 50;
 
 /// Build user-defined function + shape completion items from typeck output.
 /// These are inserted before all registry items (sort_priority 0-10).
@@ -173,11 +226,19 @@ pub fn user_symbol_items(
             .collect::<Vec<_>>()
             .join(", ");
         let detail = format!("function {name}({param_str}) -> {}", type_name(&sig.ret));
+
+        // Build a snippet with tab stops for each non-self parameter.
+        // `self` is implicit in UFCS dot-call form; including it as a tab stop
+        // would force the user to fill it in manually, which defeats the point.
+        let snippet = fn_snippet(name, &sig.params);
+
         items.push(CompletionItem {
             label: name.clone(),
             kind: Some(CompletionItemKind::FUNCTION),
             detail: Some(detail),
             sort_text: Some(format!("{:04}_{name}", USER_FN_SORT_PRIORITY)),
+            insert_text: Some(snippet),
+            insert_text_format: Some(InsertTextFormat::SNIPPET),
             ..Default::default()
         });
     }
@@ -193,6 +254,117 @@ pub fn user_symbol_items(
     }
 
     items
+}
+
+/// Build completion items for symbols exported by other files in the project.
+///
+/// Each item carries `additionalTextEdits` that inserts the import statement when
+/// the user selects the item. Only fires in BareIdentifier context (not after-dot).
+/// Symbols already visible in `sig_table`/`shape_table` are skipped to avoid
+/// offering items that don't need an import.
+pub fn cross_file_completion_items(
+    state: &ServerState,
+    uri: &lsp_types::Url,
+    text: &str,
+    table: &LineTable,
+    sig_table: Option<&SignatureTable>,
+    shape_table: Option<&ShapeTable>,
+) -> Vec<CompletionItem> {
+    let Some(project_root) = state.project_root.as_deref() else {
+        return vec![];
+    };
+
+    let current_path = crate::state::uri_to_path(uri);
+    let mut all_paths = state.db.all_source_paths();
+    all_paths.sort();
+
+    // Pre-compute the import insertion position once for the whole list.
+    let insert_pos = import_insert_position(state, uri, text, table);
+
+    let mut items: Vec<CompletionItem> = Vec::new();
+
+    for path in &all_paths {
+        if path.as_str() == current_path {
+            continue;
+        }
+        let Some(sf) = state.db.source_by_path(path) else {
+            continue;
+        };
+        let Some(import_path) = import_path_for_file(path, project_root) else {
+            continue;
+        };
+
+        let exports = ynz_typeck::exports_query(&state.db, sf);
+
+        for name in exports.shapes.keys().filter(|n| !n.starts_with("__anon__")) {
+            if shape_table.map(|t| t.shapes.contains_key(name)).unwrap_or(false) {
+                continue; // already visible
+            }
+            items.push(import_completion_item(
+                name, "shape", CompletionItemKind::CLASS,
+                &import_path, insert_pos, state.encoding, text, table,
+            ));
+        }
+
+        for name in exports.functions.keys() {
+            if sig_table.map(|t| t.fns.contains_key(name)).unwrap_or(false) {
+                continue;
+            }
+            items.push(import_completion_item(
+                name, "function", CompletionItemKind::FUNCTION,
+                &import_path, insert_pos, state.encoding, text, table,
+            ));
+        }
+
+        for name in exports.options.keys() {
+            if shape_table.map(|t| t.options_names.contains(name)).unwrap_or(false) {
+                continue;
+            }
+            items.push(import_completion_item(
+                name, "options", CompletionItemKind::ENUM,
+                &import_path, insert_pos, state.encoding, text, table,
+            ));
+        }
+    }
+
+    items
+}
+
+fn import_completion_item(
+    name: &str,
+    kind_label: &str,
+    kind: CompletionItemKind,
+    import_path: &str,
+    insert_pos: Position,
+    encoding: PositionEncoding,
+    text: &str,
+    table: &LineTable,
+) -> CompletionItem {
+    let _ = (encoding, text, table); // consumed via insert_pos which is pre-computed
+    let import_text = format!("import {{ {name} }} from `{import_path}`\n");
+    let edit = TextEdit {
+        range: Range { start: insert_pos, end: insert_pos },
+        new_text: import_text,
+    };
+    CompletionItem {
+        label: name.to_string(),
+        kind: Some(kind),
+        detail: Some(format!("{kind_label} — from `{import_path}`")),
+        sort_text: Some(format!("{:04}_{name}", CROSS_FILE_SORT_PRIORITY)),
+        additional_text_edits: Some(vec![edit]),
+        ..Default::default()
+    }
+}
+
+/// Compute the LSP Position at which to insert a new import statement.
+fn import_insert_position(
+    state: &ServerState,
+    uri: &lsp_types::Url,
+    text: &str,
+    table: &LineTable,
+) -> Position {
+    let byte = crate::code_action::import_insert_byte(state, uri);
+    table.byte_offset_to_position(text, byte, state.encoding)
 }
 
 /// Build the LSP `CompletionList` for the given cursor position in `text`.

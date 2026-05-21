@@ -3,25 +3,31 @@ use std::collections::HashMap;
 use lsp_server::{Connection, Message, Notification, Request, Response};
 use lsp_types::{
     notification::{
-        DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Initialized,
-        Notification as _,
+        DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidRenameFiles,
+        Initialized, Notification as _,
     },
     request::{
-        CodeActionRequest, Completion, Formatting, GotoDefinition, HoverRequest, Initialize,
-        InlayHintRequest, PrepareRenameRequest, RangeFormatting, References, Rename, Request as _,
-        SemanticTokensFullRequest, SemanticTokensRangeRequest, Shutdown,
+        CodeActionRequest, Completion, DocumentLinkRequest, DocumentSymbolRequest, Formatting,
+        FoldingRangeRequest, GotoDefinition, HoverRequest, Initialize, InlayHintRequest,
+        PrepareRenameRequest, RangeFormatting, References, Rename, Request as _,
+        SemanticTokensFullRequest, SemanticTokensRangeRequest, Shutdown, WorkspaceSymbolRequest,
     },
     CodeActionParams, CompletionParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, DocumentFormattingParams, DocumentRangeFormattingParams,
-    GotoDefinitionParams, HoverParams, InitializeParams, InitializeResult, InlayHintParams,
-    PrepareRenameResponse, ReferenceParams, RenameParams, SemanticTokensParams,
-    SemanticTokensRangeParams, ServerInfo, Url,
+    DidOpenTextDocumentParams, DocumentFormattingParams, DocumentLinkParams,
+    DocumentRangeFormattingParams, DocumentSymbolParams, DocumentSymbolResponse,
+    FoldingRangeParams, GotoDefinitionParams, HoverParams, InitializeParams, InitializeResult,
+    InlayHintParams, PrepareRenameResponse, ReferenceParams, RenameFilesParams, RenameParams,
+    SemanticTokensParams, SemanticTokensRangeParams, ServerInfo, Url, WorkspaceSymbolParams,
 };
 
 use crate::{
     capabilities::{negotiate_encoding, server_capabilities},
     code_action::code_action_response,
-    completion::{completion_list, receiver_end_offset},
+    completion::{completion_list, cross_file_completion_items, detect_context, receiver_end_offset},
+    document_link::document_link_response,
+    document_symbol::{document_symbol_response, workspace_symbol_response},
+    folding_range::folding_range_response,
+    rename_file::did_rename_files,
     semantic_tokens::{semantic_tokens_full_response, semantic_tokens_range_response},
     diagnostic_transform::{path_to_uri, to_lsp_diagnostic},
     formatting::{formatting_response, range_formatting_response},
@@ -44,13 +50,18 @@ pub fn run_stdio() {
 /// Drive the request loop over `connection`. Separated from `run_stdio` so tests
 /// can inject an in-process `Connection`.
 pub fn serve(connection: Connection) {
-    let encoding = handshake(&connection);
+    let (encoding, project_root) = handshake(&connection);
     let mut state = ServerState::new(encoding);
+    if let Some(root) = project_root {
+        state.project_root = Some(root.clone());
+        state.index_project_files_pub(&root);
+    }
     main_loop(&connection, &mut state);
 }
 
-/// Perform the LSP initialize handshake and return the negotiated position encoding.
-fn handshake(connection: &Connection) -> crate::capabilities::PositionEncoding {
+/// Perform the LSP initialize handshake and return the negotiated position encoding
+/// plus any project root extracted from the client's workspace params.
+fn handshake(connection: &Connection) -> (crate::capabilities::PositionEncoding, Option<std::path::PathBuf>) {
     // I/O-init: framework guarantees deserialization; panic surfaces unrecoverable stdio breakage
     let (id, params_value) = connection
         .initialize_start()
@@ -73,6 +84,18 @@ fn handshake(connection: &Connection) -> crate::capabilities::PositionEncoding {
 
     let encoding = negotiate_encoding(client_encodings);
 
+    // Extract project root from Initialize params (rootUri preferred, rootPath fallback).
+    let project_root = params
+        .root_uri
+        .as_ref()
+        .and_then(|uri| crate::state::find_project_root(&uri.to_file_path().ok()?))
+        .or_else(|| {
+            #[allow(deprecated)]
+            params.root_path.as_deref().and_then(|p| {
+                crate::state::find_project_root(std::path::Path::new(p))
+            })
+        });
+
     let result = InitializeResult {
         // positionEncoding lives inside ServerCapabilities per LSP 3.17 spec §3.15
         capabilities: server_capabilities(encoding),
@@ -87,7 +110,7 @@ fn handshake(connection: &Connection) -> crate::capabilities::PositionEncoding {
     connection
         .initialize_finish(id, result_value)
         .expect("initialize_finish failed");
-    encoding
+    (encoding, project_root)
 }
 
 fn main_loop(connection: &Connection, state: &mut ServerState) {
@@ -197,8 +220,6 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
             let shape_table = sig_output.as_ref().map(|o| &o.shape_table);
 
             // Resolve receiver type for after-dot completion narrowing.
-            // Find the byte offset of the last character of the receiver before the dot,
-            // then call type_of_expression_at_offset for the primitive type name.
             let cursor_offset = table.position_to_byte_offset(text, position, state.encoding)?;
             let receiver_type: Option<String> = completion_sf.and_then(|sf| {
                 let recv_offset = receiver_end_offset(text, cursor_offset)?;
@@ -206,7 +227,7 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
                 Some(ynz_typeck::types::type_name(&ty))
             });
 
-            completion_list(
+            let mut list = completion_list(
                 text,
                 table,
                 position,
@@ -214,7 +235,19 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
                 sig_table,
                 shape_table,
                 receiver_type.as_deref(),
-            )
+            )?;
+
+            // In BareIdentifier context only: extend with cross-file exportable symbols.
+            // Each item carries additionalTextEdits that inserts the import on selection.
+            let ctx = detect_context(text, cursor_offset);
+            if matches!(ctx, ynz_registry::CompletionContext::BareIdentifier) {
+                let cross = cross_file_completion_items(
+                    state, uri, text, table, sig_table, shape_table,
+                );
+                list.items.extend(cross);
+            }
+
+            Some(list)
         });
 
         let result = match list {
@@ -485,6 +518,102 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
         return;
     }
 
+    if req.method == DocumentLinkRequest::METHOD {
+        let params: DocumentLinkParams = match serde_json::from_value(req.params) {
+            Ok(p) => p,
+            Err(e) => {
+                let response = Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::InvalidParams as i32,
+                    format!("invalid documentLink params: {e}"),
+                );
+                connection.sender.send(Message::Response(response)).ok();
+                return;
+            }
+        };
+        let uri = &params.text_document.uri;
+        let links = document_link_response(state, uri);
+        let value = serde_json::to_value(links).unwrap_or(serde_json::Value::Null);
+        connection
+            .sender
+            .send(Message::Response(Response::new_ok(req.id, value)))
+            .ok();
+        return;
+    }
+
+    if req.method == FoldingRangeRequest::METHOD {
+        let params: FoldingRangeParams = match serde_json::from_value(req.params) {
+            Ok(p) => p,
+            Err(e) => {
+                let response = Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::InvalidParams as i32,
+                    format!("invalid foldingRange params: {e}"),
+                );
+                connection.sender.send(Message::Response(response)).ok();
+                return;
+            }
+        };
+        let uri = &params.text_document.uri;
+        let ranges = folding_range_response(state, uri);
+        let value = serde_json::to_value(ranges).unwrap_or(serde_json::Value::Null);
+        connection
+            .sender
+            .send(Message::Response(Response::new_ok(req.id, value)))
+            .ok();
+        return;
+    }
+
+    if req.method == DocumentSymbolRequest::METHOD {
+        let params: DocumentSymbolParams = match serde_json::from_value(req.params) {
+            Ok(p) => p,
+            Err(e) => {
+                let response = Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::InvalidParams as i32,
+                    format!("invalid documentSymbol params: {e}"),
+                );
+                connection.sender.send(Message::Response(response)).ok();
+                return;
+            }
+        };
+        let uri = &params.text_document.uri;
+        let symbols = document_symbol_response(state, uri);
+        let value = if symbols.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::to_value(DocumentSymbolResponse::Nested(symbols))
+                .unwrap_or(serde_json::Value::Null)
+        };
+        connection
+            .sender
+            .send(Message::Response(Response::new_ok(req.id, value)))
+            .ok();
+        return;
+    }
+
+    if req.method == WorkspaceSymbolRequest::METHOD {
+        let params: WorkspaceSymbolParams = match serde_json::from_value(req.params) {
+            Ok(p) => p,
+            Err(e) => {
+                let response = Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::InvalidParams as i32,
+                    format!("invalid workspace/symbol params: {e}"),
+                );
+                connection.sender.send(Message::Response(response)).ok();
+                return;
+            }
+        };
+        let symbols = workspace_symbol_response(state, &params.query);
+        let value = serde_json::to_value(symbols).unwrap_or(serde_json::Value::Null);
+        connection
+            .sender
+            .send(Message::Response(Response::new_ok(req.id, value)))
+            .ok();
+        return;
+    }
+
     // Unhandled request — send method-not-found error.
     let response = Response::new_err(
         req.id,
@@ -502,6 +631,8 @@ fn handle_notification(connection: &Connection, state: &mut ServerState, notif: 
             if let Ok(params) = serde_json::from_value::<DidOpenTextDocumentParams>(notif.params) {
                 let uri = params.text_document.uri;
                 let text = params.text_document.text;
+                // Infer project root lazily on first open if Initialize didn't provide one.
+                state.set_project_root_from_uri(&uri);
                 state.open_document(uri.clone(), text);
                 run_and_publish_diagnostics(connection, state, &uri, None);
             }
@@ -526,6 +657,12 @@ fn handle_notification(connection: &Connection, state: &mut ServerState, notif: 
                 publish_diagnostics(connection, uri.clone(), vec![], None);
                 state.last_published.remove(&uri);
                 state.close_document(&uri);
+            }
+        }
+
+        DidRenameFiles::METHOD => {
+            if let Ok(params) = serde_json::from_value::<RenameFilesParams>(notif.params) {
+                did_rename_files(state, &params);
             }
         }
 

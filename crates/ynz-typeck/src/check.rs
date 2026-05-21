@@ -38,7 +38,9 @@ pub struct TypedModule {
 
 /// Run the M5 type checker over all function bodies.
 ///
-/// Returns the typed module, monomorphization table, and accumulated diagnostics.
+/// Returns the typed module, monomorphization table, accumulated diagnostics, and the
+/// set of names that were resolved from the signature table or shape table during the
+/// check pass. The caller (`check_query`) uses this to detect unused imports.
 pub fn check(
     module: &Module,
     sig_table: &SignatureTable,
@@ -47,7 +49,7 @@ pub fn check(
     generic_shape_table: &GenericShapeTable,
     intrinsics: &PrimitiveIntrinsicTable,
     imported_options: &std::collections::HashMap<String, crate::options_table::OptionsEntry>,
-) -> (TypedModule, MonomorphizationTable, DiagnosticBucket) {
+) -> (TypedModule, MonomorphizationTable, DiagnosticBucket, HashSet<String>) {
     let mut diags = DiagnosticBucket::new();
     let mut options_table = collect_options(module, &mut diags);
     // Merge imported options so function bodies can use cross-file options types.
@@ -78,13 +80,14 @@ pub fn check(
         errors_success_narrowed: HashSet::new(),
         errors_consumed: HashSet::new(),
         current_fn_errors_capable: false,
+        referenced_names: HashSet::new(),
     };
     checker.check_module(module);
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
     };
-    (typed, checker.mono_table, checker.diags)
+    (typed, checker.mono_table, checker.diags, checker.referenced_names)
 }
 
 struct Checker<'b> {
@@ -153,6 +156,10 @@ struct Checker<'b> {
     /// a `.failed()` check. After consumption, calling `.failed()` is a compile
     /// error ("check-after-use").
     errors_consumed: HashSet<String>,
+    /// Names that were actually resolved via the signature table or shape table
+    /// during this check pass. Used by `check_query` to detect unused imports —
+    /// any imported name absent from this set after the pass was never referenced.
+    referenced_names: HashSet<String>,
 }
 
 impl<'b> Checker<'b> {
@@ -1339,6 +1346,7 @@ impl<'b> Checker<'b> {
             name => {
                 // Non-generic user-defined function?
                 if let Some(sig) = self.sig_table.fns.get(name) {
+                    self.referenced_names.insert(name.to_string());
                     let params = sig.params.clone();
                     let ownerships = sig.param_ownerships.clone();
                     let ret = sig.ret.clone();
@@ -2043,6 +2051,7 @@ impl<'b> Checker<'b> {
                 // Check that first param type matches receiver
                 if let Some((_, first_ty)) = sig.params.first() {
                     if first_ty == receiver_ty || *first_ty == Type::Error {
+                        self.referenced_names.insert(method.to_string());
                         // Receiver ownership check via the shared helper — called from BOTH
                         // this UFCS dot-call path AND the regular function-call arg loop so
                         // the diagnostic text is byte-identical between `p.heal(20)` and
@@ -2229,9 +2238,13 @@ impl<'b> Checker<'b> {
             }
             // M6: options type names resolve to Type::Options.
             AstType::Named(n, _) if self.options_table.contains(n) => {
+                self.referenced_names.insert(n.clone());
                 Type::Options { name: n.clone() }
             }
-            AstType::Named(n, _) if self.shape_table.contains(n) => Type::Shape { name: n.clone() },
+            AstType::Named(n, _) if self.shape_table.contains(n) => {
+                self.referenced_names.insert(n.clone());
+                Type::Shape { name: n.clone() }
+            }
             // M7 P3c: built-in compiler-synthesized types — always recognized.
             AstType::Named(n, _) if matches!(n.as_str(), "Frame" | "SourceLoc") => {
                 Type::Shape { name: n.clone() }
@@ -2260,9 +2273,9 @@ impl<'b> Checker<'b> {
                 self.diags.push(Diagnostic::error(
                     span.clone(),
                     format!("`{n}` is not a known type."),
-                    "Use a built-in type (`int`, `float`, `number`, `boolean`, `string`) or a `shape` name defined in this file.",
-                    format!("Types must be declared before use. If `{n}` is a shape, make sure the `shape {n} {{ ... }}` declaration is in this file.", n = n),
-                ));
+                    format!("Use a built-in (`int`, `float`, `number`, `boolean`, `string`) or declare `shape {n} {{ ... }}` in this file, or import it from another file."),
+                    format!("`{n}` is not declared or imported. If it's defined in another file, add `import {{ {n} }} from \\`path/to/file\\`` at the top."),
+                ).with_kind(ynz_diagnostics::DiagnosticKind::NotDefined));
                 Type::Error
             }
             AstType::Range { .. } => Type::Error,
@@ -4071,6 +4084,7 @@ fn make_not_defined_diag(
         None => fallback_what_instead,
     };
     Diagnostic::error(span, format!("`{name}` is not defined."), what_instead, why)
+        .with_kind(ynz_diagnostics::DiagnosticKind::NotDefined)
 }
 
 /// Find the closest name using Levenshtein distance — for "did you mean?" suggestions.
@@ -4214,7 +4228,7 @@ mod tests {
             &mut DiagnosticBucket::new(),
             &shape_table,
         );
-        let (_, _, diags) = check(
+        let (_, _, diags, _) = check(
             &module,
             &sig_table,
             &shape_table,

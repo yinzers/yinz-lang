@@ -56,6 +56,13 @@ impl CompilerDb {
         self.source_registry.insert(path, sf);
     }
 
+    /// Remove a file from the registry. The salsa input itself is not deleted
+    /// (salsa owns it), but it becomes unreachable via `source_by_path` and
+    /// `all_source_paths`, so no future queries will touch it.
+    pub fn deregister_source(&mut self, path: &str) {
+        self.source_registry.remove(path);
+    }
+
     /// Look up a SourceFile by its canonical path.
     /// Returns `None` if the file was not registered (not part of the project).
     pub fn source_by_path(&self, path: &str) -> Option<SourceFile> {

@@ -41,6 +41,8 @@ pub struct PrimitiveIntrinsicEntry {
     pub param_types: &'static [&'static str],
     pub return_type: &'static str,
     pub since: &'static str,
+    /// Optional teaching note shown in IDE completion documentation.
+    pub doc: Option<&'static str>,
 }
 
 /// A constant accessible as `Type.name` (e.g. `int.max`, `number.epsilon`).

@@ -355,6 +355,11 @@ pub fn collect_shapes(
         let mut own_fields: Vec<FieldDef> = Vec::new();
         for field in &s.fields {
             let ty = name_table.resolve_ast_type(&field.ty);
+            // Inline anonymous shapes get the same unknown-field-type validation as
+            // named shapes — without this, `{ x: UnknownType }` silently resolves to
+            // Type::Error with no diagnostic. Use "inline type" as the display name
+            // so error messages don't expose the `__anon__` internal identifier.
+            emit_unknown_field_type_diag(&field.ty, &field.name, "inline type", &name_table, &[], diags);
             own_fields.push(FieldDef {
                 name: field.name.clone(),
                 ty,

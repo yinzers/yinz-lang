@@ -244,16 +244,21 @@ fn emit_primitive_intrinsics(table: &TomlTable, out: &mut String) {
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let since = get_str(entry, "since", kind, name);
+        let doc = entry.get("doc").and_then(|v| v.as_str());
 
         let receiver_expr = match receiver_type {
             Some(rt) => format!("Some({rt:?})"),
             None => "None".to_string(),
         };
         let params_expr = escape_str_array(&param_types);
+        let doc_expr = match doc {
+            Some(d) => format!("Some({d:?})"),
+            None => "None".to_string(),
+        };
 
         writeln!(
             out,
-            "    crate::PrimitiveIntrinsicEntry {{ name: {name:?}, kind: {intr_kind:?}, receiver_type: {receiver_expr}, param_types: {params_expr}, return_type: {return_type:?}, since: {since:?} }},",
+            "    crate::PrimitiveIntrinsicEntry {{ name: {name:?}, kind: {intr_kind:?}, receiver_type: {receiver_expr}, param_types: {params_expr}, return_type: {return_type:?}, since: {since:?}, doc: {doc_expr} }},",
         )
         .unwrap();
     }

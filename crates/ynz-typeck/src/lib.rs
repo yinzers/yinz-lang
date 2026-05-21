@@ -59,7 +59,8 @@ pub mod types;
 pub use check::{check, type_attached_const_type, TypedModule};
 pub use generics::{GenericFnTable, GenericShapeTable, MonomorphizationTable};
 pub use intrinsics::PrimitiveIntrinsicTable;
-pub use queries::{check_query, module_signatures_query, CheckOutput, SignatureOutput};
+pub use queries::{check_query, exports_query, module_signatures_query, CheckOutput, SignatureOutput};
+pub use exports::ExportTable;
 pub use shapes::{ShapeDef, ShapeTable};
 pub use signatures::SignatureTable;
 pub use symbol_lookup::{
