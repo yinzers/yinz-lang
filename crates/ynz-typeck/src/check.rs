@@ -1308,6 +1308,8 @@ impl<'b> Checker<'b> {
         match callee_name.as_str() {
             "print" => self.check_print_call(call),
             "range" => self.check_range_call(call),
+            // v0.3-M1: sleepMs(ms: int) — synchronous blocking sleep; lowers to ynz_thread_sleep_ms.
+            "sleepMs" => self.check_sleep_ms_call(call),
             // M8 P4: `sensitive(value)` constructor — wraps a string in Type::Sensitive.
             "sensitive" => {
                 if call.args.len() != 1 {
@@ -1354,7 +1356,7 @@ impl<'b> Checker<'b> {
                 // Unknown
                 let mut candidates: Vec<&str> = self.sig_table.all_names();
                 candidates.extend(self.generic_fn_table.all_names());
-                candidates.extend(["print", "range"]);
+                candidates.extend(["print", "range", "sleepMs"]);
                 self.diags.push(make_not_defined_diag(
                     name,
                     call.callee.span().clone(),
@@ -1470,6 +1472,32 @@ impl<'b> Checker<'b> {
                 Type::Error
             }
         }
+    }
+
+    fn check_sleep_ms_call(&mut self, call: &CallExpr) -> Type {
+        if call.args.len() != 1 {
+            self.diags.push(Diagnostic::error(
+                call.span.clone(),
+                format!("`sleepMs` takes exactly 1 argument, but {} were given.", call.args.len()),
+                "Write `sleepMs(200)` — pass the number of milliseconds to sleep.",
+                "`sleepMs` pauses the current thread for the given number of milliseconds. \
+                 It takes one `int` argument.",
+            ));
+            for arg in &call.args {
+                self.infer_expr(arg, None);
+            }
+            return Type::Nothing;
+        }
+        let ty = self.infer_expr(&call.args[0], Some(&Type::Int));
+        if ty != Type::Int && ty != Type::Error {
+            self.diags.push(Diagnostic::error(
+                call.args[0].span().clone(),
+                format!("`sleepMs` requires an `int` argument, but got `{}`.", type_name(&ty)),
+                "Pass an integer number of milliseconds: `sleepMs(200)`.",
+                "`sleepMs` converts the argument to a millisecond duration. Only `int` is accepted.",
+            ));
+        }
+        Type::Nothing
     }
 
     /// Check ownership constraints when a binding is passed to a function parameter.

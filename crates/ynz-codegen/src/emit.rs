@@ -2446,6 +2446,18 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     let val = lower_expr(cg, &call.args[0])?;
                     Ok(val)
                 }
+                // v0.3-M1: sleepMs(ms: int) — synchronous blocking sleep; lowers to ynz_thread_sleep_ms.
+                "sleepMs" if call.args.len() == 1 => {
+                    let ms = lower_expr(cg, &call.args[0])?.into_int_value();
+                    cg.builder
+                        .build_call(
+                            cg.rt.ynz_thread_sleep_ms,
+                            &[ms.into()],
+                            "sleepMs",
+                        )
+                        .map_err(|e| format!("{e}"))?;
+                    Ok(cg.i32().const_int(0, false).into())
+                }
                 "range" => {
                     // M7 P4c: range() as a first-class value — produces a {i64 start, i64 end}
                     // alloca on the stack.  The pointer to that alloca is returned so the range

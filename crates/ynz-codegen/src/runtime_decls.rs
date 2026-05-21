@@ -155,6 +155,20 @@ pub struct RuntimeDecls<'ctx> {
     pub ynz_bignum_sub: FunctionValue<'ctx>,
     pub ynz_bignum_mul: FunctionValue<'ctx>,
     pub ynz_bignum_div: FunctionValue<'ctx>,
+
+    // ── v0.3-M1: Tokio scheduler runtime ─────────────────────────────────
+    // Called by generated `main` and `background` lowering.
+    // ynz_rt_init() → void  — initialise Tokio multi-thread runtime at main entry
+    pub ynz_rt_init: FunctionValue<'ctx>,
+    // ynz_rt_spawn_blocking(fn_ptr: ptr, ctx_ptr: ptr, ctx_size: i64) → void
+    // fn_ptr: extern "C" fn(*mut u8); ctx_ptr + ctx_size describe heap-copy of arg struct.
+    pub ynz_rt_spawn_blocking: FunctionValue<'ctx>,
+    // ynz_rt_check_preempt() → void  — v0.3-M1 stub (no-op); loop back-edge cooperative yield
+    pub ynz_rt_check_preempt: FunctionValue<'ctx>,
+    // ynz_rt_shutdown() → void  — drain runtime at main exit (shutdown_timeout 5s)
+    pub ynz_rt_shutdown: FunctionValue<'ctx>,
+    // ynz_thread_sleep_ms(ms: i64) → void  — blocking sleep; used by sleepMs() intrinsic
+    pub ynz_thread_sleep_ms: FunctionValue<'ctx>,
 }
 
 impl<'ctx> RuntimeDecls<'ctx> {
@@ -515,6 +529,22 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 module,
                 "ynz_bignum_div",
                 ptr.fn_type(&[ptr.into(), ptr.into(), i32.into()], false),
+            ),
+
+            // v0.3-M1: Tokio scheduler runtime
+            ynz_rt_init: declare_fn(module, "ynz_rt_init", void.fn_type(&[], false)),
+            ynz_rt_spawn_blocking: declare_fn(
+                module,
+                "ynz_rt_spawn_blocking",
+                // fn_ptr: opaque function pointer (ptr), ctx_ptr: *mut u8 (ptr), ctx_size: i64
+                void.fn_type(&[ptr.into(), ptr.into(), i64.into()], false),
+            ),
+            ynz_rt_check_preempt: declare_fn(module, "ynz_rt_check_preempt", void.fn_type(&[], false)),
+            ynz_rt_shutdown: declare_fn(module, "ynz_rt_shutdown", void.fn_type(&[], false)),
+            ynz_thread_sleep_ms: declare_fn(
+                module,
+                "ynz_thread_sleep_ms",
+                void.fn_type(&[i64.into()], false),
             ),
         }
     }

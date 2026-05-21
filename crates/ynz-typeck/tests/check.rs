@@ -2454,3 +2454,52 @@ fn cross_file_inline_shape_field_mismatch_documents_known_gap() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.3-M1: sleepMs intrinsic typeck
+// ─────────────────────────────────────────────────────────────────────────────
+
+// WHY: sleepMs(int) -> nothing must type-check cleanly with an int arg and
+// return nothing. If the typeck dispatch arm is missing, users get a confusing
+// "not defined" error instead of a successful type-check.
+#[test]
+fn sleep_ms_with_int_arg_is_clean() {
+    assert_clean(
+        "function entrypoint() -> nothing {\n  sleepMs(50)\n}",
+    );
+}
+
+// WHY: sleepMs with a non-int arg must produce a clear teaching error.
+// Guards against the typeck arm silently accepting wrong-typed arguments.
+#[test]
+fn sleep_ms_with_wrong_type_produces_error() {
+    let out = run("function entrypoint() -> nothing {\n  sleepMs(`not an int`)\n}");
+    let errors: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(!errors.is_empty(), "sleepMs with string arg must produce an error");
+    assert!(
+        errors[0].what.contains("int") || errors[0].what.contains("sleepMs"),
+        "error must mention int or sleepMs; got: {:?}", errors[0].what
+    );
+}
+
+// WHY: sleepMs with 0 args must produce an arity error.
+#[test]
+fn sleep_ms_with_no_args_produces_error() {
+    let out = run("function entrypoint() -> nothing {\n  sleepMs()\n}");
+    let errors: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(!errors.is_empty(), "sleepMs with no args must produce an error");
+}
+
+// WHY: sleepMs with 2 args must produce an arity error.
+#[test]
+fn sleep_ms_with_two_args_produces_error() {
+    let out = run("function entrypoint() -> nothing {\n  sleepMs(50, 100)\n}");
+    let errors: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(!errors.is_empty(), "sleepMs with 2 args must produce an error");
+}

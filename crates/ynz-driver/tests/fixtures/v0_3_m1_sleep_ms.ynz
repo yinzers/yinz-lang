@@ -1,0 +1,6 @@
+// v0.3-M1: sleepMs(int) intrinsic end-to-end test fixture.
+// Used by the integration test `sleep_ms_intrinsic_links_and_runs`.
+function entrypoint() -> nothing {
+  sleepMs(50)
+  print(`slept`)
+}

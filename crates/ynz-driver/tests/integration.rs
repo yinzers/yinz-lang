@@ -1574,3 +1574,26 @@ fn duplicate_entrypoint_in_project_produces_teaching_diagnostic() {
         "diagnostic must mention yinz.toml so the user knows where to set the entry file; got:\n{stderr}"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.3-M1: sleepMs intrinsic end-to-end
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn sleep_ms_intrinsic_links_and_runs() {
+    // WHY: sleepMs(int) must be reachable end-to-end — typeck → codegen → link
+    // → execute. This test catches regressions where the intrinsic is registered
+    // in the registry but not wired through typeck dispatch (making it unreachable
+    // from .ynz source). The timing assertion is generous to avoid CI flake.
+    use std::time::Instant;
+    let start = Instant::now();
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m1_sleep_ms.ynz"));
+    let elapsed = start.elapsed();
+    assert_eq!(code, 0, "sleepMs fixture must exit 0; stderr:\n{stderr}");
+    assert_eq!(stdout.trim(), "slept", "sleepMs fixture must print `slept`; got:\n{stdout}");
+    assert!(
+        elapsed.as_millis() >= 40,
+        "sleepMs(50) must sleep at least 40ms, but the whole run took {:?}",
+        elapsed
+    );
+}

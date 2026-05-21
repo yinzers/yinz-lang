@@ -619,6 +619,17 @@ param_types = ["int", "int"]
 return_type = "range<int>"
 since = "M3"
 
+# --- free_fn: sleepMs (v0.3-M1) ---
+# Synchronous blocking sleep on the calling thread. Does NOT use `wait` semantics
+# (those ship in v0.3-M2). Named sleepMs to avoid any overlap with the `wait` keyword.
+# Lowers to ynz_thread_sleep_ms(ms: i64) in libynz_runtime.a.
+[[primitive_intrinsic]]
+name = "sleepMs"
+kind = "free_fn"
+param_types = ["int"]
+return_type = "nothing"
+since = "v0.3-M1"
+
 # --- methods: int conversions ---
 [[primitive_intrinsic]]
 name = "toNumber"

@@ -88,6 +88,12 @@ impl Drop for CtxDropGuard {
 ///    the happy path and on unwind, so ctx is freed in both cases.
 /// 4. Call `spawn_blocking` — returns immediately; the caller continues.
 ///
+/// # Cache-line alignment note (forward-design for M4)
+/// `ctx_ptr` is 64 bytes per cache line on x86_64 and ARM64. In v0.3-M1 there is no
+/// padding between ctx fields; false sharing between a spawning thread that still
+/// holds a live reference to the original struct and the task's copy can cause cache
+/// thrashing. v0.3-M4's arena allocator will align ctx heap copies to 64 bytes.
+///
 /// # Safety
 /// - `ctx_ptr` must point to at least `ctx_size` valid bytes for the duration of this call.
 ///   Ownership of those bytes is NOT transferred; a copy is made onto the heap.
