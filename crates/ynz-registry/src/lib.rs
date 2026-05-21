@@ -108,6 +108,42 @@ pub fn muted_hint_domain_lookup(domain: &str) -> Option<&'static MutedHintDomain
     MUTED_HINT_DOMAINS.iter().find(|e| e.domain == domain)
 }
 
+/// Render a WHAT / WHAT-INSTEAD / WHY hover tooltip for an inlay hint domain.
+///
+/// Returns markdown suitable for an LSP `InlayHint.tooltip` field, sourcing:
+/// - **WHAT**: the registry entry's `description` (what the compiler decided)
+/// - **WHAT INSTEAD**: the entry's `example_hint_rendered` (the explicit form)
+/// - **WHY**: a context sentence derived from the `placement_category`
+///
+/// Returns `None` when the domain is not in the registry (deferred/unknown).
+///
+/// Per Golden Rule 11, every teaching surface must answer WHAT / WHAT-INSTEAD /
+/// WHY.  Inlay hints without a hover tooltip are muted annotations the user
+/// cannot learn from — that violates the teaching mission of v0.2-M5.
+pub fn lsp_inlay_hint_hover_for(domain: &str) -> Option<String> {
+    let entry = muted_hint_domain_lookup(domain)?;
+
+    let why = match entry.placement_category {
+        "Addition" =>
+            "The compiler figured this out from context. Click to make it explicit in source.",
+        "Replacement" =>
+            "The compiler picked the stricter form automatically. Hover to see the alternative \
+             you could write explicitly.",
+        "Informational" =>
+            "This shows what the compiler decided at this call site. No source change is needed.",
+        _ => "The compiler inferred this automatically.",
+    };
+
+    Some(format!(
+        "**WHAT**: {what}\n\n\
+         **WHAT INSTEAD**: `{hint}` — write this to make the decision explicit in source.\n\n\
+         **WHY**: {why}",
+        what = entry.description,
+        hint = entry.example_hint_rendered,
+        why = why,
+    ))
+}
+
 /// Render a diagnostic template string by substituting `{key}` placeholders.
 ///
 /// Grammar:

@@ -30,12 +30,25 @@ use crate::{
 
 /// Stable LSP error codes for rename failures.  Index into this table by variant
 /// name to get `(code, human-readable label)`.
+/// Stable LSP error codes for rename failures (server-defined, -32000..-32099).
+///
+/// | Code   | Variant                             |
+/// |--------|-------------------------------------|
+/// | -32001 | `NotARenameable`                    |
+/// | -32002 | `NewNameIsReservedKeyword`          |
+/// | -32003 | `NewNameIsBannedJargon`             |
+/// | -32004 | `NewNameInvalidIdentifier`          |
+/// | -32005 | `ConflictsWithExistingName`         |
+/// | -32006 | `CannotRenameImportedSymbolInThisFile` |
+///
+/// These codes are stable — changing them breaks clients that pattern-match on the
+/// code to display custom error UI.  Do not renumber without a major-version bump.
 pub const LSP_RENAME_ERROR_CODES: &[(&str, i32)] = &[
     ("NotARenameable", -32001),
     ("NewNameIsReservedKeyword", -32002),
     ("NewNameIsBannedJargon", -32003),
     ("NewNameInvalidIdentifier", -32004),
-    ("ConflictsWithExistingName", -32005), // reserved; variant not yet in RenameError
+    ("ConflictsWithExistingName", -32005),
     ("CannotRenameImportedSymbolInThisFile", -32006),
 ];
 
@@ -78,6 +91,15 @@ fn rename_error_to_lsp(err: &RenameError) -> (i32, String) {
                  letters, digits, and underscores.\n\n\
                  WHY: the parser would reject the file if a non-identifier were used \
                  as a name."
+            ),
+        ),
+        RenameError::ConflictsWithExistingName(file, _span) => (
+            -32005,
+            format!(
+                "Cannot rename — a symbol with that name already exists in `{file}`.\n\n\
+                 WHAT INSTEAD: choose a name not already used in any file affected by this rename.\n\n\
+                 WHY: two top-level symbols with the same name in the same scope produce a \
+                 compile error immediately after the rename.",
             ),
         ),
         RenameError::CannotRenameImportedSymbolInThisFile(origin) => (

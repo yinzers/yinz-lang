@@ -13,24 +13,29 @@
 //! | `array_to_fixed_promotion` | Replacement | decoration on never-grown arrays |
 //! | `let_to_const_promotion` | Replacement | decoration on never-mutated lets |
 //!
+//! Every firing hint carries a WHAT / WHAT-INSTEAD / WHY hover tooltip sourced
+//! from the registry via `ynz_registry::lsp_inlay_hint_hover_for`.  Per Golden
+//! Rule 11 (compiler is a teacher), muted annotations without a hover tooltip
+//! are teaching surfaces the user cannot learn from.
+//!
 //! # Protocol-only domains (empty list, no error)
 //!
 //! `function_param_type`, `wait_points`, `lifetimes`, `allocators` — each
-//! handled by a registered branch in `inlay_hint_response` that returns `[]`.
-//! When v0.3+ adds the underlying analysis, those branches emit real hints
-//! with no further LSP code change.
+//! handled here but returning `[]`.  When v0.3+ adds the underlying analysis,
+//! those branches emit real hints with no further LSP code change.
 //!
 //! # Viewport filtering
 //!
-//! The LSP `InlayHintRequest` includes a `range` parameter (the visible viewport).
 //! A hint is included if its `position` byte offset falls within the requested
-//! range's byte span — even if the anchor expression starts before the range.
-//! This matches rust-analyzer's behaviour (position-only, not anchor-span).
+//! `range` — even if the anchor expression starts before the range.  This is
+//! position-only filtering, matching rust-analyzer's behaviour.
 
-use lsp_types::{InlayHint, InlayHintKind, InlayHintLabel, Position, Range};
+use lsp_types::{
+    InlayHint, InlayHintKind, InlayHintLabel, MarkupContent, MarkupKind, Position, Range,
+};
 use ynz_typeck::{
     array_to_fixed_promotion_hints, copy_point_hints, let_to_const_promotion_hints,
-    ownership_call_site_hints, variable_type_hints, PromotionKind,
+    ownership_call_site_hints, variable_type_hints,
 };
 
 use crate::{
@@ -39,12 +44,60 @@ use crate::{
     state::ServerState,
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn byte_to_position(
+    text: &str,
+    byte: usize,
+    table: &LineTable,
+    encoding: PositionEncoding,
+) -> Option<Position> {
+    Some(table.byte_offset_to_position(text, byte.min(text.len()), encoding))
+}
+
+fn in_viewport(pos: usize, start: usize, end: usize) -> bool {
+    pos >= start && pos <= end
+}
+
+fn tooltip(domain: &str) -> Option<lsp_types::InlayHintTooltip> {
+    ynz_registry::lsp_inlay_hint_hover_for(domain).map(|md| {
+        lsp_types::InlayHintTooltip::MarkupContent(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: md,
+        })
+    })
+}
+
+fn make_hint(
+    pos: Position,
+    label: String,
+    kind: InlayHintKind,
+    domain: &str,
+) -> InlayHint {
+    InlayHint {
+        position: pos,
+        label: InlayHintLabel::String(label),
+        kind: Some(kind),
+        text_edits: None,
+        tooltip: tooltip(domain),
+        padding_left: None,
+        padding_right: None,
+        data: None,
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Public handler
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// Compute the `textDocument/inlayHint` response for the viewport `range`.
 ///
-/// Returns hints for all firing domains filtered to hints whose `position`
-/// falls within `range`.  Protocol-only domains return no hints.
+/// Returns hints for all firing domains filtered to those whose `position`
+/// falls within `range`.  Protocol-only domains return no hints (not an error).
 ///
-/// Time: O(AST × 5 passes) on cache miss; O(1) salsa hit on re-render.
+/// Time: O(AST × 5 passes) on cache miss; O(1) on salsa cache hit.
 pub fn inlay_hint_response(
     state: &ServerState,
     uri: &lsp_types::Url,
@@ -63,11 +116,11 @@ pub fn inlay_hint_response(
         None => return Vec::new(),
     };
 
-    // Convert the viewport Range to byte offsets for filtering.
-    let range_start_byte = table
+    // Convert the viewport Range to byte offsets.
+    let vp_start = table
         .position_to_byte_offset(text, range.start, state.encoding)
         .unwrap_or(0);
-    let range_end_byte = table
+    let vp_end = table
         .position_to_byte_offset(text, range.end, state.encoding)
         .unwrap_or(text.len());
 
@@ -76,114 +129,76 @@ pub fn inlay_hint_response(
     // ── Domain 1: variable_type (Addition) ───────────────────────────────────
 
     for h in variable_type_hints(&state.db, sf) {
-        if h.position < range_start_byte || h.position > range_end_byte {
-            continue;
-        }
+        if !in_viewport(h.position, vp_start, vp_end) { continue; }
         if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
-            hints.push(InlayHint {
-                position: pos,
-                label: InlayHintLabel::String(format!(": {}", h.type_text)),
-                kind: Some(InlayHintKind::TYPE),
-                text_edits: None,
-                tooltip: None,
-                padding_left: None,
-                padding_right: None,
-                data: None,
-            });
+            hints.push(make_hint(
+                pos,
+                format!(": {}", h.type_text),
+                InlayHintKind::TYPE,
+                "variable_type",
+            ));
         }
     }
 
     // ── Domain 2: ownership_call_site (Informational) ────────────────────────
 
     for h in ownership_call_site_hints(&state.db, sf) {
-        if h.position < range_start_byte || h.position > range_end_byte {
-            continue;
-        }
+        if !in_viewport(h.position, vp_start, vp_end) { continue; }
         if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
-            hints.push(InlayHint {
-                position: pos,
-                label: InlayHintLabel::String(format!(" {}", h.modifier)),
-                kind: Some(InlayHintKind::PARAMETER),
-                text_edits: None,
-                tooltip: None,
-                padding_left: None,
-                padding_right: None,
-                data: None,
-            });
+            hints.push(make_hint(
+                pos,
+                format!(" {}", h.modifier),
+                InlayHintKind::PARAMETER,
+                "ownership_call_site",
+            ));
         }
     }
 
     // ── Domain 3: copy_points (Informational) ────────────────────────────────
 
     for h in copy_point_hints(&state.db, sf) {
-        if h.position < range_start_byte || h.position > range_end_byte {
-            continue;
-        }
+        if !in_viewport(h.position, vp_start, vp_end) { continue; }
         if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
-            hints.push(InlayHint {
-                position: pos,
-                label: InlayHintLabel::String(format!(".copy ({}, trivially copyable)", h.size_text)),
-                kind: Some(InlayHintKind::PARAMETER),
-                text_edits: None,
-                tooltip: None,
-                padding_left: None,
-                padding_right: None,
-                data: None,
-            });
+            hints.push(make_hint(
+                pos,
+                format!(".copy ({}, trivially copyable)", h.size_text),
+                InlayHintKind::PARAMETER,
+                "copy_points",
+            ));
         }
     }
 
-    // ── Domains 4+5: array_to_fixed_promotion + let_to_const (Replacement) ──
+    // ── Domain 4: array_to_fixed_promotion (Replacement) ─────────────────────
 
     for h in array_to_fixed_promotion_hints(&state.db, sf) {
-        if h.position < range_start_byte || h.position > range_end_byte {
-            continue;
-        }
+        if !in_viewport(h.position, vp_start, vp_end) { continue; }
         if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
-            hints.push(InlayHint {
-                position: pos,
-                label: InlayHintLabel::String(h.label.clone()),
-                kind: Some(InlayHintKind::TYPE),
-                text_edits: None,
-                tooltip: None,
-                padding_left: None,
-                padding_right: None,
-                data: None,
-            });
+            hints.push(make_hint(
+                pos,
+                h.label.clone(),
+                InlayHintKind::TYPE,
+                "array_to_fixed_promotion",
+            ));
         }
     }
+
+    // ── Domain 5: let_to_const_promotion (Replacement) ───────────────────────
 
     for h in let_to_const_promotion_hints(&state.db, sf) {
-        if h.position < range_start_byte || h.position > range_end_byte {
-            continue;
-        }
+        if !in_viewport(h.position, vp_start, vp_end) { continue; }
         if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
-            let label = match h.kind {
-                PromotionKind::LetToConst => h.label.clone(),
-                PromotionKind::ArrayToFixed => h.label.clone(),
-            };
-            hints.push(InlayHint {
-                position: pos,
-                label: InlayHintLabel::String(label),
-                kind: Some(InlayHintKind::TYPE),
-                text_edits: None,
-                tooltip: None,
-                padding_left: None,
-                padding_right: None,
-                data: None,
-            });
+            hints.push(make_hint(
+                pos,
+                h.label.clone(),
+                InlayHintKind::TYPE,
+                "let_to_const_promotion",
+            ));
         }
     }
 
-    // ── Protocol-only domains (empty) ────────────────────────────────────────
-    // function_param_type, wait_points, lifetimes, allocators:
-    // Each is registered here explicitly so the LSP never returns an error for
-    // these domains — they simply emit nothing until v0.3+ data exists.
-    // No code needed: no data → no hints → Vec unchanged.
+    // ── Protocol-only domains (function_param_type, wait_points, lifetimes,
+    //    allocators) — registered intent: return empty until v0.3+ adds data.
+    //    No code needed: no data → no hints appended → Vec unchanged.
 
     hints
-}
-
-fn byte_to_position(text: &str, byte: usize, table: &LineTable, encoding: PositionEncoding) -> Option<Position> {
-    Some(table.byte_offset_to_position(text, byte.min(text.len()), encoding))
 }

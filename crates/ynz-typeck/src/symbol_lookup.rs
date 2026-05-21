@@ -80,6 +80,16 @@ pub enum RenameError {
     /// digits, and underscores (`[a-zA-Z][a-zA-Z0-9_]*`).
     /// WHY: the parser would reject the file if a non-identifier were used here.
     NewNameInvalidIdentifier(String),
+    /// The proposed new name conflicts with an existing symbol in the affected scope.
+    ///
+    /// The inner `String` is the first file path where the conflict was detected.
+    /// The `SourceSpan` is the span of the conflicting declaration.
+    ///
+    /// WHAT INSTEAD: choose a name not already used by a shape, function, or binding
+    /// in any file that references the symbol being renamed.
+    /// WHY: two symbols with the same name in the same scope would make the file
+    /// ambiguous or cause silent shadowing, both of which are compile errors.
+    ConflictsWithExistingName(String, SourceSpan),
     /// The symbol is declared in another file; rename must be triggered from that file.
     ///
     /// WHAT INSTEAD: open the origin file and trigger rename from the declaration site.
@@ -361,9 +371,46 @@ pub fn rename_locations(
         return Err(RenameError::CannotRenameImportedSymbolInThisFile(origin_path));
     }
 
+    // Check whether `new_name` already exists as a top-level declaration in any
+    // affected file — if so, the rename would produce a duplicate name.
+    //
+    // Scope: file-level shapes, functions, and options.  Local-binding shadowing
+    // is a separate concern; the compiler's shadow-detection catches it at
+    // compile time after the rename anyway.  This check prevents the silent-
+    // corruption case where rename produces two top-level symbols with the same
+    // name, which would make the file unreachable.
+    for path in db.all_source_paths() {
+        if let Some(sf) = db.source_by_path(&path) {
+            if let Some(conflict_span) = find_top_level_name(db, sf, &new_name) {
+                return Err(RenameError::ConflictsWithExistingName(path, conflict_span));
+            }
+        }
+    }
+
     // Collect all use-sites (including declaration).
     let all_sites = references_for_offset(db, source, byte_offset, true);
     Ok(all_sites)
+}
+
+/// Return the declaration span of a top-level symbol named `name` in `source`,
+/// or `None` if no such declaration exists.
+fn find_top_level_name(
+    db: &dyn SourceFileRegistry,
+    source: SourceFile,
+    name: &str,
+) -> Option<SourceSpan> {
+    use ynz_ast::nodes::Item;
+    let parse = ynz_parser::parse_query(db, source);
+    for item in &parse.module.items {
+        match item {
+            Item::Function(f) if f.name == name => return Some(f.name_span.clone()),
+            Item::ShapeDecl(s) if s.name == name => return Some(s.name_span.clone()),
+            Item::OptionsDecl(o) if o.name == name => return Some(o.name_span.clone()),
+            Item::ConstDecl(c) if c.name == name => return Some(c.name_span.clone()),
+            _ => {}
+        }
+    }
+    None
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
