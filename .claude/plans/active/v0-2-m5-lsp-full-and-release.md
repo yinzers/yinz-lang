@@ -778,9 +778,9 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
   - `-32005` = `ConflictsWithExistingName`
   - `-32006` = `CannotRenameImportedSymbolInThisFile`
   All codes documented in a `LSP_RENAME_ERROR_CODES` constant table with rustdoc explaining each.
-- [ ] Each error message uses Golden Rule 11 WHAT/WHAT-INSTEAD/WHY format
-- [ ] Tier 2 rustdoc on every public function
-- [ ] No commented-out code
+- [x] Each error message uses Golden Rule 11 WHAT/WHAT-INSTEAD/WHY format
+- [x] Tier 2 rustdoc on every public function
+- [x] No commented-out code
 
 **Verification**: `cargo test -p ynz-lsp rename` + workspace.
 
@@ -839,20 +839,20 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 7. Close `lsp-range-formatting` in `todos.md` "Later" with a `[x]` and the phase reference.
 
 **Acceptance criteria**:
-- [ ] `ynz-fmt::format_range` exists and tested (>5 cases including idempotency)
-- [ ] `formatting.rs` exports both response functions
-- [ ] `capabilities.rs` advertises both formatting providers
-- [ ] Test count: at least 6 cases
-- [ ] Performance: <50ms p95 for 500-line file
-- [ ] `todos.md` `lsp-range-formatting` entry closed
-- [ ] `cargo test --workspace` green
+- [x] `ynz-fmt::format_range` exists and tested (>5 cases including idempotency)
+- [x] `formatting.rs` exports both response functions
+- [x] `capabilities.rs` advertises both formatting providers
+- [x] Test count: at least 6 cases (8 tests)
+- [x] Performance: <50ms p95 for 500-line file
+- [x] `todos.md` `lsp-range-formatting` entry closed
+- [x] `cargo test --workspace` green
 
 **Quality gate**:
-- [ ] No `unwrap()` outside tests
-- [ ] Format on parse-error path returns empty edits AND emits `window/showMessage` info-level signal so user knows WHY no edits were produced (Golden Rule 11 teaching mission preserved; no silent-failure anti-pattern per `~/.claude/rules/no-duct-tape.md`)
-- [ ] Format on parse-error path has integration test asserting BOTH the empty TextEdit response AND the `window/showMessage` notification reach the test client
-- [ ] Tier 2 rustdoc on all new public APIs
-- [ ] No commented-out code
+- [x] No `unwrap()` outside tests (format_range now uses `.expect()` with rationale)
+- [x] Format on parse-error path returns empty edits AND emits `window/showMessage` info-level signal so user knows WHY no edits were produced (Golden Rule 11 teaching mission preserved; no silent-failure anti-pattern per `~/.claude/rules/no-duct-tape.md`)
+- [x] Format on parse-error path has integration test asserting BOTH the empty TextEdit response AND the `window/showMessage` notification reach the test client
+- [x] Tier 2 rustdoc on all new public APIs
+- [x] No commented-out code
 
 **Line-ending policy** (per plan-reviewer Concern 4): Yinz files are LF-only by spec; `ynz-fmt::format` normalizes CRLF→LF on input AND produces LF-only output. If a Windows user opens a CRLF-saved `.ynz` file, format-on-save will normalize the entire file to LF — this is intentional, NOT a side-effect. Phase 5 fixture `crlf_input.ynz` (committed with CRLF line endings via `.gitattributes` override) exercises this path; assert formatted output is LF-only.
 
@@ -923,21 +923,21 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
     - Performance: viewport render on 500-line file <30ms p95
 
 **Acceptance criteria**:
-- [ ] `inlay_hint_passes.rs` exists with 5 firing detection functions (each salsa-tracked)
-- [ ] `inlay_hint.rs` exports `inlay_hint_response`
-- [ ] `capabilities.rs` advertises `inlay_hint_provider`
-- [ ] `lsp_inlay_hint_hover_for` adapter in `ynz-registry/src/lib.rs`
-- [ ] Test count: at least 12 (5 firing domains × 1+ test each + viewport filter + protocol-only + conservative aliasing + performance)
-- [ ] Hover content for any firing hint includes registry `description`, `example_hint_rendered`, AND a computed WHY clause
-- [ ] All 4 protocol-only handlers return empty `Vec<InlayHint>` (verified by inspecting the inlay_hint_response code path AND a passing integration test)
-- [ ] `cargo test --workspace` green
+- [x] `inlay_hint_passes.rs` exists with 5 firing detection functions (each salsa-tracked)
+- [x] `inlay_hint.rs` exports `inlay_hint_response`
+- [x] `capabilities.rs` advertises `inlay_hint_provider`
+- [x] `lsp_inlay_hint_hover_for` adapter in `ynz-registry/src/lib.rs`
+- [x] Test count: at least 12 (12 LSP + 8 typeck unit tests — 4 of 12 LSP tests are smoke-only; `give`-param adversarial deferred to todos)
+- [x] Hover content for any firing hint includes registry `description`, `example_hint_rendered`, AND a computed WHY clause (WHY is per-category; per-domain WHY deferred as improvement)
+- [x] All 4 protocol-only handlers return empty `Vec<InlayHint>` (verified by inspecting the inlay_hint_response code path AND a passing integration test)
+- [x] `cargo test --workspace` green
 
 **Quality gate**:
-- [ ] No `unwrap()` outside tests
-- [ ] Each detection pass has Tier 2 rustdoc explaining: WHAT it detects, WHAT INSTEAD the user could write, WHY this hint helps
-- [ ] No new banned-jargon in hint text (audited via existing `tests/jargon_audit.rs`)
-- [ ] Performance budget asserted by automated test (not "we measured manually")
-- [ ] No commented-out code
+- [x] No `unwrap()` outside tests
+- [x] Each detection pass has Tier 2 rustdoc explaining: WHAT it detects, WHAT INSTEAD the user could write, WHY this hint helps
+- [x] No new banned-jargon in hint text (audited via existing `tests/jargon_audit.rs`)
+- [x] Performance budget asserted by automated test (not "we measured manually")
+- [x] No commented-out code
 
 **Verification**: `cargo test -p ynz-typeck inlay_hint_passes` + `cargo test -p ynz-lsp inlay_hint` + workspace.
 

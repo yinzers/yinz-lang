@@ -47,6 +47,12 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 - [x] **lsp-range-formatting** — shipped in v0.2-M5 Phase 5: `ynz_fmt::format_range` + `textDocument/rangeFormatting` LSP handler.
 
+- [ ] **lsp-inlay-hint-give-param-adversarial** — Phase 6 acceptance criterion required a test: `x` passed to fn declared `give T` → `let_to_const` hint SUPPRESSED. Currently only `lend`-pass direction is tested. Trigger: before Phase 12 release gate or when a user reports the `give` aliasing case produces a wrong hint. File: `crates/ynz-typeck/tests/inlay_hint_passes.rs`.
+
+- [ ] **lsp-rename-conflict-scope** — `rename_locations` currently checks ALL files in db for a name conflict; should be scoped to files that actually reference the renamed symbol (same set `references_for_offset` walks). Current over-rejection is conservative but noisy. Also: `find_top_level_name` misses `ImportDecl`-bound names. Trigger: user reports rename rejected unexpectedly because an unrelated file happens to use the target name.
+
+- [ ] **lsp-inlay-hint-hover-per-domain-why** — hover tooltip WHY text is per-placement-category, not per-domain. `array_to_fixed_promotion` and `let_to_const_promotion` share identical WHY. Golden Rule 11 calls for "specific and contextual" WHY. Per-domain WHY strings would name the actual proof (e.g. "no .add() call found, stack form skips the heap"). Trigger: when v0.3 adds the Tier-3 lint that references the same WHY text.
+
 - [ ] **fmt-inter-element-comments** — implement element-level comment attachment in `emit_expr` for `ArrayLit`/`MapLit`/`StructLit` when long-line split is triggered. Locked spec: `[1, // note\n 2, 3]` → comment moves to own line ABOVE element 2 at element indent. Deferred from v0.2-M3 Phase 3 because it requires making `emit_expr` comment-aware (significant scope); Phase 3's `comment_in_array.ynz` tests the leading-comment-before-stmt case instead. Implement when taking up Phase 3.5 or Phase 4.
 
 - [ ] **fmt-diff-mode** — add `ynz fmt --diff` flag emitting unified diff of what would change. Deferred from v0.2-M3 (not blocking ship; useful for code review tooling). No specific trigger; nice-to-have.

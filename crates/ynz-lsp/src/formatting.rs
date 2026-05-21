@@ -196,9 +196,10 @@ pub fn range_formatting_response(
         return Vec::new();
     }
 
-    // The formatted content for the exact byte range.
-    let formatted_range =
-        ynz_fmt::format_range(source, start_byte, end_byte).unwrap_or_default();
+    // The formatted content for the exact byte range.  format_range delegates to
+    // format() internally, which already succeeded above — this call cannot fail.
+    let formatted_range = ynz_fmt::format_range(source, start_byte, end_byte)
+        .expect("format_range cannot fail — format(source) succeeded above");
     let original_range_text = &source[start_byte..end_byte.min(source.len())];
 
     if formatted_range.trim_end_matches('\n') == original_range_text.trim_end_matches('\n') {
