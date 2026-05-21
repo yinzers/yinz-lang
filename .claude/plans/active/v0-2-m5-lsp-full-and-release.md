@@ -5,7 +5,7 @@ owner: Patrick Rizzardi
 status: active
 roadmap: v0-2-dev-loop-tooling
 created: 2026-05-20
-last_updated: 2026-05-21 (Phase 7 complete — code actions; Phases 0-7 all done)
+last_updated: 2026-05-21 (Phase 8 complete — semantic tokens; Phases 0-8 all done)
 files:
   - crates/ynz-lsp/**
   - crates/ynz-typeck/src/**
@@ -1054,19 +1054,19 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
    - **TM grammar non-disagreement (per plan-reviewer Concern 2)**: take a representative fixture (`examples/pirates-roster/entrypoint.ynz`); for each KEYWORD token, assert that (a) the TextMate grammar's regex would match the same byte-range AND (b) the semantic-tokens emitter emits `KEYWORD` for that range. Comparison mechanism: run the TM grammar's `keyword.*` rules over the source using a small TM-rule-matcher helper (since we can't run Oniguruma from Rust easily, the helper does word-boundary substring search for each registered keyword); collect ranges. Run semantic-tokens emitter; collect KEYWORD-type ranges. Assert the two sets are identical for keyword tokens. Disagreement = test failure. (NOTE: we ONLY test keyword agreement, NOT every TM scope — semantic-tokens deliberately refines beyond TM for identifiers; identifier-type disagreement is EXPECTED and correct.)
 
 **Acceptance criteria**:
-- [ ] `semantic_tokens.rs` exports both full + range response functions
-- [ ] `SEMANTIC_TOKEN_LEGEND` constant declared
-- [ ] `capabilities.rs` advertises with full + range options
-- [ ] Test count: at least 8 covering each token type at least once + multi-byte encoding
-- [ ] Performance: full file 500 lines <100ms p95; range <30ms p95
-- [ ] `cargo test --workspace` green
+- [x] `semantic_tokens.rs` exports both full + range response functions
+- [x] `SEMANTIC_TOKEN_LEGEND` constant declared
+- [x] `capabilities.rs` advertises with full + range options
+- [x] Test count: at least 8 covering each token type at least once + multi-byte encoding (12 tests)
+- [x] Performance: full file 500 lines <100ms p95; range <30ms p95
+- [x] `cargo test --workspace` green
 
 **Quality gate**:
-- [ ] No `unwrap()` outside tests
-- [ ] Tier 2 rustdoc on emitter explaining the AST → token mapping
-- [ ] No new banned-jargon in any constant or doc
-- [ ] Delta-encoding is correct (unit-tested: single-token, two-tokens-same-line, two-tokens-different-lines)
-- [ ] No commented-out code
+- [x] No `unwrap()` outside tests
+- [x] Tier 2 rustdoc on emitter explaining the AST → token mapping
+- [x] No new banned-jargon in any constant or doc
+- [x] Delta-encoding is correct (unit-tested: single-token, two-tokens-same-line, two-tokens-different-lines)
+- [x] No commented-out code
 
 **Verification**: `cargo test -p ynz-lsp semantic_tokens` + workspace.
 

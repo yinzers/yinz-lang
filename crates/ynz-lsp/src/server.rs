@@ -9,18 +9,20 @@ use lsp_types::{
     request::{
         CodeActionRequest, Completion, Formatting, GotoDefinition, HoverRequest, Initialize,
         InlayHintRequest, PrepareRenameRequest, RangeFormatting, References, Rename, Request as _,
-        Shutdown,
+        SemanticTokensFullRequest, SemanticTokensRangeRequest, Shutdown,
     },
     CodeActionParams, CompletionParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentFormattingParams, DocumentRangeFormattingParams,
     GotoDefinitionParams, HoverParams, InitializeParams, InitializeResult, InlayHintParams,
-    PrepareRenameResponse, ReferenceParams, RenameParams, ServerInfo, Url,
+    PrepareRenameResponse, ReferenceParams, RenameParams, SemanticTokensParams,
+    SemanticTokensRangeParams, ServerInfo, Url,
 };
 
 use crate::{
     capabilities::{negotiate_encoding, server_capabilities},
     code_action::code_action_response,
     completion::completion_list,
+    semantic_tokens::{semantic_tokens_full_response, semantic_tokens_range_response},
     diagnostic_transform::{path_to_uri, to_lsp_diagnostic},
     formatting::{formatting_response, range_formatting_response},
     goto_definition::definition_response,
@@ -388,6 +390,58 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
                 connection.sender.send(Message::Response(response)).ok();
             }
         }
+        return;
+    }
+
+    if req.method == SemanticTokensFullRequest::METHOD {
+        let params: SemanticTokensParams = match serde_json::from_value(req.params) {
+            Ok(p) => p,
+            Err(e) => {
+                let response = Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::InvalidParams as i32,
+                    format!("invalid semanticTokens/full params: {e}"),
+                );
+                connection.sender.send(Message::Response(response)).ok();
+                return;
+            }
+        };
+        let uri = &params.text_document.uri;
+        let result = semantic_tokens_full_response(state, uri);
+        let value = match result {
+            Some(r) => serde_json::to_value(r).unwrap_or(serde_json::Value::Null),
+            None => serde_json::Value::Null,
+        };
+        connection
+            .sender
+            .send(Message::Response(Response::new_ok(req.id, value)))
+            .ok();
+        return;
+    }
+
+    if req.method == SemanticTokensRangeRequest::METHOD {
+        let params: SemanticTokensRangeParams = match serde_json::from_value(req.params) {
+            Ok(p) => p,
+            Err(e) => {
+                let response = Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::InvalidParams as i32,
+                    format!("invalid semanticTokens/range params: {e}"),
+                );
+                connection.sender.send(Message::Response(response)).ok();
+                return;
+            }
+        };
+        let uri = &params.text_document.uri;
+        let result = semantic_tokens_range_response(state, uri, params.range);
+        let value = match result {
+            Some(r) => serde_json::to_value(r).unwrap_or(serde_json::Value::Null),
+            None => serde_json::Value::Null,
+        };
+        connection
+            .sender
+            .send(Message::Response(Response::new_ok(req.id, value)))
+            .ok();
         return;
     }
 
