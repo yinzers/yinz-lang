@@ -1,7 +1,7 @@
-// WHY: Phase 9 structured fields test — every LSP diagnostic emitted for a
-// BannedKeyword error must have `code`, `data` populated. If either is absent,
-// the code-action handler (Phase 7) and tooling consumers (Phase 9 --json) lose
-// the kind and structured WHY content they depend on.
+// WHY: every LSP diagnostic emitted for a BannedKeyword error must have `code`
+// and `data` populated. If either is absent, the code-action handler and
+// `ynz build --json` tooling consumers lose the kind and structured WHY content
+// they depend on to surface quick-fixes and machine-readable diagnostics.
 
 mod harness;
 use harness::InProcessHarness;

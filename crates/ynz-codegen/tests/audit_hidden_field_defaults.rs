@@ -21,7 +21,7 @@
 /// - `crates/ynz-driver/tests/fixtures/m7_user_iterable.ynz:8` — `hidden pos: int = 0`
 /// - `crates/ynz-driver/tests/fixtures/m4_hidden_field.ynz:3` — `hidden count: int = 0`
 ///
-/// **Implication**: The Phase 11a bug (non-zero hidden defaults silently zero-init) has
+/// **Implication**: The non-zero-hidden-field-default-eval bug (silently zero-init) has
 /// zero live consumers in the current test suite. The fix changes a broken code path
 /// with no measurable effect on existing test output. Insta snapshots for all existing
 /// fixtures remain stable post-fix (verified by `cargo test --workspace` green).

@@ -112,8 +112,8 @@ pub fn build_into(source_path: &Path, output_dir: &Path) -> BuildResult {
 /// This is the `ynz build --json` path. Default ariadne output is suppressed.
 /// Exit code: 0 when there are no errors; 1 when there are errors.
 ///
-/// The output schema is documented in `design/lsp.md` and stabilizes at the
-/// v0.2.0 release (Phase 12 drops the `-unstable` suffix from `schema_version`).
+/// The output schema is documented in `design/lsp.md` and is stable as of
+/// v0.2.0. Pre-release builds use a `-unstable` suffix in `schema_version`.
 pub fn build_json(source_path: &Path) -> i32 {
     let source_abs =
         std::fs::canonicalize(source_path).unwrap_or_else(|_| source_path.to_path_buf());

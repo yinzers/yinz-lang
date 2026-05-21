@@ -104,7 +104,7 @@ fn regression_lsp_vs_cli_divergence() {
     // because it requires the `ynz` binary to be built and present.
     // Run manually with: cargo test -p ynz-lsp -- --ignored regression_lsp_vs_cli
     //
-    // Closes: lsp-vs-cli-exact-divergence in todos.md (Phase 9 of v0.2-M5).
+    // Closes: lsp-vs-cli-exact-divergence in todos.md.
     use std::path::Path;
 
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))

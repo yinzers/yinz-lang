@@ -3,9 +3,8 @@ use ynz_diagnostics::{DiagnosticBucket, Severity};
 
 /// Schema version for `ynz build --json` NDJSON output.
 ///
-/// Stabilized at `v0.2.0` when the v0.2.0 tag is cut (Phase 12 drops the
-/// `-unstable` suffix). Until then, tooling consumers MUST check this field
-/// and reject output from versions they haven't validated against.
+/// Stable as of v0.2.0. Pre-release builds use an `-unstable` suffix; tooling
+/// consumers MUST check this field and reject schemas they have not validated.
 pub const SCHEMA_VERSION: &str = "v0.2.0";
 
 /// One line of NDJSON output per diagnostic, emitted to stdout.
@@ -202,10 +201,10 @@ mod tests {
 
     #[test]
     fn schema_version_is_stable_at_v0_2_0() {
-        // WHY: v0.2.0 tag cut (Phase 12) drops the -unstable suffix.
-        //      Tooling consumers that rejected -unstable builds now accept v0.2.0 output.
-        //      If a future pre-release adds -unstable back, this test enforces the stable
-        //      suffix is restored when the next release tag is cut.
+        // WHY: schema_version is stable at v0.2.0; the -unstable suffix signals
+        //      pre-release builds. If a future pre-release re-adds the suffix, this
+        //      test fails until the stable form is restored at the next release tag.
+        //      Tooling consumers gate on this field to reject in-development output.
         assert!(
             !SCHEMA_VERSION.ends_with("-unstable"),
             "schema_version must not have -unstable suffix after the v0.2.0 tag is cut"
