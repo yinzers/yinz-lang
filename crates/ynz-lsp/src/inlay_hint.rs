@@ -34,10 +34,12 @@ use lsp_types::{
     InlayHint, InlayHintKind, InlayHintLabel, MarkupContent, MarkupKind, Position, Range,
     TextEdit,
 };
+use ynz_diagnostics::Severity;
 use ynz_typeck::{
     array_to_fixed_promotion_hints, copy_point_hints, let_to_const_promotion_hints,
     ownership_call_site_hints, variable_type_hints,
 };
+use ynz_typeck::queries::check_query;
 
 use crate::{
     capabilities::PositionEncoding,
@@ -238,6 +240,32 @@ pub fn inlay_hint_response(
                 "let_to_const_promotion",
                 Some(vec![edit]),
             ));
+        }
+    }
+
+    // ── Domain 6: ownership_call_site — background large-copy (.give hint) ─────
+    // Fires when a BackgroundLargeStructCopy warning is present at the call site.
+    // The Tier 3 warning already teaches via the diagnostic; this hint reinforces
+    // with an inline annotation at the exact arg position.
+
+    let check_out = check_query(&state.db, sf);
+    for d in check_out.diagnostics.iter() {
+        if d.severity == Severity::Warning
+            && d.what.starts_with("Copying ")
+            && d.what_instead.contains(".give")
+        {
+            let hint_pos = d.span.end;
+            if !in_viewport(hint_pos, vp_start, vp_end) {
+                continue;
+            }
+            if let Some(pos) = byte_to_position(text, hint_pos, table, state.encoding) {
+                hints.push(make_hint(
+                    pos,
+                    " .give (transfers ownership; no copy)".to_string(),
+                    InlayHintKind::PARAMETER,
+                    "ownership_call_site",
+                ));
+            }
         }
     }
 

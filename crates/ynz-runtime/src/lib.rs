@@ -1,3 +1,9 @@
+pub mod runtime;
+pub use runtime::{
+    ynz_rt_check_preempt, ynz_rt_init, ynz_rt_shutdown, ynz_rt_spawn_blocking,
+    ynz_thread_sleep_ms,
+};
+
 use unicode_normalization::UnicodeNormalization;
 /// C-ABI runtime shims for Yinz-compiled binaries.
 ///

@@ -412,7 +412,16 @@ fn link_objects(
     cmd.arg(rt_lib_tmp.path())
         .arg("-no-pie")
         .arg("-o")
-        .arg(binary_path);
+        .arg(binary_path)
+        // Tokio runtime (embedded in libynz_runtime.a) requires:
+        //   -lpthread  — OS thread spawning
+        //   -ldl       — dynamic loading on some platforms
+        //   -lm        — math functions (f64::powf etc.)
+        //   -lrt       — clock_gettime on older glibc (no-op on modern Linux)
+        .arg("-lpthread")
+        .arg("-ldl")
+        .arg("-lm")
+        .arg("-lrt");
     let cc_result = cmd.output();
     // rt_lib_tmp dropped here — linker has already finished reading it.
 
@@ -585,6 +594,15 @@ fn build_single_file(source_path: &Path, output_dir: Option<&Path>) -> BuildResu
         .arg("-no-pie")
         .arg("-o")
         .arg(&binary_path)
+        // Tokio runtime (embedded in libynz_runtime.a) requires:
+        //   -lpthread  — OS thread spawning
+        //   -ldl       — dynamic loading on some platforms
+        //   -lm        — math functions (f64::powf etc.)
+        //   -lrt       — clock_gettime on older glibc (no-op on modern Linux)
+        .arg("-lpthread")
+        .arg("-ldl")
+        .arg("-lm")
+        .arg("-lrt")
         .output();
     // rt_lib_tmp dropped here — linker has already read it.
 

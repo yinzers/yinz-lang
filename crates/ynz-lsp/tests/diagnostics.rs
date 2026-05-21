@@ -162,6 +162,63 @@ fn diagnostic_message_contains_what_what_instead_why() {
     );
 }
 
+// WHY: v0.3-M1 added `lend`-cross-thread as a new compile error class. This test
+// drives typeck via ServerState (the same path the LSP server uses) to verify
+// the new diagnostic flows through to_lsp_diagnostic with WHAT/WHAT-INSTEAD/WHY.
+// Without this test, the P4 typeck change could be correct but the LSP transform
+// path for the new diagnostic kind is unverified.
+#[test]
+fn lend_cross_thread_error_flows_to_lsp_diagnostic() {
+    use ynz_lsp::{
+        capabilities::PositionEncoding, diagnostic_transform::to_lsp_diagnostic,
+        position::LineTable, state::ServerState,
+    };
+    use ynz_typeck::queries::check_query;
+
+    let src = r#"
+shape Event { name: string }
+function record(lend self: Event) -> nothing {
+    self.name = "recorded"
+}
+function main() -> nothing {
+    let event: Event = { name: "login" }
+    background record(event)
+}
+"#;
+
+    let uri: lsp_types::Url = "file:///lend_test.ynz".parse().unwrap();
+    let mut state = ServerState::new(PositionEncoding::Utf8);
+    state.open_document(uri.clone(), src.to_string());
+
+    let sf = state.source_file_for(&uri).unwrap();
+    let check_out = check_query(&state.db, sf);
+
+    // Must have at least one error about `lend` across thread boundary
+    let lend_error = check_out
+        .diagnostics
+        .iter()
+        .find(|d| d.what.contains("lend") || d.what_instead.contains("give"));
+    assert!(
+        lend_error.is_some(),
+        "expected lend-cross-thread diagnostic; got: {:?}",
+        check_out.diagnostics
+    );
+
+    // Verify it flows through to_lsp_diagnostic without panic
+    let d = lend_error.unwrap();
+    let table = LineTable::new(src);
+    let lsp = to_lsp_diagnostic(d, src, &table, PositionEncoding::Utf8);
+    assert_eq!(lsp.severity, Some(lsp_types::DiagnosticSeverity::ERROR));
+    assert!(
+        lsp.message.contains("WHAT INSTEAD"),
+        "LSP message must include WHAT INSTEAD clause"
+    );
+    assert!(
+        lsp.message.contains("WHY"),
+        "LSP message must include WHY clause"
+    );
+}
+
 #[test]
 fn utf8_and_utf16_ranges_differ_for_multibyte() {
     use ynz_diagnostics::{Diagnostic as YnzDiag, Severity, SourceSpan};

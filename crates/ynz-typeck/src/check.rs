@@ -81,6 +81,7 @@ pub fn check(
         errors_consumed: HashSet::new(),
         current_fn_errors_capable: false,
         referenced_names: HashSet::new(),
+        kernel_mode: false,
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -88,6 +89,57 @@ pub fn check(
         expr_types: checker.expr_types,
     };
     (typed, checker.mono_table, checker.diags, checker.referenced_names)
+}
+
+/// Like `check` but with kernel-mode enabled.
+///
+/// In kernel mode, `wait` and `background` are compile errors because the
+/// thread-pool runtime does not run in kernel mode. This function is used in tests;
+/// the `--kernel` build mode arrives in a later version.
+#[allow(clippy::too_many_arguments)]
+pub fn check_with_kernel_mode(
+    module: &Module,
+    sig_table: &SignatureTable,
+    shape_table: &ShapeTable,
+    generic_fn_table: &GenericFnTable,
+    generic_shape_table: &GenericShapeTable,
+    intrinsics: &PrimitiveIntrinsicTable,
+    imported_options: &std::collections::HashMap<String, crate::options_table::OptionsEntry>,
+) -> (TypedModule, MonomorphizationTable, DiagnosticBucket) {
+    let mut diags = DiagnosticBucket::new();
+    let mut options_table = collect_options(module, &mut diags);
+    for (name, entry) in imported_options {
+        options_table.options.entry(name.clone()).or_insert_with(|| entry.clone());
+    }
+    let mut checker = Checker {
+        intrinsics,
+        sig_table,
+        shape_table,
+        generic_fn_table,
+        generic_shape_table,
+        options_table: &options_table,
+        expr_types: HashMap::new(),
+        diags,
+        scope: Scope::new(),
+        current_fn_ret: Type::Nothing,
+        current_shape: None,
+        type_param_scope: HashMap::new(),
+        mono_table: MonomorphizationTable::default(),
+        maybe_non_none: HashSet::new(),
+        union_narrowed: HashMap::new(),
+        union_aliases: collect_union_aliases(module, shape_table),
+        errors_success_narrowed: HashSet::new(),
+        errors_consumed: HashSet::new(),
+        current_fn_errors_capable: false,
+        referenced_names: HashSet::new(),
+        kernel_mode: true,
+    };
+    checker.check_module(module);
+    let typed = TypedModule {
+        module: module.clone(),
+        expr_types: checker.expr_types,
+    };
+    (typed, checker.mono_table, checker.diags)
 }
 
 struct Checker<'b> {
@@ -129,6 +181,10 @@ struct Checker<'b> {
     type_param_scope: HashMap<String, ()>,
     /// Whether the function currently being checked is itself errors_capable.
     current_fn_errors_capable: bool,
+    /// True when building for --kernel mode. `wait` and `background` are rejected
+    /// at compile time because the thread-pool runtime does not run in kernel mode.
+    /// Defaults to false; set to true only via `check_with_kernel_mode`.
+    kernel_mode: bool,
 
     // ── Flow-sensitive sets (reset per function; persist through if/else branches) ──
     //
@@ -955,6 +1011,27 @@ impl<'b> Checker<'b> {
         }
     }
 
+    /// Heuristic estimate of conceptual copy cost when the user writes `.copy()`:
+    /// 8 bytes per field for shape values (assumes each field is i64-sized).
+    ///
+    /// This is NOT the C-ABI slot size at the background-spawn site (codegen packs each
+    /// arg into a single i64 regardless of the shape's field count). Used only to decide
+    /// whether to emit the large-copy warning; not load-bearing for correctness.
+    fn estimate_type_size_bytes(&self, ty: &Type) -> usize {
+        match ty {
+            Type::Shape { name, .. } => {
+                if let Some(def) = self.shape_table.shapes.get(name.as_str()) {
+                    // Each field = 8 bytes (i64 ABI slot)
+                    def.fields.len() * 8
+                } else {
+                    8
+                }
+            }
+            // Scalar and pointer types: always 8 bytes in the i64 ABI
+            _ => 8,
+        }
+    }
+
     /// Infer the type of `expr`.
     ///
     /// `hint` is an optional expected type passed from a `let` annotation.
@@ -1179,11 +1256,35 @@ impl<'b> Checker<'b> {
                     Type::String
                 }
             }
-            // M8 P5: `wait expr` — same type as the inner expression (sequential semantics).
-            Expr::Wait(inner, _) => self.infer_expr(inner, hint),
-            // M8 P5: `background expr` — must be a function call; return type is Nothing
+            // `wait expr` — kernel-mode rejects `wait` (no scheduler runtime).
+            // Sequential semantics maintained in M1 (state machines ship in M2).
+            Expr::Wait(inner, span) => {
+                if self.kernel_mode {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        "`wait` is not available in --kernel mode.",
+                        "Remove the keyword or build without `--kernel`. Kernel-mode programs run without a scheduler runtime.",
+                        "The thread-pool runtime that powers `wait` does not run in kernel mode. See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
+                    ));
+                }
+                self.infer_expr(inner, hint)
+            }
+            // `background expr` — must be a function call; return type is Nothing
             // (return value is discarded). Ownership rules enforced in check_stmt.
             Expr::Background(inner, span) => {
+                // Kernel-mode rejection — background requires the thread-pool runtime.
+                if self.kernel_mode {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        "`background` is not available in --kernel mode.",
+                        "Remove the keyword or build without `--kernel`. Kernel-mode programs run without a scheduler runtime.",
+                        "The thread-pool runtime that powers `background` does not run in kernel mode. See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
+                    ));
+                    // Still infer inner for completeness; return Nothing.
+                    let _ = self.infer_expr(inner, None);
+                    return Type::Nothing;
+                }
+
                 let inner_ty = self.infer_expr(inner, None);
                 // background must wrap a function call — enforce this.
                 if !matches!(inner.as_ref(), Expr::Call(_) | Expr::MethodCall { .. }) {
@@ -1197,8 +1298,9 @@ impl<'b> Checker<'b> {
                 }
                 // Locked M8 decision (spec/concurrency.md:164-177): `background` must
                 // reject callees that borrow their arguments via `share`. A `share`
-                // borrow may outlive the caller's scope once the task runs in the
-                // background — a memory-safety hole.
+                // borrow may outlive the caller's scope once the task runs in the background.
+                // Reject `lend`-param callees: a borrow may outlive the owner across the
+                // thread boundary — same safety hole as `share`.
                 let callee_name: Option<&str> = match inner.as_ref() {
                     Expr::Call(call) => {
                         if let Expr::Ident(name, _) = &call.callee {
@@ -1212,10 +1314,7 @@ impl<'b> Checker<'b> {
                 };
                 if let Some(name) = callee_name {
                     if let Some(sig) = self.sig_table.fns.get(name) {
-                        let has_share_param = sig
-                            .param_ownerships
-                            .contains(&Some(OwnershipModifier::Share));
-                        if has_share_param {
+                        if sig.param_ownerships.contains(&Some(OwnershipModifier::Share)) {
                             self.diags.push(Diagnostic::error(
                                 inner.span().clone(),
                                 "Cannot use `background` with a function that borrows its arguments.",
@@ -1223,8 +1322,43 @@ impl<'b> Checker<'b> {
                                 "`background` will run this function outside the current scope. If the function only borrows its argument (via `share`), the borrow may outlive the value — a memory-safety hole. Pass ownership (`give`) or a copy so the background task has its own value.",
                             ));
                         }
+                        // `lend` across a thread boundary is a safety error (same hole as `share`).
+                        if sig.param_ownerships.contains(&Some(OwnershipModifier::Lend)) {
+                            self.diags.push(Diagnostic::error(
+                                inner.span().clone(),
+                                "Cannot use `background` with a function that mutates its arguments via `lend`.",
+                                "Change the parameter to `give` (transfer ownership) or pass a copy: `background fn(value.copy)`.",
+                                "`background` runs this function outside the current scope. A `lend` borrow allows mutation through the borrow; if the value's owner reassigns or drops it concurrently, the background task's mutations would corrupt freed memory. Transfer ownership (`give`) or pass a copy so the background task owns its argument.",
+                            ));
+                        }
                     }
                 }
+
+                // Large-copy warning (Tier 3 lint): warn when a `.copy` arg is a shape
+                // with estimated size > 64 bytes.
+                // Size estimate: each field = 8 bytes (all values are i64-sized in the
+                // background ctx ABI). Threshold matches cache-line size.
+                const BACKGROUND_LARGE_COPY_BYTES: usize = 64;
+                if let Expr::Call(call) = inner.as_ref() {
+                    for arg in &call.args {
+                        // A `.copy` arg is PostfixOp { op: Copy, receiver }
+                        if let Expr::PostfixOp { op, receiver, .. } = arg {
+                            if *op == ynz_ast::nodes::PostfixOpKind::Copy {
+                                let arg_ty = self.infer_expr(receiver, None);
+                                let size = self.estimate_type_size_bytes(&arg_ty);
+                                if size > BACKGROUND_LARGE_COPY_BYTES {
+                                    self.diags.push(Diagnostic::warning(
+                                        arg.span().clone(),
+                                        format!("Copying {} bytes into a background task.", size),
+                                        "Pass ownership with `background fn(value.give)` if you don't need the value after. Click `.give` to apply.",
+                                        "`.give` transfers ownership without copying. Auto-detection of unused-after-call ships in v0.3-M3; until then, the choice is yours to make explicit.",
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let _ = inner_ty;
                 Type::Nothing // background discards the return value
             }
@@ -1315,6 +1449,8 @@ impl<'b> Checker<'b> {
         match callee_name.as_str() {
             "print" => self.check_print_call(call),
             "range" => self.check_range_call(call),
+            // sleepMs(ms: int) — synchronous blocking sleep; lowers to ynz_thread_sleep_ms.
+            "sleepMs" => self.check_sleep_ms_call(call),
             // M8 P4: `sensitive(value)` constructor — wraps a string in Type::Sensitive.
             "sensitive" => {
                 if call.args.len() != 1 {
@@ -1362,7 +1498,7 @@ impl<'b> Checker<'b> {
                 // Unknown
                 let mut candidates: Vec<&str> = self.sig_table.all_names();
                 candidates.extend(self.generic_fn_table.all_names());
-                candidates.extend(["print", "range"]);
+                candidates.extend(["print", "range", "sleepMs"]);
                 self.diags.push(make_not_defined_diag(
                     name,
                     call.callee.span().clone(),
@@ -1478,6 +1614,32 @@ impl<'b> Checker<'b> {
                 Type::Error
             }
         }
+    }
+
+    fn check_sleep_ms_call(&mut self, call: &CallExpr) -> Type {
+        if call.args.len() != 1 {
+            self.diags.push(Diagnostic::error(
+                call.span.clone(),
+                format!("`sleepMs` takes exactly 1 argument, but {} were given.", call.args.len()),
+                "Write `sleepMs(200)` — pass the number of milliseconds to sleep.",
+                "`sleepMs` pauses the current thread for the given number of milliseconds. \
+                 It takes one `int` argument.",
+            ));
+            for arg in &call.args {
+                self.infer_expr(arg, None);
+            }
+            return Type::Nothing;
+        }
+        let ty = self.infer_expr(&call.args[0], Some(&Type::Int));
+        if ty != Type::Int && ty != Type::Error {
+            self.diags.push(Diagnostic::error(
+                call.args[0].span().clone(),
+                format!("`sleepMs` requires an `int` argument, but got `{}`.", type_name(&ty)),
+                "Pass an integer number of milliseconds: `sleepMs(200)`.",
+                "`sleepMs` converts the argument to a millisecond duration. Only `int` is accepted.",
+            ));
+        }
+        Type::Nothing
     }
 
     /// Check ownership constraints when a binding is passed to a function parameter.

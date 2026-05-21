@@ -419,6 +419,7 @@ fn lower_generic_function<'ctx>(
         // Generic functions are not errors-capable in M7 (no `-> T errors` on generics yet).
         is_errors_capable: false,
         errors_capable_locals: std::collections::HashSet::new(),
+        bg_uid: 0,
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -615,6 +616,10 @@ struct Cg<'ctx, 'g> {
     // M7 P4a: set of local names that hold errors-capable results (pointer to {i64, i64}).
     // When one of these is first used in an errors-capable function, auto-propagation fires.
     errors_capable_locals: std::collections::HashSet<String>,
+    // v0.3-M1: per-compilation counter for unique `background` closure LLVM function names.
+    // Per-Cg (not global static) so identical source always produces identical IR even
+    // when multiple compilations run in the same process (LSP, test harness).
+    bg_uid: u64,
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
@@ -817,7 +822,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             | Type::Maybe { .. }
             | Type::BuiltinMap { .. }
             | Type::MapEntry { .. }
-            | Type::Union { .. } => self
+            | Type::Union { .. }
+            | Type::Sensitive { .. } => self
                 .builder
                 .build_ptr_to_int(val.into_pointer_value(), self.i64(), "ptr_to_i")
                 .map_err(|e| format!("{e}")),
@@ -852,7 +858,8 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
             | Type::Maybe { .. }
             | Type::BuiltinMap { .. }
             | Type::MapEntry { .. }
-            | Type::Union { .. } => self
+            | Type::Union { .. }
+            | Type::Sensitive { .. } => self
                 .builder
                 .build_int_to_ptr(val, self.ptr(), "i_to_ptr")
                 .map(|v| v.into())
@@ -907,16 +914,21 @@ fn lower_function<'ctx, 'g>(
         options_table,
         is_errors_capable,
         errors_capable_locals: std::collections::HashSet::new(),
+        bg_uid: 0,
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
     cg.builder.position_at_end(entry);
 
     // Initialize SipHash key from OS entropy before any map operations.
+    // Also initialise the Tokio runtime (v0.3-M1: spawns the blocking thread pool).
     if is_main {
         cg.builder
             .build_call(cg.rt.ynz_siphash_init, &[], "siphash_init")
             .map_err(|e| format!("siphash_init: {e}"))?;
+        cg.builder
+            .build_call(cg.rt.ynz_rt_init, &[], "rt_init")
+            .map_err(|e| format!("rt_init: {e}"))?;
     }
 
     // M7 P4a: errors-capable functions push a frame on entry for the call trace.
@@ -962,6 +974,10 @@ fn lower_function<'ctx, 'g>(
     // - non-nothing functions: unreachable — typeck confirmed exhaustive paths.
     if !is_block_terminated(&cg) {
         if is_main {
+            // Drain in-flight background tasks before exiting.
+            cg.builder
+                .build_call(cg.rt.ynz_rt_shutdown, &[], "rt_shutdown_implicit")
+                .map_err(|e| format!("rt_shutdown: {e}"))?;
             cg.builder
                 .build_return(Some(&ctx.i32_type().const_int(0, false)))
                 .map_err(|e| format!("implicit main ret: {e}"))?;
@@ -1089,6 +1105,19 @@ fn is_block_terminated(cg: &Cg) -> bool {
         .get_insert_block()
         .map(|bb| bb.get_terminator().is_some())
         .unwrap_or(true)
+}
+
+/// Emit a cooperative preemption checkpoint at a loop back-edge.
+///
+/// The v0.3-M1 stub is a no-op (single `ret`); it correctly positions call sites
+/// for v0.3-M2 state-machine suspension. Call-site preempt (at every `build_call`
+/// for user functions) deferred to M2 per P1 GATE measurement (1190% overhead).
+#[inline]
+fn emit_loop_preempt<'ctx>(cg: &mut Cg<'ctx, '_>) -> Result<(), String> {
+    cg.builder
+        .build_call(cg.rt.ynz_rt_check_preempt, &[], "preempt")
+        .map_err(|e| format!("preempt: {e}"))?;
+    Ok(())
 }
 
 fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
@@ -1555,6 +1584,7 @@ fn lower_stmt_while<'ctx>(
         lower_stmt(cg, stmt)?;
     }
     if !is_block_terminated(cg) {
+        emit_loop_preempt(cg)?;
         cg.builder
             .build_unconditional_branch(header_bb)
             .map_err(|e| format!("{e}"))?;
@@ -1647,6 +1677,7 @@ fn lower_stmt_for<'ctx>(
             cg.builder
                 .build_store(i_slot, next_i)
                 .map_err(|e| format!("{e}"))?;
+            emit_loop_preempt(cg)?;
             cg.builder
                 .build_unconditional_branch(cond_bb)
                 .map_err(|e| format!("{e}"))?;
@@ -1732,6 +1763,7 @@ fn lower_stmt_for<'ctx>(
 
         cg.locals.remove(var);
         if !is_block_terminated(cg) {
+            emit_loop_preempt(cg)?;
             cg.builder
                 .build_unconditional_branch(cond_bb)
                 .map_err(|e| format!("{e}"))?;
@@ -1826,6 +1858,7 @@ fn lower_stmt_for<'ctx>(
             cg.builder
                 .build_store(i_slot, next_i)
                 .map_err(|e| format!("{e}"))?;
+            emit_loop_preempt(cg)?;
             cg.builder
                 .build_unconditional_branch(cond_bb)
                 .map_err(|e| format!("{e}"))?;
@@ -1908,6 +1941,7 @@ fn lower_stmt_for<'ctx>(
             cg.builder
                 .build_store(i_slot, next_i)
                 .map_err(|e| format!("{e}"))?;
+            emit_loop_preempt(cg)?;
             cg.builder
                 .build_unconditional_branch(cond_bb)
                 .map_err(|e| format!("{e}"))?;
@@ -2051,6 +2085,7 @@ fn lower_stmt_for<'ctx>(
             cg.builder
                 .build_store(i_slot, next_i)
                 .map_err(|e| format!("{e}"))?;
+            emit_loop_preempt(cg)?;
             cg.builder
                 .build_unconditional_branch(cond_bb)
                 .map_err(|e| format!("{e}"))?;
@@ -2173,6 +2208,7 @@ fn lower_stmt_for<'ctx>(
         cg.builder
             .build_store(counter_slot, ctr_next)
             .map_err(|e| format!("{e}"))?;
+        emit_loop_preempt(cg)?;
         cg.builder
             .build_unconditional_branch(header_bb)
             .map_err(|e| format!("{e}"))?;
@@ -2185,6 +2221,10 @@ fn lower_stmt_for<'ctx>(
 
 fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Result<(), String> {
     if cg.is_main {
+        // Drain in-flight background tasks before exiting.
+        cg.builder
+            .build_call(cg.rt.ynz_rt_shutdown, &[], "rt_shutdown")
+            .map_err(|e| format!("rt_shutdown: {e}"))?;
         cg.builder
             .build_return(Some(&cg.i32().const_int(0, false)))
             .map_err(|e| format!("main ret: {e}"))?;
@@ -2445,6 +2485,18 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                 "sensitive" if call.args.len() == 1 => {
                     let val = lower_expr(cg, &call.args[0])?;
                     Ok(val)
+                }
+                // v0.3-M1: sleepMs(ms: int) — synchronous blocking sleep; lowers to ynz_thread_sleep_ms.
+                "sleepMs" if call.args.len() == 1 => {
+                    let ms = lower_expr(cg, &call.args[0])?.into_int_value();
+                    cg.builder
+                        .build_call(
+                            cg.rt.ynz_thread_sleep_ms,
+                            &[ms.into()],
+                            "sleepMs",
+                        )
+                        .map_err(|e| format!("{e}"))?;
+                    Ok(cg.i32().const_int(0, false).into())
                 }
                 "range" => {
                     // M7 P4c: range() as a first-class value — produces a {i64 start, i64 end}
@@ -3082,15 +3134,184 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                 Ok(result)
             }
         }
-        // M8 P5: wait/background — sequential semantics in M8 (both are identity at codegen).
-        // `wait foo()` → lower foo() directly.
-        // `background foo()` → lower foo(), discard return value, return i32(0).
+        // v0.3-M1: wait still lowers to a direct call (state machines ship in M2).
+        // background lowers to ynz_rt_spawn_blocking — actual separate-thread scheduling.
         Expr::Wait(inner, _) => lower_expr(cg, inner),
-        Expr::Background(inner, _) => {
-            let _ = lower_expr(cg, inner)?; // run to completion, discard result
-            Ok(cg.i32().const_int(0, false).into())
-        }
+        Expr::Background(inner, _) => lower_expr_background(cg, inner),
     }
+}
+
+
+/// Lower `background fn(args)` to `ynz_rt_spawn_blocking`.
+///
+/// # Approach
+///
+/// 1. Evaluate all arguments on the calling thread; convert each to an i64 bit pattern.
+/// 2. Alloca a context struct on the caller's stack (`n_args * 8` bytes); store each i64.
+///    Stack alloca is safe because `ynz_rt_spawn_blocking` copies the bytes synchronously
+///    before returning — the callee owns its heap copy; the caller's alloca is freed
+///    automatically at end-of-function without any explicit `ynz_free`.
+/// 3. Create a new LLVM function `ynz_bg_<name>_<uid>` with signature `void (ptr)`.
+///    Its body: for each ctx slot, load i64 → reconstruct original type → call original fn.
+///    The `uid` is per-Cg (incremented on `cg.bg_uid`) — deterministic across compilations.
+/// 4. Emit `ynz_rt_spawn_blocking(closure, ctx, size)` and return i32(0).
+///
+/// # Ownership
+///
+/// The runtime (`ynz_rt_spawn_blocking`) copies the ctx bytes into a `Box<[u8]>` owned by
+/// `CtxDropGuard`. The `CtxDropGuard` frees the COPY on both normal return and panic path.
+/// The caller-side alloca is reclaimed at function exit — no explicit free needed.
+///
+/// Call-site preempt insertion deferred to M2 per P1 GATE measurement.
+fn lower_expr_background<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    inner: &ynz_ast::nodes::Expr,
+) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
+    use inkwell::values::BasicMetadataValueEnum;
+
+    // background must wrap a Call — typeck already enforces this.
+    let call = match inner {
+        ynz_ast::nodes::Expr::Call(c) => c,
+        _ => {
+            // Typeck already emitted an error. Fall back to sequential execution.
+            let _ = lower_expr(cg, inner)?;
+            return Ok(cg.i32().const_int(0, false).into());
+        }
+    };
+
+    let callee_name = match &call.callee {
+        ynz_ast::nodes::Expr::Ident(name, _) => name.clone(),
+        _ => {
+            // Complex callee (method call desugared to non-ident) — run synchronously.
+            let _ = lower_expr(cg, inner)?;
+            return Ok(cg.i32().const_int(0, false).into());
+        }
+    };
+
+    // Step 1: evaluate arguments on the calling thread.
+    let mut arg_vals_i64: Vec<inkwell::values::IntValue<'ctx>> = Vec::new();
+    let mut arg_types: Vec<Type> = Vec::new();
+    for arg in &call.args {
+        let val = lower_expr(cg, arg)?;
+        let ty = cg.expr_type(arg);
+        let bits = cg.to_i64_bits(val, &ty)
+            .map_err(|e| format!("background arg to_i64_bits: {e}"))?;
+        arg_vals_i64.push(bits);
+        arg_types.push(ty);
+    }
+
+    let n_args = arg_vals_i64.len();
+    let ctx_size: u64 = (n_args as u64) * 8; // each arg is i64 = 8 bytes
+
+    // Step 2: alloca context on the caller's stack and store args.
+    // Stack alloca is safe because ynz_rt_spawn_blocking copies the bytes synchronously
+    // before returning; the runtime's heap copy is owned by CtxDropGuard.
+    // No ynz_free needed — the alloca is reclaimed automatically at function exit.
+    let ctx_ptr = if ctx_size > 0 {
+        let ctx_ty = cg.i64().array_type(n_args as u32);
+        let alloca = cg.builder
+            .build_alloca(ctx_ty, "bg_ctx")
+            .map_err(|e| format!("bg ctx alloca: {e}"))?;
+        for (i, bits) in arg_vals_i64.iter().enumerate() {
+            // SAFETY: GEP into the alloca; all offsets are within [0, n_args * 8).
+            let slot = unsafe {
+                cg.builder
+                    .build_gep(
+                        cg.i64(),
+                        alloca,
+                        &[cg.i64().const_int(i as u64, false)],
+                        "bg_slot",
+                    )
+                    .map_err(|e| format!("bg ctx gep: {e}"))?
+            };
+            cg.builder.build_store(slot, *bits).map_err(|e| format!("bg store: {e}"))?;
+        }
+        alloca
+    } else {
+        cg.ctx.ptr_type(inkwell::AddressSpace::default()).const_null()
+    };
+
+    // Step 3: create the closure LLVM function.
+    // Per-Cg counter: deterministic across multiple compilations in the same process.
+    let uid = cg.bg_uid;
+    cg.bg_uid += 1;
+    let closure_name = format!("ynz_bg_{}_{}", callee_name, uid);
+    let closure_ty = cg.ctx.void_type().fn_type(
+        &[cg.ctx.ptr_type(inkwell::AddressSpace::default()).into()],
+        false,
+    );
+    let closure_fn = cg.module.add_function(&closure_name, closure_ty, None);
+
+    // Save current insert block so we can restore it after building the closure body.
+    let return_bb = cg.builder.get_insert_block()
+        .ok_or_else(|| "no insert block at background site".to_string())?;
+
+    let closure_entry = cg.ctx.append_basic_block(closure_fn, "entry");
+    cg.builder.position_at_end(closure_entry);
+
+    // Unpack args from ctx and reconstruct original types.
+    let ctx_arg = closure_fn.get_nth_param(0)
+        .ok_or_else(|| "closure has no param".to_string())?
+        .into_pointer_value();
+
+    let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
+    for (i, ty) in arg_types.iter().enumerate() {
+        let slot = unsafe {
+            cg.builder
+                .build_gep(cg.i64(), ctx_arg, &[cg.i64().const_int(i as u64, false)], "cl_slot")
+                .map_err(|e| format!("closure gep: {e}"))?
+        };
+        let bits = cg.builder
+            .build_load(cg.i64(), slot, "cl_arg")
+            .map_err(|e| format!("closure load: {e}"))?
+            .into_int_value();
+        let val = cg.i64_bits_to(bits, ty)
+            .map_err(|e| format!("closure i64_bits_to: {e}"))?;
+        call_args.push(val.into());
+    }
+
+    // Call the original function from within the closure.
+    // Use the same mangled-name resolution as the regular Call path (for generics).
+    let effective_name = if cg.module.get_function(&callee_name).is_some() {
+        callee_name.clone()
+    } else {
+        find_mono_name_by_args(cg.mono_table, &callee_name, &arg_types)
+            .unwrap_or_else(|| callee_name.clone())
+    };
+    let target_fn = cg.module.get_function(&effective_name)
+        .ok_or_else(|| format!("background callee `{effective_name}` not in module"))?;
+    cg.builder
+        .build_call(target_fn, &call_args, "bg_call")
+        .map_err(|e| format!("closure call: {e}"))?;
+    cg.builder
+        .build_return(None)
+        .map_err(|e| format!("closure ret: {e}"))?;
+
+    // Step 4: restore builder and emit spawn call.
+    cg.builder.position_at_end(return_bb);
+
+    // Cast closure function pointer to ptr (the C-ABI fn pointer type).
+    let closure_ptr = closure_fn.as_global_value().as_pointer_value();
+    let ctx_i64 = cg.builder
+        .build_ptr_to_int(ctx_ptr, cg.i64(), "ctx_i64")
+        .map_err(|e| format!("ctx ptrtoint: {e}"))?;
+    let ctx_as_ptr = cg.builder
+        .build_int_to_ptr(ctx_i64, cg.ctx.ptr_type(inkwell::AddressSpace::default()), "ctx_ptr")
+        .map_err(|e| format!("ctx inttoptr: {e}"))?;
+
+    cg.builder
+        .build_call(
+            cg.rt.ynz_rt_spawn_blocking,
+            &[
+                closure_ptr.into(),
+                ctx_as_ptr.into(),
+                cg.i64().const_int(ctx_size, false).into(),
+            ],
+            "bg_spawn",
+        )
+        .map_err(|e| format!("spawn_blocking: {e}"))?;
+
+    Ok(cg.i32().const_int(0, false).into())
 }
 
 /// Coerce a decimal128 (N≤34) operand to a bignum C-string when the other side is

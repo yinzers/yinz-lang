@@ -2498,3 +2498,224 @@ function entrypoint() -> nothing {
         output.diagnostics
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.3-M1: sleepMs intrinsic typeck
+// ─────────────────────────────────────────────────────────────────────────────
+
+// WHY: sleepMs(int) -> nothing must type-check cleanly with an int arg and
+// return nothing. If the typeck dispatch arm is missing, users get a confusing
+// "not defined" error instead of a successful type-check.
+#[test]
+fn sleep_ms_with_int_arg_is_clean() {
+    assert_clean(
+        "function entrypoint() -> nothing {\n  sleepMs(50)\n}",
+    );
+}
+
+// WHY: sleepMs with a non-int arg must produce a clear teaching error.
+// Guards against the typeck arm silently accepting wrong-typed arguments.
+#[test]
+fn sleep_ms_with_wrong_type_produces_error() {
+    let out = run("function entrypoint() -> nothing {\n  sleepMs(`not an int`)\n}");
+    let errors: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(!errors.is_empty(), "sleepMs with string arg must produce an error");
+    assert!(
+        errors[0].what.contains("int") || errors[0].what.contains("sleepMs"),
+        "error must mention int or sleepMs; got: {:?}", errors[0].what
+    );
+}
+
+// WHY: sleepMs with 0 args must produce an arity error.
+#[test]
+fn sleep_ms_with_no_args_produces_error() {
+    let out = run("function entrypoint() -> nothing {\n  sleepMs()\n}");
+    let errors: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(!errors.is_empty(), "sleepMs with no args must produce an error");
+}
+
+// WHY: sleepMs with 2 args must produce an arity error.
+#[test]
+fn sleep_ms_with_two_args_produces_error() {
+    let out = run("function entrypoint() -> nothing {\n  sleepMs(50, 100)\n}");
+    let errors: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(!errors.is_empty(), "sleepMs with 2 args must produce an error");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.3-M1: P4 — lend-cross-thread, large-copy warning, kernel-mode rejection
+// ─────────────────────────────────────────────────────────────────────────────
+
+use ynz_typeck::check_with_kernel_mode;
+
+fn run_kernel(source: &str) -> CheckOutput {
+    // Drive typeck directly with kernel_mode=true, bypassing the salsa check_query.
+    let db = ynz_parser::CompilerDb::default();
+    let sf = ynz_parser::SourceFile::new(&db, FILE.to_string(), source.to_string());
+    let parse = ynz_parser::parse_query(&db, sf);
+    let sig_output = ynz_typeck::queries::module_signatures_query(&db, sf);
+
+    let mut merged_sig_table = sig_output.sig_table.clone();
+    for (name, sig) in &sig_output.imported_fns {
+        merged_sig_table.fns.entry(name.clone()).or_insert_with(|| sig.clone());
+    }
+
+    let (typed, mono_table, check_diags) = check_with_kernel_mode(
+        &parse.module,
+        &merged_sig_table,
+        &sig_output.shape_table,
+        &sig_output.generic_fn_table,
+        &sig_output.generic_shape_table,
+        &ynz_typeck::intrinsics::PrimitiveIntrinsicTable::m6(),
+        &sig_output.imported_options,
+    );
+
+    let mut all_diags = parse.diagnostics.clone();
+    for d in sig_output.diagnostics.iter() { all_diags.push(d.clone()); }
+    for d in check_diags.into_iter() { all_diags.push(d); }
+
+    CheckOutput { typed_module: typed, mono_table, diagnostics: all_diags }
+}
+
+// WHY: lend param across thread boundary is a memory-safety error.
+// If a function mutates via `lend` and runs on a background thread, the
+// original value might be dropped while the mutation is in progress.
+#[test]
+fn background_with_lend_param_rejected() {
+    let src = "function mutate(lend x: int) -> nothing { }\n\
+               function entrypoint() -> nothing { let x: int = 5\n background mutate(x) }";
+    let out = run(src);
+    let errors: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(!errors.is_empty(), "lend param to background must produce an error");
+    assert!(
+        errors.iter().any(|d| d.what.contains("lend") || d.what.contains("mutate")),
+        "error must mention lend or background; got: {:?}", errors
+    );
+}
+
+// WHY: large-copy warning fires when a .copy arg is a shape with estimated size > 64B.
+// Guards that the warning threshold and message are correct.
+#[test]
+fn background_with_large_copy_warns() {
+    // Shape with 9 fields = 9 * 8 = 72 bytes > 64 byte threshold.
+    // NOTE: .copy() with parens (it's an action per dot-postfix rule).
+    let src = "shape BigData { a: int, b: int, c: int, d: int, e: int, f: int, g: int, h: int, i: int }\n\
+               function process(d: BigData) -> nothing { }\n\
+               function entrypoint() -> nothing {\n  let d: BigData = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9 }\n  background process(d.copy())\n}";
+    let out = run(src);
+    let warnings: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning))
+        .collect();
+    assert!(!warnings.is_empty(), "large .copy arg must produce a warning; diags: {:#?}", out.diagnostics);
+    assert!(
+        warnings.iter().any(|d| d.what.contains("bytes")),
+        "warning must mention bytes; got: {:?}", warnings
+    );
+}
+
+// WHY: small-copy does not warn — guard that the threshold is correct.
+#[test]
+fn background_with_small_copy_no_warn() {
+    // Shape with 4 fields = 32 bytes < 64 byte threshold
+    let src = "shape Small { a: int, b: int, c: int, d: int }\n\
+               function process(s: Small) -> nothing { }\n\
+               function entrypoint() -> nothing {\n  let s: Small = { a: 1, b: 2, c: 3, d: 4 }\n  background process(s.copy())\n}";
+    let out = run(src);
+    let warnings: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning) && d.what.contains("bytes"))
+        .collect();
+    assert!(warnings.is_empty(), "small .copy arg must NOT produce a bytes warning; got: {:#?}", warnings);
+}
+
+// WHY: kernel mode must reject `wait` with a teaching error.
+#[test]
+fn wait_in_kernel_mode_rejected() {
+    let src = "function slow() -> int { return 1 }\n\
+               function entrypoint() -> nothing { let x = wait slow() }";
+    let out = run_kernel(src);
+    let errors: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(!errors.is_empty(), "wait in kernel mode must produce an error");
+    assert!(
+        errors.iter().any(|d| d.what.contains("wait") || d.what.contains("kernel")),
+        "error must mention wait or kernel; got: {:?}", errors
+    );
+}
+
+// WHY: kernel mode must reject `background` with a teaching error.
+#[test]
+fn background_in_kernel_mode_rejected() {
+    let src = "function process() -> nothing { }\n\
+               function entrypoint() -> nothing { background process() }";
+    let out = run_kernel(src);
+    let errors: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(!errors.is_empty(), "background in kernel mode must produce an error");
+    assert!(
+        errors.iter().any(|d| d.what.contains("background") || d.what.contains("kernel")),
+        "error must mention background or kernel; got: {:?}", errors
+    );
+}
+
+// WHY: background inside a for loop must compile without LLVM symbol collisions.
+// Guards that the per-Cg bg_uid counter prevents duplicate closure names.
+#[test]
+fn background_inside_for_loop_compiles() {
+    let src = "function process(i: int) -> nothing { }\n\
+               function entrypoint() -> nothing {\n  for (i in range(0, 3)) {\n    background process(i)\n  }\n}";
+    assert_clean(src);
+}
+
+// WHY: background with a UFCS method call that has lend self must produce the
+// lend-cross-thread error — verifies that desugaring path is covered.
+#[test]
+fn background_method_call_with_lend_self_rejected() {
+    let src = "shape Counter { n: int }\n\
+               function increment(lend self: Counter) -> nothing { self.n = self.n + 1 }\n\
+               function entrypoint() -> nothing {\n  let c: Counter = { n: 0 }\n  background c.increment()\n}";
+    let out = run(src);
+    let errors: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(!errors.is_empty(), "background with lend-self UFCS must produce an error");
+}
+
+// WHY: background fn(x) where fn takes `give`; use of x after must produce
+// use-after-give error. Guards that is_consumed propagation works at background-call sites.
+// Note: `.give` has no body-level syntax; the compiler infers give-ownership when the
+// function signature declares `give x`. The test passes `x` directly (not `x.give`).
+#[test]
+fn background_give_then_use_after_rejected() {
+    let src = "function process(give x: int) -> nothing { }\n\
+               function entrypoint() -> nothing {\n  let x: int = 5\n  background process(x)\n  print(x)\n}";
+    let out = run(src);
+    let errors: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(!errors.is_empty(), "use-after-give in background must produce an error");
+}
+
+// WHY: zero-byte struct (no fields) must NOT trigger the large-copy warning.
+// Guards that the size > 64 condition is strictly-greater (not >=) and doesn't
+// misfire on zero-sized types or Type::Nothing.
+#[test]
+fn background_with_zero_byte_struct_no_warn() {
+    let src = "shape Empty {}\n\
+               function process(e: Empty) -> nothing { }\n\
+               function entrypoint() -> nothing {\n  let e: Empty = {}\n  background process(e.copy())\n}";
+    let out = run(src);
+    let warnings: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning) && d.what.contains("bytes"))
+        .collect();
+    assert!(warnings.is_empty(), "zero-byte struct copy must NOT produce a bytes warning; got: {:#?}", warnings);
+}

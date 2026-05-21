@@ -224,6 +224,8 @@ function entrypoint() -> nothing {
   print(`  import { newPirate, announce } from services/players`)
   print(`  import { clamp, square } from utils/math_extra`)
   print(`  Multi-file build: ALL .ynz files in the project compiled + linked.`)
+  // ────── v0.3-M1: background runs on a separate thread ──────
+  m3m1_demo()
 }
 
 // ────── M3 helper functions ──────
@@ -392,6 +394,21 @@ function demoInlineShapes() -> nothing {
   }
 }
 
+// ────── v0.3-M1: background runs on a separate thread ──────
+//
+// Hover the `background` keyword in VSCode to see the v0.3-M1 hover doc.
+//
+// The function below is scheduled on a separate thread; main continues
+// immediately. Watch the print order — `main done with v0.3-M1` appears
+// BEFORE `background analytics done`.
+function m3m1_demo() -> nothing {
+  print(``)
+  print(`v0.3-M1 — background runs on a separate thread:`)
+  const event = `pirate_seventh_inning_stretch`
+  background recordPittsburghAnalytics(event.copy())
+  print(`main done with v0.3-M1`)
+}
+
 // ====== v0.2-M5 LSP features ======
 // These comments demonstrate the editor features shipped in v0.2-M5.
 // Open this file in VSCode with the Yinz extension installed to try them.
@@ -406,3 +423,15 @@ function demoInlineShapes() -> nothing {
 // Format on save rewrites the file to canonical Yinz style via ynz-fmt.
 // Code actions offer quick-fixes for any diagnostic with a WHAT-INSTEAD.
 // Semantic tokens show keywords in one color, types in another, variables in a third.
+
+// ────── v0.3-M1 helper ──────
+
+function recordPittsburghAnalytics(event: string) -> nothing {
+  // Sleep 200ms (simulating slow disk write) so the main thread visibly
+  // gets ahead of us.
+  // NOTE: `sleepMs` (NOT `wait`) — `wait` is the keyword and stays
+  // synchronous in M1; the state-machine suspension semantics ship in v0.3-M2.
+  // `sleepMs` is the Yinz-language intrinsic added in v0.3-M1 (P2).
+  sleepMs(200)
+  print(`background analytics done`)
+}

@@ -1,0 +1,21 @@
+// v0.3-M1 background timing fixture.
+// Verifies that background tasks run on a separate thread: main continues
+// before the background task completes.
+//
+// The background task sleeps 200ms. Main prints `main done` immediately after
+// scheduling the task. The test verifies `main done` appears within 50ms
+// and `background done` appears after (ordering proves separate-thread scheduling).
+//
+// NOTE: sleepMs (NOT wait) — `wait` stays synchronous in M1 (state machines ship
+// in v0.3-M2). sleepMs is the v0.3-M1 Yinz intrinsic that calls the blocking
+// sleep helper on the background thread pool.
+
+function recordEvent() -> nothing {
+  sleepMs(200)
+  print(`background done`)
+}
+
+function entrypoint() -> nothing {
+  background recordEvent()
+  print(`main done`)
+}

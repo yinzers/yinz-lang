@@ -1,0 +1,20 @@
+// v0.3-M1 background isolation fixture.
+//
+// Tests that a background task running on a separate thread does not affect
+// the main thread's exit code or execution flow.
+//
+// NOTE: Yinz M1 has no user-level panic!() syntax. The Rust-level panic-discard
+// contract (catch_unwind inside ynz_rt_spawn_blocking) is tested directly in
+// crates/ynz-runtime/tests/spike.rs (spawn+panic, spawn+panic+ctx-no-leak,
+// nested-spawn-inner-panic tests). This fixture tests the pipeline-level
+// isolation property: background task completing normally, main exits 0.
+
+function backgroundWork() -> nothing {
+  sleepMs(50)
+  print(`background finished`)
+}
+
+function entrypoint() -> nothing {
+  background backgroundWork()
+  print(`main done`)
+}

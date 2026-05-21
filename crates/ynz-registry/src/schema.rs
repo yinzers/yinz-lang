@@ -6,6 +6,12 @@ pub struct KeywordEntry {
     /// The `Token::Xxx` variant emitted (e.g. `"Function"`).
     pub token: &'static str,
     pub since: &'static str,
+    /// WHAT this keyword does (Rule 11 first clause). `None` = no hover doc yet.
+    pub hover_what: Option<&'static str>,
+    /// WHAT INSTEAD the developer should write to use it correctly (Rule 11 second clause).
+    pub hover_what_instead: Option<&'static str>,
+    /// WHY the keyword works the way it does — contextual, not generic (Rule 11 third clause).
+    pub hover_why: Option<&'static str>,
 }
 
 /// A keyword from another language that Yinz rejects at lex time with a teaching error.

@@ -114,6 +114,66 @@ fn hover_unregistered_returns_none() {
     assert!(lsp_hover_for_token("_totally_unregistered_xyz_").is_none());
 }
 
+// WHY: v0.3-M1 added Rule-11 hover docs (WHAT/WHAT-INSTEAD/WHY) to the `wait` and
+// `background` keywords. These tests verify the new schema fields are emitted
+// by build.rs and rendered by lsp_adapter.rs. Without them, users hovering over
+// these keywords in VSCode see only "Introduced in M8." — no teaching content.
+
+#[test]
+fn hover_wait_includes_what_what_instead_why() {
+    // WHY: `wait` hover must contain Rule-11 WHAT/WHAT-INSTEAD/WHY content from
+    // the new KeywordEntry.hover_what/hover_what_instead/hover_why schema fields.
+    let h = lsp_hover_for_token("wait").expect("wait must have hover content");
+    assert_eq!(h.kind, HoverKind::Keyword);
+    let body = &h.markdown_body;
+    assert!(body.contains("**WHAT:**"), "wait hover must have WHAT clause");
+    assert!(
+        body.contains("**WHAT INSTEAD:**"),
+        "wait hover must have WHAT INSTEAD clause"
+    );
+    assert!(body.contains("**WHY:**"), "wait hover must have WHY clause");
+    assert!(
+        body.contains("suspend on I/O"),
+        "wait hover must mention suspension context"
+    );
+}
+
+#[test]
+fn hover_background_includes_what_what_instead_why() {
+    // WHY: `background` hover must contain Rule-11 WHAT/WHAT-INSTEAD/WHY content
+    // reflecting v0.3-M1 semantics (separate thread). Old hover was just "Introduced in M8."
+    let h = lsp_hover_for_token("background").expect("background must have hover content");
+    assert_eq!(h.kind, HoverKind::Keyword);
+    let body = &h.markdown_body;
+    assert!(body.contains("**WHAT:**"), "background hover must have WHAT clause");
+    assert!(
+        body.contains("**WHAT INSTEAD:**"),
+        "background hover must have WHAT INSTEAD clause"
+    );
+    assert!(body.contains("**WHY:**"), "background hover must have WHY clause");
+    assert!(
+        body.contains("separate thread"),
+        "background hover must mention separate thread (v0.3-M1 semantics)"
+    );
+}
+
+#[test]
+fn hover_keywords_without_hover_docs_use_legacy_format() {
+    // WHY: keywords without hover_what/hover_what_instead/hover_why set in features.toml
+    // must still produce valid hover content (the legacy "Introduced in X" format).
+    // Verifies backward compatibility of the optional field schema extension.
+    let h = lsp_hover_for_token("function").expect("function keyword must have hover content");
+    assert_eq!(h.kind, HoverKind::Keyword);
+    assert!(
+        h.markdown_body.contains("Introduced in"),
+        "keywords without hover docs must use legacy format"
+    );
+    assert!(
+        !h.markdown_body.contains("**WHAT:**"),
+        "legacy-format keyword must not have WHAT clause"
+    );
+}
+
 #[test]
 fn sort_priority_deferred_greater_than_keywords() {
     let bare = lsp_completion_items(&CompletionContext::BareIdentifier);
