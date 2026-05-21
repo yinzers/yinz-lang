@@ -415,3 +415,73 @@ fn completion_request_returns_list_via_lsp() {
         "completion response must not contain an error field: {response}"
     );
 }
+
+#[test]
+// WHY: __anon__ names are internal synthetic identifiers for anonymous inline shapes.
+// Leaking them into completion makes the list actively misleading — users see
+// `__anon__a_int__b_string` and have no idea what to do with it. This test
+// catches any regression where internal shape names slip through the filter.
+fn anon_shapes_excluded_from_completion() {
+    use lsp_types::Position;
+    use std::collections::HashMap;
+    use ynz_lsp::{capabilities::PositionEncoding, completion::completion_list, position::LineTable};
+    use ynz_typeck::shapes::{ShapeDef, ShapeTable};
+    use ynz_typeck::signatures::SignatureTable;
+
+    let text = "let ";
+    let table = LineTable::new(text);
+
+    let mut shapes = HashMap::new();
+    let dummy_span = ynz_diagnostics::SourceSpan::new("test.ynz", 0, 0);
+    // A normal shape — must appear.
+    shapes.insert(
+        "Player".to_string(),
+        ShapeDef {
+            name: "Player".to_string(),
+            is_base: false,
+            extends: None,
+            follows: vec![],
+            fields: vec![],
+            contract_sigs: vec![],
+            defined_at: dummy_span.clone(),
+        },
+    );
+    // A synthetic anon shape — must NOT appear.
+    shapes.insert(
+        "__anon__health_int__name_string".to_string(),
+        ShapeDef {
+            name: "__anon__health_int__name_string".to_string(),
+            is_base: false,
+            extends: None,
+            follows: vec![],
+            fields: vec![],
+            contract_sigs: vec![],
+            defined_at: dummy_span,
+        },
+    );
+
+    let shape_table = ShapeTable {
+        shapes,
+        union_aliases: HashMap::new(),
+        options_names: std::collections::HashSet::new(),
+    };
+    let sig_table = SignatureTable { fns: HashMap::new() };
+
+    let list = completion_list(
+        text,
+        &table,
+        Position { line: 0, character: 4 },
+        PositionEncoding::Utf8,
+        Some(&sig_table),
+        Some(&shape_table),
+        None,
+    )
+    .expect("completion must be Some");
+
+    let labels: Vec<&str> = list.items.iter().map(|i| i.label.as_str()).collect();
+    assert!(labels.contains(&"Player"), "named shape must appear in completion");
+    assert!(
+        !labels.iter().any(|l| l.starts_with("__anon__")),
+        "synthetic __anon__ shapes must not appear in completion; got: {labels:?}"
+    );
+}

@@ -182,7 +182,7 @@ pub fn user_symbol_items(
         });
     }
 
-    for name in shape_table.shapes.keys() {
+    for name in shape_table.shapes.keys().filter(|n| !n.starts_with("__anon__")) {
         items.push(CompletionItem {
             label: name.clone(),
             kind: Some(CompletionItemKind::CLASS),
