@@ -4,7 +4,7 @@ type: roadmap
 owner: patrick
 status: active
 created: 2026-05-18
-last_updated: 2026-05-20
+last_updated: 2026-05-20 (v0.2-M5 scope updated to reflect final execution plan)
 milestones:
   - v0-2-m1-feature-inventory-sync
   - v0-2-m2-lsp-thin-slice
@@ -161,19 +161,30 @@ Likely 6-8 phases. Sequencing note: can begin once v0.2-M1's keyword/type/intrin
 **Rough scope**: research locks daemon vs simple-loop (likely daemon, sharing infrastructure with v0.2-M5 LSP), file-watching via `notify` crate, salsa-driven incremental recompile, output rendering reusing `ynz-diagnostics`, `--json` event stream (probable — confirm in research phase) and tests, integration tests (touch file, assert recompile fires; touch file rapidly, assert no race), explicit perf check against the sub-second target from `design/compiler.md`. Likely 4-5 phases (5 if `--json` lands in M4; 3-4 if deferred).
 
 ### Milestone v0.2-M5: LSP Full + v0.2.0 Release
-**Value delivered**: The thin LSP shipped in v0.2-M2 expands to a full editor experience: **go-to-definition, find-references, rename, format-on-save** (delegates to v0.2-M3's `ynz-fmt` library), **muted-hint surfaces** per `design/inference.md` + `design/ide-hints.md` (folds in the M7-deferred muted-hint work that was held for "v0.2 LSP"), and the deferred-to-v0.2 sweep of items from `todos.md` "Soon" section (hidden-field default eval, dynamic dispatch call-site coercion, UFCS const-lend check). Cuts the **v0.2.0 release tag**.
-**Execution plan**: `v0-2-m5-lsp-full-and-release` (status: planned)
-**Depends on**: v0.2-M1 (registry), v0.2-M2 (thin LSP foundation it builds on), v0.2-M3 (`ynz-fmt` for format-on-save). v0.2-M4 not a hard dep, but if v0.2-M4 chose daemon mode, M5 reuses that infrastructure.
-**Rough scope**: salsa-query-backed go-to-def + find-references + rename (rename specifically needs careful salsa invalidation), `textDocument/formatting` handler wiring v0.2-M3's library, the three muted-hint placement categories from `design/inference.md` (Addition / Replacement / Informational) — each gets a concrete LSP implementation, sweep of `todos.md` "Soon" items, `examples/pirates-roster/entrypoint.ynz` extension showing every v0.2 LSP feature in action, `examples/primantis-orders/v0_2_errors.ynz` for any new compile errors landed by the registry rewrites, VSCode extension v0.2 update notes, CHANGELOG entry, `Cargo.toml` bump to `0.2.0`, `v0.2.0` tag cut, retro entry on what worked / what didn't for v0.3 planning. Realistically 10-15 phases.
+**Value delivered**: The thin LSP shipped in v0.2-M2 expands to a full editor experience: **8 new LSP capabilities** (go-to-definition, find-references, atomic rename, format-on-save, `textDocument/inlayHint` with 5 firing domains, code actions with quick-fixes, semantic tokens, doc-comment hover), **3 compiler correctness bug-fixes** (hidden-field default eval, dynamic-dispatch call-site coercion, UFCS const-lend check parity), **`ynz build --json`** structured NDJSON output, and **VSCode extension v0.2.0** with 8 feature screenshots. Cuts the **v0.2.0 release tag** (first plain-version tag; no `-mN` suffix).
+**Execution plan**: `.claude/plans/active/v0-2-m5-lsp-full-and-release.md` (status: active; 15 phases: P0-P12 with P11 split into P11a/b/c)
+**Depends on**: v0.2-M1 (SSOT registry — all 9 `[[muted_hint_domain]]` entries needed for inlay hints), v0.2-M2 (thin LSP foundation — server.rs, state.rs, position.rs, dispatch model), v0.2-M3 (`ynz-fmt::format` for format-on-save), v0.2-M4 (must be merged + tagged `v0.2.0-m4` before Phase 12 runs the version bump).
 
-**M2 deferrals landing in M5 (from `.claude/plans/active/v0-2-m2-lsp-thin-slice.md` Deferrals table):**
-- `textDocument/inlayHint` — muted-hint surfaces (the LSP method specifically; M2 shipped no inlay hints)
-- `textDocument/codeAction` — code actions and quick-fixes
-- `textDocument/semanticTokens` — semantic highlighting richer than TextMate grammar
-- Doc-comment integration in `textDocument/hover` body (rich `///` comment content; Phase 5 best-effort, full support here)
-- Pull-diagnostics model — LSP 3.17 `textDocument/diagnostic` pull model as alternative to current push-via-publishDiagnostics
-- `Diagnostic.code` + `Diagnostic.codeDescription` fields (DiagnosticKind name + link; deferred from M2 Phase 3)
-- Structured `Diagnostic.data` field — client-side rendering of WHAT/WHAT-INSTEAD/WHY as separate JSON fields (plaintext `message` stays as fallback)
+**What this milestone ships (locked)**:
+- `textDocument/definition`, `textDocument/references`, `textDocument/rename` + `textDocument/prepareRename`
+- `textDocument/formatting` + `textDocument/rangeFormatting` (adds `format_range` to `ynz-fmt`)
+- `textDocument/inlayHint` — 5 of 9 domains fire today; 4 protocol-only for v0.3+ data
+- `textDocument/codeAction` — WHAT-INSTEAD-driven quick-fixes from registry
+- `textDocument/semanticTokens` — full + range; delta-encoded; keyword/type/fn/var classification
+- Structured `Diagnostic.code` + `Diagnostic.data`; doc-comment hover via `leading_docs` parser attachment
+- `ynz build --json` NDJSON; schema stabilized at v0.2.0
+- 3 correctness bug-fixes closing `todos.md` "Soon" entries
+
+**What remains deferred (with registry entries)**:
+- LSP pull-diagnostics model (`lsp-pull-diagnostics` registry entry)
+- 4 protocol-only inlay-hint domains (`lsp-inlay-hint-wait-points`, `-allocators`, `-lifetimes`, `-function-param-type`)
+- Aliased re-export rename (`lsp-rename-aliased-re-export` registry entry)
+
+**M2 deferrals targeted for closure in M5** (from `.claude/plans/done/v0-2-m2-lsp-thin-slice.md` Deferrals table):
+- `textDocument/inlayHint`, `textDocument/codeAction`, `textDocument/semanticTokens` — planned Phases 6-8
+- Doc-comment hover — planned Phase 10
+- `Diagnostic.code` + `Diagnostic.data` — planned Phase 9
+- Pull-diagnostics — explicitly deferred to v0.3+ via `registry/features.toml` `lsp-pull-diagnostics` entry
 
 ## Out of Scope
 

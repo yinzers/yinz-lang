@@ -137,10 +137,34 @@ These are LSP-level user preferences, not language-level decisions. The protocol
 
 ---
 
+## v0.2-M5 Implementation Plan
+
+M5 will wire data to 5 of the 9 registry `[[muted_hint_domain]]` entries. The remaining 4 will have protocol handlers that return empty hint lists — they fire automatically when v0.3+ delivers the underlying analysis data. No LSP code change is needed when those features ship.
+
+| Domain | M5 Status | What triggers data | Deferred-entry reference |
+|---|---|---|---|
+| `variable_type` | **Firing** — `variable_type_hints` pass in `inlay_hint_passes.rs` | Every unannotated `let x = expr` | N/A |
+| `ownership_call_site` | **Firing** — `ownership_call_site_hints` pass | Every call site with a typed callee signature | N/A |
+| `copy_points` | **Firing** — `copy_point_hints` pass | Trivially-copyable arg still live after call | N/A |
+| `array_to_fixed_promotion` | **Firing** — `array_to_fixed_promotion_hints` pass | `let x: array<T> = [...]` with no mutation/growth detected | N/A |
+| `let_to_const_promotion` | **Firing** — `let_to_const_promotion_hints` pass | `let x = ...` with no reassignment/mutation/`.lend` detected | N/A |
+| `function_param_type` | **Protocol-only** (empty) | First-class lambdas with inferred param types | `registry/features.toml` `lsp-inlay-hint-function-param-type` |
+| `wait_points` | **Protocol-only** (empty) | `wait`-auto-insertion analysis (I/O suspension) | `registry/features.toml` `lsp-inlay-hint-wait-points` |
+| `lifetimes` | **Protocol-only** (empty) | Explicit lifetime UI (may stay fully implicit) | `registry/features.toml` `lsp-inlay-hint-lifetimes` |
+| `allocators` | **Protocol-only** (empty) | `arena scratch { }` keyword | `registry/features.toml` `lsp-inlay-hint-allocators` |
+
+All 9 protocol handlers will be registered in `crates/ynz-lsp/src/inlay_hint.rs::inlay_hint_response` (planned Phase 6). Protocol-only handlers return `Vec<InlayHint>::new()` — not an error, not a panic, just an empty list.
+
+The 5 detection passes will live in `crates/ynz-typeck/src/inlay_hint_passes.rs` as salsa-tracked queries. The hover content for each firing hint will be sourced from the registry via `ynz-registry::lsp_inlay_hint_hover_for(domain, context)` — same SSOT that drives autocomplete and keyword hover.
+
+---
+
 ## Cross-references
 
 - `.claude/rules/inference.md` (the uniform inference rule this protocol implements)
 - `design/golden-rules.md` Rule 11 (extended to all teaching surfaces)
 - `design/teaching-mission.md` "IDE as a Teaching Surface" section
 - `design/compiler-errors.md` (the three-part diagnostic format hints inherit)
+- `design/lsp.md` "Inlay Hints" section (M5 implementation status in full-detail table)
+- `registry/features.toml` `[[muted_hint_domain]]` entries (canonical domain definitions)
 - `design/future/index.md` (where this file sits in the future-list ordering, even though `design/ide-hints.md` is the protocol itself, not in `design/future/`)

@@ -17,6 +17,8 @@ Global cross-workstream items only. Granular per-chat work lives in:
 - [ ] **Dynamic dispatch call-site coercion** — `coerce_to_dynamic` infrastructure is in place (vtable globals emitted) but passing a concrete shape to a `dynamic Foo` parameter is not yet wired. Defer to post-M5.
 - [ ] **UFCS const-lend check** — `check.rs` comment (line ~936): receiver ownership not checked for dot-call UFCS; only free-function-call form is checked. Low priority — the function-call form produces the correct error.
 
+- [ ] **clippy-cleanup-ynz-fmt-ynz-watch** — 3 pre-existing `cargo clippy --workspace -- -D warnings` failures: `redundant_closure` in ynz-fmt, `if_same_then_else` + `too_many_arguments` in ynz-watch. Not introduced by v0.2-M5 Phase 0. Must be cleared before the v0.2.0 release tag (Phase 12 gate-check requires clippy clean). Trigger: Phase 12 pre-release gate.
+
 - [ ] **watch-lru-runtime-tuning** — `YNZ_WATCH_LRU_SCALE`, `YNZ_WATCH_LRU_PARSE`, `YNZ_WATCH_LRU_SIG`, `YNZ_WATCH_LRU_CHECK`, `YNZ_WATCH_LRU_CODEGEN` env vars are documented in `design/watch.md` and locked in the M4 plan but NOT yet wired to `set_lru_capacity` at watch boot. **Why deferred**: salsa 0.26 `set_lru_capacity` requires `&mut db` access; threading that through the `WatchDb` API at runtime adds 15-20 lines but shifts the wire-up to Phase 6+. **Cost to fix**: ~20 lines in `crates/ynz-watch/src/db.rs::WatchDb::apply_lru_env_overrides()` + call at boot; env-var parsing already exists in `memory.rs::read_mb_env`. **Trigger**: a user reports salsa cache OOM that can't be solved by `YNZ_WATCH_REBUILD_AFTER` tuning alone.
 
 ## Later (idea bin — not committed)
@@ -24,6 +26,8 @@ Global cross-workstream items only. Granular per-chat work lives in:
 - [ ] **fmt-inter-arm-comments** — comments placed BETWEEN two match arms (`pattern1 => stmt\n// comment\npattern2 => stmt`) are silently dropped by the formatter. The `trailing-comment-after-last-arm` fix landed in Phase 4 captures AFTER the last arm; BETWEEN arms is a pre-existing bug (confirmed pre-fix on `main`). `When triggered:` fix when implementing Phase 3.5 or Phase 4 follow-up on comment attachment; add a `comment_between_arms.ynz` fixture to scope the bug explicitly. See `crates/ynz-fmt/src/walker.rs` `Stmt::Match` emit code for the fix location.
 
 - [ ] **parser-infinite-loop-on-error-gallery-fixtures** — `v0_2_m1_errors.ynz` and `m1_errors.ynz` cause the parser to hang (infinite loop on error recovery). Pre-existing bug, predates the formatter. The `idempotency.rs` and `semantic_roundtrip.rs` and `mass_rewrite.rs` tests explicitly skip these two files. `When triggered:` fix when the parser's error-recovery loop is audited for termination guarantees (likely as part of the v0.3 parser hardening pass).
+
+- [ ] **lsp-goto-def-subprocess-smoke-test** — Phase 2 tests `definition_response` via direct function calls; the JSON-RPC wire path (Initialize → didOpen → GotoDefinition → Location over stdio) is untested. Trigger: Phase 12 release gate (before v0.2.0 tag). Wire using the `InProcessHarness` pattern from `tests/hover.rs`. Expected: send GotoDefinition request at `announce` in a two-file project; assert response `Location.uri` matches dep file URI.
 
 - [ ] **lsp-vs-cli-exact-divergence** — `regression_lsp_vs_cli_divergence` currently asserts boolean error-presence agreement (CLI exits non-zero ↔ LSP publishes ≥1 diagnostic). Exact diagnostic count matching requires `ynz build --json` structured output (ariadne pretty-print is unreliable to count via regex). Add a `--json` output mode to `ynz-driver` then tighten this test to count-level assertions. Deferred from v0.2-M2 Phase 8.
 
@@ -61,7 +65,31 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 - [ ] **lsp-salsa-cancellation** — salsa 0.26 queries are not cancellable mid-execution; a long `references_for_offset` scan blocks subsequent `didChange` notifications. Acceptable in v0.2-M5 thin-slice dispatch model (single-threaded; in-flight completes before mutations). Trigger: a user reports typing-freeze during a cross-file references scan, OR v0.3+ multi-window editing surfaces measurable contention. Fix: investigate salsa snapshot API (`Snapshot<CompilerDb>`) for concurrent reads; main loop retains `&mut` for mutations, references/refs/rename run on snapshots. Cross-reference: `design/lsp.md` "Concurrency model" section, `crates/ynz-lsp/src/server.rs` main dispatch.
 
+<!-- ----- 6 deferred-tooling registry entries below were staged for v0.2-M5 Phase 0.
+     All 6 graduated to registry/features.toml as [[deferred_tooling_feature]] in Phase 0.
+     Retained below as audit trail only — registry/features.toml is now the canonical SSOT.
+     Plan reference: .claude/plans/active/v0-2-m5-lsp-full-and-release.md Phase 0 -->
+
+- [x] **lsp-pull-diagnostics** — graduated to `registry/features.toml` `[[deferred_tooling_feature]]` in v0.2-M5 Phase 0.
+
+- [x] **lsp-inlay-hint-wait-points** — graduated to `registry/features.toml` `[[deferred_tooling_feature]]` in v0.2-M5 Phase 0.
+
+- [x] **lsp-inlay-hint-allocators** — graduated to `registry/features.toml` `[[deferred_tooling_feature]]` in v0.2-M5 Phase 0.
+
+- [x] **lsp-inlay-hint-lifetimes** — graduated to `registry/features.toml` `[[deferred_tooling_feature]]` in v0.2-M5 Phase 0.
+
+- [x] **lsp-inlay-hint-function-param-type** — graduated to `registry/features.toml` `[[deferred_tooling_feature]]` in v0.2-M5 Phase 0.
+
+- [x] **lsp-rename-aliased-re-export** — graduated to `registry/features.toml` `[[deferred_tooling_feature]]` in v0.2-M5 Phase 0. Cross-reference: `crates/ynz-typeck/src/symbol_lookup.rs::rename_locations` + `RenameError::CannotRenameImportedSymbolInThisFile`.
+
+- [ ] **lsp-references-circular-import-termination** — `references_for_offset` walks all open files following import edges; if Yinz allows circular imports (currently undetermined whether typeck rejects them at all), a cyclic graph could cause infinite loop / editor freeze. v0.2-M5 Phase 1 does NOT explicitly guard against this. Trigger: first user report of editor freeze on cyclic imports, OR pre-emptively when Yinz's import-cycle detection rule lands (likely v0.3 parser hardening pass). Fix: add `visited: HashSet<SourceFile>` to the cross-file walk in `references_for_offset` + add a circular-import fixture test that asserts termination.
+
+- [ ] **lsp-rename-call-site-shadowing-detection** — `RenameError::ConflictsWithExistingName` check today validates "new name doesn't shadow an existing symbol in scope of the rename target." It does NOT walk every use-site of the renamed symbol to check whether the new name would shadow a variable in THAT scope. Example: `function foo() { let x = 1; bar(qux); } function baz() { bar(qux); }` — rename `qux` to `x` succeeds the check, but in `foo()` the renamed use is now shadowed by the local `let x`, silently changing binding semantics. Tier A silent-wrong-output class. Trigger: user report OR v0.3 typeck exposes a per-call-site scope-walk API. Fix: extend `rename_locations` to walk each use-site's scope chain and reject if the new name shadows OR is shadowed by an existing binding.
+
 ## Done (recent)
+
+- [x] **webpage-foundation M1 complete (PR #65 open, 9 commits)** — Nuxt 4 SSG foundation: 15 Y* components, Tailwind v4 design tokens, Shiki code highlighting (6 colors in SSG HTML), SEO suite (sitemap/robots/JSON-LD), CI workflow, DO App Platform Dockerfile. Worktree: `/tmp/ynz-webpage`. Dev server running on :6002 (`bun run dev` in worktree). Plan: `.claude/plans/done/webpage-foundation.md`.
+
 
 - [x] **M6 complete (tag pending v0.1.0-m6, 631 tests)** — options+unions+narrowing: options types (i8 tags, multi-case, toString), union types (tagged-struct, Is-arm narrowing), fallible conversions (.toInt/.toFloat/.toNumber), early-return narrowing, shape aliases (shape S = A|B), string parsing runtime. Plan moved to done/. M2+M3 catch-up items closed.
 - [x] **M5 complete (tag v0.1.0-m5, 574 tests)** — Generics `<T>`, `fixed<T>`, `array<T>`, `map<K,V>`, `maybe<T>`, `.exists()`/`.value`/`.or()`, bracket sugar, SipHash-2-4, Swiss Tables, monomorphization, M4 catch-up (wrapping/saturating, type-attached constants). Plan moved to `done/m5-generics.md`.

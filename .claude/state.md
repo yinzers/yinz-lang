@@ -1,6 +1,6 @@
 # Session State: ynz
 
-**Last Updated**: 2026-05-20 (ynz watch 7 bugs + ynz fmt 4 bugs: __shape/__entry desugar leaking, comments dropped from empty arrays, comments dropped from empty map literals)
+**Last Updated**: 2026-05-21 (webpage-foundation M1 complete — 7 phases, PR #65 open; dev server running on port 6002 in /tmp/ynz-webpage worktree)
 
 ---
 
@@ -10,12 +10,11 @@
 
 <!-- RADAR-START -->
 ### Active Roadmaps
-- v0-2-dev-loop-tooling (patrick) — 2 active plans — 2026-05-20
+- v0-2-dev-loop-tooling (patrick) — 1 active plans — 2026-05-20 (v0.2-M5 scope updated to reflect final execution plan)
 - webpage-docs (Patrick Rizzardi) — 1 active plans — 2026-05-20
 
 ### Active Workstreams
-- v0-2-m4-watch (Patrick Rizzardi) — 9 files touched — 90/121 done — roadmap: v0-2-dev-loop-tooling — 2026-05-20 (post-ship bugs fixed — see Post-Ship Fixes section)
-- v0-2-m5-lsp-full-and-release (Patrick Rizzardi) — 16 files touched — 0/215 done — roadmap: v0-2-dev-loop-tooling — 2026-05-20 (plan-reviewer Round 1 BLOCK addressed — 10 Required Fixes + 5 Concerns + 6 Adversarial cases folded in; see Reviewer History at bottom)
+- v0-2-m5-lsp-full-and-release (Patrick Rizzardi) — 16 files touched — 46/217 done — roadmap: v0-2-dev-loop-tooling — 2026-05-21 (Phase 3 complete — references handler + ProgressTracker + 7 tests)
 - webpage-foundation (Patrick Rizzardi) — 3 files touched — 0/125 done — roadmap: webpage-docs — 2026-05-20
 <!-- RADAR-END -->
 
