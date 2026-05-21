@@ -14,7 +14,7 @@
 - webpage-docs (Patrick Rizzardi) — 1 active plans — 2026-05-20
 
 ### Active Workstreams
-- v0-2-m5-lsp-full-and-release (Patrick Rizzardi) — 16 files touched — 46/217 done — roadmap: v0-2-dev-loop-tooling — 2026-05-21 (Phase 3 complete — references handler + ProgressTracker + 7 tests)
+- v0-2-m5-lsp-full-and-release (Patrick Rizzardi) — committed Phases 0-6 — roadmap: v0-2-dev-loop-tooling — 2026-05-21 (Phases 4+5+6 complete: rename (14 tests) + format-on-save (8 tests) + inlay hints (8 tests); Phases 0-6 all shipped)
 - webpage-foundation (Patrick Rizzardi) — 3 files touched — 0/125 done — roadmap: webpage-docs — 2026-05-20
 <!-- RADAR-END -->
 
