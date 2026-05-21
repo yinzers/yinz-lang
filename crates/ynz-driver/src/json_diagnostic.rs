@@ -187,16 +187,6 @@ mod tests {
     }
 
     #[test]
-    fn severity_mapping_error_is_error() {
-        let mut bucket = DiagnosticBucket::new();
-        bucket.push(make_diag(Severity::Error, "error", "fix it", "because"));
-        // emit_json writes to stdout; we can't capture it easily here.
-        // The important invariant is tested: errors > 0 → exit_code = 1.
-        // This is verified via integration tests in crates/ynz-driver/tests/.
-        let _ = bucket; // suppress unused warning
-    }
-
-    #[test]
     fn zero_diagnostics_exit_code_is_zero() {
         // WHY: `ynz build --json` on a clean file must emit ONLY the summary line
         // (exit_code: 0, all counts = 0). If it emits diagnostic lines for zero
