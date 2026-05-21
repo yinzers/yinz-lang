@@ -1,0 +1,15 @@
+/// Companion to m5_ufcs_const_lend_error.ynz — free-function form.
+/// Used by the byte-identical diagnostic parity test to verify that
+/// `heal(p, 20)` and `p.heal(20)` produce the same error message.
+shape Player {
+  health: int
+}
+
+function heal(lend self: Player, amount: int) -> nothing {
+  self.health = self.health + amount
+}
+
+function entrypoint() -> nothing {
+  const p: Player = { health: 100 }
+  heal(p, 20)
+}

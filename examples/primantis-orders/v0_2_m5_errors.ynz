@@ -1,0 +1,25 @@
+// v0.2-M5 error gallery.
+// Each section below triggers a diagnostic class introduced or fixed in v0.2-M5.
+// Run: ynz build examples/primantis-orders/v0_2_m5_errors.ynz
+// Expected: compile errors at each marked line (Yinz multi-error up to 50 per compile).
+
+// ── UFCS const-lend: dot-call form now errors (same as free-function form) ──────
+
+// WHY: class = ConstLendViaUFCS. `const p; p.heal(20)` where `heal(lend self: Player)`
+//      must produce "cannot lend a const binding" — the same error the free-function
+//      form `heal(p, 20)` produces. Yinz enforces shared-wording: both call forms
+//      yield byte-identical diagnostics per design/ide-hints.md.
+shape Player {
+  health: int
+}
+
+function heal(lend self: Player, amount: int) -> nothing {
+  self.health = self.health + amount
+}
+
+// Trigger: UFCS dot-call on const binding with a lend-receiver function.
+// CODE ACTION: "Declare `p` with `let` if you need `heal` to modify it."
+function entrypoint() -> nothing {
+  const p: Player = { health: 100 }
+  p.heal(10)   // ERROR: `p` is `const` — `heal` needs to mutate it but `const` blocks mutation.
+}

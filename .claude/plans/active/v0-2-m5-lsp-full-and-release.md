@@ -5,7 +5,7 @@ owner: Patrick Rizzardi
 status: active
 roadmap: v0-2-dev-loop-tooling
 created: 2026-05-20
-last_updated: 2026-05-21 (Phase 11b complete — dynamic-dispatch call-site coercion; Phases 0-11b all done)
+last_updated: 2026-05-21 (Phase 11c complete — UFCS const-lend check parity; Phases 0-11c all done)
 files:
   - crates/ynz-lsp/**
   - crates/ynz-typeck/src/**
@@ -1386,19 +1386,19 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 7. Close todos.md entry.
 
 **Acceptance criteria**:
-- [ ] Happy-path error fixture FAILS on baseline (silent-accept), PASSES on branch (errors correctly)
-- [ ] Share-on-const adversarial PASSES (no over-reject)
-- [ ] Mixed-calls adversarial PASSES (granular)
-- [ ] Diagnostic text BYTE-IDENTICAL between dot-call and function-call forms (verified by test comparing the two)
-- [ ] `examples/primantis-orders/v0_2_m5_errors.ynz` UFCS const-lend trigger added with `// WHY:` comment
-- [ ] todos.md UFCS const-lend entry closed
-- [ ] No regression: `cargo test --workspace` green
+- [x] Happy-path error fixture (`m5_ufcs_const_lend_error.ynz`) FAILS on baseline (silent-accept); PASSES on branch (errors correctly, verified via stash)
+- [x] Share-on-const adversarial PASSES (`m5_ufcs_const_share_ok.ynz`; `const p; p.greet()` with share → compiles and prints)
+- [x] Mixed-calls adversarial PASSES (`m5_ufcs_mixed_calls.ynz`; only heal errors, greet succeeds)
+- [x] Diagnostic text BYTE-IDENTICAL: enforced by `m5_ufcs_and_freefn_const_lend_produce_byte_identical_diagnostics` parity test (runs both fixtures, strips ariadne span lines, asserts normalized stderr matches)
+- [x] `examples/primantis-orders/v0_2_m5_errors.ynz` created with UFCS const-lend trigger + `// WHY:` comment
+- [x] todos.md UFCS const-lend entry closed
+- [x] No regression: `cargo test --workspace` green (1350 tests)
 
 **Quality gate**:
-- [ ] `check_arg_ownership` helper has Tier 2 rustdoc; the shared diagnostic text it produces is documented as "called from BOTH UFCS dot-call and function-call paths — canonical wording per design/ide-hints.md shared-wording rule"
-- [ ] No `// TODO` / `// HACK` markers
-- [ ] No `unwrap()` outside tests
-- [ ] No commented-out code
+- [x] `check_arg_ownership` helper has Tier 2 rustdoc on the function explaining the shared-wording invariant and both call sites; `check_method_call` also updated with Tier 2 rustdoc explaining `receiver_expr` parameter
+- [x] No `// TODO` / `// HACK` markers
+- [x] No `unwrap()` outside tests
+- [x] No commented-out code
 
 **Verification**: `cargo test --workspace` + stash-baseline-check + manual `diff` of the two diagnostic outputs (verify identical).
 

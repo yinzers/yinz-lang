@@ -1,0 +1,21 @@
+/// Fixture: a mix of dot-call and function-call forms in the same function body.
+/// `foo(p)` with share param compiles; `p.heal(20)` with lend param on const errors.
+/// Verifies the ownership check fires precisely — only the lend call should fail.
+shape Player {
+  name: string
+  health: int
+}
+
+function greet(share self: Player) -> nothing {
+  print(self.name)
+}
+
+function heal(lend self: Player, amount: int) -> nothing {
+  self.health = self.health + amount
+}
+
+function entrypoint() -> nothing {
+  const p: Player = { name: `hero`, health: 100 }
+  greet(p)
+  p.heal(10)
+}

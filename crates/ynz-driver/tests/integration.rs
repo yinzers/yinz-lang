@@ -870,6 +870,97 @@ fn m5_map_get_set_count() {
 }
 
 #[test]
+fn m5_ufcs_const_lend_errors_same_as_free_fn_form() {
+    // WHY: `const p; p.heal(20)` where `heal(lend self: Player)` must produce
+    //      the same "cannot lend a const binding" error as `heal(p, 20)`.
+    //      The UFCS dot-call form and the function-call form must enforce identical
+    //      ownership rules — any divergence is a silent ownership-safety gap.
+    let (_stdout, stderr, code) =
+        ynz_run_stdout(&fixture("m5_ufcs_const_lend_error.ynz"));
+    assert_ne!(code, 0, "UFCS lend on const must fail");
+    assert!(
+        stderr.contains("const") && stderr.contains("heal"),
+        "error must mention both the const binding and the function name; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn m5_ufcs_and_freefn_const_lend_produce_byte_identical_diagnostics() {
+    // WHY: enforces the shared-wording invariant from design/ide-hints.md.
+    //      If anyone tweaks one format!() site in check_arg_ownership without
+    //      touching the other, this test goes red — "manually verified" rots;
+    //      this is the tripwire.  Both call forms must produce word-for-word
+    //      identical diagnostic text (modulo span line numbers which differ
+    //      between fixtures by design).
+    let (_, ufcs_stderr, ufcs_code) =
+        ynz_run_stdout(&fixture("m5_ufcs_const_lend_error.ynz"));
+    let (_, freefn_stderr, freefn_code) =
+        ynz_run_stdout(&fixture("m5_freefn_const_lend_error.ynz"));
+    assert_ne!(ufcs_code, 0, "UFCS form must fail");
+    assert_ne!(freefn_code, 0, "free-fn form must fail");
+
+    // Strip ariadne span/context lines that differ between fixtures (file paths,
+    // line numbers, source-code snippets, underlines).  Compare only the human-
+    // readable diagnostic message text (the "Error: ..." prefix lines and the
+    // indented note/label lines).
+    let normalize = |s: &str| -> String {
+        s.lines()
+            .filter(|l| {
+                let t = l.trim();
+                // ariadne box-drawing and span lines
+                !t.starts_with("╭─[")
+                    && !t.starts_with("────")
+                    && !t.is_empty()
+                    // "│ " lines: ariadne renders source-context, arrows, empty filler
+                    && !t.starts_with("│")
+                    // Skip ariadne numeric line references " 15 │ ..."
+                    && !t.contains(" │ ")
+                    && !t.contains(" │  ")
+                    // tail boilerplate
+                    && !t.starts_with("If any of these")
+                    && !t.starts_with("https://")
+                    // span paths
+                    && !t.contains(".ynz:")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    assert_eq!(
+        normalize(&ufcs_stderr),
+        normalize(&freefn_stderr),
+        "UFCS and free-fn forms must produce byte-identical diagnostic text"
+    );
+}
+
+#[test]
+fn m5_ufcs_const_share_still_compiles() {
+    // WHY: `const p; p.greet()` where `greet(share self: Player)` must compile.
+    //      The ownership check must NOT over-reject `share` (read-only) methods —
+    //      `const` bindings CAN be shared, only `lend` (mutation) is blocked.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_ufcs_const_share_ok.ynz"));
+    assert_eq!(
+        code,
+        0,
+        "UFCS share on const must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(stdout, "hero\n");
+}
+
+#[test]
+fn m5_ufcs_mixed_calls_granular_rejection() {
+    // WHY: in the same function body, `greet(p)` (share, ok) must compile and
+    //      `p.heal(10)` (lend, const) must error.  Verifies the ownership check
+    //      is per-call, not a blanket rejection of all calls on const bindings.
+    let (_stdout, stderr, code) = ynz_run_stdout(&fixture("m5_ufcs_mixed_calls.ynz"));
+    assert_ne!(code, 0, "lend call on const must fail; stderr:\n{stderr}");
+    assert!(
+        stderr.contains("heal") && !stderr.contains("greet"),
+        "only the lend call (heal) must error, not the share call (greet); stderr:\n{stderr}"
+    );
+}
+
+#[test]
 fn m5_dyn_dispatch_concrete_shape_follows_contract_accepted() {
     // WHY: a shape that declares `follows Contract` must be accepted at a `dynamic Contract`
     //      call site without a typeck error.  Only shapes that declare `follows` qualify;
