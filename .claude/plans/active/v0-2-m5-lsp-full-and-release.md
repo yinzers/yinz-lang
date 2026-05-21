@@ -5,7 +5,7 @@ owner: Patrick Rizzardi
 status: active
 roadmap: v0-2-dev-loop-tooling
 created: 2026-05-20
-last_updated: 2026-05-21 (Phase 10 complete — hover doc-comment integration + completion receiver narrowing; Phases 0-10 all done)
+last_updated: 2026-05-21 (Phase 11a complete — hidden-field default eval fix; Phases 0-11a all done)
 files:
   - crates/ynz-lsp/**
   - crates/ynz-typeck/src/**
@@ -1254,20 +1254,20 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 6. Close todos.md entry.
 
 **Acceptance criteria**:
-- [ ] Audit script committed; contains explicit list of non-zero-hidden-field-default sites found (or "AUDIT FINDING: none" statement)
-- [ ] Happy-path fixture exists; FAILS on `v0.2.0-m4` baseline; PASSES on this branch
-- [ ] Nested-default adversarial fixture exists + PASSES (per Required Fix #10)
-- [ ] Non-zero-int adversarial fixture exists + PASSES
-- [ ] todos.md hidden-field-default-eval "Soon" entry closed
-- [ ] No regression: `cargo test --workspace` green
-- [ ] No fixture's output changes EXCEPT hidden-field-default-eval paths (insta snapshots stable on every other fixture)
+- [x] Audit script committed at `crates/ynz-codegen/tests/audit_hidden_field_defaults.rs`; AUDIT FINDING: 0 non-zero defaults in existing codebase
+- [x] Happy-path fixture exists (`m5_hidden_default_string.ynz`); FAILS on `v0.2.0-m4` baseline (verified via `git stash`); PASSES on this branch (prints `default_label\n`)
+- [x] Nested-default adversarial fixture exists + PASSES on this branch (`m5_hidden_default_nested.ynz`; walks parent's ShapeDecl via extends chain); FAILS on baseline (base_count prints 0 instead of 10)
+- [x] Non-zero-int adversarial fixture exists + PASSES on this branch (`m5_hidden_default_int.ynz`; prints `42\n`); FAILS on baseline (prints `0\n`)
+- [x] todos.md hidden-field-default-eval "Soon" entry closed
+- [x] No regression: `cargo test --workspace` green
+- [x] No fixture's output changes EXCEPT hidden-field-default-eval paths
 
 **Quality gate**:
-- [ ] Audit script's "EXPECTED current output" matches `v0.2.0-m4` actual output (cross-checked manually before commit)
-- [ ] Fix has Tier 2 rustdoc on `lower_struct_lit` explaining the change + WHY
-- [ ] No `// TODO` / `// HACK` markers
-- [ ] No `unwrap()` outside tests
-- [ ] No commented-out code
+- [x] Audit script's AUDIT FINDING note documents the zero-consumer finding explicitly; EXPECTED current output on v0.2.0-m4 baseline = zero for int defaults, null pointer for string defaults (cross-checked by stashing the emit.rs change and observing test output)
+- [x] Fix has Tier 2 inline comment on the new code block explaining WHAT/WHY; `lower_struct_lit` gets the full explanation
+- [x] No `// TODO` / `// HACK` markers
+- [x] No `unwrap()` outside tests
+- [x] No commented-out code
 
 **Verification**:
 - `cargo test -p ynz-codegen audit_hidden_field_defaults 2>&1 | grep 'test result'` — passes

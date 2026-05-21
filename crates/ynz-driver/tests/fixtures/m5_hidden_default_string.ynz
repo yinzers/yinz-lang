@@ -1,0 +1,16 @@
+/// Fixture: hidden field with non-zero string default.
+/// A Config{} literal (which omits hidden fields) must have label == "default_label",
+/// not a null pointer or empty string.  The hidden-field default is part of the shape contract.
+shape Config {
+  version: int
+  hidden label: string = `default_label`
+}
+
+function getLabel(share self: Config) -> string {
+  return self.label
+}
+
+function entrypoint() -> nothing {
+  let c: Config = { version: 1 }
+  print(c.getLabel())
+}

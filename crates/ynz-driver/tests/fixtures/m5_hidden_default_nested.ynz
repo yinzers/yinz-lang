@@ -1,0 +1,27 @@
+/// Fixture: hidden fields in a shape that extends a base shape.
+/// Both the base's hidden default (10) and the derived shape's own hidden default (99)
+/// must be evaluated at construction time.  Inherited hidden fields live in the
+/// parent's shape declaration, not the child's.
+shape Base {
+  id: int
+  hidden base_count: int = 10
+}
+
+shape Derived extends Base {
+  name: string
+  hidden own_offset: int = 99
+}
+
+function getBaseCount(share self: Derived) -> int {
+  return self.base_count
+}
+
+function getOwnOffset(share self: Derived) -> int {
+  return self.own_offset
+}
+
+function entrypoint() -> nothing {
+  let d: Derived = { id: 1, name: `test` }
+  print(d.getBaseCount())
+  print(d.getOwnOffset())
+}

@@ -1,0 +1,17 @@
+/// Fixture: hidden field with non-zero int default (42).
+/// A Counter{} literal must have threshold == 42, not 0.
+/// Zero-init is only correct for explicit `= 0` defaults; non-zero defaults
+/// must be evaluated from the declaration's default expression.
+shape Counter {
+  name: string
+  hidden threshold: int = 42
+}
+
+function getThreshold(share self: Counter) -> int {
+  return self.threshold
+}
+
+function entrypoint() -> nothing {
+  let c: Counter = { name: `items` }
+  print(c.getThreshold())
+}
