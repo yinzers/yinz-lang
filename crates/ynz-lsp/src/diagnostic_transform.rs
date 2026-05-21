@@ -2,6 +2,7 @@ use lsp_types::{
     Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, NumberOrString, Range,
     Url,
 };
+use serde_json::json;
 use ynz_diagnostics::{Diagnostic as YnzDiagnostic, Severity};
 
 use crate::{capabilities::PositionEncoding, position::LineTable};
@@ -66,12 +67,21 @@ pub fn to_lsp_diagnostic(
         }
     };
 
-    // code is the PascalCase DiagnosticKind name — used by code-action handler to
-    // identify which quick-fix to offer. Phase 9 adds data + codeDescription.
+    // `code` = PascalCase DiagnosticKind name — used by code-action handler and
+    // tooling consumers to identify the diagnostic class without parsing the message.
     let code = d
         .kind
         .as_ref()
         .map(|k| NumberOrString::String(k.kind_name().to_string()));
+
+    // `data` = structured WHAT/WHAT-INSTEAD/WHY for consumers that want to render
+    // custom UI without re-parsing `message`. `codeDescription` reserved for docs
+    // site URL — currently `None` until the docs site ships in v0.3+.
+    let data = Some(json!({
+        "what": d.what,
+        "what_instead": d.what_instead,
+        "why": d.why,
+    }));
 
     Diagnostic {
         range,
@@ -80,6 +90,7 @@ pub fn to_lsp_diagnostic(
         message,
         related_information,
         code,
+        data,
         ..Default::default()
     }
 }

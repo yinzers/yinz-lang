@@ -2270,6 +2270,8 @@ dependencies = [
  "clap",
  "insta",
  "predicates",
+ "serde",
+ "serde_json",
  "tempfile",
  "ynz-ast",
  "ynz-codegen",

@@ -98,11 +98,13 @@ fn regression_errors_fixture_has_diagnostics_with_teaching_content() {
 #[ignore]
 fn regression_lsp_vs_cli_divergence() {
     // WHY: The LSP diagnostic pipeline (ynz-lsp via salsa queries) and the CLI
-    // pipeline (ynz build via ynz-driver) must report consistent diagnostic
-    // counts for the same source. A divergence means one pipeline is silently
-    // suppressing or fabricating errors. This test is #[ignore] because the CLI
-    // binary may be slow to start (LLVM init) and is not built in all CI configs.
+    // pipeline (ynz build --json via ynz-driver) must report the same diagnostic
+    // count per severity for every fixture. A divergence means one pipeline is
+    // silently suppressing or fabricating diagnostics. This test is #[ignore]
+    // because it requires the `ynz` binary to be built and present.
     // Run manually with: cargo test -p ynz-lsp -- --ignored regression_lsp_vs_cli
+    //
+    // Closes: lsp-vs-cli-exact-divergence in todos.md (Phase 9 of v0.2-M5).
     use std::path::Path;
 
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -145,14 +147,22 @@ fn regression_lsp_vs_cli_divergence() {
         let client = InProcessHarness::new().start_server();
         client.initialize();
         let lsp_diags = open_and_get_diagnostics(&client, &uri, &text);
-        let lsp_count = lsp_diags.len();
+        let lsp_error_count = lsp_diags
+            .iter()
+            .filter(|d| {
+                d.get("severity")
+                    .and_then(|s| s.as_u64())
+                    .map(|s| s == 1) // LSP DiagnosticSeverity::ERROR = 1
+                    .unwrap_or(false)
+            })
+            .count();
 
-        // Count diagnostics from the CLI pipeline with a generous timeout.
+        // Count diagnostics from the CLI pipeline via `--json` structured output.
         let cli_output = std::process::Command::new(&ynz_binary)
-            .args(["build", path.to_str().expect("path is valid UTF-8")])
+            .args(["build", "--json", path.to_str().expect("path is valid UTF-8")])
             .output();
 
-        let cli_has_errors = match cli_output {
+        let cli_error_count = match cli_output {
             Err(_) => {
                 eprintln!(
                     "regression_lsp_vs_cli_divergence: could not run CLI for {}; skipping",
@@ -161,27 +171,31 @@ fn regression_lsp_vs_cli_divergence() {
                 continue;
             }
             Ok(output) => {
-                // CLI exits non-zero when there are errors. stderr content is ariadne
-                // pretty-printed; we do NOT count individual diagnostics here because
-                // ariadne's rendering (spans, notes, suggestions) produces variable line
-                // counts per diagnostic. Exact count matching requires `ynz build --json`
-                // (structured output not yet implemented — tracked in todos.md
-                // "lsp-vs-cli-exact-divergence"). The invariant we CAN assert reliably
-                // is: CLI sees errors ↔ LSP sees errors (boolean agreement).
-                !output.status.success()
+                // Parse the summary line (last line of NDJSON output).
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let summary_line = stdout.lines().filter(|l| !l.is_empty()).last();
+                match summary_line.and_then(|l| serde_json::from_str::<serde_json::Value>(l).ok()) {
+                    Some(v) if v["type"] == "summary" => {
+                        v["errors"].as_u64().unwrap_or(0) as usize
+                    }
+                    _ => {
+                        eprintln!(
+                            "regression_lsp_vs_cli_divergence: could not parse --json output for {}; skipping",
+                            path.display()
+                        );
+                        continue;
+                    }
+                }
             }
         };
 
-        let lsp_has_errors = lsp_count > 0;
         assert_eq!(
-            lsp_has_errors,
-            cli_has_errors,
-            "LSP vs CLI error presence disagreement for {}: \
-             LSP reported {} diagnostics (has_errors={lsp_has_errors}), \
-             CLI exited with success={} (has_errors={cli_has_errors})",
+            lsp_error_count,
+            cli_error_count,
+            "LSP vs CLI ERROR COUNT disagreement for {}:\n  LSP: {} errors\n  CLI (--json): {} errors",
             path.display(),
-            lsp_count,
-            !cli_has_errors
+            lsp_error_count,
+            cli_error_count
         );
     }
 }

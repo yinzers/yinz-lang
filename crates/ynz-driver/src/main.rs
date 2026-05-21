@@ -1,5 +1,6 @@
 mod build;
 mod fmt;
+mod json_diagnostic;
 mod load;
 mod run;
 mod watch;
@@ -63,6 +64,13 @@ enum Command {
         /// Dump LLVM IR alongside the compiled binary (writes to <binary>.ll).
         #[arg(long)]
         emit_ir: bool,
+        /// Emit structured NDJSON diagnostic output on stdout instead of ariadne text.
+        ///
+        /// Each diagnostic is one JSON object per line. The final line is a summary
+        /// object with error/warning/suggestion counts and an exit_code field.
+        /// See `design/lsp.md` for the full schema.
+        #[arg(long)]
+        json: bool,
     },
     /// Compile and immediately run a Yinz source file or project.
     ///
@@ -187,7 +195,14 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Build { file, emit_ir } => {
+        Command::Build { file, emit_ir, json } => {
+            if json {
+                // --json mode: run check_query only (no codegen/link); emit NDJSON to stdout.
+                // Default ariadne output is suppressed. Exit code mirrors the process exit.
+                let exit_code = build::build_json(&file);
+                process::exit(exit_code);
+            }
+
             let result = build::build(&file);
 
             if result.success {
