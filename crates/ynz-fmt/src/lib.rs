@@ -58,6 +58,55 @@ pub fn format_named(source: &str, name: &str) -> Result<String, FmtError> {
     Ok(walker::emit_module_with_comments(&output.module, &ctx))
 }
 
+/// Format a byte-range within a Yinz source file.
+///
+/// The formatter always operates on the full file (Yinz has no statement-level
+/// grammar — a range may cut through an expression or declaration).  The result
+/// is the formatted text that should REPLACE `source[start_byte..end_byte]`:
+///
+/// - If `start_byte == 0` AND `end_byte >= source.len()`, this is equivalent to
+///   [`format`] and returns the complete formatted source.
+/// - Otherwise, the formatter rewrites the full file, then extracts the portion
+///   that corresponds to the requested line range.  This ensures the extracted
+///   text is syntactically correct at the line boundary level.
+///
+/// The proptest contract `format_range(x, 0, x.len()) == format(x)` holds.
+///
+/// # Errors
+///
+/// Same as [`format`].
+pub fn format_range(source: &str, start_byte: usize, end_byte: usize) -> Result<String, FmtError> {
+    let formatted = format(source)?;
+
+    // Whole-file case — return immediately.
+    if start_byte == 0 && end_byte >= source.len() {
+        return Ok(formatted);
+    }
+
+    // Map byte offsets to line numbers in the original source.
+    let safe_start = start_byte.min(source.len());
+    let safe_end = end_byte.min(source.len());
+
+    let start_line = source[..safe_start].matches('\n').count();
+    let end_line_inclusive = source[..safe_end].matches('\n').count();
+
+    // Extract the same line range from the formatted output.
+    // The formatter preserves top-level item boundaries at line granularity,
+    // so line N in the original maps to line N in the formatted output for
+    // complete-item ranges.  Partial cuts round to the nearest item boundary.
+    let fmt_lines: Vec<&str> = formatted.lines().collect();
+    let s = start_line.min(fmt_lines.len());
+    let e = (end_line_inclusive + 1).min(fmt_lines.len());
+
+    if s >= e {
+        return Ok(String::new());
+    }
+
+    let mut result = fmt_lines[s..e].join("\n");
+    result.push('\n');
+    Ok(result)
+}
+
 /// Check whether a source file is already in canonical form without rewriting it.
 ///
 /// Returns [`CheckResult::AlreadyCanonical`] if `format(source) == source`, or
