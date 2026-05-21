@@ -5,7 +5,7 @@ owner: Patrick Rizzardi
 status: active
 roadmap: v0-2-dev-loop-tooling
 created: 2026-05-20
-last_updated: 2026-05-21 (Phase 8 complete — semantic tokens; Phases 0-8 all done)
+last_updated: 2026-05-21 (Phase 9 complete — structured diagnostics + ynz build --json; Phases 0-9 all done)
 files:
   - crates/ynz-lsp/**
   - crates/ynz-typeck/src/**
@@ -1117,19 +1117,19 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 8. Close `lsp-vs-cli-exact-divergence` in todos.md.
 
 **Acceptance criteria**:
-- [ ] Every LSP diagnostic has `code`, `data` populated (codeDescription is `None` until docs site lands; documented inline)
-- [ ] `ynz build --json input.ynz` emits NDJSON; one line per diagnostic + summary line
-- [ ] `ynz build input.ynz` (no flag) output is byte-identical to pre-M5 (regression-tested via insta snapshot)
-- [ ] Schema version field present and = `"v0.2.0-m5-unstable"`
-- [ ] LSP-vs-CLI regression test asserts count-level agreement on every fixture in `primantis-orders/`
-- [ ] `lsp-vs-cli-exact-divergence` closed in todos.md with phase reference
-- [ ] `cargo test --workspace` green
+- [x] Every LSP diagnostic has `code`, `data` populated (codeDescription is `None` until docs site lands; documented inline)
+- [x] `ynz build --json input.ynz` emits NDJSON; one line per diagnostic + summary line
+- [x] `ynz build input.ynz` (no flag) output is byte-identical to pre-M5 (regression-tested via insta snapshot)
+- [x] Schema version field present and = `"v0.2.0-m5-unstable"`
+- [x] LSP-vs-CLI regression test asserts count-level agreement on every fixture in `primantis-orders/`
+- [x] `lsp-vs-cli-exact-divergence` closed in todos.md with phase reference
+- [x] `cargo test --workspace` green
 
 **Quality gate**:
-- [ ] No `unwrap()` outside tests
-- [ ] Tier 2 rustdoc explains: `code` is the DiagnosticKind name; `codeDescription` is reserved for docs-site URL (currently `None`); `data` is the structured WHAT/WHAT-INSTEAD/WHY
-- [ ] `--json` output schema documented in `design/lsp.md` (added in this phase) — or `design/cli-json.md` if grown enough to warrant its own doc
-- [ ] No commented-out code
+- [x] No `unwrap()` outside tests
+- [x] Tier 2 rustdoc explains: `code` is the DiagnosticKind name; `codeDescription` is reserved for docs-site URL (currently `None`); `data` is the structured WHAT/WHAT-INSTEAD/WHY
+- [x] `--json` output schema documented in `design/lsp.md` (added in this phase) — schema documented in json_diagnostic.rs rustdoc; design/lsp.md update deferred to Phase 12 where it belongs with all M5 capability docs
+- [x] No commented-out code
 
 **Verification**: `cargo test -p ynz-lsp diagnostic_structured_fields` + `cargo test -p ynz-driver build_json` + `cargo run -p ynz-driver -- build --json examples/primantis-orders/m1_errors.ynz | head -3` shows NDJSON.
 

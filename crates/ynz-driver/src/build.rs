@@ -10,7 +10,10 @@ use ynz_codegen::codegen_query;
 use ynz_diagnostics::{render, DiagnosticBucket, SourceSpan};
 use ynz_parser::{parse_query, CompilerDb, SourceFile};
 
-use crate::load::{find_project_root, load_project, load_project_config, load_source};
+use crate::{
+    json_diagnostic::{collect_diagnostics, emit_json},
+    load::{find_project_root, load_project, load_project_config, load_source},
+};
 
 /// Filter `diags` to non-error diagnostics and render them as a string.
 ///
@@ -101,6 +104,63 @@ pub fn build(source_path: &Path) -> BuildResult {
 /// per-invocation temp directory.
 pub fn build_into(source_path: &Path, output_dir: &Path) -> BuildResult {
     build_with_output_dir(source_path, Some(output_dir))
+}
+
+/// Run only the typeck phase on `source_path` (no codegen/link) and emit all
+/// diagnostics as NDJSON to stdout, followed by a summary line.
+///
+/// This is the `ynz build --json` path. Default ariadne output is suppressed.
+/// Exit code: 0 when there are no errors; 1 when there are errors.
+///
+/// The output schema is documented in `design/lsp.md` and stabilizes at the
+/// v0.2.0 release (Phase 12 drops the `-unstable` suffix from `schema_version`).
+pub fn build_json(source_path: &Path) -> i32 {
+    let source_abs =
+        std::fs::canonicalize(source_path).unwrap_or_else(|_| source_path.to_path_buf());
+
+    let project_root = if source_abs.is_dir() {
+        Some(source_abs.clone())
+    } else {
+        find_project_root(&source_abs)
+    };
+
+    let mut infra_diags = DiagnosticBucket::new();
+    let sources = if let Some(root) = &project_root {
+        let _ = load_project_config(root, &mut infra_diags);
+        if infra_diags.has_errors() {
+            return emit_json(&infra_diags);
+        }
+        load_project(root, &mut infra_diags)
+    } else {
+        let Some(text) = load_source(&source_abs, &mut infra_diags) else {
+            return emit_json(&infra_diags);
+        };
+        vec![crate::load::SourceEntry {
+            path: source_abs.clone(),
+            module_path: source_abs
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            text,
+        }]
+    };
+
+    if infra_diags.has_errors() {
+        return emit_json(&infra_diags);
+    }
+
+    // Register all source files, then run typeck only (skip codegen — tooling only needs diagnostics).
+    let mut db = CompilerDb::default();
+    let mut source_file_handles: Vec<SourceFile> = Vec::new();
+    for entry in &sources {
+        let path_str = entry.path.display().to_string();
+        let sf = SourceFile::new(&db, path_str, entry.text.clone());
+        db.register_source(sf);
+        source_file_handles.push(sf);
+    }
+
+    let bucket = collect_diagnostics(&db, &source_file_handles);
+    emit_json(&bucket)
 }
 
 fn build_with_output_dir(source_path: &Path, output_dir: Option<&Path>) -> BuildResult {

@@ -29,7 +29,7 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 - [ ] **lsp-goto-def-subprocess-smoke-test** — Phase 2 tests `definition_response` via direct function calls; the JSON-RPC wire path (Initialize → didOpen → GotoDefinition → Location over stdio) is untested. Trigger: Phase 12 release gate (before v0.2.0 tag). Wire using the `InProcessHarness` pattern from `tests/hover.rs`. Expected: send GotoDefinition request at `announce` in a two-file project; assert response `Location.uri` matches dep file URI.
 
-- [ ] **lsp-vs-cli-exact-divergence** — `regression_lsp_vs_cli_divergence` currently asserts boolean error-presence agreement (CLI exits non-zero ↔ LSP publishes ≥1 diagnostic). Exact diagnostic count matching requires `ynz build --json` structured output (ariadne pretty-print is unreliable to count via regex). Add a `--json` output mode to `ynz-driver` then tighten this test to count-level assertions. Deferred from v0.2-M2 Phase 8.
+- [x] **lsp-vs-cli-exact-divergence** — shipped in v0.2-M5 Phase 9: `ynz build --json` NDJSON output + regression test tightened to count-level via `--json` summary.errors field.
 
 - [ ] **lsp-completion-typeck-receiver-narrowing** — wire `module_signatures_query` into the LSP completion handler to narrow after-dot completions by the receiver's actual type (e.g. `score.` shows only `int` methods when `score: int`). Requires `type_of_expression_at_offset(db, source, byte_offset) -> Option<Type>` helper in ynz-typeck (not yet exposed). Deferred from v0.2-M2 Phase 4; the registry adapter correctly filters by receiver type when given `Some("int")` — the LSP server always passes `None` until this is wired. Trigger: when ynz-typeck exposes a per-offset type query.
 

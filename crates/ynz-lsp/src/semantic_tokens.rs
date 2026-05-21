@@ -345,15 +345,19 @@ mod tests {
     // ─── Legend / options sanity ─────────────────────────────────────────────
 
     #[test]
-    fn legend_idxs_are_in_bounds() {
-        assert!((IDX_KEYWORD as usize) < SEMANTIC_TOKEN_LEGEND.len());
-        assert!((IDX_TYPE as usize) < SEMANTIC_TOKEN_LEGEND.len());
-        assert!((IDX_FUNCTION as usize) < SEMANTIC_TOKEN_LEGEND.len());
-        assert!((IDX_VARIABLE as usize) < SEMANTIC_TOKEN_LEGEND.len());
-        assert!((IDX_ENUM_MEMBER as usize) < SEMANTIC_TOKEN_LEGEND.len());
-        assert!((IDX_NUMBER as usize) < SEMANTIC_TOKEN_LEGEND.len());
-        assert!((IDX_STRING as usize) < SEMANTIC_TOKEN_LEGEND.len());
-        assert!((IDX_COMMENT as usize) < SEMANTIC_TOKEN_LEGEND.len());
+    fn legend_idxs_map_to_correct_token_types() {
+        // WHY: reordering SEMANTIC_TOKEN_LEGEND silently produces wrong colors in VSCode
+        // without any compile error. This test verifies each IDX constant points to
+        // the expected SemanticTokenType — not just that it's in-bounds.
+        use lsp_types::SemanticTokenType;
+        assert_eq!(SEMANTIC_TOKEN_LEGEND[IDX_KEYWORD as usize], SemanticTokenType::KEYWORD);
+        assert_eq!(SEMANTIC_TOKEN_LEGEND[IDX_TYPE as usize], SemanticTokenType::TYPE);
+        assert_eq!(SEMANTIC_TOKEN_LEGEND[IDX_FUNCTION as usize], SemanticTokenType::FUNCTION);
+        assert_eq!(SEMANTIC_TOKEN_LEGEND[IDX_VARIABLE as usize], SemanticTokenType::VARIABLE);
+        assert_eq!(SEMANTIC_TOKEN_LEGEND[IDX_ENUM_MEMBER as usize], SemanticTokenType::ENUM_MEMBER);
+        assert_eq!(SEMANTIC_TOKEN_LEGEND[IDX_NUMBER as usize], SemanticTokenType::NUMBER);
+        assert_eq!(SEMANTIC_TOKEN_LEGEND[IDX_STRING as usize], SemanticTokenType::STRING);
+        assert_eq!(SEMANTIC_TOKEN_LEGEND[IDX_COMMENT as usize], SemanticTokenType::COMMENT);
     }
 
     // ─── Delta encoding ──────────────────────────────────────────────────────
