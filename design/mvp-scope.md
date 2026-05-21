@@ -8,6 +8,53 @@ The granular model exists because (a) each version has predictable scope, (b) ea
 
 ---
 
+## ⚠️ DO NOT FORGET — Required Teaching Surface for Every Version
+
+**This checklist applies to every version below, no exceptions.** Every version that adds ANY user-facing feature (language feature, stdlib module, compiler optimization, tooling) MUST ship ALL of the following in the same version. Not a future version. Not "we'll add it later." The whole point of the granular versioning model is that each version is complete — compiler + IDE + docs + demos all move together.
+
+### Registry (`registry/features.toml`)
+- [ ] New keyword → `[[keyword]]` entry with `token`, `since`, `description`
+- [ ] New banned jargon (term we reject from error messages) → `[[banned_jargon]]` entry
+- [ ] New primitive method on int/float/string/bool → `[[primitive_intrinsic]]` entry
+- [ ] New muted-hint domain (IDE inline annotation) → `[[muted_hint_domain]]` entry with `placement_category`, `example_source`, `example_hint_rendered`
+- [ ] New lint/suggestion rule → `[[lint_rule]]` entry (v0.4+ when the linting tier ships)
+- [ ] Any feature deliberately deferred to a future version → `[[deferred_language_feature]]` or `[[deferred_tooling_feature]]` entry so it can never be silently forgotten
+
+### Compiler diagnostics — every new error/warning gets all three parts
+- [ ] **WHAT**: what went wrong, in plain English, no jargon
+- [ ] **WHAT INSTEAD**: the exact fix the user should make
+- [ ] **WHY**: the specific, contextual reason — not generic ("avoids allocation") but tied to the actual call site ("scores isn't used again after this line, so...")
+- [ ] No bare "invalid syntax" or "type error" without the three-part body
+- [ ] If a diagnostic has a single unambiguous WHAT-INSTEAD fix, wire a code-action quick-fix in the LSP
+
+### LSP + IDE (from v0.2 onward)
+- [ ] New muted-hint domain wired in `crates/ynz-lsp/src/inlay_hint.rs` (or equivalent handler)
+- [ ] New lint rule emitted as an LSP `Diagnostic` with the correct severity
+- [ ] If an existing keyword's behavior CHANGES in this version (e.g., `wait`/`background` changing from sequential to concurrent in v0.3), update its hover text in `registry/features.toml` — stale hover docs actively mislead users
+- [ ] New code-action quick-fix if any diagnostic has a concrete single-step WHAT-INSTEAD
+
+### VSCode extension (from v0.2 onward)
+- [ ] `tooling/vscode-ynz/package.json` version bump to match the Yinz release version
+- [ ] At least one new screenshot showing the new IDE surface added to `tooling/vscode-ynz/screenshots/`
+- [ ] `tooling/vscode-ynz/README.md` updated if the new capability changes what users do in the editor
+- [ ] `.vsix` attached to the GitHub release alongside the Yinz binary
+
+### Demo files (from v0.1 onward — per `.claude/rules/plan-invariants.md`)
+- [ ] `examples/pirates-roster/entrypoint.ynz` extended with a realistic section showing the new feature in context — not a toy snippet, something that looks like real code
+- [ ] `examples/primantis-orders/v{0.N}_errors.ynz` (or milestone-specific `m{N}_errors.ynz`) — intentional triggers for every new compile error class, each with `// WHY: <DiagnosticClassName>` comment
+
+### Spec + design docs
+- [ ] `spec/feature.md` written or updated — audience is an 18-year-old JS dev, examples-heavy, plain English
+- [ ] `design/feature.md` written or updated — rationale, alternatives considered, locked decisions
+- [ ] `spec/overview.md` table of contents updated if a new spec file was created
+- [ ] `design/decisions.md` index updated if a new design file was created
+- [ ] Resolved open questions moved from `design/open-questions.md` to the relevant design file
+
+### The test
+> If a new contributor checked out this version's git tag and tried to use the feature, would their editor tell them everything they need to know — autocomplete, hover docs, inline hints, clear errors with fixes? If anything is missing, the checklist wasn't completed.
+
+---
+
 ## v0.1 — Core language only
 
 The absolute minimum: the language compiles and runs a hello-world program. No stdlib modules.
@@ -48,6 +95,8 @@ The absolute minimum: the language compiles and runs a hello-world program. No s
 - `ynz run` — compile + execute
 
 **Programs you can write in v0.1:** hello world, math demos, pure-computation programs. No file I/O, no networking, no testing.
+
+> **⚠️ DO NOT FORGET** (checklist at top): registry entries for all new keywords + banned jargon + deferred features; WHAT/WHAT-INSTEAD/WHY for every new error; `pirates-roster` demo; error gallery files; spec + design docs. *(v0.1 shipped — checklist applied across M1–M8.)*
 
 ---
 
@@ -148,6 +197,8 @@ Single source of truth for all feature inventories. `registry/features.toml` + `
 
 **Cuts the `v0.2.0` release tag** (first plain-version tag; no `-mN` suffix) in Phase 12. Plan: `.claude/plans/active/v0-2-m5-lsp-full-and-release.md`.
 
+> **⚠️ DO NOT FORGET** (checklist at top): registry entries (SSOT keyword/intrinsic/jargon/hint domains); LSP capabilities wired; WHAT/WHAT-INSTEAD/WHY for every new error; extension version bump + screenshots; `pirates-roster` demo; error gallery files. *(v0.2 shipped — checklist applied across M1–M5.)*
+
 ---
 
 ## v0.3 — Auto-parallelization optimization + Auto-SoA
@@ -172,6 +223,8 @@ The compiler auto-transforms `array<Shape>` storage from Array-of-Structs to Str
 - **Substitute used pre-this-version**: Default Array-of-Structs layout. Manual SoA via parallel `array<T>` of each field is possible if a user really needs it pre-v0.3, but no compiler help.
 - **Locked design**: See `design/future/auto-soa.md`
 
+> **⚠️ DO NOT FORGET** (checklist at top): new `[[muted_hint_domain]]` registry entries for `background_routing` and `channel_capacity` and `auto_arc`; `wait_points` domain activated (was protocol-only); `wait`/`background` hover docs updated (behavior changes from sequential); new lint rules `array-using-soa-layout` + `cross-thread-fields-not-padded` in registry; WHAT/WHAT-INSTEAD/WHY for all new errors (lend-across-thread, wait-on-non-may-block, channel-closed, large-copy warning); SoA debugger DAP integration; extension bump + screenshots for each new IDE surface; `pirates-roster` demo extended per milestone; per-milestone error gallery files (`v0_3_m{1..4}_errors.ynz`). Roadmap: `.claude/plans/roadmaps/v0-3-concurrency-perf.md`.
+
 ---
 
 ## v0.4 — Linting tier (compile-time suggestions)
@@ -183,6 +236,8 @@ The compiler starts emitting the third severity tier — suggestions — during 
 No separate `ynz lint` command — the compiler IS the linter. Customization (config file) comes in v1.x.
 
 **Co-shipping candidate: `--release` flag** — LLVM `-O3`, strip debug info, disable dev-only flags. Locked direction; see `design/future/release-mode.md`. May ship in v0.4 alongside the linting work, or slip to a later perf-focused slot if scope demands.
+
+> **⚠️ DO NOT FORGET** (checklist at top): `[[lint_rule]]` registry entries for every new Tier 3 suggestion rule; LSP `Diagnostic.severity = hint` wired per rule; hover text for each rule follows WHAT/WHAT-INSTEAD/WHY; `--release` flag (if co-shipping) must suppress or adjust hint output; extension version bump + screenshot showing the suggestion squiggle; `pirates-roster` demo with at least two lint rules visible; error gallery showing triggered suggestions.
 
 ---
 
@@ -198,6 +253,8 @@ Three modules bundled together because they're tightly coupled:
 
 Module-specific lint suggestions ship with this version (e.g., "prefer `path.join()` over string concatenation").
 
+> **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries for all `file`, `path`, `directory` methods; module-specific lint rules as `[[lint_rule]]` entries; WHAT/WHAT-INSTEAD/WHY for all new I/O errors; `Iterable<T>` / `FallibleIterable<T>` hover docs if they surface here; new stdlib example project under `examples/<pittsburgh-themed>/` (single-entry layout); extension version bump + screenshot; spec + design docs written.
+
 ---
 
 ## v0.6 — `math`
@@ -205,6 +262,8 @@ Module-specific lint suggestions ship with this version (e.g., "prefer `path.joi
 Self-contained module. sqrt, abs, min/max, floor/ceil/round, trig (sin/cos/tan and inverses), log/exp, pow, constants (`math.pi`, `math.e`, etc.).
 
 Module-specific lint suggestions: "prefer `math.pi` over hardcoded 3.14159."
+
+> **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` + `[[type_attached_constant]]` entries for all `math.*` methods and constants; lint rule for hardcoded approximations; WHAT/WHAT-INSTEAD/WHY for domain errors (sqrt of negative, etc.); stdlib example project; extension bump + screenshot; spec + design docs.
 
 ---
 
@@ -218,17 +277,23 @@ Three modules bundled — all about "running as a program":
 
 See `design/stdlib/cli.md` for the full design (TBD when this version is up).
 
+> **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries for all `cli`, `env`, `process` methods; WHAT/WHAT-INSTEAD/WHY for all new errors (missing required arg, invalid env var type, etc.); stdlib example project; extension bump + screenshot; spec + design docs.
+
 ---
 
 ## v0.8 — `json`
 
 Parse, stringify, prettify. Universal data interchange.
 
+> **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries for `json.*` methods; WHAT/WHAT-INSTEAD/WHY for parse errors (malformed JSON, type mismatch on deserialize); compiler-generated typed serializers per `design/stdlib-design.md` Rule 6 (no runtime reflection); lint suggestions if any; stdlib example project; extension bump + screenshot; spec + design docs.
+
 ---
 
 ## v0.9 — `date` + `duration` (tight pair)
 
 Always paired. `date.now()`, `date.from()`, comparisons, formatting, parsing. `duration` construction, arithmetic, conversion (seconds/minutes/hours/days).
+
+> **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries for all `date`/`duration` methods; Rule 3 compliance (no platform-dependent locale/timezone defaults — explicit always); WHAT/WHAT-INSTEAD/WHY for parse errors; stdlib example project; extension bump + screenshot; spec + design docs.
 
 ---
 
@@ -252,6 +317,8 @@ The `db` module is one of the most substantial stdlib entries — see `design/st
 
 **Hard dependencies**: v0.5 (file — schema snapshot files), v0.9 (date/duration — timestamp wire deserialization).
 
+> **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries for all `db.*` query methods; embedded SQL syntax highlighting wired in LSP (ships with this version per spec); WHAT/WHAT-INSTEAD/WHY for all DB errors (connection failed, type mismatch, N+1 detection hint); compiler-generated typed deserializers per `stdlib-design.md` Rule 6; IDE support for embedded SQL; stdlib example project; extension bump + screenshot; spec + design docs.
+
 ---
 
 ## v0.11 — `log` (basic)
@@ -260,11 +327,15 @@ The `db` module is one of the most substantial stdlib entries — see `design/st
 
 Module-specific lint suggestion: "prefer `log.info()` over `print()` in non-test code when `log` module is available."
 
+> **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries for `log.*` methods; lint rule `prefer-log-over-print` in registry; `print()` → `log.*` code-action quick-fix wired in LSP; WHAT/WHAT-INSTEAD/WHY for misconfigured log output; stdlib example project; extension bump; spec + design docs.
+
 ---
 
 ## v0.12 — `random`
 
 Tiny module. `random.int(min, max)`, `random.float()`, `random.choice(array)`, `random.shuffle(array)`, `random.seed(n)` for deterministic testing.
+
+> **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries for all `random.*` methods; stdlib example project; extension bump; spec + design docs. (Tiny module — checklist is short here.)
 
 ---
 
@@ -293,11 +364,15 @@ See `design/testing.md` for the full design.
 - **Trigger to land**: v0.14+ if real demand surfaces (e.g., a project with massive test files that need within-file parallelism, or users reporting they can't isolate cross-file state cleanly).
 - **Locked design**: See `design/testing.md` and `spec/testing.md`
 
+> **⚠️ DO NOT FORGET** (checklist at top): `test` keyword activated in registry (was `[[deferred_language_feature]]` — promote it); `[[primitive_intrinsic]]` entries for all assertion functions; `ynz test` CLI output follows WHAT/WHAT-INSTEAD/WHY format for assertion failures; assertion failures must show actual vs expected values clearly; extension integration (test results in Problems panel); stdlib example with a real test suite; spec + design docs.
+
 ---
 
 ## v0.14 — `regex`
 
 Substantial design surface (engine choice, flags, captures, replace). Gets its own milestone.
+
+> **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries for `regex.*` methods; RE2/NFA-only enforcement (per `stdlib-design.md` Rule 7 — no backtracking engine, no backreferences); WHAT/WHAT-INSTEAD/WHY for invalid pattern errors and ReDoS-risk patterns; stdlib example project; extension bump; spec + design docs.
 
 ---
 
@@ -313,11 +388,15 @@ With TLS support from day 1 in this version.
 
 **Naming note**: the module is called `request` (not `http`) so the direction is unambiguous on read — `request.get(url)` is clearly outbound. The inbound counterpart is `server` (v0.21). Shared `Request`/`Response` types (capital — they're types per Rule 13) live in both modules' surface; both directions touch them since HTTP semantics are direction-agnostic at the message level.
 
+> **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries for all `request.*` methods; TLS support wired from day one (no plain HTTP default); WHAT/WHAT-INSTEAD/WHY for network errors (timeout, DNS failure, non-2xx status); stdlib example project; extension bump; spec + design docs.
+
 ---
 
 ## v0.16 — `stats`
 
 mean, median, mode, stddev, variance, percentile, histogram. Built on `math`.
+
+> **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries for all `stats.*` methods; WHAT/WHAT-INSTEAD/WHY for edge cases (empty array, single element); stdlib example project; extension bump; spec + design docs.
 
 ---
 
@@ -325,11 +404,15 @@ mean, median, mode, stddev, variance, percentile, histogram. Built on `math`.
 
 SHA-256, SHA-512, AES-GCM, HMAC, key derivation (PBKDF2/Argon2). Careful design needed.
 
+> **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries; sensitive-type modifier applied to key/secret values so they auto-redact in logs; WHAT/WHAT-INSTEAD/WHY for misuse errors (wrong key size, wrong mode, etc.); stdlib example project; extension bump; spec + design docs. This module has the highest security surface — design review before execution plan.
+
 ---
 
 ## v0.18 — `compression`
 
 gzip, zstd, optionally brotli. Wraps system libs via the compiler-internal FFI (since user-facing FFI is v2+).
+
+> **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries for `compression.*` methods; WHAT/WHAT-INSTEAD/WHY for decompression errors (corrupt data, wrong format); stdlib example project; extension bump; spec + design docs.
 
 ---
 
@@ -337,11 +420,15 @@ gzip, zstd, optionally brotli. Wraps system libs via the compiler-internal FFI (
 
 ANSI colors, cursor positioning, terminal-size detection. For richer CLI output.
 
+> **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries for `terminal.*` methods; no-op behavior when stdout is not a TTY (piped output must not contain escape codes — this is a common gotcha); WHAT/WHAT-INSTEAD/WHY for terminal errors; stdlib example project; extension bump; spec + design docs.
+
 ---
 
 ## v0.20 — `csv`
 
 Read, write, optionally streaming for huge files. Less common than JSON but useful.
+
+> **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries for `csv.*` methods; streaming mode must follow `FallibleIterable<T>` protocol (per `design/iterables.md`); WHAT/WHAT-INSTEAD/WHY for parse errors; stdlib example project; extension bump; spec + design docs.
 
 ---
 
@@ -350,6 +437,8 @@ Read, write, optionally streaming for huge files. Less common than JSON but usef
 Builds on the `request` module (v0.15) — shares the `Request`/`Response` types and the underlying HTTP wire-protocol implementation. Adds the inbound side: routing, middleware, request/response handler abstractions. Substantial module.
 
 **API shape (locked at v0.21 design time, not now):** module-level functions on the singleton `server` namespace — `server.route(method, path, handler)`, `server.middleware(fn)`, `server.listen(port)`. The single-server-per-process case is overwhelmingly the norm; multi-server is rare enough to handle as a v1+ extension if real demand surfaces.
+
+> **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries for `server.*` methods; `Request`/`Response` types updated in registry if any fields change from v0.15; WHAT/WHAT-INSTEAD/WHY for server errors (port in use, handler panic, malformed response); LSP autocomplete for route handler signatures; stdlib example project (a real HTTP server); extension bump; spec + design docs.
 
 ---
 
@@ -365,17 +454,23 @@ Install mechanism targets bun-class speed (content-addressed cache, hard-links, 
 
 **Why this version (late in the v0 train)**: There is no public release until v1.0. Shipping the package manager early would mean every pre-v1.0 breaking language change cracks every package — packages would live in an unstable language for ~17 releases. Landing it at v0.22 puts packages into a stable-ish language with the stdlib mostly built (so packages have real APIs to depend on), and gives the package manager one polish cycle before v1.0's backwards-compat promise kicks in. Per `design/versioning.md`, pre-v1.0 has no compatibility guarantee, so the early-shipped value (ecosystem bootstrap, "fill gaps with packages") doesn't accrue until there's a public community — which is v1.0.
 
+> **⚠️ DO NOT FORGET** (checklist at top): `ynz add/remove/update/install` CLI help text follows WHAT/WHAT-INSTEAD/WHY for all errors (package not found, version conflict, network failure); lock file format documented in spec; multi-entry project layout documented in spec (`examples/stadium-fleet/` demo updated); extension integration (show installed packages, dependency warnings); spec + design docs.
+
 ---
 
 ## v0.23 — Logging framework
 
 Structured logging on top of v0.11's basic `log` module. Sinks (file, stdout, syslog), filters, log levels per module, structured fields, contextual loggers.
 
+> **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries for new `log.*` methods beyond v0.11's basics; `prefer-log-over-print` lint rule from v0.11 updated if sink API changes how logging works; WHAT/WHAT-INSTEAD/WHY for sink configuration errors; stdlib example project; extension bump; spec + design docs.
+
 ---
 
 ## v0.24 — Process spawning
 
 `process.spawn(cmd, args)`, pipes (stdin/stdout/stderr), signal handling beyond `onShutdown`. Distinct from v0.7's `process.exit/.pid/.isRunning` (which are about the current process).
+
+> **⚠️ DO NOT FORGET** (checklist at top): `[[primitive_intrinsic]]` entries for `process.spawn` and pipe methods; WHAT/WHAT-INSTEAD/WHY for spawn errors (command not found, permission denied, pipe broken); `errors` keyword integration (spawned process error propagates as first-class error); stdlib example project; extension bump; spec + design docs.
 
 ---
 
@@ -413,6 +508,8 @@ A way to mark stdlib functions / language features as deprecated, with compiler 
 - **Substitute used pre-v1.0**: None needed.
 - **Locked design**: See `design/versioning.md` and `design/linting.md`
 
+> **⚠️ DO NOT FORGET** (checklist at top): **full WHAT/WHAT-INSTEAD/WHY audit of every existing compile error** (v1.0 ships this as a named requirement — "All compile errors reviewed"); operator overloading registry entries (`follows Add`, `follows Subtract`, etc.); custom `Iterable<T>` contract entries; formal grammar doc written; extension v1.0 release with all screenshots refreshed; spec + design docs for operator overloading and custom iterables; v1.0 release blog post / announcement (public launch).
+
 ---
 
 ## v1.1 — Post-launch polish tooling
@@ -426,6 +523,8 @@ A way to mark stdlib functions / language features as deprecated, with compiler 
 - **Substitute used pre-v1.1**: No static doc generation (read the source). No REPL (write a small script and `ynz run` it).
 - **Trigger to land**: v1.1 (post-launch polish milestone).
 - **Locked design**: See `spec/doc-comments.md`
+
+> **⚠️ DO NOT FORGET** (checklist at top): `ynz doc` output format documented; `///` doc-comment registry entries if any new metadata fields are introduced; `ynz repl` tutorial mode follows WHAT/WHAT-INSTEAD/WHY for REPL-specific errors; extension integration for REPL (inline output, REPL panel); spec + design docs.
 
 ---
 
@@ -443,6 +542,8 @@ Server-side infrastructure for hosting and serving Yinz packages — the `ynz ad
 - **Substitute used pre-v1.2**: Package manager (v0.22) supports git URLs and local paths. `ynz add github:user/repo` works fine. Public registry isn't required for the package manager to be useful.
 - **Trigger to land**: v1.2 milestone, after v1.0 launch stabilizes.
 - **Locked design**: See `design/packages.md`
+
+> **⚠️ DO NOT FORGET** (checklist at top): registry API surface documented in spec; `ynz add some-package` errors follow WHAT/WHAT-INSTEAD/WHY (package not found, version conflict, auth error); extension integration (browse packages, see README in hover); spec + design docs. This is dogfood — if the registry server itself produces bad errors or lacks LSP support, it undermines the whole teaching mission.
 
 ---
 
@@ -465,6 +566,8 @@ The `[lint]` section in `yinz.toml` becomes fully configurable — disable rules
 - **Why this version**: v0.4 ships the linting tier with curated defaults. Customization adds a configuration surface that should be designed against real usage patterns — too early creates a config syntax we're stuck with.
 - **Substitute used pre-this-version**: Curated default rule set per `design/linting.md`. Cannot be customized; take-it-or-leave-it.
 - **Locked design**: See `design/linting.md`
+
+> **⚠️ DO NOT FORGET** (checklist at top): `[lint]` config schema documented in spec; config validation errors follow WHAT/WHAT-INSTEAD/WHY; LSP reads `yinz.toml` lint config and adjusts displayed diagnostics live; spec + design docs.
 
 ---
 
