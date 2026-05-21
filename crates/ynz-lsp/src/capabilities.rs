@@ -1,6 +1,6 @@
 use lsp_types::{
-    CompletionOptions, HoverProviderCapability, PositionEncodingKind, ServerCapabilities,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+    CompletionOptions, HoverProviderCapability, OneOf, PositionEncodingKind,
+    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
 };
 
 /// The position encoding this server prefers. UTF-8 means LSP Position.character == byte offset,
@@ -34,6 +34,8 @@ pub fn server_capabilities(encoding: PositionEncoding) -> ServerCapabilities {
             ..Default::default()
         }),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
+        definition_provider: Some(OneOf::Left(true)),
+        references_provider: Some(OneOf::Left(true)),
         ..Default::default()
     }
 }

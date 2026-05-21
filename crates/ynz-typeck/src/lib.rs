@@ -38,6 +38,7 @@
 //! - `builtins` — built-in shape type helper (`Frame`, `SourceLoc`).
 //! - `types` — the [`Type`] enum: all types the type checker knows.
 
+pub mod ast_offset;
 pub mod builtins;
 pub mod check;
 pub mod exports;
@@ -48,6 +49,7 @@ pub mod queries;
 pub mod resolve_import;
 pub mod return_paths;
 pub mod scope;
+pub mod symbol_lookup;
 pub mod shapes;
 pub mod signatures;
 pub mod types;
@@ -58,4 +60,8 @@ pub use intrinsics::PrimitiveIntrinsicTable;
 pub use queries::{check_query, module_signatures_query, CheckOutput, SignatureOutput};
 pub use shapes::{ShapeDef, ShapeTable};
 pub use signatures::SignatureTable;
+pub use symbol_lookup::{
+    cross_file_reference_count_estimate, def_site_for_offset, references_for_offset,
+    rename_locations, resolve_symbol_at, RenameError, ResolvedSymbol, SymbolKind,
+};
 pub use types::Type;

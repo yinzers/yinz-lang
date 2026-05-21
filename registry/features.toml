@@ -1159,6 +1159,62 @@ ships_in = "never — explicit rejection"
 design_doc = "design/watch.md"
 triggers = "N/A — this feature is explicitly rejected, not deferred"
 
+# --- v0.2-M5 LSP full deferred entries ---
+
+# LSP pull-diagnostics model (LSP 3.17 textDocument/diagnostic).
+[[deferred_tooling_feature]]
+name = "lsp-pull-diagnostics"
+substitute = "Push-via-publishDiagnostics model (M2) works fine for v0.2. Pull adds API surface without user-visible value while push already works."
+why = "Pull-diagnostics (LSP 3.17 textDocument/diagnostic) lets the client control when to request diagnostic updates, which can reduce latency on slow connections or powerful machines. Push is simpler and sufficient for v0.2's single-editor-one-Patrick use case."
+ships_in = "v0.3+"
+design_doc = "design/lsp.md"
+triggers = "A client that requires pull-mode AND VSCode push integration begins to lag — rare in 2026."
+
+# Inlay hint — function_param_type domain (awaiting lambdas).
+[[deferred_tooling_feature]]
+name = "lsp-inlay-hint-function-param-type"
+substitute = "Users write explicit param types on named functions. No lambda surface exists in v0.1."
+why = "The canonical use-case for function_param_type hints is `foo(x => x + 1)` where `x` type is inferred from `foo`'s expected parameter type. Yinz v0.1 has no first-class lambdas. The M5 LSP protocol handler emits no hints until lambdas land."
+ships_in = "v0.3+"
+design_doc = "design/ide-hints.md"
+triggers = "First-class lambdas/closures milestone ships."
+
+# Inlay hint — wait_points domain (awaiting I/O suspension analysis).
+[[deferred_tooling_feature]]
+name = "lsp-inlay-hint-wait-points"
+substitute = "Users write explicit `wait` at I/O call sites. No auto-insertion analysis exists in v0.1."
+why = "The wait_points muted-hint domain (Addition category) emits `wait (db.fetch may suspend on I/O)` before I/O calls the compiler can prove suspend. Yinz v0.1 has no I/O-suspension analysis — all calls are synchronous. The M5 LSP protocol handler emits no hints until the analysis ships."
+ships_in = "v0.3"
+design_doc = "design/future/concurrency.md"
+triggers = "`wait`-auto-insertion analysis ships in the concurrency milestone."
+
+# Inlay hint — lifetimes domain (awaiting explicit lifetime UI, may stay fully implicit).
+[[deferred_tooling_feature]]
+name = "lsp-inlay-hint-lifetimes"
+substitute = "No user-facing lifetime UI exists in v0.1. Compiler handles lifetimes fully internally."
+why = "The lifetimes muted-hint domain (Informational category; opt-in only) shows lifetime annotations the compiler inferred. Yinz v0.1 has no explicit lifetime annotation surface. The M5 LSP protocol handler emits no hints. If lifetimes stay fully implicit (possible per design/ownership.md), this entry remains protocol-only indefinitely."
+ships_in = "TBD — may never ship if lifetimes stay fully implicit"
+design_doc = "design/ownership.md"
+triggers = "Explicit lifetimes get a user-facing surface, OR user demand surfaces for seeing implicit lifetime annotations in the IDE."
+
+# Inlay hint — allocators domain (awaiting arena keyword).
+[[deferred_tooling_feature]]
+name = "lsp-inlay-hint-allocators"
+substitute = "No allocator selection in v0.1 — heap is the only target."
+why = "The allocators muted-hint domain (Addition category) emits `.in(scratch)` after constructors inside `arena scratch { }` blocks. Yinz v0.1 has no arenas. The M5 LSP protocol handler emits no hints until arenas land."
+ships_in = "v0.3"
+design_doc = "design/future/arena.md"
+triggers = "`arena scratch { }` keyword ships in the v0.3 concurrency/memory milestone."
+
+# Rename — aliased re-export deferred to v0.3+.
+[[deferred_tooling_feature]]
+name = "lsp-rename-aliased-re-export"
+substitute = "Aliased re-exports (`export { Crew as Captain }`) are REJECTED in v0.2-M5 rename (treated same as bare re-exports). Must rename `Crew` at its origin file `services/crew.ynz`."
+why = "Renaming an aliased re-export (the alias is owned by the importing file, not the origin) has subtle semantics: renaming `Captain` in `entrypoint.ynz` should update every file that imports `Captain` from `entrypoint.ynz` but leave `services/crew.ynz` alone. Correct implementation requires typeck to own local-aliased-binding metadata for re-exports — not yet wired in v0.2-M5."
+ships_in = "v0.3+"
+design_doc = "design/lsp.md"
+triggers = "User request OR a real codebase pattern emerges where aliased re-exports are common and users hit the rejection wall."
+
 # ---------------------------------------------------------------------------
 # [[deferred_stdlib_api]] — RESERVED, zero entries in M1.
 # Each v0.5+ stdlib milestone populates its own entries.

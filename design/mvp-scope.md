@@ -124,14 +124,29 @@ Single source of truth for all feature inventories. `registry/features.toml` + `
 - **Process group kill** — child spawned in own process group via `nix::unistd::setsid()` (Unix); SIGTERM → 2s grace → SIGKILL. Catches double-forked children.
 - **Shadow source state** — `WatchDb` holds `HashMap<PathBuf, String>` outside salsa; DB rebuild repopulates salsa from shadow. Shadow is source of truth; salsa is derived cache.
 
-### v0.2-M5: LSP Full + v0.2.0 Release (planned)
+### v0.2-M5: LSP Full + v0.2.0 Release (in progress)
 
-- Go-to-def, find-refs, rename, format-on-save (via `ynz-fmt`), muted-hint surfaces, code actions, semantic tokens
-- Pull-diagnostics model, structured `Diagnostic.data`, `Diagnostic.code` fields
-- Doc-comment integration in hover
-- `textDocument/inlayHint` for the three placement categories from `design/inference.md`
-- `textDocument/codeAction`, `textDocument/semanticTokens`
-- Cuts the `v0.2.0` release tag
+**8 new LSP capabilities**:
+- `textDocument/definition` — go-to-def, same-file and cross-file
+- `textDocument/references` — find all references across open project files; `$/progress` for slow scans
+- `textDocument/rename` + `textDocument/prepareRename` — atomic `WorkspaceEdit`; rejects invalid names via registry
+- `textDocument/formatting` + `textDocument/rangeFormatting` — delegates to `ynz-fmt::format` / `format_range`
+- `textDocument/inlayHint` — 9 domains; 5 firing (variable_type, ownership_call_site, copy_points, array_to_fixed_promotion, let_to_const_promotion); 4 protocol-only awaiting v0.3+ data
+- `textDocument/codeAction` — quick-fixes from registry WHAT-INSTEAD; `Replace \`X\` with \`Y\`` format
+- `textDocument/semanticTokens` — keyword/type/function/variable/parameter/field/option-variant/number/string/comment classification; delta-encoded
+- Structured `Diagnostic.code` + `Diagnostic.data` fields; doc-comment hover enrichment
+
+**3 compiler correctness bug-fixes**:
+- Hidden-field default eval: `hidden bar: string = "default"` now evaluates the default correctly (was null-init)
+- Dynamic-dispatch call-site coercion: passing `ConcreteFoo` to `dynamic Foo` param now accepted + vtable-dispatches correctly (was typeck error)
+- UFCS const-lend check: `const p; p.heal(20)` where `heal: lend self` now errors (parity with function-call form which already errored)
+
+**Tooling**:
+- `ynz build --json` — structured NDJSON diagnostic output; schema stabilized at v0.2.0
+- `format_range(source, range)` API added to `ynz-fmt` library
+- VSCode extension v0.2.0: screenshots, `\n\n` separator polish, all 8 new capabilities wired
+
+**Cuts the `v0.2.0` release tag** (first plain-version tag; no `-mN` suffix) in Phase 12. Plan: `.claude/plans/active/v0-2-m5-lsp-full-and-release.md`.
 
 ---
 

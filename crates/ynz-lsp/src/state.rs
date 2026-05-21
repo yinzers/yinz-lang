@@ -6,6 +6,22 @@ use ynz_parser::db::{CompilerDb, SourceFile};
 
 use crate::{capabilities::PositionEncoding, position::LineTable};
 
+/// Build a `file://` URI from a registered `SourceFile`'s canonical path.
+///
+/// Inverse of `uri_to_path`: used by go-to-def and find-references to convert
+/// origin-file paths returned by `def_site_for_offset` / `references_for_offset`
+/// back into URIs the LSP client can follow.
+pub fn uri_for_source_file(db: &CompilerDb, sf: SourceFile) -> Url {
+    let path = sf.path(db);
+    Url::from_file_path(&*path).unwrap_or_else(|_| {
+        // Non-filesystem paths (e.g. synthetic test files without a real path):
+        // construct a fallback URI so the client sees something rather than panicking.
+        Url::parse(&format!("file://{path}")).unwrap_or_else(|_| {
+            Url::parse("file:///unknown").expect("static fallback URI is valid")
+        })
+    })
+}
+
 /// All mutable state owned by the LSP server for the lifetime of the process.
 ///
 /// A single worker thread owns `ServerState` and processes all requests

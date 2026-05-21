@@ -9,6 +9,13 @@ use std::collections::HashMap;
 #[salsa::db]
 pub trait SourceFileRegistry: salsa::Database {
     fn source_by_path(&self, path: &str) -> Option<SourceFile>;
+    /// Returns all canonical paths registered in this project.
+    ///
+    /// Perf: O(N) allocation per call (clones the full keyset). Not a hot-path concern at
+    /// v0.2 project scales (<100 files), but callers should avoid calling this in tight loops.
+    /// Trigger to revisit: project size exceeds 100 files and LSP references/rename latency
+    /// becomes noticeable — at that point, switch to an iterator API or a cached snapshot.
+    fn all_source_paths(&self) -> Vec<String>;
 }
 
 /// A single source file as a salsa input.
@@ -63,5 +70,9 @@ impl salsa::Database for CompilerDb {}
 impl SourceFileRegistry for CompilerDb {
     fn source_by_path(&self, path: &str) -> Option<SourceFile> {
         self.source_registry.get(path).copied()
+    }
+
+    fn all_source_paths(&self) -> Vec<String> {
+        self.source_registry.keys().cloned().collect()
     }
 }

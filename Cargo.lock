@@ -2295,6 +2295,7 @@ dependencies = [
 name = "ynz-lsp"
 version = "0.2.0-m4"
 dependencies = [
+ "crossbeam-channel",
  "lsp-server",
  "lsp-types",
  "salsa",

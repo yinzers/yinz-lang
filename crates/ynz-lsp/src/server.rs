@@ -6,17 +6,20 @@ use lsp_types::{
         DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Initialized,
         Notification as _,
     },
-    request::{Completion, HoverRequest, Initialize, Request as _, Shutdown},
+    request::{Completion, GotoDefinition, HoverRequest, Initialize, References, Request as _, Shutdown},
     CompletionParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, HoverParams, InitializeParams, InitializeResult, ServerInfo, Url,
+    DidOpenTextDocumentParams, GotoDefinitionParams, HoverParams, InitializeParams,
+    InitializeResult, ReferenceParams, ServerInfo, Url,
 };
 
 use crate::{
     capabilities::{negotiate_encoding, server_capabilities},
     completion::completion_list,
     diagnostic_transform::{path_to_uri, to_lsp_diagnostic},
+    goto_definition::definition_response,
     hover::hover_response,
     position::LineTable,
+    references::references_response,
     state::ServerState,
 };
 
@@ -191,6 +194,59 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
             None => serde_json::Value::Null,
         };
         let response = Response::new_ok(req.id, result);
+        connection.sender.send(Message::Response(response)).ok();
+        return;
+    }
+
+    if req.method == GotoDefinition::METHOD {
+        let params: GotoDefinitionParams = match serde_json::from_value(req.params) {
+            Ok(p) => p,
+            Err(e) => {
+                let response = Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::InvalidParams as i32,
+                    format!("invalid definition params: {e}"),
+                );
+                connection.sender.send(Message::Response(response)).ok();
+                return;
+            }
+        };
+        let uri = &params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+        let result = definition_response(state, uri, position);
+        let value = match result {
+            Some(r) => serde_json::to_value(r).unwrap_or(serde_json::Value::Null),
+            None => serde_json::Value::Null,
+        };
+        let response = Response::new_ok(req.id, value);
+        connection.sender.send(Message::Response(response)).ok();
+        return;
+    }
+
+    if req.method == References::METHOD {
+        let params: ReferenceParams = match serde_json::from_value(req.params) {
+            Ok(p) => p,
+            Err(e) => {
+                let response = Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::InvalidParams as i32,
+                    format!("invalid references params: {e}"),
+                );
+                connection.sender.send(Message::Response(response)).ok();
+                return;
+            }
+        };
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let include_decl = params.context.include_declaration;
+        let result = references_response(state, uri, position, include_decl, &connection.sender);
+        let value = match result {
+            Some(locs) => serde_json::to_value(locs).unwrap_or(serde_json::Value::Null),
+            // None means lookup failed (unknown URI or invalid position).
+            // Some(vec![]) = valid position with zero references — serializes to [].
+            None => serde_json::Value::Null,
+        };
+        let response = Response::new_ok(req.id, value);
         connection.sender.send(Message::Response(response)).ok();
         return;
     }
