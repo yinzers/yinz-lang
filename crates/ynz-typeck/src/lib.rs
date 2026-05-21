@@ -40,6 +40,7 @@
 
 pub mod ast_offset;
 pub mod builtins;
+pub mod inlay_hint_passes;
 pub mod check;
 pub mod exports;
 pub mod generics;
@@ -65,3 +66,8 @@ pub use symbol_lookup::{
     rename_locations, resolve_symbol_at, RenameError, ResolvedSymbol, SymbolKind,
 };
 pub use types::Type;
+pub use inlay_hint_passes::{
+    array_to_fixed_promotion_hints, copy_point_hints, let_to_const_promotion_hints,
+    ownership_call_site_hints, variable_type_hints, CopyHint, OwnershipHint, PromotionHint,
+    PromotionKind, TypeHint,
+};

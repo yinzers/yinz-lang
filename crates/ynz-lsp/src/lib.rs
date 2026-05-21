@@ -4,6 +4,7 @@ pub mod diagnostic_transform;
 pub mod formatting;
 pub mod goto_definition;
 pub mod hover;
+pub mod inlay_hint;
 pub mod position;
 pub mod progress;
 pub mod references;

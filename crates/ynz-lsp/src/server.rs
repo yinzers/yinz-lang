@@ -7,13 +7,13 @@ use lsp_types::{
         Notification as _,
     },
     request::{
-        Completion, Formatting, GotoDefinition, HoverRequest, Initialize, PrepareRenameRequest,
-        RangeFormatting, References, Rename, Request as _, Shutdown,
+        Completion, Formatting, GotoDefinition, HoverRequest, Initialize, InlayHintRequest,
+        PrepareRenameRequest, RangeFormatting, References, Rename, Request as _, Shutdown,
     },
     CompletionParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentFormattingParams, DocumentRangeFormattingParams,
-    GotoDefinitionParams, HoverParams, InitializeParams, InitializeResult, PrepareRenameResponse,
-    ReferenceParams, RenameParams, ServerInfo, Url,
+    GotoDefinitionParams, HoverParams, InitializeParams, InitializeResult, InlayHintParams,
+    PrepareRenameResponse, ReferenceParams, RenameParams, ServerInfo, Url,
 };
 
 use crate::{
@@ -23,6 +23,7 @@ use crate::{
     formatting::{formatting_response, range_formatting_response},
     goto_definition::definition_response,
     hover::hover_response,
+    inlay_hint::inlay_hint_response,
     position::LineTable,
     references::references_response,
     rename::{prepare_rename_response, rename_response},
@@ -299,6 +300,29 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
             &connection.sender,
         );
         let value = serde_json::to_value(edits).unwrap_or(serde_json::Value::Null);
+        connection
+            .sender
+            .send(Message::Response(Response::new_ok(req.id, value)))
+            .ok();
+        return;
+    }
+
+    if req.method == InlayHintRequest::METHOD {
+        let params: InlayHintParams = match serde_json::from_value(req.params) {
+            Ok(p) => p,
+            Err(e) => {
+                let response = Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::InvalidParams as i32,
+                    format!("invalid inlayHint params: {e}"),
+                );
+                connection.sender.send(Message::Response(response)).ok();
+                return;
+            }
+        };
+        let uri = &params.text_document.uri;
+        let hints = inlay_hint_response(state, uri, params.range);
+        let value = serde_json::to_value(hints).unwrap_or(serde_json::Value::Null);
         connection
             .sender
             .send(Message::Response(Response::new_ok(req.id, value)))
