@@ -30,6 +30,12 @@ These files are INTENTIONALLY broken — they're not meant to compile. The point
 | **m6_errors.ynz** | future | options + union narrowing error classes |
 | **m7_errors.ynz** | future | string + errors + iterables error classes |
 | **m8_errors.ynz** | future | module + sensitive + concurrency error classes |
+| **v0_2_m1_errors.ynz** | ✅ shipped | feature-registry SSOT diagnostics |
+| **v0_2_m2_errors.ynz** | ✅ shipped | LSP diagnostic flow verification |
+| **v0_2_m3_errors.ynz** | ✅ shipped | watch-daemon diagnostics |
+| **v0_2_m4_errors.ynz** | ✅ shipped | file-watcher path errors |
+| **v0_2_m5_errors.ynz** | ✅ shipped | LSP rename + refactor errors |
+| **[v0_3_m1_errors.ynz](v0_3_m1_errors.ynz)** | ✅ shipped | share-param (carry-forward), lend-cross-thread, large-copy warning, kernel-mode rejections (commented, triggered in-process) |
 
 ## Why this exists
 

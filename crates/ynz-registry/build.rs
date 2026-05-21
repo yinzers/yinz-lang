@@ -155,9 +155,24 @@ fn emit_keywords(table: &TomlTable, out: &mut String) {
         let name = get_str(entry, "name", "keyword", "<unknown>");
         let token = get_str(entry, "token", "keyword", name);
         let since = get_str(entry, "since", "keyword", name);
+        let hover_what = entry.get("hover_what").and_then(|v| v.as_str());
+        let hover_what_instead = entry.get("hover_what_instead").and_then(|v| v.as_str());
+        let hover_why = entry.get("hover_why").and_then(|v| v.as_str());
+        let hw = match hover_what {
+            Some(s) => format!("Some({s:?})"),
+            None => "None".to_string(),
+        };
+        let hwi = match hover_what_instead {
+            Some(s) => format!("Some({s:?})"),
+            None => "None".to_string(),
+        };
+        let hwy = match hover_why {
+            Some(s) => format!("Some({s:?})"),
+            None => "None".to_string(),
+        };
         writeln!(
             out,
-            "    crate::KeywordEntry {{ name: {name:?}, token: {token:?}, since: {since:?} }},",
+            "    crate::KeywordEntry {{ name: {name:?}, token: {token:?}, since: {since:?}, hover_what: {hw}, hover_what_instead: {hwi}, hover_why: {hwy} }},",
         )
         .unwrap();
     }

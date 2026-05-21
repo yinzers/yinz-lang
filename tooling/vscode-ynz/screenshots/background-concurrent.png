@@ -1,0 +1,1 @@
+PNG_PLACEHOLDER: Record a screenshot showing (1) hover over `background` keyword showing WHAT/WHAT-INSTEAD/WHY v0.3-M1 hover doc, and (2) a `background fn(largeStruct.copy())` line with the `.give` inlay hint + lend-cross-thread error squiggle visible. Replace this file with the actual PNG before the v0.3.0-m1 GitHub release.

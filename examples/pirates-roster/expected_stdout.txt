@@ -80,3 +80,7 @@ M8 — modules, multi-file project:
   import { newPirate, announce } from services/players
   import { clamp, square } from utils/math_extra
   Multi-file build: ALL .ynz files in the project compiled + linked.
+
+v0.3-M1 — background runs on a separate thread:
+main done with v0.3-M1
+background analytics done

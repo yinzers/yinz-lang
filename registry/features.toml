@@ -166,11 +166,19 @@ since = "M8"
 name = "wait"
 token = "Wait"
 since = "M8"
+# Rule 11 hover docs — v0.3-M1
+hover_what = "Compile-time hint that this call may suspend on I/O."
+hover_what_instead = "Write `wait foo()` at a call site to ensure the function completes before continuing. Runtime suspension semantics ship in v0.3-M2."
+hover_why = "v0.3-M2 adds state-machine transformations that make `wait` non-blocking; in v0.3-M1, `wait` still runs synchronously but the keyword's compile-time meaning is locked."
 
 [[keyword]]
 name = "background"
 token = "Background"
 since = "M8"
+# Rule 11 hover docs — v0.3-M1
+hover_what = "Runs the function on a separate thread starting in v0.3-M1."
+hover_what_instead = "Write `background fn(value.give)` or `background fn(value.copy)` to schedule fn on the background thread pool."
+hover_why = "Previously ran synchronously (v0.1, v0.2). v0.3-M1 spawns fn on a separate OS thread; main continues immediately. Handle-form (`let h = background fn()`) ships in v0.3-M4."
 
 # ---------------------------------------------------------------------------
 # [[banned_declaration_keyword]] — keywords from other languages Yinz rejects
@@ -1217,6 +1225,15 @@ ships_in = "v0.3"
 design_doc = "design/future/arena.md"
 triggers = "`arena scratch { }` keyword ships in the v0.3 concurrency/memory milestone."
 
+# background handle-form — `let h = background fn()` is rejected by typeck; ships in v0.3-M4.
+[[deferred_tooling_feature]]
+name = "background-handle-form"
+substitute = "Use fire-and-forget `background fn(value.give)` or `background fn(value.copy)` for now. Handles (`let h = background fn()`) and channel-based result passing ship in v0.3-M4."
+why = "The handle form needs channels to pass results back to the caller. Channels ship in v0.3-M4 alongside the handle-form syntax."
+ships_in = "v0.3-M4"
+design_doc = "design/future/concurrency.md"
+triggers = "`let h = background fn()` — already rejected by typeck with a compile error pointing to this deferred feature"
+
 # Rename — aliased re-export deferred to v0.3+.
 [[deferred_tooling_feature]]
 name = "lsp-rename-aliased-re-export"
@@ -1332,6 +1349,32 @@ what_template = "ynz watch: memory polling is unavailable on this platform."
 what_instead_template = "The memory hard-stop safety net (`YNZ_WATCH_MAX_RSS_MB`) is disabled for this session. Watch will continue running."
 why_template = "The `memory-stats` crate could not read process RSS on this platform (rare — typically affects chroot environments without /proc). Without RSS polling, the Layer 3 hard-stop cannot fire. Layers 1 (LRU caps) and 2 (periodic DB rebuild) remain active."
 
+# v0.3-M1 concurrency safety diagnostic templates
+
+[[diagnostic_template]]
+kind_name = "LendAcrossThreadBoundary"
+what_template = "Cannot use `background` with a function that mutates its arguments via `lend`."
+what_instead_template = "Change the parameter to `give` (transfer ownership) or pass a copy: `background fn(value.copy)`."
+why_template = "`background` runs this function outside the current scope. A `lend` borrow allows mutation through the borrow; if the value's owner reassigns or drops it concurrently, the background task's mutations would corrupt freed memory. Transfer ownership (`give`) or pass a copy so the background task owns its argument."
+
+[[diagnostic_template]]
+kind_name = "KernelModeRejectsBackground"
+what_template = "`background` is not available in --kernel mode."
+what_instead_template = "Remove the keyword or build without `--kernel`. Kernel-mode programs run without a scheduler runtime."
+why_template = "The thread-pool runtime that powers `background` does not run in kernel mode. See design/future/no-runtime-mode.md for the kernel-mode contract."
+
+[[diagnostic_template]]
+kind_name = "KernelModeRejectsWait"
+what_template = "`wait` is not available in --kernel mode."
+what_instead_template = "Remove the keyword or build without `--kernel`. Kernel-mode programs run without a scheduler runtime."
+why_template = "The thread-pool runtime that powers `wait` does not run in kernel mode. See design/future/no-runtime-mode.md for the kernel-mode contract."
+
+[[diagnostic_template]]
+kind_name = "BackgroundLargeStructCopy"
+what_template = "Copying {size} bytes into a background task."
+what_instead_template = "Pass ownership with `background fn(value.give)` if you don't need the value after. Click `.give` to apply."
+why_template = "`.give` transfers ownership without copying. Auto-detection of unused-after-call ships in v0.3-M3; until then, the choice is yours to make explicit."
+
 # ---------------------------------------------------------------------------
 # [[muted_hint_domain]] — IDE inference domains per .claude/rules/inference.md.
 # Required fields: domain, placement_category, description, example_source,
@@ -1356,9 +1399,13 @@ example_hint_rendered = ": int"
 [[muted_hint_domain]]
 domain = "ownership_call_site"
 placement_category = "Informational"
-description = "Shows the ownership modifier the compiler infers at a function call site"
+description = "Shows the ownership modifier the compiler infers at a function call site; also fires at background call sites when .copy() arg exceeds 64 bytes to suggest .give instead"
 example_source = "foo(player)"
 example_hint_rendered = "share (read-only — matches foo's signature)"
+# v0.3-M1 extension: fires at `background fn(largeStruct.copy)` call sites when
+# estimated copy size > 64 bytes. LSP inlayHint handler: crates/ynz-lsp/src/inlay_hint.rs.
+# Firing condition: BackgroundLargeStructCopy warning present at call site span.
+triggers_on_background_call_site = true
 
 [[muted_hint_domain]]
 domain = "wait_points"

@@ -1,0 +1,101 @@
+// v0.3-M1 compile-error and warning gallery
+//
+// Every block below intentionally triggers a diagnostic class added in v0.3-M1.
+// Run `ynz build v0_3_m1_errors.ynz` to see all diagnostics.
+// Yinz reports up to 50 diagnostics per compile so a single run surfaces all.
+//
+// Each block has a // WHY: comment naming the diagnostic class.
+
+// -- Shapes used as targets in the examples below --
+
+shape Order {
+  id: int
+  item: string
+}
+
+shape BigOrder {
+  id: int
+  item: string
+  qty: int
+  price: int
+  note: string
+  region: int
+  zone: int
+  code: int
+  flag: int
+}
+
+// -- v0.3-M1 Error Class 1: share-param callee via background (M8 carry-forward) --
+
+function readOrder(share self: Order) -> nothing {
+  print(self.item)
+}
+
+function triggerShareError() -> nothing {
+  let order: Order = { id: 1, item: `cheesesteak` }
+  // WHY: background + share param = borrow-may-outlive-caller safety error.
+  // (Was locked in M8; carry-forward regression check -- still errors in v0.3-M1.)
+  background readOrder(order)
+}
+
+// -- v0.3-M1 Error Class 2: lend-param callee via background --
+
+function updateOrder(lend self: Order) -> nothing {
+  self.id = self.id + 1
+}
+
+function triggerLendError() -> nothing {
+  let order: Order = { id: 1, item: `kielbasa` }
+  // WHY: LendAcrossThreadBoundary -- background + lend param is a new v0.3-M1 error.
+  // A lend borrow across a thread boundary lets the background task mutate
+  // a value whose owner may reassign or drop it concurrently.
+  background updateOrder(order)
+}
+
+// -- v0.3-M1 Warning Class: large-copy at background call site --
+
+function processBigOrder(order: BigOrder) -> nothing {
+  print(order.item)
+}
+
+function triggerLargeCopyWarning() -> nothing {
+  let big: BigOrder = { id: 1, item: `primanti sandwich`, qty: 100, price: 9, note: `extra coleslaw`, region: 3, zone: 7, code: 42, flag: 1 }
+  // WHY: BackgroundLargeStructCopy -- BigOrder has 9 fields x 8 bytes = 72 bytes > 64 byte threshold.
+  // Suggests passing ownership instead of copying.
+  background processBigOrder(big.copy())
+}
+
+// -- v0.3-M1 Error Class 3: kernel-mode rejects background --
+//
+// WHY: KernelModeRejectsBackground -- background requires the thread-pool runtime;
+// kernel-mode programs run without a scheduler runtime.
+//
+// Cannot be triggered via the public CLI in M1 (--kernel flag is hidden until v0.3+).
+// Triggered in-process via check_with_kernel_mode() -- see crates/ynz-typeck/tests/check.rs.
+// When --kernel is a public flag (v0.3+), this block will be updated with a real trigger.
+//
+// Placeholder comment only:
+//   function entrypoint() -> nothing {
+//     let order: Order = { id: 1, item: `pierogies` }
+//     background processBigOrder(order)   // ERROR in --kernel mode
+//   }
+
+// -- v0.3-M1 Error Class 4: kernel-mode rejects wait --
+//
+// WHY: KernelModeRejectsWait -- wait requires the thread-pool runtime;
+// kernel-mode programs run without a scheduler runtime.
+//
+// Same as above -- --kernel flag is hidden in M1; triggered via check_with_kernel_mode().
+// See crates/ynz-typeck/tests/check.rs `wait_in_kernel_mode_rejected`.
+
+// -- Happy path: fire-and-forget (the correct form) --
+
+function dispatchOrder(order: Order) -> nothing {
+  print(order.item)
+}
+
+// WHY: This is the CORRECT form -- ownership is inferred as give, no copy needed.
+function validBackgroundDispatch() -> nothing {
+  let order: Order = { id: 1, item: `fries on the sandwich` }
+  background dispatchOrder(order)
+}

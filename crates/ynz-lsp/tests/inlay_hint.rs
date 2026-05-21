@@ -315,3 +315,83 @@ fn test_inlay_hint_response_under_30ms_for_viewport() {
         elapsed.as_millis()
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Domain 6: ownership_call_site — background large-copy (.give hint)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_inlay_hint_background_large_copy_emits_give_hint() {
+    // WHY: v0.3-M1 added a `.give (transfers ownership; no copy)` inlayHint for
+    // `background fn(largeStruct.copy)` call sites where the copy exceeds 64 bytes.
+    // This verifies the LSP wiring of the ownership_call_site domain extension —
+    // without it, users get the Tier 3 warning but miss the inline hint that makes
+    // the fix one click away.
+    //
+    // The shape below has 9 fields × 8 bytes = 72 bytes > 64 byte threshold.
+    let src = r#"
+shape LargeEvent {
+    a: int
+    b: int
+    c: int
+    d: int
+    e: int
+    f: int
+    g: int
+    h: int
+    i: int
+}
+function process(evt: LargeEvent) -> nothing {
+}
+function entrypoint() -> nothing {
+    let event: LargeEvent = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9 }
+    background process(event.copy())
+}
+"#;
+    let (state, uri) = state_single("/tmp/ynz_ih_bg_large.ynz", src);
+    let hints = inlay_hint_response(&state, &uri, full_range());
+
+    let give_hint = hints.iter().find(|h| {
+        if let lsp_types::InlayHintLabel::String(s) = &h.label {
+            s.contains(".give")
+        } else {
+            false
+        }
+    });
+    assert!(
+        give_hint.is_some(),
+        "background large-copy must emit .give inlayHint; hints: {:?}",
+        hints.iter().map(|h| &h.label).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_inlay_hint_background_small_copy_no_give_hint() {
+    // WHY: the .give hint must NOT fire for small-struct copies (≤ 64 bytes) —
+    // only oversized copies get the warning + hint.
+    let src = r#"
+shape SmallEvent { name: int }
+function process(evt: SmallEvent) -> nothing {
+}
+function entrypoint() -> nothing {
+    let event: SmallEvent = { name: 1 }
+    background process(event.copy())
+}
+"#;
+    let (state, uri) = state_single("/tmp/ynz_ih_bg_small.ynz", src);
+    let hints = inlay_hint_response(&state, &uri, full_range());
+
+    let give_hint = hints.iter().find(|h| {
+        if let lsp_types::InlayHintLabel::String(s) = &h.label {
+            s.contains(".give")
+        } else {
+            false
+        }
+    });
+    assert!(
+        give_hint.is_none(),
+        "small-copy background must NOT emit .give hint; got hint: {:?}",
+        give_hint
+    );
+}
+

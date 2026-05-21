@@ -2,6 +2,23 @@
 
 All notable changes to the Yinz Language extension are documented here.
 
+## [0.3.0-m1] — 2026-05-21
+
+### Added
+
+- **`background` runs on a separate thread** — hover over the `background` keyword to see updated v0.3-M1 docs (WHAT: "Runs the function on a separate thread"; WHAT INSTEAD: correct call forms; WHY: prior v0.2 behavior was sequential).
+- **`wait` hover docs updated** — hover doc explains M1 semantics (synchronous; state-machine suspension arrives in v0.3-M2).
+- **New compile errors**:
+  - `background fn(lend-param)` → lend-cross-thread safety error with `.give`/`.copy()` fix suggestion.
+  - `background fn(...)` in `--kernel` mode → error with explanation.
+  - `wait expr` in `--kernel` mode → error with explanation.
+- **New inlay hint** — `background fn(largeStruct.copy())` where estimated copy size > 64 bytes shows `.give (transfers ownership; no copy)` muted annotation inline.
+- **Large-copy warning** — Tier 3 lint warning (yellow) on `.copy()` args > 64 bytes at `background` call sites.
+
+### Screenshots
+
+See `screenshots/background-concurrent.png` for the hover doc and inline hint in action.
+
 ## [0.2.0-m2] — 2026-05-20
 
 Initial release (preview).

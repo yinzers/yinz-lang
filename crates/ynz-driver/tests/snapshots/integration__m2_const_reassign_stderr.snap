@@ -3,7 +3,7 @@ source: crates/ynz-driver/tests/integration.rs
 expression: stderr
 ---
 Error: `x` cannot be changed — it was declared with `const`.
-   ╭─[ /workspaces/ynz/crates/ynz-driver/tests/fixtures/m2_const_reassign.ynz:3:3 ]
+   ╭─[ /workspaces/ynz/.claude/worktrees/v0-3-m1-runtime-and-background/crates/ynz-driver/tests/fixtures/m2_const_reassign.ynz:3:3 ]
    │
  3 │   x = 99
    │   ┬  

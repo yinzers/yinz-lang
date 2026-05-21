@@ -145,3 +145,42 @@ fn m8_gallery_fires_expected_diagnostics() {
         "m8 gallery must include a background-share diagnostic; got:\n{stderr}"
     );
 }
+
+// WHY: v0_3_m1_errors.ynz exercises every new v0.3-M1 error/warning class:
+// share-param carry-forward, lend-cross-thread, large-copy warning, and the
+// happy-path fire-and-forget. If error count changes, either a new diagnostic
+// class was added (update count + key-phrase) or something regressed (fix it).
+#[test]
+fn v0_3_m1_gallery_fires_expected_diagnostics() {
+    let (stderr, code) = compile_gallery(&gallery("v0_3_m1_errors.ynz"));
+    // Gallery has intentional errors; must exit non-zero.
+    assert_ne!(code, 0, "v0_3_m1 gallery must exit non-zero");
+
+    // Count compile errors (warnings are separate).
+    let error_count = count_errors(&stderr);
+    let warning_count = stderr.lines().filter(|l| l.starts_with("Warning:")).count();
+
+    // Expected: 3 errors (no-entrypoint + share-param + lend-cross-thread) and 1 warning (large-copy).
+    assert!(
+        (2..=5).contains(&error_count),
+        "v0_3_m1 gallery must produce 2–5 errors; got {error_count}.\nstderr:\n{stderr}"
+    );
+    assert_eq!(
+        warning_count, 1,
+        "v0_3_m1 gallery must produce exactly 1 warning (large-copy); got {warning_count}.\nstderr:\n{stderr}"
+    );
+
+    // Key-phrase checks — one per error/warning class.
+    assert!(
+        stderr.contains("borrows its arguments"),
+        "v0_3_m1 gallery must include share-param diagnostic; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("mutates its arguments via `lend`"),
+        "v0_3_m1 gallery must include lend-cross-thread diagnostic; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Copying") && stderr.contains("bytes into a background task"),
+        "v0_3_m1 gallery must include large-copy warning; got:\n{stderr}"
+    );
+}

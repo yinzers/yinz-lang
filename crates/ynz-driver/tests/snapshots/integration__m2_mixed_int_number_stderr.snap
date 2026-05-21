@@ -3,7 +3,7 @@ source: crates/ynz-driver/tests/integration.rs
 expression: stderr
 ---
 Error: `+` cannot be used with `int` and `number`.
-   ╭─[ /workspaces/ynz/crates/ynz-driver/tests/fixtures/m2_mixed_int_number.ynz:4:11 ]
+   ╭─[ /workspaces/ynz/.claude/worktrees/v0-3-m1-runtime-and-background/crates/ynz-driver/tests/fixtures/m2_mixed_int_number.ynz:4:11 ]
    │
  4 │   let c = a + b
    │           ──┬──  

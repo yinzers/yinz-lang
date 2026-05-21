@@ -204,8 +204,18 @@ pub struct HoverContent {
 pub fn lsp_hover_for_token(name: &str) -> Option<HoverContent> {
     // Keywords
     if let Some(e) = crate::keyword_lookup(name) {
+        let markdown_body = if let (Some(what), Some(what_instead), Some(why)) =
+            (e.hover_what, e.hover_what_instead, e.hover_why)
+        {
+            format!(
+                "## Keyword: `{}`\n\n**WHAT:** {what}\n\n**WHAT INSTEAD:** {what_instead}\n\n**WHY:** {why}\n\nIntroduced in {}.",
+                e.name, e.since
+            )
+        } else {
+            format!("## Keyword: `{}`\n\nIntroduced in {}.", e.name, e.since)
+        };
         return Some(HoverContent {
-            markdown_body: format!("## Keyword: `{}`\n\nIntroduced in {}.", e.name, e.since),
+            markdown_body,
             kind: HoverKind::Keyword,
         });
     }

@@ -2,6 +2,13 @@
 
 Syntax highlighting, inline diagnostics, autocomplete, and hover docs for `.ynz` files.
 
+## What's new in v0.3.0-m1
+
+- **`background` actually runs on a separate thread** — `background fn(args)` now spawns on a background thread-pool runtime; main continues immediately. Hover over `background` to see the updated docs.
+- **New safety errors** — `background fn(lend-param)` rejects mutable borrows across thread boundaries; `background`/`wait` in `--kernel` mode produce teaching errors.
+- **Inline `.give` hint** — when `background fn(largeStruct.copy())` copies more than 64 bytes, an inline muted hint suggests `.give (transfers ownership; no copy)`.
+- **`sleepMs(ms)` intrinsic** — synchronous thread sleep for demos and timing tests.
+
 ## What's new in v0.2.0
 
 - **Go-to-definition** — Cmd+click any identifier to jump to its declaration (same file or cross-file)
