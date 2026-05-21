@@ -103,12 +103,6 @@ fn examples_roundtrip() {
         if path_str.contains("fmt_demo") {
             continue;
         }
-        // Pre-existing parser infinite loops — skip.
-        let is_known_parser_hang =
-            path_str.contains("v0_2_m1_errors") || path_str.contains("m1_errors");
-        if is_known_parser_hang {
-            continue;
-        }
         check_semantic_roundtrip(file);
     }
 }
@@ -125,12 +119,6 @@ fn driver_fixtures_roundtrip() {
     }
     let files = walk_ynz_files(&fixtures_dir);
     for file in &files {
-        let path_str = file.to_string_lossy();
-        let is_known_parser_hang =
-            path_str.contains("v0_2_m1_errors") || path_str.contains("m1_errors");
-        if is_known_parser_hang {
-            continue;
-        }
         check_semantic_roundtrip(file);
     }
 }

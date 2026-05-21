@@ -70,14 +70,6 @@ fn all_examples_are_idempotent() {
         if path_str.contains("fmt_demo") {
             continue;
         }
-        // Some error-gallery files have pre-existing parser infinite loops
-        // (the parser gets stuck recovering from certain malformed constructs).
-        // Skip them — these are parser bugs predating the formatter.
-        let is_known_parser_hang =
-            path_str.contains("v0_2_m1_errors") || path_str.contains("m1_errors");
-        if is_known_parser_hang {
-            continue;
-        }
         check_idempotent(file);
     }
 }

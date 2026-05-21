@@ -1218,8 +1218,20 @@ impl<'a> Parser<'a> {
     fn parse_block(&mut self) -> Block {
         let start = self.current_span();
         let mut stmts = Vec::new();
+        // Defense-in-depth: 10 000-iteration cap catches any future forward-progress
+        // regression before it silently hangs CI. The real forward-progress guarantee
+        // is the `pos_before` check below; this cap is a tripwire, not the fix.
+        let mut iter_budget = 10_000usize;
 
         loop {
+            debug_assert!(
+                {
+                    iter_budget = iter_budget.saturating_sub(1);
+                    iter_budget > 0
+                },
+                "parse_block: iteration budget exhausted — missing forward-progress guarantee (file bug, not user bug)"
+            );
+
             match self.peek() {
                 Token::RBrace => {
                     let end = self.current_span();
@@ -1242,8 +1254,17 @@ impl<'a> Parser<'a> {
                     };
                 }
                 _ => {
+                    let pos_before = self.pos;
                     if let Some(stmt) = self.parse_stmt() {
                         stmts.push(stmt);
+                    }
+                    // Forward-progress guarantee: parse_atom intentionally avoids consuming
+                    // statement-boundary tokens (Token::Function, Token::Options, etc.) so the
+                    // enclosing block can see them. But parse_stmt's default arm wraps them in
+                    // Stmt::Expr(Expr::Error) without advancing — causing an infinite loop here.
+                    // If parse_stmt returned without moving the cursor, skip one token.
+                    if self.pos == pos_before {
+                        self.advance();
                     }
                 }
             }
@@ -2794,7 +2815,14 @@ impl<'a> Parser<'a> {
         self.advance(); // consume `(`
 
         let mut args = Vec::new();
+        // Defense-in-depth: same forward-progress guarantee as parse_block.
+        // The real fix is the pos_before check in the _ => arm below.
+        let mut call_budget = 10_000usize;
         loop {
+            debug_assert!(
+                { call_budget = call_budget.saturating_sub(1); call_budget > 0 },
+                "parse_call: iteration budget exhausted — missing forward-progress guarantee (file bug, not user bug)"
+            );
             match self.peek() {
                 Token::RParen => {
                     let end = self.current_span();
@@ -2825,7 +2853,14 @@ impl<'a> Parser<'a> {
                     self.advance(); // consume `,` between args
                 }
                 _ => {
+                    let pos_before = self.pos;
                     args.push(self.parse_expr(0));
+                    // Forward-progress guarantee: if parse_expr(0) returned without
+                    // consuming any token (e.g., parse_atom saw a stmt-boundary token
+                    // and declined to consume it), advance to avoid looping forever.
+                    if self.pos == pos_before {
+                        self.advance();
+                    }
                 }
             }
         }
