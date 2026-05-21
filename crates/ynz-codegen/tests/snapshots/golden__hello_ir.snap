@@ -183,7 +183,9 @@ declare void @ynz_thread_sleep_ms(i64)
 define i32 @main() {
 entry:
   call void @ynz_siphash_init()
+  call void @ynz_rt_init()
   %puts = call i32 @puts(ptr @bts)
+  call void @ynz_rt_shutdown()
   ret i32 0
 }
 

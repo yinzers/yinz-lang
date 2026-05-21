@@ -231,6 +231,7 @@ entry:
 define i32 @main() {
 entry:
   call void @ynz_siphash_init()
+  call void @ynz_rt_init()
   %Player = alloca { ptr, i64 }, align 8
   store { ptr, i64 } zeroinitializer, ptr %Player, align 8
   %name = getelementptr inbounds { ptr, i64 }, ptr %Player, i32 0, i32 0
@@ -250,6 +251,7 @@ entry:
   %puts = call i32 @puts(ptr %int_str)
   %p6 = load ptr, ptr %p, align 8
   call void @consume(ptr %p6)
+  call void @ynz_rt_shutdown()
   ret i32 0
 }
 

@@ -71,6 +71,14 @@ enum Command {
         /// See `design/lsp.md` for the full schema.
         #[arg(long)]
         json: bool,
+        /// v0.3.0-m1: reserved for M3 auto-parallelization gate; currently no-op.
+        ///
+        /// Forces sequential execution of all `background` tasks (disables the
+        /// auto-parallelize pass when it ships in v0.3-M3). In M1 this flag has no
+        /// effect on program behavior. It exists to enable the cross-impl consistency
+        /// harness to compare parallel vs sequential output starting from M1.
+        #[arg(long, hide = true)]
+        no_auto_parallel: bool,
     },
     /// Compile and immediately run a Yinz source file or project.
     ///
@@ -195,7 +203,7 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Build { file, emit_ir, json } => {
+        Command::Build { file, emit_ir, json, no_auto_parallel: _ } => {
             if json {
                 // --json mode: run check_query only (no codegen/link); emit NDJSON to stdout.
                 // Default ariadne output is suppressed. Exit code mirrors the process exit.

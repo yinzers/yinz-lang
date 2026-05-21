@@ -444,3 +444,65 @@ fn m3_codegen_query_returns_no_diagnostics_on_valid_m3_source() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.3-M1: background + loop preempt IR snapshots
+// ─────────────────────────────────────────────────────────────────────────────
+
+const V03_M1_BACKGROUND_SOURCE: &str = r#"
+function worker() -> nothing {
+  sleepMs(1)
+}
+
+function entrypoint() -> nothing {
+  background worker()
+  print(`done`)
+}
+"#;
+
+const V03_M1_WHILE_PREEMPT_SOURCE: &str = r#"
+function entrypoint() -> nothing {
+  let x: int = 3
+  while (x > 0) {
+    x = x - 1
+  }
+  print(x)
+}
+"#;
+
+#[test]
+fn v03_m1_background_ir_snapshot() {
+    // WHY: locks the exact ynz_rt_spawn_blocking call sequence and closure shape.
+    // If the Background lowering drifts (wrong ctx size, wrong closure name, missing
+    // shutdown call), this snapshot fails and catches it immediately.
+    let db = ynz_parser::CompilerDb::default();
+    let sf = ynz_parser::SourceFile::new(&db, "v03m1bg.ynz".to_string(), V03_M1_BACKGROUND_SOURCE.to_string());
+    let output = codegen_query(&db, sf);
+    assert!(
+        output.diagnostics.is_empty(),
+        "v0.3-M1 background source must compile without diagnostics:\n{:#?}",
+        output.diagnostics
+    );
+    insta::assert_snapshot!("v03_m1_background_ir", output.artifact.ir_text);
+}
+
+#[test]
+fn v03_m1_while_loop_preempt_ir_snapshot() {
+    // WHY: locks that ynz_rt_check_preempt is inserted at the while-loop back-edge.
+    // If someone removes emit_loop_preempt from the while-loop lowering, this snapshot
+    // fails (preempt call disappears from the IR).
+    let db = ynz_parser::CompilerDb::default();
+    let sf = ynz_parser::SourceFile::new(&db, "v03m1while.ynz".to_string(), V03_M1_WHILE_PREEMPT_SOURCE.to_string());
+    let output = codegen_query(&db, sf);
+    assert!(
+        output.diagnostics.is_empty(),
+        "v0.3-M1 while-loop source must compile without diagnostics:\n{:#?}",
+        output.diagnostics
+    );
+    let ir = &output.artifact.ir_text;
+    assert!(
+        ir.contains("ynz_rt_check_preempt"),
+        "while-loop IR must contain ynz_rt_check_preempt call; got:\n{ir}"
+    );
+    insta::assert_snapshot!("v03_m1_while_preempt_ir", ir);
+}
