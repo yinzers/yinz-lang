@@ -1,6 +1,7 @@
 use lsp_types::{
-    CompletionOptions, HoverProviderCapability, OneOf, PositionEncodingKind, RenameOptions,
-    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+    CompletionOptions, HoverProviderCapability, InlayHintOptions, InlayHintServerCapabilities,
+    OneOf, PositionEncodingKind, RenameOptions, ServerCapabilities,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
     WorkDoneProgressOptions,
 };
 
@@ -39,6 +40,14 @@ pub fn server_capabilities(encoding: PositionEncoding) -> ServerCapabilities {
         references_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
         document_range_formatting_provider: Some(OneOf::Left(true)),
+        inlay_hint_provider: Some(OneOf::Right(InlayHintServerCapabilities::Options(
+            InlayHintOptions {
+                work_done_progress_options: WorkDoneProgressOptions {
+                    work_done_progress: None,
+                },
+                resolve_provider: Some(false),
+            },
+        ))),
         rename_provider: Some(OneOf::Right(RenameOptions {
             prepare_provider: Some(true),
             work_done_progress_options: WorkDoneProgressOptions {
