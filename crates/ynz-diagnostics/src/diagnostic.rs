@@ -43,6 +43,23 @@ pub enum DiagnosticKind {
 }
 
 impl DiagnosticKind {
+    /// The PascalCase registry name for this variant — used as the LSP `Diagnostic.code` value
+    /// and in `--json` output. Matches `kind_name` in `registry/features.toml`.
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            DiagnosticKind::TypeMismatch { .. } => "TypeMismatch",
+            DiagnosticKind::MutationOfConst => "MutationOfConst",
+            DiagnosticKind::NotDefined => "NotDefined",
+            DiagnosticKind::MissingField { .. } => "MissingField",
+            DiagnosticKind::HiddenAccess => "HiddenAccess",
+            DiagnosticKind::ImportNotFound => "ImportNotFound",
+            DiagnosticKind::Consumed => "Consumed",
+            DiagnosticKind::Borrowed => "Borrowed",
+            DiagnosticKind::MissingReturn => "MissingReturn",
+            DiagnosticKind::BannedKeyword { .. } => "BannedKeyword",
+        }
+    }
+
     /// Generate the terse caret tag shown inline at the error site.
     pub fn tag(&self) -> String {
         match self {

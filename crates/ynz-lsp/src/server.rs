@@ -7,10 +7,11 @@ use lsp_types::{
         Notification as _,
     },
     request::{
-        Completion, Formatting, GotoDefinition, HoverRequest, Initialize, InlayHintRequest,
-        PrepareRenameRequest, RangeFormatting, References, Rename, Request as _, Shutdown,
+        CodeActionRequest, Completion, Formatting, GotoDefinition, HoverRequest, Initialize,
+        InlayHintRequest, PrepareRenameRequest, RangeFormatting, References, Rename, Request as _,
+        Shutdown,
     },
-    CompletionParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    CodeActionParams, CompletionParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentFormattingParams, DocumentRangeFormattingParams,
     GotoDefinitionParams, HoverParams, InitializeParams, InitializeResult, InlayHintParams,
     PrepareRenameResponse, ReferenceParams, RenameParams, ServerInfo, Url,
@@ -18,6 +19,7 @@ use lsp_types::{
 
 use crate::{
     capabilities::{negotiate_encoding, server_capabilities},
+    code_action::code_action_response,
     completion::completion_list,
     diagnostic_transform::{path_to_uri, to_lsp_diagnostic},
     formatting::{formatting_response, range_formatting_response},
@@ -386,6 +388,29 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
                 connection.sender.send(Message::Response(response)).ok();
             }
         }
+        return;
+    }
+
+    if req.method == CodeActionRequest::METHOD {
+        let params: CodeActionParams = match serde_json::from_value(req.params) {
+            Ok(p) => p,
+            Err(e) => {
+                let response = Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::InvalidParams as i32,
+                    format!("invalid codeAction params: {e}"),
+                );
+                connection.sender.send(Message::Response(response)).ok();
+                return;
+            }
+        };
+        let uri = &params.text_document.uri;
+        let actions = code_action_response(state, uri, params.range);
+        let value = serde_json::to_value(actions).unwrap_or(serde_json::Value::Null);
+        connection
+            .sender
+            .send(Message::Response(Response::new_ok(req.id, value)))
+            .ok();
         return;
     }
 

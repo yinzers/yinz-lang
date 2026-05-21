@@ -144,6 +144,52 @@ pub fn lsp_inlay_hint_hover_for(domain: &str) -> Option<String> {
     ))
 }
 
+// CARVE-OUT: simple-replacement table for code-action label generation.
+// Each entry maps a banned declaration keyword to its direct Yinz replacement token.
+// Not in features.toml because the replacement token is already implied by the
+// `what_instead` prose in each [[banned_declaration_keyword]] entry; duplicating it
+// per-entry adds N redundant fields for the same label template ("Replace `X` with `Y`")
+// across all keyword entries — a violation of DRY without benefit.
+const SIMPLE_KEYWORD_REPLACEMENTS: &[(&str, &str)] = &[
+    ("class", "shape"),
+    ("struct", "shape"),
+    ("type", "shape"),
+    ("interface", "shape"),
+    ("enum", "options"),
+    ("fn", "function"),
+    ("func", "function"),
+    ("await", "wait"),
+];
+
+/// Return a quick-fix label for the given diagnostic kind and token, following the
+/// "Replace `X` with `Y`" template used consistently across all code actions.
+///
+/// Returns `None` when the kind has no unambiguous single-token quick-fix
+/// (e.g., `async` → multi-step transformation, not a one-word swap).
+pub fn lsp_code_action_label_for(diagnostic_kind: &str, token: &str) -> Option<String> {
+    let replacement = lsp_code_action_replacement_for(diagnostic_kind, token)?;
+    Some(format!("Replace `{token}` with `{replacement}`"))
+}
+
+/// Return the replacement token for the given diagnostic kind and offending token.
+///
+/// Returns `None` when there is no straightforward single-token replacement
+/// (complex cases like `async`/`abstract` require multi-token edits or context-
+/// dependent rewrites — those are deferred to v0.3 per `lsp-complex-code-actions`
+/// in todos.md).
+pub fn lsp_code_action_replacement_for(
+    diagnostic_kind: &str,
+    token: &str,
+) -> Option<&'static str> {
+    match diagnostic_kind {
+        "BannedKeyword" => SIMPLE_KEYWORD_REPLACEMENTS
+            .iter()
+            .find(|(banned, _)| *banned == token)
+            .map(|(_, replacement)| *replacement),
+        _ => None,
+    }
+}
+
 /// Render a diagnostic template string by substituting `{key}` placeholders.
 ///
 /// Grammar:
