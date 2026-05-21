@@ -1,0 +1,15 @@
+/// Fixture: UFCS dot-call on a const binding where the method requires `share`.
+/// `const p; p.greet()` where `greet` declares `share self` must compile and run.
+/// The ownership check must NOT over-reject read-only (`share`) methods on const bindings.
+shape Player {
+  name: string
+}
+
+function greet(share self: Player) -> nothing {
+  print(self.name)
+}
+
+function entrypoint() -> nothing {
+  const p: Player = { name: `hero` }
+  p.greet()
+}

@@ -1020,13 +1020,13 @@ impl<'b> Checker<'b> {
                         for arg in args.iter() {
                             self.infer_expr(arg, None);
                         }
-                        self.check_method_call(&receiver_ty, method, method_span)
+                        self.check_method_call(&receiver_ty, Some(receiver), method, method_span)
                     }
                 } else {
                     for arg in args.iter() {
                         self.infer_expr(arg, None);
                     }
-                    self.check_method_call(&receiver_ty, method, method_span)
+                    self.check_method_call(&receiver_ty, Some(receiver), method, method_span)
                 }
             }
 
@@ -1472,6 +1472,52 @@ impl<'b> Checker<'b> {
         }
     }
 
+    /// Check ownership constraints when a binding is passed to a function parameter.
+    ///
+    /// Called from BOTH the UFCS dot-call path AND the regular function-call path to ensure
+    /// the same ownership rules apply and the same diagnostic text is produced in both cases.
+    /// Per `design/ide-hints.md` shared-wording rule, the error text must be byte-identical
+    /// between the two call forms (e.g., `p.heal(20)` and `heal(p, 20)` produce the same error).
+    ///
+    /// Time: O(1) scope lookup.  Space: O(1).
+    fn check_arg_ownership(
+        &mut self,
+        binding_name: &str,
+        ownership: Option<&ynz_ast::nodes::OwnershipModifier>,
+        fn_name: &str,
+        arg_span: &SourceSpan,
+    ) {
+        match ownership {
+            Some(ynz_ast::nodes::OwnershipModifier::Give) => {
+                if let Some(entry) = self.scope.lookup(binding_name) {
+                    if entry.is_const {
+                        self.diags.push(Diagnostic::error(
+                            arg_span.clone(),
+                            format!("`{binding_name}` is `const` and cannot be given away."),
+                            format!("Declare `{binding_name}` with `let` if you need to transfer ownership."),
+                            "`const` bindings are fully read-only — the compiler cannot transfer ownership of a value that may not change.",
+                        ));
+                    } else if !entry.is_consumed {
+                        self.scope.consume(binding_name);
+                    }
+                }
+            }
+            Some(ynz_ast::nodes::OwnershipModifier::Lend) => {
+                if let Some(entry) = self.scope.lookup(binding_name) {
+                    if entry.is_const {
+                        self.diags.push(Diagnostic::error(
+                            arg_span.clone(),
+                            format!("`{binding_name}` is `const` — `{fn_name}` needs to mutate it but `const` blocks mutation."),
+                            format!("Declare `{binding_name}` with `let` if you need `{fn_name}` to modify it."),
+                            "`const` bindings cannot be lent for mutation. The `lend` modifier means the function will write to the value.",
+                        ));
+                    }
+                }
+            }
+            _ => {} // share or unspecified: no restrictions
+        }
+    }
+
     fn check_user_fn_call(
         &mut self,
         call: &CallExpr,
@@ -1502,35 +1548,7 @@ impl<'b> Checker<'b> {
 
             // Ownership enforcement on direct identifier arguments.
             if let Some(binding_name) = simple_ident_name(arg) {
-                match ownership {
-                    Some(ynz_ast::nodes::OwnershipModifier::Give) => {
-                        if let Some(entry) = self.scope.lookup(binding_name) {
-                            if entry.is_const {
-                                self.diags.push(Diagnostic::error(
-                                    arg.span().clone(),
-                                    format!("`{binding_name}` is `const` and cannot be given away."),
-                                    format!("Declare `{binding_name}` with `let` if you need to transfer ownership."),
-                                    "`const` bindings are fully read-only — the compiler cannot transfer ownership of a value that may not change.",
-                                ));
-                            } else if !entry.is_consumed {
-                                self.scope.consume(binding_name);
-                            }
-                        }
-                    }
-                    Some(ynz_ast::nodes::OwnershipModifier::Lend) => {
-                        if let Some(entry) = self.scope.lookup(binding_name) {
-                            if entry.is_const {
-                                self.diags.push(Diagnostic::error(
-                                    arg.span().clone(),
-                                    format!("`{binding_name}` is `const` — `{name}` needs to mutate it but `const` blocks mutation."),
-                                    format!("Declare `{binding_name}` with `let` if you need `{name}` to modify it."),
-                                    "`const` bindings cannot be lent for mutation. The `lend` modifier means the function will write to the value.",
-                                ));
-                            }
-                        }
-                    }
-                    _ => {} // share or unspecified: no restrictions
-                }
+                self.check_arg_ownership(binding_name, ownership, name, arg.span());
             }
 
             // M7 P3c: range values are first-class — can be passed as function arguments.
@@ -1785,38 +1803,10 @@ impl<'b> Checker<'b> {
             if actual != Type::Error {
                 let _ = unify_param(param_ty, &actual, &mut subst);
             }
-            // Ownership enforcement (mirrors check_user_fn_call).
+            // Ownership enforcement via shared helper (same as check_user_fn_call and UFCS path).
             let ownership = non_self_ownerships.get(i).and_then(|o| o.as_ref());
             if let Some(binding_name) = simple_ident_name(arg) {
-                match ownership {
-                    Some(ynz_ast::nodes::OwnershipModifier::Give) => {
-                        if let Some(entry) = self.scope.lookup(binding_name) {
-                            if entry.is_const {
-                                self.diags.push(Diagnostic::error(
-                                    arg.span().clone(),
-                                    format!("`{binding_name}` is `const` and cannot be given away."),
-                                    format!("Declare `{binding_name}` with `let` if you need to transfer ownership."),
-                                    "`const` bindings are fully read-only — the compiler cannot transfer ownership of a value that may not change.",
-                                ));
-                            } else if !entry.is_consumed {
-                                self.scope.consume(binding_name);
-                            }
-                        }
-                    }
-                    Some(ynz_ast::nodes::OwnershipModifier::Lend) => {
-                        if let Some(entry) = self.scope.lookup(binding_name) {
-                            if entry.is_const {
-                                self.diags.push(Diagnostic::error(
-                                    arg.span().clone(),
-                                    format!("`{binding_name}` is `const` — `{name}` needs to mutate it but `const` blocks mutation."),
-                                    format!("Declare `{binding_name}` with `let` if you need `{name}` to modify it."),
-                                    "`const` bindings cannot be lent for mutation.",
-                                ));
-                            }
-                        }
-                    }
-                    _ => {}
-                }
+                self.check_arg_ownership(binding_name, ownership, name, arg.span());
             }
         }
 
@@ -1916,9 +1906,18 @@ impl<'b> Checker<'b> {
         concrete_ret
     }
 
+    /// Type-check a UFCS dot-call expression: `receiver.method(args)`.
+    ///
+    /// `receiver_expr` carries the original receiver `Expr` so the ownership
+    /// check can inspect the binding name and enforce `const` constraints on
+    /// the first parameter.  `None` is used for synthetic calls where no
+    /// source receiver expression is available (e.g., intrinsic dispatch helpers).
+    ///
+    /// Time: O(sig lookup) on cache miss.  Space: O(1).
     fn check_method_call(
         &mut self,
         receiver_ty: &Type,
+        receiver_expr: Option<&Expr>,
         method: &str,
         method_span: &SourceSpan,
     ) -> Type {
@@ -2044,11 +2043,16 @@ impl<'b> Checker<'b> {
                 // Check that first param type matches receiver
                 if let Some((_, first_ty)) = sig.params.first() {
                     if first_ty == receiver_ty || *first_ty == Type::Error {
-                        // Note: receiver ownership check for UFCS is limited here —
-                        // full receiver tracking requires the call expression context.
-                        // The call site's check_user_fn_call handles arg 0's ownership
-                        // when called as a free function; UFCS receiver is checked
-                        // via the MethodCall path which doesn't have the arg list here.
+                        // Receiver ownership check via the shared helper — called from BOTH
+                        // this UFCS dot-call path AND the regular function-call arg loop so
+                        // the diagnostic text is byte-identical between `p.heal(20)` and
+                        // `heal(p, 20)` per design/ide-hints.md shared-wording rule.
+                        let receiver_ownership = sig.param_ownerships.first().and_then(|o| o.as_ref());
+                        if let Some(recv_expr) = receiver_expr {
+                            if let Some(binding_name) = simple_ident_name(recv_expr) {
+                                self.check_arg_ownership(binding_name, receiver_ownership, method, recv_expr.span());
+                            }
+                        }
                         return sig.ret.clone();
                     }
                 }

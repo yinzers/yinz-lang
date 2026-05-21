@@ -1,0 +1,16 @@
+/// Fixture: UFCS dot-call on a const binding where the method requires `lend`.
+/// `const p; p.heal(20)` where `heal` declares `lend self` must produce the same
+/// "cannot lend a const binding" error as the free-function form `heal(p, 20)`.
+/// Both forms must produce identical diagnostic text.
+shape Player {
+  health: int
+}
+
+function heal(lend self: Player, amount: int) -> nothing {
+  self.health = self.health + amount
+}
+
+function entrypoint() -> nothing {
+  const p: Player = { health: 100 }
+  p.heal(20)
+}
