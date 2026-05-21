@@ -3740,3 +3740,40 @@ fn m8_doc_comment_on_private_item_silently_preserved() {
         _ => panic!("expected Function item"),
     }
 }
+
+#[test]
+fn m10_doc_comment_attaches_to_export_const() {
+    // WHY: `/// comment\nexport const X = 5` must attach doc = Some("comment") to the
+    //      ConstDecl. Without this, hover over exported constants shows no doc text.
+    let output = parse("/// Maximum health.\nexport const MAX_HEALTH = 100");
+    assert_eq!(
+        output.diagnostics.len(),
+        0,
+        "no diagnostics expected: {:?}",
+        output.diagnostics
+    );
+    match &output.module.items[0] {
+        Item::ConstDecl(c) => {
+            assert_eq!(
+                c.doc,
+                Some("Maximum health.".to_string()),
+                "doc must be Some with the stripped content"
+            );
+        }
+        _ => panic!("expected ConstDecl item"),
+    }
+}
+
+#[test]
+fn m10_doc_comment_blank_line_does_not_attach_to_const() {
+    // WHY: blank line between doc comment and const must prevent attachment,
+    //      matching the behavior for functions and shapes.
+    let output = parse("/// orphan\n\nexport const MAX = 10");
+    assert_eq!(output.diagnostics.len(), 0);
+    match &output.module.items[0] {
+        Item::ConstDecl(c) => {
+            assert_eq!(c.doc, None, "orphaned doc must not attach to const");
+        }
+        _ => panic!("expected ConstDecl item"),
+    }
+}

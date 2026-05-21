@@ -70,6 +70,9 @@ pub struct ConstDecl {
     pub value: Expr,
     pub is_exported: bool,
     pub span: SourceSpan,
+    /// Doc comment attached immediately before this declaration (`/// ...`).
+    /// `None` = no doc comment.
+    pub doc: Option<String>,
 }
 
 /// A single item in a re-export: `name` or `name as alias`.

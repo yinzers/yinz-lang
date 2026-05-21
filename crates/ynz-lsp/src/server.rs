@@ -21,7 +21,7 @@ use lsp_types::{
 use crate::{
     capabilities::{negotiate_encoding, server_capabilities},
     code_action::code_action_response,
-    completion::completion_list,
+    completion::{completion_list, receiver_end_offset},
     semantic_tokens::{semantic_tokens_full_response, semantic_tokens_range_response},
     diagnostic_transform::{path_to_uri, to_lsp_diagnostic},
     formatting::{formatting_response, range_formatting_response},
@@ -142,6 +142,9 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
         let sig_output = state
             .source_file_for(uri)
             .map(|sf| ynz_typeck::queries::module_signatures_query(&state.db, sf));
+        let parse_output = state
+            .source_file_for(uri)
+            .map(|sf| ynz_parser::queries::parse_query(&state.db, sf));
 
         let empty_sig = ynz_typeck::signatures::SignatureTable {
             fns: std::collections::HashMap::new(),
@@ -154,7 +157,8 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
                 .as_ref()
                 .map(|o| &o.sig_table)
                 .unwrap_or(&empty_sig);
-            hover_response(&lex.tokens, sig, text, table, byte_offset, state.encoding)
+            let module = parse_output.as_ref().map(|p| &p.module);
+            hover_response(&lex.tokens, sig, module, text, table, byte_offset, state.encoding)
         });
 
         let result = match hover {
@@ -185,11 +189,23 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
         let sig_output = state
             .source_file_for(uri)
             .map(|sf| ynz_typeck::queries::module_signatures_query(&state.db, sf));
+        let completion_sf = state.source_file_for(uri);
 
         let list = state.text_for(uri).and_then(|text| {
             let table = state.line_table_for(uri)?;
             let sig_table = sig_output.as_ref().map(|o| &o.sig_table);
             let shape_table = sig_output.as_ref().map(|o| &o.shape_table);
+
+            // Resolve receiver type for after-dot completion narrowing.
+            // Find the byte offset of the last character of the receiver before the dot,
+            // then call type_of_expression_at_offset for the primitive type name.
+            let cursor_offset = table.position_to_byte_offset(text, position, state.encoding)?;
+            let receiver_type: Option<String> = completion_sf.and_then(|sf| {
+                let recv_offset = receiver_end_offset(text, cursor_offset)?;
+                let ty = ynz_typeck::type_of_expression_at_offset(&state.db, sf, recv_offset)?;
+                Some(ynz_typeck::types::type_name(&ty))
+            });
+
             completion_list(
                 text,
                 table,
@@ -197,6 +213,7 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
                 state.encoding,
                 sig_table,
                 shape_table,
+                receiver_type.as_deref(),
             )
         });
 

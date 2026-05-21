@@ -289,6 +289,7 @@ impl<'a> Parser<'a> {
             Token::Const => {
                 if let Some(mut decl) = self.parse_const_decl() {
                     decl.is_exported = true;
+                    decl.doc = doc;
                     items.push(Item::ConstDecl(decl));
                 }
             }
@@ -769,6 +770,7 @@ impl<'a> Parser<'a> {
             value,
             is_exported: false, // set to true by parse_export_item
             span: SourceSpan::new(self.file, start, end),
+            doc: None, // set by parse_module / parse_export_item_with_doc
         })
     }
 

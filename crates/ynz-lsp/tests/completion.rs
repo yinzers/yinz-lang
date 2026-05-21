@@ -115,6 +115,7 @@ fn completion_list_with_user_fns_includes_them() {
         PositionEncoding::Utf8,
         Some(&sig_table),
         Some(&shape_table),
+        None,
     );
     let list = list.expect("completion must be Some");
     let labels: Vec<_> = list.items.iter().map(|i| i.label.as_str()).collect();
@@ -176,6 +177,7 @@ fn user_symbols_sort_before_keywords() {
         PositionEncoding::Utf8,
         Some(&sig_table),
         Some(&shape_table),
+        None,
     );
     let list = list.expect("completion must be Some");
 
@@ -205,7 +207,7 @@ fn bare_completion_contains_keywords() {
         line: 1,
         character: 4,
     };
-    let list = completion_list(text, &table, position, PositionEncoding::Utf8, None, None);
+    let list = completion_list(text, &table, position, PositionEncoding::Utf8, None, None, None);
     let list = list.expect("completion list must be Some");
     let kw_labels: Vec<_> = list
         .items
@@ -246,6 +248,7 @@ fn deferred_features_in_bare_are_deprecated() {
         PositionEncoding::Utf8,
         None,
         None,
+        None,
     );
     let list = list.expect("completion must be Some");
 
@@ -279,7 +282,7 @@ fn after_dot_completion_returns_items() {
         line: (lines.len() - 1) as u32,
         character: last_line.len() as u32,
     };
-    let list = completion_list(text, &table, position, PositionEncoding::Utf8, None, None);
+    let list = completion_list(text, &table, position, PositionEncoding::Utf8, None, None, None);
     let list = list.expect("completion after dot must return Some");
     // In this thin slice, receiver type is not narrowed (None → all methods returned)
     assert!(
@@ -299,7 +302,7 @@ fn numeric_dot_returns_bare_completion() {
         line: 0,
         character: text.len() as u32,
     };
-    let list = completion_list(text, &table, position, PositionEncoding::Utf8, None, None);
+    let list = completion_list(text, &table, position, PositionEncoding::Utf8, None, None, None);
     // "5." treated as decimal literal → BareIdentifier context → keywords appear
     let list = list.expect("completion must be Some even for numeric dot");
     let kw_count = list
@@ -310,6 +313,72 @@ fn numeric_dot_returns_bare_completion() {
     assert!(
         kw_count > 0,
         "numeric dot should produce bare-identifier (keyword) completion"
+    );
+}
+
+#[test]
+fn after_dot_with_receiver_type_narrows_to_int_methods() {
+    // WHY: receiver-type narrowing ensures `score.` (where score: int) shows ONLY int methods,
+    //      not all primitive methods (string, float, etc.).  Without narrowing users see noisy
+    //      false completions (e.g. `.count()` which is a string method).
+    use lsp_types::Position;
+    use ynz_lsp::{completion::completion_list, position::LineTable};
+
+    let text = "score.";
+    let table = LineTable::new(text);
+    let position = Position {
+        line: 0,
+        character: text.len() as u32,
+    };
+    // Pass receiver_type_name = Some("int") as if typeck resolved `score: int`
+    let list = completion_list(
+        text,
+        &table,
+        position,
+        PositionEncoding::Utf8,
+        None,
+        None,
+        Some("int"),
+    );
+    let list = list.expect("completion must be Some");
+    let labels: Vec<&str> = list.items.iter().map(|i| i.label.as_str()).collect();
+
+    // int has methods like toString(), toFloat(), toNumber() etc.
+    assert!(
+        labels.iter().any(|l| l.starts_with("toString")),
+        "int after-dot should include toString(): {labels:?}"
+    );
+    // string-only method should NOT appear when receiver is int
+    assert!(
+        !labels.contains(&"count()"),
+        "string method count() must not appear for int receiver: {labels:?}"
+    );
+}
+
+#[test]
+fn after_dot_with_no_receiver_type_shows_all_methods() {
+    // WHY: when receiver type is unknown (None), all primitive methods appear as best-effort
+    //      candidates so the user still gets helpful completions rather than nothing.
+    use lsp_types::Position;
+    use ynz_lsp::{completion::completion_list, position::LineTable};
+
+    let text = "x.";
+    let table = LineTable::new(text);
+    let position = Position {
+        line: 0,
+        character: text.len() as u32,
+    };
+    let list = completion_list(text, &table, position, PositionEncoding::Utf8, None, None, None);
+    let list = list.expect("completion must be Some");
+    // Without narrowing, should include methods from multiple primitive types
+    let method_count = list
+        .items
+        .iter()
+        .filter(|i| i.kind == Some(lsp_types::CompletionItemKind::METHOD))
+        .count();
+    assert!(
+        method_count > 0,
+        "after-dot with no receiver type should still return primitive method candidates"
     );
 }
 

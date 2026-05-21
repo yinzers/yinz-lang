@@ -58,16 +58,59 @@ pub fn detect_context<'a>(text: &str, cursor_offset: usize) -> CompletionContext
             }
         }
 
-        // Receiver type narrowing via typeck is deferred: requires
-        // `type_of_expression_at_offset` in ynz-typeck (not yet exposed).
-        // Until then, all primitive methods appear as best-effort candidates.
-        // Tracked: .claude/todos.md "lsp-completion-typeck-receiver-narrowing".
+        // receiver_type is filled in by the caller (server.rs) via type_of_expression_at_offset;
+        // detect_context itself is a pure text-analysis function with no db access.
         CompletionContext::AfterDot {
             receiver_type: None,
         }
     } else {
         CompletionContext::BareIdentifier
     }
+}
+
+/// Return the byte offset of the last character of the receiver identifier before `cursor_offset`.
+///
+/// If the character immediately before the cursor (skipping whitespace) is `.`, walks backwards
+/// to find the identifier token and returns its end byte offset (exclusive) — which is the byte
+/// to pass to `type_of_expression_at_offset` for receiver type narrowing.
+///
+/// Returns `None` if there is no `.` before the cursor, or if the text before the `.` is not
+/// an identifier (e.g., a numeric literal).
+pub fn receiver_end_offset(text: &str, cursor_offset: usize) -> Option<usize> {
+    if cursor_offset == 0 || text.is_empty() {
+        return None;
+    }
+    let before = &text[..cursor_offset.min(text.len())];
+    let bytes = before.as_bytes();
+    let last_non_ws = bytes.iter().rev().find(|&&b| !b.is_ascii_whitespace()).copied()?;
+    if last_non_ws != b'.' {
+        return None;
+    }
+    // Find the position of the dot
+    let dot_pos = before.trim_end_matches(|c: char| c.is_ascii_whitespace()).len();
+    if dot_pos == 0 {
+        return None;
+    }
+    let before_dot = &before[..dot_pos - 1];
+    let prev_non_ws = before_dot.trim_end_matches(|c: char| c.is_ascii_whitespace());
+    if prev_non_ws.is_empty() {
+        return None;
+    }
+    // Walk backwards to find the start of the identifier
+    let end = prev_non_ws.len(); // byte offset of end of receiver in `before`
+    let is_ident_continue = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let start = prev_non_ws
+        .as_bytes()
+        .iter()
+        .rev()
+        .position(|&b| !is_ident_continue(b))
+        .map(|rpos| end - rpos)
+        .unwrap_or(0);
+    if start == end {
+        return None; // no identifier characters found
+    }
+    // Return the offset of the LAST character of the identifier (end - 1 is inside the name)
+    Some(end.saturating_sub(1))
 }
 
 /// Convert a `RegistryCompletionItem` to an LSP `CompletionItem`.
@@ -153,7 +196,13 @@ pub fn user_symbol_items(
 }
 
 /// Build the LSP `CompletionList` for the given cursor position in `text`.
+///
 /// Merges user-defined symbols (from typeck) before registry items.
+///
+/// `receiver_type_name` is the resolved type name of the expression before a `.` trigger
+/// (e.g. `"int"` for `let score: int = 5; score.`). When `Some`, completion is narrowed to
+/// methods of that primitive type. When `None`, all primitive methods are returned as
+/// best-effort candidates. Resolved by the server via `type_of_expression_at_offset`.
 pub fn completion_list(
     text: &str,
     table: &LineTable,
@@ -161,9 +210,17 @@ pub fn completion_list(
     encoding: PositionEncoding,
     sig_table: Option<&SignatureTable>,
     shape_table: Option<&ShapeTable>,
+    receiver_type_name: Option<&str>,
 ) -> Option<CompletionList> {
     let cursor_offset = table.position_to_byte_offset(text, position, encoding)?;
-    let context = detect_context(text, cursor_offset);
+    let mut context = detect_context(text, cursor_offset);
+
+    // Apply pre-resolved receiver type from the server's typeck lookup
+    if let (CompletionContext::AfterDot { receiver_type }, Some(rtype)) =
+        (&mut context, receiver_type_name)
+    {
+        *receiver_type = Some(rtype);
+    }
 
     let mut items: Vec<CompletionItem> = Vec::new();
 

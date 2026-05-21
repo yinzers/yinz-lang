@@ -5,7 +5,7 @@ owner: Patrick Rizzardi
 status: active
 roadmap: v0-2-dev-loop-tooling
 created: 2026-05-20
-last_updated: 2026-05-21 (Phase 9 complete — structured diagnostics + ynz build --json; Phases 0-9 all done)
+last_updated: 2026-05-21 (Phase 10 complete — hover doc-comment integration + completion receiver narrowing; Phases 0-10 all done)
 files:
   - crates/ynz-lsp/**
   - crates/ynz-typeck/src/**
@@ -1183,19 +1183,25 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 8. Close `lsp-completion-typeck-receiver-narrowing` todo.
 
 **Acceptance criteria**:
-- [ ] AST decl nodes have `leading_docs: Vec<String>` field
-- [ ] Parser attaches doc-comments correctly (3+ tests: attached, free-floating, blank-line-separated)
-- [ ] `type_of_expression_at_offset` exists + tested (5+ cases)
-- [ ] Completion after `.` narrows by receiver type
-- [ ] Hover prepends doc-comments if present
-- [ ] `lsp-completion-typeck-receiver-narrowing` closed in todos.md
-- [ ] No existing AST consumer breaks (verified by full workspace test green)
-- [ ] `cargo test --workspace` green
+- [x] AST decl nodes have `doc: Option<String>` field (FunctionDecl/ShapeDecl/OptionsDecl from M8; ConstDecl added in Phase 10)
+- [x] Parser attaches doc-comments correctly (3+ tests: attached, free-floating, blank-line-separated — includes new const tests)
+- [x] `type_of_expression_at_offset` exists + tested (6 cases)
+- [x] Completion after `.` narrows by receiver type (via receiver_type_name param + receiver_end_offset helper)
+- [x] Hover prepends doc-comments if present (module param passed from server)
+- [x] `lsp-completion-typeck-receiver-narrowing` — approach changed: receiver_type_name injected from server rather than in detect_context; existing todo entry reflects this
+- [x] No existing AST consumer breaks (verified by full workspace test green: 1340 tests)
+- [x] `cargo test --workspace` green
 
 **Quality gate**:
-- [ ] No `unwrap()` outside tests
-- [ ] Doc-comment attachment rule (no blank line; attach to next decl) documented in rustdoc on the parser pass
-- [ ] No commented-out code
+- [x] No `unwrap()` outside tests
+- [x] Doc-comment attachment rule (no blank line; attach to next decl) documented in rustdoc on the parser pass (existing M8 P3 rustdoc)
+- [x] No commented-out code
+
+**Phase 10 notes (deviations from plan)**:
+- **Design deviation (doc field)**: Plan locked `leading_docs: Option<Vec<String>>` + `#[serde(default)]`. Implementation uses `doc: Option<String>` (joined with `\n`) — this was the M8 P3 design already in place for FunctionDecl/ShapeDecl/OptionsDecl. Since `ynz-ast` has NO serde dependency (verified: `grep -n serde crates/ynz-ast/Cargo.toml` → empty), `#[serde(default)]` is inapplicable. The `Option<String>` form is correct for an in-memory-only AST. The `Vec<String>` per-line form would be useful only if consumers need to map specific doc-comment lines to spans (not a current requirement). If future `ynz doc` (v1.1) needs per-line mapping, the `Option<String>` can be split on `\n` at that point.
+- **Design deviation (receiver narrowing wiring)**: Plan said "wire via `detect_context`" but the actual approach is cleaner — `detect_context` stays pure text, `receiver_end_offset` helper returns the byte offset, and `server.rs` does the db call. `completion_list` accepts `receiver_type_name: Option<&str>` which is injected by the server.
+- **Todo entry update**: `lsp-completion-typeck-receiver-narrowing` graduated `[x]` with remaining-gap note (inferred/unannotated bindings still return `None`).
+- **`ynz-ast` dep**: added as direct dependency of `ynz-lsp` (was indirect via ynz-parser; needed for `use ynz_ast::nodes::{Item, Module}` in hover.rs).
 
 **Verification**: `cargo test -p ynz-parser parse_doc_comment_attach` + `cargo test -p ynz-lsp hover completion` + workspace.
 

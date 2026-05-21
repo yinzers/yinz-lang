@@ -1,4 +1,5 @@
 use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind, Range};
+use ynz_ast::nodes::{Item, Module};
 use ynz_parser::token::{Spanned, Token};
 use ynz_registry::lsp_hover_for_token;
 use ynz_typeck::types::type_name;
@@ -66,15 +67,36 @@ fn token_text(tok: &Token) -> String {
     }
 }
 
+/// Look up the `///` doc comment attached to a top-level declaration by name.
+///
+/// Returns the doc string from the first matching declaration, or `None` if the
+/// name resolves to a keyword, primitive, or a declaration without doc comments.
+fn doc_for_name<'a>(module: &'a Module, name: &str) -> Option<&'a str> {
+    for item in &module.items {
+        match item {
+            Item::Function(f) if f.name == name => return f.doc.as_deref(),
+            Item::ShapeDecl(s) if s.name == name => return s.doc.as_deref(),
+            Item::OptionsDecl(o) if o.name == name => return o.doc.as_deref(),
+            Item::ConstDecl(c) if c.name == name => return c.doc.as_deref(),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Build the LSP `Hover` response for the given cursor position.
 ///
 /// Priority:
 /// 1. Registry lookup by token name (covers keywords, intrinsics, deferred features, banned terms)
-/// 2. Typeck signature lookup for user-defined functions
+/// 2. Typeck signature lookup for user-defined functions, optionally enriched with `///` doc comments
 /// 3. `None` if neither resolves (e.g., cursor on punctuation, inside whitespace)
+///
+/// `module` is `Some` when the parsed AST is available; passing `None` falls back to the
+/// signature-only hover that shipped in M2.
 pub fn hover_response(
     tokens: &[Spanned<Token>],
     sig_table: &ynz_typeck::signatures::SignatureTable,
+    module: Option<&Module>,
     text: &str,
     table: &LineTable,
     byte_offset: usize,
@@ -98,7 +120,7 @@ pub fn hover_response(
         });
     }
 
-    // Typeck fallback: user-defined function signature
+    // Typeck fallback: user-defined function signature, prepended with doc comment if present
     if let Some(sig) = sig_table.fns.get(&token_name) {
         let param_str = sig
             .params
@@ -106,12 +128,20 @@ pub fn hover_response(
             .map(|(pname, ptype)| format!("{pname}: {}", type_name(ptype)))
             .collect::<Vec<_>>()
             .join(", ");
-        let body = format!(
+        let sig_body = format!(
             "## `function {}({})`\n\nReturns: `{}`",
             token_name,
             param_str,
             type_name(&sig.ret)
         );
+
+        // Prepend doc comment if the parsed module is available
+        let body = if let Some(doc) = module.and_then(|m| doc_for_name(m, &token_name)) {
+            format!("{doc}\n\n---\n\n{sig_body}")
+        } else {
+            sig_body
+        };
+
         return Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
@@ -182,7 +212,7 @@ mod tests {
         let src = "function entrypoint() -> nothing { }";
         let tokens = tokenize(src);
         let table = LineTable::new(src);
-        let result = hover_response(&tokens, &make_sig(), src, &table, 3, PositionEncoding::Utf8);
+        let result = hover_response(&tokens, &make_sig(), None, src, &table, 3, PositionEncoding::Utf8);
         assert!(
             result.is_some(),
             "hovering over 'function' keyword should return Some"
@@ -204,7 +234,7 @@ mod tests {
         let src = "let   x = 5";
         let tokens = tokenize(src);
         let table = LineTable::new(src);
-        let result = hover_response(&tokens, &make_sig(), src, &table, 4, PositionEncoding::Utf8);
+        let result = hover_response(&tokens, &make_sig(), None, src, &table, 4, PositionEncoding::Utf8);
         assert!(result.is_none(), "whitespace offset should return None");
     }
 
@@ -213,7 +243,7 @@ mod tests {
         let src = "";
         let tokens = tokenize(src);
         let table = LineTable::new(src);
-        let result = hover_response(&tokens, &make_sig(), src, &table, 0, PositionEncoding::Utf8);
+        let result = hover_response(&tokens, &make_sig(), None, src, &table, 0, PositionEncoding::Utf8);
         assert!(result.is_none());
     }
 }
