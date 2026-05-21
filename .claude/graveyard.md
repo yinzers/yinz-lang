@@ -20,6 +20,16 @@ Add entries via `/learn` when a project-specific mistake pattern is identified. 
 - Plans explicitly marked `## Invariants This Milestone Must Preserve` with all required subsections containing the const semantics
 - Cross-cutting plans not tied to a specific milestone (e.g., the `design-lockdown-from-gemini-review` plan itself, which is what created this entry)
 **Last verified**: 2026-05-14
+**Category**: regex+judgment
+
+**Pre-filter patterns**:
+```
+\.claude/plans/(active|done)/m[0-9]+-
+ownership
+const binding
+borrow checker
+```
+
 
 **Cause**: The M3 plan stated "ownership system arrives in M4" without enumerating which call-site operations `const` blocks (`.lend`/`.give`), or which LLVM attributes M4 codegen must emit (`readonly`). The gap WAS real and would have shipped a less-safe + less-performant M4. Gemini's 2026-05-14 code review surfaced it before it shipped.
 
@@ -46,6 +56,21 @@ Add entries via `/learn` when a project-specific mistake pattern is identified. 
 - Documentation explicitly describing the inverse-anti-pattern as wrong (cites this entry or `.claude/rules/inference.md`).
 - Examples showing `foo(player.share)` as one of several legal forms, not as a requirement.
 **Last verified**: 2026-05-14
+**Category**: regex+judgment
+
+**Pre-filter patterns**:
+```
+^spec/.*\.md$
+^design/.*\.md$
+must annotate at
+required at call site
+explicit annotation
+at every call
+\.share
+\.lend
+\.give
+```
+
 
 **Cause**: The design-lockdown conversation considered requiring explicit `.share`/`.lend` at every call site as an alternative to the uniform-inference + muted-IDE-hint approach. It was rejected because forcing explicit annotation degrades into syntactic noise developers learn to ignore (the Rust `&` pattern). Without this graveyard entry, future-Claude reading the spec could re-introduce the "must annotate at call site" framing, undoing the design.
 
@@ -71,6 +96,14 @@ Add entries via `/learn` when a project-specific mistake pattern is identified. 
 - Plans not associated with a specific milestone (cross-cutting plans, design plans, refactoring plans)
 - Plans where the section structure is present but a subsection is legitimately empty because nothing applies (rare — must include "(none for this milestone)" or similar text to distinguish from forgotten)
 **Last verified**: 2026-05-14
+**Category**: regex+judgment
+
+**Pre-filter patterns**:
+```
+\.claude/plans/(active|done)/m[0-9]+-
+^## Invariants This Milestone Must Preserve$
+```
+
 
 **Cause**: Without mechanical enforcement of the 5-subsection structure, future plans will skip subsections. The const-deep-immutability gap that triggered this whole project IS an example of this kind of structural omission in real life — the M3 plan had no Invariants section at all.
 
@@ -96,6 +129,16 @@ Add entries via `/learn` when a project-specific mistake pattern is identified. 
 - Plans dated before 2026-05-15 (rule applies forward from when it lands)
 - Plans that are explicitly documentation-only (no language/stdlib feature added)
 **Last verified**: 2026-05-14
+**Category**: regex+judgment
+
+**Pre-filter patterns**:
+```
+\.claude/plans/(active|done)/.*\.md$
+crates/
+^### Runtime Dependencies$
+^### Kernel-Mode Behavior$
+```
+
 
 **Cause**: The `--kernel` mode design (see `design/future/no-runtime-mode.md`) for chipset/NASA/embedded targets requires every Yinz language and stdlib feature to declare its runtime dependencies (heap allocator? scheduler? OS I/O? none?) and kernel-mode behavior (compile error? works with user-provided primitive? always works?). Without enforcement, features ship with hidden heap dependencies and the v0.3 kernel-mode work hits a wall trying to retroactively analyze every feature.
 
@@ -120,6 +163,20 @@ Add entries via `/learn` when a project-specific mistake pattern is identified. 
 - Documentation that explicitly cites this entry or `design/future/panic-safety.md` as the rejection rationale (e.g., "Yinz rejects try/catch — see X")
 - Test fixtures specifically testing that try/catch produces a parse error (banned-keyword diagnostic test)
 **Last verified**: 2026-05-14
+**Category**: regex+judgment
+
+**Pre-filter patterns**:
+```
+crates/ynz-parser/src/(lexer|token|parser)\.rs$
+crates/ynz-ast/src/nodes\.rs$
+^spec/.*\.md$
+^design/.*\.md$
+(^|[^[:alnum:]_])(Try|Catch|Recover)([^[:alnum:]_]|$)
+try \{
+catch \(
+recover \(
+```
+
 
 **Cause**: The design-lockdown conversation rejected try/catch in favor of `errors`-keyword auto-propagation (for KNOWN failures) + supervisor pattern at the task boundary (for UNKNOWN panics). At one point during the conversation, Claude proposed `try { } recover { }` syntax as a "different" panic-handling mechanism. Patrick caught this as try/catch under a different name. Without this graveyard entry, future-Claude in a 6-month-later session will re-relitigate ("but Erlang has supervisors AND try/catch, why can't we") and re-introduce the rejected syntax.
 
@@ -144,6 +201,16 @@ Add entries via `/learn` when a project-specific mistake pattern is identified. 
 **Scope**: `crates/ynz-parser/src/lexer.rs` — the `lex_one` match and `emit_unknown_byte` fallthrough.
 
 **Exemption**: Truly obscure characters with no established use in major languages (e.g., `\x01`, `\x7f`) may use the generic fallthrough. Any character that IS syntactically meaningful in JS, Python, Rust, Go, TypeScript, PHP, Swift, or Kotlin needs a dedicated handler.
+**Last verified**: 2026-05-18
+**Category**: regex+judgment
+
+**Pre-filter patterns**:
+```
+crates/ynz-parser/src/lexer\.rs$
+emit_unknown_byte
+not valid here
+Remove or replace
+```
 
 **Cause**: New characters added to the lexer's fallthrough `emit_unknown_byte` path produce a generic "The character X is not valid here / Remove or replace this character" message with a wrong WHY ("Yinz source files may only contain ASCII text" — single quote IS ASCII). This violates Golden Rule 11 (WHY must be specific and contextual) and can cause cascade errors when the character normally delimits a multi-token construct (e.g., `'hello world'` → 5 cascade errors before the fix; `# comment` → cascade into keyword parse errors before the fix).
 
@@ -169,6 +236,15 @@ Add entries via `/learn` when a project-specific mistake pattern is identified. 
 ## Parser Infinite Loop — Zero-Advance Recovery in Bounded Loop — 2026-05-18
 
 **Scope**: Any parser loop in `crates/ynz-parser/src/parser.rs` — specifically all `loop { ... }` constructs that contain error-recovery paths.
+**Last verified**: 2026-05-18
+**Category**: regex+judgment
+
+**Pre-filter patterns**:
+```
+crates/ynz-parser/src/parser\.rs$
+loop \{
+macro_rules!
+```
 
 **Cause**: Using a macro with a `continue` statement inside `loop { macro!(); break; }`. In Rust, `continue` inside a macro targets the **innermost** enclosing loop at the expansion site — the inner `loop { ... break; }`, not the outer field/element-parsing loop. When the macro's recovery path advances to a boundary token (e.g. `Eof`, `RBrace`) and then `continue`s, it re-enters the inner loop, calls the macro again, sees the same boundary token, skips the recovery loop (no advance), and `continue`s again. Infinite loop.
 
@@ -196,6 +272,15 @@ Add entries via `/learn` when a project-specific mistake pattern is identified. 
 - Definitions that are lookup tables OVER the registry's generated output (e.g., a perf-critical wrapper that caches registry data)
 
 **Last verified**: 2026-05-19 — pattern tested against current codebase. Matches: `crates/ynz-diagnostics/src/banned_jargon.rs:21` (migrating in Phase 2) and `crates/ynz-typeck/src/builtins.rs:101` (migrating in Phase 3, undiscovered in original research). Zero false positives in other files in those crates.
+**Category**: regex+judgment
+
+**Pre-filter patterns**:
+```
+crates/ynz-(diagnostics|typeck|parser)/src/
+pub (const|static).*&\[
+&\[&str\]
+```
+
 
 **Cause**: v0.1.0 shipped with feature inventories scattered across 7+ locations. Adding `int.max` in M4 P5 touched five locations that nothing enforced to stay in sync. The v0.2 LSP (M2) needs these inventories at IDE-keystroke latency — reading from 7 separate Rust files is not tenable. v0.2-M1 builds the SSOT registry to fix the class. This entry prevents new scattered registries from appearing post-M1.
 
@@ -218,6 +303,17 @@ Add entries via `/learn` when a project-specific mistake pattern is identified. 
 ## M8 Modules Shipped Untested — Three Infrastructure Bugs — 2026-05-18/19
 
 **Scope**: `crates/ynz-driver/src/` — any build/load infrastructure change that touches multi-file project loading or path resolution.
+**Last verified**: 2026-05-19
+**Category**: regex+judgment
+
+**Pre-filter patterns**:
+```
+crates/ynz-driver/src/(load|build)\.rs$
+yinz\.toml
+find_project_root
+load_project
+ImportDecl
+```
 
 **Cause**: M8 Phase 2 (modules) shipped import/export grammar + multi-file driver wiring but wrote zero integration tests for the project-load path. Three infrastructure bugs shipped:
 
@@ -248,6 +344,19 @@ Add entries via `/learn` when a project-specific mistake pattern is identified. 
 ## ynz watch Hardcoded `cc` Linker — 2026-05-20
 
 **Scope**: `crates/ynz-watch/src/rebuild.rs` — any code that spawns the linker from the watch rebuild path.
+**Last verified**: 2026-05-20
+**Category**: regex
+
+*(Direct-fire: the literal `Command::new("cc")` pattern in ynz-watch is unambiguously the bug. Other hardcoded linker names matched here would also be wrong. No legit reason to do this — `find_linker` exists. The bar for `regex` is high; this earns it because the pattern is a literal anti-pattern with no exemption.)*
+
+**Pre-filter patterns**:
+```
+crates/ynz-watch/.*\.rs$
+Command::new\("cc"\)
+Command::new\("gcc"\)
+Command::new\("g\+\+"\)
+Command::new\("ld"\)
+```
 
 **Cause**: `write_binary()` in `rebuild.rs` hardcoded `Command::new("cc")`. The existing `ynz build` path (`crates/ynz-driver/src/build.rs`) already had a `find_linker()` probe that tries `clang-18`, `clang`, `cc`, `gcc`, `g++` in order. Watch was written independently and didn't reuse it. Devcontainers with LLVM/clang-18 installed but not `cc` (no build-essential) hit `No such file or directory` on every non-check rebuild.
 
