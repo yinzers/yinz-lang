@@ -2,7 +2,7 @@
   "name": "yinz",
   "displayName": "Yinz Language",
   "description": "Yinz language support: syntax highlighting, inline diagnostics, autocomplete, and hover docs powered by ynz-lsp",
-  "version": "0.2.0-m2",
+  "version": "0.2.0",
   "publisher": "yinz-lang",
   "preview": true,
   "license": "MIT OR Apache-2.0",

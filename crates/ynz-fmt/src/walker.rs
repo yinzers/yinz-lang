@@ -1154,7 +1154,7 @@ fn emit_block_with_comments_skipping(
     let first_real_pos = block
         .stmts
         .get(skip)
-        .map(|s| stmt_span_start(s))
+        .map(stmt_span_start)
         .unwrap_or(block_open_pos);
 
     // Build a synthetic block with the first `skip` stmts removed.

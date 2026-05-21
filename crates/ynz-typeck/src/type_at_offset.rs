@@ -75,10 +75,10 @@ fn resolve_type_in_function(f: &FunctionDecl, byte_offset: usize) -> Option<Type
 fn resolve_type_in_block(block: &Block, byte_offset: usize) -> Option<Type> {
     for stmt in &block.stmts {
         match stmt {
-            Stmt::Let { name_span, ty: Some(ty), .. } => {
-                if span_contains(name_span, byte_offset) {
-                    return ast_type_to_primitive(ty);
-                }
+            Stmt::Let { name_span, ty: Some(ty), .. }
+                if span_contains(name_span, byte_offset) =>
+            {
+                return ast_type_to_primitive(ty);
             }
             Stmt::Let { .. } => {} // unannotated let — can't determine type without inference
             Stmt::If { body, .. } => {

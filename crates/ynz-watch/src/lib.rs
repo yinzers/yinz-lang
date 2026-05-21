@@ -272,6 +272,10 @@ pub fn run(config: WatchConfig) -> i32 {
 /// Run one rebuild + (optionally) child-spawn cycle.
 ///
 /// Returns `true` if EPIPE was detected during JSON event emission (caller should exit loop).
+// Perf: all 8 args are logically distinct per-cycle state that would need a struct otherwise.
+// The args are passed by a single call site; wrapping them in a struct adds indirection
+// without improving call-site clarity.
+#[allow(clippy::too_many_arguments)]
 fn run_rebuild_cycle(
     db: &mut WatchDb,
     entry_path: &std::path::Path,
