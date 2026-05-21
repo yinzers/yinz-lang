@@ -24,6 +24,21 @@ export const activate = (context: vscode.ExtensionContext): void => {
         synchronize: {
             fileEvents: vscode.workspace.createFileSystemWatcher('**/*.ynz'),
         },
+        // Transform diagnostic messages for the Problems panel.
+        // The LSP server uses "\n\nWHAT INSTEAD: ...\n\nWHY: ..." as a multi-section
+        // format that renders well in hover popups but shows raw \n\n in the Problems
+        // panel.  We collapse the sections to a single readable line for that surface.
+        middleware: {
+            handleDiagnostics: (uri, diagnostics, next) => {
+                const transformed = diagnostics.map(d => {
+                    if (!d.message.includes('\n\n')) return d;
+                    // Keep only the first section (the WHAT) for the Problems panel.
+                    const firstSection = d.message.split('\n\n')[0].trim();
+                    return { ...d, message: firstSection };
+                });
+                next(uri, transformed);
+            },
+        },
     };
 
     client = new LanguageClient(

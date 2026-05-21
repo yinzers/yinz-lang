@@ -2,6 +2,18 @@
 
 Syntax highlighting, inline diagnostics, autocomplete, and hover docs for `.ynz` files.
 
+## What's new in v0.2.0
+
+- **Go-to-definition** — Cmd+click any identifier to jump to its declaration (same file or cross-file)
+- **Find All References** — right-click → "Find All References" lists every use-site across the project
+- **Rename** — F2 on any symbol; all references update atomically
+- **Format on save** — delegates to `ynz-fmt`; normalizes LF line endings
+- **Inlay hints** — inline type annotations (`: int`), ownership modifiers (`share`/`lend`), auto-promotion hints
+- **Code actions** — quick-fix lightbulb for every diagnostic with a WHAT-INSTEAD
+- **Semantic tokens** — richer color differentiation: keywords / types / functions / variables
+- **Doc-comment hover** — `///` doc comments appear in hover popups above the signature
+- **Completion narrowing** — `score.` where `score: int` shows only int methods
+
 ## Features
 
 - **Syntax highlighting** — keywords, deferred features (shown as illegal), banned keywords (shown as deprecated), strings, comments, literals

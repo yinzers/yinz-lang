@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.2.0] — 2026-05-21 — LSP Full Experience + Compiler Bug Fixes
+
+Commit range: v0.2.0-m4..v0.2.0
+
+### What changed
+
+v0.2.0 closes out the v0.2 dev-loop series (M1 feature registry, M2 LSP thin slice, M3 formatter, M4 watch daemon) by completing the LSP into a full editor experience and fixing three correctness bugs that were deferred from earlier milestones.
+
+#### 8 new LSP capabilities
+
+- **`textDocument/definition`** — Cmd+click any identifier to jump to its declaration. Works across files using `exports.rs` + `resolve_import.rs` cross-file resolution.
+- **`textDocument/references`** — Right-click → "Find All References" lists every use-site across the entire project. Emits `$/progress` notifications for large scans.
+- **`textDocument/rename`** + **`textDocument/prepareRename`** — F2 to rename; all references update atomically via `WorkspaceEdit`. Validates new name against Yinz keywords and banned jargon. Rejects imports-at-origin errors with precise "rename at the declaration file" guidance.
+- **`textDocument/formatting`** + **`textDocument/rangeFormatting`** — Format-on-save delegates to `ynz-fmt`. `ynz-fmt::format_range` added for range format. Emits `window/showMessage` when formatting is skipped due to parse errors (no silent empty-edits). Yinz files are LF-only; format-on-save normalizes CRLF → LF on Windows — **first save on a CRLF file will produce a large diff; this is intentional, not a bug**.
+- **`textDocument/inlayHint`** — 5 firing domains (variable types, ownership call-site modifiers, copy-point markers, `array<T>` → `fixed<T>` promotion, `let` → `const` promotion) + 4 protocol-only domains awaiting v0.3+ data (function param types, wait points, lifetimes, allocators). Click-to-make-explicit supported for the 5 firing domains.
+- **`textDocument/codeAction`** — Quick-fix lightbulb for every diagnostic with a WHAT-INSTEAD. One click applies the registered replacement (e.g., `class` → `shape`).
+- **`textDocument/semanticTokens/full`** + **`textDocument/semanticTokens/range`** — Richer-than-TextMate highlighting: keywords, types, functions, variables, parameters, fields, options variants each get their own token type. Semantic tokens refine the TextMate grammar; they never disagree on keyword spans.
+
+#### Hover and completion polish
+
+- **Doc-comment hover**: `///` doc comments attached to functions, shapes, options, and constants now appear above the signature in hover popups.
+- **Completion receiver narrowing**: after-dot completions filter to the receiver's type (e.g. `score.` where `score: int` shows only int methods).
+
+#### `ynz build --json`
+
+New `--json` flag on `ynz build`: emits NDJSON diagnostic events + a summary line. Schema is stable at `"v0.2.0"`. Replaces regex-parsing ariadne text for CI/tooling consumers. Default human-readable output is unchanged.
+
+```json
+{"type":"diagnostic","schema_version":"v0.2.0","severity":"error","kind":"UnknownDeclarationKeyword","code":"UnknownDeclarationKeyword","span":{"file":"/path/to/file.ynz","start_byte":0,"end_byte":5},"message":"...","data":{"what":"...","what_instead":"...","why":"..."}}
+{"type":"summary","schema_version":"v0.2.0","errors":1,"warnings":0,"suggestions":0,"exit_code":1}
+```
+
+#### Structured LSP diagnostic fields
+
+Every LSP diagnostic now populates `code` (DiagnosticKind name), and `data` (structured `{what, what_instead, why}` object) so rich-UI clients can render WHAT-INSTEAD/WHY without re-parsing `message`.
+
+#### Three compiler correctness fixes
+
+- **Hidden-field default eval** (`codegen`): `shape Foo { hidden bar: string = "default" }` constructed as `Foo {}` previously zero-initialized `bar` (null pointer for strings). Now evaluates the default expression. Works through `extends` inheritance chains. Audit confirmed 0 live consumers of the broken behavior — no existing program output changes.
+- **Dynamic-dispatch call-site coercion** (`typeck`): passing a `ConcreteFoo` to a `dynamic Foo` parameter was a typeck error even when `ConcreteFoo follows Foo`. Fixed in two parts: `resolve_ast_type` now resolves `AstType::Dynamic` correctly (was returning `Type::Error`), and the call-arg checker accepts the coerce when `shape.follows.contains(contract)`. Note: method dispatch ON a `dynamic` receiver (`d.method()`) remains deferred to v0.3.
+- **UFCS const-lend check** (`typeck`): `const p; p.heal(20)` where `heal` declares `lend self` was silently accepted — only the free-function form `heal(p, 20)` produced an error. Both forms now produce byte-identical diagnostics via a shared `check_arg_ownership` helper.
+
+#### VSCode extension v0.2.0
+
+Extension version bumped to `0.2.0`. Install via `.vsix` from the GitHub release.
+
+---
+
 ## [0.2.0-m4] — 2026-05-20 — `ynz watch` Rebuild-on-Save Daemon
 
 Commit range: v0.2.0-m3..v0.2.0-m4
