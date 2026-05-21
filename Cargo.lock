@@ -2303,6 +2303,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "ynz-diagnostics",
+ "ynz-fmt",
  "ynz-parser",
  "ynz-registry",
  "ynz-typeck",

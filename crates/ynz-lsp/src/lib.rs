@@ -1,11 +1,14 @@
 pub mod capabilities;
 pub mod completion;
 pub mod diagnostic_transform;
+pub mod formatting;
 pub mod goto_definition;
 pub mod hover;
 pub mod position;
 pub mod progress;
 pub mod references;
+pub mod rename;
+pub mod rename_edit_builder;
 pub mod server;
 pub mod state;
 

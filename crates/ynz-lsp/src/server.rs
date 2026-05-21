@@ -6,20 +6,26 @@ use lsp_types::{
         DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Initialized,
         Notification as _,
     },
-    request::{Completion, GotoDefinition, HoverRequest, Initialize, References, Request as _, Shutdown},
+    request::{
+        Completion, Formatting, GotoDefinition, HoverRequest, Initialize, PrepareRenameRequest,
+        RangeFormatting, References, Rename, Request as _, Shutdown,
+    },
     CompletionParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, GotoDefinitionParams, HoverParams, InitializeParams,
-    InitializeResult, ReferenceParams, ServerInfo, Url,
+    DidOpenTextDocumentParams, DocumentFormattingParams, DocumentRangeFormattingParams,
+    GotoDefinitionParams, HoverParams, InitializeParams, InitializeResult, PrepareRenameResponse,
+    ReferenceParams, RenameParams, ServerInfo, Url,
 };
 
 use crate::{
     capabilities::{negotiate_encoding, server_capabilities},
     completion::completion_list,
     diagnostic_transform::{path_to_uri, to_lsp_diagnostic},
+    formatting::{formatting_response, range_formatting_response},
     goto_definition::definition_response,
     hover::hover_response,
     position::LineTable,
     references::references_response,
+    rename::{prepare_rename_response, rename_response},
     state::ServerState,
 };
 
@@ -248,6 +254,114 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
         };
         let response = Response::new_ok(req.id, value);
         connection.sender.send(Message::Response(response)).ok();
+        return;
+    }
+
+    if req.method == Formatting::METHOD {
+        let params: DocumentFormattingParams = match serde_json::from_value(req.params) {
+            Ok(p) => p,
+            Err(e) => {
+                let response = Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::InvalidParams as i32,
+                    format!("invalid formatting params: {e}"),
+                );
+                connection.sender.send(Message::Response(response)).ok();
+                return;
+            }
+        };
+        let edits = formatting_response(state, &params.text_document.uri, &connection.sender);
+        let value = serde_json::to_value(edits).unwrap_or(serde_json::Value::Null);
+        connection
+            .sender
+            .send(Message::Response(Response::new_ok(req.id, value)))
+            .ok();
+        return;
+    }
+
+    if req.method == RangeFormatting::METHOD {
+        let params: DocumentRangeFormattingParams = match serde_json::from_value(req.params) {
+            Ok(p) => p,
+            Err(e) => {
+                let response = Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::InvalidParams as i32,
+                    format!("invalid rangeFormatting params: {e}"),
+                );
+                connection.sender.send(Message::Response(response)).ok();
+                return;
+            }
+        };
+        let edits = range_formatting_response(
+            state,
+            &params.text_document.uri,
+            params.range,
+            &connection.sender,
+        );
+        let value = serde_json::to_value(edits).unwrap_or(serde_json::Value::Null);
+        connection
+            .sender
+            .send(Message::Response(Response::new_ok(req.id, value)))
+            .ok();
+        return;
+    }
+
+    if req.method == PrepareRenameRequest::METHOD {
+        let params: lsp_types::TextDocumentPositionParams =
+            match serde_json::from_value(req.params) {
+                Ok(p) => p,
+                Err(e) => {
+                    let response = Response::new_err(
+                        req.id,
+                        lsp_server::ErrorCode::InvalidParams as i32,
+                        format!("invalid prepareRename params: {e}"),
+                    );
+                    connection.sender.send(Message::Response(response)).ok();
+                    return;
+                }
+            };
+        let uri = &params.text_document.uri;
+        let position = params.position;
+        let result = prepare_rename_response(state, uri, position)
+            .map(PrepareRenameResponse::Range);
+        let value = match result {
+            Some(r) => serde_json::to_value(r).unwrap_or(serde_json::Value::Null),
+            None => serde_json::Value::Null,
+        };
+        let response = Response::new_ok(req.id, value);
+        connection.sender.send(Message::Response(response)).ok();
+        return;
+    }
+
+    if req.method == Rename::METHOD {
+        let params: RenameParams = match serde_json::from_value(req.params) {
+            Ok(p) => p,
+            Err(e) => {
+                let response = Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::InvalidParams as i32,
+                    format!("invalid rename params: {e}"),
+                );
+                connection.sender.send(Message::Response(response)).ok();
+                return;
+            }
+        };
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let new_name = &params.new_name;
+        match rename_response(state, uri, position, new_name, &connection.sender) {
+            Ok(edit) => {
+                let value = serde_json::to_value(edit).unwrap_or(serde_json::Value::Null);
+                connection
+                    .sender
+                    .send(Message::Response(Response::new_ok(req.id, value)))
+                    .ok();
+            }
+            Err((code, message)) => {
+                let response = Response::new_err(req.id, code, message);
+                connection.sender.send(Message::Response(response)).ok();
+            }
+        }
         return;
     }
 
