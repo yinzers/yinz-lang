@@ -5,7 +5,7 @@ owner: Patrick Rizzardi
 status: active
 roadmap: v0-2-dev-loop-tooling
 created: 2026-05-20
-last_updated: 2026-05-21 (Phase 12 in-progress — automated steps complete; awaiting Patrick /release + merge to main)
+last_updated: 2026-05-21 (Phase 12 automated steps complete + cumulative code-reviewer PASS; awaiting Patrick: push → PR → merge → /release)
 files:
   - crates/ynz-lsp/**
   - crates/ynz-typeck/src/**
