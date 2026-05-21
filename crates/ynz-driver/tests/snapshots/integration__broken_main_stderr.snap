@@ -3,7 +3,7 @@ source: crates/ynz-driver/tests/integration.rs
 expression: stderr
 ---
 Error: This file has no `entrypoint` function.
-   ╭─[ /workspaces/ynz/.claude/worktrees/v0-3-m1-runtime-and-background/crates/ynz-driver/tests/fixtures/broken_main.ynz:1:1 ]
+   ╭─[ /workspaces/ynz/crates/ynz-driver/tests/fixtures/broken_main.ynz:1:1 ]
    │
  1 │ ╭─▶ function entrypoint() {
    ┆ ┆   
@@ -17,7 +17,7 @@ Error: This file has no `entrypoint` function.
    │     Note: Every Yinz program needs an `entrypoint` function — that is where execution starts.
 ───╯
 Error: Missing return type on `entrypoint`.
-   ╭─[ /workspaces/ynz/.claude/worktrees/v0-3-m1-runtime-and-background/crates/ynz-driver/tests/fixtures/broken_main.ynz:1:23 ]
+   ╭─[ /workspaces/ynz/crates/ynz-driver/tests/fixtures/broken_main.ynz:1:23 ]
    │
  1 │ function entrypoint() {
    │                       ┬  
@@ -26,7 +26,7 @@ Error: Missing return type on `entrypoint`.
    │ Note: Every function in Yinz declares what it returns. Use `-> nothing` for functions that don't return a value.
 ───╯
 Error: Unexpected `}` at the top level.
-   ╭─[ /workspaces/ynz/.claude/worktrees/v0-3-m1-runtime-and-background/crates/ynz-driver/tests/fixtures/broken_main.ynz:3:1 ]
+   ╭─[ /workspaces/ynz/crates/ynz-driver/tests/fixtures/broken_main.ynz:3:1 ]
    │
  3 │ }
    │ ┬  
