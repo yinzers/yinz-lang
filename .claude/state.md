@@ -1,6 +1,6 @@
 # Session State: ynz
 
-**Last Updated**: 2026-05-21 (webpage-foundation M1 complete — 7 phases, PR #65 open; dev server running on port 6002 in /tmp/ynz-webpage worktree)
+**Last Updated**: 2026-05-21 (v0.2.0 shipped — v0-2-dev-loop-tooling roadmap DONE; webpage-foundation M1 PR #65 merged)
 
 ---
 

@@ -2,9 +2,9 @@
 slug: v0-2-dev-loop-tooling
 type: roadmap
 owner: patrick
-status: active
+status: done
 created: 2026-05-18
-last_updated: 2026-05-20 (v0.2-M5 scope updated to reflect final execution plan)
+last_updated: 2026-05-21 (v0.2.0 shipped — all 5 milestones in done/; tag v0.2.0 cut)
 milestones:
   - v0-2-m1-feature-inventory-sync
   - v0-2-m2-lsp-thin-slice
