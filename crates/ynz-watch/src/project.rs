@@ -72,7 +72,7 @@ pub fn resolve_target(path: &Path) -> Result<WatchTarget> {
     // Make the hint absolute before walking up — canonicalize("") fails on Linux,
     // so we must never let an empty/relative path reach find_project_root.
     let hint_dir = {
-        let p = if path.is_dir() { path.to_path_buf() } else { path.to_path_buf() };
+        let p = path.to_path_buf();
         if p.is_absolute() {
             p
         } else {

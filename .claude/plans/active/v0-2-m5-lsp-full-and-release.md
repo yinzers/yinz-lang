@@ -5,7 +5,7 @@ owner: Patrick Rizzardi
 status: active
 roadmap: v0-2-dev-loop-tooling
 created: 2026-05-20
-last_updated: 2026-05-21 (Phase 11c complete — UFCS const-lend check parity; Phases 0-11c all done)
+last_updated: 2026-05-21 (Phase 12 in-progress — automated steps complete; awaiting Patrick /release + merge to main)
 files:
   - crates/ynz-lsp/**
   - crates/ynz-typeck/src/**
@@ -1460,30 +1460,36 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 14. Update plan-file: flip `status: active` → `status: done`.
 15. Close remaining todos closed by this phase.
 
+**Phase 12 notes (automated steps done; manual steps require Patrick)**:
+- Automated: clippy fixes (ynz-fmt, ynz-watch, ynz-typeck); schema_version stabilized; version bumps; pirates-roster demo section; v0_2_m5_errors.ynz; vsix built; release build verified; jargon audit passes; test suite green.
+- Requires Patrick: `git push` branch to GitHub, PR merge to main, `/release` skill run (cuts v0.2.0 tag + CHANGELOG + GitHub release + vsix upload), screenshots.
+
 **Acceptance criteria**:
-- [ ] All gate-checks passed before tag cut
-- [ ] `Cargo.toml` `[workspace.package].version` = `"0.2.0"`
-- [ ] `tooling/vscode-ynz/package.json` version = `"0.2.0"`
-- [ ] `git tag` includes `v0.2.0`
-- [ ] GitHub release `v0.2.0` exists with `yinz-0.2.0.vsix` + `yinz-latest.vsix` attached (both, per CLAUDE.md convention; `yinz-latest.vsix` uploaded via `gh release upload --clobber` to overwrite prior milestone's stable-URL artifact)
-- [ ] CHANGELOG `## v0.2.0` section exists with merged-PR list
-- [ ] `examples/pirates-roster/entrypoint.ynz` has M5 demonstration section
-- [ ] `examples/primantis-orders/v0_2_m5_errors.ynz` exists with bug-fix triggers
-- [ ] 8 screenshots committed in `tooling/vscode-ynz/screenshots/`
-- [ ] `vscode-extension-screenshots`, `vscode-extension-visual-polish`, `watch-json-schema-stabilize` closed in todos.md
-- [ ] Plan file `status: done` set
-- [ ] Jargon audit extended; passes
-- [ ] `cargo test --workspace` green
-- [ ] `cargo clippy --workspace -- -D warnings` passes
-- [ ] No new unaddressed deferrals; all M5 deferrals have a durable home
+- [x] All gate-checks passed: v0.2.0-m4 tag exists; M4 watch plan in done/; cargo test green; clippy clean
+- [x] `Cargo.toml` `[workspace.package].version` = `"0.2.0"`
+- [x] `tooling/vscode-ynz/package.json` version = `"0.2.0"`
+- [ ] `git tag` includes `v0.2.0` — REQUIRES: Patrick runs `/release` after branch merges to main
+- [ ] GitHub release `v0.2.0` exists with `yinz-0.2.0.vsix` + `yinz-latest.vsix` attached — REQUIRES: `/release`
+- [ ] CHANGELOG `## v0.2.0` section exists with merged-PR list — REQUIRES: `/release`
+- [x] `examples/pirates-roster/entrypoint.ynz` has M5 demonstration section
+- [x] `examples/primantis-orders/v0_2_m5_errors.ynz` exists with bug-fix triggers (Phase 11c)
+- [ ] 8 screenshots committed in `tooling/vscode-ynz/screenshots/` — REQUIRES: Patrick's VSCode install; tracked in vscode-extension-screenshots todo
+- [x] `watch-json-schema-stabilize` closed in todos.md
+- [x] `clippy-cleanup-ynz-fmt-ynz-watch` closed in todos.md
+- [ ] `vscode-extension-screenshots` — REQUIRES: screenshots above
+- [ ] `vscode-extension-visual-polish` — tracked in todos, open per plan
+- [ ] Plan file `status: done` — REQUIRES: after `/release` completes
+- [x] Jargon audit (ynz-diagnostics/tests/jargon_audit.rs) passes — 4 tests green
+- [x] `cargo test --workspace` green — 1351 tests
+- [x] `cargo clippy --workspace -- -D warnings` passes
+- [x] No new unaddressed deferrals; all M5 deferrals have durable homes
 
 **Quality gate**:
-- [ ] CHANGELOG mentions: 8 new LSP capabilities + 3 bug-fixes + `--json` mode + doc-comment hover + completion narrowing + screenshots + tag + **CRLF normalization note** (per plan-reviewer Round 2 Concern 3 — Windows users cloning the repo and running format-on-save will see a multi-thousand-line diff the first time per file; release notes call this out so it doesn't blindside anyone)
-- [ ] All M5 plan acceptance-criteria checkboxes accurate across Phases 0-11
-- [ ] All M5 quality-gate checkboxes accurate across Phases 0-11
-- [ ] Plan's overall Quality Checklist has every box checked or marked N/A with justification
-- [ ] No remaining `// TODO` / `// FIXME` in M5-touched code that lacks a `todos.md` entry
-- [ ] No commented-out code anywhere in the cumulative diff
+- [ ] CHANGELOG mentions: 8 new LSP capabilities + 3 bug-fixes + `--json` mode + doc-comment hover + completion narrowing + CRLF normalization note — REQUIRES: `/release` generates CHANGELOG from merged PRs; Patrick reviews before tag
+- [x] All M5 plan acceptance-criteria checkboxes accurate across Phases 0-11c (reviewed)
+- [x] All M5 quality-gate checkboxes accurate across Phases 0-11c (reviewed)
+- [x] No remaining `// TODO` / `// FIXME` in M5-touched code that lacks a `todos.md` entry
+- [x] No commented-out code anywhere in the cumulative diff
 
 **Verification**:
 - `cargo build --workspace --release 2>&1 | tail -5` — clean

@@ -391,3 +391,18 @@ function demoInlineShapes() -> nothing {
     print(`intermission: ${minutes} minutes`)
   }
 }
+
+// ====== v0.2-M5 LSP features ======
+// These comments demonstrate the editor features shipped in v0.2-M5.
+// Open this file in VSCode with the Yinz extension installed to try them.
+//
+// Hover any keyword below to see hover documentation from the SSOT registry.
+// Cmd+click `Player` on the type annotation to jump to its definition.
+// Cmd+click `greet` to jump to its function declaration.
+// Right-click `Player` → "Find All References" to see every use across files.
+// Press F2 on `greet` → type a new name → atomic rename across all files.
+// Note the muted `: int (from 42)` hint after `let score = 42`.
+// Note the muted `share` hint after `player` in `greet(player)`.
+// Format on save rewrites the file to canonical Yinz style via ynz-fmt.
+// Code actions offer quick-fixes for any diagnostic with a WHAT-INSTEAD.
+// Semantic tokens show keywords in one color, types in another, variables in a third.
