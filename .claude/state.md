@@ -109,3 +109,17 @@ cargo fmt --all
 - **M6 catch-up obligations from M3**: `is Type` narrowing in multi-case `if`; options-variant matching; exhaustiveness checking for options/unions.
 - **M7 catch-up obligations from M3**: replace `range` builtin with `Iterable[T]` protocol; allow Range as first-class value; remove M3 special-cases in typeck + codegen; Unicode canonical equivalence for string multi-case (`ynz_string_eq`).
 - **M4 plan must include**: 5-subsection Invariants block per `.claude/rules/plan-invariants.md` (Safety, Performance, Teaching, Runtime Dependencies, Kernel-Mode Behavior). const deep-immutability invariants required in Safety + Performance. `shape` keyword reservation in P1 lexer.
+
+---
+
+## Active Decisions (Architectural — v0.3-M1)
+
+**v0.3.0-m1 shipped 2026-05-21** — `background` runs on a separate OS thread via Tokio blocking thread pool embedded in `libynz_rt.a`.
+
+**Key architectural decisions locked in this milestone:**
+- **C-ABI bridge** (`ynz_rt_init`/`ynz_rt_spawn_blocking`/`ynz_rt_check_preempt`/`ynz_rt_shutdown`): Tokio is internal; users never see Tokio types. WHY: binds the runtime to Yinz's ownership model; future swap (e.g., custom scheduler) is possible without user-facing API change.
+- **Stack-alloca ctx (not heap)**: `ynz_rt_spawn_blocking` takes a stack-allocated ctx; runtime copies it synchronously before returning. WHY: no heap ctx means no RAII cleanup concern at the call site; runtime is responsible for the copy lifetime.
+- **Loop back-edge preempt (M1) vs call-site preempt (M2)**: M1 inserts `ynz_rt_check_preempt` at loop back-edges only. Call-site insertion measured at 1190% overhead on fib(30) — deferred to M2 with loop-integrated yield strategy. WHY: loop-only gives O(1) preempt cost per iteration; call-site needs smarter insertion logic.
+- **`--no-auto-parallel` hidden flag**: plumbed in M1 (no-op); becomes load-bearing in M3 when auto-parallelization ships. WHY: plumb now so M3 isn't a flag-API breaking change.
+- **Fire-and-forget only (M1)**: `let h = background fn()` handle form is a compile error. WHY: handles need channels; channels ship in M4. Documented as `background-handle-form` deferred-tooling-feature in registry.
+- **Total tests at ship**: ~1220 (across all crates; ynz-typeck 156, ynz-lsp 100+, ynz-driver 120+, ynz-runtime 10, ynz-registry 29, etc.).

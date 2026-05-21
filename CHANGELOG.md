@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.3.0-m1] — 2026-05-21 — Runtime Bootstrap + Working `background`
+
+Commit range: v0.2.0..v0.3.0-m1
+
+### What changed
+
+v0.3.0-m1 makes `background fn(args)` actually run on a separate OS thread. Previously (v0.1, v0.2), `background` and `wait` parsed and type-checked but ran sequentially — a correctness illusion. M1 ends that: `background` now schedules work onto a Tokio blocking thread pool; main continues immediately.
+
+#### Features
+
+- **Working `background`** — `background fn(value.give)` and `background fn(value.copy())` now spawn on a separate thread. Main continues without waiting. Fire-and-forget; no handles in M1 (handle-form ships in v0.3-M4 with channels).
+- **Thread-pool runtime (`libynz_rt`)** — Tokio multi-thread runtime embedded in `libynz_runtime.a`; users never see Tokio types. C-ABI bridge: `ynz_rt_init` / `ynz_rt_spawn_blocking` / `ynz_rt_check_preempt` / `ynz_rt_shutdown`.
+- **`sleepMs(ms: int)` intrinsic** — synchronous blocking sleep for demos and timing tests. Maps to `ynz_thread_sleep_ms`.
+- **Large-copy warning** — Tier 3 lint: `background fn(largeStruct.copy())` where estimated copy size > 64 bytes emits a warning suggesting `.give` to transfer ownership instead.
+- **`.give` inlay hint** — LSP `ownership_call_site` domain extended: when the large-copy warning fires, an inline `.give (transfers ownership; no copy)` muted annotation appears at the arg site.
+
+#### Safety errors (new in M1)
+
+- **Lend-cross-thread** — `background fn(...)` where `fn` has a `lend` parameter is now a compile error. A mutable borrow across a thread boundary can outlive the owner — same safety hole as `share` (which was already rejected).
+- **Kernel-mode rejections** — `background` and `wait` in `--kernel` mode produce teaching errors (thread-pool runtime doesn't run in kernel mode). Flag is hidden in M1; exposed in v0.3+.
+
+#### Improvements
+
+- **Parser termination guarantee** — Two `_ =>` arms in `parse_block` and `parse_call` lacked forward-progress guarantees. Fixed with `pos_before` check + forced `advance()` + 10,000-iteration `debug_assert!` cap. Previously-skipped error-gallery fixtures in `ynz-fmt` tests now run.
+- **Corpus determinism harness** — New test suite runs each of 69 corpus files (driver fixtures + examples) twice and asserts byte-identical output. Guards against non-determinism from background thread scheduling.
+- **Keyword hover docs** — `wait` and `background` hover docs updated with WHAT/WHAT-INSTEAD/WHY per Rule 11. Registry `KeywordEntry` schema extended with optional hover fields; backward-compatible (existing keywords use legacy format).
+
+#### Fixes
+
+- Parser infinite-loop on `background` function with error-recovery path.
+- `m8_combo_modules_sensitive_concurrency` relaxed from strict-sequential to presence-only (background is genuinely concurrent now).
+
+#### Demo / gallery
+
+- `examples/pirates-roster/entrypoint.ynz` extended with v0.3-M1 section (`m3m1_demo`): main prints before background analytics done.
+- `examples/primantis-orders/v0_3_m1_errors.ynz` — new error gallery covering share-param, lend-cross-thread, and large-copy warning.
+
+---
+
 ## [0.2.0] — 2026-05-21 — LSP Full Experience + Compiler Bug Fixes
 
 Commit range: v0.2.0-m4..v0.2.0
