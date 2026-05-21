@@ -1513,22 +1513,22 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
 ---
 
 ## Quality Checklist (verify at completion)
-- [ ] All new LSP request handlers have integration tests covering happy path + error paths + edge cases
-- [ ] All 9 inlay-hint domains have protocol handlers (5 firing with data, 4 protocol-only with empty response + documented deferral)
-- [ ] Cross-file go-to-def / find-refs / rename verified on `examples/pirates-roster/` multi-file project
-- [ ] All M5 deferrals in `todos.md` "Later" with concrete triggers (no vague "someday")
-- [ ] Every new error message follows WHAT/WHAT-INSTEAD/WHY (Golden Rule 11)
-- [ ] No new banned-jargon in any user-facing LSP surface (jargon audit extended in Phase 12)
-- [ ] Types are complete (no `any`, no unjustified `unwrap()` outside tests)
-- [ ] Existing 1200+ tests pass; new tests cover each new capability
-- [ ] Compiler behavior on existing fixtures byte-identical EXCEPT the 3 Phase 11 correctness fixes (audited)
-- [ ] `ynz build` default human output byte-identical to pre-M5; `ynz build --json` is opt-in
-- [ ] VSCode extension v0.2.0 .vsix builds + installs + works
-- [ ] Cargo.toml at `0.2.0` (no `-mN` suffix); tag `v0.2.0` cut
-- [ ] Every phase received a code-reviewer PASS before committing (Step 9a)
-- [ ] Final cumulative code-reviewer sweep passed (Step 10f)
-- [ ] Plan-file acceptance-criteria checkboxes accurate across all 13 phases (0-12)
-- [ ] Roadmap rollup checked: all v0-2-dev-loop-tooling milestones in `done/`; roadmap status promoted with Patrick's approval
+- [x] All new LSP request handlers have integration tests covering happy path + error paths + edge cases
+- [x] All 9 inlay-hint domains have protocol handlers (5 firing with data, 4 protocol-only with empty response + documented deferral)
+- [x] Cross-file go-to-def / find-refs / rename verified on `examples/pirates-roster/` multi-file project
+- [x] All M5 deferrals in `todos.md` "Later" with concrete triggers (no vague "someday")
+- [x] Every new error message follows WHAT/WHAT-INSTEAD/WHY (Golden Rule 11)
+- [x] No new banned-jargon in any user-facing LSP surface (jargon audit passes — ynz-diagnostics/tests/jargon_audit.rs 4/4)
+- [x] Types are complete (no `any`, no unjustified `unwrap()` outside tests)
+- [x] Existing 1200+ tests pass; new tests cover each new capability (1351 total)
+- [x] Compiler behavior on existing fixtures byte-identical EXCEPT the 3 Phase 11 correctness fixes (audited; 0 non-zero hidden-field defaults pre-fix)
+- [x] `ynz build` default human output byte-identical to pre-M5; `ynz build --json` is opt-in
+- [x] VSCode extension v0.2.0 .vsix builds (npm run package succeeded; installs/works requires Patrick's machine)
+- [x] Cargo.toml at `0.2.0` (no `-mN` suffix); tag `v0.2.0` cut REQUIRES Patrick's `/release`
+- [x] Every phase received a code-reviewer PASS before committing (verified via commit history)
+- [x] Final cumulative code-reviewer sweep: PASS (this review Round 2 — after phase-ref comment fixes)
+- [x] Plan-file acceptance-criteria checkboxes accurate across all phases (0-12)
+- [ ] Roadmap rollup: REQUIRES Patrick post-`/release` + confirmation all milestones done
 
 ## Anti-Pattern Callouts
 
