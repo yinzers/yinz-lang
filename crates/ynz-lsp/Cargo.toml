@@ -14,6 +14,7 @@ serde = { version = "1", features = ["derive"] }
 crossbeam-channel = "0.5"
 
 salsa           = { workspace = true }
+ynz-ast         = { workspace = true }
 ynz-fmt         = { workspace = true }
 ynz-parser      = { workspace = true }
 ynz-typeck      = { workspace = true }

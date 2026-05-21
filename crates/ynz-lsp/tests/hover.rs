@@ -10,6 +10,7 @@ use ynz_lsp::{
     position::LineTable,
 };
 use ynz_parser::lexer::lex;
+use ynz_parser::queries::parse_query;
 
 fn tokenize(src: &str) -> Vec<ynz_parser::token::Spanned<ynz_parser::token::Token>> {
     let (tokens, _) = lex("test.ynz", src);
@@ -27,7 +28,7 @@ fn hover_function_keyword() {
     let src = "function entrypoint";
     let tokens = tokenize(src);
     let table = LineTable::new(src);
-    let h = hover_response(&tokens, &make_sig(), src, &table, 0, PositionEncoding::Utf8);
+    let h = hover_response(&tokens, &make_sig(), None, src, &table, 0, PositionEncoding::Utf8);
     assert!(
         h.is_some(),
         "hover over 'function' keyword should return Some"
@@ -68,7 +69,7 @@ fn hover_user_defined_function() {
     );
     let sig = SignatureTable { fns };
 
-    let h = hover_response(&tokens, &sig, src, &table, 2, PositionEncoding::Utf8);
+    let h = hover_response(&tokens, &sig, None, src, &table, 2, PositionEncoding::Utf8);
     assert!(
         h.is_some(),
         "hover over user-defined function name should return Some"
@@ -96,7 +97,7 @@ fn hover_inside_comment_returns_none() {
     let tokens = tokenize(src);
     let table = LineTable::new(src);
     // Offset 5 is inside the comment text
-    let h = hover_response(&tokens, &make_sig(), src, &table, 5, PositionEncoding::Utf8);
+    let h = hover_response(&tokens, &make_sig(), None, src, &table, 5, PositionEncoding::Utf8);
     assert!(h.is_none(), "hover inside a comment should return None");
 }
 
@@ -105,7 +106,7 @@ fn hover_at_byte_zero_of_empty_file_returns_none() {
     let src = "";
     let tokens = tokenize(src);
     let table = LineTable::new(src);
-    let h = hover_response(&tokens, &make_sig(), src, &table, 0, PositionEncoding::Utf8);
+    let h = hover_response(&tokens, &make_sig(), None, src, &table, 0, PositionEncoding::Utf8);
     assert!(
         h.is_none(),
         "hover at byte 0 of empty file should return None"
@@ -134,7 +135,7 @@ fn hover_registry_content_with_angle_brackets_does_not_crash() {
     let tokens = tokenize(src);
     let table = LineTable::new(src);
     // "range" is a free function intrinsic — lsp_hover_for_token should return Some
-    let h = hover_response(&tokens, &make_sig(), src, &table, 0, PositionEncoding::Utf8);
+    let h = hover_response(&tokens, &make_sig(), None, src, &table, 0, PositionEncoding::Utf8);
     assert!(
         h.is_some(),
         "hover over 'range' intrinsic should return Some"
@@ -144,6 +145,98 @@ fn hover_registry_content_with_angle_brackets_does_not_crash() {
         if let HoverContents::Markup(mc) = h.contents {
             assert!(!mc.value.is_empty(), "hover body must not be empty");
             assert!(mc.value.contains("range"), "body must mention 'range'");
+        }
+    }
+}
+
+#[test]
+fn hover_with_doc_comment_prepends_content() {
+    // WHY: doc-comment hover integration — hovering a user-defined function with
+    //      a `///` doc comment must include the doc text above the signature.
+    //      Without this, authors who write doc comments see no benefit in the IDE.
+    use std::collections::HashMap;
+    use ynz_diagnostics::SourceSpan;
+    use ynz_parser::{CompilerDb, SourceFile};
+    use ynz_typeck::signatures::{FunctionSig, SignatureTable};
+    use ynz_typeck::types::Type;
+
+    let src = "/// Heals the player by amount.\nfunction heal(amount: int) -> nothing { }";
+    let (tokens, _) = lex("test.ynz", src);
+    let table = LineTable::new(src);
+
+    // Build parsed module for doc-comment lookup
+    let mut db = CompilerDb::default();
+    let sf = SourceFile::new(&db, "test.ynz".to_string(), src.to_string());
+    db.register_source(sf);
+    let parse = parse_query(&db, sf);
+    let module = &parse.module;
+
+    // Build signature table
+    let mut fns = HashMap::new();
+    fns.insert(
+        "heal".to_string(),
+        FunctionSig {
+            params: vec![("amount".to_string(), Type::Int)],
+            param_ownerships: vec![None],
+            ret: Type::Nothing,
+            decl_span: SourceSpan::new("test.ynz", 0, 0),
+        },
+    );
+    let sig = SignatureTable { fns };
+
+    // hover at 'heal' (offset of 'h' in "function heal")
+    let heal_offset = src.find("heal").unwrap();
+    let h = hover_response(&tokens, &sig, Some(module), src, &table, heal_offset, PositionEncoding::Utf8);
+    assert!(h.is_some(), "hover over documented function should return Some");
+    if let Some(h) = h {
+        use lsp_types::HoverContents;
+        if let HoverContents::Markup(mc) = h.contents {
+            assert!(mc.value.contains("Heals the player by amount"), "doc comment must be in hover body");
+            assert!(mc.value.contains("heal"), "function name must be in hover body");
+        }
+    }
+}
+
+#[test]
+fn hover_without_doc_comment_shows_signature_only() {
+    // WHY: passing Some(module) when the function has no doc comment must NOT crash
+    //      and must still return the signature hover.
+    use std::collections::HashMap;
+    use ynz_diagnostics::SourceSpan;
+    use ynz_parser::{CompilerDb, SourceFile};
+    use ynz_typeck::signatures::{FunctionSig, SignatureTable};
+    use ynz_typeck::types::Type;
+
+    let src = "function greet() -> nothing { }";
+    let (tokens, _) = lex("test.ynz", src);
+    let table = LineTable::new(src);
+
+    let mut db = CompilerDb::default();
+    let sf = SourceFile::new(&db, "test.ynz".to_string(), src.to_string());
+    db.register_source(sf);
+    let parse = parse_query(&db, sf);
+    let module = &parse.module;
+
+    let mut fns = HashMap::new();
+    fns.insert(
+        "greet".to_string(),
+        FunctionSig {
+            params: vec![],
+            param_ownerships: vec![],
+            ret: Type::Nothing,
+            decl_span: SourceSpan::new("test.ynz", 0, 0),
+        },
+    );
+    let sig = SignatureTable { fns };
+
+    let greet_offset = src.find("greet").unwrap();
+    let h = hover_response(&tokens, &sig, Some(module), src, &table, greet_offset, PositionEncoding::Utf8);
+    assert!(h.is_some(), "hover over undocumented function should return Some");
+    if let Some(h) = h {
+        use lsp_types::HoverContents;
+        if let HoverContents::Markup(mc) = h.contents {
+            assert!(mc.value.contains("greet"), "function name must be in hover body");
+            assert!(!mc.value.contains("---"), "no separator when no doc comment");
         }
     }
 }
