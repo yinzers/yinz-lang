@@ -5,7 +5,7 @@ owner: Patrick Rizzardi
 status: active
 roadmap: v0-2-dev-loop-tooling
 created: 2026-05-20
-last_updated: 2026-05-21 (Phase 3 complete — references handler + ProgressTracker + 7 tests)
+last_updated: 2026-05-21 (Phase 6 complete — rename + format-on-save + inlay hints; Phases 0-6 all done)
 files:
   - crates/ynz-lsp/**
   - crates/ynz-typeck/src/**
@@ -760,17 +760,17 @@ Each phase ends with an **Exit Sequence** block listing the actions to execute (
    - **Atomic-or-fail under concurrent didChange (adversarial per plan-reviewer)**: integration test that simulates: client sends `Rename(file_a, offset)` → before response arrives, client sends `didChange(file_a)` mutating the relevant region. Per the M2 locked dispatch model (single-threaded; in-flight requests complete before mutations), the rename MUST be computed against the pre-mutation snapshot AND the resulting WorkspaceEdit must apply consistently to the pre-mutation byte offsets. The test asserts EITHER (a) the rename returns a WorkspaceEdit computed against the snapshot AND the client receives a stale-but-coherent response, OR (b) the rename returns `ResponseError(-32801 ContentModified)` (LSP 3.17 spec's "the document has changed" error — note: `-32801` is `ContentModified`; `-32802` is `ServerCancelled`; assertion uses the `lsp_types::error_codes::CONTENT_MODIFIED` constant rather than the magic number to avoid drift) — but NEVER a WorkspaceEdit that applies HALF the renames against pre-mutation offsets and HALF against post-mutation offsets. The dispatch-serialization model trivially gives us (a); the test documents the contract.
 
 **Acceptance criteria**:
-- [ ] `rename.rs` exports `rename_response` + `prepare_rename_response`
-- [ ] `rename_edit_builder.rs` exports `RenameEditBuilder`
-- [ ] `capabilities.rs` advertises rename with `prepare_provider: true`
-- [ ] Test count: at least 9 covering all `RenameError` variants + all UX flows
-- [ ] WorkspaceEdit `changes` map is atomically constructed; partial-failure test asserts that if `rename_locations` returns `Err`, NO edits are sent
-- [ ] Performance: cross-file rename in pirates-roster <1s p95
-- [ ] `cargo test --workspace` green
+- [x] `rename.rs` exports `rename_response` + `prepare_rename_response`
+- [x] `rename_edit_builder.rs` exports `RenameEditBuilder`
+- [x] `capabilities.rs` advertises rename with `prepare_provider: true`
+- [x] Test count: at least 9 covering all `RenameError` variants + all UX flows (14 tests)
+- [x] WorkspaceEdit `changes` map is atomically constructed; partial-failure test asserts that if `rename_locations` returns `Err`, NO edits are sent
+- [x] Performance: cross-file rename in pirates-roster <1s p95
+- [x] `cargo test --workspace` green
 
 **Quality gate**:
-- [ ] No `unwrap()` outside tests
-- [ ] `LspRenameError` codes are stable (assigned constants, not magic numbers). **Locked code-to-variant mapping** (per plan-reviewer Concern 3 — LSP spec reserves -32000 to -32099 as "implementation-defined server errors"; use that range exclusively):
+- [x] No `unwrap()` outside tests
+- [x] `LspRenameError` codes are stable (assigned constants, not magic numbers). **Locked code-to-variant mapping** (per plan-reviewer Concern 3 — LSP spec reserves -32000 to -32099 as "implementation-defined server errors"; use that range exclusively):
   - `-32001` = `NotARenameable` (e.g., cursor on keyword/literal)
   - `-32002` = `NewNameIsReservedKeyword`
   - `-32003` = `NewNameIsBannedJargon`
