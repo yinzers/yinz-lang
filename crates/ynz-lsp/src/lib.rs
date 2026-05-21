@@ -11,6 +11,7 @@ pub mod progress;
 pub mod references;
 pub mod rename;
 pub mod rename_edit_builder;
+pub mod semantic_tokens;
 pub mod server;
 pub mod state;
 

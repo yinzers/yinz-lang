@@ -4,6 +4,7 @@ use lsp_types::{
     ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
     TextDocumentSyncOptions, WorkDoneProgressOptions,
 };
+use crate::semantic_tokens::semantic_tokens_options;
 
 /// The position encoding this server prefers. UTF-8 means LSP Position.character == byte offset,
 /// which matches SourceSpan exactly — no conversion needed when the client supports it.
@@ -61,6 +62,7 @@ pub fn server_capabilities(encoding: PositionEncoding) -> ServerCapabilities {
             },
             resolve_provider: Some(false),
         })),
+        semantic_tokens_provider: Some(semantic_tokens_options()),
         ..Default::default()
     }
 }

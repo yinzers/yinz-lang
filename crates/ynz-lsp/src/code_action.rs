@@ -54,7 +54,9 @@ pub fn code_action_response(
 
         let action = match kind {
             DiagnosticKind::BannedKeyword { keyword } => {
-                build_banned_keyword_action(uri, text, &table, diag, keyword, state.encoding)
+                build_banned_keyword_action(
+                    uri, text, &table, diag, keyword, kind.kind_name(), state.encoding,
+                )
             }
             _ => None,
         };
@@ -77,10 +79,11 @@ fn build_banned_keyword_action(
     table: &LineTable,
     diag: &ynz_diagnostics::Diagnostic,
     keyword: &str,
+    kind_name: &str,
     encoding: crate::capabilities::PositionEncoding,
 ) -> Option<CodeAction> {
-    let replacement = ynz_registry::lsp_code_action_replacement_for("BannedKeyword", keyword)?;
-    let label = ynz_registry::lsp_code_action_label_for("BannedKeyword", keyword)?;
+    let replacement = ynz_registry::lsp_code_action_replacement_for(kind_name, keyword)?;
+    let label = ynz_registry::lsp_code_action_label_for(kind_name, keyword)?;
 
     let diag_range = {
         let start = table.byte_offset_to_position(text, diag.span.start, encoding);
