@@ -13,7 +13,7 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Soon (committed, not started)
 
-- [ ] **Hidden-field default evaluation in struct literals** — `emit.rs:lower_struct_lit` zero-inits hidden fields; string/shape hidden fields with non-zero defaults are silently wrong. Revisit when v0.2 LSP work begins.
+- [x] **Hidden-field default evaluation in struct literals** — shipped in v0.2-M5 Phase 11a: `lower_struct_lit` now walks the inheritance chain and evaluates hidden-field default expressions via `lower_expr`. All 3 fixtures pass (string, int, nested/inherited). Audit confirmed 0 non-zero defaults in existing fixtures — fix changes a previously-broken path with no live consumer regressions.
 - [ ] **Dynamic dispatch call-site coercion** — `coerce_to_dynamic` infrastructure is in place (vtable globals emitted) but passing a concrete shape to a `dynamic Foo` parameter is not yet wired. Defer to post-M5.
 - [ ] **UFCS const-lend check** — `check.rs` comment (line ~936): receiver ownership not checked for dot-call UFCS; only free-function-call form is checked. Low priority — the function-call form produces the correct error.
 

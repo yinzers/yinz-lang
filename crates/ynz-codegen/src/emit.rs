@@ -4617,9 +4617,76 @@ fn lower_struct_lit<'ctx>(
         store_field(cg, val, &field_ty, gep)?;
     }
 
-    // Hidden-field defaults are not evaluated here — zero-init covers M4's
-    // restricted defaults (constants and empty literals). String/shape hidden
-    // fields with non-zero defaults require a setter. See todos.md.
+    // Evaluate and store non-zero hidden-field defaults.
+    //
+    // Walk all AST ShapeDecls in the inheritance chain (current shape + every ancestor
+    // via `extends`) to find hidden fields with explicit default expressions.
+    // Zero-init above already covers zero-default fields; only emit a GEP+store when
+    // the default expression evaluates to something non-zero.
+    //
+    // Inherited hidden fields live in the parent's AST ShapeDecl, not the child's —
+    // so we must walk the chain.  The GEP index is always looked up from the resolved
+    // ShapeDef.fields (which includes inherited fields in layout order) to produce
+    // the correct LLVM struct offset.
+    let ast_shape_decl_for = |name: &str| -> Option<&ynz_ast::nodes::ShapeDecl> {
+        cg.typed.module.items.iter().find_map(|item| {
+            if let ynz_ast::nodes::Item::ShapeDecl(s) = item {
+                if s.name == name { Some(s) } else { None }
+            } else {
+                None
+            }
+        })
+    };
+
+    // Collect the shape names to visit: walk up the extends chain.
+    let mut chain: Vec<String> = vec![shape_name.clone()];
+    {
+        let mut cur = shape_name.clone();
+        while let Some(parent) = cg.shape_table.get(&cur).and_then(|s| s.extends.clone()) {
+            chain.push(parent.clone());
+            cur = parent;
+        }
+    }
+
+    for decl_name in &chain {
+        let Some(ast_shape) = ast_shape_decl_for(decl_name) else {
+            continue;
+        };
+        for ast_field in &ast_shape.fields {
+            if !ast_field.is_hidden {
+                continue;
+            }
+            let Some(default_expr) = &ast_field.default else {
+                continue;
+            };
+            // Find this field's index in the resolved ShapeDef (which includes
+            // inherited fields; the LLVM struct layout follows ShapeDef.fields order).
+            let field_idx = match shape_def
+                .fields
+                .iter()
+                .position(|f| f.name == ast_field.name)
+            {
+                Some(idx) => idx,
+                None => continue, // field not in resolved def — skip safely
+            };
+            let field_ty = shape_def.fields[field_idx].ty.clone();
+
+            let gep = cg
+                .builder
+                .build_struct_gep(
+                    struct_ty,
+                    slot,
+                    field_idx as u32,
+                    &format!("{}.{}_default", shape_name, ast_field.name),
+                )
+                .map_err(|e| {
+                    format!("hidden default GEP `{}`: {e}", ast_field.name)
+                })?;
+
+            let val = lower_expr(cg, default_expr)?;
+            store_field(cg, val, &field_ty, gep)?;
+        }
+    }
 
     Ok(slot.into())
 }

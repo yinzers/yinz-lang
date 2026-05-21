@@ -869,6 +869,60 @@ fn m5_map_get_set_count() {
     assert_eq!(stdout, "90\n85\n95\n2\n");
 }
 
+#[test]
+fn m5_hidden_default_string_evaluates_correctly() {
+    // WHY: `shape Foo { hidden label: string = "default" }` constructed via `Foo {}`
+    //      must produce a value where `label == "default"`, not a null pointer or empty string.
+    //      Hidden-field defaults are part of the shape's contract; silently zero-initing them
+    //      is a silent-wrong-output bug class that only surfaces at runtime (no compile error).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_hidden_default_string.ynz"));
+    assert_eq!(
+        code,
+        0,
+        "m5_hidden_default_string must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout, "default_label\n",
+        "hidden string default must print the literal value, not null"
+    );
+}
+
+#[test]
+fn m5_hidden_default_int_evaluates_correctly() {
+    // WHY: non-zero integer hidden defaults must be evaluated, not zero-inited.
+    //      A shape with `hidden threshold: int = 42` must have threshold == 42
+    //      in every constructed instance, not 0.  Zero-init is only correct for
+    //      explicit `= 0` defaults.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_hidden_default_int.ynz"));
+    assert_eq!(
+        code,
+        0,
+        "m5_hidden_default_int must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout, "42\n",
+        "hidden int default 42 must print 42, not 0 (zero-init regression)"
+    );
+}
+
+#[test]
+fn m5_hidden_default_nested_evaluates_both_parent_and_own() {
+    // WHY: when a shape `extends` a parent that also declares hidden fields, BOTH
+    //      the parent's hidden defaults AND the child's own hidden defaults must be
+    //      evaluated at construction time.  Inherited hidden fields live in the parent's
+    //      AST ShapeDecl; a fix that only walks the child's declaration misses them.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_hidden_default_nested.ynz"));
+    assert_eq!(
+        code,
+        0,
+        "m5_hidden_default_nested must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout, "10\n99\n",
+        "both parent hidden default (10) and own hidden default (99) must print correctly"
+    );
+}
+
 // ── M6: options, unions, fallible conversions ──────────────────────────────────
 
 #[test]
