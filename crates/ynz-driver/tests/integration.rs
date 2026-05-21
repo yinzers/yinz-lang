@@ -870,6 +870,46 @@ fn m5_map_get_set_count() {
 }
 
 #[test]
+fn m5_dyn_dispatch_concrete_shape_follows_contract_accepted() {
+    // WHY: a shape that declares `follows Contract` must be accepted at a `dynamic Contract`
+    //      call site without a typeck error.  Only shapes that declare `follows` qualify;
+    //      shapes that do NOT declare `follows` must still be rejected (pinned separately).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_dyn_dispatch_coerce_happy.ynz"));
+    assert_eq!(
+        code,
+        0,
+        "dynamic coerce happy path must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(stdout, "accepted\n");
+}
+
+#[test]
+fn m5_dyn_dispatch_no_follows_still_errors() {
+    // WHY: the coerce must NOT over-accept — only shapes with `follows Contract` qualify for
+    //      a `dynamic Contract` parameter.  A shape without `follows` must remain a typeck
+    //      error.  This pins the negative direction; the happy-path test pins the positive.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_dyn_dispatch_coerce_no_follows.ynz"));
+    assert_ne!(code, 0, "passing a non-following shape must fail; stdout:\n{stdout}");
+    assert!(
+        stderr.contains("Enemy") && stderr.contains("dynamic Printable"),
+        "error must name both the rejected shape and the required contract; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn m5_dyn_dispatch_chained_both_calls_succeed() {
+    // WHY: a concrete shape passed through two function calls each accepting `dynamic Contract`
+    //      must pass through correctly — verifies the coerce works at multiple call sites.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_dyn_dispatch_coerce_chained.ynz"));
+    assert_eq!(
+        code,
+        0,
+        "chained dynamic coerce must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(stdout, "accepted\nrelayed\n");
+}
+
+#[test]
 fn m5_hidden_default_string_evaluates_correctly() {
     // WHY: `shape Foo { hidden label: string = "default" }` constructed via `Foo {}`
     //      must produce a value where `label == "default"`, not a null pointer or empty string.

@@ -128,8 +128,15 @@ impl ShapeTable {
             AstType::AnonShape { fields, .. } => Type::Shape {
                 name: canonical_anon_name(fields),
             },
-            // P3b: dynamic dispatch and Self type resolution.
-            AstType::Dynamic { .. } | AstType::SelfType { .. } => Type::Error,
+            // `dynamic Contract` resolves to Type::Dynamic carrying the contract name.
+            // This is sufficient for the call-site coerce check in check.rs
+            // (shape.follows.contains(contract)) and for the vtable global lookup
+            // (vtable_ShapeName_ContractName emitted in M4 P3b).  Method dispatch
+            // through a `dynamic` receiver is handled separately in emit.rs.
+            AstType::Dynamic { contract, .. } => Type::Dynamic {
+                contract: contract.clone(),
+            },
+            AstType::SelfType { .. } => Type::Error,
             // TypeParam: must be resolved in context (Checker::ast_type_to_type handles this).
             AstType::TypeParam { .. } => Type::Error,
             // Generic instantiation: P3a handles user-defined generics; P3b handles built-ins.

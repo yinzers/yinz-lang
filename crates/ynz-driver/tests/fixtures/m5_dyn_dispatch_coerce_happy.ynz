@@ -1,0 +1,23 @@
+/// Fixture: passing a concrete shape to a `dynamic Contract` parameter.
+/// A shape that `follows` a contract can be passed where `dynamic Contract` is expected.
+/// Without this coerce, the call site is a typeck error even when the shape satisfies the contract.
+shape Printable {
+  display(share self) -> nothing
+}
+
+shape Player follows Printable {
+  name: string
+}
+
+function display(share self: Player) -> nothing {
+  print(self.name)
+}
+
+function showDynamic(d: dynamic Printable) -> nothing {
+  print(`accepted`)
+}
+
+function entrypoint() -> nothing {
+  let p: Player = { name: `hero` }
+  showDynamic(p)
+}

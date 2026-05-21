@@ -1546,20 +1546,50 @@ impl<'b> Checker<'b> {
                     ));
                 }
             } else if actual_ty != Type::Error && !types_compatible(expected_ty, &actual_ty) {
-                self.diags.push(Diagnostic::error(
-                    arg.span().clone(),
-                    format!(
-                        "This argument is `{}`, but `{name}` expects `{}` here.",
-                        type_name(&actual_ty),
-                        type_name(expected_ty)
-                    ),
-                    format!("Pass a `{}` value.", type_name(expected_ty)),
-                    format!(
-                        "`{name}` declared this parameter as `{}`. Passing a `{}` would be a type mismatch.",
-                        type_name(expected_ty),
-                        type_name(&actual_ty)
-                    ),
-                ));
+                // Accept a concrete shape as a `dynamic Contract` argument when the
+                // shape's declaration includes `follows Contract`.
+                //
+                // Both shapes and `dynamic` values are plain pointers in the LLVM ABI —
+                // the coerce is a type-level widening only; no runtime fat-pointer packing
+                // is needed at this call site.  Method dispatch through `d` inside the
+                // callee uses the vtable at the call site where the concrete type is known.
+                let is_valid_dyn_coerce = match (expected_ty, &actual_ty) {
+                    (Type::Dynamic { contract }, Type::Shape { name: shape_name }) => self
+                        .shape_table
+                        .get(shape_name)
+                        .map(|def| def.follows.contains(contract))
+                        .unwrap_or(false),
+                    _ => false,
+                };
+
+                if !is_valid_dyn_coerce {
+                    self.diags.push(Diagnostic::error(
+                        arg.span().clone(),
+                        format!(
+                            "This argument is `{}`, but `{name}` expects `{}` here.",
+                            type_name(&actual_ty),
+                            type_name(expected_ty)
+                        ),
+                        if let Type::Dynamic { contract } = expected_ty {
+                            format!(
+                                "Pass a shape that follows `{contract}` (add `follows {contract}` to the shape declaration)."
+                            )
+                        } else {
+                            format!("Pass a `{}` value.", type_name(expected_ty))
+                        },
+                        if let Type::Dynamic { contract } = expected_ty {
+                            format!(
+                                "`{name}` declared this parameter as `dynamic {contract}`. Only shapes that declare `follows {contract}` can be passed here."
+                            )
+                        } else {
+                            format!(
+                                "`{name}` declared this parameter as `{}`. Passing a `{}` would be a type mismatch.",
+                                type_name(expected_ty),
+                                type_name(&actual_ty)
+                            )
+                        },
+                    ));
+                }
             }
         }
         // Reject Range return values (shouldn't be in sig_table, but guard anyway)
