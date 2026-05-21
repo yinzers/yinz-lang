@@ -3,7 +3,7 @@
 // and that range formatting covers the requested line range without corrupting
 // the rest of the file.
 
-use lsp_types::{Position, Range};
+use lsp_types::{notification::Notification as _, Position, Range};
 use ynz_lsp::{
     capabilities::PositionEncoding,
     formatting::{formatting_response, range_formatting_response},
@@ -17,9 +17,27 @@ fn state_single(path: &str, src: &str) -> (ServerState, lsp_types::Url) {
     (state, uri)
 }
 
+/// Returns (sender, receiver) so tests can drain and inspect notifications.
+fn spy_sender() -> (
+    crossbeam_channel::Sender<lsp_server::Message>,
+    crossbeam_channel::Receiver<lsp_server::Message>,
+) {
+    crossbeam_channel::unbounded()
+}
+
 fn mock_sender() -> crossbeam_channel::Sender<lsp_server::Message> {
-    let (tx, _rx) = crossbeam_channel::unbounded();
-    tx
+    spy_sender().0
+}
+
+/// Drain the spy channel and return all `window/showMessage` notification method names.
+fn drain_notifications(rx: &crossbeam_channel::Receiver<lsp_server::Message>) -> Vec<String> {
+    let mut methods = Vec::new();
+    while let Ok(msg) = rx.try_recv() {
+        if let lsp_server::Message::Notification(n) = msg {
+            methods.push(n.method.clone());
+        }
+    }
+    methods
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -55,14 +73,24 @@ fn test_formatting_canonical_file_returns_empty_vec() {
 }
 
 #[test]
-fn test_formatting_parse_error_file_returns_empty_vec() {
-    // WHY: format-on-save on a file with syntax errors must not crash — return
-    // empty edits (window/showMessage is emitted but we can't assert it here
-    // without a spy channel; the parse-error path is verified by compilation).
+fn test_formatting_parse_error_file_returns_empty_vec_and_show_message() {
+    // WHY: format-on-save on a file with parse errors must BOTH return empty edits
+    // AND emit window/showMessage so the user knows WHY nothing happened (Golden
+    // Rule 11 teaching mission — silent empty is duct tape per no-duct-tape.md).
+    // This test asserts both sides of the contract.
     let src = "function broken( -> nothing {}\n"; // missing param closing paren
     let (state, uri) = state_single("/tmp/ynz_fmt_broken.ynz", src);
-    let edits = formatting_response(&state, &uri, &mock_sender());
+    let (tx, rx) = spy_sender();
+    let edits = formatting_response(&state, &uri, &tx);
+
     assert!(edits.is_empty(), "parse-error file must produce zero edits");
+
+    let notif_methods = drain_notifications(&rx);
+    assert!(
+        notif_methods.iter().any(|m| m == lsp_types::notification::ShowMessage::METHOD),
+        "parse-error path must emit window/showMessage; got notifications: {:?}",
+        notif_methods
+    );
 }
 
 #[test]

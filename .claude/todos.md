@@ -45,7 +45,7 @@ Global cross-workstream items only. Granular per-chat work lives in:
 - [ ] Wire up GitHub Actions CI (ci.yml already written, just needs configuration)
 - [ ] macOS CI golden hash for ynz-codegen
 
-- [ ] **lsp-range-formatting** — add `format_range(source, range)` to ynz-fmt library + textDocument/rangeFormatting LSP handler. Deferred from v0.2-M3 (whole-file formatting was enough for editor format-on-save). Pick up IF v0.2-M5 LSP proves a need.
+- [x] **lsp-range-formatting** — shipped in v0.2-M5 Phase 5: `ynz_fmt::format_range` + `textDocument/rangeFormatting` LSP handler.
 
 - [ ] **fmt-inter-element-comments** — implement element-level comment attachment in `emit_expr` for `ArrayLit`/`MapLit`/`StructLit` when long-line split is triggered. Locked spec: `[1, // note\n 2, 3]` → comment moves to own line ABOVE element 2 at element indent. Deferred from v0.2-M3 Phase 3 because it requires making `emit_expr` comment-aware (significant scope); Phase 3's `comment_in_array.ynz` tests the leading-comment-before-stmt case instead. Implement when taking up Phase 3.5 or Phase 4.
 

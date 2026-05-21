@@ -43,7 +43,9 @@ fn show_message(sender: &crossbeam_channel::Sender<Message>, kind: MessageType, 
             typ: kind,
             message: text.to_string(),
         })
-        .unwrap_or_default(),
+        // ShowMessageParams derives Serialize and cannot fail to serialize — the
+        // derive macro produces an infallible impl for plain-struct + string fields.
+        .expect("ShowMessageParams serialization is infallible"),
     };
     sender.send(Message::Notification(notif)).ok();
 }
@@ -141,13 +143,31 @@ pub fn range_formatting_response(
         None => return Vec::new(),
     };
 
-    // Convert the LSP range to byte offsets.
-    let start_byte = table
-        .position_to_byte_offset(source, range.start, state.encoding)
-        .unwrap_or(0);
-    let end_byte = table
-        .position_to_byte_offset(source, range.end, state.encoding)
-        .unwrap_or(source.len());
+    // Convert the LSP range to byte offsets.  If either conversion fails (stale
+    // client offsets after a concurrent edit), emit a diagnostic and return
+    // empty edits — same visible-signal pattern as parse-error handling.
+    let start_byte = match table.position_to_byte_offset(source, range.start, state.encoding) {
+        Some(b) => b,
+        None => {
+            show_message(
+                sender,
+                MessageType::INFO,
+                "ynz-fmt: range formatting: start position out of bounds — try reloading the file.",
+            );
+            return Vec::new();
+        }
+    };
+    let end_byte = match table.position_to_byte_offset(source, range.end, state.encoding) {
+        Some(b) => b,
+        None => {
+            show_message(
+                sender,
+                MessageType::INFO,
+                "ynz-fmt: range formatting: end position out of bounds — try reloading the file.",
+            );
+            return Vec::new();
+        }
+    };
 
     // Format the whole file — the Yinz grammar is file-scoped, so partial
     // formatting is always a full-file pass.

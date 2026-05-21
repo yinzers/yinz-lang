@@ -235,6 +235,28 @@ fn test_rename_imported_symbol_returns_error_code_32006() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Conflict detection — renaming to an existing symbol name
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_rename_to_existing_name_returns_error_code_32005() {
+    // WHY: renaming `greet` → `entrypoint` (where `entrypoint` already exists
+    // in the same file) must be REJECTED with -32005.  Allowing it would produce
+    // two top-level functions with the same name, which is a compile error
+    // immediately after the rename — a silent corruption of the user's source.
+    let src = "function greet() -> string { return `hi` }\nfunction entrypoint() -> nothing {}\n";
+    let (state, uri) = state_single("/tmp/ynz_rename_conflict.ynz", src);
+    let pos = position_at(src, "greet");
+    let result = rename_response(&state, &uri, pos, "entrypoint", &mock_sender());
+    let (code, msg) = result.expect_err("rename to existing name must error");
+    assert_eq!(code, -32005, "conflict must produce code -32005");
+    assert!(
+        msg.contains("WHAT INSTEAD"),
+        "conflict error must include WHAT INSTEAD guidance; got: {msg}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Atomic-or-fail: partial edit never returned
 // ─────────────────────────────────────────────────────────────────────────────
 

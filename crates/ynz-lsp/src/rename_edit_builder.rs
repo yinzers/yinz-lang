@@ -21,16 +21,26 @@ pub struct RenameEditBuilder {
 }
 
 impl RenameEditBuilder {
+    /// Create an empty builder.
+    ///
+    /// WHY `new` instead of a direct `WorkspaceEdit { ... }` literal: the builder
+    /// enforces the accumulate-then-build contract at the type level — callers
+    /// cannot call `build()` after a conversion error because `build()` consumes
+    /// `self`, preventing any further `add` calls.  Trying to build a partial edit
+    /// and then continue would not compile.
     pub fn new() -> Self {
         Self {
             changes: HashMap::new(),
         }
     }
 
-    /// Record a replacement of `range` in `url` with `new_text`.
+    /// Record a text replacement of `range` in `url` with `new_text`.
     ///
-    /// Calling `add` never fails — conversion errors must be detected BEFORE
-    /// calling `add` so no partial state is accumulated.
+    /// WHY this method is infallible: conversion from `SourceSpan` → LSP `Range`
+    /// must happen BEFORE `add` is called so that a conversion failure causes the
+    /// CALLER to return an error to the LSP client.  If `add` could fail, a partial
+    /// accumulation (N–1 edits) could be built and sent, which would corrupt the
+    /// user's source code.  The infallible contract ensures atomicity.
     pub fn add(&mut self, url: Url, range: lsp_types::Range, new_text: String) {
         self.changes
             .entry(url)
@@ -38,7 +48,10 @@ impl RenameEditBuilder {
             .push(TextEdit { range, new_text });
     }
 
-    /// Consume the builder and produce the final `WorkspaceEdit`.
+    /// Consume the builder and return the final atomic `WorkspaceEdit`.
+    ///
+    /// WHY consuming: prevents the caller from calling `add` after `build` — once
+    /// you hand the edit to the LSP client, the accumulation phase is over.
     pub fn build(self) -> WorkspaceEdit {
         WorkspaceEdit {
             changes: Some(self.changes),
@@ -47,12 +60,12 @@ impl RenameEditBuilder {
         }
     }
 
-    /// Total number of individual edits accumulated (for progress reporting).
+    /// Total individual edits accumulated across all files.  Used for progress reporting.
     pub fn edit_count(&self) -> usize {
         self.changes.values().map(Vec::len).sum()
     }
 
-    /// Number of distinct files with at least one edit.
+    /// Number of distinct files that have at least one edit.
     pub fn file_count(&self) -> usize {
         self.changes.len()
     }
