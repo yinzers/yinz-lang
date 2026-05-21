@@ -1,0 +1,27 @@
+/// Fixture: passing a concrete shape through two function calls each accepting `dynamic`.
+/// Both calls should compile and the concrete shape passes through correctly.
+shape Printable {
+  display(share self) -> nothing
+}
+
+shape Player follows Printable {
+  name: string
+}
+
+function display(share self: Player) -> nothing {
+  print(self.name)
+}
+
+function relay(d: dynamic Printable) -> nothing {
+  print(`relayed`)
+}
+
+function showDynamic(d: dynamic Printable) -> nothing {
+  print(`accepted`)
+  relay(d)
+}
+
+function entrypoint() -> nothing {
+  let p: Player = { name: `hero` }
+  showDynamic(p)
+}

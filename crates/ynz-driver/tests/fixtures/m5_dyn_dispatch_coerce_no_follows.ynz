@@ -1,0 +1,21 @@
+/// Fixture: passing a concrete shape that does NOT follow the required contract.
+/// The compiler must still reject the call — only shapes that explicitly declare
+/// `follows Contract` can satisfy a `dynamic Contract` parameter.
+/// This is the over-acceptance adversarial case: verifies the fix doesn't
+/// accept all shapes unconditionally.
+shape Printable {
+  display(share self) -> nothing
+}
+
+shape Enemy {
+  health: int
+}
+
+function showDynamic(d: dynamic Printable) -> nothing {
+  print(`accepted`)
+}
+
+function entrypoint() -> nothing {
+  let e: Enemy = { health: 50 }
+  showDynamic(e)
+}
