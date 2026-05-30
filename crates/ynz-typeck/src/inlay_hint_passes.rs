@@ -139,10 +139,13 @@ fn collect_maybe_mutated_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
             collect_maybe_mutated_expr(cond, out);
             collect_maybe_mutated(body, out);
         }
-        Stmt::Match { scrutinee, arms, .. } => {
+        Stmt::Match { scrutinee, arms, else_arm, .. } => {
             collect_maybe_mutated_expr(scrutinee, out);
             for arm in arms {
                 collect_maybe_mutated(&arm.body, out);
+            }
+            if let Some(eb) = else_arm {
+                collect_maybe_mutated(eb, out);
             }
         }
         Stmt::While { cond, body, .. } => {
@@ -247,9 +250,12 @@ fn collect_type_hints_block(
             Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => {
                 collect_type_hints_block(body, expr_types, out);
             }
-            Stmt::Match { arms, .. } => {
+            Stmt::Match { arms, else_arm, .. } => {
                 for arm in arms {
                     collect_type_hints_block(&arm.body, expr_types, out);
+                }
+                if let Some(eb) = else_arm {
+                    collect_type_hints_block(eb, expr_types, out);
                 }
             }
             _ => {}
@@ -308,10 +314,13 @@ fn collect_ownership_hints_block(
                 collect_ownership_hints_expr(cond, sig_table, imported, out);
                 collect_ownership_hints_block(body, sig_table, imported, out);
             }
-            Stmt::Match { scrutinee, arms, .. } => {
+            Stmt::Match { scrutinee, arms, else_arm, .. } => {
                 collect_ownership_hints_expr(scrutinee, sig_table, imported, out);
                 for arm in arms {
                     collect_ownership_hints_block(&arm.body, sig_table, imported, out);
+                }
+                if let Some(eb) = else_arm {
+                    collect_ownership_hints_block(eb, sig_table, imported, out);
                 }
             }
             Stmt::While { cond, body, .. } => {
@@ -399,10 +408,13 @@ fn collect_copy_hints_block(
                 collect_copy_hints_expr(cond, expr_types, out);
                 collect_copy_hints_block(body, expr_types, out);
             }
-            Stmt::Match { scrutinee, arms, .. } => {
+            Stmt::Match { scrutinee, arms, else_arm, .. } => {
                 collect_copy_hints_expr(scrutinee, expr_types, out);
                 for arm in arms {
                     collect_copy_hints_block(&arm.body, expr_types, out);
+                }
+                if let Some(eb) = else_arm {
+                    collect_copy_hints_block(eb, expr_types, out);
                 }
             }
             Stmt::While { body, .. } | Stmt::For { body, .. } => {
@@ -471,9 +483,12 @@ fn collect_array_hints_block(block: &Block, mutated: &HashSet<String>, out: &mut
             Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => {
                 collect_array_hints_block(body, mutated, out);
             }
-            Stmt::Match { arms, .. } => {
+            Stmt::Match { arms, else_arm, .. } => {
                 for arm in arms {
                     collect_array_hints_block(&arm.body, mutated, out);
+                }
+                if let Some(eb) = else_arm {
+                    collect_array_hints_block(eb, mutated, out);
                 }
             }
             _ => {}
@@ -522,9 +537,12 @@ fn collect_const_hints_block(block: &Block, mutated: &HashSet<String>, out: &mut
             Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => {
                 collect_const_hints_block(body, mutated, out);
             }
-            Stmt::Match { arms, .. } => {
+            Stmt::Match { arms, else_arm, .. } => {
                 for arm in arms {
                     collect_const_hints_block(&arm.body, mutated, out);
+                }
+                if let Some(eb) = else_arm {
+                    collect_const_hints_block(eb, mutated, out);
                 }
             }
             _ => {}

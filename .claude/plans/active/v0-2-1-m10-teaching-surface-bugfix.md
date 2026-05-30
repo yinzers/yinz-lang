@@ -246,7 +246,7 @@ Milestone ships via `/pr` (project skill) when all phases are done and the final
 - [x] rules-compliance-reviewer: PASS 2026-05-30 (r3 — Big-O annotations added; r1/r2 otherwise clean)
 - [x] plan-adherence-verifier: PASS 2026-05-30 (r2 — all 7 steps + round-2 fix in scope; r3 doc/tidy non-functional, PASS carried)
 - [x] acceptance-verifier: PASS 2026-05-30 (r2 — 4/4 ACs MET + both round-2 findings covered; r3 non-functional, PASS carried)
-- [ ] Committed: <commit SHA>
+- [x] Committed: 641896a
 
 **Findings Log**:
 - 2026-05-30 — code-reviewer round 1: BLOCK. New `Item::ConstDecl` arm uses diagnostic-emitting `self.infer_expr(&c.value, None)` + `ast_type_to_type(ty)` → `const X: NonexistentType = 5` now emits NotDefined where HEAD emitted 0. Type-checking verdict change; violates the locked Safety invariant ("no change to type-checking verdicts"). Out-of-scope scope creep smuggled via a side effect.
@@ -272,22 +272,22 @@ Milestone ships via `/pr` (project skill) when all phases are done and the final
 2. For each of the six `Stmt::Match` arms, bind `else_arm` in the pattern and recurse into it with the SAME walker that arm uses for `arms` (e.g. `collect_maybe_mutated` for 142, `collect_const_hints_block` for 525, etc.).
 3. Add a companion test for the `array→fixed` hint with an `else =>`-arm `.add()` call to prove the array walker (474) is also fixed.
 **Acceptance criteria**:
-- [ ] `let` mutated in `else =>` arm → no `let→const` hint.
-  - Evidence: (filled at phase completion)
-- [ ] array grown via `.add()` in `else =>` arm → no `array→fixed` hint.
-  - Evidence: (filled at phase completion)
-- [ ] All six walkers visit `else_arm` (grep confirms no `Stmt::Match` arm in the file still drops it).
-  - Evidence: (filled at phase completion)
+- [x] `let` mutated in `else =>` arm → no `let→const` hint.
+  - Evidence: `tests/inlay_hint_else_arm.rs:25` `let_mutated_only_in_else_arm_does_not_get_let_to_const_hint` — `count = 99` only in `else =>`; asserts zero LetToConst hints. code-reviewer verified it FAILS on pre-fix HEAD (false hint fired), PASSES post-fix. Fix: `inlay_hint_passes.rs:142` binds `else_arm` + `collect_maybe_mutated(eb, out)`.
+- [x] array grown via `.add()` in `else =>` arm → no `array→fixed` hint.
+  - Evidence: `tests/inlay_hint_else_arm.rs:86` `array_grown_in_else_arm_does_not_get_array_to_fixed_hint` — `nums.add(4)` only in `else =>`; asserts zero ArrayToFixed hints. Fail-before/pass-after confirmed by code-reviewer. Fix: `inlay_hint_passes.rs:486` (array walker) + the :142 mutation collector.
+- [x] All six walkers visit `else_arm` (grep confirms no `Stmt::Match` arm in the file still drops it).
+  - Evidence: `grep -n 'Stmt::Match' inlay_hint_passes.rs` → 6 hits (142, 253, 317, 411, 486, 540), each binding `else_arm` and recursing with its OWN walker (verified by code-reviewer + plan-adherence: no cross-wiring). Plus 2 over-suppression guard tests (not-mutated/not-grown still get hints).
 **Quality gate**:
-- [ ] Each walker uses its own correct recursion fn (not a copy-paste of the wrong one).
-- [ ] No change to the `arms` iteration behavior.
-**Verification**: `cargo test -p ynz-typeck inlay_hint_else_arm` green; `grep -n 'Stmt::Match' inlay_hint_passes.rs` shows every arm binds `else_arm`.
+- [x] Each walker uses its own correct recursion fn (not a copy-paste of the wrong one). — verified per-arm by code-reviewer + plan-adherence.
+- [x] No change to the `arms` iteration behavior. — diff only adds `else_arm` handling; `arms` loops untouched.
+**Verification**: `cargo test -p ynz-typeck inlay_hint_else_arm` green (4/4); `cargo test -p ynz-typeck` 451 green; clippy clean; grep confirms every arm binds `else_arm`.
 
 **Phase Review Gates**:
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [x] code-reviewer: PASS 2026-05-30 (reverted fix to confirm fail-before/pass-after; six walkers correctly wired)
+- [x] rules-compliance-reviewer: PASS 2026-05-30
+- [x] plan-adherence-verifier: PASS 2026-05-30 (6/6 walkers + both tests + guards, zero creep)
+- [x] acceptance-verifier: PASS 2026-05-30 (3/3 ACs MET, anti-tautology confirmed)
 - [ ] Committed: <commit SHA>
 
 **Findings Log**:
