@@ -186,8 +186,22 @@ pub fn lsp_code_action_replacement_for(
             .iter()
             .find(|(banned, _)| *banned == token)
             .map(|(_, replacement)| *replacement),
+        "BannedJargon" => banned_jargon_lookup(token).map(|e| e.replacement),
         _ => None,
     }
+}
+
+/// Return a quick-fix label for a `BannedJargon` diagnostic, embedding the registry
+/// `reason` field so the user learns WHY the word is banned, not just what to write instead.
+///
+/// Returns `None` when no `[[banned_jargon]]` entry exists for the term.
+pub fn lsp_code_action_label_for_jargon(term: &str) -> Option<String> {
+    let entry = banned_jargon_lookup(term)?;
+    Some(format!(
+        "Replace `{term}` with `{replacement}` — {reason}",
+        replacement = entry.replacement,
+        reason = entry.reason,
+    ))
 }
 
 /// Render a diagnostic template string by substituting `{key}` placeholders.

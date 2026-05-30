@@ -544,28 +544,28 @@ _(empty until a reviewer returns BLOCK)_
 5. Add a `"BannedJargon"` arm to `lsp_code_action_replacement_for` (lib.rs:180) that searches `[[banned_jargon]]` registry entries for `term` and returns its replacement.
 6. **The lesson (Patrick, 2026-05-30)**: the code action must carry the WHY, not just swap the word. Set the code action's `title`/`description` to include the registry `[[banned_jargon]]` `why` text (e.g. for `enum`: "use `options` — Yinz uses human-readable words a non-programmer can guess"). A user clicking the lightbulb learns WHY the word is banned, not just that it changed. (Note: `enum` already teaches+fixes via the existing `BannedKeyword` path — `SIMPLE_KEYWORD_REPLACEMENTS` `("enum","options")` at `lib.rs:158`; Phase 7 brings the SAME teach-and-fix parity to the jargon class that currently lacks the quick-fix.)
 **Acceptance criteria**:
-- [ ] `trigger_characters` no longer includes space; `.`-triggered completion still works.
-  - Evidence: (filled at phase completion)
-- [ ] Banned-jargon diagnostic produces a working replacement code action.
-  - Evidence: (filled at phase completion)
-- [ ] Replacement text is sourced from the registry `[[banned_jargon]]` entry (no hardcoded duplicate).
-  - Evidence: (filled at phase completion)
-- [ ] The code action surfaces the WHY (lesson) from the registry `why` field, not just the replacement word.
-  - Evidence: (filled at phase completion)
+- [x] `trigger_characters` no longer includes space; `.`-triggered completion still works.
+  - Evidence: `capabilities.rs:38` one-line deletion (`vec![".".to_string(), " ".to_string()]` → `vec![".".to_string()]`); test `completion_trigger_characters_does_not_include_space` (`code_action_jargon.rs:36–57`) asserts space ABSENT and `.` PRESENT in the same test; 2/2 green via `cargo test -p ynz-lsp --test code_action_jargon`.
+- [x] Banned-jargon diagnostic produces a working replacement code action.
+  - Evidence: `lexer.rs` `emit_banned_jargon_identifier` emits `DiagnosticKind::BannedJargon { term }` (variant added `diagnostic.rs:43`); `code_action.rs:63–65` BannedJargon arm → `build_banned_jargon_action`; test `banned_jargon_identifier_produces_replacement_code_action` (`code_action_jargon.rs:60–121`) drives lexer→typeck→code_action end-to-end. code-reviewer confirmed NON-TAUTOLOGICAL: neutralized the arm (`=> None`), test failed with "expected a code action…got none", then restored.
+- [x] Replacement text is sourced from the registry `[[banned_jargon]]` entry (no hardcoded duplicate).
+  - Evidence: `ynz-registry/src/lib.rs:189` `"BannedJargon" => banned_jargon_lookup(token).map(|e| e.replacement)`; `BANNED_JARGON` baked from `registry/features.toml` via `build.rs` (no LSP-layer constant). Test asserts `edits[0].new_text == ynz_registry::banned_jargon_lookup("infer").unwrap().replacement` — RHS is a live registry read, not a literal, so hardcoded drift fails the test.
+- [x] The code action surfaces the WHY (lesson) from the registry `why` field, not just the replacement word.
+  - Evidence: `ynz-registry/src/lib.rs:196–205` `lsp_code_action_label_for_jargon` formats title `"Replace \`{term}\` with \`{replacement}\` — {reason}"` from `entry.reason`; test asserts `action.title.contains(expected_reason)` where `expected_reason = banned_jargon_lookup("infer").unwrap().reason` (live read). NOTE: plan text says "registry `why` field"; the actual schema field is `reason` — implementation correctly uses `reason` (all 4 reviewers confirmed; tracked for the end-of-plan report).
 **Quality gate**:
-- [ ] No new registry ENTRY added — only a read of existing `[[banned_jargon]]`.
-- [ ] Code-action arm follows the existing `BannedKeyword`/`UnusedImport` arm idiom.
+- [x] No new registry ENTRY added — only a read of existing `[[banned_jargon]]`. (rules-compliance + acceptance-verifier confirmed `registry/features.toml` not in diff; registry change is two READ functions consuming existing entries.)
+- [x] Code-action arm follows the existing `BannedKeyword`/`UnusedImport` arm idiom. (code-reviewer: `build_banned_jargon_action` mirrors `build_banned_keyword_action` byte-for-byte; same range-computation, `TextEdit`/`WorkspaceEdit`/`is_preferred` shape.)
 **Verification**: `cargo test -p ynz-lsp code_action_jargon` green; manual: open a file with `enum`, confirm the lightbulb fixes it.
 
 **Phase Review Gates**:
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
-- [ ] Committed: <commit SHA>
+- [x] code-reviewer: PASS 2026-05-30 (r1 — neutralized the BannedJargon arm to prove the test bites; replacement+reason both registry-sourced, no panic on fallible lookup. 3 non-blocking concerns: thin registry `reason` text [content follow-up], plan `why`/`reason` wording, cosmetic lexer `other` vs `text`.)
+- [x] rules-compliance-reviewer: PASS 2026-05-30 (r1 — zero violations; durable-WHY comments, registry SSOT respected, no banned jargon in user-facing strings, no test weakening.)
+- [x] plan-adherence-verifier: PASS 2026-05-30 (r1 — all 6 steps landed; lexer.rs deviation ruled load-bearing + architecturally correct [mirrors emit_banned_declaration_keyword] + documented; `infer` test trigger is the correct path [`enum` routes through BannedKeyword]; zero creep.)
+- [x] acceptance-verifier: PASS 2026-05-30 (r1 — 4/4 ACs MET; tests derive expected values from live registry lookups so hardcoded drift would fail.)
+- [x] Committed: <commit SHA>
 
 **Findings Log**:
-_(empty until a reviewer returns BLOCK)_
+_(no BLOCK rounds — all 4 reviewers PASS on round 1. Non-blocking concerns recorded in the code-reviewer gate above; the registry `reason`-text enrichment is a follow-up, not a Phase 7 fix.)_
 
 ---
 
