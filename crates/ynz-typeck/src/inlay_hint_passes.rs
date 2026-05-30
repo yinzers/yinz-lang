@@ -101,6 +101,24 @@ fn ast_ty_is_array(ty: &ynz_ast::nodes::Type) -> bool {
     matches!(ty, ynz_ast::nodes::Type::Generic { name, .. } if name == "array")
 }
 
+/// Walk a chained field/index access expression to the root `Expr::Ident`, returning
+/// its name.  Returns `None` when the chain does not bottom out at an identifier (e.g.
+/// a method-call result used as the base — rare, and not a named binding the mutation
+/// collector tracks).
+///
+/// Time: O(d)  Space: O(1)  where d = receiver-chain depth
+fn root_ident(mut expr: &Expr) -> Option<&str> {
+    loop {
+        match expr {
+            Expr::Ident(name, _) => return Some(name.as_str()),
+            Expr::FieldAccess { receiver, .. } | Expr::IndexAccess { receiver, .. } => {
+                expr = receiver.as_ref();
+            }
+            _ => return None,
+        }
+    }
+}
+
 /// Conservative mutation-name collector: walks a block and records every identifier
 /// that appears in a position that could indicate mutation (assignment target,
 /// receiver of a method call, argument to any function — conservative).
@@ -117,17 +135,16 @@ fn collect_maybe_mutated_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
             collect_maybe_mutated_expr(value, out);
         }
         Stmt::FieldAssign { target, value, .. } => {
-            // Mutates the receiver of the field access.
-            if let Expr::FieldAccess { receiver, .. } = target.as_ref() {
-                if let Expr::Ident(name, _) = receiver.as_ref() {
-                    out.insert(name.clone());
-                }
+            // Follow any chained field-access path to the root binding name.
+            if let Some(name) = root_ident(target.as_ref()) {
+                out.insert(name.to_string());
             }
             collect_maybe_mutated_expr(value, out);
         }
         Stmt::IndexAssign { receiver, index, value, .. } => {
-            if let Expr::Ident(name, _) = receiver.as_ref() {
-                out.insert(name.clone());
+            // Follow any chained index-access path to the root binding name.
+            if let Some(name) = root_ident(receiver.as_ref()) {
+                out.insert(name.to_string());
             }
             collect_maybe_mutated_expr(index, out);
             collect_maybe_mutated_expr(value, out);
@@ -174,9 +191,10 @@ fn collect_maybe_mutated_expr(expr: &Expr, out: &mut HashSet<String>) {
             collect_maybe_mutated_expr(&c.callee, out);
         }
         Expr::MethodCall { receiver, args, .. } => {
-            // Any method call on a binding potentially mutates it.
-            if let Expr::Ident(name, _) = receiver.as_ref() {
-                out.insert(name.clone());
+            // Any method call on a binding potentially mutates it; follow the full
+            // receiver chain to the root Ident so that `a.b.heal(5)` marks `a`.
+            if let Some(name) = root_ident(receiver.as_ref()) {
+                out.insert(name.to_string());
             }
             collect_maybe_mutated_expr(receiver, out);
             for arg in args {

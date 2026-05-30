@@ -5,7 +5,7 @@ roadmap: v0-2-1-lsp-gap-closure
 owner: Patrick Rizzardi
 status: active
 created: 2026-05-30
-last_updated: 2026-05-30
+last_updated: 2026-05-30 (Phase 2 complete)
 files:
   - crates/ynz-typeck/src/check.rs
   - crates/ynz-typeck/src/inlay_hint_passes.rs
@@ -288,7 +288,7 @@ Milestone ships via `/pr` (project skill) when all phases are done and the final
 - [x] rules-compliance-reviewer: PASS 2026-05-30
 - [x] plan-adherence-verifier: PASS 2026-05-30 (6/6 walkers + both tests + guards, zero creep)
 - [x] acceptance-verifier: PASS 2026-05-30 (3/3 ACs MET, anti-tautology confirmed)
-- [ ] Committed: <commit SHA>
+- [x] Committed: 0d5c985
 
 **Findings Log**:
 _(empty until a reviewer returns BLOCK)_
@@ -308,26 +308,31 @@ _(empty until a reviewer returns BLOCK)_
 2. Add a free `root_ident(e: &Expr) -> Option<&str>` helper that loops through `Expr::FieldAccess { receiver, .. } | Expr::IndexAccess { receiver, .. }` until it hits `Expr::Ident` (or returns `None`).
 3. Use it for `FieldAssign.target` and `IndexAssign.receiver`; insert the returned root name.
 **Acceptance criteria**:
-- [ ] `player.address.street = "x"` marks `player` mutated → no hint.
-  - Evidence: (filled at phase completion)
-- [ ] `arr[i][j] = v` marks `arr` mutated → no hint.
-  - Evidence: (filled at phase completion)
-- [ ] Single-level case (`player.health = 5`) still works.
-  - Evidence: (filled at phase completion)
+- [x] `player.address.street = "x"` marks `player` mutated → no hint.
+  - Evidence: `tests/inlay_hint_nested_assign.rs:27` `nested_field_assign_marks_root_binding_mutated_no_let_to_const_hint` — FAILED before fix (1 spurious hint at position 38 on `player`), PASSES after fix. Fix: `root_ident` in `inlay_hint_passes.rs:139` follows the two-level FieldAccess chain to `player`.
+- [x] `arr[i][j] = v` marks `arr` mutated → no hint.
+  - Evidence: `tests/inlay_hint_nested_assign.rs:57` `nested_index_assign_marks_root_binding_mutated_no_let_to_const_hint` — FAILED before fix (3 hints: arr + i + j; expected 2), PASSES after fix (2 hints: i + j only). Fix: `root_ident` in `inlay_hint_passes.rs:146` follows the nested IndexAccess chain to `arr`.
+- [x] Single-level case (`player.health = 5`) still works.
+  - Evidence: `tests/inlay_hint_nested_assign.rs:95` `single_level_field_assign_still_marks_binding_mutated` — PASSED before and after fix (regression guard). No over-suppression from refactor.
+- [x] (round-2, code-reviewer finding) Chained method-call receiver marks root binding mutated.
+  - Evidence: `tests/inlay_hint_nested_assign.rs:131` `nested_method_call_receiver_marks_root_binding_mutated` — `player.address.heal(5)` (heal = `lend self`); asserts no `let→const` hint at the `let player` position. acceptance-verifier confirmed pre-fix would emit a hint at byte 268 (not a tautology); position filter is tight (hint position = `let` span.start). Fix: MethodCall arm in `collect_maybe_mutated_expr` (`inlay_hint_passes.rs:196`) now uses `root_ident` — all 3 mutation sites uniform.
 **Quality gate**:
-- [ ] `root_ident` handles `None` (non-ident root) without panicking.
-- [ ] No `.unwrap()` on the `Option`.
-**Verification**: `cargo test -p ynz-typeck inlay_hint_nested_assign` green.
+- [x] `root_ident` handles `None` (non-ident root) without panicking. — Returns `None` for any non-Ident/FieldAccess/IndexAccess root; callers use `if let Some(name)`, no `.unwrap()`.
+- [x] No `.unwrap()` on the `Option`. — Both call sites use `if let Some(name) = root_ident(...)`.
+**Verification**: `cargo test -p ynz-typeck --test inlay_hint_nested_assign` green (4/4); `cargo test -p ynz-typeck` 455 green, 0 failures; clippy clean.
 
-**Phase Review Gates**:
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
+**Phase Review Gates** (r1 BLOCK on MethodCall sibling-bug → r2 one-line fix):
+- [x] code-reviewer: PASS 2026-05-30 (r2 — reverted fix to confirm new test has teeth at byte 268; all 3 mutation sites uniform via root_ident)
+- [x] rules-compliance-reviewer: PASS 2026-05-30 (r1 — root_ident has Big-O; no violations. r2 one-line helper swap adds no rule surface — PASS carried)
+- [x] plan-adherence-verifier: PASS 2026-05-30 (r1 — 3 steps + 2 call sites + helper, no creep. r2 closes a same-class sibling site, no scope change — PASS carried)
+- [x] acceptance-verifier: PASS 2026-05-30 (r2 — 4/4 ACs MET, position filter proven non-tautological, 455 tests 0 failures)
 - [ ] Committed: <commit SHA>
 
 **Findings Log**:
-_(empty until a reviewer returns BLOCK)_
+- 2026-05-30 — code-reviewer round 1: BLOCK. The `Expr::MethodCall` arm in `collect_maybe_mutated_expr` (inlay_hint_passes.rs ~193) uses the SAME single-level `if let Expr::Ident(name,_) = receiver.as_ref()` pattern Phase 2 exists to kill — so a mutating method call through a chained receiver (`player.address.heal(5)`) never marks the root `player` mutated → false `let→const` hint on a third sibling path. Reviewer proved it with a probe. Same bug class as Bug 2.7; `root_ident` already exists. (rules/adherence/acceptance all PASS round 1.)
+- 2026-05-30 — round-2 fix dispatched: swap the MethodCall receiver check to `root_ident(receiver.as_ref())` + add a fail-before/pass-after regression test `nested_method_call_receiver_marks_root_binding_mutated`. Fixing now (not deferring) per no-duct-tape — same bug class, one-line fix with the helper present.
+- 2026-05-30 — round-2 landed + code-reviewer PASS: MethodCall arm now uses `root_ident` (all 3 mutation sites uniform). Reviewer reverted the fix and confirmed the new test catches the `player` hint at byte 268 — assertion has teeth, not a tautology. CORRECTION: real ynz-typeck count is **455** (454 + 1 new test), 0 failures — the executor's "471" was a miscount artifact.
+- 2026-05-30 — TRACKED NON-BLOCKING NIT (code-reviewer concern): `nested_method_call_receiver_marks_root_binding_mutated` hardcodes byte offset 268 for `let player` (documented with a provenance comment). Brittle — a future edit to the fixture string would shift the offset and the position filter could false-pass. TRIGGER: anyone editing the nested_assign fixture strings should replace the byte-268 filter with a position-by-name lookup (find the hint whose source slice starts with `let player`). Not blocking: the test is correct today, has teeth, and is guarded by a provenance comment.
 
 ---
 
