@@ -169,6 +169,30 @@ pub struct RuntimeDecls<'ctx> {
     pub ynz_rt_shutdown: FunctionValue<'ctx>,
     // ynz_thread_sleep_ms(ms: i64) → void  — blocking sleep; used by sleepMs() intrinsic
     pub ynz_thread_sleep_ms: FunctionValue<'ctx>,
+
+    // ── v0.3-M2: async state-machine runtime ─────────────────────────────
+    // Declarations only — call sites are emitted in Phase 2 codegen.
+    // All params are primitive C types; no Tokio types cross the ABI boundary.
+    //
+    // resume_fn signature (fn_ptr_2arg): extern "C" fn(*mut u8, *mut u8) -> i32
+    //   arg0 = frame_ptr (*mut u8 — state-machine heap frame)
+    //   arg1 = waker_ctx (*mut u8 — type-erased &mut Context<'_>)
+    //   returns: 0 = Ready, 1 = Pending
+    //
+    // ynz_rt_spawn(resume_fn, frame_ptr, frame_size) → void
+    //   Schedule a state-machine Future on the Tokio I/O worker pool.
+    pub ynz_rt_spawn: FunctionValue<'ctx>,
+    // ynz_rt_async_sleep_create(ms: i64) → *mut u8
+    //   Allocate a boxed tokio::time::Sleep future; returns opaque heap pointer.
+    pub ynz_rt_async_sleep_create: FunctionValue<'ctx>,
+    // ynz_rt_async_sleep_poll(handle_ptr: *mut u8, waker_ctx: *mut u8) → i32
+    //   Poll the boxed Sleep future. Returns 0 (Ready, box freed) or 1 (Pending).
+    pub ynz_rt_async_sleep_poll: FunctionValue<'ctx>,
+    // ynz_rt_call_state_machine_sync(resume_fn, frame_ptr, frame_size) → i32
+    //   Synchronously drive a state machine to completion (Shape B sync bridge).
+    //   Returns the state machine's final i32 value (from frame slot 0 on Ready).
+    //   Uses Handle::block_on on Tokio threads; RUNTIME.block_on outside Tokio.
+    pub ynz_rt_call_state_machine_sync: FunctionValue<'ctx>,
 }
 
 impl<'ctx> RuntimeDecls<'ctx> {
@@ -545,6 +569,37 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 module,
                 "ynz_thread_sleep_ms",
                 void.fn_type(&[i64.into()], false),
+            ),
+
+            // v0.3-M2: async state-machine runtime (declarations; call sites in Phase 2)
+            //
+            // fn_ptr_2arg: function pointer for the resume_fn ABI —
+            //   extern "C" fn(frame_ptr: *mut u8, waker_ctx: *mut u8) -> i32
+            // Represented in LLVM as a function pointer returning i32 with two ptr args.
+            ynz_rt_spawn: declare_fn(
+                module,
+                "ynz_rt_spawn",
+                // (resume_fn: fn(ptr,ptr)->i32, frame_ptr: ptr, frame_size: i64) -> void
+                void.fn_type(&[ptr.into(), ptr.into(), i64.into()], false),
+            ),
+            ynz_rt_async_sleep_create: declare_fn(
+                module,
+                "ynz_rt_async_sleep_create",
+                // (ms: i64) -> *mut u8  (opaque heap pointer to Pin<Box<Sleep>>)
+                ptr.fn_type(&[i64.into()], false),
+            ),
+            ynz_rt_async_sleep_poll: declare_fn(
+                module,
+                "ynz_rt_async_sleep_poll",
+                // (handle_ptr: *mut u8, waker_ctx: *mut u8) -> i32  (0=Ready, 1=Pending)
+                i32.fn_type(&[ptr.into(), ptr.into()], false),
+            ),
+            ynz_rt_call_state_machine_sync: declare_fn(
+                module,
+                "ynz_rt_call_state_machine_sync",
+                // (resume_fn: fn(ptr,ptr)->i32, frame_ptr: ptr, frame_size: i64) -> i32
+                // Returns the state machine's final value (read from frame slot 0 when Ready).
+                i32.fn_type(&[ptr.into(), ptr.into(), i64.into()], false),
             ),
         }
     }

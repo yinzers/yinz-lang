@@ -1,6 +1,7 @@
 pub mod runtime;
 pub use runtime::{
-    ynz_rt_check_preempt, ynz_rt_init, ynz_rt_shutdown, ynz_rt_spawn_blocking,
+    ynz_rt_async_sleep_create, ynz_rt_async_sleep_poll, ynz_rt_call_state_machine_sync,
+    ynz_rt_check_preempt, ynz_rt_init, ynz_rt_shutdown, ynz_rt_spawn, ynz_rt_spawn_blocking,
     ynz_thread_sleep_ms,
 };
 
@@ -2129,7 +2130,7 @@ mod m7_errors_runtime {
             // Start clean — pop any frames left from other tests.
             FRAME_STACK.with(|s| s.borrow_mut().clear());
 
-            ynz_frame_push(b"test.ynz\0".as_ptr(), 10, b"myFn\0".as_ptr());
+            ynz_frame_push(c"test.ynz".as_ptr().cast(), 10, c"myFn".as_ptr().cast());
             let len_after_push = FRAME_STACK.with(|s| s.borrow().len());
             assert_eq!(len_after_push, 1);
 
@@ -2171,10 +2172,10 @@ mod m7_errors_runtime {
         // the caller sees the error, so the snapshot must be taken first.
         FRAME_STACK.with(|s| s.borrow_mut().clear());
         unsafe {
-            ynz_frame_push(b"a.ynz\0".as_ptr(), 1, b"fn_a\0".as_ptr());
-            ynz_frame_push(b"b.ynz\0".as_ptr(), 2, b"fn_b\0".as_ptr());
+            ynz_frame_push(c"a.ynz".as_ptr().cast(), 1, c"fn_a".as_ptr().cast());
+            ynz_frame_push(c"b.ynz".as_ptr().cast(), 2, c"fn_b".as_ptr().cast());
 
-            let err = ynz_error_new(b"oops\0".as_ptr());
+            let err = ynz_error_new(c"oops".as_ptr().cast());
             assert_eq!(ynz_error_trace_len(err), 2);
 
             let f0 = ynz_error_trace_frame(err, 0);
@@ -2203,7 +2204,7 @@ mod m7_errors_runtime {
         // trace_ptr = null. ynz_unhandled_error must handle this gracefully.
         FRAME_STACK.with(|s| s.borrow_mut().clear());
         unsafe {
-            let err = ynz_error_new(b"empty\0".as_ptr());
+            let err = ynz_error_new(c"empty".as_ptr().cast());
             assert_eq!(ynz_error_trace_len(err), 0);
             let f = ynz_error_trace_frame(err, 0);
             assert!(f.is_null());
@@ -2218,7 +2219,7 @@ mod m7_errors_runtime {
         FRAME_STACK.with(|s| s.borrow_mut().clear());
         unsafe {
             for i in 0..2000i64 {
-                ynz_frame_push(b"f.ynz\0".as_ptr(), i, b"deep\0".as_ptr());
+                ynz_frame_push(c"f.ynz".as_ptr().cast(), i, c"deep".as_ptr().cast());
             }
             let len = FRAME_STACK.with(|s| s.borrow().len());
             assert_eq!(len, FRAME_STACK_LIMIT);

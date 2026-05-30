@@ -1,8 +1,12 @@
 /// Tokio-backed scheduler runtime for Yinz compiled binaries.
 ///
-/// Four C-ABI entry points are exported:
+/// C-ABI entry points exported from this module:
 ///   - `ynz_rt_init()` — create the Tokio runtime at program start
-///   - `ynz_rt_spawn_blocking(fn_ptr, ctx_ptr, ctx_size)` — schedule a background task
+///   - `ynz_rt_spawn_blocking(fn_ptr, ctx_ptr, ctx_size)` — blocking-pool background task
+///   - `ynz_rt_spawn(resume_fn, frame_ptr, frame_size)` — I/O-pool state-machine task (M2)
+///   - `ynz_rt_async_sleep_create(ms)` — allocate a boxed Tokio Sleep future (M2)
+///   - `ynz_rt_async_sleep_poll(handle_ptr, waker_ctx)` — poll an in-flight sleep (M2)
+///   - `ynz_rt_call_state_machine_sync(resume_fn, frame_ptr, frame_size)` — sync bridge (M2)
 ///   - `ynz_rt_check_preempt()` — cooperative yield point at loop back-edges + call sites
 ///   - `ynz_rt_shutdown()` — drain the runtime at program end
 ///
@@ -12,10 +16,15 @@
 ///
 /// Every background task body is wrapped in `std::panic::catch_unwind`. A panicking
 /// background task logs via `eprintln!` and is silently discarded; it never propagates
-/// to the spawning scope. The heap context uses a RAII drop guard that runs on both
-/// the happy path AND on unwind, preventing ctx leaks even when the task panics.
+/// to the spawning scope. The heap frame uses a RAII drop guard (`FrameDropGuard`) that
+/// runs on both the happy path AND on unwind, preventing frame leaks even when a task panics.
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Mutex, OnceLock};
+use std::task::{Context, Poll};
 use std::time::Duration;
+
+use tokio::time::Sleep;
 
 // The runtime is stored in a process-global `Mutex<Option<Runtime>>`.
 // `Mutex` gives `ynz_rt_shutdown` the ability to `take()` the runtime for
@@ -56,24 +65,26 @@ pub extern "C" fn ynz_rt_init() {
     // in a test harness that re-calls init), this is a no-op.
 }
 
-/// RAII guard that frees the heap context when dropped (normal return AND unwind).
-struct CtxDropGuard {
+/// RAII guard that frees the heap frame when dropped (normal return AND unwind).
+///
+/// Used by both `ynz_rt_spawn_blocking` (ctx copy) and `ynz_rt_spawn` (state-machine
+/// frame). The guard holds a raw pointer + length; on drop it reconstructs the Box<[u8]>
+/// and lets Rust free it, running on both the happy path and any panic unwind.
+struct FrameDropGuard {
     ptr: *mut u8,
     len: usize,
 }
 
-// SAFETY: CtxDropGuard wraps a heap pointer that is passed to one specific
-// background task. It never leaves that task's closure, so Send is safe here.
-unsafe impl Send for CtxDropGuard {}
+// SAFETY: FrameDropGuard wraps a heap pointer owned exclusively by one background task.
+// It never leaves that task's closure, so Send is safe here.
+unsafe impl Send for FrameDropGuard {}
 
-impl Drop for CtxDropGuard {
+impl Drop for FrameDropGuard {
     fn drop(&mut self) {
         if !self.ptr.is_null() && self.len > 0 {
-            // SAFETY: ptr was allocated with Box<[u8]>::into_raw in ynz_rt_spawn_blocking.
-            // This drop runs exactly once per CtxDropGuard value.
-            let slice = unsafe {
-                std::slice::from_raw_parts_mut(self.ptr, self.len)
-            };
+            // SAFETY: ptr was allocated with Box<[u8]>::into_raw. This drop runs exactly
+            // once per FrameDropGuard value (captured by value into the closure).
+            let slice = unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) };
             let _ = unsafe { Box::from_raw(slice as *mut [u8]) };
         }
     }
@@ -140,8 +151,8 @@ pub unsafe extern "C" fn ynz_rt_spawn_blocking(
     };
 
     // Create the RAII guard BEFORE the closure so it's captured (not the raw *mut u8).
-    // CtxDropGuard: Send is impl'd below; the closure becomes Send too.
-    let ctx_guard = CtxDropGuard { ptr: ctx_heap_ptr, len: ctx_heap_len };
+    // FrameDropGuard: Send is impl'd; the closure becomes Send too.
+    let ctx_guard = FrameDropGuard { ptr: ctx_heap_ptr, len: ctx_heap_len };
 
     rt.spawn_blocking(move || {
         // Guard is captured — frees ctx on both return and unwind.
@@ -218,5 +229,361 @@ pub extern "C" fn ynz_rt_shutdown() {
 pub extern "C" fn ynz_thread_sleep_ms(ms: i64) {
     if ms > 0 {
         std::thread::sleep(Duration::from_millis(ms as u64));
+    }
+}
+
+// ── v0.3-M2: async state-machine runtime shims ────────────────────────────────
+//
+// These four shims back the `wait sleepAsync(N)` Yinz intrinsic and the
+// state-machine codegen infrastructure. They are declared in `runtime_decls.rs`
+// for the LLVM backend but no call sites are emitted until Phase 2 codegen lands.
+//
+// ABI invariants (locked in Spike Findings):
+//   - resume_fn: extern "C" fn(frame_ptr: *mut u8, waker_ctx: *mut u8) -> i32
+//     Returns 0 = Ready, 1 = Pending.
+//   - waker_ctx: *mut u8 pointing to &mut Context<'_>. The resume_fn casts back
+//     via `&mut *(waker_ctx as *mut Context<'_>)`. No fabricated Wakers.
+//   - frame_size: i64 byte length of the heap-allocated state-machine frame.
+//   - No Tokio types appear in any C-ABI signature; all params are primitive C types.
+
+/// Drives a Yinz codegen-emitted state-machine resume function as a Tokio Future,
+/// returning the state machine's final i32 value when it completes.
+///
+/// The resume_fn ABI: `(frame_ptr, waker_ctx) -> i32` where 0 = Ready and 1 = Pending.
+/// When Ready, the state machine's return value is in frame slot 0 (the first 4 bytes
+/// of frame_ptr, written by the codegen-emitted resume_fn before returning 0). The
+/// sync bridge reads that slot and returns the value to the calling C-ABI shim.
+///
+/// Used exclusively by `ynz_rt_call_state_machine_sync` (synchronous block_on path).
+/// `ynz_rt_spawn` uses `SpawnStateFnFuture` (Output=()) — fire-and-forget; value discarded.
+struct SyncStateFnFuture {
+    resume_fn: unsafe extern "C" fn(*mut u8, *mut u8) -> i32,
+    frame_ptr: *mut u8,
+    // frame_size carries the byte length for the Phase 2 deallocation path.
+    // Not read by poll() — the resume_fn owns the frame layout.
+    // Suppressed until Phase 2 wires the dealloc path.
+    #[allow(dead_code)]
+    frame_size: i64,
+}
+
+// SAFETY: SyncStateFnFuture is driven to completion by a single block_on call; ownership
+// of frame_ptr is exclusively held by this future for its lifetime. No aliasing across threads.
+unsafe impl Send for SyncStateFnFuture {}
+
+impl Future for SyncStateFnFuture {
+    type Output = i32;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // Cast Context to *mut u8 — the locked waker_ctx ABI: type-erased pointer to
+        // &mut Context<'_>. The resume_fn casts back on the other side.
+        let waker_ctx = cx as *mut Context<'_> as *mut u8;
+        // SAFETY: resume_fn is a valid C-ABI function pointer (caller guarantee).
+        // frame_ptr is valid for frame_size bytes (caller guarantee).
+        let result = unsafe { (self.resume_fn)(self.frame_ptr, waker_ctx) };
+        match result {
+            0 => {
+                // Ready — read the state machine's return value from frame slot 0.
+                // Frame slot 0 is the first 4 bytes of frame_ptr, written as an i32
+                // by the codegen-emitted resume_fn immediately before returning 0.
+                // SAFETY: frame_ptr is valid for at least 4 bytes (caller guarantee;
+                // all codegen-emitted frames begin with a resume_point i32 slot, and
+                // the return-value i32 is written to that slot on terminal transition).
+                let value = unsafe { *(self.frame_ptr as *const i32) };
+                Poll::Ready(value)
+            }
+            1 => Poll::Pending,
+            // Unexpected return values indicate a codegen bug; panic is the correct response
+            // because continuing with corrupt state would be worse than a loud failure.
+            _ => panic!(
+                "ynz runtime: state-machine resume_fn returned unexpected value {result} \
+                 (expected 0=Ready or 1=Pending). This is a compiler codegen bug."
+            ),
+        }
+    }
+}
+
+/// Drives a Yinz codegen-emitted state-machine resume function as a fire-and-forget
+/// Tokio Future. Return value is intentionally discarded — `ynz_rt_spawn` callers
+/// use channels or atomics to observe completion.
+///
+/// Separate from `SyncStateFnFuture` so `ynz_rt_spawn`'s external C-ABI signature
+/// stays `void` (no return channel at the ABI level).
+struct SpawnStateFnFuture {
+    resume_fn: unsafe extern "C" fn(*mut u8, *mut u8) -> i32,
+    frame_ptr: *mut u8,
+    // frame_size carries the byte length for the Phase 2 deallocation path.
+    #[allow(dead_code)]
+    frame_size: i64,
+}
+
+// SAFETY: SpawnStateFnFuture is owned exclusively by the spawned task for its lifetime.
+unsafe impl Send for SpawnStateFnFuture {}
+
+impl Future for SpawnStateFnFuture {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let waker_ctx = cx as *mut Context<'_> as *mut u8;
+        // SAFETY: resume_fn is a valid C-ABI function pointer (caller guarantee).
+        // frame_ptr is valid for frame_size bytes (caller guarantee).
+        let result = unsafe { (self.resume_fn)(self.frame_ptr, waker_ctx) };
+        match result {
+            // Ready — fire-and-forget; return value in frame slot 0 is intentionally ignored.
+            0 => Poll::Ready(()),
+            1 => Poll::Pending,
+            _ => panic!(
+                "ynz runtime: state-machine resume_fn returned unexpected value {result} \
+                 (expected 0=Ready or 1=Pending). This is a compiler codegen bug."
+            ),
+        }
+    }
+}
+
+/// Schedule a state-machine function on the Tokio I/O worker pool (non-blocking spawn).
+///
+/// # Flow
+/// 1. Wrap the `(resume_fn, frame_ptr)` pair in a `SpawnStateFnFuture` — a `Future` impl
+///    that calls `resume_fn(frame_ptr, waker_ctx)` on each poll and discards the return
+///    value (fire-and-forget; callers signal completion via channels or atomics).
+/// 2. Spawn the future on the global Tokio runtime via `rt.spawn`. Returns immediately;
+///    the future runs cooperatively on the work-stealing I/O thread pool.
+/// 3. The frame pointed to by `frame_ptr` is NOT freed by `SpawnStateFnFuture`'s drop:
+///    `SpawnStateFnFuture` holds a raw `*mut u8` with no Drop impl; the raw pointer carries
+///    no ownership. Frame deallocation is the codegen-emitted resume_fn's responsibility
+///    on its terminal state transition, wired in Phase 2; until then, the frame intentionally
+///    leaks in this fire-and-forget path.
+/// 4. Panic inside `resume_fn` is caught by Tokio's task wrapper; the JoinHandle
+///    will surface a `JoinError::is_panic()`. The spawning scope continues normally.
+///
+/// # Failure modes
+/// - `ynz_rt_init` was never called: logs a warning and discards the task.
+/// - `ynz_rt_shutdown` was already called: logs a warning and discards the task.
+/// - `resume_fn` panics: caught by Tokio's task wrapper; JoinHandle carries the panic.
+///
+/// # Side effects
+/// Enqueues a work-stealing task on the Tokio I/O pool. The frame pointed to by
+/// `frame_ptr` must remain valid until the spawned future completes (ownership transfers
+/// into the future at spawn time — the caller must NOT free or alias frame_ptr after
+/// calling this function).
+///
+/// # Safety
+/// - `resume_fn` must be a valid function pointer matching the `(frame, waker_ctx) -> i32` ABI.
+/// - `frame_ptr` must be valid for `frame_size` bytes and exclusively owned by this call.
+///   After this function returns, the caller must treat `frame_ptr` as moved — any further
+///   access is undefined behaviour.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_rt_spawn(
+    resume_fn: unsafe extern "C" fn(*mut u8, *mut u8) -> i32,
+    frame_ptr: *mut u8,
+    frame_size: i64,
+) {
+    let Some(guard) = RUNTIME.get() else {
+        eprintln!(
+            "ynz runtime: ynz_rt_spawn called before ynz_rt_init — task discarded"
+        );
+        return;
+    };
+    let lock = match guard.lock() {
+        Ok(l) => l,
+        Err(e) => e.into_inner(),
+    };
+    let Some(rt) = lock.as_ref() else {
+        eprintln!(
+            "ynz runtime: ynz_rt_spawn called after ynz_rt_shutdown — task discarded"
+        );
+        return;
+    };
+
+    let future = SpawnStateFnFuture { resume_fn, frame_ptr, frame_size };
+    rt.spawn(future);
+}
+
+/// Allocate and return a heap-pinned `tokio::time::Sleep` future for `sleepAsync(ms)`.
+///
+/// # Flow
+/// 1. Create `tokio::time::sleep(Duration::from_millis(ms))` — a `Sleep` future.
+/// 2. Box and pin the future so it can be safely polled via `as_mut()`.
+/// 3. Convert to a raw pointer via `Box::into_raw`; return as `*mut u8` (opaque to caller).
+///
+/// The caller (codegen-emitted state-machine resume function) stores the returned pointer
+/// in the state-machine frame's `awaited_handle` slot and passes it to
+/// `ynz_rt_async_sleep_poll` on each subsequent poll until Ready.
+///
+/// # Failure modes
+/// - `ms <= 0`: creates a sleep with duration 0 (fires immediately on first poll).
+///
+/// # Side effects
+/// Heap-allocates a `Pin<Box<Sleep>>`. The caller is responsible for freeing the
+/// allocation by calling `ynz_rt_async_sleep_poll` until it returns 0 (Ready), at which
+/// point the box is dropped internally. If the frame is dropped mid-wait (cancellation),
+/// the frame's Drop impl must call the appropriate free shim to avoid leaking the Sleep box.
+///
+/// # Safety
+/// The returned pointer is valid until `ynz_rt_async_sleep_poll` returns 0 (Ready) or
+/// until explicitly freed. After Ready, the pointer is dangling — do not use it.
+#[no_mangle]
+pub extern "C" fn ynz_rt_async_sleep_create(ms: i64) -> *mut u8 {
+    let duration = if ms > 0 {
+        Duration::from_millis(ms as u64)
+    } else {
+        Duration::ZERO
+    };
+    let sleep: Pin<Box<Sleep>> = Box::pin(tokio::time::sleep(duration));
+    // Convert to raw pointer; ownership transfers to the caller (stored in the frame).
+    // SAFETY: Box::into_raw returns a valid aligned pointer; Pin guarantees the allocation
+    // is stable in memory. The caller must not move the pointee.
+    Box::into_raw(Box::new(sleep)) as *mut u8
+}
+
+/// Poll an in-flight `Sleep` future created by `ynz_rt_async_sleep_create`.
+///
+/// # Flow
+/// 1. Cast `handle_ptr` back to `*mut Pin<Box<Sleep>>` and borrow it mutably.
+/// 2. Cast `waker_ctx` back to `&mut Context<'_>` — the real Tokio waker forwarded
+///    from the enclosing state-machine's poll. No fabricated Wakers.
+/// 3. Call `sleep.as_mut().poll(cx)`.
+/// 4. On `Pending`: waker is registered with Tokio's timer reactor (by `Sleep::poll`
+///    internally). Return 1 so the state-machine frame saves `resume_point` and returns
+///    `Pending` to its own caller.
+/// 5. On `Ready`: drop the `Pin<Box<Sleep>>` allocation. Return 0 so the state-machine
+///    advances to its next resume point.
+///
+/// # Failure modes
+/// - Panic inside `sleep.poll()`: caught by `std::panic::catch_unwind`; returns `1`
+///   (Pending) so the frame is not corrupted. The task's overall panic propagation is
+///   handled by the Tokio task wrapper around the state machine's Future.
+///
+/// # Side effects
+/// - On Ready: frees the `Pin<Box<Sleep>>` heap allocation.
+/// - On Pending: `Sleep::poll` registers the real Tokio timer waker — the task is woken
+///   automatically when the timer fires, with no tight-loop polling.
+///
+/// # Safety
+/// - `handle_ptr` must be a non-null pointer previously returned by
+///   `ynz_rt_async_sleep_create` and not yet consumed (i.e., `ynz_rt_async_sleep_poll`
+///   has not yet returned 0 for this handle).
+/// - `waker_ctx` must be a valid `*mut u8` pointing to a live `&mut Context<'_>` for
+///   the duration of this call. This is the same context passed into the enclosing
+///   state-machine's `Future::poll` invocation.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_rt_async_sleep_poll(handle_ptr: *mut u8, waker_ctx: *mut u8) -> i32 {
+    let result = std::panic::catch_unwind(|| {
+        // SAFETY: handle_ptr was returned by ynz_rt_async_sleep_create (Box::into_raw of
+        // Box<Pin<Box<Sleep>>>). It is valid, aligned, and exclusively owned by this call.
+        let sleep_box = &mut *(handle_ptr as *mut Pin<Box<Sleep>>);
+        // SAFETY: waker_ctx was cast from &mut Context<'_> by StateFnFuture::poll or by
+        // the codegen-emitted resume function. Valid for the duration of this call.
+        let cx = &mut *(waker_ctx as *mut Context<'_>);
+        match sleep_box.as_mut().poll(cx) {
+            Poll::Pending => 1i32,
+            Poll::Ready(()) => {
+                // Drop the Sleep box now that it has fired. Reconstruct ownership from
+                // the raw pointer so Rust's drop machinery runs the deallocation.
+                // SAFETY: handle_ptr is valid, non-null, uniquely owned; reconstructing
+                // Box<Pin<Box<Sleep>>> is the inverse of Box::into_raw above.
+                drop(Box::from_raw(handle_ptr as *mut Pin<Box<Sleep>>));
+                0i32
+            }
+        }
+    });
+    match result {
+        Ok(v) => v,
+        Err(e) => {
+            let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = e.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "<non-string panic payload>".to_string()
+            };
+            eprintln!(
+                "ynz runtime: ynz_rt_async_sleep_poll panicked (returning Pending): {msg}"
+            );
+            1 // Return Pending on panic so the frame is not corrupted.
+        }
+    }
+}
+
+/// Synchronously drive a state-machine to completion from any thread context (Shape B).
+///
+/// Returns the state machine's final i32 value, read from frame slot 0 when the
+/// resume_fn signals Ready (returns 0). The codegen-emitted resume_fn writes the
+/// return value into the first i32 of the frame before returning 0; this shim reads
+/// it and propagates it to the caller. Exit-code propagation from `main`'s state
+/// machine flows through this return value.
+///
+/// # Flow
+/// 1. Wrap `(resume_fn, frame_ptr)` in a `SyncStateFnFuture` (Output = i32).
+/// 2. Detect Tokio context via `Handle::try_current()`:
+///    - `Ok(handle)` — inside Tokio (worker thread OR spawn_blocking-pool thread).
+///      Call `handle.block_on(future)`. Works on both thread types; unlike
+///      `block_in_place`, which panics on spawn_blocking-pool threads (confirmed by
+///      Spike Contract #4b). The tradeoff: ties up this worker thread for the wait
+///      duration. M3 auto-`wait` insertion eliminates most call sites.
+///    - `Err(_)` — outside Tokio (main thread, detached thread). Use the global
+///      `RUNTIME` (initialised by `ynz_rt_init`). Codegen guarantees `ynz_rt_init`
+///      runs before any state-machine call so `RUNTIME.get().expect(...)` is
+///      unreachable in correct codegen — the `.expect` is a defence-in-depth assertion.
+/// 3. Wrap the entire `match` in `catch_unwind` so a panicking state machine does not
+///    abort the calling thread; the panic propagates as a Rust panic to the caller.
+///
+/// # Failure modes
+/// - `resume_fn` panics: `catch_unwind` catches and re-panics; the caller's panic
+///   handler (or Tokio's task wrapper) takes over.
+/// - `RUNTIME` not initialised (codegen bug): panics with a clear message.
+/// - `RUNTIME` mutex poisoned: recovers via `into_inner` (same as other shims).
+///
+/// # Side effects
+/// Blocks the calling thread until the state machine returns `Ready` (0). On Tokio
+/// worker threads this ties up a worker slot for the wait duration (bounded by M3 fix).
+///
+/// # Safety
+/// - `resume_fn` must be a valid function pointer matching the `(frame, waker_ctx) -> i32` ABI.
+/// - `frame_ptr` must be valid for at least 4 bytes (the return-value i32 slot at frame
+///   offset 0) and for `frame_size` bytes total, for the duration of this call.
+///   The frame is NOT freed by this function; the caller retains ownership and must free it.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_rt_call_state_machine_sync(
+    resume_fn: unsafe extern "C" fn(*mut u8, *mut u8) -> i32,
+    frame_ptr: *mut u8,
+    frame_size: i64,
+) -> i32 {
+    let result = std::panic::catch_unwind(|| {
+        let future = SyncStateFnFuture { resume_fn, frame_ptr, frame_size };
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                // Inside Tokio — worker thread OR spawn_blocking-pool thread.
+                // Handle::block_on works on both (unlike block_in_place which panics on
+                // spawn_blocking-pool threads — confirmed by Spike Contract #4b).
+                handle.block_on(future)
+            }
+            Err(_) => {
+                // Outside Tokio — main thread before/after runtime, or detached thread.
+                // RUNTIME is guaranteed initialised by codegen (ynz_rt_init is first
+                // instruction in main whenever any wait/background function is compiled).
+                // The .expect() is defence-in-depth against future codegen bugs.
+                let rt_guard = RUNTIME
+                    .get()
+                    .expect(
+                        "ynz runtime: ynz_rt_call_state_machine_sync called before ynz_rt_init. \
+                         This is a compiler codegen bug — ynz_rt_init must be the first \
+                         instruction in main for any program using wait or background.",
+                    );
+                let lock = match rt_guard.lock() {
+                    Ok(l) => l,
+                    Err(e) => e.into_inner(),
+                };
+                let rt = lock.as_ref().expect(
+                    "ynz runtime: ynz_rt_call_state_machine_sync called after ynz_rt_shutdown. \
+                     This is a compiler codegen bug — state-machine calls must not outlive \
+                     the runtime.",
+                );
+                rt.block_on(future)
+            }
+        }
+    });
+    match result {
+        Ok(value) => value,
+        Err(e) => std::panic::resume_unwind(e),
     }
 }

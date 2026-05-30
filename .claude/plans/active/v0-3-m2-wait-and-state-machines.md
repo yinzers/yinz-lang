@@ -580,7 +580,7 @@ If ANY contract fails: halt + escalate to user with the failure detail + propose
 - [x] rules-compliance-reviewer: PASS 2026-05-30T21:25 (no violations; Demo/Registry exemption correct for a no-Yinz-surface spike)
 - [x] plan-adherence-verifier: PASS 2026-05-30T21:35 (re-run vs canonical worktree plan; all 9 steps MET/documented-deviation; 4a/4b deviation sound)
 - [x] acceptance-verifier: PASS 2026-05-30T21:42 (all ACs MET; Contract #12 accepted as documented deferral-to-P2 by Patrick at the P0 gate)
-- [ ] Committed: <commit SHA>
+- [x] Committed: 6328666f09a0b9f993b1a1b13da878e30ff2c662
 
 **Findings Log** (filled during any fix loops):
 - 2026-05-30T21:30 — acceptance-verifier round 1: BLOCK. 2 WEAK ACs. (1) Contract #6-expanded asserts `string_frees > 0` but AC requires the counter "return to baseline" (deterministically == 1000); `> 0` passes even on a 999/1000 leak. Also flagged by code-reviewer (Concern #1). `m2_spike.rs:~1640`. (2) Contract #12 IR-snapshot test passes unconditionally — a documented deferral to P2, not a P0 proof. `m2_spike.rs:1558-1588`.
@@ -783,32 +783,37 @@ Contract #12 requires compiling a `.ynz` fixture containing `wait` to LLVM IR an
 8. Verify `./target/debug/ynz run hello.ynz` still prints `hello, yinz` (the new shims are in `libynz_runtime.a` but unused — should be inert).
 
 **Acceptance criteria**:
-- [ ] `ynz_rt_spawn` exported as `#[no_mangle] extern "C"`; signature matches spec
-  - Evidence: (filled at phase completion)
-- [ ] `ynz_rt_async_sleep_create` exported; returns heap pointer to a boxed `Sleep` future
-  - Evidence: (filled at phase completion)
-- [ ] `ynz_rt_async_sleep_poll` exported; correctly polls and re-registers waker
-  - Evidence: (filled at phase completion)
-- [ ] `ynz_rt_call_state_machine_sync` exported; Shape B (uses `Handle::block_on` everywhere inside Tokio; falls back to `RUNTIME.block_on` outside; NO `block_in_place`); correctly drives state machine to completion synchronously
-  - Evidence: (filled at phase completion)
-- [ ] All 4 new C-ABI shims registered in `runtime_decls.rs`
-  - Evidence: (filled at phase completion)
-- [ ] `libynz_runtime.a` archive size increase ≤ 2MB (Tokio time feature was already in `rt-multi-thread`; should be minimal)
-  - Evidence: (filled at phase completion)
-- [ ] `ynz build hello.ynz` succeeds and prints `hello, yinz` (existing behavior unchanged)
-  - Evidence: (filled at phase completion)
-- [ ] `cargo test --workspace` passes (1220+ existing tests + new m2_runtime tests)
-  - Evidence: (filled at phase completion)
-- [ ] `nm libynz_runtime.a | grep ynz_rt_` shows all 4 new symbols exported
-  - Evidence: (filled at phase completion)
+- [x] `ynz_rt_spawn` exported as `#[no_mangle] extern "C"`; signature matches spec
+  - Evidence: `runtime.rs:374` — `#[no_mangle] pub unsafe extern "C" fn ynz_rt_spawn(resume_fn: unsafe extern "C" fn(*mut u8,*mut u8)->i32, frame_ptr: *mut u8, frame_size: i64)`. `nm libynz_runtime.a` shows `T ynz_rt_spawn`. Exercised by `rt_spawn_drives_state_machine_on_io_pool` (which calls `ynz_rt_spawn` directly after fix-round-1). ✓
+- [x] `ynz_rt_async_sleep_create` exported; returns heap pointer to a boxed `Sleep` future
+  - Evidence: `runtime.rs:424` — `#[no_mangle] pub extern "C" fn ynz_rt_async_sleep_create(ms: i64) -> *mut u8`; `Box::into_raw(Box::new(Pin<Box<Sleep>>))`. IR snapshot: `declare ptr @ynz_rt_async_sleep_create(i64)`. Test `sleep_create_returns_non_null` asserts non-null + reconstructs `Box<Pin<Box<Sleep>>>` without UB. ✓
+- [x] `ynz_rt_async_sleep_poll` exported; correctly polls and re-registers waker
+  - Evidence: `runtime.rs:468` — casts `waker_ctx` to `&mut Context<'_>`, calls `sleep_box.as_mut().poll(cx)` (Tokio registers the real timer waker on Pending). Test `sleep_poll_suspend_and_resume` asserts elapsed ≥ 80ms (proves waker-driven, not busy-poll); `sleep_eight_concurrent_share_threads` proves concurrent registration. ✓
+- [x] `ynz_rt_call_state_machine_sync` exported; Shape B (uses `Handle::block_on` everywhere inside Tokio; falls back to `RUNTIME.block_on` outside; NO `block_in_place`); correctly drives state machine to completion synchronously
+  - Evidence: `runtime.rs:545` — Ok arm `handle.block_on(future)` (line 560), Err arm `rt.block_on(future)` (line 576); `block_in_place` appears only in two explanatory comments, zero executable uses. Returns `i32` (frame slot 0) per Patrick's ABI decision. Tests `call_state_machine_sync_from_spawn_blocking` + `call_state_machine_sync_no_tokio_context` both assert `result == 42` (both thread contexts). ✓
+- [x] All 4 new C-ABI shims registered in `runtime_decls.rs`
+  - Evidence: `runtime_decls.rs:570+` — `ynz_rt_spawn`→`void.fn_type([ptr,ptr,i64])`, `ynz_rt_async_sleep_create`→`ptr.fn_type([i64])`, `ynz_rt_async_sleep_poll`→`i32.fn_type([ptr,ptr])`, `ynz_rt_call_state_machine_sync`→`i32.fn_type([ptr,ptr,i64])`. All 4 appear as `declare` lines in the 5 golden IR snapshots. ✓
+- [x] `libynz_runtime.a` archive size increase ≤ 2MB (Tokio time feature was already in `rt-multi-thread`; should be minimal)
+  - Evidence: pre-diff 45,076,802 B → post-diff 45,461,354 B; delta ~375 KB, well under the 2 MB cap. ✓
+- [x] `ynz build hello.ynz` succeeds and prints `hello, yinz` (existing behavior unchanged)
+  - Evidence: `./target/debug/ynz run crates/ynz-driver/tests/fixtures/hello.ynz` → `hello, yinz`; `cargo build --workspace` clean. New shims declared but no call sites emitted (inert, as planned). ✓
+- [x] `cargo test --workspace` passes (no regression; new m2_runtime tests pass) — *AC text amended: the original "1220+ existing tests" was a main-branch figure; this worktree was branched (off d509770) before those tests landed and contains ~190 tests. The semantic bar is "no regression + new tests pass."*
+  - Evidence: all crates pass except the 5 known worktree-path ynz-driver snapshot artifacts (snapshots bake absolute path; fail identically at base d509770 — NOT P1 regressions). New m2_runtime: 9/9 pass. ynz-runtime total 91 tests pass; ynz-codegen 22 pass. Zero NEW failures introduced by P1. ✓
+- [x] `nm libynz_runtime.a | grep ynz_rt_` shows all 4 new symbols exported
+  - Evidence: `nm target/debug/libynz_runtime.a | grep ynz_rt_` shows `T ynz_rt_spawn`, `T ynz_rt_async_sleep_create`, `T ynz_rt_async_sleep_poll`, `T ynz_rt_call_state_machine_sync` (all exported text symbols). ✓
 
 **Quality gate**:
-- [ ] No `unsafe` outside the extern fns themselves; each unsafe block has a SAFETY comment
-- [ ] Tier 3 doc comments on each new shim (Flow / Failure modes / Side effects per `comments.md`)
-- [ ] Panic-catch wrappers on every shim (matches M1 pattern in `ynz_rt_spawn_blocking`)
-- [ ] Frame cleanup uses RAII drop guard (matches M1's `CtxDropGuard`)
-- [ ] No Tokio types exposed in the C-ABI signatures (all params are primitive C types)
-- [ ] No SQL/security concerns (pure-Rust runtime; no external input)
+- [x] No `unsafe` outside the extern fns themselves; each unsafe block has a SAFETY comment
+  - code-reviewer confirmed every `unsafe` block carries a sound `// SAFETY:` comment; the `waker_ctx`/frame-slot-0 raw-pointer casts are the C-ABI boundary, each justified.
+- [x] Tier 3 doc comments on each new shim (Flow / Failure modes / Side effects per `comments.md`)
+  - rules-compliance + code-reviewer confirmed Flow/Failure/Side-effects doc comments on all 4 shims; the `ynz_rt_spawn` ownership comment was corrected (fix-round-1) to state the real contract.
+- [x] Panic-catch wrappers on every shim (matches M1 pattern in `ynz_rt_spawn_blocking`)
+  - `catch_unwind` on `async_sleep_poll` + `call_state_machine_sync`; `ynz_rt_spawn` relies on Tokio's task wrapper (M1 pattern). Validated by `panic_during_state_machine_poll_is_caught`.
+- [x] Frame cleanup uses RAII drop guard (matches M1's `CtxDropGuard`)
+  - `CtxDropGuard`→`FrameDropGuard` rename complete + used in `ynz_rt_spawn_blocking`. NOTE: the new `ynz_rt_spawn` path intentionally does NOT free its frame in P1 (documented deferral — frame dealloc is the codegen resume_fn's job at terminal state, wired in P2; reviewed + accepted). The drop-guard mechanism exists and matches M1; spawn-frame dealloc is a tracked P2 obligation, not a leak-by-omission.
+- [x] No Tokio types exposed in the C-ABI signatures (all params are primitive C types)
+  - All 4 shim signatures use only `*mut u8`, `i64`, `i32`, fn-ptr. code-reviewer + plan-adherence confirmed.
+- [x] No SQL/security concerns (pure-Rust runtime; no external input)
 
 **Verification**:
 - `cargo build --workspace --release` succeeds in < 120s on CI
@@ -816,14 +821,21 @@ Contract #12 requires compiling a `.ynz` fixture containing `wait` to LLVM IR an
 - `ynz build hello.ynz && ./hello` prints `hello, yinz`
 
 **Phase Review Gates** (filled at phase completion):
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [x] code-reviewer: PASS 2026-05-30T22:45 (re-review round 3 — all 3 round-1 BLOCKs resolved; i32 slot-0 read sound; c-string/drop conversions behavior-preserving; clippy silent)
+- [x] rules-compliance-reviewer: PASS 2026-05-30T22:05 (round 1; post-round deltas = doc-truth correction + mechanical clippy, strictly improving)
+- [x] plan-adherence-verifier: PASS 2026-05-30T22:08 (round 1; the void→i32 fix now CONFORMS to plan line 779, improving adherence; 5 snapshots mechanical)
+- [x] acceptance-verifier: PASS 2026-05-30T22:50 (re-review — all 9 ACs MET; void→i32 verified result==42 both contexts)
 - [ ] Committed: <commit SHA>
 
 **Findings Log** (filled during any fix loops):
-_(empty until a reviewer returns BLOCK)_
+- 2026-05-30T22:10 — reviewer round 1: rules-compliance PASS; plan-adherence PASS; code-reviewer BLOCK; acceptance-verifier BLOCK (1 WEAK). Three code findings + 1 plan-text finding.
+- 2026-05-30T22:10 — code-reviewer BLOCK #1 (FAKE TEST): `rt_spawn_drives_state_machine_on_io_pool` (m2_runtime.rs:~346) never calls `ynz_rt_spawn` — it spawns via `local_rt.spawn(...)` and admits it in a comment; `ynz_rt_spawn` isn't even imported. One of 4 shims has no real coverage behind a green test bearing its name.
+- 2026-05-30T22:10 — code-reviewer BLOCK #2 (WRONG OWNERSHIP DOC): `ynz_rt_spawn` doc (runtime.rs:~300) claims Tokio's RAII drop of `Box<StateFnFuture>` frees the frame on completion/abort. False — `StateFnFuture` holds a raw `*mut u8` with NO Drop impl; nothing frees it. Frame dealloc is deferred to P2 (`frame_size` is `#[allow(dead_code)]` "until P2 wires dealloc"). A P2 executor trusting this skips dealloc → heap leak.
+- 2026-05-30T22:10 — code-reviewer concern → CONFIRMED BLOCK (void/i32 ABI): `ynz_rt_call_state_machine_sync` shipped returning `void` (StateFnFuture Output=()), but plan locks `-> i32`/`i32.fn_type` (749/779), line 768 "returns the final value", line 888 main-exit-code propagation, and P0 spike contract #4d returned 42 via the bridge. void silently drops main's exit code; P2 would build main-wrap on the wrong signature. plan-adherence + acceptance called it a "stale plan artifact" but cited no evidence the void was intended. RESOLUTION: Patrick (2026-05-30) — CONFORM IMPL TO i32. (ynz_rt_spawn stays void — fire-and-forget.)
+- 2026-05-30T22:10 — acceptance-verifier WEAK (plan-text): AC says "1220+ existing tests" but this worktree has ~190 (branched before those landed in main). Semantic intent met (no regression; 9 new m2_runtime tests pass). Coordinator amends AC text to be worktree-accurate.
+- 2026-05-30T22:15 — fix-loop round 1 (coordinator → executor): (1) sync bridge void→i32 read-from-frame-slot-0, runtime_decls i32.fn_type, regen IR snapshots, mirror spike bridge; (2) make the spawn test actually call ynz_rt_spawn; (3) rewrite the ynz_rt_spawn ownership doc to state the truth (frame NOT freed by StateFnFuture drop; dealloc is P2's job). All 3 DONE: sync bridge now `SyncStateFnFuture<Output=i32>` reads frame slot 0; spawn test calls ynz_rt_spawn + signals via SignalSm; doc corrected.
+- 2026-05-30T22:25 — fix-loop round 2 (clippy -D warnings cleanup): `let _ = Box::from_raw` → `drop(...)` (intentional Sleep-handle free) ×4; removed orphaned `test_sm_resume`; `redundant_async_block` fixed; 6 pre-existing `manual_c_str_literals` in lib.rs converted `b"x\0"`→`c"x"` (byte-identical). `cargo clippy -p ynz-runtime --tests -- -D warnings` = 0 warnings; 91 tests pass.
+- 2026-05-30T22:30 — re-review IN FLIGHT: code-reviewer + acceptance-verifier re-running on final clean diff (rules + plan-adherence already PASS — deltas strictly improve/are mechanical). Awaiting verdicts → then write P1 gates + Evidence + amend stale "1220+ tests" AC text to worktree-accurate count + commit P1. NEXT after P1 commit = Phase 2 (codegen state-machine path). P2 INHERITS: frame-slot-0 return-value ABI (i32 at offset 0) + must add the `main_rt_init_is_first_instruction` hard-gate AC (Contract #12 landing).
 
 **Exit Sequence**: per template (persist → 4-agent review fan-out → handle → prompt).
 
