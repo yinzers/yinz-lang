@@ -17,14 +17,71 @@
 //! by the LSP layer but return empty hint lists until v0.3+ data exists.
 
 use std::collections::HashSet;
+use std::sync::OnceLock;
 
 use ynz_ast::nodes::{Block, Expr, Item, OwnershipModifier, Stmt};
 use ynz_parser::{parse_query, SourceFile, SourceFileRegistry};
 
 use crate::{
+    generics::GenericFnTable,
+    intrinsics::PrimitiveIntrinsicTable,
     queries::{check_query, module_signatures_query},
+    signatures::{FunctionSig, SignatureTable},
     types::{type_name, Type},
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Builtin callee ownership helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Returns `true` when `name` is a builtin free-function whose every parameter
+/// is read-only (share).
+///
+/// All v0.1/v0.2 builtin free-fns are read-only by contract — they inspect
+/// their arguments and never take ownership or mutate through a borrow.
+/// `range` and `sleepMs` are in `registry/features.toml` as `kind = "free_fn"`;
+/// `print` and `sensitive` are special-cased in `check.rs` and not in the
+/// free-fn registry table, so they are listed here explicitly.
+///
+/// When the registry gains an ownership field for free-fn entries (cross-file
+/// sig data), replace the explicit list with a registry-sourced lookup.
+///
+/// Time: O(n) where n = number of registry free-fn names (small, <10).  Space: O(1).
+fn builtin_free_fn_is_readonly(name: &str) -> bool {
+    // Builtins special-cased in check.rs (not in PrimitiveIntrinsicTable.free_fns).
+    if matches!(name, "print" | "sensitive") {
+        return true;
+    }
+    // Registry free-fn builtins (range overloads, sleepMs, and any future additions).
+    // PrimitiveIntrinsicTable::free_fn_names() is the SSOT for this list.
+    static REGISTRY_FREE_FNS: OnceLock<Vec<&'static str>> = OnceLock::new();
+    let registry_names =
+        REGISTRY_FREE_FNS.get_or_init(|| PrimitiveIntrinsicTable::m6().free_fn_names());
+    registry_names.contains(&name)
+}
+
+/// Returns `true` when `method` is a scalar primitive intrinsic method (e.g.
+/// `.toString()`, `.toFloat()`, `.byteAt()`, `.contains()`) and therefore always
+/// takes a read-only (share) receiver.
+///
+/// The set is sourced from `PrimitiveIntrinsicTable::all_scalar_intrinsic_method_names()`
+/// which covers both zero-arg and one-arg scalar intrinsics.  Collection methods
+/// (`add`, `remove`, `set`, etc.) are excluded because `build_table` already
+/// skips `array`, `fixed`, `maybe`, and `map` receiver types.
+///
+/// Time: O(1) amortised (HashSet lookup; set built once via OnceLock).
+/// Space: O(m) where m = number of scalar intrinsic method names (<40).
+fn primitive_intrinsic_method_is_readonly(method: &str) -> bool {
+    static INTRINSIC_METHODS: OnceLock<HashSet<String>> = OnceLock::new();
+    let set = INTRINSIC_METHODS.get_or_init(|| {
+        PrimitiveIntrinsicTable::m6()
+            .all_scalar_intrinsic_method_names()
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    });
+    set.contains(method)
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public hint structs
@@ -119,100 +176,282 @@ fn root_ident(mut expr: &Expr) -> Option<&str> {
     }
 }
 
-/// Conservative mutation-name collector: walks a block and records every identifier
-/// that appears in a position that could indicate mutation (assignment target,
-/// receiver of a method call, argument to any function — conservative).
-fn collect_maybe_mutated(block: &Block, out: &mut HashSet<String>) {
+/// Ownership-aware mutation-name collector: walks a block and records every identifier
+/// that appears in a position that indicates mutation — assignment target, receiver of a
+/// mutating method call, or argument to a `lend`/`give` parameter.
+///
+/// `share` parameters (and all builtin free-fns and scalar primitive intrinsic methods)
+/// do NOT count as mutations — bindings only passed to read-only callees remain
+/// candidates for the `let→const` hint.
+///
+/// **Conservative fallback for unresolvable callees**: when a callee cannot be resolved
+/// through sig_table, imported, generic_fn_table, or the builtin/intrinsic sets, every
+/// ident argument is marked mutated.  The tradeoff: a missed hint on a binding whose
+/// actual ownership is unknown is acceptable; a wrong "effectively const" hint on a
+/// binding that IS mutated is not — it trains users to distrust the teaching surface.
+/// **Cost**: imported functions (cross-file user code) suppress `let→const` hints on
+/// their arguments even when those functions are genuinely read-only, because their
+/// signatures are not yet resolved at hint-analysis time.
+/// **Trigger to narrow the fallback**: when cross-file signature data is available at
+/// the call site (imported-function ownership recorded in the registry or resolved via
+/// the cross-file salsa query), replace the conservative fallback with a registry-sourced
+/// ownership lookup — at that point, only truly-unknown callees (e.g. indirect calls
+/// through a function-typed value) need the conservative path.
+///
+/// Time: O(n × sig-lookup)  Space: O(mutated-set)
+fn collect_maybe_mutated(
+    block: &Block,
+    sig_table: &SignatureTable,
+    imported: &std::collections::HashMap<String, FunctionSig>,
+    generic_fn_table: &GenericFnTable,
+    out: &mut HashSet<String>,
+) {
     for stmt in &block.stmts {
-        collect_maybe_mutated_stmt(stmt, out);
+        collect_maybe_mutated_stmt(stmt, sig_table, imported, generic_fn_table, out);
     }
 }
 
-fn collect_maybe_mutated_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
+fn collect_maybe_mutated_stmt(
+    stmt: &Stmt,
+    sig_table: &SignatureTable,
+    imported: &std::collections::HashMap<String, FunctionSig>,
+    generic_fn_table: &GenericFnTable,
+    out: &mut HashSet<String>,
+) {
     match stmt {
         Stmt::Assign { target, value, .. } => {
             out.insert(target.clone());
-            collect_maybe_mutated_expr(value, out);
+            collect_maybe_mutated_expr(value, sig_table, imported, generic_fn_table, out);
         }
         Stmt::FieldAssign { target, value, .. } => {
             // Follow any chained field-access path to the root binding name.
             if let Some(name) = root_ident(target.as_ref()) {
                 out.insert(name.to_string());
             }
-            collect_maybe_mutated_expr(value, out);
+            collect_maybe_mutated_expr(value, sig_table, imported, generic_fn_table, out);
         }
         Stmt::IndexAssign { receiver, index, value, .. } => {
             // Follow any chained index-access path to the root binding name.
             if let Some(name) = root_ident(receiver.as_ref()) {
                 out.insert(name.to_string());
             }
-            collect_maybe_mutated_expr(index, out);
-            collect_maybe_mutated_expr(value, out);
+            collect_maybe_mutated_expr(index, sig_table, imported, generic_fn_table, out);
+            collect_maybe_mutated_expr(value, sig_table, imported, generic_fn_table, out);
         }
-        Stmt::Let { value, .. } => collect_maybe_mutated_expr(value, out),
-        Stmt::Expr(e) => collect_maybe_mutated_expr(e, out),
-        Stmt::Return { value: Some(e), .. } => collect_maybe_mutated_expr(e, out),
+        Stmt::Let { value, .. } => {
+            collect_maybe_mutated_expr(value, sig_table, imported, generic_fn_table, out);
+        }
+        Stmt::Expr(e) => {
+            collect_maybe_mutated_expr(e, sig_table, imported, generic_fn_table, out);
+        }
+        Stmt::Return { value: Some(e), .. } => {
+            collect_maybe_mutated_expr(e, sig_table, imported, generic_fn_table, out);
+        }
         Stmt::If { cond, body, .. } => {
-            collect_maybe_mutated_expr(cond, out);
-            collect_maybe_mutated(body, out);
+            collect_maybe_mutated_expr(cond, sig_table, imported, generic_fn_table, out);
+            collect_maybe_mutated(body, sig_table, imported, generic_fn_table, out);
         }
         Stmt::Match { scrutinee, arms, else_arm, .. } => {
-            collect_maybe_mutated_expr(scrutinee, out);
+            collect_maybe_mutated_expr(scrutinee, sig_table, imported, generic_fn_table, out);
             for arm in arms {
-                collect_maybe_mutated(&arm.body, out);
+                collect_maybe_mutated(&arm.body, sig_table, imported, generic_fn_table, out);
             }
             if let Some(eb) = else_arm {
-                collect_maybe_mutated(eb, out);
+                collect_maybe_mutated(eb, sig_table, imported, generic_fn_table, out);
             }
         }
         Stmt::While { cond, body, .. } => {
-            collect_maybe_mutated_expr(cond, out);
-            collect_maybe_mutated(body, out);
+            collect_maybe_mutated_expr(cond, sig_table, imported, generic_fn_table, out);
+            collect_maybe_mutated(body, sig_table, imported, generic_fn_table, out);
         }
         Stmt::For { iter, body, .. } => {
-            collect_maybe_mutated_expr(iter, out);
-            collect_maybe_mutated(body, out);
+            collect_maybe_mutated_expr(iter, sig_table, imported, generic_fn_table, out);
+            collect_maybe_mutated(body, sig_table, imported, generic_fn_table, out);
         }
         _ => {}
     }
 }
 
-fn collect_maybe_mutated_expr(expr: &Expr, out: &mut HashSet<String>) {
+fn collect_maybe_mutated_expr(
+    expr: &Expr,
+    sig_table: &SignatureTable,
+    imported: &std::collections::HashMap<String, FunctionSig>,
+    generic_fn_table: &GenericFnTable,
+    out: &mut HashSet<String>,
+) {
     match expr {
-        // Any call-site: conservatively mark all ident arguments as "possibly mutated"
-        // because we don't know the callee's parameter ownership here.
         Expr::Call(c) => {
-            for arg in &c.args {
-                if let Expr::Ident(name, _) = arg {
-                    out.insert(name.clone());
+            // Resolve the callee's ownership modifiers so we only mark args mutated when
+            // the matched parameter is `lend` or `give`.  `share` params (non-mutating
+            // read access) do not count — they let the `let→const` hint fire.
+            //
+            // Lookup order: user sig_table → imported → generic_fn_table → builtin free-fns
+            // (print, range, sleepMs, sensitive, and any registry free-fns).  Builtin
+            // free-fns are all read-only (share) in v0.1/v0.2 — none mutate their args.
+            //
+            // Conservative fallback: if the callee cannot be resolved through any path
+            // above (genuinely unknown user-defined function), ALL ident args are marked
+            // mutated.  This prevents a wrong "effectively const" hint when the actual
+            // ownership is unknown.  Tradeoff: imported-function args that are truly
+            // read-only also get suppressed — a missed hint is safer than a wrong one.
+            // Narrows when cross-file signature data becomes available in the registry.
+            let resolved_ownerships: Option<&Vec<Option<OwnershipModifier>>> =
+                if let Expr::Ident(name, _) = &c.callee {
+                    sig_table
+                        .fns
+                        .get(name.as_str())
+                        .map(|s| &s.param_ownerships)
+                        .or_else(|| imported.get(name.as_str()).map(|s| &s.param_ownerships))
+                        .or_else(|| {
+                            generic_fn_table
+                                .fns
+                                .get(name.as_str())
+                                .map(|s| &s.param_ownerships)
+                        })
+                } else {
+                    None
+                };
+
+            // Determine if this is a known-readonly builtin (all args are share).
+            let callee_is_builtin_readonly = if let Expr::Ident(name, _) = &c.callee {
+                builtin_free_fn_is_readonly(name.as_str())
+            } else {
+                false
+            };
+
+            for (i, arg) in c.args.iter().enumerate() {
+                let is_mutating = if callee_is_builtin_readonly {
+                    // Builtin free-fn — all parameters are share; never marks args mutated.
+                    false
+                } else {
+                    match &resolved_ownerships {
+                        Some(param_ownerships) => {
+                            // Resolved user callee: only `lend`/`give` modifiers count as mutations.
+                            match param_ownerships.get(i) {
+                                Some(Some(OwnershipModifier::Lend | OwnershipModifier::Give)) => true,
+                                // `share`, `None` (implicit share), or index out of range → not mutating.
+                                _ => false,
+                            }
+                        }
+                        // Unresolvable callee → conservative: mark every ident arg mutated.
+                        None => true,
+                    }
+                };
+
+                if is_mutating {
+                    if let Expr::Ident(name, _) = arg {
+                        out.insert(name.clone());
+                    }
                 }
-                collect_maybe_mutated_expr(arg, out);
+                collect_maybe_mutated_expr(arg, sig_table, imported, generic_fn_table, out);
             }
-            collect_maybe_mutated_expr(&c.callee, out);
+            collect_maybe_mutated_expr(&c.callee, sig_table, imported, generic_fn_table, out);
         }
-        Expr::MethodCall { receiver, args, .. } => {
-            // Any method call on a binding potentially mutates it; follow the full
-            // receiver chain to the root Ident so that `a.b.heal(5)` marks `a`.
-            if let Some(name) = root_ident(receiver.as_ref()) {
-                out.insert(name.to_string());
-            }
-            collect_maybe_mutated_expr(receiver, out);
-            for arg in args {
-                if let Expr::Ident(name, _) = arg {
-                    out.insert(name.clone());
+        Expr::MethodCall { receiver, method, args, .. } => {
+            // Resolve the method via the same sig lookup as free-function calls (UFCS —
+            // `player.heal(20)` desugars to `heal(player, 20)`; the receiver is param 0).
+            // Lookup order: user sig_table → imported → generic_fn_table → primitive
+            // intrinsic table.  All scalar primitive intrinsic methods (toString, toFloat,
+            // byteAt, contains, etc.) are read-only (share receiver) by definition.
+            // If the method still can't be resolved, conservatively mark the receiver mutated.
+            let ownerships: Option<&Vec<Option<OwnershipModifier>>> = {
+                sig_table
+                    .fns
+                    .get(method.as_str())
+                    .map(|s| &s.param_ownerships)
+                    .or_else(|| imported.get(method.as_str()).map(|s| &s.param_ownerships))
+                    .or_else(|| {
+                        generic_fn_table
+                            .fns
+                            .get(method.as_str())
+                            .map(|s| &s.param_ownerships)
+                    })
+            };
+
+            // Receiver corresponds to param 0 in the resolved signature.
+            let receiver_is_mutating = if primitive_intrinsic_method_is_readonly(method.as_str()) {
+                // Scalar intrinsic method — receiver is always share (read-only).
+                false
+            } else {
+                match &ownerships {
+                    Some(param_ownerships) => {
+                        matches!(
+                            param_ownerships.first(),
+                            Some(Some(OwnershipModifier::Lend | OwnershipModifier::Give))
+                        )
+                    }
+                    // Unresolvable user-defined method → conservative: assume the receiver is mutated.
+                    None => true,
                 }
-                collect_maybe_mutated_expr(arg, out);
+            };
+            if receiver_is_mutating {
+                // Follow the full receiver chain to the root Ident so that
+                // `a.b.heal(5)` marks `a` (not the intermediate `a.b`).
+                if let Some(name) = root_ident(receiver.as_ref()) {
+                    out.insert(name.to_string());
+                }
+            }
+            collect_maybe_mutated_expr(receiver, sig_table, imported, generic_fn_table, out);
+
+            // Additional args correspond to params 1.. in the resolved signature.
+            for (i, arg) in args.iter().enumerate() {
+                let arg_is_mutating = match &ownerships {
+                    Some(param_ownerships) => {
+                        matches!(
+                            param_ownerships.get(i + 1),
+                            Some(Some(OwnershipModifier::Lend | OwnershipModifier::Give))
+                        )
+                    }
+                    None => true,
+                };
+                if arg_is_mutating {
+                    if let Expr::Ident(name, _) = arg {
+                        out.insert(name.clone());
+                    }
+                }
+                collect_maybe_mutated_expr(arg, sig_table, imported, generic_fn_table, out);
             }
         }
         Expr::BinOp { lhs, rhs, .. } => {
-            collect_maybe_mutated_expr(lhs, out);
-            collect_maybe_mutated_expr(rhs, out);
+            collect_maybe_mutated_expr(lhs, sig_table, imported, generic_fn_table, out);
+            collect_maybe_mutated_expr(rhs, sig_table, imported, generic_fn_table, out);
         }
-        Expr::UnaryOp { operand, .. } => collect_maybe_mutated_expr(operand, out),
-        Expr::FieldAccess { receiver, .. } => collect_maybe_mutated_expr(receiver, out),
+        Expr::UnaryOp { operand, .. } => {
+            collect_maybe_mutated_expr(operand, sig_table, imported, generic_fn_table, out);
+        }
+        Expr::FieldAccess { receiver, .. } => {
+            collect_maybe_mutated_expr(receiver, sig_table, imported, generic_fn_table, out);
+        }
         Expr::IndexAccess { receiver, index, .. } => {
-            collect_maybe_mutated_expr(receiver, out);
-            collect_maybe_mutated_expr(index, out);
+            collect_maybe_mutated_expr(receiver, sig_table, imported, generic_fn_table, out);
+            collect_maybe_mutated_expr(index, sig_table, imported, generic_fn_table, out);
+        }
+        // Recurse into compound literal expressions so mutations nested inside
+        // struct/array/map literals and postfix operations are tracked.
+        Expr::StructLit { fields, .. } => {
+            for field in fields {
+                collect_maybe_mutated_expr(
+                    &field.value,
+                    sig_table,
+                    imported,
+                    generic_fn_table,
+                    out,
+                );
+            }
+        }
+        Expr::ArrayLit { elements, .. } => {
+            for element in elements {
+                collect_maybe_mutated_expr(element, sig_table, imported, generic_fn_table, out);
+            }
+        }
+        Expr::MapLit { entries, .. } => {
+            for (key_expr, val_expr) in entries {
+                collect_maybe_mutated_expr(key_expr, sig_table, imported, generic_fn_table, out);
+                collect_maybe_mutated_expr(val_expr, sig_table, imported, generic_fn_table, out);
+            }
+        }
+        Expr::PostfixOp { receiver: operand, .. } => {
+            collect_maybe_mutated_expr(operand, sig_table, imported, generic_fn_table, out);
         }
         _ => {}
     }
@@ -464,22 +703,30 @@ fn collect_copy_hints_expr(
 
 /// Emit `// promoted to fixed` decorations on `array<T>` bindings never grown.
 ///
-/// Conservative: if the binding name appears in ANY call argument, method call,
-/// or assignment target, the hint is suppressed (the call might mutate via lend).
+/// A binding is considered mutated only when it appears in an assignment target, a
+/// method-call receiver, or an argument to a `lend`/`give` parameter.  `share` params
+/// do not count.  Unresolvable callees are treated conservatively (mark mutated).
 ///
-/// Time: O(n × binding-count).  Space: O(hints).
+/// Time: O(n × sig-lookup).  Space: O(hints).
 #[salsa::tracked]
 pub fn array_to_fixed_promotion_hints(
     db: &dyn SourceFileRegistry,
     source: SourceFile,
 ) -> Vec<PromotionHint> {
     let parse = parse_query(db, source);
+    let sigs = module_signatures_query(db, source);
 
     let mut hints = Vec::new();
     for item in &parse.module.items {
         if let Item::Function(f) = item {
             let mut mutated = HashSet::new();
-            collect_maybe_mutated(&f.body, &mut mutated);
+            collect_maybe_mutated(
+                &f.body,
+                &sigs.sig_table,
+                &sigs.imported_fns,
+                &sigs.generic_fn_table,
+                &mut mutated,
+            );
             collect_array_hints_block(&f.body, &mutated, &mut hints);
         }
     }
@@ -516,24 +763,33 @@ fn collect_array_hints_block(block: &Block, mutated: &HashSet<String>, out: &mut
 
 /// Emit `// effectively const` decorations on `let` bindings never reassigned/mutated.
 ///
-/// Conservative: any binding that appears in a call argument, method receiver,
-/// or assignment target is excluded (the operation might mutate via lend).
+/// A binding is considered mutated only when it appears in an assignment target, a
+/// method-call receiver, or an argument to a `lend`/`give` parameter.  `share` params
+/// do not count — passing a binding to a non-mutating function is consistent with
+/// const semantics.  Unresolvable callees are treated conservatively (mark mutated).
 ///
 /// `const` bindings are excluded (they already are const).
 ///
-/// Time: O(n × binding-count).  Space: O(hints).
+/// Time: O(n × sig-lookup).  Space: O(hints).
 #[salsa::tracked]
 pub fn let_to_const_promotion_hints(
     db: &dyn SourceFileRegistry,
     source: SourceFile,
 ) -> Vec<PromotionHint> {
     let parse = parse_query(db, source);
+    let sigs = module_signatures_query(db, source);
 
     let mut hints = Vec::new();
     for item in &parse.module.items {
         if let Item::Function(f) = item {
             let mut mutated = HashSet::new();
-            collect_maybe_mutated(&f.body, &mut mutated);
+            collect_maybe_mutated(
+                &f.body,
+                &sigs.sig_table,
+                &sigs.imported_fns,
+                &sigs.generic_fn_table,
+                &mut mutated,
+            );
             collect_const_hints_block(&f.body, &mutated, &mut hints);
         }
     }

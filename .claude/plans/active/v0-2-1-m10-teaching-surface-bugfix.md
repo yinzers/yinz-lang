@@ -326,7 +326,7 @@ _(empty until a reviewer returns BLOCK)_
 - [x] rules-compliance-reviewer: PASS 2026-05-30 (r1 — root_ident has Big-O; no violations. r2 one-line helper swap adds no rule surface — PASS carried)
 - [x] plan-adherence-verifier: PASS 2026-05-30 (r1 — 3 steps + 2 call sites + helper, no creep. r2 closes a same-class sibling site, no scope change — PASS carried)
 - [x] acceptance-verifier: PASS 2026-05-30 (r2 — 4/4 ACs MET, position filter proven non-tautological, 455 tests 0 failures)
-- [ ] Committed: <commit SHA>
+- [x] Committed: c9da88f
 
 **Findings Log**:
 - 2026-05-30 — code-reviewer round 1: BLOCK. The `Expr::MethodCall` arm in `collect_maybe_mutated_expr` (inlay_hint_passes.rs ~193) uses the SAME single-level `if let Expr::Ident(name,_) = receiver.as_ref()` pattern Phase 2 exists to kill — so a mutating method call through a chained receiver (`player.address.heal(5)`) never marks the root `player` mutated → false `let→const` hint on a third sibling path. Reviewer proved it with a probe. Same bug class as Bug 2.7; `root_ident` already exists. (rules/adherence/acceptance all PASS round 1.)
@@ -354,29 +354,38 @@ _(empty until a reviewer returns BLOCK)_
 
 **Behavior-change note for CHANGELOG**: when a callee can't be resolved (e.g. an imported function whose signature isn't in scope), Phase 3 conservatively marks the arg mutated — so imported-function args get no `let→const` hint. Named tradeoff (never a wrong "const" hint over a possibly-missing one); call it out in the v0.2.1 CHANGELOG alongside the Bug 2.9 "hints now fire more often" note so neither is mistaken for a regression.
 **Acceptance criteria**:
-- [ ] `print(count)` → `let→const` hint fires.
-  - Evidence: (filled at phase completion)
-- [ ] `consume(x)` with `consume(lend T)` → hint suppressed.
-  - Evidence: (filled at phase completion)
-- [ ] Mutation inside an array/struct literal arg is tracked.
-  - Evidence: (filled at phase completion)
-- [ ] Unresolvable callee → conservative suppress (no wrong const hint).
-  - Evidence: (filled at phase completion)
+- [x] `print(count)` → `let→const` hint fires.
+  - Evidence: `tests/inlay_hint_maybe_mutated.rs:336` `print_call_does_not_suppress_let_to_const_hint` — LITERAL `let count = 5; print(count)`, asserts hint FIRES. (round 1 substituted a user-fn for print and MASKED this; round 2 added `builtin_free_fn_is_readonly` + the real test.) code-reviewer mutation-verified: forcing the helper to `false` fails exactly this test. Fix: `inlay_hint_passes.rs` builtin/intrinsic ownership resolution (print/range/sleepMs/sensitive → share; range/sleepMs from `free_fn_names()` SSOT).
+- [x] `consume(x)` with `consume(lend T)` → hint suppressed.
+  - Evidence: `tests/inlay_hint_maybe_mutated.rs` `lend_param_call_suppresses_let_to_const_hint` + `give_param_call_…`; `mixed_params_only_share_gets_hint` (assert count==1) is the teeth — proves share-fires-while-lend-suppresses per binding.
+- [x] Mutation inside an array/struct literal arg is tracked.
+  - Evidence: `mutation_inside_array_literal_arg_is_tracked`, `mutation_nested_in_struct_literal_is_tracked`, `mutation_call_inside_struct_literal_field_is_tracked` (count==2, sharp). Fix: new `Expr::StructLit/ArrayLit/MapLit/PostfixOp` arms recurse into sub-expressions (Bug 2.10).
+- [x] Unresolvable callee → conservative suppress (no wrong const hint).
+  - Evidence: `unresolvable_callee_conservatively_suppresses_hint` (`unknownFn(x)`); `None => true` fallback in both Call + MethodCall arms, documented with the no-duct-tape tradeoff/cost/trigger docstring.
+- [x] (round-2 flagship) Intrinsic method receiver keeps its hint.
+  - Evidence: `intrinsic_method_call_does_not_suppress_receiver_hint` — `let score = 5; const s = score.toString()` → `score` keeps hint (assert count==1, teeth via `const s`). Fix: `primitive_intrinsic_method_is_readonly` consults `intrinsics.rs::all_scalar_intrinsic_method_names()`.
 **Quality gate**:
-- [ ] `sig_table` threaded to all three fns (no call path left unchecked).
-- [ ] `share` parameters never mark args mutated (definitional).
-- [ ] No panic on generic/UFCS callee lookup miss.
-**Verification**: `cargo test -p ynz-typeck inlay_hint_maybe_mutated` green; `cargo test --workspace` green.
+- [x] `sig_table` threaded to all three fns (no call path left unchecked). — plan-adherence verified every recursive call site + both entry points.
+- [x] `share` parameters never mark args mutated (definitional). — `mixed_params_only_share_gets_hint` proves it.
+- [x] No panic on generic/UFCS callee lookup miss. — code-reviewer: no `.unwrap()`/`.expect()` in the file; `None`→conservative branch.
+**Verification**: `cargo test -p ynz-typeck --test inlay_hint_maybe_mutated` 13/13 green; `cargo test -p ynz-typeck` 468 green, 0 failures; clippy clean.
 
-**Phase Review Gates**:
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
+**Phase Review Gates** (r1: code-reviewer BLOCK [flagship print broken] + rules BLOCK [6 comments] → r2 fixed both):
+- [x] code-reviewer: PASS 2026-05-30 (r2 — mutation-verified the 2 flagship tests have teeth; print(count) + score.toString() now fire)
+- [x] rules-compliance-reviewer: PASS 2026-05-30 (r2 — fallback docstring has WHAT/WHY/COST/TRIGGER; zero changelog framing; new helpers carry Big-O)
+- [x] plan-adherence-verifier: PASS 2026-05-30 (r2 — 6/6 steps; intrinsics.rs 3rd-file addition documented as correct SSOT-consult, not creep)
+- [x] acceptance-verifier: PASS 2026-05-30 (r2 — all 5 ACs MET; flagship now a real print(count) test failing on r1 code)
 - [ ] Committed: <commit SHA>
 
+**Findings Log (continued — round-2 closure):**
+- 2026-05-30 — round-2 PASS all 4: flagship genuinely fixed (`print(count)`/`score.toString()` fire via builtin+intrinsic ownership resolution, SSOT-sourced); 6 comments rewritten durable; intrinsics.rs gained `all_scalar_intrinsic_method_names()` (minimal SSOT helper). 13 tests (was 11, +2 flagship), 468 ynz-typeck green.
+- 2026-05-30 — TRACKED NON-BLOCKING NIT (code-reviewer): `builtin_free_fn_is_readonly` hardcodes `matches!(name, "print" | "sensitive")` (the check.rs-special-cased free-fns NOT in the registry `free_fn_names()` SSOT; range/sleepMs come from SSOT). Verified complete today {print,range,sleepMs,sensitive}. TRIGGER: if a future builtin free-fn is added to check.rs dispatch but NOT the registry, this helper silently misses it (suppresses a legit hint) — add it here OR (better) migrate builtin ownership into the registry. Documented with a narrowing-trigger comment in-code.
+
 **Findings Log**:
-_(empty until a reviewer returns BLOCK)_
+- 2026-05-30 — round 1: rules-compliance PASS-able-but-BLOCK on comment quality; plan-adherence PASS (6/6 steps); acceptance-verifier PASS (4/4 ACs by the tests as written). code-reviewer BLOCK + rules-compliance BLOCK.
+- 2026-05-30 — **code-reviewer BLOCK (the important one)**: flagship AC#1 (`print(count)` → hint fires) does NOT actually hold. `print` / primitive intrinsics (`.toString()` etc.) aren't in sig_table/imported/generic_fn_table → conservative fallback marks the arg mutated → hint suppressed. Proven: `let count = 5; print(count)` → 0 hints. The executor's test substituted a user-defined `share` fn for `print`, so the green suite MASKED the headline objective being broken. Per no-duct-tape, "intrinsics fall to conservative-suppress, same as pre-fix" is wrong framing — pre-fix everything was suppressed (invisible); post-fix print/.toString are the conspicuous remaining failures of the feature Bug 2.9 exists to fix. (See `intrinsic-fns-not-in-sigtable` memory.)
+- 2026-05-30 — rules-compliance BLOCK: 6 comment-quality issues — (1) conservative-fallback docstring states symptom not the full tradeoff/cost/trigger (no-duct-tape documented-deferral shape); (2-6) test WHY comments use changelog framing ("Before the fix…", "Without the StructLit recursion arm…") + a plan reference ("adversarial case from Step 6"). comments.md Hard Rule 2.
+- 2026-05-30 — ROUND-2 fix dispatched: (a) make the walker intrinsic/builtin-aware — print/range/sleepMs → share args; primitive intrinsics → share self — via a shared "resolve callee ownership incl. builtins" path consulting the existing intrinsic table (NOT a hardcoded duplicate list); only genuinely-unknown USER callees hit the conservative fallback (keep the `unknownFn(x)` suppress test — that's the legit fallback). Add fail-before/pass-after tests for the LITERAL `print(count)` repro + `let s = score.toString()` keeping `score`'s hint. (b) rewrite the 6 comments to durable WHY (current contract, no "before the fix"/plan refs); fill the fallback docstring's tradeoff/cost/trigger.
 
 ---
 
