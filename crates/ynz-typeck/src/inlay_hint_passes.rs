@@ -158,6 +158,78 @@ fn ast_ty_is_array(ty: &ynz_ast::nodes::Type) -> bool {
     matches!(ty, ynz_ast::nodes::Type::Generic { name, .. } if name == "array")
 }
 
+/// Compute the byte offset where a Replacement-category promotion hint should be
+/// placed for a `let` statement — just before any trailing `//` line comment, or
+/// at end-of-line when no trailing comment exists.
+///
+/// Scans the source line that contains `stmt_start` (the `let` keyword offset),
+/// tracking whether each byte is inside a backtick string (`` ` ``) or a
+/// double-quoted string (`"`).  The first `//` that falls outside all open
+/// string literals is the trailing-comment boundary; the hint is placed at that
+/// offset.  If no such `//` exists before end-of-line, returns `line_end`.
+///
+/// A `//` that appears INSIDE a string literal is not a comment — it must not
+/// affect hint placement.  This guards the common case of URL literals
+/// (`"http://..."`, `` `https://...` ``) appearing as initializers.
+///
+/// # Arguments
+/// - `text`: full source file text.
+/// - `stmt_start`: byte offset of the `let` keyword (`span.start`), used to locate the source line.
+///
+/// Single-line constraint: this scans only the line that `stmt_start` sits on. For a
+/// `let` whose initializer spans multiple lines (e.g. a multi-line array literal), the
+/// returned position is the end of the FIRST line, not the true end of the statement —
+/// so the Replacement decoration anchors mid-expression for such bindings. Acceptable
+/// for now: multi-line initializers on promotable (never-grown / never-reassigned)
+/// bindings are rare, single-line is correct, and there is no crash. Locating the true
+/// statement end needs reliable end-of-statement detection across lines — `span.end`
+/// points past trailing trivia (comments) rather than the closing token, so it can't be
+/// used directly. Narrow the scan to the full statement when that trivia handling is
+/// sorted, or when a user reports the multi-line mis-anchor.
+///
+/// Time: O(line_len)  Space: O(1)  where line_len = length of the containing line.
+fn hint_position_end_of_stmt_or_before_comment(text: &str, stmt_start: usize) -> usize {
+    // Locate the start of the line containing the `let` keyword.
+    let line_start = text[..stmt_start].rfind('\n').map_or(0, |p| p + 1);
+    // Locate end-of-line (exclusive, stopping just before the '\n').
+    let line_end = text[line_start..].find('\n').map_or(text.len(), |p| line_start + p);
+
+    // Scan the full line to determine string-literal state at each byte.
+    // Yinz uses backtick strings (`...`) and double-quoted strings ("...").
+    // Escape sequences (`\`` or `\"`) prevent a delimiter from closing the literal.
+    let line = &text[line_start..line_end];
+    let line_byte_base = line_start;
+
+    let mut in_backtick = false;
+    let mut in_dquote = false;
+    let mut i = 0;
+    while i < line.len() {
+        let b = line.as_bytes()[i];
+        match b {
+            b'\\' if in_backtick || in_dquote => {
+                // Skip the escaped character — it cannot be a string delimiter.
+                i += 2;
+                continue;
+            }
+            b'`' if !in_dquote => {
+                in_backtick = !in_backtick;
+            }
+            b'"' if !in_backtick => {
+                in_dquote = !in_dquote;
+            }
+            // Check for `//` outside string literals — a real line comment.
+            b'/' if !in_backtick && !in_dquote && line.as_bytes().get(i + 1) == Some(&b'/') => {
+                // Found an unquoted `//` on this line — place the hint here.
+                return line_byte_base + i;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    // No trailing comment found — hint goes at end-of-line.
+    line_end
+}
+
 /// Walk a chained field/index access expression to the root `Expr::Ident`, returning
 /// its name.  Returns `None` when the chain does not bottom out at an identifier (e.g.
 /// a method-call result used as the base — rare, and not a named binding the mutation
@@ -716,6 +788,7 @@ pub fn array_to_fixed_promotion_hints(
     let parse = parse_query(db, source);
     let sigs = module_signatures_query(db, source);
 
+    let text = source.text(db);
     let mut hints = Vec::new();
     for item in &parse.module.items {
         if let Item::Function(f) = item {
@@ -727,18 +800,23 @@ pub fn array_to_fixed_promotion_hints(
                 &sigs.generic_fn_table,
                 &mut mutated,
             );
-            collect_array_hints_block(&f.body, &mutated, &mut hints);
+            collect_array_hints_block(&f.body, &mutated, &text, &mut hints);
         }
     }
     hints
 }
 
-fn collect_array_hints_block(block: &Block, mutated: &HashSet<String>, out: &mut Vec<PromotionHint>) {
+fn collect_array_hints_block(
+    block: &Block,
+    mutated: &HashSet<String>,
+    text: &str,
+    out: &mut Vec<PromotionHint>,
+) {
     for stmt in &block.stmts {
         if let Stmt::Let { ty: Some(ty_ann), name, span, .. } = stmt {
             if ast_ty_is_array(ty_ann) && !mutated.contains(name) {
                 out.push(PromotionHint {
-                    position: span.start,
+                    position: hint_position_end_of_stmt_or_before_comment(text, span.start),
                     kind: PromotionKind::ArrayToFixed,
                     label: "// promoted to fixed — never grown".to_string(),
                 });
@@ -746,14 +824,14 @@ fn collect_array_hints_block(block: &Block, mutated: &HashSet<String>, out: &mut
         }
         match stmt {
             Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => {
-                collect_array_hints_block(body, mutated, out);
+                collect_array_hints_block(body, mutated, text, out);
             }
             Stmt::Match { arms, else_arm, .. } => {
                 for arm in arms {
-                    collect_array_hints_block(&arm.body, mutated, out);
+                    collect_array_hints_block(&arm.body, mutated, text, out);
                 }
                 if let Some(eb) = else_arm {
-                    collect_array_hints_block(eb, mutated, out);
+                    collect_array_hints_block(eb, mutated, text, out);
                 }
             }
             _ => {}
@@ -779,6 +857,7 @@ pub fn let_to_const_promotion_hints(
     let parse = parse_query(db, source);
     let sigs = module_signatures_query(db, source);
 
+    let text = source.text(db);
     let mut hints = Vec::new();
     for item in &parse.module.items {
         if let Item::Function(f) = item {
@@ -790,18 +869,23 @@ pub fn let_to_const_promotion_hints(
                 &sigs.generic_fn_table,
                 &mut mutated,
             );
-            collect_const_hints_block(&f.body, &mutated, &mut hints);
+            collect_const_hints_block(&f.body, &mutated, &text, &mut hints);
         }
     }
     hints
 }
 
-fn collect_const_hints_block(block: &Block, mutated: &HashSet<String>, out: &mut Vec<PromotionHint>) {
+fn collect_const_hints_block(
+    block: &Block,
+    mutated: &HashSet<String>,
+    text: &str,
+    out: &mut Vec<PromotionHint>,
+) {
     for stmt in &block.stmts {
         if let Stmt::Let { is_const: false, name, span, .. } = stmt {
             if !mutated.contains(name) {
                 out.push(PromotionHint {
-                    position: span.start,
+                    position: hint_position_end_of_stmt_or_before_comment(text, span.start),
                     kind: PromotionKind::LetToConst,
                     label: "// effectively const — never reassigned".to_string(),
                 });
@@ -809,14 +893,14 @@ fn collect_const_hints_block(block: &Block, mutated: &HashSet<String>, out: &mut
         }
         match stmt {
             Stmt::If { body, .. } | Stmt::While { body, .. } | Stmt::For { body, .. } => {
-                collect_const_hints_block(body, mutated, out);
+                collect_const_hints_block(body, mutated, text, out);
             }
             Stmt::Match { arms, else_arm, .. } => {
                 for arm in arms {
-                    collect_const_hints_block(&arm.body, mutated, out);
+                    collect_const_hints_block(&arm.body, mutated, text, out);
                 }
                 if let Some(eb) = else_arm {
-                    collect_const_hints_block(eb, mutated, out);
+                    collect_const_hints_block(eb, mutated, text, out);
                 }
             }
             _ => {}

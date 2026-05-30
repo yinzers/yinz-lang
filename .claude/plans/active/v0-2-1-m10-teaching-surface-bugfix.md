@@ -375,7 +375,7 @@ _(empty until a reviewer returns BLOCK)_
 - [x] rules-compliance-reviewer: PASS 2026-05-30 (r2 — fallback docstring has WHAT/WHY/COST/TRIGGER; zero changelog framing; new helpers carry Big-O)
 - [x] plan-adherence-verifier: PASS 2026-05-30 (r2 — 6/6 steps; intrinsics.rs 3rd-file addition documented as correct SSOT-consult, not creep)
 - [x] acceptance-verifier: PASS 2026-05-30 (r2 — all 5 ACs MET; flagship now a real print(count) test failing on r1 code)
-- [ ] Committed: <commit SHA>
+- [x] Committed: 572a6d8
 
 **Findings Log (continued — round-2 closure):**
 - 2026-05-30 — round-2 PASS all 4: flagship genuinely fixed (`print(count)`/`score.toString()` fire via builtin+intrinsic ownership resolution, SSOT-sourced); 6 comments rewritten durable; intrinsics.rs gained `all_scalar_intrinsic_method_names()` (minimal SSOT helper). 13 tests (was 11, +2 flagship), 468 ynz-typeck green.
@@ -404,26 +404,29 @@ _(empty until a reviewer returns BLOCK)_
 4. In `tooling/vscode-ynz/package.json`, add `contributes.configurationDefaults`: `"[ynz]": { "editor.inlayHints.foreground": "#ffd23f" }`. (Hex locked by roadmap Q11 — Pittsburgh gold, `--color-gold` from `website/app/assets/css/tailwind.css:22`.)
 5. **Adversarial test (plan-review)**: a statement with `//` INSIDE a string literal before any real trailing comment, e.g. `let url: array<int> = parse("http://x")  // real comment` → assert the hint positions before the REAL trailing comment, not the `//` inside `"http://x"`. Directly exercises the string-literal-`//` quality gate.
 **Acceptance criteria**:
-- [ ] Promotion hint positions at end-of-statement, not `span.start`.
-  - Evidence: (filled at phase completion)
-- [ ] Trailing-comment case positions before the `//`.
-  - Evidence: (filled at phase completion)
-- [ ] `package.json` declares the `[ynz]`-scoped inlay color `#ffd23f`; extension still loads (`package.json` valid JSON).
-  - Evidence: (filled at phase completion)
+- [x] Promotion hint positions at end-of-statement, not `span.start`.
+  - Evidence: `tests/inlay_hint_position.rs:36` `let_to_const_hint_position_is_end_of_statement_not_span_start` + `:155` `array_to_fixed_…`. acceptance-verifier confirmed anti-tautology by arithmetic: pre-fix `span.start`=byte 37 fails `>= stmt_end`(50); new code passes. code-reviewer reverted to span.start → 3/4 fail. Fix: new `hint_position_end_of_stmt_or_before_comment` helper, both promotion passes updated.
+- [x] Trailing-comment case positions before the `//`.
+  - Evidence: `tests/inlay_hint_position.rs:77` `let_to_const_hint_positions_before_trailing_comment` asserts `position <= comment_pos`. (Note: `array→fixed` shares the same helper but has no dedicated trailing-comment test — plan-adherence flagged; behavioral correctness shared.)
+- [x] `package.json` declares the `[ynz]`-scoped inlay color `#ffd23f`; extension still loads (`package.json` valid JSON).
+  - Evidence: `tooling/vscode-ynz/package.json` `contributes.configurationDefaults["[ynz]"]["editor.inlayHints.foreground"] = "#ffd23f"`; `node -e "JSON.parse(...)"` → valid JSON (verified by acceptance-verifier). Language-scoped, not global.
+- [x] (plan-review adversarial) string-literal `//` not treated as a comment.
+  - Evidence: `tests/inlay_hint_position.rs:101` `let_to_const_hint_does_not_treat_url_slash_slash_as_comment` — `` let msg = `http://x`  // real comment ``; dual assert `position >= in_string_slash+2` AND `<= real_comment_pos`. Anti-tautology proven arithmetically (pre-fix byte 37 fails both). State machine tracks backtick + dquote + escapes; code-reviewer stress-tested escaped-quote/multibyte-UTF-8/no-comment edges.
 **Quality gate**:
-- [ ] Helper does not treat `//` inside a string literal as a comment.
-- [ ] Color contribution is language-scoped (`[ynz]`), not global.
-**Verification**: `cargo test -p ynz-typeck inlay_hint_position` green; `cd tooling/vscode-ynz && npx tsc --noEmit` (or the project's lint) clean; `node -e "JSON.parse(require('fs').readFileSync('tooling/vscode-ynz/package.json'))"` succeeds.
+- [x] Helper does not treat `//` inside a string literal as a comment. — string-state machine (backtick/dquote + escape), adversarial test + code-reviewer harness confirm.
+- [x] Color contribution is language-scoped (`[ynz]`), not global. — verified by acceptance-verifier + plan-adherence.
+**Verification**: `cargo test -p ynz-typeck --test inlay_hint_position` 4/4 green; `cargo test -p ynz-typeck` 472 green, 0 failures; clippy clean (ynz-typeck); `node -e "JSON.parse(...)"` valid.
 
 **Phase Review Gates**:
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [x] code-reviewer: PASS 2026-05-30 (state machine stress-tested all edges; fail-before verified by revert; UTF-8-safe, no unwraps)
+- [x] rules-compliance-reviewer: PASS 2026-05-30 (helper has Big-O; no banned content; color needs no comment)
+- [x] plan-adherence-verifier: PASS 2026-05-30 (all 5 steps; helper name/sig differ but functionally equivalent + pre-disclosed; #ffd23f exact; zero creep)
+- [x] acceptance-verifier: PASS 2026-05-30 (4/4 ACs, anti-tautology proven arithmetically)
 - [ ] Committed: <commit SHA>
 
 **Findings Log**:
-_(empty until a reviewer returns BLOCK)_
+- 2026-05-30 — all 4 reviewers PASS round 1 (no fix loop). Two NON-BLOCKING concerns addressed in-place before commit (comment-only, no re-review needed): (a) fixed the adversarial test's WHY comment which narrated a hypothetical `array<int>=[1,2,3]` source that didn't match the actual `` `http://x` `` backtick-string test; (b) added a single-line-constraint doc comment to the helper.
+- 2026-05-30 — TRACKED NON-BLOCKING NIT (code-reviewer): multi-line `let` initializers (e.g. a multi-line array literal) get the Replacement decoration anchored at end of the FIRST line, not the true end-of-statement, because the helper scans only `stmt_start`'s line. Narrow (multi-line promotable bindings are rare), no crash, single-line is correct. Documented in-code as a single-line assumption with rationale (span.end points past trivia, so reliable across-line statement-end detection is non-trivial). TRIGGER: sort the span.end-trivia handling, or a user reports the multi-line mis-anchor.
 
 ---
 
