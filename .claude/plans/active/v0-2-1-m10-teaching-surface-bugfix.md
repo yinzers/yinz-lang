@@ -462,7 +462,7 @@ _(empty until a reviewer returns BLOCK)_
 - [x] rules-compliance-reviewer: PASS 2026-05-30 (test-ratchet + WHY on the flipped assertion satisfy immutable-test discipline; Big-O present)
 - [x] plan-adherence-verifier: PASS 2026-05-30 (4 steps; the ynz-lsp stale-test fix is in the plan's `files:` scope, documented via test-ratchet — not creep)
 - [x] acceptance-verifier: PASS 2026-05-30 (3/3 ACs; renamed/flipped test passes; 204 ynz-lsp 0 failures)
-- [ ] Committed: <commit SHA>
+- [x] Committed: 586db65
 
 **Findings Log**:
 - 2026-05-30 — PHASE-3 VERIFICATION GAP CAUGHT HERE: an ynz-lsp test (`test_inlay_hint_const_hint_suppressed_when_passed_to_function`) had been FAILING since Phase 3 (572a6d8) because Phase 3's verification ran only `cargo test -p ynz-typeck`, never `-p ynz-lsp`. The test encoded the Bug 2.9 over-suppression as expected behavior; Phase 3 correctly fixed the behavior, breaking the stale test. Fixed here: renamed to `..._fires_when_passed_to_readonly_param`, assertion flipped to corrected behavior, `// test-ratchet:` + rewritten WHY. LESSON: remaining phases + final sweep run `-p ynz-lsp` (and full workspace) too, not just `-p ynz-typeck`.
@@ -484,27 +484,38 @@ _(empty until a reviewer returns BLOCK)_
 2. **Context-aware reorder (LOCKED — no fallback).** In `hover_response`, before calling `lsp_hover_for_token`, ask whether the cursor is on a value-position expression via the EXISTING `type_of_expression_at_offset` (`crates/ynz-typeck/src/type_at_offset.rs:44`) — and/or `identifier_use_site_at_offset` (`ast_offset.rs:19`) for definition/use sites. If it resolves to a typed expression / user-defined symbol, show the user-symbol hover (its type). Only when the offset does NOT resolve to a value-position expression (i.e. it's an ownership-modifier token in a function signature) does it fall through to the registry keyword hover. This naturally disambiguates `share + 1` (expression → variable) from `function f(share self)` (modifier → keyword) with no residual hole. Do NOT ship a "same-named binding exists → user wins" heuristic — that relocates the bug. If the offset infra unexpectedly can't deliver this, STOP and raise a blocker.
 3. Change the cursor-in-token bound at `:23` from `< tok.span.end` to `<= tok.span.end`, OR add previous-token fallback when offset == end and the next token isn't an identifier. Pick the one that doesn't double-match adjacent tokens; add a test proving no double-match.
 4. **Adversarial test (plan-review)**: hover on an inner shadowing `share` where an outer-scope binding of the same name exists — assert the INNERMOST symbol resolves. Guards the scope-lookup precedence the reorder depends on.
-**Acceptance criteria**:
-- [ ] `let share = 5; share + 1` hover → variable type.
-  - Evidence: (filled at phase completion)
-- [ ] `share` as a signature modifier → keyword hover preserved.
-  - Evidence: (filled at phase completion)
-- [ ] End-of-token cursor → hover content returned, no adjacent-token double-match.
-  - Evidence: (filled at phase completion)
+**Acceptance criteria** (RESTATED 2026-05-30 — Bug 2.8's literal "keyword hover shadows a same-named variable" symptom is NON-REPRODUCIBLE in current Yinz: no token is both registry-hoverable AND usable as a binding name [`share`/`lend`/`give` = bindable but no keyword hover; `errors`/`wait`/`is`/`background` = hoverable but hard tokens, `let errors = 5` fails to parse]. The original ACs assumed `share` had a keyword hover to shadow; it doesn't. Restated to what Phase 6 genuinely delivers — context-aware reorder is sound + future-proof for any dual-use token):
+- [x] An annotated local identifier in expression position hovers to its TYPE (not a keyword hover, not typeless).
+  - Evidence: `tests/hover_shadowing.rs:51` `variable_named_share_in_expression_position_shows_type_in_hover` — `let share: int = 5; print(share)` → hover body contains `int` (asserts `mc.value.contains("int")`, fails on round-1 typeless code). Mechanism: `type_of_name_at_offset` (new in `type_at_offset.rs`) resolves the declared type; `binding_hover` renders `` `share`: `int` ``. acceptance-verifier confirmed anti-tautological.
+- [x] `errors`/`wait` keyword hover STILL fires in genuine keyword positions after the context-aware reorder (the real preservation invariant — replaces the vacuous original `share`-modifier AC since `share` has no hover).
+  - Evidence: `tests/hover_shadowing.rs:138` `errors_keyword_in_return_type_position_still_shows_keyword_hover` + `:178` `wait_keyword_still_shows_keyword_hover_after_fix` — both assert `is_keyword_hover` (body contains `## Keyword`). These have teeth (errors/wait genuinely have registry hovers). Plus `share_in_function_signature_modifier_position_returns_none` honestly captures that a bare modifier with no registry entry returns None.
+- [x] End-of-token cursor → hover content returned, no adjacent-token double-match (Bug 2.12 — genuine fail-before/pass-after).
+  - Evidence: `tests/hover_shadowing.rs:255` `end_of_token_cursor_returns_hover_content` (cursor at byte 8 = span.end of `function` → resolves; fails on pre-fix strict `<`) + `:279` `end_of_token_cursor_does_not_double_match_adjacent_token` (whitespace gap → None). Fix: `hover.rs` `<`→`<=` bound.
 **Quality gate**:
-- [ ] Keyword hover still works for all genuine keyword positions (regression test for at least `share`, `wait`, `errors`).
-- [ ] No panic when no symbol resolves.
-**Verification**: `cargo test -p ynz-lsp hover_shadowing` green; existing hover tests green.
+- [x] Keyword hover still works for genuine keyword positions (`wait`, `errors` tested with `## Keyword` body assertions; `function` regression-guarded). — `share` is NOT a registry keyword so it's excluded from this (documented above).
+- [x] No panic when no symbol resolves. — `no_panic_when_module_is_none` test; Option threaded, no unguarded `.unwrap()` in production.
+**Verification**: `cargo test -p ynz-lsp --test hover_shadowing` 10/10 green; `cargo test -p ynz-lsp` 0 failures; `cargo test -p ynz-typeck` green; clippy clean (ynz-typeck) / no-new (ynz-lsp).
 
-**Phase Review Gates**:
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
+**Phase Review Gates** (r1: code-reviewer feature-dressed-as-bugfix concern + rules BLOCK + acceptance 2-WEAK → r2: type delivery + honest reframe + comment fixes → r3: final comment cleanups):
+- [x] code-reviewer: PASS 2026-05-30 (r2 — type now shown, dead fn buried; ruled `type_of_name_at_offset` the correct primitive)
+- [x] rules-compliance-reviewer: PASS 2026-05-30 (r3 — Big-O on hover_response; all changelog framing removed; // WHY: headers kept per testing.md)
+- [x] plan-adherence-verifier: PASS 2026-05-30 (r2 — LOCKED context-aware approach held; type-delivery divergence documented + correct; type_at_offset.rs justified SSOT)
+- [x] acceptance-verifier: PASS 2026-05-30 (r2 — both round-1 WEAK holes closed: type asserted, preservation tested on hoverable keywords)
 - [ ] Committed: <commit SHA>
 
 **Findings Log**:
-_(empty until a reviewer returns BLOCK)_
+- 2026-05-30 — round 1: plan-adherence PASS (LOCKED context-aware approach confirmed — `identifier_use_site_at_offset` is the sole gate, rejected heuristic absent). rules-compliance BLOCK + acceptance-verifier BLOCK.
+- 2026-05-30 — **KEY FINDING: Bug 2.8's literal symptom is NON-REPRODUCIBLE in current Yinz.** No token is both (a) registry-hoverable AND (b) usable as a binding name: `share`/`lend`/`give` are `Token::Identifier` (bindable) but have NO `[[keyword]]` registry hover; `errors`/`wait`/`is`/`background` HAVE hovers but are HARD TOKENS — `let errors = 5` → "Expected a variable name after `let`" (verified via `ynz build`). So "keyword hover shadows a same-named variable" can't happen today. The audit's Bug 2.8 assumed `share` had a keyword hover to shadow; it doesn't. acceptance-verifier independently reached the same conclusion (AC#1 proves None→binding-hover, not keyword→user; AC#2 `share`-modifier asserts None→None, vacuous).
+- 2026-05-30 — WHAT PHASE 6 ACTUALLY DELIVERS (all genuine, keep): (a) **Bug 2.12 end-of-token cursor `<`→`<=`** — real fail-before/pass-after, MET; (b) binding-hover for local identifiers in expression position (`let share=5; share+1` → was None, now `Binding: share`) — a real UX add; (c) defensive context-aware reorder (user-symbol wins over registry if a dual-use token ever exists — future-proof) + verified `errors`/`wait` keyword hovers still fire in keyword positions. NOT duct tape — it's correcting a planning assumption (audit's false premise) with evidence + keeping the valuable adjacent work.
+- 2026-05-30 — rules-compliance BLOCK: (1-2) missing canonical `Time: O() Space: O()` on `user_symbol_hover` + `binding_hover` (verbal complexity present, not canonical format) — LEGIT, fix. (4-6) test comments use "Pre-fix:/Post-fix:" changelog framing — LEGIT, reword to durable invariants. **(#3 REJECTED by coordinator): the reviewer flagged the `// WHY:` test comments as durability violations — that's WRONG; `.claude/rules/testing.md` MANDATES `// WHY:` on every test ("Every test gets a one-line // WHY: comment stating the invariant it protects"). The reviewer conflated mandated test-WHY with banned changelog comments. WHY headers stay; only their version-relative CONTENT gets reworded.** (#7 reviewer's own "not a hard violation".)
+- 2026-05-30 — ROUND-2 fix dispatched: (A) coordinator reframes Phase 6 ACs honestly (Bug 2.8 keyword-shadow non-reproducible; ACs restated to what's delivered: binding-hover-for-locals + Bug-2.12 + errors/wait keyword preservation). (B) executor strengthens tests + (C) comment fixes.
+- 2026-05-30 — ROUND-2 LANDED (self-tests green) but **NOT YET RE-REVIEWED OR COMMITTED — PAUSED HERE at Patrick's request (context full)**. Executor result: AC#1 now shows the TYPE (`` `share`: `int` ``, test asserts body contains "int"); AC#2 errors/wait keyword-hover tests assert `## Keyword` body (not just is_some); share-modifier test renamed to `..._returns_none` (honest, no false "keyword preserved" claim); Big-O canonical on `user_symbol_hover`/`binding_hover`/`type_of_name_at_offset`; "Pre-fix/Post-fix" framing removed, 11 `// WHY:` headers intact; dead OR-branches in `is_keyword_hover` test helper cleaned. ynz-lsp + ynz-typeck 0 failures; clippy clean (typeck) / no-new (lsp, 5 pre-existing).
+- **RESUME CHECKLIST for Phase 6 (do this first when work resumes):**
+  1. Phase 6 round-2 diff is UNCOMMITTED in the worktree (`crates/ynz-typeck/src/type_at_offset.rs` + `crates/ynz-lsp/src/hover.rs` + `crates/ynz-lsp/tests/hover_shadowing.rs`). Base = 586db65 (Phase 5 commit).
+  2. Re-run all 4 reviewers on the round-2 diff. ROUND-2-SPECIFIC REVIEW ITEMS: (a) executor used a NEW `type_of_name_at_offset` (name-based, in type_at_offset.rs) instead of the plan's named `type_of_expression_at_offset` — judge whether that's an acceptable equivalent or should use the named fn; (b) executor left a DEAD unused public fn `type_of_expression_in_module` in type_at_offset.rs (added then superseded) — should be removed unless a caller exists; (c) `type_at_offset.rs` is a 3rd file beyond Phase 6's expected scope (hover.rs + test) — judge as justified-SSOT (name-based type lookup belongs in the type-resolution module) vs creep.
+  3. Coordinator must REFRAME the Phase 6 AC text in the plan (still says "variable type" / "keyword hover preserved") to match reality before ticking — Bug 2.8 keyword-shadow is non-reproducible; ACs are now: (1) annotated local hover shows its type; (2) errors/wait keyword hover still fires in keyword position; (3) Bug 2.12 end-of-token; (4) share-modifier returns None (no spurious binding hover).
+  4. TRACKED follow-up nits (do NOT block P6; note in end-of-plan report): (i) Bug 2.12 EOF-flush edge — last token against EOF with no trailing newline (`"myvar"`@5) returns None (narrow, non-silent); (ii) remove dead `type_of_expression_in_module` if still unused.
+  5. Then tick gates + AC evidence + commit P6, write SHA, continue to Phase 7.
 
 ---
 
