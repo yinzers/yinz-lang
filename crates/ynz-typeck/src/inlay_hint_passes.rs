@@ -20,6 +20,7 @@ use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use ynz_ast::nodes::{Block, Expr, Item, OwnershipModifier, Stmt};
+use ynz_diagnostics::SourceSpan;
 use ynz_parser::{parse_query, SourceFile, SourceFileRegistry};
 
 use crate::{
@@ -134,6 +135,19 @@ pub struct PromotionHint {
     pub kind: PromotionKind,
     /// Short label shown in the hint, e.g. `"// effectively const — never reassigned"`.
     pub label: String,
+    /// For `ArrayToFixed` hints: byte range of the `array` keyword in the type
+    /// annotation (e.g. the `array` in `array<int>`), used to build the
+    /// click-to-make-explicit TextEdit that rewrites `array` → `fixed`.
+    ///
+    /// `None` is the graceful no-edit path (the hint renders as a decoration but
+    /// has nothing to click-replace). Currently `None` is unreachable for
+    /// `ArrayToFixed`: the hint only fires on `array<T>`-annotated bindings, whose
+    /// `Type::Generic` always carries a `name_span`. The Option is kept defensive
+    /// for a future inferred-array promotion (`let nums = [1,2,3]` with no
+    /// annotation), which would have no `array` keyword to locate.
+    /// Always `None` for `LetToConst` hints (they use the `let`-keyword span
+    /// stored in `position` instead — see `let_to_const_edit` in `inlay_hint.rs`).
+    pub type_keyword_span: Option<SourceSpan>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -815,10 +829,20 @@ fn collect_array_hints_block(
     for stmt in &block.stmts {
         if let Stmt::Let { ty: Some(ty_ann), name, span, .. } = stmt {
             if ast_ty_is_array(ty_ann) && !mutated.contains(name) {
+                // Extract the span of `array` keyword from the type annotation.
+                // `Type::Generic { name_span, .. }` carries the span of the type
+                // constructor name (e.g. `array` in `array<int>`), which is exactly
+                // the byte range the TextEdit must replace with `fixed`.
+                let type_keyword_span = if let ynz_ast::nodes::Type::Generic { name_span, .. } = ty_ann {
+                    Some(name_span.clone())
+                } else {
+                    None
+                };
                 out.push(PromotionHint {
                     position: hint_position_end_of_stmt_or_before_comment(text, span.start),
                     kind: PromotionKind::ArrayToFixed,
                     label: "// promoted to fixed — never grown".to_string(),
+                    type_keyword_span,
                 });
             }
         }
@@ -888,6 +912,9 @@ fn collect_const_hints_block(
                     position: hint_position_end_of_stmt_or_before_comment(text, span.start),
                     kind: PromotionKind::LetToConst,
                     label: "// effectively const — never reassigned".to_string(),
+                    // LetToConst uses the `let`-keyword span stored in `position`
+                    // via `let_to_const_edit` in `inlay_hint.rs`; no type annotation involved.
+                    type_keyword_span: None,
                 });
             }
         }
