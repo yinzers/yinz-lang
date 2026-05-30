@@ -23,9 +23,18 @@ files:
 
 # Plan: v0.2.1 M10 — Teaching-Surface Correctness (Bug Hunt Cluster)
 Created: 2026-05-30
-Status: approved + decisions locked — NOT YET DISPATCHED (parked by Patrick 2026-05-30)
+Status: EXECUTING (whole-plan unattended, isolated worktree) — PAUSED after Phase 6 at Patrick's request (context full)
 
-> **Resume note (2026-05-30)**: plan-reviewer returned PASS (Tier A, zero Required Fixes); all four suggested adversarial cases folded in. Patrick chose "don't dispatch yet" but LOCKED all four open decisions (2026-05-30):
+> **RESUME POINTER (2026-05-30) — read this first:**
+> Executing via `/execute-plan` (whole-plan, all-PASS-to-commit) in worktree `.claude/worktrees/v0-2-1-m10-teaching-surface-bugfix`, branch `v0.2.1-m10-teaching-surface-bugfix` off `main` (main untouched @ d509770; seed bd07e69).
+> **DONE (6/12), each 4-reviewer-gated + committed:** P0 `641896a` (unused-import FPs, Bug 1+2.1–2.5) · P1 `0d5c985` (else_arm, 2.6) · P2 `c9da88f` (nested-assign+MethodCall root, 2.7) · P3 `572a6d8` (ownership-aware mutation+literals, 2.9+2.10, intrinsic-aware) · P4 `e094df8` (inlay positioning + Yinz-gold #ffd23f) · P5 `586db65` (array→fixed click-edit, 2.13, + a Phase-3 verification-gap test fix) · P6 `aea528c` (hover context-aware + end-of-token, 2.8+2.12).
+> **REMAINING (5): P7** (space-trigger removal + BannedJargon quick-fix carrying the WHY) · **P8** (booleanean typo + 2 `infers` jargon) · **P9** (ownership-hint generic/UFCS, 2.11) · **P10** (copy-hint recursion, 2.14) · **P11** (pirates-roster demo extension + final cumulative sweep + end-of-plan BEFORE/AFTER report for Patrick).
+> **To resume:** `/execute-plan` on this plan in the worktree. Per-phase loop = plan-executor → 4 reviewers (code/rules/adherence/acceptance, all PASS to commit) → coordinator writes evidence+gates+SHA. RUN `cargo test -p ynz-typeck` AND `-p ynz-lsp` (a Phase-3 gap was a typeck change breaking an untested ynz-lsp test). Executors must NOT run `cargo fmt` (worktree rustfmt baseline mismatched → whole-crate churn). KNOWN NON-ISSUES: 5 ynz-driver integration snapshot tests fail on a worktree absolute-path artifact (NOT regressions); ynz-lsp has 5 pre-existing clippy errors (v0.3.0-m1 condition, NOT M10) → bar is "no-NEW", tracked for a separate cleanup.
+> **TRACKED follow-up nits (carry into the end-of-plan report, NOT blockers):** (1) Phase 2 — `nested_method_call_…` test hardcodes byte offset 268 (brittle if fixture edited); (2) Phase 4 — multi-line `let` initializer anchors the promotion hint at end-of-first-line; (3) Phase 6 — Bug 2.12 EOF-flush edge (last token vs EOF, no trailing newline → None); (4) intrinsic-fns-not-in-sigtable memory (P3 conservative fallback for imported fns).
+> **M9 (separate roadmap plan, NOT M10):** v0.2.1 ships as its OWN `0.2.1` tag FIRST, THEN merges into the v0.3 line.
+>
+> --- original decision lock (2026-05-30, all honored during execution) ---
+> plan-reviewer PASS (Tier A, zero Required Fixes); four locked decisions:
 > 1. **P9/P10 (Bugs 2.11/2.14): KEEP in M10.** No split.
 > 2. **Phase 6 hover: context-aware fix ONLY (no fallback).** The narrow fallback is duct tape — it relocates the wrong-hover hole rather than closing it (violates GR11 teaching mission + no-duct-tape "no caller violates this today"). Use the EXISTING `type_of_expression_at_offset` (`type_at_offset.rs:44`) / `identifier_use_site_at_offset` (`ast_offset.rs:19`) infra. If that infra genuinely can't deliver it (it can — verified present), STOP and raise as a blocker; do NOT silently downgrade.
 > 3. **Phase 7: YES add `DiagnosticKind::BannedJargon { term }`.** Plus the quick-fix MUST carry the WHY (the lesson), not just the replacement word — sourced from the registry `[[banned_jargon]]` `why` field. (`enum` already teaches+fixes via the BannedKeyword path; Phase 7 brings parity to the jargon class.)
@@ -501,7 +510,7 @@ _(empty until a reviewer returns BLOCK)_
 - [x] rules-compliance-reviewer: PASS 2026-05-30 (r3 — Big-O on hover_response; all changelog framing removed; // WHY: headers kept per testing.md)
 - [x] plan-adherence-verifier: PASS 2026-05-30 (r2 — LOCKED context-aware approach held; type-delivery divergence documented + correct; type_at_offset.rs justified SSOT)
 - [x] acceptance-verifier: PASS 2026-05-30 (r2 — both round-1 WEAK holes closed: type asserted, preservation tested on hoverable keywords)
-- [ ] Committed: <commit SHA>
+- [x] Committed: aea528c
 
 **Findings Log**:
 - 2026-05-30 — round 1: plan-adherence PASS (LOCKED context-aware approach confirmed — `identifier_use_site_at_offset` is the sole gate, rejected heuristic absent). rules-compliance BLOCK + acceptance-verifier BLOCK.
