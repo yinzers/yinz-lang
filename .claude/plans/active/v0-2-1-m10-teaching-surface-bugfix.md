@@ -1,0 +1,700 @@
+---
+slug: v0-2-1-m10-teaching-surface-bugfix
+type: execution
+roadmap: v0-2-1-lsp-gap-closure
+owner: Patrick Rizzardi
+status: active
+created: 2026-05-30
+last_updated: 2026-05-30
+files:
+  - crates/ynz-typeck/src/check.rs
+  - crates/ynz-typeck/src/inlay_hint_passes.rs
+  - crates/ynz-typeck/tests/**
+  - crates/ynz-lsp/src/hover.rs
+  - crates/ynz-lsp/src/inlay_hint.rs
+  - crates/ynz-lsp/src/code_action.rs
+  - crates/ynz-lsp/src/capabilities.rs
+  - crates/ynz-lsp/tests/**
+  - crates/ynz-registry/src/lib.rs
+  - registry/features.toml
+  - tooling/vscode-ynz/package.json
+  - examples/pirates-roster/entrypoint.ynz
+---
+
+# Plan: v0.2.1 M10 — Teaching-Surface Correctness (Bug Hunt Cluster)
+Created: 2026-05-30
+Status: approved + decisions locked — NOT YET DISPATCHED (parked by Patrick 2026-05-30)
+
+> **Resume note (2026-05-30)**: plan-reviewer returned PASS (Tier A, zero Required Fixes); all four suggested adversarial cases folded in. Patrick chose "don't dispatch yet" but LOCKED all four open decisions (2026-05-30):
+> 1. **P9/P10 (Bugs 2.11/2.14): KEEP in M10.** No split.
+> 2. **Phase 6 hover: context-aware fix ONLY (no fallback).** The narrow fallback is duct tape — it relocates the wrong-hover hole rather than closing it (violates GR11 teaching mission + no-duct-tape "no caller violates this today"). Use the EXISTING `type_of_expression_at_offset` (`type_at_offset.rs:44`) / `identifier_use_site_at_offset` (`ast_offset.rs:19`) infra. If that infra genuinely can't deliver it (it can — verified present), STOP and raise as a blocker; do NOT silently downgrade.
+> 3. **Phase 7: YES add `DiagnosticKind::BannedJargon { term }`.** Plus the quick-fix MUST carry the WHY (the lesson), not just the replacement word — sourced from the registry `[[banned_jargon]]` `why` field. (`enum` already teaches+fixes via the BannedKeyword path; Phase 7 brings parity to the jargon class.)
+> 4. **Dispatch: ISOLATED GIT WORKTREE** (separate), per the roadmap-locked model — main=0.3.0-m1 with v0-3-m2 active, so M10's v0.2.1 track stays out of the main checkout.
+>
+> Baseline at plan time: 1434 tests green on main. Ready for `/execute-plan` in a worktree whenever Patrick says go.
+
+## Context & Why
+
+**Goal**: Fix every bug found by the 2026-05-21 four-agent teaching-surface audit so that Yinz's compiler-as-teacher surfaces (unused-import diagnostics, inlay hints, hover, completion, banned-jargon quick-fixes) stop being silently wrong. This is the first milestone of the `v0-2-1-lsp-gap-closure` roadmap to dispatch — Patrick's locked call (roadmap Q12): "bug fixes ship to users in days, not weeks."
+
+**Why**: A teaching language whose teaching surface lies is worse than one with no hints. Every confirmed bug here is a Tier 1/2 teaching regression — the user sees a warning on valid code (and learns to ignore *all* warnings), or sees a "this is effectively const" hint on a binding that IS mutated (and learns the hint can't be trusted). The dominant case is brutal: Bug 2.9 means almost every `let` passed to *any* call (including `print(x)`) gets its `let → const` hint suppressed — so the headline auto-promotion teaching surface almost never fires in real code.
+
+**Background (current state)**:
+- v0.2.0 shipped the LSP foundation (go-to-def, find-refs, rename, format, inlay hints, 9 code-action types).
+- A user reported the `Timeframe` unused-import false positive (Bug 1). The four-agent audit (`.analysis/bugs.md`, `.analysis/teaching-content-audit.md`, `.analysis/lsp-ux-friction.md`) generalized it: Bug 1 shares a root cause with five more unused-import sites, plus 8 other independent teaching-surface bugs.
+- The codebase has moved since the audit — `v0.3.0-m1` shipped (Cargo `version = "0.3.0-m1"`). All audit line numbers drifted +150–900 lines and were re-verified against current source on 2026-05-30 (see anchors below). **Current baseline: 1434 tests green, 0 failures.**
+
+**Constraints**:
+- No language changes, no syntax changes, no compiler ABI changes — purely additive/corrective on the typeck + LSP side.
+- v0.2.1 is its own track, branched off `main` (which sits at `0.3.0-m1`), shipped first as a `0.2.1` tag, then merged into the v0.3 line later (M9 owns that). M10's diffs are additive and merge cleanly into v0.3.
+- Every fix must keep the WHAT/WHAT-INSTEAD/WHY diagnostic format and Yinz vocabulary (no banned jargon — `infer`/`inferred` is itself banned in user-facing text, which is why P8 exists).
+
+**Success criteria**: Every bug below has a regression test that FAILS on the pre-fix commit and PASSES after the fix. The `examples/pirates-roster/entrypoint.ynz` demo exercises all six previously-false-positive import patterns and produces ZERO spurious unused-import warnings. `cargo test --workspace` stays green (≥1434 + the new regression tests). `cargo clippy --workspace -- -D warnings` clean.
+
+---
+
+## Scope Note — This Plan Is a Superset of the Roadmap's M10 P0–P8
+
+The roadmap's M10 rough-scope lists phases P0–P8, mapping to audit Bugs 1, 2.1–2.9, 2.12, 2.13 + the typo/jargon fixes. But M10's own value statement claims **"every bug found by the audit gets fixed."** Three confirmed real bugs are silently absent from the P0–P8 list:
+
+- **Bug 2.10** — `collect_maybe_mutated_expr` doesn't recurse into `StructLit`/`ArrayLit`/`MapLit`/`PostfixOp` (mutations inside literals missed). *(Verified narrower than the audit stated — `MethodCall` IS already handled.)*
+- **Bug 2.11** — `ownership_call_site_hints` doesn't handle generic functions or UFCS method-call form (`player.heal(20)` gets no ownership hint; `heal(player, 20)` does).
+- **Bug 2.14** — `collect_copy_hints_expr` doesn't recurse into call args (nested `outer(inner(x))` misses `x`'s copy hint).
+
+Per CLAUDE.md Rule 11 (all confirmed findings get fixed; priority labels are ordering hints, not gates) and `no-duct-tape.md`, leaving them out would be an undocumented deferral that contradicts the milestone's stated promise. **Decision baked into this plan**: Bug 2.10 folds into Phase 3 (same function being edited); Bugs 2.11 and 2.14 become Phases 9 and 10. See the Questions section — Patrick can split P9/P10 into a v0.2.1 follow-up if he wants M10 to match the roadmap's P0–P8 letter exactly, but the default is "fix them now."
+
+---
+
+## Research Findings (verified against current source 2026-05-30)
+
+All anchors below are CURRENT line numbers, re-verified post-`v0.3.0-m1`. Every cited bug pattern still exists — no no-op phases.
+
+**Unused-import `referenced_names.insert` gaps (Bug 1 + 2.1–2.5), all in `crates/ynz-typeck/src/check.rs`:**
+- `check_options_value` — **3736** (was 3574). Returns `Type::Options` with no insert.
+- `check_is_arm_pattern` — **3634** (was 3472); `check_is_expr` — **3684** (was 3522). Both validate `type_path.name`, no insert.
+- `check_follows_contracts` — **2664** (was 2502).
+- `check_module` match arms — **222**; `Item::ShapeDecl(_) => {}` at **230**; `ConstDecl` now folded into combined arm `Item::ImportDecl(_) | Item::ConstDecl(_) | Item::ReExport(_) => {}` at **236** (shape change — edit the combined arm).
+- `AstType::Dynamic` — **2456** (was 2294); `if self.shape_table.contains(contract)` branch, no insert.
+- `AstType::Generic` user-defined fallthrough — **2541–2549** (was 2379); `if self.generic_shape_table.contains(name)` branch, no insert.
+- **Correct-pattern reference examples**: `AstType::Named` options insert at **2403**, shape insert at **2407**; free-fn name insert at **1485**; UFCS method name insert at **2216**.
+
+**Inlay-hint walkers, all in `crates/ynz-typeck/src/inlay_hint_passes.rs` (533 lines):**
+- Six `Stmt::Match` arms drop `else_arm` via `..`: lines **142** (`collect_maybe_mutated_stmt`), **250** (`collect_type_hints_block`), **311** (`collect_ownership_hints_block`), **402** (`collect_copy_hints_block`), **474** (`collect_array_hints_block`), **525** (`collect_const_hints_block`). `Stmt::Match.else_arm: Option<Block>` confirmed at `crates/ynz-ast/src/nodes.rs:246`.
+- Nested assign root-binding: **119–134**; `Stmt::FieldAssign` (121–123) + `Stmt::IndexAssign` (129) only handle one-level `Expr::Ident` receiver.
+- `collect_maybe_mutated_expr` — **160–198**; `Expr::Call` arm (164–172) marks every arg ident mutated, no callee-ownership check. Function signature is `fn collect_maybe_mutated_expr(expr: &Expr, out: &mut HashSet<String>)` — **no `sig_table` param** (must thread one in). `MethodCall` IS handled (line 173); the genuine coverage gap (Bug 2.10) is `StructLit`/`ArrayLit`/`MapLit`/`PostfixOp` falling through `_ => {}` at 196.
+- `collect_ownership_hints_expr` — **330–364**; line **339** `sig_table.fns.get(name).or_else(|| imported.get(name))` never queries `generic_fn_table`; the guard at 336 matches only `Expr::Call`, not `Expr::MethodCall`.
+- `collect_copy_hints_expr` — **416–433**; inspects top-level call args, no recursion into them.
+- Promotion hints: `PromotionHint` struct at **73–80** (fields `position: usize`, `kind: PromotionKind`, `label: String`). `array_to_fixed_promotion_hints` sets `position: span.start` at **464**; `let_to_const_promotion_hints` at **515**.
+
+**LSP, `crates/ynz-lsp/src`:**
+- `hover.rs:112–121` — registry `lsp_hover_for_token` tried before user-symbol fallback (which is at 124).
+- `hover.rs:23` — `byte_offset >= tok.span.start && byte_offset < tok.span.end` (strict `<` upper bound).
+- `capabilities.rs:38` — `trigger_characters: Some(vec![".".to_string(), " ".to_string()])` (space present).
+- `code_action.rs:57–76` — arms: `BannedKeyword`, `NotDefined`, `UnusedImport`, `_ => None`. **No `BannedJargon` arm.**
+- `inlay_hint.rs` — `let_to_const_edit` helper at **120**; **no `array_to_fixed_edit` helper exists**. `make_hint` (76) vs `make_hint_with_edit` (85) distinction exists. `array_to_fixed` uses plain `make_hint` (no edit) at **221–226**; `let_to_const` uses `make_hint_with_edit` at **232+**.
+
+**Registry:** `lsp_code_action_replacement_for(diagnostic_kind: &str, token: &str) -> Option<&'static str>` is at **`crates/ynz-registry/src/lib.rs:180`** (NOT `lsp_adapter.rs` as the audit said). Only matches `"BannedKeyword"` via `SIMPLE_KEYWORD_REPLACEMENTS` (185–188); does not search `[[banned_jargon]]`.
+
+**Typo/jargon, `check.rs`:** `booleanean` at **1577**; `"infers"` at **1997** and **2010** (only 2 sites, not the audit's 3).
+
+**Error gallery:** `examples/primantis-orders/` latest is `v0_3_m1_errors.ynz`. M10 adds NO new compile-error class (it fixes false-positives), so it adds NO new gallery trigger — see the `### Demo & Error Gallery` invariant for how that obligation is satisfied instead.
+
+---
+
+## Risks
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|-----------|--------|------------|
+| Bug 2.9 fix (Phase 3) makes `let → const` hints suddenly appear on many bindings users assumed never triggered | High | Low | This is the CORRECT behavior; the old over-suppression was the bug. Document in the v0.2.1 CHANGELOG. M9's per-domain inlay toggles let users mute the domain (defaults stay on). |
+| Phase 6 hover reorder breaks keyword hover for genuine keyword uses (`share self` in a signature now shows nothing / wrong content) | Low | Medium | Phase 6 is LOCKED to the context-aware fix using the existing `type_of_expression_at_offset` / `identifier_use_site_at_offset` infra (verified present). Value-position expression → user symbol; non-expression (signature modifier) → keyword hover. Required tests: hovering `share` in a signature modifier STILL returns the keyword hover; `let share = 5; share + 1` returns the variable type. No fallback heuristic is permitted (it relocates the bug). |
+| Phase 3 `sig_table` threading touches many walker signatures; risk of incomplete threading leaving some call sites unchecked | Medium | Medium | Phase 3 acceptance requires the threaded param reach `collect_maybe_mutated`, `collect_maybe_mutated_stmt`, AND `collect_maybe_mutated_expr`; a test asserts `foo(lend x)` suppresses while `print(x)` fires. Generic-fn + UFCS resolution covered by explicit test cases. |
+| Phase 7 `BannedJargon` quick-fix assumes a `DiagnosticKind::BannedJargon { term }` variant exists; it may not | Medium | Medium | Phase 7 Step 1 confirms what `DiagnosticKind` variant the banned-jargon diagnostic uses. If no `term`-carrying variant exists, Phase 7 adds one (or extends the existing one) before wiring the code action — see Questions. |
+| Phase 4 end-of-statement positioning helper needs source text; `inlay_hint_passes` is a salsa query | Low | Low | The pass already has `sf.text(db)`; the helper takes `(text, stmt_span)`. Verified the pass keys on `SourceFile`. No new salsa input. |
+| Phase 0 unified PR (6 sites + 2 walks) rejected by reviewer as "too many changes" | Low | Medium | Shared root cause + shared regression-test file; splitting creates 6 near-duplicate PRs. If the reviewer insists, fall back to 3 PRs grouped by AST-position-family (variant/pattern access; declaration walks; type-position annotations). |
+| Array→fixed click-edit (Phase 5) produces invalid source if `fixed<T>` needs an explicit size | Low | Medium | Roadmap locked the approach as a keyword token-swap (`array` → `fixed`), size inferred from the literal — consistent with `design/collections.md` auto-promotion. Phase 5 verification compiles the post-edit source to prove it's valid. |
+
+---
+
+## Questions — ALL RESOLVED 2026-05-30 (kept for audit trail)
+
+1. **Superset scope (P9 + P10)** — **RESOLVED: KEEP in M10.** Bugs 2.11 (ownership-hint generic/UFCS) and 2.14 (copy-hint recursion) stay as Phases 9–10. Bug 2.10 stays folded into Phase 3. No split to a follow-up.
+2. **Phase 6 hover-reorder depth** — **RESOLVED: context-aware fix ONLY, no fallback.** The narrow fallback was rejected as duct tape — it relocates the wrong-hover hole (a file with both a `share` variable and a `share` signature modifier would hover wrong in the opposite direction) rather than closing it, violating GR11 + no-duct-tape. The existing `type_of_expression_at_offset` (`type_at_offset.rs:44`) and `identifier_use_site_at_offset` (`ast_offset.rs:19`) provide everything needed. If that infra genuinely can't deliver the context-aware fix, STOP and raise it as a blocker — do not silently ship the fallback.
+3. **Phase 7 `DiagnosticKind` variant** — **RESOLVED: YES, add `BannedJargon { term }`.** Typeck-internal enum change, no ABI/user impact. ADDITIONAL requirement from Patrick: the quick-fix must carry the WHY (the lesson), not just the replacement word — source it from the registry `[[banned_jargon]]` `why` field.
+
+---
+
+## Risk Assessment & Rollout Strategy
+
+**Risk level: LOW**
+
+| Criteria | Applies? | Notes |
+|---|---|---|
+| Touches payments/billing | No | |
+| Touches auth/permissions | No | |
+| Raw SQL / literals | No | |
+| Modifies existing data | No | Compile-time + LSP-time only; no persisted state |
+| Third-party integration | No | LSP is in-house |
+| Changes existing endpoints/behavior | Yes | Diagnostic emission (fewer false-positives), inlay-hint frequency (Bug 2.9 fires more), hover content, completion trigger. All corrections of wrong behavior. |
+| New feature, no equivalent | No | Pure bug fixes |
+
+**Mitigations applied:**
+- Comprehensive regression test per bug (test-first per phase) → catches regressions before merge → LOW.
+- Backward compatible: no source-language change; existing v0.1/v0.2 `.ynz` files behave identically except for the corrected (fewer) diagnostics and corrected hints.
+
+**Rollout plan:** N/A in the gradual-ramp sense — this is developer tooling shipped in the VSIX, not a production service with traffic to ramp. Ships with the v0.2.1 release tag (M9). The only "rollout" is users installing the new VSIX. Behavior changes (Bug 2.9 hint frequency) are called out in the v0.2.1 CHANGELOG.
+
+---
+
+## Invariants This Milestone Must Preserve
+
+### Safety
+- Unused-import diagnostics still fire on genuinely-unused imports after the fix (no false NEGATIVE introduced) — a regression test imports a symbol and never uses it, asserts the warning STILL appears.
+- The six new `referenced_names` inserts (Phase 0) only mark a name referenced when the name actually appears in that AST position — they do not blanket-suppress.
+- `let → const` and `array → fixed` inlay hints fire only when the binding is provably never reassigned/mutated/grown after the Phase 1/2/3 walker fixes (no hint on a mutated binding — the core correctness property).
+- No change to type-checking verdicts: a program that compiled before compiles after; a program that errored before errors after (except spurious unused-import warnings, which are warnings, not errors).
+
+### Performance
+- No new salsa query is introduced; all fixes are inside existing queries (`check_query`, the inlay-hint passes). Salsa per-file memoization unchanged.
+- Phase 3 replaces an unconditional `out.insert(name)` per call arg with a `sig_table` HashMap lookup + conditional insert — O(1) per arg, no asymptotic change; lookups hit the already-built `sig_table`.
+- Phase 0 adds at most one `HashSet::insert` per shape-decl/const-decl/type-position visited during `check_module` — bounded by AST size, already walked.
+- **Auto-promotion analysis**: this milestone IS the correctness layer of two existing auto-promotions (`array<T>→fixed<T>` via `prefer-fixed-when-immutable`; `let→const` via `mutable-when-const-suffices`). No NEW auto-promotion candidate is introduced. The codegen auto-promotion itself is unchanged — only the IDE teaching surface (muted hint + click-to-make-explicit) is being corrected. Phase 5 completes the `array→fixed` click-to-make-explicit surface so it matches `let→const` per `.claude/rules/inference.md` "Two Surfaces" (Replacement category). No lint-rule names change (the M4 lint tier-3 milestone owns `prefer-fixed-when-immutable` / `mutable-when-const-suffices`; M10 only fixes the hint analyses they share).
+
+### Teaching
+- Every diagnostic and hover touched keeps the WHAT/WHAT-INSTEAD/WHY three-part format.
+- Phase 7 adds a `BannedJargon` quick-fix lightbulb so users clicking it convert `enum`→`options` etc. — turning a passive warning into an actionable teaching moment.
+- Phase 8 removes banned jargon (`infers`) from user-facing diagnostic WHY strings (per `.claude/rules/vocabulary.md` — `infer`/`inferred` banned in user-facing text) and fixes the `booleanean` typo.
+- No new banned-jargon word is introduced; `tests/jargon_audit.rs` (or equivalent) stays green. Phase 8 adds the `booleanean`/`infers` strings to whatever audit guards them so they can't regress.
+
+### Runtime Dependencies
+- None. Every change is compile-time (typeck) or editor-time (LSP). No heap allocator, scheduler, or OS I/O dependency added. The LSP already does filesystem reads for cross-file resolution; M10 adds no new I/O.
+
+### Kernel-Mode Behavior
+- N/A — these code paths (typeck diagnostics, LSP hint/hover/completion handlers) do not execute at program runtime and emit no codegen. They always work regardless of `--kernel` mode because they never run in the compiled binary. No `--kernel` compile-error path is added or changed.
+
+### Demo & Error Gallery
+- **`examples/pirates-roster/entrypoint.ynz`**: extend with a section that exercises ALL SIX previously-false-positive import patterns in realistic context — an imported `options` accessed via variant (`Timeframe.fiveMinute`), an imported union variant used in `is`-narrowing, an imported contract used via `follows`, an imported parent shape used via `extends`, an imported type used as a shape field annotation and in a module-level `const`, an imported contract used via `dynamic`, and an imported generic shape used in `Container<T>` position. The acceptance bar is **zero spurious unused-import warnings** when this file compiles. Captured as an `insta` stdout/stderr snapshot.
+- **Error gallery**: M10 adds NO new compile-error class — it removes false-positive *warnings* and fixes hints. Per the `### Demo & Error Gallery` invariant's deferred-handling clause, there is nothing to add to `examples/primantis-orders/v0_3_m1_errors.ynz` (no new diagnostic class to trigger). Instead, the regression coverage lives as (a) the `pirates-roster` "should NOT warn" snapshot above, and (b) per-bug regression tests in `crates/ynz-typeck/tests/` and `crates/ynz-lsp/tests/`. This is a stated, justified exception — recorded here so reviewers know the gallery was considered, not forgotten.
+
+### Feature Registry Entries
+- **No new registry entries.** M10 adds zero keywords, zero banned-jargon words, zero primitive intrinsics, zero type-attached constants, zero deferred features, zero diagnostic templates, zero muted-hint domains.
+- The only registry-adjacent change is Phase 7: `lsp_code_action_replacement_for` gains a `"BannedJargon"` arm that READS existing `[[banned_jargon]]` entries (already in `registry/features.toml`) to source the replacement text. No schema change, no new entry — read-only consumption of an existing catalog.
+- Phase 8 may edit the *description text* of up to 3 existing `[[muted_hint_domain]]` entries to remove banned `infer`/`inferred` wording — that's a content edit to existing entries, not a new entry. Listed explicitly so the `### Feature Registry Entries` audit sees it was considered.
+
+---
+
+## Phase Execution Protocol
+
+This is a **bug-fix milestone**, so per `~/.claude/rules/verification.md` and the plan skill's bug-fix rule, **every phase is test-first**: write the regression test that reproduces the bug FIRST, run it, confirm it FAILS with the observed wrong behavior (Paper-Trace the residual in the commit/PR notes), THEN apply the fix, THEN confirm the test PASSES. You cannot weaken a test you wrote 30 seconds ago to reproduce a bug.
+
+Per `feedback_all_phases_then_review` memory: the executing agent runs ALL phases without pausing for a per-phase "start next phase?" commit gate, BUT runs the four-reviewer pass (code-reviewer + rules-compliance-reviewer + plan-adherence-verifier + acceptance-verifier) after EACH phase before moving on. Patrick reviews the full milestone diff at the end.
+
+**Each phase's Exit Sequence (run these as actions, not a checklist):**
+1. **Persist plan state** — tick the phase's Acceptance Criteria checkboxes for criteria the diff actually met, fill each `Evidence:` sub-bullet with concrete content (test name, file:line, command output), tick Quality Gate items verified, bump `last_updated:`. After the reviewer pass, tick the Phase Review Gates with verdict + ISO timestamp and record the commit SHA.
+2. **Run `cargo test --workspace` + `cargo clippy --workspace -- -D warnings` + `cargo fmt --all --check`** — all green before review.
+3. **Invoke the four reviewers** (code-reviewer, rules-compliance-reviewer, plan-adherence-verifier, acceptance-verifier) against the phase diff. Each reviewer prompt MUST remind the agent of `~/.claude/rules/comments.md` + Golden Rule 11 WHY-quality + Yinz vocabulary (per `agent-dispatch-rule-reminders` memory).
+4. **Handle verdicts** — BLOCK → address Required Fixes, re-invoke (max 3 rounds; non-concession evidence rules apply). PASS → commit the phase on the M10 branch and continue to the next phase.
+
+Milestone ships via `/pr` (project skill) when all phases are done and the final cumulative reviewer sweep passes. v0.2.1 release/tag is M9's job, not M10's.
+
+---
+
+## Phases
+
+### Phase 0: Unused-import false-positive bug class (Bug 1 + 2.1–2.5)
+**PR scope**: Six missing `referenced_names.insert` sites + two `check_module` walks (`Item::ShapeDecl`, `Item::ConstDecl`) so imports used only via options-variant access, `is`-narrowing, `extends`/`follows`, shape field types, module-`const`, `dynamic`, or generic position stop being flagged "imported but never used."
+**Branch**: `fix/m10-unused-import-false-positives`
+**Flag**: N/A
+**Est. lines**: ~60 (six 1-line inserts + two walk loops + one regression-test file)
+**Ships via**: commit on M10 branch (single logical PR — shared root cause)
+**Objective**: A symbol imported and used through ANY of the six AST positions is recorded in `referenced_names`, so `check_query`'s unused-import pass doesn't warn on it.
+**Why this phase exists**: This is the user-reported bug (`Timeframe`) plus its five siblings. Ships first — highest user pain, lowest risk.
+**Current-state anchors**:
+- `crates/ynz-typeck/src/check.rs:3736` — `check_options_value`, no insert (Bug 1).
+- `crates/ynz-typeck/src/check.rs:3634` — `check_is_arm_pattern`; `:3684` — `check_is_expr` (Bug 2.1).
+- `crates/ynz-typeck/src/check.rs:2664` — `check_follows_contracts` (Bug 2.2).
+- `crates/ynz-typeck/src/check.rs:230` — `Item::ShapeDecl(_) => {}`; `:236` — combined `ConstDecl` arm (Bug 2.2/2.3).
+- `crates/ynz-typeck/src/check.rs:2456` — `AstType::Dynamic` branch (Bug 2.4).
+- `crates/ynz-typeck/src/check.rs:2541` — `AstType::Generic` user-defined branch (Bug 2.5).
+- Correct-pattern examples to mirror: `check.rs:2403/2407` (Named insert), `:1485` (free-fn), `:2216` (UFCS).
+**Files (expected scope)**: `crates/ynz-typeck/src/check.rs`, new `crates/ynz-typeck/tests/unused_import_false_positives.rs`.
+**Deviation rule**: standard — document deviations in the PR notes; unrelated concerns split out.
+**Steps**:
+1. Write `crates/ynz-typeck/tests/unused_import_false_positives.rs` with six tests, one per pattern (options-variant access, `is`-narrowing, `follows`/`extends`, shape-field-type, module-`const`, `dynamic`, generic). Each imports a symbol, uses it ONLY via the target pattern, asserts NO `UnusedImport` diagnostic for that name. Run — confirm the relevant tests FAIL today.
+2. Add a seventh "control" test: import a symbol, never use it, assert the `UnusedImport` warning STILL fires (guards against over-suppression / false-negative).
+3. `check_options_value` (3736): `self.referenced_names.insert(type_name.to_string());` before the variant check.
+4. `check_is_arm_pattern` (3634) + `check_is_expr` (3684): `self.referenced_names.insert(type_path.name.clone());` after the empty-name guard.
+5. `AstType::Dynamic` (2456): insert `contract.clone()` inside the `shape_table.contains` branch. `AstType::Generic` (2541): insert `name.clone()` inside the `generic_shape_table.contains` branch.
+6. In `check_module`: replace `Item::ShapeDecl(_) => {}` (230) with an arm that, for the shape decl, inserts the `extends` parent name, each `follows` contract name, and walks each field's type annotation via `self.ast_type_to_type(&field.ty)` (discard the returned `Type` — `shapes.rs` already validated; we call it for the `referenced_names` side effect). Pull `ConstDecl` out of the combined arm (236) into its own arm that walks the const's declared type + initializer expression for referenced names. (Verify whether `check_follows_contracts` at 2664 is the better single chokepoint for the `follows`/`extends` inserts — if it already iterates contract names at the equivalent of the audit's `:2509`, do the inserts there instead and leave `check_module`'s ShapeDecl arm to only the field-type + extends walk. Pick whichever avoids double-walking; document the choice.)
+7. **Adversarial test (plan-review)**: import a symbol used via TWO patterns at once (e.g. `extends Parent` AND a field-type annotation of the same imported type), plus a SECOND genuinely-unused import in the same file — assert the dual-used one is not flagged AND the unused one still IS. Pins that double-insert doesn't mask a sibling unused import.
+**Acceptance criteria**:
+- [ ] All six pattern tests pass; the import is not flagged unused.
+  - Evidence: (filled at phase completion)
+- [ ] The control test passes: a genuinely-unused import STILL warns.
+  - Evidence: (filled at phase completion)
+- [ ] `Timeframe.fiveMinute`-style options-variant access (the exact user-reported repro) produces no warning.
+  - Evidence: (filled at phase completion)
+- [ ] No existing test regresses (`cargo test --workspace` ≥ 1434 + new tests).
+  - Evidence: (filled at phase completion)
+**Quality gate**:
+- [ ] Inserts mirror the existing correct-pattern sites (2403/2407/1485/2216) — same idiom, not a new one.
+- [ ] No double-insert path that could mask a real unused import.
+- [ ] Arrow-fn / type discipline per coding-style.md (no `as any` equivalent; no `.unwrap()` added on fallible lookups without a guard).
+**Verification**: `cargo test -p ynz-typeck unused_import_false_positives` all green; `cargo test --workspace` green.
+
+**Phase Review Gates**:
+- [ ] code-reviewer: <verdict + ISO timestamp>
+- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
+- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
+- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [ ] Committed: <commit SHA>
+
+**Findings Log**:
+_(empty until a reviewer returns BLOCK)_
+
+---
+
+### Phase 1: `Stmt::Match.else_arm` blindspot (Bug 2.6)
+**PR scope**: All six `Stmt::Match` walkers in `inlay_hint_passes.rs` visit `else_arm` so a binding mutated inside an `else =>` catch-all is correctly tracked.
+**Branch**: `fix/m10-else-arm-blindspot`
+**Est. lines**: ~18 (one `if let Some(eb) = else_arm` per walker × 6)
+**Objective**: No inlay hint (`let→const`, `array→fixed`, type, ownership, copy) fires based on analysis that ignored an `else =>` arm.
+**Why this phase exists**: `let count = 0; if (...) { ... else => count = 99 }` currently shows "effectively const — never reassigned" on a binding that IS reassigned — the canonical "hint fires on a mutated binding" bug.
+**Current-state anchors**: `crates/ynz-typeck/src/inlay_hint_passes.rs` lines **142, 250, 311, 402, 474, 525** (each `Stmt::Match { ..arms.., .. }` drops `else_arm`); `crates/ynz-ast/src/nodes.rs:246` (`else_arm: Option<Block>`).
+**Files (expected scope)**: `crates/ynz-typeck/src/inlay_hint_passes.rs`, `crates/ynz-typeck/tests/inlay_hint_else_arm.rs` (new).
+**Steps**:
+1. Write a test: `let` binding mutated only inside an `else =>` arm → assert NO `let→const` hint. Confirm it FAILS today.
+2. For each of the six `Stmt::Match` arms, bind `else_arm` in the pattern and recurse into it with the SAME walker that arm uses for `arms` (e.g. `collect_maybe_mutated` for 142, `collect_const_hints_block` for 525, etc.).
+3. Add a companion test for the `array→fixed` hint with an `else =>`-arm `.add()` call to prove the array walker (474) is also fixed.
+**Acceptance criteria**:
+- [ ] `let` mutated in `else =>` arm → no `let→const` hint.
+  - Evidence: (filled at phase completion)
+- [ ] array grown via `.add()` in `else =>` arm → no `array→fixed` hint.
+  - Evidence: (filled at phase completion)
+- [ ] All six walkers visit `else_arm` (grep confirms no `Stmt::Match` arm in the file still drops it).
+  - Evidence: (filled at phase completion)
+**Quality gate**:
+- [ ] Each walker uses its own correct recursion fn (not a copy-paste of the wrong one).
+- [ ] No change to the `arms` iteration behavior.
+**Verification**: `cargo test -p ynz-typeck inlay_hint_else_arm` green; `grep -n 'Stmt::Match' inlay_hint_passes.rs` shows every arm binds `else_arm`.
+
+**Phase Review Gates**:
+- [ ] code-reviewer: <verdict + ISO timestamp>
+- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
+- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
+- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [ ] Committed: <commit SHA>
+
+**Findings Log**:
+_(empty until a reviewer returns BLOCK)_
+
+---
+
+### Phase 2: Nested `FieldAssign`/`IndexAssign` root-binding tracking (Bug 2.7)
+**PR scope**: `player.address.street = "x"` and `arr[i][j] = v` mark their root binding (`player`, `arr`) as mutated.
+**Branch**: `fix/m10-nested-assign-root-binding`
+**Est. lines**: ~20 (a `root_ident` walker + two call sites)
+**Objective**: The mutation collector follows chained `FieldAccess`/`IndexAccess` to the root identifier instead of stopping at one level.
+**Why this phase exists**: A binding mutated through a nested field/index path currently gets a wrong `let→const` hint because only single-level `Expr::Ident` receivers are recorded.
+**Current-state anchors**: `crates/ynz-typeck/src/inlay_hint_passes.rs:119–134` (`Stmt::FieldAssign` 121–123, `Stmt::IndexAssign` 129 — one-level only).
+**Files (expected scope)**: `crates/ynz-typeck/src/inlay_hint_passes.rs`, `crates/ynz-typeck/tests/inlay_hint_nested_assign.rs` (new).
+**Steps**:
+1. Write a test: `let player = makePlayer(); player.address.street = "x"` → assert NO `let→const` hint on `player`. Confirm FAIL today.
+2. Add a free `root_ident(e: &Expr) -> Option<&str>` helper that loops through `Expr::FieldAccess { receiver, .. } | Expr::IndexAccess { receiver, .. }` until it hits `Expr::Ident` (or returns `None`).
+3. Use it for `FieldAssign.target` and `IndexAssign.receiver`; insert the returned root name.
+**Acceptance criteria**:
+- [ ] `player.address.street = "x"` marks `player` mutated → no hint.
+  - Evidence: (filled at phase completion)
+- [ ] `arr[i][j] = v` marks `arr` mutated → no hint.
+  - Evidence: (filled at phase completion)
+- [ ] Single-level case (`player.health = 5`) still works.
+  - Evidence: (filled at phase completion)
+**Quality gate**:
+- [ ] `root_ident` handles `None` (non-ident root) without panicking.
+- [ ] No `.unwrap()` on the `Option`.
+**Verification**: `cargo test -p ynz-typeck inlay_hint_nested_assign` green.
+
+**Phase Review Gates**:
+- [ ] code-reviewer: <verdict + ISO timestamp>
+- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
+- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
+- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [ ] Committed: <commit SHA>
+
+**Findings Log**:
+_(empty until a reviewer returns BLOCK)_
+
+---
+
+### Phase 3: `collect_maybe_mutated` over-suppression + literal coverage (Bug 2.9 + Bug 2.10)
+**PR scope**: Mark a call argument as mutated ONLY when the callee's parameter is `lend`/`give` (not `share`); and recurse into `StructLit`/`ArrayLit`/`MapLit`/`PostfixOp` so mutations inside literals are seen. Recovers the `let→const` hint on the dominant real-code case (`let x = 5; print(x)`).
+**Branch**: `fix/m10-maybe-mutated-ownership-aware`
+**Est. lines**: ~70 (thread `sig_table` through 3 fns + ownership check + 4 new match arms + tests)
+**Objective**: `print(count)` no longer suppresses the `let→const` hint; `foo(lend x)` still does; mutations inside literal arguments are tracked.
+**Why this phase exists**: This is the highest-impact teaching fix — almost every `let` is passed to *some* call, so the over-suppression means the headline auto-promotion hint almost never fires. Bug 2.10 (literal coverage) folds in because it's the same function (`collect_maybe_mutated_expr`).
+**Current-state anchors**: `crates/ynz-typeck/src/inlay_hint_passes.rs:160–198` (`collect_maybe_mutated_expr`; `Expr::Call` arm 164–172 unconditional insert; fn has NO `sig_table` param; `_ => {}` leaf at 196 swallows `StructLit`/`ArrayLit`/`MapLit`/`PostfixOp`; `MethodCall` already at 173). Ownership-modifier lookup precedent: `collect_ownership_hints_expr` (330–364).
+**Files (expected scope)**: `crates/ynz-typeck/src/inlay_hint_passes.rs`, `crates/ynz-typeck/tests/inlay_hint_maybe_mutated.rs` (new).
+**Steps**:
+1. Write tests: (a) `let count = 5; print(count)` → `let→const` hint FIRES; (b) `let x = mk(); consume(x)` where `consume(lend T)` → hint SUPPRESSED; (c) `let nums = [a, b.mutate()]` → `b`'s mutation tracked. Confirm (a) and (c) FAIL today, (b) passes for the wrong reason (everything suppressed).
+2. Thread `sig_table: &SigTable` (and `imported`, `generic_fn_table` as needed) through `collect_maybe_mutated`, `collect_maybe_mutated_stmt`, `collect_maybe_mutated_expr`.
+3. In the `Expr::Call` arm: resolve the callee sig (`sig_table.fns.get(name).or_else(|| imported.get(name))`, with `generic_fn_table` fallback); for each arg ident, insert ONLY when the matched parameter's ownership modifier is `lend` or `give`. `share` (and the `const`-binding implicit default) → do not insert. If the callee can't be resolved, fall back to the conservative "mark mutated" behavior (so an unknown callee never produces a wrong "this is const" hint) — document this fallback.
+4. Add UFCS handling: for `Expr::MethodCall`, resolve the method the same way typeck does (the UFCS path near `check.rs:2216`) and apply the same per-parameter ownership check to the receiver + args.
+5. Add explicit `Expr::StructLit`/`ArrayLit`/`MapLit`/`PostfixOp` arms that recurse into their sub-expressions (Bug 2.10).
+6. **Adversarial test (plan-review)**: a `let` binding passed to a `share` param AND separately reassigned (`let x = 5; print(x); x = 9`) → assert NO `let→const` hint, because the genuine reassignment must still win. Proves the ownership-aware fix didn't accidentally drop real mutation tracking.
+
+**Behavior-change note for CHANGELOG**: when a callee can't be resolved (e.g. an imported function whose signature isn't in scope), Phase 3 conservatively marks the arg mutated — so imported-function args get no `let→const` hint. Named tradeoff (never a wrong "const" hint over a possibly-missing one); call it out in the v0.2.1 CHANGELOG alongside the Bug 2.9 "hints now fire more often" note so neither is mistaken for a regression.
+**Acceptance criteria**:
+- [ ] `print(count)` → `let→const` hint fires.
+  - Evidence: (filled at phase completion)
+- [ ] `consume(x)` with `consume(lend T)` → hint suppressed.
+  - Evidence: (filled at phase completion)
+- [ ] Mutation inside an array/struct literal arg is tracked.
+  - Evidence: (filled at phase completion)
+- [ ] Unresolvable callee → conservative suppress (no wrong const hint).
+  - Evidence: (filled at phase completion)
+**Quality gate**:
+- [ ] `sig_table` threaded to all three fns (no call path left unchecked).
+- [ ] `share` parameters never mark args mutated (definitional).
+- [ ] No panic on generic/UFCS callee lookup miss.
+**Verification**: `cargo test -p ynz-typeck inlay_hint_maybe_mutated` green; `cargo test --workspace` green.
+
+**Phase Review Gates**:
+- [ ] code-reviewer: <verdict + ISO timestamp>
+- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
+- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
+- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [ ] Committed: <commit SHA>
+
+**Findings Log**:
+_(empty until a reviewer returns BLOCK)_
+
+---
+
+### Phase 4: Inlay-hint positioning fix + Yinz-yellow color contribution
+**PR scope**: Replacement-category promotion hints (`array→fixed`, `let→const`) render at end-of-statement (before any trailing user comment) instead of at the `let` keyword; the VSCode extension sets the `[ynz]`-scoped inlay-hint color to Pittsburgh gold `#ffd23f`.
+**Branch**: `fix/m10-inlay-position-and-color`
+**Est. lines**: ~40 (helper + two position swaps + one package.json block + tests)
+**Objective**: The promotion decorations sit at the natural read position (end of line) and are visually distinct in `.ynz` files.
+**Why this phase exists**: `position: span.start` puts the hint on the `let` keyword, mid-statement — wrong place for a Replacement-category annotation per `.claude/rules/inference.md`.
+**Current-state anchors**: `crates/ynz-typeck/src/inlay_hint_passes.rs:464` (`array_to_fixed` position) and `:515` (`let_to_const` position), both `position: span.start`. `PromotionHint` struct at 73–80. `tooling/vscode-ynz/package.json` (no `contributes.configurationDefaults` for inlay color yet).
+**Files (expected scope)**: `crates/ynz-typeck/src/inlay_hint_passes.rs`, `tooling/vscode-ynz/package.json`, `crates/ynz-typeck/tests/inlay_hint_position.rs` (new).
+**Steps**:
+1. Write a test asserting the promotion hint's byte position equals end-of-statement (or the `//` position when a trailing comment exists), not `span.start`. Confirm FAIL today.
+2. Add helper `end_of_let_statement_or_before_comment(text: &str, stmt_span: SourceSpan) -> usize` in `inlay_hint_passes.rs` — scans from `stmt_span.end` (or the line) for a `//` not inside a string literal, returns the `//` byte offset or end-of-line. The pass has `sf.text(db)` available.
+3. Set `PromotionHint.position` (464 and 515) to the helper's result.
+4. In `tooling/vscode-ynz/package.json`, add `contributes.configurationDefaults`: `"[ynz]": { "editor.inlayHints.foreground": "#ffd23f" }`. (Hex locked by roadmap Q11 — Pittsburgh gold, `--color-gold` from `website/app/assets/css/tailwind.css:22`.)
+5. **Adversarial test (plan-review)**: a statement with `//` INSIDE a string literal before any real trailing comment, e.g. `let url: array<int> = parse("http://x")  // real comment` → assert the hint positions before the REAL trailing comment, not the `//` inside `"http://x"`. Directly exercises the string-literal-`//` quality gate.
+**Acceptance criteria**:
+- [ ] Promotion hint positions at end-of-statement, not `span.start`.
+  - Evidence: (filled at phase completion)
+- [ ] Trailing-comment case positions before the `//`.
+  - Evidence: (filled at phase completion)
+- [ ] `package.json` declares the `[ynz]`-scoped inlay color `#ffd23f`; extension still loads (`package.json` valid JSON).
+  - Evidence: (filled at phase completion)
+**Quality gate**:
+- [ ] Helper does not treat `//` inside a string literal as a comment.
+- [ ] Color contribution is language-scoped (`[ynz]`), not global.
+**Verification**: `cargo test -p ynz-typeck inlay_hint_position` green; `cd tooling/vscode-ynz && npx tsc --noEmit` (or the project's lint) clean; `node -e "JSON.parse(require('fs').readFileSync('tooling/vscode-ynz/package.json'))"` succeeds.
+
+**Phase Review Gates**:
+- [ ] code-reviewer: <verdict + ISO timestamp>
+- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
+- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
+- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [ ] Committed: <commit SHA>
+
+**Findings Log**:
+_(empty until a reviewer returns BLOCK)_
+
+---
+
+### Phase 5: `array_to_fixed_promotion` click-to-make-explicit (Bug 2.13)
+**PR scope**: The `array→fixed` inlay hint attaches a `TextEdit` that swaps the `array` keyword for `fixed` in the type annotation, matching the `let→const` hint's click-to-make-explicit behavior.
+**Branch**: `fix/m10-array-to-fixed-edit`
+**Est. lines**: ~50 (new `array_to_fixed_edit` helper + `PromotionHint` field + `make_hint`→`make_hint_with_edit` switch + test)
+**Objective**: Clicking the `array→fixed` decoration rewrites the source, per `.claude/rules/inference.md` "Two Surfaces for the Same Decision" (Replacement category — both auto-promotions get click-to-make-explicit).
+**Why this phase exists**: `let→const` is clickable; `array→fixed` is a dead decoration. Inconsistent teaching surface.
+**Current-state anchors**: `crates/ynz-lsp/src/inlay_hint.rs:221–226` (`array_to_fixed` uses plain `make_hint`, no edit); `:120` (`let_to_const_edit` helper to mirror); `:232+` (`let_to_const` uses `make_hint_with_edit`). `PromotionHint` at `inlay_hint_passes.rs:73–80` (carries no type-annotation span yet).
+**Files (expected scope)**: `crates/ynz-typeck/src/inlay_hint_passes.rs` (extend `PromotionHint`), `crates/ynz-lsp/src/inlay_hint.rs` (new helper + switch), `crates/ynz-lsp/tests/inlay_hint_array_to_fixed_edit.rs` (new).
+**Steps**:
+1. Write a test: `let nums: array<int> = [1,2,3]` (never grown) → the `array→fixed` hint carries a `TextEdit` that replaces `array` with `fixed` in the annotation, and the post-edit source `let nums: fixed<int> = [1,2,3]` type-checks. Confirm FAIL today (no edit attached).
+2. Extend `PromotionHint` with the byte range of the `array` keyword in the type annotation (e.g. `type_keyword_span: Option<SourceSpan>`), populated by `array_to_fixed_promotion_hints`.
+3. Add `array_to_fixed_edit(...)` in `inlay_hint.rs` (mirror `let_to_const_edit` at 120) producing a `TextEdit` over the `array` keyword range → `"fixed"`.
+4. Switch the `array_to_fixed` push (221) from `make_hint` to `make_hint_with_edit` with that edit.
+**Acceptance criteria**:
+- [ ] `array→fixed` hint carries a `TextEdit`.
+  - Evidence: (filled at phase completion)
+- [ ] Applying the edit yields valid, type-checking source (`fixed<int>` size inferred from literal).
+  - Evidence: (filled at phase completion)
+- [ ] `let→const` edit unchanged (no regression).
+  - Evidence: (filled at phase completion)
+**Quality gate**:
+- [ ] Edit range covers exactly the `array` keyword, not the `<int>` args.
+- [ ] No edit emitted when the annotation can't be located (graceful, no panic).
+**Verification**: `cargo test -p ynz-lsp inlay_hint_array_to_fixed_edit` green; manually confirm post-edit fixture compiles via `./target/debug/ynz build`.
+
+**Phase Review Gates**:
+- [ ] code-reviewer: <verdict + ISO timestamp>
+- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
+- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
+- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [ ] Committed: <commit SHA>
+
+**Findings Log**:
+_(empty until a reviewer returns BLOCK)_
+
+---
+
+### Phase 6: Hover fixes (Bug 2.8 + Bug 2.12)
+**PR scope**: (a) User-defined symbols win over registry keyword hover for contextual identifiers (`share`/`lend`/`give`/`errors`/`wait`/`is`/`background`) used as ordinary identifiers; (b) hover works at the end-of-token cursor position.
+**Branch**: `fix/m10-hover-shadowing-and-eot`
+**Est. lines**: ~40 (lookup reorder with context guard + bound change + tests)
+**Objective**: Hovering `share` in `let share = 5; share + 1` shows the variable's type; hovering `share` in `function f(share self: Player)` still shows the keyword hover; hovering at the byte-after-last-char of a token returns content.
+**Why this phase exists**: A user-defined variable named like a contextual keyword currently always gets the keyword hover (wrong symbol). And many editors place the cursor at `tok.span.end`, which the strict `<` check excludes.
+**Current-state anchors**: `crates/ynz-lsp/src/hover.rs:112–121` (registry tried before user-symbol fallback at 124); `:23` (`byte_offset < tok.span.end` strict). Contextual identifiers confirmed non-token via `parser.rs:1450–1458`.
+**Files (expected scope)**: `crates/ynz-lsp/src/hover.rs`, `crates/ynz-lsp/tests/hover_shadowing.rs` (new).
+**Steps**:
+1. Write tests: (a) `let share = 5; share + 1` hover on second `share` → variable type, not keyword; (b) `function f(share self: Player)` hover on `share` → keyword hover STILL shown; (c) cursor at `tok.span.end` → hover returns content. Confirm (a) and (c) FAIL today.
+2. **Context-aware reorder (LOCKED — no fallback).** In `hover_response`, before calling `lsp_hover_for_token`, ask whether the cursor is on a value-position expression via the EXISTING `type_of_expression_at_offset` (`crates/ynz-typeck/src/type_at_offset.rs:44`) — and/or `identifier_use_site_at_offset` (`ast_offset.rs:19`) for definition/use sites. If it resolves to a typed expression / user-defined symbol, show the user-symbol hover (its type). Only when the offset does NOT resolve to a value-position expression (i.e. it's an ownership-modifier token in a function signature) does it fall through to the registry keyword hover. This naturally disambiguates `share + 1` (expression → variable) from `function f(share self)` (modifier → keyword) with no residual hole. Do NOT ship a "same-named binding exists → user wins" heuristic — that relocates the bug. If the offset infra unexpectedly can't deliver this, STOP and raise a blocker.
+3. Change the cursor-in-token bound at `:23` from `< tok.span.end` to `<= tok.span.end`, OR add previous-token fallback when offset == end and the next token isn't an identifier. Pick the one that doesn't double-match adjacent tokens; add a test proving no double-match.
+4. **Adversarial test (plan-review)**: hover on an inner shadowing `share` where an outer-scope binding of the same name exists — assert the INNERMOST symbol resolves. Guards the scope-lookup precedence the reorder depends on.
+**Acceptance criteria**:
+- [ ] `let share = 5; share + 1` hover → variable type.
+  - Evidence: (filled at phase completion)
+- [ ] `share` as a signature modifier → keyword hover preserved.
+  - Evidence: (filled at phase completion)
+- [ ] End-of-token cursor → hover content returned, no adjacent-token double-match.
+  - Evidence: (filled at phase completion)
+**Quality gate**:
+- [ ] Keyword hover still works for all genuine keyword positions (regression test for at least `share`, `wait`, `errors`).
+- [ ] No panic when no symbol resolves.
+**Verification**: `cargo test -p ynz-lsp hover_shadowing` green; existing hover tests green.
+
+**Phase Review Gates**:
+- [ ] code-reviewer: <verdict + ISO timestamp>
+- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
+- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
+- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [ ] Committed: <commit SHA>
+
+**Findings Log**:
+_(empty until a reviewer returns BLOCK)_
+
+---
+
+### Phase 7: Space-trigger removal + `BannedJargon` quick-fix
+**PR scope**: Stop the completion popup from opening on every space; add a quick-fix lightbulb that converts banned jargon (`enum`→`options`, etc.) to the Yinz term.
+**Branch**: `fix/m10-space-trigger-and-jargon-quickfix`
+**Est. lines**: ~40 (one-line trigger removal + code-action arm + registry lookup arm + tests)
+**Objective**: Typing prose/space doesn't spam completion; a banned-jargon diagnostic offers a one-click fix sourced from the registry's `[[banned_jargon]]` replacement.
+**Why this phase exists**: Space in `trigger_characters` opens completion on every word boundary (noise). And banned-jargon diagnostics are passive — no actionable fix.
+**Current-state anchors**: `crates/ynz-lsp/src/capabilities.rs:38` (`" "` in `trigger_characters`); `crates/ynz-lsp/src/code_action.rs:57–76` (arms: `BannedKeyword`, `NotDefined`, `UnusedImport`, `_ => None` — no `BannedJargon`); `crates/ynz-registry/src/lib.rs:180` (`lsp_code_action_replacement_for` matches only `"BannedKeyword"` via `SIMPLE_KEYWORD_REPLACEMENTS`).
+**Files (expected scope)**: `crates/ynz-lsp/src/capabilities.rs`, `crates/ynz-lsp/src/code_action.rs`, `crates/ynz-registry/src/lib.rs`, possibly `crates/ynz-diagnostics/src/*` (if `DiagnosticKind::BannedJargon { term }` needs adding), `crates/ynz-lsp/tests/code_action_jargon.rs` (new).
+**Steps**:
+1. **Confirm** what `DiagnosticKind` variant the banned-jargon diagnostic uses and whether it carries the offending term. If no `term`-carrying variant exists, add/extend one (typeck-internal enum — no ABI impact; see Question 3).
+2. Write tests: (a) completion trigger list no longer contains `" "`; (b) a `enum` banned-jargon diagnostic yields a code action that replaces `enum`→`options`. Confirm both FAIL today.
+3. Remove `" ".to_string()` from `capabilities.rs:38` `trigger_characters` (keep `"."`).
+4. Add a `DiagnosticKind::BannedJargon { term }` arm to `code_action_response` (code_action.rs) calling `lsp_code_action_replacement_for("BannedJargon", term)`.
+5. Add a `"BannedJargon"` arm to `lsp_code_action_replacement_for` (lib.rs:180) that searches `[[banned_jargon]]` registry entries for `term` and returns its replacement.
+6. **The lesson (Patrick, 2026-05-30)**: the code action must carry the WHY, not just swap the word. Set the code action's `title`/`description` to include the registry `[[banned_jargon]]` `why` text (e.g. for `enum`: "use `options` — Yinz uses human-readable words a non-programmer can guess"). A user clicking the lightbulb learns WHY the word is banned, not just that it changed. (Note: `enum` already teaches+fixes via the existing `BannedKeyword` path — `SIMPLE_KEYWORD_REPLACEMENTS` `("enum","options")` at `lib.rs:158`; Phase 7 brings the SAME teach-and-fix parity to the jargon class that currently lacks the quick-fix.)
+**Acceptance criteria**:
+- [ ] `trigger_characters` no longer includes space; `.`-triggered completion still works.
+  - Evidence: (filled at phase completion)
+- [ ] Banned-jargon diagnostic produces a working replacement code action.
+  - Evidence: (filled at phase completion)
+- [ ] Replacement text is sourced from the registry `[[banned_jargon]]` entry (no hardcoded duplicate).
+  - Evidence: (filled at phase completion)
+- [ ] The code action surfaces the WHY (lesson) from the registry `why` field, not just the replacement word.
+  - Evidence: (filled at phase completion)
+**Quality gate**:
+- [ ] No new registry ENTRY added — only a read of existing `[[banned_jargon]]`.
+- [ ] Code-action arm follows the existing `BannedKeyword`/`UnusedImport` arm idiom.
+**Verification**: `cargo test -p ynz-lsp code_action_jargon` green; manual: open a file with `enum`, confirm the lightbulb fixes it.
+
+**Phase Review Gates**:
+- [ ] code-reviewer: <verdict + ISO timestamp>
+- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
+- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
+- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [ ] Committed: <commit SHA>
+
+**Findings Log**:
+_(empty until a reviewer returns BLOCK)_
+
+---
+
+### Phase 8: Typo + jargon fix-ups (`booleanean`, `infers`)
+**PR scope**: Fix the `booleanean` typo and replace banned `infers` jargon with "figures out" in user-facing diagnostic strings; add a guard so they can't regress.
+**Branch**: `fix/m10-typo-and-jargon-cleanup`
+**Est. lines**: ~15 (3 string edits + audit-guard extension)
+**Objective**: No user-facing diagnostic contains `booleanean` or `infers`.
+**Why this phase exists**: `booleanean` is a visible typo in the `print` diagnostic; `infers`/`inferred` are banned in user-facing text per `.claude/rules/vocabulary.md`.
+**Current-state anchors**: `check.rs:1577` (`booleanean`); `check.rs:1997` and `:2010` (`"infers"` — 2 sites, not 3). Banned-jargon enforcement lives in `crates/ynz-diagnostics/src/banned_jargon.rs`.
+**Files (expected scope)**: `crates/ynz-typeck/src/check.rs`, `registry/features.toml` (if any `[[muted_hint_domain]]` description uses `infer`/`inferred`), the jargon-audit test.
+**Steps**:
+1. Write/extend a test that scans the two diagnostic strings (or runs the jargon audit over typeck diagnostics) asserting no `booleanean` and no `infers`. Confirm FAIL today.
+2. `check.rs:1577`: `booleanean` → `boolean`.
+3. `check.rs:1997`, `:2010`: `"... Yinz infers type parameters ..."` → `"... Yinz figures out type parameters ..."` (keep WHY meaning, drop banned word).
+4. Grep `registry/features.toml` `[[muted_hint_domain]]` description fields for `infer`/`inferred`; replace with "figures out" / "the compiler picks" per vocabulary.md. (Audit suggested up to 3 such fields — fix whatever actually exists.)
+5. Ensure `banned_jargon.rs` (or the doc-grep audit) covers these strings so they can't regress.
+**Acceptance criteria**:
+- [ ] No `booleanean` anywhere in user-facing diagnostics.
+  - Evidence: (filled at phase completion)
+- [ ] No `infers`/`inferred` in the two `check.rs` strings or `[[muted_hint_domain]]` descriptions.
+  - Evidence: (filled at phase completion)
+- [ ] Jargon audit guards both so a future reintroduction fails CI/tests.
+  - Evidence: (filled at phase completion)
+**Quality gate**:
+- [ ] Replacement preserves the diagnostic's WHAT/WHAT-INSTEAD/WHY meaning.
+- [ ] `infer`/`inference` still allowed in design-doc/internal contexts (do not over-ban — vocabulary.md dual-audience rule).
+**Verification**: `cargo test --workspace` green; `grep -rn 'booleanean\|infers' crates/ynz-typeck/src/check.rs` returns nothing.
+
+**Phase Review Gates**:
+- [ ] code-reviewer: <verdict + ISO timestamp>
+- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
+- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
+- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [ ] Committed: <commit SHA>
+
+**Findings Log**:
+_(empty until a reviewer returns BLOCK)_
+
+---
+
+### Phase 9: Ownership-hint generic + UFCS coverage (Bug 2.11) — superset of roadmap P0–P8
+**PR scope**: `ownership_call_site_hints` resolves generic-function calls (via `generic_fn_table`) and UFCS method-call form (`player.heal(20)`), so ownership muted hints are consistent across both call syntaxes.
+**Branch**: `fix/m10-ownership-hint-generic-ufcs`
+**Est. lines**: ~45 (generic fallback + `MethodCall` arm + tests)
+**Objective**: A user sees the same ownership hint whether they write `heal(player, 20)` or `player.heal(20)`, and for generic functions.
+**Why this phase exists**: Bug 2.11 — the muted-hint protocol is supposed to be informative across ALL call sites, but generic + UFCS calls currently get no ownership hint. Included per Rule 11 (confirmed finding gets fixed); see Question 1.
+**Current-state anchors**: `crates/ynz-typeck/src/inlay_hint_passes.rs:330–364`; line 339 `sig_table.fns.get(name).or_else(|| imported.get(name))` (no `generic_fn_table`); guard at 336 matches only `Expr::Call`.
+**Files (expected scope)**: `crates/ynz-typeck/src/inlay_hint_passes.rs`, `crates/ynz-typeck/tests/inlay_hint_ownership_ufcs.rs` (new).
+**Steps**:
+1. Write tests: (a) UFCS `player.heal(20)` where `heal(lend Player, int)` → ownership hint on `player`; (b) generic-fn call gets an ownership hint. Confirm FAIL today.
+2. Add `generic_fn_table` fallback to the sig lookup at 339.
+3. Add an `Expr::MethodCall` branch that resolves the method via the same UFCS lookup typeck uses (near `check.rs:2216`) and emits hints for the receiver + args.
+**Acceptance criteria**:
+- [ ] UFCS call gets the same ownership hint as the equivalent free-fn call.
+  - Evidence: (filled at phase completion)
+- [ ] Generic-fn call gets an ownership hint.
+  - Evidence: (filled at phase completion)
+**Quality gate**:
+- [ ] UFCS resolution mirrors typeck's lookup (no parallel/divergent logic per no-duct-tape #7).
+- [ ] No panic on unresolved generic/UFCS callee.
+**Verification**: `cargo test -p ynz-typeck inlay_hint_ownership_ufcs` green.
+
+**Phase Review Gates**:
+- [ ] code-reviewer: <verdict + ISO timestamp>
+- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
+- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
+- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [ ] Committed: <commit SHA>
+
+**Findings Log**:
+_(empty until a reviewer returns BLOCK)_
+
+---
+
+### Phase 10: Copy-hint recursion into nested calls (Bug 2.14) — superset of roadmap P0–P8
+**PR scope**: `collect_copy_hints_expr` recurses into call arguments so nested calls like `outer(inner(x))` emit a copy hint for `x`.
+**Branch**: `fix/m10-copy-hint-recursion`
+**Est. lines**: ~25 (recursion + test)
+**Objective**: Trivially-copyable values get their copy hint at every call depth, not just the outermost.
+**Why this phase exists**: Bug 2.14 — `collect_ownership_hints_expr` recurses into args; `collect_copy_hints_expr` doesn't, so the two teaching surfaces are inconsistent at nested calls. Included per Rule 11; see Question 1.
+**Current-state anchors**: `crates/ynz-typeck/src/inlay_hint_passes.rs:416–433` (inspects top-level args, no recursion). Precedent: `collect_ownership_hints_expr` recurses via `collect_ownership_hints_expr(arg, ...)`.
+**Files (expected scope)**: `crates/ynz-typeck/src/inlay_hint_passes.rs`, `crates/ynz-typeck/tests/inlay_hint_copy_recursion.rs` (new).
+**Steps**:
+1. Write a test: `outer(inner(n))` with `n: int` → `n` gets a copy hint. Confirm FAIL today.
+2. After inspecting each top-level arg, recurse `collect_copy_hints_expr(arg, ...)` (mirror the ownership-hints recursion).
+**Acceptance criteria**:
+- [ ] Nested-call arg gets a copy hint.
+  - Evidence: (filled at phase completion)
+- [ ] No duplicate hint at the outer level.
+  - Evidence: (filled at phase completion)
+**Quality gate**:
+- [ ] Recursion mirrors `collect_ownership_hints_expr` (consistent walker shape).
+- [ ] `Type::Error`/`Type::Nothing` still filtered (no copy hint on non-copyable).
+**Verification**: `cargo test -p ynz-typeck inlay_hint_copy_recursion` green.
+
+**Phase Review Gates**:
+- [ ] code-reviewer: <verdict + ISO timestamp>
+- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
+- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
+- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [ ] Committed: <commit SHA>
+
+**Findings Log**:
+_(empty until a reviewer returns BLOCK)_
+
+---
+
+### Phase 11: Demo extension + cumulative verification sweep
+**PR scope**: Extend `examples/pirates-roster/entrypoint.ynz` to exercise all six previously-false-positive import patterns (zero spurious warnings), then run the Step-10 verification sweep over the whole milestone.
+**Branch**: `fix/m10-demo-and-verification`
+**Est. lines**: ~40 (demo additions + snapshot)
+**Objective**: Hands-on demo proof that the unused-import fixes hold in a realistic project, plus the cumulative end-of-plan review.
+**Why this phase exists**: The `### Demo & Error Gallery` invariant requires the demo extension; the plan skill requires a final verification sweep.
+**Current-state anchors**: `examples/pirates-roster/entrypoint.ynz` (single-entry layout per `examples/README.md`).
+**Files (expected scope)**: `examples/pirates-roster/entrypoint.ynz` (+ any imported service/util files needed for the patterns), the project's `insta` snapshot for the demo build.
+**Steps**:
+1. Add a Pittsburgh-themed section to `pirates-roster` that imports symbols used ONLY via: options-variant access, `is`-narrowing, `follows`, `extends`, shape-field-type annotation, module-`const`, `dynamic`, and generic position.
+2. Build the demo (`./target/debug/ynz build examples/pirates-roster/entrypoint.ynz`); assert ZERO unused-import warnings. Capture `insta` stdout/stderr snapshot.
+3. Step-10 sweep: TODO grep (no `TODO`/`FIXME`/`Phase N` left in touched code); confirm `.claude/todos.md` LSP bug items reflect what shipped; cumulative `git diff <m10-base>..HEAD` four-reviewer pass; verify Quality Checklist below.
+**Acceptance criteria**:
+- [ ] `pirates-roster` exercises all six patterns; build emits zero spurious unused-import warnings.
+  - Evidence: (filled at phase completion)
+- [ ] `insta` snapshot committed and green.
+  - Evidence: (filled at phase completion)
+- [ ] No orphaned TODO/FIXME in M10-touched code.
+  - Evidence: (filled at phase completion)
+**Quality gate**:
+- [ ] Demo section uses real Yinz operations only (no invented APIs per dot-postfix.md).
+- [ ] Folder/section naming Pittsburgh-themed per examples-structure.md.
+**Verification**: `cargo test --workspace` green (≥1434 + all new tests); `cargo clippy --workspace -- -D warnings` clean; `cargo fmt --all --check` clean; demo build snapshot green.
+
+**Phase Review Gates**:
+- [ ] code-reviewer: <verdict + ISO timestamp>
+- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
+- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
+- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [ ] Committed: <commit SHA>
+
+**Findings Log**:
+_(empty until a reviewer returns BLOCK)_
+
+---
+
+## End-of-Plan Deliverable — Before/After Report (Patrick, 2026-05-30)
+
+After all phases pass the final cumulative review, produce a **before/after report** for Patrick covering every bug fixed. For each of the 14 bugs (Bug 1, 2.1–2.14), state:
+- **What was broken** — the bug in one line.
+- **Before (what Patrick saw in the editor/extension)** — the concrete wrong behavior visible in VSCode (e.g. "spurious `Timeframe` imported-but-never-used warning on valid code", "hovering `share` variable showed the keyword doc", "`let x = 5; print(x)` showed NO `let→const` hint", "completion popup opened on every space").
+- **After (what Patrick should now see)** — the corrected behavior (e.g. "no warning", "variable type shown", "`let→const` hint now fires", "popup only on `.`"), and whether it's a **visible behavior change** (some fixes change what shows up — e.g. `let→const` hints now appear on far more bindings; the `array→fixed` decoration is now clickable; the inlay-hint color is now Pittsburgh gold) vs an **invisible correctness fix**.
+- **How to see it** — the file/scenario in `examples/pirates-roster/` or a minimal repro to eyeball it after installing the rebuilt VSIX.
+
+Group the report by "you'll notice this changed" vs "quietly correct now." Call out the two CHANGELOG-worthy behavior shifts explicitly (Bug 2.9 → many more `let→const` hints; Phase 4 → gold inlay color + end-of-line positioning). This is the artifact Patrick reviews to validate the milestone hands-on.
+
+---
+
+## Anti-Pattern Callouts
+
+- **Splitting into commits instead of PRs**: Each phase is a self-contained bug fix sized as its own PR/commit on the M10 branch; Phase 0 is deliberately one PR (6 sites + shared root cause + shared test file), not six. Size is per-PR per branching.md.
+- **Shadow main branches**: M10 branches off `main` (at `0.3.0-m1`); no long-lived parallel main. The v0.2.1 track is a real release branch M9 merges into v0.3 — documented in the roadmap's amended release model, not an orphan.
+- **Building the engine before shipping value**: Every phase ships a user-visible fix on its own. M10 is dispatched FIRST precisely because it delivers value (fewer false positives, working hints) in days — no infrastructure-before-value.
+- **Hotfix that isn't**: These are real fixes with regression tests that fail-then-pass; no band-aids. The test-first protocol guarantees each fix is proven against a reproducing test.
+- **Abandoned branches**: M10 is a single milestone branch; phases commit to it sequentially and it merges via `/pr` when done. No per-phase branch is left dangling.
+- **Flag graveyards**: No feature flags — these are correctness fixes, not flag-gated features. Nothing to clean up.
+
+## Quality Checklist (verify at completion)
+- [ ] All inputs validated — N/A (no new user input surface; typeck/LSP internal)
+- [ ] Auth/authz enforced — N/A (dev tooling)
+- [ ] Error handling: diagnostics keep WHAT/WHAT-INSTEAD/WHY; no panics added on lookup misses
+- [ ] No SQL injection / XSS / path traversal / secret exposure — N/A
+- [ ] Performance: no new salsa query; O(1) per-arg lookups; no N+1
+- [ ] Tests: every bug has a fail-then-pass regression test (happy + the wrong-behavior case)
+- [ ] Existing tests still pass (≥1434 baseline preserved)
+- [ ] Types complete (no `as any`-equivalent, no unguarded `.unwrap()` added)
+- [ ] Follows existing codebase patterns (inserts mirror 2403/2407/1485/2216; walkers mirror ownership-hints recursion)
+- [ ] Every phase received the four-reviewer PASS before committing
+- [ ] Final cumulative reviewer sweep passed (Phase 11)
+- [ ] Plan-file acceptance-criteria checkboxes accurate across all phases
+- [ ] `examples/pirates-roster/entrypoint.ynz` extended + snapshot green (Demo invariant)
