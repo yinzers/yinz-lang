@@ -50,6 +50,74 @@ pub fn type_of_expression_at_offset(
     resolve_type_in_module(&parse.module, byte_offset)
 }
 
+/// Look up the declared type of the binding or parameter named `name` in the
+/// innermost function that contains `byte_offset`.
+///
+/// Used by the hover handler: `identifier_use_site_at_offset` supplies the name
+/// at an expression use-site; this function finds the corresponding declaration and
+/// returns its annotated type. Only annotated let-bindings and parameters are
+/// covered — unannotated bindings require the full `check_query` pass.
+///
+/// Time: O(n) AST walk where n = statements in the enclosing function.
+/// Space: O(depth) call stack.
+pub fn type_of_name_at_offset(module: &Module, name: &str, byte_offset: usize) -> Option<Type> {
+    for item in &module.items {
+        if let Item::Function(f) = item {
+            if span_contains(&f.span, byte_offset) {
+                // Check parameters first.
+                for param in &f.params {
+                    if param.name == name {
+                        return ast_type_to_primitive(&param.ty);
+                    }
+                }
+                // Walk the body for let-bindings by name, not by offset.
+                return resolve_type_by_name_in_block(&f.body, name);
+            }
+        }
+    }
+    None
+}
+
+fn resolve_type_by_name_in_block(block: &Block, name: &str) -> Option<Type> {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Let { name: bname, ty: Some(ty), .. } if bname == name => {
+                return ast_type_to_primitive(ty);
+            }
+            Stmt::Let { .. } => {}
+            Stmt::If { body, .. } => {
+                if let Some(t) = resolve_type_by_name_in_block(body, name) {
+                    return Some(t);
+                }
+            }
+            Stmt::While { body, .. } => {
+                if let Some(t) = resolve_type_by_name_in_block(body, name) {
+                    return Some(t);
+                }
+            }
+            Stmt::For { body, .. } => {
+                if let Some(t) = resolve_type_by_name_in_block(body, name) {
+                    return Some(t);
+                }
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                for arm in arms {
+                    if let Some(t) = resolve_type_by_name_in_block(&arm.body, name) {
+                        return Some(t);
+                    }
+                }
+                if let Some(b) = else_arm {
+                    if let Some(t) = resolve_type_by_name_in_block(b, name) {
+                        return Some(t);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn resolve_type_in_module(module: &Module, byte_offset: usize) -> Option<Type> {
     for item in &module.items {
         if let Item::Function(f) = item {

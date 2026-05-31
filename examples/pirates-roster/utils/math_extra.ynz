@@ -17,3 +17,13 @@ export function clamp(value: int, low: int, high: int) -> int {
 export function square(n: int) -> int {
   return n * n
 }
+
+// ────── M10 demo export — generic-position import-pattern coverage ──────
+
+/// Category for a stat book entry. Used as a concrete field type inside a
+/// generic shape in entrypoint.ynz (exercises the M10 generic-field import fix).
+export options StatCategory {
+  batting
+  pitching
+  fielding
+}

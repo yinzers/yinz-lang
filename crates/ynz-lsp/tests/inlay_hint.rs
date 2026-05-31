@@ -180,9 +180,19 @@ fn test_inlay_hint_protocol_only_domains_return_empty_not_error() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn test_inlay_hint_const_hint_suppressed_when_passed_to_function() {
-    // WHY: if a binding is passed to ANY function, the const hint is suppressed
-    // (conservative — the function might have a lend parameter).
+fn test_inlay_hint_const_hint_fires_when_passed_to_readonly_param() {
+    // test-ratchet: v0.2.1-M10 Phase 3 (Bug 2.9) made the let→const analysis
+    // ownership-aware. This test previously asserted the OPPOSITE (const hint
+    // suppressed when a binding is passed to ANY function) — that "conservative,
+    // the function might have a lend parameter" behavior WAS the over-suppression
+    // bug Phase 3 fixed, not a correct invariant. Assertion flipped to the corrected
+    // behavior.
+    //
+    // WHY: a binding passed to a read-only parameter (bare/`share` — here `x: int`
+    // with no `lend`/`give`) is NOT mutated, so the let→const hint MUST still fire.
+    // Only `lend`/`give` parameters suppress it. Catches a regression back to the
+    // old "any call suppresses" behavior, which made the headline let→const hint
+    // almost never fire in real code (nearly every `let` is passed to print/log/etc).
     let src = "function consume(x: int) -> nothing {}\nfunction entrypoint() -> nothing {\n  let val = 42\n  consume(val)\n}\n";
     let (state, uri) = state_single("/tmp/ynz_ih_alias.ynz", src);
     let hints = inlay_hint_response(&state, &uri, full_range());
@@ -196,10 +206,10 @@ fn test_inlay_hint_const_hint_suppressed_when_passed_to_function() {
             }
         })
         .collect();
-    // `val` is passed to `consume` — conservatively suppressed.
+    // `val` is passed to `consume`'s read-only `int` param — not mutated → hint fires.
     assert!(
-        const_hints.is_empty(),
-        "binding passed to function must not get const hint (conservative aliasing); got: {:?}",
+        !const_hints.is_empty(),
+        "binding passed to a read-only param must still get the let→const hint; got: {:?}",
         const_hints
     );
 }

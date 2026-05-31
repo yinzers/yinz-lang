@@ -40,6 +40,10 @@ pub enum DiagnosticKind {
     MissingReturn,
     /// A banned keyword was used.
     BannedKeyword { keyword: String },
+    /// A banned jargon word was used as an identifier — the identifier name is
+    /// carried so the LSP code-action handler can build a quick-fix without
+    /// re-parsing the source text.
+    BannedJargon { term: String },
     /// An imported name is never referenced in the file.
     UnusedImport { name: String },
 }
@@ -59,6 +63,7 @@ impl DiagnosticKind {
             DiagnosticKind::Borrowed => "Borrowed",
             DiagnosticKind::MissingReturn => "MissingReturn",
             DiagnosticKind::BannedKeyword { .. } => "BannedKeyword",
+            DiagnosticKind::BannedJargon { .. } => "BannedJargon",
             DiagnosticKind::UnusedImport { .. } => "UnusedImport",
         }
     }
@@ -76,6 +81,7 @@ impl DiagnosticKind {
             DiagnosticKind::Borrowed => "borrowed".to_string(),
             DiagnosticKind::MissingReturn => "missing return".to_string(),
             DiagnosticKind::BannedKeyword { keyword } => format!("`{keyword}` not valid here"),
+            DiagnosticKind::BannedJargon { term } => format!("`{term}` is programmer jargon"),
             DiagnosticKind::UnusedImport { name } => format!("`{name}` never used"),
         }
     }

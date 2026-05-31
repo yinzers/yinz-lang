@@ -2,7 +2,7 @@
   "name": "yinz",
   "displayName": "Yinz Language",
   "description": "Yinz language support: syntax highlighting, inline diagnostics, autocomplete, and hover docs powered by ynz-lsp",
-  "version": "0.3.0-m1",
+  "version": "0.3.0-m2",
   "publisher": "yinz-lang",
   "preview": true,
   "license": "MIT OR Apache-2.0",
@@ -44,6 +44,11 @@
           "default": "ynz-lsp",
           "description": "Path to the ynz-lsp binary. Defaults to 'ynz-lsp' (must be on PATH)."
         }
+      }
+    },
+    "configurationDefaults": {
+      "[ynz]": {
+        "editor.inlayHints.foreground": "#ffd23f"
       }
     }
   },

@@ -733,7 +733,10 @@ impl<'src> Lexer<'src> {
                 Token::Identifier(text.to_string())
             }
 
-            other => Token::Identifier(other.to_string()),
+            other => {
+                self.emit_banned_jargon_identifier(start, self.pos, other);
+                Token::Identifier(other.to_string())
+            }
         };
         self.push_token(tok, start, self.pos);
     }
@@ -1298,6 +1301,30 @@ impl<'src> Lexer<'src> {
             "Yinz uses one `if` keyword for simple branches, value matching, and type narrowing. \
              One concept, one keyword.",
         ));
+    }
+
+    /// Emit a `BannedJargon` suggestion when an identifier matches a registry
+    /// `[[banned_jargon]]` entry.  The term is carried on the `DiagnosticKind`
+    /// so the LSP code-action handler can build a quick-fix without re-parsing.
+    fn emit_banned_jargon_identifier(&mut self, start: usize, end: usize, term: &str) {
+        let Some(entry) = ynz_registry::banned_jargon_lookup(term) else {
+            return;
+        };
+        self.diags.push(
+            Diagnostic::suggestion(
+                SourceSpan::new(self.file, start, end),
+                format!("`{term}` is programmer jargon that Yinz avoids in source code."),
+                format!("Use `{}` instead.", entry.replacement),
+                format!(
+                    "Yinz keeps identifiers readable to developers without \
+                     a CS theory background — {reason}.",
+                    reason = entry.reason,
+                ),
+            )
+            .with_kind(DiagnosticKind::BannedJargon {
+                term: term.to_string(),
+            }),
+        );
     }
 
     fn emit_banned_declaration_keyword(

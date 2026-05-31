@@ -1844,21 +1844,21 @@ since = "M4"
 [[muted_hint_domain]]
 domain = "variable_type"
 placement_category = "Addition"
-description = "Infers the type of a variable from its initializer expression"
+description = "Shows the type the compiler figures out for a variable from its initializer expression"
 example_source = "let x = 42"
 example_hint_rendered = ": int (from 42)"
 
 [[muted_hint_domain]]
 domain = "function_param_type"
 placement_category = "Addition"
-description = "Infers a function parameter type from the call-site argument"
+description = "Shows the function parameter type the compiler figures out from the call-site argument"
 example_source = "foo(x => x + 1)"
 example_hint_rendered = ": int"
 
 [[muted_hint_domain]]
 domain = "ownership_call_site"
 placement_category = "Informational"
-description = "Shows the ownership modifier the compiler infers at a function call site; also fires at background call sites when .copy() arg exceeds 64 bytes to suggest .give instead"
+description = "Shows the ownership modifier the compiler picks at a function call site; also fires at background call sites when .copy() arg exceeds 64 bytes to suggest .give instead"
 example_source = "foo(player)"
 example_hint_rendered = "share (read-only — matches foo's signature)"
 # v0.3-M1 extension: fires at `background fn(largeStruct.copy)` call sites when
@@ -1876,14 +1876,14 @@ example_hint_rendered = "wait (db.fetch may suspend on I/O)"
 [[muted_hint_domain]]
 domain = "lifetimes"
 placement_category = "Informational"
-description = "Shows inferred lifetimes (shown only on user request — usually noise)"
+description = "Shows lifetimes the compiler tracks automatically (shown only on user request — usually noise)"
 example_source = "function foo(x: string) -> string { x }"
 example_hint_rendered = "'caller_scope"
 
 [[muted_hint_domain]]
 domain = "allocators"
 placement_category = "Addition"
-description = "Shows the inferred allocator for a new value inside an arena scope"
+description = "Shows the allocator the compiler picks for a new value inside an arena scope"
 example_source = "let temp = array<int>()"
 example_hint_rendered = ".in(scratch) — current arena"
 
