@@ -1471,6 +1471,156 @@ fn m8_background_runs_concurrently() {
     );
 }
 
+// ── v0.3-M2: concurrent wait state machines ──────────────────────────────────
+
+#[test]
+fn v03_m2_concurrent_waits_proof() {
+    // WHY: Core M2 correctness proof — 8 background tasks each containing `wait sleepAsync(100)`
+    // must all print their START line before any DONE line. This is only possible if state
+    // machines work correctly: each task suspends at the `wait` (yielding the thread), prints
+    // START, then resumes ~100ms later to print DONE. Sequential execution would interleave
+    // START 1 / DONE 1 / START 2 / DONE 2 — which is the M1 behavior.
+    //
+    // The concurrency proof is core-count-independent: even on a 1-core machine, Tokio's
+    // cooperative scheduling ensures all 8 STARTs are emitted before the first DONE because
+    // they all suspend at `wait` before any timer fires.
+    //
+    // DEVIATION NOTE: the fixture uses sleepMs(300) to keep main alive until background tasks
+    // complete (Tokio drops pending futures on ynz_rt_shutdown without a wait). M4 handle-form
+    // will eliminate this requirement.
+    //
+    // The no-op / sequential-execution detector is the ORDERING assertion below
+    // (all 8 START lines before any DONE) — deterministic and core-count-independent.
+    // The wall-clock bounds are loose sanity guards ONLY and do NOT detect a sleepAsync
+    // no-op: main's blocking sleepMs(300) keep-alive dominates total runtime, so the binary
+    // runs ~300ms whether or not sleepAsync suspends. We build the fixture first, then time
+    // execution only (excluding compile), so the bounds measure the program, not the build.
+    let tmp = std::env::temp_dir()
+        .join(format!("ynz-concurrent-proof-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).expect("create temp dir for concurrent waits proof");
+    let src_copy = tmp.join("v0_3_m2_concurrent_waits_proof.ynz");
+    std::fs::copy(
+        fixture("v0_3_m2_concurrent_waits_proof.ynz"),
+        &src_copy,
+    ).expect("copy concurrent waits fixture");
+
+    // Build phase — not timed.
+    let build_out = run_ynz(&["build", src_copy.to_str().unwrap()]);
+    assert!(
+        build_out.status.success(),
+        "concurrent waits fixture must build without errors; stderr:\n{}",
+        String::from_utf8_lossy(&build_out.stderr)
+    );
+    let binary = src_copy.with_extension("");
+    assert!(binary.exists(), "binary must exist after ynz build");
+
+    // Execution phase — timed.
+    let exec_start = std::time::Instant::now();
+    let exec_out = Command::new(&binary)
+        .env("CLICOLOR", "0")
+        .output()
+        .expect("failed to spawn concurrent waits binary");
+    let elapsed = exec_start.elapsed();
+    let elapsed_ms = elapsed.as_millis();
+
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let code = exec_out.status.code().unwrap_or(-1);
+    let stdout = String::from_utf8_lossy(&exec_out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&exec_out.stderr).into_owned();
+
+    assert_eq!(code, 0, "concurrent waits proof must exit 0; stderr:\n{stderr}");
+
+    let lines: Vec<&str> = stdout.lines().collect();
+    let start_lines: Vec<usize> = lines.iter().enumerate()
+        .filter(|(_, l)| l.starts_with("START "))
+        .map(|(i, _)| i)
+        .collect();
+    let done_lines: Vec<usize> = lines.iter().enumerate()
+        .filter(|(_, l)| l.starts_with("DONE "))
+        .map(|(i, _)| i)
+        .collect();
+
+    assert_eq!(start_lines.len(), 8, "all 8 START lines must appear; stdout:\n{stdout}");
+    assert_eq!(done_lines.len(), 8, "all 8 DONE lines must appear; stdout:\n{stdout}");
+
+    // safe: both vecs are asserted non-empty (len == 8) immediately above, so max/min are Some.
+    let last_start = *start_lines.iter().max().unwrap();
+    let first_done = *done_lines.iter().min().unwrap();
+    assert!(
+        last_start < first_done,
+        "all 8 START lines must appear before any DONE line — concurrency proof failed.\n\
+         If this test fails, the state machines are running sequentially (M1 behavior), \
+         not concurrently (M2 behavior).\nstdout:\n{stdout}"
+    );
+
+    // Sanity floor only: confirms the compiled binary actually executed (it must run at
+    // least main's sleepMs(300) keep-alive). This is NOT a sleepAsync no-op detector — a
+    // no-op would still run ~300ms because sleepMs(300) dominates. The ordering assertion
+    // above is what proves sleepAsync genuinely suspends. The upper bound catches a hang.
+    assert!(
+        elapsed_ms >= 80,
+        "execution time {elapsed_ms}ms is below 80ms — sleepAsync may have no-opped; \
+         check that wait actually suspends for 100ms"
+    );
+    assert!(
+        elapsed_ms < 2000,
+        "execution time {elapsed_ms}ms exceeds 2 seconds; concurrent waits must finish in ~300ms"
+    );
+}
+
+// ── v0.3-M2 Option-B deferral errors ─────────────────────────────────────────
+
+#[test]
+fn v03_m2_wait_in_loop_produces_clean_error() {
+    // WHY: `wait` inside a while loop must emit a clean teaching error with a non-zero
+    // exit code rather than silently no-oping the wait or crashing the backend.
+    // Catches regressions where the loop-body guard is removed and programs silently
+    // skip the suspension point — the user sees no output and no error.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m2_wait_in_loop_error.ynz"));
+    assert_ne!(code, 0, "wait in loop must exit non-zero; stderr:\n{stderr}");
+    assert!(
+        stdout.is_empty(),
+        "no output must be produced on compile error; got:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("loop"),
+        "error must mention `loop` in the message; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("v0.3-M3"),
+        "error must reference v0.3-M3 as the fix milestone; stderr:\n{stderr}"
+    );
+    // Must NOT contain the crash message that would appear if the codegen ran.
+    assert!(
+        !stderr.contains("Machine-code generation failed"),
+        "must not crash the backend — clean typeck error expected; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m2_local_crossing_wait_produces_clean_error() {
+    // WHY: a local binding declared before a `wait` and read after must emit a clean
+    // teaching error rather than crashing the backend with an LLVM dominance violation
+    // ("Machine-code generation failed inside the backend"). Catches regressions where
+    // the local-crossing guard is removed.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m2_local_crossing_wait_error.ynz"));
+    assert_ne!(code, 0, "local crossing wait must exit non-zero; stderr:\n{stderr}");
+    assert!(
+        stdout.is_empty(),
+        "no output must be produced on compile error; got:\n{stdout}"
+    );
+    // Must NOT contain the backend crash message.
+    assert!(
+        !stderr.contains("Machine-code generation failed"),
+        "must not crash the backend — clean typeck error expected; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("`x`"),
+        "error must name the offending binding `x`; stderr:\n{stderr}"
+    );
+}
+
 // ── M8 P6: bignum — number<N> for N > 34 ─────────────────────────────────────
 // (m8_bignum_number100_runs above covers the literal print case)
 

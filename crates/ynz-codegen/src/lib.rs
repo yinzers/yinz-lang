@@ -30,6 +30,7 @@ pub mod emit;
 pub mod queries;
 pub mod runtime_decls;
 pub mod shape_types;
+pub mod state_machine;
 pub mod vtable;
 
 pub use artifact::{sha256, CompiledArtifact};

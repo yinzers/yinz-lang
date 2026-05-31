@@ -1,0 +1,254 @@
+---
+source: crates/ynz-codegen/tests/golden.rs
+expression: ir
+---
+; ModuleID = 'ynz-v03m2_single_wait.ynz'
+source_filename = "ynz-v03m2_single_wait.ynz"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-linux-gnu"
+
+@.str.true = private unnamed_addr constant [5 x i8] c"true\00"
+@.str.false = private unnamed_addr constant [6 x i8] c"false\00"
+@.dec.zero = private unnamed_addr constant i128 45235290231555418299757684020165476352
+@.panic.iadd = private unnamed_addr constant [20 x i8] c"int overflow in '+'\00"
+@.panic.isub = private unnamed_addr constant [20 x i8] c"int overflow in '-'\00"
+@.panic.imul = private unnamed_addr constant [20 x i8] c"int overflow in '*'\00"
+@.panic.idiv = private unnamed_addr constant [23 x i8] c"division by zero (int)\00"
+@.panic.irem = private unnamed_addr constant [24 x i8] c"remainder by zero (int)\00"
+@.panic.ddiv = private unnamed_addr constant [26 x i8] c"division by zero (number)\00"
+@.panic.drem = private unnamed_addr constant [27 x i8] c"remainder by zero (number)\00"
+@.source.file = private unnamed_addr constant [22 x i8] c"v03m2_single_wait.ynz\00"
+
+declare i32 @puts(ptr)
+
+declare void @ynz_decimal_add(ptr, ptr, ptr)
+
+declare void @ynz_decimal_sub(ptr, ptr, ptr)
+
+declare void @ynz_decimal_mul(ptr, ptr, ptr)
+
+declare void @ynz_decimal_div(ptr, ptr, ptr)
+
+declare i32 @ynz_decimal_compare(ptr, ptr)
+
+declare void @ynz_decimal_from_int(i64, ptr)
+
+declare void @ynz_decimal_from_float(double, ptr)
+
+declare ptr @ynz_decimal_to_string(ptr)
+
+declare ptr @ynz_int_to_string(i64)
+
+declare ptr @ynz_float_to_string(double)
+
+declare void @ynz_panic_overflow(ptr, ptr, i32, i32)
+
+declare void @ynz_panic_div_by_zero(ptr, ptr, i32, i32)
+
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64) #0
+
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64) #0
+
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64) #0
+
+declare i32 @ynz_string_eq(ptr, ptr)
+
+declare ptr @ynz_alloc(i64)
+
+declare void @ynz_free(ptr, i64)
+
+declare ptr @ynz_array_new()
+
+declare void @ynz_array_push(ptr, i64)
+
+declare void @ynz_array_get(ptr, i64, ptr)
+
+declare void @ynz_array_set(ptr, i64, i64)
+
+declare i64 @ynz_array_count(ptr)
+
+declare void @ynz_array_drop(ptr)
+
+declare void @ynz_siphash_init()
+
+declare ptr @ynz_map_new()
+
+declare void @ynz_map_get(ptr, i64, ptr)
+
+declare void @ynz_map_get_str(ptr, ptr, ptr)
+
+declare void @ynz_map_set(ptr, i64, i64)
+
+declare void @ynz_map_set_str(ptr, ptr, i64)
+
+declare i64 @ynz_map_count(ptr)
+
+declare i64 @ynz_map_has(ptr, i64)
+
+declare void @ynz_map_iter_get(ptr, i64, ptr)
+
+declare void @ynz_map_iter_get_str(ptr, i64, ptr)
+
+declare void @ynz_map_drop(ptr)
+
+declare void @ynz_string_to_int(ptr, i64, ptr)
+
+declare void @ynz_string_to_float(ptr, i64, ptr)
+
+declare void @ynz_string_to_number(ptr, i64, ptr)
+
+declare ptr @ynz_string_from_static(ptr, i64)
+
+declare void @ynz_frame_push(ptr, i64, ptr)
+
+declare void @ynz_frame_pop()
+
+declare ptr @ynz_error_new(ptr)
+
+declare void @ynz_error_drop(ptr)
+
+declare ptr @ynz_error_message(ptr)
+
+declare void @ynz_unhandled_error(ptr)
+
+declare i32 @ynz_string_validate_utf8(ptr, i64)
+
+declare ptr @ynz_string_concat(ptr, ptr)
+
+declare i64 @ynz_string_count(ptr)
+
+declare i64 @ynz_string_byte_count(ptr)
+
+declare ptr @ynz_string_codepoint_at(ptr, i64)
+
+declare i64 @ynz_string_byte_at(ptr, i64)
+
+declare i32 @ynz_string_contains(ptr, ptr)
+
+declare i64 @ynz_string_index_of(ptr, ptr)
+
+declare i32 @ynz_string_starts_with(ptr, ptr)
+
+declare i32 @ynz_string_ends_with(ptr, ptr)
+
+declare ptr @ynz_string_to_upper(ptr)
+
+declare ptr @ynz_string_to_lower(ptr)
+
+declare ptr @ynz_string_substring(ptr, i64, i64)
+
+declare ptr @ynz_string_trim(ptr)
+
+declare i64 @ynz_string_grapheme_count(ptr)
+
+declare ptr @ynz_string_grapheme_at(ptr, i64)
+
+declare ptr @ynz_string_split(ptr, ptr)
+
+declare ptr @ynz_string_replace(ptr, ptr, ptr)
+
+declare ptr @ynz_string_builder_new()
+
+declare void @ynz_string_builder_append(ptr, ptr)
+
+declare ptr @ynz_string_builder_finalize(ptr)
+
+declare void @ynz_string_builder_drop(ptr)
+
+declare ptr @ynz_sensitive_to_string(ptr)
+
+declare ptr @ynz_bignum_add(ptr, ptr, i32)
+
+declare ptr @ynz_bignum_sub(ptr, ptr, i32)
+
+declare ptr @ynz_bignum_mul(ptr, ptr, i32)
+
+declare ptr @ynz_bignum_div(ptr, ptr, i32)
+
+declare void @ynz_rt_init()
+
+declare void @ynz_rt_spawn_blocking(ptr, ptr, i64)
+
+declare void @ynz_rt_check_preempt()
+
+declare void @ynz_rt_shutdown()
+
+declare void @ynz_thread_sleep_ms(i64)
+
+declare void @ynz_rt_spawn(ptr, ptr, i64)
+
+declare ptr @ynz_rt_async_sleep_create(i64)
+
+declare i32 @ynz_rt_async_sleep_poll(ptr, ptr)
+
+declare i32 @ynz_rt_call_state_machine_sync(ptr, ptr, i64)
+
+define i32 @ynz_sm_pause_resume(ptr %0, ptr %1) {
+sm_entry:
+  %rp = load i32, ptr %0, align 4
+  switch i32 %rp, label %sm_dead [
+    i32 0, label %sm_s0
+    i32 1, label %sm_s1
+  ]
+
+sm_s0:                                            ; preds = %sm_entry
+  %sleep_handle = call ptr @ynz_rt_async_sleep_create(i64 100)
+  %first_poll = call i32 @ynz_rt_async_sleep_poll(ptr %sleep_handle, ptr %1)
+  %first_is_ready = icmp eq i32 %first_poll, 0
+  br i1 %first_is_ready, label %sm_post_wait, label %sm_suspend
+
+sm_s1:                                            ; preds = %sm_entry
+  %h_slot = getelementptr i8, ptr %0, i64 8
+  %sleep_handle1 = load ptr, ptr %h_slot, align 8
+  %poll = call i32 @ynz_rt_async_sleep_poll(ptr %sleep_handle1, ptr %1)
+  %is_ready = icmp eq i32 %poll, 0
+  br i1 %is_ready, label %sm_post_wait, label %sm_pending
+
+sm_dead:                                          ; preds = %sm_entry
+  ret i32 0
+
+sm_pending:                                       ; preds = %sm_s1, %sm_suspend
+  ret i32 1
+
+sm_post_wait:                                     ; preds = %sm_s1, %sm_s0
+  %h_slot_wr2 = getelementptr i8, ptr %0, i64 8
+  store ptr null, ptr %h_slot_wr2, align 8
+  store i32 0, ptr %0, align 4
+  ret i32 0
+
+sm_suspend:                                       ; preds = %sm_s0
+  %h_slot_wr = getelementptr i8, ptr %0, i64 8
+  store ptr %sleep_handle, ptr %h_slot_wr, align 8
+  store i32 1, ptr %0, align 4
+  br label %sm_pending
+}
+
+define void @pause() {
+entry:
+  %sm_frame = call ptr @ynz_alloc(i64 16)
+  %h_slot_wr = getelementptr i8, ptr %sm_frame, i64 8
+  store ptr null, ptr %h_slot_wr, align 8
+  store i32 0, ptr %sm_frame, align 4
+  %sm_result = call i32 @ynz_rt_call_state_machine_sync(ptr @ynz_sm_pause_resume, ptr %sm_frame, i64 16)
+  call void @ynz_free(ptr %sm_frame, i64 16)
+  ret void
+}
+
+define i32 @main() {
+entry:
+  call void @ynz_siphash_init()
+  call void @ynz_rt_init()
+  %sm_frame = call ptr @ynz_alloc(i64 16)
+  %h_slot_wr = getelementptr i8, ptr %sm_frame, i64 8
+  store ptr null, ptr %h_slot_wr, align 8
+  store i32 0, ptr %sm_frame, align 4
+  call void @ynz_rt_spawn(ptr @ynz_sm_pause_resume, ptr %sm_frame, i64 16)
+  call void @ynz_thread_sleep_ms(i64 200)
+  call void @ynz_rt_shutdown()
+  ret i32 0
+}
+
+attributes #0 = { nocallback nofree nosync nounwind speculatable willreturn memory(none) }

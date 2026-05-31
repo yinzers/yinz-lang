@@ -35,6 +35,20 @@ use tokio::time::Sleep;
 // SAFETY: `Mutex<Option<Runtime>>` is `Send + Sync`.
 static RUNTIME: OnceLock<Mutex<Option<tokio::runtime::Runtime>>> = OnceLock::new();
 
+/// Byte offset of the `sleep_handle` pointer in a codegen-emitted state-machine frame.
+///
+/// Frame layout (mirrors `crates/ynz-codegen/src/state_machine.rs`):
+///   bytes 0–3   : resume_point (i32)
+///   bytes 4–7   : padding
+///   bytes 8–15  : sleep_handle (*mut Pin<Box<Sleep>>, or null)
+///   bytes 16+   : local-variable slots (i64 each)
+///
+/// This constant is the authoritative offset used by `SpawnStateFnFuture::drop` to
+/// read the `sleep_handle` slot and free any in-flight `Sleep` box on task cancellation.
+/// It MUST stay in sync with `FRAME_OFFSET_SLEEP_HANDLE` in state_machine.rs — both are
+/// `8` and derive from the same frame layout decision.
+const FRAME_SLEEP_HANDLE_OFFSET: usize = 8;
+
 /// Initialise the Tokio multi-thread runtime.
 ///
 /// # Flow
@@ -311,13 +325,55 @@ impl Future for SyncStateFnFuture {
 struct SpawnStateFnFuture {
     resume_fn: unsafe extern "C" fn(*mut u8, *mut u8) -> i32,
     frame_ptr: *mut u8,
-    // frame_size carries the byte length for the Phase 2 deallocation path.
-    #[allow(dead_code)]
+    /// Byte length of the heap frame, used by `Drop` to free it via `ynz_free`.
     frame_size: i64,
 }
 
 // SAFETY: SpawnStateFnFuture is owned exclusively by the spawned task for its lifetime.
 unsafe impl Send for SpawnStateFnFuture {}
+
+impl Drop for SpawnStateFnFuture {
+    /// Free the heap state-machine frame when the spawned task ends — on normal completion
+    /// AND on cancellation (Tokio dropping the task before it finishes). This is the
+    /// spawn-path counterpart to the sync bridge: the sync path frees the frame at the
+    /// codegen call site after `block_on` returns, but a fire-and-forget `ynz_rt_spawn`
+    /// task has no call site to return to, so its frame is freed here. Frame ownership
+    /// moves into this future at spawn time (`ynz_rt_spawn` safety contract), so this drop
+    /// runs exactly once and the frame is never aliased.
+    ///
+    /// Cancellation mid-wait: `ynz_rt_async_sleep_poll` frees the `Sleep` box when it
+    /// returns Ready (normal completion). When a task is cancelled while still Pending —
+    /// Tokio drops the Future mid-poll — the `Sleep` box is still live in frame slot at
+    /// `FRAME_SLEEP_HANDLE_OFFSET`. The codegen null-on-Ready discipline (emit.rs) ensures
+    /// the slot is non-null only when a sleep is genuinely in flight, so reading and freeing
+    /// it here on a non-null value is free of double-free risk.
+    fn drop(&mut self) {
+        if self.frame_ptr.is_null() {
+            return;
+        }
+        // SAFETY: frame_ptr is valid for at least `frame_size` bytes (caller guarantee).
+        // FRAME_SLEEP_HANDLE_OFFSET is within bounds because the frame is at least 16 bytes
+        // (header size). Reading the pointer at offset 8 and treating it as `*mut Pin<Box<Sleep>>`
+        // matches the layout established by `store_sleep_handle` in state_machine.rs.
+        unsafe {
+            let handle_slot =
+                self.frame_ptr.add(FRAME_SLEEP_HANDLE_OFFSET) as *const *mut u8;
+            let handle_ptr = *handle_slot;
+            if !handle_ptr.is_null() {
+                // Reconstruct ownership of the `Pin<Box<Sleep>>` and drop it. This is the
+                // inverse of `Box::into_raw` in `ynz_rt_async_sleep_create`. The Sleep future
+                // allocated there and stored by codegen is exclusively owned from that moment
+                // until either `ynz_rt_async_sleep_poll` returns Ready (normal path) or this
+                // Drop runs (cancellation path). Exactly one of these two paths runs; no aliasing.
+                drop(Box::from_raw(handle_ptr as *mut Pin<Box<Sleep>>));
+            }
+            // Free the frame after the sleep handle is dealt with.
+            // SAFETY: frame_ptr was returned by `ynz_alloc` for `frame_size` bytes and moved
+            // into this future exclusively; freed exactly once here.
+            crate::ynz_free(self.frame_ptr, self.frame_size as usize);
+        }
+    }
+}
 
 impl Future for SpawnStateFnFuture {
     type Output = ();
@@ -347,11 +403,9 @@ impl Future for SpawnStateFnFuture {
 ///    value (fire-and-forget; callers signal completion via channels or atomics).
 /// 2. Spawn the future on the global Tokio runtime via `rt.spawn`. Returns immediately;
 ///    the future runs cooperatively on the work-stealing I/O thread pool.
-/// 3. The frame pointed to by `frame_ptr` is NOT freed by `SpawnStateFnFuture`'s drop:
-///    `SpawnStateFnFuture` holds a raw `*mut u8` with no Drop impl; the raw pointer carries
-///    no ownership. Frame deallocation is the codegen-emitted resume_fn's responsibility
-///    on its terminal state transition, wired in Phase 2; until then, the frame intentionally
-///    leaks in this fire-and-forget path.
+/// 3. The frame pointed to by `frame_ptr` is freed by `SpawnStateFnFuture`'s `Drop` when the
+///    task ends — on normal completion AND on cancellation. Ownership of the frame moves into
+///    the future at spawn time, so the drop frees it exactly once via `ynz_free`.
 /// 4. Panic inside `resume_fn` is caught by Tokio's task wrapper; the JoinHandle
 ///    will surface a `JoinError::is_panic()`. The spawning scope continues normally.
 ///

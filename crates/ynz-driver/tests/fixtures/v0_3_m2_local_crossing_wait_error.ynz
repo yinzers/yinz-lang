@@ -1,0 +1,5 @@
+function entrypoint() -> nothing {
+  let x: int = 5
+  wait sleepAsync(30)
+  print(x.toString())
+}

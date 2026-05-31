@@ -38,8 +38,134 @@ use crate::{
     artifact::{sha256, CompiledArtifact},
     runtime_decls::RuntimeDecls,
     shape_types::{emit_shape_types, ShapeLlvmTypes},
+    state_machine,
     vtable::emit_vtable_globals,
 };
+
+// ── v0.3-M2: function-contains-wait analysis ──────────────────────────────────
+
+/// True when any `Expr::Wait` appears anywhere in `body` (recursive, depth-first).
+///
+/// This is the path-selection predicate for the state-machine codegen path.
+/// Functions whose body contains `Expr::Wait` are lowered via
+/// `lower_function_with_waits`; all others use the standard `lower_function` path
+/// with zero added overhead.
+///
+/// Recurses into all nested blocks (if/while/for/match arms). Does NOT cross
+/// function-call boundaries — `wait` in a callee is NOT transitive in M2 (M3
+/// ships the transitive predicate via call-graph analysis).
+pub fn function_contains_wait(body: &ynz_ast::nodes::Block) -> bool {
+    body.stmts.iter().any(stmt_contains_wait)
+}
+
+fn stmt_contains_wait(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Expr(e) => expr_contains_wait(e),
+        Stmt::Let { value, .. } => expr_contains_wait(value),
+        Stmt::Assign { value, .. } => expr_contains_wait(value),
+        Stmt::If { cond, body, .. } => expr_contains_wait(cond) || function_contains_wait(body),
+        Stmt::Match { scrutinee, arms, else_arm, .. } => {
+            expr_contains_wait(scrutinee)
+                || arms.iter().any(|a| function_contains_wait(&a.body))
+                || else_arm.as_ref().is_some_and(function_contains_wait)
+        }
+        Stmt::While { cond, body, .. } => expr_contains_wait(cond) || function_contains_wait(body),
+        Stmt::For { iter, body, .. } => expr_contains_wait(iter) || function_contains_wait(body),
+        Stmt::Return { value, .. } => value.as_ref().is_some_and(expr_contains_wait),
+        Stmt::FieldAssign { target, value, .. } => {
+            expr_contains_wait(target) || expr_contains_wait(value)
+        }
+        Stmt::IndexAssign { receiver, index, value, .. } => {
+            expr_contains_wait(receiver) || expr_contains_wait(index) || expr_contains_wait(value)
+        }
+    }
+}
+
+fn expr_contains_wait(expr: &Expr) -> bool {
+    match expr {
+        Expr::Wait(..) => true,
+        Expr::Background(inner, _) => expr_contains_wait(inner),
+        Expr::Call(c) => c.args.iter().any(expr_contains_wait),
+        Expr::BinOp { lhs, rhs, .. } => expr_contains_wait(lhs) || expr_contains_wait(rhs),
+        Expr::UnaryOp { operand, .. } => expr_contains_wait(operand),
+        Expr::MethodCall { receiver, args, .. } => {
+            expr_contains_wait(receiver) || args.iter().any(expr_contains_wait)
+        }
+        Expr::FieldAccess { receiver, .. } => expr_contains_wait(receiver),
+        Expr::IndexAccess { receiver, index, .. } => {
+            expr_contains_wait(receiver) || expr_contains_wait(index)
+        }
+        Expr::StructLit { fields, .. } => fields.iter().any(|f| expr_contains_wait(&f.value)),
+        Expr::ArrayLit { elements, .. } => elements.iter().any(expr_contains_wait),
+        Expr::MapLit { entries, .. } => entries.iter().any(|(k, v)| {
+            expr_contains_wait(k) || expr_contains_wait(v)
+        }),
+        Expr::InterpolatedString(parts, _) => parts.iter().any(|p| match p {
+            ynz_ast::nodes::StringPart::Expr(e, _) => expr_contains_wait(e),
+            ynz_ast::nodes::StringPart::Lit(..) => false,
+        }),
+        Expr::PostfixOp { receiver, .. } => expr_contains_wait(receiver),
+        Expr::Is { expr: inner, .. } => expr_contains_wait(inner),
+        // Leaf nodes (literals, idents, NoneLit, SelfValue, Error) — no nested waits.
+        _ => false,
+    }
+}
+
+/// Cache of `function_contains_wait` results keyed by Yinz function name.
+///
+/// Built once per module during `build_module` before Pass 2. Prevents re-walking
+/// the AST on every call-site check during background routing and call-site dispatch.
+pub type WaitCache = HashMap<String, bool>;
+
+/// Empty WaitCache used by generic-function lowering (generics cannot contain `wait` in M2).
+///
+/// Process-global OnceLock avoids allocating a new empty HashMap per generic instantiation.
+static EMPTY_WAIT_CACHE: std::sync::OnceLock<WaitCache> = std::sync::OnceLock::new();
+
+fn empty_wait_cache() -> &'static WaitCache {
+    EMPTY_WAIT_CACHE.get_or_init(WaitCache::new)
+}
+
+/// Build the `WaitCache` for all non-generic functions in the module.
+///
+/// Generic functions are excluded because their concrete instantiations are lowered
+/// separately and generics cannot contain user-written `wait` in M2 (they have no
+/// concrete return type that could be awaitable).
+fn build_wait_cache(typed: &TypedModule) -> WaitCache {
+    let mut cache = WaitCache::new();
+    for item in &typed.module.items {
+        if let Item::Function(f) = item {
+            if f.generics.is_empty() {
+                cache.insert(f.name.clone(), function_contains_wait(&f.body));
+            }
+        }
+    }
+    cache
+}
+
+/// The set of free-function intrinsic names that are may-block (can contain suspension points).
+///
+/// M2 uses a fixed 2-element set. M3 will replace this with a transitive call-graph analysis
+/// pass, at which point this constant can be removed.
+///
+/// The cost of keeping this as an in-code constant (rather than a registry field) is explicit:
+/// every new may-block intrinsic added before M3 must edit this list. Caught at code review.
+// CARVE-OUT: compiler-internal constant — predicate for M2 sleepAsync dispatch in codegen.
+// Not a user-facing feature. M3's transitive analysis replaces this entirely.
+const M2_MAY_BLOCK_INTRINSICS: &[&str] = &["sleepAsync", "__testFallibleAsync"];
+
+/// True when a callee name identifies a may-block call site in M2.
+///
+/// Two signals are checked:
+/// 1. The callee is in the M2 may-block intrinsic set (`sleepAsync`, `__testFallibleAsync`).
+/// 2. The callee is a user-defined function whose body syntactically contains `Expr::Wait`.
+///
+/// NOT transitive: if `foo` calls `bar` and `bar` contains `wait`, `foo` is only may-block
+/// if the `WaitCache` entry for `foo` is true (i.e., `foo`'s own body contains `wait`).
+fn is_may_block_callee(callee_name: &str, wait_cache: &WaitCache) -> bool {
+    M2_MAY_BLOCK_INTRINSICS.contains(&callee_name)
+        || wait_cache.get(callee_name).copied().unwrap_or(false)
+}
 
 /// The file ID embedded in the LLVM module for deterministic IR and object output.
 pub fn module_identifier(source_path: &str) -> String {
@@ -192,6 +318,22 @@ fn build_module<'ctx, 'g>(
     // Pass 0 — emit LLVM struct types for all user-defined shapes.
     let shape_types = emit_shape_types(ctx, shape_table);
 
+    // Pass 0.5 — build the wait cache: one AST walk per function, result cached for all
+    // of Pass 2 (background routing, call-site dispatch, path selection all read it).
+    let wait_cache = build_wait_cache(typed);
+
+    // Pass 0.6 — forward-declare resume functions for all state-machine functions.
+    // Required before Pass 1 so that call sites inside state-machine bodies can
+    // reference the resume function before its body is emitted.
+    for item in &typed.module.items {
+        if let Item::Function(f) = item {
+            if f.generics.is_empty() && wait_cache.get(&f.name).copied().unwrap_or(false) {
+                let resume_name = state_machine::resume_fn_name(&f.name);
+                state_machine::declare_resume_fn(ctx, module, &resume_name);
+            }
+        }
+    }
+
     // Pass 1 — forward-declare every non-generic function so vtables and bodies can reference them.
     for item in &typed.module.items {
         match item {
@@ -245,6 +387,7 @@ fn build_module<'ctx, 'g>(
                 &shape_types,
                 mono_table,
                 &options_table,
+                &wait_cache,
             )?,
             Item::Function(_)
             | Item::ShapeDecl(_)
@@ -420,6 +563,9 @@ fn lower_generic_function<'ctx>(
         is_errors_capable: false,
         errors_capable_locals: std::collections::HashSet::new(),
         bg_uid: 0,
+        // Generic functions cannot contain `wait` in M2 (no concrete return type that could
+        // be awaitable). Use an empty cache — no state-machine routing needed.
+        wait_cache: empty_wait_cache(),
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -620,6 +766,10 @@ struct Cg<'ctx, 'g> {
     // Per-Cg (not global static) so identical source always produces identical IR even
     // when multiple compilations run in the same process (LSP, test harness).
     bg_uid: u64,
+    // v0.3-M2: contains-wait cache for all non-generic functions in the module.
+    // Used by background routing and call-site dispatch to check if a callee is a
+    // state machine without re-walking its AST on every access.
+    wait_cache: &'g WaitCache,
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
@@ -799,36 +949,15 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         Ok(slot)
     }
 
-    /// Convert any BasicValueEnum to its i64-bit representation for uniform array storage.
+    /// Convert any BasicValueEnum to its i64-bit representation for uniform array/map/frame
+    /// storage. Delegates to the shared `value_to_i64_bits` marshaller after resolving generics.
     fn to_i64_bits(
         &self,
         val: BasicValueEnum<'ctx>,
         ty: &Type,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         let resolved = self.resolve_type(ty);
-        match &resolved {
-            Type::Int | Type::Bool => Ok(val.into_int_value()),
-            Type::Float => self
-                .builder
-                .build_bit_cast(val.into_float_value(), self.i64(), "f_to_i")
-                .map(|v| v.into_int_value())
-                .map_err(|e| format!("{e}")),
-            Type::String
-            | Type::Number { .. }
-            | Type::Shape { .. }
-            | Type::Dynamic { .. }
-            | Type::BuiltinArray { .. }
-            | Type::BuiltinFixed { .. }
-            | Type::Maybe { .. }
-            | Type::BuiltinMap { .. }
-            | Type::MapEntry { .. }
-            | Type::Union { .. }
-            | Type::Sensitive { .. } => self
-                .builder
-                .build_ptr_to_int(val.into_pointer_value(), self.i64(), "ptr_to_i")
-                .map_err(|e| format!("{e}")),
-            _ => Err(format!("cannot convert {:?} to i64 bits", resolved)),
-        }
+        value_to_i64_bits(&self.builder, self.i64(), val, &resolved)
     }
 
     /// Convert an i64-bit pattern back to the concrete type representation.
@@ -881,7 +1010,18 @@ fn lower_function<'ctx, 'g>(
     shape_types: &'g ShapeLlvmTypes<'ctx>,
     mono_table: &'g MonomorphizationTable,
     options_table: &'g ynz_typeck::options_table::OptionsTable,
+    wait_cache: &'g WaitCache,
 ) -> Result<(), String> {
+    // v0.3-M2 path selection: functions whose body contains `Expr::Wait` get the state-machine
+    // path. All others use the standard sequential path with zero overhead.
+    // The wait_cache is computed once before Pass 2 — no re-walk here.
+    if wait_cache.get(&f.name).copied().unwrap_or(false) {
+        return lower_function_with_waits(
+            ctx, module, rt, globals, typed, f, shape_table, shape_types, mono_table,
+            options_table, wait_cache,
+        );
+    }
+
     let llvm_name = if f.name == "entrypoint" {
         "main"
     } else {
@@ -915,6 +1055,7 @@ fn lower_function<'ctx, 'g>(
         is_errors_capable,
         errors_capable_locals: std::collections::HashSet::new(),
         bg_uid: 0,
+        wait_cache,
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -1001,6 +1142,858 @@ fn lower_function<'ctx, 'g>(
         }
     }
     Ok(())
+}
+
+// ── v0.3-M2: state-machine function codegen ───────────────────────────────────
+
+/// Lower a `wait`-containing function as an LLVM state machine.
+///
+/// # Generated components
+///
+/// 1. **Resume function** (`ynz_sm_<name>_resume`) — the actual state-machine logic,
+///    split at each `Expr::Wait`. Pre-declared in Pass 0.6; body emitted here.
+///    Signature: `i32 (ptr frame, ptr waker_ctx)` where 0=Ready, 1=Pending.
+///
+/// 2. **Wrapper function** (`<name>` LLVM function, or `main` for `entrypoint`) —
+///    allocates the frame, copies args to frame slots, calls
+///    `ynz_rt_call_state_machine_sync`, reads the return value from frame[0], frees
+///    the frame, and returns. This is the function called from non-SM contexts and
+///    by `main` entry.
+///
+/// # Frame allocation
+///
+/// Frame is heap-allocated via `ynz_alloc(frame_size)`. For the `background` path,
+/// the frame is allocated at the call site (in `lower_expr_background`) and passed
+/// directly to `ynz_rt_spawn` — the wrapper function is not invoked.
+///
+/// # Wait dispatch strategy
+///
+/// Each `Expr::Wait(Call { callee: "sleepAsync", args: [ms] }, _)` in the body
+/// generates:
+/// - **State N (before wait)**: create the sleep handle, store in `frame[SLEEP_HANDLE]`,
+///   set `resume_point = N+1`, return Pending.
+/// - **State N+1 (continuation)**: poll the sleep handle via `ynz_rt_async_sleep_poll`.
+///   If Ready: clear handle slot, continue. If Pending: return 1.
+///
+/// # `main` wrap
+///
+/// When `entrypoint` contains `wait`, the LLVM `main` function:
+/// 1. Calls `ynz_rt_init` (first non-allocation instruction — see AC #5).
+/// 2. Allocates the frame.
+/// 3. Calls `ynz_rt_call_state_machine_sync(resume_fn, frame, size)`.
+/// 4. Reads exit code from `frame[0]`.
+/// 5. Calls `ynz_rt_shutdown`.
+/// 6. Returns exit code.
+///
+/// # Failure modes
+///
+/// Propagates `Err` from any inkwell builder call. State-machine resume panics are
+/// caught by Tokio's task wrapper and do not propagate to the calling scope.
+#[allow(clippy::too_many_arguments)]
+fn lower_function_with_waits<'ctx, 'g>(
+    ctx: &'ctx Context,
+    module: &'g Module<'ctx>,
+    rt: &'g RuntimeDecls<'ctx>,
+    globals: &'g ModuleGlobals<'ctx>,
+    typed: &'g TypedModule,
+    f: &'g FunctionDecl,
+    shape_table: &'g ShapeTable,
+    shape_types: &'g ShapeLlvmTypes<'ctx>,
+    mono_table: &'g MonomorphizationTable,
+    options_table: &'g ynz_typeck::options_table::OptionsTable,
+    wait_cache: &'g WaitCache,
+) -> Result<(), String> {
+    // Collect the names of parameters that cross the wait boundary.
+    // In M2, ALL parameters are live across any wait in the function body.
+    // M3 may add liveness analysis to shrink this set.
+    let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
+    let n_locals = param_names.len(); // each param gets one i64 frame slot
+
+    let frame_bytes = state_machine::frame_size(n_locals);
+    let is_main = f.name == "entrypoint";
+    let llvm_name = if is_main { "main" } else { f.name.as_str() };
+
+    // ── Part 1: Generate the resume function body ──────────────────────────────
+
+    let resume_name = state_machine::resume_fn_name(&f.name);
+    let resume_fn = module
+        .get_function(&resume_name)
+        .ok_or_else(|| format!("resume fn `{resume_name}` not pre-declared"))?;
+
+    // Resume fn params: (frame: ptr, waker_ctx: ptr)
+    let frame_param = resume_fn
+        .get_nth_param(0)
+        .ok_or("resume: missing frame param")?
+        .into_pointer_value();
+    let waker_param = resume_fn
+        .get_nth_param(1)
+        .ok_or("resume: missing waker param")?
+        .into_pointer_value();
+
+    // Build the entry block: switch on resume_point.
+    let resume_entry = ctx.append_basic_block(resume_fn, "sm_entry");
+
+    // Pre-create state blocks.
+    // Count waits in body to know how many states we need.
+    let n_waits = count_waits_in_block(&f.body);
+    // States: 0 = before first wait, 1..n_waits = each continuation, plus a dead/error block.
+    let state_blocks: Vec<inkwell::basic_block::BasicBlock<'ctx>> =
+        (0..=n_waits)
+            .map(|i| ctx.append_basic_block(resume_fn, &format!("sm_s{i}")))
+            .collect();
+    let dead_block = ctx.append_basic_block(resume_fn, "sm_dead");
+
+    // Pending return block: returns 1 (Pending) to the outer driver.
+    let pending_block = ctx.append_basic_block(resume_fn, "sm_pending");
+
+    // Build a Cg context for the resume function body. Allocas must be placed in the
+    // function entry block (sm_entry) so they dominate all successor blocks per LLVM SSA rules.
+    let mut cg_resume = Cg {
+        ctx,
+        module,
+        builder: ctx.create_builder(),
+        rt,
+        globals,
+        typed,
+        current_fn: resume_fn,
+        is_main: false,
+        _current_fn_ret_ty: Type::Nothing, // resume fn returns i32, not the Yinz type
+        locals: HashMap::new(),
+        shape_table,
+        shape_types,
+        type_subst: HashMap::new(),
+        mono_table,
+        options_table,
+        is_errors_capable: false,
+        errors_capable_locals: std::collections::HashSet::new(),
+        bg_uid: 0,
+        wait_cache,
+    };
+
+    // Step 1 — Emit allocas in the entry block (sm_entry). LLVM SSA requires all allocas
+    // to be in the function entry block so they dominate every use across all state blocks.
+    cg_resume.builder.position_at_end(resume_entry);
+    for (slot_idx, pname) in param_names.iter().enumerate() {
+        // Alloca sized to i64 (the frame slot width). The actual LLVM type is i64.
+        let alloca = cg_resume.builder
+            .build_alloca(cg_resume.i64(), &format!("{pname}_alloca"))
+            .map_err(|e| format!("sm param alloca: {e}"))?;
+        // Register in locals map — state blocks load from these allocas.
+        cg_resume.locals.insert(pname.clone(), alloca);
+        let _ = slot_idx; // slot loading happens per-state-block below
+    }
+
+    // Step 2 — Emit the switch on resume_point (still in sm_entry, after allocas).
+    {
+        let rp = state_machine::load_resume_point(ctx, &cg_resume.builder, frame_param)?;
+        let cases: Vec<(inkwell::values::IntValue<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
+            state_blocks.iter().enumerate()
+                .map(|(i, &bb)| (ctx.i32_type().const_int(i as u64, false), bb))
+                .collect();
+        cg_resume.builder
+            .build_switch(rp, dead_block, &cases)
+            .map_err(|e| format!("sm switch: {e}"))?;
+    }
+
+    // Step 3 — Build the pending return block.
+    {
+        let builder = ctx.create_builder();
+        builder.position_at_end(pending_block);
+        builder
+            .build_return(Some(&ctx.i32_type().const_int(1, false)))
+            .map_err(|e| format!("pending ret: {e}"))?;
+    }
+
+    // Step 4 — Build the dead block (unreachable in correct codegen).
+    {
+        let builder = ctx.create_builder();
+        builder.position_at_end(dead_block);
+        builder
+            .build_return(Some(&ctx.i32_type().const_int(0, false)))
+            .map_err(|e| format!("dead ret: {e}"))?;
+    }
+
+    // Step 5 — Emit state_blocks[0] (initial state). Load params from frame into allocas.
+    cg_resume.builder.position_at_end(state_blocks[0]);
+
+    for (slot_idx, pname) in param_names.iter().enumerate() {
+        let bits = state_machine::load_local_slot(ctx, &cg_resume.builder, frame_param, slot_idx, pname)?;
+        let param_decl = &f.params[slot_idx];
+        let param_ty = ast_type_to_typeck_type(&param_decl.ty, shape_table);
+        // Reconstruct the LLVM value from i64 bits, then store into the alloca.
+        let val = cg_resume.i64_bits_to(bits, &param_ty)
+            .map_err(|e| format!("sm param reconstruct: {e}"))?;
+        let alloca = *cg_resume.locals.get(pname).ok_or_else(|| format!("sm: alloca for {pname} not found"))?;
+        // Store directly regardless of type (the alloca is i64; store the raw bits).
+        let bits_for_store = cg_resume.to_i64_bits(val, &param_ty)
+            .map_err(|e| format!("sm param to_bits: {e}"))?;
+        cg_resume.builder.build_store(alloca, bits_for_store)
+            .map_err(|e| format!("sm param store: {e}"))?;
+    }
+
+    // Emit the function body statements, intercepting waits at the right state boundaries.
+    lower_sm_body(
+        &mut cg_resume,
+        &f.body,
+        &state_blocks,
+        pending_block,
+        frame_param,
+        waker_param,
+        &param_names,
+        f,
+        shape_table,
+    )?;
+
+    // ── Part 2: Generate the wrapper function ──────────────────────────────────
+
+    let wrapper_fn = module
+        .get_function(llvm_name)
+        .ok_or_else(|| format!("wrapper fn `{llvm_name}` not forward-declared"))?;
+
+    let builder = ctx.create_builder();
+    let entry_bb = ctx.append_basic_block(wrapper_fn, "entry");
+    builder.position_at_end(entry_bb);
+
+    // Main-specific: emit rt_init (FIRST instruction per AC #5) and siphash_init.
+    if is_main {
+        builder
+            .build_call(rt.ynz_siphash_init, &[], "siphash_init")
+            .map_err(|e| format!("siphash_init: {e}"))?;
+        // ynz_rt_init is the FIRST non-allocation instruction (AC: main_rt_init_is_first_instruction).
+        builder
+            .build_call(rt.ynz_rt_init, &[], "rt_init")
+            .map_err(|e| format!("rt_init: {e}"))?;
+    }
+
+    // Allocate the frame.
+    let frame_ptr = state_machine::alloc_frame(ctx, &builder, rt, n_locals)?;
+
+    // Write each parameter to its frame slot.
+    for (slot_idx, param) in f.params.iter().enumerate() {
+        let llvm_param = wrapper_fn
+            .get_nth_param(slot_idx as u32)
+            .ok_or_else(|| format!("wrapper: missing param {slot_idx}"))?;
+        // Convert parameter to i64 bits for frame storage via the shared marshaller.
+        // SM wrapper params are concrete (M2 does not monomorphize wait-containing generics),
+        // so the AST type maps directly without generic substitution.
+        let param_ty = ast_type_to_typeck_type(&param.ty, shape_table);
+        let bits = value_to_i64_bits(&builder, ctx.i64_type(), llvm_param, &param_ty)
+            .map_err(|e| format!("param to bits: {e}"))?;
+        state_machine::store_local_slot(ctx, &builder, frame_ptr, slot_idx, bits)?;
+    }
+
+    // Drive the state machine to completion via the sync bridge.
+    let resume_fn_ptr = resume_fn.as_global_value().as_pointer_value();
+    let frame_size_val = ctx.i64_type().const_int(frame_bytes, false);
+
+    let exit_val = builder
+        .build_call(
+            rt.ynz_rt_call_state_machine_sync,
+            &[resume_fn_ptr.into(), frame_ptr.into(), frame_size_val.into()],
+            "sm_result",
+        )
+        .map_err(|e| format!("sm_sync call: {e}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or("ynz_rt_call_state_machine_sync returned void")?
+        .into_int_value();
+
+    // Free the frame — ownership returns to the wrapper after sync completes.
+    state_machine::free_frame(ctx, &builder, rt, frame_ptr, n_locals)?;
+
+    if is_main {
+        builder
+            .build_call(rt.ynz_rt_shutdown, &[], "rt_shutdown")
+            .map_err(|e| format!("rt_shutdown: {e}"))?;
+        // Propagate the exit code from frame slot 0 (the final return value written by resume_fn).
+        let exit_i32 = if exit_val.get_type() != ctx.i32_type() {
+            builder
+                .build_int_truncate(exit_val, ctx.i32_type(), "exit_i32")
+                .map_err(|e| format!("exit truncate: {e}"))?
+        } else {
+            exit_val
+        };
+        builder
+            .build_return(Some(&exit_i32))
+            .map_err(|e| format!("main ret: {e}"))?;
+    } else {
+        // Non-main wrapper: returns nothing (void) — it's driven synchronously.
+        builder
+            .build_return(None)
+            .map_err(|e| format!("wrapper void ret: {e}"))?;
+    }
+
+    Ok(())
+}
+
+/// Count `Expr::Wait` occurrences in a block (flat — counts direct children only for
+/// simple sequential wait patterns). For nested waits (wait inside if/while), each
+/// sub-block contributes to the total state count.
+fn count_waits_in_block(block: &ynz_ast::nodes::Block) -> usize {
+    block.stmts.iter().map(count_waits_in_stmt).sum()
+}
+
+fn count_waits_in_stmt(stmt: &Stmt) -> usize {
+    match stmt {
+        Stmt::Expr(e) => count_waits_in_expr(e),
+        Stmt::Let { value, .. } => count_waits_in_expr(value),
+        Stmt::Assign { value, .. } => count_waits_in_expr(value),
+        Stmt::If { cond, body, .. } => count_waits_in_expr(cond) + count_waits_in_block(body),
+        Stmt::Match { scrutinee, arms, else_arm, .. } => {
+            count_waits_in_expr(scrutinee)
+                + arms.iter().map(|a| count_waits_in_block(&a.body)).sum::<usize>()
+                + else_arm.as_ref().map_or(0, count_waits_in_block)
+        }
+        Stmt::While { cond, body, .. } => {
+            count_waits_in_expr(cond) + count_waits_in_block(body)
+        }
+        Stmt::For { iter, body, .. } => {
+            count_waits_in_expr(iter) + count_waits_in_block(body)
+        }
+        Stmt::Return { value, .. } => value.as_ref().map_or(0, count_waits_in_expr),
+        Stmt::FieldAssign { target, value, .. } => {
+            count_waits_in_expr(target) + count_waits_in_expr(value)
+        }
+        Stmt::IndexAssign { receiver, index, value, .. } => {
+            count_waits_in_expr(receiver) + count_waits_in_expr(index) + count_waits_in_expr(value)
+        }
+    }
+}
+
+fn count_waits_in_expr(expr: &Expr) -> usize {
+    match expr {
+        Expr::Wait(..) => 1,
+        Expr::Call(c) => c.args.iter().map(count_waits_in_expr).sum(),
+        Expr::BinOp { lhs, rhs, .. } => count_waits_in_expr(lhs) + count_waits_in_expr(rhs),
+        Expr::UnaryOp { operand, .. } => count_waits_in_expr(operand),
+        Expr::MethodCall { receiver, args, .. } => {
+            count_waits_in_expr(receiver) + args.iter().map(count_waits_in_expr).sum::<usize>()
+        }
+        Expr::Background(inner, _) => count_waits_in_expr(inner),
+        _ => 0,
+    }
+}
+
+/// Reload all frame parameters into their allocas.
+///
+/// Called at the start of EVERY state block in the resume function because each call to
+/// the resume function creates fresh allocas (stack frame). Parameters live in the heap
+/// frame across suspensions; without reloading, continuation states see uninitialized allocas.
+///
+/// # Why per-state-block, not just in state_0
+///
+/// The resume function is called once per Tokio poll. Each call has a NEW stack frame,
+/// so allocas start uninitialized. State_0 runs normally because it loads params fresh.
+/// State_1 (continuation after first wait) also gets a new stack frame — without this
+/// reload, `n` would be garbage in `print('DONE ${n}')`.
+///
+/// This is a straightforward (if slightly redundant) solution for M2: all params are live
+/// across all wait boundaries. M3's liveness analysis can narrow the reload to only
+/// the slots that are actually live at each state.
+fn reload_params_from_frame<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    frame_ptr: PointerValue<'ctx>,
+    param_names: &[String],
+    f: &FunctionDecl,
+    shape_table: &ShapeTable,
+) -> Result<(), String> {
+    let ctx = cg.ctx;
+    for (slot_idx, pname) in param_names.iter().enumerate() {
+        let bits = state_machine::load_local_slot(ctx, &cg.builder, frame_ptr, slot_idx, pname)?;
+        let param_decl = &f.params[slot_idx];
+        let param_ty = ast_type_to_typeck_type(&param_decl.ty, shape_table);
+        let alloca = *cg.locals.get(pname).ok_or_else(|| format!("sm reload: alloca for {pname} missing"))?;
+        let bits_to_store = cg.to_i64_bits(cg.i64_bits_to(bits, &param_ty)?, &param_ty)?;
+        cg.builder.build_store(alloca, bits_to_store)
+            .map_err(|e| format!("sm reload store {pname}: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Lower the body of a state-machine function.
+///
+/// Emits statements sequentially. When an `Expr::Wait` is encountered:
+/// - Emits the sleep-create + first-poll sequence.
+/// - If Pending: stores the handle, sets `resume_point = continuation_state_idx`, branches to `pending_block`.
+/// - If Ready (zero-ms sleep): continues inline.
+/// - Continues emission in the post-wait block.
+///
+/// All statement types that don't contain `wait` are lowered normally via `lower_stmt`.
+///
+/// # Flow
+///
+/// States are allocated linearly: state 0 → stmts up to first wait → state 1 (continuation
+/// of first wait, re-entered on wakeup) → stmts up to second wait → state 2 → ... → terminal.
+///
+/// # Failure modes
+///
+/// Any `lower_stmt` or `lower_expr` error propagates immediately.
+#[allow(clippy::too_many_arguments)]
+fn lower_sm_body<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    body: &ynz_ast::nodes::Block,
+    state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
+    pending_block: inkwell::basic_block::BasicBlock<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    waker_ctx: PointerValue<'ctx>,
+    param_names: &[String],
+    f: &FunctionDecl,
+    shape_table: &'g ShapeTable,
+) -> Result<(), String> {
+    // State 0 already has the builder positioned by the caller. Reload params from frame
+    // so they're available in case the wait is at the end of state 0.
+    reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table)?;
+
+    // Track which state block index we are currently emitting into.
+    let mut current_state: usize = 0;
+
+    // Walk the body, recursing through control flow (if/while/for) so a `wait` at ANY
+    // nesting depth becomes a real suspend point. The flat top-level walk this replaces
+    // silently no-op'd nested waits (created a timer, discarded it).
+    lower_sm_block(
+        cg,
+        body,
+        state_blocks,
+        pending_block,
+        frame_ptr,
+        waker_ctx,
+        param_names,
+        f,
+        shape_table,
+        &mut current_state,
+    )?;
+
+    // Emit the terminal transition: write return value (0 for nothing-returning) and return Ready.
+    if !is_block_terminated(cg) {
+        // Write return value 0 to frame[0] (return slot).
+        state_machine::store_return_value(
+            cg.ctx,
+            &cg.builder,
+            frame_ptr,
+            cg.ctx.i32_type().const_int(0, false),
+        )?;
+        cg.builder
+            .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
+            .map_err(|e| format!("sm terminal ret: {e}"))?;
+    }
+
+    // Terminate any unreached state blocks (e.g., non-sleep-async waits that consumed a
+    // pre-allocated state slot but didn't actually do a state transition). LLVM requires
+    // every basic block to have a terminator.
+    for &bb in state_blocks.iter() {
+        if bb.get_terminator().is_none() {
+            // This state was never entered (the wait that would have used it was non-suspension).
+            // Emit a direct Ready return — if somehow reached, it signals "done".
+            cg.builder.position_at_end(bb);
+            reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table)?;
+            state_machine::store_return_value(
+                cg.ctx,
+                &cg.builder,
+                frame_ptr,
+                cg.ctx.i32_type().const_int(0, false),
+            )?;
+            cg.builder
+                .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
+                .map_err(|e| format!("sm orphan state ret: {e}"))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Walk a block of statements in state-machine context, recursing through control flow.
+///
+/// For each statement: if it (transitively) contains a `wait`, dispatch to
+/// `lower_sm_stmt_with_wait` (which handles bare/let waits AND recurses into `if`/loop
+/// bodies); otherwise lower it normally. The `current_state` counter threads through the
+/// recursion so each `wait` — regardless of nesting depth — consumes the next pre-allocated
+/// continuation state, matching the `count_waits_in_block` pre-count that sized `state_blocks`.
+///
+/// Extracted from `lower_sm_body` so control-flow handlers (`Stmt::If`, future loops) can
+/// recurse into their branch bodies with the same walk.
+#[allow(clippy::too_many_arguments)]
+fn lower_sm_block<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    block: &ynz_ast::nodes::Block,
+    state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
+    pending_block: inkwell::basic_block::BasicBlock<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    waker_ctx: PointerValue<'ctx>,
+    param_names: &[String],
+    f: &FunctionDecl,
+    shape_table: &'g ShapeTable,
+    current_state: &mut usize,
+) -> Result<(), String> {
+    for stmt in &block.stmts {
+        if is_block_terminated(cg) {
+            break;
+        }
+        if stmt_contains_wait(stmt) {
+            lower_sm_stmt_with_wait(
+                cg,
+                stmt,
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
+        } else {
+            lower_stmt(cg, stmt)?;
+        }
+    }
+    Ok(())
+}
+
+/// Lower a statement that contains at least one `Expr::Wait`.
+///
+/// Handles:
+/// - `Stmt::Expr(Expr::Wait(...))` — a bare `wait sleepAsync(ms)` statement
+/// - `Stmt::Let { value: Expr::Wait(...), ... }` — `let x = wait sleepAsync(ms)`
+/// - `Stmt::If { cond, body, .. }` whose body contains a wait — recurses into the branch
+///   so the nested wait suspends correctly (the branch and its continuation converge at a
+///   merge block; Yinz `if` has no else — multi-case uses `Stmt::Match`).
+///
+/// For each wait encountered, the codegen:
+/// 1. Evaluates the sleep duration.
+/// 2. Calls `ynz_rt_async_sleep_create(ms)` + first poll (registers waker).
+/// 3. If Pending: stores handle, sets `resume_point = continuation_state_idx`, branches to `pending_block`.
+/// 4. If Ready: continues inline.
+/// 5. Post-wait block: reloads params from frame, continues emitting post-wait code.
+#[allow(clippy::too_many_arguments)]
+fn lower_sm_stmt_with_wait<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    stmt: &Stmt,
+    state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
+    pending_block: inkwell::basic_block::BasicBlock<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    waker_ctx: PointerValue<'ctx>,
+    param_names: &[String],
+    f: &FunctionDecl,
+    shape_table: &'g ShapeTable,
+    current_state: &mut usize,
+) -> Result<(), String> {
+    match stmt {
+        // `wait sleepAsync(ms)` as a bare expression statement.
+        Stmt::Expr(Expr::Wait(inner, _)) => {
+            emit_wait_point(
+                cg,
+                inner,
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
+        }
+        // `let name = wait sleepAsync(ms)` — sleepAsync is nothing-returning; bind zero.
+        Stmt::Let { name, value: Expr::Wait(inner, _), .. }
+            if matches!(inner.as_ref(),
+                Expr::Call(c) if matches!(&c.callee, Expr::Ident(n, _) if n == "sleepAsync"))
+        => {
+            emit_wait_point(
+                cg,
+                inner,
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
+            // sleepAsync returns nothing; bind zero to name.
+            let alloca = cg.builder
+                .build_alloca(cg.i64(), &format!("{name}_alloca"))
+                .map_err(|e| format!("wait let alloca: {e}"))?;
+            cg.builder
+                .build_store(alloca, cg.i64().const_int(0, false))
+                .map_err(|e| format!("wait let store: {e}"))?;
+            cg.locals.insert(name.clone(), alloca);
+        }
+        // `let name = wait non_sleep_async_call(...)` — non-suspension wait; lower normally.
+        // The pre-allocated state block for this wait will be given an unreachable terminator
+        // at the end of lower_sm_body.
+        Stmt::Let { name: _, value: Expr::Wait(..), .. } => {
+            lower_stmt(cg, stmt)?;
+        }
+        // `if (cond) { ...wait... }` — recurse the SM walker into the branch so a nested wait
+        // gets a real suspend point. Mirrors `lower_stmt_if`'s cond → then/merge structure,
+        // but the body is SM-lowered. Yinz `if` has no else (multi-case uses `Stmt::Match`).
+        // The cond is lowered normally: in M2 it cannot contain a wait — the only may-block
+        // intrinsics are `sleepAsync` (returns nothing) and `__testFallibleAsync` (returns int),
+        // neither of which type-checks as a boolean condition.
+        Stmt::If { cond, body, .. } => {
+            let cond_val = lower_expr(cg, cond)?.into_int_value();
+            let then_bb = cg.append_block("sm_if_then");
+            let merge_bb = cg.append_block("sm_if_merge");
+            cg.builder
+                .build_conditional_branch(cond_val, then_bb, merge_bb)
+                .map_err(|e| format!("sm if branch: {e}"))?;
+
+            cg.builder.position_at_end(then_bb);
+            lower_sm_block(
+                cg,
+                body,
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
+            // The branch (and any wait-continuation inside it) converges at merge. On resume
+            // into a mid-branch wait, the entry switch jumps to that wait's continuation state,
+            // which flows post_wait → rest-of-branch → merge — cond is NOT re-evaluated.
+            if !is_block_terminated(cg) {
+                cg.builder
+                    .build_unconditional_branch(merge_bb)
+                    .map_err(|e| format!("sm if then->merge: {e}"))?;
+            }
+            cg.builder.position_at_end(merge_bb);
+        }
+        // wait-in-loop and wait-in-match are rejected at typeck (`WaitInsideLoop`) before
+        // codegen runs, and locals-crossing-nested-wait are rejected at typeck
+        // (`LocalCrossesWait`). Any statement reaching this arm is not a wait-bearing
+        // construct that requires SM treatment — lower it on the standard path.
+        //
+        // If either typeck guard ever regresses and a nested wait slips through, the
+        // backend would crash with a dominance violation. The panic below makes that
+        // regression loud and immediately traceable rather than a silent wrong-codegen.
+        _ => {
+            if stmt_contains_wait(stmt) {
+                panic!(
+                    "BUG: SM codegen reached a wait-bearing statement that typeck should have \
+                     rejected. The WaitInsideLoop or LocalCrossesWait guard regressed. \
+                     Statement: {stmt:?}"
+                );
+            }
+            lower_stmt(cg, stmt)?;
+        }
+    }
+    Ok(())
+}
+
+/// Emit the IR for a single `wait sleepAsync(ms)` point within a state-machine body.
+///
+/// # Flow
+///
+/// 1. Evaluate the sleep duration `ms` as an i64.
+/// 2. Call `ynz_rt_async_sleep_create(ms)` → opaque handle pointer.
+/// 3. Poll immediately via `ynz_rt_async_sleep_poll` — this registers the waker with Tokio's
+///    timer reactor (without this poll, the reactor never knows to wake the task).
+/// 4. If Ready (0ms sleep): branch directly to `post_wait_bb` (no suspension needed).
+/// 5. If Pending: save handle to frame, set `resume_point = continuation_state_idx`,
+///    branch to `pending_block` (returns 1 = Pending to Tokio's executor).
+/// 6. `cont_state_bb` (entered on Tokio wakeup): reload params from frame (fresh stack frame
+///    each resume_fn call), re-poll handle to confirm Ready, branch to `post_wait_bb`.
+/// 7. `post_wait_bb`: clear handle slot, reload params, continue with post-wait statements.
+///
+/// # Failure modes
+///
+/// - Inner expression is not a `sleepAsync` call: falls back to evaluating the inner
+///   expression normally (no suspension). Kept as safe fallback — typeck warns first.
+#[allow(clippy::too_many_arguments)]
+fn emit_wait_point<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    inner: &Expr,
+    state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
+    pending_block: inkwell::basic_block::BasicBlock<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    waker_ctx: PointerValue<'ctx>,
+    param_names: &[String],
+    f: &FunctionDecl,
+    shape_table: &'g ShapeTable,
+    current_state: &mut usize,
+) -> Result<(), String> {
+    let ctx = cg.ctx;
+
+    // Determine if the inner call is `sleepAsync(ms)`.
+    let is_sleep_async = matches!(
+        inner,
+        Expr::Call(c) if matches!(&c.callee, Expr::Ident(n, _) if n == "sleepAsync")
+    );
+
+    if !is_sleep_async {
+        // Non-may-block wait: typeck should warn (wait_on_non_may_block_warning). Evaluate
+        // the inner expression normally (no suspension). Still transition through the state
+        // so sm_sN gets a terminator — the "wait" is a no-op at runtime.
+        lower_expr(cg, inner)?;
+        let continuation_state = *current_state + 1;
+        let cont_state_bb = state_blocks
+            .get(continuation_state)
+            .copied()
+            .ok_or_else(|| format!("continuation state {continuation_state} out of range"))?;
+        let post_wait_bb = cg.ctx.append_basic_block(cg.current_fn, "sm_noop_wait");
+        // Direct branch to continuation state (no suspension).
+        cg.builder
+            .build_unconditional_branch(cont_state_bb)
+            .map_err(|e| format!("noop wait branch: {e}"))?;
+        *current_state = continuation_state;
+        // Fill the continuation state with a direct branch to post_wait_bb.
+        cg.builder.position_at_end(cont_state_bb);
+        reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table)?;
+        cg.builder
+            .build_unconditional_branch(post_wait_bb)
+            .map_err(|e| format!("cont noop branch: {e}"))?;
+        cg.builder.position_at_end(post_wait_bb);
+        return Ok(());
+    }
+
+    // Extract the ms argument from sleepAsync(ms).
+    let ms_val = if let Expr::Call(c) = inner {
+        if c.args.is_empty() {
+            ctx.i64_type().const_int(0, false)
+        } else {
+            lower_expr(cg, &c.args[0])?.into_int_value()
+        }
+    } else {
+        ctx.i64_type().const_int(0, false)
+    };
+
+    // Step 1: Call ynz_rt_async_sleep_create(ms) → handle pointer.
+    let handle = cg
+        .builder
+        .build_call(cg.rt.ynz_rt_async_sleep_create, &[ms_val.into()], "sleep_handle")
+        .map_err(|e| format!("sleep_create call: {e}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or("ynz_rt_async_sleep_create returned void")?
+        .into_pointer_value();
+
+    // Step 2: Poll the sleep handle immediately — this registers the waker with Tokio's
+    // reactor so the task is woken when the timer fires.
+    //
+    // WHY poll here (not just on re-entry): `ynz_rt_async_sleep_create` allocates the
+    // Sleep future but does NOT register any waker. Only calling `ynz_rt_async_sleep_poll`
+    // registers the waker with the timer reactor. Without this first poll, the task
+    // returns Pending with no waker, and Tokio's reactor never knows to wake it.
+    // P0 Contract #11 locked this protocol: the waker_ctx must be forwarded from the
+    // enclosing SpawnStateFnFuture::poll's cx argument.
+    let first_poll_result = cg
+        .builder
+        .build_call(
+            cg.rt.ynz_rt_async_sleep_poll,
+            &[handle.into(), waker_ctx.into()],
+            "first_poll",
+        )
+        .map_err(|e| format!("first_poll call: {e}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or("ynz_rt_async_sleep_poll returned void")?
+        .into_int_value();
+
+    // Continuation state index and the state/post_wait blocks.
+    let continuation_state = *current_state + 1;
+    let cont_state_bb = state_blocks
+        .get(continuation_state)
+        .copied()
+        .ok_or_else(|| format!("continuation state {continuation_state} out of range"))?;
+    let post_wait_bb = ctx.append_basic_block(cg.current_fn, "sm_post_wait");
+    let suspend_bb = ctx.append_basic_block(cg.current_fn, "sm_suspend");
+
+    // Branch on the first poll result:
+    // - Ready (0): the sleep already completed (very short or zero duration); skip state machine
+    //   suspension and go directly to post_wait_bb.
+    // - Pending (1): save the handle to the frame, set resume_point = continuation_state,
+    //   branch to pending_block (returns 1 to Tokio's executor).
+    let is_ready = cg
+        .builder
+        .build_int_compare(
+            inkwell::IntPredicate::EQ,
+            first_poll_result,
+            ctx.i32_type().const_int(0, false),
+            "first_is_ready",
+        )
+        .map_err(|e| format!("first_poll cmp: {e}"))?;
+    cg.builder
+        .build_conditional_branch(is_ready, post_wait_bb, suspend_bb)
+        .map_err(|e| format!("first_poll branch: {e}"))?;
+
+    // suspend_bb: the sleep is pending — save state and return Pending to Tokio.
+    cg.builder.position_at_end(suspend_bb);
+    state_machine::store_sleep_handle(ctx, &cg.builder, frame_ptr, handle)?;
+    state_machine::store_resume_point(ctx, &cg.builder, frame_ptr, continuation_state as u64)?;
+    cg.builder
+        .build_unconditional_branch(pending_block)
+        .map_err(|e| format!("sm branch to pending: {e}"))?;
+
+    // cont_state_bb: Tokio woke us up after the timer fired. Reload params from frame
+    // (each resume_fn call has fresh allocas — the old allocas from state_0's call are gone).
+    // Then re-poll the handle to confirm Ready and transition to post_wait_bb.
+    *current_state = continuation_state;
+    cg.builder.position_at_end(cont_state_bb);
+    reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table)?;
+    state_machine::emit_sleep_poll_branch(
+        ctx,
+        &cg.builder,
+        cg.rt,
+        frame_ptr,
+        waker_ctx,
+        post_wait_bb,
+        pending_block,
+    )?;
+
+    // post_wait_bb: the sleep completed (either immediately on first poll or after wakeup).
+    // Clear the handle slot (the runtime freed the Sleep box on Ready return).
+    // Reload params in case we arrived here from the first-poll-Ready path (state_0).
+    cg.builder.position_at_end(post_wait_bb);
+    let null_ptr = ctx.ptr_type(inkwell::AddressSpace::default()).const_null();
+    state_machine::store_sleep_handle(ctx, &cg.builder, frame_ptr, null_ptr)?;
+    // Params are already loaded in both paths (state_0 via sm_entry reload, state_N via cont_state_bb reload).
+
+    // Builder is now positioned at post_wait_bb for subsequent statement emission.
+    Ok(())
+}
+
+/// Convert a Yinz parameter LLVM value to i64 bits for storage in a state-machine frame slot.
+///
+/// Mirrors `Cg::to_i64_bits` but operates on `BasicValueEnum` directly (parameter values
+/// are not yet in allocas at the wrapper-function entry point).
+/// Convert a value to its i64-bit slot representation — the SINGLE marshaller shared by
+/// array/map storage (`Cg::to_i64_bits`) AND state-machine wrapper param storage.
+///
+/// `resolved` must already have generic substitution applied (callers that hold a `Cg`
+/// pass `self.resolve_type(ty)`; the state-machine wrapper passes a concrete param type).
+///
+/// Bool returns the i1 unchanged; the `store_local_slot` / array-store helpers zero-extend
+/// to the i64 slot width, so callers never need to widen here.
+fn value_to_i64_bits<'ctx>(
+    builder: &inkwell::builder::Builder<'ctx>,
+    i64_ty: inkwell::types::IntType<'ctx>,
+    val: BasicValueEnum<'ctx>,
+    resolved: &Type,
+) -> Result<inkwell::values::IntValue<'ctx>, String> {
+    match resolved {
+        Type::Int | Type::Bool => Ok(val.into_int_value()),
+        Type::Float => builder
+            .build_bit_cast(val.into_float_value(), i64_ty, "f_to_i")
+            .map(|v| v.into_int_value())
+            .map_err(|e| format!("{e}")),
+        Type::String
+        | Type::Number { .. }
+        | Type::Shape { .. }
+        | Type::Dynamic { .. }
+        | Type::BuiltinArray { .. }
+        | Type::BuiltinFixed { .. }
+        | Type::Maybe { .. }
+        | Type::BuiltinMap { .. }
+        | Type::MapEntry { .. }
+        | Type::Union { .. }
+        | Type::Sensitive { .. } => builder
+            .build_ptr_to_int(val.into_pointer_value(), i64_ty, "ptr_to_i")
+            .map_err(|e| format!("{e}")),
+        _ => Err(format!("cannot convert {:?} to i64 bits", resolved)),
+    }
 }
 
 /// Map an AST type annotation to the typeck `Type` for use in codegen decisions.
@@ -2537,6 +3530,26 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         .map_err(|e| format!("{e}"))?;
                     Ok(slot.into())
                 }
+                // v0.3-M2: sleepAsync(ms: int) — non-blocking sleep; lowers to state-machine wait point.
+                // Only reaches here when called WITHOUT `wait` wrapping (e.g., bare `sleepAsync(100)`).
+                // With `wait`, the call is handled by emit_wait_point / lower_sm_body.
+                // Without `wait`, evaluate to a no-op (discards the sleep handle immediately).
+                // WHY: typeck emits `unawaited_sleep_async` warning for this case; codegen still
+                // needs to produce valid IR without crashing.
+                "sleepAsync" if call.args.len() == 1 => {
+                    // Evaluate the ms argument for side effects but discard the sleep handle.
+                    let ms = lower_expr(cg, &call.args[0])?.into_int_value();
+                    let handle = cg
+                        .builder
+                        .build_call(cg.rt.ynz_rt_async_sleep_create, &[ms.into()], "sleep_handle")
+                        .map_err(|e| format!("sleepAsync: {e}"))?
+                        .try_as_basic_value()
+                        .basic()
+                        .ok_or("ynz_rt_async_sleep_create void")?;
+                    // Immediately discard the handle — typeck warned the user; this is intentional.
+                    let _ = handle;
+                    Ok(cg.i32().const_int(0, false).into())
+                }
                 name => {
                     // Prefer the direct name. If not found, find the correct monomorphized
                     // variant by matching argument types against MonomorphizationTable entries.
@@ -2549,6 +3562,61 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         find_mono_name_by_args(cg.mono_table, name, &arg_types)
                             .unwrap_or_else(|| name.to_string())
                     };
+
+                    // v0.3-M2 Step 6: call-site dispatch for state-machine callees.
+                    //
+                    // When the callee is a state-machine function (its body contains `wait`),
+                    // and the caller is NOT itself a state machine (no `wait` in its own body),
+                    // emit ynz_rt_call_state_machine_sync (the sync bridge).
+                    //
+                    // The 4 cases from the dispatch table:
+                    //   (caller-not-SM, no-wait) → sync bridge  ← THIS CASE
+                    //   (caller-not-SM, wait)    → unreachable (caller would be SM)
+                    //   (caller-SM, no-wait)     → sync bridge fallback (teaching warning in P3)
+                    //   (caller-SM, wait)        → inline poll-and-yield (handled by lower_sm_body)
+                    //
+                    // The `wait`-wrapped SM-caller case is handled by lower_sm_body before
+                    // reaching lower_expr; if we reach here from inside a state machine, it means
+                    // the call was NOT wait-wrapped → use sync bridge with Tier 3 teaching warning
+                    // (warning emitted by P3 typeck; codegen just emits the sync bridge).
+                    if is_may_block_callee(name, cg.wait_cache) {
+                        let resume_name = state_machine::resume_fn_name(name);
+                        if let Some(resume_fn) = cg.module.get_function(&resume_name) {
+                            // Evaluate args and store in a frame.
+                            let mut arg_bits: Vec<inkwell::values::IntValue<'ctx>> = Vec::new();
+                            let mut arg_tys: Vec<Type> = Vec::new();
+                            for arg in &call.args {
+                                let val = lower_expr(cg, arg)?;
+                                let ty = cg.expr_type(arg);
+                                let bits = cg.to_i64_bits(val, &ty)
+                                    .map_err(|e| format!("sm call arg bits: {e}"))?;
+                                arg_bits.push(bits);
+                                arg_tys.push(ty);
+                            }
+                            let n_locals = arg_bits.len();
+                            let frame_ptr = state_machine::alloc_frame(cg.ctx, &cg.builder, cg.rt, n_locals)?;
+                            for (idx, bits) in arg_bits.iter().enumerate() {
+                                state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, idx, *bits)?;
+                            }
+                            let resume_ptr = resume_fn.as_global_value().as_pointer_value();
+                            let frame_size_v = cg.ctx.i64_type().const_int(state_machine::frame_size(n_locals), false);
+                            let result = cg.builder
+                                .build_call(
+                                    cg.rt.ynz_rt_call_state_machine_sync,
+                                    &[resume_ptr.into(), frame_ptr.into(), frame_size_v.into()],
+                                    "sm_sync",
+                                )
+                                .map_err(|e| format!("sm_sync call: {e}"))?
+                                .try_as_basic_value()
+                                .basic()
+                                .ok_or("sm_sync returned void")?
+                                .into_int_value();
+                            state_machine::free_frame(cg.ctx, &cg.builder, cg.rt, frame_ptr, n_locals)?;
+                            return Ok(result.into());
+                        }
+                        // Resume fn not found — fall through to normal call (wrapper fn).
+                    }
+
                     let fn_val = cg.module.get_function(&effective_name).ok_or_else(|| {
                         format!("codegen: function `{effective_name}` not found in module")
                     })?;
@@ -3134,9 +4202,25 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                 Ok(result)
             }
         }
-        // v0.3-M1: wait still lowers to a direct call (state machines ship in M2).
-        // background lowers to ynz_rt_spawn_blocking — actual separate-thread scheduling.
-        Expr::Wait(inner, _) => lower_expr(cg, inner),
+        // v0.3-M2: Expr::Wait lowering.
+        //
+        // Inside a state-machine resume function (cg.is_state_machine=true), `wait` is
+        // handled by lower_sm_body / emit_wait_point — not by lower_expr. The is_state_machine
+        // branch here is a safety fallback for waits encountered during generic expression
+        // evaluation (e.g., waits in argument positions). In non-SM contexts (cg.is_state_machine=false),
+        // callers that are state machines drive the callee via the sync bridge; the callee function
+        // itself is generated as a state machine by lower_function_with_waits.
+        //
+        // WHY the non-SM arm evaluates the inner expression: if a non-SM function contains
+        // wait (e.g., a wait-free function calling a wait-containing function) the call
+        // falls through to the normal call lowering path which then emits ynz_rt_call_state_machine_sync
+        // at the call site (Step 6 dispatch). The `wait` keyword itself has no IR equivalent
+        // outside of a state-machine context — it is pure syntax that drives path selection.
+        Expr::Wait(inner, _) => {
+            // Safety fallback: if we somehow reach here inside a state machine, evaluate normally.
+            // The SM body lowering (lower_sm_body) handles waits before they reach lower_expr.
+            lower_expr(cg, inner)
+        }
         Expr::Background(inner, _) => lower_expr_background(cg, inner),
     }
 }
@@ -3187,6 +4271,16 @@ fn lower_expr_background<'ctx>(
             return Ok(cg.i32().const_int(0, false).into());
         }
     };
+
+    // v0.3-M2: if the callee is a state-machine function, route to ynz_rt_spawn (I/O pool)
+    // instead of ynz_rt_spawn_blocking (CPU blocking pool).
+    //
+    // WHY: state-machine functions yield during I/O via poll-and-suspend; routing them to
+    // the blocking pool would hold a dedicated OS thread captive during the wait, defeating
+    // the entire point of the state machine. The I/O pool shares threads cooperatively.
+    if is_may_block_callee(&callee_name, cg.wait_cache) {
+        return lower_expr_background_state_machine(cg, call, &callee_name);
+    }
 
     // Step 1: evaluate arguments on the calling thread.
     let mut arg_vals_i64: Vec<inkwell::values::IntValue<'ctx>> = Vec::new();
@@ -3310,6 +4404,76 @@ fn lower_expr_background<'ctx>(
             "bg_spawn",
         )
         .map_err(|e| format!("spawn_blocking: {e}"))?;
+
+    Ok(cg.i32().const_int(0, false).into())
+}
+
+/// Lower `background sm_fn(args)` for a state-machine callee (routes to `ynz_rt_spawn`).
+///
+/// # Flow
+///
+/// 1. Evaluate all arguments and convert to i64 bit patterns.
+/// 2. Heap-allocate the state-machine frame via `ynz_alloc`.
+///    The frame is heap-allocated (not stack) because it outlives this call — the spawned
+///    future owns it until completion or cancellation.
+/// 3. Write resume_point=0 and arg slots to the frame.
+/// 4. Call `ynz_rt_spawn(resume_fn_ptr, frame_ptr, frame_size)` — fire-and-forget.
+///    The spawned future owns the frame; no ynz_free here. The frame is freed by the
+///    codegen-emitted resume function when it reaches its terminal state (returns Ready).
+///    Note: in M2, frame deallocation on spawn path is handled by resume_fn's terminal
+///    transition; the RAII drop guard in SpawnStateFnFuture covers cancellation.
+///
+/// # Failure modes
+///
+/// - `ynz_rt_init` not called: `ynz_rt_spawn` logs a warning and discards the task.
+/// - Resume function panics: Tokio task wrapper catches it; error is logged and discarded.
+fn lower_expr_background_state_machine<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    call: &ynz_ast::nodes::CallExpr,
+    callee_name: &str,
+) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
+    // Step 1: evaluate arguments and convert to i64 bits.
+    let mut arg_vals_i64: Vec<inkwell::values::IntValue<'ctx>> = Vec::new();
+    let mut arg_types: Vec<Type> = Vec::new();
+    for arg in &call.args {
+        let val = lower_expr(cg, arg)?;
+        let ty = cg.expr_type(arg);
+        let bits = cg
+            .to_i64_bits(val, &ty)
+            .map_err(|e| format!("sm bg arg bits: {e}"))?;
+        arg_vals_i64.push(bits);
+        arg_types.push(ty);
+    }
+    let n_locals = arg_vals_i64.len();
+
+    // Step 2: heap-allocate the frame (frame outlives this call — the spawned future owns it).
+    let frame_ptr = state_machine::alloc_frame(cg.ctx, &cg.builder, cg.rt, n_locals)?;
+
+    // Step 3: write parameter values to frame local slots.
+    for (idx, bits) in arg_vals_i64.iter().enumerate() {
+        state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, idx, *bits)?;
+    }
+
+    // Step 4: find the resume function and call ynz_rt_spawn.
+    let resume_name = state_machine::resume_fn_name(callee_name);
+    let resume_fn = cg
+        .module
+        .get_function(&resume_name)
+        .ok_or_else(|| format!("sm bg: resume fn `{resume_name}` not found"))?;
+
+    let resume_ptr = resume_fn.as_global_value().as_pointer_value();
+    let frame_size_val = cg
+        .ctx
+        .i64_type()
+        .const_int(state_machine::frame_size(n_locals), false);
+
+    cg.builder
+        .build_call(
+            cg.rt.ynz_rt_spawn,
+            &[resume_ptr.into(), frame_ptr.into(), frame_size_val.into()],
+            "sm_spawn",
+        )
+        .map_err(|e| format!("ynz_rt_spawn: {e}"))?;
 
     Ok(cg.i32().const_int(0, false).into())
 }
@@ -6912,4 +8076,77 @@ fn build_decimal_global<'ctx>(
     g.set_linkage(inkwell::module::Linkage::Private);
     g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
     g
+}
+
+#[cfg(test)]
+mod tests {
+    use super::function_contains_wait;
+    use ynz_ast::nodes::{Block, Expr, Stmt};
+    use ynz_diagnostics::SourceSpan;
+
+    fn dummy_span() -> SourceSpan {
+        SourceSpan::new("test.ynz", 0, 1)
+    }
+
+    fn wait_expr() -> Expr {
+        // A bare `wait` wrapping an integer literal — the wrapped expr type does not
+        // matter for the contains-wait walk; only the Wait variant is tested here.
+        Expr::Wait(
+            Box::new(Expr::IntLit(0, dummy_span())),
+            dummy_span(),
+        )
+    }
+
+    // WHY: guards against the routing decision regressing — if function_contains_wait
+    // returns false for a wait-containing function, that function gets lowered on the
+    // straight-line path and the wait becomes a silent no-op (M1 regression).
+    #[test]
+    fn block_with_top_level_wait_returns_true() {
+        let block = Block {
+            stmts: vec![Stmt::Expr(wait_expr())],
+            span: dummy_span(),
+        };
+        assert!(
+            function_contains_wait(&block),
+            "block containing a bare Expr::Wait must return true"
+        );
+    }
+
+    // WHY: a wait-free function must take the standard lowering path with zero
+    // added overhead. False positives here would route every simple function through
+    // the state-machine path, bloating codegen for all programs.
+    #[test]
+    fn block_without_wait_returns_false() {
+        let block = Block {
+            stmts: vec![Stmt::Expr(Expr::IntLit(42, dummy_span()))],
+            span: dummy_span(),
+        };
+        assert!(
+            !function_contains_wait(&block),
+            "block with no Wait must return false"
+        );
+    }
+
+    // WHY: Increment A routes `if`-nested waits to the SM lowering path. If this
+    // returns false, an `if`-nested wait silently regresses to the M1 no-op behavior.
+    #[test]
+    fn block_with_if_nested_wait_returns_true() {
+        let if_body = Block {
+            stmts: vec![Stmt::Expr(wait_expr())],
+            span: dummy_span(),
+        };
+        let if_stmt = Stmt::If {
+            cond: Expr::BoolLit(true, dummy_span()),
+            body: if_body,
+            span: dummy_span(),
+        };
+        let block = Block {
+            stmts: vec![if_stmt],
+            span: dummy_span(),
+        };
+        assert!(
+            function_contains_wait(&block),
+            "block containing an if-nested Expr::Wait must return true"
+        );
+    }
 }

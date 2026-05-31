@@ -269,7 +269,7 @@ fn m2_decimal_exactness() {
     // WHY: the whole point of decimal128 is that 0.1 + 0.2 == 0.3 exactly.
     // This test compiles just the number computation (not the full smoke test)
     // and verifies the IR is produced without codegen errors. End-to-end
-    // execution is Phase 6 (driver integration) which actually runs the binary.
+    // execution is the driver integration step which actually runs the binary.
     let source = "function entrypoint() -> nothing { let x = 0.1 + 0.2\nprint(x) }";
     let db = CompilerDb::default();
     let sf = SourceFile::new(&db, "decimal_test.ynz".to_string(), source.to_string());
@@ -505,4 +505,289 @@ fn v03_m1_while_loop_preempt_ir_snapshot() {
         "while-loop IR must contain ynz_rt_check_preempt call; got:\n{ir}"
     );
     insta::assert_snapshot!("v03_m1_while_preempt_ir", ir);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.3-M2: state-machine codegen IR snapshots
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Helper: run codegen on a source string, return the IR text.
+/// Panics if codegen fails (diagnostics present or empty object file).
+fn run_m2_sm_codegen(file: &str, source: &str) -> String {
+    let db = ynz_parser::CompilerDb::default();
+    let sf = ynz_parser::SourceFile::new(&db, file.to_string(), source.to_string());
+    let output = codegen_query(&db, sf);
+    assert!(
+        output.diagnostics.is_empty(),
+        "v0.3-M2 SM source `{file}` must compile without diagnostics:\n{:#?}",
+        output.diagnostics
+    );
+    assert!(
+        !output.artifact.object_bytes.is_empty(),
+        "v0.3-M2 SM source `{file}` must produce a non-empty object"
+    );
+    output.artifact.ir_text.clone()
+}
+
+#[test]
+fn v03_m2_single_wait_ir_snapshot() {
+    // WHY: locks the state-machine IR shape for a function with exactly one wait point.
+    // If the resume function, switch dispatch, or suspend/resume blocks change structure,
+    // this snapshot fails and the reviewer can audit the diff.
+    let source = r#"
+function pause() -> nothing {
+  wait sleepAsync(100)
+}
+function entrypoint() -> nothing {
+  background pause()
+  sleepMs(200)
+}
+"#;
+    let ir = run_m2_sm_codegen("v03m2_single_wait.ynz", source);
+    assert!(
+        ir.contains("ynz_sm_pause_resume"),
+        "single-wait IR must contain resume function; got:\n{}",
+        ir.lines().take(80).collect::<Vec<_>>().join("\n")
+    );
+    assert!(
+        ir.contains("ynz_rt_async_sleep_create"),
+        "single-wait IR must emit sleep create; got:\n{}",
+        ir.lines().take(80).collect::<Vec<_>>().join("\n")
+    );
+    assert!(
+        ir.contains("ynz_rt_async_sleep_poll"),
+        "single-wait IR must emit sleep poll; got:\n{}",
+        ir.lines().take(80).collect::<Vec<_>>().join("\n")
+    );
+    insta::assert_snapshot!("v03_m2_single_wait_ir", ir);
+}
+
+#[test]
+fn v03_m2_multi_wait_ir_snapshot() {
+    // WHY: locks the multi-state state machine IR shape (two sequential waits).
+    // A regression in state-block numbering or resume_point tracking will appear here.
+    let source = r#"
+function chain() -> nothing {
+  wait sleepAsync(50)
+  wait sleepAsync(50)
+}
+function entrypoint() -> nothing {
+  background chain()
+  sleepMs(200)
+}
+"#;
+    let ir = run_m2_sm_codegen("v03m2_multi_wait.ynz", source);
+    assert!(
+        ir.contains("ynz_sm_chain_resume"),
+        "multi-wait IR must contain resume function"
+    );
+    // Two waits → two sleep-create calls.
+    let sleep_create_count = ir.matches("ynz_rt_async_sleep_create").count();
+    assert!(
+        sleep_create_count >= 2,
+        "multi-wait IR must have >= 2 sleep_create calls; got {sleep_create_count}"
+    );
+    insta::assert_snapshot!("v03_m2_multi_wait_ir", ir);
+}
+
+#[test]
+fn v03_m2_wait_in_if_ir_snapshot() {
+    // WHY: locks the IR shape for a wait inside a conditional (wait-in-if branching).
+    // State machines with wait inside an `if` must emit correct poll-and-yield in the
+    // conditional branch while the non-waiting path goes straight to the terminal.
+    let source = r#"
+function maybeWait(b: boolean) -> nothing {
+  if (b) {
+    wait sleepAsync(100)
+  }
+}
+function entrypoint() -> nothing {
+  background maybeWait(true)
+  sleepMs(200)
+}
+"#;
+    let ir = run_m2_sm_codegen("v03m2_wait_in_if.ynz", source);
+    assert!(
+        ir.contains("ynz_sm_maybeWait_resume"),
+        "wait-in-if IR must contain resume function"
+    );
+    // Behavioral assertions: the `if` branch that contains the wait must reach
+    // the suspend/poll path, and sm_pending must have live predecessors (is NOT dead).
+    assert!(
+        ir.contains("ynz_rt_async_sleep_poll"),
+        "wait-in-if IR must call async_sleep_poll inside the if branch; \
+         if this fails the wait was silently no-oped"
+    );
+    // sm_pending must have a predecessor comment showing live control flow to it.
+    // A dead sm_pending would show "No predecessors!" — that was the pre-fix bug.
+    let sm_pending_line = ir
+        .lines()
+        .find(|l| l.contains("sm_pending:"))
+        .unwrap_or("");
+    assert!(
+        !sm_pending_line.contains("No predecessors!"),
+        "sm_pending must have live predecessors after wait-in-if fix; \
+         'No predecessors!' means the suspend path is dead code"
+    );
+    insta::assert_snapshot!("v03_m2_wait_in_if_ir", ir);
+}
+
+#[test]
+fn v03_m2_non_sm_caller_block_on_ir_snapshot() {
+    // WHY: locks the sync-bridge call at a non-SM call site that calls a state-machine function.
+    // If the block_on bridge (ynz_rt_call_state_machine_sync) disappears from the IR, this
+    // test catches it before the program silently returns wrong values.
+    let source = r#"
+function sleeper() -> nothing {
+  wait sleepAsync(100)
+}
+function entrypoint() -> nothing {
+  sleeper()
+}
+"#;
+    let ir = run_m2_sm_codegen("v03m2_non_sm_caller.ynz", source);
+    assert!(
+        ir.contains("ynz_rt_call_state_machine_sync"),
+        "non-SM caller IR must emit sync bridge; got:\n{}",
+        ir.lines().take(60).collect::<Vec<_>>().join("\n")
+    );
+    insta::assert_snapshot!("v03_m2_non_sm_caller_block_on_ir", ir);
+}
+
+#[test]
+fn v03_m2_main_with_wait_ir_snapshot() {
+    // WHY: locks that main wraps in block_on when entrypoint contains wait, and that
+    // ynz_rt_init is the FIRST non-allocation instruction in main's entry block.
+    // If ynz_rt_init placement regresses, programs using wait will panic at runtime
+    // with "ynz_rt_init not called before sync state-machine call".
+    let source = r#"
+function entrypoint() -> nothing {
+  wait sleepAsync(1)
+}
+"#;
+    let ir = run_m2_sm_codegen("v03m2_main_with_wait.ynz", source);
+    assert!(
+        ir.contains("ynz_rt_call_state_machine_sync"),
+        "main-with-wait IR must emit sync bridge"
+    );
+    assert!(
+        ir.contains("ynz_rt_init"),
+        "main-with-wait IR must call ynz_rt_init"
+    );
+    insta::assert_snapshot!("v03_m2_main_with_wait_ir", ir);
+}
+
+#[test]
+fn v03_m2_background_spawn_sm_fn_ir_snapshot() {
+    // WHY: locks that `background sm_fn()` emits ynz_rt_spawn (I/O pool) and NOT
+    // ynz_rt_spawn_blocking (blocking pool). If the routing regresses, background
+    // state machines would tie up OS threads during their wait, defeating M2.
+    let source = r#"
+function worker() -> nothing {
+  wait sleepAsync(100)
+}
+function entrypoint() -> nothing {
+  background worker()
+  sleepMs(200)
+}
+"#;
+    let ir = run_m2_sm_codegen("v03m2_bg_spawn_sm.ynz", source);
+    let spawn_calls = ir.lines()
+        .filter(|l| l.contains("call") && l.contains("ynz_rt_spawn") && !l.contains("ynz_rt_spawn_blocking"))
+        .count();
+    assert!(
+        spawn_calls > 0,
+        "background SM call must emit ynz_rt_spawn (I/O pool); got:\n{}",
+        ir.lines().take(80).collect::<Vec<_>>().join("\n")
+    );
+    // Must NOT use ynz_rt_spawn_blocking for state-machine callees.
+    // Check for actual call instructions (not just declare statements which always appear).
+    let spawn_blocking_calls = ir.lines()
+        .filter(|l| l.contains("call") && l.contains("ynz_rt_spawn_blocking"))
+        .count();
+    assert_eq!(
+        spawn_blocking_calls, 0,
+        "background SM call must NOT emit ynz_rt_spawn_blocking call instructions; got:\n{}",
+        ir.lines().take(60).collect::<Vec<_>>().join("\n")
+    );
+    insta::assert_snapshot!("v03_m2_background_spawn_sm_fn_ir", ir);
+}
+
+#[test]
+fn v03_m2_background_spawn_regular_fn_ir_snapshot() {
+    // WHY: verifies that M1's background behavior is preserved — a wait-free function
+    // spawned via `background` still routes to ynz_rt_spawn_blocking (not ynz_rt_spawn).
+    // This is the M1 behavior that must not regress when M2 routing is added.
+    let source = r#"
+function worker() -> nothing {
+  sleepMs(100)
+}
+function entrypoint() -> nothing {
+  background worker()
+  sleepMs(200)
+}
+"#;
+    let ir = run_m2_sm_codegen("v03m2_bg_regular.ynz", source);
+    let spawn_blocking_calls = ir.lines()
+        .filter(|l| l.contains("call") && l.contains("ynz_rt_spawn_blocking"))
+        .count();
+    assert!(
+        spawn_blocking_calls > 0,
+        "background wait-free call must preserve M1 ynz_rt_spawn_blocking behavior"
+    );
+    insta::assert_snapshot!("v03_m2_background_spawn_regular_fn_ir", ir);
+}
+
+#[test]
+fn main_rt_init_is_first_instruction() {
+    // WHY: AC #5 — P0 Contract #12 deferred to this test. ynz_rt_init MUST be the
+    // first non-alloca instruction in main's entry block whenever any function in the
+    // compilation unit contains `wait` or `background`. Without this ordering guarantee,
+    // ynz_rt_call_state_machine_sync panics with "ynz_rt_init not called".
+    //
+    // This test asserts: the IR of main contains `call void @ynz_rt_init()` and it
+    // appears before any `call void @ynz_rt_call_state_machine_sync` or
+    // `call void @ynz_rt_spawn` instruction in main's text.
+    let source = r#"
+function entrypoint() -> nothing {
+  wait sleepAsync(1)
+}
+"#;
+    let ir = run_m2_sm_codegen("v03m2_rt_init_first.ynz", source);
+
+    // Find the main function definition and check instruction order.
+    // Scan line by line: once we enter the `main` function, ynz_rt_init must appear
+    // before ynz_rt_call_state_machine_sync.
+    let mut in_main = false;
+    let mut rt_init_seen = false;
+    let mut sm_sync_before_init = false;
+
+    for line in ir.lines() {
+        if line.contains("define") && (line.contains("@main") || line.contains("i32 @main")) {
+            in_main = true;
+        }
+        if in_main {
+            if line.contains("@ynz_rt_init") {
+                rt_init_seen = true;
+            }
+            if line.contains("@ynz_rt_call_state_machine_sync") && !rt_init_seen {
+                sm_sync_before_init = true;
+            }
+            // Exit main function definition at closing brace.
+            if line == "}" && in_main {
+                break;
+            }
+        }
+    }
+
+    assert!(
+        rt_init_seen,
+        "main must call ynz_rt_init when compilation unit contains wait. IR snippet:\n{}",
+        ir.lines().take(60).collect::<Vec<_>>().join("\n")
+    );
+    assert!(
+        !sm_sync_before_init,
+        "ynz_rt_call_state_machine_sync must not appear before ynz_rt_init in main"
+    );
+    insta::assert_snapshot!("v03_m2_main_rt_init_first", ir);
 }

@@ -283,6 +283,51 @@ impl<'b> Checker<'b> {
             );
         }
 
+        // Option-B deferral checks: emit clean teaching errors for wait patterns
+        // that require the M3 coroutine-locals transform rather than silently
+        // no-oping (loop case) or crashing the backend (local-crossing case).
+        if !self.kernel_mode && block_contains_wait(&f.body) {
+            // Check 1: `wait` inside a loop or match body.
+            if let Some(span) = wait_in_loop_or_match_body(&f.body.stmts) {
+                self.diags.push(Diagnostic::error(
+                    span,
+                    "`wait` inside a loop is not supported yet.",
+                    "Move the `wait` to a standalone function called inside the loop: \
+                     `function step() -> nothing { wait sleepAsync(100) }`, \
+                     then call `step()` from the loop body.",
+                    "v0.3-M2 can only pause at the top level of a function or inside an `if` \
+                     block. Pausing inside a loop requires saving and restoring the loop counter \
+                     across the pause point — that transform ships in v0.3-M3.",
+                ));
+            }
+
+            // Check 2: local binding declared before a `wait` and read after it.
+            // Parameters are excluded — they are frame-backed at every resume point.
+            let param_names: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
+            let crossings = locals_crossing_wait(&f.body.stmts, &param_names);
+            // Emit one diagnostic per crossing (deduplicated by name to reduce noise).
+            let mut reported: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for crossing in crossings {
+                if reported.insert(crossing.name.clone()) {
+                    self.diags.push(Diagnostic::error(
+                        crossing.use_span,
+                        format!(
+                            "`{}` is declared before a `wait` and used after — this is not supported yet.",
+                            crossing.name
+                        ),
+                        format!(
+                            "Move `{}` to a function parameter (parameters are preserved across \
+                             pause points) or restructure so `{}` is not needed after the `wait`.",
+                            crossing.name, crossing.name
+                        ),
+                        "v0.3-M2 can only preserve function parameters across a `wait` point. \
+                         Preserving a local binding across a pause requires a more complex \
+                         transform that ships in v0.3-M3.",
+                    ));
+                }
+            }
+        }
+
         self.check_stmts(&f.body.stmts);
         self.scope.pop();
 
@@ -1451,6 +1496,10 @@ impl<'b> Checker<'b> {
             "range" => self.check_range_call(call),
             // sleepMs(ms: int) — synchronous blocking sleep; lowers to ynz_thread_sleep_ms.
             "sleepMs" => self.check_sleep_ms_call(call),
+            // sleepAsync(ms: int) — non-blocking sleep; codegen emits state-machine wait point.
+            // Full registry entry and `unawaited_sleep_async` warning ship in P3 typeck.
+            // This minimal arm is needed in P2 so driver fixtures using `wait sleepAsync(ms)` compile.
+            "sleepAsync" => self.check_sleep_async_call(call),
             // M8 P4: `sensitive(value)` constructor — wraps a string in Type::Sensitive.
             "sensitive" => {
                 if call.args.len() != 1 {
@@ -1498,7 +1547,7 @@ impl<'b> Checker<'b> {
                 // Unknown
                 let mut candidates: Vec<&str> = self.sig_table.all_names();
                 candidates.extend(self.generic_fn_table.all_names());
-                candidates.extend(["print", "range", "sleepMs"]);
+                candidates.extend(["print", "range", "sleepMs", "sleepAsync"]);
                 self.diags.push(make_not_defined_diag(
                     name,
                     call.callee.span().clone(),
@@ -1637,6 +1686,41 @@ impl<'b> Checker<'b> {
                 format!("`sleepMs` requires an `int` argument, but got `{}`.", type_name(&ty)),
                 "Pass an integer number of milliseconds: `sleepMs(200)`.",
                 "`sleepMs` converts the argument to a millisecond duration. Only `int` is accepted.",
+            ));
+        }
+        Type::Nothing
+    }
+
+    /// Validate `sleepAsync(ms)` call — non-blocking sleep for `wait` expressions.
+    ///
+    /// Accepts exactly one `int` argument. Returns `nothing` (the sleep completes silently).
+    /// The full `unawaited_sleep_async` warning (calling sleepAsync without `wait`) and the
+    /// registry entry ship in P3. This minimal implementation enables P2 driver fixtures that
+    /// use `wait sleepAsync(ms)`.
+    fn check_sleep_async_call(&mut self, call: &CallExpr) -> Type {
+        if call.args.len() != 1 {
+            self.diags.push(Diagnostic::error(
+                call.span.clone(),
+                format!(
+                    "`sleepAsync` takes exactly 1 argument, but {} were given.",
+                    call.args.len()
+                ),
+                "Write `wait sleepAsync(200)` — pass the number of milliseconds to pause.",
+                "`sleepAsync` suspends the calling function for the given number of milliseconds \
+                 without blocking the OS thread. It takes one `int` argument.",
+            ));
+            for arg in &call.args {
+                self.infer_expr(arg, None);
+            }
+            return Type::Nothing;
+        }
+        let ty = self.infer_expr(&call.args[0], Some(&Type::Int));
+        if ty != Type::Int && ty != Type::Error {
+            self.diags.push(Diagnostic::error(
+                call.args[0].span().clone(),
+                format!("`sleepAsync` requires an `int` argument, but got `{}`.", type_name(&ty)),
+                "Pass an integer number of milliseconds: `wait sleepAsync(200)`.",
+                "`sleepAsync` converts the argument to a millisecond duration. Only `int` is accepted.",
             ));
         }
         Type::Nothing
@@ -3922,6 +4006,389 @@ pub fn type_attached_const_type(type_name: &str, const_name: &str) -> Option<Typ
             "type_attached_const_type: unknown value_type {other:?} for {type_name}.{const_name}"
         ),
     })
+}
+
+// ── Option-B deferral checks (v0.3-M2 scope boundary) ────────────────────────
+//
+// v0.3-M2 supports `wait` at the top level of a function and inside `if` blocks.
+// Two patterns require the full coroutine-locals transform that lands in M3:
+//
+//   1. `wait` inside a `while`/`for`/`match` body — the loop counter must survive
+//      the pause point, which needs frame-backed mutable locals (M3 machinery).
+//   2. A local binding (`let`/`const`) declared before a `wait` and read after it —
+//      the binding would need a frame slot and flush-before-suspend discipline,
+//      also M3 machinery.
+//
+// Function parameters are exempt from (2): they ARE frame-backed (slot-loaded at
+// each resume point), so a param read after a `wait` is correct and accepted.
+//
+// These helpers run as a pre-pass in `check_function` for functions that contain
+// any `wait`, and emit clean teaching errors instead of letting the codegen no-op
+// or crash.
+
+/// Returns the `SourceSpan` of the first `wait` found directly inside a loop or
+/// match body in `stmts` — i.e., where a `while`, `for`, or `match` statement's
+/// body recursively contains a `wait` expression.
+///
+/// Only the immediate children of these constructs are tested; `wait` inside
+/// nested `if` blocks at the same level is handled by the SM walker, not here.
+/// Top-level `wait` in `stmts` itself is NOT returned — only loop/match-nested ones.
+fn wait_in_loop_or_match_body(stmts: &[Stmt]) -> Option<SourceSpan> {
+    for stmt in stmts {
+        let found = match stmt {
+            Stmt::While { body, span, .. } if block_contains_wait(body) => Some(span.clone()),
+            Stmt::For { body, span, .. } if block_contains_wait(body) => Some(span.clone()),
+            Stmt::Match {
+                arms,
+                else_arm,
+                span,
+                ..
+            } if arms.iter().any(|a| block_contains_wait(&a.body))
+                || else_arm.as_ref().is_some_and(block_contains_wait) =>
+            {
+                Some(span.clone())
+            }
+            // `if` blocks are handled — recurse into them looking for nested loops/match.
+            Stmt::If { body, .. } => wait_in_loop_or_match_body(&body.stmts),
+            _ => None,
+        };
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
+/// Returns true if the block contains any `wait` expression anywhere in its tree.
+fn block_contains_wait(block: &Block) -> bool {
+    block.stmts.iter().any(stmt_contains_wait_anywhere)
+}
+
+fn stmt_contains_wait_anywhere(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Expr(e) => expr_contains_wait_anywhere(e),
+        Stmt::Let { value, .. } | Stmt::Assign { value, .. } => expr_contains_wait_anywhere(value),
+        Stmt::If { cond, body, .. } => {
+            expr_contains_wait_anywhere(cond) || block_contains_wait(body)
+        }
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
+            expr_contains_wait_anywhere(scrutinee)
+                || arms.iter().any(|a| block_contains_wait(&a.body))
+                || else_arm.as_ref().is_some_and(block_contains_wait)
+        }
+        Stmt::While { cond, body, .. } | Stmt::For { iter: cond, body, .. } => {
+            expr_contains_wait_anywhere(cond) || block_contains_wait(body)
+        }
+        Stmt::Return { value, .. } => value.as_ref().is_some_and(expr_contains_wait_anywhere),
+        Stmt::FieldAssign { target, value, .. } => {
+            expr_contains_wait_anywhere(target) || expr_contains_wait_anywhere(value)
+        }
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => {
+            expr_contains_wait_anywhere(receiver)
+                || expr_contains_wait_anywhere(index)
+                || expr_contains_wait_anywhere(value)
+        }
+    }
+}
+
+fn expr_contains_wait_anywhere(expr: &Expr) -> bool {
+    match expr {
+        Expr::Wait(_, _) => true,
+        Expr::Background(inner, _) => expr_contains_wait_anywhere(inner),
+        Expr::Call(c) => {
+            expr_contains_wait_anywhere(&c.callee) || c.args.iter().any(expr_contains_wait_anywhere)
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            expr_contains_wait_anywhere(lhs) || expr_contains_wait_anywhere(rhs)
+        }
+        Expr::UnaryOp { operand, .. } => expr_contains_wait_anywhere(operand),
+        Expr::MethodCall {
+            receiver, args, ..
+        } => {
+            expr_contains_wait_anywhere(receiver) || args.iter().any(expr_contains_wait_anywhere)
+        }
+        Expr::FieldAccess { receiver, .. } => expr_contains_wait_anywhere(receiver),
+        Expr::IndexAccess { receiver, index, .. } => {
+            expr_contains_wait_anywhere(receiver) || expr_contains_wait_anywhere(index)
+        }
+        Expr::StructLit { fields, .. } => {
+            fields.iter().any(|f| expr_contains_wait_anywhere(&f.value))
+        }
+        Expr::ArrayLit { elements, .. } => elements.iter().any(expr_contains_wait_anywhere),
+        Expr::MapLit { entries, .. } => entries
+            .iter()
+            .any(|(k, v)| expr_contains_wait_anywhere(k) || expr_contains_wait_anywhere(v)),
+        Expr::PostfixOp { receiver, .. } => expr_contains_wait_anywhere(receiver),
+        Expr::Is { expr: inner, .. } => expr_contains_wait_anywhere(inner),
+        Expr::InterpolatedString(parts, _) => parts.iter().any(|p| match p {
+            ynz_ast::nodes::StringPart::Expr(e, _) => expr_contains_wait_anywhere(e),
+            ynz_ast::nodes::StringPart::Lit(_, _) => false,
+        }),
+        // Leaf nodes — no wait nested here.
+        Expr::Ident(_, _)
+        | Expr::StringLit(_, _)
+        | Expr::IntLit(_, _)
+        | Expr::NumberLit(_, _)
+        | Expr::BoolLit(_, _)
+        | Expr::SelfValue { .. }
+        | Expr::NoneLit { .. }
+        | Expr::Error(_) => false,
+    }
+}
+
+/// Describes a local binding declared before a `wait` in a function body that is
+/// also referenced after that wait.
+struct LocalCrossesWait {
+    /// Name of the local binding.
+    name: String,
+    /// Span of the usage AFTER the wait (for error reporting).
+    use_span: SourceSpan,
+}
+
+/// Scan `stmts` for local (`let`/`const`) bindings declared before any reachable
+/// `wait` suspend point (including waits nested inside `if` branches at any depth)
+/// that are then referenced after that wait.
+///
+/// Suspend points include:
+/// - `Stmt::Expr(Expr::Wait(...))` — top-level bare wait
+/// - `Stmt::Let { value: Expr::Wait(...), .. }` — top-level let-wait
+/// - An `if` branch whose body contains a wait — the `if` block is a suspend point
+///   because the branch may execute and suspend before control reaches later statements
+///
+/// `wait`-in-loop is already caught by `wait_in_loop_or_match_body` before this runs,
+/// so only top-level and `if`-nested waits reach here.
+///
+/// Function parameters are excluded: the SM codegen gives every parameter a frame
+/// slot and reloads it at each resume point, so they are always safe.
+fn locals_crossing_wait(stmts: &[Stmt], param_names: &[&str]) -> Vec<LocalCrossesWait> {
+    let mut problems = Vec::new();
+    collect_crossings_in_stmts(stmts, param_names, &mut Vec::new(), &mut problems);
+    problems
+}
+
+/// Recursive crossing-analysis kernel.
+///
+/// `declared` accumulates all local names declared before any wait point seen so far
+/// in this statement sequence. When a wait (or an `if` containing a wait) is
+/// encountered, subsequent statements (and the post-wait portion of the same `if`
+/// branch) are scanned for references to those accumulated names.
+fn collect_crossings_in_stmts(
+    stmts: &[Stmt],
+    param_names: &[&str],
+    declared: &mut Vec<String>,
+    out: &mut Vec<LocalCrossesWait>,
+) {
+    // Whether a reachable suspend point has been seen in this statement list.
+    let mut past_wait = false;
+
+    for stmt in stmts {
+        if past_wait {
+            // We are post-wait: any reference to a pre-wait local is a crossing.
+            collect_ident_refs_in_stmt(stmt, declared, out);
+        } else {
+            match stmt {
+                // Bare top-level wait — all currently-declared locals are crossing candidates.
+                Stmt::Expr(Expr::Wait(_, _)) => {
+                    past_wait = true;
+                }
+                // `let name = wait expr` — name is post-wait, not a crossing candidate.
+                Stmt::Let { name: _, value: Expr::Wait(_, _), .. } => {
+                    past_wait = true;
+                }
+                Stmt::Let { name, value, .. } => {
+                    if !declared.contains(name) && !param_names.contains(&name.as_str()) {
+                        declared.push(name.clone());
+                    }
+                    // The RHS could contain an `if`-nested wait in theory (rare), recurse.
+                    // In practice the parser rejects that for `wait` used as an expression
+                    // nested under `let`; this is a conservative safety net.
+                    if expr_contains_wait_anywhere(value) {
+                        past_wait = true;
+                    }
+                }
+                Stmt::Assign { target: name, .. } => {
+                    if !declared.contains(name) && !param_names.contains(&name.as_str()) {
+                        declared.push(name.clone());
+                    }
+                }
+                // An `if` block whose body contains a wait is a reachable suspend point.
+                // Two sub-cases:
+                //   (a) Locals declared BEFORE this `if` and read AFTER it cross the
+                //       potential wait inside the branch.
+                //   (b) Locals declared INSIDE the branch, before the wait, and read
+                //       after the wait IN THE SAME BRANCH also cross — handle via
+                //       recursive call into the branch.
+                Stmt::If { body, .. } if block_contains_wait(body) => {
+                    // Sub-case (b): recurse into the branch, seeding with the outer
+                    // `declared` set so that outer-scope names declared before this if
+                    // are also tracked inside the branch.
+                    let mut branch_declared = declared.clone();
+                    collect_crossings_in_stmts(
+                        &body.stmts,
+                        param_names,
+                        &mut branch_declared,
+                        out,
+                    );
+                    // Sub-case (a): any name declared before this if is now potentially
+                    // crossing (the branch may have suspended). Mark wait seen for the
+                    // outer sequence so post-if statements are checked.
+                    past_wait = true;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Recursively scan `stmt` and accumulate `LocalCrossesWait` entries for any
+/// `Expr::Ident` whose name is in `targets`.
+fn collect_ident_refs_in_stmt(
+    stmt: &Stmt,
+    targets: &[String],
+    out: &mut Vec<LocalCrossesWait>,
+) {
+    match stmt {
+        Stmt::Expr(e) => collect_ident_refs_in_expr(e, targets, out),
+        Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
+            collect_ident_refs_in_expr(value, targets, out);
+        }
+        Stmt::If { cond, body, .. } => {
+            collect_ident_refs_in_expr(cond, targets, out);
+            for s in &body.stmts {
+                collect_ident_refs_in_stmt(s, targets, out);
+            }
+        }
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
+            collect_ident_refs_in_expr(scrutinee, targets, out);
+            for arm in arms {
+                for s in &arm.body.stmts {
+                    collect_ident_refs_in_stmt(s, targets, out);
+                }
+            }
+            if let Some(b) = else_arm {
+                for s in &b.stmts {
+                    collect_ident_refs_in_stmt(s, targets, out);
+                }
+            }
+        }
+        Stmt::While { cond, body, .. } | Stmt::For { iter: cond, body, .. } => {
+            collect_ident_refs_in_expr(cond, targets, out);
+            for s in &body.stmts {
+                collect_ident_refs_in_stmt(s, targets, out);
+            }
+        }
+        Stmt::Return { value, .. } => {
+            if let Some(e) = value {
+                collect_ident_refs_in_expr(e, targets, out);
+            }
+        }
+        Stmt::FieldAssign { target, value, .. } => {
+            collect_ident_refs_in_expr(target, targets, out);
+            collect_ident_refs_in_expr(value, targets, out);
+        }
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => {
+            collect_ident_refs_in_expr(receiver, targets, out);
+            collect_ident_refs_in_expr(index, targets, out);
+            collect_ident_refs_in_expr(value, targets, out);
+        }
+    }
+}
+
+fn collect_ident_refs_in_expr(
+    expr: &Expr,
+    targets: &[String],
+    out: &mut Vec<LocalCrossesWait>,
+) {
+    match expr {
+        Expr::Ident(name, span) => {
+            if targets.contains(name) {
+                out.push(LocalCrossesWait {
+                    name: name.clone(),
+                    use_span: span.clone(),
+                });
+            }
+        }
+        Expr::Wait(inner, _) | Expr::Background(inner, _) => {
+            collect_ident_refs_in_expr(inner, targets, out);
+        }
+        Expr::Call(c) => {
+            collect_ident_refs_in_expr(&c.callee, targets, out);
+            for a in &c.args {
+                collect_ident_refs_in_expr(a, targets, out);
+            }
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_ident_refs_in_expr(lhs, targets, out);
+            collect_ident_refs_in_expr(rhs, targets, out);
+        }
+        Expr::UnaryOp { operand, .. } => collect_ident_refs_in_expr(operand, targets, out),
+        Expr::MethodCall {
+            receiver, args, ..
+        } => {
+            collect_ident_refs_in_expr(receiver, targets, out);
+            for a in args {
+                collect_ident_refs_in_expr(a, targets, out);
+            }
+        }
+        Expr::FieldAccess { receiver, .. } => collect_ident_refs_in_expr(receiver, targets, out),
+        Expr::IndexAccess { receiver, index, .. } => {
+            collect_ident_refs_in_expr(receiver, targets, out);
+            collect_ident_refs_in_expr(index, targets, out);
+        }
+        Expr::StructLit { fields, .. } => {
+            for f in fields {
+                collect_ident_refs_in_expr(&f.value, targets, out);
+            }
+        }
+        Expr::ArrayLit { elements, .. } => {
+            for e in elements {
+                collect_ident_refs_in_expr(e, targets, out);
+            }
+        }
+        Expr::MapLit { entries, .. } => {
+            for (k, v) in entries {
+                collect_ident_refs_in_expr(k, targets, out);
+                collect_ident_refs_in_expr(v, targets, out);
+            }
+        }
+        Expr::PostfixOp { receiver, .. } => collect_ident_refs_in_expr(receiver, targets, out),
+        Expr::Is { expr: inner, .. } => collect_ident_refs_in_expr(inner, targets, out),
+        Expr::InterpolatedString(parts, _) => {
+            for p in parts {
+                if let ynz_ast::nodes::StringPart::Expr(e, _) = p {
+                    collect_ident_refs_in_expr(e, targets, out);
+                }
+            }
+        }
+        // Leaf nodes — no identifiers to find other than Ident handled above.
+        Expr::StringLit(_, _)
+        | Expr::IntLit(_, _)
+        | Expr::NumberLit(_, _)
+        | Expr::BoolLit(_, _)
+        | Expr::SelfValue { .. }
+        | Expr::NoneLit { .. }
+        | Expr::Error(_) => {}
+    }
 }
 
 fn body_has_error_node(stmts: &[Stmt]) -> bool {

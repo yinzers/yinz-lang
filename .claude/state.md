@@ -10,12 +10,11 @@
 
 <!-- RADAR-START -->
 ### Active Roadmaps
-- v0-2-dev-loop-tooling (patrick) — 1 active plans — 2026-05-20 (v0.2-M5 scope updated to reflect final execution plan)
-- webpage-docs (Patrick Rizzardi) — 1 active plans — 2026-05-20
+- v0-3-concurrency-perf (Patrick Rizzardi) — 1 active plans — 2026-05-21
+- webpage-docs (Patrick Rizzardi) — 0 active plans — 2026-05-20
 
 ### Active Workstreams
-- v0-2-m5-lsp-full-and-release (Patrick Rizzardi) — committed Phases 0-6 — roadmap: v0-2-dev-loop-tooling — 2026-05-21 (Phases 4+5+6 complete: rename (14 tests) + format-on-save (8 tests) + inlay hints (8 tests); Phases 0-6 all shipped)
-- webpage-foundation (Patrick Rizzardi) — 3 files touched — 0/125 done — roadmap: webpage-docs — 2026-05-20
+- v0-3-m2-wait-and-state-machines (Patrick Rizzardi) — 15 files touched — 54/160 done — roadmap: v0-3-concurrency-perf — 2026-05-31 (P0 ✅committed 6328666, P1 ✅committed b740e3d. P2 codegen IMPLEMENTED but UNCOMMITTED (staged) + code-reviewer BLOCK — 2 confirmed correctness bugs: (
 <!-- RADAR-END -->
 
 ---
@@ -52,6 +51,7 @@ cargo fmt --all
 
 ## Active Decisions (append with WHY)
 
+- [2026-05-31] **⚠️ CROSS-CHAT — main advanced to v0.3.0-m2 (teaching-surface bug hunt) while you were on this branch**: A sibling chat shipped the v0.2.1-M10 teaching-surface bugfix milestone (14 audit bugs + 3 same-class siblings — unused-import false-positives, inlay-hint mutated-binding lies incl. `wait`/`background`/interpolation wrappers, hover, completion, banned-jargon quick-fix, gold inlay color). Merged to main (commit `13264af` + ext bump `3a2f975`), released as tag **v0.3.0-m2**, GitHub release + dual VSIX assets published. **THIS BRANCH (`v0.3-m2-wait-and-state-machines`) does NOT have those fixes yet** — it branched off the old main (`d509770`), same as M10; merging M10 to main does NOT auto-flow here. **WHAT TO DO**: when ready for your next merge/release (or to build on the fixed teaching surfaces), run `git fetch origin && git merge origin/main` from this worktree. As of 2026-05-31 there is ZERO file overlap between M10 and your work (M10 = typeck/LSP/registry teaching surfaces; you = ynz-runtime/codegen `wait`/state-machines), so the merge is clean today — but your later phases will touch `inlay_hint_passes.rs`/`check.rs` (wait-point inlay hints are v0.3 territory), and conflict risk grows the longer you wait, so merge sooner rather than later. NOTE: M10 left 4 tracked walker-completeness follow-ups in `.claude/todos.md` (`inlay-hint-walker-completeness-followup`) — some are wait-hint-adjacent, worth a look when you do wait-point hints. **WHY this note exists**: Patrick asked that the wait-and-state chat be told what shipped + how to sync, since cross-branch propagation isn't automatic.
 - [2026-05-12] **Compiler implementation language = Rust**: Mature LLVM bindings (inkwell), strong ADT/pattern-matching for AST, salsa framework gives incremental builds + LSP "for free." See `design/compiler-language.md`.
 - [2026-05-12] **MVP scope split into v0.1 / v0.2 / v0.3 / v1.0 / v2+**: Concurrency keywords parse from day 1 but run sequentially until v0.3 (when auto-parallelization optimization engages). See `design/mvp-scope.md`.
 - [2026-05-12] **Error auto-propagation = flow-sensitive narrowing (Option B under, Option A in feel)**: If user calls `.failed()` before using the success value, auto-propagation suppressed; otherwise compiler auto-propagates at first use. Same `.failed()`/`.or()` API works inside AND outside `errors` functions. See `design/errors.md`.
@@ -111,6 +111,10 @@ cargo fmt --all
 - **M4 plan must include**: 5-subsection Invariants block per `.claude/rules/plan-invariants.md` (Safety, Performance, Teaching, Runtime Dependencies, Kernel-Mode Behavior). const deep-immutability invariants required in Safety + Performance. `shape` keyword reservation in P1 lexer.
 
 ---
+
+## Active Decisions (Architectural — v0.3-M2)
+
+- **[2026-05-31] M2/M3 boundary — `wait` nesting scope = OPTION B (clean error, defer transform to M3)**: In v0.3-M2, an explicit `wait` works at top level and inside `if`. `wait` inside a `while`/`for`/`match` body, and a `let` local whose value is read after a `wait` (crosses a suspension boundary), emit a CLEAN teaching compile error (WHAT/WHAT-INSTEAD/WHY pointing to M3) — emitted at typeck so the codegen no-op fallback is unreachable. WHY: the full frame-backed-mutable-locals stackless-coroutine transform (flush-before-suspend + reload-at-resume + SM-aware variants of all ~5 `for` forms + `while` + the `let`-crossing dominance fix) is M3-scale machinery; the spike already proved the loop ABI (P0 Contract #7b), so M3 wires codegen onto a proven foundation alongside auto-`wait` insertion. The M2 shipped demo (8 background `pause()` tasks) uses top-level waits only — Option B descopes nothing user-visible. Replaces the prior silent no-op (loop) + codegen crash (let-crossing) — both were bugs — with honest errors. Decided via /execute-plan resume of Phase 2.
 
 ## Active Decisions (Architectural — v0.3-M1)
 

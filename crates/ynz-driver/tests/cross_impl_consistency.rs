@@ -142,10 +142,14 @@ fn corpus_produces_deterministic_output_across_runs() {
         // precedes background output in the same run; two runs may differ in
         // interleaving if the system is under load. We skip the timing fixture
         // which is inherently racy.
+        // WHY concurrent_waits_proof is excluded: it uses 8 concurrent background state machines
+        // with non-deterministic scheduling order (which task's START/DONE prints first depends
+        // on the Tokio I/O pool scheduler). The ordering assertions live in the dedicated driver
+        // integration test (v0_3_m2_concurrent_waits_proof), not in the determinism harness.
         let is_timing_fixture = path
             .file_name()
             .and_then(|n| n.to_str())
-            .map(|n| n.contains("timing") || n.contains("background"))
+            .map(|n| n.contains("timing") || n.contains("background") || n.contains("concurrent"))
             .unwrap_or(false);
 
         if !is_timing_fixture {

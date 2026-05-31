@@ -2719,3 +2719,221 @@ fn background_with_zero_byte_struct_no_warn() {
         .collect();
     assert!(warnings.is_empty(), "zero-byte struct copy must NOT produce a bytes warning; got: {:#?}", warnings);
 }
+
+// ── v0.3-M2 Option-B deferral errors ────────────────────────────────────────
+
+// WHY: `wait` inside a `while` loop must emit a clean teaching error instead of
+// silently no-oping the wait. Catches regressions where the loop-body check is
+// removed and the codegen quietly discards the suspension, making programs appear
+// to work while never actually pausing.
+#[test]
+fn wait_in_while_loop_is_an_error() {
+    let src = r#"
+function entrypoint() -> nothing {
+  let i: int = 0
+  while (i < 3) {
+    wait sleepAsync(100)
+    i = i + 1
+  }
+}
+"#;
+    let out = run(src);
+    let errors: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(!errors.is_empty(), "wait inside while loop must produce an error");
+    let has_loop_msg = errors.iter().any(|d| d.what.contains("loop"));
+    assert!(has_loop_msg, "error must mention loop; got: {:#?}", errors);
+    let has_why = errors.iter().any(|d| d.why.contains("v0.3-M3"));
+    assert!(has_why, "error WHY must reference v0.3-M3; got: {:#?}", errors);
+}
+
+// WHY: `wait` inside a `for` loop must emit the same teaching error. Guards that
+// the check covers `for` in addition to `while` — both need the loop-counter
+// frame-backing transform from M3.
+#[test]
+fn wait_in_for_loop_is_an_error() {
+    let src = r#"
+function entrypoint() -> nothing {
+  for (i in range(0, 3)) {
+    wait sleepAsync(100)
+  }
+}
+"#;
+    let out = run(src);
+    let errors: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(!errors.is_empty(), "wait inside for loop must produce an error");
+    let has_loop_msg = errors.iter().any(|d| d.what.contains("loop"));
+    assert!(has_loop_msg, "error must mention loop; got: {:#?}", errors);
+}
+
+// WHY: a local binding declared before a `wait` and read after must emit a clean
+// teaching error instead of crashing the backend with an LLVM dominance violation.
+// Catches regressions where the local-crossing check is removed and a user hits
+// "Machine-code generation failed inside the backend" with no useful message.
+#[test]
+fn local_binding_crossing_wait_is_an_error() {
+    let src = r#"
+function entrypoint() -> nothing {
+  let x: int = 5
+  wait sleepAsync(30)
+  print(x.toString())
+}
+"#;
+    let out = run(src);
+    let errors: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(!errors.is_empty(), "local binding crossing wait must produce an error");
+    let has_name = errors.iter().any(|d| d.what.contains("`x`"));
+    assert!(has_name, "error must name the offending binding `x`; got: {:#?}", errors);
+    let has_why = errors.iter().any(|d| d.why.contains("v0.3-M3"));
+    assert!(has_why, "error WHY must reference v0.3-M3; got: {:#?}", errors);
+}
+
+// WHY: function PARAMETERS read after a `wait` must NOT produce an error — they are
+// frame-backed at every resume point and the concurrent-waits demo depends on this.
+// If parameters are wrongly flagged as "crossing" a wait, the main demo fixture breaks.
+#[test]
+fn param_read_after_wait_is_accepted() {
+    let src = r#"
+function pause(n: int) -> nothing {
+  print(n.toString())
+  wait sleepAsync(100)
+  print(n.toString())
+}
+function entrypoint() -> nothing {
+  background pause(1)
+}
+"#;
+    assert_clean(src);
+}
+
+// WHY: `wait` at the top level and inside `if` must be accepted — these are the
+// M2-supported cases. If this test fails, the Option-B check is overly broad and
+// rejects valid programs.
+#[test]
+fn wait_at_top_level_and_in_if_is_accepted() {
+    let src = r#"
+function maybeWait(b: boolean) -> nothing {
+  if (b) {
+    wait sleepAsync(50)
+  }
+  wait sleepAsync(10)
+}
+function entrypoint() -> nothing {
+  background maybeWait(true)
+  sleepMs(200)
+}
+"#;
+    assert_clean(src);
+}
+
+// WHY: a local declared before an if-nested wait and read AFTER the if block crosses
+// the wait boundary. Before this fix, this pattern crashed the LLVM backend with a
+// dominance violation ("Instruction does not dominate all uses"). Must emit the clean
+// LocalCrossesWait teaching error instead.
+#[test]
+fn local_before_if_nested_wait_read_after_if_is_an_error() {
+    let src = r#"
+function entrypoint() -> nothing {
+  let x: int = 5
+  if (x < 10) {
+    wait sleepAsync(30)
+  }
+  print(x.toString())
+}
+"#;
+    let out = run(src);
+    let errors: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(
+        !errors.is_empty(),
+        "local declared before if-nested wait and read after must produce an error"
+    );
+    let has_name = errors.iter().any(|d| d.what.contains("`x`"));
+    assert!(has_name, "error must name the offending binding `x`; got: {:#?}", errors);
+    let no_crash = errors.iter().all(|d| !d.what.contains("Machine-code generation failed"));
+    assert!(no_crash, "must be a clean typeck error, not a backend crash; got: {:#?}", errors);
+}
+
+// WHY: a local declared before an if-nested wait and read INSIDE THE SAME BRANCH after
+// the wait also crosses. Before this fix, this variant also crashed the LLVM backend.
+#[test]
+fn local_before_if_nested_wait_read_inside_branch_is_an_error() {
+    let src = r#"
+function entrypoint() -> nothing {
+  let x: int = 5
+  if (x < 10) {
+    wait sleepAsync(30)
+    print(x.toString())
+  }
+}
+"#;
+    let out = run(src);
+    let errors: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(
+        !errors.is_empty(),
+        "local read inside same branch after wait must produce an error"
+    );
+    let has_name = errors.iter().any(|d| d.what.contains("`x`"));
+    assert!(has_name, "error must name the offending binding `x`; got: {:#?}", errors);
+}
+
+// WHY: a local declared INSIDE an if branch before the wait and read after the wait in
+// that same branch crosses the wait. Before this fix, this variant crashed the backend.
+#[test]
+fn local_inside_if_branch_before_wait_read_after_wait_is_an_error() {
+    let src = r#"
+function entrypoint() -> nothing {
+  if (true) {
+    let y: int = 7
+    wait sleepAsync(30)
+    print(y.toString())
+  }
+}
+"#;
+    let out = run(src);
+    let errors: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(
+        !errors.is_empty(),
+        "local declared inside branch before wait and read after must produce an error"
+    );
+    let has_name = errors.iter().any(|d| d.what.contains("`y`"));
+    assert!(has_name, "error must name the offending binding `y`; got: {:#?}", errors);
+}
+
+// WHY: a local declared AND fully read BEFORE any wait must be accepted.
+// Over-rejection here would break valid programs that use locals for setup before a wait.
+#[test]
+fn local_declared_and_read_before_wait_is_accepted() {
+    let src = r#"
+function entrypoint() -> nothing {
+  let x: int = 5
+  print(x.toString())
+  wait sleepAsync(10)
+}
+"#;
+    assert_clean(src);
+}
+
+// WHY: a local declared AFTER the last wait must be accepted — it cannot cross any
+// suspend point because it doesn't exist before the wait.
+#[test]
+fn local_declared_after_wait_is_accepted() {
+    let src = r#"
+function entrypoint() -> nothing {
+  wait sleepAsync(10)
+  let z: int = 99
+  print(z.toString())
+}
+"#;
+    assert_clean(src);
+}

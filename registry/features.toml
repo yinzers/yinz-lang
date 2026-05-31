@@ -1381,6 +1381,20 @@ what_template = "Copying {size} bytes into a background task."
 what_instead_template = "Pass ownership with `background fn(value.give)` if you don't need the value after. Click `.give` to apply."
 why_template = "`.give` transfers ownership without copying. Auto-detection of unused-after-call ships in v0.3-M3; until then, the choice is yours to make explicit."
 
+# v0.3-M2 Option-B deferral diagnostic templates
+
+[[diagnostic_template]]
+kind_name = "WaitInsideLoop"
+what_template = "`wait` inside a loop is not supported yet."
+what_instead_template = "Move the `wait` to a standalone function called inside the loop: `function step() -> nothing { wait sleepAsync(100) }`, then call `step()` from the loop body."
+why_template = "v0.3-M2 can only pause at the top level of a function or inside an `if` block. Pausing inside a loop requires saving and restoring the loop counter across the pause point — that transform ships in v0.3-M3."
+
+[[diagnostic_template]]
+kind_name = "LocalCrossesWait"
+what_template = "`{name}` is declared before a `wait` and used after — this is not supported yet."
+what_instead_template = "Move `{name}` to a function parameter (parameters are preserved across pause points) or restructure so `{name}` is not needed after the `wait`."
+why_template = "v0.3-M2 can only preserve function parameters across a `wait` point. Preserving a local binding across a pause requires a more complex transform that ships in v0.3-M3."
+
 # ---------------------------------------------------------------------------
 # [[primitive_intrinsic]] — maybe<T> methods
 # receiver_type = "maybe" matches any maybe<T> via prefix stripping in lsp_adapter.
