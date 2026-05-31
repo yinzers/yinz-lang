@@ -1633,7 +1633,7 @@ impl<'b> Checker<'b> {
                         type_name(&arg_ty)
                     ),
                     what_instead,
-                    "`print` works with: int, float, number, booleanean, string, and any shape.",
+                    "`print` works with: int, float, number, boolean, string, and any shape.",
                 ));
             }
             return Type::Error;
@@ -2056,7 +2056,7 @@ impl<'b> Checker<'b> {
                         call.span.clone(),
                         format!("Cannot work out the type parameter `{tp_name}` for function `{name}` — pass a value or annotate explicitly."),
                         format!("Examples: `{name}(5)` (T = int) or `{name}<int>()`"),
-                        "Yinz infers type parameters from the argument types. If there are no arguments, specify the type explicitly.",
+                        "Yinz figures out type parameters from the argument types. If there are no arguments, specify the type explicitly.",
                     ));
                 }
                 n => {
@@ -2069,7 +2069,7 @@ impl<'b> Checker<'b> {
                         call.span.clone(),
                         format!("{n} type parameters could not be resolved for `{name}`: {list}."),
                         format!("Annotate the call explicitly: `{name}<Type1, Type2>(...)` or pass typed arguments."),
-                        "Yinz infers type parameters from the argument types. If there are no arguments, specify all types explicitly.",
+                        "Yinz figures out type parameters from the argument types. If there are no arguments, specify all types explicitly.",
                     ));
                 }
             }

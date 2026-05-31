@@ -131,7 +131,7 @@ pub fn lsp_inlay_hint_hover_for(domain: &str) -> Option<String> {
              you could write explicitly.",
         "Informational" =>
             "This shows what the compiler decided at this call site. No source change is needed.",
-        _ => "The compiler inferred this automatically.",
+        _ => "The compiler figured this out automatically.",
     };
 
     Some(format!(

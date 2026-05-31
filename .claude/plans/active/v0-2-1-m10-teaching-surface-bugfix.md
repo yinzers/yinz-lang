@@ -562,7 +562,7 @@ _(empty until a reviewer returns BLOCK)_
 - [x] rules-compliance-reviewer: PASS 2026-05-30 (r1 — zero violations; durable-WHY comments, registry SSOT respected, no banned jargon in user-facing strings, no test weakening.)
 - [x] plan-adherence-verifier: PASS 2026-05-30 (r1 — all 6 steps landed; lexer.rs deviation ruled load-bearing + architecturally correct [mirrors emit_banned_declaration_keyword] + documented; `infer` test trigger is the correct path [`enum` routes through BannedKeyword]; zero creep.)
 - [x] acceptance-verifier: PASS 2026-05-30 (r1 — 4/4 ACs MET; tests derive expected values from live registry lookups so hardcoded drift would fail.)
-- [x] Committed: <commit SHA>
+- [x] Committed: 5e20fea
 
 **Findings Log**:
 _(no BLOCK rounds — all 4 reviewers PASS on round 1. Non-blocking concerns recorded in the code-reviewer gate above; the registry `reason`-text enrichment is a follow-up, not a Phase 7 fix.)_
@@ -584,26 +584,26 @@ _(no BLOCK rounds — all 4 reviewers PASS on round 1. Non-blocking concerns rec
 4. Grep `registry/features.toml` `[[muted_hint_domain]]` description fields for `infer`/`inferred`; replace with "figures out" / "the compiler picks" per vocabulary.md. (Audit suggested up to 3 such fields — fix whatever actually exists.)
 5. Ensure `banned_jargon.rs` (or the doc-grep audit) covers these strings so they can't regress.
 **Acceptance criteria**:
-- [ ] No `booleanean` anywhere in user-facing diagnostics.
-  - Evidence: (filled at phase completion)
-- [ ] No `infers`/`inferred` in the two `check.rs` strings or `[[muted_hint_domain]]` descriptions.
-  - Evidence: (filled at phase completion)
-- [ ] Jargon audit guards both so a future reintroduction fails CI/tests.
-  - Evidence: (filled at phase completion)
+- [x] No `booleanean` anywhere in user-facing diagnostics.
+  - Evidence: `check.rs:1636` `booleanean`→`boolean` in the `print` `Diagnostic::error` string; live `grep booleanean crates/ynz-typeck/src/check.rs` empty. Guard test `no_typo_booleanean_or_verb_infers_in_diagnostic_strings` (`jargon_audit.rs`) source-scans all `crates/**` Diagnostic call sites; code-reviewer mutation-verified it FAILS on reintroduction.
+- [x] No `infers`/`inferred` in the two `check.rs` strings or `[[muted_hint_domain]]` descriptions.
+  - Evidence: `check.rs:2059` + `:2072` `"Yinz infers type parameters…"`→`"Yinz figures out…"` (WHY preserved); all 9 `[[muted_hint_domain]]` descriptions scrubbed (5 had banned wording: variable_type/function_param_type/ownership_call_site/lifetimes/allocators). SAME-CLASS ADDITION (Rule 11): `ynz-registry/src/lib.rs:134` `_=>` hover-WHY fallback `"…inferred…"`→`"…figured this out…"`. acceptance-verifier confirmed the 2 remaining `inferred` in `features.toml:1196,1214` are `[[deferred_tooling_feature]]` `why` fields — internal/non-user-facing, correctly left (no over-ban).
+- [x] Jargon audit guards both so a future reintroduction fails CI/tests.
+  - Evidence: 4 new tests in `jargon_audit.rs` — diagnostic-string scan, `lsp_inlay_hint_hover_for` source-scan (guards the unreachable `_=>` arm a runtime test can't reach), runtime hover-output sweep over all 9 domains, muted_hint_domain description scan. code-reviewer ran 4 mutation checks: every guard goes RED on reintroduction, GREEN on restore. Source-scan empirically failed pre-fix (`"WHY string in lsp_inlay_hint_hover_for contains banned jargon"`) — non-tautological.
 **Quality gate**:
-- [ ] Replacement preserves the diagnostic's WHAT/WHAT-INSTEAD/WHY meaning.
-- [ ] `infer`/`inference` still allowed in design-doc/internal contexts (do not over-ban — vocabulary.md dual-audience rule).
+- [x] Replacement preserves the diagnostic's WHAT/WHAT-INSTEAD/WHY meaning. (code-reviewer + plan-adherence: WHY meaning intact on all 5 reworded strings — e.g. typeck "no arguments, specify explicitly" guidance retained.)
+- [x] `infer`/`inference` still allowed in design-doc/internal contexts (do not over-ban — vocabulary.md dual-audience rule). (all 4 reviewers confirmed only user-facing strings touched; zero internal identifiers/comments/doc-comments reworded; the audit test's own banned-word literals are correct detection patterns, not violations.)
 **Verification**: `cargo test --workspace` green; `grep -rn 'booleanean\|infers' crates/ynz-typeck/src/check.rs` returns nothing.
 
 **Phase Review Gates**:
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
-- [ ] Committed: <commit SHA>
+- [x] code-reviewer: PASS 2026-05-31 (mutation-verified all 4 guard tests bite, incl. the unreachable `_=>` arm; dual-audience boundary respected. 1 non-blocking: `jargon_audit.rs:449` "historically contained" comment — ruled load-bearing escape-valve, cross-flagged to rules-compliance.)
+- [x] rules-compliance-reviewer: PASS 2026-05-31 (zero violations; dual-audience applied correctly — test code naming banned words is legit detection data; registry edits content-only on existing entries; no ratcheting. Did not flag the :449 comment.)
+- [x] plan-adherence-verifier: PASS 2026-05-31 (all 5 steps MET; lib.rs deviation front-matter-blessed [line 18] + Rule-11 same-class; 5-vs-3 toml edits all genuine; no Phase 9/10 creep.)
+- [x] acceptance-verifier: PASS 2026-05-31 (3/3 ACs MET; guards scan real disk artifacts, non-tautological with confirmed pre-fix failure; 2 remaining features.toml `inferred` correctly exempt [deferred_tooling_feature why-fields].)
+- [x] Committed: <commit SHA>
 
 **Findings Log**:
-_(empty until a reviewer returns BLOCK)_
+_(no BLOCK rounds — all 4 reviewers PASS on round 1. Scope expanded mid-phase to fold in a Rule-11 same-class fix [`ynz-registry/src/lib.rs:134` user-facing `inferred` in the inlay-hint hover WHY fallback] + its audit guard. Non-blocking concern: `jargon_audit.rs:449` "historically contained `inferred`" comment is borderline changelog phrasing per comments.md — both code-reviewer and rules-compliance cleared it as load-bearing test-rationale; left as-is, trivial follow-up if Patrick wants it tightened.)_
 
 ---
 
