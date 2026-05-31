@@ -4,7 +4,7 @@ type: execution
 owner: Patrick Rizzardi
 status: active
 created: 2026-05-30
-last_updated: 2026-05-31 (P0 ✅committed 6328666, P1 ✅committed b740e3d. P2 codegen IMPLEMENTED but UNCOMMITTED (staged) + code-reviewer BLOCK — 2 confirmed correctness bugs: (#1) `wait` inside if/while/for is a silent no-op (flat statement-split, not CFG transform); (#3) `background sm_fn()` leaks the heap frame. Happy-path top-level `wait` works (concurrency proof passes, top-level wait=124ms). DECISION (Patrick 2026-05-31): FIX PROPERLY (real stackless-coroutine transform). P2-FIX DESIGN locked in Phase 2 Findings Log — 3 increments: (A) wait-in-if/if-cond, (B) wait-in-loop w/ induction-var-in-frame, (C) locals-crossing-wait → frame slots; plus #2 snapshot behavioral asserts, #3 SpawnStateFnFuture Drop, #4 param_to_i64_bits collapse. Verify each increment with a BARE-BINARY TIMING test (golden IR snapshots froze bug #1 — timing is the only no-op catcher). PROGRESS (uncommitted, all verified): #4✅(one marshaller) #3-frame✅(SpawnStateFnFuture::Drop) Increment-A✅(wait-in-if: 86ms real suspend, IR poll+live sm_pending, edge cases pass). NEXT: AWAITING SCOPE DECISION (clarification requested) — Option B clean-error+defer-loops-to-M3 [RECOMMENDED] vs Option A full-coroutine-transform-now. See Phase 2 Findings "SCOPE DECISION PENDING". Verified: loops/let-crossing-wait = M3-scale (lower_stmt_for is 566 lines × ~5 iteration forms + needs frame-backed-mutable-locals subsystem); M2 demo uses TOP-LEVEL waits only. After decision: finish remaining Phase 2 fixes, then /execute-plan runs reviewers + carries P3/P4/P5 straight through (all-phases-then-review). Do NOT commit P2 until done + review re-run. EXECUTING in worktree on branch v0.3-m2-wait-and-state-machines, whole-plan mode.)
+last_updated: 2026-05-31
 roadmap: v0-3-concurrency-perf
 files:
   - crates/ynz-runtime/**
@@ -45,9 +45,9 @@ Roadmap: `v0-3-concurrency-perf`
 
 **Constraints** (from roadmap):
 
-- **No function coloring.** Every function is still just `function`. No `async fn` distinction in the source. The compiler decides which functions become state machines based on whether their body contains `Expr::Wait` — a local syntactic check, not a transitive one (transitive may-block analysis is M3).
+- **No function coloring.** Every function is still just `function`. No `async fn` distinction in the source. The compiler decides which functions become state machines via **transitive intra-compilation-unit may-block analysis** (Phase 6 fixpoint, may-block set `{sleepAsync}`): a function is a state machine iff it transitively reaches a may-block call. Cross-module propagation is M3 (M8 prereq). `wait` is inferred/optional; the IDE shows it as a muted hint. (Per the roadmap boundary correction 2026-05-31, the analysis engine moved M3→M2 — see `## Design-Doc Alignment`.)
 - **`wait` semantics preserved exactly.** Code after `wait expr` does not run until `expr` completes. This is identical in M1, M2, M3. M2 only changes what the OS thread does WHILE waiting (releases vs holds).
-- **`block_on` bridge keeps the no-coloring promise during the M2→M3 transition.** When a function that doesn't contain `wait` calls a function that DOES contain `wait` (i.e., a state machine), the call site uses tokio's `block_on` — the calling thread blocks until the future completes. Correct behavior, suboptimal performance. M3's may-block analysis + auto-`wait` insertion replaces `block_on` call sites with proper suspension points, at codegen level — zero source change required.
+- **Inline poll-and-yield keeps the no-coloring promise — NO bridge.** Because every function reaching a suspension point is itself a state machine (transitive analysis), every suspending call is inline poll-and-yield into the embedded child sub-frame. The ONLY top-level driver is `RUNTIME.block_on(entrypoint)` from the main thread. A call the compiler can't analyze intra-unit (cross-module pre-M8 / dynamic-dispatch vtable / FFI) is a clean compile error, never a bridge. (This replaces the originally-planned `block_on` bridge, which both crashed at runtime — the Phase-5 HALT — and contradicted `design/future/concurrency.md`.)
 - **Existing programs produce identical stdout/stderr/exit-code.** Verified by the cross-impl consistency harness extended from M1 (`--no-auto-parallel` flag is no-op in M2 too; gets meaningful behavior in M3).
 - **No GC, no per-task OS stack.** State machines are stackless coroutines (Rust-async model). Frame allocated via `ynz_alloc` on spawn; freed via the closure's RAII drop guard when the state machine completes (whether normally or via panic).
 - **`--kernel` mode still rejects `wait` and `background`** (carries forward from M1; no Tokio in kernel mode).
@@ -57,7 +57,7 @@ Roadmap: `v0-3-concurrency-perf`
 
 - A function containing `wait sleepAsync(200)` PAUSES for ~200ms but the underlying OS thread is FREE during that pause. Verified by: spawn 8 background tasks each calling `wait sleepAsync(100)`; total wall-clock to all-complete ≤ 150ms on a 4-core CI runner (proves they share threads, don't each hold one).
 - A function returning `T errors` with a `wait expr` in the middle correctly propagates errors through suspension. Verified by: a fixture using `__testFallibleAsync()` that exercises the success path AND the error-cascade path through a state-machine frame.
-- A non-`wait` caller of a state-machine function uses `block_on` and gets correct behavior (blocks until completion). Verified by: a fixture where main calls a state-machine fn directly (no `wait`), main blocks for the full duration but completes correctly.
+- Calling a suspending function WITHOUT writing `wait` works correctly via inline poll-and-yield — the caller, reaching a suspension point, is itself a state machine (no bridge, no abort). Verified by: a fixture where a suspending fn calls another suspending fn with no explicit `wait` (this aborted before the rework) and now runs correctly; only `main→entrypoint` uses `RUNTIME.block_on`.
 - `cargo test --workspace` passes (existing 1220+ tests + new M2 tests).
 - `ynz build --no-auto-parallel hello.ynz` and `ynz build hello.ynz` produce identical stdout/stderr/exit-code on every fixture (cross-impl consistency, carried forward from M1).
 - `examples/pirates-roster/entrypoint.ynz` has a v0.3-M2 section that demonstrates 8 background tasks each `wait sleepAsync(100)`-ing concurrently — all finish in ~100ms wall-clock, NOT 800ms (8 demonstrates thread-sharing visibly on multi-core CI per Round 2 Concern #5).
@@ -86,6 +86,16 @@ Roadmap: `v0-3-concurrency-perf`
 - **`design/stdlib/filesystem.md`** currently has no `async`/`wait` references — M2 P4 adds a "Deferred to v0.5: async I/O surface — `readFileAsync`, `writeFileAsync`, etc. — backed by tokio::fs" stub note so future-us doesn't reinvent this conversation. Same for `network.md` and `database.md`.
 
 ---
+
+## Design-Doc Alignment
+
+**Governing design docs**: `design/future/concurrency.md` ("Concurrency — No Function Coloring") + `design/concurrency.md`.
+
+**Match assertion**: the SHIPPED M2 model (Rework Phases 6–9 + the updated Invariant subsections + Quality Checklist) conforms to the design — whole-program TRANSITIVE intra-unit may-block analysis (design lines 34-35) → every suspending function is a stackless state machine → inline poll-and-yield at every suspending call → composed frames ("low memory, fast spawn — like Rust's async", design line 40) → NO `block_on` bridge (the bridge appears nowhere in the design; Phase 8 deletes it). `wait` is inferred/optional (no function coloring, design line 11). Un-analyzable boundaries (cross-module pre-M8, dynamic-dispatch vtable, FFI) → clean compile error ("externals are on the user", design lines 47-57) — never a bridge, never a guess.
+
+**Milestone-boundary deferral (confirmed documented in the roadmap, NOT invented here)**: cross-module may-block propagation + auto-parallelization are deferred to M3. This deferral is documented in `.claude/plans/roadmaps/v0-3-concurrency-perf.md` Architectural Decision "M2/M3 boundary correction" (2026-05-31). M2 builds the analysis ENGINE over the `{sleepAsync}` may-block set; M3 feeds it cross-module edges + I/O intrinsics. The boundary is cut at a buildable line — M2 is CORRECT and complete for intra-unit programs without M3.
+
+**Historical-record carve-out**: the Risks table, Question Resolutions, and Phase 0–5 text below retain `block_on`/`Shape B`/`wait_required`/bridge phrasing as the forensic record of the SUPERSEDED original design (how the HALT happened). That text is NOT the current design; the current design is this section + the Rework Phases + the updated Invariant subsections.
 
 ## Risks
 
@@ -149,7 +159,7 @@ No open questions at execution-plan level at draft time.
 
 ## Risk Assessment & Rollout Strategy
 
-**Risk level: HIGH** (mitigated to MEDIUM via P0 spike gate + cross-impl consistency harness + comprehensive test coverage + backward-compat bridge).
+**Risk level: HIGH** (mitigated to MEDIUM via the re-spike-against-the-real-compiler gate + cross-impl consistency harness + comprehensive END-TO-END test coverage + the transitive may-block analysis that removes the bridge entirely). The original "backward-compat bridge" mitigation is RETIRED — the bridge was the HALT cause; the inference model has no bridge.
 
 | Criteria | Applies? | Notes |
 |---|---|---|
@@ -164,9 +174,9 @@ No open questions at execution-plan level at draft time.
 **Mitigations applied**:
 - P0 spike gate (5 contracts must hold before P1) → HIGH → MEDIUM
 - Cross-impl consistency harness (M1) extended → MEDIUM → reinforced
-- Test coverage (state-machine fixtures, errors+wait, block_on bridge, panic-through-state-machine, multi-wait sequential, wait-in-if) → MEDIUM → reinforced
+- Test coverage (transitive-may-block fixpoint, value-return int/string/errors, nested SM, background-from-SM, previously-aborting-now-works, recursion + cancellation-no-leak, composed-single-alloc proof, no-bridge IR-grep, can't-infer errors, multi-wait, wait-in-if) → MEDIUM → reinforced
 - `--no-auto-parallel` kill switch carries forward (no-op in M2 but plumbing already exists) → MEDIUM → reinforced
-- block_on bridge preserves correctness even when codegen makes suboptimal routing decisions → HIGH → MEDIUM
+- Transitive analysis + inline poll-and-yield make every suspending call correct by construction (no bridge to mis-route); the re-spike validated against the REAL compiler, not a hand-written model → HIGH → MEDIUM
 
 **Rollout plan**:
 1. Internal testing: 2-3 days using `examples/pirates-roster/` + driver fixtures + new state-machine fixtures on CI + local
@@ -177,12 +187,14 @@ No open questions at execution-plan level at draft time.
 
 ## Invariants This Milestone Must Preserve
 
+> **⚠️ RE-BASELINED 2026-05-31 — bridge specifics below are SUPERSEDED by the inference model.** Authored for the original bridge design (committed Phases 0–5). The rework (Phases 6–9) + the `v0-3-concurrency-perf` roadmap boundary correction replace the `block_on` bridge with the design-doc model: **transitive intra-unit may-block analysis → state-machines-everywhere → inline poll-and-yield → composed frames → no bridge** (deleted in Phase 8). Subsections below are updated for the SHIPPED model where it matters (Safety `block_on` bullet, Performance sync-bridge/predicate, Teaching diagnostics + `wait_points`, Runtime Dependencies). Any remaining bridge/`Shape B`/`wait_required` phrasing in the Risks table, Question Resolutions, and Phase 0–5 text is RETAINED AS HISTORICAL RECORD of how M2 was originally built (the HALT's forensic trail) — not the current design.
+
 ### Safety
 
 - **`wait`-source-semantic preservation.** Every source program containing `wait expr` produces identical observable behavior under M2 codegen vs M1 codegen, modulo timing (M2 may interleave with other tasks during the wait, M1 holds the thread). Order of side effects in a single function body is preserved. Test: every fixture in `examples/` AND `crates/ynz-codegen/tests/fixtures/` that uses `wait` produces identical stdout/stderr/exit-code under M2 vs M1 build (verified by re-running M1 binaries against the M2 build of the same source — codegen-determinism property test).
 - **State-machine frame ownership.** The frame allocated for a state machine is freed exactly once: on completion (happy path) OR on cancellation/drop (Tokio task dropped before completion) OR on panic during `poll()`. Verified by: P0 spike contract `state_machine_no_leak` — spawn 1000 state machines each with a 64-byte frame; cancel half mid-flight via `runtime.shutdown_timeout(0)`; assert net `ynz_alloc - ynz_free` count == 0.
 - **`errors`-cascade through suspension.** A state-machine function returning `T errors` that produces an error after a `wait` correctly populates the error's `Frame` trace AND `SourceLoc` data. Test: `errors_cascade_through_state_machine` — call a fn that does `wait __testFallibleAsync()` with the failure flag; assert returned error has expected trace.
-- **`block_on` bridge correctness.** A non-state-machine function calling a state-machine function gets identical return value as if the state machine had been driven by tokio::task::spawn + JoinHandle::await. Test: `block_on_bridge_returns_same_value_as_spawn`.
+- **Inline-poll-and-yield correctness (REPLACES `block_on` bridge).** A suspending function calling another suspending function drives the embedded child sub-frame via inline poll-and-yield (no bridge), forwarding the same `waker_ctx`, and gets the identical return value as if driven by `tokio::task::spawn` + `JoinHandle::await`. The ONLY top-level driver is `RUNTIME.block_on(entrypoint)`. Test: `nested_sm_returns_correct_value` + IR-grep that no `ynz_sm_*_resume` fn calls a bridge.
 - **Use-after-free prevention on state-machine values.** A local in a state-machine frame that crosses a `wait` boundary survives the suspension (frame slot retains the value); a local declared and dropped before the `wait` is NOT in the frame. Test: `value_lives_across_wait_boundary` — IR snapshot asserts the frame contains exactly the right slots for the test fixture.
 - **`--kernel` mode rejection** carries forward from M1 unchanged. Test: `kernel_mode_rejects_wait_unchanged_from_m1` passes — same diagnostic emitted as in M1.
 - **Existing v0.1+v0.2+v0.3-M1 programs.** Every `.ynz` fixture not using `wait` produces byte-identical output under M2 build vs M1 build. Verified by: cross-impl consistency harness extended to compare M2-codegen-output vs the V1 baseline snapshot from M1.
@@ -190,9 +202,9 @@ No open questions at execution-plan level at draft time.
 ### Performance
 
 - **`lower_function_with_waits` path is only taken when needed.** Functions whose body contains no `Expr::Wait` use the standard `lower_function` path with zero added overhead. Verified by: `cargo bench`-style measurement (or `time cargo build -p ynz-driver`) on `examples/pirates-roster/` — typeck+codegen wall-clock M2 vs M1 baseline, threshold: ≤ 10% slowdown.
-- **State machine frame size minimal.** Frame contains exactly: `resume_point: i32` + one slot per live local across a wait boundary + one slot for the awaited handle. Verified by: P0 spike measures frame sizes for representative fixtures; integration test `state_machine_frame_size_bounded` asserts frame ≤ 256 bytes for the spike fixture (5 sequential waits, 3 live locals).
+- **State machine frame size minimal + composed.** Each (sub-)frame contains exactly: `resume_point: i32` + `return_slot` (16B) + `sleep_handle` (only if it directly `sleepAsync`s) + one slot per own-local crossing a wait + each child SM's EMBEDDED sub-frame (recursion edge → a heap-box pointer slot instead). The whole call tree is ONE composed struct = ONE `ynz_alloc` per spawned task tree. Verified by: `state_machine_frame_size_bounded` asserts the composed frame is within budget; the composed-single-alloc proof (Phase 7) asserts one allocation per tree.
 - **Multi-task concurrency under wait.** 8 background tasks each calling `wait sleepAsync(100)` complete in ≤ 150ms wall-clock total on the CI runner (proves they share threads — if each held its own thread they'd complete in 100ms each but tied up 8 threads; the actual win is 8 tasks on 4 threads finish in ~100ms because they pause concurrently). Threshold tolerances are 1.5× the ideal 100ms to account for CI scheduler noise.
-- **Sync-bridge overhead.** Calling a state-machine fn via `ynz_rt_call_state_machine_sync` adds ≤ 1% of a 100ms wait = ≤ 1000µs absolute overhead per call vs direct future polling. Single threshold per Round 3 reconciliation (Round 2 had 100µs + 1000µs + 5000µs all inconsistently — locked to 1000µs absolute / 1% relative). Verified by: microbenchmark in P0 spike Step 8.
+- **Composed-frame allocation (REPLACES sync-bridge overhead).** A synchronous state-machine call tree does exactly ONE `ynz_alloc` for the whole composed tree (child sub-frames embedded), NOT one per call — matching `design/future/concurrency.md`'s "low memory, fast spawn — like Rust's async." Heap-alloc only at `background` spawn (one per task tree) and recursion edges. A pure-CPU function (no transitive suspension) compiles to straight-line code, ZERO state-machine overhead. Verified by: alloc-counter single-allocation proof (Phase 7) + zero-cost straight-line check.
 - **`ynz_rt_check_preempt` per-call cost** unchanged from M1 (~1ns; no-op stub). Full preemption semantics still ship later — M2 doesn't touch the preempt mechanism.
 
 **Auto-promotion analysis** (per `.claude/rules/auto-promotion.md`):
@@ -203,60 +215,47 @@ The M1 large-copy-warning hybrid (muted hint + Tier 3 lint for `.copy` → `.giv
 - **`background` routing (I/O pool vs blocking pool)** — auto-decided by the same "contains wait" syntactic check. There IS a user-typeable form for "force I/O pool" or "force blocking pool" candidate: `background.cpuBound fn()` / `background.ioBound fn()` per `design/future/concurrency.md`. But final naming is M3 territory (per the roadmap "Explicit override... final naming TBD"). M2 does NOT add user-typeable override forms — that would lock naming before M3's analysis informs it. Muted hint surface: deferred to M3 (`background_routing` muted-hint domain locks in M3 per roadmap). M2 routing decisions ARE made but are invisible at the user surface. Documented in registry as "M2 routing happens silently per syntactic-wait check; user-facing IDE hint ships in M3."
 - **Other auto-promotion candidates in M2**: none. Runtime additions (`ynz_rt_spawn`, `ynz_rt_async_sleep_create`) have no stricter form the compiler could prove fits.
 
-**M2 may-block predicate (precise spec — per plan-reviewer Required Fix #6)**:
+**M2 may-block predicate (RE-BASELINED — now TRANSITIVE intra-unit, per the roadmap boundary correction)**:
 
-The compiler decides whether a call site "may block" using the following predicate ONLY in M2:
-
-```rust
-// crates/ynz-typeck/src/intrinsics.rs
-pub const M2_MAY_BLOCK_INTRINSICS: &[&str] = &["sleepAsync", "__testFallibleAsync"];
-
-pub fn is_may_block_callee(callee_name: &str, callee_contains_wait: bool) -> bool {
-    M2_MAY_BLOCK_INTRINSICS.contains(&callee_name) || callee_contains_wait
-}
-```
-
-The predicate uses TWO signals AT THE SYNTACTIC CALL SITE:
-1. **Callee is in the may-block intrinsic set** (`sleepAsync` or `__testFallibleAsync`)
-2. **Callee is a user-defined function whose body syntactically contains `Expr::Wait`** (the `FunctionSig.contains_wait` flag populated by typeck — see Phase 3)
-
-This is **NOT transitive.** If `foo()` calls `bar()` and `bar()` contains `wait`, then `bar` is may-block (sig.contains_wait=true) and a `wait bar()` call site is correctly handled. But if `foo()` calls `baz()` where `baz()` calls `sleepAsync(100)` (no wait), `baz` is NOT flagged as may-block in M2 (no contains_wait, not in intrinsic set). M3 ships the transitive predicate.
-
-The `wait_on_non_may_block_warning` warning fires when `wait X()` is written but `is_may_block_callee(X, X.contains_wait)` returns false. Test fixture `transitive_no_wait_does_not_trigger_warning` validates the M2 predicate's intentional limitation (so M3 can swap the predicate without changing test expectations).
+The compiler decides whether a function is a state machine via the **transitive intra-compilation-unit may-block fixpoint** (Phase 6), seeded with the may-block set `{sleepAsync}` (plus the internal test intrinsic `__testFallibleAsync`):
+- A function `suspends` iff it directly calls a may-block intrinsic OR transitively calls any function that `suspends`; the property propagates UP the call graph to a fixpoint (`design/future/concurrency.md` lines 34-35).
+- In `foo() → baz() → sleepAsync()` (no explicit `wait` anywhere), `baz` AND `foo` are BOTH `suspends` and BOTH state machines — the previously-aborting transitive case now works, no bridge.
+- **Cross-module** propagation is M3 (needs M8). A cross-module callee unresolvable intra-unit → **clean compile error** (Phase 6), not a guess, not a bridge.
+- **Pure-CPU** functions get NO state-machine code (zero-cost — `design/future/concurrency.md` line 75).
+- `wait` is **inferred** (optional to write); the IDE shows it as the `wait_points` muted hint. (The superseded local-only `M2_MAY_BLOCK_INTRINSICS`/`is_may_block_callee` non-transitive predicate is retained only in the Phase 3 historical text; NOT the shipped predicate.)
 
 ### Teaching
 
 Every new diagnostic introduced in M2 follows WHAT/WHAT-INSTEAD/WHY. Audit performed by jargon test in `crates/ynz-diagnostics/tests/jargon_audit.rs` (existing infrastructure from M1).
 
-New diagnostics in M2:
+New diagnostics in M2 (SHIPPED inference-model set):
 
-- `wait_on_non_may_block_warning` (P3, warning Tier 3): "`wait` on a function that does not suspend — the `wait` has no effect."
-  - WHAT: "The function `{callee_name}` does not contain a suspension point; `wait` here changes nothing."
-  - WHAT INSTEAD: "Remove the `wait` keyword — call `{callee_name}({args})` directly."
-  - WHY: "`wait` only has effect when the awaited expression can suspend (calls a may-block intrinsic or another function whose body contains `wait`). Currently, `{callee_name}` is purely CPU-bound; the runtime semantics are identical with or without `wait`."
-- `wait_on_non_call_expression` (P3, error): existing M1 check that `background` requires a call has a parallel — `wait` requires a call. M2 ships this as: if the inner of `wait` is anything other than a `Call`/`MethodCall`/`FreeFn-call`, emit an error.
+- `wait_on_non_call_expression` (P6, error): the optional explicit `wait` keyword must precede a function call.
   - WHAT: "`wait` must be followed by a function call."
-  - WHAT INSTEAD: "Write `wait someFn()` to wait for `someFn` to complete."
-  - WHY: "`wait` schedules a suspension point. It only applies to function calls whose result must be waited for."
-- `unawaited_sleep_async` (P3, warning Tier 3): "calling `sleepAsync` without `wait` has no effect."
-  - WHAT: "`sleepAsync(ms)` creates a sleep handle but discards it without waiting — the function returns immediately, the sleep never fires."
-  - WHAT INSTEAD: "Write `wait sleepAsync({ms})` to actually pause for `{ms}` milliseconds. Or use `sleepMs({ms})` for the blocking-sleep semantics if `wait` isn't appropriate here."
-  - WHY: "`sleepAsync` is a may-block intrinsic — calling it without `wait` constructs the sleep object then drops it. The `wait` keyword is the user-visible signal that a suspension point happens here."
-- `wait_required_on_state_machine_call` (P3, **warning Tier 3** — reclassified Round 2 + locked Round 3 per Required Fix #5; runtime is panic-safe via `ynz_rt_call_state_machine_sync` Shape B, so this is a TEACHING surface that guides users toward writing `wait` for perf reasons, not a CORRECTNESS gate): emitted when a state-machine function (caller's `FunctionSig.contains_wait == true`) calls another state-machine function (callee's `FunctionSig.contains_wait == true`) WITHOUT wrapping the call in `wait` AND WITHOUT being the immediate inner of `Expr::Background`. Warning exit code = 0; stderr substring = `warning:`.
-  - WHAT: "`{callee_name}` may suspend (its body contains `wait`); calling it from another state-machine function without `wait` is not allowed in v0.3-M2."
-  - WHAT INSTEAD: "Write `wait {callee_name}({args})` to suspend the caller at this call site."
-  - WHY: "v0.3-M2 keeps the no-coloring promise via a `block_on` bridge — but only for callers that aren't already state machines. State-machine-to-state-machine without `wait` would require auto-`wait` insertion that ships in v0.3-M3. Until then, the keyword must be explicit at these call sites only. M3 auto-insertion lifts this requirement with zero source change."
+  - WHAT INSTEAD: "Write `wait someFn()` — or omit `wait` entirely; the compiler infers suspension from the call graph."
+  - WHY: "`wait` is an optional explicit marker for a suspension point; it only applies to function calls."
+- `wait_on_non_may_block` (P6, gentle Tier-3 hint): writing `wait` on a call the analysis proves never suspends — redundant.
+  - WHAT: "`{callee_name}` never suspends; this explicit `wait` has no effect."
+  - WHAT INSTEAD: "Remove the `wait` — `{callee_name}({args})` is purely CPU-bound."
+  - WHY: "Suspension is inferred from the call graph; `{callee_name}` reaches no may-block call, so `wait` here changes nothing."
+- **Can't-infer suspension → clean compile error** (P6): a call whose suspension status can't be determined intra-unit (cross-module callee pre-M8 / dynamic dispatch through a `dynamic Contract` vtable / FFI) is a clean error, NOT a guess and NOT a bridge.
+  - WHAT: "Can't determine whether `{callee}` suspends (it's {cross-module / dynamic-dispatch / FFI})."
+  - WHAT INSTEAD: "Make the boundary explicit (mark the FFI/contract may-block, or keep the call intra-unit)."
+  - WHY: "M2 analyzes one compilation unit; cross-module suspension propagation ships in v0.3-M3 via M8. Until then the boundary must be explicit — externals are the user's responsibility."
+- Retained Option-B errors (M3 hard core): `WaitInsideLoop` + `LocalCrossesWait` — clean WHAT/WHAT-INSTEAD/WHY errors pointing to M3 (frame-backed mutable locals + loop-state transform). See Phase 8.
+
+⚠️ **SUPERSEDED — retired by the rework (Phase 6), NOT shipped:** `unawaited_sleep_async` (under inference `sleepAsync` is auto-awaited unless `background`ed — nothing to warn) and `wait_required_on_state_machine_call` (under inference `wait` is never required — nothing to require). These were bridge/local-predicate artifacts of the superseded design; listed here only as the record of what the rework removed.
 
 Updated diagnostics (hover docs):
 
 - `wait` keyword: hover text fully replaces the M1 text. M2 now ships the real suspension semantics — the WHAT/WHAT-INSTEAD/WHY block in `### Feature Registry Entries` reflects that.
 - `background` keyword: minor update — the routing-distinction note ("state-machine functions go to I/O pool; CPU-bound to blocking pool") is added to the WHY clause; "returns AND errors are discarded" clarification added (per Risks table mitigation for background-of-state-machine-fn returning T errors).
 
-IDE muted-hint domains: `wait_points` and `background_routing` both still stay protocol-only (auto-insertion + cross-fn routing analysis are M3). M2 does NOT activate either domain. Documented in registry as "active in M3."
+IDE muted-hint domains: **`wait_points` is ACTIVATED in M2** (Phase 6) — `wait` is inferred, so the muted hint shows the inferred suspension point per `inference.md` (Addition category). `background_routing` stays protocol-only (cross-fn CPU/IO routing is M3). NOTE: `wait_required_on_state_machine_call` and `unawaited_sleep_async` (described above) are REMOVED/downgraded by the rework (Phase 6) — bridge/local-predicate artifacts; with `wait` inferred there is nothing to "require," and `sleepAsync` is auto-awaited unless `background`ed.
 
 ### Runtime Dependencies
 
-- `lower_function_with_waits` codegen path requires `ynz_rt_spawn`, `ynz_rt_async_sleep_create`, `ynz_rt_async_sleep_poll`, `ynz_rt_call_state_machine_sync` C-ABI shims from `libynz_runtime.a`. All new in M2; live in `crates/ynz-runtime/src/runtime.rs`.
+- `lower_function_with_waits` codegen path requires `ynz_rt_spawn`, `ynz_rt_async_sleep_create`, `ynz_rt_async_sleep_poll` C-ABI shims from `libynz_runtime.a`, plus the top-level `RUNTIME.block_on(entrypoint)` driver. The `ynz_rt_call_state_machine_sync` sync-bridge shim is DELETED in Phase 8 — the inference model needs no bridge (every suspending caller inline-poll-yields). Net runtime surface is SMALLER than the bridge design.
 - Tokio runtime (already booted in `main` by M1's `ynz_rt_init`) must support `task::spawn` (I/O pool, multi-thread scheduler) AND `time::sleep` (timer wheel). Both features are in the existing Tokio dep (`rt-multi-thread` feature) — no Cargo.toml change required for M2 (verified: Tokio's `time` module is included in `rt-multi-thread` per Tokio 1.x feature dependencies).
 - Heap allocation via `ynz_alloc` / `ynz_free` (existing M4 infrastructure) for state-machine frames. Requires malloc (libc) — no change from M1's runtime-dep story.
 
@@ -275,11 +274,14 @@ Per `.claude/rules/plan-invariants.md` `### Demo & Error Gallery`:
    - Prints a "scheduled 8 pirates" marker BEFORE the background tasks complete; then each task prints a marker after its wait
    - Demonstrates timing: all 8 background tasks complete in ~100ms wall-clock total, NOT ~800ms (proves they share threads via state-machine suspension)
    - Section header: `// ────── v0.3-M2: wait actually suspends ──────`
+   - Per Phase 9 step 2: ALSO include a section demonstrating concurrency with NO explicit `wait` (the compiler infers it) + a value-returning SM + a nested SM — the inference-model surface.
    - **Locked: demo uses `wait sleepAsync(100)` for the suspension-observable pause, NOT `sleepMs` or any other M1 intrinsic.** Rationale: `sleepMs` blocks the thread (M1 semantics); `wait sleepAsync` yields the thread (M2 semantics). Demonstrating the difference is the entire point of the section.
 
-2. **`examples/primantis-orders/v0_3_m2_errors.ynz`** — new file, intentional triggers for every new M2 compile error/warning class:
-   - `wait_on_non_may_block_warning` (a `wait print("hi")` — `print` is CPU-bound)
+2. **`examples/primantis-orders/v0_3_m2_errors.ynz`** — new file, intentional triggers for the SHIPPED M2 diagnostic set (reconciled with Phase 9 step 3):
    - `wait_on_non_call_expression` (a `wait 42` — primitive value, not a call)
+   - `wait_on_non_may_block` redundant-`wait` hint (a `wait print("hi")` — `print` is CPU-bound)
+   - can't-infer clean error (a call the compiler can't analyze — e.g. a dynamic-dispatch suspending call)
+   - retained `WaitInsideLoop` + `LocalCrossesWait` Option-B errors
    - The existing M1 error gallery's triggers carry forward in `v0_3_m1_errors.ynz` (already shipped).
    - `// WHY:` comment on each trigger naming the diagnostic class.
 
@@ -309,14 +311,12 @@ Concrete entries this plan adds (modifies + new):
   - WHAT: "`wait` must be followed by a function call."
   - WHAT INSTEAD: "Write `wait someFn()` to wait for `someFn` to complete."
   - WHY: "`wait` schedules a suspension point. It only applies to function calls whose result must be waited for."
-- **New `[[diagnostic_template]]` `unawaited_sleep_async`** — canonical text:
-  - WHAT: "`sleepAsync(ms)` creates a sleep handle but discards it without waiting — the function returns immediately, the sleep never fires."
-  - WHAT INSTEAD: "Write `wait sleepAsync({ms})` to actually pause for `{ms}` milliseconds. Or use `sleepMs({ms})` for the blocking-sleep semantics if `wait` isn't appropriate here."
-  - WHY: "`sleepAsync` is a may-block intrinsic — calling it without `wait` constructs the sleep object then drops it. The `wait` keyword is the user-visible signal that a suspension point happens here."
-- **New `[[diagnostic_template]]` `wait_required_on_state_machine_call`** — canonical text:
-  - WHAT: "`{callee_name}` may suspend (its body contains `wait`); calling it from another state-machine function without `wait` is not allowed in v0.3-M2."
-  - WHAT INSTEAD: "Write `wait {callee_name}({args})` to suspend the caller at this call site."
-  - WHY: "v0.3-M2 keeps the no-coloring promise via a `block_on` bridge — but only for callers that aren't already state machines. State-machine-to-state-machine without `wait` would require auto-`wait` insertion that ships in v0.3-M3. Until then, the keyword must be explicit at these call sites only. M3 auto-insertion lifts this requirement with zero source change."
+- **New `[[diagnostic_template]]` `wait_cannot_infer_suspension`** — canonical text (the can't-infer clean error):
+  - WHAT: "Can't determine whether `{callee}` suspends — it's a {cross-module / dynamic-dispatch / FFI} call the compiler can't analyze in one unit."
+  - WHAT INSTEAD: "Make the boundary explicit (mark the FFI/contract may-block, or keep the call intra-unit). Cross-module suspension propagation ships in v0.3-M3."
+  - WHY: "M2 analyzes one compilation unit; externals it can't see are the user's responsibility (every language has this limit). A guess or a runtime bridge here would be wrong — so it's a clean compile error."
+- **Activate `[[muted_hint_domain]]` `wait_points`** — flip from protocol-only to active (Phase 6). `placement_category = "addition"` per `inference.md`: the inferred `wait` renders as muted text before a suspending call.
+- **REMOVED/downgraded by the rework (per `plan-invariants.md` `### Feature Registry Entries` "state what you do NOT add"):** `unawaited_sleep_async` and `wait_required_on_state_machine_call` diagnostic_templates are NOT added — they were bridge/local-predicate artifacts of the superseded design. Under inference `sleepAsync` is auto-awaited and `wait` is never required, so neither diagnostic has anything to fire on. `wait_on_non_may_block_warning` is reframed as the gentle `wait_on_non_may_block` redundant-`wait` hint (template above remains, name simplified).
 - **New `[[primitive_intrinsic]]` `sleepAsync`** — free-fn intrinsic. Signature: `sleepAsync(int) -> nothing`. Kind = "free_fn". TOML schema:
   ```toml
   [[primitive_intrinsic]]
@@ -1292,7 +1292,7 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
 - [x] acceptance-verifier: PASS 2026-05-31T (review round 2) — OVERALL PASS, all 13 ACs MET; round-1 WEAK AC6 (span) + AC12 (jargon) both resolved; workspace 106/5-environmental, zero regression.
 - [x] deviation-judge #1 (scope: lsp_adapter.rs M1→M2 hover test retarget): PASS 2026-05-31T (round 1) — clean retarget, all 4 structural asserts + `.expect()` preserved, WHY comment updated.
 - [x] deviation-judge #2 (scope: 6 pre-existing deferred-feature entries reworded by the audit extension): BLOCK→PASS 2026-05-31T — round-2 BLOCK caught an overshoot (invented "borrow-scope" inconsistent w/ `domain="lifetimes"`; "aliased re-export" precision lost). Coordinator-applied judge-specified fix (canonical "scope" vocabulary + `` `lifetimes` `` key reference + restored "aliased re-export"); re-judge PASS — both corrections faithful, jargon-clean, cross-entry consistency restored.
-- [ ] Committed: <commit SHA>
+- [x] Committed: 6a2d32d
 
 **Findings Log** (filled during any fix loops):
 
@@ -1400,7 +1400,7 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
    - **`state_machine_can_background_state_machine_without_wait` (per round-2 Required Fix #2)** — fn with `wait sleepAsync(50)` (so it's a state machine) calls `background other()` where `other()` is also a state machine. Asserts: compiles clean (no `wait_required_on_state_machine_call` false-positive); runs to completion with `other()` running concurrently.
    - **`background_regular_fn_that_internally_calls_state_machine_does_not_crash` (per round-2 Concern #1)** — `background mid()` where `mid()` is a regular fn (no wait) that internally calls a state-machine fn. Routes to `ynz_rt_spawn_blocking` (per P2 Step 5 local check); inside the blocking pool worker, the inner state-machine call uses `ynz_rt_call_state_machine_sync` Shape B (`Handle::block_on` — works on blocking-pool threads; no `block_in_place` panic). Asserts no panic + correct output.
    - **`mutual_recursion_state_machines` (per round-3 adversarial case 1)** — `function a(n) { if n > 0 { wait b(n-1) } }` + `function b(n) { if n > 0 { wait a(n-1) } }`. Each call alternates between two state-machine frames. Asserts: `a(8)` completes without deadlock; codegen handles mutual recursion (likely via forward declarations).
-   - **`state_machine_errors_before_first_wait` (per round-3 adversarial case 2)** — `function f() -> int errors { if shouldFail { return error("early") }; wait sleepAsync(50); return 0 }`. Frame is allocated; early return must free it. Asserts: when `shouldFail` is true, no frame-leak (`ynz_alloc/ynz_free` counters return to baseline) AND error has populated trace.
+   - **`state_machine_errors_before_first_wait` (per round-3 adversarial case 2)** — `function f() -> int errors { if shouldFail { return error("early") }; wait sleepAsync(50); return 0 }`. Frame is allocated; early return must free it. Asserts: when `shouldFail` is true, no frame-leak (`ynz_alloc/ynz_free` counters return to baseline), error has populated trace, AND the typed return-slot holds the `{i64,i64}` error tuple with field order intact (error_ptr=field0) even though `resume_point` never advanced past 0 — the error-before-wait path stores the typed slot on first poll (a distinct code path from error-after-wait).
    - **`sleepAsync_boundary_values` (per round-3 adversarial case 3)** — `wait sleepAsync(0)` should yield immediately (Tokio `Duration::ZERO` semantics; completes in < 5ms). `wait sleepAsync(-1)` must be rejected at typeck OR clamped to 0 at runtime. **Decision (locked)**: typeck does NOT validate int range for `sleepAsync`'s arg (Yinz allows any `int` literal); runtime CLAMPS negative values to 0 via `let ms = ms.max(0) as u64;` inside `ynz_rt_async_sleep_create`. Documented as a runtime safety net; no compile-time error to keep the intrinsic signature simple.
 6. **Bump workspace `Cargo.toml`** version from `0.3.0-m1` to `0.3.0-m2`.
 7. **Add CHANGELOG entry**. Required sections (per plan-reviewer Concern):
@@ -1464,7 +1464,49 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
 - [ ] Committed: <commit SHA>
 
 **Findings Log** (filled during any fix loops):
-_(empty until a reviewer returns BLOCK)_
+
+**🛑 2026-05-31 — MILESTONE-INTEGRITY HALT (Phase 5 executor surfaced + coordinator VERIFIED 3 load-bearing codegen/runtime bugs; escalated to Patrick).** Phase 5's integration tests + demo exposed that M2's real codegen does NOT support paths the plan's success criteria require. Coordinator-verified via the production compiler (`./target/debug/ynz run`), NOT just the executor's word:
+- **BUG A — value-returning state machines fail codegen.** `function f() -> int { wait sleepAsync(10); return 5 }` → "Function return type does not match operand type of return inst… Machine-code generation failed inside the backend." The SM resume fn returns the resume-discriminant (`i32`) but a value-returning fn's return type leaks through. ANY non-`nothing`-return state machine crashes codegen → the named success criterion "a function returning `T errors` with a `wait` correctly propagates errors through suspension" is UNATTAINABLE as built. (Phase 2 only ever tested `-> nothing` state machines — pause/fetchEvent — so this was never hit.)
+- **BUG B — nested `wait` SM-from-SM panics at runtime.** Minimal idiomatic no-coloring code `entrypoint { wait outer() }` → `outer { wait inner() }` → `inner { wait sleepAsync(20) }` → PANIC "Cannot start a runtime from within a runtime", thread aborts. The wait-wrapped SM-from-SM call (the "Yes/Yes" inline-poll-yield row of the 4-case dispatch — the CORE stackless-coroutine mechanism) is NOT inlined; it falls back to a `block_on` sync bridge inside an async context, which Tokio panics on. Contradicts P0 Contract #4d (claimed SM-in-SM validated) — the P0 SPIKE hand-wrote Rust that DIVERGES from what the real codegen emits, giving false ACCEPT confidence.
+- **BUG C — `background` from inside a state machine hangs.** `entrypoint` containing its own `wait` (→ entrypoint is a state machine) + `background worker()` → HANG (timeout). The sub-spawned task isn't driven while the calling thread is parked in `block_on`.
+- **WORKS (the only shape Phase 2 exercised):** top-level `wait` in a `-> nothing` fn; `background` of such fns from a NON-state-machine `entrypoint` (the 8-task concurrency proof — 16 START/DONE lines, exit 0); `wait` inside `if`.
+
+The Phase 5 executor WORKED AROUND these (omitted `errors_cascade_through_state_machine` + 5 SM-from-SM tests; changed the demo keep-alive from `wait sleepAsync(150)` to blocking `sleepMs(200)` so `entrypoint` isn't a state machine). That ships broken success criteria by omission — NOT acceptable as "Phase 5 done." Earlier gate PASSes (P0 ACCEPT, P2/P3/P4) were valid for what they tested but the tests didn't cover value-returning or nested state machines end-to-end. **Phase 5 NOT committed. Milestone HALTED pending Patrick's scope/fix decision (same decision class as the original Option B).** Coordinator did NOT commit Phase 5, did NOT run `/release`, did NOT unilaterally re-scope.
+
+**RE-ENTRY CONTRACT (for the fresh chat picking this up — ordered, no step skipped):**
+1. **Re-spike against the REAL compiler.** Compile real `.ynz` through `./target/debug/ynz` (NOT hand-written Rust — that's what gave the P0 spike false confidence). Map the full divergence: value-returning SMs, nested `wait`-SM-from-SM, background-from-SM. Seed = the verified works/breaks table above.
+2. **Fix the codegen** (`crates/ynz-codegen/src/{emit.rs,state_machine.rs}`, runtime as needed): value-returning frames via `Poll<T>`; genuine inline poll-and-yield for nested `wait`-SM (delete the `block_on` fallback that panics in an async context); background-from-SM spawn-and-drive. Commit on the SAME branch `v0.3-m2-wait-and-state-machines`, on top of Phases 0–4 (`6328666`/`b740e3d`/`5109b52`/`5b72521`/`6a2d32d`). Each fix-phase commits on review PASS per the gate discipline.
+3. **Reconcile the Option-B clean errors** (Phase 2/3): with value-returning + nested + background-from-SM now WORKING, the typeck guards (`WaitInsideLoop`/`LocalCrossesWait` + any new ones) should narrow to only what genuinely stays M3 (e.g. wait-in-loop if still deferred), OR lift entirely if the rework covers them. Re-decide explicitly.
+4. **Re-run Phase 5** on the fixed foundation: restore the REAL integration tests the P5 executor omitted (`errors_cascade_through_state_machine` + the 5 SM-from-SM tests) so they PASS as working-behavior (not error-assertions); revert the demo workaround (`sleepMs` → `wait sleepAsync` keep-alive). Full 4-agent + judge gate.
+5. **Milestone wrap = USER-GATED.** Cargo.toml bump + CHANGELOG + state.md ship entry, THEN surface to Patrick for `/release` + merge-to-main (resolve the `v0.3.0-m2` tag collision with the M10 sibling milestone first). Do NOT auto-release, auto-merge, or auto-start M3.
+
+**✅ 2026-05-31 — RE-ENTRY CONTRACT step 1 (RE-SPIKE) COMPLETE.** All 3 bugs reproduced + every works-case re-confirmed against the REAL compiler (`./target/debug/ynz run`, binary == committed Phases 0–4, rebuilt clean). Verified divergence map written to `.analysis/m2-respike-findings.md`. Key refinements vs the HALT's initial read:
+- **Bug A is TWO failure modes by return type**: `-> int` → LLVM verify failure (`ret i64 5` in i32 resume fn + `ret void` in i64 wrapper at `emit.rs:1419-1424`); `-> string`/`-> string errors` → codegen panic at `emit.rs:6835` (i32 sync-bridge result fed where pointer/`{i64,i64}` expected). Unifying root cause: `store_return_value` (`state_machine.rs:159`) truncates to i32 into frame slot 0; no typed return slot exists; wrapper always `ret void` for non-main.
+- **Bug B root cause located**: `lower_sm_body` only inline-poll-yields `wait sleepAsync(...)`; `wait <userSM>()` is NOT intercepted and falls through to `emit.rs:3582-3616` which emits the sync bridge for ANY may-block callee. The comment there claims `(caller-SM, wait) → inline poll-and-yield (handled by lower_sm_body)` but **that path was never implemented**. Sync bridge `runtime.rs:611` `handle.block_on` panics "Cannot start a runtime from within a runtime" → nounwind ABORT across `extern "C"` (catch_unwind can't save it). Round-3's "Shape B" fixed block_in_place, not this.
+- **Bug C**: parent SM parked in `block_on` never yields to the runtime → backgrounded task never driven → hang. Shares the inline-poll-yield rework (parent must suspend-to-runtime, not block).
+- **Next = RE-ENTRY step 2: `/plan` the codegen rework** (typed return slot + frame return path; genuine inline poll-and-yield for nested SM, delete in-async sync-bridge fallback; background-from-SM). Findings doc seeds the plan.
+
+**🟡 2026-05-31 — Rework plan DRAFTED (Phases 6–9) + plan-reviewer BLOCK fixes applied, but PAUSED on a Patrick decision that gates Phase 7/8 design. DO NOT EXECUTE until resolved.**
+- **Drafted**: Phase 6 (typed return slot — Bug A), Phase 7 (inline poll-and-yield for caller-is-SM + background-from-SM — Bug B/C), Phase 8 (reconcile residual bridge + Option-B guards), Phase 9 (Phase-5 redo, USER-GATED wrap). Frame layout locked (return slot @16, locals @32, inner-frame-slot-idx byte @4). Decision-risk analysis done (frame layout = Option A; inner-frame in parent slot + slot-idx byte; C free after B).
+- **plan-reviewer verdict = BLOCK** (Tier A), 6 Required Fixes + 3 Concerns — ALL APPLIED to the plan: (1) cancellation-no-leak AC now has positive live-frame assertion + negative control (can't pass on a dead branch — the HALT failure class); (2) caller-is-SM flag proven on 2 shapes incl. if-branch-only-wait adversarial; (3) Phase 8 bridge mechanism COMMITTED to dedicated-thread (killed the "pick whichever proves out" deferral); (4) Option-B guards LOCKED to STAY (killed the escape hatch); (5) all `wait_required` WHY copies enumerated; (6) errors-cascade AC split + deterministic assertion + {i64,i64} field-order + non-trivial-exit-code adversarial. Concerns (sentinel comment, timing band lower bound, inner-frame-size store-not-recompute) also applied.
+- **🛑 PAUSED — PENDING PATRICK DECISION: M2 coloring.** The "slower route" (thread-holding sync bridge) exists ONLY as a consequence of the LOCKED no-coloring decision (omit `wait` → function suspends-without-waker → needs the bridge). Patrick is reconsidering whether to ship ANY slow path. Two live options: **(A) REQUIRE `wait` to call a suspender in M2 (coloring)** → clean compile error if missing; every caller-of-suspender becomes an SM → inline-poll-yield everywhere → ZERO slow paths, compile-time-safe; the bridge is needed ONLY at main→entrypoint; M3 auto-`wait` later removes the `wait`-typing requirement (uncolors). **Reverses the locked no-coloring-in-M2 decision** but ships nothing slow. **(C) keep no-coloring + accept the slow bridge** (current drafted plan). Coordinator RECOMMENDS (A): the re-spike proved the no-coloring bridge wasn't "free/correct-but-slower" as assumed — it CRASHED — so the premise justifying no-coloring-with-bridge in M2 is gone; (A) ships zero slow paths and is no-duct-tape-clean. **If (A): Phase 7 deletes the bridge entirely for SM contexts AND Phase 8's panic-safe-bridge work mostly vanishes (replaced by a `wait`-required compile error for the no-`wait` suspender call); the Option-B `wait_required` warning becomes an ERROR. If (C): plan stands as drafted.** Resolve before executing Phase 7/8.
+
+**🔴 2026-05-31 — VERIFIED ROOT CAUSE (supersedes the A/C framing above — the real answer was documented all along).** Patrick pushed; coordinator finally read the concurrency DESIGN docs (the `/plan` research step that was skipped — only the codebase was mapped, not the design intent). `design/future/concurrency.md` — titled **"Concurrency — No Function Coloring"** — documents the END-STATE model EXACTLY: line 11 "whole-program may-block analysis from the call graph, auto-inserts `wait` at suspension points"; lines 34-35 "transitively calls... propagates up the call graph... INSERTS a `wait` suspension point" at every may-block call site; line 49 "CANNOT analyze C linked via FFI... FFI must declare `may-block` explicitly"; line 75 "only call chains that actually reach a suspension point get suspension code." **There is NO bridge in the design — anywhere.** The bridge was invented by THIS plan to paper over a mis-drawn milestone boundary.
+- **The error = milestone STAGING, not the design.** The v0.3 roadmap cut M2 = "wait + state machines" | M3 = "may-block analysis." That cut is unbuildable: a CORRECT state-machine layer REQUIRES the transitive analysis. Without it → local-only detection → the bridge (which both crashed AND contradicts the documented no-coloring inference). The state-machine MECHANISM (frames/resume/poll-yield/runtime) was right and matches the doc; the missing piece is the analysis ENGINE.
+- **Process miss (graveyard candidate):** 3 rounds of adversarial plan-review + P0 gate + 5 per-phase 4-agent gates, and NONE held the plan against `design/future/concurrency.md` to catch "you're bridging when the design says infer." Every review checked the plan against ITSELF, never against the design doc it contradicted. Lesson: plan-review MUST diff the plan against the governing design docs, not just internal consistency. (Distinct from the P0-validated-hand-written-Rust miss.)
+- **THE FIX (vindicated by the doc):** pull the transitive may-block analysis into M2. In M2 the may-block set = `{sleepAsync}` only (no I/O/FFI yet) → degenerate case of the documented engine; I/O/FFI join the set in later milestones (same engine). A function is a state machine iff it transitively reaches a may-block call (call-graph fixpoint, extends the local `contains_wait` from Phase 3). Every caller-of-a-suspender is therefore a state machine → inline-poll-yield everywhere → NO bridge (except the legit `main→entrypoint` top-level driver). `wait` becomes inferred + shown as the `wait_points` muted-hint inlay (mvp-scope line 183 already lists it as "protocol-only awaiting v0.3"). Un-inferable cases (dynamic-dispatch through a vtable; future FFI) = clean compile error per the doc's "externals are on the user."
+- **CONSEQUENCE — roadmap boundary must be corrected:** may-block analysis moves M3 → M2 (it's load-bearing for M2 correctness); M3 keeps auto-parallelization + call-site preemption. The M2 plan gets RE-BASELINED around the analysis engine, not patched onto the bridge. **Phases 6-9 as drafted (bridge-based) are SUPERSEDED by this finding for Phases 7-8; Phase 6 (typed return slot) survives unchanged.** **AWAITING PATRICK: (1) correct roadmap boundary first, then re-baseline M2 plan around the inference engine; or (2) other direction.** Do NOT execute until pointed.
+
+**✅ 2026-05-31 — Guardrail added (Patrick item "A") to prevent recurrence of the design-doc-contradiction failure** (all in the M2 worktree branch — pending Patrick's commit-target call, may belong on `main` independent of M2): (1) project `CLAUDE.md` "When Working on This Project" first bullet — design docs are governing; read before planning + during execution; surface plan-vs-design contradictions as "design doc X says A; plan says B"; (2) `.claude/rules/plan-invariants.md` new `## Design-Doc Alignment` section (required on every plan) + reviewer obligation to diff plan against cited design docs; (3) `.claude/graveyard.md` corpse "Plan Contradicts a Governing Design Doc, Caught By No Review" with diff-greppable Bouncer checks. Global mirror (global CLAUDE.md + plan-reviewer agent) OFFERED, awaiting Patrick OK. Patrick working through a list (A done; B+ pending).
+
+**✅ 2026-05-31 — Direction APPROVED + roadmap boundary CORRECTED (Patrick).** Patrick confirmed the design-doc model is the right long-term answer (verified: stackless state machines + compiler-inferred coloring + composed frames = Rust's perf ceiling + Go's ergonomics; fixes Rust coloring/Pin/runtime-fragmentation AND JS coloring/single-thread; no fundamentally faster task-concurrency model — only impl headroom = frame composition, now locked). Actions taken this turn:
+- **Roadmap `v0-3-concurrency-perf` corrected** (via `/peek`): M2 scope EXPANDED (intra-compilation-unit transitive may-block fixpoint over `{sleepAsync}` + frame composition + typed return slot + can't-infer→clean-error); M3 NARROWED (cross-module propagation [M8 prereq] + auto-parallelization + I/O-auto-`wait`). Two new Architectural Decisions: "M2/M3 boundary correction" + "frame allocation = COMPOSITION not per-call heap". M2 spike line fixed (real compiler, not hand-written IR). last_updated→2026-05-31.
+- **`design/stdlib/filesystem.md`**: added `io_uring`/`kqueue`/IOCP + SIMD-on-read performance note for the v0.5 file module (the I/O-backend asterisk, captured so it's not forgotten).
+- **NEXT (active): RE-BASELINE THIS M2 PLAN** around the inference engine — rewrite Phases 7-8 (DELETE the bridge; replace with the transitive may-block fixpoint + state-machines-everywhere + frame composition + can't-infer→clean-error), adjust Phase 6 (typed return slot in composed frame), fix the Rework-Phases header/dispatch table, update the Invariants block (runtime SIMPLER — no bridge; new cost = a compile-time analysis pass; frame composition). Then **full concurrency review** (reviewers diff the corrected roadmap + re-baselined M2 + M3/M4 defs against `design/concurrency.md` + `design/future/concurrency.md` per the new Design-Doc Alignment gate) as the validation capstone. Phases 6-9 as previously drafted (bridge-based) are SUPERSEDED by the inference model for 7-8; Phase 6 typed-return-slot survives (now feeds composed frames).
+
+**✅ 2026-05-31 — RE-BASELINE COMPLETE (Patrick: "fix all plans … do it right").** All plans now reflect the inference model: (1) roadmap `v0-3-concurrency-perf` — M2/M3 boundary corrected + frame-composition locked; (2) this plan's Rework Phases fully rewritten — **P6** transitive may-block analysis engine + can't-infer clean errors; **P7** state-machine codegen w/ composed frames + typed return slot + inline-poll-yield-everywhere (fixes A/B/C, no bridge); **P8** delete dead bridge + reconcile Option-B guards (both STAY, locked) + diagnostics; **P9** Phase-5 redo (USER-GATED); (3) Invariants block — supersession banner + Safety/Performance/Teaching/Runtime-Deps updated; (4) Quality Checklist reconciled (P0–P9; design-doc-alignment gate). Bridge-era text in Risks/Question-Resolutions/Phase-0-5 RETAINED as the HALT forensic trail. Stale paragraph-blob in front-matter `last_updated` cleaned to a plain date. **NEXT: full concurrency design-doc-alignment review** (plan-reviewer diffs re-baselined M2 plan + corrected roadmap vs `design/concurrency.md` + `design/future/concurrency.md`) — validation capstone. THEN execute Phase 6 on PASS.
+
+**✅ 2026-05-31 — FULL CONCURRENCY DESIGN-DOC-ALIGNMENT REVIEW: PASS (3 rounds).** plan-reviewer validated the re-baselined M2 plan + corrected roadmap against `design/future/concurrency.md` + `design/concurrency.md`. R1 BLOCK (4 fixes: bridge text in Teaching/Feature-Registry, missing `## Design-Doc Alignment` section, Demo-gallery trigger mismatch) → all fixed. R2 BLOCK (1 fix: bridge/local-syntactic model still in `## Context & Why` + Risk Assessment) → fixed (rewritten to inference model) + 2 adversarial cases added (background-graph-cut, wait-arg-ordering). R3: **PASS — Required Fixes: None — plan ready to implement; Design-Doc Alignment: PASS.** All plans fixed + validated. UNCOMMITTED (working tree) — awaiting Patrick review-before-commit. NEXT: execute Phase 6 (transitive may-block analysis engine) via /execute-plan, on Patrick's go.
 
 **Exit Sequence — RUN THESE STEPS (final phase):**
 
@@ -1476,21 +1518,288 @@ _(empty until a reviewer returns BLOCK)_
 6. **Prompt the user.** Tell them: "v0.3-M2 done. Review fan-out: PASS. Cumulative tests: [count]. Tag v0.3.0-m2 ready to push. Roadmap rollup: 2 of 4 v0.3 milestones remain (M3 may-block + auto-parallel; M4 channels + SoA + v0.3.0 tag)."
 7. **Roadmap rollup**: per /plan Step 11a, the roadmap `v0-3-concurrency-perf` has 2 milestones remaining; don't auto-mark done. Suggest M3 as the next planning target.
 
+> **⚠️ SUPERSEDED — the Phase 5 Exit Sequence above did NOT run (milestone HALTED).** Phase 5 was never committed. Its demo + release steps re-run as **Phase 9** below, on the fixed codegen foundation. The real milestone-final Exit Sequence now lives in Phase 9. Phases 6–9 below are the RE-ENTRY CONTRACT codegen rework (re-spike DONE — see `.analysis/m2-respike-findings.md`).
+
 ---
+
+## Rework Phases (RE-ENTRY CONTRACT — codegen rework to the DESIGN-DOC model)
+
+> **Re-spike (RE-ENTRY step 1) COMPLETE** — all 3 bugs + 2 residual aborts reproduced against `./target/debug/ynz run` (`.analysis/m2-respike-findings.md`).
+>
+> **2026-05-31 — RE-BASELINED to the inference model (the design-doc model; NOT the bridge).** The earlier bridge-based draft of these phases is SUPERSEDED. Per `design/future/concurrency.md` ("No Function Coloring") + the roadmap boundary correction (`v0-3-concurrency-perf` Architectural Decisions, 2026-05-31), M2 builds the **transitive may-block analysis engine** so that EVERY function reaching a suspension point is compiled as a state machine and every suspending call is **inline poll-and-yield**. There is **no `block_on` bridge** anywhere except the single legitimate `main → entrypoint` top-level driver. `wait` is **inferred** (optional to write); the IDE shows it as the `wait_points` muted hint.
+>
+> **Phases 0–5 checkboxes/ACs above reflect the SUPERSEDED bridge build (committed history + the HALT forensic trail). The shipped state is defined by Phases 6–9 below + the updated Invariant subsections.** Phase 6 retires the bridge-era diagnostics (`unawaited_sleep_async`, `wait_required_on_state_machine_call`); Phase 8 deletes the bridge code.
+>
+> **Locked frame layout (Decision: frame COMPOSITION — `v0-3-concurrency-perf` Architectural Decisions, "frame allocation = COMPOSITION").** A child state machine's frame is EMBEDDED in the parent's frame at a compile-time-fixed offset — the whole call tree is ONE struct, ONE allocation per spawned task. Per (sub-)frame:
+> | Offset (within each frame / sub-frame) | Field |
+> |---|---|
+> | 0 | `resume_point` i32 (each embedded child has its own at its sub-offset) |
+> | 4 | padding |
+> | 8 | `sleep_handle` ptr — present only if THIS fn directly `wait sleepAsync`s |
+> | 16 | `return_slot` (16 bytes — holds i64 / pointer / the `{i64,i64}` errors ABI) |
+> | 32+ | THIS fn's own locals that cross a wait (M2: params only — see Phase 8 Option-B note) |
+> | after locals | embedded sub-frame of each child state-machine called, at compile-time-fixed offsets |
+>
+> Heap allocation happens ONLY at (a) `background` spawn (one `ynz_alloc` for the whole composed tree) and (b) **recursion edges** — a recursive/cyclic call can't embed itself (infinite size), so it heap-boxes the child and stores a pointer in that slot (à la Rust `Box::pin`). Recursion is therefore the ONLY place a per-call alloc/free + cancellation-Drop applies — NOT every call. This deletes the old design's per-call-heap-frame + inner-frame-slot-idx + Drop-walks-every-call complexity.
+>
+> **Dispatch (replaces the old 4-case bridge table):**
+> | Situation | Codegen emits |
+> |---|---|
+> | A suspending fn (transitively reaches a may-block call, per Phase 6) calls another suspending fn | **Inline poll-and-yield** into the embedded sub-frame, forwarding the same `waker_ctx`. Whether the source wrote `wait` is irrelevant — inference drives it. |
+> | A non-suspending (pure-CPU) fn — never reaches a may-block call | Plain direct call. No state machine, no suspension code (per `design/future/concurrency.md` line 75 "only call chains that reach a suspension point get suspension code"). |
+> | `main`/`entrypoint` drives the top of the tree | The ONE legitimate top-level driver: `RUNTIME.block_on(entrypoint_future)` from the main thread (outside Tokio). Not "slow" — it's "run the program to completion." |
+> | A call the compiler CANNOT analyze (cross-module before M8; dynamic dispatch through a `dynamic Contract` vtable; FFI) | **Clean teaching compile error** (Phase 6) — never a bridge. M3 lifts the cross-module case via M8 + cross-module propagation. |
+
+### Phase 6: Transitive May-Block Analysis Engine + Can't-Infer Clean Errors
+
+**PR scope**: Build the intra-compilation-unit transitive may-block fixpoint (the engine that decides which functions are state machines), wire `wait` to be inferred, and emit clean teaching errors for the cases the compiler can't analyze. Codegen consuming the analysis is Phase 7.
+**Branch**: worktree branch `v0.3-m2-wait-and-state-machines`
+**Flag**: N/A
+**Est. lines**: ~300 (new salsa-tracked analysis pass + typeck wiring + diagnostics)
+**Ships via**: commit on the same branch on review PASS
+**Objective**: A salsa-tracked `may_block` fixpoint with the may-block set = `{sleepAsync}` (M2's only suspension source). A function `suspends` iff it transitively reaches a may-block call through the intra-unit call graph. This REPLACES Phase 3's local-only `FunctionSig.contains_wait` as the source of truth for "is this a state machine." `wait` becomes optional (inference决定s suspension; explicit `wait` is validated-but-redundant). For any call the analysis cannot resolve (cross-module callee while M8 cross-file typeck is absent; a `dynamic Contract` vtable call; FFI), emit a clean WHAT/WHAT-INSTEAD/WHY compile error rather than guessing or bridging.
+**Why this phase exists**: This engine is the design-doc model (`design/future/concurrency.md` lines 34-35). It's load-bearing for a correct state-machine layer — without it M2 was forced into the bridge that caused the HALT. It's the foundation Phase 7's codegen consumes, and the substrate M3 extends cross-module.
+**Current-state anchors**:
+- `crates/ynz-typeck/src/signatures.rs:14` — `FunctionSig` (+ Phase 3's `contains_wait` field); population in `collect_signatures` (~:48)
+- `crates/ynz-typeck/src/check.rs` — `body_contains_wait` recursive walk (Phase 3, local-only); `M2_MAY_BLOCK_INTRINSICS` + `is_may_block_callee`; `wait_required_on_state_machine_call` / `unawaited_sleep_async` / `wait_on_non_may_block_warning` emission sites (these get reworked here — inference makes most moot)
+- `crates/ynz-typeck/src/queries.rs` — salsa query wiring (`check_query`/`signature_query`) — the new `may_block_query` slots in here
+- `registry/features.toml` — `wait_points` `[[muted_hint_domain]]` (currently protocol-only per mvp-scope:183) — activated here for inferred `wait`
+**Files (expected scope)**:
+- `crates/ynz-typeck/src/` — new `may_block.rs` (the fixpoint) + `queries.rs` wiring; `FunctionSig.suspends` (transitive) replacing/superseding local `contains_wait`; can't-infer detection + clean errors in `check.rs`
+- `crates/ynz-diagnostics/` + `registry/features.toml` — can't-infer error template(s); rework wait-diagnostics; activate `wait_points` muted-hint domain
+- `crates/ynz-driver/tests/fixtures/` — `v0_3_m2_transitive_suspends.ynz` (outer→inner→sleepAsync), `v0_3_m2_pure_cpu_not_sm.ynz`, `v0_3_m2_cant_infer_dynamic_dispatch.ynz`, `v0_3_m2_cant_infer_cross_module.ynz`
+- analysis unit tests (typeck) + driver compile-error tests
+**Deviation rule**: standard — document deviations; split unrelated work.
+**Steps**:
+1. **`may_block` fixpoint** (`may_block.rs`): seed the may-block set with `sleepAsync` (plus the internal-only `__testFallibleAsync` test intrinsic — same set, named identically in the `### Performance` may-block-predicate subsection). Iterate to fixpoint over the intra-unit call graph: a function `suspends` if it directly calls a may-block intrinsic OR calls any function that `suspends`. Handle recursion/cycles (a cycle converges — mark suspending if any member reaches a may-block call). **`background`-spawned callees are a graph CUT, not a propagation edge**: `background bar()` decouples the edge — a function whose ONLY path to a may-block call is through a `background` spawn (it never awaits the spawned task) is NOT itself `suspends`. Otherwise every caller of anything that backgrounds I/O would needlessly become a state machine. Salsa-track it (`may_block_query`).
+2. **Replace local `contains_wait` with transitive `suspends`** as the "is state machine" predicate everywhere it's consumed (typeck + the Phase-7 codegen will read `suspends`). Keep `contains_wait` only if a site genuinely needs "has a literal `wait` token" (e.g. the redundant-explicit-`wait` hint); rename for clarity.
+3. **`wait` inferred / optional**: writing `wait` is no longer required to make a call suspend — the analysis decides. An explicit `wait` on a call the analysis already marks suspending is validated-but-redundant → muted `wait_points` hint (NOT an error/warning). Writing `wait` on a provably-non-suspending call → the existing `wait_on_non_may_block` becomes a gentle "this `wait` has no effect; `X` never suspends" (keep as Tier-3 teaching).
+4. **Retire the now-moot diagnostics**: `wait_required_on_state_machine_call` (you never need to write `wait` → nothing to require) and `unawaited_sleep_async` (sleepAsync is auto-awaited unless `background`ed) are removed or downgraded — they were artifacts of the local-only/bridge model. Document the removal in `### Feature Registry Entries`.
+5. **Can't-infer clean errors**: when a call's suspension status can't be determined intra-unit — (a) callee is in another module and cross-file resolution isn't available (M8 pending), (b) the call is dynamic dispatch through a `dynamic Contract` vtable, (c) FFI (none in M2 yet) — emit a clean WHAT/WHAT-INSTEAD/WHY error directing the user to make it explicit; WHY notes M3 lifts the cross-module case via M8. NEVER fall through to a bridge.
+6. **Activate `wait_points` muted-hint domain** in the registry (was protocol-only) so the inferred `wait` renders as a muted hint per `inference.md` (Addition category).
+**Acceptance criteria**:
+- [ ] `may_block` fixpoint marks `outer`/`inner` as suspending in `outer→inner→sleepAsync` and does NOT mark a pure-CPU function (unit test on the analysis output, asserting the exact suspending-set)
+  - Evidence: (filled at phase completion)
+- [ ] `background` decouples the graph: a fn that ONLY `background`s a suspending callee (never awaits it) is NOT marked `suspends` — it stays straight-line/zero-cost (fixture asserts no state machine emitted for the backgrounding fn). The fixpoint treats `background`-spawn as a graph cut, not a propagation edge
+  - Evidence: (filled at phase completion)
+- [ ] An explicit `wait` is no longer REQUIRED: a fixture calling a suspending fn WITHOUT `wait` type-checks clean (no `wait_required` error/warning) — `wait` is inferred
+  - Evidence: (filled at phase completion)
+- [ ] A dynamic-dispatch-to-maybe-suspending call AND a cross-module-to-maybe-suspending call each produce a clean WHAT/WHAT-INSTEAD/WHY compile error (exit 1, no panic, no bridge) — the "externals are on the user" rule
+  - Evidence: (filled at phase completion)
+- [ ] `wait_points` muted-hint domain active in the registry; `wait_required_on_state_machine_call` + `unawaited_sleep_async` removed/downgraded with the change recorded in `### Feature Registry Entries`
+  - Evidence: (filled at phase completion)
+- [ ] `cargo test --workspace` green except the 5 known environmental snapshot diffs (do NOT accept their `.snap.new`); jargon_audit green
+  - Evidence: (filled at phase completion)
+**Quality gate**:
+- [ ] Fixpoint terminates on cyclic/recursive call graphs (convergence test)
+- [ ] No call silently falls through to a bridge — every unanalyzable call hits the clean-error path (grep: no `ynz_rt_call_state_machine_sync` reachable from the analysis-driven path)
+- [ ] All new/changed diagnostics WHAT/WHAT-INSTEAD/WHY; no banned jargon
+- [ ] Analysis is salsa-tracked (incremental); no full-recompute per keystroke
+**Verification**: `cargo test -p ynz-typeck` (fixpoint unit tests); `./target/debug/ynz run` on the can't-infer fixtures (clean errors); `./target/debug/ynz run` on the no-`wait` transitive fixture (type-checks — codegen lands Phase 7).
+
+**Phase Review Gates** (filled at phase completion by coordinator):
+- [ ] code-reviewer: <verdict + ISO timestamp>
+- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
+- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
+- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [ ] Committed: <commit SHA>
+
+**Findings Log**: _(empty until a reviewer returns BLOCK)_
+
+**Exit Sequence**: per `~/.claude/commands/execute-plan.md` Step 3.d–3.h — `$BASE` = Phase 4 commit `6a2d32d` (first rework phase). Reviewers MUST diff against `design/future/concurrency.md` (the analysis must match the documented whole-program-may-block model) per the Design-Doc Alignment gate.
+
+### Phase 7: State-Machine Codegen — Composed Frames + Typed Return Slot + Inline Poll-and-Yield Everywhere (fixes A/B/C)
+
+**PR scope**: Emit LLVM state machines for every function the Phase-6 analysis marks `suspends`, using composed frames (embedded child sub-frames), a typed return slot, and inline poll-and-yield for every suspending call. Fixes Bug A (value-returning), Bug B (nested SM), Bug C (background-from-SM) as ONE unified mechanism. No bridge.
+**Branch**: same worktree branch
+**Flag**: N/A
+**Est. lines**: ~500 (composed-frame layout computation + lower_function_with_waits rewrite + inline-poll-yield + recursion heap-box)
+**Ships via**: commit on the same branch on review PASS
+**Objective**: `lower_function_with_waits`, driven by `suspends`, compiles each suspending fn into a state machine whose frame embeds its callees' sub-frames at compile-time-fixed offsets (one allocation per spawned task tree). Each (sub-)frame has a typed `return_slot` at offset 16; value-returning fns store the typed value there and the parent/wrapper reads it typed (fixes A). A suspending call drives the embedded child's resume fn (pointer to the sub-frame + forwarded `waker_ctx`), branching Ready→read child return slot + continue / Pending→`ret 1` (fixes B — no bridge, no abort). `background` of a suspending fn allocs+spawns the composed tree; the parent SM yielding lets the executor drive it (fixes C). Recursive calls heap-box the child (the only per-call alloc/free + cancellation-Drop).
+**Why this phase exists**: This is the codegen half of the design-doc model — the part that makes the inferred state machines actually run, fast (Rust-async-level: one alloc per task tree, zero-cost when no suspension). It fixes all three HALT bugs at once because under the inference model they're the same mechanism.
+**Current-state anchors**:
+- `crates/ynz-codegen/src/state_machine.rs:56-72` — frame layout constants + `frame_size` (rework for composition + return slot at 16, locals at 32)
+- `crates/ynz-codegen/src/state_machine.rs:159` — `store_return_value` (i32-truncation defect — replace with typed store/load at offset 16)
+- `crates/ynz-codegen/src/emit.rs:1193-1427` — `lower_function_with_waits` (resume fn + wrapper; the `ret void` non-main defect at ~:1420; rewrite to consume `suspends` + emit composed frames + typed return)
+- `crates/ynz-codegen/src/emit.rs:1532-1956` — `lower_sm_body` / `emit_wait_point` (the `wait sleepAsync` inline-poll-yield to generalize to user-SM calls via embedded sub-frames)
+- `crates/ynz-codegen/src/emit.rs:3553-3618` — call-site dispatch (DELETE the bridge path; replace with inline-poll-yield into the embedded sub-frame)
+- `crates/ynz-codegen/src/emit.rs:4430-4479` — `lower_expr_background_state_machine` (`ynz_rt_spawn` — allocs the composed tree)
+- `crates/ynz-runtime/src/runtime.rs:287-316` — `SyncStateFnFuture::poll` (frame[0] i32 read — for the top-level driver, read the typed return slot at 16 / exit code)
+**Files (expected scope)**:
+- `crates/ynz-codegen/src/state_machine.rs` — composed-frame layout computation (per-fn total size incl. embedded children; recursion → heap-box slot); `FRAME_OFFSET_RETURN_SLOT=16`, `FRAME_OFFSET_LOCALS_START=32`; `store/load_return_value_typed`; sub-frame offset helpers
+- `crates/ynz-codegen/src/emit.rs` — rewrite `lower_function_with_waits` + `lower_sm_body` to consume `suspends` + composed frames; inline-poll-yield into embedded sub-frames; wrapper returns typed value (reconstruct `{i64,i64}` for errors); delete the bridge dispatch at `:3582-3616`; recursion heap-box path
+- `crates/ynz-runtime/src/runtime.rs` — top-level driver reads typed return slot; `SpawnStateFnFuture::Drop` frees a heap-boxed RECURSIVE child if present (single, fixed-offset — much smaller than the old per-call surface)
+- `crates/ynz-driver/tests/fixtures/` + `crates/ynz-driver/tests/m2_state_machine_integration.rs` — value-return int/string/errors, nested SM, background-from-SM, no-`wait` transitive-now-works, recursive SM, cancellation-no-leak, composed-single-alloc proof
+**Deviation rule**: standard.
+**Steps**:
+1. **Composed-frame layout** (`state_machine.rs`): given `suspends` + the call graph, compute each suspending fn's frame: header (resume_point@0, sleep_handle@8 if it directly sleepAsyncs) + return_slot@16 + own-locals@32+ + each child SM's sub-frame embedded at a fixed offset. Recursion edge → store a heap pointer slot instead of embedding. Compute total size; `frame_size` returns it.
+2. **Typed return slot**: `store_return_value_typed`/`load_return_value_typed` at offset 16 (i64 / ptr / both words of `{i64,i64}`). `lower_sm_body` terminal stores the typed value + `ret i32 0`. Wrapper/parent reads it typed (reconstruct errors struct). Fixes A1+A2.
+3. **Inline poll-and-yield for every suspending call**: in `lower_sm_body`, a call to a `suspends` callee drives the embedded sub-frame's resume fn (`&frame[child_offset]`, forwarded `waker_ctx`), mirroring `emit_wait_point`'s Ready/Pending branch; Ready→`load_return_value_typed` from the sub-frame + continue; Pending→`ret 1`. Delete the `emit.rs:3582-3616` bridge dispatch. Fixes B.
+4. **Recursion heap-box**: at a recursion/cycle edge, `ynz_alloc` the child frame, store the pointer in the recursion slot, drive it, free on Ready; `SpawnStateFnFuture::Drop` frees it on cancellation. The ONLY per-call alloc/free + Drop case.
+5. **background-from-SM**: `lower_expr_background_state_machine` allocs the composed tree once + `ynz_rt_spawn`. No emit change needed beyond composed sizing. Validate the parent SM yielding lets the spawned task run concurrently. Fixes C.
+6. **Top-level driver** (`runtime.rs`): `main`/`entrypoint` driven by `RUNTIME.block_on`; read the typed return slot @16 for the exit code (truncate i64→i32). `SyncStateFnFuture::poll` stops reading frame[0].
+**Acceptance criteria**:
+- [ ] `-> int` value-return SM prints the value, exit 0 (was LLVM verify failure); `-> string` works (was emit.rs:6835 panic) — AND the `-> string` return-slot byte layout is asserted (SSO discriminant + length + content survive the typed store/load at offset 16; a `string` returned across a wait round-trips byte-identical), per the old P0 string-across-wait contract
+  - Evidence: (filled at phase completion)
+- [ ] `-> string errors` SM: error HANDLED via `.or()` reads the SUCCESS slot; AND error-through-suspension surfaces with the EXACT expected message/trace value computed from the fixture (`assert_eq!`, not "surfaces correctly") + `{i64,i64}` field order asserted (error_ptr=field0, success=field1)
+  - Evidence: (filled at phase completion)
+- [ ] `entrypoint() -> int { wait sleepAsync(10); return 42 }` → process exit code == 42 (non-trivial, survives i64→i32 truncation)
+  - Evidence: (filled at phase completion)
+- [ ] 3-level nested SM prints in order, exit 0 (was nounwind ABORT); errors-cascade through nested SM surfaces correctly
+  - Evidence: (filled at phase completion)
+- [ ] `background` from a suspending entrypoint runs the worker concurrently with the parent's `wait`, both complete, exit 0 (was Bug C hang/124)
+  - Evidence: (filled at phase completion)
+- [ ] previously-aborting no-`wait` SM-from-SM AND transitive non-SM-helper→SM cases now RUN correctly (was abort) — because every suspending fn is now a state machine (inference), no bridge
+  - Evidence: (filled at phase completion)
+- [ ] composed-single-allocation proof: a 3-level synchronous SM call tree does exactly ONE `ynz_alloc` for the whole tree (not one per call) — instrument the alloc counter; recursion/background are the only additional allocs
+  - Evidence: (filled at phase completion)
+- [ ] recursion cancellation-no-leak: a recursive SM aborted mid-wait at **depth 3** (three live heap-boxed children) frees ALL three — `ynz_alloc`/`ynz_free` balanced (a Drop that frees only the top box MUST fail this); positive control (≥1 recursive heap-box live at abort) + negative control (no-op the Drop free → test FAILS with a leak)
+  - Evidence: (filled at phase completion)
+- [ ] no `ynz_rt_call_state_machine_sync` reachable from any generated `ynz_sm_*_resume` fn (IR grep) — the bridge is dead for all suspending callers
+  - Evidence: (filled at phase completion)
+**Quality gate**:
+- [ ] `waker_ctx` forwarded verbatim to every embedded child's resume fn — no fabricated waker (ABI lock; P0 Contract #11)
+- [ ] Expression temporaries that cross a suspending call within the SAME expression (e.g. `f(cpuFn(), wait g())`) are either frame-backed (survive g's suspension; left-to-right eval order preserved) OR cleanly rejected by the `LocalCrossesWait` guard — never silently corrupted (a fixture pins which)
+- [ ] Composed-frame offsets correct for nesting AND for a DIAMOND call graph (`foo` suspends → calls suspending `bar` AND `baz`, both call suspending `qux`): each child resolves within its own sub-frame, no cross-frame clobber; a `v0_3_m2_diamond_sm.ynz` fixture asserts correct concurrent values out of both arms
+- [ ] errors `{i64,i64}` reconstruction matches `errors_result_type` (field order)
+- [ ] Recursion heap-box freed on BOTH Ready (codegen) and cancellation (Drop); no double-free
+- [ ] Zero-cost: a pure-CPU fn (no `suspends`) compiles to straight-line code, NO state machine, NO frame
+**Verification**: `./target/debug/ynz run` on every fixture; `cargo test m2_state_machine_integration`; alloc-counter proofs (single-alloc + cancellation-balance); IR grep for bridge absence.
+
+**Phase Review Gates** (filled at phase completion by coordinator):
+- [ ] code-reviewer: <verdict + ISO timestamp>
+- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
+- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
+- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [ ] Committed: <commit SHA>
+
+**Findings Log**: _(empty until a reviewer returns BLOCK)_
+
+**Exit Sequence**: per `~/.claude/commands/execute-plan.md` Step 3.d–3.h — `$BASE` = Phase 6's committed SHA. Highest-risk phase (composed-frame layout + recursion heap-box Drop). Reviewers MUST diff against `design/future/concurrency.md` ("low memory, fast spawn — like Rust's async" = the composed-single-alloc requirement) per the Design-Doc Alignment gate; verify the cancellation-no-leak test actually exercises the Drop path (positive + negative control), not a dead branch.
+
+### Phase 8: Delete Dead Bridge + Reconcile Option-B Guards + Diagnostics
+
+**PR scope**: Remove the now-unreachable sync-bridge runtime code, explicitly re-decide the Option-B typeck guards on the inference foundation, and finalize the diagnostic surface.
+**Branch**: same worktree branch
+**Flag**: N/A
+**Est. lines**: ~200 (dead-code removal + typeck guard re-decision + diagnostics reconcile + tests)
+**Ships via**: commit on the same branch on review PASS
+**Objective**: (a) Delete `ynz_rt_call_state_machine_sync` and its runtime support — under the inference model NO suspending caller uses it (every caller is a state machine → inline-poll-yield); the only top-level drive is `RUNTIME.block_on`. (b) Re-decide `WaitInsideLoop` + `LocalCrossesWait`: **both STAY M2 errors — LOCKED**; frame-backed MUTABLE locals (flush-before-suspend + reload — distinct from the typed RETURN slot) and the loop-state transform are the genuine M3 hard core (Phase 2 Findings line 1012, verified `let x=5; wait; print(x)` crashes); the composed-frame work backs RETURN values + embedded children, NOT arbitrary mutable locals crossing a wait. No escape hatch — lifting either is an M3 decision needing Patrick sign-off + a read-AND-mutated-across-wait fixture. (c) Finalize diagnostics: the can't-infer errors (Phase 6) + the retained Option-B errors + the redundant-explicit-`wait` muted hint are the M2 surface; confirm no stale "bridge"/"Shape B"/"wait_required" text survives.
+**Why this phase exists**: Leaving dead bridge code is a loaded footgun (a future change could route to it and re-introduce the abort); the Option-B guards were written on the falsified bridge premise and must be reconciled against the inference model; the diagnostic surface must be coherent.
+**Current-state anchors**:
+- `crates/ynz-runtime/src/runtime.rs:600-643` — `ynz_rt_call_state_machine_sync` (delete) + `runtime_decls.rs` extern decl + `SyncStateFnFuture` (delete if unused after Phase 7's top-level driver uses `RUNTIME.block_on` directly)
+- `crates/ynz-typeck/src/check.rs` — `WaitInsideLoop` + `LocalCrossesWait` emission (retain) ; any residual `wait_required`/`unawaited` (removed in Phase 6 — confirm gone)
+- `registry/features.toml` + `crates/ynz-diagnostics/` — diagnostic templates (remove stale bridge-era ones)
+**Files (expected scope)**:
+- `crates/ynz-runtime/src/runtime.rs` + `crates/ynz-codegen/src/runtime_decls.rs` — delete the sync bridge (+ `SyncStateFnFuture` if dead)
+- `crates/ynz-typeck/src/check.rs` — confirm `WaitInsideLoop`/`LocalCrossesWait` retained + clean; remove dead emission paths
+- `registry/features.toml` + `crates/ynz-diagnostics/` — finalize templates; record removals in `### Feature Registry Entries`
+- `crates/ynz-driver/tests/fixtures/` — `wait_in_loop_error.ynz` / `local_crossing_wait_error.ynz` still produce clean teaching errors (exit 1)
+- plan Active Decisions — record the guard re-decision
+**Deviation rule**: standard.
+**Steps**:
+1. **Delete the sync bridge**: remove `ynz_rt_call_state_machine_sync` (runtime + extern decl). Grep the whole repo for any remaining caller; if Phase 7 left the top-level driver on the bridge, move it to a direct `RUNTIME.block_on`. Confirm a clean `cargo build` with the symbol gone.
+2. **Record guard re-decision (LOCKED, no escape hatch)** in Active Decisions: `WaitInsideLoop` STAYS (loop-state transform = M3); `LocalCrossesWait` STAYS (frame-backed MUTABLE locals = M3 hard core; composed frames back return values + children, not arbitrary mutable locals). Confirm both still emit clean WHAT/WHAT-INSTEAD/WHY errors pointing to M3.
+3. **Finalize diagnostics**: confirm `wait_required_on_state_machine_call` + `unawaited_sleep_async` are gone (Phase 6); the redundant-explicit-`wait` case is a muted hint (not error); grep the repo for `Shape B` / `block_on bridge` / `works on every thread` / `wait_required` and confirm zero stale references in code, registry, diagnostics, or this plan.
+**Acceptance criteria**:
+- [ ] `ynz_rt_call_state_machine_sync` deleted; repo-wide grep finds zero references; `cargo build --workspace` clean
+  - Evidence: (filled at phase completion)
+- [ ] `wait_in_loop_error.ynz` + `local_crossing_wait_error.ynz` still produce clean WHAT/WHAT-INSTEAD/WHY teaching errors pointing to M3 (exit 1) — guards retained
+  - Evidence: (filled at phase completion)
+- [ ] Guard re-decision recorded in Active Decisions (both STAY, with rationale + no escape hatch)
+  - Evidence: (filled at phase completion)
+- [ ] Repo-wide grep for `Shape B` / `block_on bridge` / `works on every thread` / `wait_required_on_state_machine_call` returns zero stale references (code, registry, diagnostics, plan); jargon_audit green
+  - Evidence: (filled at phase completion)
+- [ ] `cargo test --workspace` green except the 5 known environmental diffs
+  - Evidence: (filled at phase completion)
+**Quality gate**:
+- [ ] No dead/unreachable bridge code left as a future footgun
+- [ ] Retained guards emit clean WHAT/WHAT-INSTEAD/WHY pointing to M3
+- [ ] No banned jargon / no stale bridge-era diagnostic text anywhere
+**Verification**: `cargo build --workspace` (symbol gone); `./target/debug/ynz run` on the two retained-error fixtures; repo greps; jargon_audit.
+
+**Phase Review Gates** (filled at phase completion by coordinator):
+- [ ] code-reviewer: <verdict + ISO timestamp>
+- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
+- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
+- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [ ] Committed: <commit SHA>
+
+**Findings Log**: _(empty until a reviewer returns BLOCK)_
+
+**Exit Sequence**: per `~/.claude/commands/execute-plan.md` Step 3.d–3.h — `$BASE` = Phase 7's committed SHA.
+
+### Phase 9: Phase 5 Redo — Integration Tests, Demo, Gallery, Cross-Impl Harness, Release Prep (USER-GATED)
+
+**PR scope**: Re-run the HALTED Phase 5 on the fixed inference foundation — restore the omitted integration tests as working-behavior, revert the demo workaround, extend demo + error gallery + cross-impl harness, prep the milestone wrap. Wrap is USER-GATED.
+**Branch**: same worktree branch
+**Flag**: N/A
+**Est. lines**: ~350
+**Ships via**: `/pr` then USER-GATED `/release` (resolve the `v0.3.0-m2` tag collision with the M10 sibling FIRST — do NOT auto-release/merge)
+**Objective**: The milestone's named success criteria pass end-to-end on real code; the demo shows concurrency WITHOUT explicit `wait` (inference) + value-returning + nested + background-from-SM; the gallery covers the can't-infer + retained Option-B diagnostics; cross-impl harness passes; Cargo.toml/CHANGELOG/state.md staged for the user-gated release.
+**Why this phase exists**: RE-ENTRY CONTRACT step 4 + the Demo & Error Gallery invariant. The P5 executor's workarounds (omitting errors-cascade + SM-from-SM tests; blocking-`sleepMs` demo keep-alive) ship broken criteria by omission — reverted here, replaced with working-behavior versions now that Phases 6-8 make them pass.
+**Current-state anchors**:
+- the HALTED original Phase 5 section above (its steps are the template; its workarounds are what gets reverted)
+- `examples/pirates-roster/entrypoint.ynz` (uncommitted P5 workaround — blocking `sleepMs` keep-alive → revert to `wait sleepAsync`, AND show inferred-no-`wait` concurrency)
+- `crates/ynz-driver/tests/m2_state_machine_integration.rs`, `crates/ynz-driver/tests/cross_impl_consistency.rs`, `Cargo.toml`, `CHANGELOG.md`, `.claude/state.md`
+**Files (expected scope)**: as the original Phase 5 Files list + the rework fixtures from P6-P8 folded into demo/gallery; the 5 `.snap.new` environmental diffs NOT accepted.
+**Deviation rule**: standard. Do NOT silently re-introduce any P5 workaround.
+**Steps**:
+1. Restore omitted integration tests as WORKING-behavior assertions: `errors_cascade_through_state_machine` + the 5 SM-from-SM tests (`mutual_recursion_state_machines`, `state_machine_errors_before_first_wait`, transitive-non-SM→SM, background-from-SM, recursive-SM) — all PASS as working behavior.
+2. Revert the demo workaround: `examples/pirates-roster/entrypoint.ynz` keep-alive `sleepMs(...)` → `wait sleepAsync(150)`; add a section demonstrating concurrency with NO explicit `wait` (inference) + a value-returning SM + a nested SM.
+3. Error gallery `examples/primantis-orders/v0_3_m2_errors.ynz`: the can't-infer errors + retained `WaitInsideLoop`/`LocalCrossesWait` + redundant-`wait` hint. `// WHY:` per trigger.
+4. Cross-impl harness: extend `cross_impl_consistency.rs` with M2 fixtures + timing allowlist.
+5. Wrap prep (staged, NOT executed): confirm `Cargo.toml`=`0.3.0-m2`; CHANGELOG section (Features / Improvements / Known-limitations [retained Option-B guards; recursion heap-boxes] / Internal-only); state.md ship entry; both `.vsix` assets.
+6. STOP before release: surface to Patrick — resolve the `v0.3.0-m2` tag collision with M10 FIRST; then user-gated `/release` + merge.
+**Acceptance criteria**:
+- [ ] All restored integration tests PASS as working behavior (none omitted, none asserting an abort that should now work)
+  - Evidence: (filled at phase completion)
+- [ ] Demo keep-alive is `wait sleepAsync`; demo includes a NO-explicit-`wait` concurrency section + value-returning + nested SM; `./target/debug/ynz run examples/pirates-roster/` shows all 8 pirate-done lines + total < 300ms AND > ~140ms (both bounds — lower proves the sleep actually fired)
+  - Evidence: (filled at phase completion)
+- [ ] Error gallery produces every retained diagnostic class in one run
+  - Evidence: (filled at phase completion)
+- [ ] `cargo test cross_impl_consistency` + `cargo test m2_state_machine_integration` pass; `cargo test --workspace` green except the 5 environmental diffs
+  - Evidence: (filled at phase completion)
+- [ ] CHANGELOG known-limitations accurate (retained Option-B guards; recursion uses heap-boxed frames); Cargo.toml=`0.3.0-m2`; state.md ship entry appended
+  - Evidence: (filled at phase completion)
+**Quality gate**:
+- [ ] NO P5 workaround re-introduced (no blocking-`sleepMs` keep-alive; no omitted tests)
+- [ ] `.snap.new` environmental diffs NOT accepted
+- [ ] `__testFallibleAsync` still NOT in registry / NOT in LSP completions
+- [ ] No auto-release/merge/M3-start — wrap is user-gated
+**Verification**: full `cargo test --workspace`; `./target/debug/ynz run examples/pirates-roster/`; the cumulative-review fan-out (Step 10f, Opus).
+
+**Phase Review Gates** (filled at phase completion by coordinator):
+- [ ] code-reviewer: <verdict + ISO timestamp>
+- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
+- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
+- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [ ] Committed: <commit SHA>
+
+**Findings Log**: _(empty until a reviewer returns BLOCK)_
+
+**Exit Sequence — milestone-final (RUN THESE STEPS):**
+1. Persist plan state: tick all remaining checkboxes across Phases 6-9; verify the Quality Checklist below is all-checked/N-A; bump `last_updated:`.
+2. **Cumulative review fan-out (Step 10f)** with `model: "opus"` on all 4 reviewers. Diff: `git diff 6a2d32d..HEAD` (or working-tree form if uncommitted) covering Phases 6-9. Brief: audit the full rework against `design/future/concurrency.md` (the inference model — whole-program may-block, no bridge, composed frames) per the Design-Doc Alignment gate; the typed-return-slot ABI; inline-poll-yield correctness (no bridge in any resume fn); the reconciled Option-B guards; all teaching surfaces.
+3. Handle verdict: BLOCK → fix/push-back (max 3 rounds). PASS → continue.
+4. Flip front-matter `status: active` → `status: done` (radar auto-moves to `plans/done/`).
+5. **STOP — USER-GATED.** Surface to Patrick: cumulative review PASS, test count, the `v0.3.0-m2` tag collision (resolve with M10 sibling FIRST), THEN `/release` + merge-to-main on his go. Do NOT auto-release/merge/start-M3.
+6. **Roadmap rollup** (Step 11a): `v0-3-concurrency-perf` has 2 milestones remaining (M3 cross-module + auto-parallel; M4 channels + SoA). Don't auto-mark the roadmap done. Suggest M3 as the next planning target.
 
 ## Quality Checklist (verify at completion)
 
-- [ ] All inputs validated — no new user input surface (compiler internal change); intrinsic registration uses `M2_MAY_BLOCK_INTRINSICS` in-code const set per Question Resolution #7 (no schema field added); transitive may-block analysis deferred to M3 per `### Performance` "M2 may-block predicate" subsection
+- [ ] All inputs validated — no new user input surface (compiler internal change); **intra-unit transitive may-block analysis SHIPS in M2** (Phase 6 fixpoint, may-block set `{sleepAsync}`); cross-module propagation deferred to M3 (M8 prereq); unanalyzable calls → clean compile error, never a guess
 - [ ] Auth/authz — N/A (compiler)
 - [ ] Error handling: every new diagnostic uses WHAT/WHAT-INSTEAD/WHY (verified by per-phase reviews); no leaked Rust panic strings to user (catch_unwind boundaries in all new runtime shims)
 - [ ] No SQL injection, XSS, path traversal, or secret exposure — N/A
-- [ ] Performance: state-machine path used only when needed; codegen+typeck wall-clock ≤ 10% slower than M1 baseline on pirates-roster (measured); sync-bridge overhead ≤ 1000µs per call = 1% of 100ms wait (measured; single threshold per Round 3 reconciliation)
-- [ ] Tests: state-machine integration + errors-cascade + block_on bridge + panic-through-state-machine + multi-wait + wait-in-if + cross-impl harness + LSP completion visibility + LSP diagnostic flow + registry parse all pass
+- [ ] Performance: state-machine path used only for functions that transitively suspend (pure-CPU → straight-line, zero overhead); codegen+typeck+may-block-analysis wall-clock ≤ 10% slower than M1 baseline on pirates-roster (measured); **composed frames = ONE `ynz_alloc` per spawned task tree** (not per call — alloc-counter proof, Phase 7)
+- [ ] Tests: transitive-may-block fixpoint + value-returning (int/string/errors) + errors-cascade-through-suspension + nested-SM + background-from-SM + previously-aborting-now-works + recursion + cancellation-no-leak (positive+negative control) + composed-single-alloc proof + no-bridge IR-grep + can't-infer clean errors + cross-impl harness + LSP visibility + registry parse all pass
 - [ ] Existing tests still pass (1220+ existing + ~30+ new M2 tests)
 - [ ] Types are complete (no `as any` equivalent; widening casts limited to C-ABI boundary with SAFETY comments)
 - [ ] Follows existing codebase conventions: runtime extern fn pattern, codegen runtime_decls registration, typeck intrinsic registration, registry TOML schema, demo/error-gallery file patterns
-- [ ] Every phase received a 4-agent review-fanout PASS before committing (P0–P5)
-- [ ] Final cumulative review fan-out passed (all 6 phases PASS)
+- [ ] Every phase received a 4-agent review-fanout PASS before committing (P0–P9; rework Phases 6–9 added 2026-05-31)
+- [ ] Each rework phase's review diffed the diff against `design/future/concurrency.md` (Design-Doc Alignment gate — the check that was structurally absent before the HALT)
+- [ ] Final cumulative review fan-out passed (all phases PASS, Opus, incl. design-doc alignment of the whole rework)
 - [ ] Plan-file acceptance-criteria checkboxes accurate across all phases
 - [ ] `__testFallibleAsync` confirmed NOT in registry, NOT in LSP completions (P3 test)
 - [ ] Cross-impl consistency harness allowlist updated with timing-dependent M2 fixtures
@@ -1499,7 +1808,7 @@ _(empty until a reviewer returns BLOCK)_
 
 ## Anti-Pattern Callouts
 
-- **Splitting into commits instead of PRs**: Each of the 6 phases is one PR. P2 is the largest (state-machine codegen ~600 lines) but stays focused — state-machine IR generation is tightly coupled and shouldn't split. Sub-helpers (state_machine.rs module) extracted within P2 for clarity, not as a separate PR.
+- **Splitting into commits instead of PRs**: The milestone is one branch with phase-boundary commits (P0–P9; rework Phases 6–9 added 2026-05-31). P7 (state-machine codegen + composed frames) is the largest but stays focused — state-machine IR + frame composition are tightly coupled and shouldn't split. Sub-helpers (`state_machine.rs` / `may_block.rs`) extracted for clarity.
 - **Shadow main branches**: All phases target `main` directly via PR. No long-lived integration branch.
 - **Building the engine before shipping value**: P0-P1 are foundation (no user-visible value), but P2 ships actual value (wait actually suspends). P4 ships full teaching surface in the same milestone — not a follow-up.
 - **Hotfix that isn't**: N/A — no hotfix-style work in M2.

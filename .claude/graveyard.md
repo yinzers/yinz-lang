@@ -48,6 +48,44 @@ borrow checker
 
 ---
 
+## Plan Contradicts a Governing Design Doc, Caught By No Review — 2026-05-31
+
+**Scope**: `.claude/plans/active/*.md` and `.claude/plans/paused/*.md` (execution plans). Roadmaps + done plans exempt from the section requirement (done plans are historical; roadmaps don't have phases).
+**Exemption**:
+- Plans containing a `## Design-Doc Alignment` section that cites the governing `/design/` doc(s) and either confirms match OR enumerates each divergence as "design doc X says A; plan does B because <reason>" with sign-off.
+- Plans where `/design/` genuinely has no relevant doc AND the `## Design-Doc Alignment` section states that explicitly.
+- Pure bugfix/cleanup/refactor plans that implement no new design surface (still benefit from the section but it may legitimately say "no design doc governs a bugfix; restoring documented behavior").
+**Last verified**: 2026-05-31
+**Category**: regex+judgment
+
+**Pre-filter patterns**:
+```
+\.claude/plans/(active|paused)/.*\.md$
+block_on
+bridge
+defer.*to (M|v0\.)[0-9]
+transitive
+may-block
+no.*coloring
+```
+
+**Cause**: The v0.3-M2 plan shipped a `block_on` sync bridge as its "no-coloring delivery mechanism." `design/future/concurrency.md` ("Concurrency — No Function Coloring") documents the actual model: whole-program TRANSITIVE may-block analysis up the call graph + auto-inserted `wait` at every suspension point + stackless state machines; FFI declares `may-block` (the only "can't infer → user" case). **There is no bridge in the design.** The bridge was invented to fill the gap created by cutting the M2/M3 milestone boundary at the wrong line (state machines in M2, may-block analysis deferred to M3 — but a correct state-machine layer REQUIRES the analysis). It both crashed at runtime (the HALT) and contradicted the documented design. Three rounds of adversarial plan-review + a P0 spike gate + five per-phase 4-agent review gates all PASSED it — because every review checked the plan against ITSELF (internal consistency, AC evidence, rule violations), never against the design doc it was violating.
+
+**Detection signature**: (1) An execution plan file lacks a `## Design-Doc Alignment` section. OR (2) A plan defers a capability to a later milestone (`defer ... to M3`, `... is M3`, "deferred to v0.x") where that capability is named load-bearing for the CURRENT milestone in a `/design/` doc. OR (3) A plan introduces a runtime mechanism (`block_on`, sync bridge, thread-hold) for a behavior a `/design/` doc says is resolved at COMPILE time (inference / whole-program analysis).
+
+**Constraint**: Every execution plan MUST include `## Design-Doc Alignment` citing the governing `/design/` doc(s) and confirming match or enumerating each divergence with sign-off (see `.claude/rules/plan-invariants.md` "Design-Doc Alignment"). Plan-review (Step 7) and per-phase review (Step 9a) MUST diff the plan/diff against the cited design docs, not only against the plan's internal consistency. A plan contradicting a design doc is a BLOCK with the citation regardless of internal consistency — surfaced as "design doc X says A; plan says B."
+
+**Bouncer checks** (each runnable as shell against a diff):
+- [ ] For each added/modified `.claude/plans/{active,paused}/*.md` that is an execution plan (front-matter `type: execution` or absent): grep the body for `^## Design-Doc Alignment$`. Missing → WARNING.
+- [ ] If a plan body contains a deferral phrase (`defer.*to (M|v0\.)[0-9]`, `is (M[0-9]|v0\.[0-9])`, `deferred to`) for a capability, the `## Design-Doc Alignment` section MUST acknowledge whether that deferral is documented in the roadmap/mvp-scope or invented by the plan. Deferral phrase present + no Design-Doc Alignment acknowledgment → WARNING.
+- [ ] If a plan introduces `block_on` / "sync bridge" / "hold the thread" / "blocking pool" language for a behavior, and `design/future/concurrency.md` (or any cited design doc) describes that behavior as compile-time-inferred → judgment BLOCK, cite "design doc says inferred-at-compile-time; plan introduces a runtime block".
+
+**Severity**: critical (a plan that contradicts the governing design ships the WRONG language; this one cost a halted milestone + a full re-plan).
+
+**Originating incident**: 2026-05-31 — during the v0.3-M2 re-spike + re-plan, Patrick asked "if `wait` is inferred at compile time, why is anything slower at runtime?" and "did we have this documented?" Reading `design/future/concurrency.md` (which the `/plan` research step had skipped — only the codebase was mapped) revealed the doc had the correct transitive-inference / no-bridge model all along. The bridge was a plan invention contradicting it. See `.claude/plans/active/v0-3-m2-wait-and-state-machines.md` Findings Log "🔴 VERIFIED ROOT CAUSE."
+
+---
+
 ## Requiring Explicit Ownership Annotation at Call Sites — 2026-05-14
 
 **Scope**: `spec/*.md` and `design/*.md`, except `design/future/*` (parking-lot speculation only).
