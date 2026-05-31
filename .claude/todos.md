@@ -7,7 +7,12 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 ## Now (active)
 
-*(v0.2-M1 SHIPPED — all 8 phases merged, Cargo.toml bumped to 0.2.0-m1, tag cut pending /release. v0.2-M2 (LSP) is next. Plan moved to done/.)*
+*(main = `760e024` (v0.3.0-m1 + gitignore-ephemera commit), working tree CLEAN. Repo cleanup done 2026-05-31. v0.2.1 LSP work is SERIAL now (no parallel worktrees). Active branches: M10 (done, unmerged), v0.3-m2 (in flight). Next real step: consolidate M10 → main.)*
+
+- [ ] **consolidate-m10-to-main (2026-05-31)** — M10 (`v0.2.1-m10-teaching-surface-bugfix`, +15, done in-branch) needs merging to main. BLOCKED-ON: resolve `snap-new-drift-before-merge` first. v0.3-m2 workstream may own the actual merge (it's absorbing M10 per earlier call) — coordinate. v0.3-m2 (`+5`) stays in flight; leave cooking.
+- [ ] **decide-webpage-branch (2026-05-31)** — `feat/webpage-foundation-scaffold` (+10/-50, PR #65 open, worktree pruned): rebase onto current main or scrap? 50 commits behind. Parked until decided.
+- [ ] **snap-new-drift-before-merge (2026-05-31)** — BOTH M10 and v0.3-m2 worktrees carry the SAME 5 un-accepted `.snap.new` stderr snapshots: `integration__{broken_main,empty,m2_compound_assign,m2_const_reassign,m2_mixed_int_number}_stderr.snap.new`. `empty_stderr`/`broken_main_stderr` shouldn't change from EITHER teaching-surface OR wait work — identical drift in two unrelated branches smells like main-level snapshot staleness (stderr format/path/version string changed, never re-accepted). **Investigate before merging either branch** — run the stderr tests against clean `main` to see if they're already stale there; don't `cargo insta accept` a drift nobody authored.
+- DONE 2026-05-31: gitignored ephemera (`760e024`), dropped 3 dead M4-era stashes, removed stale v0-3-m1 worktree, deleted 60 merged branches. `stash@{0}` = stale main-checkout planning copies (insurance; drop after M10 merges).
 
 - [ ] **m8-typeck-cross-file-resolution still in active/** — audit as of v0.2-M1 Phase 0 (2026-05-19): plan is `status: active` / `pending_approval` / `0/32 done`. Roadmap: v0-1-compiler. This is real unfinished work (cross-file import/export typeck — `Item::ImportDecl(_) => {}` currently silently ignored). Action needed: either (a) approve the plan and start execution in a dedicated chat, OR (b) move plan to `paused/` if v0.2-M1 is higher priority. Does NOT appear to be a ghost resurrected by git-mv — it's genuinely incomplete M8 work. Investigate before v0.2-M2 LSP work begins (cross-file resolution is a precondition for LSP "go-to-definition" working across files).
 

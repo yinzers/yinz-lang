@@ -1,6 +1,6 @@
 # Session State: ynz
 
-**Last Updated**: 2026-05-21 (v0.2.0 shipped — v0-2-dev-loop-tooling roadmap DONE; webpage-foundation M1 PR #65 merged)
+**Last Updated**: 2026-05-31 (REPO CLEANUP done — main working tree clean. Gitignored AI-workflow ephemera (`.claude/worktrees/`, `.analysis/`, `.claire/`, `*.snap.new`); dropped 3 dead M4-era stashes; deleted 60 merged branches; removed stale v0-3-m1 worktree. v0.3.0-m1 is main's HEAD. v0.2.1 M1/M3/M5 LSP plan ON HOLD — serial-not-parallel. M10 done-in-branch (+15, UNMERGED — v0.3-m2 owns merge); v0.3-m2 in flight; webpage parked. Next: consolidate M10 → main (investigate `.snap.new` drift first). See `.claude/todos.md` → branch-consolidation-to-main + snap-new-drift-before-merge.)
 
 ---
 
@@ -10,12 +10,13 @@
 
 <!-- RADAR-START -->
 ### Active Roadmaps
-- v0-2-dev-loop-tooling (patrick) — 1 active plans — 2026-05-20 (v0.2-M5 scope updated to reflect final execution plan)
-- webpage-docs (Patrick Rizzardi) — 1 active plans — 2026-05-20
+- v0-2-1-lsp-gap-closure (Patrick Rizzardi) — 1 active plans — 2026-05-30
+- v0-3-concurrency-perf (Patrick Rizzardi) — 1 active plans — 2026-05-21
+- webpage-docs (Patrick Rizzardi) — 0 active plans — 2026-05-20
 
 ### Active Workstreams
-- v0-2-m5-lsp-full-and-release (Patrick Rizzardi) — committed Phases 0-6 — roadmap: v0-2-dev-loop-tooling — 2026-05-21 (Phases 4+5+6 complete: rename (14 tests) + format-on-save (8 tests) + inlay hints (8 tests); Phases 0-6 all shipped)
-- webpage-foundation (Patrick Rizzardi) — 3 files touched — 0/125 done — roadmap: webpage-docs — 2026-05-20
+- v0-2-1-m10-teaching-surface-bugfix (Patrick Rizzardi) — 12 files touched — 0/136 done — roadmap: v0-2-1-lsp-gap-closure — 2026-05-30
+- v0-3-m2-wait-and-state-machines (Patrick Rizzardi) — 15 files touched — 27/160 done — roadmap: v0-3-concurrency-perf — 2026-05-30 (P0 spike COMPLETE — all 19 tests pass, all 12 contracts + 3 measurements within budget; ACCEPT decision; P1 ready)
 <!-- RADAR-END -->
 
 ---
@@ -52,6 +53,9 @@ cargo fmt --all
 
 ## Active Decisions (append with WHY)
 
+- [2026-05-31] **Serial, not parallel — AND repo hygiene locked**: Patrick pivoted off the parallel worktree-dispatch model (the [2026-05-30] "PARALLEL TRACK" decision below is amended): v0.2.1 LSP work proceeds SERIALLY, one plan at a time, no more spinning up parallel worktrees. The M1/M3/M5 ("Plan 2") drafting was halted mid-`/plan` per this call. WHY: parallel worktrees were producing divergence/merge tangle (stale planning copies on main, snapshot drift across branches, 60+ dead branches). **Repo-hygiene policy now enforced via `.gitignore`** (commit `760e024`): `.claude/worktrees/`, `.analysis/`, `.claire/`, `*.snap.new` are ignored — they were the recurring source of main-checkout churn. `state.md`/`todos.md` stay tracked (commit alongside real work). Cleanup 2026-05-31 also dropped 3 dead M4-era stashes + deleted 60 merged branches. The v0.2.1 planning artifacts (roadmap, design/lsp.md inventory, features.toml deferred entries, audit reports) live in the **M10 branch** — they arrive on main when M10 merges; do NOT re-commit them to main (conflict risk). `stash@{0}` holds the stale main-checkout copies as insurance — droppable once M10 merges.
+- [2026-05-30] **v0.2.1 LSP gap-closure = PARALLEL TRACK to v0.3, shipped FIRST**: LSP work is faster than v0.3 concurrency work, so v0.2.1 gets its own `0.2.1` tag (branched off main, which is at `0.3.0-m1`), released first, THEN merged/rebased into the v0.3 line (M9 owns the merge). WHY: roadmap was written 2026-05-21 assuming Cargo sat at 0.2.0 and v0.2.1 tagged before any v0.3 — but v0.3.0-m1 already shipped, voiding that assumption. Roadmap `v0-2-1-lsp-gap-closure` amended. **8-plan batching locked** (M10 alone → M1+M3+M5 → M2 → M4 → M6+M7 → M8 → M9 → M11; only intra-plan dep is M6→M7). See roadmap "Execution Plan Batching" table.
+- [2026-05-30] **M10 (teaching-surface bugfix) fully planned, reviewer-PASS, dispatched FIRST — awaiting Patrick's go**: Plan at `.claude/plans/active/v0-2-1-m10-teaching-surface-bugfix.md`. 12 phases fixing all 14 audit bugs (`.analysis/bugs.md`), anchors re-verified vs current source (baseline 1434 tests). plan-reviewer PASS (Tier A, zero required fixes). 4 decisions locked: P9/P10 kept in M10; Phase 6 hover = context-aware fix only (no fallback — fallback relocates the wrong-output hole); Phase 7 BannedJargon quick-fix carries the WHY (the lesson); dispatch = isolated git worktree off main. Next action: `/execute-plan` in a worktree on Patrick's go.
 - [2026-05-12] **Compiler implementation language = Rust**: Mature LLVM bindings (inkwell), strong ADT/pattern-matching for AST, salsa framework gives incremental builds + LSP "for free." See `design/compiler-language.md`.
 - [2026-05-12] **MVP scope split into v0.1 / v0.2 / v0.3 / v1.0 / v2+**: Concurrency keywords parse from day 1 but run sequentially until v0.3 (when auto-parallelization optimization engages). See `design/mvp-scope.md`.
 - [2026-05-12] **Error auto-propagation = flow-sensitive narrowing (Option B under, Option A in feel)**: If user calls `.failed()` before using the success value, auto-propagation suppressed; otherwise compiler auto-propagates at first use. Same `.failed()`/`.or()` API works inside AND outside `errors` functions. See `design/errors.md`.
