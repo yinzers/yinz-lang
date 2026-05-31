@@ -4,6 +4,17 @@ target/
 *.bc
 Cargo.lock.bak
 
+# AI-workflow ephemera — never belong in the index on the main checkout.
+# (gitignore has no inline comments; each pattern stands alone.)
+# git worktree checkouts live here — separate working trees, not files to track
+.claude/worktrees/
+# analyzer-agent scratch reports (regenerable; durable copies ride with their milestone branch)
+.analysis/
+# stray junk dir from a worktree-scaffolding misfire
+.claire/
+# un-accepted insta snapshots — review/accept in-branch, never commit the .new
+*.snap.new
+
 # Compiled binaries emitted by `ynz build`/`ynz run` during integration tests.
 # These land adjacent to the source .ynz file when no output path is specified.
 crates/ynz-driver/tests/fixtures/hello
