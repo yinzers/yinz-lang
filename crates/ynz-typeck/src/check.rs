@@ -265,6 +265,14 @@ impl<'b> Checker<'b> {
                     for field in &s.fields {
                         self.collect_referenced_names_in_ast_type(&field.ty, &type_params);
                     }
+                    // Union type alias RHS: `shape PghEvent = SouthSideEvent | StripeDistrictEvent`.
+                    // alias_ty is the raw AstType (Union) written in source. Because the check
+                    // pass never enters ShapeDecl bodies, these member names are otherwise
+                    // invisible to referenced_names — the same gap the field-type walk above
+                    // closes for regular shape fields.
+                    if let Some(alias) = &s.alias_ty {
+                        self.collect_referenced_names_in_ast_type(alias, &type_params);
+                    }
                 }
                 // M6: options declarations are validated and registered by collect_options()
                 // which runs before check_module. Nothing to do here.

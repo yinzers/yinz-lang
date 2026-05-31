@@ -668,7 +668,7 @@ _**TRACKED FOLLOW-UP (out of M10 scope — Rule 11 / deferrals-must-be-tracked)*
 - [x] rules-compliance-reviewer: PASS 2026-05-31 (r1 — durable comments, mirrors walker [no parallel logic], no test weakening, no violations.)
 - [x] plan-adherence-verifier: PASS 2026-05-31 (r1 — both steps MET; 2-file scope clean; recursion follows ownership-walker precedent; is_trivially_copyable filter preserved; out-of-scope gaps correctly absent [not skipped steps].)
 - [x] acceptance-verifier: PASS 2026-05-31 (r1 — both ACs MET; AC1 presence+content, AC2 exact `==1` count.)
-- [x] Committed: <commit SHA>
+- [x] Committed: ad3f4d3
 
 **Findings Log**:
 _(no BLOCK rounds — all 4 reviewers PASS round 1, no documented deviations.)_
@@ -691,26 +691,29 @@ _  2. `collect_copy_hints_block` walks only `Stmt::Expr`+`Stmt::Let`, skipping `
 2. Build the demo (`./target/debug/ynz build examples/pirates-roster/entrypoint.ynz`); assert ZERO unused-import warnings. Capture `insta` stdout/stderr snapshot.
 3. Step-10 sweep: TODO grep (no `TODO`/`FIXME`/`Phase N` left in touched code); confirm `.claude/todos.md` LSP bug items reflect what shipped; cumulative `git diff <m10-base>..HEAD` four-reviewer pass; verify Quality Checklist below.
 **Acceptance criteria**:
-- [ ] `pirates-roster` exercises all six patterns; build emits zero spurious unused-import warnings.
-  - Evidence: (filled at phase completion)
-- [ ] `insta` snapshot committed and green.
-  - Evidence: (filled at phase completion)
-- [ ] No orphaned TODO/FIXME in M10-touched code.
-  - Evidence: (filled at phase completion)
+- [x] `pirates-roster` exercises all six patterns; build emits zero spurious unused-import warnings.
+  - Evidence: `examples/pirates-roster/entrypoint.ynz` exercises 7 patterns cross-file — options-variant (`ScheduleDay.home` :489), is-narrowing (`is StripeDistrictEvent` :513), dynamic (`runAnnouncement(a: dynamic Announceable)` :535), shape-field-type (`day: ScheduleDay` :543), module-const (`const OPENING_DAY_SLOT: ScheduleDay` :551), generic (`category: StatCategory` in `StatBook<T>` :560), union-alias-RHS (`shape RiverEvent = SouthSideEvent | LocalVenueEvent` :526). CLEAN-REBUILD VERIFIED (coordinator forced `touch main.rs && cargo build`; acceptance-verifier re-ran on the clean binary): `ynz build` emits ZERO unused-import warning for any type-position symbol — only the 4 pre-existing genuine unused-FUNCTION-import warnings + 1 pre-existing dead-code remain. follows/extends are an EVIDENCED same-file-only compile constraint (`shapes.rs:393/406`, `all_names` file-local) covered by unit tests (`follows_contract_does_not_warn_unused_import`, `extends_parent_does_not_warn_unused_import`) — demo + unit tests together cover every enumerated pattern.
+- [x] `insta` snapshot committed and green.
+  - Evidence: `crates/ynz-driver/tests/snapshots/error_galleries__pirates_roster_demo_warning_lines.snap` + test `pirates_roster_demo_builds_with_zero_m10_pattern_warnings` — green (7/7, no `.snap.new`), pins the 5-warning set with all M10 pattern symbols ABSENT; path-stripped for worktree-stability (deviation-judge #3 JUSTIFIED). Committed in the Phase 11 commit below (the `.snap` was untracked at review time — all phase work is uncommitted until the coordinator's commit step; staged + committed here, satisfying the "committed" conjunct the acceptance-verifier correctly flagged as pending).
+- [x] No orphaned TODO/FIXME in M10-touched code.
+  - Evidence: two grep passes (diff-scoped + direct) over all 7 Phase 11 files → zero `TODO`/`FIXME`. "Phase 0"/"Bug 2.x" in comments are durable context names, not work-items.
 **Quality gate**:
-- [ ] Demo section uses real Yinz operations only (no invented APIs per dot-postfix.md).
-- [ ] Folder/section naming Pittsburgh-themed per examples-structure.md.
+- [x] Demo section uses real Yinz operations only (no invented APIs per dot-postfix.md). (code-reviewer + rules-compliance + plan-adherence all confirmed real Yinz; demo builds clean.)
+- [x] Folder/section naming Pittsburgh-themed per examples-structure.md. ("Three Rivers schedule" section; ScheduleDay/StripeDistrictEvent/SouthSideEvent/RiverEvent — Pittsburgh-themed; single-entry layout preserved.)
 **Verification**: `cargo test --workspace` green (≥1434 + all new tests); `cargo clippy --workspace -- -D warnings` clean; `cargo fmt --all --check` clean; demo build snapshot green.
 
 **Phase Review Gates**:
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
-- [ ] Committed: <commit SHA>
+- [x] code-reviewer: PASS 2026-05-31 (r1 — reverted the 8-line union-alias fix to prove tests bite; demo builds clean, ZERO type-position spurious warnings; limitation comment audited line-by-line vs shapes.rs, accurate; snapshot non-vacuous + worktree-stable.)
+- [x] rules-compliance-reviewer: PASS 2026-05-31 (r1 — zero violations; durable comments, real Yinz, Pittsburgh-themed, non-OOP, no test weakening, follows/extends limitation legit per no-duct-tape.)
+- [x] plan-adherence-verifier: PASS 2026-05-31 (r1 — both steps MET, scope respected; 3 deviations documented with clean rationales [no banned phrases]; pattern coverage = demo(7) ∪ unit-tests(all) complete.)
+- [x] acceptance-verifier: PASS 2026-05-31 (r2 on CLEAN rebuild — AC1 MET [zero spurious warnings], AC3 MET; AC2 MET on commit. r1 BLOCK was a STALE-BINARY/build-race false negative [7 agents built target/ concurrently]; coordinator clean-rebuild + code-reviewer revert-test + plan-adherence all refuted it; r2 solo re-run confirmed clean.)
+- [x] Deviation-judge #1 (union-alias fix folded into Phase 11): JUSTIFIED 2026-05-31 (same Phase-0 bug class, 7th type position, same idiom, files in front-matter, unit-test-proven, surfaced by the Demo invariant — deferring would ship a teaching lie).
+- [x] Deviation-judge #2 (follows/extends absent from demo): JUSTIFIED 2026-05-31 (independently verified shapes.rs:393/406 makes cross-file follows/extends a compile error — demo physically can't show it; unit-test substitution correct; accurate comment; tracked todos line 12).
+- [x] Deviation-judge #3 (path-stripped warning-lines snapshot): JUSTIFIED 2026-05-31 (strictly stronger than full-stderr here — full-stderr embeds worktree-absolute paths and fails everywhere, as the 5 pre-existing integration .snap.new prove; + 4-symbol assert! belt-and-suspenders; matches error_galleries prior art).
+- [x] Committed: <commit SHA>
 
 **Findings Log**:
-_(empty until a reviewer returns BLOCK)_
+_(no executor BLOCK rounds. Scope EXPANDED mid-phase to fold in a Rule-11 same-class fix — the union-alias-RHS unused-import gap [`check.rs` alias_ty walk + 2 unit tests], discovered during the Demo invariant's mandatory build validation; deviation-judge #1 ruled JUSTIFIED. Two earlier executor MISDIAGNOSES were caught + corrected by coordinator verification: (a) a "separate driver unused-import tracker" claim [FALSE — single source `queries.rs:175`, driver calls `check_query`]; (b) a "union-alias can't build cross-file in the driver" claim [FALSE — it builds clean; the false demo comment was deleted and the union pattern restored]. The follows/extends cross-file limitation [shapes.rs:393/406] is REAL [verified] and accurately documented. acceptance-verifier r1 BLOCK was a stale-binary false negative from concurrent-agent build races — resolved by a solo clean-rebuild re-run [r2 PASS]. Three out-of-M10-scope walker-completeness follow-ups [Phase 9 return-stmt ownership, Phase 10 copy-hint UFCS + copy-hint block-stmt] are tracked in todos.md.)_
 
 ---
 

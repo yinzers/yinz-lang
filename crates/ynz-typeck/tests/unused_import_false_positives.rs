@@ -178,6 +178,43 @@ function entrypoint() -> nothing { }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Bug 2.2 (continued) — `extends` parent only
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn extends_parent_does_not_warn_unused_import() {
+    // WHY: `check_module` skipped `Item::ShapeDecl` entirely, so an imported parent
+    // shape used only in `shape X extends Parent` was never inserted into
+    // referenced_names and was incorrectly flagged as unused. The dual-pattern
+    // adversarial test covers `extends + field-type` together; this test covers
+    // `extends` alone to prove the single-use case is also protected.
+    //
+    // Note: the `two_file_db` helper exercises the typeck check_query path directly
+    // (file-local resolution), which is what check_module's ShapeDecl arm covers.
+    // The driver-level cross-file compile path hits shapes.rs:393 (`all_names` is
+    // file-local only), which emits "not defined — cannot extend it" before the
+    // unused-import check runs. This unit test reaches the fixed check_module path;
+    // the driver limitation is documented in entrypoint.ynz and todos.md
+    // "m8-typeck-cross-file-resolution".
+    let dep = r#"
+export shape Entity {
+    name: string
+    health: int
+}
+"#;
+    let main = r#"
+import { Entity } from `world`
+shape Warrior extends Entity {
+    weapon: string
+}
+function entrypoint() -> nothing { }
+"#;
+    let (db, sf, dir) = two_file_db("world", dep, main);
+    assert_no_unused_import_warning(&db, sf, "Entity");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Bug 2.3 — shape field type annotation (`tf: Timeframe`)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -418,6 +455,57 @@ function entrypoint() -> nothing { }
         "Unexpected NotDefined diagnostics (TypeParam-skip failed): {:#?}",
         not_defined_diags
     );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Union type alias RHS — imported type used ONLY as a union member
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn union_alias_rhs_member_does_not_warn_unused_import() {
+    // WHY: `check_module`'s ShapeDecl arm walks field types and the `extends`
+    // parent but never walked `alias_ty` (the resolved union RHS). An import used
+    // only as a union member — `shape PghEvent = SouthSideEvent | StripeDistrictEvent`
+    // where both are imported and appear nowhere else — was counted as unused because
+    // the check pass never sees the alias_ty contents through any other code path.
+    // The shape body is pre-resolved in shapes.rs before the check pass runs, so
+    // without explicitly walking alias_ty those member names are invisible to
+    // referenced_names.
+    let dep = r#"
+export shape SouthSideEvent { name: string }
+export shape StripeDistrictEvent { name: string }
+"#;
+    let main = r#"
+import { SouthSideEvent } from `pgh_events`
+import { StripeDistrictEvent } from `pgh_events`
+shape PghEvent = SouthSideEvent | StripeDistrictEvent
+function entrypoint() -> nothing { }
+"#;
+    let (db, sf, dir) = two_file_db("pgh_events", dep, main);
+    assert_no_unused_import_warning(&db, sf, "SouthSideEvent");
+    assert_no_unused_import_warning(&db, sf, "StripeDistrictEvent");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn union_alias_rhs_with_options_member_does_not_warn_unused_import() {
+    // WHY: same root cause as above — alias_ty not walked — but with an `options`
+    // type as a union member (Type::Options rather than Type::Shape). Confirms the
+    // fix handles both shape and options variants in the resolved Type::Union.
+    let dep = r#"
+export shape Scored { points: int }
+export options Grade { high: `High`, low: `Low` }
+"#;
+    let main = r#"
+import { Scored } from `results`
+import { Grade } from `results`
+shape Assessment = Scored | Grade
+function entrypoint() -> nothing { }
+"#;
+    let (db, sf, dir) = two_file_db("results", dep, main);
+    assert_no_unused_import_warning(&db, sf, "Scored");
+    assert_no_unused_import_warning(&db, sf, "Grade");
     let _ = std::fs::remove_dir_all(dir);
 }
 
