@@ -634,7 +634,7 @@ _(no BLOCK rounds — all 4 reviewers PASS on round 1. Scope expanded mid-phase 
 - [x] rules-compliance-reviewer: PASS 2026-05-31 (r1 — durable docstring rewrite, no parallel logic, ownership hints informational, Yinz vocab, no test weakening, no graveyard corpses.)
 - [x] plan-adherence-verifier: PASS 2026-05-31 (r1 — all 3 steps MET; 2-file scope clean; line overage is pure generic_fn_table threading [minimum diff], not creep; resolve_param_ownerships chain matches Phase 3; no Phase 10 bleed.)
 - [x] acceptance-verifier: PASS 2026-05-31 (r1 — both ACs MET; tests drive Expr::MethodCall + generic syntax, assert exact modifier + exact count, paired with free-fn baseline.)
-- [x] Committed: <commit SHA>
+- [x] Committed: e2b3827
 
 **Findings Log**:
 _(no BLOCK rounds — all 4 reviewers PASS round 1. Post-review test-strengthening: added source-derived position-parity assertions to close code-reviewer concern #1 [header comment overstated that position was tested]; verified non-tautological + 7/7 green._
@@ -654,24 +654,27 @@ _**TRACKED FOLLOW-UP (out of M10 scope — Rule 11 / deferrals-must-be-tracked)*
 1. Write a test: `outer(inner(n))` with `n: int` → `n` gets a copy hint. Confirm FAIL today.
 2. After inspecting each top-level arg, recurse `collect_copy_hints_expr(arg, ...)` (mirror the ownership-hints recursion).
 **Acceptance criteria**:
-- [ ] Nested-call arg gets a copy hint.
-  - Evidence: (filled at phase completion)
-- [ ] No duplicate hint at the outer level.
-  - Evidence: (filled at phase completion)
+- [x] Nested-call arg gets a copy hint.
+  - Evidence: `inlay_hint_copy_recursion.rs` — `nested_call_arg_gets_copy_hint`: `outer(inner(n))`, `n: int` → asserts a `CopyHint{size_text:"8 bytes"}` at the end-of-`n` byte offset (presence + content). Production: 1 functional line `collect_copy_hints_expr(arg, expr_types, out)` added after the per-arg type-check in the `Expr::Call` loop. code-reviewer mutation-verified: neutralizing the recursion line → test fails with `hints: []` (pre-fix state); restored → passes. Non-tautological.
+- [x] No duplicate hint at the outer level.
+  - Evidence: `top_level_copyable_arg_gets_exactly_one_copy_hint` (`consume(n)`, `n: int`) asserts `assert_eq!(hints_at_n.len(), 1)` — EXACT count (not `>=1`), the sharp predicate that catches a double-emit. Mechanism (verified by code-reviewer + plan-adherence): recursing into a plain `Expr::Ident` arg hits the `if let Expr::Call` guard which doesn't match → emits nothing; the single hint comes from the top-level type-check only. acceptance-verifier confirmed the `==1` sharpness.
 **Quality gate**:
-- [ ] Recursion mirrors `collect_ownership_hints_expr` (consistent walker shape).
-- [ ] `Type::Error`/`Type::Nothing` still filtered (no copy hint on non-copyable).
+- [x] Recursion mirrors `collect_ownership_hints_expr` (consistent walker shape). (all reviewers: same check-then-recurse-inside-arg-loop shape; copy-hint signature omits sig_table since copy hints don't resolve ownership, but the walker structure is identical — no forked approach per no-duct-tape #7.)
+- [x] `Type::Error`/`Type::Nothing` still filtered (no copy hint on non-copyable). (recursion added AFTER the `is_trivially_copyable` guard [Int|Float|Bool|Number only]; non-copyable types filtered at every depth; confirmed by still-green `test_copy_point_does_not_fire_for_string_arg`.)
 **Verification**: `cargo test -p ynz-typeck inlay_hint_copy_recursion` green.
 
 **Phase Review Gates**:
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
-- [ ] Committed: <commit SHA>
+- [x] code-reviewer: PASS 2026-05-31 (r1 — mutation-verified [neutralized recursion → AC1 dies with `hints:[]`, AC2 stays green proving independence]; 1-line surgical fix mirrors ownership walker; type filter preserved at depth. 2 non-blocking: MethodCall/UFCS copy-hint gap + block-walker stmt gap — both pre-existing, tracked follow-ups, reviewer insisted they be written down not left in chat.)
+- [x] rules-compliance-reviewer: PASS 2026-05-31 (r1 — durable comments, mirrors walker [no parallel logic], no test weakening, no violations.)
+- [x] plan-adherence-verifier: PASS 2026-05-31 (r1 — both steps MET; 2-file scope clean; recursion follows ownership-walker precedent; is_trivially_copyable filter preserved; out-of-scope gaps correctly absent [not skipped steps].)
+- [x] acceptance-verifier: PASS 2026-05-31 (r1 — both ACs MET; AC1 presence+content, AC2 exact `==1` count.)
+- [x] Committed: <commit SHA>
 
 **Findings Log**:
-_(empty until a reviewer returns BLOCK)_
+_(no BLOCK rounds — all 4 reviewers PASS round 1, no documented deviations.)_
+_**TRACKED FOLLOW-UPS (out of M10 scope — Rule 11 / deferrals-must-be-tracked; recorded in `.claude/todos.md` per code-reviewer's insistence they not live only in chat)**: two adjacent inlay-hint-walker completeness gaps surfaced during Phase 10, both PRE-EXISTING and NOT among the 14 cataloged audit bugs:_
+_  1. `collect_copy_hints_expr` only handles `Expr::Call`, not `Expr::MethodCall` (UFCS) — `player.greet(n)` gives `n` no copy hint. This is the EXACT class Phase 9 fixed for the OWNERSHIP walker (Bug 2.11); the copy walker now lags — a sibling-walker asymmetry (no-duct-tape #7 smell)._
+_  2. `collect_copy_hints_block` walks only `Stmt::Expr`+`Stmt::Let`, skipping `Stmt::Assign`/`FieldAssign`/`IndexAssign`/`Return` value exprs (the ownership block walker covers more). Joins the Phase 9 `Stmt::Return` ownership-walker gap — together these three form a coherent "inlay-hint walker completeness" follow-up workstream for a future v0.2.1 milestone._
 
 ---
 

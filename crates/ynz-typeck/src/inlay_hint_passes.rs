@@ -872,6 +872,10 @@ fn collect_copy_hints_expr(
 ) {
     if let Expr::Call(c) = expr {
         for arg in &c.args {
+            // Emit a copy hint when this arg's type is trivially copyable.  The
+            // type-check runs before the recursion, so a plain `Expr::Ident` arg
+            // that is copyable gets exactly one hint here; the recursion below
+            // finds no nested `Expr::Call` inside an ident and emits nothing.
             if let Some(ty) = expr_types.get(&expr_span_key(arg)) {
                 if is_trivially_copyable(ty) {
                     out.push(CopyHint {
@@ -880,6 +884,10 @@ fn collect_copy_hints_expr(
                     });
                 }
             }
+            // Recurse into the arg so that copyable values nested inside inner
+            // calls (e.g. `outer(inner(n))` → `n`) are reached at any depth.
+            // Mirrors `collect_ownership_hints_expr`'s recursion shape.
+            collect_copy_hints_expr(arg, expr_types, out);
         }
     }
 }
