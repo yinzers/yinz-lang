@@ -65,6 +65,7 @@ fn hover_user_defined_function() {
             param_ownerships: vec![None],
             ret: Type::String,
             decl_span: SourceSpan::new("test.ynz", 0, 0),
+            contains_wait: false,
         },
     );
     let sig = SignatureTable { fns };
@@ -180,6 +181,7 @@ fn hover_with_doc_comment_prepends_content() {
             param_ownerships: vec![None],
             ret: Type::Nothing,
             decl_span: SourceSpan::new("test.ynz", 0, 0),
+            contains_wait: false,
         },
     );
     let sig = SignatureTable { fns };
@@ -225,6 +227,7 @@ fn hover_without_doc_comment_shows_signature_only() {
             param_ownerships: vec![],
             ret: Type::Nothing,
             decl_span: SourceSpan::new("test.ynz", 0, 0),
+            contains_wait: false,
         },
     );
     let sig = SignatureTable { fns };

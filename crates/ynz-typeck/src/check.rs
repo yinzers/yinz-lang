@@ -15,7 +15,7 @@ use crate::{
         apply_substitution, unify_param, GenericFnSig, GenericFnTable, GenericShapeTable,
         MonoSignature, MonomorphizationTable, Substitution,
     },
-    intrinsics::PrimitiveIntrinsicTable,
+    intrinsics::{is_may_block_callee, PrimitiveIntrinsicTable},
     options_table::{collect_options, OptionsTable},
     return_paths::analyze_return_paths,
     scope::{Scope, ScopeEntry},
@@ -82,6 +82,9 @@ pub fn check(
         current_fn_errors_capable: false,
         referenced_names: HashSet::new(),
         kernel_mode: false,
+        inside_wait: false,
+        inside_background: false,
+        current_fn_contains_wait: false,
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -133,6 +136,9 @@ pub fn check_with_kernel_mode(
         current_fn_errors_capable: false,
         referenced_names: HashSet::new(),
         kernel_mode: true,
+        inside_wait: false,
+        inside_background: false,
+        current_fn_contains_wait: false,
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -216,6 +222,27 @@ struct Checker<'b> {
     /// during this check pass. Used by `check_query` to detect unused imports —
     /// any imported name absent from this set after the pass was never referenced.
     referenced_names: HashSet<String>,
+
+    // ── v0.3-M2 wait-context flags ────────────────────────────────────────────
+    //
+    // Set to true while recursing inside `Expr::Wait` or `Expr::Background`
+    // respectively. Used by call-site checks to distinguish:
+    //   - `wait fn()` (inside_wait=true) → correct usage
+    //   - `fn()` bare (both false) → possibly `unawaited_sleep_async` or `wait_required`
+    //   - `background fn()` (inside_background=true) → exempted from wait_required warning
+    //
+    // (true, true) is unreachable per parser: `background` is statement-position only;
+    // `wait background X()` fails at parse time before typeck runs.
+    //
+    // Reset to false at the start of each expression; set to true only while the
+    // direct inner of the corresponding wrapper is being checked.
+    inside_wait: bool,
+    inside_background: bool,
+    /// True when the function currently being checked has `contains_wait == true` in its
+    /// `FunctionSig`. Used by `wait_required_on_state_machine_call` to decide whether
+    /// to check callee state-machine status. Populated at the start of each function by
+    /// `check_function`; defaults to false.
+    current_fn_contains_wait: bool,
 }
 
 impl<'b> Checker<'b> {
@@ -257,6 +284,13 @@ impl<'b> Checker<'b> {
         self.current_fn_errors_capable = f.errors_capable;
         self.errors_success_narrowed.clear();
         self.errors_consumed.clear();
+        // M2: track whether the caller is a state machine (body syntactically contains wait).
+        self.current_fn_contains_wait = self
+            .sig_table
+            .fns
+            .get(&f.name)
+            .map(|s| s.contains_wait)
+            .unwrap_or(false);
 
         self.scope.push();
 
@@ -1302,7 +1336,7 @@ impl<'b> Checker<'b> {
                 }
             }
             // `wait expr` — kernel-mode rejects `wait` (no scheduler runtime).
-            // Sequential semantics maintained in M1 (state machines ship in M2).
+            // M2: adds non-call-expression error + may-block warning.
             Expr::Wait(inner, span) => {
                 if self.kernel_mode {
                     self.diags.push(Diagnostic::error(
@@ -1311,8 +1345,28 @@ impl<'b> Checker<'b> {
                         "Remove the keyword or build without `--kernel`. Kernel-mode programs run without a scheduler runtime.",
                         "The thread-pool runtime that powers `wait` does not run in kernel mode. See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
                     ));
+                    return self.infer_expr(inner, hint);
                 }
-                self.infer_expr(inner, hint)
+                // `wait` must be followed by a call expression.
+                // `wait background X()` is a parser error (background is statement-position only),
+                // so the (inside_wait=true, inside_background=true) corner is unreachable here.
+                let is_call = matches!(inner.as_ref(), Expr::Call(_) | Expr::MethodCall { .. });
+                if !is_call {
+                    self.diags.push(Diagnostic::error(
+                        span.clone(),
+                        "`wait` must be followed by a function call.",
+                        "Write `wait someFn()` to wait for `someFn` to complete.",
+                        "`wait` schedules a suspension point. It only applies to function calls \
+                         whose result must be waited for.",
+                    ));
+                    return self.infer_expr(inner, hint);
+                }
+                // Set inside_wait context so call dispatch can emit may-block warning.
+                let prev_inside_wait = self.inside_wait;
+                self.inside_wait = true;
+                let result = self.infer_expr(inner, hint);
+                self.inside_wait = prev_inside_wait;
+                result
             }
             // `background expr` — must be a function call; return type is Nothing
             // (return value is discarded). Ownership rules enforced in check_stmt.
@@ -1330,7 +1384,13 @@ impl<'b> Checker<'b> {
                     return Type::Nothing;
                 }
 
+                // Set inside_background so the call-site `wait_required_on_state_machine_call`
+                // check exempts this call — `background sm_fn()` from inside a state machine
+                // is a legal route-to-I/O-pool pattern (Round 2 Required Fix #2).
+                let prev_inside_background = self.inside_background;
+                self.inside_background = true;
                 let inner_ty = self.infer_expr(inner, None);
+                self.inside_background = prev_inside_background;
                 // background must wrap a function call — enforce this.
                 if !matches!(inner.as_ref(), Expr::Call(_) | Expr::MethodCall { .. }) {
                     self.diags.push(Diagnostic::error(
@@ -1491,15 +1551,140 @@ impl<'b> Checker<'b> {
             return self.check_test_fn_call(call, &callee_name, &sig);
         }
 
-        match callee_name.as_str() {
+        // M2: `wait` on a call that cannot suspend — emit a teaching warning.
+        // sleepAsync and __testFallibleAsync are may-block, so they're excluded.
+        // User-defined functions handle this inline where `sig.contains_wait` is accessible.
+        if self.inside_wait
+            && matches!(callee_name.as_str(), "print" | "range" | "sleepMs" | "sensitive")
+        {
+            self.diags.push(Diagnostic::warning(
+                call.span.clone(),
+                "`wait` on a function that does not suspend — the `wait` has no effect.",
+                format!("Remove the `wait` keyword — call `{callee_name}(...)` directly."),
+                format!(
+                    "`wait` only has effect when the awaited expression can suspend \
+                     (calls a may-block intrinsic or another function whose body contains \
+                     `wait`). Currently, `{callee_name}` is purely CPU-bound; the runtime \
+                     semantics are identical with or without `wait`."
+                ),
+            ));
+        }
+
+        // `wait`/`background` apply to the directly-awaited/backgrounded call itself — not to
+        // calls nested inside its argument list. Save and clear so argument recursion sees no
+        // wait/background context; restore after the dispatch returns.
+        let was_inside_wait = self.inside_wait;
+        let was_inside_background = self.inside_background;
+        self.inside_wait = false;
+        self.inside_background = false;
+
+        let result = match callee_name.as_str() {
             "print" => self.check_print_call(call),
             "range" => self.check_range_call(call),
             // sleepMs(ms: int) — synchronous blocking sleep; lowers to ynz_thread_sleep_ms.
             "sleepMs" => self.check_sleep_ms_call(call),
             // sleepAsync(ms: int) — non-blocking sleep; codegen emits state-machine wait point.
-            // Full registry entry and `unawaited_sleep_async` warning ship in P3 typeck.
-            // This minimal arm is needed in P2 so driver fixtures using `wait sleepAsync(ms)` compile.
-            "sleepAsync" => self.check_sleep_async_call(call),
+            // Registry entry + unawaited_sleep_async warning + kernel-mode rejection land in P3.
+            "sleepAsync" => {
+                if self.kernel_mode {
+                    self.diags.push(Diagnostic::error(
+                        call.span.clone(),
+                        "`sleepAsync` is not available in --kernel mode.",
+                        "Use `sleepMs` for blocking sleep, or remove the call. \
+                         Kernel-mode programs run without a scheduler runtime.",
+                        "`sleepAsync` requires the Tokio runtime (started by `ynz_rt_init`), \
+                         which does not run in kernel mode. \
+                         See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
+                    ));
+                    for arg in &call.args {
+                        self.infer_expr(arg, None);
+                    }
+                    return Type::Nothing;
+                }
+                let result = self.check_sleep_async_call(call);
+                // `sleepAsync` called without `wait` is a useless no-op: the sleep handle is
+                // constructed then immediately dropped. Warn so the user learns the pattern.
+                if !was_inside_wait {
+                    // Extract argument text for the WHAT-INSTEAD message (first int arg or "ms").
+                    let ms_hint = call
+                        .args
+                        .first()
+                        .and_then(|a| {
+                            if let Expr::IntLit(n, _) = a {
+                                Some(n.to_string())
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or_else(|| "ms".to_string());
+                    self.diags.push(Diagnostic::warning(
+                        call.span.clone(),
+                        "`sleepAsync(ms)` creates a sleep handle but discards it without \
+                         waiting — the function returns immediately, the sleep never fires.",
+                        format!(
+                            "Write `wait sleepAsync({ms_hint})` to actually pause for \
+                             {ms_hint} milliseconds. Or use `sleepMs({ms_hint})` for the \
+                             blocking-sleep semantics if `wait` isn't appropriate here."
+                        ),
+                        "`sleepAsync` is a may-block intrinsic — calling it without `wait` \
+                         constructs the sleep object then drops it. The `wait` keyword is the \
+                         user-visible signal that a suspension point happens here.",
+                    ));
+                }
+                result
+            }
+            // __testFallibleAsync(succeed: bool) -> int errors — internal M2 test intrinsic.
+            // Not in registry; not in LSP completion. Used only in P3/P5 driver fixtures.
+            "__testFallibleAsync" => {
+                if self.kernel_mode {
+                    self.diags.push(Diagnostic::error(
+                        call.span.clone(),
+                        "`__testFallibleAsync` is not available in --kernel mode.",
+                        "Remove the call or build without `--kernel`.",
+                        "`__testFallibleAsync` requires the Tokio runtime.",
+                    ));
+                    for arg in &call.args {
+                        self.infer_expr(arg, None);
+                    }
+                    return Type::Nothing;
+                }
+                // Resolve via internal lookup — not in the public registry free_fns.
+                if let Some(sig) = self
+                    .intrinsics
+                    .lookup_free_fn_including_internal("__testFallibleAsync", call.args.len())
+                {
+                    let sig = sig.clone();
+                    let ret = sig.ret.clone();
+                    for (arg, expected_ty) in call.args.iter().zip(sig.params.iter()) {
+                        let actual = self.infer_expr(arg, Some(expected_ty));
+                        if actual != *expected_ty && actual != Type::Error {
+                            self.diags.push(Diagnostic::error(
+                                arg.span().clone(),
+                                format!(
+                                    "`__testFallibleAsync` argument type mismatch: \
+                                     expected `{}`, got `{}`.",
+                                    type_name(expected_ty),
+                                    type_name(&actual)
+                                ),
+                                "Pass `true` or `false`.",
+                                "`__testFallibleAsync` is an internal M2 test intrinsic.",
+                            ));
+                        }
+                    }
+                    ret
+                } else {
+                    self.diags.push(Diagnostic::error(
+                        call.span.clone(),
+                        format!(
+                            "`__testFallibleAsync` takes 1 argument, got {}.",
+                            call.args.len()
+                        ),
+                        "Write `wait __testFallibleAsync(true)`.",
+                        "`__testFallibleAsync` is an internal M2 test intrinsic.",
+                    ));
+                    Type::Error
+                }
+            }
             // M8 P4: `sensitive(value)` constructor — wraps a string in Type::Sensitive.
             "sensitive" => {
                 if call.args.len() != 1 {
@@ -1535,13 +1720,65 @@ impl<'b> Checker<'b> {
                     let params = sig.params.clone();
                     let ownerships = sig.param_ownerships.clone();
                     let ret = sig.ret.clone();
-                    let result = self.check_user_fn_call(call, name, &params, &ownerships, ret);
+                    let callee_contains_wait = sig.contains_wait;
+
+                    // M2: `wait fn()` where fn is not a state machine and not a may-block intrinsic.
+                    // Use the pre-clear saved values — self.inside_wait is false by this point
+                    // because arg recursion must not see the wait context.
+                    if was_inside_wait && !is_may_block_callee(name, callee_contains_wait) {
+                        self.diags.push(Diagnostic::warning(
+                            call.span.clone(),
+                            "`wait` on a function that does not suspend — the `wait` has no effect.",
+                            format!("Remove the `wait` keyword — call `{name}({})` directly.",
+                                params.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")),
+                            format!(
+                                "`wait` only has effect when the awaited expression can suspend \
+                                 (calls a may-block intrinsic or another function whose body \
+                                 contains `wait`). Currently, `{name}` is purely CPU-bound; the \
+                                 runtime semantics are identical with or without `wait`."
+                            ),
+                        ));
+                    }
+
+                    // M2: caller is a state machine AND callee is a state machine, but the
+                    // call is not wrapped in `wait` AND not inside `background`. Emit teaching
+                    // warning — the runtime is panic-safe via `ynz_rt_call_state_machine_sync`,
+                    // so this is Tier 3 (warning, exit 0) not a correctness gate.
+                    // M3 auto-`wait` insertion lifts this warning with zero source change.
+                    if !was_inside_wait
+                        && !was_inside_background
+                        && self.current_fn_contains_wait
+                        && callee_contains_wait
+                    {
+                        self.diags.push(Diagnostic::warning(
+                            call.span.clone(),
+                            format!(
+                                "`{name}` may suspend (its body contains `wait`); calling it \
+                                 from another state-machine function without `wait` is not \
+                                 allowed in v0.3-M2."
+                            ),
+                            format!("Write `wait {name}({})` to suspend the caller at this call site.",
+                                params.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")),
+                            "v0.3-M2 keeps the no-coloring promise via a `block_on` bridge — \
+                             but only for callers that aren't already state machines. \
+                             State-machine-to-state-machine without `wait` would require \
+                             auto-`wait` insertion that ships in v0.3-M3. Until then, the \
+                             keyword must be explicit at these call sites only. M3 \
+                             auto-insertion lifts this requirement with zero source change.",
+                        ));
+                    }
+
+                    let r = self.check_user_fn_call(call, name, &params, &ownerships, ret);
                     // M7 P3a: if the called function returns ErrorsCapable, handle context.
-                    return self.handle_errors_capable_call_result(result, name, call.span.clone());
+                    self.inside_wait = was_inside_wait;
+                    self.inside_background = was_inside_background;
+                    return self.handle_errors_capable_call_result(r, name, call.span.clone());
                 }
                 // Generic user-defined function?
                 if let Some(sig) = self.generic_fn_table.fns.get(name) {
                     let sig = sig.clone();
+                    self.inside_wait = was_inside_wait;
+                    self.inside_background = was_inside_background;
                     return self.check_generic_fn_call(call, name, &sig);
                 }
                 // Unknown
@@ -1563,7 +1800,10 @@ impl<'b> Checker<'b> {
                 }
                 Type::Error
             }
-        }
+        };
+        self.inside_wait = was_inside_wait;
+        self.inside_background = was_inside_background;
+        result
     }
 
     fn check_print_call(&mut self, call: &CallExpr) -> Type {
@@ -1691,12 +1931,11 @@ impl<'b> Checker<'b> {
         Type::Nothing
     }
 
-    /// Validate `sleepAsync(ms)` call — non-blocking sleep for `wait` expressions.
+    /// Validate `sleepAsync(ms)` call argument shape — non-blocking sleep for `wait` expressions.
     ///
     /// Accepts exactly one `int` argument. Returns `nothing` (the sleep completes silently).
-    /// The full `unawaited_sleep_async` warning (calling sleepAsync without `wait`) and the
-    /// registry entry ship in P3. This minimal implementation enables P2 driver fixtures that
-    /// use `wait sleepAsync(ms)`.
+    /// The `unawaited_sleep_async` warning and kernel-mode rejection are handled by the
+    /// dispatch arm in `check_call` before this helper is called.
     fn check_sleep_async_call(&mut self, call: &CallExpr) -> Type {
         if call.args.len() != 1 {
             self.diags.push(Diagnostic::error(

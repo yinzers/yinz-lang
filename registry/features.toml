@@ -638,6 +638,19 @@ param_types = ["int"]
 return_type = "nothing"
 since = "v0.3-M1"
 
+# --- free_fn: sleepAsync (v0.3-M2) ---
+# Non-blocking sleep. `wait sleepAsync(ms)` suspends the calling function for ms
+# milliseconds without blocking the OS thread — the thread is freed for other tasks
+# during the suspension. Pairs with sleepMs (blocking sleep, v0.3-M1).
+# Lowers to ynz_rt_async_sleep_create + ynz_rt_async_sleep_poll in libynz_runtime.a.
+# May-block: TRUE — member of M2_MAY_BLOCK_INTRINSICS in crates/ynz-typeck/src/intrinsics.rs.
+[[primitive_intrinsic]]
+name = "sleepAsync"
+kind = "free_fn"
+param_types = ["int"]
+return_type = "nothing"
+since = "v0.3-M2"
+
 # --- methods: int conversions ---
 [[primitive_intrinsic]]
 name = "toNumber"

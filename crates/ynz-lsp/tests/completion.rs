@@ -99,6 +99,7 @@ fn completion_list_with_user_fns_includes_them() {
             param_ownerships: vec![None],
             ret: Type::Nothing,
             decl_span: SourceSpan::new("test.ynz", 0, 0),
+            contains_wait: false,
         },
     );
     let sig_table = SignatureTable { fns };
@@ -161,6 +162,7 @@ fn user_symbols_sort_before_keywords() {
             param_ownerships: vec![],
             ret: Type::Nothing,
             decl_span: SourceSpan::new("test.ynz", 0, 0),
+            contains_wait: false,
         },
     );
     let sig_table = SignatureTable { fns };
@@ -448,6 +450,7 @@ fn user_defined_fn_has_snippet_with_param_tab_stops() {
             param_ownerships: vec![None, None],
             ret: Type::Nothing,
             decl_span: SourceSpan::new("test.ynz", 0, 0),
+            contains_wait: false,
         },
     );
     let sig_table = SignatureTable { fns };
@@ -512,6 +515,7 @@ fn user_defined_fn_self_only_snippet_has_cursor_stop() {
             param_ownerships: vec![None],
             ret: Type::String,
             decl_span: SourceSpan::new("test.ynz", 0, 0),
+            contains_wait: false,
         },
     );
     let sig_table = SignatureTable { fns };
@@ -646,6 +650,37 @@ fn anon_shapes_excluded_from_completion() {
     assert!(
         !labels.iter().any(|l| l.starts_with("__anon__")),
         "synthetic __anon__ shapes must not appear in completion; got: {labels:?}"
+    );
+}
+
+// WHY: `sleepAsync` is a public may-block intrinsic registered in registry/features.toml
+// and must appear in bare-identifier completion. `__testFallibleAsync` is an internal
+// intrinsic stored in `internal_fns` (excluded from free_fn_names) and must NOT appear.
+// This boundary is the load-bearing guarantee that internal intrinsics stay invisible
+// to users — if it breaks, `__testFallibleAsync` starts showing up in Ctrl+Space.
+#[test]
+fn sleep_async_visible_test_fallible_async_not_visible() {
+    use lsp_types::Position;
+    use ynz_lsp::{completion::completion_list, position::LineTable};
+
+    let text = "sleep";
+    let table = LineTable::new(text);
+    let position = Position {
+        line: 0,
+        character: text.len() as u32,
+    };
+    let list = completion_list(text, &table, position, PositionEncoding::Utf8, None, None, None)
+        .expect("completion must be Some");
+
+    let labels: Vec<&str> = list.items.iter().map(|i| i.label.as_str()).collect();
+
+    assert!(
+        labels.contains(&"sleepAsync"),
+        "sleepAsync must appear in completion (registered in registry/features.toml); got: {labels:?}"
+    );
+    assert!(
+        !labels.iter().any(|l| l.contains("__testFallibleAsync")),
+        "__testFallibleAsync must NOT appear in completion (internal_fns excluded from free_fn_names); got: {labels:?}"
     );
 }
 

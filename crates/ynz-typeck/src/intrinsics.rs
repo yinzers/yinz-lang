@@ -10,6 +10,33 @@ pub struct FreeFnSig {
     pub ret: Type,
 }
 
+/// Free-function intrinsic names whose calls may suspend (pause) the calling state machine.
+///
+/// v0.3-M2 has exactly two such intrinsics. v0.3-M3 will replace this set with a transitive
+/// call-graph analysis pass — at that point `M2_MAY_BLOCK_INTRINSICS` and `is_may_block_callee`
+/// can be deleted and replaced with the transitive predicate.
+///
+/// Legitimate deferral: a 2-element list does not justify a `FreeFnSig` `may_block` field +
+/// registry schema migration. The cost of the deferral is concrete: every new may-block intrinsic
+/// added before M3 must explicitly edit this const (caught at code review). That is cheaper than
+/// schema migration for a list that M3 makes obsolete.
+// CARVE-OUT: compiler-internal constant; M2 predicate only; M3 replaces via call-graph analysis.
+pub const M2_MAY_BLOCK_INTRINSICS: &[&str] = &["sleepAsync", "__testFallibleAsync"];
+
+/// Returns true when a call to `callee_name` may pause the calling state machine.
+///
+/// The M2 predicate has two signals:
+/// 1. Callee is a known may-block intrinsic (in `M2_MAY_BLOCK_INTRINSICS`).
+/// 2. Callee is a user-defined function whose body syntactically contains `wait`
+///    (the `FunctionSig.contains_wait` flag — see `signatures.rs`).
+///
+/// NOT transitive: if `foo()` calls `bar()` and `bar()` calls `sleepAsync(100)` without
+/// `wait`, then `bar.contains_wait == false` and `bar` is NOT flagged as may-block in M2.
+/// M3 ships the transitive predicate.
+pub fn is_may_block_callee(callee_name: &str, callee_contains_wait: bool) -> bool {
+    M2_MAY_BLOCK_INTRINSICS.contains(&callee_name) || callee_contains_wait
+}
+
 /// The table of primitive intrinsics.
 ///
 /// Built at construction time from `ynz_registry::primitive_intrinsics()`.
@@ -19,6 +46,11 @@ pub struct PrimitiveIntrinsicTable {
     pub free_fns: Vec<(&'static str, FreeFnSig)>,
     methods: Vec<(Type, &'static str, Type)>,
     methods_1arg: Vec<(Type, &'static str, Type, Type)>,
+    /// Internal-only intrinsics (e.g., `__testFallibleAsync`) — not surfaced in LSP
+    /// completion, not registered in `registry/features.toml`, only callable via
+    /// `lookup_free_fn_including_internal`. NOT `#[cfg(test)]` because production
+    /// typeck must resolve these names in driver fixtures.
+    internal_fns: Vec<(&'static str, FreeFnSig)>,
     #[cfg(test)]
     test_fns: Vec<(&'static str, FreeFnSig)>,
 }
@@ -128,6 +160,7 @@ fn build_table(since_filter: impl Fn(&str) -> bool) -> PrimitiveIntrinsicTable {
         free_fns,
         methods,
         methods_1arg,
+        internal_fns: Vec::new(),
         #[cfg(test)]
         test_fns: Vec::new(),
     }
@@ -151,7 +184,52 @@ impl PrimitiveIntrinsicTable {
         build_table(|_| true)
     }
 
-    /// Look up a `range` overload by argument count.
+    /// Register v0.3-M2 internal intrinsics (`__testFallibleAsync`) on an existing table.
+    ///
+    /// Pure-additive builder: does NOT modify the existing `m1()`/`m2()`/`m3()`/`m6()` builders
+    /// or any of their call sites. Attach after construction when internal intrinsics are needed:
+    ///   `PrimitiveIntrinsicTable::m2().with_m2_internals()`
+    ///
+    /// Internal intrinsics are excluded from `free_fn_names()` so they never appear in LSP
+    /// completion, and are excluded from `registry/features.toml` by design.
+    pub fn with_m2_internals(mut self) -> Self {
+        // `__testFallibleAsync(bool) -> int errors` — internal may-block intrinsic for M2
+        // state-machine test fixtures. The `errors` return type maps to `Type::ErrorsCapable`.
+        // NOT registered in registry/features.toml; NOT surfaced in LSP completion.
+        self.internal_fns.push((
+            "__testFallibleAsync",
+            FreeFnSig {
+                params: vec![Type::Bool],
+                ret: Type::ErrorsCapable {
+                    inner: Box::new(Type::Int),
+                },
+            },
+        ));
+        self
+    }
+
+    /// Look up a free function by name and argument count, including internal intrinsics.
+    ///
+    /// # USAGE GUARD
+    /// Only call this from M2 state-machine test fixtures or callee dispatch for names
+    /// registered in `M2_MAY_BLOCK_INTRINSICS`. Production user-code paths should call
+    /// `lookup_free_fn` (which excludes `internal_fns`) — `internal_fns` are never
+    /// visible in user source or LSP completion.
+    #[doc(hidden)]
+    pub fn lookup_free_fn_including_internal(
+        &self,
+        name: &str,
+        arg_count: usize,
+    ) -> Option<&FreeFnSig> {
+        self.lookup_free_fn(name, arg_count).or_else(|| {
+            self.internal_fns
+                .iter()
+                .find(|(n, sig)| *n == name && sig.params.len() == arg_count)
+                .map(|(_, sig)| sig)
+        })
+    }
+
+    /// Look up a free function by argument count (public registry entries only).
     pub fn lookup_free_fn(&self, name: &str, arg_count: usize) -> Option<&FreeFnSig> {
         self.free_fns
             .iter()
@@ -159,7 +237,10 @@ impl PrimitiveIntrinsicTable {
             .map(|(_, sig)| sig)
     }
 
-    /// All free-function names (for Levenshtein suggestions on undefined-function errors).
+    /// All free-function names visible to users (for Levenshtein suggestions and LSP completion).
+    ///
+    /// Excludes `internal_fns` by design — `__testFallibleAsync` and similar internal
+    /// intrinsics must not appear in autocomplete or "did you mean" suggestions.
     pub fn free_fn_names(&self) -> Vec<&'static str> {
         let mut names: Vec<&'static str> = self.free_fns.iter().map(|(n, _)| *n).collect();
         names.sort_unstable();

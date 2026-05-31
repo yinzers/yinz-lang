@@ -161,7 +161,7 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
         &sig_output.shape_table,
         &sig_output.generic_fn_table,
         &sig_output.generic_shape_table,
-        &PrimitiveIntrinsicTable::m6(),
+        &PrimitiveIntrinsicTable::m6().with_m2_internals(),
         &sig_output.imported_options,
     );
     for d in check_diags.into_iter() {

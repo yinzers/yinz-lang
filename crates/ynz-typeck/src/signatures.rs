@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use ynz_ast::nodes::{Item, Module, OwnershipModifier, Type as AstType};
+use ynz_ast::nodes::{Block, Expr, Item, Module, OwnershipModifier, Stmt, Type as AstType};
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 use crate::{
@@ -18,6 +18,16 @@ pub struct FunctionSig {
     pub param_ownerships: Vec<Option<OwnershipModifier>>,
     pub ret: Type,
     pub decl_span: SourceSpan,
+    /// True when the function body syntactically contains at least one `Expr::Wait` node.
+    ///
+    /// Used by the v0.3-M2 may-block predicate (`is_may_block_callee`) to determine
+    /// whether this function is a state machine. A caller that calls this function
+    /// from another state machine should wrap the call in `wait`.
+    ///
+    /// NOT transitive in M2: if `foo` calls `bar` and `bar` contains `wait`, then
+    /// `bar.contains_wait == true` — but `foo.contains_wait` depends solely on `foo`'s
+    /// own body. Transitive analysis ships in v0.3-M3.
+    pub contains_wait: bool,
 }
 
 /// All user-defined function signatures collected from a module.
@@ -120,6 +130,7 @@ pub fn collect_signatures(
                         param_ownerships,
                         ret,
                         decl_span: f.span.clone(),
+                        contains_wait: body_contains_wait(&f.body),
                     },
                 );
             }
@@ -155,6 +166,104 @@ pub fn collect_signatures(
 /// Unknown / error types map to `Type::Error` so the signature table is always complete.
 pub fn sig_ast_type_to_type(ast_ty: &AstType, shape_table: &ShapeTable) -> Type {
     shape_table.resolve_ast_type(ast_ty)
+}
+
+/// Returns true when the function body contains at least one `Expr::Wait` node.
+///
+/// Shallow syntactic scan only — does NOT recurse into nested function declarations
+/// (inner functions have their own signatures). Used to populate `FunctionSig.contains_wait`
+/// at signature-collection time so the v0.3-M2 may-block predicate can identify
+/// state-machine functions without a second AST pass.
+///
+/// NOT transitive: `body_contains_wait` sees only the direct body of this function.
+/// If `foo` calls `bar` and `bar` contains `wait`, `foo`'s own `body_contains_wait`
+/// returns false unless `foo` itself has a `wait` node. Transitive analysis ships in M3.
+pub fn body_contains_wait(block: &Block) -> bool {
+    stmts_contain_wait(&block.stmts)
+}
+
+fn stmts_contain_wait(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(stmt_contains_wait)
+}
+
+fn stmt_contains_wait(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Expr(e) => expr_contains_wait(e),
+        Stmt::Let { value, .. } => expr_contains_wait(value),
+        Stmt::Assign { value, .. } => expr_contains_wait(value),
+        Stmt::Return { value, .. } => {
+            value.as_ref().map(expr_contains_wait).unwrap_or(false)
+        }
+        Stmt::FieldAssign { target, value, .. } => {
+            expr_contains_wait(target) || expr_contains_wait(value)
+        }
+        Stmt::IndexAssign { receiver, index, value, .. } => {
+            expr_contains_wait(receiver)
+                || expr_contains_wait(index)
+                || expr_contains_wait(value)
+        }
+        Stmt::If { cond, body, .. } => {
+            expr_contains_wait(cond) || stmts_contain_wait(&body.stmts)
+        }
+        Stmt::Match { scrutinee, arms, else_arm, .. } => {
+            expr_contains_wait(scrutinee)
+                || arms.iter().any(|arm| stmts_contain_wait(&arm.body.stmts))
+                || else_arm
+                    .as_ref()
+                    .map(|b| stmts_contain_wait(&b.stmts))
+                    .unwrap_or(false)
+        }
+        Stmt::While { cond, body, .. } => {
+            expr_contains_wait(cond) || stmts_contain_wait(&body.stmts)
+        }
+        Stmt::For { iter, body, .. } => {
+            expr_contains_wait(iter) || stmts_contain_wait(&body.stmts)
+        }
+    }
+}
+
+fn expr_contains_wait(expr: &Expr) -> bool {
+    match expr {
+        Expr::Wait(..) => true,
+        Expr::BinOp { lhs, rhs, .. } => {
+            expr_contains_wait(lhs) || expr_contains_wait(rhs)
+        }
+        Expr::UnaryOp { operand, .. } => expr_contains_wait(operand),
+        Expr::Call(call) => {
+            expr_contains_wait(&call.callee) || call.args.iter().any(expr_contains_wait)
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            expr_contains_wait(receiver) || args.iter().any(expr_contains_wait)
+        }
+        Expr::IndexAccess { receiver, index, .. } => {
+            expr_contains_wait(receiver) || expr_contains_wait(index)
+        }
+        Expr::FieldAccess { receiver, .. } => expr_contains_wait(receiver),
+        Expr::StructLit { fields, .. } => fields.iter().any(|f| expr_contains_wait(&f.value)),
+        Expr::ArrayLit { elements, .. } => elements.iter().any(expr_contains_wait),
+        Expr::MapLit { entries, .. } => {
+            entries.iter().any(|(k, v)| expr_contains_wait(k) || expr_contains_wait(v))
+        }
+        Expr::Is { expr: inner, .. } => expr_contains_wait(inner),
+        Expr::InterpolatedString(parts, _) => parts.iter().any(|p| {
+            if let ynz_ast::nodes::StringPart::Expr(e, _) = p {
+                expr_contains_wait(e)
+            } else {
+                false
+            }
+        }),
+        Expr::PostfixOp { receiver, .. } => expr_contains_wait(receiver),
+        Expr::Background(inner, _) => expr_contains_wait(inner),
+        // Leaf nodes — cannot contain Wait
+        Expr::Ident(..)
+        | Expr::IntLit(..)
+        | Expr::NumberLit(..)
+        | Expr::BoolLit(..)
+        | Expr::StringLit(..)
+        | Expr::SelfValue { .. }
+        | Expr::NoneLit { .. }
+        | Expr::Error(..) => false,
+    }
 }
 
 // ── Generic function signature collection (M5 P3a) ────────────────────────────

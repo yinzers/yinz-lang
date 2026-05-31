@@ -972,7 +972,7 @@ Contract #12 requires compiling a `.ynz` fixture containing `wait` to LLVM IR an
 - [x] rules-compliance-reviewer: PASS 2026-05-31T (review round 2, file-based diff) — R1–R4 resolved (no `// Phase N`, `.unwrap()` justified); new `WaitInsideLoop`/`LocalCrossesWait` templates registered + plain-vocabulary; no new violations. (Two earlier rules runs hit a cwd footgun — `git` ran in main checkout reviewing a phantom rollback — re-run against materialized diff file.)
 - [x] plan-adherence-verifier: PASS 2026-05-31T (review round 2) — Steps 1–10 + Option B all MET; fixtures staged (PA1/PA2); plan-deletions excluded at commit (PA3/PA4); timing band noted DEVIATED-WITH-REASON (ordering assert is the real guard).
 - [x] acceptance-verifier: PASS 2026-05-31T (review round 2) — OVERALL PASS; all 11 ACs MET (AV1 unit tests added, AV2 lower-bound added then comment-corrected, AV3 `wait_required` adjudicated-deferred-to-P3); workspace 106 pass / 5 environmental-only.
-- [ ] Committed: <commit SHA>
+- [x] Committed: 5109b52
 
 **Findings Log** (filled during any fix loops):
 
@@ -1117,36 +1117,36 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
 13. **Transitive-no-wait fixture (per plan-reviewer Required Fix #6)**: add fixture `transitive_no_wait_does_not_trigger_warning.ynz` — function `foo()` calls `bar()` where `bar()` internally calls `sleepAsync(100)` without `wait`. The user-level call `wait foo()` should fire `wait_on_non_may_block_warning` (because `foo.contains_wait == false` and `foo` is not in `M2_MAY_BLOCK_INTRINSICS`). Asserts M2's local-predicate behavior — M3 will swap the predicate and this fixture's expected output flips, providing a tracking checkpoint for the M2→M3 transition.
 
 **Acceptance criteria**:
-- [ ] `sleepAsync(int) -> nothing` registered in `registry/features.toml` as `[[primitive_intrinsic]]`; `cargo build -p ynz-registry` passes
-  - Evidence: (filled at phase completion)
-- [ ] `sleepAsync` typeck dispatch arm added at `check.rs:1453` parallel to `sleepMs`
-  - Evidence: (filled at phase completion)
-- [ ] `M2_MAY_BLOCK_INTRINSICS` const + `is_may_block_callee` helper in `intrinsics.rs`
-  - Evidence: (filled at phase completion)
-- [ ] `internal_fns: Vec<(&'static str, FreeFnSig)>` field added to `PrimitiveIntrinsicTable`; `lookup_free_fn_including_internal` helper added; `__testFallibleAsync(bool) -> int errors` registered via `internal_fns` (NOT in registry, NOT in `free_fn_names()`)
-  - Evidence: (filled at phase completion)
-- [ ] `FunctionSig.contains_wait: bool` field added at `signatures.rs:14`; populated in `collect_signatures` at `:48`
-  - Evidence: (filled at phase completion)
-- [ ] `wait_on_non_call_expression` error fires correctly; integration test (`wait_of_wait_rejected`, `wait_of_literal_rejected`)
-  - Evidence: (filled at phase completion)
-- [ ] `wait_on_non_may_block_warning` warning fires correctly; integration test for `wait print("x")`
-  - Evidence: (filled at phase completion)
-- [ ] `wait_required_on_state_machine_call` warning fires when state-machine fn calls state-machine fn without `wait` AND without `background`; integration test
-  - Evidence: (filled at phase completion)
-- [ ] `state_machine_can_background_state_machine_without_wait` test passes — `background sm_fn()` from inside another state machine compiles clean (no false positive)
-  - Evidence: (filled at phase completion)
-- [ ] `unawaited_sleep_async` warning fires when `sleepAsync(100)` appears without `wait`; integration test
-  - Evidence: (filled at phase completion)
-- [ ] LSP completion test in `crates/ynz-lsp/tests/completion.rs`: `sleepAsync` visible; `__testFallibleAsync` NOT visible
-  - Evidence: (filled at phase completion)
-- [ ] M1 tests carry forward unchanged (kernel-mode, lend-rejection, etc.)
-  - Evidence: (filled at phase completion)
-- [ ] `sleepAsync` kernel-mode rejection fires; new test `kernel_mode_rejects_sleep_async`
-  - Evidence: (filled at phase completion)
-- [ ] `transitive_no_wait_does_not_trigger_warning.ynz` fixture passes with the M2 local predicate (M3 transition checkpoint)
-  - Evidence: (filled at phase completion)
-- [ ] Banned-jargon audit passes (no async/await/coroutine/task/Future/Promise in new diagnostic text)
-  - Evidence: (filled at phase completion)
+- [x] `sleepAsync(int) -> nothing` registered in `registry/features.toml` as `[[primitive_intrinsic]]`; `cargo build -p ynz-registry` passes
+  - Evidence: `registry/features.toml` new `[[primitive_intrinsic]]` (name=sleepAsync, kind=free_fn, param_types=["int"], return_type="nothing", since="v0.3-M2"); `cargo test --workspace` (106 pass) includes the registry build as prerequisite.
+- [x] `sleepAsync` typeck dispatch arm added at `check.rs:1453` parallel to `sleepMs`
+  - Evidence: `check.rs` `"sleepAsync"` arm in `match callee_name.as_str()` → kernel rejection + `check_sleep_async_call` + `unawaited_sleep_async`; `wait_sleep_async_is_clean` test passes.
+- [x] `M2_MAY_BLOCK_INTRINSICS` const + `is_may_block_callee` helper in `intrinsics.rs`
+  - Evidence: `intrinsics.rs` `pub const M2_MAY_BLOCK_INTRINSICS = &["sleepAsync","__testFallibleAsync"]` (`// CARVE-OUT:` annotated) + `pub fn is_may_block_callee`; wired at `check.rs` user-fn warning path.
+- [x] `internal_fns: Vec<(&'static str, FreeFnSig)>` field added to `PrimitiveIntrinsicTable`; `lookup_free_fn_including_internal` helper added; `__testFallibleAsync(bool) -> int errors` registered via `internal_fns` (NOT in registry, NOT in `free_fn_names()`)
+  - Evidence: `intrinsics.rs` `internal_fns` field + `with_m2_internals()` registering `__testFallibleAsync` (`int errors`) + `lookup_free_fn_including_internal` (`#[doc(hidden)]` + USAGE GUARD); `free_fn_names()` excludes it. **Production-callable** via `queries.rs:164` `m6().with_m2_internals()` (fix-round-2 — closed the round-1 WEAK); tests `wait_test_fallible_async_{true,false}_is_clean` + `_zero_args_gives_real_arity_error` pass.
+- [x] `FunctionSig.contains_wait: bool` field added at `signatures.rs:14`; populated in `collect_signatures` at `:48`
+  - Evidence: `signatures.rs` `pub contains_wait: bool` + `contains_wait: body_contains_wait(&f.body)`; recursive `body_contains_wait` walks all Stmt/Expr variants.
+- [x] `wait_on_non_call_expression` error fires correctly; integration test (`wait_of_wait_rejected`, `wait_of_literal_rejected`)
+  - Evidence: `check.rs` `is_call` guard at `Expr::Wait` → error "must be followed by a function call"; tests `wait_on_literal_is_an_error` + `wait_of_wait_rejected` pass.
+- [x] `wait_on_non_may_block_warning` warning fires correctly; integration test for `wait print("x")`
+  - Evidence: `check.rs` intrinsic fast-path (print/range/sleepMs/sensitive) + user-fn path via `is_may_block_callee`; `wait_on_non_may_block_print_warns` passes; fix-round-2 `wait_on_non_may_block_does_not_warn_on_nested_arg_call` (no false positive on args) mutation-verified.
+- [x] `wait_required_on_state_machine_call` warning fires when state-machine fn calls state-machine fn without `wait` AND without `background`; integration test
+  - Evidence: `check.rs` 4-condition gate (`!was_inside_wait && !was_inside_background && current_fn_contains_wait && callee_contains_wait`); test `state_machine_calling_state_machine_without_wait_warns` passes. (This is the warning DEFERRED from Phase 2 — landed here.)
+- [x] `state_machine_can_background_state_machine_without_wait` test passes — `background sm_fn()` from inside another state machine compiles clean (no false positive)
+  - Evidence: `inside_background` set on `Expr::Background` entry → exempts the immediate inner; test `state_machine_can_background_state_machine_without_wait` passes; fix-round-2 `background_arg_state_machine_call_still_warns` confirms the exemption does NOT leak to argument calls.
+- [x] `unawaited_sleep_async` warning fires when `sleepAsync(100)` appears without `wait`; integration test
+  - Evidence: `check.rs` `if !was_inside_wait` in the sleepAsync arm; tests `unawaited_sleep_async_warns` + fix-round-2 `unawaited_sleep_async_fires_on_arg_of_waited_call` pass.
+- [x] LSP completion test in `crates/ynz-lsp/tests/completion.rs`: `sleepAsync` visible; `__testFallibleAsync` NOT visible
+  - Evidence: `sleep_async_visible_test_fallible_async_not_visible` asserts both sides; passes (lsp 22/22). `with_m2_internals()` in the check table does NOT leak into completion (`free_fn_names()` excludes `internal_fns`).
+- [x] M1 tests carry forward unchanged (kernel-mode, lend-rejection, etc.)
+  - Evidence: typeck 185 pass / 0 fail (incl. `wait_in_kernel_mode_rejected`); workspace 106 pass / 5 environmental-only.
+- [x] `sleepAsync` kernel-mode rejection fires; new test `kernel_mode_rejects_sleep_async`
+  - Evidence: `check.rs` kernel-mode guard in the sleepAsync arm (WHAT/WHAT-INSTEAD/WHY, refs no-runtime-mode); test `kernel_mode_rejects_sleep_async` passes.
+- [x] `transitive_no_wait_does_not_trigger_warning.ynz` fixture passes with the M2 local predicate (M3 transition checkpoint)
+  - Evidence: inline test `transitive_no_wait_does_not_trigger_wait_required_warning` passes — `bar()` calls `sleepAsync` w/o wait so `bar.contains_wait==false`; `wait foo()` warns non-may-block but NOT wait_required (locks M2 LOCAL predicate; flips in M3). (Plan said `.ynz` fixture; inline test = equivalent coverage — accepted by plan-adherence.)
+- [x] Banned-jargon audit passes (no async/await/coroutine/task/Future/Promise in new diagnostic text)
+  - Evidence: `cargo test -p ynz-diagnostics --test jargon_audit` 4/4 pass; new diagnostic text uses plain Yinz vocabulary ("the awaited expression" is plain English, not the banned token).
 
 **Quality gate**:
 - [ ] All new diagnostics use WHAT/WHAT-INSTEAD/WHY format with contextual WHY
@@ -1160,14 +1160,29 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
 - Manual: write a `.ynz` file with `wait print("hi")` — confirm Tier 3 warning. Write `wait 42` — confirm error.
 
 **Phase Review Gates** (filled at phase completion):
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [x] code-reviewer: PASS 2026-05-31T (review round 2, after fix-loop round 2) — round-1 BLOCK (Fix #1 arg-flag-leak + Fix #2 with_m2_internals) both resolved; 5 fresh adversarial inputs (wait-in-arg, 3-level nesting, call-itself non-regression, kernel early-return sibling) + 3 mutation-verified guard tests all pass. 2 non-blocking concerns noted for M3 (DRY-at-2; `M2_MAY_BLOCK_INTRINSICS` duplicated in intrinsics.rs + emit.rs — unify in M3 call-graph rewrite). NOTE: reviewer's stray `git checkout` reverted+reconstructed the uncommitted tree; coordinator verified the working tree is BYTE-IDENTICAL to the reviewed snapshot before commit.
+- [x] rules-compliance-reviewer: PASS 2026-05-31T (review round 2, file-based diff) — 4 diagnostics WHAT/WHAT-INSTEAD/WHY; no banned jargon; `sleepAsync` registry entry + `M2_MAY_BLOCK_INTRINSICS` carve-out; no test-weakening. (Round-1 corrected/file-based after two cwd-footgun runs reviewed a phantom rollback.)
+- [x] plan-adherence-verifier: PASS 2026-05-31T (review round 2b) — all 13 Steps MET; D1 (hover.rs) + queries.rs (Fix B) documented in-scope/necessary touches; D2 (struct-field flags) DEVIATED-WITH-REASON; all deviation rationales free of banned phrases.
+- [x] acceptance-verifier: PASS 2026-05-31T (review round 2) — OVERALL PASS, all 15 ACs MET (round-1 WEAK AC4 resolved by `queries.rs:164` `with_m2_internals()`; 3 `__testFallibleAsync` tests pass); 106/106 non-environmental tests green.
+- [x] deviation-judge #1 (approach: Checker struct-field flags vs recursion params): PASS 2026-05-31T (round 1) — traced all set/restore paths; no leak the param approach wouldn't also have; the arg-leak bug code-reviewer found was a logic bug (fixed in Fix A), NOT deviation-attributable.
 - [ ] Committed: <commit SHA>
 
 **Findings Log** (filled during any fix loops):
-_(empty until a reviewer returns BLOCK)_
+
+**2026-05-31 — Phase 3 executor DONE (base = Phase 2 commit 5109b52), gate in flight.** Added (verified what Phase 2 already landed, didn't duplicate): `sleepAsync` registry `[[primitive_intrinsic]]`; `M2_MAY_BLOCK_INTRINSICS` + `is_may_block_callee`; `internal_fns` field + `with_m2_internals()` + `lookup_free_fn_including_internal` (#[doc(hidden)]) registering `__testFallibleAsync` (NOT in registry, NOT in free_fn_names); `FunctionSig.contains_wait` + `body_contains_wait` recursive walk; the 4 diagnostics (`wait_on_non_call_expression` error; `wait_on_non_may_block_warning`, `unawaited_sleep_async`, `wait_required_on_state_machine_call` warnings — the last deferred from Phase 2 lands here); LSP visibility test; kernel-mode `sleepAsync` rejection; transitive-no-wait fixture. Verified: typeck 179 pass, lsp 22 pass, jargon_audit 4/4, `cargo test --workspace` 106 pass / 5 environmental-only; manual diagnostics all fire correctly. Diagnostic text uses "the awaited expression" (plain English, plan canonical) — not a banned token.
+
+**Deviations:** D1 (scope) — touched `crates/ynz-lsp/tests/hover.rs` (+3) for compile-required `contains_wait: false` on existing `FunctionSig` literals; mechanical. D2 (approach) — `Checker` struct fields (set-before-recurse/restore-after) instead of recursion params (~50 call sites; matches existing `kernel_mode` pattern); real flag-leak adversarial surface → deviation-judge #1 dispatched.
+
+**Executor-flagged P5 concern:** `check_query` (production salsa path) uses `PrimitiveIntrinsicTable::m6()`, NOT `with_m2_internals()` — so `__testFallibleAsync` is TEST-callable but NOT production-callable yet. Per the registry-without-typeck-dispatch failure mode this is "registered but no production dispatch." Plan defers driver-fixture wiring to P5. **COORDINATOR TODO for P5:** wire `with_m2_internals()` into the query path (or the errors-cascade-through-state-machine integration test will find `__testFallibleAsync` "not defined").
+
+**Gate dispatched (review round 1):** code-reviewer a48785d9, rules-compliance adb61e60, plan-adherence a5d8a041, acceptance ac50ab99, deviation-judge(D2) aee9af3a. All read materialized diff `/tmp/phase3_real.diff`.
+
+**GATE ROUND 1 RESULT (2026-05-31): BLOCK.** rules-compliance PASS; plan-adherence PASS; deviation-judge(D2) PASS (struct-field-flag approach is sound — traced all set/restore paths, no leak the param approach wouldn't also have). code-reviewer BLOCK + acceptance BLOCK (convergent) → 2 fixes:
+- **Fix A (code-reviewer Fix #1, CONFIRMED via production driver):** `inside_wait` (and symmetrically `inside_background`) leaks into the AWAITED CALL'S ARGUMENT sub-expressions. `wait inner(sleepMs(10))` → spurious `wait_on_non_may_block` warning on `sleepMs` ("remove the `wait`" — but there's no wait on it). Dual symptom (judge #4): `wait print(sleepAsync(100))` wrongly SUPPRESSES `unawaited_sleep_async` on the arg. Root: `Expr::Wait` sets `inside_wait=true`, then `check_call` recurses into `call.args` with it still set. NOT deviation-attributable (same under param-passing) — a logic bug in flag scope. FIX: in `check_call`, before recursing into `call.args`, save+clear BOTH `inside_wait` and `inside_background` (set false), restore after — neither keyword applies to argument calls. + tests for `wait inner(sleepMs(10))` (no false warning), `wait print(sleepAsync(100))` (correct unawaited warning), and `background foo(sm_bar())` (sm_bar still warns wait_required).
+- **Fix B (code-reviewer Fix #2 == acceptance AC4 WEAK, CONFIRMED):** `crates/ynz-typeck/src/queries.rs:164` builds the production table via `PrimitiveIntrinsicTable::m6()` with NO `.with_m2_internals()` → `internal_fns` empty in `check_query` → `wait __testFallibleAsync(true)` hits the literal-name dispatch arm, `lookup_free_fn_including_internal` returns None, the `None⟹wrong-arity` else branch fires "takes 1 argument, got 1". Makes plan QR#8 ("internal_fns gives production typeck access") false as wired; P5's errors-cascade test would hit the same dead arm. FIX: chain `.with_m2_internals()` at the production table-construction site(s) (grep all `m6()` construction in production paths) + production-path test that `wait __testFallibleAsync(true)` resolves cleanly (int return, no arity error). Closes the COORDINATOR P5 TODO above.
+- Cosmetic (fold in): drop the useless `format!` of a literal on the user-fn `wait_on_non_may_block` warning.
+
+**FIX-LOOP ROUND 2 DONE (2026-05-31), gate re-running.** Executor applied Fix A (save+clear both flags around `check_call` arg recursion; warning decisions use saved pre-clear values), Fix B (`queries.rs:164` → `m6().with_m2_internals()`), Fix C (format!→plain string). Zero deviations. Coordinator-verified through the production compiler: `wait inner(sleepMs(10))` → 0 false `sleepMs` warnings (was the bug); `wait __testFallibleAsync(true)` resolves as `int errors` (no arity/not-defined error — the `exit=1` on an ad-hoc test was a correct "errors value needs .failed() first" teaching error, proving production-callability); `wait __testFallibleAsync()` → real arity error. typeck 185 pass (incl. 5 new fix tests: `wait_on_non_may_block_does_not_warn_on_nested_arg_call`, `unawaited_sleep_async_fires_on_arg_of_waited_call`, `background_arg_state_machine_call_still_warns`, `wait_test_fallible_async_{true,false}_is_clean`, `_zero_args_gives_real_arity_error`); lsp 22 pass (visibility test holds); workspace 106 pass / 5 environmental. **Gate round 2 dispatched:** code-reviewer af3de9f1, rules-compliance a6877e76, plan-adherence ab5cd8bb, acceptance ac6f3133 (no new deviations → no judge). Read `/tmp/phase3_real.diff` (1294 lines). Awaiting verdicts → on all-PASS: write AC ticks + gates, commit Phase 3 (stage only Phase-3 files), proceed to Phase 4.
 
 **Exit Sequence**: per template.
 

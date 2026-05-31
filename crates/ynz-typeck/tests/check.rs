@@ -2937,3 +2937,515 @@ function entrypoint() -> nothing {
 "#;
     assert_clean(src);
 }
+
+// ── v0.3-M2 typeck surface: wait diagnostics + sleepAsync/internal intrinsics ──
+
+// WHY: `wait` applied to a non-call expression (a literal, a variable, etc.) must
+// produce a hard error. Catches regressions where the check is removed and `wait 42`
+// compiles silently with whatever type 42 has, masking the user's mistake.
+#[test]
+fn wait_on_literal_is_an_error() {
+    let src = r#"
+function entrypoint() -> nothing {
+  wait 42
+}
+"#;
+    let out = run(src);
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(!errors.is_empty(), "wait on literal must produce an error");
+    let has_call_msg = errors.iter().any(|d| d.what.contains("function call"));
+    assert!(
+        has_call_msg,
+        "error must mention 'function call'; got: {:#?}",
+        errors
+    );
+}
+
+// WHY: `wait` applied to a wait expression (nested wait) must produce a hard error.
+// Guards the `wait_on_non_call_expression` check against the Case 4 adversarial case
+// identified during plan review.
+#[test]
+fn wait_of_wait_rejected() {
+    let src = r#"
+function entrypoint() -> nothing {
+  wait (wait sleepAsync(10))
+}
+"#;
+    let out = run(src);
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(!errors.is_empty(), "wait of wait must produce an error");
+}
+
+// WHY: `wait sleepAsync(100)` is the canonical correct usage; must compile clean.
+// Guards that the wait_on_non_may_block_warning does NOT fire for may-block callees.
+#[test]
+fn wait_sleep_async_is_clean() {
+    let src = r#"
+function entrypoint() -> nothing {
+  wait sleepAsync(100)
+}
+"#;
+    assert_clean(src);
+}
+
+// WHY: `wait print("hi")` must fire the `wait_on_non_may_block_warning` Tier 3 warning.
+// Catches regressions where the may-block predicate is not checked and useless `wait`
+// calls compile silently, misleading developers about what `wait` does.
+#[test]
+fn wait_on_non_may_block_print_warns() {
+    let src = r#"
+function entrypoint() -> nothing {
+  wait print(`hi`)
+}
+"#;
+    let out = run(src);
+    let warnings: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning))
+        .collect();
+    assert!(
+        !warnings.is_empty(),
+        "wait on non-may-block function must produce a warning; got: {:#?}",
+        out.diagnostics
+    );
+    let has_no_effect = warnings.iter().any(|d| d.what.contains("no effect"));
+    assert!(
+        has_no_effect,
+        "warning must say 'no effect'; got: {:#?}",
+        warnings
+    );
+    // Must NOT also produce an error — this is a Tier 3 warning, exit code 0.
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(errors.is_empty(), "wait_on_non_may_block must not produce an error (warning only); got: {:#?}", errors);
+}
+
+// WHY: `sleepAsync(100)` called without `wait` must fire the `unawaited_sleep_async`
+// Tier 3 warning. The sleep handle is constructed then dropped — the function returns
+// immediately without pausing. Catches regressions where this pattern silently no-ops.
+#[test]
+fn unawaited_sleep_async_warns() {
+    let src = r#"
+function entrypoint() -> nothing {
+  sleepAsync(100)
+}
+"#;
+    let out = run(src);
+    let warnings: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning))
+        .collect();
+    assert!(
+        !warnings.is_empty(),
+        "sleepAsync without wait must produce a warning; got: {:#?}",
+        out.diagnostics
+    );
+    let has_sleep_msg = warnings.iter().any(|d| d.what.contains("sleep"));
+    assert!(
+        has_sleep_msg,
+        "warning must mention 'sleep'; got: {:#?}",
+        warnings
+    );
+    // Tier 3 warning — no hard error.
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "unawaited_sleep_async must not produce an error; got: {:#?}",
+        errors
+    );
+}
+
+// WHY: a state-machine function calling another state-machine function without `wait`
+// must fire the `wait_required_on_state_machine_call` Tier 3 warning. Guards that the
+// missing-wait pattern is caught and the user is directed to add `wait`.
+#[test]
+fn state_machine_calling_state_machine_without_wait_warns() {
+    let src = r#"
+function inner() -> nothing {
+  wait sleepAsync(10)
+}
+function outer() -> nothing {
+  wait sleepAsync(5)
+  inner()
+}
+function entrypoint() -> nothing {
+  background outer()
+}
+"#;
+    let out = run(src);
+    let warnings: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning))
+        .collect();
+    assert!(
+        !warnings.is_empty(),
+        "state machine calling state machine without wait must warn; got: {:#?}",
+        out.diagnostics
+    );
+    let has_inner = warnings.iter().any(|d| d.what.contains("`inner`"));
+    assert!(
+        has_inner,
+        "warning must name the callee `inner`; got: {:#?}",
+        warnings
+    );
+    // Tier 3 warning — no hard error.
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "wait_required must not produce an error; got: {:#?}",
+        errors
+    );
+}
+
+// WHY: `wait inner()` where `inner` contains `wait` — the CORRECT pattern — must compile
+// clean with no warning. Guards that wait_required_on_state_machine_call does not
+// false-positive when `wait` is properly present.
+#[test]
+fn state_machine_calling_state_machine_with_wait_is_clean() {
+    let src = r#"
+function inner() -> nothing {
+  wait sleepAsync(10)
+}
+function outer() -> nothing {
+  wait sleepAsync(5)
+  wait inner()
+}
+function entrypoint() -> nothing {
+  background outer()
+}
+"#;
+    assert_clean(src);
+}
+
+// WHY: `background sm_fn()` from inside a state machine must be EXEMPT from the
+// wait_required_on_state_machine_call warning. Background scheduling is a legal
+// route-to-I/O-pool pattern (Round 2 Required Fix #2).
+#[test]
+fn state_machine_can_background_state_machine_without_wait() {
+    let src = r#"
+function inner() -> nothing {
+  wait sleepAsync(10)
+}
+function outer() -> nothing {
+  wait sleepAsync(5)
+  background inner()
+}
+function entrypoint() -> nothing {
+  background outer()
+}
+"#;
+    assert_clean(src);
+}
+
+// WHY: a non-state-machine function calling a state-machine function must NOT fire the
+// wait_required warning — the non-coloring promise means non-SM callers get the sync
+// bridge automatically. Guards against the warning over-firing and breaking valid programs.
+#[test]
+fn non_state_machine_calling_state_machine_is_clean() {
+    let src = r#"
+function inner() -> nothing {
+  wait sleepAsync(10)
+}
+function outer() -> nothing {
+  inner()
+}
+function entrypoint() -> nothing {
+  outer()
+}
+"#;
+    assert_clean(src);
+}
+
+// WHY: `sleepAsync` must be rejected in --kernel mode because the Tokio runtime does not
+// run in kernel mode. Guards the kernel_mode_rejects_sleep_async acceptance criterion.
+#[test]
+fn kernel_mode_rejects_sleep_async() {
+    let src = r#"
+function entrypoint() -> nothing {
+  sleepAsync(100)
+}
+"#;
+    let out = run_kernel(src);
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(
+        !errors.is_empty(),
+        "sleepAsync in --kernel mode must produce an error"
+    );
+    let has_kernel = errors.iter().any(|d| d.what.contains("kernel"));
+    assert!(
+        has_kernel,
+        "error must mention 'kernel'; got: {:#?}",
+        errors
+    );
+}
+
+// WHY: M2's LOCAL predicate — `foo()` calls `bar()` where `bar()` calls
+// `sleepAsync(100)` WITHOUT `wait` — means `bar.contains_wait == false`.
+// `wait bar()` should fire `wait_on_non_may_block_warning` (bar is not may-block),
+// not a false-positive wait_required warning.
+// This fixture LOCKS M2's local-predicate behavior. When M3 ships the transitive
+// predicate, this test's expected output flips (the warning goes away and bar.contains_wait
+// becomes true), providing a clear M2→M3 transition checkpoint.
+#[test]
+fn transitive_no_wait_does_not_trigger_wait_required_warning() {
+    // bar calls sleepAsync without wait — bar.contains_wait == false in M2.
+    // foo calls bar() without wait — NOT a wait_required warning (bar is not SM).
+    // wait foo() is present — fires wait_on_non_may_block_warning for foo (not SM).
+    let src = r#"
+function bar() -> nothing {
+  sleepAsync(100)
+}
+function foo() -> nothing {
+  bar()
+}
+function entrypoint() -> nothing {
+  wait foo()
+}
+"#;
+    let out = run(src);
+    // wait_on_non_may_block_warning fires for `wait foo()` — foo is not may-block.
+    let warnings: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning))
+        .collect();
+    // At least one warning (unawaited_sleep_async for bar(), wait_on_non_may_block for wait foo()).
+    assert!(!warnings.is_empty(), "M2 transitive fixture must produce warnings; got: {:#?}", out.diagnostics);
+    // No wait_required_on_state_machine_call warning — bar is NOT a state machine in M2.
+    let has_wait_required = warnings.iter().any(|d| d.what.contains("state-machine"));
+    assert!(
+        !has_wait_required,
+        "M2 local predicate must NOT fire wait_required for transitive case; got: {:#?}",
+        warnings
+    );
+    // No hard errors.
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(errors.is_empty(), "transitive fixture must have no errors; got: {:#?}", errors);
+}
+
+// WHY: `wait inner(sleepMs(10))` — `wait` applies to `inner`, not to `sleepMs` which is an
+// argument. If inside_wait leaks into argument recursion, `sleepMs(10)` (a non-may-block
+// call inside the arg list) spuriously gets a `wait_on_non_may_block` warning even though
+// the user never wrote `wait sleepMs(10)`. The fix: clear inside_wait before recursing into
+// call.args, so only the directly-awaited call sees the wait context.
+#[test]
+fn wait_on_non_may_block_does_not_warn_on_nested_arg_call() {
+    // inner is not a state machine (no wait in body). wait inner(...) fires ONE
+    // wait_on_non_may_block warning for inner — correct.
+    // addOne(5) is an argument to inner — must NOT get a spurious wait_on_non_may_block.
+    let src = r#"
+function addOne(n: int) -> int {
+  return n + 1
+}
+function inner(n: int) -> nothing {
+  sleepMs(n)
+}
+function entrypoint() -> nothing {
+  wait inner(addOne(5))
+}
+"#;
+    let out = run(src);
+    let warnings: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning))
+        .collect();
+    // Exactly ONE wait_on_non_may_block warning (on inner), none on sleepMs.
+    let no_effect_warnings: Vec<_> = warnings
+        .iter()
+        .filter(|d| d.what.contains("no effect"))
+        .collect();
+    assert_eq!(
+        no_effect_warnings.len(),
+        1,
+        "exactly one wait_on_non_may_block warning expected (on inner); got: {:#?}",
+        warnings
+    );
+    // The single warning must mention 'inner'.
+    assert!(
+        no_effect_warnings[0].what_instead.contains("inner") || no_effect_warnings[0].what.contains("no effect"),
+        "warning must be for inner; got: {:#?}",
+        no_effect_warnings[0]
+    );
+    // addOne (the nested arg call) must not appear as the target of a wait_on_non_may_block warning.
+    let add_one_warned = warnings.iter().any(|d| {
+        d.what.contains("no effect") && d.what_instead.contains("addOne")
+    });
+    assert!(
+        !add_one_warned,
+        "addOne(5) inside an argument must not get a spurious wait_on_non_may_block; got: {:#?}",
+        warnings
+    );
+    // No hard errors.
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(errors.is_empty(), "no errors expected; got: {:#?}", errors);
+}
+
+// WHY: `wait print(sleepAsync(100))` — `wait` applies to `print`, not to `sleepAsync` which
+// is an argument. If inside_wait leaks into argument recursion, the `sleepAsync` arg sees
+// inside_wait=true, so the `unawaited_sleep_async` check (`if !inside_wait`) is suppressed
+// and the warning is silently dropped — a false negative. The fix clears inside_wait before
+// recursing into args, so `sleepAsync` correctly sees inside_wait=false and fires the warning.
+#[test]
+fn unawaited_sleep_async_fires_on_arg_of_waited_call() {
+    // wait wrapper(...) fires wait_on_non_may_block for wrapper (correct — wrapper is not may-block).
+    // sleepAsync(100) is an argument to wrapper — unawaited_sleep_async MUST fire.
+    // wrapper accepts nothing so sleepAsync(100) (which returns nothing) can be passed.
+    let src = r#"
+function wrapper(n: nothing) -> nothing {
+  sleepMs(1)
+}
+function entrypoint() -> nothing {
+  wait wrapper(sleepAsync(100))
+}
+"#;
+    let out = run(src);
+    let warnings: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning))
+        .collect();
+    // Must include the unawaited_sleep_async warning for the sleepAsync argument.
+    let has_unawaited = warnings.iter().any(|d| d.what.contains("sleep"));
+    assert!(
+        has_unawaited,
+        "unawaited_sleep_async must fire on sleepAsync(100) even when it is an argument to a waited call; got: {:#?}",
+        warnings
+    );
+    // No hard errors.
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(errors.is_empty(), "no errors expected; got: {:#?}", errors);
+}
+
+// WHY: `background foo(sm_bar())` where `foo` and `sm_bar` contain `wait` — `sm_bar()` is an
+// argument to `foo`, not itself backgrounded. The `inside_background` exemption must NOT leak
+// into argument recursion. Without the fix, sm_bar() sees inside_background=true and the
+// wait_required_on_state_machine_call warning is suppressed — a false negative.
+#[test]
+fn background_arg_state_machine_call_still_warns() {
+    // sm_bar is a state machine (contains wait). foo is also a state machine.
+    // background foo(sm_bar()) — foo gets background exemption (correct, no wait_required).
+    // sm_bar() is an argument — must NOT be exempted; fires wait_required_on_state_machine_call.
+    let src = r#"
+function sm_bar() -> nothing {
+  wait sleepAsync(10)
+}
+function foo(ignored: nothing) -> nothing {
+  wait sleepAsync(10)
+}
+function entrypoint() -> nothing {
+  wait sleepAsync(1)
+  background foo(sm_bar())
+}
+"#;
+    let out = run(src);
+    let warnings: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning))
+        .collect();
+    // wait_required_on_state_machine_call must fire for sm_bar() — it's an arg, not backgrounded.
+    let has_wait_required = warnings.iter().any(|d| d.what.contains("state-machine"));
+    assert!(
+        has_wait_required,
+        "wait_required_on_state_machine_call must fire for sm_bar() inside background foo(sm_bar()); got: {:#?}",
+        warnings
+    );
+}
+
+// WHY: `wait __testFallibleAsync(true)` must typecheck cleanly through the production
+// check_query path. Before Fix B, the production table lacked with_m2_internals() so
+// lookup_free_fn_including_internal returned None and the else branch emitted a self-
+// contradictory arity error: "`__testFallibleAsync` takes 1 argument, got 1."
+// This confirms that the internal intrinsic is accessible in production typeck.
+#[test]
+fn wait_test_fallible_async_true_is_clean() {
+    let src = r#"
+function entrypoint() -> nothing {
+  wait __testFallibleAsync(true)
+}
+"#;
+    assert_clean(src);
+}
+
+// WHY: `wait __testFallibleAsync(false)` must also typecheck cleanly (the false path
+// exercises the error-return branch at runtime; the typeck concern is just arity + type).
+#[test]
+fn wait_test_fallible_async_false_is_clean() {
+    let src = r#"
+function entrypoint() -> nothing {
+  wait __testFallibleAsync(false)
+}
+"#;
+    assert_clean(src);
+}
+
+// WHY: `wait __testFallibleAsync()` with ZERO args must produce a REAL arity error
+// ("`__testFallibleAsync` takes 1 argument, got 0."), not the self-contradictory
+// "takes 1, got 1" that fired before Fix B. The else-branch in the dispatch arm means
+// "wrong arity" and must only fire for genuinely wrong arg counts.
+#[test]
+fn wait_test_fallible_async_zero_args_gives_real_arity_error() {
+    let src = r#"
+function entrypoint() -> nothing {
+  wait __testFallibleAsync()
+}
+"#;
+    let out = run(src);
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(
+        !errors.is_empty(),
+        "zero-arg __testFallibleAsync must produce an arity error; got: {:#?}",
+        out.diagnostics
+    );
+    // The error must say "got 0" — not "got 1" (the pre-fix self-contradiction).
+    let has_got_zero = errors.iter().any(|d| d.what.contains("got 0"));
+    assert!(
+        has_got_zero,
+        "arity error must say 'got 0', not the self-contradictory 'got 1'; got: {:#?}",
+        errors
+    );
+}
+
