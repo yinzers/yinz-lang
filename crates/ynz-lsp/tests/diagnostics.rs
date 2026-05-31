@@ -219,6 +219,78 @@ function main() -> nothing {
     );
 }
 
+// WHY: v0.3-M2 added `wait` on a CPU-bound call as a new warning class.
+// This test drives typeck via ServerState (the same path the LSP server uses)
+// to verify the warning flows through to_lsp_diagnostic with Warning severity
+// (not Error). Catches any regression where the severity mapping is wrong.
+#[test]
+fn wait_on_non_may_block_warning_flows_as_lsp_warning() {
+    use ynz_lsp::{
+        capabilities::PositionEncoding, diagnostic_transform::to_lsp_diagnostic,
+        position::LineTable, state::ServerState,
+    };
+    use ynz_typeck::queries::check_query;
+
+    // `wait print("hi")` — print is CPU-bound, so wait has no effect.
+    // This must produce a Warning, not an Error.
+    let src = r#"
+function entrypoint() -> nothing {
+    wait print("hi")
+}
+"#;
+
+    let uri: lsp_types::Url = "file:///wait_warning_test.ynz".parse().unwrap();
+    let mut state = ServerState::new(PositionEncoding::Utf8);
+    state.open_document(uri.clone(), src.to_string());
+
+    let sf = state.source_file_for(&uri).unwrap();
+    let check_out = check_query(&state.db, sf);
+
+    let warning = check_out
+        .diagnostics
+        .iter()
+        .find(|d| d.what.to_lowercase().contains("wait") && d.what.to_lowercase().contains("no effect"));
+    assert!(
+        warning.is_some(),
+        "expected wait_on_non_may_block_warning diagnostic; got: {:?}",
+        check_out.diagnostics
+    );
+
+    let d = warning.unwrap();
+    let table = LineTable::new(src);
+    let lsp = to_lsp_diagnostic(d, src, &table, PositionEncoding::Utf8);
+
+    // Must be Warning, not Error
+    assert_eq!(
+        lsp.severity,
+        Some(lsp_types::DiagnosticSeverity::WARNING),
+        "wait_on_non_may_block must have Warning severity, not Error"
+    );
+    assert!(
+        lsp.message.contains("WHY"),
+        "LSP message must include WHY clause"
+    );
+
+    // WHY: a zero-range or wrong-line diagnostic would silently pass the
+    // severity+message checks above. The span must anchor to the `print` call
+    // on line 2 (0-indexed) of the fixture. `print` is at column 9 (four spaces
+    // of indentation + "wait" + one space). A wrong-line span (e.g. line 0)
+    // would fail here, proving the span is genuinely emitted at the call site.
+    assert_eq!(
+        lsp.range.start.line,
+        2,
+        "wait_on_non_may_block diagnostic must point to line 2 (the `print` call); \
+         got line {}",
+        lsp.range.start.line
+    );
+    assert!(
+        lsp.range.start.character >= 9,
+        "wait_on_non_may_block diagnostic must start at or after column 9 (`print` token); \
+         got column {}",
+        lsp.range.start.character
+    );
+}
+
 #[test]
 fn utf8_and_utf16_ranges_differ_for_multibyte() {
     use ynz_diagnostics::{Diagnostic as YnzDiag, Severity, SourceSpan};

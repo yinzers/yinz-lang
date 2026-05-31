@@ -1165,7 +1165,7 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
 - [x] plan-adherence-verifier: PASS 2026-05-31T (review round 2b) — all 13 Steps MET; D1 (hover.rs) + queries.rs (Fix B) documented in-scope/necessary touches; D2 (struct-field flags) DEVIATED-WITH-REASON; all deviation rationales free of banned phrases.
 - [x] acceptance-verifier: PASS 2026-05-31T (review round 2) — OVERALL PASS, all 15 ACs MET (round-1 WEAK AC4 resolved by `queries.rs:164` `with_m2_internals()`; 3 `__testFallibleAsync` tests pass); 106/106 non-environmental tests green.
 - [x] deviation-judge #1 (approach: Checker struct-field flags vs recursion params): PASS 2026-05-31T (round 1) — traced all set/restore paths; no leak the param approach wouldn't also have; the arg-leak bug code-reviewer found was a logic bug (fixed in Fix A), NOT deviation-attributable.
-- [ ] Committed: <commit SHA>
+- [x] Committed: 5b72521
 
 **Findings Log** (filled during any fix loops):
 
@@ -1245,32 +1245,32 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
 10. Build a fresh `.vsix`: `cd tooling/vscode-ynz && vsce package`. Verify two files produced: `yinz-0.3.0-m2.vsix` AND `yinz-latest.vsix` (per project convention). NOTE: matches M1 phase 5 convention; vsce package may be deferred to release time if headless env doesn't have vsce; mark as such in acceptance criteria.
 
 **Acceptance criteria**:
-- [ ] Registry: `wait` and `background` keyword hover docs updated with M2 text
-  - Evidence: (filled at phase completion)
-- [ ] Registry: `sleepAsync` primitive_intrinsic entry added
-  - Evidence: (filled at phase completion)
-- [ ] Registry: 4 new diagnostic_template entries added (wait_on_non_may_block_warning, wait_on_non_call_expression, unawaited_sleep_async, wait_required_on_state_machine_call)
-  - Evidence: (filled at phase completion)
-- [ ] Registry: `async-io-stdlib-intrinsics-v0-5` deferred_tooling_feature entry added
-  - Evidence: (filled at phase completion)
-- [ ] `cargo build -p ynz-registry` succeeds (TOML parses + Rust compiles)
-  - Evidence: (filled at phase completion)
-- [ ] LSP diagnostic test: `wait print("hi")` returns `wait_on_non_may_block_warning` at expected span
-  - Evidence: (filled at phase completion)
-- [ ] LSP hover test: `wait` and `background` hovers return updated M2 text
-  - Evidence: (filled at phase completion)
-- [ ] VSCode extension: `package.json` version bumped to `0.3.0-m2`; CHANGELOG updated; `wait-suspension.png` screenshot present (placeholder OK if vsce headless-unavailable — real screenshot at release time)
-  - Evidence: (filled at phase completion)
-- [ ] `design/stdlib/filesystem.md` has v0.5+ async-I/O deferral section
-  - Evidence: (filled at phase completion)
-- [ ] `design/stdlib/network.md` has analogous deferral section
-  - Evidence: (filled at phase completion)
-- [ ] `design/stdlib/database.md` has analogous deferral section
-  - Evidence: (filled at phase completion)
-- [ ] No banned-jargon in any new text (audited by grep — zero async/await/coroutine/Future/Promise hits in user-facing text)
-  - Evidence: (filled at phase completion)
-- [ ] [Deferred to release] VSCode extension `.vsix` files built (both versioned and `latest`) — vsce may not be available headless
-  - Evidence: (filled at phase completion)
+- [x] Registry: `wait` and `background` keyword hover docs updated with M2 text
+  - Evidence: `registry/features.toml` `[[keyword]] wait` hover_what="Suspends the calling function..."; `background` hover_why gets the I/O-pool/blocking-pool routing-distinction note. LSP tests `hover_wait_keyword_returns_m2_suspension_text` (+ negative assert on old M1 text) + `hover_background_keyword_returns_routing_distinction_text` pass.
+- [x] Registry: `sleepAsync` primitive_intrinsic entry added
+  - Evidence: present from Phase 3 (verified not duplicated); `cargo build -p ynz-registry` green.
+- [x] Registry: 4 new diagnostic_template entries added (wait_on_non_may_block_warning, wait_on_non_call_expression, unawaited_sleep_async, wait_required_on_state_machine_call)
+  - Evidence: `registry/features.toml` `[[diagnostic_template]]` `WaitOnNonMayBlockWarning`/`WaitOnNonCallExpression`/`UnawaitedSleepAsync`/`WaitRequiredOnStateMachineCall`; `diagnostic_templates_have_all_three_parts` consistency test passes.
+- [x] Registry: `async-io-stdlib-intrinsics-v0-5` deferred_tooling_feature entry added
+  - Evidence: `registry/features.toml` `[[deferred_tooling_feature]] name="async-io-stdlib-intrinsics-v0-5"` with substitute/why/ships_in/design_doc/triggers; `deferred_tooling_features_have_required_fields` passes. (design_doc single-path filesystem.md per the registry `path.exists()` test constraint; network/db cross-refs in `triggers` — approved deviation.)
+- [x] `cargo build -p ynz-registry` succeeds (TOML parses + Rust compiles)
+  - Evidence: `Finished dev profile` clean; 26 ynz-registry tests pass.
+- [x] LSP diagnostic test: `wait print("hi")` returns `wait_on_non_may_block_warning` at expected span
+  - Evidence: `crates/ynz-lsp/tests/diagnostics.rs:wait_on_non_may_block_warning_flows_as_lsp_warning` — asserts Warning severity + WHY + `range.start.line==2` + `character>=9` (span assert added fix-round-2 per AC6; non-vacuous — fails on wrong-line/zero-range).
+- [x] LSP hover test: `wait` and `background` hovers return updated M2 text
+  - Evidence: the 2 hover tests above pass; hardened with `let HoverContents::Markup(mc) = ... else { panic!() }` (fix-round-2, kills the vacuity trap).
+- [x] VSCode extension: `package.json` version bumped to `0.3.0-m2`; CHANGELOG updated; `wait-suspension.png` screenshot present (placeholder OK if vsce headless-unavailable — real screenshot at release time)
+  - Evidence: `package.json` 0.3.0-m2; CHANGELOG `[0.3.0-m2]` section; README "What's new"; `screenshots/wait-suspension.png.PLACEHOLDER` (headless — AC-allowed).
+- [x] `design/stdlib/filesystem.md` has v0.5+ async-I/O deferral section
+  - Evidence: "## v0.5+ Async I/O Surface" section cross-referencing the registry SSOT entry (readFileAsync/writeFileAsync/readBytesAsync).
+- [x] `design/stdlib/network.md` has analogous deferral section
+  - Evidence: "## v0.15+ Async I/O Surface" (request.getAsync/postAsync).
+- [x] `design/stdlib/database.md` has analogous deferral section
+  - Evidence: "## v0.10+ Async I/O Surface" (db.queryAsync/findAsync).
+- [x] No banned-jargon in any new text (audited by grep — zero async/await/coroutine/Future/Promise hits in user-facing text)
+  - Evidence: jargon_audit 5/5 pass incl. NEW `no_banned_jargon_in_deferred_feature_user_facing_fields` (extended fix-round-2 to scan deferred-feature rendered fields — caught + fixed 6 PRE-EXISTING violations; non-vacuous, proven by injection). standalone `async`/`lifetime` removed from all user-facing field values; "borrow-scope" overshoot corrected to canonical "scope" + `` `lifetimes` `` domain-key reference (deviation-judge round-2 PASS). design/ titles ("Async I/O Surface") are contributor-facing (allowed).
+- [x] [Deferred to release] VSCode extension `.vsix` files built (both versioned and `latest`) — vsce may not be available headless
+  - Evidence: deferred-to-release per AC text (no vsce headless); placeholder + CHANGELOG note in place.
 
 **Quality gate**:
 - [ ] All new hover/diagnostic text passes WHAT/WHAT-INSTEAD/WHY format check
@@ -1286,14 +1286,31 @@ If Option B chosen: the clean error is best emitted at TYPECK (P3) — detect `w
 - Manual install of `yinz-latest.vsix` in VSCode + hover over `wait` shows new text (deferred to release time)
 
 **Phase Review Gates** (filled at phase completion):
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
+- [x] code-reviewer: PASS 2026-05-31T (review round 2, after fix-loop round 2) — empirically proved the extended jargon audit non-vacuous (injected `async` → audit failed → restored); both round-1 vacuity traps (span / hover) closed; 6 pre-existing rewrites faithful. 2 non-blocking concerns (residual "lifetimes" in non-rendered fields — fixed in the judge-driven correction; pre-existing `site_count` unused-var — out of scope, follow-up).
+- [x] rules-compliance-reviewer: PASS 2026-05-31T (review round 2) — re-scanned ALL rendered fields (closing its round-1 miss of the substitute `async`); the reworded async-io entry + 6 pre-existing rewrites jargon-clean; extended audit locks the gap.
+- [x] plan-adherence-verifier: PASS 2026-05-31T (review round 2) — all 10 Steps MET; the 6-entry rewrite = audit-forced in-scope cleanup (not creep), minimal jargon-only swaps; Approach-D1 (single design_doc path) + Approach-D2 (screenshot placeholder) documented; rationales clean.
+- [x] acceptance-verifier: PASS 2026-05-31T (review round 2) — OVERALL PASS, all 13 ACs MET; round-1 WEAK AC6 (span) + AC12 (jargon) both resolved; workspace 106/5-environmental, zero regression.
+- [x] deviation-judge #1 (scope: lsp_adapter.rs M1→M2 hover test retarget): PASS 2026-05-31T (round 1) — clean retarget, all 4 structural asserts + `.expect()` preserved, WHY comment updated.
+- [x] deviation-judge #2 (scope: 6 pre-existing deferred-feature entries reworded by the audit extension): BLOCK→PASS 2026-05-31T — round-2 BLOCK caught an overshoot (invented "borrow-scope" inconsistent w/ `domain="lifetimes"`; "aliased re-export" precision lost). Coordinator-applied judge-specified fix (canonical "scope" vocabulary + `` `lifetimes` `` key reference + restored "aliased re-export"); re-judge PASS — both corrections faithful, jargon-clean, cross-entry consistency restored.
 - [ ] Committed: <commit SHA>
 
 **Findings Log** (filled during any fix loops):
-_(empty until a reviewer returns BLOCK)_
+
+**2026-05-31 — Phase 4 executor DONE (base = Phase 3 commit 5b72521), gate in flight.** Mostly TOML + docs + 2 LSP test files (378-line diff). Added: `wait`/`background` keyword hover M2 updates; 4 `[[diagnostic_template]]` entries (wait_on_non_may_block_warning, wait_on_non_call_expression, unawaited_sleep_async, wait_required_on_state_machine_call); `async-io-stdlib-intrinsics-v0-5` `[[deferred_tooling_feature]]`; LSP diagnostic-flow + 2 hover tests; VSCode package.json→0.3.0-m2 + CHANGELOG + README; 3 design-doc async-I/O deferral sections (filesystem/network/database). Already-present (verified, not duplicated): `sleepAsync` `[[primitive_intrinsic]]` (Phase 3), `WaitInsideLoop`/`LocalCrossesWait` templates (Phase 2). Coordinator-verified: registry build green, lsp tests pass, lsp_adapter.rs test = clean M1→M2 retarget (kept all structure asserts, changed only the text line + WHY comment — NOT weakening, verified directly). workspace 106 pass / 5 environmental.
+
+**Deviations:** Scope-D1 — `crates/ynz-registry/tests/lsp_adapter.rs` touched (compile-required: M2 hover broke the M1-text assertion) → deviation-judge dispatched (test-weakening lens). Approach-D1 — `async-io-stdlib-intrinsics-v0-5` `design_doc` uses single path `design/stdlib/filesystem.md` (not the plan's 3-path string) because `every_registry_entry_design_doc_exists` test does `path.exists()` on the whole value; network/database refs moved to `triggers` prose → plan-adherence assessing SSOT-completeness. Approach-D2 — screenshot `.PLACEHOLDER` text file (AC-allows headless placeholder; no PNG fabricated). vsix build [deferred to release].
+
+**Gate dispatched (review round 1):** code-reviewer a99ac043, rules-compliance a23b52d8 (PASS, above), plan-adherence a6e14093, acceptance a7050b52, deviation-judge(Scope-D1) adf0576f. Read `/tmp/phase4_real.diff`.
+
+**GATE ROUND 1 RESULT (2026-05-31): BLOCK (acceptance).** code-reviewer PASS, rules-compliance PASS, plan-adherence PASS, deviation-judge(Scope-D1) PASS (clean retarget). acceptance BLOCK — 11/13 ACs MET, 2 WEAK → fix round:
+- **Fix #1 (AC6 span, WEAK):** `wait_on_non_may_block_warning_flows_as_lsp_warning` asserts the warning exists + Warning severity + WHY, but NOT the span — a zero-range/wrong-line diagnostic would pass. FIX: add a range assertion (the warning must anchor to the `wait`/`print` token on the fixture's known line/col).
+- **Fix #2 (AC12 banned-jargon, WEAK — caught by acceptance, MISSED by rules-compliance):** the word `async` appears as STANDALONE PROSE ("async control flow", "async I/O") in the `substitute` field of the `async-io-stdlib-intrinsics-v0-5` deferred entry, which RENDERS in user-facing LSP hover (`**Substitute:** {substitute}` via lsp_adapter). `async` is a `[[banned_jargon]]` term → real user-facing violation. FIX: reword the substitute (+ any other hover-rendered deferred-feature field — why/triggers) to plain language, keeping `sleepAsync`/`readFileAsync` API names; AND extend `crates/ynz-diagnostics/tests/jargon_audit.rs` (or wherever the audit lives) to SCAN the user-facing-rendered fields of deferred_tooling_feature entries so this class is caught mechanically (the audit currently misses them — fix the detection hole, not just the instance). design/ section TITLES ("Async I/O Surface") are contributor-facing → keep. The entry slug `async-io-stdlib-intrinsics-v0-5` is an identifier → keep (assess if it renders as user-facing prose; slug ≠ prose).
+- **Fix #3 (code-reviewer Concern #1, non-blocking but cheap — folded in):** the two new hover tests nest asserts in `if let Some/Markup` without else → latent vacuity trap (silently skip asserts if hover_response ever returns non-Markup). FIX: `let HoverContents::Markup(mc) = ... else { panic!(...) }` (strict strengthening, matches test-must-exercise-claimed-path).
+- Concern #2 (`{args}` vs `(...)` template placeholder drift) — LEAVE: consistent with pre-existing M4 templates + no parity test binds them; changing this one creates inconsistency. Noted.
+
+**FIX-LOOP ROUND 2 DONE (2026-05-31), gate re-running.** Executor applied Fix #1 (span assert in diagnostics test — `range.start.line==2`, `character>=9`, non-vacuous), Fix #2 (reworded `async-io-stdlib-intrinsics-v0-5` substitute+ships_in; EXTENDED `crates/ynz-diagnostics/tests/jargon_audit.rs` to scan deferred-feature user-facing fields — which exposed + fixed 6 PRE-EXISTING jargon violations in unrelated deferred entries, e.g. `--kernel`, lsp-inlay-hint-*, background-handle-form; "lifetime"→"borrow-scope"), Fix #3 (hover tests `let-else` hardening). Coordinator-verified: span assert non-vacuous; no standalone `async` left in user-facing field VALUES (remaining hits = `[[banned_jargon]]` defs + a TOML comment); extended audit passes + was non-vacuous (7 violations pre-fix); spot-checked `lsp-inlay-hint-lifetimes` rewrite faithful. lsp + jargon_audit green; workspace 106 / 5 environmental. Diff grew 378→518 lines (the 6 pre-existing rewrites). **Gate re-dispatched (round 2):** code-reviewer a29de5af, acceptance acad279e, rules-compliance a1ed002e (re-scanning ALL rendered fields after its round-1 miss of the substitute jargon), plan-adherence a72015da, deviation-judge(6-entry-rewrite faithfulness) ae2f0ed9. Read `/tmp/phase4_real.diff`.
+
+**GATE ROUND 2 RESULT (2026-05-31): 4 reviewers PASS; deviation-judge BLOCK → fixed → re-judging.** code-reviewer PASS (empirically proved the audit non-vacuous — injected `async`, audit failed, restored; both vacuity traps dead; flagged residual "lifetimes" in ships_in/triggers as non-blocking Concern). rules-compliance PASS (re-scanned all rendered fields, closing its round-1 miss). plan-adherence PASS (6-entry rewrite = audit-forced in-scope cleanup, not creep). acceptance PASS (all 13 ACs MET; AC6 span + AC12 jargon resolved). **deviation-judge(6-entry) BLOCK** — the audit-forced cleanup OVERSHOT in 2 entries: (1) `lsp-inlay-hint-lifetimes` invented the term "borrow-scope" (appears nowhere else, ignores the registry's own canonical "lifetime"→"scope" replacement at features.toml:553, and contradicts `[[muted_hint_domain]] domain = "lifetimes"` at features.toml:1939); (2) `lsp-rename-aliased-re-export` changed "aliased re-export"→"re-exported name" in `why`, losing precision vs the `substitute` field (the actual banned word was only bare "alias"). **COORDINATOR-APPLIED FIX (judge-specified, 5-line text correction):** lifetimes entry → "scope"/"scope annotations"/"value scopes" (canonical replacement) + references the actual `` `lifetimes` `` domain key (reconciles with line 1939) + cleared residual plurals (also closes code-reviewer's Concern #1); rename entry → restored "aliased re-export" in `why`. Verified: "borrow-scope" 0 hits repo-wide; jargon_audit 5/5 pass; registry build green; diff 523 lines. **Re-judge dispatched: ad7c3943** (faithfulness re-check of the 2 corrected entries; 4 reviewers not re-run — fix is judge-specified text-only on 2 registry entries, doesn't touch their lanes). On re-judge PASS → write AC ticks + gates, commit Phase 4, proceed to Phase 5 (final).
 
 **Exit Sequence**: per template.
 

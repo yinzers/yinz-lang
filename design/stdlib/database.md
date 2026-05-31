@@ -514,3 +514,25 @@ The unifying surface needs design work. Strawman: `db.connect(...)` returns a `D
 - Connection pooling (Postgres-specific; N/A for DuckDB embedded)
 - Schema inference / compile-time schema validation
 - Additional drivers beyond DuckDB and Postgres (deferred until after v1.0 launch)
+
+---
+
+## v0.10+ Async I/O Surface
+
+The canonical deferral spec for async database operations lives in the feature registry:
+
+```
+registry/features.toml → [[deferred_tooling_feature]] name = "async-io-stdlib-intrinsics-v0-5"
+```
+
+That registry entry is the SSOT — this section is a cross-reference, not the authority.
+
+**Planned async surface (ships with v0.10 db module)**:
+
+- `db.queryAsync(sql, params) -> array<T> errors` — non-blocking query; `wait db.queryAsync(...)` suspends the caller while the DB responds.
+- `db.findAsync(Shape, options) -> array<Shape> errors` — non-blocking structured query.
+- All existing `db.*` methods get `*Async` variants for use inside `wait` call sites.
+
+These back onto Tokio I/O (for Postgres) or DuckDB's async query API (for DuckDB embedded). The state-machine ABI that makes `wait` work was validated in v0.3-M2 using the internal `__testFallibleAsync` intrinsic, which exercises the same errors-through-state-machine path that `db.queryAsync` will use.
+
+**Why deferred**: connection pool state management under suspension, error variant taxonomy (`DatabaseError` design), and the Postgres-vs-DuckDB ABI unification (discussed in "DuckDB-vs-Postgres surface unification" above) all belong to the v0.10 milestone where the full db surface is designed.

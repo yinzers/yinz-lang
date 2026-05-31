@@ -54,3 +54,25 @@ let dir = path.directory("/app/src/entrypoint.ynz")            // "/app/src"
 - Symlink support
 - Archive support (zip, tar, gzip)
 - File copy/move helpers
+
+---
+
+## v0.5+ Async I/O Surface
+
+The canonical deferral spec for async file operations lives in the feature registry:
+
+```
+registry/features.toml → [[deferred_tooling_feature]] name = "async-io-stdlib-intrinsics-v0-5"
+```
+
+That registry entry is the SSOT — this section is a cross-reference, not the authority.
+
+**Planned async surface (ships with v0.5 file module)**:
+
+- `readFileAsync(path) -> string errors` — non-blocking file read; `wait readFileAsync("data.txt")` suspends the caller while the OS reads the file; thread is freed during the I/O.
+- `writeFileAsync(path, content) -> nothing errors` — non-blocking file write.
+- `readBytesAsync(path) -> array<byte> errors` — non-blocking binary read.
+
+These back on to `tokio::fs` in the runtime. The state-machine ABI that makes `wait` work was validated in v0.3-M2 using the internal `__testFallibleAsync` intrinsic — v0.5 inherits a working errors-through-state-machine ABI.
+
+**Why deferred**: file path encoding, error variant design (file-not-found vs permission-denied vs I/O error), and the `errors` propagation shape all belong to the v0.5 file module milestone, not to the state-machine milestone.

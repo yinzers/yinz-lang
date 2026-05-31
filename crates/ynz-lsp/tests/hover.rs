@@ -276,3 +276,58 @@ fn hover_request_via_lsp_returns_response() {
         "hover response must not contain an error: {response}"
     );
 }
+
+// WHY: v0.3-M2 replaced the forward-pointing M1 hover text for `wait` with real
+// suspension semantics. This test verifies the registry-sourced hover text now
+// reflects "Suspends the calling function" (the M2 WHAT clause), not the old
+// M1 placeholder that said "Runtime suspension semantics ship in v0.3-M2."
+// If this fails, the keyword hover docs weren't updated in the registry.
+#[test]
+fn hover_wait_keyword_returns_m2_suspension_text() {
+    let src = "wait sleepAsync(100)";
+    let tokens = tokenize(src);
+    let table = LineTable::new(src);
+    let h = hover_response(&tokens, &make_sig(), None, src, &table, 0, PositionEncoding::Utf8);
+    assert!(h.is_some(), "hover over 'wait' keyword should return Some");
+    if let Some(h) = h {
+        use lsp_types::HoverContents;
+        let HoverContents::Markup(mc) = h.contents else {
+            panic!("expected Markup hover contents for 'wait' keyword");
+        };
+        assert!(
+            mc.value.contains("Suspends the calling function"),
+            "wait hover must contain M2 suspension text 'Suspends the calling function'; got: {}",
+            mc.value
+        );
+        // Must NOT contain the old M1 forward-pointing placeholder text
+        assert!(
+            !mc.value.contains("Runtime suspension semantics ship"),
+            "wait hover must NOT contain old M1 placeholder text; got: {}",
+            mc.value
+        );
+    }
+}
+
+// WHY: v0.3-M2 added the I/O-pool vs blocking-pool routing distinction to the
+// `background` keyword hover. This test verifies the registry-sourced hover now
+// contains the routing note. If this fails, the background hover docs weren't
+// updated (and users hovering `background` in v0.3-M2 code see stale M1 text).
+#[test]
+fn hover_background_keyword_returns_routing_distinction_text() {
+    let src = "background doWork()";
+    let tokens = tokenize(src);
+    let table = LineTable::new(src);
+    let h = hover_response(&tokens, &make_sig(), None, src, &table, 0, PositionEncoding::Utf8);
+    assert!(h.is_some(), "hover over 'background' keyword should return Some");
+    if let Some(h) = h {
+        use lsp_types::HoverContents;
+        let HoverContents::Markup(mc) = h.contents else {
+            panic!("expected Markup hover contents for 'background' keyword");
+        };
+        assert!(
+            mc.value.contains("I/O pool") || mc.value.contains("blocking pool"),
+            "background hover must contain routing-distinction note (I/O pool / blocking pool); got: {}",
+            mc.value
+        );
+    }
+}

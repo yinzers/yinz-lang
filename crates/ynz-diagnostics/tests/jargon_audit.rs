@@ -328,6 +328,70 @@ fn fmt_cli_messages_contain_no_banned_jargon() {
     }
 }
 
+// WHY: deferred_language_feature entries render in user-facing LSP hover (`**Substitute:** …`,
+//      `**Why deferred:** …`, `**Ships in:** …`) and completion detail strings. If any of those
+//      fields contain banned jargon, a user hovering a deferred feature sees the banned word.
+//      deferred_tooling_feature entries currently have no LSP render path, but the check is
+//      included so that adding a render path in the future automatically inherits jargon
+//      enforcement — catching the class that slipped through in v0.3-M2 Phase 4.
+#[test]
+fn no_banned_jargon_in_deferred_feature_user_facing_fields() {
+    let banned: Vec<_> = ynz_registry::banned_jargon().collect();
+    let mut violations: Vec<String> = Vec::new();
+
+    // deferred_language_feature: substitute + why + ships_in all render in hover and/or completion.
+    for entry in ynz_registry::deferred_language_features() {
+        let fields = [
+            ("substitute", entry.substitute),
+            ("why", entry.why),
+            ("ships_in", entry.ships_in),
+        ];
+        for (field, text) in &fields {
+            let lower = text.to_lowercase();
+            for b in &banned {
+                let w = b.name.to_lowercase();
+                if contains_whole_word(&lower, &w) {
+                    violations.push(format!(
+                        "[[deferred_language_feature]] '{}' field '{}' contains banned word {:?}: {:?}",
+                        entry.name, field, b.name, text
+                    ));
+                }
+            }
+        }
+    }
+
+    // deferred_tooling_feature: no current LSP render path, but audited proactively so
+    // any future render path inherits jargon enforcement automatically.
+    for entry in ynz_registry::deferred_tooling_features() {
+        let fields = [
+            ("substitute", entry.substitute),
+            ("why", entry.why),
+            ("ships_in", entry.ships_in),
+        ];
+        for (field, text) in &fields {
+            let lower = text.to_lowercase();
+            for b in &banned {
+                let w = b.name.to_lowercase();
+                if contains_whole_word(&lower, &w) {
+                    violations.push(format!(
+                        "[[deferred_tooling_feature]] '{}' field '{}' contains banned word {:?}: {:?}",
+                        entry.name, field, b.name, text
+                    ));
+                }
+            }
+        }
+    }
+
+    if !violations.is_empty() {
+        panic!(
+            "Banned jargon found in {} deferred-feature field(s):\n{}\n\n\
+             See design/compiler-errors.md for plain-English replacements.",
+            violations.len(),
+            violations.join("\n")
+        );
+    }
+}
+
 // WHY: ynz watch emits status lines, error messages, and --help text to the user's terminal.
 //      These strings bypass the `Diagnostic::*` constructor path (which the main jargon audit
 //      scans), so they need a dedicated check. A banned word like "infer" or "null" in a

@@ -2,6 +2,13 @@
 
 Syntax highlighting, inline diagnostics, autocomplete, and hover docs for `.ynz` files.
 
+## What's new in v0.3.0-m2
+
+- **`wait` actually suspends** — `wait foo()` now suspends the calling function at a real state-machine boundary; the OS thread is freed for other tasks during the pause. Hover over `wait` to see the updated docs.
+- **`sleepAsync(ms)` intrinsic** — non-blocking sleep. `wait sleepAsync(100)` suspends for 100ms without tying up a thread. Pairs with `sleepMs(ms)` (blocking, M1).
+- **New warnings** — `wait` on a CPU-bound call (`wait print(...)`) shows a Tier 3 warning; `sleepAsync(...)` without `wait` shows a Tier 3 warning; state-machine-to-state-machine calls without `wait` show a guidance warning.
+- **`background` routing distinction** — hover over `background` to see which thread pool the call targets (I/O pool for functions with `wait`, blocking pool for others).
+
 ## What's new in v0.3.0-m1
 
 - **`background` actually runs on a separate thread** — `background fn(args)` now spawns on a background thread-pool runtime; main continues immediately. Hover over `background` to see the updated docs.

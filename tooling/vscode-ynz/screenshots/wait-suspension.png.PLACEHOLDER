@@ -1,0 +1,22 @@
+This screenshot is captured at release time using a live VSCode instance.
+
+It is not available in CI because this environment is headless (no display server).
+
+What the screenshot shows:
+- Hover over the `wait` keyword in a .ynz file in VSCode
+- The hover popup displays the v0.3-M2 text:
+    WHAT: "Suspends the calling function until the awaited expression completes.
+          The OS thread is freed for other tasks during the suspension."
+    WHAT INSTEAD: "Write `wait foo()` at a call site to suspend until `foo()` returns."
+    WHY: "`wait` makes the function pause without blocking the OS thread..."
+- A `wait print("hi")` line shows a yellow squiggle (WaitOnNonMayBlockWarning)
+  with the message: "The function `print` does not contain a suspension point;
+  `wait` here changes nothing."
+
+To capture the real screenshot at release time:
+1. Build: cargo build -p ynz-lsp --release
+2. Open tooling/vscode-ynz/ in VSCode (F5 to launch extension host)
+3. Open a .ynz file with `wait sleepAsync(100)` and `wait print("hi")`
+4. Hover over `wait` and take a screenshot
+5. Save as tooling/vscode-ynz/screenshots/wait-suspension.png
+6. Delete this .PLACEHOLDER file

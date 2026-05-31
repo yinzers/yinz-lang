@@ -123,6 +123,7 @@ fn hover_unregistered_returns_none() {
 fn hover_wait_includes_what_what_instead_why() {
     // WHY: `wait` hover must contain Rule-11 WHAT/WHAT-INSTEAD/WHY content from
     // the new KeywordEntry.hover_what/hover_what_instead/hover_why schema fields.
+    // v0.3-M2 updated this to real suspension semantics — "Suspends the calling function".
     let h = lsp_hover_for_token("wait").expect("wait must have hover content");
     assert_eq!(h.kind, HoverKind::Keyword);
     let body = &h.markdown_body;
@@ -133,8 +134,8 @@ fn hover_wait_includes_what_what_instead_why() {
     );
     assert!(body.contains("**WHY:**"), "wait hover must have WHY clause");
     assert!(
-        body.contains("suspend on I/O"),
-        "wait hover must mention suspension context"
+        body.contains("Suspends the calling function"),
+        "wait hover must mention v0.3-M2 suspension semantics"
     );
 }
 

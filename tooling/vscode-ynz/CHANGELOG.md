@@ -2,6 +2,23 @@
 
 All notable changes to the Yinz Language extension are documented here.
 
+## [0.3.0-m2] — 2026-05-31
+
+### Added
+
+- **`wait` actually suspends** — hover over the `wait` keyword to see the v0.3-M2 docs (WHAT: "Suspends the calling function until the awaited expression completes. The OS thread is freed for other tasks during the suspension."). The v0.3-M1 placeholder text is gone; the real semantics are now live.
+- **`sleepAsync(ms)` intrinsic** — non-blocking sleep. `wait sleepAsync(100)` suspends the calling function for 100ms without blocking the OS thread. Appears in autocomplete; hover shows the new may-block intrinsic doc.
+- **New warnings**:
+  - `wait print("hi")` → `WaitOnNonMayBlockWarning` (Tier 3 yellow squiggle): "The function `print` does not contain a suspension point; `wait` here changes nothing."
+  - `wait 42` → `WaitOnNonCallExpression` (error): "`wait` must be followed by a function call."
+  - `sleepAsync(100)` without `wait` → `UnawaitedSleepAsync` (Tier 3 warning): "`sleepAsync` creates a sleep handle but discards it without waiting."
+  - State-machine fn calling state-machine fn without `wait` → `WaitRequiredOnStateMachineCall` (Tier 3 warning): guides toward writing `wait`; program still runs correctly via sync bridge.
+- **`background` routing-distinction note** — hover over `background` shows which pool each call routes to: functions with `wait` go to the I/O pool; functions without `wait` go to the blocking pool.
+
+### Screenshots
+
+See `screenshots/wait-suspension.png.PLACEHOLDER` — full screenshot captured at release time (requires a live VSCode instance; not available in CI).
+
 ## [0.3.0-m1] — 2026-05-21
 
 ### Added
