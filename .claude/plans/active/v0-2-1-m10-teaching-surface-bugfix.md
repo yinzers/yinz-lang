@@ -600,7 +600,7 @@ _(no BLOCK rounds — all 4 reviewers PASS on round 1. Non-blocking concerns rec
 - [x] rules-compliance-reviewer: PASS 2026-05-31 (zero violations; dual-audience applied correctly — test code naming banned words is legit detection data; registry edits content-only on existing entries; no ratcheting. Did not flag the :449 comment.)
 - [x] plan-adherence-verifier: PASS 2026-05-31 (all 5 steps MET; lib.rs deviation front-matter-blessed [line 18] + Rule-11 same-class; 5-vs-3 toml edits all genuine; no Phase 9/10 creep.)
 - [x] acceptance-verifier: PASS 2026-05-31 (3/3 ACs MET; guards scan real disk artifacts, non-tautological with confirmed pre-fix failure; 2 remaining features.toml `inferred` correctly exempt [deferred_tooling_feature why-fields].)
-- [x] Committed: <commit SHA>
+- [x] Committed: 4a016fd
 
 **Findings Log**:
 _(no BLOCK rounds — all 4 reviewers PASS on round 1. Scope expanded mid-phase to fold in a Rule-11 same-class fix [`ynz-registry/src/lib.rs:134` user-facing `inferred` in the inlay-hint hover WHY fallback] + its audit guard. Non-blocking concern: `jargon_audit.rs:449` "historically contained `inferred`" comment is borderline changelog phrasing per comments.md — both code-reviewer and rules-compliance cleared it as load-bearing test-rationale; left as-is, trivial follow-up if Patrick wants it tightened.)_
@@ -620,24 +620,25 @@ _(no BLOCK rounds — all 4 reviewers PASS on round 1. Scope expanded mid-phase 
 2. Add `generic_fn_table` fallback to the sig lookup at 339.
 3. Add an `Expr::MethodCall` branch that resolves the method via the same UFCS lookup typeck uses (near `check.rs:2216`) and emits hints for the receiver + args.
 **Acceptance criteria**:
-- [ ] UFCS call gets the same ownership hint as the equivalent free-fn call.
-  - Evidence: (filled at phase completion)
-- [ ] Generic-fn call gets an ownership hint.
-  - Evidence: (filled at phase completion)
+- [x] UFCS call gets the same ownership hint as the equivalent free-fn call.
+  - Evidence: `inlay_hint_ownership_ufcs.rs` — `ufcs_method_call_emits_lend_hint_on_receiver` (`player.heal(20)`, sig `heal(lend self, int)` → `lend` hint on receiver) + baseline `free_fn_call_emits_lend_hint` (`heal(player, 20)` → same `lend`). Production: new `Expr::MethodCall` arm maps receiver→param 0 via the SAME `resolve_param_ownerships` helper as `Expr::Call`. acceptance-verifier confirmed `share`/`lend` cross-discrimination (not hardcoded). POSITION PARITY now asserted (added post-review): both tests assert the hint lands at the source-derived end-of-`player` offset (`src.find(...).unwrap()+"player".len()`), so the "same position relative to the argument" claim is tested, not just modifier.
+- [x] Generic-fn call gets an ownership hint.
+  - Evidence: `generic_fn_call_emits_ownership_hint` (`identity<T>(share x)` → `share`) + `generic_fn_lend_param_emits_lend_hint` (`swap<T>(lend a, lend b)` → `assert_eq!(lend_hints.len(), 2)` — exact count). Production: `resolve_param_ownerships` adds the `generic_fn_table` third tier. code-reviewer mutation-verified: neutralizing the `generic_fn_table` line fails both generic tests.
 **Quality gate**:
-- [ ] UFCS resolution mirrors typeck's lookup (no parallel/divergent logic per no-duct-tape #7).
-- [ ] No panic on unresolved generic/UFCS callee.
+- [x] UFCS resolution mirrors typeck's lookup (no parallel/divergent logic per no-duct-tape #7). (plan-adherence + code-reviewer: `resolve_param_ownerships` chain `sig_table.fns→imported→generic_fn_table` is byte-for-byte Phase 3's `collect_maybe_mutated_expr` chain [commit 572a6d8]; helper-extraction factors the shared path rather than forking it.)
+- [x] No panic on unresolved generic/UFCS callee. (test `unresolved_method_call_yields_no_hint_and_no_panic`; both arms route unresolvable callees to recurse-without-hint; zero `.unwrap()`/`.expect()` in the changed region; intrinsics like `print` not in any table → no hint, not a wrong hint.)
 **Verification**: `cargo test -p ynz-typeck inlay_hint_ownership_ufcs` green.
 
 **Phase Review Gates**:
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
-- [ ] Committed: <commit SHA>
+- [x] code-reviewer: PASS 2026-05-31 (r1 — mutation-verified both call arms + generic line; lookup mirrors Phase 3; graceful unresolved path; size justified as threading overhead. 2 non-blocking: header overstated position coverage [CLOSED post-review by adding source-derived position-parity asserts]; `Stmt::Return` ownership-hint gap [tracked follow-up].)
+- [x] rules-compliance-reviewer: PASS 2026-05-31 (r1 — durable docstring rewrite, no parallel logic, ownership hints informational, Yinz vocab, no test weakening, no graveyard corpses.)
+- [x] plan-adherence-verifier: PASS 2026-05-31 (r1 — all 3 steps MET; 2-file scope clean; line overage is pure generic_fn_table threading [minimum diff], not creep; resolve_param_ownerships chain matches Phase 3; no Phase 10 bleed.)
+- [x] acceptance-verifier: PASS 2026-05-31 (r1 — both ACs MET; tests drive Expr::MethodCall + generic syntax, assert exact modifier + exact count, paired with free-fn baseline.)
+- [x] Committed: <commit SHA>
 
 **Findings Log**:
-_(empty until a reviewer returns BLOCK)_
+_(no BLOCK rounds — all 4 reviewers PASS round 1. Post-review test-strengthening: added source-derived position-parity assertions to close code-reviewer concern #1 [header comment overstated that position was tested]; verified non-tautological + 7/7 green._
+_**TRACKED FOLLOW-UP (out of M10 scope — Rule 11 / deferrals-must-be-tracked)**: `collect_ownership_hints_block` has no `Stmt::Return { value: Some(e) }` arm (`_ => {}` swallows it), so `return heal(player, 20)` emits no ownership hint — inconsistent with the sibling `collect_maybe_mutated_stmt` which DOES handle `Stmt::Return`. Pre-existing before Phase 9 (the block walker had only `_ => {}`); NOT one of the 14 cataloged audit bugs; NOT Bug 2.11 (call-form parity). One-line add when picked up. Recorded here + surfaced in the end-of-plan before/after report so it isn't lost. Not fixed in M10.)_
 
 ---
 

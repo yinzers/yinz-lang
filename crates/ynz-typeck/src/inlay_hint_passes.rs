@@ -608,9 +608,9 @@ fn collect_type_hints_block(
 
 /// Emit `share`/`lend`/`give` hints after call-site arguments.
 ///
-/// Only fires when the callee's signature is resolved and the parameter carries
-/// an explicit ownership modifier.  Suppressed for generics, imports not in
-/// scope, and method calls (UFCS dispatch is not yet tracked here).
+/// Fires for free-function calls, generic-function calls, and UFCS method calls
+/// (`player.heal(20)` is equivalent to `heal(player, 20)` — both get the same hint).
+/// Suppressed when the callee cannot be resolved (unresolvable → no hint, not a crash).
 ///
 /// Time: O(n × signature-lookup).  Space: O(hints).
 #[salsa::tracked]
@@ -628,6 +628,7 @@ pub fn ownership_call_site_hints(
                 &f.body,
                 &sigs.sig_table,
                 &sigs.imported_fns,
+                &sigs.generic_fn_table,
                 &mut hints,
             );
         }
@@ -639,79 +640,175 @@ fn collect_ownership_hints_block(
     block: &Block,
     sig_table: &crate::signatures::SignatureTable,
     imported: &std::collections::HashMap<String, crate::signatures::FunctionSig>,
+    generic_fn_table: &GenericFnTable,
     out: &mut Vec<OwnershipHint>,
 ) {
     for stmt in &block.stmts {
         match stmt {
             Stmt::Expr(e) | Stmt::Let { value: e, .. } => {
-                collect_ownership_hints_expr(e, sig_table, imported, out);
+                collect_ownership_hints_expr(e, sig_table, imported, generic_fn_table, out);
             }
             Stmt::Assign { value, .. } | Stmt::FieldAssign { value, .. } => {
-                collect_ownership_hints_expr(value, sig_table, imported, out);
+                collect_ownership_hints_expr(value, sig_table, imported, generic_fn_table, out);
             }
             Stmt::IndexAssign { index, value, .. } => {
-                collect_ownership_hints_expr(index, sig_table, imported, out);
-                collect_ownership_hints_expr(value, sig_table, imported, out);
+                collect_ownership_hints_expr(index, sig_table, imported, generic_fn_table, out);
+                collect_ownership_hints_expr(value, sig_table, imported, generic_fn_table, out);
             }
             Stmt::If { cond, body, .. } => {
-                collect_ownership_hints_expr(cond, sig_table, imported, out);
-                collect_ownership_hints_block(body, sig_table, imported, out);
+                collect_ownership_hints_expr(cond, sig_table, imported, generic_fn_table, out);
+                collect_ownership_hints_block(body, sig_table, imported, generic_fn_table, out);
             }
             Stmt::Match { scrutinee, arms, else_arm, .. } => {
-                collect_ownership_hints_expr(scrutinee, sig_table, imported, out);
+                collect_ownership_hints_expr(scrutinee, sig_table, imported, generic_fn_table, out);
                 for arm in arms {
-                    collect_ownership_hints_block(&arm.body, sig_table, imported, out);
+                    collect_ownership_hints_block(&arm.body, sig_table, imported, generic_fn_table, out);
                 }
                 if let Some(eb) = else_arm {
-                    collect_ownership_hints_block(eb, sig_table, imported, out);
+                    collect_ownership_hints_block(eb, sig_table, imported, generic_fn_table, out);
                 }
             }
             Stmt::While { cond, body, .. } => {
-                collect_ownership_hints_expr(cond, sig_table, imported, out);
-                collect_ownership_hints_block(body, sig_table, imported, out);
+                collect_ownership_hints_expr(cond, sig_table, imported, generic_fn_table, out);
+                collect_ownership_hints_block(body, sig_table, imported, generic_fn_table, out);
             }
             Stmt::For { iter, body, .. } => {
-                collect_ownership_hints_expr(iter, sig_table, imported, out);
-                collect_ownership_hints_block(body, sig_table, imported, out);
+                collect_ownership_hints_expr(iter, sig_table, imported, generic_fn_table, out);
+                collect_ownership_hints_block(body, sig_table, imported, generic_fn_table, out);
             }
             _ => {}
         }
     }
 }
 
+/// Map an `OwnershipModifier` to the Yinz keyword string shown in the hint.
+fn ownership_modifier_str(own: &OwnershipModifier) -> &'static str {
+    match own {
+        OwnershipModifier::Share => "share",
+        OwnershipModifier::Lend => "lend",
+        OwnershipModifier::Give => "give",
+    }
+}
+
+/// Resolve a callee name to its `param_ownerships` vector.
+///
+/// Lookup order: user sig_table → imported → generic_fn_table.
+/// Returns `None` when the name cannot be resolved through any path — callers
+/// treat this as "no hint" rather than an error (graceful, no panic).
+///
+/// Mirrors the lookup order in `collect_maybe_mutated_expr` so both passes stay
+/// consistent about which callees are "known" to the file.
+fn resolve_param_ownerships<'a>(
+    name: &str,
+    sig_table: &'a crate::signatures::SignatureTable,
+    imported: &'a std::collections::HashMap<String, crate::signatures::FunctionSig>,
+    generic_fn_table: &'a GenericFnTable,
+) -> Option<&'a Vec<Option<OwnershipModifier>>> {
+    sig_table
+        .fns
+        .get(name)
+        .map(|s| &s.param_ownerships)
+        .or_else(|| imported.get(name).map(|s| &s.param_ownerships))
+        .or_else(|| generic_fn_table.fns.get(name).map(|s| &s.param_ownerships))
+}
+
 fn collect_ownership_hints_expr(
     expr: &Expr,
     sig_table: &crate::signatures::SignatureTable,
     imported: &std::collections::HashMap<String, crate::signatures::FunctionSig>,
+    generic_fn_table: &GenericFnTable,
     out: &mut Vec<OwnershipHint>,
 ) {
-    if let Expr::Call(c) = expr {
-        // Resolve callee name for free-function calls.
-        if let Expr::Ident(name, _) = &c.callee {
-            let sig_opt = sig_table.fns.get(name).or_else(|| imported.get(name));
-            if let Some(sig) = sig_opt {
-                for (i, arg) in c.args.iter().enumerate() {
-                    if let Some(Some(own)) = sig.param_ownerships.get(i) {
-                        let modifier = match own {
-                            OwnershipModifier::Share => "share",
-                            OwnershipModifier::Lend => "lend",
-                            OwnershipModifier::Give => "give",
-                        };
+    match expr {
+        Expr::Call(c) => {
+            // Resolve the callee's parameter ownership list via the shared helper.
+            //
+            // Lookup order: user sig_table → imported → generic_fn_table.
+            // Builtin free-fns (print, range, sleepMs, sensitive) are not in any of these
+            // tables and get no ownership hint — correct, because their params carry no
+            // explicit Yinz-source ownership modifier.
+            //
+            // Graceful fallback: unresolvable callee → recurse into args without hints.
+            if let Expr::Ident(name, _) = &c.callee {
+                if let Some(ownerships) =
+                    resolve_param_ownerships(name, sig_table, imported, generic_fn_table)
+                {
+                    for (i, arg) in c.args.iter().enumerate() {
+                        if let Some(Some(own)) = ownerships.get(i) {
+                            out.push(OwnershipHint {
+                                position: arg.span().end,
+                                modifier: ownership_modifier_str(own).to_string(),
+                            });
+                        }
+                        collect_ownership_hints_expr(
+                            arg,
+                            sig_table,
+                            imported,
+                            generic_fn_table,
+                            out,
+                        );
+                    }
+                    return;
+                }
+            }
+            // Fallback: recurse into args without emitting hints (unresolvable callee).
+            for arg in &c.args {
+                collect_ownership_hints_expr(arg, sig_table, imported, generic_fn_table, out);
+            }
+            collect_ownership_hints_expr(&c.callee, sig_table, imported, generic_fn_table, out);
+        }
+        Expr::MethodCall { receiver, method, args, .. } => {
+            // UFCS: `player.heal(20)` desugars to `heal(player, 20)`.
+            //
+            // Look up the method name with the same resolver as free-fn calls — receiver is
+            // param 0, additional args are params 1..  Scalar primitive intrinsic methods
+            // (toString, toFloat, etc.) are not in sig_table/imported/generic_fn_table, so
+            // they fall through to the unresolvable branch (no hint — correct, they carry no
+            // explicit ownership modifier).
+            //
+            // Graceful fallback: unresolvable method → recurse without hints (no panic).
+            if let Some(ownerships) =
+                resolve_param_ownerships(method, sig_table, imported, generic_fn_table)
+            {
+                // Receiver → param 0.
+                if let Some(Some(own)) = ownerships.first() {
+                    out.push(OwnershipHint {
+                        position: receiver.span().end,
+                        modifier: ownership_modifier_str(own).to_string(),
+                    });
+                }
+                collect_ownership_hints_expr(receiver, sig_table, imported, generic_fn_table, out);
+                // Additional args → params 1..
+                for (i, arg) in args.iter().enumerate() {
+                    if let Some(Some(own)) = ownerships.get(i + 1) {
                         out.push(OwnershipHint {
                             position: arg.span().end,
-                            modifier: modifier.to_string(),
+                            modifier: ownership_modifier_str(own).to_string(),
                         });
                     }
-                    collect_ownership_hints_expr(arg, sig_table, imported, out);
+                    collect_ownership_hints_expr(
+                        arg,
+                        sig_table,
+                        imported,
+                        generic_fn_table,
+                        out,
+                    );
                 }
-                return;
+            } else {
+                // Unresolvable method — recurse without hints.
+                collect_ownership_hints_expr(receiver, sig_table, imported, generic_fn_table, out);
+                for arg in args {
+                    collect_ownership_hints_expr(
+                        arg,
+                        sig_table,
+                        imported,
+                        generic_fn_table,
+                        out,
+                    );
+                }
             }
         }
-        // Fallback: recurse into args without hints.
-        for arg in &c.args {
-            collect_ownership_hints_expr(arg, sig_table, imported, out);
-        }
-        collect_ownership_hints_expr(&c.callee, sig_table, imported, out);
+        _ => {}
     }
 }
 
