@@ -328,6 +328,53 @@ fn fmt_cli_messages_contain_no_banned_jargon() {
     }
 }
 
+// WHY: `booleanean` is a typo for `boolean` that reached the user-facing `print` diagnostic;
+//      `infers` is the inflected verb form of banned jargon `infer` — the whole-word check
+//      for `infer` does not catch `infers` (the trailing `s` breaks the word boundary).
+//      Both must not appear in any diagnostic string. This test provides a precise guard so
+//      `cargo test -p ynz-diagnostics` catches a reintroduction immediately.
+#[test]
+fn no_typo_booleanean_or_verb_infers_in_diagnostic_strings() {
+    let mut violations: Vec<String> = Vec::new();
+
+    for path in collect_rs_files(&crates_dir()) {
+        if is_exempt(&path) {
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let filename = path.display().to_string();
+
+        for (file, line_num, string_content) in find_diagnostic_strings(&content, &filename) {
+            let lower = string_content.to_lowercase();
+            if lower.contains("booleanean") {
+                violations.push(format!(
+                    "{file}:{line_num}: diagnostic string contains typo \"booleanean\" (fix to \"boolean\"): {string_content:?}"
+                ));
+            }
+            if lower.contains("infers") {
+                violations.push(format!(
+                    "{file}:{line_num}: diagnostic string contains banned jargon verb \"infers\" (use \"figures out\"): {string_content:?}"
+                ));
+            }
+        }
+    }
+
+    if !violations.is_empty() {
+        panic!(
+            "Typo/jargon found in {} diagnostic string(s):\n{}\n\n\
+             Replace \"booleanean\" with \"boolean\"; replace \"infers\" with \
+             \"figures out\" (per vocabulary.md — `infer`/`infers` is banned in user-facing text).",
+            violations.len(),
+            violations.join("\n")
+        );
+    }
+}
+
 // WHY: ynz watch emits status lines, error messages, and --help text to the user's terminal.
 //      These strings bypass the `Diagnostic::*` constructor path (which the main jargon audit
 //      scans), so they need a dedicated check. A banned word like "infer" or "null" in a
@@ -391,6 +438,238 @@ fn watch_cli_messages_contain_no_banned_jargon() {
         panic!(
             "Banned jargon found in {} watch CLI message(s):\n{}\n\n\
              See design/compiler-errors.md for replacements.",
+            violations.len(),
+            violations.join("\n")
+        );
+    }
+}
+
+// WHY: `lsp_inlay_hint_hover_for` returns WHY strings that go directly into LSP
+//      `InlayHint.tooltip` fields — user-facing text. The `_ =>` fallback arm of the
+//      `why` match historically contained `"inferred"` (banned per vocabulary.md). The
+//      `_` arm is not reachable through any real registry domain (all 3 placement_category
+//      values have explicit arms), so the runtime-domain loop below can't reach it.
+//      The source-scan test catches reintroduction to ANY arm, including the fallback.
+//      The runtime test catches jargon in any output actually produced by real registry data.
+#[test]
+fn no_infer_jargon_in_lsp_inlay_hint_hover_why_source() {
+    // Locate lib.rs relative to this test crate.
+    // CARGO_MANIFEST_DIR = crates/ynz-diagnostics/; lib.rs is at crates/ynz-registry/src/lib.rs.
+    let lib_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("ynz-registry")
+        .join("src")
+        .join("lib.rs");
+
+    let source = std::fs::read_to_string(&lib_path)
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", lib_path.display()));
+
+    // Locate the lsp_inlay_hint_hover_for function body.
+    // We extract from the `fn lsp_inlay_hint_hover_for` line through the matching closing brace.
+    let fn_start = source
+        .find("pub fn lsp_inlay_hint_hover_for(")
+        .unwrap_or_else(|| panic!("`lsp_inlay_hint_hover_for` not found in {}", lib_path.display()));
+
+    let fn_source = &source[fn_start..];
+    // Walk to the end of the function body by brace-counting.
+    let mut depth: usize = 0;
+    let mut fn_end = fn_source.len();
+    for (i, ch) in fn_source.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+                if depth == 0 {
+                    fn_end = i + 1;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let fn_body = &fn_source[..fn_end];
+
+    // Collect all string literals inside the function body.
+    let mut violations: Vec<String> = Vec::new();
+    let mut in_str = false;
+    let mut escaped = false;
+    let mut current = String::new();
+
+    for ch in fn_body.chars() {
+        if escaped {
+            escaped = false;
+            if in_str {
+                current.push(ch);
+            }
+            continue;
+        }
+        match ch {
+            '\\' if in_str => {
+                escaped = true;
+            }
+            '"' if !in_str => {
+                in_str = true;
+                current.clear();
+            }
+            '"' if in_str => {
+                let lower = current.to_lowercase();
+                if lower.contains("inferred") || lower.contains("infers") {
+                    violations.push(format!(
+                        "WHY string in lsp_inlay_hint_hover_for contains banned jargon: {:?}",
+                        current
+                    ));
+                }
+                // Also check the stem `infer` as a whole word (not as part of `inferred`/`infers`).
+                // Use a simple byte scan with word-boundary checks.
+                let needle = b"infer";
+                let bytes = lower.as_bytes();
+                let nlen = needle.len();
+                if bytes.len() >= nlen {
+                    for start in 0..=(bytes.len() - nlen) {
+                        if &bytes[start..start + nlen] == needle {
+                            let end = start + nlen;
+                            let left_ok = start == 0
+                                || (!bytes[start - 1].is_ascii_alphanumeric()
+                                    && bytes[start - 1] != b'_');
+                            let right_ok = end >= bytes.len()
+                                || (!bytes[end].is_ascii_alphanumeric() && bytes[end] != b'_');
+                            if left_ok && right_ok {
+                                violations.push(format!(
+                                    "WHY string in lsp_inlay_hint_hover_for contains banned jargon stem \"infer\": {:?}",
+                                    current
+                                ));
+                                break;
+                            }
+                        }
+                    }
+                }
+                in_str = false;
+                current.clear();
+            }
+            c if in_str => {
+                current.push(c);
+            }
+            _ => {}
+        }
+    }
+
+    if !violations.is_empty() {
+        panic!(
+            "Banned jargon in lsp_inlay_hint_hover_for WHY strings ({} violation(s)):\n{}\n\n\
+             Replace `inferred`/`infers`/`infer` with plain English per vocabulary.md \
+             (e.g. \"figured this out\" instead of \"inferred\").",
+            violations.len(),
+            violations.join("\n")
+        );
+    }
+}
+
+#[test]
+fn no_banned_jargon_in_lsp_inlay_hint_hover_output() {
+    // WHY: Complements the source-scan above. Exercises the actual return value of
+    //      lsp_inlay_hint_hover_for for every real registry domain. Guards the WHAT
+    //      field (sourced from description), WHAT-INSTEAD (example_hint_rendered), and
+    //      WHY (the placement_category arm). If a description or example sneaks in
+    //      banned jargon, this catches it at runtime, not just source-level.
+    let banned: Vec<_> = ynz_registry::banned_jargon().collect();
+    let mut violations: Vec<String> = Vec::new();
+
+    for domain_entry in ynz_registry::muted_hint_domains() {
+        let domain = domain_entry.domain;
+        let tooltip = match ynz_registry::lsp_inlay_hint_hover_for(domain) {
+            Some(t) => t,
+            None => {
+                violations.push(format!(
+                    "lsp_inlay_hint_hover_for({domain:?}) returned None — domain is in registry but lookup failed"
+                ));
+                continue;
+            }
+        };
+        let lower = tooltip.to_lowercase();
+        for entry in &banned {
+            let w = entry.name.to_lowercase();
+            if contains_whole_word(&lower, &w) {
+                violations.push(format!(
+                    "lsp_inlay_hint_hover_for({domain:?}) tooltip contains banned word {:?}: {:?}",
+                    entry.name, tooltip
+                ));
+            }
+        }
+        if lower.contains("inferred") {
+            violations.push(format!(
+                "lsp_inlay_hint_hover_for({domain:?}) tooltip contains banned jargon \"inferred\": {:?}",
+                tooltip
+            ));
+        }
+        if lower.contains("infers") {
+            violations.push(format!(
+                "lsp_inlay_hint_hover_for({domain:?}) tooltip contains banned jargon \"infers\": {:?}",
+                tooltip
+            ));
+        }
+    }
+
+    if !violations.is_empty() {
+        panic!(
+            "Banned jargon in lsp_inlay_hint_hover_for output ({} violation(s)):\n{}\n\n\
+             Edit the registry description/example fields or the placement_category WHY arms \
+             per vocabulary.md.",
+            violations.len(),
+            violations.join("\n")
+        );
+    }
+}
+
+// WHY: `[[muted_hint_domain]]` description fields are surfaced to the user in the WHAT
+//      section of LSP inlay-hint hover tooltips (via `lsp_inlay_hint_hover_for`).
+//      A description containing `infer`/`inferred` or other banned jargon reaches the user
+//      as readily as any `Diagnostic::error` string — same ban applies. This test catches
+//      regressions when editing registry/features.toml directly, which the Diagnostic-site
+//      scanner above doesn't reach.
+#[test]
+fn no_banned_jargon_in_muted_hint_domain_descriptions() {
+    let banned: Vec<_> = ynz_registry::banned_jargon().collect();
+    let mut violations: Vec<String> = Vec::new();
+
+    for entry in ynz_registry::muted_hint_domains() {
+        let lower = entry.description.to_lowercase();
+        for jargon in &banned {
+            let w = jargon.name.to_lowercase();
+            if contains_whole_word(&lower, &w) {
+                violations.push(format!(
+                    "muted_hint_domain {:?} description contains banned word {:?}: {:?}",
+                    entry.domain, jargon.name, entry.description
+                ));
+            }
+        }
+        // Also check the inflected verb forms and typo that slip past whole-word checks.
+        if lower.contains("infers") {
+            violations.push(format!(
+                "muted_hint_domain {:?} description contains banned jargon verb \"infers\": {:?}",
+                entry.domain, entry.description
+            ));
+        }
+        if lower.contains("inferred") {
+            violations.push(format!(
+                "muted_hint_domain {:?} description contains banned jargon form \"inferred\": {:?}",
+                entry.domain, entry.description
+            ));
+        }
+        if lower.contains("booleanean") {
+            violations.push(format!(
+                "muted_hint_domain {:?} description contains typo \"booleanean\": {:?}",
+                entry.domain, entry.description
+            ));
+        }
+    }
+
+    if !violations.is_empty() {
+        panic!(
+            "Banned jargon in {} muted_hint_domain description(s):\n{}\n\n\
+             Edit registry/features.toml and replace with plain-English per vocabulary.md.",
             violations.len(),
             violations.join("\n")
         );

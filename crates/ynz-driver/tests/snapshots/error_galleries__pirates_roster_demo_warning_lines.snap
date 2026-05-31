@@ -1,0 +1,10 @@
+---
+source: crates/ynz-driver/tests/error_galleries.rs
+assertion_line: 205
+expression: warnings_only
+---
+Warning: `newPirate` is imported but never used.
+Warning: `announce` is imported but never used.
+Warning: `clamp` is imported but never used.
+Warning: `square` is imported but never used.
+Warning: This code will never run.

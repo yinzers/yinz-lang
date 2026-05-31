@@ -146,6 +146,65 @@ fn m8_gallery_fires_expected_diagnostics() {
     );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.2.1-M10 — Pirates-roster demo build: zero spurious unused-import warnings
+// ─────────────────────────────────────────────────────────────────────────────
+
+// WHY: Proves that the six M10 typeck inserts (Bugs 1 + 2.1–2.5) hold in a
+// realistic multi-file project. The pirates-roster demo imports ScheduleDay,
+// Announceable, StripeDistrictEvent, and StatCategory and uses each via an AST
+// position that previously triggered a spurious "imported but never used" warning.
+// If this test flips to FAIL, one of the Phase 0 fixes regressed.
+#[test]
+fn pirates_roster_demo_builds_with_zero_m10_pattern_warnings() {
+    let demo_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("examples/pirates-roster");
+
+    let out = Command::new(ynz_binary())
+        .args(["build", demo_dir.join("entrypoint.ynz").to_str().unwrap()])
+        .env("CLICOLOR", "0")
+        .output()
+        .expect("failed to spawn ynz binary");
+
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+
+    // Build must succeed — compile errors mean a pattern isn't expressible.
+    assert!(
+        out.status.success(),
+        "pirates-roster demo build must exit 0; stderr:\n{stderr}"
+    );
+
+    // The four M10-pattern symbols must NOT appear in any UnusedImport warning.
+    // These are the symbols exercised via the six previously-false-positive AST
+    // positions (options-variant, is-narrowing, dynamic, field-type, module-const,
+    // generic-field). A warning here means a Phase 0 insert regressed.
+    for symbol in &["ScheduleDay", "Announceable", "StripeDistrictEvent", "StatCategory"] {
+        let pattern = format!("`{symbol}` is imported but never used");
+        assert!(
+            !stderr.contains(&pattern),
+            "M10 regression: spurious unused-import warning for `{symbol}` in pirates-roster demo.\
+             \nfull stderr:\n{stderr}"
+        );
+    }
+
+    // Capture the warning-class signatures (path-stripped) as a snapshot. Strips
+    // absolute paths so the snapshot is stable across checkouts and worktrees.
+    // Pre-existing genuine warnings (newPirate, announce, clamp, square, dead-code)
+    // must appear; the M10 symbols (ScheduleDay, Announceable, StripeDistrictEvent,
+    // StatCategory) must NOT appear. The snapshot pins the warning set so any
+    // new spurious warning is caught as a diff.
+    let warning_lines: Vec<&str> = stderr
+        .lines()
+        .filter(|l| l.starts_with("Warning:"))
+        .collect();
+    let warnings_only = warning_lines.join("\n");
+    insta::assert_snapshot!("pirates_roster_demo_warning_lines", warnings_only);
+}
+
 // WHY: v0_3_m1_errors.ynz exercises every new v0.3-M1 error/warning class:
 // share-param carry-forward, lend-cross-thread, large-copy warning, and the
 // happy-path fire-and-forget. If error count changes, either a new diagnostic

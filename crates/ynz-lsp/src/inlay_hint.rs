@@ -34,7 +34,7 @@ use lsp_types::{
     InlayHint, InlayHintKind, InlayHintLabel, MarkupContent, MarkupKind, Position, Range,
     TextEdit,
 };
-use ynz_diagnostics::Severity;
+use ynz_diagnostics::{Severity, SourceSpan};
 use ynz_typeck::{
     array_to_fixed_promotion_hints, copy_point_hints, let_to_const_promotion_hints,
     ownership_call_site_hints, variable_type_hints,
@@ -131,6 +131,29 @@ fn let_to_const_edit(
     }
 }
 
+/// Build the TextEdit that replaces the `array` keyword with `fixed` in a type
+/// annotation, using the byte range carried in the `PromotionHint`.
+///
+/// The `array` token's span comes from `Type::Generic { name_span, .. }` in the
+/// AST — it covers exactly the `array` keyword, never the `<int>` type arguments.
+/// Applying this edit converts `array<int>` → `fixed<int>` while leaving the
+/// element type and initializer untouched, producing valid type-checking source.
+///
+/// Time: O(1).  Space: O(1).
+fn array_to_fixed_edit(
+    text: &str,
+    array_span: SourceSpan,
+    table: &crate::position::LineTable,
+    encoding: crate::capabilities::PositionEncoding,
+) -> TextEdit {
+    let start = table.byte_offset_to_position(text, array_span.start.min(text.len()), encoding);
+    let end = table.byte_offset_to_position(text, array_span.end.min(text.len()), encoding);
+    TextEdit {
+        range: lsp_types::Range { start, end },
+        new_text: "fixed".to_string(),
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Public handler
 // ─────────────────────────────────────────────────────────────────────────────
@@ -218,11 +241,18 @@ pub fn inlay_hint_response(
     for h in array_to_fixed_promotion_hints(&state.db, sf) {
         if !in_viewport(h.position, vp_start, vp_end) { continue; }
         if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
-            hints.push(make_hint(
+            // Build click-to-make-explicit edit when the `array` keyword span is
+            // available.  `type_keyword_span` is None only when the type annotation
+            // can't be located (graceful no-edit path — no panic, no missing hint).
+            let text_edits = h.type_keyword_span.map(|span| {
+                vec![array_to_fixed_edit(text, span, table, state.encoding)]
+            });
+            hints.push(make_hint_with_edit(
                 pos,
                 h.label.clone(),
                 InlayHintKind::TYPE,
                 "array_to_fixed_promotion",
+                text_edits,
             ));
         }
     }

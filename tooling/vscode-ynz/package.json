@@ -45,6 +45,11 @@
           "description": "Path to the ynz-lsp binary. Defaults to 'ynz-lsp' (must be on PATH)."
         }
       }
+    },
+    "configurationDefaults": {
+      "[ynz]": {
+        "editor.inlayHints.foreground": "#ffd23f"
+      }
     }
   },
   "scripts": {
