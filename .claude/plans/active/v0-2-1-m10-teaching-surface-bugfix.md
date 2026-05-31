@@ -3,9 +3,9 @@ slug: v0-2-1-m10-teaching-surface-bugfix
 type: execution
 roadmap: v0-2-1-lsp-gap-closure
 owner: Patrick Rizzardi
-status: active
+status: done
 created: 2026-05-30
-last_updated: 2026-05-30 (Phase 2 complete)
+last_updated: 2026-05-31 (Phase 2 complete)
 files:
   - crates/ynz-typeck/src/check.rs
   - crates/ynz-typeck/src/inlay_hint_passes.rs
@@ -710,7 +710,7 @@ _  2. `collect_copy_hints_block` walks only `Stmt::Expr`+`Stmt::Let`, skipping `
 - [x] Deviation-judge #1 (union-alias fix folded into Phase 11): JUSTIFIED 2026-05-31 (same Phase-0 bug class, 7th type position, same idiom, files in front-matter, unit-test-proven, surfaced by the Demo invariant — deferring would ship a teaching lie).
 - [x] Deviation-judge #2 (follows/extends absent from demo): JUSTIFIED 2026-05-31 (independently verified shapes.rs:393/406 makes cross-file follows/extends a compile error — demo physically can't show it; unit-test substitution correct; accurate comment; tracked todos line 12).
 - [x] Deviation-judge #3 (path-stripped warning-lines snapshot): JUSTIFIED 2026-05-31 (strictly stronger than full-stderr here — full-stderr embeds worktree-absolute paths and fails everywhere, as the 5 pre-existing integration .snap.new prove; + 4-symbol assert! belt-and-suspenders; matches error_galleries prior art).
-- [x] Committed: <commit SHA>
+- [x] Committed: 8dc90da
 
 **Findings Log**:
 _(no executor BLOCK rounds. Scope EXPANDED mid-phase to fold in a Rule-11 same-class fix — the union-alias-RHS unused-import gap [`check.rs` alias_ty walk + 2 unit tests], discovered during the Demo invariant's mandatory build validation; deviation-judge #1 ruled JUSTIFIED. Two earlier executor MISDIAGNOSES were caught + corrected by coordinator verification: (a) a "separate driver unused-import tracker" claim [FALSE — single source `queries.rs:175`, driver calls `check_query`]; (b) a "union-alias can't build cross-file in the driver" claim [FALSE — it builds clean; the false demo comment was deleted and the union pattern restored]. The follows/extends cross-file limitation [shapes.rs:393/406] is REAL [verified] and accurately documented. acceptance-verifier r1 BLOCK was a stale-binary false negative from concurrent-agent build races — resolved by a solo clean-rebuild re-run [r2 PASS]. Three out-of-M10-scope walker-completeness follow-ups [Phase 9 return-stmt ownership, Phase 10 copy-hint UFCS + copy-hint block-stmt] are tracked in todos.md.)_
@@ -726,6 +726,23 @@ After all phases pass the final cumulative review, produce a **before/after repo
 - **How to see it** — the file/scenario in `examples/pirates-roster/` or a minimal repro to eyeball it after installing the rebuilt VSIX.
 
 Group the report by "you'll notice this changed" vs "quietly correct now." Call out the two CHANGELOG-worthy behavior shifts explicitly (Bug 2.9 → many more `let→const` hints; Phase 4 → gold inlay color + end-of-line positioning). This is the artifact Patrick reviews to validate the milestone hands-on.
+
+---
+
+## Final Review Findings Log (end-of-plan cumulative sweep, 2026-05-31)
+
+Cumulative Opus review across the whole milestone diff (`d509770..HEAD`). Verdicts: plan-adherence-verifier PASS, acceptance-verifier PASS (36/36 ACs MET on clean rebuild), **code-reviewer BLOCK**, **rules-compliance-reviewer BLOCK**. Two findings (one real cross-phase bug, one banned phrase) — both fixed in the cumulative fix round below.
+
+- **2026-05-31 — code-reviewer BLOCK (REAL cross-phase bug, Rule 11):** `collect_maybe_mutated_expr` (`inlay_hint_passes.rs`) recurses through the Expr wrappers M10 threaded (Call/MethodCall/StructLit/ArrayLit/MapLit/PostfixOp) but NOT `Expr::Wait`/`Background`/`Is`/`InterpolatedString` (all fall through `_ => {}`). A `lend`/`give` mutation hidden inside `wait heal(buf)` or an interpolated `${bump(buf)}` is invisible → a WRONG `let→const` / `array→fixed` hint fires on a binding that IS mutated. Same teaching-lie class as P1/P2/P3, hiding behind the `wait` keyword. Empirically Paper-Traced by the reviewer (3 repros). UNTRACKED (distinct from the 3 tracked walker-completeness follow-ups). **FIX:** add the 4 wrapper-recursion arms to `collect_maybe_mutated_expr`, mirroring P11's `collect_referenced_names_in_expr` (which handles all four) + regression tests (mutation-in-wait suppresses both hints; read-only-wait control still fires). Non-blocking concern folded in for coherence: same 4 wrapper arms added to `collect_ownership_hints_expr` + `collect_copy_hints_expr` (those miss hints rather than lie, but leaving the siblings blind is no-duct-tape #7 drift).
+- **2026-05-31 — rules-compliance BLOCK (banned phrase):** `inlay_hint_passes.rs:196-197` doc comment contains the literal banned phrase "Acceptable for now:" (split across the `///` line break) per no-duct-tape.md "Phrases That Trigger Review". The deferral content (what/why/cost/trigger) is legitimate; only the tripwire wording is wrong. **FIX:** reword to "deliberate scope limit:" keeping the tradeoff text.
+- **2026-05-31 — cosmetic (code-reviewer concern, opportunistic):** `check.rs` `check_options_value` `// Record...` comment has mangled rustfmt indentation. Fixed in the same round.
+
+**Round-2 resolution (2026-05-31) — fix round committed, re-reviewed, ALL CLEAR:**
+- code-reviewer r2: PASS — neutralized the `Wait`/`Background` arm → tests (a)+(c) failed with the exact spurious-hint symptom, restored → pass (falsifiable, non-tautological); 4 wrapper arms mirror canonical `collect_referenced_names_in_expr` byte-for-byte; all 3 expr-walkers now consistent in the wrapper dimension; if-let→match conversion behavior-preserving; control test (share-wrapped) guards over-suppression.
+- rules-compliance r2: PASS — banned phrase gone (single-line + split-across-`///`); reworded to "Single-line-only by design:" preserving what/why/cost/trigger; delta clean (no parallel logic, no new violations, test pure addition).
+- New tracked follow-up (code-reviewer r2 non-blocking concern, added to todos.md `inlay-hint-walker-completeness-followup`): `collect_ownership_hints_expr` + `collect_copy_hints_expr` still don't recurse into BinOp/ArrayLit/StructLit/MapLit/IndexAccess container variants (the mutation collector IS exhaustive there) — pre-existing drift, same family as the other walker-completeness gaps, NOT introduced by this milestone. Out of M10 scope.
+
+**FINAL CUMULATIVE VERDICT (2026-05-31): all 4 reviewers PASS.** code-reviewer PASS (r2) · rules-compliance PASS (r2) · plan-adherence PASS (r1, 30 files accounted, superset bugs 2.10/2.11/2.14 landed, zero new registry entries) · acceptance-verifier PASS (r1, 36/36 ACs MET on clean rebuild). Milestone code complete + reviewed. Branch `v0.2.1-m10-teaching-surface-bugfix` ready for `/pr` → v0.2.1 release track (M9 owns the tag).
 
 ---
 

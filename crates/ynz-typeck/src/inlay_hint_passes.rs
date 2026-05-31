@@ -193,13 +193,13 @@ fn ast_ty_is_array(ty: &ynz_ast::nodes::Type) -> bool {
 /// Single-line constraint: this scans only the line that `stmt_start` sits on. For a
 /// `let` whose initializer spans multiple lines (e.g. a multi-line array literal), the
 /// returned position is the end of the FIRST line, not the true end of the statement —
-/// so the Replacement decoration anchors mid-expression for such bindings. Acceptable
-/// for now: multi-line initializers on promotable (never-grown / never-reassigned)
-/// bindings are rare, single-line is correct, and there is no crash. Locating the true
-/// statement end needs reliable end-of-statement detection across lines — `span.end`
-/// points past trailing trivia (comments) rather than the closing token, so it can't be
-/// used directly. Narrow the scan to the full statement when that trivia handling is
-/// sorted, or when a user reports the multi-line mis-anchor.
+/// so the Replacement decoration anchors mid-expression for such bindings.
+/// Single-line-only by design: multi-line initializers on promotable (never-grown /
+/// never-reassigned) bindings are rare, single-line is correct, and there is no crash.
+/// Locating the true statement end requires reliable end-of-statement detection across
+/// lines — `span.end` points past trailing trivia (comments) rather than the closing
+/// token, so it can't be used directly. Narrow the scan to the full statement when that
+/// trivia handling is sorted, or when a user reports the multi-line mis-anchor.
 ///
 /// Time: O(line_len)  Space: O(1)  where line_len = length of the containing line.
 fn hint_position_end_of_stmt_or_before_comment(text: &str, stmt_start: usize) -> usize {
@@ -539,6 +539,23 @@ fn collect_maybe_mutated_expr(
         Expr::PostfixOp { receiver: operand, .. } => {
             collect_maybe_mutated_expr(operand, sig_table, imported, generic_fn_table, out);
         }
+        // Recurse into concurrency wrappers and type-narrowing predicates so that
+        // a `lend`/`give` call nested inside `wait`, `background`, or an `is`
+        // scrutinee is not invisible to the mutation collector.
+        // Mirrors the handling in `collect_referenced_names_in_expr` (check.rs).
+        Expr::Wait(inner, _) | Expr::Background(inner, _) => {
+            collect_maybe_mutated_expr(inner, sig_table, imported, generic_fn_table, out);
+        }
+        Expr::Is { expr, .. } => {
+            collect_maybe_mutated_expr(expr, sig_table, imported, generic_fn_table, out);
+        }
+        Expr::InterpolatedString(parts, _) => {
+            for part in parts {
+                if let ynz_ast::nodes::StringPart::Expr(e, _) = part {
+                    collect_maybe_mutated_expr(e, sig_table, imported, generic_fn_table, out);
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -808,6 +825,23 @@ fn collect_ownership_hints_expr(
                 }
             }
         }
+        // Recurse into concurrency wrappers, type-narrowing predicates, and
+        // interpolated strings so that call sites nested inside these wrappers
+        // are not invisible to the ownership-hint pass.
+        // Mirrors `collect_maybe_mutated_expr` and `collect_referenced_names_in_expr`.
+        Expr::Wait(inner, _) | Expr::Background(inner, _) => {
+            collect_ownership_hints_expr(inner, sig_table, imported, generic_fn_table, out);
+        }
+        Expr::Is { expr, .. } => {
+            collect_ownership_hints_expr(expr, sig_table, imported, generic_fn_table, out);
+        }
+        Expr::InterpolatedString(parts, _) => {
+            for part in parts {
+                if let ynz_ast::nodes::StringPart::Expr(e, _) = part {
+                    collect_ownership_hints_expr(e, sig_table, imported, generic_fn_table, out);
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -870,25 +904,45 @@ fn collect_copy_hints_expr(
     expr_types: &std::collections::HashMap<(usize, usize), Type>,
     out: &mut Vec<CopyHint>,
 ) {
-    if let Expr::Call(c) = expr {
-        for arg in &c.args {
-            // Emit a copy hint when this arg's type is trivially copyable.  The
-            // type-check runs before the recursion, so a plain `Expr::Ident` arg
-            // that is copyable gets exactly one hint here; the recursion below
-            // finds no nested `Expr::Call` inside an ident and emits nothing.
-            if let Some(ty) = expr_types.get(&expr_span_key(arg)) {
-                if is_trivially_copyable(ty) {
-                    out.push(CopyHint {
-                        position: arg.span().end,
-                        size_text: copy_size_text(ty).to_string(),
-                    });
+    match expr {
+        Expr::Call(c) => {
+            for arg in &c.args {
+                // Emit a copy hint when this arg's type is trivially copyable.  The
+                // type-check runs before the recursion, so a plain `Expr::Ident` arg
+                // that is copyable gets exactly one hint here; the recursion below
+                // finds no nested `Expr::Call` inside an ident and emits nothing.
+                if let Some(ty) = expr_types.get(&expr_span_key(arg)) {
+                    if is_trivially_copyable(ty) {
+                        out.push(CopyHint {
+                            position: arg.span().end,
+                            size_text: copy_size_text(ty).to_string(),
+                        });
+                    }
+                }
+                // Recurse into the arg so that copyable values nested inside inner
+                // calls (e.g. `outer(inner(n))` → `n`) are reached at any depth.
+                // Mirrors `collect_ownership_hints_expr`'s recursion shape.
+                collect_copy_hints_expr(arg, expr_types, out);
+            }
+        }
+        // Recurse into concurrency wrappers, type-narrowing predicates, and
+        // interpolated strings so that call sites nested inside these wrappers
+        // produce copy hints.  Mirrors `collect_maybe_mutated_expr` and
+        // `collect_ownership_hints_expr` for sibling-walker consistency.
+        Expr::Wait(inner, _) | Expr::Background(inner, _) => {
+            collect_copy_hints_expr(inner, expr_types, out);
+        }
+        Expr::Is { expr: inner, .. } => {
+            collect_copy_hints_expr(inner, expr_types, out);
+        }
+        Expr::InterpolatedString(parts, _) => {
+            for part in parts {
+                if let ynz_ast::nodes::StringPart::Expr(e, _) = part {
+                    collect_copy_hints_expr(e, expr_types, out);
                 }
             }
-            // Recurse into the arg so that copyable values nested inside inner
-            // calls (e.g. `outer(inner(n))` → `n`) are reached at any depth.
-            // Mirrors `collect_ownership_hints_expr`'s recursion shape.
-            collect_copy_hints_expr(arg, expr_types, out);
         }
+        _ => {}
     }
 }
 

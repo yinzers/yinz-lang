@@ -4031,8 +4031,8 @@ impl<'b> Checker<'b> {
     /// that names an options type. Returns `Type::Options { name }` on success.
     fn check_options_value(&mut self, type_name: &str, variant: &str, span: &SourceSpan) -> Type {
         let entry = self.options_table.get(type_name).unwrap(); // caller verified contains()
-                                                                // Record the options type name as referenced so an import used exclusively
-                                                                // via variant access (`Timeframe.fiveMinute`) is not flagged as unused.
+        // Record the options type name as referenced so an import used exclusively
+        // via variant access (`Timeframe.fiveMinute`) is not flagged as unused.
         self.referenced_names.insert(type_name.to_string());
         if entry.variants.contains(&variant.to_string()) {
             Type::Options {
