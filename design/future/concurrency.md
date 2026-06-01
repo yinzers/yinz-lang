@@ -275,6 +275,28 @@ This falls out of what's already locked:
 
 ---
 
+## Sleep Intrinsics — Naming & Blocking-vs-Yielding Teaching — DECIDED 2026-06-01
+
+There are two sleep intrinsics, distinguished by what they do to the OS thread:
+
+- **`sleep(ms)`** — the **yielding** sleep (the default). Used as `wait sleep(ms)`; the function suspends and hands the thread back to the scheduler, which runs other tasks during the wait. Resumes when the timer fires. This is a suspension point (`wait` is auto-inferred per the no-coloring model).
+- **`sleepBlocking(ms)`** — the **blocking** sleep (the labeled exception). Parks the OS thread for `ms` — it sits idle, runs nothing else. NOT a suspension point.
+
+**Both pause the calling code for `ms`. The difference is whether the THREAD is wasted.** The win from yielding only appears when there's other work to run; in a single-purpose program doing one thing, the observable behavior is identical.
+
+**Naming history:** these shipped in M1/M2 as `sleepMs` (blocking) and `sleepAsync` (yielding). Both are mis-named: `sleepAsync` smuggles the `async` jargon the language exists to hide (Golden Rule 12 + `.claude/rules/vocabulary.md` — Yinz uses `wait`, never `async`/`await`), `wait sleepAsync` states "suspend" twice, and `sleepMs`/`sleepAsync` mix naming bases (unit vs mechanism). Renamed to `sleep` (yielding default) + `sleepBlocking` (blocking exception names its danger, per `stdlib-design.md` Rule 1). The rename is cheapest pre-external-users (M3 kickoff or standalone PR).
+
+**Symmetric teaching (the language steers you to the right tool per context):**
+
+| Context | Wrong choice | Diagnostic |
+|---|---|---|
+| **`--kernel` mode** | `wait sleep(ms)` (no scheduler to yield to) | **COMPILE ERROR** — `KernelModeRejectsWait`, with WHAT-INSTEAD redirecting to `sleepBlocking(ms)` (pauses without a scheduler). Ships when `--kernel` is wired to emit (post-v0.3; reserved in the registry, 0 code sites today). See `design/future/no-runtime-mode.md`. |
+| **Normal mode** | `sleepBlocking(ms)` (holds a thread idle when a scheduler is available) | **Tier 3 lint** `prefer-yielding-sleep` (suggestion, dismissable — NOT an error) → use `wait sleep(ms)`. Ships in **M4** (rides the `[[lint_rule]]` infra built there; M4's `background` handle-form also removes the last legit non-kernel blocking-sleep use — the keepalive pattern — so the lint stops nagging a valid case). Must be a suggestion, not an error: rare legit uses exist + respect explicit intent (`.claude/rules/auto-promotion.md`). |
+
+Tracked for execution in `.claude/plans/roadmaps/v0-3-concurrency-perf.md` ("Sleep intrinsic naming + blocking-vs-yielding teaching" architectural decision + M4 scope).
+
+---
+
 ## Open questions for v0.2 implementation milestone
 
 These don't need to be answered NOW; the v0.2 milestone plan resolves them:
