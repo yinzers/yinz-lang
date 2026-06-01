@@ -65,7 +65,13 @@ jobs:
         run: cargo clippy --workspace -- -D warnings
 
       - name: Build (release)
-        run: cargo build --workspace --release
+        # Pre-build the release-profile runtime staticlib first, for the same reason as the
+        # debug step above: `cargo build --workspace --release` can compile the embedding
+        # consumers (driver/watch) before ynz-runtime emits target/release/libynz_runtime.a,
+        # since the include_bytes! dependency is invisible to cargo's unit graph.
+        run: |
+          cargo build -p ynz-runtime --release
+          cargo build --workspace --release
 
       - name: Test
         run: cargo test --workspace
