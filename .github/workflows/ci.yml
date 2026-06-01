@@ -52,6 +52,15 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
+      # ynz-driver and ynz-watch embed the runtime static archive at compile time via
+      # `include_bytes!(env!("YNZ_RT_LIB_PATH"))` (target/debug/libynz_runtime.a). `cargo
+      # clippy`/`cargo check` are check-only and never produce that archive, so on a clean
+      # checkout the Clippy and Test steps fail with "couldn't read libynz_runtime.a". A
+      # real `cargo build` of ynz-runtime emits the staticlib first, satisfying the embed
+      # for the dev-profile Clippy + Test steps below. (Release step builds its own.)
+      - name: Build runtime archive (required by include_bytes! in driver/watch)
+        run: cargo build -p ynz-runtime
+
       - name: Clippy
         run: cargo clippy --workspace -- -D warnings
 
