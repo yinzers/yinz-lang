@@ -24,6 +24,9 @@ use crate::{
 /// `detail` is the optional secondary line shown in the Outline panel (e.g. `export`,
 /// param count). Returns `None` only if the text has no bytes at the span boundaries
 /// (degenerate empty file with a non-zero span — should not occur in practice).
+// Each arg is a distinct DocumentSymbol field (name, kind, detail, spans, text,
+// table, encoding); they're the LSP shape's own fields, not bundleable context.
+#[allow(clippy::too_many_arguments)]
 fn make_document_symbol(
     name: String,
     kind: SymbolKind,
@@ -283,7 +286,8 @@ pub fn workspace_symbol_response(state: &ServerState, query: &str) -> Vec<Symbol
             }
 
             let clamp = |b: usize| b.min(file_text.len());
-            let start = table.byte_offset_to_position(&file_text, clamp(name_start), state.encoding);
+            let start =
+                table.byte_offset_to_position(&file_text, clamp(name_start), state.encoding);
             let end = table.byte_offset_to_position(&file_text, clamp(name_end), state.encoding);
 
             #[allow(deprecated)]
@@ -374,7 +378,10 @@ mod tests {
         let src = "function entrypoint() -> nothing { }";
         let (state, _uri) = state_single("/tmp/ws_all.ynz", src);
         let results = workspace_symbol_response(&state, "");
-        assert!(!results.is_empty(), "empty query must match at least one symbol");
+        assert!(
+            !results.is_empty(),
+            "empty query must match at least one symbol"
+        );
     }
 
     // WHY: workspace_symbol_response must filter by case-insensitive substring.

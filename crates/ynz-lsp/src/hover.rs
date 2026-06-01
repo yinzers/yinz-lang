@@ -1,8 +1,12 @@
+use std::collections::HashMap;
+
 use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind, Range};
 use ynz_ast::nodes::{Item, Module};
 use ynz_parser::token::{Spanned, Token};
 use ynz_registry::lsp_hover_for_token;
 use ynz_typeck::ast_offset::identifier_use_site_at_offset;
+use ynz_typeck::options_table::OptionsEntry;
+use ynz_typeck::shapes::ShapeTable;
 use ynz_typeck::type_at_offset::type_of_name_at_offset;
 use ynz_typeck::types::type_name;
 
@@ -112,9 +116,12 @@ fn doc_for_name<'a>(module: &'a Module, name: &str) -> Option<&'a str> {
 /// `module` is `Some` when the parsed AST is available; passing `None` skips
 /// step 1 and falls back to the signature-only path.
 ///
-/// Time: O(log t) token bsearch + O(m) AST use-site walk (step 1) + O(1) registry
-/// + O(f) sig_table scan, where t = tokens, m = AST nodes, f = top-level fns. Runs
+/// Time: O(log t) token bsearch + O(m) AST use-site walk (step 1) + O(1) registry +
+/// O(f) sig_table scan, where t = tokens, m = AST nodes, f = top-level fns. Runs
 /// per hover request (not per keystroke). Space: O(1).
+// Each arg is a distinct hover input (tokens, sig table, module, text, line table,
+// offset, encoding, options); no meaningful context bundle for a per-request handler.
+#[allow(clippy::too_many_arguments)]
 pub fn hover_response(
     tokens: &[Spanned<Token>],
     sig_table: &ynz_typeck::signatures::SignatureTable,
@@ -123,6 +130,8 @@ pub fn hover_response(
     table: &LineTable,
     byte_offset: usize,
     encoding: PositionEncoding,
+    shape_table: Option<&ShapeTable>,
+    options: Option<&HashMap<String, OptionsEntry>>,
 ) -> Option<Hover> {
     let (token_name, span_start, span_end) = token_at_offset(tokens, byte_offset)?;
 
@@ -147,11 +156,18 @@ pub fn hover_response(
             // parameters are covered; unannotated lets return None → typeless binding
             // hover — never wrong, sometimes incomplete.
             return Some(
-                user_symbol_hover(&token_name, sig_table, Some(module), range)
-                    .unwrap_or_else(|| {
-                        let ty = type_of_name_at_offset(module, &use_name, byte_offset);
-                        binding_hover(&token_name, ty.as_ref(), range)
-                    }),
+                user_symbol_hover(
+                    &token_name,
+                    sig_table,
+                    Some(module),
+                    range,
+                    shape_table,
+                    options,
+                )
+                .unwrap_or_else(|| {
+                    let ty = type_of_name_at_offset(module, &use_name, byte_offset);
+                    binding_hover(&token_name, ty.as_ref(), range)
+                }),
             );
         }
     }
@@ -168,21 +184,24 @@ pub fn hover_response(
     }
 
     // Step 3: typeck signature lookup (module=None path, or name not a use-site).
-    user_symbol_hover(&token_name, sig_table, module, range)
+    user_symbol_hover(&token_name, sig_table, module, range, shape_table, options)
 }
 
-/// Produce a user-symbol hover: function signature with optional doc comment,
-/// or `None` when the name is not a known function (caller falls through to
-/// `binding_hover`).
+/// Produce a user-symbol hover: function signature, shape field list, or options
+/// variant list — whichever matches `token_name`. Returns `None` when not found
+/// (caller falls through to `binding_hover`).
 ///
-/// Time: O(1) sig_table lookup + O(m) doc-comment scan where m = top-level items.
-/// Space: O(1).
+/// Time: O(f) function lookup + O(s) shape lookup + O(m) doc-comment scan.
+/// Space: O(fields) for shape rendering, O(variants) for options rendering.
 fn user_symbol_hover(
     token_name: &str,
     sig_table: &ynz_typeck::signatures::SignatureTable,
     module: Option<&Module>,
     range: Option<Range>,
+    shape_table: Option<&ShapeTable>,
+    options: Option<&HashMap<String, OptionsEntry>>,
 ) -> Option<Hover> {
+    // --- Functions ---
     if let Some(sig) = sig_table.fns.get(token_name) {
         let param_str = sig
             .params
@@ -213,6 +232,101 @@ fn user_symbol_hover(
         });
     }
 
+    // --- Shapes ---
+    if let Some(st) = shape_table {
+        if let Some(def) = st.get(token_name) {
+            let doc_prefix = module
+                .and_then(|m| doc_for_name(m, token_name))
+                .map(|d| format!("{d}\n\n---\n\n"))
+                .unwrap_or_default();
+            let fields = if def.fields.is_empty() {
+                "  (no fields)".to_string()
+            } else {
+                def.fields
+                    .iter()
+                    .map(|f| format!("  {}: {}", f.name, type_name(&f.ty)))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            let body = format!(
+                "{}```ynz\nshape {} {{\n{}\n}}\n```",
+                doc_prefix, def.name, fields
+            );
+            return Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: body,
+                }),
+                range,
+            });
+        }
+    }
+
+    // --- Options (local module first, then imported) ---
+    // Local: walk the parsed AST for OptionsDecl items.
+    let local_opts = module.and_then(|m| {
+        m.items.iter().find_map(|item| {
+            if let Item::OptionsDecl(o) = item {
+                if o.name == token_name {
+                    let variants: Vec<String> = o
+                        .variants
+                        .iter()
+                        .map(|(name, _, display)| match display {
+                            Some(d) => format!("  {name}  →  \"{d}\""),
+                            None => format!("  {name}"),
+                        })
+                        .collect();
+                    let doc_prefix = o
+                        .doc
+                        .as_deref()
+                        .map(|d| format!("{d}\n\n---\n\n"))
+                        .unwrap_or_default();
+                    Some((o.name.clone(), doc_prefix, variants))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+    });
+
+    // Imported: check the imported options HashMap.
+    let imported_opts = local_opts
+        .is_none()
+        .then(|| {
+            options.and_then(|opts| {
+                opts.get(token_name).map(|entry| {
+                    let variants: Vec<String> = entry
+                        .variants
+                        .iter()
+                        .zip(entry.display_strings.iter())
+                        .map(|(name, display)| match display {
+                            Some(d) => format!("  {name}  →  \"{d}\""),
+                            None => format!("  {name}"),
+                        })
+                        .collect();
+                    (token_name.to_string(), String::new(), variants)
+                })
+            })
+        })
+        .flatten();
+
+    if let Some((name, doc_prefix, variants)) = local_opts.or(imported_opts) {
+        let variant_list = variants.join("\n");
+        let body = format!(
+            "{}```ynz\noptions {} {{\n{}\n}}\n```",
+            doc_prefix, name, variant_list
+        );
+        return Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: body,
+            }),
+            range,
+        });
+    }
+
     None
 }
 
@@ -227,7 +341,11 @@ fn user_symbol_hover(
 /// type requires `check_query` (too expensive per-keystroke).
 ///
 /// Time: O(1).  Space: O(1).
-fn binding_hover(token_name: &str, ty: Option<&ynz_typeck::types::Type>, range: Option<Range>) -> Hover {
+fn binding_hover(
+    token_name: &str,
+    ty: Option<&ynz_typeck::types::Type>,
+    range: Option<Range>,
+) -> Hover {
     let value = match ty {
         Some(t) => format!("`{}`: `{}`", token_name, type_name(t)),
         None => format!("**Binding**: `{token_name}`"),
@@ -299,7 +417,17 @@ mod tests {
         let src = "function entrypoint() -> nothing { }";
         let tokens = tokenize(src);
         let table = LineTable::new(src);
-        let result = hover_response(&tokens, &make_sig(), None, src, &table, 3, PositionEncoding::Utf8);
+        let result = hover_response(
+            &tokens,
+            &make_sig(),
+            None,
+            src,
+            &table,
+            3,
+            PositionEncoding::Utf8,
+            None,
+            None,
+        );
         assert!(
             result.is_some(),
             "hovering over 'function' keyword should return Some"
@@ -321,7 +449,17 @@ mod tests {
         let src = "let   x = 5";
         let tokens = tokenize(src);
         let table = LineTable::new(src);
-        let result = hover_response(&tokens, &make_sig(), None, src, &table, 4, PositionEncoding::Utf8);
+        let result = hover_response(
+            &tokens,
+            &make_sig(),
+            None,
+            src,
+            &table,
+            4,
+            PositionEncoding::Utf8,
+            None,
+            None,
+        );
         assert!(result.is_none(), "whitespace offset should return None");
     }
 
@@ -330,7 +468,17 @@ mod tests {
         let src = "";
         let tokens = tokenize(src);
         let table = LineTable::new(src);
-        let result = hover_response(&tokens, &make_sig(), None, src, &table, 0, PositionEncoding::Utf8);
+        let result = hover_response(
+            &tokens,
+            &make_sig(),
+            None,
+            src,
+            &table,
+            0,
+            PositionEncoding::Utf8,
+            None,
+            None,
+        );
         assert!(result.is_none());
     }
 }

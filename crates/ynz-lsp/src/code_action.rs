@@ -6,7 +6,10 @@ use ynz_ast::nodes::Item;
 use ynz_diagnostics::DiagnosticKind;
 use ynz_parser::SourceFileRegistry as _;
 
-use crate::{position::LineTable, state::{import_path_for_file, ServerState}};
+use crate::{
+    position::LineTable,
+    state::{import_path_for_file, ServerState},
+};
 
 /// Enumerate quick-fix code actions for diagnostics overlapping `range` in `uri`.
 ///
@@ -55,17 +58,23 @@ pub fn code_action_response(
         let Some(kind) = &diag.kind else { continue };
 
         let action = match kind {
-            DiagnosticKind::BannedKeyword { keyword } => {
-                build_banned_keyword_action(
-                    uri, text, &table, diag, keyword, kind.kind_name(), state.encoding,
-                )
-            }
+            DiagnosticKind::BannedKeyword { keyword } => build_banned_keyword_action(
+                uri,
+                text,
+                &table,
+                diag,
+                keyword,
+                kind.kind_name(),
+                state.encoding,
+            ),
             DiagnosticKind::BannedJargon { term } => {
                 build_banned_jargon_action(uri, text, &table, diag, term, state.encoding)
             }
             DiagnosticKind::NotDefined => {
-                let name =
-                    text.get(diag.span.start..diag.span.end.min(text.len())).unwrap_or("").trim();
+                let name = text
+                    .get(diag.span.start..diag.span.end.min(text.len()))
+                    .unwrap_or("")
+                    .trim();
                 if name.is_empty() {
                     None
                 } else {
@@ -104,11 +113,7 @@ fn build_banned_keyword_action(
 
     let diag_range = {
         let start = table.byte_offset_to_position(text, diag.span.start, encoding);
-        let end = table.byte_offset_to_position(
-            text,
-            diag.span.end.min(text.len()),
-            encoding,
-        );
+        let end = table.byte_offset_to_position(text, diag.span.end.min(text.len()), encoding);
         lsp_types::Range { start, end }
     };
 
@@ -152,11 +157,7 @@ fn build_banned_jargon_action(
 
     let diag_range = {
         let start = table.byte_offset_to_position(text, diag.span.start, encoding);
-        let end = table.byte_offset_to_position(
-            text,
-            diag.span.end.min(text.len()),
-            encoding,
-        );
+        let end = table.byte_offset_to_position(text, diag.span.end.min(text.len()), encoding);
         lsp_types::Range { start, end }
     };
 
@@ -226,7 +227,10 @@ fn build_auto_import_action(
     let insert_pos = table.byte_offset_to_position(text, insert_byte, state.encoding);
 
     let edit = TextEdit {
-        range: Range { start: insert_pos, end: insert_pos },
+        range: Range {
+            start: insert_pos,
+            end: insert_pos,
+        },
         new_text: import_text,
     };
 
@@ -264,9 +268,7 @@ fn build_remove_import_action(
     diag_start: usize,
     name: &str,
 ) -> Option<CodeAction> {
-    let Some(sf) = state.source_file_for(uri) else {
-        return None;
-    };
+    let sf = state.source_file_for(uri)?;
     let parse = ynz_parser::queries::parse_query(&state.db, sf);
 
     // Find the ImportDecl whose byte span contains the diagnostic start offset.
@@ -299,7 +301,10 @@ fn build_remove_import_action(
     let end_pos = table.byte_offset_to_position(text, line_end, state.encoding);
 
     let edit = TextEdit {
-        range: Range { start: start_pos, end: end_pos },
+        range: Range {
+            start: start_pos,
+            end: end_pos,
+        },
         new_text: String::new(),
     };
 
@@ -328,13 +333,18 @@ pub fn import_insert_byte(state: &ServerState, uri: &Url) -> usize {
         return 0;
     };
     let parse = ynz_parser::queries::parse_query(&state.db, sf);
-    let last_import_end = parse.module.items.iter().filter_map(|item| {
-        if let Item::ImportDecl(d) = item {
-            Some(d.span.end)
-        } else {
-            None
-        }
-    }).max();
+    let last_import_end = parse
+        .module
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let Item::ImportDecl(d) = item {
+                Some(d.span.end)
+            } else {
+                None
+            }
+        })
+        .max();
 
     let Some(end_byte) = last_import_end else {
         return 0;

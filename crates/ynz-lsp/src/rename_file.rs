@@ -29,16 +29,26 @@ use crate::state::{import_path_for_file, uri_to_path, ServerState};
 /// Patches import paths in all affected files by writing directly to disk,
 /// then updates the salsa db so subsequent queries reflect the new state.
 pub fn did_rename_files(state: &mut ServerState, params: &RenameFilesParams) {
-    let Some(project_root) = state.project_root.clone() else { return };
+    let Some(project_root) = state.project_root.clone() else {
+        return;
+    };
 
     for rename in &params.files {
-        let Ok(old_uri) = Url::parse(&rename.old_uri) else { continue };
-        let Ok(new_uri) = Url::parse(&rename.new_uri) else { continue };
+        let Ok(old_uri) = Url::parse(&rename.old_uri) else {
+            continue;
+        };
+        let Ok(new_uri) = Url::parse(&rename.new_uri) else {
+            continue;
+        };
         let old_path = uri_to_path(&old_uri);
         let new_path = uri_to_path(&new_uri);
 
-        let Some(old_import) = import_path_for_file(&old_path, &project_root) else { continue };
-        let Some(new_import) = import_path_for_file(&new_path, &project_root) else { continue };
+        let Some(old_import) = import_path_for_file(&old_path, &project_root) else {
+            continue;
+        };
+        let Some(new_import) = import_path_for_file(&new_path, &project_root) else {
+            continue;
+        };
 
         if old_import == new_import {
             continue;
@@ -51,13 +61,17 @@ pub fn did_rename_files(state: &mut ServerState, params: &RenameFilesParams) {
             if path.as_str() == old_path || path.as_str() == new_path {
                 continue;
             }
-            let Some(sf) = state.db.source_by_path(path) else { continue };
+            let Some(sf) = state.db.source_by_path(path) else {
+                continue;
+            };
             let parse = ynz_parser::queries::parse_query(&state.db, sf);
 
             // Check cheaply whether this file even has the import before cloning text.
-            let has_import = parse.module.items.iter().any(|item| {
-                matches!(item, Item::ImportDecl(d) if d.source == old_import)
-            });
+            let has_import = parse
+                .module
+                .items
+                .iter()
+                .any(|item| matches!(item, Item::ImportDecl(d) if d.source == old_import));
             if !has_import {
                 continue;
             }
@@ -119,7 +133,9 @@ fn patch_import_path(
     // Collect byte ranges to replace, in reverse order so offsets stay valid.
     let mut ranges: Vec<(usize, usize)> = Vec::new();
     for item in &module.items {
-        let Item::ImportDecl(decl) = item else { continue };
+        let Item::ImportDecl(decl) = item else {
+            continue;
+        };
         if decl.source != old_import {
             continue;
         }
@@ -135,7 +151,7 @@ fn patch_import_path(
         return text.to_string();
     }
 
-    ranges.sort_by(|a, b| b.0.cmp(&a.0)); // reverse order
+    ranges.sort_by_key(|r| std::cmp::Reverse(r.0)); // reverse order
     let mut out = text.to_string();
     for (start, end) in ranges {
         out.replace_range(start..end, new_import);
@@ -145,8 +161,7 @@ fn patch_import_path(
 
 fn uri_for_path(path: &str) -> Url {
     Url::from_file_path(path).unwrap_or_else(|_| {
-        Url::parse(&format!("file://{path}")).unwrap_or_else(|_| {
-            Url::parse("file:///unknown").expect("static fallback")
-        })
+        Url::parse(&format!("file://{path}"))
+            .unwrap_or_else(|_| Url::parse("file:///unknown").expect("static fallback"))
     })
 }

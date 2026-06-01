@@ -2,13 +2,17 @@ use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionItemTag, CompletionList, Documentation,
     InsertTextFormat, MarkupContent, MarkupKind, Position, Range, TextEdit,
 };
+use ynz_parser::SourceFileRegistry as _;
 use ynz_registry::{CompletionContext, CompletionKind, RegistryCompletionItem};
 use ynz_typeck::shapes::ShapeTable;
 use ynz_typeck::signatures::SignatureTable;
 use ynz_typeck::types::type_name;
-use ynz_parser::SourceFileRegistry as _;
 
-use crate::{capabilities::PositionEncoding, position::LineTable, state::{import_path_for_file, ServerState}};
+use crate::{
+    capabilities::PositionEncoding,
+    position::LineTable,
+    state::{import_path_for_file, ServerState},
+};
 
 /// Detect the completion context from the source text and cursor byte offset.
 pub fn detect_context<'a>(text: &str, cursor_offset: usize) -> CompletionContext<'a> {
@@ -83,12 +87,18 @@ pub fn receiver_end_offset(text: &str, cursor_offset: usize) -> Option<usize> {
     }
     let before = &text[..cursor_offset.min(text.len())];
     let bytes = before.as_bytes();
-    let last_non_ws = bytes.iter().rev().find(|&&b| !b.is_ascii_whitespace()).copied()?;
+    let last_non_ws = bytes
+        .iter()
+        .rev()
+        .find(|&&b| !b.is_ascii_whitespace())
+        .copied()?;
     if last_non_ws != b'.' {
         return None;
     }
     // Find the position of the dot
-    let dot_pos = before.trim_end_matches(|c: char| c.is_ascii_whitespace()).len();
+    let dot_pos = before
+        .trim_end_matches(|c: char| c.is_ascii_whitespace())
+        .len();
     if dot_pos == 0 {
         return None;
     }
@@ -190,15 +200,15 @@ fn fn_snippet(name: &str, params: &[(String, ynz_typeck::types::Type)]) -> Strin
 fn keyword_snippet(label: &str) -> Option<String> {
     let s = match label {
         "function" => "function ${1:name}(${2:params}) -> ${3:nothing} {\n\t$0\n}",
-        "shape"    => "shape ${1:Name} {\n\t${2:field}: ${3:string}\n}",
-        "options"  => "options ${1:Name} {\n\t${2:variant1},\n\t${3:variant2},\n}",
-        "let"      => "let ${1:name} = $0",
-        "const"    => "const ${1:name} = $0",
-        "if"       => "if ($1) {\n\t$0\n}",
-        "for"      => "for ($1 in $2) {\n\t$0\n}",
-        "return"   => "return $0",
-        "import"   => "import { $1 } from `$2`",
-        _          => return None,
+        "shape" => "shape ${1:Name} {\n\t${2:field}: ${3:string}\n}",
+        "options" => "options ${1:Name} {\n\t${2:variant1},\n\t${3:variant2},\n}",
+        "let" => "let ${1:name} = $0",
+        "const" => "const ${1:name} = $0",
+        "if" => "if ($1) {\n\t$0\n}",
+        "for" => "for ($1 in $2) {\n\t$0\n}",
+        "return" => "return $0",
+        "import" => "import { $1 } from `$2`",
+        _ => return None,
     };
     Some(s.to_string())
 }
@@ -243,7 +253,11 @@ pub fn user_symbol_items(
         });
     }
 
-    for name in shape_table.shapes.keys().filter(|n| !n.starts_with("__anon__")) {
+    for name in shape_table
+        .shapes
+        .keys()
+        .filter(|n| !n.starts_with("__anon__"))
+    {
         items.push(CompletionItem {
             label: name.clone(),
             kind: Some(CompletionItemKind::CLASS),
@@ -297,12 +311,21 @@ pub fn cross_file_completion_items(
         let exports = ynz_typeck::exports_query(&state.db, sf);
 
         for name in exports.shapes.keys().filter(|n| !n.starts_with("__anon__")) {
-            if shape_table.map(|t| t.shapes.contains_key(name)).unwrap_or(false) {
+            if shape_table
+                .map(|t| t.shapes.contains_key(name))
+                .unwrap_or(false)
+            {
                 continue; // already visible
             }
             items.push(import_completion_item(
-                name, "shape", CompletionItemKind::CLASS,
-                &import_path, insert_pos, state.encoding, text, table,
+                name,
+                "shape",
+                CompletionItemKind::CLASS,
+                &import_path,
+                insert_pos,
+                state.encoding,
+                text,
+                table,
             ));
         }
 
@@ -311,18 +334,33 @@ pub fn cross_file_completion_items(
                 continue;
             }
             items.push(import_completion_item(
-                name, "function", CompletionItemKind::FUNCTION,
-                &import_path, insert_pos, state.encoding, text, table,
+                name,
+                "function",
+                CompletionItemKind::FUNCTION,
+                &import_path,
+                insert_pos,
+                state.encoding,
+                text,
+                table,
             ));
         }
 
         for name in exports.options.keys() {
-            if shape_table.map(|t| t.options_names.contains(name)).unwrap_or(false) {
+            if shape_table
+                .map(|t| t.options_names.contains(name))
+                .unwrap_or(false)
+            {
                 continue;
             }
             items.push(import_completion_item(
-                name, "options", CompletionItemKind::ENUM,
-                &import_path, insert_pos, state.encoding, text, table,
+                name,
+                "options",
+                CompletionItemKind::ENUM,
+                &import_path,
+                insert_pos,
+                state.encoding,
+                text,
+                table,
             ));
         }
     }
@@ -330,6 +368,9 @@ pub fn cross_file_completion_items(
     items
 }
 
+// Builds one cross-file import CompletionItem; each arg is a distinct LSP field
+// (name, kind, labels, source span, line table) with no meaningful bundling.
+#[allow(clippy::too_many_arguments)]
 fn import_completion_item(
     name: &str,
     kind_label: &str,
@@ -343,7 +384,10 @@ fn import_completion_item(
     let _ = (encoding, text, table); // consumed via insert_pos which is pre-computed
     let import_text = format!("import {{ {name} }} from `{import_path}`\n");
     let edit = TextEdit {
-        range: Range { start: insert_pos, end: insert_pos },
+        range: Range {
+            start: insert_pos,
+            end: insert_pos,
+        },
         new_text: import_text,
     };
     CompletionItem {

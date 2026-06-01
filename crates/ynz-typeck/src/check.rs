@@ -15,7 +15,7 @@ use crate::{
         apply_substitution, unify_param, GenericFnSig, GenericFnTable, GenericShapeTable,
         MonoSignature, MonomorphizationTable, Substitution,
     },
-    intrinsics::{M2_MAY_BLOCK_INTRINSICS, PrimitiveIntrinsicTable},
+    intrinsics::{PrimitiveIntrinsicTable, M2_MAY_BLOCK_INTRINSICS},
     options_table::{collect_options, OptionsTable},
     return_paths::analyze_return_paths,
     scope::{Scope, ScopeEntry},
@@ -41,6 +41,11 @@ pub struct TypedModule {
 /// Returns the typed module, monomorphization table, accumulated diagnostics, and the
 /// set of names that were resolved from the signature table or shape table during the
 /// check pass. The caller (`check_query`) uses this to detect unused imports.
+// Each argument is a distinct, required compiler table (signatures, shapes, generics,
+// intrinsics, imported options, imported fn names); they don't bundle into a meaningful
+// context type for a single-call-site entry point. Matches the convention used across
+// emit.rs / ynz-watch for top-level entry functions.
+#[allow(clippy::too_many_arguments)]
 pub fn check(
     module: &Module,
     sig_table: &SignatureTable,
@@ -50,7 +55,12 @@ pub fn check(
     intrinsics: &PrimitiveIntrinsicTable,
     imported_options: &std::collections::HashMap<String, crate::options_table::OptionsEntry>,
     imported_fn_names: HashSet<String>,
-) -> (TypedModule, MonomorphizationTable, DiagnosticBucket, HashSet<String>) {
+) -> (
+    TypedModule,
+    MonomorphizationTable,
+    DiagnosticBucket,
+    HashSet<String>,
+) {
     let mut diags = DiagnosticBucket::new();
     let mut options_table = collect_options(module, &mut diags);
     // Merge imported options so function bodies can use cross-file options types.
@@ -1701,7 +1711,10 @@ impl<'b> Checker<'b> {
         // may-block so they are excluded. User-defined function dispatch handles `suspends`
         // via the transitive analysis result on the sig table.
         if self.inside_wait
-            && matches!(callee_name.as_str(), "print" | "range" | "sleepMs" | "sensitive")
+            && matches!(
+                callee_name.as_str(),
+                "print" | "range" | "sleepMs" | "sensitive"
+            )
         {
             self.diags.push(Diagnostic::warning(
                 call.span.clone(),
@@ -1870,12 +1883,23 @@ impl<'b> Checker<'b> {
                     // Phase 6: explicit `wait` on a non-suspending callee — redundant hint.
                     // Uses the transitive `suspends` predicate (not the local `contains_wait`).
                     // Explicit `wait` on a suspending callee is valid-but-redundant; no warning.
-                    if was_inside_wait && !callee_suspends && !M2_MAY_BLOCK_INTRINSICS.contains(&name) {
+                    if was_inside_wait
+                        && !callee_suspends
+                        && !M2_MAY_BLOCK_INTRINSICS.contains(&name)
+                    {
                         self.diags.push(Diagnostic::warning(
                             call.span.clone(),
-                            format!("`{name}` never suspends — this explicit `wait` has no effect."),
-                            format!("Remove the `wait` keyword — call `{name}({})` directly.",
-                                params.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")),
+                            format!(
+                                "`{name}` never suspends — this explicit `wait` has no effect."
+                            ),
+                            format!(
+                                "Remove the `wait` keyword — call `{name}({})` directly.",
+                                params
+                                    .iter()
+                                    .map(|(n, _)| n.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ),
                             format!(
                                 "Suspension is determined from the call graph: `{name}` reaches \
                                  no may-block call, so `wait` here changes nothing."
@@ -2176,8 +2200,14 @@ impl<'b> Checker<'b> {
             // Gate on current_fn_suspends: only a caller that independently reaches a
             // suspension point needs this error; non-suspending callers treat dynamic calls
             // as non-suspending leaves per design/future/concurrency.md:75.
-            if let (Type::Dynamic { contract: expected_contract }, Type::Dynamic { contract: actual_contract })
-                = (expected_ty, &actual_ty)
+            if let (
+                Type::Dynamic {
+                    contract: expected_contract,
+                },
+                Type::Dynamic {
+                    contract: actual_contract,
+                },
+            ) = (expected_ty, &actual_ty)
             {
                 if expected_contract == actual_contract && self.current_fn_suspends {
                     self.diags.push(Diagnostic::error(
@@ -4464,8 +4494,8 @@ impl<'b> Checker<'b> {
     /// that names an options type. Returns `Type::Options { name }` on success.
     fn check_options_value(&mut self, type_name: &str, variant: &str, span: &SourceSpan) -> Type {
         let entry = self.options_table.get(type_name).unwrap(); // caller verified contains()
-        // Record the options type name as referenced so an import used exclusively
-        // via variant access (`Timeframe.fiveMinute`) is not flagged as unused.
+                                                                // Record the options type name as referenced so an import used exclusively
+                                                                // via variant access (`Timeframe.fiveMinute`) is not flagged as unused.
         self.referenced_names.insert(type_name.to_string());
         if entry.variants.contains(&variant.to_string()) {
             Type::Options {
@@ -4729,9 +4759,10 @@ fn stmt_contains_wait_anywhere(stmt: &Stmt) -> bool {
                 || arms.iter().any(|a| block_contains_wait(&a.body))
                 || else_arm.as_ref().is_some_and(block_contains_wait)
         }
-        Stmt::While { cond, body, .. } | Stmt::For { iter: cond, body, .. } => {
-            expr_contains_wait_anywhere(cond) || block_contains_wait(body)
-        }
+        Stmt::While { cond, body, .. }
+        | Stmt::For {
+            iter: cond, body, ..
+        } => expr_contains_wait_anywhere(cond) || block_contains_wait(body),
         Stmt::Return { value, .. } => value.as_ref().is_some_and(expr_contains_wait_anywhere),
         Stmt::FieldAssign { target, value, .. } => {
             expr_contains_wait_anywhere(target) || expr_contains_wait_anywhere(value)
@@ -4760,15 +4791,13 @@ fn expr_contains_wait_anywhere(expr: &Expr) -> bool {
             expr_contains_wait_anywhere(lhs) || expr_contains_wait_anywhere(rhs)
         }
         Expr::UnaryOp { operand, .. } => expr_contains_wait_anywhere(operand),
-        Expr::MethodCall {
-            receiver, args, ..
-        } => {
+        Expr::MethodCall { receiver, args, .. } => {
             expr_contains_wait_anywhere(receiver) || args.iter().any(expr_contains_wait_anywhere)
         }
         Expr::FieldAccess { receiver, .. } => expr_contains_wait_anywhere(receiver),
-        Expr::IndexAccess { receiver, index, .. } => {
-            expr_contains_wait_anywhere(receiver) || expr_contains_wait_anywhere(index)
-        }
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => expr_contains_wait_anywhere(receiver) || expr_contains_wait_anywhere(index),
         Expr::StructLit { fields, .. } => {
             fields.iter().any(|f| expr_contains_wait_anywhere(&f.value))
         }
@@ -4806,7 +4835,10 @@ fn block_contains_inferred_suspension(
 ) -> bool {
     block.stmts.iter().any(|stmt| match stmt {
         Stmt::Expr(Expr::Call(c)) => is_suspending_call(c, suspending),
-        Stmt::Let { value: Expr::Call(c), .. } => is_suspending_call(c, suspending),
+        Stmt::Let {
+            value: Expr::Call(c),
+            ..
+        } => is_suspending_call(c, suspending),
         // Recurse into nested `if` bodies — a branch inside a branch can suspend.
         Stmt::If { body, .. } => {
             block_contains_wait(body) || block_contains_inferred_suspension(body, suspending)
@@ -4851,7 +4883,13 @@ fn locals_crossing_wait(
     suspending: &std::collections::HashSet<&str>,
 ) -> Vec<LocalCrossesWait> {
     let mut problems = Vec::new();
-    collect_crossings_in_stmts(stmts, param_names, suspending, &mut Vec::new(), &mut problems);
+    collect_crossings_in_stmts(
+        stmts,
+        param_names,
+        suspending,
+        &mut Vec::new(),
+        &mut problems,
+    );
     problems
 }
 
@@ -4892,9 +4930,14 @@ fn collect_crossings_in_stmts(
             let this_stmt_suspends = match stmt {
                 Stmt::Expr(Expr::Wait(_, _)) => true,
                 Stmt::Expr(Expr::Call(c)) if is_suspending_call(c, suspending) => true,
-                Stmt::Let { value: Expr::Wait(_, _), .. } => true,
-                Stmt::Let { value: Expr::Call(c), .. }
-                    if is_suspending_call(c, suspending) => true,
+                Stmt::Let {
+                    value: Expr::Wait(_, _),
+                    ..
+                } => true,
+                Stmt::Let {
+                    value: Expr::Call(c),
+                    ..
+                } if is_suspending_call(c, suspending) => true,
                 _ => false,
             };
             if this_stmt_suspends {
@@ -4907,13 +4950,19 @@ fn collect_crossings_in_stmts(
                 }
                 // Collect the new result-binding (if any) into pending.
                 match stmt {
-                    Stmt::Let { name, value: Expr::Wait(_, _), .. }
-                    | Stmt::Let { name, value: Expr::Call(_), .. }
-                        if !param_names.contains(&name.as_str()) =>
+                    Stmt::Let {
+                        name,
+                        value: Expr::Wait(_, _),
+                        ..
+                    }
+                    | Stmt::Let {
+                        name,
+                        value: Expr::Call(_),
+                        ..
+                    } if !param_names.contains(&name.as_str())
+                        && !pending_result_bindings.contains(name) =>
                     {
-                        if !pending_result_bindings.contains(name) {
-                            pending_result_bindings.push(name.clone());
-                        }
+                        pending_result_bindings.push(name.clone());
                     }
                     _ => {}
                 }
@@ -4940,9 +4989,14 @@ fn collect_crossings_in_stmts(
                 // is a crossing candidate for every LATER suspension. Defer tracking to
                 // `pending_result_bindings`; it flushes into `declared` when the next
                 // suspension is encountered, making it catchable only then.
-                Stmt::Let { name, value: Expr::Wait(_, _), .. } => {
+                Stmt::Let {
+                    name,
+                    value: Expr::Wait(_, _),
+                    ..
+                } => {
                     past_wait = true;
-                    if !declared.contains(name) && !param_names.contains(&name.as_str())
+                    if !declared.contains(name)
+                        && !param_names.contains(&name.as_str())
                         && !pending_result_bindings.contains(name)
                     {
                         pending_result_bindings.push(name.clone());
@@ -4952,11 +5006,14 @@ fn collect_crossings_in_stmts(
                 // Safe across its OWN producing suspension; a crossing candidate only for
                 // subsequent suspensions. Defer into `pending_result_bindings` for the same
                 // reason as the `wait` arm above.
-                Stmt::Let { name, value: Expr::Call(c), .. }
-                    if is_suspending_call(c, suspending) =>
-                {
+                Stmt::Let {
+                    name,
+                    value: Expr::Call(c),
+                    ..
+                } if is_suspending_call(c, suspending) => {
                     past_wait = true;
-                    if !declared.contains(name) && !param_names.contains(&name.as_str())
+                    if !declared.contains(name)
+                        && !param_names.contains(&name.as_str())
                         && !pending_result_bindings.contains(name)
                     {
                         pending_result_bindings.push(name.clone());
@@ -4973,10 +5030,10 @@ fn collect_crossings_in_stmts(
                         past_wait = true;
                     }
                 }
-                Stmt::Assign { target: name, .. } => {
-                    if !declared.contains(name) && !param_names.contains(&name.as_str()) {
-                        declared.push(name.clone());
-                    }
+                Stmt::Assign { target: name, .. }
+                    if !declared.contains(name) && !param_names.contains(&name.as_str()) =>
+                {
+                    declared.push(name.clone());
                 }
                 // An `if` block that contains a suspension point (explicit or inferred)
                 // is itself a reachable suspension point for the outer statement sequence.
@@ -5011,11 +5068,7 @@ fn collect_crossings_in_stmts(
 
 /// Recursively scan `stmt` and accumulate `LocalCrossesWait` entries for any
 /// `Expr::Ident` whose name is in `targets`.
-fn collect_ident_refs_in_stmt(
-    stmt: &Stmt,
-    targets: &[String],
-    out: &mut Vec<LocalCrossesWait>,
-) {
+fn collect_ident_refs_in_stmt(stmt: &Stmt, targets: &[String], out: &mut Vec<LocalCrossesWait>) {
     match stmt {
         Stmt::Expr(e) => collect_ident_refs_in_expr(e, targets, out),
         Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
@@ -5045,7 +5098,10 @@ fn collect_ident_refs_in_stmt(
                 }
             }
         }
-        Stmt::While { cond, body, .. } | Stmt::For { iter: cond, body, .. } => {
+        Stmt::While { cond, body, .. }
+        | Stmt::For {
+            iter: cond, body, ..
+        } => {
             collect_ident_refs_in_expr(cond, targets, out);
             for s in &body.stmts {
                 collect_ident_refs_in_stmt(s, targets, out);
@@ -5073,11 +5129,7 @@ fn collect_ident_refs_in_stmt(
     }
 }
 
-fn collect_ident_refs_in_expr(
-    expr: &Expr,
-    targets: &[String],
-    out: &mut Vec<LocalCrossesWait>,
-) {
+fn collect_ident_refs_in_expr(expr: &Expr, targets: &[String], out: &mut Vec<LocalCrossesWait>) {
     match expr {
         Expr::Ident(name, span) => {
             if targets.contains(name) {
@@ -5101,16 +5153,16 @@ fn collect_ident_refs_in_expr(
             collect_ident_refs_in_expr(rhs, targets, out);
         }
         Expr::UnaryOp { operand, .. } => collect_ident_refs_in_expr(operand, targets, out),
-        Expr::MethodCall {
-            receiver, args, ..
-        } => {
+        Expr::MethodCall { receiver, args, .. } => {
             collect_ident_refs_in_expr(receiver, targets, out);
             for a in args {
                 collect_ident_refs_in_expr(a, targets, out);
             }
         }
         Expr::FieldAccess { receiver, .. } => collect_ident_refs_in_expr(receiver, targets, out),
-        Expr::IndexAccess { receiver, index, .. } => {
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => {
             collect_ident_refs_in_expr(receiver, targets, out);
             collect_ident_refs_in_expr(index, targets, out);
         }
@@ -5226,46 +5278,56 @@ fn collect_subexpr_violations_in_stmt(
         Stmt::Expr(expr) => collect_subexpr_violations_in_expr(expr, suspending, out),
 
         // `let x = foo()` — the whole RHS IS the call. Safe.
-        Stmt::Let { value: Expr::Call(c), .. } if is_suspending_call(c, suspending) => {
+        Stmt::Let {
+            value: Expr::Call(c),
+            ..
+        } if is_suspending_call(c, suspending) => {
             for arg in &c.args {
                 collect_subexpr_violations_in_expr(arg, suspending, out);
             }
         }
         // `let x = wait foo()` — Safe.
-        Stmt::Let { value: Expr::Wait(inner, _), .. } => {
-            match inner.as_ref() {
-                Expr::Call(c) if is_suspending_call(c, suspending) => {
-                    for arg in &c.args {
-                        collect_subexpr_violations_in_expr(arg, suspending, out);
-                    }
+        Stmt::Let {
+            value: Expr::Wait(inner, _),
+            ..
+        } => match inner.as_ref() {
+            Expr::Call(c) if is_suspending_call(c, suspending) => {
+                for arg in &c.args {
+                    collect_subexpr_violations_in_expr(arg, suspending, out);
                 }
-                other => collect_subexpr_violations_in_expr(other, suspending, out),
             }
-        }
+            other => collect_subexpr_violations_in_expr(other, suspending, out),
+        },
         // `let x = <complex expr>` — scan the RHS.
         Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
             collect_subexpr_violations_in_expr(value, suspending, out);
         }
 
         // `return foo()` — Safe.
-        Stmt::Return { value: Some(Expr::Call(c)), .. } if is_suspending_call(c, suspending) => {
+        Stmt::Return {
+            value: Some(Expr::Call(c)),
+            ..
+        } if is_suspending_call(c, suspending) => {
             for arg in &c.args {
                 collect_subexpr_violations_in_expr(arg, suspending, out);
             }
         }
         // `return wait foo()` — Safe.
-        Stmt::Return { value: Some(Expr::Wait(inner, _)), .. } => {
-            match inner.as_ref() {
-                Expr::Call(c) if is_suspending_call(c, suspending) => {
-                    for arg in &c.args {
-                        collect_subexpr_violations_in_expr(arg, suspending, out);
-                    }
+        Stmt::Return {
+            value: Some(Expr::Wait(inner, _)),
+            ..
+        } => match inner.as_ref() {
+            Expr::Call(c) if is_suspending_call(c, suspending) => {
+                for arg in &c.args {
+                    collect_subexpr_violations_in_expr(arg, suspending, out);
                 }
-                other => collect_subexpr_violations_in_expr(other, suspending, out),
             }
-        }
+            other => collect_subexpr_violations_in_expr(other, suspending, out),
+        },
         // `return <complex>` — scan.
-        Stmt::Return { value: Some(expr), .. } => {
+        Stmt::Return {
+            value: Some(expr), ..
+        } => {
             collect_subexpr_violations_in_expr(expr, suspending, out);
         }
         Stmt::Return { value: None, .. } => {}
@@ -5275,11 +5337,19 @@ fn collect_subexpr_violations_in_stmt(
             collect_subexpr_violations_in_expr(cond, suspending, out);
             collect_subexpr_violations_in_stmts(&body.stmts, suspending, out);
         }
-        Stmt::While { cond, body, .. } | Stmt::For { iter: cond, body, .. } => {
+        Stmt::While { cond, body, .. }
+        | Stmt::For {
+            iter: cond, body, ..
+        } => {
             collect_subexpr_violations_in_expr(cond, suspending, out);
             collect_subexpr_violations_in_stmts(&body.stmts, suspending, out);
         }
-        Stmt::Match { scrutinee, arms, else_arm, .. } => {
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
             collect_subexpr_violations_in_expr(scrutinee, suspending, out);
             for arm in arms {
                 collect_subexpr_violations_in_stmts(&arm.body.stmts, suspending, out);
@@ -5292,7 +5362,12 @@ fn collect_subexpr_violations_in_stmt(
             collect_subexpr_violations_in_expr(target, suspending, out);
             collect_subexpr_violations_in_expr(value, suspending, out);
         }
-        Stmt::IndexAssign { receiver, index, value, .. } => {
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => {
             collect_subexpr_violations_in_expr(receiver, suspending, out);
             collect_subexpr_violations_in_expr(index, suspending, out);
             collect_subexpr_violations_in_expr(value, suspending, out);
@@ -5315,7 +5390,10 @@ fn collect_subexpr_violations_in_expr(
         Expr::Call(c) => {
             if is_suspending_call(c, suspending) {
                 if let Some(name) = call_name(c) {
-                    out.push(SubExprSuspendViolation { span: c.span.clone(), callee_name: name });
+                    out.push(SubExprSuspendViolation {
+                        span: c.span.clone(),
+                        callee_name: name,
+                    });
                     // Don't recurse into arguments of a reported call — one error per call site.
                     return;
                 }
@@ -5359,15 +5437,21 @@ fn collect_subexpr_violations_in_expr(
             collect_subexpr_violations_in_expr(lhs, suspending, out);
             collect_subexpr_violations_in_expr(rhs, suspending, out);
         }
-        Expr::UnaryOp { operand, .. } => collect_subexpr_violations_in_expr(operand, suspending, out),
+        Expr::UnaryOp { operand, .. } => {
+            collect_subexpr_violations_in_expr(operand, suspending, out)
+        }
         Expr::MethodCall { receiver, args, .. } => {
             collect_subexpr_violations_in_expr(receiver, suspending, out);
             for a in args {
                 collect_subexpr_violations_in_expr(a, suspending, out);
             }
         }
-        Expr::FieldAccess { receiver, .. } => collect_subexpr_violations_in_expr(receiver, suspending, out),
-        Expr::IndexAccess { receiver, index, .. } => {
+        Expr::FieldAccess { receiver, .. } => {
+            collect_subexpr_violations_in_expr(receiver, suspending, out)
+        }
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => {
             collect_subexpr_violations_in_expr(receiver, suspending, out);
             collect_subexpr_violations_in_expr(index, suspending, out);
         }
@@ -5387,7 +5471,9 @@ fn collect_subexpr_violations_in_expr(
                 collect_subexpr_violations_in_expr(v, suspending, out);
             }
         }
-        Expr::PostfixOp { receiver, .. } => collect_subexpr_violations_in_expr(receiver, suspending, out),
+        Expr::PostfixOp { receiver, .. } => {
+            collect_subexpr_violations_in_expr(receiver, suspending, out)
+        }
         Expr::Is { expr: inner, .. } => collect_subexpr_violations_in_expr(inner, suspending, out),
         Expr::InterpolatedString(parts, _) => {
             for p in parts {
@@ -5409,9 +5495,13 @@ fn collect_subexpr_violations_in_expr(
 }
 
 /// Return true if `c` is a call to a suspending function or may-block intrinsic.
-fn is_suspending_call(c: &ynz_ast::nodes::CallExpr, suspending: &std::collections::HashSet<&str>) -> bool {
+fn is_suspending_call(
+    c: &ynz_ast::nodes::CallExpr,
+    suspending: &std::collections::HashSet<&str>,
+) -> bool {
     if let Some(name) = call_name(c) {
-        return suspending.contains(name.as_str()) || M2_MAY_BLOCK_INTRINSICS.contains(&name.as_str());
+        return suspending.contains(name.as_str())
+            || M2_MAY_BLOCK_INTRINSICS.contains(&name.as_str());
     }
     false
 }
