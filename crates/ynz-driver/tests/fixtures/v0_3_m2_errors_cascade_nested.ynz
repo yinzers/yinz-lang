@@ -1,0 +1,19 @@
+// v0.3-M2 Phase 7 Round-2: errors-cascade through 2-level nested SM.
+// middle() calls fallibleStep() via inline poll-and-yield.
+// The error from __testFallibleAsync must surface through both SM boundaries.
+
+function fallibleStep() -> int errors {
+  let v = wait __testFallibleAsync(true)
+  return v
+}
+
+function middle() -> int errors {
+  let r = fallibleStep()
+  return r
+}
+
+function entrypoint() -> nothing {
+  let result = middle()
+  let safe = result.or(99)
+  print(`safe: ${safe.toString()}`)
+}

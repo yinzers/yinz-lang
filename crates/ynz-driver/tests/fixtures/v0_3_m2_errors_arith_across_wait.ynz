@@ -1,0 +1,27 @@
+// v0.3-M2 Round-5 fix: errors-capable wait-result local used in arithmetic.
+//
+// An EC local `v` bound from `wait __testFallibleAsync(...)` must auto-propagate
+// when used in `v + 10` inside the SM resume body. Before the fix, the resume
+// Cg's is_errors_capable=false caused the propagation branch to be skipped,
+// leaving the raw EC pointer where an IntValue was expected — panic at codegen.
+//
+// Success path: __testFallibleAsync(false) returns 42; compute() = 42+10 = 52.
+// Error path:  __testFallibleAsync(true) returns an error; compute() propagates
+//              the error; .or(99) falls back to 99.
+
+function computeSuccess() -> int errors {
+  let v = wait __testFallibleAsync(false)
+  return v + 10
+}
+
+function computeError() -> int errors {
+  let v = wait __testFallibleAsync(true)
+  return v + 10
+}
+
+function entrypoint() -> nothing {
+  let ok = computeSuccess()
+  print(`success=${ok.or(0).toString()}`)
+  let err = computeError()
+  print(`error=${err.or(99).toString()}`)
+}

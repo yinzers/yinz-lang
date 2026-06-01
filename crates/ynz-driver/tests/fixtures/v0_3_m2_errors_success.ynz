@@ -1,0 +1,13 @@
+// v0.3-M2 Phase 7: errors-capable SM, success path.
+// Verifies that .or() reads the success slot correctly.
+
+function maybeFail() -> int errors {
+  wait sleepAsync(5)
+  return 42
+}
+
+function entrypoint() -> nothing {
+  const v = maybeFail()
+  const n = v.or(0)
+  print(`got: ${n}`)
+}

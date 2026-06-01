@@ -58,6 +58,8 @@ declare i32 @ynz_string_eq(ptr, ptr)
 
 declare ptr @ynz_alloc(i64)
 
+declare ptr @ynz_alloc_zeroed(i64)
+
 declare void @ynz_free(ptr, i64)
 
 declare ptr @ynz_array_new()
@@ -178,7 +180,7 @@ declare void @ynz_rt_shutdown()
 
 declare void @ynz_thread_sleep_ms(i64)
 
-declare void @ynz_rt_spawn(ptr, ptr, i64)
+declare void @ynz_rt_spawn(ptr, ptr, i64, i64)
 
 declare ptr @ynz_rt_async_sleep_create(i64)
 
@@ -216,7 +218,8 @@ sm_pending:                                       ; preds = %sm_s1, %sm_suspend
 sm_post_wait:                                     ; preds = %sm_s1, %sm_s0
   %h_slot_wr2 = getelementptr i8, ptr %0, i64 8
   store ptr null, ptr %h_slot_wr2, align 8
-  store i32 0, ptr %0, align 4
+  %ret_slot_ptr = getelementptr i8, ptr %0, i64 16
+  store i64 0, ptr %ret_slot_ptr, align 8
   ret i32 0
 
 sm_suspend:                                       ; preds = %sm_s0
@@ -228,12 +231,12 @@ sm_suspend:                                       ; preds = %sm_s0
 
 define void @worker() {
 entry:
-  %sm_frame = call ptr @ynz_alloc(i64 16)
+  %sm_frame = call ptr @ynz_alloc_zeroed(i64 32)
   %h_slot_wr = getelementptr i8, ptr %sm_frame, i64 8
   store ptr null, ptr %h_slot_wr, align 8
   store i32 0, ptr %sm_frame, align 4
-  %sm_result = call i32 @ynz_rt_call_state_machine_sync(ptr @ynz_sm_worker_resume, ptr %sm_frame, i64 16)
-  call void @ynz_free(ptr %sm_frame, i64 16)
+  %sm_drive = call i32 @ynz_rt_call_state_machine_sync(ptr @ynz_sm_worker_resume, ptr %sm_frame, i64 32)
+  call void @ynz_free(ptr %sm_frame, i64 32)
   ret void
 }
 
@@ -241,11 +244,11 @@ define i32 @main() {
 entry:
   call void @ynz_siphash_init()
   call void @ynz_rt_init()
-  %sm_frame = call ptr @ynz_alloc(i64 16)
+  %sm_frame = call ptr @ynz_alloc_zeroed(i64 32)
   %h_slot_wr = getelementptr i8, ptr %sm_frame, i64 8
   store ptr null, ptr %h_slot_wr, align 8
   store i32 0, ptr %sm_frame, align 4
-  call void @ynz_rt_spawn(ptr @ynz_sm_worker_resume, ptr %sm_frame, i64 16)
+  call void @ynz_rt_spawn(ptr @ynz_sm_worker_resume, ptr %sm_frame, i64 32, i64 -1)
   call void @ynz_thread_sleep_ms(i64 200)
   call void @ynz_rt_shutdown()
   ret i32 0

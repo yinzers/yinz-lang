@@ -36,6 +36,9 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
 
     let sig_output = module_signatures_query(db, source);
     let source_path = source.path(db);
+    // Pass check.suspends_set (from may_block::analyze via check_query) directly to
+    // emit_artifact so codegen reads the TRANSITIVE suspends flags, not the pre-analysis
+    // sig_table (which has suspends=false for all fns — the Phase-7 seam fix).
     match emit_artifact(
         source_path.as_str(),
         &check.typed_module,
@@ -45,6 +48,7 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
         &check.mono_table,
         None,
         &sig_output.imported_options,
+        &check.suspends_set,
     ) {
         Ok(artifact) => Arc::new(CodegenOutput {
             artifact,

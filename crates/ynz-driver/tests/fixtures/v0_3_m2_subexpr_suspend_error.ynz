@@ -1,0 +1,16 @@
+// Fixture: suspending call in a sub-expression position.
+// Typeck must reject this with a clean teaching error (exit 1).
+// The HALT-class bug: before Fix 1, this silently called block_on
+// from inside a Tokio worker thread → non-unwinding abort, exit 0.
+//
+// WHY: verifies the HALT-class hole is closed at typeck.
+
+function inner() -> int {
+    wait sleepAsync(10)
+    return 5
+}
+
+function entrypoint() -> nothing {
+    let x = 1 + inner()
+    print(`result: ${x}`)
+}

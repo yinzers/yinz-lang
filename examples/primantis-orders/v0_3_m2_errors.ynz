@@ -1,0 +1,107 @@
+// v0.3-M2 compile-error gallery
+//
+// Every block below intentionally triggers a diagnostic class added in v0.3-M2.
+// Run `ynz build v0_3_m2_errors.ynz` to see all diagnostics.
+// Yinz reports up to 50 diagnostics per compile so a single run surfaces all.
+//
+// Each block has a // WHY: comment naming the diagnostic class it exercises.
+
+// -- v0.3-M2 Error Class 1: suspending call in a sub-expression position --
+//
+// WHY: SubExpressionSuspendPosition — a suspending call nested inside a larger
+// expression (as an operand, argument, interpolation slot, or condition) is not
+// handled by v0.3-M2 codegen. Give it its own `let` line first. Expression-
+// position suspension (auto-`wait` at arbitrary positions) ships in v0.3-M3.
+//
+// The HALT-class bug this closes: before Fix 1, this pattern silently called
+// block_on from inside a Tokio worker thread → non-unwinding abort, exit 0.
+// Now typeck rejects it before codegen fires, producing a clean teaching error.
+
+function pauseThenReturn() -> int {
+    wait sleepAsync(50)
+    return 7
+}
+
+function triggerSubExprSuspend() -> nothing {
+    // WHY: SubExpressionSuspendPosition — pauseThenReturn() is a suspending
+    // call inside an arithmetic expression; give it its own line first.
+    let doubled = 2 * pauseThenReturn()
+    print(`doubled: ${doubled}`)
+}
+
+// -- v0.3-M2 Error Class 2: mutually-recursive suspending functions --
+//
+// WHY: MutualRecursionSuspendingCycle — two or more distinct suspending functions
+// that call each other form a cycle with mixed frame layouts. SpawnStateFnFuture::Drop
+// walks the recursion chain assuming uniform layout (self-recursion); mixed layouts
+// corrupt heap on cancellation. Structuring as self-recursion (one function calling
+// itself) or removing `wait` from the cycle are the M2-supported alternatives.
+// Per-frame layout metadata for mixed cycles ships in v0.3-M3.
+
+function orderPing(n: int) -> nothing {
+    wait sleepAsync(10)
+    // WHY: MutualRecursionSuspendingCycle — orderPing calls orderPong which calls
+    // orderPing back, forming a mutual cycle where both functions suspend.
+    orderPong(n - 1)
+}
+
+function orderPong(n: int) -> nothing {
+    wait sleepAsync(10)
+    orderPing(n - 1)
+}
+
+// -- v0.3-M2 Error Class 3: `wait` inside a loop body --
+//
+// WHY: WaitInsideLoop — the loop counter must survive the pause point, requiring
+// frame-backed mutable locals. That transform ships in v0.3-M3. Move the `wait`
+// to a standalone function called from the loop body instead.
+
+function triggerWaitInLoop() -> nothing {
+    // WHY: WaitInsideLoop — wait inside a for loop is not supported in v0.3-M2.
+    for (i in range(3)) {
+        wait sleepAsync(50)
+        print(`step ${i}`)
+    }
+}
+
+// -- v0.3-M2 Error Class 4: local binding crossing a `wait` point --
+//
+// WHY: LocalCrossesWait — a local declared before a `wait` and used after requires
+// a frame slot with flush-before-suspend discipline; that transform ships in v0.3-M3.
+// Function parameters are exempt — they are frame-backed at every resume point.
+
+function triggerLocalCrossesWait() -> nothing {
+    let orderName = `pierogies`
+    // WHY: LocalCrossesWait — orderName is declared before the wait and used after.
+    wait sleepAsync(20)
+    print(`order: ${orderName}`)
+}
+
+// -- Happy-path (correct v0.3-M2 forms) --
+
+// Direct-statement form — no sub-expression nesting.
+function validSuspendingHelper() -> int {
+    wait sleepAsync(10)
+    return 42
+}
+
+function validDirectStatementCall() -> nothing {
+    let result = validSuspendingHelper()
+    print(`result: ${result}`)
+}
+
+// Self-recursion — single function calling itself is the M2-supported form.
+function countdown(n: int) -> nothing {
+    if (n <= 0) {
+        print(`done`)
+        return
+    }
+    wait sleepAsync(10)
+    countdown(n - 1)
+}
+
+function entrypoint() -> nothing {
+    // All the trigger functions above will cause compile errors, so entrypoint
+    // is here as a placeholder for the gallery runner.
+    print(`v0.3-M2 error gallery loaded`)
+}

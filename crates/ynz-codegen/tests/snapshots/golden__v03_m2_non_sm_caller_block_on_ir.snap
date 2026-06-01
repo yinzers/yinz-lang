@@ -58,6 +58,8 @@ declare i32 @ynz_string_eq(ptr, ptr)
 
 declare ptr @ynz_alloc(i64)
 
+declare ptr @ynz_alloc_zeroed(i64)
+
 declare void @ynz_free(ptr, i64)
 
 declare ptr @ynz_array_new()
@@ -178,7 +180,7 @@ declare void @ynz_rt_shutdown()
 
 declare void @ynz_thread_sleep_ms(i64)
 
-declare void @ynz_rt_spawn(ptr, ptr, i64)
+declare void @ynz_rt_spawn(ptr, ptr, i64, i64)
 
 declare ptr @ynz_rt_async_sleep_create(i64)
 
@@ -216,7 +218,8 @@ sm_pending:                                       ; preds = %sm_s1, %sm_suspend
 sm_post_wait:                                     ; preds = %sm_s1, %sm_s0
   %h_slot_wr2 = getelementptr i8, ptr %0, i64 8
   store ptr null, ptr %h_slot_wr2, align 8
-  store i32 0, ptr %0, align 4
+  %ret_slot_ptr = getelementptr i8, ptr %0, i64 16
+  store i64 0, ptr %ret_slot_ptr, align 8
   ret i32 0
 
 sm_suspend:                                       ; preds = %sm_s0
@@ -226,14 +229,60 @@ sm_suspend:                                       ; preds = %sm_s0
   br label %sm_pending
 }
 
+define i32 @ynz_sm_entrypoint_resume(ptr %0, ptr %1) {
+sm_entry:
+  %rp = load i32, ptr %0, align 4
+  switch i32 %rp, label %sm_dead [
+    i32 0, label %sm_s0
+    i32 1, label %sm_s1
+  ]
+
+sm_s0:                                            ; preds = %sm_entry
+  %cf_sleeper = getelementptr i8, ptr %0, i64 32
+  store i32 0, ptr %cf_sleeper, align 4
+  %h_slot_wr = getelementptr i8, ptr %cf_sleeper, i64 8
+  store ptr null, ptr %h_slot_wr, align 8
+  %child_poll_first = call i32 @ynz_sm_sleeper_resume(ptr %cf_sleeper, ptr %1)
+  %child_first_ready = icmp eq i32 %child_poll_first, 0
+  br i1 %child_first_ready, label %sm_post_call, label %sm_call_suspend
+
+sm_s1:                                            ; preds = %sm_entry
+  %cf_sleeper_re = getelementptr i8, ptr %0, i64 32
+  %child_poll_re = call i32 @ynz_sm_sleeper_resume(ptr %cf_sleeper_re, ptr %1)
+  %child_re_ready = icmp eq i32 %child_poll_re, 0
+  br i1 %child_re_ready, label %sm_post_call, label %sm_still_pending
+
+sm_dead:                                          ; preds = %sm_entry
+  ret i32 0
+
+sm_pending:                                       ; preds = %sm_still_pending, %sm_call_suspend
+  ret i32 1
+
+sm_post_call:                                     ; preds = %sm_s1, %sm_s0
+  %cf_sleeper_post = getelementptr i8, ptr %0, i64 32
+  %ret_slot_ptr = getelementptr i8, ptr %cf_sleeper_post, i64 16
+  %child_ret = load i64, ptr %ret_slot_ptr, align 8
+  %ret_slot_ptr1 = getelementptr i8, ptr %0, i64 16
+  store i64 0, ptr %ret_slot_ptr1, align 8
+  ret i32 0
+
+sm_call_suspend:                                  ; preds = %sm_s0
+  store i32 1, ptr %0, align 4
+  br label %sm_pending
+
+sm_still_pending:                                 ; preds = %sm_s1
+  store i32 1, ptr %0, align 4
+  br label %sm_pending
+}
+
 define void @sleeper() {
 entry:
-  %sm_frame = call ptr @ynz_alloc(i64 16)
+  %sm_frame = call ptr @ynz_alloc_zeroed(i64 32)
   %h_slot_wr = getelementptr i8, ptr %sm_frame, i64 8
   store ptr null, ptr %h_slot_wr, align 8
   store i32 0, ptr %sm_frame, align 4
-  %sm_result = call i32 @ynz_rt_call_state_machine_sync(ptr @ynz_sm_sleeper_resume, ptr %sm_frame, i64 16)
-  call void @ynz_free(ptr %sm_frame, i64 16)
+  %sm_drive = call i32 @ynz_rt_call_state_machine_sync(ptr @ynz_sm_sleeper_resume, ptr %sm_frame, i64 32)
+  call void @ynz_free(ptr %sm_frame, i64 32)
   ret void
 }
 
@@ -241,14 +290,17 @@ define i32 @main() {
 entry:
   call void @ynz_siphash_init()
   call void @ynz_rt_init()
-  %sm_frame = call ptr @ynz_alloc(i64 16)
+  %sm_frame = call ptr @ynz_alloc_zeroed(i64 64)
   %h_slot_wr = getelementptr i8, ptr %sm_frame, i64 8
   store ptr null, ptr %h_slot_wr, align 8
   store i32 0, ptr %sm_frame, align 4
-  %sm_sync = call i32 @ynz_rt_call_state_machine_sync(ptr @ynz_sm_sleeper_resume, ptr %sm_frame, i64 16)
-  call void @ynz_free(ptr %sm_frame, i64 16)
+  %sm_drive = call i32 @ynz_rt_call_state_machine_sync(ptr @ynz_sm_entrypoint_resume, ptr %sm_frame, i64 64)
+  %ret_slot_ptr = getelementptr i8, ptr %sm_frame, i64 16
+  %exit_i64 = load i64, ptr %ret_slot_ptr, align 8
+  call void @ynz_free(ptr %sm_frame, i64 64)
   call void @ynz_rt_shutdown()
-  ret i32 0
+  %exit_i32 = trunc i64 %exit_i64 to i32
+  ret i32 %exit_i32
 }
 
 attributes #0 = { nocallback nofree nosync nounwind speculatable willreturn memory(none) }

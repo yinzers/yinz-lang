@@ -1,0 +1,15 @@
+// v0.3-M2 Phase 7 Round-2: recursive suspending SM.
+// countdown(n) recursively suspends at each level.
+// Used by cancellation-no-leak test.
+
+function countdown(n: int) -> nothing {
+  if (n > 0) {
+    wait sleepAsync(100)
+    countdown(n - 1)
+  }
+}
+
+function entrypoint() -> nothing {
+  background countdown(3)
+  print(`launched`)
+}

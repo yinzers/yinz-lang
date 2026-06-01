@@ -65,6 +65,10 @@ const FRAME_SLEEP_HANDLE_OFFSET: usize = 8;
 /// Starts OS threads. No I/O until a task is spawned.
 #[no_mangle]
 pub extern "C" fn ynz_rt_init() {
+    // Latch the alloc-counter flag once here so per-alloc cost is a cheap atomic load.
+    // The env var read (lock + heap + UTF-8 scan) happens only once at program start.
+    crate::init_alloc_counter_flag();
+
     let mutex = RUNTIME.get_or_init(|| Mutex::new(None));
     let mut lock = mutex.lock().expect("ynz_rt_init: mutex poisoned");
     if lock.is_none() {
@@ -76,7 +80,8 @@ pub extern "C" fn ynz_rt_init() {
         *lock = Some(rt);
     }
     // If already initialised (e.g., double-init in the same program or after shutdown
-    // in a test harness that re-calls init), this is a no-op.
+    // in a test harness that re-calls init), this is a no-op. The alloc-counter flag
+    // call above is idempotent: re-reading the same env var produces the same value.
 }
 
 /// RAII guard that frees the heap frame when dropped (normal return AND unwind).
@@ -137,18 +142,24 @@ pub unsafe extern "C" fn ynz_rt_spawn_blocking(
     ctx_ptr: *mut u8,
     ctx_size: i64,
 ) {
-    let Some(guard) = RUNTIME.get() else {
-        eprintln!("ynz runtime: ynz_rt_spawn_blocking called before ynz_rt_init — task discarded");
-        return;
-    };
-    let lock = match guard.lock() {
-        Ok(l) => l,
-        Err(e) => e.into_inner(),
-    };
-    let Some(rt) = lock.as_ref() else {
-        // Runtime was shut down — best-effort: discard the task silently.
-        eprintln!("ynz runtime: ynz_rt_spawn_blocking called after ynz_rt_shutdown — task discarded");
-        return;
+    // Get the runtime handle without holding the RUNTIME mutex during spawn_blocking
+    // (avoids deadlock when called from inside a block_on future).
+    let handle = match tokio::runtime::Handle::try_current() {
+        Ok(h) => h,
+        Err(_) => {
+            let Some(guard) = RUNTIME.get() else {
+                eprintln!("ynz runtime: ynz_rt_spawn_blocking called before ynz_rt_init — task discarded");
+                return;
+            };
+            let lock = match guard.lock() { Ok(l) => l, Err(e) => e.into_inner() };
+            match lock.as_ref() {
+                Some(rt) => rt.handle().clone(),
+                None => {
+                    eprintln!("ynz runtime: ynz_rt_spawn_blocking called after ynz_rt_shutdown — task discarded");
+                    return;
+                }
+            }
+        }
     };
 
     // Copy the context bytes onto the heap so they outlive this stack frame.
@@ -168,7 +179,7 @@ pub unsafe extern "C" fn ynz_rt_spawn_blocking(
     // FrameDropGuard: Send is impl'd; the closure becomes Send too.
     let ctx_guard = FrameDropGuard { ptr: ctx_heap_ptr, len: ctx_heap_len };
 
-    rt.spawn_blocking(move || {
+    handle.spawn_blocking(move || {
         // Guard is captured — frees ctx on both return and unwind.
         let ctx_ptr_for_call = ctx_guard.ptr;
         let _guard = ctx_guard;
@@ -220,6 +231,10 @@ pub extern "C" fn ynz_rt_check_preempt() {
 ///
 /// # Side effects
 /// Joins OS threads. Blocks for up to 5 seconds if background tasks are still running.
+///
+/// When `YNZ_ALLOC_COUNTER_OUTPUT` env var is set to a file path, writes final alloc/free
+/// counts to that file (one "alloc=N\nfree=M\n" pair). Used by the composed-single-alloc
+/// proof in integration tests: the test sets the env var, runs the fixture, reads the file.
 #[no_mangle]
 pub extern "C" fn ynz_rt_shutdown() {
     let Some(guard) = RUNTIME.get() else { return };
@@ -229,9 +244,36 @@ pub extern "C" fn ynz_rt_shutdown() {
     };
     if let Some(rt) = lock.take() {
         // `shutdown_timeout` requires owned `Runtime`, which we now have.
-        rt.shutdown_timeout(Duration::from_secs(5));
+        // test-only: `YNZ_SHUTDOWN_TIMEOUT_MS` lets tests shorten the shutdown drain
+        // window to trigger cancellation faster. Production default is 5000ms (5s),
+        // which is the correct value for any unset env var. End-user processes that
+        // don't set the env var are unaffected. Setting it in production is safe but
+        // unsupported — shorter windows risk incomplete task cleanup.
+        let timeout_ms = std::env::var("YNZ_SHUTDOWN_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(5000); // production default: 5s
+        // shutdown_timeout signals worker tasks and waits up to `timeout_ms` for
+        // async-worker task drains. It joins the blocking pool (empty here), but
+        // async workers complete via waker/signal — 50ms is wall-clock margin for
+        // task drain, not a thread join. Drops all futures (running their Drop impls)
+        // on the worker threads before returning.
+        rt.shutdown_timeout(Duration::from_millis(timeout_ms));
     }
     // `lock` drops here, releasing the mutex.
+
+    // Dump alloc counts AFTER shutdown so all Drop impls (including SpawnStateFnFuture::Drop
+    // which calls ynz_free) have run. Writing before shutdown would give stale counts on
+    // cancellation paths where Drop runs during shutdown.
+    if let Ok(output_path) = std::env::var("YNZ_ALLOC_COUNTER_OUTPUT") {
+        if !output_path.is_empty() {
+            let alloc_count = crate::ynz_alloc_count();
+            let free_count = crate::ynz_free_count();
+            let content = format!("alloc={alloc_count}\nfree={free_count}\n");
+            // Best-effort write: ignore errors (the alloc counter is test-only).
+            let _ = std::fs::write(&output_path, content);
+        }
+    }
 }
 
 /// Sleep the current OS thread for `ms` milliseconds (blocking sleep, NOT `wait`).
@@ -296,13 +338,18 @@ impl Future for SyncStateFnFuture {
         let result = unsafe { (self.resume_fn)(self.frame_ptr, waker_ctx) };
         match result {
             0 => {
-                // Ready — read the state machine's return value from frame slot 0.
-                // Frame slot 0 is the first 4 bytes of frame_ptr, written as an i32
-                // by the codegen-emitted resume_fn immediately before returning 0.
-                // SAFETY: frame_ptr is valid for at least 4 bytes (caller guarantee;
-                // all codegen-emitted frames begin with a resume_point i32 slot, and
-                // the return-value i32 is written to that slot on terminal transition).
-                let value = unsafe { *(self.frame_ptr as *const i32) };
+                // Ready — read the typed return value from the return slot at offset 16.
+                // Phase 7 codegen stores the i64 return value at FRAME_OFFSET_RETURN_SLOT=16
+                // instead of the old i32 at frame[0] (which was the i32-truncation defect).
+                // SAFETY: frame_ptr is valid for at least 32 bytes (all codegen-emitted frames
+                // have a 32-byte header: resume_point(4)+padding(4)+sleep_handle(8)+return_slot(16)).
+                // The return slot's first 8 bytes hold the i64 return value (success path).
+                // We truncate to i32 here for the legacy SyncStateFnFuture::Output type;
+                // the wrapper reads the full typed value directly from the frame for non-main fns.
+                let value = unsafe {
+                    let ret_slot_ptr = self.frame_ptr.add(16) as *const i64;
+                    *ret_slot_ptr as i32
+                };
                 Poll::Ready(value)
             }
             1 => Poll::Pending,
@@ -327,6 +374,14 @@ struct SpawnStateFnFuture {
     frame_ptr: *mut u8,
     /// Byte length of the heap frame, used by `Drop` to free it via `ynz_free`.
     frame_size: i64,
+    /// Byte offset of the recursion-slot pointer within the frame (-1 = no recursion slot).
+    ///
+    /// For recursive SM functions, codegen allocates a heap-boxed child frame for each
+    /// recursive call and stores the pointer at this offset. On cancellation, the Drop
+    /// impl walks this pointer chain and frees all live heap-boxed child frames before
+    /// freeing the root frame. Without this, a mid-wait cancellation of a deep recursion
+    /// leaks all the child frames that were live at abort time.
+    recursion_slot_offset: i64,
 }
 
 // SAFETY: SpawnStateFnFuture is owned exclusively by the spawned task for its lifetime.
@@ -334,40 +389,72 @@ unsafe impl Send for SpawnStateFnFuture {}
 
 impl Drop for SpawnStateFnFuture {
     /// Free the heap state-machine frame when the spawned task ends — on normal completion
-    /// AND on cancellation (Tokio dropping the task before it finishes). This is the
-    /// spawn-path counterpart to the sync bridge: the sync path frees the frame at the
-    /// codegen call site after `block_on` returns, but a fire-and-forget `ynz_rt_spawn`
-    /// task has no call site to return to, so its frame is freed here. Frame ownership
-    /// moves into this future at spawn time (`ynz_rt_spawn` safety contract), so this drop
-    /// runs exactly once and the frame is never aliased.
+    /// AND on cancellation (Tokio dropping the task before it finishes).
     ///
-    /// Cancellation mid-wait: `ynz_rt_async_sleep_poll` frees the `Sleep` box when it
-    /// returns Ready (normal completion). When a task is cancelled while still Pending —
-    /// Tokio drops the Future mid-poll — the `Sleep` box is still live in frame slot at
-    /// `FRAME_SLEEP_HANDLE_OFFSET`. The codegen null-on-Ready discipline (emit.rs) ensures
-    /// the slot is non-null only when a sleep is genuinely in flight, so reading and freeing
-    /// it here on a non-null value is free of double-free risk.
+    /// Frame ownership moves into this future at spawn time, so this drop runs exactly
+    /// once; the frame is never aliased.
+    ///
+    /// Recursion chain free: if `recursion_slot_offset >= 0`, the frame may have a heap-
+    /// boxed child frame at that offset (stored there by inline-poll-heap-boxed codegen).
+    /// Walk the chain — each child is the same recursive function so uses the same frame
+    /// size and recursion slot offset — and free each frame. The chain terminates when a
+    /// frame's recursion slot holds null (codegen zeroes the slot after `ynz_free` on the
+    /// normal Ready path, so null means either "never reached this depth" or "child already
+    /// freed normally").
     fn drop(&mut self) {
         if self.frame_ptr.is_null() {
             return;
         }
-        // SAFETY: frame_ptr is valid for at least `frame_size` bytes (caller guarantee).
-        // FRAME_SLEEP_HANDLE_OFFSET is within bounds because the frame is at least 16 bytes
-        // (header size). Reading the pointer at offset 8 and treating it as `*mut Pin<Box<Sleep>>`
-        // matches the layout established by `store_sleep_handle` in state_machine.rs.
         unsafe {
+            // Free the sleep handle in the root frame (if a sleep is live mid-wait).
+            // SAFETY: FRAME_SLEEP_HANDLE_OFFSET=8 is within every valid frame header (32 bytes).
             let handle_slot =
                 self.frame_ptr.add(FRAME_SLEEP_HANDLE_OFFSET) as *const *mut u8;
             let handle_ptr = *handle_slot;
             if !handle_ptr.is_null() {
-                // Reconstruct ownership of the `Pin<Box<Sleep>>` and drop it. This is the
-                // inverse of `Box::into_raw` in `ynz_rt_async_sleep_create`. The Sleep future
-                // allocated there and stored by codegen is exclusively owned from that moment
-                // until either `ynz_rt_async_sleep_poll` returns Ready (normal path) or this
-                // Drop runs (cancellation path). Exactly one of these two paths runs; no aliasing.
                 drop(Box::from_raw(handle_ptr as *mut Pin<Box<Sleep>>));
             }
-            // Free the frame after the sleep handle is dealt with.
+
+            // Walk the recursion chain and free any live heap-boxed child frames.
+            // Each recursive call stores the child frame pointer at recursion_slot_offset.
+            // The chain uses the same frame_size and recursion_slot_offset at every level
+            // (all frames are the same self-recursive function's layout).
+            //
+            // Pattern: root.rec_slot → child → child.rec_slot → grandchild → ...
+            // We iterate starting from root's CHILD (root itself freed at the end).
+            // Each iteration: read child.rec_slot (grandchild ptr) BEFORE freeing child,
+            // then free child, then advance to grandchild.
+            //
+            // test-only: `YNZ_SKIP_RECURSION_DROP` bypasses the chain walk so the
+            // negative-control test can verify a measurable leak without this code.
+            // Production runs never set this env var; the unwrap_or(false) default
+            // means the walk always runs in production.
+            let skip_recursion_drop = std::env::var("YNZ_SKIP_RECURSION_DROP")
+                .map(|v| !v.is_empty())
+                .unwrap_or(false); // production default: run the chain walk
+            if self.recursion_slot_offset >= 0 && !skip_recursion_drop {
+                // SAFETY: frame_ptr is valid; recursion_slot_offset is within the frame.
+                let rec_slot = self.frame_ptr.add(self.recursion_slot_offset as usize) as *const *mut u8;
+                let mut child_ptr = *rec_slot;
+                while !child_ptr.is_null() {
+                    // Free the child's sleep handle before freeing its frame.
+                    let child_handle_slot =
+                        child_ptr.add(FRAME_SLEEP_HANDLE_OFFSET) as *const *mut u8;
+                    let child_handle = *child_handle_slot;
+                    if !child_handle.is_null() {
+                        drop(Box::from_raw(child_handle as *mut Pin<Box<Sleep>>));
+                    }
+                    // Read grandchild pointer BEFORE freeing child (use-after-free guard).
+                    let grandchild_slot =
+                        child_ptr.add(self.recursion_slot_offset as usize) as *const *mut u8;
+                    let next_ptr = *grandchild_slot;
+                    // SAFETY: child_ptr was allocated by ynz_alloc_zeroed(frame_size) and is not aliased.
+                    crate::ynz_free(child_ptr, self.frame_size as usize);
+                    child_ptr = next_ptr;
+                }
+            }
+
+            // Free the root frame last (after the chain is fully walked).
             // SAFETY: frame_ptr was returned by `ynz_alloc` for `frame_size` bytes and moved
             // into this future exclusively; freed exactly once here.
             crate::ynz_free(self.frame_ptr, self.frame_size as usize);
@@ -430,26 +517,35 @@ pub unsafe extern "C" fn ynz_rt_spawn(
     resume_fn: unsafe extern "C" fn(*mut u8, *mut u8) -> i32,
     frame_ptr: *mut u8,
     frame_size: i64,
+    recursion_slot_offset: i64,
 ) {
-    let Some(guard) = RUNTIME.get() else {
-        eprintln!(
-            "ynz runtime: ynz_rt_spawn called before ynz_rt_init — task discarded"
-        );
-        return;
-    };
-    let lock = match guard.lock() {
-        Ok(l) => l,
-        Err(e) => e.into_inner(),
-    };
-    let Some(rt) = lock.as_ref() else {
-        eprintln!(
-            "ynz runtime: ynz_rt_spawn called after ynz_rt_shutdown — task discarded"
-        );
-        return;
-    };
+    let future = SpawnStateFnFuture { resume_fn, frame_ptr, frame_size, recursion_slot_offset };
 
-    let future = SpawnStateFnFuture { resume_fn, frame_ptr, frame_size };
-    rt.spawn(future);
+    // Prefer spawning via the current Tokio handle (avoids the RUNTIME mutex deadlock
+    // when called from inside a block_on future — block_on holds Handle context so
+    // try_current() succeeds, and we can spawn without the mutex).
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn(future);
+        }
+        Err(_) => {
+            let Some(guard) = RUNTIME.get() else {
+                eprintln!("ynz runtime: ynz_rt_spawn called before ynz_rt_init — task discarded");
+                return;
+            };
+            let handle = {
+                let lock = match guard.lock() { Ok(l) => l, Err(e) => e.into_inner() };
+                match lock.as_ref() {
+                    Some(rt) => rt.handle().clone(),
+                    None => {
+                        eprintln!("ynz runtime: ynz_rt_spawn called after ynz_rt_shutdown — task discarded");
+                        return;
+                    }
+                }
+            };
+            handle.spawn(future);
+        }
+    }
 }
 
 /// Allocate and return a heap-pinned `tokio::time::Sleep` future for `sleepAsync(ms)`.
@@ -613,9 +709,10 @@ pub unsafe extern "C" fn ynz_rt_call_state_machine_sync(
             }
             Err(_) => {
                 // Outside Tokio — main thread before/after runtime, or detached thread.
-                // RUNTIME is guaranteed initialised by codegen (ynz_rt_init is first
-                // instruction in main whenever any wait/background function is compiled).
-                // The .expect() is defence-in-depth against future codegen bugs.
+                // Acquire the runtime handle (not block_on directly via locked mutex) to
+                // avoid a deadlock: ynz_rt_spawn_blocking and ynz_rt_spawn also acquire
+                // the same RUNTIME mutex. Holding the lock across block_on would deadlock
+                // any background call made inside the future.
                 let rt_guard = RUNTIME
                     .get()
                     .expect(
@@ -623,16 +720,17 @@ pub unsafe extern "C" fn ynz_rt_call_state_machine_sync(
                          This is a compiler codegen bug — ynz_rt_init must be the first \
                          instruction in main for any program using wait or background.",
                     );
-                let lock = match rt_guard.lock() {
-                    Ok(l) => l,
-                    Err(e) => e.into_inner(),
-                };
-                let rt = lock.as_ref().expect(
-                    "ynz runtime: ynz_rt_call_state_machine_sync called after ynz_rt_shutdown. \
-                     This is a compiler codegen bug — state-machine calls must not outlive \
-                     the runtime.",
-                );
-                rt.block_on(future)
+                // Get the Tokio Handle (cheap clone), then RELEASE the lock before block_on.
+                let handle = {
+                    let lock = match rt_guard.lock() {
+                        Ok(l) => l,
+                        Err(e) => e.into_inner(),
+                    };
+                    lock.as_ref().expect(
+                        "ynz runtime: ynz_rt_call_state_machine_sync called after ynz_rt_shutdown.",
+                    ).handle().clone()
+                }; // mutex released here — before block_on
+                handle.block_on(future)
             }
         }
     });

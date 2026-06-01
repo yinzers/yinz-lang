@@ -42,6 +42,11 @@ pub struct CheckOutput {
     pub typed_module: TypedModule,
     pub mono_table: MonomorphizationTable,
     pub diagnostics: DiagnosticBucket,
+    /// The set of function names that transitively reach a suspension point.
+    ///
+    /// Computed by `may_block::analyze` during `check_query`. Codegen reads this
+    /// to determine which functions compile as state machines (Phase-7 seam).
+    pub suspends_set: std::collections::HashSet<String>,
 }
 
 /// Pass 1: collect all shape declarations and function signatures from the module,
@@ -168,6 +173,63 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
         sig.suspends = may_block_result.suspends.contains(name.as_str());
     }
 
+    // Reject non-self mutual recursion among suspending functions.
+    //
+    // `SpawnStateFnFuture::Drop` walks the recursion chain assuming every frame has
+    // the same size and recursion-slot offset (self-recursion: all frames are the
+    // same function's layout). A mutual cycle (ping → pong → ping) has mixed layouts
+    // → heap corruption on cancellation. Detecting SCCs of size ≥ 2 here emits a
+    // clean teaching error instead of corrupting heap at runtime.
+    //
+    // Self-recursion (SCC of size 1) is NOT a cycle in this sense — it stays supported.
+    // Per-frame layout metadata to support mixed cycles ships in v0.3-M3.
+    {
+        // Build a name→span map for each local function (for error location).
+        let fn_spans: std::collections::HashMap<String, ynz_diagnostics::SourceSpan> = parse
+            .module
+            .items
+            .iter()
+            .filter_map(|item| {
+                if let Item::Function(f) = item {
+                    Some((f.name.clone(), f.name_span.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let cycles = may_block::find_mutual_suspension_cycles(
+            &parse.module,
+            &imported_fn_names,
+            &may_block_result.suspends,
+        );
+        for cycle in cycles {
+            let members_display = cycle.members.join("`, `");
+            // Emit one diagnostic per cycle member so each function's error points to
+            // its own declaration (reduces hunting across the file).
+            for member in &cycle.members {
+                if let Some(span) = fn_spans.get(member) {
+                    all_diags.push(Diagnostic::error(
+                        span.clone(),
+                        format!(
+                            "`{member}` is part of a mutually-recursive suspending cycle \
+                             with `{members_display}`."
+                        ),
+                        "Restructure so the recursion is self-recursive (a single function \
+                         calling itself), or remove the `wait` call from the cycle so it is \
+                         no longer suspending."
+                            .to_string(),
+                        "v0.3-M2 supports self-recursive suspending functions (a function \
+                         calling itself directly). Mutually-recursive suspending cycles — \
+                         where two or more different functions call each other and all suspend \
+                         — require per-frame size metadata to safely cancel mid-wait. \
+                         That support ships in v0.3-M3.",
+                    ));
+                }
+            }
+        }
+    }
+
     let (typed, mono_table, check_diags, referenced_names) = check(
         &parse.module,
         &merged_sig_table,
@@ -213,9 +275,15 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
         }
     }
 
+    // Export the suspends set so codegen can read it directly instead of deriving
+    // it from sig_table (which is from module_signatures_query, pre-analysis).
+    let suspends_set: std::collections::HashSet<String> =
+        may_block_result.suspends.iter().map(|s| s.to_string()).collect();
+
     Arc::new(CheckOutput {
         typed_module: typed,
         mono_table,
         diagnostics: all_diags,
+        suspends_set,
     })
 }

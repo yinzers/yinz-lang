@@ -379,6 +379,45 @@ impl<'b> Checker<'b> {
             }
         }
 
+        // Check 3: suspending call in a sub-expression position.
+        //
+        // v0.3-M2 compiles each suspending call as its own state-machine step. The
+        // codegen handles three direct-statement forms: `foo()`, `let x = foo()`, and
+        // `return foo()` (with or without `wait`). Any suspending call nested deeper —
+        // as an operand of `+`/`-`/etc., inside an interpolation `${...}`, as an `if`
+        // condition, as an argument to another call, etc. — falls through the codegen
+        // switcher to a wrapper path that panics at runtime ("Cannot start a runtime
+        // from within a runtime"). Catching it here (typeck) prevents the runtime abort.
+        //
+        // Expression-position suspension is the M3 feature: auto-`wait` insertion at
+        // arbitrary expression positions (design/future/concurrency.md:35).
+        if !self.kernel_mode && self.current_fn_suspends {
+            let suspending: std::collections::HashSet<&str> = self
+                .sig_table
+                .fns
+                .iter()
+                .filter_map(|(n, s)| if s.suspends { Some(n.as_str()) } else { None })
+                .collect();
+            let violations = suspending_calls_in_subexpr_position(&f.body.stmts, &suspending);
+            for (span, callee_name) in violations {
+                self.diags.push(Diagnostic::error(
+                    span,
+                    format!(
+                        "`{callee_name}` is a suspending call inside a larger expression — \
+                         this is not supported yet."
+                    ),
+                    format!(
+                        "Give it its own line first: `let result = {callee_name}(...)`, \
+                         then use `result` in the expression."
+                    ),
+                    "v0.3-M2 compiles each suspending call as its own step. Calls nested \
+                     inside an expression need expression-position suspension, which ships \
+                     in v0.3-M3. Step-by-step style (one operation per line with a named \
+                     variable) avoids this limit and matches Yinz's preferred style.",
+                ));
+            }
+        }
+
         self.check_stmts(&f.body.stmts);
         self.scope.pop();
 
@@ -4676,6 +4715,256 @@ fn collect_ident_refs_in_expr(
         | Expr::SelfValue { .. }
         | Expr::NoneLit { .. }
         | Expr::Error(_) => {}
+    }
+}
+
+// ── Check 3: suspending call in a sub-expression position ────────────────────
+//
+// v0.3-M2 codegen handles suspending calls only at the direct-statement level:
+//   - `foo()`            (Stmt::Expr — bare call)
+//   - `let x = foo()`   (Stmt::Let with call as entire RHS)
+//   - `return foo()`    (Stmt::Return with call as the return value)
+//   - the `wait`-wrapped forms of each of the above
+//
+// Any suspending call nested deeper in an expression is NOT handled: codegen
+// falls through to the wrapper path (block_on) which panics on Tokio worker
+// threads. Catching this at typeck emits a clean teaching error before the
+// panic ever fires.
+
+/// Describes a suspending call found in a sub-expression position.
+struct SubExprSuspendViolation {
+    /// Source span of the nested call.
+    span: SourceSpan,
+    /// The callee name (for the error message).
+    callee_name: String,
+}
+
+/// Walk `stmts` and collect all suspending calls that appear in sub-expression
+/// positions (not the direct-statement forms the M2 codegen handles).
+///
+/// `suspending` is the set of user-defined function names whose `suspends == true`
+/// in the current compilation unit. May-block intrinsics (`sleepAsync`,
+/// `__testFallibleAsync`) are included via `M2_MAY_BLOCK_INTRINSICS`.
+fn suspending_calls_in_subexpr_position(
+    stmts: &[Stmt],
+    suspending: &std::collections::HashSet<&str>,
+) -> Vec<(SourceSpan, String)> {
+    let mut out = Vec::new();
+    collect_subexpr_violations_in_stmts(stmts, suspending, &mut out);
+    out.into_iter().map(|v| (v.span, v.callee_name)).collect()
+}
+
+fn collect_subexpr_violations_in_stmts(
+    stmts: &[Stmt],
+    suspending: &std::collections::HashSet<&str>,
+    out: &mut Vec<SubExprSuspendViolation>,
+) {
+    for stmt in stmts {
+        collect_subexpr_violations_in_stmt(stmt, suspending, out);
+    }
+}
+
+fn collect_subexpr_violations_in_stmt(
+    stmt: &Stmt,
+    suspending: &std::collections::HashSet<&str>,
+    out: &mut Vec<SubExprSuspendViolation>,
+) {
+    match stmt {
+        // Direct-statement call: `foo()` — the whole expression IS the call. Safe.
+        Stmt::Expr(Expr::Call(c)) if is_suspending_call(c, suspending) => {
+            // Allowed. But check the arguments for nested suspending calls.
+            for arg in &c.args {
+                collect_subexpr_violations_in_expr(arg, suspending, out);
+            }
+        }
+        // Direct-statement wait-of-call: `wait foo()` — the whole expression is Wait(Call). Safe.
+        Stmt::Expr(Expr::Wait(inner, _)) => {
+            match inner.as_ref() {
+                Expr::Call(c) if is_suspending_call(c, suspending) => {
+                    // Allowed. Check args.
+                    for arg in &c.args {
+                        collect_subexpr_violations_in_expr(arg, suspending, out);
+                    }
+                }
+                // `wait expr` where inner is not a direct call — scan inner for violations.
+                other => collect_subexpr_violations_in_expr(other, suspending, out),
+            }
+        }
+        // Non-wait bare expression: scan for nested suspending calls.
+        Stmt::Expr(expr) => collect_subexpr_violations_in_expr(expr, suspending, out),
+
+        // `let x = foo()` — the whole RHS IS the call. Safe.
+        Stmt::Let { value: Expr::Call(c), .. } if is_suspending_call(c, suspending) => {
+            for arg in &c.args {
+                collect_subexpr_violations_in_expr(arg, suspending, out);
+            }
+        }
+        // `let x = wait foo()` — Safe.
+        Stmt::Let { value: Expr::Wait(inner, _), .. } => {
+            match inner.as_ref() {
+                Expr::Call(c) if is_suspending_call(c, suspending) => {
+                    for arg in &c.args {
+                        collect_subexpr_violations_in_expr(arg, suspending, out);
+                    }
+                }
+                other => collect_subexpr_violations_in_expr(other, suspending, out),
+            }
+        }
+        // `let x = <complex expr>` — scan the RHS.
+        Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
+            collect_subexpr_violations_in_expr(value, suspending, out);
+        }
+
+        // `return foo()` — Safe.
+        Stmt::Return { value: Some(Expr::Call(c)), .. } if is_suspending_call(c, suspending) => {
+            for arg in &c.args {
+                collect_subexpr_violations_in_expr(arg, suspending, out);
+            }
+        }
+        // `return wait foo()` — Safe.
+        Stmt::Return { value: Some(Expr::Wait(inner, _)), .. } => {
+            match inner.as_ref() {
+                Expr::Call(c) if is_suspending_call(c, suspending) => {
+                    for arg in &c.args {
+                        collect_subexpr_violations_in_expr(arg, suspending, out);
+                    }
+                }
+                other => collect_subexpr_violations_in_expr(other, suspending, out),
+            }
+        }
+        // `return <complex>` — scan.
+        Stmt::Return { value: Some(expr), .. } => {
+            collect_subexpr_violations_in_expr(expr, suspending, out);
+        }
+        Stmt::Return { value: None, .. } => {}
+
+        // Control flow — recurse into bodies.
+        Stmt::If { cond, body, .. } => {
+            collect_subexpr_violations_in_expr(cond, suspending, out);
+            collect_subexpr_violations_in_stmts(&body.stmts, suspending, out);
+        }
+        Stmt::While { cond, body, .. } | Stmt::For { iter: cond, body, .. } => {
+            collect_subexpr_violations_in_expr(cond, suspending, out);
+            collect_subexpr_violations_in_stmts(&body.stmts, suspending, out);
+        }
+        Stmt::Match { scrutinee, arms, else_arm, .. } => {
+            collect_subexpr_violations_in_expr(scrutinee, suspending, out);
+            for arm in arms {
+                collect_subexpr_violations_in_stmts(&arm.body.stmts, suspending, out);
+            }
+            if let Some(b) = else_arm {
+                collect_subexpr_violations_in_stmts(&b.stmts, suspending, out);
+            }
+        }
+        Stmt::FieldAssign { target, value, .. } => {
+            collect_subexpr_violations_in_expr(target, suspending, out);
+            collect_subexpr_violations_in_expr(value, suspending, out);
+        }
+        Stmt::IndexAssign { receiver, index, value, .. } => {
+            collect_subexpr_violations_in_expr(receiver, suspending, out);
+            collect_subexpr_violations_in_expr(index, suspending, out);
+            collect_subexpr_violations_in_expr(value, suspending, out);
+        }
+    }
+}
+
+/// Scan an expression for suspending calls in ANY position (sub-expression).
+///
+/// Called when we are already inside a "disallowed" expression context — any
+/// suspending call found here is a violation.
+fn collect_subexpr_violations_in_expr(
+    expr: &Expr,
+    suspending: &std::collections::HashSet<&str>,
+    out: &mut Vec<SubExprSuspendViolation>,
+) {
+    match expr {
+        // A call here is in sub-expression position (the caller already established
+        // we're NOT at the direct-statement level).
+        Expr::Call(c) => {
+            if is_suspending_call(c, suspending) {
+                if let Some(name) = call_name(c) {
+                    out.push(SubExprSuspendViolation { span: c.span.clone(), callee_name: name });
+                    // Don't recurse into arguments of a reported call — one error per call site.
+                    return;
+                }
+            }
+            // Not suspending — but its arguments might be.
+            collect_subexpr_violations_in_expr(&c.callee, suspending, out);
+            for arg in &c.args {
+                collect_subexpr_violations_in_expr(arg, suspending, out);
+            }
+        }
+        // `wait expr` in sub-expression position: the inner is already inside the larger expr.
+        Expr::Wait(inner, _) => collect_subexpr_violations_in_expr(inner, suspending, out),
+        // Background is a call-graph cut — `background foo()` does not suspend the caller.
+        Expr::Background(_, _) => {}
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_subexpr_violations_in_expr(lhs, suspending, out);
+            collect_subexpr_violations_in_expr(rhs, suspending, out);
+        }
+        Expr::UnaryOp { operand, .. } => collect_subexpr_violations_in_expr(operand, suspending, out),
+        Expr::MethodCall { receiver, args, .. } => {
+            collect_subexpr_violations_in_expr(receiver, suspending, out);
+            for a in args {
+                collect_subexpr_violations_in_expr(a, suspending, out);
+            }
+        }
+        Expr::FieldAccess { receiver, .. } => collect_subexpr_violations_in_expr(receiver, suspending, out),
+        Expr::IndexAccess { receiver, index, .. } => {
+            collect_subexpr_violations_in_expr(receiver, suspending, out);
+            collect_subexpr_violations_in_expr(index, suspending, out);
+        }
+        Expr::StructLit { fields, .. } => {
+            for f in fields {
+                collect_subexpr_violations_in_expr(&f.value, suspending, out);
+            }
+        }
+        Expr::ArrayLit { elements, .. } => {
+            for e in elements {
+                collect_subexpr_violations_in_expr(e, suspending, out);
+            }
+        }
+        Expr::MapLit { entries, .. } => {
+            for (k, v) in entries {
+                collect_subexpr_violations_in_expr(k, suspending, out);
+                collect_subexpr_violations_in_expr(v, suspending, out);
+            }
+        }
+        Expr::PostfixOp { receiver, .. } => collect_subexpr_violations_in_expr(receiver, suspending, out),
+        Expr::Is { expr: inner, .. } => collect_subexpr_violations_in_expr(inner, suspending, out),
+        Expr::InterpolatedString(parts, _) => {
+            for p in parts {
+                if let ynz_ast::nodes::StringPart::Expr(e, _) = p {
+                    collect_subexpr_violations_in_expr(e, suspending, out);
+                }
+            }
+        }
+        // Leaf nodes — no calls.
+        Expr::Ident(_, _)
+        | Expr::StringLit(_, _)
+        | Expr::IntLit(_, _)
+        | Expr::NumberLit(_, _)
+        | Expr::BoolLit(_, _)
+        | Expr::SelfValue { .. }
+        | Expr::NoneLit { .. }
+        | Expr::Error(_) => {}
+    }
+}
+
+/// Return true if `c` is a call to a suspending function or may-block intrinsic.
+fn is_suspending_call(c: &ynz_ast::nodes::CallExpr, suspending: &std::collections::HashSet<&str>) -> bool {
+    if let Some(name) = call_name(c) {
+        return suspending.contains(name.as_str()) || M2_MAY_BLOCK_INTRINSICS.contains(&name.as_str());
+    }
+    false
+}
+
+/// Extract the function name from a `CallExpr`'s callee, if it's a bare `Ident`.
+fn call_name(c: &ynz_ast::nodes::CallExpr) -> Option<String> {
+    if let Expr::Ident(name, _) = &c.callee {
+        Some(name.clone())
+    } else {
+        None
     }
 }
 

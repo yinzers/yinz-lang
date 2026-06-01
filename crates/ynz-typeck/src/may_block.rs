@@ -387,6 +387,117 @@ fn collect_calls_in_expr(
     }
 }
 
+// ── Mutual-suspension cycle detection ────────────────────────────────────────
+//
+// v0.3-M2 supports SELF-recursion among suspending functions (f → f). The Drop
+// impl on SpawnStateFnFuture walks the recursion chain assuming all frames have
+// the same layout (same function = same frame size + recursion slot offset). A
+// cycle with ≥2 DISTINCT suspending functions has mixed layouts → heap corruption
+// on cancellation. Detecting and rejecting this at typeck prevents the corruption.
+//
+// Self-recursion (f → f, SCC of size 1) is NOT a cycle in this sense — it
+// remains supported. Only SCCs of size ≥ 2 in the `suspends` subgraph are errors.
+//
+// v0.3-M3 lifts this restriction by adding per-frame size+offset metadata so the
+// Drop walk can handle mixed layouts.
+
+/// A non-self mutual suspension cycle: ≥2 distinct suspending functions that
+/// form a call cycle. The Drop walk in `SpawnStateFnFuture` assumes uniform
+/// frame layout (self-recursion), so mixed-layout mutual cycles corrupt memory.
+pub struct MutualSuspensionCycle {
+    /// The participating function names (sorted for deterministic diagnostics).
+    pub members: Vec<String>,
+}
+
+/// Find all SCCs of size ≥ 2 in the call graph restricted to the `suspends` set.
+///
+/// Returns one entry per strongly-connected component that has ≥2 distinct
+/// members, all of which are suspending functions. Each entry's `members` list
+/// is sorted alphabetically for deterministic diagnostic output.
+///
+/// Uses iterative DFS (Kosaraju's two-pass algorithm) to avoid stack overflow
+/// on large programs.
+pub fn find_mutual_suspension_cycles(
+    module: &Module,
+    imported_fn_names: &HashSet<String>,
+    suspends: &HashSet<String>,
+) -> Vec<MutualSuspensionCycle> {
+    if suspends.len() < 2 {
+        return Vec::new();
+    }
+
+    // Build the restricted call graph: edges only among suspending functions.
+    let graph = build_call_graph(module, imported_fn_names);
+    let fns: Vec<&str> = suspends.iter().map(|s| s.as_str()).collect();
+    let fn_index: HashMap<&str, usize> = fns.iter().enumerate().map(|(i, n)| (*n, i)).collect();
+    let n = fns.len();
+
+    // Adjacency lists restricted to the suspends set.
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut radj: Vec<Vec<usize>> = vec![Vec::new(); n]; // reverse graph
+    for (fn_name, edges) in &graph.edges {
+        let Some(&fi) = fn_index.get(fn_name.as_str()) else { continue };
+        for callee in &edges.direct {
+            if let Some(&ci) = fn_index.get(callee.as_str()) {
+                adj[fi].push(ci);
+                radj[ci].push(fi);
+            }
+        }
+    }
+
+    // Kosaraju pass 1: DFS on forward graph, collect finish order.
+    let mut visited = vec![false; n];
+    let mut finish_order: Vec<usize> = Vec::with_capacity(n);
+    for start in 0..n {
+        if !visited[start] {
+            // Iterative DFS with explicit stack to avoid recursion depth limits.
+            let mut stack: Vec<(usize, usize)> = vec![(start, 0)]; // (node, next_child_idx)
+            visited[start] = true;
+            while let Some((node, child_idx)) = stack.last_mut() {
+                let node = *node;
+                if *child_idx < adj[node].len() {
+                    let next = adj[node][*child_idx];
+                    *child_idx += 1;
+                    if !visited[next] {
+                        visited[next] = true;
+                        stack.push((next, 0));
+                    }
+                } else {
+                    finish_order.push(node);
+                    stack.pop();
+                }
+            }
+        }
+    }
+
+    // Kosaraju pass 2: DFS on reverse graph in reverse finish order → SCCs.
+    let mut visited2 = vec![false; n];
+    let mut cycles = Vec::new();
+    for &start in finish_order.iter().rev() {
+        if visited2[start] {
+            continue;
+        }
+        let mut component: Vec<usize> = Vec::new();
+        let mut stack: Vec<usize> = vec![start];
+        visited2[start] = true;
+        while let Some(node) = stack.pop() {
+            component.push(node);
+            for &nb in &radj[node] {
+                if !visited2[nb] {
+                    visited2[nb] = true;
+                    stack.push(nb);
+                }
+            }
+        }
+        if component.len() >= 2 {
+            let mut members: Vec<String> = component.iter().map(|&i| fns[i].to_string()).collect();
+            members.sort(); // deterministic output
+            cycles.push(MutualSuspensionCycle { members });
+        }
+    }
+    cycles
+}
+
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

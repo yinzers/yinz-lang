@@ -5,10 +5,15 @@ target/
 Cargo.lock.bak
 
 # Compiled binaries emitted by `ynz build`/`ynz run` during integration tests.
-# These land adjacent to the source .ynz file when no output path is specified.
-crates/ynz-driver/tests/fixtures/hello
-crates/ynz-driver/tests/fixtures/m3_fib
-crates/ynz-driver/tests/fixtures/m_duplicate_entrypoint
+# These land adjacent to the source .ynz file (same name, no extension) when no
+# output path is specified. Ignore every file in the fixtures tree EXCEPT the real
+# sources (.ynz / .toml) so a new fixture's compiled output never bloats the repo —
+# replaces the old per-file allowlist that silently missed new fixtures.
+crates/ynz-driver/tests/fixtures/**
+!crates/ynz-driver/tests/fixtures/
+!crates/ynz-driver/tests/fixtures/**/
+!crates/ynz-driver/tests/fixtures/**/*.ynz
+!crates/ynz-driver/tests/fixtures/**/*.toml
 
 # VSCode extension build artifacts
 tooling/vscode-ynz/node_modules/

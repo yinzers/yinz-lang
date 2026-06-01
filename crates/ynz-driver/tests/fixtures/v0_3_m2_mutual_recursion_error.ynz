@@ -1,0 +1,20 @@
+// Fixture: mutually-recursive suspending functions.
+// Typeck must reject this with a clean teaching error (exit 1).
+// Before Fix 2, ping⇄pong compiled but corrupted heap on cancellation
+// because SpawnStateFnFuture::Drop assumes uniform frame layout.
+//
+// WHY: verifies non-self mutual recursion is rejected before heap corruption.
+
+function ping(n: int) -> nothing {
+    wait sleepAsync(10)
+    pong(n - 1)
+}
+
+function pong(n: int) -> nothing {
+    wait sleepAsync(10)
+    ping(n - 1)
+}
+
+function entrypoint() -> nothing {
+    ping(2)
+}

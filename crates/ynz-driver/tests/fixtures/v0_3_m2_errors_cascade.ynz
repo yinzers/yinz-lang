@@ -1,0 +1,15 @@
+// v0.3-M2 Phase 7 Round-2: errors-cascade through SM suspension.
+// Verifies that an error produced AFTER a wait suspension is propagated correctly.
+// The {i64,i64} return slot must carry error_ptr in field0 — if field0 is 0
+// (error dropped), .or(fallback) treats it as success and returns 0 instead of fallback.
+
+function fallibleStep() -> int errors {
+  let v = wait __testFallibleAsync(true)
+  return v
+}
+
+function entrypoint() -> nothing {
+  let r = fallibleStep()
+  let safe = r.or(99)
+  print(`safe: ${safe.toString()}`)
+}

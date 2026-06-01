@@ -2,41 +2,44 @@
 ///
 /// # Why this module exists
 ///
-/// Functions containing `wait` compile to LLVM state machines instead of straight-line
-/// code. A state machine has two generated components:
+/// Functions containing suspension points compile to LLVM state machines instead of
+/// straight-line code. A state machine has two generated components:
 ///
 /// 1. A **resume function** (`ynz_sm_<name>_resume`) — the actual logic, split at
-///    each `wait` point. Signature: `extern "C" fn(frame: *mut u8, waker_ctx: *mut u8) -> i32`.
+///    each suspension point. Signature: `extern "C" fn(frame: *mut u8, waker_ctx: *mut u8) -> i32`.
 ///    Returns 0 = Ready (done), 1 = Pending (suspended; waker registered by sub-future).
 ///
 /// 2. A **wrapper function** (`<name>` — the user-visible Yinz function) — allocates the
-///    frame on the heap, writes parameters to frame slots, calls `ynz_rt_call_state_machine_sync`
-///    (sync bridge), reads the return value from frame slot 0, frees the frame, and returns.
+///    composed frame on the heap, writes parameters to frame slots, drives the state machine
+///    to completion via `RUNTIME.block_on`, reads the typed return slot, frees the frame.
 ///
-/// When called via `background name(args)`, the emitter bypasses the wrapper and instead
-/// allocates the frame + calls `ynz_rt_spawn` directly (see emit.rs).
+/// # Composed frame layout (P7 — inline poll-and-yield, no bridge)
 ///
-/// # Frame layout
+/// Each suspending fn has a composed frame: its own header + return_slot + locals +
+/// embedded sub-frames for each suspending callee at compile-time-fixed offsets.
+/// The entire call tree shares ONE `ynz_alloc` per spawned task.
 ///
-/// The frame is a heap-allocated byte array with the following layout:
+/// Per frame / sub-frame:
 ///
-/// | Offset | Size | Field             |
-/// |--------|------|-------------------|
-/// | 0      | 4    | resume_point: i32 |
-/// | 4      | 4    | padding           |
-/// | 8      | 8    | sleep_handle: ptr |
-/// | 16     | 8    | local_0: i64      |
-/// | 24     | 8    | local_1: i64      |
-/// | ...    | 8    | local_n: i64      |
+/// | Offset (relative to frame/sub-frame base) | Size | Field                              |
+/// |-------------------------------------------|------|------------------------------------|
+/// | 0                                          | 4    | resume_point: i32                  |
+/// | 4                                          | 4    | padding                            |
+/// | 8                                          | 8    | sleep_handle: ptr (null if no sleep)|
+/// | 16                                         | 16   | return_slot: 16 bytes              |
+/// | 32                                         | 8×N  | own locals (params in M2)          |
+/// | 32+8N                                      | var  | embedded sub-frame of child SM 0   |
+/// | …                                          | var  | embedded sub-frame of child SM 1   |
 ///
 /// `resume_point` drives the switch in the resume function. On the terminal transition
-/// (function exit), the codegen writes the final return value (as i32) to offset 0 before
-/// returning 0. The sync bridge reads offset 0 and propagates it as the exit code.
+/// (function exit), codegen stores the typed return value in the return_slot at offset 16,
+/// then returns 0 (Ready). The parent / driver reads the typed value from that slot.
 ///
-/// # State encoding
+/// # Recursion edges
 ///
-/// Resume points are numbered from 0. State 0 = before the first `wait`. Each `wait`
-/// increments the resume point. The terminal state writes the return value and returns 0.
+/// A recursive/cyclic call can't embed itself (infinite size). The recursion slot at a
+/// fixed offset stores an opaque pointer to a heap-allocated child frame (`ynz_alloc`),
+/// freed on Ready (normal) and in `SpawnStateFnFuture::Drop` on cancellation.
 ///
 /// # ABI lock
 ///
@@ -52,23 +55,36 @@ use inkwell::{
 
 use crate::runtime_decls::RuntimeDecls;
 
-/// Byte offset of the `resume_point` i32 field in the state-machine frame.
+/// Byte offset of the `resume_point` i32 field within each (sub-)frame.
 pub const FRAME_OFFSET_RESUME_POINT: u64 = 0;
-/// Byte offset of the `sleep_handle` pointer field in the state-machine frame.
+/// Byte offset of the `sleep_handle` pointer field within each (sub-)frame.
+/// Present regardless of whether the fn directly sleepAsyncs; zeroed when unused.
 pub const FRAME_OFFSET_SLEEP_HANDLE: u64 = 8;
-/// Byte offset of the first local-variable slot in the frame.
-pub const FRAME_OFFSET_LOCALS_START: u64 = 16;
-/// Size of each local-variable slot (i64).
-pub const FRAME_LOCAL_SLOT_SIZE: u64 = 8;
-/// Fixed overhead of the frame header (resume_point + padding + sleep_handle = 16 bytes).
-pub const FRAME_HEADER_SIZE: u64 = 16;
-
-/// Compute total frame size in bytes for a function with `n_locals` live locals crossing
-/// a wait boundary.
+/// Byte offset of the 16-byte return slot within each (sub-)frame.
 ///
-/// Frame size: 4 (resume_point) + 4 (padding) + 8 (sleep_handle) + 8*n_locals.
-pub const fn frame_size(n_locals: usize) -> u64 {
-    FRAME_HEADER_SIZE + (n_locals as u64) * FRAME_LOCAL_SLOT_SIZE
+/// The typed return value is stored here on terminal transition. Reading the value
+/// here avoids the i32-truncation defect of the old frame[0] repurposing scheme.
+pub const FRAME_OFFSET_RETURN_SLOT: u64 = 16;
+/// Byte offset of the first local-variable slot within each (sub-)frame.
+pub const FRAME_OFFSET_LOCALS_START: u64 = 32;
+/// Size of each local-variable slot (i64 = 8 bytes).
+pub const FRAME_LOCAL_SLOT_SIZE: u64 = 8;
+/// Fixed per-frame header size: resume_point(4) + padding(4) + sleep_handle(8) + return_slot(16) = 32 bytes.
+pub const FRAME_HEADER_SIZE: u64 = 32;
+
+/// Compute the own-locals section size for a frame with `n_locals` local slots.
+///
+/// Does NOT include child sub-frames; callers add child_frame_sizes separately.
+pub const fn own_locals_size(n_locals: usize) -> u64 {
+    (n_locals as u64) * FRAME_LOCAL_SLOT_SIZE
+}
+
+/// Compute total frame size including own header + locals but NOT child sub-frames.
+///
+/// For composed frames, the total is FRAME_HEADER_SIZE + own_locals_size(n_locals) + sum(child sizes).
+/// This helper covers the flat case; composed callers sum children separately.
+pub const fn frame_size_flat(n_locals: usize) -> u64 {
+    FRAME_HEADER_SIZE + own_locals_size(n_locals)
 }
 
 /// Return the LLVM name for a state-machine resume function given the Yinz function name.
@@ -94,26 +110,16 @@ pub fn declare_resume_fn<'ctx>(
         .unwrap_or_else(|| module.add_function(name, fn_ty, None))
 }
 
-/// Load the `resume_point` i32 from offset 0 of the frame.
+/// Load the `resume_point` i32 from offset 0 of a frame / sub-frame.
 ///
 /// # Flow
 ///
 /// GEP with byte offset 0 into the opaque frame pointer, then load i32.
-///
-/// # Side effects
-///
-/// Reads 4 bytes from the heap frame. No side effects on the frame state.
-///
-/// # Failure modes
-///
-/// Returns `Err` if the builder has no current insert block (should be unreachable
-/// in well-formed LLVM IR generation).
 pub fn load_resume_point<'ctx>(
     ctx: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
     frame_ptr: PointerValue<'ctx>,
 ) -> Result<inkwell::values::IntValue<'ctx>, String> {
-    // resume_point is at byte offset 0; frame is already at offset 0.
     let rp = builder
         .build_load(ctx.i32_type(), frame_ptr, "rp")
         .map_err(|e| format!("load_resume_point: {e}"))?
@@ -121,16 +127,12 @@ pub fn load_resume_point<'ctx>(
     Ok(rp)
 }
 
-/// Store a `resume_point` i32 to offset 0 of the frame.
-///
-/// # Flow
-///
-/// Stores the given i32 constant to the first 4 bytes of the frame.
+/// Store a `resume_point` i32 to offset 0 of a frame / sub-frame.
 ///
 /// # Side effects
 ///
-/// Mutates the frame's `resume_point` field. After this call the resume function
-/// will start at the new state on its next invocation.
+/// Mutates the frame's `resume_point` field. The resume function will start at the
+/// new state on its next invocation.
 pub fn store_resume_point<'ctx>(
     ctx: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -144,37 +146,171 @@ pub fn store_resume_point<'ctx>(
     Ok(())
 }
 
-/// Write the final i32 return value to frame slot 0 (the `resume_point` field).
+/// Return a GEP pointer to the 16-byte return slot at `FRAME_OFFSET_RETURN_SLOT` (offset 16).
 ///
-/// Called on the terminal state transition, immediately before returning 0 (Ready).
-/// The sync bridge reads this i32 when it sees the resume function return 0, and
-/// propagates it as the state machine's output value. Main's exit code flows through
-/// this path.
+/// # Side effects
 ///
-/// # Why frame[0] doubles as the return slot
+/// None — produces a pointer to the slot without reading or writing it.
+pub fn return_slot_ptr<'ctx>(
+    ctx: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+) -> Result<PointerValue<'ctx>, String> {
+    // SAFETY: FRAME_OFFSET_RETURN_SLOT=16 is within every valid frame (header is 32 bytes).
+    let ptr = unsafe {
+        builder
+            .build_gep(
+                ctx.i8_type(),
+                frame_ptr,
+                &[ctx.i64_type().const_int(FRAME_OFFSET_RETURN_SLOT, false)],
+                "ret_slot_ptr",
+            )
+            .map_err(|e| format!("return_slot_ptr gep: {e}"))?
+    };
+    Ok(ptr)
+}
+
+/// Store a typed i64 (int or bool) return value in the return slot at offset 16.
 ///
-/// `resume_point` is only meaningful when the state machine is running. When it returns
-/// Ready (0), the state machine is done and `resume_point` is dead. Reusing the same
-/// 4-byte slot avoids adding a separate return-value field to every frame.
-pub fn store_return_value<'ctx>(
+/// The i64 occupies the first 8 bytes of the 16-byte slot.
+///
+/// # Side effects
+///
+/// Writes 8 bytes at frame offset 16.
+pub fn store_return_value_i64<'ctx>(
     ctx: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
     frame_ptr: PointerValue<'ctx>,
     value: inkwell::values::IntValue<'ctx>,
 ) -> Result<(), String> {
-    let i32 = ctx.i32_type();
-    // Truncate to i32 if the value is wider (e.g., i64 int).
-    let v = if value.get_type() != i32 {
+    let slot = return_slot_ptr(ctx, builder, frame_ptr)?;
+    // Widen to i64 if narrower (e.g., i1 bool or i32).
+    let v_i64 = if value.get_type() != ctx.i64_type() {
         builder
-            .build_int_truncate(value, i32, "ret_trunc")
-            .map_err(|e| format!("ret_trunc: {e}"))?
+            .build_int_z_extend(value, ctx.i64_type(), "ret_widen")
+            .map_err(|e| format!("ret widen: {e}"))?
     } else {
         value
     };
     builder
-        .build_store(frame_ptr, v)
-        .map_err(|e| format!("store_return_value: {e}"))?;
+        .build_store(slot, v_i64)
+        .map_err(|e| format!("store_return_value_i64: {e}"))?;
     Ok(())
+}
+
+/// Store a typed pointer return value in the return slot at offset 16.
+///
+/// The pointer is stored as an i64 (ptr_to_int) in the first 8 bytes of the slot.
+///
+/// # Side effects
+///
+/// Writes 8 bytes at frame offset 16.
+pub fn store_return_value_ptr<'ctx>(
+    ctx: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    value: PointerValue<'ctx>,
+) -> Result<(), String> {
+    let slot = return_slot_ptr(ctx, builder, frame_ptr)?;
+    let as_i64 = builder
+        .build_ptr_to_int(value, ctx.i64_type(), "ret_ptr_int")
+        .map_err(|e| format!("ret ptr_to_int: {e}"))?;
+    builder
+        .build_store(slot, as_i64)
+        .map_err(|e| format!("store_return_value_ptr: {e}"))?;
+    Ok(())
+}
+
+/// Store a `{i64, i64}` errors ABI result in the return slot at offset 16.
+///
+/// Layout: field0 (error_ptr i64) at slot+0, field1 (success_value i64) at slot+8.
+/// This matches the `{i64, i64}` errors ABI used throughout M7/M8 codegen.
+///
+/// # Side effects
+///
+/// Writes 16 bytes at frame offset 16.
+pub fn store_return_value_errors<'ctx>(
+    ctx: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    error_ptr_i64: inkwell::values::IntValue<'ctx>,
+    success_i64: inkwell::values::IntValue<'ctx>,
+) -> Result<(), String> {
+    let slot = return_slot_ptr(ctx, builder, frame_ptr)?;
+    // field0 = error_ptr at slot+0
+    builder
+        .build_store(slot, error_ptr_i64)
+        .map_err(|e| format!("store_errors_field0: {e}"))?;
+    // field1 = success at slot+8
+    let slot8 = unsafe {
+        builder
+            .build_gep(
+                ctx.i8_type(),
+                slot,
+                &[ctx.i64_type().const_int(8, false)],
+                "ret_slot8",
+            )
+            .map_err(|e| format!("ret_slot8 gep: {e}"))?
+    };
+    builder
+        .build_store(slot8, success_i64)
+        .map_err(|e| format!("store_errors_field1: {e}"))?;
+    Ok(())
+}
+
+/// Load the i64 return value from the return slot at offset 16.
+///
+/// Used by the parent frame or top-level driver after a child returns Ready.
+///
+/// # Side effects
+///
+/// None — read only.
+pub fn load_return_value_i64<'ctx>(
+    ctx: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    name: &str,
+) -> Result<inkwell::values::IntValue<'ctx>, String> {
+    let slot = return_slot_ptr(ctx, builder, frame_ptr)?;
+    let v = builder
+        .build_load(ctx.i64_type(), slot, name)
+        .map_err(|e| format!("load_return_value_i64: {e}"))?
+        .into_int_value();
+    Ok(v)
+}
+
+/// Load the `{i64, i64}` errors ABI result from the return slot at offset 16.
+///
+/// Returns `(error_ptr_i64, success_i64)` — field0 and field1.
+///
+/// # Side effects
+///
+/// None — read only.
+pub fn load_return_value_errors<'ctx>(
+    ctx: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+) -> Result<(inkwell::values::IntValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
+    let slot = return_slot_ptr(ctx, builder, frame_ptr)?;
+    let error_ptr = builder
+        .build_load(ctx.i64_type(), slot, "ret_err")
+        .map_err(|e| format!("load_errors_field0: {e}"))?
+        .into_int_value();
+    let slot8 = unsafe {
+        builder
+            .build_gep(
+                ctx.i8_type(),
+                slot,
+                &[ctx.i64_type().const_int(8, false)],
+                "ret_slot8_r",
+            )
+            .map_err(|e| format!("ret_slot8_r gep: {e}"))?
+    };
+    let success = builder
+        .build_load(ctx.i64_type(), slot8, "ret_ok")
+        .map_err(|e| format!("load_errors_field1: {e}"))?
+        .into_int_value();
+    Ok((error_ptr, success))
 }
 
 /// Load the `sleep_handle` pointer from the frame (offset 8).
@@ -190,7 +326,7 @@ pub fn load_sleep_handle<'ctx>(
     frame_ptr: PointerValue<'ctx>,
 ) -> Result<PointerValue<'ctx>, String> {
     let ptr_ty = ctx.ptr_type(AddressSpace::default());
-    // SAFETY: FRAME_OFFSET_SLEEP_HANDLE=8 is within every valid frame (header is 16 bytes).
+    // SAFETY: FRAME_OFFSET_SLEEP_HANDLE=8 is within every valid frame (header is 32 bytes).
     let slot = unsafe {
         builder
             .build_gep(
@@ -215,9 +351,7 @@ pub fn load_sleep_handle<'ctx>(
 ///
 /// # Side effects
 ///
-/// Mutates frame offset 8. The handle must remain valid until the next poll that
-/// returns Ready, at which point the runtime frees it and the frame slot should
-/// be cleared to null.
+/// Mutates frame offset 8. The handle must remain valid until the next poll returns Ready.
 pub fn store_sleep_handle<'ctx>(
     ctx: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -248,10 +382,6 @@ pub fn store_sleep_handle<'ctx>(
 /// # Flow
 ///
 /// GEP into the frame at the slot's byte offset, load i64.
-///
-/// # Failure modes
-///
-/// Returns `Err` if the builder operation fails (should not happen in well-formed IR).
 pub fn load_local_slot<'ctx>(
     ctx: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -278,10 +408,6 @@ pub fn load_local_slot<'ctx>(
 }
 
 /// Store an i64 value into the frame's local slot at index `idx` (0-based, after the header).
-///
-/// # Flow
-///
-/// GEP to the slot's byte offset, store i64.
 ///
 /// # Side effects
 ///
@@ -318,15 +444,45 @@ pub fn store_local_slot<'ctx>(
     Ok(())
 }
 
+/// Return a GEP pointer to the embedded child sub-frame at `child_byte_offset` within `parent_frame`.
+///
+/// The child's resume function receives this pointer as its `frame_ptr` argument.
+/// The child's frame header is initialised by the parent before the first child-resume call.
+///
+/// # Side effects
+///
+/// None — produces a pointer without reading or writing.
+pub fn child_frame_ptr<'ctx>(
+    ctx: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    parent_frame: PointerValue<'ctx>,
+    child_byte_offset: u64,
+    name: &str,
+) -> Result<PointerValue<'ctx>, String> {
+    // SAFETY: child_byte_offset is within the parent frame (caller's FrameLayout guarantee).
+    let ptr = unsafe {
+        builder
+            .build_gep(
+                ctx.i8_type(),
+                parent_frame,
+                &[ctx.i64_type().const_int(child_byte_offset, false)],
+                name,
+            )
+            .map_err(|e| format!("child_frame_ptr gep: {e}"))?
+    };
+    Ok(ptr)
+}
+
 /// Allocate a state-machine frame on the heap using `ynz_alloc`.
 ///
 /// # Flow
 ///
-/// 1. Call `ynz_alloc(frame_size_bytes)` to get a heap pointer.
+/// 1. Call `ynz_alloc(total_frame_size)` to get a heap pointer.
 /// 2. Zero the sleep_handle slot (offset 8) to mark "no in-flight sleep".
 /// 3. Set resume_point = 0 (initial state).
 ///
-/// The caller is responsible for writing parameter values to local slots (offset 16+).
+/// The caller is responsible for writing parameter values to local slots (offset 32+).
+/// Child sub-frame headers are initialised by the parent on first call to each child.
 ///
 /// # Failure modes
 ///
@@ -334,25 +490,29 @@ pub fn store_local_slot<'ctx>(
 ///
 /// # Side effects
 ///
-/// Heap-allocates `frame_size_bytes` bytes. Caller MUST free via `ynz_free` after the
+/// Heap-allocates `total_frame_size` bytes. Caller MUST free via `ynz_free` after the
 /// state machine completes (or via the frame's drop guard on cancellation).
 pub fn alloc_frame<'ctx>(
     ctx: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
     rt: &RuntimeDecls<'ctx>,
-    n_locals: usize,
+    total_frame_size: u64,
 ) -> Result<PointerValue<'ctx>, String> {
-    let size = frame_size(n_locals);
-    let size_val = ctx.i64_type().const_int(size, false);
+    let size_val = ctx.i64_type().const_int(total_frame_size, false);
+    // Use ynz_alloc_zeroed so ALL frame fields (including the recursion_slot pointer) start
+    // as null. ynz_alloc gives uninitialized memory; a non-null garbage value in the
+    // recursion_slot would cause SpawnStateFnFuture::Drop to chase the garbage pointer on
+    // cancellation before the codegen writes the real recursion-child pointer there.
     let frame_ptr = builder
-        .build_call(rt.ynz_alloc, &[size_val.into()], "sm_frame")
+        .build_call(rt.ynz_alloc_zeroed, &[size_val.into()], "sm_frame")
         .map_err(|e| format!("alloc_frame: {e}"))?
         .try_as_basic_value()
         .basic()
-        .ok_or("ynz_alloc returned void")?
+        .ok_or("ynz_alloc_zeroed returned void")?
         .into_pointer_value();
 
-    // Zero the sleep_handle slot so the resume function knows no handle is active yet.
+    // sleep_handle and resume_point are already zero from ynz_alloc_zeroed.
+    // Explicit stores are kept for clarity and SSA value correctness.
     let null_ptr = ctx.ptr_type(AddressSpace::default()).const_null();
     store_sleep_handle(ctx, builder, frame_ptr, null_ptr)?;
 
@@ -364,8 +524,8 @@ pub fn alloc_frame<'ctx>(
 
 /// Free a state-machine frame allocated by `alloc_frame`.
 ///
-/// Must be called after the sync bridge returns (state machine completed normally).
-/// The RAII drop guard in `ynz_rt_spawn`'s future handles the spawn path.
+/// Must be called after the top-level driver completes (state machine done normally).
+/// The RAII drop guard in `SpawnStateFnFuture` handles the spawn path.
 ///
 /// # Side effects
 ///
@@ -375,10 +535,9 @@ pub fn free_frame<'ctx>(
     builder: &inkwell::builder::Builder<'ctx>,
     rt: &RuntimeDecls<'ctx>,
     frame_ptr: PointerValue<'ctx>,
-    n_locals: usize,
+    total_frame_size: u64,
 ) -> Result<(), String> {
-    let size = frame_size(n_locals);
-    let size_val = ctx.i64_type().const_int(size, false);
+    let size_val = ctx.i64_type().const_int(total_frame_size, false);
     builder
         .build_call(rt.ynz_free, &[frame_ptr.into(), size_val.into()], "sm_free")
         .map_err(|e| format!("free_frame: {e}"))?;
@@ -396,14 +555,6 @@ pub fn free_frame<'ctx>(
 /// 3. If Ready (0): clear handle slot to null, branch to `continue_bb` (post-wait code).
 /// 4. If Pending (1): set `resume_point = continuation_state` (already set before suspension),
 ///    branch to `pending_bb` (caller returns 1).
-///
-/// The `continue_bb` block is where the caller places post-wait statements.
-/// The `pending_bb` block emits `ret i32 1` for the Pending path.
-///
-/// # Failure modes
-///
-/// `ynz_rt_async_sleep_poll` panics are caught by Tokio's task wrapper; the function
-/// returns Pending on panic so the frame is not corrupted (runtime-side behaviour).
 ///
 /// # Side effects
 ///

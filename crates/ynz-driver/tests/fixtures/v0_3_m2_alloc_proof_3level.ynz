@@ -1,0 +1,20 @@
+// v0.3-M2 Phase 7 Round-2: composed-single-alloc proof.
+// 3-level synchronous SM call tree: entrypoint -> outer -> inner.
+// Each level suspends (sleepAsync). The composed frame is ONE allocation
+// for the entire tree — NOT one per call.
+// Expected alloc count: 1 (the root frame for the task tree).
+
+function inner() -> int {
+  wait sleepAsync(1)
+  return 1
+}
+
+function outer() -> int {
+  let v = inner()
+  return v
+}
+
+function entrypoint() -> nothing {
+  let r = outer()
+  print(`result: ${r.toString()}`)
+}

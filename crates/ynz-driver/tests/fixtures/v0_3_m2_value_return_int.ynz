@@ -1,0 +1,12 @@
+// v0.3-M2 Phase 7: value-returning state machine (int).
+// Verifies Bug A fix: resume fn can return typed int through the return slot.
+
+function compute() -> int {
+  wait sleepAsync(5)
+  return 42
+}
+
+function entrypoint() -> nothing {
+  const v = compute()
+  print(`result: ${v}`)
+}

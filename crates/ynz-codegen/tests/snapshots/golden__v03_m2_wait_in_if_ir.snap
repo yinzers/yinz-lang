@@ -1,6 +1,5 @@
 ---
 source: crates/ynz-codegen/tests/golden.rs
-assertion_line: 632
 expression: ir
 ---
 ; ModuleID = 'ynz-v03m2_wait_in_if.ynz'
@@ -58,6 +57,8 @@ declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64) #0
 declare i32 @ynz_string_eq(ptr, ptr)
 
 declare ptr @ynz_alloc(i64)
+
+declare ptr @ynz_alloc_zeroed(i64)
 
 declare void @ynz_free(ptr, i64)
 
@@ -179,7 +180,7 @@ declare void @ynz_rt_shutdown()
 
 declare void @ynz_thread_sleep_ms(i64)
 
-declare void @ynz_rt_spawn(ptr, ptr, i64)
+declare void @ynz_rt_spawn(ptr, ptr, i64, i64)
 
 declare ptr @ynz_rt_async_sleep_create(i64)
 
@@ -197,11 +198,11 @@ sm_entry:
   ]
 
 sm_s0:                                            ; preds = %sm_entry
-  %b_slot = getelementptr i8, ptr %0, i64 16
+  %b_slot = getelementptr i8, ptr %0, i64 32
   %b = load i64, ptr %b_slot, align 8
   %i_to_b = trunc i64 %b to i1
   store i1 %i_to_b, ptr %b_alloca, align 1
-  %b_slot1 = getelementptr i8, ptr %0, i64 16
+  %b_slot1 = getelementptr i8, ptr %0, i64 32
   %b2 = load i64, ptr %b_slot1, align 8
   %i_to_b3 = trunc i64 %b2 to i1
   store i1 %i_to_b3, ptr %b_alloca, align 1
@@ -209,7 +210,7 @@ sm_s0:                                            ; preds = %sm_entry
   br i1 %b4, label %sm_if_then, label %sm_if_merge
 
 sm_s1:                                            ; preds = %sm_entry
-  %b_slot5 = getelementptr i8, ptr %0, i64 16
+  %b_slot5 = getelementptr i8, ptr %0, i64 32
   %b6 = load i64, ptr %b_slot5, align 8
   %i_to_b7 = trunc i64 %b6 to i1
   store i1 %i_to_b7, ptr %b_alloca, align 1
@@ -232,7 +233,8 @@ sm_if_then:                                       ; preds = %sm_s0
   br i1 %first_is_ready, label %sm_post_wait, label %sm_suspend
 
 sm_if_merge:                                      ; preds = %sm_post_wait, %sm_s0
-  store i32 0, ptr %0, align 4
+  %ret_slot_ptr = getelementptr i8, ptr %0, i64 16
+  store i64 0, ptr %ret_slot_ptr, align 8
   ret i32 0
 
 sm_post_wait:                                     ; preds = %sm_s1, %sm_if_then
@@ -249,15 +251,15 @@ sm_suspend:                                       ; preds = %sm_if_then
 
 define void @maybeWait(i1 %0) {
 entry:
-  %sm_frame = call ptr @ynz_alloc(i64 24)
+  %sm_frame = call ptr @ynz_alloc_zeroed(i64 40)
   %h_slot_wr = getelementptr i8, ptr %sm_frame, i64 8
   store ptr null, ptr %h_slot_wr, align 8
   store i32 0, ptr %sm_frame, align 4
-  %ls_0 = getelementptr i8, ptr %sm_frame, i64 16
+  %ls_0 = getelementptr i8, ptr %sm_frame, i64 32
   %widen = zext i1 %0 to i64
   store i64 %widen, ptr %ls_0, align 8
-  %sm_result = call i32 @ynz_rt_call_state_machine_sync(ptr @ynz_sm_maybeWait_resume, ptr %sm_frame, i64 24)
-  call void @ynz_free(ptr %sm_frame, i64 24)
+  %sm_drive = call i32 @ynz_rt_call_state_machine_sync(ptr @ynz_sm_maybeWait_resume, ptr %sm_frame, i64 40)
+  call void @ynz_free(ptr %sm_frame, i64 40)
   ret void
 }
 
@@ -265,13 +267,13 @@ define i32 @main() {
 entry:
   call void @ynz_siphash_init()
   call void @ynz_rt_init()
-  %sm_frame = call ptr @ynz_alloc(i64 24)
+  %sm_frame = call ptr @ynz_alloc_zeroed(i64 40)
   %h_slot_wr = getelementptr i8, ptr %sm_frame, i64 8
   store ptr null, ptr %h_slot_wr, align 8
   store i32 0, ptr %sm_frame, align 4
-  %ls_0 = getelementptr i8, ptr %sm_frame, i64 16
+  %ls_0 = getelementptr i8, ptr %sm_frame, i64 32
   store i64 1, ptr %ls_0, align 8
-  call void @ynz_rt_spawn(ptr @ynz_sm_maybeWait_resume, ptr %sm_frame, i64 24)
+  call void @ynz_rt_spawn(ptr @ynz_sm_maybeWait_resume, ptr %sm_frame, i64 40, i64 -1)
   call void @ynz_thread_sleep_ms(i64 200)
   call void @ynz_rt_shutdown()
   ret i32 0

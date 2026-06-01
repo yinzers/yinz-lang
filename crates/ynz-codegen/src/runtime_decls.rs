@@ -41,6 +41,9 @@ pub struct RuntimeDecls<'ctx> {
 
     // Heap allocator (M4): (size: usize) → *mut u8
     pub ynz_alloc: FunctionValue<'ctx>,
+    // Zero-initialized heap allocator for SM frames: (size: usize) → *mut u8
+    // Zeros all bytes so recursion_slot and other pointer fields start null.
+    pub ynz_alloc_zeroed: FunctionValue<'ctx>,
     // Heap deallocator (M4): (ptr: *mut u8, size: usize) → void
     pub ynz_free: FunctionValue<'ctx>,
 
@@ -293,6 +296,7 @@ impl<'ctx> RuntimeDecls<'ctx> {
             ),
 
             ynz_alloc: declare_fn(module, "ynz_alloc", ptr.fn_type(&[i64.into()], false)),
+            ynz_alloc_zeroed: declare_fn(module, "ynz_alloc_zeroed", ptr.fn_type(&[i64.into()], false)),
             ynz_free: declare_fn(
                 module,
                 "ynz_free",
@@ -579,8 +583,8 @@ impl<'ctx> RuntimeDecls<'ctx> {
             ynz_rt_spawn: declare_fn(
                 module,
                 "ynz_rt_spawn",
-                // (resume_fn: fn(ptr,ptr)->i32, frame_ptr: ptr, frame_size: i64) -> void
-                void.fn_type(&[ptr.into(), ptr.into(), i64.into()], false),
+                // (resume_fn: fn(ptr,ptr)->i32, frame_ptr: ptr, frame_size: i64, recursion_slot_offset: i64) -> void
+                void.fn_type(&[ptr.into(), ptr.into(), i64.into(), i64.into()], false),
             ),
             ynz_rt_async_sleep_create: declare_fn(
                 module,

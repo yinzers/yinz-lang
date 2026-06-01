@@ -1,0 +1,41 @@
+// v0.3-M2 Phase 7 Round-3: recursive SM cancellation-no-leak fixture.
+// TIMING DESIGN: countdown(n) sleeps 200ms per level. entrypoint waits 500ms
+// before allowing shutdown (with YNZ_SHUTDOWN_TIMEOUT_MS=50).
+//
+// Alloc accounting includes the entrypoint's own frame (alloc=1 from wrapper).
+// Timeline from ynz_rt_init:
+//   At   0ms: entrypoint frame alloc'd (alloc=1). countdown(3) spawned, root alloc'd (alloc=2).
+//   At 200ms: countdown(3) wakes, allocates countdown(2) heap-box (alloc=3), polls countdown(2).
+//             countdown(2) hits its 200ms sleep.
+//   At 400ms: countdown(2) wakes, allocates countdown(1) heap-box (alloc=4), polls countdown(1).
+//             countdown(1) hits its 200ms sleep.
+//   At 500ms: entrypoint wakes, calls ynz_rt_shutdown(timeout=50ms).
+//             countdown(1) is 100ms into its 200ms sleep — 4 heap-boxed frames are live.
+//   At 550ms: Tokio's 50ms grace period expires. SpawnStateFnFuture is dropped.
+//             SpawnStateFnFuture::Drop walks the recursion chain: frees countdown(1),
+//             countdown(2), root. alloc=4, free=4 (no leak).
+//   [countdown(1)'s natural sleep end would be at ~600ms — 50ms after the cancel fires.]
+//
+// YNZ_SHUTDOWN_TIMEOUT_MS=50 (not 0): a 0ms timeout races between ynz_rt_shutdown reading
+// the counters and the worker thread running Drop. 50ms gives Tokio time to join threads
+// (ensuring Drop has run) while still cancelling before countdown(1) completes at ~600ms.
+//
+// Expected: alloc_count == free_count (no leak with chain walk).
+// Negative control (YNZ_SKIP_RECURSION_DROP=1): alloc=4, free=2 (chain walk skipped,
+// countdown(1) and countdown(2) leaked).
+//
+// The 3 recursion_cancellation* tests are serialized via a static Mutex in the
+// test harness — no CPU contention can affect relative timing across these tests.
+
+function countdown(n: int) -> nothing {
+  if (n > 0) {
+    wait sleepAsync(200)
+    countdown(n - 1)
+  }
+}
+
+function entrypoint() -> nothing {
+  background countdown(3)
+  wait sleepAsync(500)
+  print(`done`)
+}

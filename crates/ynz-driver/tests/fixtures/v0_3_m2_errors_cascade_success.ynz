@@ -1,0 +1,14 @@
+// v0.3-M2 Phase 7 Round-2: errors-cascade success path.
+// __testFallibleAsync(false) returns success {0, 42}.
+// .or(99) should return 42 (the actual success value).
+
+function fallibleStep() -> int errors {
+  let v = wait __testFallibleAsync(false)
+  return v
+}
+
+function entrypoint() -> nothing {
+  let r = fallibleStep()
+  let safe = r.or(99)
+  print(`safe: ${safe.toString()}`)
+}

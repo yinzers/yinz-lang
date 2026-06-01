@@ -11,7 +11,7 @@
 /// `number` values are stored as `i128` on the stack (16 bytes = BID encoding).
 /// `BasicValueEnum::PointerValue` carries decimal128 values through the lowering
 /// pass; the runtime arithmetic functions receive `ptr` arguments.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use inkwell::{
     attributes::{Attribute, AttributeLoc},
@@ -126,6 +126,16 @@ fn empty_wait_cache() -> &'static WaitCache {
     EMPTY_WAIT_CACHE.get_or_init(WaitCache::new)
 }
 
+static EMPTY_SUSPEND_SET: std::sync::OnceLock<SuspendSet> = std::sync::OnceLock::new();
+fn empty_suspend_set() -> &'static SuspendSet {
+    EMPTY_SUSPEND_SET.get_or_init(SuspendSet::new)
+}
+
+static EMPTY_FRAME_LAYOUTS: std::sync::OnceLock<HashMap<String, FrameLayout>> = std::sync::OnceLock::new();
+fn empty_frame_layouts() -> &'static HashMap<String, FrameLayout> {
+    EMPTY_FRAME_LAYOUTS.get_or_init(HashMap::new)
+}
+
 /// Build the `WaitCache` for all non-generic functions in the module.
 ///
 /// Generic functions are excluded because their concrete instantiations are lowered
@@ -143,6 +153,297 @@ fn build_wait_cache(typed: &TypedModule) -> WaitCache {
     cache
 }
 
+// ── v0.3-M2 Phase 7: Composed-frame layout + SuspendSet ─────────────────────
+
+/// The set of user-defined function names that transitively reach a suspension point
+/// (computed by `ynz_typeck::may_block::analyze` and stored in `FunctionSig.suspends`).
+///
+/// Functions in this set are compiled as state machines. Functions NOT in this set
+/// compile to straight-line code with zero suspension overhead.
+pub type SuspendSet = HashSet<String>;
+
+/// Composed-frame layout for one suspending function.
+///
+/// A composed frame embeds the sub-frames of all directly-called suspending children
+/// at compile-time-fixed byte offsets, so the entire intra-function call tree shares
+/// ONE `ynz_alloc` per spawned task.
+pub struct FrameLayout {
+    /// Total frame size: per-frame header (32 bytes) + own locals + all child sub-frames.
+    pub total_size: u64,
+    /// Number of own local slots (params in M2).
+    pub n_locals: usize,
+    /// Unique directly-called suspending callees with their byte offsets within this frame.
+    ///
+    /// Multiple calls to the same callee share ONE embedded slot (sequential calls
+    /// never overlap; they reuse the same sub-frame). Ordered by first appearance.
+    pub children: Vec<(String, u64)>,
+    /// Byte offset of the recursion heap-pointer slot, when this function has a
+    /// recursive edge in its call graph. The slot stores a `*mut u8` to a heap-boxed
+    /// child frame (`ynz_alloc`), freed after the recursive call returns Ready.
+    pub recursion_slot: Option<u64>,
+}
+
+/// Build `FrameLayout` for every suspending function in the module.
+///
+/// # Algorithm (O(N²) where N = number of suspending fns — bounded in practice)
+///
+/// 1. Walk each function's AST to collect its direct suspending callees in call order
+///    (deduplicating per callee name).
+/// 2. Detect recursion edges via a simple ancestor-set DFS (no topological sort needed
+///    for the recursion-detection goal).
+/// 3. Compute total_size bottom-up: leaf functions have size = header + own_locals;
+///    internal nodes add the sizes of all non-recursive children.
+fn build_frame_layouts(
+    typed: &TypedModule,
+    suspend_set: &SuspendSet,
+) -> HashMap<String, FrameLayout> {
+    // Step 1: collect direct suspending callees for each suspending fn.
+    let mut direct_children: HashMap<String, Vec<String>> = HashMap::new();
+    for item in &typed.module.items {
+        let Item::Function(f) = item else { continue };
+        if f.generics.is_empty() && suspend_set.contains(&f.name) {
+            let callees = collect_suspending_callees(&f.body, suspend_set);
+            direct_children.insert(f.name.clone(), callees);
+        }
+    }
+
+    // Step 2 + 3: compute frame sizes recursively with cycle detection.
+    // Use a memo map and a visiting set.
+    let mut sizes: HashMap<String, u64> = HashMap::new();
+    let fn_names: Vec<String> = direct_children.keys().cloned().collect();
+    for name in &fn_names {
+        let mut visiting = HashSet::new();
+        compute_frame_size(name, &direct_children, suspend_set, typed, &mut sizes, &mut visiting);
+    }
+
+    // Step 4: build FrameLayout for each fn using the computed sizes.
+    let mut layouts: HashMap<String, FrameLayout> = HashMap::new();
+    for item in &typed.module.items {
+        let Item::Function(f) = item else { continue };
+        if f.generics.is_empty() && suspend_set.contains(&f.name) {
+            let n_locals = f.params.len();
+            let own_base = state_machine::FRAME_HEADER_SIZE + state_machine::own_locals_size(n_locals);
+            let children_raw = direct_children.get(&f.name).cloned().unwrap_or_default();
+
+            // Build child offset list, detecting recursion edges.
+            let mut children: Vec<(String, u64)> = Vec::new();
+            let mut recursion_slot: Option<u64> = None;
+            let mut cursor = own_base;
+
+            // Detect which children are recursive (cycle in the call graph).
+            // Simple heuristic: a child is "recursive" if its name == the current fn OR
+            // if there's no size computed for it (size would be infinite if truly recursive).
+            for callee in &children_raw {
+                if callee == &f.name || sizes.get(callee.as_str()).is_none() {
+                    // Recursion edge: store an 8-byte heap-pointer slot instead of embedding.
+                    if recursion_slot.is_none() {
+                        recursion_slot = Some(cursor);
+                        cursor += 8; // one pointer slot
+                    }
+                    // Don't embed the recursive child.
+                } else {
+                    let child_size = *sizes.get(callee.as_str()).unwrap_or(&state_machine::FRAME_HEADER_SIZE);
+                    children.push((callee.clone(), cursor));
+                    cursor += child_size;
+                }
+            }
+
+            let total_size = cursor;
+            layouts.insert(f.name.clone(), FrameLayout {
+                total_size,
+                n_locals,
+                children,
+                recursion_slot,
+            });
+        }
+    }
+    layouts
+}
+
+/// Collect the unique suspending callee names called directly in `block` (in call order).
+///
+/// Deduplicates by callee name — multiple calls to the same callee share one embedded
+/// sub-frame slot (sequential calls never overlap). This is O(N) where N = AST nodes.
+fn collect_suspending_callees(block: &ynz_ast::nodes::Block, suspend_set: &SuspendSet) -> Vec<String> {
+    let mut callees: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    collect_callees_in_block(block, suspend_set, &mut callees, &mut seen);
+    callees
+}
+
+fn collect_callees_in_block(
+    block: &ynz_ast::nodes::Block,
+    suspend_set: &SuspendSet,
+    out: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+) {
+    for stmt in &block.stmts {
+        collect_callees_in_stmt(stmt, suspend_set, out, seen);
+    }
+}
+
+fn collect_callees_in_stmt(
+    stmt: &Stmt,
+    suspend_set: &SuspendSet,
+    out: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+) {
+    match stmt {
+        Stmt::Expr(e) | Stmt::Return { value: Some(e), .. } => collect_callees_in_expr(e, suspend_set, out, seen),
+        Stmt::Let { value: e, .. } | Stmt::Assign { value: e, .. } => collect_callees_in_expr(e, suspend_set, out, seen),
+        Stmt::FieldAssign { target, value, .. } => {
+            collect_callees_in_expr(target, suspend_set, out, seen);
+            collect_callees_in_expr(value, suspend_set, out, seen);
+        }
+        Stmt::IndexAssign { receiver, index, value, .. } => {
+            collect_callees_in_expr(receiver, suspend_set, out, seen);
+            collect_callees_in_expr(index, suspend_set, out, seen);
+            collect_callees_in_expr(value, suspend_set, out, seen);
+        }
+        Stmt::If { cond, body, .. } => {
+            collect_callees_in_expr(cond, suspend_set, out, seen);
+            collect_callees_in_block(body, suspend_set, out, seen);
+        }
+        Stmt::While { cond, body, .. } => {
+            collect_callees_in_expr(cond, suspend_set, out, seen);
+            collect_callees_in_block(body, suspend_set, out, seen);
+        }
+        Stmt::For { iter, body, .. } => {
+            collect_callees_in_expr(iter, suspend_set, out, seen);
+            collect_callees_in_block(body, suspend_set, out, seen);
+        }
+        Stmt::Match { scrutinee, arms, else_arm, .. } => {
+            collect_callees_in_expr(scrutinee, suspend_set, out, seen);
+            for arm in arms { collect_callees_in_block(&arm.body, suspend_set, out, seen); }
+            if let Some(b) = else_arm { collect_callees_in_block(b, suspend_set, out, seen); }
+        }
+        Stmt::Return { value: None, .. } => {}
+    }
+}
+
+fn collect_callees_in_expr(
+    expr: &Expr,
+    suspend_set: &SuspendSet,
+    out: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+) {
+    match expr {
+        Expr::Call(c) => {
+            if let Expr::Ident(name, _) = &c.callee {
+                if suspend_set.contains(name.as_str()) && !M2_MAY_BLOCK_INTRINSICS.contains(&name.as_str()) {
+                    if seen.insert(name.clone()) {
+                        out.push(name.clone());
+                    }
+                }
+            }
+            // Recurse into args
+            for arg in &c.args {
+                collect_callees_in_expr(arg, suspend_set, out, seen);
+            }
+        }
+        Expr::Wait(inner, _) => collect_callees_in_expr(inner, suspend_set, out, seen),
+        Expr::Background(inner, _) => {
+            // background calls don't embed — they get their own alloc via ynz_rt_spawn.
+            let _ = inner;
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_callees_in_expr(lhs, suspend_set, out, seen);
+            collect_callees_in_expr(rhs, suspend_set, out, seen);
+        }
+        Expr::UnaryOp { operand, .. } => collect_callees_in_expr(operand, suspend_set, out, seen),
+        Expr::MethodCall { receiver, args, .. } => {
+            collect_callees_in_expr(receiver, suspend_set, out, seen);
+            for a in args { collect_callees_in_expr(a, suspend_set, out, seen); }
+        }
+        Expr::FieldAccess { receiver, .. } => collect_callees_in_expr(receiver, suspend_set, out, seen),
+        Expr::IndexAccess { receiver, index, .. } => {
+            collect_callees_in_expr(receiver, suspend_set, out, seen);
+            collect_callees_in_expr(index, suspend_set, out, seen);
+        }
+        Expr::StructLit { fields, .. } => {
+            for f in fields { collect_callees_in_expr(&f.value, suspend_set, out, seen); }
+        }
+        Expr::ArrayLit { elements, .. } => {
+            for e in elements { collect_callees_in_expr(e, suspend_set, out, seen); }
+        }
+        Expr::MapLit { entries, .. } => {
+            for (k, v) in entries {
+                collect_callees_in_expr(k, suspend_set, out, seen);
+                collect_callees_in_expr(v, suspend_set, out, seen);
+            }
+        }
+        Expr::InterpolatedString(parts, _) => {
+            for p in parts {
+                if let ynz_ast::nodes::StringPart::Expr(e, _) = p {
+                    collect_callees_in_expr(e, suspend_set, out, seen);
+                }
+            }
+        }
+        Expr::PostfixOp { receiver, .. } => collect_callees_in_expr(receiver, suspend_set, out, seen),
+        Expr::Is { expr: inner, .. } => collect_callees_in_expr(inner, suspend_set, out, seen),
+        // Leaf nodes
+        _ => {}
+    }
+}
+
+/// Recursively compute the total frame size for `fn_name`, memoizing in `sizes`.
+///
+/// `visiting` tracks the ancestor path to detect recursion cycles.
+fn compute_frame_size(
+    fn_name: &str,
+    direct_children: &HashMap<String, Vec<String>>,
+    suspend_set: &SuspendSet,
+    typed: &TypedModule,
+    sizes: &mut HashMap<String, u64>,
+    visiting: &mut HashSet<String>,
+) -> u64 {
+    if let Some(&cached) = sizes.get(fn_name) {
+        return cached;
+    }
+    if visiting.contains(fn_name) {
+        // Recursion — return 0 as sentinel; the caller will use a heap-pointer slot instead.
+        return 0;
+    }
+    visiting.insert(fn_name.to_string());
+
+    // Find n_locals for this fn.
+    let n_locals = typed.module.items.iter().find_map(|item| {
+        if let Item::Function(f) = item {
+            if f.name == fn_name { return Some(f.params.len()); }
+        }
+        None
+    }).unwrap_or(0);
+
+    let own_base = state_machine::FRAME_HEADER_SIZE + state_machine::own_locals_size(n_locals);
+    let mut total = own_base;
+
+    if let Some(children) = direct_children.get(fn_name) {
+        let mut seen_recursive: HashSet<String> = HashSet::new();
+        for child in children {
+            if child == fn_name || visiting.contains(child.as_str()) {
+                // Recursive edge: add 8 bytes for the heap-pointer slot (once).
+                if seen_recursive.insert(child.clone()) {
+                    total += 8;
+                }
+            } else {
+                let child_size = compute_frame_size(child, direct_children, suspend_set, typed, sizes, visiting);
+                if child_size == 0 {
+                    // Child had a cycle; treat as recursive pointer.
+                    if seen_recursive.insert(child.clone()) {
+                        total += 8;
+                    }
+                } else {
+                    total += child_size;
+                }
+            }
+        }
+    }
+
+    visiting.remove(fn_name);
+    sizes.insert(fn_name.to_string(), total);
+    total
+}
+
 /// The set of free-function intrinsic names that are may-block (can contain suspension points).
 ///
 /// M2 uses a fixed 2-element set. M3 will replace this with a transitive call-graph analysis
@@ -154,18 +455,9 @@ fn build_wait_cache(typed: &TypedModule) -> WaitCache {
 // Not a user-facing feature. M3's transitive analysis replaces this entirely.
 const M2_MAY_BLOCK_INTRINSICS: &[&str] = &["sleepAsync", "__testFallibleAsync"];
 
-/// True when a callee name identifies a may-block call site in M2.
-///
-/// Two signals are checked:
-/// 1. The callee is in the M2 may-block intrinsic set (`sleepAsync`, `__testFallibleAsync`).
-/// 2. The callee is a user-defined function whose body syntactically contains `Expr::Wait`.
-///
-/// NOT transitive: if `foo` calls `bar` and `bar` contains `wait`, `foo` is only may-block
-/// if the `WaitCache` entry for `foo` is true (i.e., `foo`'s own body contains `wait`).
-fn is_may_block_callee(callee_name: &str, wait_cache: &WaitCache) -> bool {
-    M2_MAY_BLOCK_INTRINSICS.contains(&callee_name)
-        || wait_cache.get(callee_name).copied().unwrap_or(false)
-}
+// is_may_block_callee (local-syntactic predicate) removed in P7.
+// The SM-selection predicate is now SuspendSet (transitive, from typeck).
+// Kept only as a dead-code stub; M3 will remove it entirely.
 
 /// The file ID embedded in the LLVM module for deterministic IR and object output.
 pub fn module_identifier(source_path: &str) -> String {
@@ -178,11 +470,12 @@ pub fn emit_artifact(
     source_path: &str,
     typed_module: &TypedModule,
     shape_table: &ShapeTable,
-    _sig_table: &SignatureTable,
+    sig_table: &SignatureTable,
     generic_fn_table: &GenericFnTable,
     mono_table: &MonomorphizationTable,
     target_triple: Option<&str>,
     imported_options: &std::collections::HashMap<String, ynz_typeck::options_table::OptionsEntry>,
+    suspends_set_arg: &HashSet<String>,
 ) -> Result<CompiledArtifact, String> {
     Target::initialize_x86(&InitializationConfig::default());
 
@@ -210,6 +503,12 @@ pub fn emit_artifact(
         .ok_or_else(|| "LLVM: failed to create target machine".to_string())?;
     module.set_data_layout(&machine.get_target_data().get_data_layout());
 
+    // Use the suspends_set passed in from check_query (computed by may_block::analyze).
+    // This is the Phase-7 seam fix: the pre-analysis sig_table (from module_signatures_query)
+    // has suspends=false for all fns; the real transitive set comes from check_query.
+    let suspend_set: SuspendSet = suspends_set_arg.clone();
+    let _ = sig_table; // sig_table kept in signature for API compatibility
+
     build_module(
         &context,
         &module,
@@ -219,6 +518,7 @@ pub fn emit_artifact(
         generic_fn_table,
         mono_table,
         imported_options,
+        &suspend_set,
     )?;
 
     module
@@ -279,6 +579,7 @@ fn build_module<'ctx, 'g>(
     generic_fn_table: &'g GenericFnTable,
     mono_table: &'g MonomorphizationTable,
     imported_options: &std::collections::HashMap<String, ynz_typeck::options_table::OptionsEntry>,
+    suspend_set: &'g SuspendSet,
 ) -> Result<(), String> {
     let rt = RuntimeDecls::declare(ctx, module);
 
@@ -318,16 +619,21 @@ fn build_module<'ctx, 'g>(
     // Pass 0 — emit LLVM struct types for all user-defined shapes.
     let shape_types = emit_shape_types(ctx, shape_table);
 
-    // Pass 0.5 — build the wait cache: one AST walk per function, result cached for all
-    // of Pass 2 (background routing, call-site dispatch, path selection all read it).
+    // Pass 0.5 — build the wait cache (kept for backward-compat with generic lowering +
+    // background routing) AND compute frame layouts for all suspending functions.
+    //
+    // The wait_cache still serves the local-syntactic check used by non-SM call sites.
+    // frame_layouts encodes the composed structure (embedded child sub-frames) used by
+    // lower_function_with_waits to allocate ONE frame per task tree.
     let wait_cache = build_wait_cache(typed);
+    let frame_layouts = build_frame_layouts(typed, suspend_set);
 
-    // Pass 0.6 — forward-declare resume functions for all state-machine functions.
-    // Required before Pass 1 so that call sites inside state-machine bodies can
-    // reference the resume function before its body is emitted.
+    // Pass 0.6 — forward-declare resume functions for ALL SUSPENDING functions.
+    // Phase 7: use suspend_set (transitive) instead of wait_cache (local) so fns that
+    // reach sleepAsync transitively (without explicit `wait`) get a resume fn declared.
     for item in &typed.module.items {
         if let Item::Function(f) = item {
-            if f.generics.is_empty() && wait_cache.get(&f.name).copied().unwrap_or(false) {
+            if f.generics.is_empty() && suspend_set.contains(&f.name) {
                 let resume_name = state_machine::resume_fn_name(&f.name);
                 state_machine::declare_resume_fn(ctx, module, &resume_name);
             }
@@ -388,6 +694,8 @@ fn build_module<'ctx, 'g>(
                 mono_table,
                 &options_table,
                 &wait_cache,
+                suspend_set,
+                &frame_layouts,
             )?,
             Item::Function(_)
             | Item::ShapeDecl(_)
@@ -563,9 +871,12 @@ fn lower_generic_function<'ctx>(
         is_errors_capable: false,
         errors_capable_locals: std::collections::HashSet::new(),
         bg_uid: 0,
-        // Generic functions cannot contain `wait` in M2 (no concrete return type that could
-        // be awaitable). Use an empty cache — no state-machine routing needed.
+        // Generic functions cannot contain `wait` in M2. Use empty caches.
         wait_cache: empty_wait_cache(),
+        suspend_set: empty_suspend_set(),
+        frame_layouts: empty_frame_layouts(),
+        sm_frame_ptr: None,
+        sm_yinz_ret_ty: None,
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -766,10 +1077,20 @@ struct Cg<'ctx, 'g> {
     // Per-Cg (not global static) so identical source always produces identical IR even
     // when multiple compilations run in the same process (LSP, test harness).
     bg_uid: u64,
-    // v0.3-M2: contains-wait cache for all non-generic functions in the module.
-    // Used by background routing and call-site dispatch to check if a callee is a
-    // state machine without re-walking its AST on every access.
+    // v0.3-M2 P6: local contains-wait cache (kept for generic lowering backward-compat).
+    // Dead in P7 for non-generic code; remove in M3 when generic functions can suspend.
+    #[allow(dead_code)]
     wait_cache: &'g WaitCache,
+    // v0.3-M2 P7: transitive suspend set — the "is state machine" predicate.
+    suspend_set: &'g SuspendSet,
+    // v0.3-M2 P7: composed-frame layouts for all suspending functions.
+    frame_layouts: &'g HashMap<String, FrameLayout>,
+    // v0.3-M2 P7: when non-None, this Cg is inside a state-machine resume function.
+    // The frame pointer and Yinz return type are needed so Stmt::Return stores the
+    // typed value in frame[FRAME_OFFSET_RETURN_SLOT] and returns `i32 0` (Ready)
+    // instead of the usual LLVM `ret <value>`.
+    sm_frame_ptr: Option<PointerValue<'ctx>>,
+    sm_yinz_ret_ty: Option<Type>,
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
@@ -1011,14 +1332,17 @@ fn lower_function<'ctx, 'g>(
     mono_table: &'g MonomorphizationTable,
     options_table: &'g ynz_typeck::options_table::OptionsTable,
     wait_cache: &'g WaitCache,
+    suspend_set: &'g SuspendSet,
+    frame_layouts: &'g HashMap<String, FrameLayout>,
 ) -> Result<(), String> {
-    // v0.3-M2 path selection: functions whose body contains `Expr::Wait` get the state-machine
-    // path. All others use the standard sequential path with zero overhead.
-    // The wait_cache is computed once before Pass 2 — no re-walk here.
-    if wait_cache.get(&f.name).copied().unwrap_or(false) {
+    // v0.3-M2 P7 path selection: functions in the transitive suspend_set get the
+    // state-machine path. Uses suspend_set (from typeck FunctionSig.suspends) instead
+    // of the local wait_cache, so fns that reach sleepAsync transitively — without an
+    // explicit `wait` — are now correctly compiled as state machines.
+    if suspend_set.contains(&f.name) {
         return lower_function_with_waits(
             ctx, module, rt, globals, typed, f, shape_table, shape_types, mono_table,
-            options_table, wait_cache,
+            options_table, wait_cache, suspend_set, frame_layouts,
         );
     }
 
@@ -1056,6 +1380,10 @@ fn lower_function<'ctx, 'g>(
         errors_capable_locals: std::collections::HashSet::new(),
         bg_uid: 0,
         wait_cache,
+        suspend_set,
+        frame_layouts,
+        sm_frame_ptr: None,
+        sm_yinz_ret_ty: None,
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -1202,6 +1530,8 @@ fn lower_function_with_waits<'ctx, 'g>(
     mono_table: &'g MonomorphizationTable,
     options_table: &'g ynz_typeck::options_table::OptionsTable,
     wait_cache: &'g WaitCache,
+    suspend_set: &'g SuspendSet,
+    frame_layouts: &'g HashMap<String, FrameLayout>,
 ) -> Result<(), String> {
     // Collect the names of parameters that cross the wait boundary.
     // In M2, ALL parameters are live across any wait in the function body.
@@ -1209,7 +1539,12 @@ fn lower_function_with_waits<'ctx, 'g>(
     let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
     let n_locals = param_names.len(); // each param gets one i64 frame slot
 
-    let frame_bytes = state_machine::frame_size(n_locals);
+    // Look up the composed frame layout for this function. The total_size covers
+    // header(32) + own_locals + all embedded child sub-frames = ONE allocation per task tree.
+    let frame_layout = frame_layouts.get(&f.name);
+    let frame_bytes = frame_layout.map(|l| l.total_size)
+        .unwrap_or_else(|| state_machine::FRAME_HEADER_SIZE + state_machine::own_locals_size(n_locals));
+
     let is_main = f.name == "entrypoint";
     let llvm_name = if is_main { "main" } else { f.name.as_str() };
 
@@ -1234,8 +1569,9 @@ fn lower_function_with_waits<'ctx, 'g>(
     let resume_entry = ctx.append_basic_block(resume_fn, "sm_entry");
 
     // Pre-create state blocks.
-    // Count waits in body to know how many states we need.
-    let n_waits = count_waits_in_block(&f.body);
+    // Count ALL suspension points: explicit `wait` nodes + calls to suspending callees.
+    // Each suspension point needs a poll-loop continuation state.
+    let n_waits = count_suspension_points(&f.body, suspend_set);
     // States: 0 = before first wait, 1..n_waits = each continuation, plus a dead/error block.
     let state_blocks: Vec<inkwell::basic_block::BasicBlock<'ctx>> =
         (0..=n_waits)
@@ -1248,6 +1584,25 @@ fn lower_function_with_waits<'ctx, 'g>(
 
     // Build a Cg context for the resume function body. Allocas must be placed in the
     // function entry block (sm_entry) so they dominate all successor blocks per LLVM SSA rules.
+    // Compute the Yinz return type so lower_stmt_return can store typed values
+    // in the return slot instead of emitting a bare LLVM ret instruction.
+    //
+    // For errors-capable functions: ast_type_to_typeck_type strips the ErrorCapable
+    // wrapper and returns the inner type (e.g., Int for `-> int errors`). We need
+    // the full ErrorsCapable type so lower_stmt_return dispatches to the correct arm.
+    let fn_is_errors_capable = f.errors_capable;
+    let yinz_ret_ty = if fn_is_errors_capable {
+        let inner = ast_type_to_typeck_type(&f.return_type, shape_table);
+        Type::ErrorsCapable { inner: Box::new(inner) }
+    } else {
+        ast_type_to_typeck_type(&f.return_type, shape_table)
+    };
+
+    // frame_ptr_for_resume is not available until Part 2 — we'll thread it through
+    // after allocation. For Part 1 (resume body), we need to pass it via cg_resume.sm_frame_ptr.
+    // Since frame_param IS the frame pointer for the resume fn, we set it here.
+    // (frame_param was already bound above from resume_fn.get_nth_param(0).)
+
     let mut cg_resume = Cg {
         ctx,
         module,
@@ -1264,10 +1619,19 @@ fn lower_function_with_waits<'ctx, 'g>(
         type_subst: HashMap::new(),
         mono_table,
         options_table,
+        // is_errors_capable = false inside the resume fn: the SM return path handles
+        // errors-capable results explicitly (stores {i64,i64} in return slot). Keeping
+        // is_errors_capable=true would trigger auto-propagation via `ret {i64,i64}` which
+        // conflicts with the resume fn's `i32` return type.
         is_errors_capable: false,
         errors_capable_locals: std::collections::HashSet::new(),
         bg_uid: 0,
         wait_cache,
+        suspend_set,
+        frame_layouts,
+        sm_frame_ptr: Some(frame_param),
+        sm_yinz_ret_ty: Some(yinz_ret_ty.clone()),
+        // Carry errors-capable flag separately so lower_stmt_return can handle it.
     };
 
     // Step 1 — Emit allocas in the entry block (sm_entry). LLVM SSA requires all allocas
@@ -1365,74 +1729,246 @@ fn lower_function_with_waits<'ctx, 'g>(
             .map_err(|e| format!("rt_init: {e}"))?;
     }
 
-    // Allocate the frame.
-    let frame_ptr = state_machine::alloc_frame(ctx, &builder, rt, n_locals)?;
+    // Allocate the COMPOSED frame (covers header + own locals + all embedded child sub-frames).
+    // ONE allocation per spawned task tree — Rust-async-model performance.
+    let frame_ptr = state_machine::alloc_frame(ctx, &builder, rt, frame_bytes)?;
 
-    // Write each parameter to its frame slot.
+    // Write each parameter to its frame slot (locals start at offset 32).
     for (slot_idx, param) in f.params.iter().enumerate() {
         let llvm_param = wrapper_fn
             .get_nth_param(slot_idx as u32)
             .ok_or_else(|| format!("wrapper: missing param {slot_idx}"))?;
-        // Convert parameter to i64 bits for frame storage via the shared marshaller.
-        // SM wrapper params are concrete (M2 does not monomorphize wait-containing generics),
-        // so the AST type maps directly without generic substitution.
         let param_ty = ast_type_to_typeck_type(&param.ty, shape_table);
         let bits = value_to_i64_bits(&builder, ctx.i64_type(), llvm_param, &param_ty)
             .map_err(|e| format!("param to bits: {e}"))?;
         state_machine::store_local_slot(ctx, &builder, frame_ptr, slot_idx, bits)?;
     }
 
-    // Drive the state machine to completion via the sync bridge.
+    // Drive the state machine to completion via ynz_rt_call_state_machine_sync (the
+    // top-level RUNTIME.block_on driver). This is the ONLY place the sync bridge is used
+    // in P7 — for the wrapper→resume handoff. The resume function itself never calls the
+    // bridge; it inline-poll-yields into embedded child sub-frames (no bridge inside resume).
     let resume_fn_ptr = resume_fn.as_global_value().as_pointer_value();
     let frame_size_val = ctx.i64_type().const_int(frame_bytes, false);
 
-    let exit_val = builder
+    builder
         .build_call(
             rt.ynz_rt_call_state_machine_sync,
             &[resume_fn_ptr.into(), frame_ptr.into(), frame_size_val.into()],
-            "sm_result",
+            "sm_drive",
         )
-        .map_err(|e| format!("sm_sync call: {e}"))?
-        .try_as_basic_value()
-        .basic()
-        .ok_or("ynz_rt_call_state_machine_sync returned void")?
-        .into_int_value();
+        .map_err(|e| format!("sm_drive call: {e}"))?;
 
-    // Free the frame — ownership returns to the wrapper after sync completes.
-    state_machine::free_frame(ctx, &builder, rt, frame_ptr, n_locals)?;
+    // Read the typed return value from the return slot at offset 16.
+    // The resume function stored the typed value there (instead of the old i32-truncation
+    // into frame[0] which was the i32-truncation defect fixed in Phase 7).
+    let ret_ty = ast_type_to_typeck_type(&f.return_type, shape_table);
+    let is_errors_capable = f.errors_capable;
+
+    // Free the frame before constructing the return value — the frame slots were already
+    // read above; no further access to frame_ptr after free.
+    // EXCEPTION: for errors-capable returns we must read the errors struct BEFORE freeing,
+    // then free, then return. We defer the free to after the read below.
 
     if is_main {
+        // For main: read return value from typed return slot, free frame, shutdown, return exit code.
+        // The return value for main (-> nothing or -> int) is an i64 in the return slot.
+        let exit_i64 = state_machine::load_return_value_i64(ctx, &builder, frame_ptr, "exit_i64")?;
+        state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
         builder
             .build_call(rt.ynz_rt_shutdown, &[], "rt_shutdown")
             .map_err(|e| format!("rt_shutdown: {e}"))?;
-        // Propagate the exit code from frame slot 0 (the final return value written by resume_fn).
-        let exit_i32 = if exit_val.get_type() != ctx.i32_type() {
-            builder
-                .build_int_truncate(exit_val, ctx.i32_type(), "exit_i32")
-                .map_err(|e| format!("exit truncate: {e}"))?
-        } else {
-            exit_val
-        };
+        // Truncate i64 → i32 for C main's exit code (AC: entrypoint -> int → exit $?).
+        let exit_i32 = builder
+            .build_int_truncate(exit_i64, ctx.i32_type(), "exit_i32")
+            .map_err(|e| format!("exit truncate: {e}"))?;
         builder
             .build_return(Some(&exit_i32))
             .map_err(|e| format!("main ret: {e}"))?;
-    } else {
-        // Non-main wrapper: returns nothing (void) — it's driven synchronously.
+    } else if is_errors_capable {
+        // errors-capable wrapper: read {i64, i64} from return slot, free frame, return struct.
+        let (err_i64, ok_i64) = state_machine::load_return_value_errors(ctx, &builder, frame_ptr)?;
+        state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
+        // Reconstruct the {i64, i64} struct value for the caller.
+        let struct_ty = ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false);
+        let mut result = struct_ty.const_zero();
+        result = builder.build_insert_value(result, err_i64, 0, "ec_err")
+            .map_err(|e| format!("ec_err insert: {e}"))?.into_struct_value();
+        result = builder.build_insert_value(result, ok_i64, 1, "ec_ok")
+            .map_err(|e| format!("ec_ok insert: {e}"))?.into_struct_value();
         builder
-            .build_return(None)
-            .map_err(|e| format!("wrapper void ret: {e}"))?;
+            .build_return(Some(&result))
+            .map_err(|e| format!("ec wrapper ret: {e}"))?;
+    } else {
+        // Non-main, non-errors wrapper: read return slot and return typed value.
+        match &ret_ty {
+            Type::Nothing => {
+                state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
+                builder.build_return(None).map_err(|e| format!("wrapper void ret: {e}"))?;
+            }
+            Type::Int | Type::Bool => {
+                let val = state_machine::load_return_value_i64(ctx, &builder, frame_ptr, "ret_i64")?;
+                state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
+                builder.build_return(Some(&val)).map_err(|e| format!("wrapper int ret: {e}"))?;
+            }
+            Type::String | Type::Shape { .. } | Type::BuiltinArray { .. } | Type::BuiltinFixed { .. }
+            | Type::Maybe { .. } | Type::BuiltinMap { .. } | Type::Union { .. } | Type::Sensitive { .. } => {
+                let as_i64 = state_machine::load_return_value_i64(ctx, &builder, frame_ptr, "ret_ptr_i64")?;
+                state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
+                // Convert i64 back to pointer.
+                let ptr_val = builder
+                    .build_int_to_ptr(as_i64, ctx.ptr_type(AddressSpace::default()), "ret_ptr")
+                    .map_err(|e| format!("ret_ptr cast: {e}"))?;
+                builder.build_return(Some(&ptr_val)).map_err(|e| format!("wrapper ptr ret: {e}"))?;
+            }
+            _ => {
+                // Fallback: free and return void (shouldn't happen for well-typed programs).
+                state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
+                builder.build_return(None).map_err(|e| format!("wrapper fallback ret: {e}"))?;
+            }
+        }
     }
 
     Ok(())
 }
 
-/// Count `Expr::Wait` occurrences in a block (flat — counts direct children only for
-/// simple sequential wait patterns). For nested waits (wait inside if/while), each
-/// sub-block contributes to the total state count.
+/// Count suspension points in a block: `Expr::Wait` nodes PLUS calls to suspending callees.
+///
+/// Used by `lower_function_with_waits` to pre-allocate state blocks. Every explicit `wait` AND
+/// every call to a suspending callee (regardless of whether `wait` was written) needs one
+/// continuation state for the poll-loop re-entry.
+fn count_suspension_points(block: &ynz_ast::nodes::Block, suspend_set: &SuspendSet) -> usize {
+    block.stmts.iter().map(|s| count_suspension_stmt(s, suspend_set)).sum()
+}
+
+fn count_suspension_stmt(stmt: &Stmt, suspend_set: &SuspendSet) -> usize {
+    match stmt {
+        Stmt::Expr(e) => count_suspension_expr(e, suspend_set),
+        Stmt::Let { value, .. } | Stmt::Assign { value, .. } => count_suspension_expr(value, suspend_set),
+        Stmt::Return { value, .. } => value.as_ref().map_or(0, |e| count_suspension_expr(e, suspend_set)),
+        Stmt::FieldAssign { target, value, .. } => {
+            count_suspension_expr(target, suspend_set) + count_suspension_expr(value, suspend_set)
+        }
+        Stmt::IndexAssign { receiver, index, value, .. } => {
+            count_suspension_expr(receiver, suspend_set)
+                + count_suspension_expr(index, suspend_set)
+                + count_suspension_expr(value, suspend_set)
+        }
+        Stmt::If { cond, body, .. } => {
+            count_suspension_expr(cond, suspend_set) + count_suspension_points(body, suspend_set)
+        }
+        Stmt::While { cond, body, .. } => {
+            count_suspension_expr(cond, suspend_set) + count_suspension_points(body, suspend_set)
+        }
+        Stmt::For { iter, body, .. } => {
+            count_suspension_expr(iter, suspend_set) + count_suspension_points(body, suspend_set)
+        }
+        Stmt::Match { scrutinee, arms, else_arm, .. } => {
+            count_suspension_expr(scrutinee, suspend_set)
+                + arms.iter().map(|a| count_suspension_points(&a.body, suspend_set)).sum::<usize>()
+                + else_arm.as_ref().map_or(0, |b| count_suspension_points(b, suspend_set))
+        }
+    }
+}
+
+fn count_suspension_expr(expr: &Expr, suspend_set: &SuspendSet) -> usize {
+    match expr {
+        // Explicit `wait` of any kind = 1 suspension point.
+        Expr::Wait(..) => 1,
+        // Direct call to a suspending user-defined fn (without explicit `wait`) = 1 suspension point.
+        Expr::Call(c) => {
+            if let Expr::Ident(name, _) = &c.callee {
+                if suspend_set.contains(name.as_str()) && !M2_MAY_BLOCK_INTRINSICS.contains(&name.as_str()) {
+                    // This suspending call needs a poll-loop state.
+                    return 1 + c.args.iter().map(|a| count_suspension_expr(a, suspend_set)).sum::<usize>();
+                }
+            }
+            c.args.iter().map(|a| count_suspension_expr(a, suspend_set)).sum()
+        }
+        Expr::BinOp { lhs, rhs, .. } => count_suspension_expr(lhs, suspend_set) + count_suspension_expr(rhs, suspend_set),
+        Expr::UnaryOp { operand, .. } => count_suspension_expr(operand, suspend_set),
+        Expr::MethodCall { receiver, args, .. } => {
+            count_suspension_expr(receiver, suspend_set) + args.iter().map(|a| count_suspension_expr(a, suspend_set)).sum::<usize>()
+        }
+        Expr::Background(inner, _) => {
+            // background calls spawn separately — NOT a suspension point in the parent.
+            let _ = inner;
+            0
+        }
+        _ => 0,
+    }
+}
+
+/// True if the statement contains a direct call to a suspending user-defined function.
+///
+/// Used alongside `stmt_contains_wait` to detect suspension points that don't have an
+/// explicit `wait` token (transitive case). Background expressions are excluded because
+/// they spawn independently and don't suspend the current function.
+fn stmt_contains_suspending_call(stmt: &Stmt, suspend_set: &SuspendSet) -> bool {
+    match stmt {
+        Stmt::Expr(e) => expr_contains_suspending_call(e, suspend_set),
+        Stmt::Let { value, .. } | Stmt::Assign { value, .. } => expr_contains_suspending_call(value, suspend_set),
+        Stmt::Return { value, .. } => value.as_ref().is_some_and(|e| expr_contains_suspending_call(e, suspend_set)),
+        Stmt::FieldAssign { target, value, .. } => {
+            expr_contains_suspending_call(target, suspend_set) || expr_contains_suspending_call(value, suspend_set)
+        }
+        Stmt::IndexAssign { receiver, index, value, .. } => {
+            expr_contains_suspending_call(receiver, suspend_set)
+                || expr_contains_suspending_call(index, suspend_set)
+                || expr_contains_suspending_call(value, suspend_set)
+        }
+        Stmt::If { cond, body, .. } => {
+            expr_contains_suspending_call(cond, suspend_set)
+                || body.stmts.iter().any(|s| stmt_contains_suspending_call(s, suspend_set))
+        }
+        Stmt::While { cond, body, .. } => {
+            expr_contains_suspending_call(cond, suspend_set)
+                || body.stmts.iter().any(|s| stmt_contains_suspending_call(s, suspend_set))
+        }
+        Stmt::For { iter, body, .. } => {
+            expr_contains_suspending_call(iter, suspend_set)
+                || body.stmts.iter().any(|s| stmt_contains_suspending_call(s, suspend_set))
+        }
+        Stmt::Match { scrutinee, arms, else_arm, .. } => {
+            expr_contains_suspending_call(scrutinee, suspend_set)
+                || arms.iter().any(|a| a.body.stmts.iter().any(|s| stmt_contains_suspending_call(s, suspend_set)))
+                || else_arm.as_ref().is_some_and(|b| b.stmts.iter().any(|s| stmt_contains_suspending_call(s, suspend_set)))
+        }
+    }
+}
+
+fn expr_contains_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool {
+    match expr {
+        Expr::Call(c) => {
+            if let Expr::Ident(name, _) = &c.callee {
+                if suspend_set.contains(name.as_str()) && !M2_MAY_BLOCK_INTRINSICS.contains(&name.as_str()) {
+                    return true;
+                }
+            }
+            c.args.iter().any(|a| expr_contains_suspending_call(a, suspend_set))
+        }
+        Expr::Wait(inner, _) => expr_contains_suspending_call(inner, suspend_set),
+        Expr::Background(_inner, _) => false, // background spawns separately, doesn't suspend current fn
+        Expr::BinOp { lhs, rhs, .. } => expr_contains_suspending_call(lhs, suspend_set) || expr_contains_suspending_call(rhs, suspend_set),
+        Expr::UnaryOp { operand, .. } => expr_contains_suspending_call(operand, suspend_set),
+        Expr::MethodCall { receiver, args, .. } => {
+            expr_contains_suspending_call(receiver, suspend_set)
+                || args.iter().any(|a| expr_contains_suspending_call(a, suspend_set))
+        }
+        _ => false,
+    }
+}
+
+/// Count `Expr::Wait` occurrences in a block.
+///
+/// Retained for reference; P7 uses `count_suspension_points` instead (also counts
+/// suspending callee calls, not just explicit `wait` nodes).
+#[allow(dead_code)]
 fn count_waits_in_block(block: &ynz_ast::nodes::Block) -> usize {
     block.stmts.iter().map(count_waits_in_stmt).sum()
 }
 
+#[allow(dead_code)]
 fn count_waits_in_stmt(stmt: &Stmt) -> usize {
     match stmt {
         Stmt::Expr(e) => count_waits_in_expr(e),
@@ -1460,6 +1996,7 @@ fn count_waits_in_stmt(stmt: &Stmt) -> usize {
     }
 }
 
+#[allow(dead_code)]
 fn count_waits_in_expr(expr: &Expr) -> usize {
     match expr {
         Expr::Wait(..) => 1,
@@ -1563,34 +2100,30 @@ fn lower_sm_body<'ctx, 'g>(
         &mut current_state,
     )?;
 
-    // Emit the terminal transition: write return value (0 for nothing-returning) and return Ready.
+    // Emit the terminal transition: write typed return value to return_slot@16, return Ready.
     if !is_block_terminated(cg) {
-        // Write return value 0 to frame[0] (return slot).
-        state_machine::store_return_value(
+        // For nothing-returning fns: store 0 as the return value (harmless to read).
+        state_machine::store_return_value_i64(
             cg.ctx,
             &cg.builder,
             frame_ptr,
-            cg.ctx.i32_type().const_int(0, false),
+            cg.ctx.i64_type().const_int(0, false),
         )?;
         cg.builder
             .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
             .map_err(|e| format!("sm terminal ret: {e}"))?;
     }
 
-    // Terminate any unreached state blocks (e.g., non-sleep-async waits that consumed a
-    // pre-allocated state slot but didn't actually do a state transition). LLVM requires
-    // every basic block to have a terminator.
+    // Terminate any unreached state blocks. LLVM requires every basic block to have a terminator.
     for &bb in state_blocks.iter() {
         if bb.get_terminator().is_none() {
-            // This state was never entered (the wait that would have used it was non-suspension).
-            // Emit a direct Ready return — if somehow reached, it signals "done".
             cg.builder.position_at_end(bb);
             reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table)?;
-            state_machine::store_return_value(
+            state_machine::store_return_value_i64(
                 cg.ctx,
                 &cg.builder,
                 frame_ptr,
-                cg.ctx.i32_type().const_int(0, false),
+                cg.ctx.i64_type().const_int(0, false),
             )?;
             cg.builder
                 .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
@@ -1628,7 +2161,7 @@ fn lower_sm_block<'ctx, 'g>(
         if is_block_terminated(cg) {
             break;
         }
-        if stmt_contains_wait(stmt) {
+        if stmt_contains_wait(stmt) || stmt_contains_suspending_call(stmt, cg.suspend_set) {
             lower_sm_stmt_with_wait(
                 cg,
                 stmt,
@@ -1678,6 +2211,59 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
 ) -> Result<(), String> {
     match stmt {
         // `wait sleepAsync(ms)` as a bare expression statement.
+        Stmt::Expr(Expr::Wait(inner, _)) if is_sleep_async_call(inner) => {
+            emit_wait_point(
+                cg,
+                inner,
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
+        }
+
+        // `wait suspendingCallee(args)` — explicit wait on a user SM call.
+        Stmt::Expr(Expr::Wait(inner, _))
+            if is_direct_suspending_call(inner, cg.suspend_set)
+        => {
+            let return_val = emit_suspending_call_inline_poll(
+                cg,
+                inner,
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
+            let _ = return_val; // bare statement — discard return value
+        }
+
+        // Direct call to suspending callee without explicit `wait` (transitive case).
+        // No explicit `wait` token — the inference model drives inline-poll-and-yield.
+        Stmt::Expr(inner) if is_direct_suspending_call(inner, cg.suspend_set) => {
+            let return_val = emit_suspending_call_inline_poll(
+                cg,
+                inner,
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
+            let _ = return_val;
+        }
+
+        // `wait sleepAsync(ms)` as a bare expression statement (non-ident call — fallback).
         Stmt::Expr(Expr::Wait(inner, _)) => {
             emit_wait_point(
                 cg,
@@ -1692,10 +2278,10 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                 current_state,
             )?;
         }
+
         // `let name = wait sleepAsync(ms)` — sleepAsync is nothing-returning; bind zero.
         Stmt::Let { name, value: Expr::Wait(inner, _), .. }
-            if matches!(inner.as_ref(),
-                Expr::Call(c) if matches!(&c.callee, Expr::Ident(n, _) if n == "sleepAsync"))
+            if is_sleep_async_call(inner)
         => {
             emit_wait_point(
                 cg,
@@ -1718,18 +2304,56 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                 .map_err(|e| format!("wait let store: {e}"))?;
             cg.locals.insert(name.clone(), alloca);
         }
+
+        // `let name = wait suspendingCallee(args)` — bind the return value.
+        Stmt::Let { name, value: Expr::Wait(inner, _), .. }
+            if is_direct_suspending_call(inner, cg.suspend_set)
+        => {
+            let return_val = emit_suspending_call_inline_poll(
+                cg,
+                inner,
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
+            // Bind the return value to `name`.
+            // For errors-capable callees: return_val is {i64,i64} struct — store via alloca pointer.
+            // For all others: return_val is i64 — store directly.
+            let alloca = bind_sm_return_value(cg, name, return_val)?;
+            cg.locals.insert(name.clone(), alloca);
+        }
+
+        // `let name = suspendingCallee(args)` — no explicit `wait`, bind the return value.
+        Stmt::Let { name, value: inner, .. }
+            if is_direct_suspending_call(inner, cg.suspend_set)
+        => {
+            let return_val = emit_suspending_call_inline_poll(
+                cg,
+                inner,
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
+            let alloca = bind_sm_return_value(cg, name, return_val)?;
+            cg.locals.insert(name.clone(), alloca);
+        }
+
         // `let name = wait non_sleep_async_call(...)` — non-suspension wait; lower normally.
-        // The pre-allocated state block for this wait will be given an unreachable terminator
-        // at the end of lower_sm_body.
         Stmt::Let { name: _, value: Expr::Wait(..), .. } => {
             lower_stmt(cg, stmt)?;
         }
-        // `if (cond) { ...wait... }` — recurse the SM walker into the branch so a nested wait
-        // gets a real suspend point. Mirrors `lower_stmt_if`'s cond → then/merge structure,
-        // but the body is SM-lowered. Yinz `if` has no else (multi-case uses `Stmt::Match`).
-        // The cond is lowered normally: in M2 it cannot contain a wait — the only may-block
-        // intrinsics are `sleepAsync` (returns nothing) and `__testFallibleAsync` (returns int),
-        // neither of which type-checks as a boolean condition.
+
+        // `if (cond) { ...wait/suspending_call... }` — recurse the SM walker into the branch.
         Stmt::If { cond, body, .. } => {
             let cond_val = lower_expr(cg, cond)?.into_int_value();
             let then_bb = cg.append_block("sm_if_then");
@@ -1751,9 +2375,6 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                 shape_table,
                 current_state,
             )?;
-            // The branch (and any wait-continuation inside it) converges at merge. On resume
-            // into a mid-branch wait, the entry switch jumps to that wait's continuation state,
-            // which flows post_wait → rest-of-branch → merge — cond is NOT re-evaluated.
             if !is_block_terminated(cg) {
                 cg.builder
                     .build_unconditional_branch(merge_bb)
@@ -1761,16 +2382,60 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
             }
             cg.builder.position_at_end(merge_bb);
         }
-        // wait-in-loop and wait-in-match are rejected at typeck (`WaitInsideLoop`) before
-        // codegen runs, and locals-crossing-nested-wait are rejected at typeck
-        // (`LocalCrossesWait`). Any statement reaching this arm is not a wait-bearing
-        // construct that requires SM treatment — lower it on the standard path.
-        //
-        // If either typeck guard ever regresses and a nested wait slips through, the
-        // backend would crash with a dominance violation. The panic below makes that
-        // regression loud and immediately traceable rather than a silent wrong-codegen.
+
+        // `return suspendingCallee(args)` from a SM function — inline-poll + store return + Ready.
+        Stmt::Return { value: Some(inner), .. }
+            if is_direct_suspending_call(inner, cg.suspend_set)
+        => {
+            let return_val = emit_suspending_call_inline_poll(
+                cg,
+                inner,
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
+            // Store the return value in our own return slot and emit Ready.
+            // When the callee is errors-capable, emit_suspending_call_inline_poll returns a
+            // StructValue ({i64, i64}). Both words must reach the return slot — extracting a
+            // single i64 via to_i64_bits would silently drop the error_ptr (field0), causing
+            // the wrapper to reconstruct {0, success} and treat an error as success.
+            if let Some(own_frame) = cg.sm_frame_ptr {
+                match return_val {
+                    inkwell::values::BasicValueEnum::StructValue(sv) => {
+                        // errors-capable callee: extract error_ptr (field0) + success (field1).
+                        let err_i64 = cg.builder
+                            .build_extract_value(sv, 0, "sm_fwd_err")
+                            .map_err(|e| format!("sm fwd err extract: {e}"))?
+                            .into_int_value();
+                        let ok_i64 = cg.builder
+                            .build_extract_value(sv, 1, "sm_fwd_ok")
+                            .map_err(|e| format!("sm fwd ok extract: {e}"))?
+                            .into_int_value();
+                        state_machine::store_return_value_errors(
+                            cg.ctx, &cg.builder, own_frame, err_i64, ok_i64,
+                        )?;
+                    }
+                    _ => {
+                        // Non-errors callee: store the i64/ptr return value.
+                        let val_ty = cg.expr_type(inner);
+                        let bits = cg.to_i64_bits(return_val, &val_ty)
+                            .unwrap_or_else(|_| cg.i64().const_int(0, false));
+                        state_machine::store_return_value_i64(cg.ctx, &cg.builder, own_frame, bits)?;
+                    }
+                }
+            }
+            cg.builder
+                .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
+                .map_err(|e| format!("sm return after inline-poll: {e}"))?;
+        }
+
         _ => {
-            if stmt_contains_wait(stmt) {
+            if stmt_contains_wait(stmt) && !stmt_contains_suspending_call(stmt, cg.suspend_set) {
                 panic!(
                     "BUG: SM codegen reached a wait-bearing statement that typeck should have \
                      rejected. The WaitInsideLoop or LocalCrossesWait guard regressed. \
@@ -1781,6 +2446,481 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
         }
     }
     Ok(())
+}
+
+/// Bind a suspending call's return value to a named local alloca.
+///
+/// For i64 (int, bool, pointer-as-i64) return values: allocate an i64 alloca and store.
+/// For {i64, i64} (errors-capable) return values: allocate a pointer to a stack-alloca struct.
+/// Returns the alloca pointer for registration in `cg.locals`.
+fn bind_sm_return_value<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    name: &str,
+    return_val: inkwell::values::BasicValueEnum<'ctx>,
+) -> Result<PointerValue<'ctx>, String> {
+    match return_val {
+        inkwell::values::BasicValueEnum::IntValue(iv) => {
+            let alloca = cg.builder
+                .build_alloca(cg.i64(), &format!("{name}_alloca"))
+                .map_err(|e| format!("sm let alloca {name}: {e}"))?;
+            cg.builder.build_store(alloca, iv)
+                .map_err(|e| format!("sm let store {name}: {e}"))?;
+            Ok(alloca)
+        }
+        inkwell::values::BasicValueEnum::StructValue(sv) => {
+            // errors-capable return: create the standard pointer-to-struct representation
+            // (matches how lower_errors_capable_call_result works in the non-SM path).
+            // 1. Alloca the struct on the stack.
+            // 2. Store the struct value in the struct alloca.
+            // 3. Create a ptr alloca to hold the pointer to the struct alloca.
+            // 4. Store the struct pointer in the ptr alloca.
+            // Note: caller must register `name` in errors_capable_locals after this.
+            let struct_ty = errors_result_type(cg.ctx);
+            let struct_alloca = cg.builder
+                .build_alloca(struct_ty, &format!("{name}_ec_struct"))
+                .map_err(|e| format!("sm let ec_struct {name}: {e}"))?;
+            cg.builder.build_store(struct_alloca, sv)
+                .map_err(|e| format!("sm let ec_struct store {name}: {e}"))?;
+            // Create a ptr alloca that holds the pointer to the struct alloca.
+            let ptr_alloca = cg.builder
+                .build_alloca(cg.ptr(), &format!("{name}_ec_ptr"))
+                .map_err(|e| format!("sm let ec_ptr {name}: {e}"))?;
+            cg.builder.build_store(ptr_alloca, struct_alloca)
+                .map_err(|e| format!("sm let ec_ptr store {name}: {e}"))?;
+            cg.errors_capable_locals.insert(name.to_string());
+            Ok(ptr_alloca)
+        }
+        inkwell::values::BasicValueEnum::PointerValue(pv) => {
+            // pointer-valued return (string, shape, etc.) — store pointer as i64
+            let as_i64 = cg.builder.build_ptr_to_int(pv, cg.ctx.i64_type(), &format!("{name}_ptr_i64"))
+                .map_err(|e| format!("{e}"))?;
+            let alloca = cg.builder
+                .build_alloca(cg.i64(), &format!("{name}_alloca"))
+                .map_err(|e| format!("sm let alloca {name}: {e}"))?;
+            cg.builder.build_store(alloca, as_i64)
+                .map_err(|e| format!("sm let store {name}: {e}"))?;
+            Ok(alloca)
+        }
+        other => Err(format!("bind_sm_return_value: unexpected variant {:?}", other)),
+    }
+}
+
+/// True when `expr` is a `sleepAsync(...)` call.
+fn is_sleep_async_call(expr: &Expr) -> bool {
+    matches!(expr, Expr::Call(c) if matches!(&c.callee, Expr::Ident(n, _) if n == "sleepAsync"))
+}
+
+/// True when `expr` is a direct call to a user-defined suspending function (not a may-block intrinsic).
+fn is_direct_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool {
+    if let Expr::Call(c) = expr {
+        if let Expr::Ident(name, _) = &c.callee {
+            return suspend_set.contains(name.as_str()) && !M2_MAY_BLOCK_INTRINSICS.contains(&name.as_str());
+        }
+    }
+    false
+}
+
+/// Emit inline-poll-and-yield for a call to a user-defined suspending function.
+///
+/// # Flow (O(1) per call site)
+///
+/// 1. Get the child frame pointer = GEP(parent_frame, child_offset) — fixed at compile time.
+/// 2. Initialize the child frame header (resume_point=0, sleep_handle=null) on first entry.
+///    Re-entry path (after Pending) skips init: the child's resume_point was already set.
+/// 3. Write call arguments to child frame local slots (offset 32+).
+/// 4. Call child_resume_fn(child_frame, waker_ctx) → poll_result.
+///    - Ready (0): read return value from child_frame[RETURN_SLOT], continue inline.
+///    - Pending (1): set parent resume_point = continuation_state, return 1 (Pending).
+///
+/// On re-entry (parent resumes at continuation_state):
+/// 5. Get child_frame (same embedded offset — pointer is stable).
+/// 6. Call child_resume_fn again (child handles its own internal state).
+///    - Ready: read return value, continue.
+///    - Pending: set parent resume_point = same state, return 1 again.
+///
+/// # Waker contract (P0 #11, ABI-locked)
+///
+/// `waker_ctx` is forwarded verbatim to the child resume fn. No fabricated wakers.
+/// The child registers the waker with its own sub-future (sleepAsync handle etc.);
+/// the parent merely forwards the outer context.
+///
+/// # Return value
+///
+/// Returns the return value read from the child's return slot after the child signals Ready.
+#[allow(clippy::too_many_arguments)]
+fn emit_suspending_call_inline_poll<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    call_expr: &Expr,
+    state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
+    pending_block: inkwell::basic_block::BasicBlock<'ctx>,
+    parent_frame: PointerValue<'ctx>,
+    waker_ctx: PointerValue<'ctx>,
+    param_names: &[String],
+    f: &FunctionDecl,
+    shape_table: &'g ShapeTable,
+    current_state: &mut usize,
+) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
+    let ctx = cg.ctx;
+
+    // Extract callee name and args from the call expression.
+    let Expr::Call(c) = call_expr else {
+        return Err("emit_suspending_call_inline_poll: not a Call expression".to_string());
+    };
+    let callee_name = if let Expr::Ident(name, _) = &c.callee {
+        name.clone()
+    } else {
+        return Err("emit_suspending_call_inline_poll: callee is not an Ident".to_string());
+    };
+
+    // Find the child frame offset in the parent's frame layout.
+    let child_offset_opt = cg.frame_layouts.get(&f.name)
+        .and_then(|layout| layout.children.iter().find(|(name, _)| name == &callee_name))
+        .map(|(_, offset)| *offset);
+
+    // Recursion edge: the callee is the same function as the caller (or causes a cycle).
+    // We cannot embed the frame (infinite size). Use a heap-allocated child frame instead.
+    // The heap pointer is stored in the parent frame's recursion slot (if present).
+    // This is the only per-call alloc/free in non-background SM code.
+    if child_offset_opt.is_none() {
+        // Heap-box path for recursive/cyclic SM calls.
+        return emit_suspending_call_heap_boxed(
+            cg, c, &callee_name, state_blocks, pending_block, parent_frame,
+            waker_ctx, param_names, f, shape_table, current_state,
+        );
+    }
+
+    let child_offset = child_offset_opt.unwrap();
+
+    // Get the child frame pointer (embedded sub-frame at fixed offset).
+    let child_frame = state_machine::child_frame_ptr(
+        ctx, &cg.builder, parent_frame, child_offset, &format!("cf_{callee_name}"),
+    )?;
+
+    // Find the child's resume function.
+    let resume_name = state_machine::resume_fn_name(&callee_name);
+    let child_resume_fn = cg.module.get_function(&resume_name)
+        .ok_or_else(|| format!("emit_suspending_call: resume fn `{resume_name}` not declared"))?;
+
+    // Initialize the child frame: resume_point=0 (start state), sleep_handle=null.
+    // This runs in the FIRST-ENTRY basic block (state_blocks[current_state] before
+    // the continuation_state is appended). The CONTINUATION basic block (re-entry after
+    // Pending) skips straight past this init — the child's resume_point is already
+    // non-zero from the previous poll, so re-initialization would corrupt its state.
+    // Two separate basic blocks (post_call_bb for first-Ready and cont_state_bb for
+    // re-entry) enforce which path reaches the re-poll, never the init.
+    state_machine::store_resume_point(ctx, &cg.builder, child_frame, 0)?;
+    let null_ptr = ctx.ptr_type(AddressSpace::default()).const_null();
+    state_machine::store_sleep_handle(ctx, &cg.builder, child_frame, null_ptr)?;
+
+    // Write call arguments to the child frame's local slots.
+    let child_frame_layout = cg.frame_layouts.get(&callee_name);
+    let child_n_locals = child_frame_layout.map(|l| l.n_locals).unwrap_or(c.args.len());
+    for (idx, arg) in c.args.iter().enumerate().take(child_n_locals) {
+        let arg_val = lower_expr(cg, arg)?;
+        let arg_ty = cg.expr_type(arg);
+        let bits = cg.to_i64_bits(arg_val, &arg_ty)
+            .map_err(|e| format!("sm inline-poll arg bits: {e}"))?;
+        state_machine::store_local_slot(ctx, &cg.builder, child_frame, idx, bits)?;
+    }
+
+    // Continuation state for the poll-loop (re-entered when child is Pending).
+    let continuation_state = *current_state + 1;
+    let cont_state_bb = state_blocks.get(continuation_state).copied()
+        .ok_or_else(|| format!("inline-poll cont state {continuation_state} out of range"))?;
+    let post_call_bb = ctx.append_basic_block(cg.current_fn, "sm_post_call");
+    let suspend_bb = ctx.append_basic_block(cg.current_fn, "sm_call_suspend");
+
+    // First poll: call child_resume_fn(child_frame, waker_ctx) → poll_result.
+    let first_poll = cg.builder
+        .build_call(
+            child_resume_fn,
+            &[child_frame.into(), waker_ctx.into()],
+            "child_poll_first",
+        )
+        .map_err(|e| format!("child_poll_first call: {e}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or("child_resume_fn returned void")?
+        .into_int_value();
+
+    let is_ready = cg.builder
+        .build_int_compare(
+            IntPredicate::EQ,
+            first_poll,
+            ctx.i32_type().const_int(0, false),
+            "child_first_ready",
+        )
+        .map_err(|e| format!("first_poll cmp: {e}"))?;
+    cg.builder
+        .build_conditional_branch(is_ready, post_call_bb, suspend_bb)
+        .map_err(|e| format!("first_poll branch: {e}"))?;
+
+    // suspend_bb: child is Pending — save parent's resume_point, yield.
+    cg.builder.position_at_end(suspend_bb);
+    state_machine::store_resume_point(ctx, &cg.builder, parent_frame, continuation_state as u64)?;
+    cg.builder
+        .build_unconditional_branch(pending_block)
+        .map_err(|e| format!("sm call suspend branch: {e}"))?;
+
+    // cont_state_bb: parent resumed after child suspended. Re-poll the child.
+    // GEPs must be recomputed in each basic block (LLVM SSA dominance requirement).
+    *current_state = continuation_state;
+    cg.builder.position_at_end(cont_state_bb);
+    reload_params_from_frame(cg, parent_frame, param_names, f, shape_table)?;
+
+    // Recompute child frame pointer (same offset, but new instruction in this BB).
+    let child_frame_re = state_machine::child_frame_ptr(
+        ctx, &cg.builder, parent_frame, child_offset, &format!("cf_{callee_name}_re"),
+    )?;
+
+    // Re-poll child (may return Pending again; waker already registered by child's own poll).
+    let re_poll = cg.builder
+        .build_call(
+            child_resume_fn,
+            &[child_frame_re.into(), waker_ctx.into()],
+            "child_poll_re",
+        )
+        .map_err(|e| format!("child_poll_re call: {e}"))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or("child_resume_fn (re) returned void")?
+        .into_int_value();
+
+    let is_ready_re = cg.builder
+        .build_int_compare(
+            IntPredicate::EQ,
+            re_poll,
+            ctx.i32_type().const_int(0, false),
+            "child_re_ready",
+        )
+        .map_err(|e| format!("re_poll cmp: {e}"))?;
+    let still_pending_bb = ctx.append_basic_block(cg.current_fn, "sm_still_pending");
+    cg.builder
+        .build_conditional_branch(is_ready_re, post_call_bb, still_pending_bb)
+        .map_err(|e| format!("re_poll branch: {e}"))?;
+
+    // still_pending_bb: still Pending — keep same resume_point, yield again.
+    cg.builder.position_at_end(still_pending_bb);
+    state_machine::store_resume_point(ctx, &cg.builder, parent_frame, continuation_state as u64)?;
+    cg.builder
+        .build_unconditional_branch(pending_block)
+        .map_err(|e| format!("sm still_pending branch: {e}"))?;
+
+    // post_call_bb: child returned Ready. Read return value from child's return slot.
+    // Recompute child frame pointer again (new BB).
+    cg.builder.position_at_end(post_call_bb);
+    let child_frame_post = state_machine::child_frame_ptr(
+        ctx, &cg.builder, parent_frame, child_offset, &format!("cf_{callee_name}_post"),
+    )?;
+
+    // For errors-capable callees: reconstruct the {i64, i64} struct from the return slot.
+    // For all others: return the i64 directly.
+    if is_errors_capable_fn(cg.typed, &callee_name) {
+        let (err_i64, ok_i64) = state_machine::load_return_value_errors(ctx, &cg.builder, child_frame_post)?;
+        let struct_ty = errors_result_type(ctx);
+        let mut result = struct_ty.const_zero();
+        result = cg.builder.build_insert_value(result, err_i64, 0, "child_ret_err")
+            .map_err(|e| format!("child_ret_err insert: {e}"))?.into_struct_value();
+        result = cg.builder.build_insert_value(result, ok_i64, 1, "child_ret_ok")
+            .map_err(|e| format!("child_ret_ok insert: {e}"))?.into_struct_value();
+        Ok(result.into())
+    } else {
+        let ret_i64 = state_machine::load_return_value_i64(ctx, &cg.builder, child_frame_post, "child_ret")?;
+        Ok(ret_i64.into())
+    }
+}
+
+/// Emit inline-poll-and-yield for a RECURSIVE suspending call (recursion/cycle edge).
+///
+/// For recursive calls, the child frame cannot be embedded (infinite size). Instead:
+/// 1. Heap-allocate the child frame via `ynz_alloc`.
+/// 2. Store the heap pointer in the parent frame's recursion_slot so `SpawnStateFnFuture::Drop`
+///    can free it on cancellation.
+/// 3. Drive the child via inline poll-and-yield same as non-recursive.
+/// 4. On Ready: `ynz_free` the heap child frame.
+///
+/// # Failure modes
+///
+/// Emit an inline-poll-and-yield for a suspending callee using a heap-allocated child frame.
+///
+/// Used for self-recursive suspending functions: the child frame cannot be embedded in the
+/// parent frame (unknown size at layout time), so it is heap-allocated via `ynz_alloc_zeroed`
+/// and its pointer stored in the parent's recursion slot for Drop to free on cancellation.
+///
+/// A missing resume function is a codegen bug — typeck rejected all forms that would
+/// produce a suspending callee without a resume fn (sub-expression positions, mutual
+/// recursion). Returning a wrapper-call fallback here would emit a `block_on` call from
+/// inside a resume function, which panics on Tokio worker threads and contradicts AC6.
+#[allow(clippy::too_many_arguments)]
+fn emit_suspending_call_heap_boxed<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    c: &ynz_ast::nodes::CallExpr,
+    callee_name: &str,
+    state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
+    pending_block: inkwell::basic_block::BasicBlock<'ctx>,
+    parent_frame: PointerValue<'ctx>,
+    waker_ctx: PointerValue<'ctx>,
+    param_names: &[String],
+    f: &FunctionDecl,
+    shape_table: &'_ ShapeTable,
+    current_state: &mut usize,
+) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
+    let ctx = cg.ctx;
+
+    let resume_name = state_machine::resume_fn_name(callee_name);
+    let child_resume_fn = match cg.module.get_function(&resume_name) {
+        Some(rf) => rf,
+        None => {
+            // A suspending callee without a resume fn is a codegen bug. Typeck rejects
+            // every source form that would reach this path (sub-expression suspension →
+            // typeck error; mutual recursion → typeck error). Emitting a wrapper-call here
+            // would invoke block_on from inside a resume fn → Tokio worker thread panic.
+            return Err(format!(
+                "codegen bug: suspending callee `{callee_name}` has no resume fn `{resume_name}` \
+                 — cannot emit inline-poll from a resume context. \
+                 Typeck should have rejected this before codegen."
+            ));
+        }
+    };
+
+    // Compute child frame size.
+    let child_frame_size = cg.frame_layouts.get(callee_name)
+        .map(|l| l.total_size)
+        .unwrap_or(state_machine::FRAME_HEADER_SIZE);
+    let child_n_locals = cg.frame_layouts.get(callee_name)
+        .map(|l| l.n_locals)
+        .unwrap_or(c.args.len());
+
+    // Heap-allocate the child frame.
+    let child_frame = state_machine::alloc_frame(ctx, &cg.builder, cg.rt, child_frame_size)?;
+
+    // Store the heap pointer in the parent frame's recursion_slot (for Drop to free).
+    if let Some(rec_offset) = cg.frame_layouts.get(&f.name).and_then(|l| l.recursion_slot) {
+        let rec_slot = unsafe {
+            cg.builder.build_gep(
+                ctx.i8_type(), parent_frame,
+                &[ctx.i64_type().const_int(rec_offset, false)], "rec_slot_ptr",
+            ).map_err(|e| format!("rec_slot gep: {e}"))?
+        };
+        cg.builder.build_store(rec_slot, child_frame)
+            .map_err(|e| format!("rec_slot store: {e}"))?;
+    }
+
+    // Write call arguments.
+    for (idx, arg) in c.args.iter().enumerate().take(child_n_locals) {
+        let arg_val = lower_expr(cg, arg)?;
+        let arg_ty = cg.expr_type(arg);
+        let bits = cg.to_i64_bits(arg_val, &arg_ty)
+            .map_err(|e| format!("rec arg bits: {e}"))?;
+        state_machine::store_local_slot(ctx, &cg.builder, child_frame, idx, bits)?;
+    }
+
+    // Inline poll-and-yield (same mechanism as non-recursive; heap frame replaces embedded frame).
+    let continuation_state = *current_state + 1;
+    let cont_state_bb = state_blocks.get(continuation_state).copied()
+        .ok_or_else(|| format!("rec inline-poll cont state {continuation_state} out of range"))?;
+    let post_call_bb = ctx.append_basic_block(cg.current_fn, "sm_rec_post");
+    let suspend_bb = ctx.append_basic_block(cg.current_fn, "sm_rec_suspend");
+
+    // First poll.
+    let first_poll = cg.builder.build_call(
+        child_resume_fn, &[child_frame.into(), waker_ctx.into()], "rec_poll_first",
+    ).map_err(|e| format!("rec_poll_first: {e}"))?.try_as_basic_value().basic()
+    .ok_or("rec resume returned void")?.into_int_value();
+    let is_ready = cg.builder.build_int_compare(IntPredicate::EQ, first_poll, ctx.i32_type().const_int(0, false), "rec_first_ready")
+        .map_err(|e| format!("rec first_ready: {e}"))?;
+    cg.builder.build_conditional_branch(is_ready, post_call_bb, suspend_bb)
+        .map_err(|e| format!("rec first branch: {e}"))?;
+
+    // suspend_bb.
+    cg.builder.position_at_end(suspend_bb);
+    state_machine::store_resume_point(ctx, &cg.builder, parent_frame, continuation_state as u64)?;
+    // Store the heap frame pointer in the recursion slot for re-entry access.
+    // (Already stored above if recursion_slot is Some.)
+    cg.builder.build_unconditional_branch(pending_block)
+        .map_err(|e| format!("rec suspend branch: {e}"))?;
+
+    // cont_state_bb: re-poll.
+    *current_state = continuation_state;
+    cg.builder.position_at_end(cont_state_bb);
+    reload_params_from_frame(cg, parent_frame, param_names, f, shape_table)?;
+
+    // Reload the heap child frame pointer from the recursion slot.
+    let rec_frame = if let Some(rec_offset) = cg.frame_layouts.get(&f.name).and_then(|l| l.recursion_slot) {
+        let rec_slot = unsafe {
+            cg.builder.build_gep(
+                ctx.i8_type(), parent_frame,
+                &[ctx.i64_type().const_int(rec_offset, false)], "rec_slot_ptr_re",
+            ).map_err(|e| format!("rec_slot_re gep: {e}"))?
+        };
+        cg.builder.build_load(ctx.ptr_type(AddressSpace::default()), rec_slot, "rec_frame_re")
+            .map_err(|e| format!("rec_frame_re load: {e}"))?.into_pointer_value()
+    } else {
+        child_frame // use the originally-allocated frame (SSA value from state 0)
+    };
+
+    let re_poll = cg.builder.build_call(
+        child_resume_fn, &[rec_frame.into(), waker_ctx.into()], "rec_poll_re",
+    ).map_err(|e| format!("rec_poll_re: {e}"))?.try_as_basic_value().basic()
+    .ok_or("rec resume re returned void")?.into_int_value();
+    let is_ready_re = cg.builder.build_int_compare(IntPredicate::EQ, re_poll, ctx.i32_type().const_int(0, false), "rec_re_ready")
+        .map_err(|e| format!("rec re_ready: {e}"))?;
+    let still_pending = ctx.append_basic_block(cg.current_fn, "sm_rec_still_pending");
+    cg.builder.build_conditional_branch(is_ready_re, post_call_bb, still_pending)
+        .map_err(|e| format!("rec re branch: {e}"))?;
+
+    // still_pending_bb.
+    cg.builder.position_at_end(still_pending);
+    state_machine::store_resume_point(ctx, &cg.builder, parent_frame, continuation_state as u64)?;
+    cg.builder.build_unconditional_branch(pending_block)
+        .map_err(|e| format!("rec still_pending: {e}"))?;
+
+    // post_call_bb: child Ready. Read return value, free heap frame.
+    cg.builder.position_at_end(post_call_bb);
+    let rec_frame_post = if let Some(rec_offset) = cg.frame_layouts.get(&f.name).and_then(|l| l.recursion_slot) {
+        let rec_slot = unsafe {
+            cg.builder.build_gep(
+                ctx.i8_type(), parent_frame,
+                &[ctx.i64_type().const_int(rec_offset, false)], "rec_slot_ptr_post",
+            ).map_err(|e| format!("rec_slot_post gep: {e}"))?
+        };
+        cg.builder.build_load(ctx.ptr_type(AddressSpace::default()), rec_slot, "rec_frame_post")
+            .map_err(|e| format!("rec_frame_post load: {e}"))?.into_pointer_value()
+    } else {
+        child_frame
+    };
+
+    let ret_val = if is_errors_capable_fn(cg.typed, callee_name) {
+        let (err_i64, ok_i64) = state_machine::load_return_value_errors(ctx, &cg.builder, rec_frame_post)?;
+        let struct_ty = errors_result_type(ctx);
+        let mut r = struct_ty.const_zero();
+        r = cg.builder.build_insert_value(r, err_i64, 0, "rec_ret_err")
+            .map_err(|e| format!("rec_ret_err: {e}"))?.into_struct_value();
+        r = cg.builder.build_insert_value(r, ok_i64, 1, "rec_ret_ok")
+            .map_err(|e| format!("rec_ret_ok: {e}"))?.into_struct_value();
+        r.into()
+    } else {
+        let ret_i64 = state_machine::load_return_value_i64(ctx, &cg.builder, rec_frame_post, "rec_ret")?;
+        ret_i64.into()
+    };
+
+    // Free the heap child frame (normal completion path).
+    state_machine::free_frame(ctx, &cg.builder, cg.rt, rec_frame_post, child_frame_size)?;
+
+    // Clear the recursion slot so Drop knows it's been freed.
+    if let Some(rec_offset) = cg.frame_layouts.get(&f.name).and_then(|l| l.recursion_slot) {
+        let rec_slot = unsafe {
+            cg.builder.build_gep(
+                ctx.i8_type(), parent_frame,
+                &[ctx.i64_type().const_int(rec_offset, false)], "rec_slot_ptr_clear",
+            ).map_err(|e| format!("rec_slot_clear gep: {e}"))?
+        };
+        let null = ctx.ptr_type(AddressSpace::default()).const_null();
+        cg.builder.build_store(rec_slot, null)
+            .map_err(|e| format!("rec_slot clear: {e}"))?;
+    }
+
+    Ok(ret_val)
 }
 
 /// Emit the IR for a single `wait sleepAsync(ms)` point within a state-machine body.
@@ -3213,6 +4353,118 @@ fn lower_stmt_for<'ctx>(
 }
 
 fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Result<(), String> {
+    // v0.3-M2 P7: inside a state-machine resume function, explicit `return expr` must
+    // store the typed value in the frame's return_slot@16 and emit `ret i32 0` (Ready).
+    // This is the fix for Bug A (value-returning SM) — the resume fn returns i32, not the Yinz type.
+    if let (Some(frame_ptr), Some(ret_ty)) = (cg.sm_frame_ptr, cg.sm_yinz_ret_ty.clone()) {
+        match value {
+            None => {
+                // `return` with no value: store 0 and signal Ready.
+                state_machine::store_return_value_i64(
+                    cg.ctx, &cg.builder, frame_ptr,
+                    cg.ctx.i64_type().const_int(0, false),
+                )?;
+            }
+            Some(expr) => {
+                let val = lower_expr(cg, expr)?;
+                let val_ty = cg.expr_type(expr);
+                // Detect errors-capable return: the Yinz return type is ErrorsCapable, OR
+                // the actual value is a struct (from __testFallibleAsync or a nested SM errors call).
+                let is_ec_return = matches!(val, inkwell::values::BasicValueEnum::StructValue(_));
+                if is_ec_return {
+                    // errors-capable return: val may be {i64, i64} struct (unauto-propagated),
+                    // OR an IntValue (auto-propagated success value after `.failed()` narrowing).
+                    match val {
+                        inkwell::values::BasicValueEnum::StructValue(sv) => {
+                            let err_i64 = cg.builder
+                                .build_extract_value(sv, 0, "sm_ret_err")
+                                .map_err(|e| format!("sm ret err extract: {e}"))?
+                                .into_int_value();
+                            let ok_i64 = cg.builder
+                                .build_extract_value(sv, 1, "sm_ret_ok")
+                                .map_err(|e| format!("sm ret ok extract: {e}"))?
+                                .into_int_value();
+                            state_machine::store_return_value_errors(
+                                cg.ctx, &cg.builder, frame_ptr, err_i64, ok_i64,
+                            )?;
+                        }
+                        _ => {
+                            // Auto-propagated: val is the success value (no error).
+                            let success_bits = cg.to_i64_bits(val, &val_ty)
+                                .unwrap_or_else(|_| cg.i64().const_int(0, false));
+                            state_machine::store_return_value_errors(
+                                cg.ctx, &cg.builder, frame_ptr,
+                                cg.i64().const_int(0, false), // no error (ptr=null)
+                                success_bits,
+                            )?;
+                        }
+                    }
+                } else {
+                    match &ret_ty {
+                        // ErrorsCapable: val may be a pointer to {i64,i64} (errors-capable local)
+                        // OR a plain success value (int literal, int from another fn, etc.).
+                        Type::ErrorsCapable { inner } => {
+                            match val {
+                                inkwell::values::BasicValueEnum::PointerValue(ptr) => {
+                                    // errors-capable local: load the {i64,i64} struct and store.
+                                    let result_ty = errors_result_type(cg.ctx);
+                                    let ec_struct = cg.builder.build_load(result_ty, ptr, "sm_ret_ec_struct")
+                                        .map_err(|e| format!("sm_ret_ec_struct: {e}"))?.into_struct_value();
+                                    let err_i64 = cg.builder.build_extract_value(ec_struct, 0, "sm_ret_ec_err")
+                                        .map_err(|e| format!("sm_ret_ec_err: {e}"))?.into_int_value();
+                                    let ok_i64 = cg.builder.build_extract_value(ec_struct, 1, "sm_ret_ec_ok")
+                                        .map_err(|e| format!("sm_ret_ec_ok: {e}"))?.into_int_value();
+                                    state_machine::store_return_value_errors(
+                                        cg.ctx, &cg.builder, frame_ptr, err_i64, ok_i64,
+                                    )?;
+                                }
+                                _ => {
+                                    // Plain success value: wrap as {0, success_bits}.
+                                    let success_bits = cg.to_i64_bits(val, inner)
+                                        .unwrap_or_else(|_| cg.i64().const_int(0, false));
+                                    state_machine::store_return_value_errors(
+                                        cg.ctx, &cg.builder, frame_ptr,
+                                        cg.i64().const_int(0, false), // null error ptr = success
+                                        success_bits,
+                                    )?;
+                                }
+                            }
+                        }
+                        Type::Int | Type::Bool => {
+                            let i64v = val.into_int_value();
+                            let wide = if i64v.get_type() != cg.ctx.i64_type() {
+                                cg.builder.build_int_z_extend(i64v, cg.ctx.i64_type(), "sm_ret_widen")
+                                    .map_err(|e| format!("sm ret widen: {e}"))?
+                            } else {
+                                i64v
+                            };
+                            state_machine::store_return_value_i64(cg.ctx, &cg.builder, frame_ptr, wide)?;
+                        }
+                        Type::String | Type::Shape { .. } | Type::BuiltinArray { .. }
+                        | Type::BuiltinFixed { .. } | Type::Maybe { .. }
+                        | Type::BuiltinMap { .. } | Type::Union { .. } | Type::Sensitive { .. } => {
+                            let ptr_v = val.into_pointer_value();
+                            let as_i64 = cg.builder
+                                .build_ptr_to_int(ptr_v, cg.ctx.i64_type(), "sm_ret_ptr_i64")
+                                .map_err(|e| format!("sm ret ptr_to_int: {e}"))?;
+                            state_machine::store_return_value_i64(cg.ctx, &cg.builder, frame_ptr, as_i64)?;
+                        }
+                        _ => {
+                            // Fallback: try to_i64_bits.
+                            let bits = cg.to_i64_bits(val, &val_ty)
+                                .unwrap_or_else(|_| cg.ctx.i64_type().const_int(0, false));
+                            state_machine::store_return_value_i64(cg.ctx, &cg.builder, frame_ptr, bits)?;
+                        }
+                    }
+                }
+            }
+        }
+        cg.builder
+            .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
+            .map_err(|e| format!("sm resume ready ret: {e}"))?;
+        return Ok(());
+    }
+
     if cg.is_main {
         // Drain in-flight background tasks before exiting.
         cg.builder
@@ -3416,8 +4668,73 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     cg.locals.insert(name.to_string(), new_slot);
                     return Ok(success_val);
                 } else if !matches!(ty, Type::ErrorsCapable { .. }) {
-                    // Typeck narrowed the binding to the inner type (after a .failed() check).
-                    // Extract the success value from the stored struct and update the slot.
+                    // Typeck narrowed the binding to the inner type (after a .failed() check or
+                    // after auto-propagation in an errors-capable caller).
+                    //
+                    // SM resume context: is_errors_capable=false in the resume fn so the normal
+                    // auto-propagation arm above doesn't fire. Use the SM return mechanism instead
+                    // (store to frame return slot + ret i32 0 on the error path, yield the success
+                    // Int on the success path). This covers both `v + 10` (arithmetic caller needs
+                    // the Int) and `return v` (lower_stmt_return gets the Int and wraps it as
+                    // {0, success} — correct because the error was already propagated here).
+                    // No ynz_frame_pop: the resume fn never called ynz_frame_push.
+                    if cg.sm_frame_ptr.is_some() {
+                        let frame_ptr = cg.sm_frame_ptr.expect("sm_frame_ptr confirmed Some above");
+                        let ec_ptr = cg
+                            .builder
+                            .build_load(cg.ptr(), slot, "sm_ec_narrow_ptr")
+                            .map_err(|e| format!("sm ec narrow ptr load: {e}"))?
+                            .into_pointer_value();
+                        let result_ty = errors_result_type(cg.ctx);
+                        let result_struct = cg
+                            .builder
+                            .build_load(result_ty, ec_ptr, "sm_ec_narrow_struct")
+                            .map_err(|e| format!("sm ec narrow struct load: {e}"))?
+                            .into_struct_value();
+                        let err_ptr_i64 = cg
+                            .builder
+                            .build_extract_value(result_struct, 0, "sm_nap_err")
+                            .map_err(|e| format!("sm nap extract err: {e}"))?
+                            .into_int_value();
+                        let is_err = cg
+                            .builder
+                            .build_int_compare(
+                                IntPredicate::NE,
+                                err_ptr_i64,
+                                cg.i64().const_int(0, false),
+                                "sm_nap_is_err",
+                            )
+                            .map_err(|e| format!("sm nap icmp: {e}"))?;
+                        let propagate_bb = cg.append_block("sm_nap_propagate");
+                        let success_bb = cg.append_block("sm_nap_success");
+                        cg.builder
+                            .build_conditional_branch(is_err, propagate_bb, success_bb)
+                            .map_err(|e| format!("sm nap branch: {e}"))?;
+                        // Error path: store {error_ptr, 0} to frame return slot, signal Ready.
+                        cg.builder.position_at_end(propagate_bb);
+                        state_machine::store_return_value_errors(
+                            cg.ctx, &cg.builder, frame_ptr,
+                            err_ptr_i64,
+                            cg.i64().const_int(0, false),
+                        )?;
+                        cg.builder
+                            .build_return(Some(&cg.ctx.i32_type().const_int(0, false)))
+                            .map_err(|e| format!("sm nap error ret: {e}"))?;
+                        // Success path: extract field1 (success bits), update slot to inner type.
+                        cg.builder.position_at_end(success_bb);
+                        let success_bits = cg
+                            .builder
+                            .build_extract_value(result_struct, 1, "sm_nap_val")
+                            .map_err(|e| format!("sm nap extract val: {e}"))?
+                            .into_int_value();
+                        let success_val = cg.i64_bits_to(success_bits, &ty)?;
+                        cg.errors_capable_locals.remove(name.as_str());
+                        let new_slot = cg.alloca(&ty, &format!("{name}_ec_narrowed"))?;
+                        store(cg, success_val, &ty, new_slot)?;
+                        cg.locals.insert(name.to_string(), new_slot);
+                        return Ok(success_val);
+                    }
+
                     let ec_ptr = cg
                         .builder
                         .build_load(cg.ptr(), slot, "ec_id_ptr")
@@ -3550,6 +4867,69 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     let _ = handle;
                     Ok(cg.i32().const_int(0, false).into())
                 }
+                // v0.3-M2: __testFallibleAsync(should_fail: bool) -> int errors
+                // Internal test intrinsic for validating errors-cascade through suspension.
+                // Returns {0, 42} (success, value=42) when should_fail=false,
+                // {error_ptr, 0} (error) when should_fail=true.
+                // This is a codegen-only simulation of a fallible async intrinsic.
+                "__testFallibleAsync" if call.args.len() == 1 => {
+                    let should_fail = lower_expr(cg, &call.args[0])?.into_int_value();
+                    // Build {i64, i64} result: field0=error_ptr, field1=success_value
+                    let result_ty = errors_result_type(cg.ctx);
+                    // Success path: {0, 42}
+                    let success_result = {
+                        let mut r = result_ty.const_zero();
+                        r = cg.builder.build_insert_value(r, cg.i64().const_int(0, false), 0, "tf_ok_err")
+                            .map_err(|e| format!("tf ok err: {e}"))?.into_struct_value();
+                        r = cg.builder.build_insert_value(r, cg.i64().const_int(42, false), 1, "tf_ok_val")
+                            .map_err(|e| format!("tf ok val: {e}"))?.into_struct_value();
+                        r
+                    };
+                    // Failure path: allocate an error string
+                    let err_msg = build_string_global(cg.ctx, cg.module, "testFallibleAsync error", ".tfa.err");
+                    let err_ptr = cg.builder.build_call(
+                        cg.rt.ynz_error_new,
+                        &[err_msg.as_pointer_value().into()],
+                        "tfa_err",
+                    ).map_err(|e| format!("tfa err new: {e}"))?.try_as_basic_value().basic()
+                    .ok_or("ynz_error_new returned void")?;
+                    let err_as_i64 = cg.builder.build_ptr_to_int(
+                        err_ptr.into_pointer_value(), cg.i64(), "tfa_err_i64",
+                    ).map_err(|e| format!("tfa ptr_to_int: {e}"))?;
+                    let error_result = {
+                        let mut r = result_ty.const_zero();
+                        r = cg.builder.build_insert_value(r, err_as_i64, 0, "tf_err_ptr")
+                            .map_err(|e| format!("tf err_ptr: {e}"))?.into_struct_value();
+                        r
+                    };
+                    // Select between success and error based on should_fail.
+                    // For each field, select the appropriate value.
+                    let tf_true = cg.ctx.bool_type().const_int(1, false);
+                    // Compare against zero of the same type as should_fail.
+                    let zero_same_ty = should_fail.get_type().const_zero();
+                    let should_fail_i1 = cg.builder.build_int_compare(
+                        IntPredicate::NE, should_fail, zero_same_ty, "tf_cmp",
+                    ).map_err(|e| format!("tf cmp: {e}"))?;
+                    let field0_success = cg.builder.build_extract_value(success_result, 0, "tf_s0")
+                        .map_err(|e| format!("tf s0: {e}"))?.into_int_value();
+                    let field0_error = cg.builder.build_extract_value(error_result, 0, "tf_e0")
+                        .map_err(|e| format!("tf e0: {e}"))?.into_int_value();
+                    let field1_success = cg.builder.build_extract_value(success_result, 1, "tf_s1")
+                        .map_err(|e| format!("tf s1: {e}"))?.into_int_value();
+                    let field0 = cg.builder.build_select(should_fail_i1, field0_error, field0_success, "tf_f0")
+                        .map_err(|e| format!("tf_f0 sel: {e}"))?.into_int_value();
+                    let field1 = cg.builder.build_select(should_fail_i1, cg.i64().const_zero(), field1_success, "tf_f1")
+                        .map_err(|e| format!("tf_f1 sel: {e}"))?.into_int_value();
+                    let _ = tf_true; // suppress unused warning
+                    let mut final_result = result_ty.const_zero();
+                    final_result = cg.builder.build_insert_value(final_result, field0, 0, "tf_r0")
+                        .map_err(|e| format!("tf_r0: {e}"))?.into_struct_value();
+                    final_result = cg.builder.build_insert_value(final_result, field1, 1, "tf_r1")
+                        .map_err(|e| format!("tf_r1: {e}"))?.into_struct_value();
+                    // Route through lower_errors_capable_call_result to get a pointer
+                    // representation consistent with how all other errors-capable calls work.
+                    lower_errors_capable_call_result(cg, final_result, "__testFallibleAsync")
+                }
                 name => {
                     // Prefer the direct name. If not found, find the correct monomorphized
                     // variant by matching argument types against MonomorphizationTable entries.
@@ -3563,59 +4943,15 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                             .unwrap_or_else(|| name.to_string())
                     };
 
-                    // v0.3-M2 Step 6: call-site dispatch for state-machine callees.
+                    // v0.3-M2 P7: suspending calls inside SM resume bodies are handled by
+                    // lower_sm_stmt_with_wait (inline-poll-and-yield) BEFORE reaching lower_expr.
+                    // If a suspending call reaches here, the caller is a non-SM function calling
+                    // a suspending wrapper — invoke the wrapper fn directly (it drives the SM
+                    // internally via RUNTIME.block_on). This path should only be reached from
+                    // non-SM callers; SM callers route through lower_sm_stmt_with_wait instead.
                     //
-                    // When the callee is a state-machine function (its body contains `wait`),
-                    // and the caller is NOT itself a state machine (no `wait` in its own body),
-                    // emit ynz_rt_call_state_machine_sync (the sync bridge).
-                    //
-                    // The 4 cases from the dispatch table:
-                    //   (caller-not-SM, no-wait) → sync bridge  ← THIS CASE
-                    //   (caller-not-SM, wait)    → unreachable (caller would be SM)
-                    //   (caller-SM, no-wait)     → sync bridge fallback (teaching warning in P3)
-                    //   (caller-SM, wait)        → inline poll-and-yield (handled by lower_sm_body)
-                    //
-                    // The `wait`-wrapped SM-caller case is handled by lower_sm_body before
-                    // reaching lower_expr; if we reach here from inside a state machine, it means
-                    // the call was NOT wait-wrapped → use sync bridge with Tier 3 teaching warning
-                    // (warning emitted by P3 typeck; codegen just emits the sync bridge).
-                    if is_may_block_callee(name, cg.wait_cache) {
-                        let resume_name = state_machine::resume_fn_name(name);
-                        if let Some(resume_fn) = cg.module.get_function(&resume_name) {
-                            // Evaluate args and store in a frame.
-                            let mut arg_bits: Vec<inkwell::values::IntValue<'ctx>> = Vec::new();
-                            let mut arg_tys: Vec<Type> = Vec::new();
-                            for arg in &call.args {
-                                let val = lower_expr(cg, arg)?;
-                                let ty = cg.expr_type(arg);
-                                let bits = cg.to_i64_bits(val, &ty)
-                                    .map_err(|e| format!("sm call arg bits: {e}"))?;
-                                arg_bits.push(bits);
-                                arg_tys.push(ty);
-                            }
-                            let n_locals = arg_bits.len();
-                            let frame_ptr = state_machine::alloc_frame(cg.ctx, &cg.builder, cg.rt, n_locals)?;
-                            for (idx, bits) in arg_bits.iter().enumerate() {
-                                state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, idx, *bits)?;
-                            }
-                            let resume_ptr = resume_fn.as_global_value().as_pointer_value();
-                            let frame_size_v = cg.ctx.i64_type().const_int(state_machine::frame_size(n_locals), false);
-                            let result = cg.builder
-                                .build_call(
-                                    cg.rt.ynz_rt_call_state_machine_sync,
-                                    &[resume_ptr.into(), frame_ptr.into(), frame_size_v.into()],
-                                    "sm_sync",
-                                )
-                                .map_err(|e| format!("sm_sync call: {e}"))?
-                                .try_as_basic_value()
-                                .basic()
-                                .ok_or("sm_sync returned void")?
-                                .into_int_value();
-                            state_machine::free_frame(cg.ctx, &cg.builder, cg.rt, frame_ptr, n_locals)?;
-                            return Ok(result.into());
-                        }
-                        // Resume fn not found — fall through to normal call (wrapper fn).
-                    }
+                    // Per AC 9: no ynz_rt_call_state_machine_sync inside any ynz_sm_*_resume.
+                    // The bridge is in the WRAPPER function only; this path calls the wrapper fn.
 
                     let fn_val = cg.module.get_function(&effective_name).ok_or_else(|| {
                         format!("codegen: function `{effective_name}` not found in module")
@@ -4278,7 +5614,9 @@ fn lower_expr_background<'ctx>(
     // WHY: state-machine functions yield during I/O via poll-and-suspend; routing them to
     // the blocking pool would hold a dedicated OS thread captive during the wait, defeating
     // the entire point of the state machine. The I/O pool shares threads cooperatively.
-    if is_may_block_callee(&callee_name, cg.wait_cache) {
+    // v0.3-M2 P7: use suspend_set (transitive) instead of wait_cache (local) for routing.
+    // Any suspending fn (transitively reaches sleepAsync) routes to the I/O pool via ynz_rt_spawn.
+    if cg.suspend_set.contains(&callee_name) {
         return lower_expr_background_state_machine(cg, call, &callee_name);
     }
 
@@ -4446,10 +5784,14 @@ fn lower_expr_background_state_machine<'ctx>(
     }
     let n_locals = arg_vals_i64.len();
 
-    // Step 2: heap-allocate the frame (frame outlives this call — the spawned future owns it).
-    let frame_ptr = state_machine::alloc_frame(cg.ctx, &cg.builder, cg.rt, n_locals)?;
+    // Step 2: heap-allocate the COMPOSED frame (callee's total composed size covers the
+    // entire spawned task tree — one alloc per background spawn per the design doc model).
+    let total_frame_size = cg.frame_layouts.get(callee_name)
+        .map(|l| l.total_size)
+        .unwrap_or_else(|| state_machine::FRAME_HEADER_SIZE + state_machine::own_locals_size(n_locals));
+    let frame_ptr = state_machine::alloc_frame(cg.ctx, &cg.builder, cg.rt, total_frame_size)?;
 
-    // Step 3: write parameter values to frame local slots.
+    // Step 3: write parameter values to frame local slots (at offset 32+).
     for (idx, bits) in arg_vals_i64.iter().enumerate() {
         state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, idx, *bits)?;
     }
@@ -4465,12 +5807,24 @@ fn lower_expr_background_state_machine<'ctx>(
     let frame_size_val = cg
         .ctx
         .i64_type()
-        .const_int(state_machine::frame_size(n_locals), false);
+        .const_int(total_frame_size, false);
+
+    // Pass the recursion_slot_offset so SpawnStateFnFuture::Drop can walk and free
+    // any heap-boxed recursive child frames on cancellation. -1 = no recursion slot.
+    let rec_slot_offset = cg.frame_layouts.get(callee_name)
+        .and_then(|l| l.recursion_slot)
+        .map(|off| off as i64)
+        .unwrap_or(-1_i64);
+    let rec_slot_offset_val = cg.ctx.i64_type().const_int(
+        // i64::from_le_bytes(rec_slot_offset.to_le_bytes()) — cast negative as unsigned for LLVM
+        rec_slot_offset as u64,
+        true, // sign-extended constant
+    );
 
     cg.builder
         .build_call(
             cg.rt.ynz_rt_spawn,
-            &[resume_ptr.into(), frame_ptr.into(), frame_size_val.into()],
+            &[resume_ptr.into(), frame_ptr.into(), frame_size_val.into(), rec_slot_offset_val.into()],
             "sm_spawn",
         )
         .map_err(|e| format!("ynz_rt_spawn: {e}"))?;

@@ -282,6 +282,72 @@ extern "C" {
     fn free(ptr: *mut core::ffi::c_void);
 }
 
+// ── Test-instrumentation alloc counter ───────────────────────────────────────
+//
+// Counts ynz_alloc and ynz_free calls when the `YNZ_ALLOC_COUNTER` env var is set
+// to any non-empty value at process start (`ynz_rt_init`).
+//
+// The env var is read ONCE at `ynz_rt_init` time and stored in `ALLOC_COUNTER_ENABLED`
+// (a `static AtomicBool`). Per-alloc cost is a single relaxed atomic load — zero
+// syscall/heap/lock overhead on the hot allocation path. Reading the env var on
+// every allocation (lock + heap + UTF-8 validation) violated Golden Rule 8 (zero-cost).
+//
+// Used by Phase 7 composed-single-alloc proof: a 3-level synchronous SM call tree
+// must allocate exactly ONE frame (the root), not one per call.
+//
+// CARVE-OUT: these are runtime internals with no user-facing Yinz surface. They
+// are not registered in registry/features.toml per the feature-registry.md carve-out
+// policy (compiler-internal bookkeeping, no IDE or error-message surface).
+
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+/// Set once at `ynz_rt_init` time from the `YNZ_ALLOC_COUNTER` env var.
+/// Per-alloc gate is a relaxed atomic load (no syscall, no lock, no heap allocation).
+// test-only: tests set `YNZ_ALLOC_COUNTER` before the process starts; ynz_rt_init
+// reads it once here. Production runs that don't set the env var pay zero overhead.
+static ALLOC_COUNTER_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Running count of `ynz_alloc` calls since last reset.
+static YNZ_ALLOC_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Running count of `ynz_free` calls since last reset.
+static YNZ_FREE_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Return true when alloc-counter instrumentation is enabled.
+///
+/// Reads a `static AtomicBool` set once at `ynz_rt_init`; cost is a single
+/// relaxed atomic load. Call-site overhead is negligible.
+#[inline]
+fn alloc_counter_enabled() -> bool {
+    ALLOC_COUNTER_ENABLED.load(Ordering::Relaxed)
+}
+
+/// Called by `ynz_rt_init` to latch the env-var check once per process.
+pub(crate) fn init_alloc_counter_flag() {
+    let enabled = std::env::var("YNZ_ALLOC_COUNTER")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    ALLOC_COUNTER_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Read the current alloc call count. Zero when counter not enabled.
+#[no_mangle]
+pub extern "C" fn ynz_alloc_count() -> u64 {
+    YNZ_ALLOC_COUNT.load(Ordering::Relaxed)
+}
+
+/// Read the current free call count. Zero when counter not enabled.
+#[no_mangle]
+pub extern "C" fn ynz_free_count() -> u64 {
+    YNZ_FREE_COUNT.load(Ordering::Relaxed)
+}
+
+/// Reset both counters to zero.
+#[no_mangle]
+pub extern "C" fn ynz_alloc_count_reset() {
+    YNZ_ALLOC_COUNT.store(0, Ordering::Relaxed);
+    YNZ_FREE_COUNT.store(0, Ordering::Relaxed);
+}
+
 /// Allocate `size` bytes. Aborts on OOM — Yinz programs cannot recover from OOM.
 ///
 /// # Safety
@@ -290,10 +356,37 @@ extern "C" {
 /// The caller must free it with `ynz_free` using the same `size`.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_alloc(size: usize) -> *mut u8 {
+    if alloc_counter_enabled() {
+        YNZ_ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
     let ptr = malloc(size) as *mut u8;
     if ptr.is_null() {
         std::process::abort();
     }
+    ptr
+}
+
+/// Allocate `size` zeroed bytes. Used for state-machine frames where ALL fields must
+/// be deterministically zero-initialized (in particular the recursion_slot pointer, which
+/// `SpawnStateFnFuture::Drop` reads to walk the recursion chain — a non-null garbage value
+/// from uninitialized memory would cause a use-after-free or double-free on cancellation).
+///
+/// # Safety
+///
+/// The returned pointer is valid for `size` zero-initialized bytes and properly aligned.
+/// The caller must free it with `ynz_free` using the same `size`.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_alloc_zeroed(size: usize) -> *mut u8 {
+    if alloc_counter_enabled() {
+        YNZ_ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
+    // malloc + memset is portable; calloc is equivalent but may not be exposed in all targets.
+    let ptr = malloc(size) as *mut u8;
+    if ptr.is_null() {
+        std::process::abort();
+    }
+    // Zero all bytes so recursion_slot + any other pointer slots start null.
+    std::ptr::write_bytes(ptr, 0, size);
     ptr
 }
 
@@ -308,6 +401,9 @@ pub unsafe extern "C" fn ynz_alloc(size: usize) -> *mut u8 {
 /// Passing a null pointer is safe (no-op via libc free semantics).
 #[no_mangle]
 pub unsafe extern "C" fn ynz_free(ptr: *mut u8, _size: usize) {
+    if alloc_counter_enabled() {
+        YNZ_FREE_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
     free(ptr as *mut core::ffi::c_void);
 }
 

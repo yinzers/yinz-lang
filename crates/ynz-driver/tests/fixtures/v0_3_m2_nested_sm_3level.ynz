@@ -1,0 +1,22 @@
+// v0.3-M2 Phase 7: 3-level nested state machine.
+// Verifies Bug B fix: nested SM calls use inline poll-and-yield (no bridge abort).
+
+function inner() -> int {
+  wait sleepAsync(5)
+  return 7
+}
+
+function middle() -> int {
+  const v = inner()
+  return v + 1
+}
+
+function outer() -> int {
+  const v = middle()
+  return v + 1
+}
+
+function entrypoint() -> nothing {
+  const result = outer()
+  print(`nested: ${result}`)
+}

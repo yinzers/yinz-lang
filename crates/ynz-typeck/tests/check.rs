@@ -2589,7 +2589,7 @@ fn run_kernel(source: &str) -> CheckOutput {
     for d in sig_output.diagnostics.iter() { all_diags.push(d.clone()); }
     for d in check_diags.into_iter() { all_diags.push(d); }
 
-    CheckOutput { typed_module: typed, mono_table, diagnostics: all_diags }
+    CheckOutput { typed_module: typed, mono_table, diagnostics: all_diags, suspends_set: std::collections::HashSet::new() }
 }
 
 // WHY: lend param across thread boundary is a memory-safety error.
@@ -3347,10 +3347,12 @@ function entrypoint() -> nothing {
 // `inside_wait` flag is correctly cleared before arg recursion so arg-position calls don't
 // inherit the `wait` context of the outer call.
 #[test]
-fn wait_on_non_suspending_callee_fires_for_wrapper_not_for_sleep_async_arg() { // test-ratchet: unawaited_sleep_async retired by Phase 6; wait_on_non_may_block for wrapper is the correct remaining behavior
+fn wait_on_non_suspending_callee_fires_for_wrapper_not_for_sleep_async_arg() { // test-ratchet: Fix 1 (Round 4) added sub-expression suspending call guard; sleepAsync(100) as an argument IS a sub-expression position → now a hard error. The old Phase 6 assertion ("no hard errors") is superseded by the HALT-class fix that correctly rejects this pattern.
     // wrapper is NOT suspending (only calls sleepMs). wait wrapper() fires the
-    // wait_on_non_may_block warning. sleepAsync(100) in the arg no longer fires
-    // unawaited_sleep_async — the inference handles it without a diagnostic.
+    // wait_on_non_may_block warning. sleepAsync(100) in the arg is a sub-expression
+    // position suspending call — Fix 1 correctly rejects it with a teaching error.
+    // The entrypoint is suspending (calls sleepAsync, even in arg position) so the
+    // sub-expression guard fires.
     let src = r#"
 function wrapper(n: nothing) -> nothing {
   sleepMs(1)
@@ -3360,19 +3362,7 @@ function entrypoint() -> nothing {
 }
 "#;
     let out = run(src);
-    // wait_on_non_may_block must fire for `wrapper` (it never suspends).
-    let non_may_block_warns: Vec<_> = out
-        .diagnostics
-        .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning)
-            && d.what.contains("never suspends"))
-        .collect();
-    assert!(
-        !non_may_block_warns.is_empty(),
-        "wait_on_non_may_block must fire for wrapper; got: {:#?}",
-        out.diagnostics
-    );
-    // Retired unawaited_sleep_async warning must NOT fire.
+    // Retired unawaited_sleep_async warning must NOT fire (Phase 6 invariant retained).
     let unawaited_warns: Vec<_> = out
         .diagnostics
         .iter()
@@ -3384,13 +3374,25 @@ function entrypoint() -> nothing {
         "unawaited_sleep_async must NOT fire under Phase 6 inference; got: {:#?}",
         unawaited_warns
     );
-    // No hard errors.
-    let errors: Vec<_> = out
+    // Fix 1: sleepAsync(100) in arg position IS a sub-expression suspending call.
+    // The new guard correctly rejects it with a teaching error pointing at M3.
+    let subexpr_errors: Vec<_> = out
         .diagnostics
         .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error)
+            && d.what.contains("suspending call inside a larger expression"))
         .collect();
-    assert!(errors.is_empty(), "no errors expected; got: {:#?}", errors);
+    assert!(
+        !subexpr_errors.is_empty(),
+        "sub-expression suspending call guard must fire for sleepAsync in arg position; \
+         got: {:#?}",
+        out.diagnostics
+    );
+    assert!(
+        subexpr_errors.iter().any(|d| d.why.contains("v0.3-M3")),
+        "teaching error must reference v0.3-M3; got: {:#?}",
+        subexpr_errors
+    );
 }
 
 // WHY: Phase 6 inference — `background foo(sm_bar())` where both are suspending. Under the

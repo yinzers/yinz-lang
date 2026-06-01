@@ -258,12 +258,22 @@ fn sleep_eight_concurrent_share_threads() {
 // SyncStateFnFuture reads frame slot 0 as *const i32 after block_on returns Ready;
 // without repr(C), Rust's default layout may reorder fields and the read returns garbage.
 #[repr(C)]
+/// SyncValueSm uses the P7 frame layout (FRAME_OFFSET_RETURN_SLOT = 16):
+///
+/// | offset | field          |
+/// |--------|----------------|
+/// | 0      | resume_point   |
+/// | 4      | _padding       |
+/// | 8      | sleep_handle   |
+/// | 16     | return_val_lo  | ← SyncStateFnFuture::poll reads i64 here → truncates to i32
+/// | 24     | return_val_hi  | (unused by this test)
+#[repr(C)]
 struct SyncValueSm {
-    // Frame slot 0: the return value written before signalling Ready.
-    // Starts as resume_point discriminant; overwritten with the return value on
-    // terminal transition so the sync bridge shim can read it from frame slot 0.
-    return_slot: i32,
+    resume_point: i32,
+    _padding: i32,
     sleep_handle: *mut u8,
+    return_val: i64,   // frame offset 16 — SyncStateFnFuture::poll reads from here
+    _return_hi: i64,   // frame offset 24 — unused (errors field)
 }
 
 // SAFETY: exclusively owned by the sync bridge call; not shared across threads.
@@ -272,7 +282,13 @@ unsafe impl Send for SyncValueSm {}
 impl SyncValueSm {
     fn new() -> Box<Self> {
         FRAME_ALLOC.fetch_add(1, Ordering::SeqCst);
-        Box::new(Self { return_slot: 0, sleep_handle: std::ptr::null_mut() })
+        Box::new(Self {
+            resume_point: 0,
+            _padding: 0,
+            sleep_handle: std::ptr::null_mut(),
+            return_val: 0,
+            _return_hi: 0,
+        })
     }
 }
 
@@ -288,7 +304,8 @@ impl Drop for SyncValueSm {
 }
 
 // extern "C" resume function for SyncValueSm.
-// On Ready: writes 42 into frame slot 0 (return_slot), then returns 0.
+// On Ready: writes 42 into the return slot at frame offset 16, then returns 0.
+// SyncStateFnFuture::poll reads frame offset 16 as i64, truncates to i32 → 42.
 unsafe extern "C" fn sync_value_sm_resume(frame_ptr: *mut u8, waker_ctx: *mut u8) -> i32 {
     // SAFETY: frame_ptr was cast from *mut SyncValueSm; cast is valid.
     let sm = &mut *(frame_ptr as *mut SyncValueSm);
@@ -296,11 +313,11 @@ unsafe extern "C" fn sync_value_sm_resume(frame_ptr: *mut u8, waker_ctx: *mut u8
     let cx = &mut *(waker_ctx as *mut Context<'_>);
 
     loop {
-        match sm.return_slot {
+        match sm.resume_point {
             0 => {
                 // State 0: allocate a 50ms sleep.
                 sm.sleep_handle = ynz_rt_async_sleep_create(50);
-                sm.return_slot = 1;
+                sm.resume_point = 1;
             }
             1 => {
                 // State 1: poll the sleep.
@@ -311,15 +328,15 @@ unsafe extern "C" fn sync_value_sm_resume(frame_ptr: *mut u8, waker_ctx: *mut u8
                     0 => {
                         // Sleep fired — shim freed the handle.
                         sm.sleep_handle = std::ptr::null_mut();
-                        sm.return_slot = 2;
+                        sm.resume_point = 2;
                     }
                     v => panic!("sync_value_sm_resume: unexpected poll result {v}"),
                 }
             }
             2 => {
-                // Terminal: write the return value into frame slot 0 before signalling Ready.
-                // The sync bridge shim reads frame slot 0 as *const i32 after block_on completes.
-                sm.return_slot = 42;
+                // Terminal: write the return value at frame offset 16 (P7 return slot).
+                // SyncStateFnFuture::poll reads this i64 and truncates to i32.
+                sm.return_val = 42;
                 return 0; // Ready
             }
             _ => unreachable!("SyncValueSm: invalid state"),
@@ -412,9 +429,22 @@ fn call_state_machine_sync_no_tokio_context() {
 //
 // Used by rt_spawn_drives_state_machine_on_io_pool to observe completion of a
 // fire-and-forget ynz_rt_spawn call. The resume_fn ABI is signal_sm_resume below.
-
+//
+// Layout matches the P7 frame header so SpawnStateFnFuture::Drop reads valid fields:
+//   offset 0: resume_point i32 (tracks state)
+//   offset 4: _padding i32
+//   offset 8: sleep_handle ptr (null — SignalSm delegates sleep to TestStateMachine)
+//   offset 16+: return slot (unused by this fire-and-forget test)
+// Extra payload fields live at offset 32+ (after the 32-byte header).
+#[repr(C)]
 struct SignalSm {
-    inner: Box<TestStateMachine>,
+    resume_point: i32,            // offset 0 — frame state discriminant
+    _padding: i32,                // offset 4 — alignment padding
+    sleep_handle: *mut u8,        // offset 8 — always null (SignalSm has no own sleep)
+    _return_slot_lo: i64,         // offset 16 — return slot lo (unused)
+    _return_slot_hi: i64,         // offset 24 — return slot hi (unused)
+    // Extra test-specific fields at offset 32+ (after the P7 header).
+    inner: Box<TestStateMachine>, // offset 32
     tx: std::sync::mpsc::Sender<()>,
     sent: bool,
 }
@@ -470,6 +500,11 @@ fn rt_spawn_drives_state_machine_on_io_pool() {
     // Heap-allocate the SignalSm frame. ynz_rt_spawn takes ownership of frame_ptr.
     // The frame leaks after the task completes (Phase 2 wires dealloc via resume_fn).
     let mut sm = Box::new(SignalSm {
+        resume_point: 0,
+        _padding: 0,
+        sleep_handle: std::ptr::null_mut(),
+        _return_slot_lo: 0,
+        _return_slot_hi: 0,
         inner: TestStateMachine::new(100),
         tx,
         sent: false,
@@ -481,8 +516,9 @@ fn rt_spawn_drives_state_machine_on_io_pool() {
     std::mem::forget(sm);
 
     // SAFETY: frame_ptr valid for frame_size bytes; signal_sm_resume valid; ownership transferred.
+    // -1 = no recursion slot (this test fixture is not a recursive SM).
     unsafe {
-        ynz_rt_spawn(signal_sm_resume, frame_ptr, frame_size);
+        ynz_rt_spawn(signal_sm_resume, frame_ptr, frame_size, -1);
     }
 
     rx.recv_timeout(Duration::from_secs(2)).expect("state machine did not complete within 2s");

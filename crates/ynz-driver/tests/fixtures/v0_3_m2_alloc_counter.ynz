@@ -1,0 +1,19 @@
+// v0.3-M2 Phase 7: composed-single-alloc proof.
+// 3-level SM call tree: entrypoint→outer→inner→sleepAsync.
+// ONE ynz_alloc for the whole composed frame; no per-call allocation.
+// (Alloc counting is done in the Rust integration test via a counter shim.)
+
+function inner() -> int {
+  wait sleepAsync(5)
+  return 1
+}
+
+function outer() -> int {
+  const v = inner()
+  return v + 1
+}
+
+function entrypoint() -> nothing {
+  const v = outer()
+  print(`result: ${v}`)
+}
