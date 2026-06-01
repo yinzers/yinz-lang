@@ -187,10 +187,10 @@ fn errors_cascade_through_nested_sm_2level() {
 
 // ── AC 4: 3-level nested SM ───────────────────────────────────────────────────
 
-// WHY: Bug B fix — nested SM calls must use inline poll-and-yield (composed frames),
-// not the block_on bridge. With the bridge, a 3-level call chain would hit
-// "Cannot start a runtime from within a runtime" and abort. This test exercises
-// the full chain: entrypoint→outer→middle→inner→sleepAsync.
+// WHY: nested SM calls must use inline poll-and-yield (composed frames); the
+// program-entry driver is only at the top-level wrapper→resume handoff. A 3-level
+// call chain drives inner sub-frames inline, not by recursing into the driver.
+// This test exercises the full chain: entrypoint→outer→middle→inner→sleepAsync.
 #[test]
 fn nested_sm_3level_prints_in_order_exits_0() {
     let (stdout, _, code) = run_fixture("v0_3_m2_nested_sm_3level.ynz");
@@ -272,11 +272,10 @@ fn alloc_counter_fixture_produces_correct_result() {
 
 // ── AC 9: no bridge in resume fns (IR-level check via nm) ────────────────────
 
-// WHY: ynz_rt_call_state_machine_sync inside a ynz_sm_*_resume function would
-// mean nested block_on, which panics on Tokio worker threads. The bridge must
-// only appear in wrapper functions (the top-level driver). This test checks the
-// binary's symbol table — if a sm_resume fn calls the bridge, it appears in the
-// disassembly as a direct call.
+// WHY: ynz_rt_run_entrypoint inside a ynz_sm_*_resume function would mean nested
+// block_on, which panics on Tokio worker threads. The program-entry driver must
+// only appear in wrapper functions, never inside resume fns (those inline-poll-yield
+// into embedded child sub-frames). This test checks the binary's symbol table.
 #[test]
 fn no_bridge_reachable_from_resume_fns() {
     let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -301,8 +300,8 @@ fn no_bridge_reachable_from_resume_fns() {
         String::from_utf8_lossy(&build_out.stderr)
     );
 
-    // Use objdump to find call sites to ynz_rt_call_state_machine_sync
-    // in ynz_sm_* functions. The bridge should NOT appear inside any resume fn.
+    // Use objdump to find call sites to ynz_rt_run_entrypoint
+    // in ynz_sm_* functions. The driver should NOT appear inside any resume fn.
     let binary = fixture_path.with_extension("");
     if !binary.exists() {
         // Binary might be in a temp dir — skip this check when binary isn't found
@@ -315,8 +314,8 @@ fn no_bridge_reachable_from_resume_fns() {
 
     if let Ok(nm_out) = nm_out {
         let disasm = String::from_utf8_lossy(&nm_out.stdout).to_string();
-        // Check if any ynz_sm_*_resume function calls ynz_rt_call_state_machine_sync
-        // Simple heuristic: look for the bridge symbol in functions starting with ynz_sm_
+        // Check if any ynz_sm_*_resume function calls ynz_rt_run_entrypoint.
+        // Simple heuristic: look for the driver symbol in functions starting with ynz_sm_
         let mut in_resume_fn = false;
         let mut bridge_in_resume = false;
         for line in disasm.lines() {
@@ -325,7 +324,7 @@ fn no_bridge_reachable_from_resume_fns() {
             } else if in_resume_fn && line.contains("<ynz_sm_") && !line.contains("resume") {
                 // left previous resume fn
                 in_resume_fn = false;
-            } else if in_resume_fn && line.contains("ynz_rt_call_state_machine_sync") {
+            } else if in_resume_fn && line.contains("ynz_rt_run_entrypoint") {
                 bridge_in_resume = true;
                 break;
             } else if in_resume_fn
@@ -340,7 +339,7 @@ fn no_bridge_reachable_from_resume_fns() {
         }
         assert!(
             !bridge_in_resume,
-            "ynz_rt_call_state_machine_sync found inside a ynz_sm_*_resume fn — bridge not removed from resume fns"
+            "ynz_rt_run_entrypoint found inside a ynz_sm_*_resume fn — program-entry driver must not be called from resume fns"
         );
     }
     // Clean up binary

@@ -6,7 +6,7 @@
 ///   - `ynz_rt_spawn(resume_fn, frame_ptr, frame_size)` — I/O-pool state-machine task (M2)
 ///   - `ynz_rt_async_sleep_create(ms)` — allocate a boxed Tokio Sleep future (M2)
 ///   - `ynz_rt_async_sleep_poll(handle_ptr, waker_ctx)` — poll an in-flight sleep (M2)
-///   - `ynz_rt_call_state_machine_sync(resume_fn, frame_ptr, frame_size)` — sync bridge (M2)
+///   - `ynz_rt_run_entrypoint(resume_fn, frame_ptr, frame_size)` — program-entry state-machine driver (M2)
 ///   - `ynz_rt_check_preempt()` — cooperative yield point at loop back-edges + call sites
 ///   - `ynz_rt_shutdown()` — drain the runtime at program end
 ///
@@ -306,11 +306,12 @@ pub extern "C" fn ynz_thread_sleep_ms(ms: i64) {
 /// returning the state machine's final i32 value when it completes.
 ///
 /// The resume_fn ABI: `(frame_ptr, waker_ctx) -> i32` where 0 = Ready and 1 = Pending.
-/// When Ready, the state machine's return value is in frame slot 0 (the first 4 bytes
-/// of frame_ptr, written by the codegen-emitted resume_fn before returning 0). The
-/// sync bridge reads that slot and returns the value to the calling C-ABI shim.
+/// When Ready, the wrapper reads the typed return value directly from the frame at
+/// offset 16 (the typed return slot — see `FRAME_OFFSET_RETURN_SLOT` in `state_machine.rs`).
+/// The i32 returned here is a truncated legacy artifact; the wrapper ignores it and
+/// reads the full typed value from the frame instead.
 ///
-/// Used exclusively by `ynz_rt_call_state_machine_sync` (synchronous block_on path).
+/// Used exclusively by `ynz_rt_run_entrypoint` (program-entry driver).
 /// `ynz_rt_spawn` uses `SpawnStateFnFuture` (Output=()) — fire-and-forget; value discarded.
 struct SyncStateFnFuture {
     resume_fn: unsafe extern "C" fn(*mut u8, *mut u8) -> i32,
@@ -654,13 +655,19 @@ pub unsafe extern "C" fn ynz_rt_async_sleep_poll(handle_ptr: *mut u8, waker_ctx:
     }
 }
 
-/// Synchronously drive a state-machine to completion from any thread context (Shape B).
+/// Run the program's entry state machine to completion — the `#[tokio::main]`-equivalent
+/// single program-entry driver.
 ///
-/// Returns the state machine's final i32 value, read from frame slot 0 when the
-/// resume_fn signals Ready (returns 0). The codegen-emitted resume_fn writes the
-/// return value into the first i32 of the frame before returning 0; this shim reads
-/// it and propagates it to the caller. Exit-code propagation from `main`'s state
-/// machine flows through this return value.
+/// This is called ONLY by the codegen-emitted `main` wrapper (and non-entry wrapper
+/// functions called from non-state-machine contexts). Every call is at a genuine
+/// top-level program-entry point; this function is NOT reachable from inside any
+/// state-machine resume function (`ynz_sm_*_resume`) — those inline-poll-yield into
+/// embedded child sub-frames without going through this driver.
+///
+/// Returns the state machine's final i32 value. The codegen-emitted wrapper ignores
+/// this return value and reads the typed return directly from the frame at offset 16
+/// (the typed return slot). The i32 here is a legacy holdover for the `main` exit-code
+/// path only; non-main wrappers discard it entirely.
 ///
 /// # Flow
 /// 1. Wrap `(resume_fn, frame_ptr)` in a `SyncStateFnFuture` (Output = i32).
@@ -668,12 +675,11 @@ pub unsafe extern "C" fn ynz_rt_async_sleep_poll(handle_ptr: *mut u8, waker_ctx:
 ///    - `Ok(handle)` — inside Tokio (worker thread OR spawn_blocking-pool thread).
 ///      Call `handle.block_on(future)`. Works on both thread types; unlike
 ///      `block_in_place`, which panics on spawn_blocking-pool threads (confirmed by
-///      Spike Contract #4b). The tradeoff: ties up this worker thread for the wait
-///      duration. M3 auto-`wait` insertion eliminates most call sites.
-///    - `Err(_)` — outside Tokio (main thread, detached thread). Use the global
+///      Spike Contract #4b).
+///    - `Err(_)` — outside Tokio (main thread before runtime boots). Use the global
 ///      `RUNTIME` (initialised by `ynz_rt_init`). Codegen guarantees `ynz_rt_init`
 ///      runs before any state-machine call so `RUNTIME.get().expect(...)` is
-///      unreachable in correct codegen — the `.expect` is a defence-in-depth assertion.
+///      a defence-in-depth assertion, not an expected failure path.
 /// 3. Wrap the entire `match` in `catch_unwind` so a panicking state machine does not
 ///    abort the calling thread; the panic propagates as a Rust panic to the caller.
 ///
@@ -684,16 +690,14 @@ pub unsafe extern "C" fn ynz_rt_async_sleep_poll(handle_ptr: *mut u8, waker_ctx:
 /// - `RUNTIME` mutex poisoned: recovers via `into_inner` (same as other shims).
 ///
 /// # Side effects
-/// Blocks the calling thread until the state machine returns `Ready` (0). On Tokio
-/// worker threads this ties up a worker slot for the wait duration (bounded by M3 fix).
+/// Blocks the calling thread until the state machine returns `Ready` (0).
 ///
 /// # Safety
 /// - `resume_fn` must be a valid function pointer matching the `(frame, waker_ctx) -> i32` ABI.
-/// - `frame_ptr` must be valid for at least 4 bytes (the return-value i32 slot at frame
-///   offset 0) and for `frame_size` bytes total, for the duration of this call.
+/// - `frame_ptr` must be valid for `frame_size` bytes for the duration of this call.
 ///   The frame is NOT freed by this function; the caller retains ownership and must free it.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_rt_call_state_machine_sync(
+pub unsafe extern "C" fn ynz_rt_run_entrypoint(
     resume_fn: unsafe extern "C" fn(*mut u8, *mut u8) -> i32,
     frame_ptr: *mut u8,
     frame_size: i64,
@@ -716,7 +720,7 @@ pub unsafe extern "C" fn ynz_rt_call_state_machine_sync(
                 let rt_guard = RUNTIME
                     .get()
                     .expect(
-                        "ynz runtime: ynz_rt_call_state_machine_sync called before ynz_rt_init. \
+                        "ynz runtime: ynz_rt_run_entrypoint called before ynz_rt_init. \
                          This is a compiler codegen bug — ynz_rt_init must be the first \
                          instruction in main for any program using wait or background.",
                     );
@@ -727,7 +731,7 @@ pub unsafe extern "C" fn ynz_rt_call_state_machine_sync(
                         Err(e) => e.into_inner(),
                     };
                     lock.as_ref().expect(
-                        "ynz runtime: ynz_rt_call_state_machine_sync called after ynz_rt_shutdown.",
+                        "ynz runtime: ynz_rt_run_entrypoint called after ynz_rt_shutdown.",
                     ).handle().clone()
                 }; // mutex released here — before block_on
                 handle.block_on(future)

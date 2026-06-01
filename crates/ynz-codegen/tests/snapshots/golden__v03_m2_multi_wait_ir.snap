@@ -186,7 +186,7 @@ declare ptr @ynz_rt_async_sleep_create(i64)
 
 declare i32 @ynz_rt_async_sleep_poll(ptr, ptr)
 
-declare i32 @ynz_rt_call_state_machine_sync(ptr, ptr, i64)
+declare i32 @ynz_rt_run_entrypoint(ptr, ptr, i64)
 
 define i32 @ynz_sm_chain_resume(ptr %0, ptr %1) {
 sm_entry:
@@ -257,7 +257,7 @@ entry:
   %h_slot_wr = getelementptr i8, ptr %sm_frame, i64 8
   store ptr null, ptr %h_slot_wr, align 8
   store i32 0, ptr %sm_frame, align 4
-  %sm_drive = call i32 @ynz_rt_call_state_machine_sync(ptr @ynz_sm_chain_resume, ptr %sm_frame, i64 32)
+  %sm_drive = call i32 @ynz_rt_run_entrypoint(ptr @ynz_sm_chain_resume, ptr %sm_frame, i64 32)
   call void @ynz_free(ptr %sm_frame, i64 32)
   ret void
 }

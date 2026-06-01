@@ -186,7 +186,7 @@ declare ptr @ynz_rt_async_sleep_create(i64)
 
 declare i32 @ynz_rt_async_sleep_poll(ptr, ptr)
 
-declare i32 @ynz_rt_call_state_machine_sync(ptr, ptr, i64)
+declare i32 @ynz_rt_run_entrypoint(ptr, ptr, i64)
 
 define void @worker() {
 entry:

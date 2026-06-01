@@ -1484,7 +1484,7 @@ fn lower_function<'ctx, 'g>(
 ///
 /// 2. **Wrapper function** (`<name>` LLVM function, or `main` for `entrypoint`) —
 ///    allocates the frame, copies args to frame slots, calls
-///    `ynz_rt_call_state_machine_sync`, reads the return value from frame[0], frees
+///    `ynz_rt_run_entrypoint`, reads the typed return value from frame[16], frees
 ///    the frame, and returns. This is the function called from non-SM contexts and
 ///    by `main` entry.
 ///
@@ -1508,7 +1508,7 @@ fn lower_function<'ctx, 'g>(
 /// When `entrypoint` contains `wait`, the LLVM `main` function:
 /// 1. Calls `ynz_rt_init` (first non-allocation instruction — see AC #5).
 /// 2. Allocates the frame.
-/// 3. Calls `ynz_rt_call_state_machine_sync(resume_fn, frame, size)`.
+/// 3. Calls `ynz_rt_run_entrypoint(resume_fn, frame, size)`.
 /// 4. Reads exit code from `frame[0]`.
 /// 5. Calls `ynz_rt_shutdown`.
 /// 6. Returns exit code.
@@ -1744,16 +1744,16 @@ fn lower_function_with_waits<'ctx, 'g>(
         state_machine::store_local_slot(ctx, &builder, frame_ptr, slot_idx, bits)?;
     }
 
-    // Drive the state machine to completion via ynz_rt_call_state_machine_sync (the
-    // top-level RUNTIME.block_on driver). This is the ONLY place the sync bridge is used
-    // in P7 — for the wrapper→resume handoff. The resume function itself never calls the
-    // bridge; it inline-poll-yields into embedded child sub-frames (no bridge inside resume).
+    // Drive the state machine to completion via ynz_rt_run_entrypoint — the program-entry
+    // driver (tokio::main-equivalent). This is the ONLY call site: the wrapper→resume
+    // handoff at the top level of a suspending function's wrapper. The resume function
+    // itself never calls this driver; it inline-poll-yields into embedded child sub-frames.
     let resume_fn_ptr = resume_fn.as_global_value().as_pointer_value();
     let frame_size_val = ctx.i64_type().const_int(frame_bytes, false);
 
     builder
         .build_call(
-            rt.ynz_rt_call_state_machine_sync,
+            rt.ynz_rt_run_entrypoint,
             &[resume_fn_ptr.into(), frame_ptr.into(), frame_size_val.into()],
             "sm_drive",
         )
@@ -4950,8 +4950,9 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     // internally via RUNTIME.block_on). This path should only be reached from
                     // non-SM callers; SM callers route through lower_sm_stmt_with_wait instead.
                     //
-                    // Per AC 9: no ynz_rt_call_state_machine_sync inside any ynz_sm_*_resume.
-                    // The bridge is in the WRAPPER function only; this path calls the wrapper fn.
+                    // Per AC 9: no ynz_rt_run_entrypoint inside any ynz_sm_*_resume.
+                    // The program-entry driver lives in the WRAPPER function only; this path
+                    // calls the wrapper fn.
 
                     let fn_val = cg.module.get_function(&effective_name).ok_or_else(|| {
                         format!("codegen: function `{effective_name}` not found in module")
@@ -5543,13 +5544,16 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
         // Inside a state-machine resume function (cg.is_state_machine=true), `wait` is
         // handled by lower_sm_body / emit_wait_point — not by lower_expr. The is_state_machine
         // branch here is a safety fallback for waits encountered during generic expression
-        // evaluation (e.g., waits in argument positions). In non-SM contexts (cg.is_state_machine=false),
-        // callers that are state machines drive the callee via the sync bridge; the callee function
-        // itself is generated as a state machine by lower_function_with_waits.
+        // evaluation (e.g., waits in argument positions). State-machine callers reach a
+        // suspending callee via inline poll-and-yield (lower_sm_stmt_with_wait) into the
+        // callee's embedded sub-frame — never via a runtime driver. The non-SM path below
+        // drives a suspending callee through its wrapper (which runs the program-entry driver
+        // to completion); the callee function itself is generated as a state machine by
+        // lower_function_with_waits.
         //
         // WHY the non-SM arm evaluates the inner expression: if a non-SM function contains
         // wait (e.g., a wait-free function calling a wait-containing function) the call
-        // falls through to the normal call lowering path which then emits ynz_rt_call_state_machine_sync
+        // falls through to the normal call lowering path which then emits ynz_rt_run_entrypoint
         // at the call site (Step 6 dispatch). The `wait` keyword itself has no IR equivalent
         // outside of a state-machine context — it is pure syntax that drives path selection.
         Expr::Wait(inner, _) => {

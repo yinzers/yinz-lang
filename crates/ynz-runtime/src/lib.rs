@@ -1,6 +1,6 @@
 pub mod runtime;
 pub use runtime::{
-    ynz_rt_async_sleep_create, ynz_rt_async_sleep_poll, ynz_rt_call_state_machine_sync,
+    ynz_rt_async_sleep_create, ynz_rt_async_sleep_poll, ynz_rt_run_entrypoint,
     ynz_rt_check_preempt, ynz_rt_init, ynz_rt_shutdown, ynz_rt_spawn, ynz_rt_spawn_blocking,
     ynz_thread_sleep_ms,
 };

@@ -4,7 +4,7 @@
 /// They validate the four new C-ABI shims directly:
 ///   - `ynz_rt_spawn`
 ///   - `ynz_rt_async_sleep_create` + `ynz_rt_async_sleep_poll`
-///   - `ynz_rt_call_state_machine_sync`
+///   - `ynz_rt_run_entrypoint`
 ///
 /// Each test drives a hand-written state-machine struct that mimics what Phase 2
 /// codegen will emit. The shims must be inert (no call sites yet) but must compile
@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use tokio::time::Sleep;
 use ynz_runtime::runtime::{
-    ynz_rt_async_sleep_create, ynz_rt_async_sleep_poll, ynz_rt_call_state_machine_sync,
+    ynz_rt_async_sleep_create, ynz_rt_async_sleep_poll, ynz_rt_run_entrypoint,
     ynz_rt_init, ynz_rt_shutdown, ynz_rt_spawn,
 };
 
@@ -251,7 +251,7 @@ fn sleep_eight_concurrent_share_threads() {
 //
 // Mimics what M2 codegen emits for a state-machine function that returns 42.
 // On terminal transition (Ready), writes 42 into frame slot 0 (the first i32 of the
-// frame) so ynz_rt_call_state_machine_sync can read and return the value.
+// frame) so ynz_rt_run_entrypoint can drive it to completion.
 // This matches the ABI locked in the Spike Findings (contract #4d: result=42).
 
 // repr(C) guarantees return_slot is at byte offset 0 (the first field).
@@ -344,13 +344,13 @@ unsafe extern "C" fn sync_value_sm_resume(frame_ptr: *mut u8, waker_ctx: *mut u8
     }
 }
 
-// WHY: ynz_rt_call_state_machine_sync must work from a spawn_blocking thread (the most
+// WHY: ynz_rt_run_entrypoint must work from a spawn_blocking thread (the most
 // common production call site: a non-wait function calling a state-machine function).
 // Handle::try_current() returns Ok from spawn_blocking threads; the Ok arm must run
 // handle.block_on() — NOT block_in_place, which panics on blocking-pool threads
 // (confirmed by Spike Contract #4b). Any regression here silently re-introduces the
 // Round 2 bug. Also validates that the return value (42) propagates correctly through
-// the sync bridge, mirroring Spike Contract #4d.
+// the program-entry driver, mirroring Spike Contract #4d.
 #[test]
 fn call_state_machine_sync_from_spawn_blocking() {
     with_private_runtime(|rt| {
@@ -361,7 +361,7 @@ fn call_state_machine_sync_from_spawn_blocking() {
                 let frame_ptr = sm.as_mut() as *mut SyncValueSm as *mut u8;
                 // SAFETY: frame_ptr valid; sync_value_sm_resume valid; frame lives for call duration.
                 let ret = unsafe {
-                    ynz_rt_call_state_machine_sync(sync_value_sm_resume, frame_ptr, 0)
+                    ynz_rt_run_entrypoint(sync_value_sm_resume, frame_ptr, 0)
                 };
                 drop(sm);
                 ret
@@ -371,19 +371,19 @@ fn call_state_machine_sync_from_spawn_blocking() {
         });
         let elapsed = start.elapsed();
         eprintln!("call_state_machine_sync_from_spawn_blocking: elapsed={elapsed:?} result={result}");
-        assert_eq!(result, 42, "sync bridge must return state machine's final value (expected 42)");
+        assert_eq!(result, 42, "program-entry driver must return state machine's final value (expected 42)");
         assert!(
             elapsed >= Duration::from_millis(40),
-            "sync bridge returned too fast ({elapsed:?})"
+            "program-entry driver returned too fast ({elapsed:?})"
         );
         assert!(
             elapsed < Duration::from_millis(250),
-            "sync bridge timed out ({elapsed:?})"
+            "program-entry driver timed out ({elapsed:?})"
         );
     });
 }
 
-// WHY: ynz_rt_call_state_machine_sync must work from a thread with no Tokio context
+// WHY: ynz_rt_run_entrypoint must work from a thread with no Tokio context
 // (e.g., the main thread before ynz_rt_init, or a detached std::thread). This tests
 // the Err(_) arm which falls back to RUNTIME.get().block_on(). The global RUNTIME is
 // initialised via ynz_rt_init. Without this path, any non-async-context caller would
@@ -402,7 +402,7 @@ fn call_state_machine_sync_no_tokio_context() {
         let frame_ptr = sm.as_mut() as *mut SyncValueSm as *mut u8;
         // SAFETY: frame_ptr valid; sync_value_sm_resume valid; frame lives for call duration.
         let ret = unsafe {
-            ynz_rt_call_state_machine_sync(sync_value_sm_resume, frame_ptr, 0)
+            ynz_rt_run_entrypoint(sync_value_sm_resume, frame_ptr, 0)
         };
         drop(sm);
         ret
@@ -412,7 +412,7 @@ fn call_state_machine_sync_no_tokio_context() {
 
     let elapsed = start.elapsed();
     eprintln!("call_state_machine_sync_no_tokio_context: elapsed={elapsed:?} result={result}");
-    assert_eq!(result, 42, "sync bridge Err-arm must return state machine's final value (expected 42)");
+    assert_eq!(result, 42, "program-entry driver Err-arm must return state machine's final value (expected 42)");
     assert!(
         elapsed >= Duration::from_millis(40),
         "sync bridge returned too fast ({elapsed:?}) — may have skipped the sleep"

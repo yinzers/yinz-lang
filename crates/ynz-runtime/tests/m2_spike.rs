@@ -419,12 +419,22 @@ impl Future for FnMaybeWaitWrapper {
     }
 }
 
-// ── Sync bridge: ynz_rt_call_state_machine_sync ──────────────────────────────
+// ── Program-entry driver: ynz_rt_run_entrypoint ─────────────────────────────
 //
-// Shape B per plan-reviewer Round 3 Required Fix #1:
+// Terminology note: the Contract #4a-#4d WHY-comments below use "sync bridge" in
+// its LEGITIMATE sense — the synchronous→async boundary where the C-ABI program
+// entry crosses into the Tokio runtime via block_on. This is NOT the prohibited
+// mid-program bridge that caused the HALT (a block_on reachable from inside a
+// `ynz_sm_*_resume` fn — that is gone, enforced by `no_bridge_reachable_from_resume_fns`).
+// These contracts validate that the program-entry driver runs correctly from every
+// thread context (worker / spawn_blocking-pool / no-runtime / SM-inside-SM).
+//
+// The legitimate program-entry driver for the Yinz runtime — the Tokio-main
+// equivalent. Drives a codegen-emitted state-machine resume function to completion
+// from any thread context:
 //   match Handle::try_current() {
 //       Ok(h)  => h.block_on(future),              // worker AND spawn_blocking threads
-//       Err(_) => RUNTIME.block_on(future),        // no-Tokio context
+//       Err(_) => RUNTIME.block_on(future),        // no-Tokio context (main before init)
 //   }
 //
 // NO block_in_place — that panics on spawn_blocking-pool threads.
@@ -459,7 +469,7 @@ impl Future for StateFnFuture {
     }
 }
 
-/// Shape B sync bridge — thread-context-correct, no block_in_place.
+/// Local spike impl of the program-entry driver — thread-context-correct, no block_in_place.
 ///
 /// Called from: worker threads (4a), spawn_blocking threads (4b), no-runtime threads (4c).
 /// Works on all three because Handle::block_on is safe on any thread in a Tokio context
@@ -467,7 +477,7 @@ impl Future for StateFnFuture {
 ///
 /// # Safety
 /// resume_fn must be valid; frame_ptr valid for the duration of the call.
-unsafe fn ynz_rt_call_state_machine_sync_spike(
+unsafe fn ynz_rt_run_entrypoint_spike(
     resume_fn: unsafe extern "C" fn(*mut u8, *mut u8) -> i32,
     frame_ptr: *mut u8,
 ) {
@@ -590,7 +600,7 @@ fn contract_4a_worker_thread_sync_bridge() {
                 let frame_ptr = target.as_mut() as *mut SyncBridgeTarget as *mut u8;
                 // SAFETY: frame_ptr valid for duration; sync_bridge_resume valid.
                 unsafe {
-                    ynz_rt_call_state_machine_sync_spike(sync_bridge_resume, frame_ptr);
+                    ynz_rt_run_entrypoint_spike(sync_bridge_resume, frame_ptr);
                 }
                 drop(target);
             })
@@ -627,7 +637,7 @@ fn contract_4b_spawn_blocking_pool_sync_bridge() {
                 let mut target = SyncBridgeTarget::new(100);
                 let frame_ptr = target.as_mut() as *mut SyncBridgeTarget as *mut u8;
                 unsafe {
-                    ynz_rt_call_state_machine_sync_spike(sync_bridge_resume, frame_ptr);
+                    ynz_rt_run_entrypoint_spike(sync_bridge_resume, frame_ptr);
                 }
                 drop(target);
             })
@@ -698,7 +708,7 @@ fn contract_4c_no_runtime_sync_bridge() {
 
 // WHY: validates state-machine-inside-state-machine via sync bridge.
 // Outer A is a sync function (running in spawn_blocking) that calls
-// ynz_rt_call_state_machine_sync_spike to drive inner B (50ms sleep).
+// ynz_rt_run_entrypoint_spike to drive inner B (50ms sleep).
 // Handle::block_on in the shim correctly drives B even from a blocking-pool thread.
 // No deadlock; [45ms, 150ms] wall-clock.
 //
@@ -718,7 +728,7 @@ fn contract_4d_state_machine_inside_state_machine_sync_bridge() {
                 let frame_ptr = inner.as_mut() as *mut SyncBridgeTarget as *mut u8;
                 // SAFETY: frame_ptr valid; sync_bridge_resume valid.
                 unsafe {
-                    ynz_rt_call_state_machine_sync_spike(sync_bridge_resume, frame_ptr);
+                    ynz_rt_run_entrypoint_spike(sync_bridge_resume, frame_ptr);
                 }
                 drop(inner);
                 42i32 // outer returns 42 after inner completes
@@ -1725,7 +1735,7 @@ fn frame_size_measurement_all_fixtures() {
 // ── Sync-bridge overhead measurement ─────────────────────────────────────────
 //
 // Threshold: ≤ 1% of a 100ms wait = ≤ 1000µs absolute.
-// Compares ynz_rt_call_state_machine_sync_spike vs direct future polling.
+// Compares ynz_rt_run_entrypoint_spike vs direct future polling.
 
 #[test]
 fn sync_bridge_overhead_measurement() {
@@ -1750,7 +1760,7 @@ fn sync_bridge_overhead_measurement() {
                     let mut target = SyncBridgeTarget::new(100);
                     let frame_ptr = target.as_mut() as *mut SyncBridgeTarget as *mut u8;
                     // SAFETY: frame_ptr valid; sync_bridge_resume valid.
-                    unsafe { ynz_rt_call_state_machine_sync_spike(sync_bridge_resume, frame_ptr) };
+                    unsafe { ynz_rt_run_entrypoint_spike(sync_bridge_resume, frame_ptr) };
                     drop(target);
                 })
                 .await

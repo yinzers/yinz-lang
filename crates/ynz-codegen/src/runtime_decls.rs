@@ -191,11 +191,12 @@ pub struct RuntimeDecls<'ctx> {
     // ynz_rt_async_sleep_poll(handle_ptr: *mut u8, waker_ctx: *mut u8) → i32
     //   Poll the boxed Sleep future. Returns 0 (Ready, box freed) or 1 (Pending).
     pub ynz_rt_async_sleep_poll: FunctionValue<'ctx>,
-    // ynz_rt_call_state_machine_sync(resume_fn, frame_ptr, frame_size) → i32
-    //   Synchronously drive a state machine to completion (Shape B sync bridge).
-    //   Returns the state machine's final i32 value (from frame slot 0 on Ready).
+    // ynz_rt_run_entrypoint(resume_fn, frame_ptr, frame_size) → i32
+    //   Program-entry state-machine driver — the tokio::main-equivalent for Yinz.
+    //   Called ONLY by the codegen-emitted main wrapper and non-entry wrappers;
+    //   never reachable from inside a ynz_sm_*_resume function (those inline-poll-yield).
     //   Uses Handle::block_on on Tokio threads; RUNTIME.block_on outside Tokio.
-    pub ynz_rt_call_state_machine_sync: FunctionValue<'ctx>,
+    pub ynz_rt_run_entrypoint: FunctionValue<'ctx>,
 }
 
 impl<'ctx> RuntimeDecls<'ctx> {
@@ -598,11 +599,12 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 // (handle_ptr: *mut u8, waker_ctx: *mut u8) -> i32  (0=Ready, 1=Pending)
                 i32.fn_type(&[ptr.into(), ptr.into()], false),
             ),
-            ynz_rt_call_state_machine_sync: declare_fn(
+            ynz_rt_run_entrypoint: declare_fn(
                 module,
-                "ynz_rt_call_state_machine_sync",
+                "ynz_rt_run_entrypoint",
                 // (resume_fn: fn(ptr,ptr)->i32, frame_ptr: ptr, frame_size: i64) -> i32
-                // Returns the state machine's final value (read from frame slot 0 when Ready).
+                // Drives the state machine to completion; return value is a legacy i32
+                // (wrapper reads typed value directly from frame[16] instead).
                 i32.fn_type(&[ptr.into(), ptr.into(), i64.into()], false),
             ),
         }

@@ -634,9 +634,9 @@ function entrypoint() -> nothing {
 
 #[test]
 fn v03_m2_non_sm_caller_block_on_ir_snapshot() {
-    // WHY: locks the sync-bridge call at a non-SM call site that calls a state-machine function.
-    // If the block_on bridge (ynz_rt_call_state_machine_sync) disappears from the IR, this
-    // test catches it before the program silently returns wrong values.
+    // WHY: locks that a wrapper function calling a state-machine function emits ynz_rt_run_entrypoint.
+    // If the program-entry driver symbol disappears from the IR, this test catches it before
+    // the program silently returns wrong values.
     let source = r#"
 function sleeper() -> nothing {
   wait sleepAsync(100)
@@ -647,8 +647,8 @@ function entrypoint() -> nothing {
 "#;
     let ir = run_m2_sm_codegen("v03m2_non_sm_caller.ynz", source);
     assert!(
-        ir.contains("ynz_rt_call_state_machine_sync"),
-        "non-SM caller IR must emit sync bridge; got:\n{}",
+        ir.contains("ynz_rt_run_entrypoint"),
+        "wrapper IR must emit program-entry driver (ynz_rt_run_entrypoint); got:\n{}",
         ir.lines().take(60).collect::<Vec<_>>().join("\n")
     );
     insta::assert_snapshot!("v03_m2_non_sm_caller_block_on_ir", ir);
@@ -656,10 +656,10 @@ function entrypoint() -> nothing {
 
 #[test]
 fn v03_m2_main_with_wait_ir_snapshot() {
-    // WHY: locks that main wraps in block_on when entrypoint contains wait, and that
+    // WHY: locks that main emits ynz_rt_run_entrypoint when entrypoint contains wait, and that
     // ynz_rt_init is the FIRST non-allocation instruction in main's entry block.
     // If ynz_rt_init placement regresses, programs using wait will panic at runtime
-    // with "ynz_rt_init not called before sync state-machine call".
+    // with "ynz_rt_init not called before ynz_rt_run_entrypoint call".
     let source = r#"
 function entrypoint() -> nothing {
   wait sleepAsync(1)
@@ -667,8 +667,8 @@ function entrypoint() -> nothing {
 "#;
     let ir = run_m2_sm_codegen("v03m2_main_with_wait.ynz", source);
     assert!(
-        ir.contains("ynz_rt_call_state_machine_sync"),
-        "main-with-wait IR must emit sync bridge"
+        ir.contains("ynz_rt_run_entrypoint"),
+        "main-with-wait IR must emit program-entry driver (ynz_rt_run_entrypoint)"
     );
     assert!(
         ir.contains("ynz_rt_init"),
@@ -743,10 +743,10 @@ fn main_rt_init_is_first_instruction() {
     // WHY: AC #5 — P0 Contract #12 deferred to this test. ynz_rt_init MUST be the
     // first non-alloca instruction in main's entry block whenever any function in the
     // compilation unit contains `wait` or `background`. Without this ordering guarantee,
-    // ynz_rt_call_state_machine_sync panics with "ynz_rt_init not called".
+    // ynz_rt_run_entrypoint panics with "ynz_rt_init not called".
     //
     // This test asserts: the IR of main contains `call void @ynz_rt_init()` and it
-    // appears before any `call void @ynz_rt_call_state_machine_sync` or
+    // appears before any `call void @ynz_rt_run_entrypoint` or
     // `call void @ynz_rt_spawn` instruction in main's text.
     let source = r#"
 function entrypoint() -> nothing {
@@ -757,7 +757,7 @@ function entrypoint() -> nothing {
 
     // Find the main function definition and check instruction order.
     // Scan line by line: once we enter the `main` function, ynz_rt_init must appear
-    // before ynz_rt_call_state_machine_sync.
+    // before ynz_rt_run_entrypoint.
     let mut in_main = false;
     let mut rt_init_seen = false;
     let mut sm_sync_before_init = false;
@@ -770,7 +770,7 @@ function entrypoint() -> nothing {
             if line.contains("@ynz_rt_init") {
                 rt_init_seen = true;
             }
-            if line.contains("@ynz_rt_call_state_machine_sync") && !rt_init_seen {
+            if line.contains("@ynz_rt_run_entrypoint") && !rt_init_seen {
                 sm_sync_before_init = true;
             }
             // Exit main function definition at closing brace.
@@ -787,7 +787,7 @@ function entrypoint() -> nothing {
     );
     assert!(
         !sm_sync_before_init,
-        "ynz_rt_call_state_machine_sync must not appear before ynz_rt_init in main"
+        "ynz_rt_run_entrypoint must not appear before ynz_rt_init in main"
     );
     insta::assert_snapshot!("v03_m2_main_rt_init_first", ir);
 }
