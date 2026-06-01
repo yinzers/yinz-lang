@@ -48,6 +48,22 @@ fn ynz_run_stdout(source_path: &Path) -> (String, String, i32) {
     (stdout, stderr, code)
 }
 
+/// Assert a stderr snapshot with machine-independent fixture paths.
+///
+/// The compiler echoes the absolute path of the source file into its diagnostics
+/// (e.g. `╭─[ /abs/path/crates/ynz-driver/tests/fixtures/broken_main.ynz:1:1 ]`). That
+/// absolute prefix differs by checkout location (local `/workspaces/...` vs CI
+/// `/home/runner/work/...`), so a raw snapshot only matches on the machine that recorded
+/// it. This filter rewrites any `.../tests/fixtures/` prefix to `[FIXTURES]/` so the
+/// pinned error text is portable across every host.
+fn assert_stderr_snapshot(name: &str, stderr: &str) {
+    let mut settings = insta::Settings::clone_current();
+    settings.add_filter(r"\S*/tests/fixtures/", "[FIXTURES]/");
+    settings.bind(|| {
+        insta::assert_snapshot!(name, stderr);
+    });
+}
+
 #[test]
 fn hello_ynz_prints_hello_yinz_and_exits_zero() {
     // WHY: this is the M1 success criterion. Every other test is secondary.
@@ -106,7 +122,7 @@ fn broken_main_exits_nonzero_with_diagnostic() {
         stderr.contains("entrypoint"),
         "diagnostic must mention `entrypoint`; got:\n{stderr}"
     );
-    insta::assert_snapshot!("broken_main_stderr", stderr);
+    assert_stderr_snapshot("broken_main_stderr", &stderr);
 }
 
 #[test]
@@ -120,7 +136,7 @@ fn empty_source_exits_nonzero_with_missing_entrypoint_diagnostic() {
         stderr.contains("entrypoint"),
         "empty source diagnostic must mention `entrypoint`; got:\n{stderr}"
     );
-    insta::assert_snapshot!("empty_stderr", stderr);
+    assert_stderr_snapshot("empty_stderr", &stderr);
 }
 
 #[test]
@@ -193,7 +209,7 @@ fn m2_mixed_int_number_produces_diagnostic() {
         stderr.contains("toNumber"),
         "diagnostic must suggest `.toNumber()`, got:\n{stderr}"
     );
-    insta::assert_snapshot!("m2_mixed_int_number_stderr", stderr);
+    assert_stderr_snapshot("m2_mixed_int_number_stderr", &stderr);
 }
 
 #[test]
@@ -207,7 +223,7 @@ fn m2_const_reassignment_produces_diagnostic() {
         stderr.contains("const"),
         "diagnostic must mention `const`, got:\n{stderr}"
     );
-    insta::assert_snapshot!("m2_const_reassign_stderr", stderr);
+    assert_stderr_snapshot("m2_const_reassign_stderr", &stderr);
 }
 
 #[test]
@@ -235,7 +251,7 @@ fn m2_compound_assign_produces_diagnostic() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m2_compound_assign.ynz"));
     assert_ne!(code, 0, "compound assignment must exit non-zero");
     assert!(stdout.is_empty());
-    insta::assert_snapshot!("m2_compound_assign_stderr", stderr);
+    assert_stderr_snapshot("m2_compound_assign_stderr", &stderr);
 }
 
 #[test]

@@ -755,6 +755,7 @@ dependencies = [
  "once_cell",
  "pest",
  "pest_derive",
+ "regex",
  "serde",
  "similar",
  "tempfile",

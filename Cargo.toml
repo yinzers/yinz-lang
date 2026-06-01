@@ -28,7 +28,7 @@ salsa = "0.26.2"
 inkwell = { version = "0.9.0", features = ["llvm18-1-prefer-dynamic"] }
 ariadne = "0.6.0"
 unicode-segmentation = "1.13.2"
-insta = { version = "1.47.2", features = ["redactions"] }
+insta = { version = "1.47.2", features = ["redactions", "filters"] }
 clap = { version = "4.6.1", features = ["derive"] }
 
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }

@@ -473,7 +473,10 @@ static SIPHASH_KEY: OnceLock<[u8; 16]> = OnceLock::new();
 pub extern "C" fn ynz_siphash_init() {
     SIPHASH_KEY.get_or_init(|| {
         let mut key = [0u8; 16];
-        #[cfg(target_os = "linux")]
+        // Linux, macOS, and the BSDs all expose /dev/urandom. Using `unix` (not just
+        // `linux`) means macOS gets a real entropy-seeded key instead of all-zeros —
+        // and keeps `mut key` used on every CI target, so clippy stays clean cross-platform.
+        #[cfg(unix)]
         {
             use std::fs::File;
             use std::io::Read;

@@ -3,7 +3,7 @@ source: crates/ynz-driver/tests/integration.rs
 expression: stderr
 ---
 Error: `+=` is not supported in Yinz.
-   ╭─[ /workspaces/ynz/crates/ynz-driver/tests/fixtures/m2_compound_assign.ynz:3:5 ]
+   ╭─[ [FIXTURES]/m2_compound_assign.ynz:3:5 ]
    │
  3 │   x += 1
    │     ─┬  
