@@ -47,9 +47,7 @@ pub fn print_watching() {
 
 /// Print a file-removed warning.
 pub fn print_file_removed(path: &str) {
-    println!(
-        "ynz watch: {path} vanished; watch continues, will re-pick-up on re-creation"
-    );
+    println!("ynz watch: {path} vanished; watch continues, will re-pick-up on re-creation");
     let _ = io::stdout().flush();
 }
 

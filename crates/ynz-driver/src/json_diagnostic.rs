@@ -128,8 +128,9 @@ pub fn emit_json(bucket: &DiagnosticBucket) -> i32 {
 
         // serde_json::to_string never emits raw newlines inside strings;
         // embedded \n in WHAT/WHY are JSON-escaped to \\n automatically.
-        let line =
-            serde_json::to_string(&event).unwrap_or_else(|_| r#"{"type":"diagnostic","error":"serialization failed"}"#.to_string());
+        let line = serde_json::to_string(&event).unwrap_or_else(|_| {
+            r#"{"type":"diagnostic","error":"serialization failed"}"#.to_string()
+        });
         println!("{line}");
     }
 
@@ -193,8 +194,15 @@ mod tests {
         // Tested indirectly here; integration test verifies the NDJSON content.
         let bucket = DiagnosticBucket::new();
         let exit_code = {
-            let errors: u32 = bucket.iter().filter(|d| d.severity == Severity::Error).count() as u32;
-            if errors > 0 { 1i32 } else { 0i32 }
+            let errors: u32 = bucket
+                .iter()
+                .filter(|d| d.severity == Severity::Error)
+                .count() as u32;
+            if errors > 0 {
+                1i32
+            } else {
+                0i32
+            }
         };
         assert_eq!(exit_code, 0);
     }
@@ -231,13 +239,30 @@ mod tests {
             severity: "error",
             kind: None,
             code: None,
-            span: JsonSpan { file: "/tmp/test.ynz", start_byte: 0, end_byte: 5 },
-            message: format!("{}\n\nWHAT INSTEAD: {}\n\nWHY: {}", d.what, d.what_instead, d.why),
-            data: JsonDiagnosticData { what: &d.what, what_instead: &d.what_instead, why: &d.why },
+            span: JsonSpan {
+                file: "/tmp/test.ynz",
+                start_byte: 0,
+                end_byte: 5,
+            },
+            message: format!(
+                "{}\n\nWHAT INSTEAD: {}\n\nWHY: {}",
+                d.what, d.what_instead, d.why
+            ),
+            data: JsonDiagnosticData {
+                what: &d.what,
+                what_instead: &d.what_instead,
+                why: &d.why,
+            },
         };
         let json = serde_json::to_string(&event).unwrap();
-        assert!(!json.contains(r#""kind":null"#), "kind must be omitted, not null");
-        assert!(!json.contains(r#""code":null"#), "code must be omitted, not null");
+        assert!(
+            !json.contains(r#""kind":null"#),
+            "kind must be omitted, not null"
+        );
+        assert!(
+            !json.contains(r#""code":null"#),
+            "code must be omitted, not null"
+        );
     }
 
     #[test]
@@ -257,9 +282,20 @@ mod tests {
             severity: "error",
             kind: None,
             code: None,
-            span: JsonSpan { file: "/tmp/test.ynz", start_byte: 0, end_byte: 5 },
-            message: format!("{}\n\nWHAT INSTEAD: {}\n\nWHY: {}", d.what, d.what_instead, d.why),
-            data: JsonDiagnosticData { what: &d.what, what_instead: &d.what_instead, why: &d.why },
+            span: JsonSpan {
+                file: "/tmp/test.ynz",
+                start_byte: 0,
+                end_byte: 5,
+            },
+            message: format!(
+                "{}\n\nWHAT INSTEAD: {}\n\nWHY: {}",
+                d.what, d.what_instead, d.why
+            ),
+            data: JsonDiagnosticData {
+                what: &d.what,
+                what_instead: &d.what_instead,
+                why: &d.why,
+            },
         };
         let json = serde_json::to_string(&event).unwrap();
         // Output must be a single line — no raw newlines.
@@ -269,6 +305,9 @@ mod tests {
             "serialized JSON must be exactly one line; embedded newlines must be escaped"
         );
         // The escaped form must be present.
-        assert!(json.contains(r#"\n"#), "embedded newline must appear as \\n");
+        assert!(
+            json.contains(r#"\n"#),
+            "embedded newline must appear as \\n"
+        );
     }
 }

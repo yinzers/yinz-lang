@@ -109,7 +109,10 @@ struct FnFetchEvent {
 impl FnFetchEvent {
     fn new() -> Box<Self> {
         FRAME_ALLOC_COUNT.fetch_add(1, Ordering::SeqCst);
-        Box::new(Self { resume_point: 0, sleep_handle: None })
+        Box::new(Self {
+            resume_point: 0,
+            sleep_handle: None,
+        })
     }
 }
 
@@ -127,7 +130,8 @@ impl Future for FnFetchEvent {
             match self.resume_point {
                 0 => {
                     // State 0: create sleep handle, transition to state 1.
-                    self.sleep_handle = Some(Box::pin(tokio::time::sleep(Duration::from_millis(100))));
+                    self.sleep_handle =
+                        Some(Box::pin(tokio::time::sleep(Duration::from_millis(100))));
                     self.resume_point = 1;
                 }
                 1 => {
@@ -218,7 +222,10 @@ struct FnChain {
 impl FnChain {
     fn new() -> Box<Self> {
         FRAME_ALLOC_COUNT.fetch_add(1, Ordering::SeqCst);
-        Box::new(Self { resume_point: 0, sleep_handle: None })
+        Box::new(Self {
+            resume_point: 0,
+            sleep_handle: None,
+        })
     }
 }
 
@@ -235,7 +242,8 @@ impl Future for FnChain {
         loop {
             match self.resume_point {
                 0 => {
-                    self.sleep_handle = Some(Box::pin(tokio::time::sleep(Duration::from_millis(50))));
+                    self.sleep_handle =
+                        Some(Box::pin(tokio::time::sleep(Duration::from_millis(50))));
                     self.resume_point = 1;
                 }
                 1 => {
@@ -255,7 +263,8 @@ impl Future for FnChain {
                     }
                 }
                 2 => {
-                    self.sleep_handle = Some(Box::pin(tokio::time::sleep(Duration::from_millis(50))));
+                    self.sleep_handle =
+                        Some(Box::pin(tokio::time::sleep(Duration::from_millis(50))));
                     self.resume_point = 3;
                 }
                 3 => {
@@ -333,7 +342,11 @@ struct FnMaybeWait {
 impl FnMaybeWait {
     fn new(b: bool) -> Box<Self> {
         FRAME_ALLOC_COUNT.fetch_add(1, Ordering::SeqCst);
-        Box::new(Self { resume_point: 0, b, sleep_handle: None })
+        Box::new(Self {
+            resume_point: 0,
+            b,
+            sleep_handle: None,
+        })
     }
 }
 
@@ -352,7 +365,8 @@ impl Future for FnMaybeWait {
                 0 => {
                     if self.b {
                         // Branch: create sleep and suspend.
-                        self.sleep_handle = Some(Box::pin(tokio::time::sleep(Duration::from_millis(100))));
+                        self.sleep_handle =
+                            Some(Box::pin(tokio::time::sleep(Duration::from_millis(100))));
                         self.resume_point = 1;
                     } else {
                         // No-branch: skip directly to done.
@@ -481,7 +495,10 @@ unsafe fn ynz_rt_run_entrypoint_spike(
     resume_fn: unsafe extern "C" fn(*mut u8, *mut u8) -> i32,
     frame_ptr: *mut u8,
 ) {
-    let future = StateFnFuture { resume_fn, frame_ptr };
+    let future = StateFnFuture {
+        resume_fn,
+        frame_ptr,
+    };
 
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => {
@@ -516,7 +533,11 @@ struct SyncBridgeTarget {
 impl SyncBridgeTarget {
     fn new(sleep_ms: u64) -> Box<Self> {
         FRAME_ALLOC_COUNT.fetch_add(1, Ordering::SeqCst);
-        Box::new(Self { resume_point: 0, sleep_handle: None, sleep_ms })
+        Box::new(Self {
+            resume_point: 0,
+            sleep_handle: None,
+            sleep_ms,
+        })
     }
 }
 
@@ -534,7 +555,8 @@ impl Future for SyncBridgeTarget {
             match self.resume_point {
                 0 => {
                     let ms = self.sleep_ms;
-                    self.sleep_handle = Some(Box::pin(tokio::time::sleep(Duration::from_millis(ms))));
+                    self.sleep_handle =
+                        Some(Box::pin(tokio::time::sleep(Duration::from_millis(ms))));
                     self.resume_point = 1;
                 }
                 1 => {
@@ -739,7 +761,10 @@ fn contract_4d_state_machine_inside_state_machine_sync_bridge() {
 
         let elapsed = start.elapsed();
         eprintln!("contract_4d nested SM sync bridge: elapsed={elapsed:?} result={result}");
-        assert_eq!(result, 42, "inner state machine did not return expected value");
+        assert_eq!(
+            result, 42,
+            "inner state machine did not return expected value"
+        );
         assert!(
             elapsed >= Duration::from_millis(45),
             "4d completed suspiciously fast ({elapsed:?}); inner sleep may not have fired"
@@ -802,7 +827,8 @@ impl Future for FnFetchOrFail {
             match self.resume_point {
                 0 => {
                     // Simulate __testFallibleAsync: 10ms sleep then succeed/fail.
-                    self.sleep_handle = Some(Box::pin(tokio::time::sleep(Duration::from_millis(10))));
+                    self.sleep_handle =
+                        Some(Box::pin(tokio::time::sleep(Duration::from_millis(10))));
                     self.resume_point = 1;
                 }
                 1 => {
@@ -878,16 +904,30 @@ fn contract_5_errors_cascade_through_sm_boundary() {
             Ok(val) => panic!("failure path returned success: {val}"),
             Err(frame) => {
                 // Validate struct bytes survived across the suspension boundary.
-                assert_eq!(frame.loc.line, 42, "SourceLoc.line mismatch: {}", frame.loc.line);
-                assert_eq!(frame.loc.col, 7, "SourceLoc.col mismatch: {}", frame.loc.col);
+                assert_eq!(
+                    frame.loc.line, 42,
+                    "SourceLoc.line mismatch: {}",
+                    frame.loc.line
+                );
+                assert_eq!(
+                    frame.loc.col, 7,
+                    "SourceLoc.col mismatch: {}",
+                    frame.loc.col
+                );
                 // SAFETY: file pointer points to a static string with null terminator.
                 let file_str = unsafe {
                     std::ffi::CStr::from_ptr(frame.loc.file as *const i8)
                         .to_str()
                         .expect("SourceLoc.file not valid UTF-8")
                 };
-                assert_eq!(file_str, "__spike_fixture__", "SourceLoc.file mismatch: {file_str}");
-                eprintln!("contract_5 failure path: file={file_str} line={} col={} ✓", frame.loc.line, frame.loc.col);
+                assert_eq!(
+                    file_str, "__spike_fixture__",
+                    "SourceLoc.file mismatch: {file_str}"
+                );
+                eprintln!(
+                    "contract_5 failure path: file={file_str} line={} col={} ✓",
+                    frame.loc.line, frame.loc.col
+                );
             }
         }
     });
@@ -954,7 +994,11 @@ struct FnPulse {
 impl FnPulse {
     fn new() -> Box<Self> {
         FRAME_ALLOC_COUNT.fetch_add(1, Ordering::SeqCst);
-        Box::new(Self { resume_point: 0, i: 0, sleep_handle: None })
+        Box::new(Self {
+            resume_point: 0,
+            i: 0,
+            sleep_handle: None,
+        })
     }
 }
 
@@ -976,7 +1020,8 @@ impl Future for FnPulse {
                         self.resume_point = 2; // done
                     } else {
                         // Create sleep for this iteration.
-                        self.sleep_handle = Some(Box::pin(tokio::time::sleep(Duration::from_millis(10))));
+                        self.sleep_handle =
+                            Some(Box::pin(tokio::time::sleep(Duration::from_millis(10))));
                         self.resume_point = 1;
                     }
                 }
@@ -1055,7 +1100,11 @@ struct FetchBoolFuture {
 
 impl FetchBoolFuture {
     fn new(return_val: bool) -> Self {
-        Self { resume_point: 0, sleep_handle: None, return_val }
+        Self {
+            resume_point: 0,
+            sleep_handle: None,
+            return_val,
+        }
     }
 }
 
@@ -1066,7 +1115,8 @@ impl Future for FetchBoolFuture {
         loop {
             match self.resume_point {
                 0 => {
-                    self.sleep_handle = Some(Box::pin(tokio::time::sleep(Duration::from_millis(5))));
+                    self.sleep_handle =
+                        Some(Box::pin(tokio::time::sleep(Duration::from_millis(5))));
                     self.resume_point = 1;
                 }
                 1 => {
@@ -1156,11 +1206,17 @@ fn contract_8_wait_in_if_condition() {
     with_runtime(|rt| {
         // fetchBool returns true — branch should take the true path.
         let result = rt.block_on(FnBranchWrapper(FnBranch::new(true)));
-        assert!(result, "branch with true: expected true post-suspension value");
+        assert!(
+            result,
+            "branch with true: expected true post-suspension value"
+        );
 
         // fetchBool returns false — branch should take the false path.
         let result = rt.block_on(FnBranchWrapper(FnBranch::new(false)));
-        assert!(!result, "branch with false: expected false post-suspension value");
+        assert!(
+            !result,
+            "branch with false: expected false post-suspension value"
+        );
 
         eprintln!("contract_8: post-suspension branching correct ✓");
     });
@@ -1199,7 +1255,12 @@ impl SpikeFatString {
         if bytes.len() <= 15 {
             let mut inline = [0u8; 15];
             inline[..bytes.len()].copy_from_slice(bytes);
-            Self { inline, inline_len: bytes.len() as u8, heap_data: None, is_heap: 0 }
+            Self {
+                inline,
+                inline_len: bytes.len() as u8,
+                heap_data: None,
+                is_heap: 0,
+            }
         } else {
             Self {
                 inline: [0u8; 15],
@@ -1242,7 +1303,11 @@ struct FnChat {
 impl FnChat {
     fn new(greeting: SpikeFatString) -> Box<Self> {
         FRAME_ALLOC_COUNT.fetch_add(1, Ordering::SeqCst);
-        Box::new(Self { resume_point: 0, greeting: Some(greeting), sleep_handle: None })
+        Box::new(Self {
+            resume_point: 0,
+            greeting: Some(greeting),
+            sleep_handle: None,
+        })
     }
 }
 
@@ -1264,7 +1329,8 @@ impl Future for FnChat {
                 0 => {
                     // Use greeting before wait (simulating print(greeting)).
                     // String data must still be intact after the wait.
-                    self.sleep_handle = Some(Box::pin(tokio::time::sleep(Duration::from_millis(50))));
+                    self.sleep_handle =
+                        Some(Box::pin(tokio::time::sleep(Duration::from_millis(50))));
                     self.resume_point = 1;
                 }
                 1 => {
@@ -1308,7 +1374,10 @@ fn contract_9_heap_string_survives_suspension() {
     // Frame size sanity check.
     let frame_size = std::mem::size_of::<FnChat>();
     eprintln!("contract_9: FnChat frame size = {frame_size} bytes");
-    assert!(frame_size <= 256, "FnChat frame too large: {frame_size} bytes");
+    assert!(
+        frame_size <= 256,
+        "FnChat frame too large: {frame_size} bytes"
+    );
 
     with_runtime(|rt| {
         // SSO path (short string ≤15 bytes).
@@ -1319,8 +1388,14 @@ fn contract_9_heap_string_survives_suspension() {
 
         let (len, bytes, is_heap) = rt.block_on(FnChatWrapper(FnChat::new(sso_greeting)));
         assert_eq!(len, expected_len, "SSO: length changed across suspension");
-        assert_eq!(bytes, expected_bytes, "SSO: bytes changed across suspension");
-        assert_eq!(is_heap, expected_heap, "SSO: discriminant changed across suspension");
+        assert_eq!(
+            bytes, expected_bytes,
+            "SSO: bytes changed across suspension"
+        );
+        assert_eq!(
+            is_heap, expected_heap,
+            "SSO: discriminant changed across suspension"
+        );
         eprintln!("contract_9 SSO path: len={len} bytes={bytes:?} is_heap={is_heap} ✓");
 
         // Heap path (long string >15 bytes).
@@ -1331,8 +1406,14 @@ fn contract_9_heap_string_survives_suspension() {
 
         let (len, bytes, is_heap) = rt.block_on(FnChatWrapper(FnChat::new(heap_greeting)));
         assert_eq!(len, expected_len, "heap: length changed across suspension");
-        assert_eq!(bytes, expected_bytes, "heap: bytes changed across suspension");
-        assert_eq!(is_heap, expected_heap, "heap: discriminant changed across suspension");
+        assert_eq!(
+            bytes, expected_bytes,
+            "heap: bytes changed across suspension"
+        );
+        assert_eq!(
+            is_heap, expected_heap,
+            "heap: discriminant changed across suspension"
+        );
         eprintln!("contract_9 heap path: len={len} is_heap={is_heap} ✓");
     });
 }
@@ -1367,7 +1448,14 @@ struct FibFuture {
 impl FibFuture {
     fn new(n: i64) -> Self {
         FRAME_ALLOC_COUNT.fetch_add(1, Ordering::SeqCst);
-        Self { resume_point: 0, n, a: 0, b: 0, sub_future_a: None, sub_future_b: None }
+        Self {
+            resume_point: 0,
+            n,
+            a: 0,
+            b: 0,
+            sub_future_a: None,
+            sub_future_b: None,
+        }
     }
 }
 
@@ -1442,10 +1530,16 @@ fn contract_10_recursive_state_machine() {
     });
 
     let net = net_frame_count();
-    assert_eq!(net, 0, "recursive SM: frame leak detected: net alloc-free = {net}");
+    assert_eq!(
+        net, 0,
+        "recursive SM: frame leak detected: net alloc-free = {net}"
+    );
     // fib(8) makes exactly 67 calls (known from the Fibonacci call tree).
     let allocs = FRAME_ALLOC_COUNT.load(Ordering::SeqCst) as usize;
-    assert_eq!(allocs, 67, "fib(8): expected 67 frame allocations, got {allocs}");
+    assert_eq!(
+        allocs, 67,
+        "fib(8): expected 67 frame allocations, got {allocs}"
+    );
 }
 
 // ── Contract #11: waker propagation correctness ───────────────────────────────
@@ -1468,7 +1562,11 @@ struct WakerProbeTask {
 impl WakerProbeTask {
     fn new() -> Box<Self> {
         FRAME_ALLOC_COUNT.fetch_add(1, Ordering::SeqCst);
-        Box::new(Self { resume_point: 0, sleep_handle: None, poll_count: 0 })
+        Box::new(Self {
+            resume_point: 0,
+            sleep_handle: None,
+            poll_count: 0,
+        })
     }
 }
 
@@ -1486,7 +1584,8 @@ impl Future for WakerProbeTask {
         loop {
             match self.resume_point {
                 0 => {
-                    self.sleep_handle = Some(Box::pin(tokio::time::sleep(Duration::from_millis(100))));
+                    self.sleep_handle =
+                        Some(Box::pin(tokio::time::sleep(Duration::from_millis(100))));
                     self.resume_point = 1;
                 }
                 1 => {
@@ -1697,7 +1796,10 @@ fn quality_gate_panic_during_poll_caught() {
         MAIN_REACHED_END.store(true, Ordering::SeqCst);
     });
 
-    assert!(MAIN_REACHED_END.load(Ordering::SeqCst), "main did not reach end after poll panic");
+    assert!(
+        MAIN_REACHED_END.load(Ordering::SeqCst),
+        "main did not reach end after poll panic"
+    );
 }
 
 // ── Frame size measurements ───────────────────────────────────────────────────
@@ -1708,17 +1810,20 @@ fn quality_gate_panic_during_poll_caught() {
 #[test]
 fn frame_size_measurement_all_fixtures() {
     let sizes = [
-        ("FnFetchEvent",   std::mem::size_of::<FnFetchEvent>()),
-        ("FnChain",        std::mem::size_of::<FnChain>()),
-        ("FnMaybeWait",    std::mem::size_of::<FnMaybeWait>()),
+        ("FnFetchEvent", std::mem::size_of::<FnFetchEvent>()),
+        ("FnChain", std::mem::size_of::<FnChain>()),
+        ("FnMaybeWait", std::mem::size_of::<FnMaybeWait>()),
         ("SyncBridgeTarget", std::mem::size_of::<SyncBridgeTarget>()),
-        ("SyncBridgeTarget (4d outer)", std::mem::size_of::<SyncBridgeTarget>()),
-        ("FnFetchOrFail",  std::mem::size_of::<FnFetchOrFail>()),
-        ("FnPulse",        std::mem::size_of::<FnPulse>()),
-        ("FnBranch",       std::mem::size_of::<FnBranch>()),
-        ("FnChat",         std::mem::size_of::<FnChat>()),
+        (
+            "SyncBridgeTarget (4d outer)",
+            std::mem::size_of::<SyncBridgeTarget>(),
+        ),
+        ("FnFetchOrFail", std::mem::size_of::<FnFetchOrFail>()),
+        ("FnPulse", std::mem::size_of::<FnPulse>()),
+        ("FnBranch", std::mem::size_of::<FnBranch>()),
+        ("FnChat", std::mem::size_of::<FnChat>()),
         ("WakerProbeTask", std::mem::size_of::<WakerProbeTask>()),
-        ("FibFuture",      std::mem::size_of::<FibFuture>()),
+        ("FibFuture", std::mem::size_of::<FibFuture>()),
     ];
 
     eprintln!("\n=== Frame Size Measurements ===");
@@ -1785,7 +1890,11 @@ fn sync_bridge_overhead_measurement() {
              bridge:   {bridge_per:?} (via sync bridge)\n  \
              overhead: {overhead_us}µs (threshold: {threshold_us}µs = 1% of 100ms)\n  \
              result: {}\n===\n",
-            if overhead_us <= threshold_us { "✓ within budget" } else { "✗ EXCEEDS budget" }
+            if overhead_us <= threshold_us {
+                "✓ within budget"
+            } else {
+                "✗ EXCEEDS budget"
+            }
         );
 
         assert!(

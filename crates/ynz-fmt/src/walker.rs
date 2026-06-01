@@ -11,9 +11,9 @@
 
 use ynz_ast::nodes::{
     BinOpKind, Block, ConstDecl, ContractSig, Expr, FieldDecl, ForDestructureBinding, FunctionDecl,
-    GenericParam, ImportDecl, ImportKind, Item, MatchPattern, MatchPatternKind, Module, OptionsDecl,
-    OwnershipModifier, Param, PostfixOpKind, ReExport, ShapeDecl, Stmt, StringPart, Type, TypePath,
-    UnaryOpKind,
+    GenericParam, ImportDecl, ImportKind, Item, MatchPattern, MatchPatternKind, Module,
+    OptionsDecl, OwnershipModifier, Param, PostfixOpKind, ReExport, ShapeDecl, Stmt, StringPart,
+    Type, TypePath, UnaryOpKind,
 };
 use ynz_diagnostics::SourceSpan;
 
@@ -496,10 +496,16 @@ fn emit_empty_array_with_comments(
     }
     let mut out = String::from("[\n");
     for c in &floating {
-        out.push_str(&format!("{elem_indent}{}\n", normalize_comment_text(&c.text)));
+        out.push_str(&format!(
+            "{elem_indent}{}\n",
+            normalize_comment_text(&c.text)
+        ));
     }
     for c in &leading {
-        out.push_str(&format!("{elem_indent}{}\n", normalize_comment_text(&c.text)));
+        out.push_str(&format!(
+            "{elem_indent}{}\n",
+            normalize_comment_text(&c.text)
+        ));
     }
     out.push_str(&format!("{close_indent}]"));
     out
@@ -1100,11 +1106,14 @@ fn emit_block_with_comments(
             // Let/const with an empty array whose span covers multiple lines (has
             // commented-out elements): advance past the array's closing `]` so those
             // comments are not re-claimed as leading comments for the next statement.
-            Stmt::Let { value: Expr::ArrayLit { elements, span: arr_span }, .. }
-                if elements.is_empty() && arr_span.end > arr_span.start + 2 =>
-            {
-                arr_span.end
-            }
+            Stmt::Let {
+                value:
+                    Expr::ArrayLit {
+                        elements,
+                        span: arr_span,
+                    },
+                ..
+            } if elements.is_empty() && arr_span.end > arr_span.start + 2 => arr_span.end,
             _ => ctx.source[stmt_start..]
                 .find('\n')
                 .map(|i| stmt_start + i)

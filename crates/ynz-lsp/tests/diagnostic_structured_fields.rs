@@ -32,7 +32,10 @@ fn banned_keyword_diagnostic_has_code_field() {
     client.initialize();
     let src = "class Foo { }\n";
     let diags = open_and_get_diagnostics(&client, "file:///test_code.ynz", src);
-    assert!(!diags.is_empty(), "class Foo must produce at least one diagnostic");
+    assert!(
+        !diags.is_empty(),
+        "class Foo must produce at least one diagnostic"
+    );
     let has_code = diags.iter().any(|d| {
         d.get("code")
             .map(|c| c.as_str().unwrap_or("") == "BannedKeyword")
@@ -54,7 +57,10 @@ fn banned_keyword_diagnostic_has_data_field() {
     client.initialize();
     let src = "class Foo { }\n";
     let diags = open_and_get_diagnostics(&client, "file:///test_data.ynz", src);
-    assert!(!diags.is_empty(), "class Foo must produce at least one diagnostic");
+    assert!(
+        !diags.is_empty(),
+        "class Foo must produce at least one diagnostic"
+    );
     let has_data = diags.iter().any(|d| {
         d.get("data")
             .and_then(|data| data.get("what_instead"))

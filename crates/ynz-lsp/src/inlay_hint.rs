@@ -31,21 +31,16 @@
 //! position-only filtering, matching rust-analyzer's behaviour.
 
 use lsp_types::{
-    InlayHint, InlayHintKind, InlayHintLabel, MarkupContent, MarkupKind, Position, Range,
-    TextEdit,
+    InlayHint, InlayHintKind, InlayHintLabel, MarkupContent, MarkupKind, Position, Range, TextEdit,
 };
 use ynz_diagnostics::{Severity, SourceSpan};
+use ynz_typeck::queries::check_query;
 use ynz_typeck::{
     array_to_fixed_promotion_hints, copy_point_hints, let_to_const_promotion_hints,
     ownership_call_site_hints, variable_type_hints,
 };
-use ynz_typeck::queries::check_query;
 
-use crate::{
-    capabilities::PositionEncoding,
-    position::LineTable,
-    state::ServerState,
-};
+use crate::{capabilities::PositionEncoding, position::LineTable, state::ServerState};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
@@ -73,12 +68,7 @@ fn tooltip(domain: &str) -> Option<lsp_types::InlayHintTooltip> {
     })
 }
 
-fn make_hint(
-    pos: Position,
-    label: String,
-    kind: InlayHintKind,
-    domain: &str,
-) -> InlayHint {
+fn make_hint(pos: Position, label: String, kind: InlayHintKind, domain: &str) -> InlayHint {
     make_hint_with_edit(pos, label, kind, domain, None)
 }
 
@@ -111,7 +101,10 @@ fn type_insertion_edit(
 ) -> TextEdit {
     let pos = table.byte_offset_to_position(text, insert_at.min(text.len()), encoding);
     TextEdit {
-        range: lsp_types::Range { start: pos, end: pos },
+        range: lsp_types::Range {
+            start: pos,
+            end: pos,
+        },
         new_text: format!(": {type_text}"),
     }
 }
@@ -195,7 +188,9 @@ pub fn inlay_hint_response(
     // ── Domain 1: variable_type (Addition) ───────────────────────────────────
 
     for h in variable_type_hints(&state.db, sf) {
-        if !in_viewport(h.position, vp_start, vp_end) { continue; }
+        if !in_viewport(h.position, vp_start, vp_end) {
+            continue;
+        }
         if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
             let edit = type_insertion_edit(text, h.position, &h.type_text, table, state.encoding);
             hints.push(make_hint_with_edit(
@@ -211,7 +206,9 @@ pub fn inlay_hint_response(
     // ── Domain 2: ownership_call_site (Informational) ────────────────────────
 
     for h in ownership_call_site_hints(&state.db, sf) {
-        if !in_viewport(h.position, vp_start, vp_end) { continue; }
+        if !in_viewport(h.position, vp_start, vp_end) {
+            continue;
+        }
         if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
             hints.push(make_hint(
                 pos,
@@ -225,7 +222,9 @@ pub fn inlay_hint_response(
     // ── Domain 3: copy_points (Informational) ────────────────────────────────
 
     for h in copy_point_hints(&state.db, sf) {
-        if !in_viewport(h.position, vp_start, vp_end) { continue; }
+        if !in_viewport(h.position, vp_start, vp_end) {
+            continue;
+        }
         if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
             hints.push(make_hint(
                 pos,
@@ -239,14 +238,16 @@ pub fn inlay_hint_response(
     // ── Domain 4: array_to_fixed_promotion (Replacement) ─────────────────────
 
     for h in array_to_fixed_promotion_hints(&state.db, sf) {
-        if !in_viewport(h.position, vp_start, vp_end) { continue; }
+        if !in_viewport(h.position, vp_start, vp_end) {
+            continue;
+        }
         if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
             // Build click-to-make-explicit edit when the `array` keyword span is
             // available.  `type_keyword_span` is None only when the type annotation
             // can't be located (graceful no-edit path — no panic, no missing hint).
-            let text_edits = h.type_keyword_span.map(|span| {
-                vec![array_to_fixed_edit(text, span, table, state.encoding)]
-            });
+            let text_edits = h
+                .type_keyword_span
+                .map(|span| vec![array_to_fixed_edit(text, span, table, state.encoding)]);
             hints.push(make_hint_with_edit(
                 pos,
                 h.label.clone(),
@@ -260,7 +261,9 @@ pub fn inlay_hint_response(
     // ── Domain 5: let_to_const_promotion (Replacement) ───────────────────────
 
     for h in let_to_const_promotion_hints(&state.db, sf) {
-        if !in_viewport(h.position, vp_start, vp_end) { continue; }
+        if !in_viewport(h.position, vp_start, vp_end) {
+            continue;
+        }
         if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
             let edit = let_to_const_edit(text, h.position, table, state.encoding);
             hints.push(make_hint_with_edit(

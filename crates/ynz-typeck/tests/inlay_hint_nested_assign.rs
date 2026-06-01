@@ -160,7 +160,9 @@ function entrypoint() -> nothing {
     let hints = let_to_const_promotion_hints(&db, sf);
     let player_const_hints: Vec<_> = hints
         .iter()
-        .filter(|h| matches!(h.kind, PromotionKind::LetToConst) && h.position == player_let_position)
+        .filter(|h| {
+            matches!(h.kind, PromotionKind::LetToConst) && h.position == player_let_position
+        })
         .collect();
     assert!(
         player_const_hints.is_empty(),

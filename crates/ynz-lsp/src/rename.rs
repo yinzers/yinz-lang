@@ -196,9 +196,8 @@ pub fn rename_response(
 
     // Collect all rename locations.  Any validation failure is returned as an
     // LSP ResponseError here — no partial WorkspaceEdit is ever built.
-    let locations =
-        ynz_typeck::rename_locations(&state.db, sf, byte_offset, new_name.to_string())
-            .map_err(|e| rename_error_to_lsp(&e))?;
+    let locations = ynz_typeck::rename_locations(&state.db, sf, byte_offset, new_name.to_string())
+        .map_err(|e| rename_error_to_lsp(&e))?;
 
     if locations.is_empty() {
         // No references found — return an empty (but valid) WorkspaceEdit.

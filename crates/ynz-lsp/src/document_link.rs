@@ -10,11 +10,7 @@
 use lsp_types::{DocumentLink, Range};
 use ynz_ast::nodes::Item;
 
-use crate::{
-    capabilities::PositionEncoding,
-    position::LineTable,
-    state::ServerState,
-};
+use crate::{capabilities::PositionEncoding, position::LineTable, state::ServerState};
 
 /// Build the `textDocument/documentLink` response for `uri`.
 ///
@@ -24,10 +20,7 @@ use crate::{
 /// the user can see which string is the import path).
 ///
 /// Time: O(imports) — one pass over top-level items.
-pub fn document_link_response(
-    state: &ServerState,
-    uri: &lsp_types::Url,
-) -> Vec<DocumentLink> {
+pub fn document_link_response(state: &ServerState, uri: &lsp_types::Url) -> Vec<DocumentLink> {
     let project_root = match &state.project_root {
         Some(r) => r.clone(),
         None => return Vec::new(),
@@ -151,7 +144,11 @@ mod tests {
         assert!(links[0].target.is_none(), "missing file → target None");
         // source field holds the path without backtick delimiters; tooltip wraps it.
         assert!(
-            links[0].tooltip.as_deref().unwrap_or("").contains("services/users"),
+            links[0]
+                .tooltip
+                .as_deref()
+                .unwrap_or("")
+                .contains("services/users"),
             "tooltip should name the import path; got: {:?}",
             links[0].tooltip
         );

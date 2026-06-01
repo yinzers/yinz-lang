@@ -875,8 +875,7 @@ fn m5_ufcs_const_lend_errors_same_as_free_fn_form() {
     //      the same "cannot lend a const binding" error as `heal(p, 20)`.
     //      The UFCS dot-call form and the function-call form must enforce identical
     //      ownership rules — any divergence is a silent ownership-safety gap.
-    let (_stdout, stderr, code) =
-        ynz_run_stdout(&fixture("m5_ufcs_const_lend_error.ynz"));
+    let (_stdout, stderr, code) = ynz_run_stdout(&fixture("m5_ufcs_const_lend_error.ynz"));
     assert_ne!(code, 0, "UFCS lend on const must fail");
     assert!(
         stderr.contains("const") && stderr.contains("heal"),
@@ -892,8 +891,7 @@ fn m5_ufcs_and_freefn_const_lend_produce_byte_identical_diagnostics() {
     //      this is the tripwire.  Both call forms must produce word-for-word
     //      identical diagnostic text (modulo span line numbers which differ
     //      between fixtures by design).
-    let (_, ufcs_stderr, ufcs_code) =
-        ynz_run_stdout(&fixture("m5_ufcs_const_lend_error.ynz"));
+    let (_, ufcs_stderr, ufcs_code) = ynz_run_stdout(&fixture("m5_ufcs_const_lend_error.ynz"));
     let (_, freefn_stderr, freefn_code) =
         ynz_run_stdout(&fixture("m5_freefn_const_lend_error.ynz"));
     assert_ne!(ufcs_code, 0, "UFCS form must fail");
@@ -940,8 +938,7 @@ fn m5_ufcs_const_share_still_compiles() {
     //      `const` bindings CAN be shared, only `lend` (mutation) is blocked.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_ufcs_const_share_ok.ynz"));
     assert_eq!(
-        code,
-        0,
+        code, 0,
         "UFCS share on const must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(stdout, "hero\n");
@@ -967,8 +964,7 @@ fn m5_dyn_dispatch_concrete_shape_follows_contract_accepted() {
     //      shapes that do NOT declare `follows` must still be rejected (pinned separately).
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_dyn_dispatch_coerce_happy.ynz"));
     assert_eq!(
-        code,
-        0,
+        code, 0,
         "dynamic coerce happy path must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(stdout, "accepted\n");
@@ -980,7 +976,10 @@ fn m5_dyn_dispatch_no_follows_still_errors() {
     //      a `dynamic Contract` parameter.  A shape without `follows` must remain a typeck
     //      error.  This pins the negative direction; the happy-path test pins the positive.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_dyn_dispatch_coerce_no_follows.ynz"));
-    assert_ne!(code, 0, "passing a non-following shape must fail; stdout:\n{stdout}");
+    assert_ne!(
+        code, 0,
+        "passing a non-following shape must fail; stdout:\n{stdout}"
+    );
     assert!(
         stderr.contains("Enemy") && stderr.contains("dynamic Printable"),
         "error must name both the rejected shape and the required contract; stderr:\n{stderr}"
@@ -999,8 +998,7 @@ fn m5_dyn_dispatch_chained_both_calls_succeed() {
     // non-suspending dynamic callers compile clean (Phase-6 round-3).
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_dyn_dispatch_coerce_chained.ynz"));
     assert_eq!(
-        code,
-        0,
+        code, 0,
         "chained dynamic coerce (non-suspending fns) must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(stdout, "accepted\nrelayed\n");
@@ -1014,8 +1012,7 @@ fn m5_hidden_default_string_evaluates_correctly() {
     //      is a silent-wrong-output bug class that only surfaces at runtime (no compile error).
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_hidden_default_string.ynz"));
     assert_eq!(
-        code,
-        0,
+        code, 0,
         "m5_hidden_default_string must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(
@@ -1032,8 +1029,7 @@ fn m5_hidden_default_int_evaluates_correctly() {
     //      explicit `= 0` defaults.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_hidden_default_int.ynz"));
     assert_eq!(
-        code,
-        0,
+        code, 0,
         "m5_hidden_default_int must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(
@@ -1050,8 +1046,7 @@ fn m5_hidden_default_nested_evaluates_both_parent_and_own() {
     //      AST ShapeDecl; a fix that only walks the child's declaration misses them.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_hidden_default_nested.ynz"));
     assert_eq!(
-        code,
-        0,
+        code, 0,
         "m5_hidden_default_nested must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(
@@ -1501,14 +1496,11 @@ fn v03_m2_concurrent_waits_proof() {
     // no-op: main's blocking sleepMs(300) keep-alive dominates total runtime, so the binary
     // runs ~300ms whether or not sleepAsync suspends. We build the fixture first, then time
     // execution only (excluding compile), so the bounds measure the program, not the build.
-    let tmp = std::env::temp_dir()
-        .join(format!("ynz-concurrent-proof-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("ynz-concurrent-proof-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).expect("create temp dir for concurrent waits proof");
     let src_copy = tmp.join("v0_3_m2_concurrent_waits_proof.ynz");
-    std::fs::copy(
-        fixture("v0_3_m2_concurrent_waits_proof.ynz"),
-        &src_copy,
-    ).expect("copy concurrent waits fixture");
+    std::fs::copy(fixture("v0_3_m2_concurrent_waits_proof.ynz"), &src_copy)
+        .expect("copy concurrent waits fixture");
 
     // Build phase — not timed.
     let build_out = run_ynz(&["build", src_copy.to_str().unwrap()]);
@@ -1535,20 +1527,35 @@ fn v03_m2_concurrent_waits_proof() {
     let stdout = String::from_utf8_lossy(&exec_out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&exec_out.stderr).into_owned();
 
-    assert_eq!(code, 0, "concurrent waits proof must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "concurrent waits proof must exit 0; stderr:\n{stderr}"
+    );
 
     let lines: Vec<&str> = stdout.lines().collect();
-    let start_lines: Vec<usize> = lines.iter().enumerate()
+    let start_lines: Vec<usize> = lines
+        .iter()
+        .enumerate()
         .filter(|(_, l)| l.starts_with("START "))
         .map(|(i, _)| i)
         .collect();
-    let done_lines: Vec<usize> = lines.iter().enumerate()
+    let done_lines: Vec<usize> = lines
+        .iter()
+        .enumerate()
         .filter(|(_, l)| l.starts_with("DONE "))
         .map(|(i, _)| i)
         .collect();
 
-    assert_eq!(start_lines.len(), 8, "all 8 START lines must appear; stdout:\n{stdout}");
-    assert_eq!(done_lines.len(), 8, "all 8 DONE lines must appear; stdout:\n{stdout}");
+    assert_eq!(
+        start_lines.len(),
+        8,
+        "all 8 START lines must appear; stdout:\n{stdout}"
+    );
+    assert_eq!(
+        done_lines.len(),
+        8,
+        "all 8 DONE lines must appear; stdout:\n{stdout}"
+    );
 
     // safe: both vecs are asserted non-empty (len == 8) immediately above, so max/min are Some.
     let last_start = *start_lines.iter().max().unwrap();
@@ -1584,7 +1591,10 @@ fn v03_m2_wait_in_loop_produces_clean_error() {
     // Catches regressions where the loop-body guard is removed and programs silently
     // skip the suspension point — the user sees no output and no error.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m2_wait_in_loop_error.ynz"));
-    assert_ne!(code, 0, "wait in loop must exit non-zero; stderr:\n{stderr}");
+    assert_ne!(
+        code, 0,
+        "wait in loop must exit non-zero; stderr:\n{stderr}"
+    );
     assert!(
         stdout.is_empty(),
         "no output must be produced on compile error; got:\n{stdout}"
@@ -1611,7 +1621,10 @@ fn v03_m2_local_crossing_wait_produces_clean_error() {
     // ("Machine-code generation failed inside the backend"). Catches regressions where
     // the local-crossing guard is removed.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m2_local_crossing_wait_error.ynz"));
-    assert_ne!(code, 0, "local crossing wait must exit non-zero; stderr:\n{stderr}");
+    assert_ne!(
+        code, 0,
+        "local crossing wait must exit non-zero; stderr:\n{stderr}"
+    );
     assert!(
         stdout.is_empty(),
         "no output must be produced on compile error; got:\n{stdout}"
@@ -1639,7 +1652,10 @@ fn v03_m2_inferred_suspension_local_crossing_produces_clean_error() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture(
         "v0_3_m2_inferred_suspension_local_crossing_error.ynz",
     ));
-    assert_ne!(code, 0, "inferred-suspension crossing must exit non-zero; stderr:\n{stderr}");
+    assert_ne!(
+        code, 0,
+        "inferred-suspension crossing must exit non-zero; stderr:\n{stderr}"
+    );
     assert!(
         stdout.is_empty(),
         "no output on compile error; got:\n{stdout}"
@@ -1671,10 +1687,11 @@ fn v03_m2_cant_infer_cross_module_exits_nonzero_with_teaching_error() {
     // WHAT/WHAT-INSTEAD/WHY can't-infer teaching error. Guards regressions where the
     // can't-infer check is dropped or gated too narrowly (e.g., gated on
     // `current_fn_suspends` which misses the sole-suspension case).
-    let (stdout, stderr, code) = ynz_run_stdout(
-        &fixture("v0_3_m2_cant_infer_cross_module"),
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m2_cant_infer_cross_module"));
+    assert_ne!(
+        code, 0,
+        "cross-module cant-infer must exit non-zero; stderr:\n{stderr}"
     );
-    assert_ne!(code, 0, "cross-module cant-infer must exit non-zero; stderr:\n{stderr}");
     assert!(
         stdout.is_empty(),
         "no output must be produced on compile error; stdout:\n{stdout}"
@@ -1698,10 +1715,12 @@ fn v03_m2_cant_infer_dynamic_dispatch_exits_nonzero_with_teaching_error() {
     // WHY: a dynamic-dispatch call in a suspending context must exit 1 and emit the
     // WHAT/WHAT-INSTEAD/WHY can't-infer teaching error. Guards regressions where the
     // dynamic-dispatch check is dropped or gated on `current_fn_suspends`.
-    let (stdout, stderr, code) = ynz_run_stdout(
-        &fixture("v0_3_m2_cant_infer_dynamic_dispatch.ynz"),
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m2_cant_infer_dynamic_dispatch.ynz"));
+    assert_ne!(
+        code, 0,
+        "dynamic-dispatch cant-infer must exit non-zero; stderr:\n{stderr}"
     );
-    assert_ne!(code, 0, "dynamic-dispatch cant-infer must exit non-zero; stderr:\n{stderr}");
     assert!(
         stdout.is_empty(),
         "no output on compile error; stdout:\n{stdout}"
@@ -1728,10 +1747,11 @@ fn v03_m2_transitive_suspends_type_checks_clean() {
     // no-wait direct call work). Exit 0 proves the analysis classifies them correctly
     // and no spurious errors/warnings are emitted. Guards regressions where the
     // transitive fixpoint is dropped and functions revert to local-only predicate.
-    let (_stdout, stderr, code) = ynz_run_stdout(
-        &fixture("v0_3_m2_transitive_suspends.ynz"),
+    let (_stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m2_transitive_suspends.ynz"));
+    assert_eq!(
+        code, 0,
+        "transitive suspends fixture must exit 0; stderr:\n{stderr}"
     );
-    assert_eq!(code, 0, "transitive suspends fixture must exit 0; stderr:\n{stderr}");
     // test-ratchet: strengthening — kills the || escape branch; the fixture's stderr is
     // verified to be 0 bytes on a clean compile. Any output here is a regression.
     assert!(
@@ -1746,11 +1766,13 @@ fn v03_m2_pure_cpu_not_state_machine_exits_zero() {
     // be classified as a state machine. It compiles to straight-line code and runs
     // correctly with no suspension overhead. Guards regressions where the analysis
     // marks non-suspending functions as suspending (false-positive state-machine codegen).
-    let (stdout, stderr, code) = ynz_run_stdout(
-        &fixture("v0_3_m2_pure_cpu_not_sm.ynz"),
-    );
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m2_pure_cpu_not_sm.ynz"));
     assert_eq!(code, 0, "pure-CPU fixture must exit 0; stderr:\n{stderr}");
-    assert_eq!(stdout.trim(), "result: 42", "pure-CPU fixture must print 'result: 42'; got: {stdout}");
+    assert_eq!(
+        stdout.trim(),
+        "result: 42",
+        "pure-CPU fixture must print 'result: 42'; got: {stdout}"
+    );
 }
 
 // ── M8 P6: bignum — number<N> for N > 34 ─────────────────────────────────────
@@ -1801,9 +1823,7 @@ fn examples_basics_runs_end_to_end() {
     // Everything after "all 8 pirates done" is deterministic again.
     let m2_marker = "v0.3-M2 — wait actually suspends";
     let tail_marker = "all 8 pirates done";
-    if let (Some(m2_start), Some(tail_start)) =
-        (stdout.find(m2_marker), stdout.find(tail_marker))
-    {
+    if let (Some(m2_start), Some(tail_start)) = (stdout.find(m2_marker), stdout.find(tail_marker)) {
         // Byte-exact prefix (all M1 and earlier sections).
         let stdout_prefix = &stdout[..m2_start];
         let golden_prefix = &golden[..golden.find(m2_marker).unwrap_or(golden.len())];
@@ -1864,9 +1884,18 @@ fn m8_combo_modules_sensitive_concurrency() {
         "sensitive+concurrency combo must compile and run; stderr:\n{stderr}"
     );
     // First [REDACTED] and super-secret-key (from main-thread print calls) must appear.
-    assert!(stdout.contains("[REDACTED]"), "sensitive must redact in print; stdout:\n{stdout}");
-    assert!(stdout.contains("super-secret-key"), "reveal() must show raw value; stdout:\n{stdout}");
-    assert!(stdout.contains("done"), "main must print `done`; stdout:\n{stdout}");
+    assert!(
+        stdout.contains("[REDACTED]"),
+        "sensitive must redact in print; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("super-secret-key"),
+        "reveal() must show raw value; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("done"),
+        "main must print `done`; stdout:\n{stdout}"
+    );
 }
 
 #[test]
@@ -1936,7 +1965,11 @@ fn sleep_ms_intrinsic_links_and_runs() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m1_sleep_ms.ynz"));
     let elapsed = start.elapsed();
     assert_eq!(code, 0, "sleepMs fixture must exit 0; stderr:\n{stderr}");
-    assert_eq!(stdout.trim(), "slept", "sleepMs fixture must print `slept`; got:\n{stdout}");
+    assert_eq!(
+        stdout.trim(),
+        "slept",
+        "sleepMs fixture must print `slept`; got:\n{stdout}"
+    );
     assert!(
         elapsed.as_millis() >= 40,
         "sleepMs(50) must sleep at least 40ms, but the whole run took {:?}",
@@ -1963,7 +1996,10 @@ fn background_runs_on_separate_thread_timing() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m1_background_timing.ynz"));
     let total_elapsed = start.elapsed();
 
-    assert_eq!(code, 0, "background timing fixture must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "background timing fixture must exit 0; stderr:\n{stderr}"
+    );
     assert!(
         stdout.contains("main done"),
         "stdout must contain `main done`; got:\n{stdout}"

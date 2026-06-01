@@ -4,7 +4,9 @@
 // the ability to collapse large declarations, with no error to diagnose.
 
 use lsp_types::FoldingRangeKind;
-use ynz_lsp::{capabilities::PositionEncoding, folding_range::folding_range_response, state::ServerState};
+use ynz_lsp::{
+    capabilities::PositionEncoding, folding_range::folding_range_response, state::ServerState,
+};
 
 fn state_single(path: &str, src: &str) -> (ServerState, lsp_types::Url) {
     let mut state = ServerState::new(PositionEncoding::Utf8);
@@ -95,7 +97,11 @@ fn multiple_declarations_produce_multiple_folds() {
     );
     // All folds must use the Region kind.
     for fr in &ranges {
-        assert_eq!(fr.kind, Some(FoldingRangeKind::Region), "all folds use Region kind");
+        assert_eq!(
+            fr.kind,
+            Some(FoldingRangeKind::Region),
+            "all folds use Region kind"
+        );
     }
     // Ranges must be non-overlapping and in source order.
     for window in ranges.windows(2) {

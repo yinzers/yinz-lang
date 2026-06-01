@@ -14,7 +14,11 @@ fn ynz_binary() -> PathBuf {
 
 fn run_build_json(source_path: &Path) -> Output {
     Command::new(ynz_binary())
-        .args(["build", "--json", source_path.to_str().expect("path is UTF-8")])
+        .args([
+            "build",
+            "--json",
+            source_path.to_str().expect("path is UTF-8"),
+        ])
         .env("CLICOLOR", "0")
         .output()
         .expect("failed to spawn ynz binary")
@@ -34,8 +38,7 @@ fn parse_ndjson(stdout: &str) -> Vec<serde_json::Value> {
         .lines()
         .filter(|l| !l.is_empty())
         .map(|l| {
-            serde_json::from_str(l)
-                .unwrap_or_else(|e| panic!("invalid JSON line: {e}\nline: {l}"))
+            serde_json::from_str(l).unwrap_or_else(|e| panic!("invalid JSON line: {e}\nline: {l}"))
         })
         .collect()
 }
@@ -87,7 +90,10 @@ fn build_json_error_file_emits_diagnostic_and_summary() {
     assert_eq!(summary["type"], "summary", "last event must be summary");
     // The summary must show at least 1 error.
     let errors = summary["errors"].as_u64().unwrap_or(0);
-    assert!(errors > 0, "broken_main.ynz must have at least 1 error in summary");
+    assert!(
+        errors > 0,
+        "broken_main.ynz must have at least 1 error in summary"
+    );
     // Verify process exit code agrees with summary.exit_code.
     let summary_exit = summary["exit_code"].as_i64().unwrap_or(-1) as i32;
     assert_eq!(
@@ -95,11 +101,7 @@ fn build_json_error_file_emits_diagnostic_and_summary() {
         Some(summary_exit),
         "process exit code must match summary.exit_code"
     );
-    assert_ne!(
-        out.status.code(),
-        Some(0),
-        "error file must exit non-zero"
-    );
+    assert_ne!(out.status.code(), Some(0), "error file must exit non-zero");
 }
 
 // ─── Schema version field is present ─────────────────────────────────────────
@@ -152,7 +154,10 @@ fn build_json_diagnostic_has_required_fields() {
             assert!(e.get("data").is_some(), "missing data");
             let data = &e["data"];
             assert!(data.get("what").is_some(), "data.what missing");
-            assert!(data.get("what_instead").is_some(), "data.what_instead missing");
+            assert!(
+                data.get("what_instead").is_some(),
+                "data.what_instead missing"
+            );
             assert!(data.get("why").is_some(), "data.why missing");
         }
     }
@@ -166,7 +171,10 @@ fn build_without_json_flag_has_no_json_output() {
     // NOT contain NDJSON. If default output changes, existing scripts that
     // parse human-readable stderr break.
     let out = Command::new(ynz_binary())
-        .args(["build", fixture("hello.ynz").to_str().expect("path is UTF-8")])
+        .args([
+            "build",
+            fixture("hello.ynz").to_str().expect("path is UTF-8"),
+        ])
         .env("CLICOLOR", "0")
         .output()
         .expect("failed to spawn ynz binary");

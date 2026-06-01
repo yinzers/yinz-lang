@@ -8,7 +8,7 @@
 /// and spawn-kill-respawn with a real long-running binary.
 use std::path::{Path, PathBuf};
 
-use ynz_watch::{WatchError, child::ChildHandle, project::WatchSourceFile};
+use ynz_watch::{child::ChildHandle, project::WatchSourceFile, WatchError};
 
 // WHY: ChildHandle::spawn must return WatchError::ChildSpawnFailed when the binary doesn't
 //      exist. If this returns Ok (or panics), the watch event loop crashes with no diagnostic
@@ -44,7 +44,15 @@ fn check_mode_does_not_spawn_child() {
 
     let mut current_child: Option<ChildHandle> = None;
 
-    let _outcome = rebuild_one(&mut db, &path, &path, &out_dir, true, &mut current_child, false);
+    let _outcome = rebuild_one(
+        &mut db,
+        &path,
+        &path,
+        &out_dir,
+        true,
+        &mut current_child,
+        false,
+    );
 
     assert!(
         current_child.is_none(),
@@ -100,7 +108,10 @@ fn spawn_kill_respawn_via_child_handle() {
 
     // Now spawn a second one — must succeed (no zombie from first).
     let second = ChildHandle::spawn_with_args(sleep_path, &["10"]);
-    assert!(second.is_ok(), "second spawn must succeed after first child was killed");
+    assert!(
+        second.is_ok(),
+        "second spawn must succeed after first child was killed"
+    );
 
     // Kill second on drop.
     drop(second);

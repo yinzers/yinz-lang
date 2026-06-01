@@ -72,6 +72,8 @@ fn variable_named_share_in_expression_position_shows_type_in_hover() {
         &table,
         use_offset,
         PositionEncoding::Utf8,
+        None,
+        None,
     );
 
     assert!(
@@ -83,7 +85,8 @@ fn variable_named_share_in_expression_position_shows_type_in_hover() {
             assert!(
                 !is_keyword_hover(&mc.value),
                 "expression-position `share` binding must NOT show keyword hover; \
-                 got: {v:?}", v = mc.value
+                 got: {v:?}",
+                v = mc.value
             );
             // The annotation `let share: int` must surface the type.
             assert!(
@@ -118,6 +121,8 @@ fn variable_named_lend_in_expression_position_shows_binding_hover_not_none() {
         &table,
         use_offset,
         PositionEncoding::Utf8,
+        None,
+        None,
     );
 
     assert!(
@@ -129,7 +134,8 @@ fn variable_named_lend_in_expression_position_shows_binding_hover_not_none() {
             assert!(
                 !is_keyword_hover(&mc.value),
                 "expression-position `lend` binding must NOT show keyword hover; \
-                 got: {v:?}", v = mc.value
+                 got: {v:?}",
+                v = mc.value
             );
         }
     }
@@ -158,6 +164,8 @@ fn errors_keyword_in_return_type_position_still_shows_keyword_hover() {
         &table,
         0,
         PositionEncoding::Utf8,
+        None,
+        None,
     );
 
     assert!(
@@ -169,7 +177,8 @@ fn errors_keyword_in_return_type_position_still_shows_keyword_hover() {
             assert!(
                 is_keyword_hover(&mc.value),
                 "`errors` in keyword position must show a `## Keyword` registry hover; \
-                 got: {v:?}", v = mc.value
+                 got: {v:?}",
+                v = mc.value
             );
         }
     }
@@ -195,6 +204,8 @@ fn wait_keyword_still_shows_keyword_hover_after_fix() {
         &table,
         0,
         PositionEncoding::Utf8,
+        None,
+        None,
     );
 
     assert!(
@@ -206,7 +217,8 @@ fn wait_keyword_still_shows_keyword_hover_after_fix() {
             assert!(
                 is_keyword_hover(&mc.value),
                 "`wait` in keyword position must show a `## Keyword` registry hover; \
-                 got: {v:?}", v = mc.value
+                 got: {v:?}",
+                v = mc.value
             );
         }
     }
@@ -237,6 +249,8 @@ fn share_in_function_signature_modifier_position_returns_none() {
         &table,
         share_modifier_offset,
         PositionEncoding::Utf8,
+        None,
+        None,
     );
 
     // `share` modifier: no registry entry, no use-site, no sig_table entry → None.
@@ -311,7 +325,7 @@ fn inner_shadowing_share_resolves_to_binding_hover_not_keyword() {
     // of any keyword disambiguation logic.
     let src = concat!(
         "function entrypoint() -> nothing {\n",
-        "  let share: int = 5\n",   // outer binding
+        "  let share: int = 5\n", // outer binding
         "  if (true) {\n",
         "    let share: int = 99\n", // inner binding (shadows outer)
         "    print(share)\n",        // inner use-site — resolve this one
@@ -333,6 +347,8 @@ fn inner_shadowing_share_resolves_to_binding_hover_not_keyword() {
         &table,
         inner_use_offset,
         PositionEncoding::Utf8,
+        None,
+        None,
     );
 
     assert!(
@@ -343,7 +359,8 @@ fn inner_shadowing_share_resolves_to_binding_hover_not_keyword() {
         if let HoverContents::Markup(mc) = hover.contents {
             assert!(
                 !is_keyword_hover(&mc.value),
-                "inner-scope `share` use must NOT show keyword hover; got: {v:?}", v = mc.value
+                "inner-scope `share` use must NOT show keyword hover; got: {v:?}",
+                v = mc.value
             );
         }
     }
@@ -372,9 +389,14 @@ fn keyword_hover_function_unaffected_by_fix() {
         &table,
         0, // offset 0 = start of `function`
         PositionEncoding::Utf8,
+        None,
+        None,
     );
 
-    assert!(result.is_some(), "`function` keyword hover must still return Some");
+    assert!(
+        result.is_some(),
+        "`function` keyword hover must still return Some"
+    );
 }
 
 #[test]
@@ -395,6 +417,8 @@ fn no_panic_when_module_is_none() {
         &table,
         0,
         PositionEncoding::Utf8,
+        None,
+        None,
     );
 
     // Asserts only that it does NOT panic. Result may be Some or None.

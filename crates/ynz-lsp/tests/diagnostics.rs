@@ -246,10 +246,9 @@ function entrypoint() -> nothing {
     let sf = state.source_file_for(&uri).unwrap();
     let check_out = check_query(&state.db, sf);
 
-    let warning = check_out
-        .diagnostics
-        .iter()
-        .find(|d| d.what.to_lowercase().contains("wait") && d.what.to_lowercase().contains("no effect"));
+    let warning = check_out.diagnostics.iter().find(|d| {
+        d.what.to_lowercase().contains("wait") && d.what.to_lowercase().contains("no effect")
+    });
     assert!(
         warning.is_some(),
         "expected wait_on_non_may_block_warning diagnostic; got: {:?}",
@@ -277,8 +276,7 @@ function entrypoint() -> nothing {
     // of indentation + "wait" + one space). A wrong-line span (e.g. line 0)
     // would fail here, proving the span is genuinely emitted at the call site.
     assert_eq!(
-        lsp.range.start.line,
-        2,
+        lsp.range.start.line, 2,
         "wait_on_non_may_block diagnostic must point to line 2 (the `print` call); \
          got line {}",
         lsp.range.start.line

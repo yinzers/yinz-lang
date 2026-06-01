@@ -182,7 +182,12 @@ fn pirates_roster_demo_builds_with_zero_m10_pattern_warnings() {
     // These are the symbols exercised via the six previously-false-positive AST
     // positions (options-variant, is-narrowing, dynamic, field-type, module-const,
     // generic-field). A warning here means a Phase 0 insert regressed.
-    for symbol in &["ScheduleDay", "Announceable", "StripeDistrictEvent", "StatCategory"] {
+    for symbol in &[
+        "ScheduleDay",
+        "Announceable",
+        "StripeDistrictEvent",
+        "StatCategory",
+    ] {
         let pattern = format!("`{symbol}` is imported but never used");
         assert!(
             !stderr.contains(&pattern),

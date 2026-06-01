@@ -5,9 +5,7 @@
 // for a real error or a broken workspace-edit that corrupts source.
 
 use ynz_lsp::{
-    capabilities::PositionEncoding,
-    code_action::code_action_response,
-    position::LineTable,
+    capabilities::PositionEncoding, code_action::code_action_response, position::LineTable,
     state::ServerState,
 };
 
@@ -49,11 +47,12 @@ fn full_range(src: &str) -> lsp_types::Range {
 }
 
 fn range_at(src: &str, needle: &str) -> lsp_types::Range {
-    let offset = src.find(needle).unwrap_or_else(|| panic!("{needle:?} not in source"));
+    let offset = src
+        .find(needle)
+        .unwrap_or_else(|| panic!("{needle:?} not in source"));
     let table = LineTable::new(src);
     let start = table.byte_offset_to_position(src, offset, PositionEncoding::Utf8);
-    let end =
-        table.byte_offset_to_position(src, offset + needle.len(), PositionEncoding::Utf8);
+    let end = table.byte_offset_to_position(src, offset + needle.len(), PositionEncoding::Utf8);
     lsp_types::Range { start, end }
 }
 
@@ -71,10 +70,7 @@ fn test_code_action_class_produces_replace_with_shape() {
     );
     if let lsp_types::CodeActionOrCommand::CodeAction(a) = &actions[0] {
         assert_eq!(a.title, "Replace `class` with `shape`");
-        assert_eq!(
-            a.kind.as_ref(),
-            Some(&lsp_types::CodeActionKind::QUICKFIX)
-        );
+        assert_eq!(a.kind.as_ref(), Some(&lsp_types::CodeActionKind::QUICKFIX));
         let changes = a
             .edit
             .as_ref()
@@ -242,7 +238,8 @@ fn test_code_action_response_under_50ms() {
 fn auto_import_suggests_shape_from_other_file() {
     let root = std::path::Path::new("/tmp/ynz_autoimport_shape");
     let exporter_src = "export shape Player {\n  name: string\n  health: int\n}\n";
-    let importer_src = "function main() -> nothing {\n  let p: Player = { name: \"x\", health: 1 }\n}\n";
+    let importer_src =
+        "function main() -> nothing {\n  let p: Player = { name: \"x\", health: 1 }\n}\n";
 
     let (state, imp_uri) = state_two_files(
         root,
@@ -267,7 +264,9 @@ fn auto_import_suggests_shape_from_other_file() {
         .collect();
 
     assert!(
-        titles.iter().any(|t| t.contains("Player") && t.contains("models/player")),
+        titles
+            .iter()
+            .any(|t| t.contains("Player") && t.contains("models/player")),
         "expected auto-import action for Player; got: {titles:?}"
     );
 }
@@ -303,7 +302,9 @@ fn auto_import_suggests_function_from_other_file() {
         .collect();
 
     assert!(
-        titles.iter().any(|t| t.contains("greet") && t.contains("utils/greeting")),
+        titles
+            .iter()
+            .any(|t| t.contains("greet") && t.contains("utils/greeting")),
         "expected auto-import for greet; got: {titles:?}"
     );
 }
@@ -367,7 +368,11 @@ fn auto_import_edit_produces_correct_import_text() {
 
     let import_action = actions.iter().find_map(|a| {
         if let lsp_types::CodeActionOrCommand::CodeAction(ca) = a {
-            if ca.title.contains("Order") { Some(ca) } else { None }
+            if ca.title.contains("Order") {
+                Some(ca)
+            } else {
+                None
+            }
         } else {
             None
         }
@@ -376,17 +381,21 @@ fn auto_import_edit_produces_correct_import_text() {
     let action = import_action.expect("auto-import action must exist for Order");
     let edit = action.edit.as_ref().expect("action must have edit");
     let changes = edit.changes.as_ref().expect("edit must have changes");
-    let edits = changes.get(&imp_uri).expect("changes must contain importer uri");
+    let edits = changes
+        .get(&imp_uri)
+        .expect("changes must contain importer uri");
     assert_eq!(edits.len(), 1, "exactly one TextEdit");
     assert_eq!(
-        edits[0].new_text,
-        "import { Order } from `services/orders`\n",
+        edits[0].new_text, "import { Order } from `services/orders`\n",
         "import text must follow Yinz syntax"
     );
     // Insertion must be at the start of the file (no prior imports).
     assert_eq!(
         edits[0].range.start,
-        lsp_types::Position { line: 0, character: 0 },
+        lsp_types::Position {
+            line: 0,
+            character: 0
+        },
         "insert at top when no prior imports"
     );
 }
@@ -421,13 +430,20 @@ fn auto_import_inserts_after_existing_imports() {
     let range = range_at(importer_src, "Order");
     let actions = code_action_response(&state, &imp_uri, range);
 
-    let action = actions.iter().find_map(|a| {
-        if let lsp_types::CodeActionOrCommand::CodeAction(ca) = a {
-            if ca.title.contains("Order") { Some(ca) } else { None }
-        } else {
-            None
-        }
-    }).expect("auto-import action must exist for Order");
+    let action = actions
+        .iter()
+        .find_map(|a| {
+            if let lsp_types::CodeActionOrCommand::CodeAction(ca) = a {
+                if ca.title.contains("Order") {
+                    Some(ca)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .expect("auto-import action must exist for Order");
 
     let edit = action.edit.as_ref().unwrap();
     let changes = edit.changes.as_ref().unwrap();
@@ -450,7 +466,8 @@ fn unused_import_produces_remove_action() {
     let root = std::path::Path::new("/tmp/ynz_unused_import_action");
     // exporter exports `greet` but importer never calls it.
     let exporter_src = "export function greet(name: string) -> string {\n  return `hi`\n}\n";
-    let importer_src = "import { greet } from `utils/greeting`\n\nfunction main() -> nothing {\n  let x = 1\n}\n";
+    let importer_src =
+        "import { greet } from `utils/greeting`\n\nfunction main() -> nothing {\n  let x = 1\n}\n";
 
     let (state, imp_uri) = state_two_files(
         root,
@@ -478,18 +495,30 @@ fn unused_import_produces_remove_action() {
     assert!(
         remove_action.is_some(),
         "expected a 'Remove unused import' code action; got: {:?}",
-        actions.iter().filter_map(|a| {
-            if let lsp_types::CodeActionOrCommand::CodeAction(ca) = a { Some(ca.title.as_str()) } else { None }
-        }).collect::<Vec<_>>()
+        actions
+            .iter()
+            .filter_map(|a| {
+                if let lsp_types::CodeActionOrCommand::CodeAction(ca) = a {
+                    Some(ca.title.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
     );
 
     let action = remove_action.unwrap();
     let edit = action.edit.as_ref().expect("action must have an edit");
     let changes = edit.changes.as_ref().expect("edit must have changes");
-    let edits = changes.get(&imp_uri).expect("changes must contain importer uri");
+    let edits = changes
+        .get(&imp_uri)
+        .expect("changes must contain importer uri");
     assert_eq!(edits.len(), 1, "exactly one TextEdit");
     // The edit must delete the entire first line (the import statement).
-    assert_eq!(edits[0].new_text, "", "edit must delete text (new_text is empty)");
+    assert_eq!(
+        edits[0].new_text, "",
+        "edit must delete text (new_text is empty)"
+    );
     assert_eq!(edits[0].range.start.line, 0, "edit starts at line 0");
 }
 
@@ -508,7 +537,11 @@ fn used_import_produces_no_remove_action() {
     std::fs::create_dir_all(root.join("utils")).unwrap();
     std::fs::write(root.join("utils/greeting.ynz"), exporter_src).unwrap();
     std::fs::write(root.join("entrypoint.ynz"), importer_src).unwrap();
-    std::fs::write(root.join("yinz.toml"), "[project]\nname = \"test\"\nentry = \"entrypoint.ynz\"\n").unwrap();
+    std::fs::write(
+        root.join("yinz.toml"),
+        "[project]\nname = \"test\"\nentry = \"entrypoint.ynz\"\n",
+    )
+    .unwrap();
 
     let (state, imp_uri) = state_two_files(
         root,

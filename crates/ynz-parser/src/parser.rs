@@ -2032,7 +2032,7 @@ impl<'a> Parser<'a> {
                 body,
                 span,
                 destructure_pattern: None,
-            map_destructure_pattern: None,
+                map_destructure_pattern: None,
             };
         }
 
@@ -2092,7 +2092,7 @@ impl<'a> Parser<'a> {
                 },
                 span,
                 destructure_pattern: None,
-            map_destructure_pattern: None,
+                map_destructure_pattern: None,
             };
         }
 
@@ -2227,7 +2227,7 @@ impl<'a> Parser<'a> {
                 },
                 span,
                 destructure_pattern: None,
-            map_destructure_pattern: None,
+                map_destructure_pattern: None,
             };
         }
 
@@ -2390,7 +2390,7 @@ impl<'a> Parser<'a> {
                 },
                 span,
                 destructure_pattern: None,
-            map_destructure_pattern: None,
+                map_destructure_pattern: None,
             };
         }
 

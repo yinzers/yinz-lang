@@ -21,15 +21,11 @@
 
 use lsp_server::{Message, Notification};
 use lsp_types::{
-    MessageType, Range, ShowMessageParams, TextEdit,
     notification::{Notification as _, ShowMessage},
+    MessageType, Range, ShowMessageParams, TextEdit,
 };
 
-use crate::{
-    capabilities::PositionEncoding,
-    position::LineTable,
-    state::ServerState,
-};
+use crate::{capabilities::PositionEncoding, position::LineTable, state::ServerState};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
@@ -51,7 +47,12 @@ fn show_message(sender: &crossbeam_channel::Sender<Message>, kind: MessageType, 
 }
 
 /// Convert a byte range (start_byte, end_byte) in `text` to an LSP `Range`.
-fn byte_range_to_lsp_range(text: &str, start_byte: usize, end_byte: usize, encoding: PositionEncoding) -> Range {
+fn byte_range_to_lsp_range(
+    text: &str,
+    start_byte: usize,
+    end_byte: usize,
+    encoding: PositionEncoding,
+) -> Range {
     let table = LineTable::new(text);
     let start = table.byte_offset_to_position(text, start_byte, encoding);
     let end = table.byte_offset_to_position(text, end_byte.min(text.len()), encoding);

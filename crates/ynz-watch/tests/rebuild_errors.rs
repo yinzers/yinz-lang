@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use ynz_watch::{
-    db::{RebuildOutcome, WatchDb, init_db},
+    db::{init_db, RebuildOutcome, WatchDb},
     project::WatchSourceFile,
 };
 

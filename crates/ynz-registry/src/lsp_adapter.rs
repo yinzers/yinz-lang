@@ -130,7 +130,8 @@ pub fn lsp_completion_items(context: &CompletionContext<'_>) -> Vec<RegistryComp
                             .and_then(|s| s.strip_suffix('>'))
                             .unwrap_or("T");
                         let return_display = e.return_type.replace('T', elem);
-                        let param_str = e.param_types
+                        let param_str = e
+                            .param_types
                             .iter()
                             .map(|p| p.replace('T', elem))
                             .collect::<Vec<_>>()

@@ -533,7 +533,12 @@ fn no_infer_jargon_in_lsp_inlay_hint_hover_why_source() {
     // We extract from the `fn lsp_inlay_hint_hover_for` line through the matching closing brace.
     let fn_start = source
         .find("pub fn lsp_inlay_hint_hover_for(")
-        .unwrap_or_else(|| panic!("`lsp_inlay_hint_hover_for` not found in {}", lib_path.display()));
+        .unwrap_or_else(|| {
+            panic!(
+                "`lsp_inlay_hint_hover_for` not found in {}",
+                lib_path.display()
+            )
+        });
 
     let fn_source = &source[fn_start..];
     // Walk to the end of the function body by brace-counting.

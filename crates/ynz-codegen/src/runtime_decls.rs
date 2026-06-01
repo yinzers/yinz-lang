@@ -297,7 +297,11 @@ impl<'ctx> RuntimeDecls<'ctx> {
             ),
 
             ynz_alloc: declare_fn(module, "ynz_alloc", ptr.fn_type(&[i64.into()], false)),
-            ynz_alloc_zeroed: declare_fn(module, "ynz_alloc_zeroed", ptr.fn_type(&[i64.into()], false)),
+            ynz_alloc_zeroed: declare_fn(
+                module,
+                "ynz_alloc_zeroed",
+                ptr.fn_type(&[i64.into()], false),
+            ),
             ynz_free: declare_fn(
                 module,
                 "ynz_free",
@@ -568,7 +572,11 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 // fn_ptr: opaque function pointer (ptr), ctx_ptr: *mut u8 (ptr), ctx_size: i64
                 void.fn_type(&[ptr.into(), ptr.into(), i64.into()], false),
             ),
-            ynz_rt_check_preempt: declare_fn(module, "ynz_rt_check_preempt", void.fn_type(&[], false)),
+            ynz_rt_check_preempt: declare_fn(
+                module,
+                "ynz_rt_check_preempt",
+                void.fn_type(&[], false),
+            ),
             ynz_rt_shutdown: declare_fn(module, "ynz_rt_shutdown", void.fn_type(&[], false)),
             ynz_thread_sleep_ms: declare_fn(
                 module,

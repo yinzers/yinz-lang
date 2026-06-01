@@ -359,7 +359,14 @@ pub fn collect_shapes(
             // named shapes — without this, `{ x: UnknownType }` silently resolves to
             // Type::Error with no diagnostic. Use "inline type" as the display name
             // so error messages don't expose the `__anon__` internal identifier.
-            emit_unknown_field_type_diag(&field.ty, &field.name, "inline type", &name_table, &[], diags);
+            emit_unknown_field_type_diag(
+                &field.ty,
+                &field.name,
+                "inline type",
+                &name_table,
+                &[],
+                diags,
+            );
             own_fields.push(FieldDef {
                 name: field.name.clone(),
                 ty,

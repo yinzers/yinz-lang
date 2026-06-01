@@ -5,10 +5,7 @@
 /// 2. NOT crash or hang.
 ///
 /// The caller (`event_loop`) logs the vanished-file warning and continues watching.
-use std::{
-    fs,
-    time::Duration,
-};
+use std::{fs, time::Duration};
 
 use tempfile::TempDir;
 use ynz_watch::{FileWatcher, WatchEvent};

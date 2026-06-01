@@ -9,9 +9,7 @@
 
 use lsp_types::{Position, Range};
 use ynz_lsp::{
-    capabilities::PositionEncoding,
-    inlay_hint::inlay_hint_response,
-    state::ServerState,
+    capabilities::PositionEncoding, inlay_hint::inlay_hint_response, state::ServerState,
 };
 
 fn state_single(path: &str, src: &str) -> (ServerState, lsp_types::Url) {
@@ -23,8 +21,14 @@ fn state_single(path: &str, src: &str) -> (ServerState, lsp_types::Url) {
 
 fn full_range() -> Range {
     Range {
-        start: Position { line: 0, character: 0 },
-        end: Position { line: 9999, character: 0 },
+        start: Position {
+            line: 0,
+            character: 0,
+        },
+        end: Position {
+            line: 9999,
+            character: 0,
+        },
     }
 }
 
@@ -61,7 +65,14 @@ fn array_to_fixed_hint_carries_text_edit() {
     assert!(
         !atf_hints.is_empty(),
         "expected an array→fixed promotion hint; got no 'fixed' hints. All hint labels: {:?}",
-        hints.iter().filter_map(|h| if let lsp_types::InlayHintLabel::String(s) = &h.label { Some(s) } else { None }).collect::<Vec<_>>()
+        hints
+            .iter()
+            .filter_map(|h| if let lsp_types::InlayHintLabel::String(s) = &h.label {
+                Some(s)
+            } else {
+                None
+            })
+            .collect::<Vec<_>>()
     );
 
     // Every array→fixed hint must carry at least one TextEdit.
@@ -115,13 +126,13 @@ fn array_to_fixed_edit_replaces_array_keyword_with_fixed() {
     // Convert LSP position → byte offset to apply the edit in-place.
     let edit_start_line = edit.range.start.line as usize;
     let edit_start_char = edit.range.start.character as usize;
-    let edit_end_line   = edit.range.end.line as usize;
-    let edit_end_char   = edit.range.end.character as usize;
+    let edit_end_line = edit.range.end.line as usize;
+    let edit_end_char = edit.range.end.character as usize;
 
     // Compute byte offsets (UTF-8 assumption; PositionEncoding is Utf8 above).
     let src_bytes = src.as_bytes();
     let start_byte = line_char_to_byte(src_bytes, edit_start_line, edit_start_char);
-    let end_byte   = line_char_to_byte(src_bytes, edit_end_line,   edit_end_char);
+    let end_byte = line_char_to_byte(src_bytes, edit_end_line, edit_end_char);
 
     let replaced = format!(
         "{}{}{}",
@@ -221,7 +232,8 @@ fn every_array_to_fixed_hint_in_file_carries_an_edit() {
             if s.contains("fixed") {
                 assert!(
                     hint.text_edits.as_deref().map_or(false, |e| !e.is_empty()),
-                    "every array→fixed hint must carry a TextEdit; hint: {:?}", hint.label
+                    "every array→fixed hint must carry a TextEdit; hint: {:?}",
+                    hint.label
                 );
             }
         }

@@ -64,7 +64,8 @@ fn two_files_on_disk(
 /// Find the byte offset of the first occurrence of `needle` in `src`.
 #[allow(dead_code)]
 fn offset_of(src: &str, needle: &str) -> usize {
-    src.find(needle).unwrap_or_else(|| panic!("needle {needle:?} not in source"))
+    src.find(needle)
+        .unwrap_or_else(|| panic!("needle {needle:?} not in source"))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -242,7 +243,10 @@ fn test_resolve_symbol_at_cross_file_imported_function() {
     let sym = resolve_symbol_at(&db, main_sf, call_offset).expect("should resolve cross-file fn");
     assert_eq!(sym.kind, SymbolKind::Function);
     assert_eq!(sym.name, "newPirate");
-    assert!(sym.origin_file != main_sf, "origin should be dep file, not main file");
+    assert!(
+        sym.origin_file != main_sf,
+        "origin should be dep file, not main file"
+    );
 }
 
 #[test]
@@ -254,7 +258,10 @@ fn test_resolve_symbol_at_cross_file_imported_shape() {
     let type_offset = main_src.rfind(": Pirate").unwrap() + 2;
     let sym = resolve_symbol_at(&db, main_sf, type_offset).expect("should resolve shape");
     assert_eq!(sym.kind, SymbolKind::Shape);
-    assert!(sym.origin_file != main_sf, "origin should be dep file, not main file");
+    assert!(
+        sym.origin_file != main_sf,
+        "origin should be dep file, not main file"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -289,7 +296,11 @@ function entrypoint() -> nothing {
     let (db, sf) = single_file("test.ynz", src);
     let decl_offset = src.find("function greet").unwrap() + "function ".len();
     let refs = references_for_offset(&db, sf, decl_offset, true);
-    assert!(refs.len() >= 2, "expected at least decl + 1 use, got {}", refs.len());
+    assert!(
+        refs.len() >= 2,
+        "expected at least decl + 1 use, got {}",
+        refs.len()
+    );
 }
 
 #[test]
@@ -308,7 +319,11 @@ fn test_references_for_offset_symbol_used_in_multiple_files() {
     let call_offset = main_src.find("announce(`Roberto`)").unwrap();
     let refs = references_for_offset(&db, main_sf, call_offset, false);
     // Both calls in main file.
-    assert!(refs.len() >= 2, "expected at least 2 refs, got {}", refs.len());
+    assert!(
+        refs.len() >= 2,
+        "expected at least 2 refs, got {}",
+        refs.len()
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -333,9 +348,19 @@ fn test_references_shadowing_inner_binding_does_not_contaminate_outer() {
     let inner_refs = references_for_offset(&db, sf, inner_offset, false);
 
     // Outer `foo` → only the use in `bar = foo + 1` (1 site; not the inner shadow's use).
-    assert_eq!(outer_refs.len(), 1, "outer foo: expected 1 use-site, got {}", outer_refs.len());
+    assert_eq!(
+        outer_refs.len(),
+        1,
+        "outer foo: expected 1 use-site, got {}",
+        outer_refs.len()
+    );
     // Inner `foo` → only the use in `let x = foo` (1 site; not the outer binding's use).
-    assert_eq!(inner_refs.len(), 1, "inner foo: expected 1 use-site, got {}", inner_refs.len());
+    assert_eq!(
+        inner_refs.len(),
+        1,
+        "inner foo: expected 1 use-site, got {}",
+        inner_refs.len()
+    );
     // Spans must be disjoint (they refer to different source positions).
     let outer_span = &outer_refs[0].1;
     let inner_span = &inner_refs[0].1;
@@ -359,8 +384,8 @@ function entrypoint() -> nothing {
 "#;
     let (db, sf) = single_file("test.ynz", src);
     let decl_offset = src.find("let count").unwrap() + "let ".len();
-    let locs = rename_locations(&db, sf, decl_offset, "total".to_string())
-        .expect("rename should succeed");
+    let locs =
+        rename_locations(&db, sf, decl_offset, "total".to_string()).expect("rename should succeed");
     assert!(!locs.is_empty(), "must return at least one location");
 }
 
@@ -374,9 +399,12 @@ function entrypoint() -> nothing {
     let (db, sf) = single_file("test.ynz", src);
     let offset = src.find("let count").unwrap() + "let ".len();
     let err = rename_locations(&db, sf, offset, "let".to_string())
-        .err().expect("renaming to keyword must fail");
-    assert!(matches!(err, RenameError::NewNameIsReservedKeyword(ref k) if k == "let"),
-        "expected NewNameIsReservedKeyword(let), got {err:?}");
+        .err()
+        .expect("renaming to keyword must fail");
+    assert!(
+        matches!(err, RenameError::NewNameIsReservedKeyword(ref k) if k == "let"),
+        "expected NewNameIsReservedKeyword(let), got {err:?}"
+    );
 }
 
 #[test]
@@ -389,9 +417,12 @@ function entrypoint() -> nothing {
     let (db, sf) = single_file("test.ynz", src);
     let offset = src.find("let count").unwrap() + "let ".len();
     let err = rename_locations(&db, sf, offset, "class".to_string())
-        .err().expect("renaming to banned jargon must fail");
-    assert!(matches!(err, RenameError::NewNameIsBannedJargon(..)),
-        "expected NewNameIsBannedJargon, got {err:?}");
+        .err()
+        .expect("renaming to banned jargon must fail");
+    assert!(
+        matches!(err, RenameError::NewNameIsBannedJargon(..)),
+        "expected NewNameIsBannedJargon, got {err:?}"
+    );
 }
 
 #[test]
@@ -404,9 +435,12 @@ function entrypoint() -> nothing {
     let (db, sf) = single_file("test.ynz", src);
     let offset = src.find("let count").unwrap() + "let ".len();
     let err = rename_locations(&db, sf, offset, "123foo".to_string())
-        .err().expect("invalid identifier must fail");
-    assert!(matches!(err, RenameError::NewNameInvalidIdentifier(..)),
-        "expected NewNameInvalidIdentifier, got {err:?}");
+        .err()
+        .expect("invalid identifier must fail");
+    assert!(
+        matches!(err, RenameError::NewNameInvalidIdentifier(..)),
+        "expected NewNameInvalidIdentifier, got {err:?}"
+    );
 }
 
 #[test]
@@ -419,7 +453,8 @@ function entrypoint() -> nothing {
     let (db, sf) = single_file("test.ynz", src);
     let offset = src.find("let count").unwrap() + "let ".len();
     let err = rename_locations(&db, sf, offset, "".to_string())
-        .err().expect("empty name must fail");
+        .err()
+        .expect("empty name must fail");
     assert!(matches!(err, RenameError::NewNameInvalidIdentifier(..)));
 }
 
@@ -431,9 +466,12 @@ fn test_rename_locations_rejects_imported_symbol_at_use_site() {
 
     let call_offset = main_src.find("greet()").unwrap();
     let err = rename_locations(&db, main_sf, call_offset, "sayHello".to_string())
-        .err().expect("imported symbol rename must fail");
-    assert!(matches!(err, RenameError::CannotRenameImportedSymbolInThisFile(..)),
-        "expected CannotRenameImportedSymbolInThisFile, got {err:?}");
+        .err()
+        .expect("imported symbol rename must fail");
+    assert!(
+        matches!(err, RenameError::CannotRenameImportedSymbolInThisFile(..)),
+        "expected CannotRenameImportedSymbolInThisFile, got {err:?}"
+    );
 }
 
 #[test]
@@ -442,9 +480,12 @@ fn test_rename_locations_at_non_symbol_returns_not_a_renameable() {
     let (db, sf) = single_file("test.ynz", src);
     // Offset 0 = 'f' in the `function` keyword — not a resolvable identifier.
     let err = rename_locations(&db, sf, 0, "foo".to_string())
-        .err().expect("non-symbol must fail");
-    assert!(matches!(err, RenameError::NotARenameable),
-        "expected NotARenameable, got {err:?}");
+        .err()
+        .expect("non-symbol must fail");
+    assert!(
+        matches!(err, RenameError::NotARenameable),
+        "expected NotARenameable, got {err:?}"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -503,5 +544,9 @@ fn test_cross_file_reference_count_estimate_completes_fast() {
     let offset = dep_src.find("function greet").unwrap() + "function ".len();
     let _ = cross_file_reference_count_estimate(&db, dep_sf, offset);
     let elapsed = start.elapsed();
-    assert!(elapsed.as_millis() < 5, "estimate took {}ms, expected < 5ms", elapsed.as_millis());
+    assert!(
+        elapsed.as_millis() < 5,
+        "estimate took {}ms, expected < 5ms",
+        elapsed.as_millis()
+    );
 }

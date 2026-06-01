@@ -3,7 +3,9 @@
 // it doesn't. Bugs here silently break Ctrl-click navigation on imports — the
 // most common way developers jump between files.
 
-use ynz_lsp::{capabilities::PositionEncoding, document_link::document_link_response, state::ServerState};
+use ynz_lsp::{
+    capabilities::PositionEncoding, document_link::document_link_response, state::ServerState,
+};
 
 fn state_with_root(uri_path: &str, src: &str, root: &str) -> (ServerState, lsp_types::Url) {
     let mut state = ServerState::new(PositionEncoding::Utf8);
@@ -75,5 +77,8 @@ fn single_file_mode_returns_empty() {
     state.open_document(uri.clone(), src.to_string());
     // project_root is None — single-file mode
     let links = document_link_response(&state, &uri);
-    assert!(links.is_empty(), "single-file mode → no links; got: {links:?}");
+    assert!(
+        links.is_empty(),
+        "single-file mode → no links; got: {links:?}"
+    );
 }

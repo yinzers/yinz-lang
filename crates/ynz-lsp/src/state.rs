@@ -1,4 +1,7 @@
-use std::{collections::HashMap, path::{Path, PathBuf}};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use lsp_types::Url;
 use salsa::Setter as _;
@@ -100,7 +103,9 @@ impl ServerState {
     }
 
     fn index_dir(&mut self, dir: &Path) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {

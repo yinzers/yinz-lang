@@ -22,7 +22,8 @@ fn file_change_event_delivered_within_200ms() {
     let file = dir.path().join("test.ynz");
     fs::write(&file, "// initial content\n").unwrap();
 
-    let file_watcher = FileWatcher::new(std::slice::from_ref(&file), watcher::read_debounce_ms()).unwrap();
+    let file_watcher =
+        FileWatcher::new(std::slice::from_ref(&file), watcher::read_debounce_ms()).unwrap();
 
     let start = Instant::now();
     // Modify the file; expect a Changed event within 100ms debounce + delivery overhead.
@@ -36,9 +37,9 @@ fn file_change_event_delivered_within_200ms() {
         }
     });
 
-    let ev = rx.recv_timeout(Duration::from_millis(600)).expect(
-        "no file-change event within 600ms (debounce 100ms + 500ms headroom for CI)",
-    );
+    let ev = rx
+        .recv_timeout(Duration::from_millis(600))
+        .expect("no file-change event within 600ms (debounce 100ms + 500ms headroom for CI)");
     let elapsed = start.elapsed();
 
     match ev {

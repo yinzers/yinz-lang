@@ -4,9 +4,7 @@
 // "No definition found" silently or jump to the wrong file/line.
 
 use ynz_lsp::{
-    capabilities::PositionEncoding,
-    goto_definition::definition_response,
-    position::LineTable,
+    capabilities::PositionEncoding, goto_definition::definition_response, position::LineTable,
     state::ServerState,
 };
 
@@ -23,7 +21,12 @@ fn state_two_files(
     services_name: &str,
     services_src: &str,
     main_src: &str,
-) -> (ServerState, lsp_types::Url, lsp_types::Url, std::path::PathBuf) {
+) -> (
+    ServerState,
+    lsp_types::Url,
+    lsp_types::Url,
+    std::path::PathBuf,
+) {
     let dir = std::env::temp_dir().join(format!(
         "ynz_lsp_gotodef_{}",
         std::time::SystemTime::now()
@@ -52,7 +55,8 @@ fn state_two_files(
 }
 
 fn offset_of(src: &str, needle: &str) -> usize {
-    src.find(needle).unwrap_or_else(|| panic!("{needle:?} not in source"))
+    src.find(needle)
+        .unwrap_or_else(|| panic!("{needle:?} not in source"))
 }
 
 fn position_at(src: &str, needle: &str) -> lsp_types::Position {
@@ -69,7 +73,10 @@ fn test_goto_def_same_file_function_returns_location() {
     let (state, uri) = state_single(path, src);
     let pos = position_at(src, "greet()"); // offset at call site
     let result = definition_response(&state, &uri, pos);
-    assert!(result.is_some(), "definition must resolve for same-file function call");
+    assert!(
+        result.is_some(),
+        "definition must resolve for same-file function call"
+    );
     if let Some(lsp_types::GotoDefinitionResponse::Scalar(loc)) = result {
         // Declaration is at start of file — line 0.
         assert_eq!(loc.range.start.line, 0, "greet declared on line 0");
@@ -90,7 +97,10 @@ fn test_goto_def_same_file_shape_returns_location() {
         character: annotation_pos.character + 2,
     };
     let result = definition_response(&state, &uri, pos);
-    assert!(result.is_some(), "definition must resolve for shape annotation");
+    assert!(
+        result.is_some(),
+        "definition must resolve for shape annotation"
+    );
     if let Some(lsp_types::GotoDefinitionResponse::Scalar(loc)) = result {
         assert_eq!(loc.range.start.line, 0, "Player declared on line 0");
     }
@@ -104,7 +114,10 @@ fn test_goto_def_whitespace_returns_none() {
     let path = "/tmp/ynz_gotodef_ws.ynz";
     let (state, uri) = state_single(path, src);
     // Position in the whitespace inside the braces.
-    let pos = lsp_types::Position { line: 0, character: 35 };
+    let pos = lsp_types::Position {
+        line: 0,
+        character: 35,
+    };
     assert!(definition_response(&state, &uri, pos).is_none());
 }
 
@@ -114,7 +127,10 @@ fn test_goto_def_keyword_returns_none() {
     let path = "/tmp/ynz_gotodef_kw.ynz";
     let (state, uri) = state_single(path, src);
     // Position on `function` keyword (offset 0).
-    let pos = lsp_types::Position { line: 0, character: 0 };
+    let pos = lsp_types::Position {
+        line: 0,
+        character: 0,
+    };
     assert!(definition_response(&state, &uri, pos).is_none());
 }
 
@@ -133,8 +149,7 @@ fn test_goto_def_integer_literal_returns_none() {
 fn test_goto_def_cross_file_imported_function_returns_dep_uri() {
     let dep_src = "export function announce(name: string) -> string {\n  return name\n}\n";
     let main_src = "import { announce } from `services/players`\nfunction entrypoint() -> nothing {\n  let msg = announce(`Roberto`)\n}\n";
-    let (state, main_uri, dep_uri, _dir) =
-        state_two_files("players", dep_src, main_src);
+    let (state, main_uri, dep_uri, _dir) = state_two_files("players", dep_src, main_src);
 
     let pos = position_at(main_src, "announce(`Roberto`)");
     let result = definition_response(&state, &main_uri, pos);
@@ -144,7 +159,10 @@ fn test_goto_def_cross_file_imported_function_returns_dep_uri() {
         assert_ne!(loc.uri, main_uri, "cross-file jump must go to dep file");
         assert_eq!(loc.uri, dep_uri, "jump must point to players.ynz");
         // `announce` is declared on line 0 of dep file.
-        assert_eq!(loc.range.start.line, 0, "announce declared on line 0 of dep");
+        assert_eq!(
+            loc.range.start.line, 0,
+            "announce declared on line 0 of dep"
+        );
     }
 }
 

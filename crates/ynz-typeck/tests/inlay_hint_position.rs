@@ -22,7 +22,8 @@ fn single_file(src: &str) -> (CompilerDb, SourceFile) {
 }
 
 fn offset_of(src: &str, needle: &str) -> usize {
-    src.find(needle).unwrap_or_else(|| panic!("{needle:?} not found in source"))
+    src.find(needle)
+        .unwrap_or_else(|| panic!("{needle:?} not found in source"))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

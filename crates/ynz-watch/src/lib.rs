@@ -18,9 +18,8 @@ use std::path::PathBuf;
 use child::ChildHandle;
 use db::WatchDb;
 use json_emitter::JsonEmitter;
-use json_events::{ShutdownReason, WatchEvent as JsonWatchEvent, ts};
-use memory::{MemoryConfig, RssCheckResult, check_rss, hard_stop_message};
-
+use json_events::{ts, ShutdownReason, WatchEvent as JsonWatchEvent};
+use memory::{check_rss, hard_stop_message, MemoryConfig, RssCheckResult};
 
 /// Configuration for a `ynz watch` session.
 ///
@@ -103,7 +102,10 @@ pub fn run(config: WatchConfig) -> i32 {
     let mut emitter: Option<JsonEmitter> = if config.json {
         let mut e = JsonEmitter::new_stdout();
         let (timestamp, schema_version) = ts();
-        let watching: Vec<String> = watch_paths.iter().map(|p| p.display().to_string()).collect();
+        let watching: Vec<String> = watch_paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
         if let Err(err) = e.emit(&JsonWatchEvent::WatchReady {
             timestamp,
             schema_version,
@@ -130,8 +132,8 @@ pub fn run(config: WatchConfig) -> i32 {
         &config,
         &mut current_child,
         emitter.as_mut(),
-        true,  // force: shadow pre-populated by from_target; no prior compile to diff against
-        true,  // no_clear: don't wipe output before the initial build
+        true, // force: shadow pre-populated by from_target; no prior compile to diff against
+        true, // no_clear: don't wipe output before the initial build
     ) {
         // EPIPE on initial build — downstream consumer already gone.
         rebuild::emit_pipe_closed_to_stderr();
@@ -172,8 +174,8 @@ pub fn run(config: WatchConfig) -> i32 {
             &config,
             &mut current_child,
             emitter.as_mut(),
-            false,            // not force: skip if content unchanged (prevents IN_OPEN feedback loop)
-            config.no_clear,  // honour --no-clear flag; clear only on real content changes
+            false, // not force: skip if content unchanged (prevents IN_OPEN feedback loop)
+            config.no_clear, // honour --no-clear flag; clear only on real content changes
         );
         if got_epipe {
             epipe.set(true);
@@ -189,7 +191,10 @@ pub fn run(config: WatchConfig) -> i32 {
         if !rss_unavailable_logged {
             match check_rss(&mem_config, &mut last_warn) {
                 RssCheckResult::Ok => {}
-                RssCheckResult::Warn { rss_mb, threshold_mb } => {
+                RssCheckResult::Warn {
+                    rss_mb,
+                    threshold_mb,
+                } => {
                     if !config.json {
                         eprintln!(
                             "ynz watch: memory warning — {rss_mb}MB (threshold: {threshold_mb}MB)"
@@ -205,8 +210,12 @@ pub fn run(config: WatchConfig) -> i32 {
                         });
                     }
                 }
-                RssCheckResult::Stop { rss_mb, threshold_mb } => {
-                    let msg = hard_stop_message(rss_mb, threshold_mb, &config.path.display().to_string());
+                RssCheckResult::Stop {
+                    rss_mb,
+                    threshold_mb,
+                } => {
+                    let msg =
+                        hard_stop_message(rss_mb, threshold_mb, &config.path.display().to_string());
                     eprintln!("{msg}");
                     if let Some(ref mut e) = emitter {
                         let (timestamp, schema_version) = ts();
@@ -221,8 +230,10 @@ pub fn run(config: WatchConfig) -> i32 {
                 }
                 RssCheckResult::Unavailable => {
                     rss_unavailable_logged = true;
-                    eprintln!("ynz watch: memory polling unavailable on this platform; \
-                               hard-stop disabled for this session");
+                    eprintln!(
+                        "ynz watch: memory polling unavailable on this platform; \
+                               hard-stop disabled for this session"
+                    );
                     if let Some(ref mut e) = emitter {
                         let (timestamp, schema_version) = ts();
                         let _ = e.emit(&JsonWatchEvent::MemoryUnavailable {
@@ -305,4 +316,3 @@ fn run_rebuild_cycle(
 fn is_epipe(e: &std::io::Error) -> bool {
     e.kind() == std::io::ErrorKind::BrokenPipe
 }
-

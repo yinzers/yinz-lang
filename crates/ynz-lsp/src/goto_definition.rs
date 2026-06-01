@@ -51,8 +51,7 @@ pub fn definition_response(
     let origin_table = LineTable::new(&origin_text);
 
     // Use the session-negotiated encoding so UTF-16 clients get correct character offsets.
-    let start =
-        origin_table.byte_offset_to_position(&origin_text, decl_span.start, state.encoding);
+    let start = origin_table.byte_offset_to_position(&origin_text, decl_span.start, state.encoding);
     let end = origin_table.byte_offset_to_position(
         &origin_text,
         decl_span.end.min(origin_text.len()),

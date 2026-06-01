@@ -6,20 +6,20 @@
 ///
 /// The other tests (rss_unavailable, db_rebuild_preserves_state, memory_config)
 /// run in the default test suite.
-use std::{
-    path::PathBuf,
-    time::Duration,
-};
+use std::{path::PathBuf, time::Duration};
 
 use ynz_watch::{
     db::init_db,
-    memory::{MemoryConfig, RssCheckResult, check_rss, current_rss_bytes, hard_stop_message},
+    memory::{check_rss, current_rss_bytes, hard_stop_message, MemoryConfig, RssCheckResult},
     project::WatchSourceFile,
 };
 
 fn make_db(path: &str, text: &str) -> (ynz_watch::db::WatchDb, PathBuf) {
     let p = PathBuf::from(path);
-    let db = init_db(&[WatchSourceFile { path: p.clone(), text: text.to_string() }]);
+    let db = init_db(&[WatchSourceFile {
+        path: p.clone(),
+        text: text.to_string(),
+    }]);
     (db, p)
 }
 
@@ -52,14 +52,19 @@ fn current_rss_bytes_returns_value_on_supported_platforms() {
 //      before hitting the 4GB hard ceiling — silent degradation.
 #[test]
 fn check_rss_warn_triggers_above_threshold() {
-    let config = MemoryConfig { warn_mb: 0, max_mb: u64::MAX };
+    let config = MemoryConfig {
+        warn_mb: 0,
+        max_mb: u64::MAX,
+    };
     let mut last_warn = None;
     let result = check_rss(&config, &mut last_warn);
     // With warn_mb=0, any non-zero RSS should trigger Warn (not Ok or Stop).
     match result {
         RssCheckResult::Warn { .. } => {} // expected
         RssCheckResult::Ok => panic!("expected Warn when threshold=0; got Ok"),
-        RssCheckResult::Stop { .. } => panic!("Stop is mathematically unreachable with max_mb=u64::MAX"),
+        RssCheckResult::Stop { .. } => {
+            panic!("Stop is mathematically unreachable with max_mb=u64::MAX")
+        }
         RssCheckResult::Unavailable => {} // acceptable on platforms without RSS polling
     }
 }
@@ -69,7 +74,10 @@ fn check_rss_warn_triggers_above_threshold() {
 //      helpful message. Hard-stop is the safety net when Layer 1 and 2 aren't enough.
 #[test]
 fn check_rss_stop_triggers_at_zero_ceiling() {
-    let config = MemoryConfig { warn_mb: 0, max_mb: 0 };
+    let config = MemoryConfig {
+        warn_mb: 0,
+        max_mb: 0,
+    };
     let mut last_warn = None;
     let result = check_rss(&config, &mut last_warn);
     match result {
@@ -94,7 +102,10 @@ fn check_rss_stop_triggers_at_zero_ceiling() {
 //      terminal output that drowns the actual compile errors.
 #[test]
 fn check_rss_warn_is_rate_limited() {
-    let config = MemoryConfig { warn_mb: 0, max_mb: u64::MAX };
+    let config = MemoryConfig {
+        warn_mb: 0,
+        max_mb: u64::MAX,
+    };
     let mut last_warn = None;
 
     // First call should potentially warn.
@@ -104,7 +115,9 @@ fn check_rss_warn_is_rate_limited() {
     if last_warn.is_some() {
         let result = check_rss(&config, &mut last_warn);
         match result {
-            RssCheckResult::Warn { .. } => panic!("second immediate call should not warn — rate limit broken"),
+            RssCheckResult::Warn { .. } => {
+                panic!("second immediate call should not warn — rate limit broken")
+            }
             _ => {} // Ok, Stop, or Unavailable all acceptable
         }
     }
@@ -120,7 +133,10 @@ fn hard_stop_message_format() {
     assert!(msg.contains("WHAT:"), "missing WHAT");
     assert!(msg.contains("WHAT INSTEAD:"), "missing WHAT INSTEAD");
     assert!(msg.contains("WHY:"), "missing WHY");
-    assert!(msg.contains("YNZ_WATCH_REBUILD_AFTER"), "missing tuning guidance");
+    assert!(
+        msg.contains("YNZ_WATCH_REBUILD_AFTER"),
+        "missing tuning guidance"
+    );
 }
 
 // WHY: Layer 2 periodic-rebuild threshold must trigger at N rebuilds and reset to 0
@@ -142,7 +158,11 @@ fn layer2_periodic_rebuild_triggers_at_threshold() {
     );
 
     db.rebuild_db();
-    assert_eq!(db.rebuild_count(), 0, "rebuild_count must reset to 0 after rebuild_db()");
+    assert_eq!(
+        db.rebuild_count(),
+        0,
+        "rebuild_count must reset to 0 after rebuild_db()"
+    );
     assert!(
         !db.should_periodic_rebuild(1, Duration::from_secs(9999)),
         "should NOT trigger immediately after rebuild_db()"
@@ -175,9 +195,7 @@ fn long_session_10k_rebuilds() {
 
     for i in 1..=10000usize {
         // Mutate source text slightly each iteration via update_source API.
-        let src = format!(
-            "function entrypoint() -> nothing {{ print(`iteration {i}`) }}\n"
-        );
+        let src = format!("function entrypoint() -> nothing {{ print(`iteration {i}`) }}\n");
         db.update_source(&path, src);
 
         let _ = db.run_codegen(&path);
@@ -202,8 +220,14 @@ fn long_session_10k_rebuilds() {
     );
 
     if rss_samples.len() >= 2 {
-        let baseline_mb = rss_samples.iter().find(|(i, _)| *i == 500).map(|(_, mb)| *mb);
-        let final_mb = rss_samples.iter().find(|(i, _)| *i == 10000).map(|(_, mb)| *mb);
+        let baseline_mb = rss_samples
+            .iter()
+            .find(|(i, _)| *i == 500)
+            .map(|(_, mb)| *mb);
+        let final_mb = rss_samples
+            .iter()
+            .find(|(i, _)| *i == 10000)
+            .map(|(_, mb)| *mb);
 
         if let (Some(baseline), Some(final_rss)) = (baseline_mb, final_mb) {
             let max_allowed = (baseline as f64 * 1.05) as u64;

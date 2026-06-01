@@ -8,8 +8,8 @@ use crate::{
     check::{check, TypedModule},
     exports::{collect_exports, ExportTable},
     generics::{GenericFnTable, GenericShapeTable, MonomorphizationTable},
-    may_block,
     intrinsics::PrimitiveIntrinsicTable,
+    may_block,
     options_table::collect_options,
     resolve_import::resolve_imports,
     shapes::{collect_generic_shapes, collect_shapes, ShapeTable},
@@ -277,8 +277,11 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
 
     // Export the suspends set so codegen can read it directly instead of deriving
     // it from sig_table (which is from module_signatures_query, pre-analysis).
-    let suspends_set: std::collections::HashSet<String> =
-        may_block_result.suspends.iter().map(|s| s.to_string()).collect();
+    let suspends_set: std::collections::HashSet<String> = may_block_result
+        .suspends
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
 
     Arc::new(CheckOutput {
         typed_module: typed,

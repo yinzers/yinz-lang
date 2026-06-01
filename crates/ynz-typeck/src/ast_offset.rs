@@ -3,8 +3,8 @@
 //! Used by the LSP to map a cursor position to a named symbol reference so
 //! `resolve_symbol_at` can determine what the user is pointing at.
 use ynz_ast::nodes::{
-    Block, ConstDecl, Expr, FieldDecl, FunctionDecl, ImportDecl, ImportKind, Item, MatchPatternKind,
-    Module, OptionsDecl, ShapeDecl, Stmt, StringPart, Type as AstType,
+    Block, ConstDecl, Expr, FieldDecl, FunctionDecl, ImportDecl, ImportKind, Item,
+    MatchPatternKind, Module, OptionsDecl, ShapeDecl, Stmt, StringPart, Type as AstType,
 };
 use ynz_diagnostics::SourceSpan;
 
@@ -115,7 +115,10 @@ fn ident_in_import(d: &ImportDecl, offset: usize) -> Option<(String, SourceSpan)
                 }
             }
         }
-        ImportKind::Namespace { local_name, local_name_span } => {
+        ImportKind::Namespace {
+            local_name,
+            local_name_span,
+        } => {
             if span_contains(local_name_span, offset) {
                 return Some((local_name.clone(), local_name_span.clone()));
             }
@@ -142,7 +145,13 @@ fn ident_in_block(block: &Block, offset: usize) -> Option<(String, SourceSpan)> 
 
 fn ident_in_stmt(stmt: &Stmt, offset: usize) -> Option<(String, SourceSpan)> {
     match stmt {
-        Stmt::Let { name, name_span, ty, value, .. } => {
+        Stmt::Let {
+            name,
+            name_span,
+            ty,
+            value,
+            ..
+        } => {
             if span_contains(name_span, offset) {
                 return Some((name.clone(), name_span.clone()));
             }
@@ -153,7 +162,12 @@ fn ident_in_stmt(stmt: &Stmt, offset: usize) -> Option<(String, SourceSpan)> {
             }
             ident_in_expr(value, offset)
         }
-        Stmt::Assign { target, target_span, value, .. } => {
+        Stmt::Assign {
+            target,
+            target_span,
+            value,
+            ..
+        } => {
             if span_contains(target_span, offset) {
                 return Some((target.clone(), target_span.clone()));
             }
@@ -164,7 +178,12 @@ fn ident_in_stmt(stmt: &Stmt, offset: usize) -> Option<(String, SourceSpan)> {
         Stmt::If { cond, body, .. } => {
             ident_in_expr(cond, offset).or_else(|| ident_in_block(body, offset))
         }
-        Stmt::Match { scrutinee, arms, else_arm, .. } => {
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
             if let Some(r) = ident_in_expr(scrutinee, offset) {
                 return Some(r);
             }
@@ -197,11 +216,14 @@ fn ident_in_stmt(stmt: &Stmt, offset: usize) -> Option<(String, SourceSpan)> {
         Stmt::FieldAssign { target, value, .. } => {
             ident_in_expr(target, offset).or_else(|| ident_in_expr(value, offset))
         }
-        Stmt::IndexAssign { receiver, index, value, .. } => {
-            ident_in_expr(receiver, offset)
-                .or_else(|| ident_in_expr(index, offset))
-                .or_else(|| ident_in_expr(value, offset))
-        }
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => ident_in_expr(receiver, offset)
+            .or_else(|| ident_in_expr(index, offset))
+            .or_else(|| ident_in_expr(value, offset)),
     }
 }
 
@@ -225,7 +247,13 @@ fn ident_in_expr(expr: &Expr, offset: usize) -> Option<(String, SourceSpan)> {
             }
             None
         }
-        Expr::MethodCall { receiver, method, method_span, args, .. } => {
+        Expr::MethodCall {
+            receiver,
+            method,
+            method_span,
+            args,
+            ..
+        } => {
             if span_contains(method_span, offset) {
                 return Some((method.clone(), method_span.clone()));
             }
@@ -239,7 +267,12 @@ fn ident_in_expr(expr: &Expr, offset: usize) -> Option<(String, SourceSpan)> {
             }
             None
         }
-        Expr::FieldAccess { receiver, field, field_span, .. } => {
+        Expr::FieldAccess {
+            receiver,
+            field,
+            field_span,
+            ..
+        } => {
             if span_contains(field_span, offset) {
                 return Some((field.clone(), field_span.clone()));
             }
@@ -258,9 +291,9 @@ fn ident_in_expr(expr: &Expr, offset: usize) -> Option<(String, SourceSpan)> {
             None
         }
         Expr::PostfixOp { receiver, .. } => ident_in_expr(receiver, offset),
-        Expr::IndexAccess { receiver, index, .. } => {
-            ident_in_expr(receiver, offset).or_else(|| ident_in_expr(index, offset))
-        }
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => ident_in_expr(receiver, offset).or_else(|| ident_in_expr(index, offset)),
         Expr::ArrayLit { elements, .. } => {
             for e in elements {
                 if let Some(r) = ident_in_expr(e, offset) {
@@ -331,7 +364,12 @@ fn ident_in_ast_type(ty: &AstType, offset: usize) -> Option<(String, SourceSpan)
                 None
             }
         }
-        AstType::Generic { name, name_span, args, .. } => {
+        AstType::Generic {
+            name,
+            name_span,
+            args,
+            ..
+        } => {
             if span_contains(name_span, offset) {
                 return Some((name.clone(), name_span.clone()));
             }

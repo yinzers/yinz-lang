@@ -127,7 +127,10 @@ fn hover_wait_includes_what_what_instead_why() {
     let h = lsp_hover_for_token("wait").expect("wait must have hover content");
     assert_eq!(h.kind, HoverKind::Keyword);
     let body = &h.markdown_body;
-    assert!(body.contains("**WHAT:**"), "wait hover must have WHAT clause");
+    assert!(
+        body.contains("**WHAT:**"),
+        "wait hover must have WHAT clause"
+    );
     assert!(
         body.contains("**WHAT INSTEAD:**"),
         "wait hover must have WHAT INSTEAD clause"
@@ -146,12 +149,18 @@ fn hover_background_includes_what_what_instead_why() {
     let h = lsp_hover_for_token("background").expect("background must have hover content");
     assert_eq!(h.kind, HoverKind::Keyword);
     let body = &h.markdown_body;
-    assert!(body.contains("**WHAT:**"), "background hover must have WHAT clause");
+    assert!(
+        body.contains("**WHAT:**"),
+        "background hover must have WHAT clause"
+    );
     assert!(
         body.contains("**WHAT INSTEAD:**"),
         "background hover must have WHAT INSTEAD clause"
     );
-    assert!(body.contains("**WHY:**"), "background hover must have WHY clause");
+    assert!(
+        body.contains("**WHY:**"),
+        "background hover must have WHY clause"
+    );
     assert!(
         body.contains("separate thread"),
         "background hover must mention separate thread (v0.3-M1 semantics)"

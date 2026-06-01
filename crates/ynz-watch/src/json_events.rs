@@ -192,7 +192,8 @@ mod tests {
         assert_eq!(&ts[16..17], ":", "timestamp[16] must be ':'");
         assert_eq!(&ts[19..20], ".", "timestamp[19] must be '.'");
         // All other chars must be ASCII digits.
-        let digit_positions: &[usize] = &[0,1,2,3,5,6,8,9,11,12,14,15,17,18,20,21,22];
+        let digit_positions: &[usize] =
+            &[0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18, 20, 21, 22];
         for &i in digit_positions {
             assert!(
                 ts.as_bytes()[i].is_ascii_digit(),

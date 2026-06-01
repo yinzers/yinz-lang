@@ -5,9 +5,7 @@
 // no promotion hint fires when the mutation evidence lives in the `else =>` arm.
 
 use ynz_parser::{CompilerDb, SourceFile};
-use ynz_typeck::{
-    array_to_fixed_promotion_hints, let_to_const_promotion_hints, PromotionKind,
-};
+use ynz_typeck::{array_to_fixed_promotion_hints, let_to_const_promotion_hints, PromotionKind};
 
 fn single_file(src: &str) -> (CompilerDb, SourceFile) {
     let path = format!("/tmp/ynz_else_arm_{}.ynz", src.len());

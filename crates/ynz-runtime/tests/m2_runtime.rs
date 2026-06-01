@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 
 use tokio::time::Sleep;
 use ynz_runtime::runtime::{
-    ynz_rt_async_sleep_create, ynz_rt_async_sleep_poll, ynz_rt_run_entrypoint,
-    ynz_rt_init, ynz_rt_shutdown, ynz_rt_spawn,
+    ynz_rt_async_sleep_create, ynz_rt_async_sleep_poll, ynz_rt_init, ynz_rt_run_entrypoint,
+    ynz_rt_shutdown, ynz_rt_spawn,
 };
 
 // ── Test serialization ────────────────────────────────────────────────────────
@@ -73,7 +73,11 @@ struct TestStateMachine {
 impl TestStateMachine {
     fn new(sleep_ms: u64) -> Box<Self> {
         FRAME_ALLOC.fetch_add(1, Ordering::SeqCst);
-        Box::new(Self { resume_point: 0, sleep_handle: std::ptr::null_mut(), sleep_ms })
+        Box::new(Self {
+            resume_point: 0,
+            sleep_handle: std::ptr::null_mut(),
+            sleep_ms,
+        })
     }
 }
 
@@ -90,9 +94,7 @@ impl Drop for TestStateMachine {
             // SAFETY: sleep_handle was returned by ynz_rt_async_sleep_create
             // (Box::into_raw of Box<Pin<Box<Sleep>>>). Reconstructing the Box here
             // is the correct inverse; it runs the Sleep drop impl.
-            drop(unsafe {
-                Box::from_raw(self.sleep_handle as *mut Pin<Box<Sleep>>)
-            });
+            drop(unsafe { Box::from_raw(self.sleep_handle as *mut Pin<Box<Sleep>>) });
             self.sleep_handle = std::ptr::null_mut();
         }
     }
@@ -115,8 +117,7 @@ impl Future for TestStateMachine {
                     let waker_ctx = cx as *mut Context<'_> as *mut u8;
                     // SAFETY: sleep_handle is non-null (set in state 0).
                     // waker_ctx is valid for this call's duration.
-                    let result =
-                        unsafe { ynz_rt_async_sleep_poll(self.sleep_handle, waker_ctx) };
+                    let result = unsafe { ynz_rt_async_sleep_poll(self.sleep_handle, waker_ctx) };
                     match result {
                         1 => return Poll::Pending,
                         0 => {
@@ -207,7 +208,11 @@ fn sleep_poll_suspend_and_resume() {
             elapsed < Duration::from_millis(250),
             "sleep took too long ({elapsed:?}); scheduler may be broken"
         );
-        assert_eq!(net_frames(), 0, "frame alloc/free mismatch after single sleep");
+        assert_eq!(
+            net_frames(),
+            0,
+            "frame alloc/free mismatch after single sleep"
+        );
     });
 }
 
@@ -272,8 +277,8 @@ struct SyncValueSm {
     resume_point: i32,
     _padding: i32,
     sleep_handle: *mut u8,
-    return_val: i64,   // frame offset 16 — SyncStateFnFuture::poll reads from here
-    _return_hi: i64,   // frame offset 24 — unused (errors field)
+    return_val: i64, // frame offset 16 — SyncStateFnFuture::poll reads from here
+    _return_hi: i64, // frame offset 24 — unused (errors field)
 }
 
 // SAFETY: exclusively owned by the sync bridge call; not shared across threads.
@@ -360,9 +365,7 @@ fn call_state_machine_sync_from_spawn_blocking() {
                 let mut sm = SyncValueSm::new();
                 let frame_ptr = sm.as_mut() as *mut SyncValueSm as *mut u8;
                 // SAFETY: frame_ptr valid; sync_value_sm_resume valid; frame lives for call duration.
-                let ret = unsafe {
-                    ynz_rt_run_entrypoint(sync_value_sm_resume, frame_ptr, 0)
-                };
+                let ret = unsafe { ynz_rt_run_entrypoint(sync_value_sm_resume, frame_ptr, 0) };
                 drop(sm);
                 ret
             })
@@ -370,8 +373,13 @@ fn call_state_machine_sync_from_spawn_blocking() {
             .expect("spawn_blocking panicked")
         });
         let elapsed = start.elapsed();
-        eprintln!("call_state_machine_sync_from_spawn_blocking: elapsed={elapsed:?} result={result}");
-        assert_eq!(result, 42, "program-entry driver must return state machine's final value (expected 42)");
+        eprintln!(
+            "call_state_machine_sync_from_spawn_blocking: elapsed={elapsed:?} result={result}"
+        );
+        assert_eq!(
+            result, 42,
+            "program-entry driver must return state machine's final value (expected 42)"
+        );
         assert!(
             elapsed >= Duration::from_millis(40),
             "program-entry driver returned too fast ({elapsed:?})"
@@ -401,9 +409,7 @@ fn call_state_machine_sync_no_tokio_context() {
         let mut sm = SyncValueSm::new();
         let frame_ptr = sm.as_mut() as *mut SyncValueSm as *mut u8;
         // SAFETY: frame_ptr valid; sync_value_sm_resume valid; frame lives for call duration.
-        let ret = unsafe {
-            ynz_rt_run_entrypoint(sync_value_sm_resume, frame_ptr, 0)
-        };
+        let ret = unsafe { ynz_rt_run_entrypoint(sync_value_sm_resume, frame_ptr, 0) };
         drop(sm);
         ret
     })
@@ -412,7 +418,10 @@ fn call_state_machine_sync_no_tokio_context() {
 
     let elapsed = start.elapsed();
     eprintln!("call_state_machine_sync_no_tokio_context: elapsed={elapsed:?} result={result}");
-    assert_eq!(result, 42, "program-entry driver Err-arm must return state machine's final value (expected 42)");
+    assert_eq!(
+        result, 42,
+        "program-entry driver Err-arm must return state machine's final value (expected 42)"
+    );
     assert!(
         elapsed >= Duration::from_millis(40),
         "sync bridge returned too fast ({elapsed:?}) — may have skipped the sleep"
@@ -438,11 +447,11 @@ fn call_state_machine_sync_no_tokio_context() {
 // Extra payload fields live at offset 32+ (after the 32-byte header).
 #[repr(C)]
 struct SignalSm {
-    resume_point: i32,            // offset 0 — frame state discriminant
-    _padding: i32,                // offset 4 — alignment padding
-    sleep_handle: *mut u8,        // offset 8 — always null (SignalSm has no own sleep)
-    _return_slot_lo: i64,         // offset 16 — return slot lo (unused)
-    _return_slot_hi: i64,         // offset 24 — return slot hi (unused)
+    resume_point: i32,     // offset 0 — frame state discriminant
+    _padding: i32,         // offset 4 — alignment padding
+    sleep_handle: *mut u8, // offset 8 — always null (SignalSm has no own sleep)
+    _return_slot_lo: i64,  // offset 16 — return slot lo (unused)
+    _return_slot_hi: i64,  // offset 24 — return slot hi (unused)
     // Extra test-specific fields at offset 32+ (after the P7 header).
     inner: Box<TestStateMachine>, // offset 32
     tx: std::sync::mpsc::Sender<()>,
@@ -521,12 +530,19 @@ fn rt_spawn_drives_state_machine_on_io_pool() {
         ynz_rt_spawn(signal_sm_resume, frame_ptr, frame_size, -1);
     }
 
-    rx.recv_timeout(Duration::from_secs(2)).expect("state machine did not complete within 2s");
+    rx.recv_timeout(Duration::from_secs(2))
+        .expect("state machine did not complete within 2s");
 
     let elapsed = start.elapsed();
     eprintln!("rt_spawn_drives_state_machine_on_io_pool: elapsed={elapsed:?}");
-    assert!(elapsed >= Duration::from_millis(80), "completed too fast ({elapsed:?})");
-    assert!(elapsed < Duration::from_millis(500), "timed out ({elapsed:?})");
+    assert!(
+        elapsed >= Duration::from_millis(80),
+        "completed too fast ({elapsed:?})"
+    );
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "timed out ({elapsed:?})"
+    );
 
     ynz_rt_shutdown();
 }

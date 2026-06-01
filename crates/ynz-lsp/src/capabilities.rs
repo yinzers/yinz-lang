@@ -1,3 +1,4 @@
+use crate::semantic_tokens::semantic_tokens_options;
 use lsp_types::{
     CodeActionOptions, CodeActionProviderCapability, CompletionOptions, DocumentLinkOptions,
     FileOperationFilter, FileOperationPattern, FileOperationPatternKind,
@@ -7,7 +8,6 @@ use lsp_types::{
     WorkDoneProgressOptions, WorkspaceFileOperationsServerCapabilities,
     WorkspaceServerCapabilities,
 };
-use crate::semantic_tokens::semantic_tokens_options;
 
 /// The position encoding this server prefers. UTF-8 means LSP Position.character == byte offset,
 /// which matches SourceSpan exactly — no conversion needed when the client supports it.

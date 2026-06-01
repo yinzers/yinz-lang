@@ -4,9 +4,7 @@
 // symbols so clients distinguish "no refs found" from "not a symbol."
 
 use ynz_lsp::{
-    capabilities::PositionEncoding,
-    position::LineTable,
-    references::references_response,
+    capabilities::PositionEncoding, position::LineTable, references::references_response,
     state::ServerState,
 };
 
@@ -26,7 +24,12 @@ fn state_two_files(
     services_name: &str,
     services_src: &str,
     main_src: &str,
-) -> (ServerState, lsp_types::Url, lsp_types::Url, std::path::PathBuf) {
+) -> (
+    ServerState,
+    lsp_types::Url,
+    lsp_types::Url,
+    std::path::PathBuf,
+) {
     let dir = std::env::temp_dir().join(format!(
         "ynz_lsp_refs_{}",
         std::time::SystemTime::now()
@@ -51,7 +54,9 @@ fn state_two_files(
 }
 
 fn position_at(src: &str, needle: &str) -> lsp_types::Position {
-    let offset = src.find(needle).unwrap_or_else(|| panic!("{needle:?} not in src"));
+    let offset = src
+        .find(needle)
+        .unwrap_or_else(|| panic!("{needle:?} not in src"));
     LineTable::new(src).byte_offset_to_position(src, offset, PositionEncoding::Utf8)
 }
 
@@ -61,8 +66,11 @@ fn test_references_include_decl_false_excludes_declaration() {
     let path = "/tmp/ynz_refs_excl.ynz";
     let (state, uri) = state_single(path, src);
     let decl_pos = position_at(src, "greet()"); // first occurrence = call, not decl
-    // Position on the declaration `function greet`
-    let decl_name_pos = lsp_types::Position { line: 0, character: 9 }; // 'g' of greet
+                                                // Position on the declaration `function greet`
+    let decl_name_pos = lsp_types::Position {
+        line: 0,
+        character: 9,
+    }; // 'g' of greet
     let refs = references_response(&state, &uri, decl_name_pos, false, &make_sender());
     let refs = refs.expect("should return Some (not a non-symbol offset)");
     // 3 call sites, NOT the declaration.
@@ -75,10 +83,17 @@ fn test_references_include_decl_true_includes_declaration() {
     let src = "function greet() -> string { return `hi` }\nfunction entrypoint() -> nothing {\n  let a = greet()\n}\n";
     let path = "/tmp/ynz_refs_incl.ynz";
     let (state, uri) = state_single(path, src);
-    let decl_pos = lsp_types::Position { line: 0, character: 9 };
+    let decl_pos = lsp_types::Position {
+        line: 0,
+        character: 9,
+    };
     let refs = references_response(&state, &uri, decl_pos, true, &make_sender());
     let refs = refs.expect("should return Some");
-    assert!(refs.len() >= 2, "expected decl + 1 call; got {}", refs.len());
+    assert!(
+        refs.len() >= 2,
+        "expected decl + 1 call; got {}",
+        refs.len()
+    );
 }
 
 #[test]
@@ -90,7 +105,10 @@ fn test_references_whitespace_returns_some_empty_not_none() {
     let src = "function entrypoint() -> nothing {   }\n";
     let path = "/tmp/ynz_refs_ws.ynz";
     let (state, uri) = state_single(path, src);
-    let pos = lsp_types::Position { line: 0, character: 35 };
+    let pos = lsp_types::Position {
+        line: 0,
+        character: 35,
+    };
     let refs = references_response(&state, &uri, pos, false, &make_sender());
     let refs = refs.expect("whitespace returns Some(empty), not None");
     assert!(refs.is_empty(), "whitespace should produce zero references");
@@ -102,11 +120,18 @@ fn test_references_unknown_symbol_returns_empty_vec_not_none() {
     let src = "function solo() -> nothing {}\nfunction entrypoint() -> nothing {}\n";
     let path = "/tmp/ynz_refs_solo.ynz";
     let (state, uri) = state_single(path, src);
-    let decl_pos = lsp_types::Position { line: 0, character: 9 }; // 'solo'
+    let decl_pos = lsp_types::Position {
+        line: 0,
+        character: 9,
+    }; // 'solo'
     let refs = references_response(&state, &uri, decl_pos, false, &make_sender())
         .expect("declared symbol must return Some(vec)");
     // No call sites — returns empty vec, not None.
-    assert!(refs.is_empty(), "expected zero call sites; got {}", refs.len());
+    assert!(
+        refs.is_empty(),
+        "expected zero call sites; got {}",
+        refs.len()
+    );
 }
 
 #[test]
@@ -117,7 +142,11 @@ fn test_references_cross_file_symbol_returns_cross_file_locations() {
     let call_pos = position_at(main_src, "announce(`Roberto`)");
     let refs = references_response(&state, &main_uri, call_pos, false, &make_sender());
     let refs = refs.expect("cross-file call must return Some");
-    assert!(refs.len() >= 2, "expected 2 call sites in main file; got {}", refs.len());
+    assert!(
+        refs.len() >= 2,
+        "expected 2 call sites in main file; got {}",
+        refs.len()
+    );
 }
 
 #[test]
@@ -136,7 +165,10 @@ fn test_references_progress_emitted_for_large_project() {
         state.open_document(fake_uri, format!("function f{i}() -> nothing {{}}"));
     }
     let (tx, rx) = crossbeam_channel::unbounded();
-    let decl_pos = lsp_types::Position { line: 0, character: 9 };
+    let decl_pos = lsp_types::Position {
+        line: 0,
+        character: 9,
+    };
     let _ = references_response(&state, &uri, decl_pos, false, &tx);
     // Drain notifications — we should see at least one progress notification.
     let mut got_progress = false;
@@ -147,7 +179,10 @@ fn test_references_progress_emitted_for_large_project() {
             }
         }
     }
-    assert!(got_progress, "progress notification must be emitted for >10 open documents");
+    assert!(
+        got_progress,
+        "progress notification must be emitted for >10 open documents"
+    );
 }
 
 #[test]
@@ -155,7 +190,10 @@ fn test_references_performance_under_500ms() {
     let src = "function greet() -> string { return `hi` }\nfunction entrypoint() -> nothing {\n  let a = greet()\n  let b = greet()\n}\n";
     let path = "/tmp/ynz_refs_perf.ynz";
     let (state, uri) = state_single(path, src);
-    let decl_pos = lsp_types::Position { line: 0, character: 9 };
+    let decl_pos = lsp_types::Position {
+        line: 0,
+        character: 9,
+    };
     let start = std::time::Instant::now();
     let _ = references_response(&state, &uri, decl_pos, false, &make_sender());
     let elapsed = start.elapsed();
@@ -171,7 +209,10 @@ fn test_references_unknown_uri_returns_none() {
     // None is reserved for "unknown URI or invalid position", not for "no refs".
     let state = ServerState::new(PositionEncoding::Utf8);
     let unknown_uri = lsp_types::Url::from_file_path("/tmp/nonexistent_ynz_file.ynz").unwrap();
-    let pos = lsp_types::Position { line: 0, character: 0 };
+    let pos = lsp_types::Position {
+        line: 0,
+        character: 0,
+    };
     assert!(
         references_response(&state, &unknown_uri, pos, false, &make_sender()).is_none(),
         "unknown URI must return None, not Some(empty)"
@@ -202,5 +243,9 @@ fn test_progress_tokens_are_unique() {
     // The `begin` notifications carry the token we care about.
     let begin_tokens: Vec<_> = tokens.iter().step_by(2).collect(); // every other = begin
     let unique: std::collections::HashSet<_> = begin_tokens.iter().collect();
-    assert_eq!(unique.len(), begin_tokens.len(), "all 5 progress tokens must be distinct");
+    assert_eq!(
+        unique.len(),
+        begin_tokens.len(),
+        "all 5 progress tokens must be distinct"
+    );
 }

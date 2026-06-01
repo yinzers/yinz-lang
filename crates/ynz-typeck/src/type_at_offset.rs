@@ -81,7 +81,11 @@ pub fn type_of_name_at_offset(module: &Module, name: &str, byte_offset: usize) -
 fn resolve_type_by_name_in_block(block: &Block, name: &str) -> Option<Type> {
     for stmt in &block.stmts {
         match stmt {
-            Stmt::Let { name: bname, ty: Some(ty), .. } if bname == name => {
+            Stmt::Let {
+                name: bname,
+                ty: Some(ty),
+                ..
+            } if bname == name => {
                 return ast_type_to_primitive(ty);
             }
             Stmt::Let { .. } => {}
@@ -143,9 +147,11 @@ fn resolve_type_in_function(f: &FunctionDecl, byte_offset: usize) -> Option<Type
 fn resolve_type_in_block(block: &Block, byte_offset: usize) -> Option<Type> {
     for stmt in &block.stmts {
         match stmt {
-            Stmt::Let { name_span, ty: Some(ty), .. }
-                if span_contains(name_span, byte_offset) =>
-            {
+            Stmt::Let {
+                name_span,
+                ty: Some(ty),
+                ..
+            } if span_contains(name_span, byte_offset) => {
                 return ast_type_to_primitive(ty);
             }
             Stmt::Let { .. } => {} // unannotated let — can't determine type without inference
@@ -246,7 +252,12 @@ mod tests {
         let (db, sf) = make_db_with("test.ynz", src);
         let p_offset = src.find('p').unwrap();
         let ty = type_of_expression_at_offset(&db, sf, p_offset);
-        assert_eq!(ty, Some(Type::Shape { name: "Player".to_string() }));
+        assert_eq!(
+            ty,
+            Some(Type::Shape {
+                name: "Player".to_string()
+            })
+        );
     }
 
     #[test]

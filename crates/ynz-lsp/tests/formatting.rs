@@ -87,7 +87,9 @@ fn test_formatting_parse_error_file_returns_empty_vec_and_show_message() {
 
     let notif_methods = drain_notifications(&rx);
     assert!(
-        notif_methods.iter().any(|m| m == lsp_types::notification::ShowMessage::METHOD),
+        notif_methods
+            .iter()
+            .any(|m| m == lsp_types::notification::ShowMessage::METHOD),
         "parse-error path must emit window/showMessage; got notifications: {:?}",
         notif_methods
     );
@@ -129,8 +131,14 @@ fn test_range_formatting_returns_textedit_within_range() {
     let (state, uri) = state_single("/tmp/ynz_fmt_range.ynz", src);
     // Request formatting of line 1 only (the `let` line).
     let range = Range {
-        start: Position { line: 1, character: 0 },
-        end: Position { line: 2, character: 0 },
+        start: Position {
+            line: 1,
+            character: 0,
+        },
+        end: Position {
+            line: 2,
+            character: 0,
+        },
     };
     // Must not crash regardless of what it returns.
     let edits = range_formatting_response(&state, &uri, range, &mock_sender());
@@ -151,14 +159,17 @@ fn test_range_formatting_canonical_range_returns_empty_vec() {
     let formatted = ynz_fmt::format(src).expect("format");
     let (state, uri) = state_single("/tmp/ynz_fmt_range_canonical.ynz", &formatted);
     let range = Range {
-        start: Position { line: 0, character: 0 },
-        end: Position { line: 2, character: 0 },
+        start: Position {
+            line: 0,
+            character: 0,
+        },
+        end: Position {
+            line: 2,
+            character: 0,
+        },
     };
     let edits = range_formatting_response(&state, &uri, range, &mock_sender());
-    assert!(
-        edits.is_empty(),
-        "canonical range must produce zero edits"
-    );
+    assert!(edits.is_empty(), "canonical range must produce zero edits");
 }
 
 #[test]
@@ -166,11 +177,20 @@ fn test_range_formatting_parse_error_returns_empty_vec() {
     let src = "function broken( -> nothing {}\n";
     let (state, uri) = state_single("/tmp/ynz_fmt_range_broken.ynz", src);
     let range = Range {
-        start: Position { line: 0, character: 0 },
-        end: Position { line: 1, character: 0 },
+        start: Position {
+            line: 0,
+            character: 0,
+        },
+        end: Position {
+            line: 1,
+            character: 0,
+        },
     };
     let edits = range_formatting_response(&state, &uri, range, &mock_sender());
-    assert!(edits.is_empty(), "parse-error range must produce zero edits");
+    assert!(
+        edits.is_empty(),
+        "parse-error range must produce zero edits"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

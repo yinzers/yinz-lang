@@ -136,8 +136,12 @@ fn resolve_project(root: &Path, hint: &Path) -> Result<WatchTarget> {
 
     // Try [entries] table first, then fall back to `entry = "..."`.
     let entry_name = if let Some(entries) = parse_entries_table_from_toml(&toml_path) {
-        pick_entry_from_hint(&entries, root, hint)
-            .unwrap_or_else(|| entries.into_values().next().unwrap_or_else(|| "entrypoint.ynz".to_string()))
+        pick_entry_from_hint(&entries, root, hint).unwrap_or_else(|| {
+            entries
+                .into_values()
+                .next()
+                .unwrap_or_else(|| "entrypoint.ynz".to_string())
+        })
     } else {
         parse_entry_from_toml(&toml_path).unwrap_or_else(|| "entrypoint.ynz".to_string())
     };
@@ -183,7 +187,11 @@ fn parse_entries_table_from_toml(path: &Path) -> Option<std::collections::HashMa
             }
         }
     }
-    if map.is_empty() { None } else { Some(map) }
+    if map.is_empty() {
+        None
+    } else {
+        Some(map)
+    }
 }
 
 /// Pick the best entry from a multi-entry map given the user's hint path.
@@ -371,6 +379,9 @@ mod tests {
 
         let target = resolve_target(&sub).unwrap();
         assert_eq!(target.project_root, Some(dir.path().to_path_buf()));
-        assert_eq!(target.entry, dir.path().join("ships/backfill/entrypoint.ynz"));
+        assert_eq!(
+            target.entry,
+            dir.path().join("ships/backfill/entrypoint.ynz")
+        );
     }
 }

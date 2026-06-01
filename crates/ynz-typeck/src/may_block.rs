@@ -124,7 +124,10 @@ pub fn analyze(module: &Module, imported_fn_names: &HashSet<String>) -> MayBlock
 ///
 /// Used by test code that wants to assert exact fixpoint membership without
 /// building the full [`MayBlockAnalysis`].
-pub fn suspends_set_for_test(module: &Module, imported_fn_names: &HashSet<String>) -> HashSet<String> {
+pub fn suspends_set_for_test(
+    module: &Module,
+    imported_fn_names: &HashSet<String>,
+) -> HashSet<String> {
     analyze(module, imported_fn_names).suspends
 }
 
@@ -171,7 +174,10 @@ fn build_call_graph(module: &Module, imported_fn_names: &HashSet<String>) -> Cal
     for item in &module.items {
         let Item::Function(f) = item else { continue };
 
-        let mut fn_edges = FnEdges { direct: Vec::new(), calls_may_block_intrinsic: false };
+        let mut fn_edges = FnEdges {
+            direct: Vec::new(),
+            calls_may_block_intrinsic: false,
+        };
         collect_calls_in_block(
             &f.body.stmts,
             &local_fns,
@@ -183,7 +189,10 @@ fn build_call_graph(module: &Module, imported_fn_names: &HashSet<String>) -> Cal
         edges.insert(f.name.clone(), fn_edges);
     }
 
-    CallGraph { edges, unresolvable }
+    CallGraph {
+        edges,
+        unresolvable,
+    }
 }
 
 fn collect_calls_in_block(
@@ -195,7 +204,14 @@ fn collect_calls_in_block(
     unresolvable: &mut Vec<(String, UnresolvableEdge)>,
 ) {
     for stmt in stmts {
-        collect_calls_in_stmt(stmt, local_fns, imported_fns, enclosing_fn, edges, unresolvable);
+        collect_calls_in_stmt(
+            stmt,
+            local_fns,
+            imported_fns,
+            enclosing_fn,
+            edges,
+            unresolvable,
+        );
     }
 }
 
@@ -209,44 +225,185 @@ fn collect_calls_in_stmt(
 ) {
     match stmt {
         Stmt::Expr(e) => {
-            collect_calls_in_expr(e, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+            collect_calls_in_expr(
+                e,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
         }
         Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
-            collect_calls_in_expr(value, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+            collect_calls_in_expr(
+                value,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
         }
         Stmt::Return { value, .. } => {
             if let Some(v) = value {
-                collect_calls_in_expr(v, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+                collect_calls_in_expr(
+                    v,
+                    local_fns,
+                    imported_fns,
+                    enclosing_fn,
+                    edges,
+                    unresolvable,
+                    false,
+                );
             }
         }
         Stmt::FieldAssign { target, value, .. } => {
-            collect_calls_in_expr(target, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
-            collect_calls_in_expr(value, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+            collect_calls_in_expr(
+                target,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
+            collect_calls_in_expr(
+                value,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
         }
-        Stmt::IndexAssign { receiver, index, value, .. } => {
-            collect_calls_in_expr(receiver, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
-            collect_calls_in_expr(index, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
-            collect_calls_in_expr(value, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => {
+            collect_calls_in_expr(
+                receiver,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
+            collect_calls_in_expr(
+                index,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
+            collect_calls_in_expr(
+                value,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
         }
         Stmt::If { cond, body, .. } => {
-            collect_calls_in_expr(cond, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
-            collect_calls_in_block(&body.stmts, local_fns, imported_fns, enclosing_fn, edges, unresolvable);
+            collect_calls_in_expr(
+                cond,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
+            collect_calls_in_block(
+                &body.stmts,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+            );
         }
         Stmt::While { cond, body, .. } => {
-            collect_calls_in_expr(cond, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
-            collect_calls_in_block(&body.stmts, local_fns, imported_fns, enclosing_fn, edges, unresolvable);
+            collect_calls_in_expr(
+                cond,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
+            collect_calls_in_block(
+                &body.stmts,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+            );
         }
         Stmt::For { iter, body, .. } => {
-            collect_calls_in_expr(iter, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
-            collect_calls_in_block(&body.stmts, local_fns, imported_fns, enclosing_fn, edges, unresolvable);
+            collect_calls_in_expr(
+                iter,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
+            collect_calls_in_block(
+                &body.stmts,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+            );
         }
-        Stmt::Match { scrutinee, arms, else_arm, .. } => {
-            collect_calls_in_expr(scrutinee, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
+            collect_calls_in_expr(
+                scrutinee,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
             for arm in arms {
-                collect_calls_in_block(&arm.body.stmts, local_fns, imported_fns, enclosing_fn, edges, unresolvable);
+                collect_calls_in_block(
+                    &arm.body.stmts,
+                    local_fns,
+                    imported_fns,
+                    enclosing_fn,
+                    edges,
+                    unresolvable,
+                );
             }
             if let Some(eb) = else_arm {
-                collect_calls_in_block(&eb.stmts, local_fns, imported_fns, enclosing_fn, edges, unresolvable);
+                collect_calls_in_block(
+                    &eb.stmts,
+                    local_fns,
+                    imported_fns,
+                    enclosing_fn,
+                    edges,
+                    unresolvable,
+                );
             }
         }
     }
@@ -267,7 +424,15 @@ fn collect_calls_in_expr(
         Expr::Background(inner, _) => {
             // The direct callee of `background` is a graph cut. Recurse into its
             // arguments normally (they are evaluated in the calling context).
-            collect_calls_in_expr(inner, local_fns, imported_fns, enclosing_fn, edges, unresolvable, true);
+            collect_calls_in_expr(
+                inner,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                true,
+            );
         }
         Expr::Call(call) => {
             // Determine callee name.
@@ -306,15 +471,47 @@ fn collect_calls_in_expr(
                 }
                 // Recurse into arguments regardless (args are evaluated in calling context).
                 for arg in &call.args {
-                    collect_calls_in_expr(arg, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+                    collect_calls_in_expr(
+                        arg,
+                        local_fns,
+                        imported_fns,
+                        enclosing_fn,
+                        edges,
+                        unresolvable,
+                        false,
+                    );
                 }
                 // Callee expression (e.g. for function-value calls, rare in current Yinz)
-                collect_calls_in_expr(&call.callee, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+                collect_calls_in_expr(
+                    &call.callee,
+                    local_fns,
+                    imported_fns,
+                    enclosing_fn,
+                    edges,
+                    unresolvable,
+                    false,
+                );
             } else {
                 // Non-ident callee expression — recurse.
-                collect_calls_in_expr(&call.callee, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+                collect_calls_in_expr(
+                    &call.callee,
+                    local_fns,
+                    imported_fns,
+                    enclosing_fn,
+                    edges,
+                    unresolvable,
+                    false,
+                );
                 for arg in &call.args {
-                    collect_calls_in_expr(arg, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+                    collect_calls_in_expr(
+                        arg,
+                        local_fns,
+                        imported_fns,
+                        enclosing_fn,
+                        edges,
+                        unresolvable,
+                        false,
+                    );
                 }
             }
         }
@@ -324,56 +521,186 @@ fn collect_calls_in_expr(
             // available here. At the AST-walk level we conservatively recurse —
             // can't-infer errors for `dynamic` dispatch are emitted at the typeck
             // level (check.rs) where receiver type is known.
-            collect_calls_in_expr(receiver, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+            collect_calls_in_expr(
+                receiver,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
             for arg in args {
-                collect_calls_in_expr(arg, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+                collect_calls_in_expr(
+                    arg,
+                    local_fns,
+                    imported_fns,
+                    enclosing_fn,
+                    edges,
+                    unresolvable,
+                    false,
+                );
             }
         }
         Expr::Wait(inner, _) => {
-            collect_calls_in_expr(inner, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+            collect_calls_in_expr(
+                inner,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
         }
         Expr::BinOp { lhs, rhs, .. } => {
-            collect_calls_in_expr(lhs, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
-            collect_calls_in_expr(rhs, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+            collect_calls_in_expr(
+                lhs,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
+            collect_calls_in_expr(
+                rhs,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
         }
         Expr::UnaryOp { operand, .. } => {
-            collect_calls_in_expr(operand, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+            collect_calls_in_expr(
+                operand,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
         }
-        Expr::IndexAccess { receiver, index, .. } => {
-            collect_calls_in_expr(receiver, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
-            collect_calls_in_expr(index, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => {
+            collect_calls_in_expr(
+                receiver,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
+            collect_calls_in_expr(
+                index,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
         }
         Expr::FieldAccess { receiver, .. } => {
-            collect_calls_in_expr(receiver, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+            collect_calls_in_expr(
+                receiver,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
         }
         Expr::StructLit { fields, .. } => {
             for f in fields {
-                collect_calls_in_expr(&f.value, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+                collect_calls_in_expr(
+                    &f.value,
+                    local_fns,
+                    imported_fns,
+                    enclosing_fn,
+                    edges,
+                    unresolvable,
+                    false,
+                );
             }
         }
         Expr::ArrayLit { elements, .. } => {
             for e in elements {
-                collect_calls_in_expr(e, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+                collect_calls_in_expr(
+                    e,
+                    local_fns,
+                    imported_fns,
+                    enclosing_fn,
+                    edges,
+                    unresolvable,
+                    false,
+                );
             }
         }
         Expr::MapLit { entries, .. } => {
             for (k, v) in entries {
-                collect_calls_in_expr(k, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
-                collect_calls_in_expr(v, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+                collect_calls_in_expr(
+                    k,
+                    local_fns,
+                    imported_fns,
+                    enclosing_fn,
+                    edges,
+                    unresolvable,
+                    false,
+                );
+                collect_calls_in_expr(
+                    v,
+                    local_fns,
+                    imported_fns,
+                    enclosing_fn,
+                    edges,
+                    unresolvable,
+                    false,
+                );
             }
         }
         Expr::Is { expr: inner, .. } => {
-            collect_calls_in_expr(inner, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+            collect_calls_in_expr(
+                inner,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
         }
         Expr::InterpolatedString(parts, _) => {
             for part in parts {
                 if let ynz_ast::nodes::StringPart::Expr(e, _) = part {
-                    collect_calls_in_expr(e, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+                    collect_calls_in_expr(
+                        e,
+                        local_fns,
+                        imported_fns,
+                        enclosing_fn,
+                        edges,
+                        unresolvable,
+                        false,
+                    );
                 }
             }
         }
         Expr::PostfixOp { receiver, .. } => {
-            collect_calls_in_expr(receiver, local_fns, imported_fns, enclosing_fn, edges, unresolvable, false);
+            collect_calls_in_expr(
+                receiver,
+                local_fns,
+                imported_fns,
+                enclosing_fn,
+                edges,
+                unresolvable,
+                false,
+            );
         }
         // Leaf nodes — no calls inside.
         Expr::Ident(..)
@@ -436,7 +763,9 @@ pub fn find_mutual_suspension_cycles(
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut radj: Vec<Vec<usize>> = vec![Vec::new(); n]; // reverse graph
     for (fn_name, edges) in &graph.edges {
-        let Some(&fi) = fn_index.get(fn_name.as_str()) else { continue };
+        let Some(&fi) = fn_index.get(fn_name.as_str()) else {
+            continue;
+        };
         for callee in &edges.direct {
             if let Some(&ci) = fn_index.get(callee.as_str()) {
                 adj[fi].push(ci);
@@ -526,7 +855,10 @@ function entrypoint() -> nothing {
 }
 "#,
         );
-        assert!(!suspends.contains("entrypoint"), "pure CPU fn must NOT be suspends");
+        assert!(
+            !suspends.contains("entrypoint"),
+            "pure CPU fn must NOT be suspends"
+        );
     }
 
     #[test]
@@ -539,8 +871,14 @@ function pause() -> nothing {
 function entrypoint() -> nothing { }
 "#,
         );
-        assert!(suspends.contains("pause"), "direct sleepAsync caller must be suspends");
-        assert!(!suspends.contains("entrypoint"), "unrelated fn must NOT be suspends");
+        assert!(
+            suspends.contains("pause"),
+            "direct sleepAsync caller must be suspends"
+        );
+        assert!(
+            !suspends.contains("entrypoint"),
+            "unrelated fn must NOT be suspends"
+        );
     }
 
     #[test]
@@ -559,9 +897,18 @@ function entrypoint() -> nothing {
 "#,
         );
         // All three are in the transitive chain.
-        assert!(suspends.contains("inner"), "inner (direct) must be suspends");
-        assert!(suspends.contains("outer"), "outer (transitive) must be suspends");
-        assert!(suspends.contains("entrypoint"), "entrypoint (transitive) must be suspends");
+        assert!(
+            suspends.contains("inner"),
+            "inner (direct) must be suspends"
+        );
+        assert!(
+            suspends.contains("outer"),
+            "outer (transitive) must be suspends"
+        );
+        assert!(
+            suspends.contains("entrypoint"),
+            "entrypoint (transitive) must be suspends"
+        );
     }
 
     #[test]
@@ -579,8 +926,14 @@ function launcher() -> nothing {
 function entrypoint() -> nothing { }
 "#,
         );
-        assert!(suspends.contains("worker"), "worker (direct) must be suspends");
-        assert!(!suspends.contains("launcher"), "launcher (background-only) must NOT be suspends");
+        assert!(
+            suspends.contains("worker"),
+            "worker (direct) must be suspends"
+        );
+        assert!(
+            !suspends.contains("launcher"),
+            "launcher (background-only) must NOT be suspends"
+        );
         assert!(!suspends.contains("entrypoint"));
     }
 
@@ -594,8 +947,14 @@ function b() -> nothing { a() }
 function entrypoint() -> nothing { }
 "#,
         );
-        assert!(!suspends.contains("a"), "a (cycle, no may-block) must NOT be suspends");
-        assert!(!suspends.contains("b"), "b (cycle, no may-block) must NOT be suspends");
+        assert!(
+            !suspends.contains("a"),
+            "a (cycle, no may-block) must NOT be suspends"
+        );
+        assert!(
+            !suspends.contains("b"),
+            "b (cycle, no may-block) must NOT be suspends"
+        );
 
         // Mutual recursion where one reaches sleepAsync — both should be suspends.
         let suspends2 = suspends_set(
@@ -606,7 +965,10 @@ function entrypoint() -> nothing { }
 "#,
         );
         assert!(suspends2.contains("b"), "b (direct) must be suspends");
-        assert!(suspends2.contains("a"), "a (cycle-member via b) must be suspends");
+        assert!(
+            suspends2.contains("a"),
+            "a (cycle-member via b) must be suspends"
+        );
     }
 
     #[test]
@@ -652,8 +1014,14 @@ function entrypoint() -> nothing { }
         // but compute() in the arg is intra-context. launcher() itself does NOT suspend
         // because compute() is pure.
         assert!(suspends.contains("worker"), "worker must be suspends");
-        assert!(!suspends.contains("compute"), "compute must NOT be suspends (pure CPU)");
-        assert!(!suspends.contains("launcher"), "launcher must NOT be suspends (background-only path)");
+        assert!(
+            !suspends.contains("compute"),
+            "compute must NOT be suspends (pure CPU)"
+        );
+        assert!(
+            !suspends.contains("launcher"),
+            "launcher must NOT be suspends (background-only path)"
+        );
     }
 
     #[test]
@@ -672,8 +1040,14 @@ function caller() -> nothing {
 function entrypoint() -> nothing { }
 "#,
         );
-        assert!(suspends.contains("maybePause"), "wait inside if must still be suspends");
-        assert!(suspends.contains("caller"), "transitive via maybePause must be suspends");
+        assert!(
+            suspends.contains("maybePause"),
+            "wait inside if must still be suspends"
+        );
+        assert!(
+            suspends.contains("caller"),
+            "transitive via maybePause must be suspends"
+        );
     }
 
     #[test]
@@ -688,7 +1062,10 @@ function entrypoint() -> nothing {
 }
 "#,
         );
-        assert!(suspends.contains("entrypoint"), "__testFallibleAsync must seed suspends");
+        assert!(
+            suspends.contains("entrypoint"),
+            "__testFallibleAsync must seed suspends"
+        );
     }
 
     #[test]

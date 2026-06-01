@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use ynz_watch::{
     db::init_db,
     json_emitter::JsonEmitter,
-    json_events::{ShutdownReason, WatchEvent, SCHEMA_VERSION, ts},
+    json_events::{ts, ShutdownReason, WatchEvent, SCHEMA_VERSION},
     project::WatchSourceFile,
     rebuild::rebuild_one_with_emitter,
 };
@@ -20,7 +20,9 @@ impl std::io::Write for CaptureBuf {
         self.0.lock().unwrap().extend_from_slice(b);
         Ok(b.len())
     }
-    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 // Arc<Mutex<Vec<u8>>> is Send automatically; no unsafe needed here.
 
@@ -55,18 +57,22 @@ fn every_emitted_event_has_schema_version() {
     let mut emitter = JsonEmitter::new_writer(CaptureBuf(Arc::clone(&shared)));
 
     let (timestamp, schema_version) = ts();
-    emitter.emit(&WatchEvent::WatchReady {
-        timestamp,
-        schema_version,
-        watching: vec!["foo.ynz".into()],
-    }).unwrap();
+    emitter
+        .emit(&WatchEvent::WatchReady {
+            timestamp,
+            schema_version,
+            watching: vec!["foo.ynz".into()],
+        })
+        .unwrap();
 
     let (timestamp, schema_version) = ts();
-    emitter.emit(&WatchEvent::BuildStart {
-        timestamp,
-        schema_version,
-        file: "foo.ynz".into(),
-    }).unwrap();
+    emitter
+        .emit(&WatchEvent::BuildStart {
+            timestamp,
+            schema_version,
+            file: "foo.ynz".into(),
+        })
+        .unwrap();
 
     let bytes = shared.lock().unwrap().clone();
     let events = collect_events(&bytes);
@@ -88,17 +94,21 @@ fn event_type_field_uses_kebab_case() {
     let mut emitter = JsonEmitter::new_writer(CaptureBuf(Arc::clone(&shared)));
 
     let (timestamp, schema_version) = ts();
-    emitter.emit(&WatchEvent::BuildStart {
-        timestamp: timestamp.clone(),
-        schema_version: schema_version.clone(),
-        file: "foo.ynz".into(),
-    }).unwrap();
+    emitter
+        .emit(&WatchEvent::BuildStart {
+            timestamp: timestamp.clone(),
+            schema_version: schema_version.clone(),
+            file: "foo.ynz".into(),
+        })
+        .unwrap();
 
-    emitter.emit(&WatchEvent::ChildSpawn {
-        timestamp,
-        schema_version,
-        pid: 42,
-    }).unwrap();
+    emitter
+        .emit(&WatchEvent::ChildSpawn {
+            timestamp,
+            schema_version,
+            pid: 42,
+        })
+        .unwrap();
 
     let bytes = shared.lock().unwrap().clone();
     let events = collect_events(&bytes);
@@ -129,7 +139,11 @@ fn build_end_outcome_ok_on_success() {
 
     let mut current_child = None;
     let _ = rebuild_one_with_emitter(
-        &mut db, &path, &path, &out_dir, true, // check_only — no binary spawn
+        &mut db,
+        &path,
+        &path,
+        &out_dir,
+        true, // check_only — no binary spawn
         &mut current_child,
         Some(&mut emitter_box),
         true, // force: skip no-change guard, test always runs one build
@@ -140,9 +154,10 @@ fn build_end_outcome_ok_on_success() {
     let events = collect_events(&bytes);
 
     // Expect build-start + build-end.
-    let build_end = events.iter().find(|ev| {
-        ev.get("type").and_then(|v| v.as_str()) == Some("build-end")
-    }).expect("no build-end event emitted");
+    let build_end = events
+        .iter()
+        .find(|ev| ev.get("type").and_then(|v| v.as_str()) == Some("build-end"))
+        .expect("no build-end event emitted");
 
     assert_eq!(
         build_end.get("outcome").and_then(|v| v.as_str()),
@@ -173,7 +188,11 @@ fn build_start_precedes_build_end() {
 
     let mut current_child = None;
     let _ = rebuild_one_with_emitter(
-        &mut db, &path, &path, &out_dir, true,
+        &mut db,
+        &path,
+        &path,
+        &out_dir,
+        true,
         &mut current_child,
         Some(&mut emitter_box),
         true, // force: skip no-change guard
@@ -194,7 +213,8 @@ fn build_start_precedes_build_end() {
     assert!(end_idx.is_some(), "build-end must be emitted");
     assert!(
         start_idx.unwrap() < end_idx.unwrap(),
-        "build-start must precede build-end; got order: {:?}", types
+        "build-start must precede build-end; got order: {:?}",
+        types
     );
 
     let _ = std::fs::remove_dir_all(&out_dir);
@@ -223,7 +243,11 @@ fn diagnostic_events_emitted_on_compile_error() {
 
     let mut current_child = None;
     let _ = rebuild_one_with_emitter(
-        &mut db, &path, &path, &out_dir, true,
+        &mut db,
+        &path,
+        &path,
+        &out_dir,
+        true,
         &mut current_child,
         Some(&mut emitter_box),
         true, // force: skip no-change guard
@@ -233,19 +257,41 @@ fn diagnostic_events_emitted_on_compile_error() {
     let bytes = shared.lock().unwrap().clone();
     let events = collect_events(&bytes);
 
-    let diag_events: Vec<&serde_json::Value> = events.iter().filter(|ev| {
-        ev.get("type").and_then(|v| v.as_str()) == Some("diagnostic")
-    }).collect();
+    let diag_events: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|ev| ev.get("type").and_then(|v| v.as_str()) == Some("diagnostic"))
+        .collect();
 
-    assert!(!diag_events.is_empty(), "at least one diagnostic event must be emitted for broken code");
+    assert!(
+        !diag_events.is_empty(),
+        "at least one diagnostic event must be emitted for broken code"
+    );
 
     let first = diag_events[0];
-    assert!(first.get("what").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false),
-        "diagnostic must have non-empty 'what' field");
-    assert!(first.get("what_instead").is_some(), "diagnostic must have 'what_instead' field");
-    assert!(first.get("why").is_some(), "diagnostic must have 'why' field");
-    assert!(first.get("severity").is_some(), "diagnostic must have 'severity' field");
-    assert!(first.get("span").is_some(), "diagnostic must have 'span' field");
+    assert!(
+        first
+            .get("what")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false),
+        "diagnostic must have non-empty 'what' field"
+    );
+    assert!(
+        first.get("what_instead").is_some(),
+        "diagnostic must have 'what_instead' field"
+    );
+    assert!(
+        first.get("why").is_some(),
+        "diagnostic must have 'why' field"
+    );
+    assert!(
+        first.get("severity").is_some(),
+        "diagnostic must have 'severity' field"
+    );
+    assert!(
+        first.get("span").is_some(),
+        "diagnostic must have 'span' field"
+    );
 
     let _ = std::fs::remove_dir_all(&out_dir);
 }
@@ -259,11 +305,13 @@ fn watch_shutdown_serializes_correctly() {
     let mut emitter = JsonEmitter::new_writer(CaptureBuf(Arc::clone(&shared)));
 
     let (timestamp, schema_version) = ts();
-    emitter.emit(&WatchEvent::WatchShutdown {
-        timestamp,
-        schema_version,
-        reason: ShutdownReason::CtrlC,
-    }).unwrap();
+    emitter
+        .emit(&WatchEvent::WatchShutdown {
+            timestamp,
+            schema_version,
+            reason: ShutdownReason::CtrlC,
+        })
+        .unwrap();
 
     let bytes = shared.lock().unwrap().clone();
     let events = collect_events(&bytes);

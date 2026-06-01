@@ -31,13 +31,17 @@ fn make_db(src: &str, tag: &str) -> (CompilerDb, SourceFile) {
 fn has_let_to_const_hint_for(src: &str, tag: &str) -> bool {
     let (db, sf) = make_db(src, tag);
     let hints = let_to_const_promotion_hints(&db, sf);
-    hints.iter().any(|h| matches!(h.kind, PromotionKind::LetToConst))
+    hints
+        .iter()
+        .any(|h| matches!(h.kind, PromotionKind::LetToConst))
 }
 
 fn has_array_to_fixed_hint_for(src: &str, tag: &str) -> bool {
     let (db, sf) = make_db(src, tag);
     let hints = array_to_fixed_promotion_hints(&db, sf);
-    hints.iter().any(|h| matches!(h.kind, PromotionKind::ArrayToFixed))
+    hints
+        .iter()
+        .any(|h| matches!(h.kind, PromotionKind::ArrayToFixed))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -98,7 +102,10 @@ function entrypoint() -> nothing {
     // is absent.  We count: if total hints ≥ 2, `buf` got a spurious hint.
     let (db, sf) = make_db(src, "b_interp_lend");
     let hints = let_to_const_promotion_hints(&db, sf);
-    let let_to_const_count = hints.iter().filter(|h| matches!(h.kind, PromotionKind::LetToConst)).count();
+    let let_to_const_count = hints
+        .iter()
+        .filter(|h| matches!(h.kind, PromotionKind::LetToConst))
+        .count();
     assert!(
         let_to_const_count < 2,
         "interpolated-string wrapper: `buf` passed to lend inside `${{...}}` must not get hint; \

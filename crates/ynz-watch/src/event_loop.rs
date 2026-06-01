@@ -37,11 +37,8 @@ use crate::{
 /// Writes status lines to stdout. Calls `callback` for each `Changed` event.
 ///
 /// Time: O(1) per event  Space: O(1)
-pub fn run_event_loop<F>(
-    watcher: &FileWatcher,
-    _config: &WatchConfig,
-    mut on_change: F,
-) where
+pub fn run_event_loop<F>(watcher: &FileWatcher, _config: &WatchConfig, mut on_change: F)
+where
     F: FnMut(&PathBuf),
 {
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -85,4 +82,3 @@ pub fn run_event_loop<F>(
         }
     }
 }
-

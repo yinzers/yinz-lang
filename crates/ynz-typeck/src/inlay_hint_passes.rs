@@ -155,7 +155,10 @@ pub struct PromotionHint {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn is_trivially_copyable(ty: &Type) -> bool {
-    matches!(ty, Type::Int | Type::Float | Type::Bool | Type::Number { .. })
+    matches!(
+        ty,
+        Type::Int | Type::Float | Type::Bool | Type::Number { .. }
+    )
 }
 
 fn copy_size_text(ty: &Type) -> &'static str {
@@ -206,7 +209,9 @@ fn hint_position_end_of_stmt_or_before_comment(text: &str, stmt_start: usize) ->
     // Locate the start of the line containing the `let` keyword.
     let line_start = text[..stmt_start].rfind('\n').map_or(0, |p| p + 1);
     // Locate end-of-line (exclusive, stopping just before the '\n').
-    let line_end = text[line_start..].find('\n').map_or(text.len(), |p| line_start + p);
+    let line_end = text[line_start..]
+        .find('\n')
+        .map_or(text.len(), |p| line_start + p);
 
     // Scan the full line to determine string-literal state at each byte.
     // Yinz uses backtick strings (`...`) and double-quoted strings ("...").
@@ -316,7 +321,12 @@ fn collect_maybe_mutated_stmt(
             }
             collect_maybe_mutated_expr(value, sig_table, imported, generic_fn_table, out);
         }
-        Stmt::IndexAssign { receiver, index, value, .. } => {
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => {
             // Follow any chained index-access path to the root binding name.
             if let Some(name) = root_ident(receiver.as_ref()) {
                 out.insert(name.to_string());
@@ -337,7 +347,12 @@ fn collect_maybe_mutated_stmt(
             collect_maybe_mutated_expr(cond, sig_table, imported, generic_fn_table, out);
             collect_maybe_mutated(body, sig_table, imported, generic_fn_table, out);
         }
-        Stmt::Match { scrutinee, arms, else_arm, .. } => {
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
             collect_maybe_mutated_expr(scrutinee, sig_table, imported, generic_fn_table, out);
             for arm in arms {
                 collect_maybe_mutated(&arm.body, sig_table, imported, generic_fn_table, out);
@@ -414,7 +429,9 @@ fn collect_maybe_mutated_expr(
                         Some(param_ownerships) => {
                             // Resolved user callee: only `lend`/`give` modifiers count as mutations.
                             match param_ownerships.get(i) {
-                                Some(Some(OwnershipModifier::Lend | OwnershipModifier::Give)) => true,
+                                Some(Some(OwnershipModifier::Lend | OwnershipModifier::Give)) => {
+                                    true
+                                }
                                 // `share`, `None` (implicit share), or index out of range → not mutating.
                                 _ => false,
                             }
@@ -433,7 +450,12 @@ fn collect_maybe_mutated_expr(
             }
             collect_maybe_mutated_expr(&c.callee, sig_table, imported, generic_fn_table, out);
         }
-        Expr::MethodCall { receiver, method, args, .. } => {
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
             // Resolve the method via the same sig lookup as free-function calls (UFCS —
             // `player.heal(20)` desugars to `heal(player, 20)`; the receiver is param 0).
             // Lookup order: user sig_table → imported → generic_fn_table → primitive
@@ -508,7 +530,9 @@ fn collect_maybe_mutated_expr(
         Expr::FieldAccess { receiver, .. } => {
             collect_maybe_mutated_expr(receiver, sig_table, imported, generic_fn_table, out);
         }
-        Expr::IndexAccess { receiver, index, .. } => {
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => {
             collect_maybe_mutated_expr(receiver, sig_table, imported, generic_fn_table, out);
             collect_maybe_mutated_expr(index, sig_table, imported, generic_fn_table, out);
         }
@@ -536,7 +560,9 @@ fn collect_maybe_mutated_expr(
                 collect_maybe_mutated_expr(val_expr, sig_table, imported, generic_fn_table, out);
             }
         }
-        Expr::PostfixOp { receiver: operand, .. } => {
+        Expr::PostfixOp {
+            receiver: operand, ..
+        } => {
             collect_maybe_mutated_expr(operand, sig_table, imported, generic_fn_table, out);
         }
         // Recurse into concurrency wrappers and type-narrowing predicates so that
@@ -597,7 +623,12 @@ fn collect_type_hints_block(
 ) {
     for stmt in &block.stmts {
         match stmt {
-            Stmt::Let { ty: None, name_span, value, .. } => {
+            Stmt::Let {
+                ty: None,
+                name_span,
+                value,
+                ..
+            } => {
                 if let Some(t) = expr_types.get(&expr_span_key(value)) {
                     if !matches!(t, Type::Error | Type::Nothing) {
                         out.push(TypeHint {
@@ -676,10 +707,21 @@ fn collect_ownership_hints_block(
                 collect_ownership_hints_expr(cond, sig_table, imported, generic_fn_table, out);
                 collect_ownership_hints_block(body, sig_table, imported, generic_fn_table, out);
             }
-            Stmt::Match { scrutinee, arms, else_arm, .. } => {
+            Stmt::Match {
+                scrutinee,
+                arms,
+                else_arm,
+                ..
+            } => {
                 collect_ownership_hints_expr(scrutinee, sig_table, imported, generic_fn_table, out);
                 for arm in arms {
-                    collect_ownership_hints_block(&arm.body, sig_table, imported, generic_fn_table, out);
+                    collect_ownership_hints_block(
+                        &arm.body,
+                        sig_table,
+                        imported,
+                        generic_fn_table,
+                        out,
+                    );
                 }
                 if let Some(eb) = else_arm {
                     collect_ownership_hints_block(eb, sig_table, imported, generic_fn_table, out);
@@ -774,7 +816,12 @@ fn collect_ownership_hints_expr(
             }
             collect_ownership_hints_expr(&c.callee, sig_table, imported, generic_fn_table, out);
         }
-        Expr::MethodCall { receiver, method, args, .. } => {
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
             // UFCS: `player.heal(20)` desugars to `heal(player, 20)`.
             //
             // Look up the method name with the same resolver as free-fn calls — receiver is
@@ -803,25 +850,13 @@ fn collect_ownership_hints_expr(
                             modifier: ownership_modifier_str(own).to_string(),
                         });
                     }
-                    collect_ownership_hints_expr(
-                        arg,
-                        sig_table,
-                        imported,
-                        generic_fn_table,
-                        out,
-                    );
+                    collect_ownership_hints_expr(arg, sig_table, imported, generic_fn_table, out);
                 }
             } else {
                 // Unresolvable method — recurse without hints.
                 collect_ownership_hints_expr(receiver, sig_table, imported, generic_fn_table, out);
                 for arg in args {
-                    collect_ownership_hints_expr(
-                        arg,
-                        sig_table,
-                        imported,
-                        generic_fn_table,
-                        out,
-                    );
+                    collect_ownership_hints_expr(arg, sig_table, imported, generic_fn_table, out);
                 }
             }
         }
@@ -882,7 +917,12 @@ fn collect_copy_hints_block(
                 collect_copy_hints_expr(cond, expr_types, out);
                 collect_copy_hints_block(body, expr_types, out);
             }
-            Stmt::Match { scrutinee, arms, else_arm, .. } => {
+            Stmt::Match {
+                scrutinee,
+                arms,
+                else_arm,
+                ..
+            } => {
                 collect_copy_hints_expr(scrutinee, expr_types, out);
                 for arm in arms {
                     collect_copy_hints_block(&arm.body, expr_types, out);
@@ -986,17 +1026,24 @@ fn collect_array_hints_block(
     out: &mut Vec<PromotionHint>,
 ) {
     for stmt in &block.stmts {
-        if let Stmt::Let { ty: Some(ty_ann), name, span, .. } = stmt {
+        if let Stmt::Let {
+            ty: Some(ty_ann),
+            name,
+            span,
+            ..
+        } = stmt
+        {
             if ast_ty_is_array(ty_ann) && !mutated.contains(name) {
                 // Extract the span of `array` keyword from the type annotation.
                 // `Type::Generic { name_span, .. }` carries the span of the type
                 // constructor name (e.g. `array` in `array<int>`), which is exactly
                 // the byte range the TextEdit must replace with `fixed`.
-                let type_keyword_span = if let ynz_ast::nodes::Type::Generic { name_span, .. } = ty_ann {
-                    Some(name_span.clone())
-                } else {
-                    None
-                };
+                let type_keyword_span =
+                    if let ynz_ast::nodes::Type::Generic { name_span, .. } = ty_ann {
+                        Some(name_span.clone())
+                    } else {
+                        None
+                    };
                 out.push(PromotionHint {
                     position: hint_position_end_of_stmt_or_before_comment(text, span.start),
                     kind: PromotionKind::ArrayToFixed,
@@ -1065,7 +1112,13 @@ fn collect_const_hints_block(
     out: &mut Vec<PromotionHint>,
 ) {
     for stmt in &block.stmts {
-        if let Stmt::Let { is_const: false, name, span, .. } = stmt {
+        if let Stmt::Let {
+            is_const: false,
+            name,
+            span,
+            ..
+        } = stmt
+        {
             if !mutated.contains(name) {
                 out.push(PromotionHint {
                     position: hint_position_end_of_stmt_or_before_comment(text, span.start),

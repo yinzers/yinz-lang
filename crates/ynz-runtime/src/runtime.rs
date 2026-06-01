@@ -148,10 +148,15 @@ pub unsafe extern "C" fn ynz_rt_spawn_blocking(
         Ok(h) => h,
         Err(_) => {
             let Some(guard) = RUNTIME.get() else {
-                eprintln!("ynz runtime: ynz_rt_spawn_blocking called before ynz_rt_init — task discarded");
+                eprintln!(
+                    "ynz runtime: ynz_rt_spawn_blocking called before ynz_rt_init — task discarded"
+                );
                 return;
             };
-            let lock = match guard.lock() { Ok(l) => l, Err(e) => e.into_inner() };
+            let lock = match guard.lock() {
+                Ok(l) => l,
+                Err(e) => e.into_inner(),
+            };
             match lock.as_ref() {
                 Some(rt) => rt.handle().clone(),
                 None => {
@@ -177,7 +182,10 @@ pub unsafe extern "C" fn ynz_rt_spawn_blocking(
 
     // Create the RAII guard BEFORE the closure so it's captured (not the raw *mut u8).
     // FrameDropGuard: Send is impl'd; the closure becomes Send too.
-    let ctx_guard = FrameDropGuard { ptr: ctx_heap_ptr, len: ctx_heap_len };
+    let ctx_guard = FrameDropGuard {
+        ptr: ctx_heap_ptr,
+        len: ctx_heap_len,
+    };
 
     handle.spawn_blocking(move || {
         // Guard is captured — frees ctx on both return and unwind.
@@ -253,11 +261,11 @@ pub extern "C" fn ynz_rt_shutdown() {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(5000); // production default: 5s
-        // shutdown_timeout signals worker tasks and waits up to `timeout_ms` for
-        // async-worker task drains. It joins the blocking pool (empty here), but
-        // async workers complete via waker/signal — 50ms is wall-clock margin for
-        // task drain, not a thread join. Drops all futures (running their Drop impls)
-        // on the worker threads before returning.
+                              // shutdown_timeout signals worker tasks and waits up to `timeout_ms` for
+                              // async-worker task drains. It joins the blocking pool (empty here), but
+                              // async workers complete via waker/signal — 50ms is wall-clock margin for
+                              // task drain, not a thread join. Drops all futures (running their Drop impls)
+                              // on the worker threads before returning.
         rt.shutdown_timeout(Duration::from_millis(timeout_ms));
     }
     // `lock` drops here, releasing the mutex.
@@ -409,8 +417,7 @@ impl Drop for SpawnStateFnFuture {
         unsafe {
             // Free the sleep handle in the root frame (if a sleep is live mid-wait).
             // SAFETY: FRAME_SLEEP_HANDLE_OFFSET=8 is within every valid frame header (32 bytes).
-            let handle_slot =
-                self.frame_ptr.add(FRAME_SLEEP_HANDLE_OFFSET) as *const *mut u8;
+            let handle_slot = self.frame_ptr.add(FRAME_SLEEP_HANDLE_OFFSET) as *const *mut u8;
             let handle_ptr = *handle_slot;
             if !handle_ptr.is_null() {
                 drop(Box::from_raw(handle_ptr as *mut Pin<Box<Sleep>>));
@@ -435,7 +442,8 @@ impl Drop for SpawnStateFnFuture {
                 .unwrap_or(false); // production default: run the chain walk
             if self.recursion_slot_offset >= 0 && !skip_recursion_drop {
                 // SAFETY: frame_ptr is valid; recursion_slot_offset is within the frame.
-                let rec_slot = self.frame_ptr.add(self.recursion_slot_offset as usize) as *const *mut u8;
+                let rec_slot =
+                    self.frame_ptr.add(self.recursion_slot_offset as usize) as *const *mut u8;
                 let mut child_ptr = *rec_slot;
                 while !child_ptr.is_null() {
                     // Free the child's sleep handle before freeing its frame.
@@ -520,7 +528,12 @@ pub unsafe extern "C" fn ynz_rt_spawn(
     frame_size: i64,
     recursion_slot_offset: i64,
 ) {
-    let future = SpawnStateFnFuture { resume_fn, frame_ptr, frame_size, recursion_slot_offset };
+    let future = SpawnStateFnFuture {
+        resume_fn,
+        frame_ptr,
+        frame_size,
+        recursion_slot_offset,
+    };
 
     // Prefer spawning via the current Tokio handle (avoids the RUNTIME mutex deadlock
     // when called from inside a block_on future — block_on holds Handle context so
@@ -535,7 +548,10 @@ pub unsafe extern "C" fn ynz_rt_spawn(
                 return;
             };
             let handle = {
-                let lock = match guard.lock() { Ok(l) => l, Err(e) => e.into_inner() };
+                let lock = match guard.lock() {
+                    Ok(l) => l,
+                    Err(e) => e.into_inner(),
+                };
                 match lock.as_ref() {
                     Some(rt) => rt.handle().clone(),
                     None => {
@@ -647,9 +663,7 @@ pub unsafe extern "C" fn ynz_rt_async_sleep_poll(handle_ptr: *mut u8, waker_ctx:
             } else {
                 "<non-string panic payload>".to_string()
             };
-            eprintln!(
-                "ynz runtime: ynz_rt_async_sleep_poll panicked (returning Pending): {msg}"
-            );
+            eprintln!("ynz runtime: ynz_rt_async_sleep_poll panicked (returning Pending): {msg}");
             1 // Return Pending on panic so the frame is not corrupted.
         }
     }
@@ -703,7 +717,11 @@ pub unsafe extern "C" fn ynz_rt_run_entrypoint(
     frame_size: i64,
 ) -> i32 {
     let result = std::panic::catch_unwind(|| {
-        let future = SyncStateFnFuture { resume_fn, frame_ptr, frame_size };
+        let future = SyncStateFnFuture {
+            resume_fn,
+            frame_ptr,
+            frame_size,
+        };
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
                 // Inside Tokio — worker thread OR spawn_blocking-pool thread.
@@ -717,22 +735,21 @@ pub unsafe extern "C" fn ynz_rt_run_entrypoint(
                 // avoid a deadlock: ynz_rt_spawn_blocking and ynz_rt_spawn also acquire
                 // the same RUNTIME mutex. Holding the lock across block_on would deadlock
                 // any background call made inside the future.
-                let rt_guard = RUNTIME
-                    .get()
-                    .expect(
-                        "ynz runtime: ynz_rt_run_entrypoint called before ynz_rt_init. \
+                let rt_guard = RUNTIME.get().expect(
+                    "ynz runtime: ynz_rt_run_entrypoint called before ynz_rt_init. \
                          This is a compiler codegen bug — ynz_rt_init must be the first \
                          instruction in main for any program using wait or background.",
-                    );
+                );
                 // Get the Tokio Handle (cheap clone), then RELEASE the lock before block_on.
                 let handle = {
                     let lock = match rt_guard.lock() {
                         Ok(l) => l,
                         Err(e) => e.into_inner(),
                     };
-                    lock.as_ref().expect(
-                        "ynz runtime: ynz_rt_run_entrypoint called after ynz_rt_shutdown.",
-                    ).handle().clone()
+                    lock.as_ref()
+                        .expect("ynz runtime: ynz_rt_run_entrypoint called after ynz_rt_shutdown.")
+                        .handle()
+                        .clone()
                 }; // mutex released here — before block_on
                 handle.block_on(future)
             }

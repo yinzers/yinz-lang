@@ -6,8 +6,8 @@
 
 use lsp_server::{Message, Notification};
 use lsp_types::{
-    NumberOrString, ProgressParams, ProgressParamsValue, WorkDoneProgress,
-    WorkDoneProgressBegin, WorkDoneProgressEnd, WorkDoneProgressReport,
+    NumberOrString, ProgressParams, ProgressParamsValue, WorkDoneProgress, WorkDoneProgressBegin,
+    WorkDoneProgressEnd, WorkDoneProgressReport,
 };
 use std::sync::atomic::{AtomicU32, Ordering};
 

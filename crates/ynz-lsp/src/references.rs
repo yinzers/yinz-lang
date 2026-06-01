@@ -63,7 +63,10 @@ pub fn references_response(
             let origin_uri = uri_for_source_file(&state.db, origin_sf);
             let origin_text = origin_sf.text(&state.db);
             let range = span_to_range(&origin_text, &span, state.encoding);
-            range.map(|r| Location { uri: origin_uri, range: r })
+            range.map(|r| Location {
+                uri: origin_uri,
+                range: r,
+            })
         })
         .collect();
 

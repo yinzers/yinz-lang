@@ -290,7 +290,13 @@ pub fn load_return_value_errors<'ctx>(
     ctx: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
     frame_ptr: PointerValue<'ctx>,
-) -> Result<(inkwell::values::IntValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
+) -> Result<
+    (
+        inkwell::values::IntValue<'ctx>,
+        inkwell::values::IntValue<'ctx>,
+    ),
+    String,
+> {
     let slot = return_slot_ptr(ctx, builder, frame_ptr)?;
     let error_ptr = builder
         .build_load(ctx.i64_type(), slot, "ret_err")

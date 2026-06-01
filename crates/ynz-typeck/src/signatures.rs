@@ -202,21 +202,23 @@ fn stmt_contains_wait(stmt: &Stmt) -> bool {
         Stmt::Expr(e) => expr_contains_wait(e),
         Stmt::Let { value, .. } => expr_contains_wait(value),
         Stmt::Assign { value, .. } => expr_contains_wait(value),
-        Stmt::Return { value, .. } => {
-            value.as_ref().map(expr_contains_wait).unwrap_or(false)
-        }
+        Stmt::Return { value, .. } => value.as_ref().map(expr_contains_wait).unwrap_or(false),
         Stmt::FieldAssign { target, value, .. } => {
             expr_contains_wait(target) || expr_contains_wait(value)
         }
-        Stmt::IndexAssign { receiver, index, value, .. } => {
-            expr_contains_wait(receiver)
-                || expr_contains_wait(index)
-                || expr_contains_wait(value)
-        }
-        Stmt::If { cond, body, .. } => {
-            expr_contains_wait(cond) || stmts_contain_wait(&body.stmts)
-        }
-        Stmt::Match { scrutinee, arms, else_arm, .. } => {
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => expr_contains_wait(receiver) || expr_contains_wait(index) || expr_contains_wait(value),
+        Stmt::If { cond, body, .. } => expr_contains_wait(cond) || stmts_contain_wait(&body.stmts),
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
             expr_contains_wait(scrutinee)
                 || arms.iter().any(|arm| stmts_contain_wait(&arm.body.stmts))
                 || else_arm
@@ -227,18 +229,14 @@ fn stmt_contains_wait(stmt: &Stmt) -> bool {
         Stmt::While { cond, body, .. } => {
             expr_contains_wait(cond) || stmts_contain_wait(&body.stmts)
         }
-        Stmt::For { iter, body, .. } => {
-            expr_contains_wait(iter) || stmts_contain_wait(&body.stmts)
-        }
+        Stmt::For { iter, body, .. } => expr_contains_wait(iter) || stmts_contain_wait(&body.stmts),
     }
 }
 
 fn expr_contains_wait(expr: &Expr) -> bool {
     match expr {
         Expr::Wait(..) => true,
-        Expr::BinOp { lhs, rhs, .. } => {
-            expr_contains_wait(lhs) || expr_contains_wait(rhs)
-        }
+        Expr::BinOp { lhs, rhs, .. } => expr_contains_wait(lhs) || expr_contains_wait(rhs),
         Expr::UnaryOp { operand, .. } => expr_contains_wait(operand),
         Expr::Call(call) => {
             expr_contains_wait(&call.callee) || call.args.iter().any(expr_contains_wait)
@@ -246,15 +244,15 @@ fn expr_contains_wait(expr: &Expr) -> bool {
         Expr::MethodCall { receiver, args, .. } => {
             expr_contains_wait(receiver) || args.iter().any(expr_contains_wait)
         }
-        Expr::IndexAccess { receiver, index, .. } => {
-            expr_contains_wait(receiver) || expr_contains_wait(index)
-        }
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => expr_contains_wait(receiver) || expr_contains_wait(index),
         Expr::FieldAccess { receiver, .. } => expr_contains_wait(receiver),
         Expr::StructLit { fields, .. } => fields.iter().any(|f| expr_contains_wait(&f.value)),
         Expr::ArrayLit { elements, .. } => elements.iter().any(expr_contains_wait),
-        Expr::MapLit { entries, .. } => {
-            entries.iter().any(|(k, v)| expr_contains_wait(k) || expr_contains_wait(v))
-        }
+        Expr::MapLit { entries, .. } => entries
+            .iter()
+            .any(|(k, v)| expr_contains_wait(k) || expr_contains_wait(v)),
         Expr::Is { expr: inner, .. } => expr_contains_wait(inner),
         Expr::InterpolatedString(parts, _) => parts.iter().any(|p| {
             if let ynz_ast::nodes::StringPart::Expr(e, _) = p {

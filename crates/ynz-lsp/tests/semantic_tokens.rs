@@ -6,8 +6,8 @@
 
 use ynz_lsp::{
     capabilities::PositionEncoding,
-    semantic_tokens::{semantic_tokens_full_response, semantic_tokens_range_response},
     position::LineTable,
+    semantic_tokens::{semantic_tokens_full_response, semantic_tokens_range_response},
     state::ServerState,
 };
 
@@ -22,8 +22,7 @@ fn range_at(src: &str, needle: &str) -> lsp_types::Range {
     let offset = src.find(needle).expect("needle in src");
     let table = LineTable::new(src);
     let start = table.byte_offset_to_position(src, offset, PositionEncoding::Utf8);
-    let end =
-        table.byte_offset_to_position(src, offset + needle.len(), PositionEncoding::Utf8);
+    let end = table.byte_offset_to_position(src, offset + needle.len(), PositionEncoding::Utf8);
     lsp_types::Range { start, end }
 }
 
@@ -89,7 +88,10 @@ fn test_semantic_tokens_function_name_is_function() {
     let tokens = semantic_tokens_full_response(&state, &uri).expect("tokens");
     let fn_count = tokens.data.iter().filter(|t| t.token_type == 2).count();
     // At minimum, `greet` should appear as FUNCTION (2) — at declaration + call site.
-    assert!(fn_count >= 1, "expected at least 1 FUNCTION token; got {fn_count}");
+    assert!(
+        fn_count >= 1,
+        "expected at least 1 FUNCTION token; got {fn_count}"
+    );
 }
 
 // ─── Token type emission: number ─────────────────────────────────────────────
@@ -100,7 +102,10 @@ fn test_semantic_tokens_integer_literal_is_number() {
     let (state, uri) = state_single("/tmp/ynz_st_number.ynz", src);
     let tokens = semantic_tokens_full_response(&state, &uri).expect("tokens");
     let num_count = tokens.data.iter().filter(|t| t.token_type == 7).count();
-    assert!(num_count >= 1, "expected at least 1 NUMBER token; got {num_count}");
+    assert!(
+        num_count >= 1,
+        "expected at least 1 NUMBER token; got {num_count}"
+    );
 }
 
 // ─── Token type emission: string ─────────────────────────────────────────────
@@ -111,7 +116,10 @@ fn test_semantic_tokens_string_literal_is_string() {
     let (state, uri) = state_single("/tmp/ynz_st_string.ynz", src);
     let tokens = semantic_tokens_full_response(&state, &uri).expect("tokens");
     let str_count = tokens.data.iter().filter(|t| t.token_type == 8).count();
-    assert!(str_count >= 1, "expected at least 1 STRING token; got {str_count}");
+    assert!(
+        str_count >= 1,
+        "expected at least 1 STRING token; got {str_count}"
+    );
 }
 
 // ─── Options variant emission ─────────────────────────────────────────────────
@@ -126,7 +134,10 @@ fn test_semantic_tokens_variable_fallback() {
     let tokens = semantic_tokens_full_response(&state, &uri).expect("tokens");
     let var_count = tokens.data.iter().filter(|t| t.token_type == 3).count();
     // `score` is a local variable; must appear as VARIABLE.
-    assert!(var_count >= 1, "expected at least 1 VARIABLE token; got {var_count}");
+    assert!(
+        var_count >= 1,
+        "expected at least 1 VARIABLE token; got {var_count}"
+    );
 }
 
 // ─── Range filter ────────────────────────────────────────────────────────────
@@ -173,10 +184,34 @@ fn test_semantic_tokens_keyword_agreement_with_tm_grammar() {
 
     // The Yinz keyword set — each entry here matches the TM grammar's keyword.ynz scope.
     let yinz_keywords = [
-        "function", "let", "const", "return", "if", "else", "while", "for", "in",
-        "shape", "follows", "extends", "base", "hidden", "dynamic", "options", "is",
-        "import", "export", "wait", "background", "sensitive", "errors", "true",
-        "false", "nothing", "none", "self",
+        "function",
+        "let",
+        "const",
+        "return",
+        "if",
+        "else",
+        "while",
+        "for",
+        "in",
+        "shape",
+        "follows",
+        "extends",
+        "base",
+        "hidden",
+        "dynamic",
+        "options",
+        "is",
+        "import",
+        "export",
+        "wait",
+        "background",
+        "sensitive",
+        "errors",
+        "true",
+        "false",
+        "nothing",
+        "none",
+        "self",
     ];
 
     // Find keyword tokens in our output.

@@ -108,7 +108,10 @@ fn spawn_drop_program_continues() {
     ynz_rt_shutdown();
 
     REACHED_END.store(true, Ordering::SeqCst);
-    assert!(REACHED_END.load(Ordering::SeqCst), "should reach end after shutdown");
+    assert!(
+        REACHED_END.load(Ordering::SeqCst),
+        "should reach end after shutdown"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -212,7 +215,10 @@ fn spawn_panic_ctx_no_leak() {
 
     let tasks_ran = TASK_COUNTER.load(Ordering::SeqCst);
     let drops_fired = DROP_COUNTER.load(Ordering::SeqCst);
-    assert_eq!(tasks_ran, N, "expected {N} task executions, got {tasks_ran}");
+    assert_eq!(
+        tasks_ran, N,
+        "expected {N} task executions, got {tasks_ran}"
+    );
     assert_eq!(
         drops_fired, N,
         "CtxDropGuard-equivalent ran {drops_fired} times but expected {N} \
@@ -377,14 +383,16 @@ fn check_preempt_noop_per_call_cost_acceptable() {
     let elapsed = start.elapsed();
     let ns_per_call = elapsed.as_nanos() as f64 / ITERS as f64;
 
-    eprintln!(
-        "check_preempt no-op stub: {ns_per_call:.2}ns/call over {ITERS} iterations"
-    );
+    eprintln!("check_preempt no-op stub: {ns_per_call:.2}ns/call over {ITERS} iterations");
 
     // In release mode: target is a single `ret` ≈ 1-2ns. Allow up to 10ns for
     // measurement noise. In debug mode, unoptimised function call overhead is
     // much higher — allow up to 200ns.
-    let max_ns = if cfg!(debug_assertions) { 200.0_f64 } else { 10.0 };
+    let max_ns = if cfg!(debug_assertions) {
+        200.0_f64
+    } else {
+        10.0
+    };
     assert!(
         ns_per_call < max_ns,
         "check_preempt per-call cost {ns_per_call:.2}ns > {max_ns:.0}ns budget"

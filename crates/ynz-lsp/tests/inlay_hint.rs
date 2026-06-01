@@ -5,9 +5,7 @@
 
 use lsp_types::{Position, Range};
 use ynz_lsp::{
-    capabilities::PositionEncoding,
-    inlay_hint::inlay_hint_response,
-    state::ServerState,
+    capabilities::PositionEncoding, inlay_hint::inlay_hint_response, state::ServerState,
 };
 
 fn state_single(path: &str, src: &str) -> (ServerState, lsp_types::Url) {
@@ -20,8 +18,14 @@ fn state_single(path: &str, src: &str) -> (ServerState, lsp_types::Url) {
 /// A range covering the entire source file (all hints included).
 fn full_range() -> Range {
     Range {
-        start: Position { line: 0, character: 0 },
-        end: Position { line: 9999, character: 0 },
+        start: Position {
+            line: 0,
+            character: 0,
+        },
+        end: Position {
+            line: 9999,
+            character: 0,
+        },
     }
 }
 
@@ -74,7 +78,8 @@ fn test_inlay_hint_variable_type_suppressed_for_annotated_let() {
         .collect();
     assert!(
         type_hints.is_empty(),
-        "annotated let must not emit type hints; got: {:?}", type_hints
+        "annotated let must not emit type hints; got: {:?}",
+        type_hints
     );
 }
 
@@ -143,8 +148,14 @@ fn test_inlay_hint_viewport_filter_excludes_out_of_range_hints() {
 
     // Line 1 only (the `let a` line).
     let line1_range = Range {
-        start: Position { line: 1, character: 0 },
-        end: Position { line: 2, character: 0 },
+        start: Position {
+            line: 1,
+            character: 0,
+        },
+        end: Position {
+            line: 2,
+            character: 0,
+        },
     };
     let line1_hints = inlay_hint_response(&state, &uri, line1_range);
 
@@ -404,4 +415,3 @@ function entrypoint() -> nothing {
         give_hint
     );
 }
-

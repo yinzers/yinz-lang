@@ -248,10 +248,7 @@ fn transitive_suspends_no_explicit_wait_runs_correctly() {
         stdout.contains("bar done"),
         "expected 'bar done'; got: {stdout:?}"
     );
-    assert!(
-        stdout.contains("done"),
-        "expected 'done'; got: {stdout:?}"
-    );
+    assert!(stdout.contains("done"), "expected 'done'; got: {stdout:?}");
 }
 
 // ── AC 7 (behavioral): composed frame — single nested tree ────────────────────
@@ -316,8 +313,10 @@ fn no_bridge_reachable_from_resume_fns() {
     let nm_out = Command::new("objdump")
         .args(["-d", binary.to_str().expect("valid path")])
         .output()
-        .expect("objdump must be available — the no-bridge invariant test cannot pass without \
-                  disassembling the binary. Install binutils or run on a CI image that has it.");
+        .expect(
+            "objdump must be available — the no-bridge invariant test cannot pass without \
+                  disassembling the binary. Install binutils or run on a CI image that has it.",
+        );
 
     assert!(
         nm_out.status.success(),
@@ -380,16 +379,20 @@ fn run_with_alloc_counter(fixture: &str) -> (u64, u64) {
     )
     .args(["run", fixture_path.to_str().expect("valid path")])
     .env("YNZ_ALLOC_COUNTER", "1")
-    .env("YNZ_ALLOC_COUNTER_OUTPUT", count_file.to_str().expect("valid path"))
+    .env(
+        "YNZ_ALLOC_COUNTER_OUTPUT",
+        count_file.to_str().expect("valid path"),
+    )
     .output()
     .expect("ynz binary not found");
 
-    let content = std::fs::read_to_string(&count_file)
-        .unwrap_or_else(|_| "alloc=0\nfree=0\n".to_string());
+    let content =
+        std::fs::read_to_string(&count_file).unwrap_or_else(|_| "alloc=0\nfree=0\n".to_string());
     let _ = std::fs::remove_file(&count_file);
 
     let parse_count = |prefix: &str| -> u64 {
-        content.lines()
+        content
+            .lines()
             .find(|l| l.starts_with(prefix))
             .and_then(|l| l.split('=').nth(1))
             .and_then(|v| v.trim().parse().ok())
@@ -401,7 +404,11 @@ fn run_with_alloc_counter(fixture: &str) -> (u64, u64) {
 // ── AC 8: recursion cancellation-no-leak ──────────────────────────────────────
 
 /// Run a fixture with alloc-counter + optional cancellation + optional skip-recursion-drop.
-fn run_with_alloc_and_options(fixture: &str, cancel: bool, skip_recursion_drop: bool) -> (u64, u64) {
+fn run_with_alloc_and_options(
+    fixture: &str,
+    cancel: bool,
+    skip_recursion_drop: bool,
+) -> (u64, u64) {
     let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(fixture);
@@ -410,7 +417,11 @@ fn run_with_alloc_and_options(fixture: &str, cancel: bool, skip_recursion_drop: 
         "ynz_alloc_{}_{}_{}.txt",
         fixture,
         if cancel { "cancel" } else { "normal" },
-        if skip_recursion_drop { "skip" } else { "nodrop" }
+        if skip_recursion_drop {
+            "skip"
+        } else {
+            "nodrop"
+        }
     ));
 
     let _ = std::fs::remove_file(&count_file);
@@ -424,7 +435,10 @@ fn run_with_alloc_and_options(fixture: &str, cancel: bool, skip_recursion_drop: 
     );
     cmd.args(["run", fixture_path.to_str().expect("valid path")])
         .env("YNZ_ALLOC_COUNTER", "1")
-        .env("YNZ_ALLOC_COUNTER_OUTPUT", count_file.to_str().expect("valid path"));
+        .env(
+            "YNZ_ALLOC_COUNTER_OUTPUT",
+            count_file.to_str().expect("valid path"),
+        );
     if cancel {
         // 50ms timeout: long enough for Tokio to join worker threads (ensuring Drop has run
         // before counters are read), short enough to fire before countdown(1)'s 200ms sleep
@@ -440,12 +454,13 @@ fn run_with_alloc_and_options(fixture: &str, cancel: bool, skip_recursion_drop: 
 
     let _output = cmd.output().expect("ynz binary not found");
 
-    let content = std::fs::read_to_string(&count_file)
-        .unwrap_or_else(|_| "alloc=0\nfree=0\n".to_string());
+    let content =
+        std::fs::read_to_string(&count_file).unwrap_or_else(|_| "alloc=0\nfree=0\n".to_string());
     let _ = std::fs::remove_file(&count_file);
 
     let parse_count = |prefix: &str| -> u64 {
-        content.lines()
+        content
+            .lines()
             .find(|l| l.starts_with(prefix))
             .and_then(|l| l.split('=').nth(1))
             .and_then(|v| v.trim().parse().ok())
@@ -625,7 +640,10 @@ fn no_bridge_via_subexpr_position_rejected_at_typeck() {
     // Typeck must fire before any LLVM IR is emitted, so no binary exists to inspect.
     // The presence of exit 1 + the teaching text is proof the codegen block_on path
     // is unreachable for this input.
-    assert_eq!(exit_code, 1, "must reject at typeck (exit 1): stderr={stderr}");
+    assert_eq!(
+        exit_code, 1,
+        "must reject at typeck (exit 1): stderr={stderr}"
+    );
     assert!(
         stderr.contains("suspending call inside a larger expression"),
         "must mention the sub-expression position restriction: {stderr}"

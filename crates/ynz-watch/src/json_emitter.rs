@@ -69,7 +69,9 @@ mod tests {
             self.0.lock().unwrap().extend_from_slice(b);
             Ok(b.len())
         }
-        fn flush(&mut self) -> io::Result<()> { Ok(()) }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
     // Arc<Mutex<Vec<u8>>> implements Send automatically; no unsafe needed here.
 
@@ -89,9 +91,13 @@ mod tests {
         let bytes = shared.lock().unwrap().clone();
         let output = String::from_utf8(bytes).unwrap();
         let lines: Vec<&str> = output.lines().collect();
-        assert_eq!(lines.len(), 1, "emit must produce exactly one line per call");
-        let parsed: serde_json::Value = serde_json::from_str(lines[0])
-            .expect("emitted line must be valid JSON");
+        assert_eq!(
+            lines.len(),
+            1,
+            "emit must produce exactly one line per call"
+        );
+        let parsed: serde_json::Value =
+            serde_json::from_str(lines[0]).expect("emitted line must be valid JSON");
         assert_eq!(
             parsed.get("type").and_then(|v| v.as_str()),
             Some("build-start"),

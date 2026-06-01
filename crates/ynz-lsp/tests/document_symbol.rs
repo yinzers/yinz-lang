@@ -40,7 +40,10 @@ fn document_symbol_returns_function_entry() {
     );
     // Response is an array of DocumentSymbol objects.
     let symbols = response.as_array().expect("response must be a JSON array");
-    assert!(!symbols.is_empty(), "open file with one function must have at least one symbol");
+    assert!(
+        !symbols.is_empty(),
+        "open file with one function must have at least one symbol"
+    );
     let names: Vec<&str> = symbols
         .iter()
         .filter_map(|s| s.get("name")?.as_str())
@@ -75,7 +78,10 @@ fn document_symbol_unknown_uri_returns_null_or_empty() {
     );
     // Null OR an empty array are both acceptable.
     let ok = response.is_null() || response.as_array().map(|a| a.is_empty()).unwrap_or(false);
-    assert!(ok, "unknown URI must yield null or empty array; got: {response}");
+    assert!(
+        ok,
+        "unknown URI must yield null or empty array; got: {response}"
+    );
 }
 
 // WHY: a shape declaration must appear as a CLASS-kind symbol in the response.
@@ -100,11 +106,17 @@ fn document_symbol_shape_decl_returns_class_kind() {
 
     let response = h.recv_response();
     let symbols = response.as_array().expect("response must be JSON array");
-    let player = symbols.iter().find(|s| s.get("name").and_then(|n| n.as_str()) == Some("Player"));
+    let player = symbols
+        .iter()
+        .find(|s| s.get("name").and_then(|n| n.as_str()) == Some("Player"));
     assert!(player.is_some(), "Player shape must appear in symbol list");
     // LSP SymbolKind::Class == 5
     let kind = player.unwrap().get("kind").and_then(|k| k.as_u64());
-    assert_eq!(kind, Some(5), "Player must have SymbolKind::Class (5); got: {kind:?}");
+    assert_eq!(
+        kind,
+        Some(5),
+        "Player must have SymbolKind::Class (5); got: {kind:?}"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -167,8 +179,13 @@ fn workspace_symbol_no_match_returns_empty_array() {
         response.get("error").is_none(),
         "workspace/symbol must not error on no-match: {response}"
     );
-    let symbols = response.as_array().expect("no-match must return a JSON array");
-    assert!(symbols.is_empty(), "non-matching query must produce an empty array");
+    let symbols = response
+        .as_array()
+        .expect("no-match must return a JSON array");
+    assert!(
+        symbols.is_empty(),
+        "non-matching query must produce an empty array"
+    );
 }
 
 // WHY: workspace/symbol must support case-insensitive substring matching.

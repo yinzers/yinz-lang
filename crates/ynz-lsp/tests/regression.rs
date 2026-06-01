@@ -159,7 +159,11 @@ fn regression_lsp_vs_cli_divergence() {
 
         // Count diagnostics from the CLI pipeline via `--json` structured output.
         let cli_output = std::process::Command::new(&ynz_binary)
-            .args(["build", "--json", path.to_str().expect("path is valid UTF-8")])
+            .args([
+                "build",
+                "--json",
+                path.to_str().expect("path is valid UTF-8"),
+            ])
             .output();
 
         let cli_error_count = match cli_output {
@@ -175,9 +179,7 @@ fn regression_lsp_vs_cli_divergence() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let summary_line = stdout.lines().filter(|l| !l.is_empty()).last();
                 match summary_line.and_then(|l| serde_json::from_str::<serde_json::Value>(l).ok()) {
-                    Some(v) if v["type"] == "summary" => {
-                        v["errors"].as_u64().unwrap_or(0) as usize
-                    }
+                    Some(v) if v["type"] == "summary" => v["errors"].as_u64().unwrap_or(0) as usize,
                     _ => {
                         eprintln!(
                             "regression_lsp_vs_cli_divergence: could not parse --json output for {}; skipping",

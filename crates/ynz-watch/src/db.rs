@@ -6,7 +6,7 @@ use std::{
 
 use salsa::Setter as _;
 use ynz_codegen::codegen_query;
-use ynz_diagnostics::{DiagnosticBucket, render};
+use ynz_diagnostics::{render, DiagnosticBucket};
 use ynz_parser::{CompilerDb, SourceFile};
 
 use crate::project::{WatchSourceFile, WatchTarget};
@@ -68,7 +68,9 @@ impl WatchDb {
     /// rebuild when content is unchanged breaks the feedback loop without losing any real
     /// user-initiated changes (salsa would return the cached result anyway).
     pub fn source_unchanged(&self, path: &Path, text: &str) -> bool {
-        self.sources.get(path).is_some_and(|existing| existing == text)
+        self.sources
+            .get(path)
+            .is_some_and(|existing| existing == text)
     }
 
     /// Update a source file in both the shadow store and the salsa DB.
@@ -153,7 +155,11 @@ impl WatchDb {
     ///   - `db_created_at.elapsed() >= rebuild_after_duration`
     ///
     /// Uses `Instant` (monotonic) for both checks — immune to NTP / clock skew.
-    pub fn should_periodic_rebuild(&self, rebuild_after_n: u64, rebuild_after_duration: Duration) -> bool {
+    pub fn should_periodic_rebuild(
+        &self,
+        rebuild_after_n: u64,
+        rebuild_after_duration: Duration,
+    ) -> bool {
         self.rebuild_count >= rebuild_after_n
             || self.db_created_at.elapsed() >= rebuild_after_duration
     }
@@ -197,9 +203,7 @@ impl RebuildOutcome {
     /// Render the human-readable diagnostic string (for text-mode output).
     pub fn render_diagnostics(&self) -> String {
         match self {
-            RebuildOutcome::Errors { diags, sources, .. } => {
-                render(diags, sources, false)
-            }
+            RebuildOutcome::Errors { diags, sources, .. } => render(diags, sources, false),
             RebuildOutcome::Infra(msg) => format!("{msg}\n"),
             RebuildOutcome::Success { .. } => String::new(),
         }
@@ -211,9 +215,10 @@ impl RebuildOutcome {
 
     pub fn error_count(&self) -> usize {
         match self {
-            RebuildOutcome::Errors { diags, .. } => {
-                diags.iter().filter(|d| d.severity == ynz_diagnostics::Severity::Error).count()
-            }
+            RebuildOutcome::Errors { diags, .. } => diags
+                .iter()
+                .filter(|d| d.severity == ynz_diagnostics::Severity::Error)
+                .count(),
             _ => 0,
         }
     }
@@ -256,16 +261,19 @@ mod tests {
 
     #[test]
     fn rebuild_db_preserves_source_text() {
-        let mut db = make_db(&[
-            ("/tmp/a.ynz", "// file a\n"),
-            ("/tmp/b.ynz", "// file b\n"),
-        ]);
+        let mut db = make_db(&[("/tmp/a.ynz", "// file a\n"), ("/tmp/b.ynz", "// file b\n")]);
 
         db.rebuild_db();
 
         let snap = db.source_snapshot();
-        assert_eq!(snap.get("/tmp/a.ynz").map(String::as_str), Some("// file a\n"));
-        assert_eq!(snap.get("/tmp/b.ynz").map(String::as_str), Some("// file b\n"));
+        assert_eq!(
+            snap.get("/tmp/a.ynz").map(String::as_str),
+            Some("// file a\n")
+        );
+        assert_eq!(
+            snap.get("/tmp/b.ynz").map(String::as_str),
+            Some("// file b\n")
+        );
     }
 
     #[test]

@@ -33,13 +33,18 @@ fn single_file(src: &str) -> (CompilerDb, SourceFile) {
 fn has_let_to_const_hints(src: &str) -> bool {
     let (db, sf) = single_file(src);
     let hints = let_to_const_promotion_hints(&db, sf);
-    hints.iter().any(|h| matches!(h.kind, PromotionKind::LetToConst))
+    hints
+        .iter()
+        .any(|h| matches!(h.kind, PromotionKind::LetToConst))
 }
 
 fn let_to_const_hint_count(src: &str) -> usize {
     let (db, sf) = single_file(src);
     let hints = let_to_const_promotion_hints(&db, sf);
-    hints.iter().filter(|h| matches!(h.kind, PromotionKind::LetToConst)).count()
+    hints
+        .iter()
+        .filter(|h| matches!(h.kind, PromotionKind::LetToConst))
+        .count()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

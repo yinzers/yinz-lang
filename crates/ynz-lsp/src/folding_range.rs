@@ -79,8 +79,16 @@ fn span_to_fold(
     text: &str,
     table: &LineTable,
 ) -> Option<FoldingRange> {
-    let start_pos = table.byte_offset_to_position(text, span.start, crate::capabilities::PositionEncoding::Utf8);
-    let end_pos = table.byte_offset_to_position(text, span.end.min(text.len()), crate::capabilities::PositionEncoding::Utf8);
+    let start_pos = table.byte_offset_to_position(
+        text,
+        span.start,
+        crate::capabilities::PositionEncoding::Utf8,
+    );
+    let end_pos = table.byte_offset_to_position(
+        text,
+        span.end.min(text.len()),
+        crate::capabilities::PositionEncoding::Utf8,
+    );
 
     let start_line = start_pos.line;
     let end_line = end_pos.line;

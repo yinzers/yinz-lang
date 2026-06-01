@@ -28,7 +28,17 @@ fn hover_function_keyword() {
     let src = "function entrypoint";
     let tokens = tokenize(src);
     let table = LineTable::new(src);
-    let h = hover_response(&tokens, &make_sig(), None, src, &table, 0, PositionEncoding::Utf8);
+    let h = hover_response(
+        &tokens,
+        &make_sig(),
+        None,
+        src,
+        &table,
+        0,
+        PositionEncoding::Utf8,
+        None,
+        None,
+    );
     assert!(
         h.is_some(),
         "hover over 'function' keyword should return Some"
@@ -71,7 +81,17 @@ fn hover_user_defined_function() {
     );
     let sig = SignatureTable { fns };
 
-    let h = hover_response(&tokens, &sig, None, src, &table, 2, PositionEncoding::Utf8);
+    let h = hover_response(
+        &tokens,
+        &sig,
+        None,
+        src,
+        &table,
+        2,
+        PositionEncoding::Utf8,
+        None,
+        None,
+    );
     assert!(
         h.is_some(),
         "hover over user-defined function name should return Some"
@@ -99,7 +119,17 @@ fn hover_inside_comment_returns_none() {
     let tokens = tokenize(src);
     let table = LineTable::new(src);
     // Offset 5 is inside the comment text
-    let h = hover_response(&tokens, &make_sig(), None, src, &table, 5, PositionEncoding::Utf8);
+    let h = hover_response(
+        &tokens,
+        &make_sig(),
+        None,
+        src,
+        &table,
+        5,
+        PositionEncoding::Utf8,
+        None,
+        None,
+    );
     assert!(h.is_none(), "hover inside a comment should return None");
 }
 
@@ -108,7 +138,17 @@ fn hover_at_byte_zero_of_empty_file_returns_none() {
     let src = "";
     let tokens = tokenize(src);
     let table = LineTable::new(src);
-    let h = hover_response(&tokens, &make_sig(), None, src, &table, 0, PositionEncoding::Utf8);
+    let h = hover_response(
+        &tokens,
+        &make_sig(),
+        None,
+        src,
+        &table,
+        0,
+        PositionEncoding::Utf8,
+        None,
+        None,
+    );
     assert!(
         h.is_none(),
         "hover at byte 0 of empty file should return None"
@@ -137,7 +177,17 @@ fn hover_registry_content_with_angle_brackets_does_not_crash() {
     let tokens = tokenize(src);
     let table = LineTable::new(src);
     // "range" is a free function intrinsic — lsp_hover_for_token should return Some
-    let h = hover_response(&tokens, &make_sig(), None, src, &table, 0, PositionEncoding::Utf8);
+    let h = hover_response(
+        &tokens,
+        &make_sig(),
+        None,
+        src,
+        &table,
+        0,
+        PositionEncoding::Utf8,
+        None,
+        None,
+    );
     assert!(
         h.is_some(),
         "hover over 'range' intrinsic should return Some"
@@ -190,13 +240,32 @@ fn hover_with_doc_comment_prepends_content() {
 
     // hover at 'heal' (offset of 'h' in "function heal")
     let heal_offset = src.find("heal").unwrap();
-    let h = hover_response(&tokens, &sig, Some(module), src, &table, heal_offset, PositionEncoding::Utf8);
-    assert!(h.is_some(), "hover over documented function should return Some");
+    let h = hover_response(
+        &tokens,
+        &sig,
+        Some(module),
+        src,
+        &table,
+        heal_offset,
+        PositionEncoding::Utf8,
+        None,
+        None,
+    );
+    assert!(
+        h.is_some(),
+        "hover over documented function should return Some"
+    );
     if let Some(h) = h {
         use lsp_types::HoverContents;
         if let HoverContents::Markup(mc) = h.contents {
-            assert!(mc.value.contains("Heals the player by amount"), "doc comment must be in hover body");
-            assert!(mc.value.contains("heal"), "function name must be in hover body");
+            assert!(
+                mc.value.contains("Heals the player by amount"),
+                "doc comment must be in hover body"
+            );
+            assert!(
+                mc.value.contains("heal"),
+                "function name must be in hover body"
+            );
         }
     }
 }
@@ -236,13 +305,32 @@ fn hover_without_doc_comment_shows_signature_only() {
     let sig = SignatureTable { fns };
 
     let greet_offset = src.find("greet").unwrap();
-    let h = hover_response(&tokens, &sig, Some(module), src, &table, greet_offset, PositionEncoding::Utf8);
-    assert!(h.is_some(), "hover over undocumented function should return Some");
+    let h = hover_response(
+        &tokens,
+        &sig,
+        Some(module),
+        src,
+        &table,
+        greet_offset,
+        PositionEncoding::Utf8,
+        None,
+        None,
+    );
+    assert!(
+        h.is_some(),
+        "hover over undocumented function should return Some"
+    );
     if let Some(h) = h {
         use lsp_types::HoverContents;
         if let HoverContents::Markup(mc) = h.contents {
-            assert!(mc.value.contains("greet"), "function name must be in hover body");
-            assert!(!mc.value.contains("---"), "no separator when no doc comment");
+            assert!(
+                mc.value.contains("greet"),
+                "function name must be in hover body"
+            );
+            assert!(
+                !mc.value.contains("---"),
+                "no separator when no doc comment"
+            );
         }
     }
 }
@@ -290,7 +378,17 @@ fn hover_wait_keyword_returns_m2_suspension_text() {
     let src = "wait sleepAsync(100)";
     let tokens = tokenize(src);
     let table = LineTable::new(src);
-    let h = hover_response(&tokens, &make_sig(), None, src, &table, 0, PositionEncoding::Utf8);
+    let h = hover_response(
+        &tokens,
+        &make_sig(),
+        None,
+        src,
+        &table,
+        0,
+        PositionEncoding::Utf8,
+        None,
+        None,
+    );
     assert!(h.is_some(), "hover over 'wait' keyword should return Some");
     if let Some(h) = h {
         use lsp_types::HoverContents;
@@ -320,8 +418,21 @@ fn hover_background_keyword_returns_routing_distinction_text() {
     let src = "background doWork()";
     let tokens = tokenize(src);
     let table = LineTable::new(src);
-    let h = hover_response(&tokens, &make_sig(), None, src, &table, 0, PositionEncoding::Utf8);
-    assert!(h.is_some(), "hover over 'background' keyword should return Some");
+    let h = hover_response(
+        &tokens,
+        &make_sig(),
+        None,
+        src,
+        &table,
+        0,
+        PositionEncoding::Utf8,
+        None,
+        None,
+    );
+    assert!(
+        h.is_some(),
+        "hover over 'background' keyword should return Some"
+    );
     if let Some(h) = h {
         use lsp_types::HoverContents;
         let HoverContents::Markup(mc) = h.contents else {
@@ -332,5 +443,118 @@ fn hover_background_keyword_returns_routing_distinction_text() {
             "background hover must contain routing-distinction note (I/O pool / blocking pool); got: {}",
             mc.value
         );
+    }
+}
+
+// WHY: shape type names at use-sites used to fall through to the useless
+//      "**Binding**: `Bar`" fallback. This test verifies hovering over a shape
+//      name in a type annotation now shows the shape's field list. Without this,
+//      IDEs show garbage for every user-defined type at the point of use.
+#[test]
+fn hover_shape_type_shows_fields() {
+    use ynz_parser::{CompilerDb, SourceFile};
+    use ynz_typeck::queries::module_signatures_query;
+
+    let src = "shape Bar {\n  symbol: string\n  open: number\n}\nfunction insertBars(bars: Bar) -> nothing { }";
+    let (tokens, _) = lex("test.ynz", src);
+    let table = LineTable::new(src);
+
+    let mut db = CompilerDb::default();
+    let sf = SourceFile::new(&db, "test.ynz".to_string(), src.to_string());
+    db.register_source(sf);
+    let parse = parse_query(&db, sf);
+    let sig_out = module_signatures_query(&db, sf);
+
+    let bar_in_param = src.rfind("Bar").unwrap();
+    let h = hover_response(
+        &tokens,
+        &sig_out.sig_table,
+        Some(&parse.module),
+        src,
+        &table,
+        bar_in_param,
+        PositionEncoding::Utf8,
+        Some(&sig_out.shape_table),
+        Some(&sig_out.imported_options),
+    );
+    assert!(
+        h.is_some(),
+        "hover over shape name at use-site should return Some"
+    );
+    if let Some(h) = h {
+        use lsp_types::HoverContents;
+        if let HoverContents::Markup(mc) = h.contents {
+            assert!(
+                mc.value.contains("shape Bar"),
+                "hover must show shape declaration"
+            );
+            assert!(
+                mc.value.contains("symbol"),
+                "hover must include field names"
+            );
+            assert!(mc.value.contains("open"), "hover must include all fields");
+            assert!(
+                !mc.value.contains("**Binding**"),
+                "must not show useless binding fallback"
+            );
+        }
+    }
+}
+
+// WHY: options types at use-sites also fell through to the binding fallback.
+//      This test verifies hovering over an options name shows its variant list.
+//      Without this, every options type shows nothing useful in the IDE.
+#[test]
+fn hover_options_type_shows_variants() {
+    use ynz_parser::{CompilerDb, SourceFile};
+    use ynz_typeck::queries::module_signatures_query;
+
+    let src = "options Status {\n  active\n  inactive\n  banned: `Banned User`\n}\nfunction check(s: Status) -> nothing { }";
+    let (tokens, _) = lex("test.ynz", src);
+    let table = LineTable::new(src);
+
+    let mut db = CompilerDb::default();
+    let sf = SourceFile::new(&db, "test.ynz".to_string(), src.to_string());
+    db.register_source(sf);
+    let parse = parse_query(&db, sf);
+    let sig_out = module_signatures_query(&db, sf);
+
+    let status_in_param = src.rfind("Status").unwrap();
+    let h = hover_response(
+        &tokens,
+        &sig_out.sig_table,
+        Some(&parse.module),
+        src,
+        &table,
+        status_in_param,
+        PositionEncoding::Utf8,
+        Some(&sig_out.shape_table),
+        Some(&sig_out.imported_options),
+    );
+    assert!(
+        h.is_some(),
+        "hover over options name at use-site should return Some"
+    );
+    if let Some(h) = h {
+        use lsp_types::HoverContents;
+        if let HoverContents::Markup(mc) = h.contents {
+            assert!(
+                mc.value.contains("options Status"),
+                "hover must show options declaration"
+            );
+            assert!(mc.value.contains("active"), "hover must show variants");
+            assert!(
+                mc.value.contains("inactive"),
+                "hover must show all variants"
+            );
+            assert!(
+                mc.value.contains("Banned User"),
+                "hover must show display strings"
+            );
+            assert!(
+                !mc.value.contains("**Binding**"),
+                "must not show useless binding fallback"
+            );
+        }
     }
 }

@@ -91,7 +91,9 @@ fn extract_match_arm_strings(src: &str, fn_name: &str) -> HashSet<String> {
                     // skip another alternative string
                     k += 1;
                     while k < wbytes.len() && wbytes[k] != b'"' {
-                        if wbytes[k] == b'\\' { k += 1; }
+                        if wbytes[k] == b'\\' {
+                            k += 1;
+                        }
                         k += 1;
                     }
                     k += 1;
@@ -113,7 +115,9 @@ fn registry_methods_by_receiver() -> HashMap<String, HashSet<String>> {
         if !matches!(e.kind, "method" | "method_1arg") {
             continue;
         }
-        let Some(recv) = e.receiver_type else { continue };
+        let Some(recv) = e.receiver_type else {
+            continue;
+        };
         map.entry(recv.to_string())
             .or_default()
             .insert(e.name.to_string());
@@ -133,10 +137,23 @@ fn carve_outs() -> HashMap<&'static str, HashSet<&'static str>> {
     // string's. A future dedicated block can be added if the IDE needs to show them
     // separately. Until then, carve them out to avoid false failures.
     m.entry("sensitive_method_return").or_default().extend([
-        "reveal", "contains", "startsWith", "endsWith", "indexOf",
-        "byteAt", "get", "count", "byteCount", "graphemeCount",
-        "toUpperCase", "toLowerCase", "trim", "substring", "replace",
-        "graphemeAt", "split",
+        "reveal",
+        "contains",
+        "startsWith",
+        "endsWith",
+        "indexOf",
+        "byteAt",
+        "get",
+        "count",
+        "byteCount",
+        "graphemeCount",
+        "toUpperCase",
+        "toLowerCase",
+        "trim",
+        "substring",
+        "replace",
+        "graphemeAt",
+        "split",
     ]);
 
     m
@@ -157,12 +174,12 @@ fn all_builtin_methods_are_registered() {
 
     // (builtins.rs fn name, registry receiver_type base)
     let cases: &[(&str, &str)] = &[
-        ("array_method_return",      "array"),
-        ("fixed_method_return",      "fixed"),
-        ("maybe_method_return",      "maybe"),
-        ("map_method_return",        "map"),
-        ("string_method_return",     "string"),
-        ("sensitive_method_return",  "sensitive"),
+        ("array_method_return", "array"),
+        ("fixed_method_return", "fixed"),
+        ("maybe_method_return", "maybe"),
+        ("map_method_return", "map"),
+        ("string_method_return", "string"),
+        ("sensitive_method_return", "sensitive"),
     ];
 
     let mut failures: Vec<String> = Vec::new();

@@ -20,9 +20,7 @@ fn parse_within_timeout(source: &str) {
 #[test]
 fn stmt_boundary_token_inside_block_does_not_hang() {
     // Token::Function inside a body — the original reproducer from v0.2-M1/v0.3-M1.
-    parse_within_timeout(
-        "function outer() -> nothing {\n  function inner() -> nothing { }\n}",
-    );
+    parse_within_timeout("function outer() -> nothing {\n  function inner() -> nothing { }\n}");
     // Token::Options inside a body — same mechanism.
     parse_within_timeout("function test() -> nothing {\n  options Foo { a, b }\n}");
     // Nested function-inside-block inside another block.
@@ -52,8 +50,8 @@ fn gallery_files_do_not_hang() {
         if !path.exists() {
             continue; // file may not be present in all worktrees
         }
-        let source = std::fs::read_to_string(&path)
-            .unwrap_or_else(|_| panic!("could not read {name}"));
+        let source =
+            std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("could not read {name}"));
         let start = Instant::now();
         let db = ynz_parser::CompilerDb::default();
         let sf = ynz_parser::SourceFile::new(&db, name.to_string().into(), source.into());

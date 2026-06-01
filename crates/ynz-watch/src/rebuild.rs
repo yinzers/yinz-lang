@@ -15,7 +15,7 @@ use crate::{
     db::{RebuildOutcome, WatchDb},
     error::{Result, WatchError},
     json_emitter::JsonEmitter,
-    json_events::{BuildOutcome, WatchEvent as JsonEvent, ts},
+    json_events::{ts, BuildOutcome, WatchEvent as JsonEvent},
     ui,
 };
 
@@ -107,7 +107,12 @@ pub fn rebuild_one(
 
     // Text-mode diagnostic rendering.
     if !json_mode {
-        if let RebuildOutcome::Errors { ref diags, ref sources, elapsed_ms } = outcome {
+        if let RebuildOutcome::Errors {
+            ref diags,
+            ref sources,
+            elapsed_ms,
+        } = outcome
+        {
             let rendered = render(diags, sources, false);
             if !rendered.is_empty() {
                 print!("{rendered}");
@@ -233,9 +238,13 @@ fn finish_rebuild(
     match raw_outcome {
         RebuildOutcome::Errors { .. } => CycleOutcome::Errors,
 
-        RebuildOutcome::Success { ref object_bytes, .. } => {
+        RebuildOutcome::Success {
+            ref object_bytes, ..
+        } => {
             if check_only {
-                return CycleOutcome::Success { binary: PathBuf::new() };
+                return CycleOutcome::Success {
+                    binary: PathBuf::new(),
+                };
             }
             let binary_name = entry_path
                 .file_stem()
@@ -256,7 +265,9 @@ fn finish_rebuild(
             match ChildHandle::spawn(&binary_path) {
                 Ok(c) => {
                     *current_child = Some(c);
-                    CycleOutcome::Success { binary: binary_path }
+                    CycleOutcome::Success {
+                        binary: binary_path,
+                    }
                 }
                 Err(e) => {
                     eprintln!("{e}");
@@ -369,7 +380,12 @@ pub fn rebuild_one_with_emitter(
 
     // Emit diagnostic events (one per compile error) before build-end.
     if let Some(ref mut e_emitter) = emitter {
-        if let RebuildOutcome::Errors { ref diags, ref sources, .. } = raw_outcome {
+        if let RebuildOutcome::Errors {
+            ref diags,
+            ref sources,
+            ..
+        } = raw_outcome
+        {
             for diag in diags.iter() {
                 use ynz_diagnostics::Severity;
                 let severity = match diag.severity {
@@ -398,7 +414,12 @@ pub fn rebuild_one_with_emitter(
 
     // Text-mode: render diagnostics before finish_rebuild moves raw_outcome.
     if !json_mode {
-        if let RebuildOutcome::Errors { ref diags, ref sources, elapsed_ms } = raw_outcome {
+        if let RebuildOutcome::Errors {
+            ref diags,
+            ref sources,
+            elapsed_ms,
+        } = raw_outcome
+        {
             let rendered = ynz_diagnostics::render(diags, sources, false);
             if !rendered.is_empty() {
                 print!("{rendered}");

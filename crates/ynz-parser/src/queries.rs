@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use ynz_ast::nodes::Module;
-use ynz_diagnostics::DiagnosticBucket;
+use ynz_ast::nodes::{Item, Module};
+use ynz_diagnostics::{DiagnosticBucket, DiagnosticKind, SourceSpan};
 
 use crate::{
     db::SourceFile,
@@ -34,6 +34,29 @@ pub fn lex_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<LexOutput>
     })
 }
 
+/// Collect source spans where a banned-declaration keyword is used as a plain
+/// identifier. Currently covers shape field names and function parameter names.
+/// BannedKeyword diagnostics at these positions are suppressed in `parse_query`.
+fn valid_identifier_positions(module: &Module) -> Vec<SourceSpan> {
+    let mut spans = Vec::new();
+    for item in &module.items {
+        match item {
+            Item::ShapeDecl(s) => {
+                for field in &s.fields {
+                    spans.push(field.name_span.clone());
+                }
+            }
+            Item::Function(f) => {
+                for param in &f.params {
+                    spans.push(param.name_span.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    spans
+}
+
 /// Convenience: lex a source and return the diagnostics bucket directly.
 pub fn lex_to_bucket(db: &dyn salsa::Database, source: SourceFile) -> DiagnosticBucket {
     lex_query(db, source).diagnostics.clone()
@@ -59,7 +82,22 @@ pub fn parse_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<ParseOut
     let mut parser = Parser::new(path.as_str(), &lex.tokens);
     let module = parser.parse_module();
 
-    let mut diagnostics = lex.diagnostics.clone();
+    // Collect positions where banned-declaration-keyword tokens are valid plain
+    // identifiers (shape field names, function parameter names). A BannedKeyword
+    // diagnostic at one of these positions is suppressed: `class: string` as a
+    // field name is correct Yinz — `class` is only banned as a declaration keyword.
+    let suppress_spans = valid_identifier_positions(&module);
+
+    let mut diagnostics = DiagnosticBucket::new();
+    for d in lex.diagnostics.iter() {
+        let suppressed = matches!(&d.kind, Some(DiagnosticKind::BannedKeyword { .. }))
+            && suppress_spans
+                .iter()
+                .any(|s| s.start == d.span.start && s.end == d.span.end);
+        if !suppressed {
+            diagnostics.push(d.clone());
+        }
+    }
     for d in parser.diags.into_iter() {
         diagnostics.push(d);
     }

@@ -238,8 +238,7 @@ pub fn def_site_for_offset(
     source: SourceFile,
     byte_offset: usize,
 ) -> Option<(SourceFile, SourceSpan)> {
-    resolve_symbol_at(db, source, byte_offset)
-        .map(|sym| (sym.origin_file, sym.decl_span))
+    resolve_symbol_at(db, source, byte_offset).map(|sym| (sym.origin_file, sym.decl_span))
 }
 
 /// Find every use-site of the symbol at `byte_offset` across all registered files.
@@ -283,9 +282,8 @@ pub fn references_for_offset(
 
     // Remove the declaration span itself from use-sites (already added by include_decl above).
     if !include_decl {
-        results.retain(|(sf, span)| {
-            !(*sf == canonical.origin_file && *span == canonical.decl_span)
-        });
+        results
+            .retain(|(sf, span)| !(*sf == canonical.origin_file && *span == canonical.decl_span));
     }
 
     results
@@ -362,13 +360,15 @@ pub fn rename_locations(
     // Validate the new name first — fast fail before any file walking.
     validate_new_name(&new_name)?;
 
-    let canonical = resolve_symbol_at(db, source, byte_offset)
-        .ok_or(RenameError::NotARenameable)?;
+    let canonical =
+        resolve_symbol_at(db, source, byte_offset).ok_or(RenameError::NotARenameable)?;
 
     // Only allow rename from the declaration file.
     if canonical.origin_file != source {
         let origin_path = canonical.origin_file.path(db);
-        return Err(RenameError::CannotRenameImportedSymbolInThisFile(origin_path));
+        return Err(RenameError::CannotRenameImportedSymbolInThisFile(
+            origin_path,
+        ));
     }
 
     // Check whether `new_name` already exists as a top-level declaration in any
@@ -463,8 +463,17 @@ fn find_binding_in_block(
         }
 
         match stmt {
-            Stmt::Let { is_const, name: binding_name, name_span, .. } if *binding_name == name => {
-                let kind = if *is_const { SymbolKind::LocalConst } else { SymbolKind::LocalLet };
+            Stmt::Let {
+                is_const,
+                name: binding_name,
+                name_span,
+                ..
+            } if *binding_name == name => {
+                let kind = if *is_const {
+                    SymbolKind::LocalConst
+                } else {
+                    SymbolKind::LocalLet
+                };
                 best = Some(ResolvedSymbol {
                     kind,
                     origin_file: source,
@@ -477,7 +486,12 @@ fn find_binding_in_block(
                     best = Some(inner);
                 }
             }
-            Stmt::For { var, var_span, body, .. } => {
+            Stmt::For {
+                var,
+                var_span,
+                body,
+                ..
+            } => {
                 if var == name {
                     best = Some(ResolvedSymbol {
                         kind: SymbolKind::LocalLet,
@@ -543,9 +557,10 @@ fn resolve_via_imports(
 
         // Map local name → exported name (handling `as alias`).
         let exported_name: Option<String> = match &decl.kind {
-            ynz_ast::nodes::ImportKind::Named(items) => {
-                items.iter().find(|i| i.local_name == name).map(|i| i.exported_name.clone())
-            }
+            ynz_ast::nodes::ImportKind::Named(items) => items
+                .iter()
+                .find(|i| i.local_name == name)
+                .map(|i| i.exported_name.clone()),
             ynz_ast::nodes::ImportKind::Namespace { local_name, .. } => {
                 // Namespace imports bind as `ns.Name` — check prefix form.
                 if name.starts_with(&format!("{local_name}.")) {
@@ -560,7 +575,9 @@ fn resolve_via_imports(
             continue;
         };
 
-        let Some(resolved_path) = crate::resolve_import::resolve_module_path(source_path, &decl.source) else {
+        let Some(resolved_path) =
+            crate::resolve_import::resolve_module_path(source_path, &decl.source)
+        else {
             continue;
         };
 
@@ -671,7 +688,12 @@ fn collect_use_sites_in_stmt(
             collect_use_sites_in_expr(cond, canonical, sf, db, results);
             collect_use_sites_in_block(body, canonical, sf, db, results);
         }
-        Stmt::Match { scrutinee, arms, else_arm, .. } => {
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
             collect_use_sites_in_expr(scrutinee, canonical, sf, db, results);
             for arm in arms {
                 collect_use_sites_in_block(&arm.body, canonical, sf, db, results);
@@ -692,7 +714,12 @@ fn collect_use_sites_in_stmt(
             collect_use_sites_in_expr(target, canonical, sf, db, results);
             collect_use_sites_in_expr(value, canonical, sf, db, results);
         }
-        Stmt::IndexAssign { receiver, index, value, .. } => {
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => {
             collect_use_sites_in_expr(receiver, canonical, sf, db, results);
             collect_use_sites_in_expr(index, canonical, sf, db, results);
             collect_use_sites_in_expr(value, canonical, sf, db, results);
@@ -712,7 +739,9 @@ fn emit_if_same_canonical(
     results: &mut Vec<(SourceFile, SourceSpan)>,
 ) {
     if let Some(resolved) = resolve_symbol_at(db, sf, span.start) {
-        if resolved.origin_file == canonical.origin_file && resolved.decl_span == canonical.decl_span {
+        if resolved.origin_file == canonical.origin_file
+            && resolved.decl_span == canonical.decl_span
+        {
             results.push((sf, span.clone()));
         }
     }
@@ -735,7 +764,13 @@ fn collect_use_sites_in_expr(
                 collect_use_sites_in_expr(arg, canonical, sf, db, results);
             }
         }
-        Expr::MethodCall { receiver, method, method_span, args, .. } => {
+        Expr::MethodCall {
+            receiver,
+            method,
+            method_span,
+            args,
+            ..
+        } => {
             if method == &canonical.name {
                 emit_if_same_canonical(method_span, canonical, sf, db, results);
             }
@@ -762,7 +797,9 @@ fn collect_use_sites_in_expr(
         Expr::PostfixOp { receiver, .. } => {
             collect_use_sites_in_expr(receiver, canonical, sf, db, results);
         }
-        Expr::IndexAccess { receiver, index, .. } => {
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => {
             collect_use_sites_in_expr(receiver, canonical, sf, db, results);
             collect_use_sites_in_expr(index, canonical, sf, db, results);
         }

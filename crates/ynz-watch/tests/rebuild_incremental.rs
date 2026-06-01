@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use ynz_watch::{
-    db::{WatchDb, init_db},
+    db::{init_db, WatchDb},
     project::WatchSourceFile,
 };
 
@@ -21,14 +21,16 @@ fn make_db(sources: &[(&str, &str)]) -> WatchDb {
     init_db(&entries)
 }
 
-
 // WHY: shadow source state must survive a salsa DB drop+recreate (Layer 2 periodic rebuild).
 //      If this breaks, rebuild_db() silently empties the DB and watch reports 0 errors on
 //      broken code — silent-wrong-output. Do NOT loosen: fix the shadow/repopulate logic.
 #[test]
 fn rebuild_db_round_trips_source_text() {
     let mut db = make_db(&[
-        ("/tmp/a.ynz", "function entrypoint() -> nothing { print(42) }\n"),
+        (
+            "/tmp/a.ynz",
+            "function entrypoint() -> nothing { print(42) }\n",
+        ),
         ("/tmp/b.ynz", "// module b\n"),
     ]);
 
@@ -84,7 +86,11 @@ fn rebuild_count_resets_after_periodic_rebuild() {
     );
 
     db.rebuild_db();
-    assert_eq!(db.rebuild_count(), 0, "rebuild_count resets to 0 after rebuild_db()");
+    assert_eq!(
+        db.rebuild_count(),
+        0,
+        "rebuild_count resets to 0 after rebuild_db()"
+    );
     assert!(
         !db.should_periodic_rebuild(1, Duration::from_secs(9999)),
         "should_periodic_rebuild must return false immediately after rebuild_db()"

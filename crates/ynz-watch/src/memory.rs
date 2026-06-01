@@ -174,7 +174,10 @@ mod tests {
     fn hard_stop_message_contains_three_parts() {
         let msg = hard_stop_message(4096, 4096, "foo.ynz");
         assert!(msg.contains("WHAT:"), "message must have WHAT");
-        assert!(msg.contains("WHAT INSTEAD:"), "message must have WHAT INSTEAD");
+        assert!(
+            msg.contains("WHAT INSTEAD:"),
+            "message must have WHAT INSTEAD"
+        );
         assert!(msg.contains("WHY:"), "message must have WHY");
     }
 }

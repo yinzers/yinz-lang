@@ -19,12 +19,12 @@ pub const SEMANTIC_TOKEN_LEGEND: &[SemanticTokenType] = &[
     SemanticTokenType::TYPE,        // 1
     SemanticTokenType::FUNCTION,    // 2
     SemanticTokenType::VARIABLE,    // 3
-    SemanticTokenType::PARAMETER,   // 4 — unused today; reserved in legend for future AST-walk upgrade
-    SemanticTokenType::PROPERTY,    // 5 — unused today; reserved for field access
+    SemanticTokenType::PARAMETER, // 4 — unused today; reserved in legend for future AST-walk upgrade
+    SemanticTokenType::PROPERTY,  // 5 — unused today; reserved for field access
     SemanticTokenType::ENUM_MEMBER, // 6
-    SemanticTokenType::NUMBER,      // 7
-    SemanticTokenType::STRING,      // 8
-    SemanticTokenType::COMMENT,     // 9
+    SemanticTokenType::NUMBER,    // 7
+    SemanticTokenType::STRING,    // 8
+    SemanticTokenType::COMMENT,   // 9
 ];
 
 const IDX_KEYWORD: u32 = 0;
@@ -207,7 +207,9 @@ fn classify_token(tok: &Token, sig: &ynz_typeck::queries::SignatureOutput) -> Op
 
         // ── Literals ──────────────────────────────────────────────────────────
         Token::IntLit(_) | Token::NumberLit(_) => Some(IDX_NUMBER),
-        Token::StringLit(_) | Token::BacktickString(_) | Token::InterpolationStart
+        Token::StringLit(_)
+        | Token::BacktickString(_)
+        | Token::InterpolationStart
         | Token::InterpolationEnd => Some(IDX_STRING),
 
         // ── Doc comment ───────────────────────────────────────────────────────
@@ -350,14 +352,38 @@ mod tests {
         // without any compile error. This test verifies each IDX constant points to
         // the expected SemanticTokenType — not just that it's in-bounds.
         use lsp_types::SemanticTokenType;
-        assert_eq!(SEMANTIC_TOKEN_LEGEND[IDX_KEYWORD as usize], SemanticTokenType::KEYWORD);
-        assert_eq!(SEMANTIC_TOKEN_LEGEND[IDX_TYPE as usize], SemanticTokenType::TYPE);
-        assert_eq!(SEMANTIC_TOKEN_LEGEND[IDX_FUNCTION as usize], SemanticTokenType::FUNCTION);
-        assert_eq!(SEMANTIC_TOKEN_LEGEND[IDX_VARIABLE as usize], SemanticTokenType::VARIABLE);
-        assert_eq!(SEMANTIC_TOKEN_LEGEND[IDX_ENUM_MEMBER as usize], SemanticTokenType::ENUM_MEMBER);
-        assert_eq!(SEMANTIC_TOKEN_LEGEND[IDX_NUMBER as usize], SemanticTokenType::NUMBER);
-        assert_eq!(SEMANTIC_TOKEN_LEGEND[IDX_STRING as usize], SemanticTokenType::STRING);
-        assert_eq!(SEMANTIC_TOKEN_LEGEND[IDX_COMMENT as usize], SemanticTokenType::COMMENT);
+        assert_eq!(
+            SEMANTIC_TOKEN_LEGEND[IDX_KEYWORD as usize],
+            SemanticTokenType::KEYWORD
+        );
+        assert_eq!(
+            SEMANTIC_TOKEN_LEGEND[IDX_TYPE as usize],
+            SemanticTokenType::TYPE
+        );
+        assert_eq!(
+            SEMANTIC_TOKEN_LEGEND[IDX_FUNCTION as usize],
+            SemanticTokenType::FUNCTION
+        );
+        assert_eq!(
+            SEMANTIC_TOKEN_LEGEND[IDX_VARIABLE as usize],
+            SemanticTokenType::VARIABLE
+        );
+        assert_eq!(
+            SEMANTIC_TOKEN_LEGEND[IDX_ENUM_MEMBER as usize],
+            SemanticTokenType::ENUM_MEMBER
+        );
+        assert_eq!(
+            SEMANTIC_TOKEN_LEGEND[IDX_NUMBER as usize],
+            SemanticTokenType::NUMBER
+        );
+        assert_eq!(
+            SEMANTIC_TOKEN_LEGEND[IDX_STRING as usize],
+            SemanticTokenType::STRING
+        );
+        assert_eq!(
+            SEMANTIC_TOKEN_LEGEND[IDX_COMMENT as usize],
+            SemanticTokenType::COMMENT
+        );
     }
 
     // ─── Delta encoding ──────────────────────────────────────────────────────
@@ -366,7 +392,12 @@ mod tests {
     fn delta_encoding_single_token() {
         // WHY: delta-encoding off-by-one bugs are silent — emitter produces wrong
         // column positions in VSCode and no assertion catches them without this test.
-        let raw = vec![RawToken { line: 2, start: 5, length: 3, token_type: IDX_KEYWORD }];
+        let raw = vec![RawToken {
+            line: 2,
+            start: 5,
+            length: 3,
+            token_type: IDX_KEYWORD,
+        }];
         let encoded = encode_delta(raw);
         assert_eq!(encoded.len(), 1);
         // First token: deltaLine = line (2 - 0), deltaStart = start (5 - 0 because new line)
@@ -381,8 +412,18 @@ mod tests {
         // WHY: same-line tokens encode start relative to previous start.
         // Getting the condition wrong produces wrong column for the second token.
         let raw = vec![
-            RawToken { line: 0, start: 4, length: 3, token_type: IDX_KEYWORD },
-            RawToken { line: 0, start: 10, length: 5, token_type: IDX_VARIABLE },
+            RawToken {
+                line: 0,
+                start: 4,
+                length: 3,
+                token_type: IDX_KEYWORD,
+            },
+            RawToken {
+                line: 0,
+                start: 10,
+                length: 5,
+                token_type: IDX_VARIABLE,
+            },
         ];
         let encoded = encode_delta(raw);
         assert_eq!(encoded.len(), 2);
@@ -397,8 +438,18 @@ mod tests {
     fn delta_encoding_two_tokens_different_lines() {
         // WHY: when delta_line > 0, delta_start resets to absolute character position.
         let raw = vec![
-            RawToken { line: 1, start: 4, length: 3, token_type: IDX_KEYWORD },
-            RawToken { line: 3, start: 7, length: 2, token_type: IDX_NUMBER },
+            RawToken {
+                line: 1,
+                start: 4,
+                length: 3,
+                token_type: IDX_KEYWORD,
+            },
+            RawToken {
+                line: 3,
+                start: 7,
+                length: 2,
+                token_type: IDX_NUMBER,
+            },
         ];
         let encoded = encode_delta(raw);
         assert_eq!(encoded.len(), 2);

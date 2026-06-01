@@ -124,13 +124,16 @@ pub fn lsp_inlay_hint_hover_for(domain: &str) -> Option<String> {
     let entry = muted_hint_domain_lookup(domain)?;
 
     let why = match entry.placement_category {
-        "Addition" =>
-            "The compiler figured this out from context. Click to make it explicit in source.",
-        "Replacement" =>
+        "Addition" => {
+            "The compiler figured this out from context. Click to make it explicit in source."
+        }
+        "Replacement" => {
             "The compiler picked the stricter form automatically. Hover to see the alternative \
-             you could write explicitly.",
-        "Informational" =>
-            "This shows what the compiler decided at this call site. No source change is needed.",
+             you could write explicitly."
+        }
+        "Informational" => {
+            "This shows what the compiler decided at this call site. No source change is needed."
+        }
         _ => "The compiler figured this out automatically.",
     };
 
@@ -177,10 +180,7 @@ pub fn lsp_code_action_label_for(diagnostic_kind: &str, token: &str) -> Option<S
 /// (complex cases like `async`/`abstract` require multi-token edits or context-
 /// dependent rewrites — those are deferred to v0.3 per `lsp-complex-code-actions`
 /// in todos.md).
-pub fn lsp_code_action_replacement_for(
-    diagnostic_kind: &str,
-    token: &str,
-) -> Option<&'static str> {
+pub fn lsp_code_action_replacement_for(diagnostic_kind: &str, token: &str) -> Option<&'static str> {
     match diagnostic_kind {
         "BannedKeyword" => SIMPLE_KEYWORD_REPLACEMENTS
             .iter()

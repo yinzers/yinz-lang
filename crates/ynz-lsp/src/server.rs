@@ -7,9 +7,9 @@ use lsp_types::{
         Initialized, Notification as _,
     },
     request::{
-        CodeActionRequest, Completion, DocumentLinkRequest, DocumentSymbolRequest, Formatting,
-        FoldingRangeRequest, GotoDefinition, HoverRequest, Initialize, InlayHintRequest,
-        PrepareRenameRequest, RangeFormatting, References, Rename, Request as _,
+        CodeActionRequest, Completion, DocumentLinkRequest, DocumentSymbolRequest,
+        FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest, Initialize,
+        InlayHintRequest, PrepareRenameRequest, RangeFormatting, References, Rename, Request as _,
         SemanticTokensFullRequest, SemanticTokensRangeRequest, Shutdown, WorkspaceSymbolRequest,
     },
     CodeActionParams, CompletionParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
@@ -23,13 +23,13 @@ use lsp_types::{
 use crate::{
     capabilities::{negotiate_encoding, server_capabilities},
     code_action::code_action_response,
-    completion::{completion_list, cross_file_completion_items, detect_context, receiver_end_offset},
+    completion::{
+        completion_list, cross_file_completion_items, detect_context, receiver_end_offset,
+    },
+    diagnostic_transform::{path_to_uri, to_lsp_diagnostic},
     document_link::document_link_response,
     document_symbol::{document_symbol_response, workspace_symbol_response},
     folding_range::folding_range_response,
-    rename_file::did_rename_files,
-    semantic_tokens::{semantic_tokens_full_response, semantic_tokens_range_response},
-    diagnostic_transform::{path_to_uri, to_lsp_diagnostic},
     formatting::{formatting_response, range_formatting_response},
     goto_definition::definition_response,
     hover::hover_response,
@@ -37,6 +37,8 @@ use crate::{
     position::LineTable,
     references::references_response,
     rename::{prepare_rename_response, rename_response},
+    rename_file::did_rename_files,
+    semantic_tokens::{semantic_tokens_full_response, semantic_tokens_range_response},
     state::ServerState,
 };
 
@@ -61,7 +63,12 @@ pub fn serve(connection: Connection) {
 
 /// Perform the LSP initialize handshake and return the negotiated position encoding
 /// plus any project root extracted from the client's workspace params.
-fn handshake(connection: &Connection) -> (crate::capabilities::PositionEncoding, Option<std::path::PathBuf>) {
+fn handshake(
+    connection: &Connection,
+) -> (
+    crate::capabilities::PositionEncoding,
+    Option<std::path::PathBuf>,
+) {
     // I/O-init: framework guarantees deserialization; panic surfaces unrecoverable stdio breakage
     let (id, params_value) = connection
         .initialize_start()
@@ -85,15 +92,18 @@ fn handshake(connection: &Connection) -> (crate::capabilities::PositionEncoding,
     let encoding = negotiate_encoding(client_encodings);
 
     // Extract project root from Initialize params (rootUri preferred, rootPath fallback).
+    // Both fields are deprecated in newer LSP in favor of workspaceFolders, but editors
+    // still send them on Initialize, so we intentionally read both for compatibility.
+    #[allow(deprecated)]
     let project_root = params
         .root_uri
         .as_ref()
         .and_then(|uri| crate::state::find_project_root(&uri.to_file_path().ok()?))
         .or_else(|| {
-            #[allow(deprecated)]
-            params.root_path.as_deref().and_then(|p| {
-                crate::state::find_project_root(std::path::Path::new(p))
-            })
+            params
+                .root_path
+                .as_deref()
+                .and_then(|p| crate::state::find_project_root(std::path::Path::new(p)))
         });
 
     let result = InitializeResult {
@@ -180,8 +190,20 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
                 .as_ref()
                 .map(|o| &o.sig_table)
                 .unwrap_or(&empty_sig);
+            let shape_table = sig_output.as_ref().map(|o| &o.shape_table);
+            let imported_options = sig_output.as_ref().map(|o| &o.imported_options);
             let module = parse_output.as_ref().map(|p| &p.module);
-            hover_response(&lex.tokens, sig, module, text, table, byte_offset, state.encoding)
+            hover_response(
+                &lex.tokens,
+                sig,
+                module,
+                text,
+                table,
+                byte_offset,
+                state.encoding,
+                shape_table,
+                imported_options,
+            )
         });
 
         let result = match hover {
@@ -241,9 +263,8 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
             // Each item carries additionalTextEdits that inserts the import on selection.
             let ctx = detect_context(text, cursor_offset);
             if matches!(ctx, ynz_registry::CompletionContext::BareIdentifier) {
-                let cross = cross_file_completion_items(
-                    state, uri, text, table, sig_table, shape_table,
-                );
+                let cross =
+                    cross_file_completion_items(state, uri, text, table, sig_table, shape_table);
                 list.items.extend(cross);
             }
 
@@ -385,23 +406,23 @@ fn handle_request(connection: &Connection, state: &mut ServerState, req: Request
     }
 
     if req.method == PrepareRenameRequest::METHOD {
-        let params: lsp_types::TextDocumentPositionParams =
-            match serde_json::from_value(req.params) {
-                Ok(p) => p,
-                Err(e) => {
-                    let response = Response::new_err(
-                        req.id,
-                        lsp_server::ErrorCode::InvalidParams as i32,
-                        format!("invalid prepareRename params: {e}"),
-                    );
-                    connection.sender.send(Message::Response(response)).ok();
-                    return;
-                }
-            };
+        let params: lsp_types::TextDocumentPositionParams = match serde_json::from_value(req.params)
+        {
+            Ok(p) => p,
+            Err(e) => {
+                let response = Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::InvalidParams as i32,
+                    format!("invalid prepareRename params: {e}"),
+                );
+                connection.sender.send(Message::Response(response)).ok();
+                return;
+            }
+        };
         let uri = &params.text_document.uri;
         let position = params.position;
-        let result = prepare_rename_response(state, uri, position)
-            .map(PrepareRenameResponse::Range);
+        let result =
+            prepare_rename_response(state, uri, position).map(PrepareRenameResponse::Range);
         let value = match result {
             Some(r) => serde_json::to_value(r).unwrap_or(serde_json::Value::Null),
             None => serde_json::Value::Null,

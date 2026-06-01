@@ -2479,7 +2479,10 @@ function entrypoint() -> nothing {
 "#,
         1,
     );
-    let has_msg = output.diagnostics.iter().any(|d| d.what.contains("Timeframe"));
+    let has_msg = output
+        .diagnostics
+        .iter()
+        .any(|d| d.what.contains("Timeframe"));
     assert!(
         has_msg,
         "Expected diagnostic mentioning `Timeframe` for unknown type in inline shape; got: {:#?}",
@@ -2500,7 +2503,10 @@ function entrypoint() -> nothing {
 "#,
         1,
     );
-    let has_msg = output.diagnostics.iter().any(|d| d.what.contains("GhostType"));
+    let has_msg = output
+        .diagnostics
+        .iter()
+        .any(|d| d.what.contains("GhostType"));
     assert!(
         has_msg,
         "Expected diagnostic mentioning `GhostType` in maybe field; got: {:#?}",
@@ -2517,9 +2523,7 @@ function entrypoint() -> nothing {
 // "not defined" error instead of a successful type-check.
 #[test]
 fn sleep_ms_with_int_arg_is_clean() {
-    assert_clean(
-        "function entrypoint() -> nothing {\n  sleepMs(50)\n}",
-    );
+    assert_clean("function entrypoint() -> nothing {\n  sleepMs(50)\n}");
 }
 
 // WHY: sleepMs with a non-int arg must produce a clear teaching error.
@@ -2527,13 +2531,19 @@ fn sleep_ms_with_int_arg_is_clean() {
 #[test]
 fn sleep_ms_with_wrong_type_produces_error() {
     let out = run("function entrypoint() -> nothing {\n  sleepMs(`not an int`)\n}");
-    let errors: Vec<_> = out.diagnostics.iter()
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
-    assert!(!errors.is_empty(), "sleepMs with string arg must produce an error");
+    assert!(
+        !errors.is_empty(),
+        "sleepMs with string arg must produce an error"
+    );
     assert!(
         errors[0].what.contains("int") || errors[0].what.contains("sleepMs"),
-        "error must mention int or sleepMs; got: {:?}", errors[0].what
+        "error must mention int or sleepMs; got: {:?}",
+        errors[0].what
     );
 }
 
@@ -2541,20 +2551,30 @@ fn sleep_ms_with_wrong_type_produces_error() {
 #[test]
 fn sleep_ms_with_no_args_produces_error() {
     let out = run("function entrypoint() -> nothing {\n  sleepMs()\n}");
-    let errors: Vec<_> = out.diagnostics.iter()
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
-    assert!(!errors.is_empty(), "sleepMs with no args must produce an error");
+    assert!(
+        !errors.is_empty(),
+        "sleepMs with no args must produce an error"
+    );
 }
 
 // WHY: sleepMs with 2 args must produce an arity error.
 #[test]
 fn sleep_ms_with_two_args_produces_error() {
     let out = run("function entrypoint() -> nothing {\n  sleepMs(50, 100)\n}");
-    let errors: Vec<_> = out.diagnostics.iter()
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
-    assert!(!errors.is_empty(), "sleepMs with 2 args must produce an error");
+    assert!(
+        !errors.is_empty(),
+        "sleepMs with 2 args must produce an error"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2572,7 +2592,10 @@ fn run_kernel(source: &str) -> CheckOutput {
 
     let mut merged_sig_table = sig_output.sig_table.clone();
     for (name, sig) in &sig_output.imported_fns {
-        merged_sig_table.fns.entry(name.clone()).or_insert_with(|| sig.clone());
+        merged_sig_table
+            .fns
+            .entry(name.clone())
+            .or_insert_with(|| sig.clone());
     }
 
     let (typed, mono_table, check_diags) = check_with_kernel_mode(
@@ -2586,10 +2609,19 @@ fn run_kernel(source: &str) -> CheckOutput {
     );
 
     let mut all_diags = parse.diagnostics.clone();
-    for d in sig_output.diagnostics.iter() { all_diags.push(d.clone()); }
-    for d in check_diags.into_iter() { all_diags.push(d); }
+    for d in sig_output.diagnostics.iter() {
+        all_diags.push(d.clone());
+    }
+    for d in check_diags.into_iter() {
+        all_diags.push(d);
+    }
 
-    CheckOutput { typed_module: typed, mono_table, diagnostics: all_diags, suspends_set: std::collections::HashSet::new() }
+    CheckOutput {
+        typed_module: typed,
+        mono_table,
+        diagnostics: all_diags,
+        suspends_set: std::collections::HashSet::new(),
+    }
 }
 
 // WHY: lend param across thread boundary is a memory-safety error.
@@ -2600,13 +2632,21 @@ fn background_with_lend_param_rejected() {
     let src = "function mutate(lend x: int) -> nothing { }\n\
                function entrypoint() -> nothing { let x: int = 5\n background mutate(x) }";
     let out = run(src);
-    let errors: Vec<_> = out.diagnostics.iter()
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
-    assert!(!errors.is_empty(), "lend param to background must produce an error");
     assert!(
-        errors.iter().any(|d| d.what.contains("lend") || d.what.contains("mutate")),
-        "error must mention lend or background; got: {:?}", errors
+        !errors.is_empty(),
+        "lend param to background must produce an error"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.what.contains("lend") || d.what.contains("mutate")),
+        "error must mention lend or background; got: {:?}",
+        errors
     );
 }
 
@@ -2620,13 +2660,20 @@ fn background_with_large_copy_warns() {
                function process(d: BigData) -> nothing { }\n\
                function entrypoint() -> nothing {\n  let d: BigData = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9 }\n  background process(d.copy())\n}";
     let out = run(src);
-    let warnings: Vec<_> = out.diagnostics.iter()
+    let warnings: Vec<_> = out
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning))
         .collect();
-    assert!(!warnings.is_empty(), "large .copy arg must produce a warning; diags: {:#?}", out.diagnostics);
+    assert!(
+        !warnings.is_empty(),
+        "large .copy arg must produce a warning; diags: {:#?}",
+        out.diagnostics
+    );
     assert!(
         warnings.iter().any(|d| d.what.contains("bytes")),
-        "warning must mention bytes; got: {:?}", warnings
+        "warning must mention bytes; got: {:?}",
+        warnings
     );
 }
 
@@ -2638,10 +2685,18 @@ fn background_with_small_copy_no_warn() {
                function process(s: Small) -> nothing { }\n\
                function entrypoint() -> nothing {\n  let s: Small = { a: 1, b: 2, c: 3, d: 4 }\n  background process(s.copy())\n}";
     let out = run(src);
-    let warnings: Vec<_> = out.diagnostics.iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning) && d.what.contains("bytes"))
+    let warnings: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| {
+            matches!(d.severity, ynz_diagnostics::Severity::Warning) && d.what.contains("bytes")
+        })
         .collect();
-    assert!(warnings.is_empty(), "small .copy arg must NOT produce a bytes warning; got: {:#?}", warnings);
+    assert!(
+        warnings.is_empty(),
+        "small .copy arg must NOT produce a bytes warning; got: {:#?}",
+        warnings
+    );
 }
 
 // WHY: kernel mode must reject `wait` with a teaching error.
@@ -2650,13 +2705,21 @@ fn wait_in_kernel_mode_rejected() {
     let src = "function slow() -> int { return 1 }\n\
                function entrypoint() -> nothing { let x = wait slow() }";
     let out = run_kernel(src);
-    let errors: Vec<_> = out.diagnostics.iter()
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
-    assert!(!errors.is_empty(), "wait in kernel mode must produce an error");
     assert!(
-        errors.iter().any(|d| d.what.contains("wait") || d.what.contains("kernel")),
-        "error must mention wait or kernel; got: {:?}", errors
+        !errors.is_empty(),
+        "wait in kernel mode must produce an error"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.what.contains("wait") || d.what.contains("kernel")),
+        "error must mention wait or kernel; got: {:?}",
+        errors
     );
 }
 
@@ -2666,13 +2729,21 @@ fn background_in_kernel_mode_rejected() {
     let src = "function process() -> nothing { }\n\
                function entrypoint() -> nothing { background process() }";
     let out = run_kernel(src);
-    let errors: Vec<_> = out.diagnostics.iter()
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
-    assert!(!errors.is_empty(), "background in kernel mode must produce an error");
     assert!(
-        errors.iter().any(|d| d.what.contains("background") || d.what.contains("kernel")),
-        "error must mention background or kernel; got: {:?}", errors
+        !errors.is_empty(),
+        "background in kernel mode must produce an error"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.what.contains("background") || d.what.contains("kernel")),
+        "error must mention background or kernel; got: {:?}",
+        errors
     );
 }
 
@@ -2693,10 +2764,15 @@ fn background_method_call_with_lend_self_rejected() {
                function increment(lend self: Counter) -> nothing { self.n = self.n + 1 }\n\
                function entrypoint() -> nothing {\n  let c: Counter = { n: 0 }\n  background c.increment()\n}";
     let out = run(src);
-    let errors: Vec<_> = out.diagnostics.iter()
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
-    assert!(!errors.is_empty(), "background with lend-self UFCS must produce an error");
+    assert!(
+        !errors.is_empty(),
+        "background with lend-self UFCS must produce an error"
+    );
 }
 
 // WHY: background fn(x) where fn takes `give`; use of x after must produce
@@ -2708,10 +2784,15 @@ fn background_give_then_use_after_rejected() {
     let src = "function process(give x: int) -> nothing { }\n\
                function entrypoint() -> nothing {\n  let x: int = 5\n  background process(x)\n  print(x)\n}";
     let out = run(src);
-    let errors: Vec<_> = out.diagnostics.iter()
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
-    assert!(!errors.is_empty(), "use-after-give in background must produce an error");
+    assert!(
+        !errors.is_empty(),
+        "use-after-give in background must produce an error"
+    );
 }
 
 // WHY: zero-byte struct (no fields) must NOT trigger the large-copy warning.
@@ -2723,10 +2804,18 @@ fn background_with_zero_byte_struct_no_warn() {
                function process(e: Empty) -> nothing { }\n\
                function entrypoint() -> nothing {\n  let e: Empty = {}\n  background process(e.copy())\n}";
     let out = run(src);
-    let warnings: Vec<_> = out.diagnostics.iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning) && d.what.contains("bytes"))
+    let warnings: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| {
+            matches!(d.severity, ynz_diagnostics::Severity::Warning) && d.what.contains("bytes")
+        })
         .collect();
-    assert!(warnings.is_empty(), "zero-byte struct copy must NOT produce a bytes warning; got: {:#?}", warnings);
+    assert!(
+        warnings.is_empty(),
+        "zero-byte struct copy must NOT produce a bytes warning; got: {:#?}",
+        warnings
+    );
 }
 
 // ── v0.3-M2 Option-B deferral errors ────────────────────────────────────────
@@ -2747,14 +2836,23 @@ function entrypoint() -> nothing {
 }
 "#;
     let out = run(src);
-    let errors: Vec<_> = out.diagnostics.iter()
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
-    assert!(!errors.is_empty(), "wait inside while loop must produce an error");
+    assert!(
+        !errors.is_empty(),
+        "wait inside while loop must produce an error"
+    );
     let has_loop_msg = errors.iter().any(|d| d.what.contains("loop"));
     assert!(has_loop_msg, "error must mention loop; got: {:#?}", errors);
     let has_why = errors.iter().any(|d| d.why.contains("v0.3-M3"));
-    assert!(has_why, "error WHY must reference v0.3-M3; got: {:#?}", errors);
+    assert!(
+        has_why,
+        "error WHY must reference v0.3-M3; got: {:#?}",
+        errors
+    );
 }
 
 // WHY: `wait` inside a `for` loop must emit the same teaching error. Guards that
@@ -2770,10 +2868,15 @@ function entrypoint() -> nothing {
 }
 "#;
     let out = run(src);
-    let errors: Vec<_> = out.diagnostics.iter()
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
-    assert!(!errors.is_empty(), "wait inside for loop must produce an error");
+    assert!(
+        !errors.is_empty(),
+        "wait inside for loop must produce an error"
+    );
     let has_loop_msg = errors.iter().any(|d| d.what.contains("loop"));
     assert!(has_loop_msg, "error must mention loop; got: {:#?}", errors);
 }
@@ -2792,14 +2895,27 @@ function entrypoint() -> nothing {
 }
 "#;
     let out = run(src);
-    let errors: Vec<_> = out.diagnostics.iter()
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
-    assert!(!errors.is_empty(), "local binding crossing wait must produce an error");
+    assert!(
+        !errors.is_empty(),
+        "local binding crossing wait must produce an error"
+    );
     let has_name = errors.iter().any(|d| d.what.contains("`x`"));
-    assert!(has_name, "error must name the offending binding `x`; got: {:#?}", errors);
+    assert!(
+        has_name,
+        "error must name the offending binding `x`; got: {:#?}",
+        errors
+    );
     let has_why = errors.iter().any(|d| d.why.contains("v0.3-M3"));
-    assert!(has_why, "error WHY must reference v0.3-M3; got: {:#?}", errors);
+    assert!(
+        has_why,
+        "error WHY must reference v0.3-M3; got: {:#?}",
+        errors
+    );
 }
 
 // WHY: function PARAMETERS read after a `wait` must NOT produce an error — they are
@@ -2856,7 +2972,9 @@ function entrypoint() -> nothing {
 }
 "#;
     let out = run(src);
-    let errors: Vec<_> = out.diagnostics.iter()
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
     assert!(
@@ -2864,9 +2982,19 @@ function entrypoint() -> nothing {
         "local declared before if-nested wait and read after must produce an error"
     );
     let has_name = errors.iter().any(|d| d.what.contains("`x`"));
-    assert!(has_name, "error must name the offending binding `x`; got: {:#?}", errors);
-    let no_crash = errors.iter().all(|d| !d.what.contains("Machine-code generation failed"));
-    assert!(no_crash, "must be a clean typeck error, not a backend crash; got: {:#?}", errors);
+    assert!(
+        has_name,
+        "error must name the offending binding `x`; got: {:#?}",
+        errors
+    );
+    let no_crash = errors
+        .iter()
+        .all(|d| !d.what.contains("Machine-code generation failed"));
+    assert!(
+        no_crash,
+        "must be a clean typeck error, not a backend crash; got: {:#?}",
+        errors
+    );
 }
 
 // WHY: a local declared before an if-nested wait and read INSIDE THE SAME BRANCH after
@@ -2883,7 +3011,9 @@ function entrypoint() -> nothing {
 }
 "#;
     let out = run(src);
-    let errors: Vec<_> = out.diagnostics.iter()
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
     assert!(
@@ -2891,7 +3021,11 @@ function entrypoint() -> nothing {
         "local read inside same branch after wait must produce an error"
     );
     let has_name = errors.iter().any(|d| d.what.contains("`x`"));
-    assert!(has_name, "error must name the offending binding `x`; got: {:#?}", errors);
+    assert!(
+        has_name,
+        "error must name the offending binding `x`; got: {:#?}",
+        errors
+    );
 }
 
 // WHY: a local declared INSIDE an if branch before the wait and read after the wait in
@@ -2908,7 +3042,9 @@ function entrypoint() -> nothing {
 }
 "#;
     let out = run(src);
-    let errors: Vec<_> = out.diagnostics.iter()
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
     assert!(
@@ -2916,7 +3052,11 @@ function entrypoint() -> nothing {
         "local declared inside branch before wait and read after must produce an error"
     );
     let has_name = errors.iter().any(|d| d.what.contains("`y`"));
-    assert!(has_name, "error must name the offending binding `y`; got: {:#?}", errors);
+    assert!(
+        has_name,
+        "error must name the offending binding `y`; got: {:#?}",
+        errors
+    );
 }
 
 // WHY: a local declared AND fully read BEFORE any wait must be accepted.
@@ -2972,7 +3112,9 @@ function entrypoint() -> nothing {
 }
 "#;
     let out = run(src);
-    let errors: Vec<_> = out.diagnostics.iter()
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
     assert!(
@@ -2980,9 +3122,17 @@ function entrypoint() -> nothing {
         "result-binding crossing a later suspension must produce an error; got no errors"
     );
     let has_slot = errors.iter().any(|d| d.what.contains("`slot`"));
-    assert!(has_slot, "error must name the crossing binding `slot`; got: {:#?}", errors);
+    assert!(
+        has_slot,
+        "error must name the crossing binding `slot`; got: {:#?}",
+        errors
+    );
     let has_why = errors.iter().any(|d| d.why.contains("v0.3-M3"));
-    assert!(has_why, "error WHY must reference v0.3-M3; got: {:#?}", errors);
+    assert!(
+        has_why,
+        "error WHY must reference v0.3-M3; got: {:#?}",
+        errors
+    );
 }
 
 // WHY: no-over-fire guard — `let slot = sleeper(); let other = sleeper(); return other`
@@ -3122,7 +3272,11 @@ function entrypoint() -> nothing {
         .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
-    assert!(errors.is_empty(), "wait_on_non_may_block must not produce an error (warning only); got: {:#?}", errors);
+    assert!(
+        errors.is_empty(),
+        "wait_on_non_may_block must not produce an error (warning only); got: {:#?}",
+        errors
+    );
 }
 
 // WHY: Phase 6 inference model — `sleepAsync(100)` without explicit `wait` is valid.
@@ -3131,7 +3285,8 @@ function entrypoint() -> nothing {
 // there is nothing to warn about: the function suspends correctly without writing `wait`.
 // Guards regressions where a stale `unawaited_sleep_async` warning is re-introduced.
 #[test]
-fn unawaited_sleep_async_no_longer_warns() { // test-ratchet: unawaited_sleep_async retired by Phase 6 inference model; old warning was bridge-era artifact
+fn unawaited_sleep_async_no_longer_warns() {
+    // test-ratchet: unawaited_sleep_async retired by Phase 6 inference model; old warning was bridge-era artifact
     let src = r#"
 function entrypoint() -> nothing {
   sleepAsync(100)
@@ -3142,8 +3297,10 @@ function entrypoint() -> nothing {
     let unawaited_warnings: Vec<_> = out
         .diagnostics
         .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning)
-            && d.what.contains("discards it without waiting"))
+        .filter(|d| {
+            matches!(d.severity, ynz_diagnostics::Severity::Warning)
+                && d.what.contains("discards it without waiting")
+        })
         .collect();
     assert!(
         unawaited_warnings.is_empty(),
@@ -3169,7 +3326,8 @@ function entrypoint() -> nothing {
 // compiler infers suspension; calling a suspending fn without explicit `wait` is correct
 // and emits no warning. Guards regressions where the old bridge-era warning resurfaces.
 #[test]
-fn state_machine_calling_state_machine_without_wait_clean_under_inference() { // test-ratchet: wait_required_on_state_machine_call retired by Phase 6; bridge-era artifact; no-wait SM→SM calls are correct under inference
+fn state_machine_calling_state_machine_without_wait_clean_under_inference() {
+    // test-ratchet: wait_required_on_state_machine_call retired by Phase 6; bridge-era artifact; no-wait SM→SM calls are correct under inference
     let src = r#"
 function inner() -> nothing {
   wait sleepAsync(10)
@@ -3187,8 +3345,10 @@ function entrypoint() -> nothing {
     let wait_required_warnings: Vec<_> = out
         .diagnostics
         .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning)
-            && d.what.contains("state-machine"))
+        .filter(|d| {
+            matches!(d.severity, ynz_diagnostics::Severity::Warning)
+                && d.what.contains("state-machine")
+        })
         .collect();
     assert!(
         wait_required_warnings.is_empty(),
@@ -3307,7 +3467,8 @@ function entrypoint() -> nothing {
 // The suspends-set check directly verifies the fixpoint produced the right result —
 // a no-op fixpoint leaves the set empty and fails both assertions.
 #[test]
-fn transitive_no_wait_compiles_clean_under_inference() { // test-ratchet: Phase 6 transitive analysis makes bar.suspends=true and foo.suspends=true; wait foo() is valid; old M2-local-predicate checkpoint superseded
+fn transitive_no_wait_compiles_clean_under_inference() {
+    // test-ratchet: Phase 6 transitive analysis makes bar.suspends=true and foo.suspends=true; wait foo() is valid; old M2-local-predicate checkpoint superseded
     // bar calls sleepAsync without wait — Phase 6 analysis: bar.suspends = true.
     // foo calls bar() — Phase 6 analysis: foo.suspends = true (transitive).
     // wait foo() — foo.suspends is true, so this is valid-but-redundant (no warning).
@@ -3345,8 +3506,11 @@ function entrypoint() -> nothing {
     let stale_warnings: Vec<_> = out
         .diagnostics
         .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning)
-            && (d.what.contains("discards it without waiting") || d.what.contains("never suspends")))
+        .filter(|d| {
+            matches!(d.severity, ynz_diagnostics::Severity::Warning)
+                && (d.what.contains("discards it without waiting")
+                    || d.what.contains("never suspends"))
+        })
         .collect();
     assert!(
         stale_warnings.is_empty(),
@@ -3359,7 +3523,11 @@ function entrypoint() -> nothing {
         .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
-    assert!(errors.is_empty(), "transitive fixture must compile clean; got: {:#?}", errors);
+    assert!(
+        errors.is_empty(),
+        "transitive fixture must compile clean; got: {:#?}",
+        errors
+    );
 }
 
 // WHY: `wait inner(sleepMs(10))` — `wait` applies to `inner`, not to `sleepMs` which is an
@@ -3402,14 +3570,15 @@ function entrypoint() -> nothing {
     );
     // The single warning must mention 'inner'.
     assert!(
-        no_effect_warnings[0].what_instead.contains("inner") || no_effect_warnings[0].what.contains("no effect"),
+        no_effect_warnings[0].what_instead.contains("inner")
+            || no_effect_warnings[0].what.contains("no effect"),
         "warning must be for inner; got: {:#?}",
         no_effect_warnings[0]
     );
     // addOne (the nested arg call) must not appear as the target of a wait_on_non_may_block warning.
-    let add_one_warned = warnings.iter().any(|d| {
-        d.what.contains("no effect") && d.what_instead.contains("addOne")
-    });
+    let add_one_warned = warnings
+        .iter()
+        .any(|d| d.what.contains("no effect") && d.what_instead.contains("addOne"));
     assert!(
         !add_one_warned,
         "addOne(5) inside an argument must not get a spurious wait_on_non_may_block; got: {:#?}",
@@ -3431,7 +3600,8 @@ function entrypoint() -> nothing {
 // `inside_wait` flag is correctly cleared before arg recursion so arg-position calls don't
 // inherit the `wait` context of the outer call.
 #[test]
-fn wait_on_non_suspending_callee_fires_for_wrapper_not_for_sleep_async_arg() { // test-ratchet: Fix 1 (Round 4) added sub-expression suspending call guard; sleepAsync(100) as an argument IS a sub-expression position → now a hard error. The old Phase 6 assertion ("no hard errors") is superseded by the HALT-class fix that correctly rejects this pattern.
+fn wait_on_non_suspending_callee_fires_for_wrapper_not_for_sleep_async_arg() {
+    // test-ratchet: Fix 1 (Round 4) added sub-expression suspending call guard; sleepAsync(100) as an argument IS a sub-expression position → now a hard error. The old Phase 6 assertion ("no hard errors") is superseded by the HALT-class fix that correctly rejects this pattern.
     // wrapper is NOT suspending (only calls sleepMs). wait wrapper() fires the
     // wait_on_non_may_block warning. sleepAsync(100) in the arg is a sub-expression
     // position suspending call — Fix 1 correctly rejects it with a teaching error.
@@ -3450,8 +3620,10 @@ function entrypoint() -> nothing {
     let unawaited_warns: Vec<_> = out
         .diagnostics
         .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning)
-            && d.what.contains("discards it without waiting"))
+        .filter(|d| {
+            matches!(d.severity, ynz_diagnostics::Severity::Warning)
+                && d.what.contains("discards it without waiting")
+        })
         .collect();
     assert!(
         unawaited_warns.is_empty(),
@@ -3463,8 +3635,11 @@ function entrypoint() -> nothing {
     let subexpr_errors: Vec<_> = out
         .diagnostics
         .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error)
-            && d.what.contains("suspending call inside a larger expression"))
+        .filter(|d| {
+            matches!(d.severity, ynz_diagnostics::Severity::Error)
+                && d.what
+                    .contains("suspending call inside a larger expression")
+        })
         .collect();
     assert!(
         !subexpr_errors.is_empty(),
@@ -3487,7 +3662,8 @@ function entrypoint() -> nothing {
 // now produces the subexpr teaching error (not a wait_required warning). This test verifies: (a) no
 // stale wait_required-style warning, and (b) the subexpr error fires (the hole is closed).
 #[test]
-fn background_arg_state_machine_call_is_clean_under_inference() { // test-ratchet: wait_required_on_state_machine_call retired by Phase 6; sm_bar() as arg-of-background now correctly fires the subexpr suspension error (args evaluate in caller context before spawn)
+fn background_arg_state_machine_call_is_clean_under_inference() {
+    // test-ratchet: wait_required_on_state_machine_call retired by Phase 6; sm_bar() as arg-of-background now correctly fires the subexpr suspension error (args evaluate in caller context before spawn)
     // sm_bar is suspending (contains wait). foo is also suspending.
     // background foo(sm_bar()) — sm_bar() in arg position evaluates in calling context.
     // entrypoint calls sleepAsync directly → entrypoint.suspends = true.
@@ -3508,8 +3684,10 @@ function entrypoint() -> nothing {
     let state_machine_warns: Vec<_> = out
         .diagnostics
         .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning)
-            && d.what.contains("state-machine"))
+        .filter(|d| {
+            matches!(d.severity, ynz_diagnostics::Severity::Warning)
+                && d.what.contains("state-machine")
+        })
         .collect();
     assert!(
         state_machine_warns.is_empty(),
@@ -3520,8 +3698,11 @@ function entrypoint() -> nothing {
     let subexpr_errors: Vec<_> = out
         .diagnostics
         .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error)
-            && d.what.contains("suspending call inside a larger expression"))
+        .filter(|d| {
+            matches!(d.severity, ynz_diagnostics::Severity::Error)
+                && d.what
+                    .contains("suspending call inside a larger expression")
+        })
         .collect();
     assert!(
         !subexpr_errors.is_empty(),
@@ -3615,8 +3796,10 @@ fn cant_infer_suspension_cross_module_fires_error() {
     std::fs::write(&entry_path, entry_src).expect("write entrypoint.ynz");
 
     let mut db = ynz_parser::CompilerDb::default();
-    let sf_utils = ynz_parser::SourceFile::new(&db, utils_path.display().to_string(), utils_src.to_string());
-    let sf_entry = ynz_parser::SourceFile::new(&db, entry_path.display().to_string(), entry_src.to_string());
+    let sf_utils =
+        ynz_parser::SourceFile::new(&db, utils_path.display().to_string(), utils_src.to_string());
+    let sf_entry =
+        ynz_parser::SourceFile::new(&db, entry_path.display().to_string(), entry_src.to_string());
     db.register_source(sf_utils);
     db.register_source(sf_entry);
 
@@ -3632,7 +3815,9 @@ fn cant_infer_suspension_cross_module_fires_error() {
         output.diagnostics
     );
     // "Can't determine" (capital C) is the exact what-field text — use case-sensitive match.
-    let has_cant_infer = errors.iter().any(|d| d.what.contains("Can't determine") || d.what.contains("cross-module"));
+    let has_cant_infer = errors
+        .iter()
+        .any(|d| d.what.contains("Can't determine") || d.what.contains("cross-module"));
     assert!(
         has_cant_infer,
         "error must mention Can't-determine or cross-module; got: {:#?}",
@@ -3674,8 +3859,10 @@ fn cant_infer_suspension_cross_module_with_local_sleep_fires_error() {
     std::fs::write(&entry_path, entry_src).expect("write entrypoint.ynz");
 
     let mut db = ynz_parser::CompilerDb::default();
-    let sf_utils = ynz_parser::SourceFile::new(&db, utils_path.display().to_string(), utils_src.to_string());
-    let sf_entry = ynz_parser::SourceFile::new(&db, entry_path.display().to_string(), entry_src.to_string());
+    let sf_utils =
+        ynz_parser::SourceFile::new(&db, utils_path.display().to_string(), utils_src.to_string());
+    let sf_entry =
+        ynz_parser::SourceFile::new(&db, entry_path.display().to_string(), entry_src.to_string());
     db.register_source(sf_utils);
     db.register_source(sf_entry);
 
@@ -3690,7 +3877,9 @@ fn cant_infer_suspension_cross_module_with_local_sleep_fires_error() {
         "suspending fn + cross-module call must produce a can't-infer error; got: {:#?}",
         output.diagnostics
     );
-    let has_cant_infer = errors.iter().any(|d| d.what.contains("Can't determine") || d.what.contains("cross-module"));
+    let has_cant_infer = errors
+        .iter()
+        .any(|d| d.what.contains("Can't determine") || d.what.contains("cross-module"));
     assert!(
         has_cant_infer,
         "error must mention Can't-determine or cross-module; got: {:#?}",
@@ -3859,4 +4048,3 @@ function entrypoint() -> nothing {
         cant_infer_errors
     );
 }
-

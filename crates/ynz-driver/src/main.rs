@@ -203,7 +203,12 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Build { file, emit_ir, json, no_auto_parallel: _ } => {
+        Command::Build {
+            file,
+            emit_ir,
+            json,
+            no_auto_parallel: _,
+        } => {
             if json {
                 // --json mode: run check_query only (no codegen/link); emit NDJSON to stdout.
                 // Default ariadne output is suppressed. Exit code mirrors the process exit.

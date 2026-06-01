@@ -18,7 +18,8 @@ fn single_file(src: &str) -> (CompilerDb, SourceFile) {
 }
 
 fn offset_of(src: &str, needle: &str) -> usize {
-    src.find(needle).unwrap_or_else(|| panic!("{needle:?} not in source"))
+    src.find(needle)
+        .unwrap_or_else(|| panic!("{needle:?} not in source"))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -31,7 +32,10 @@ fn test_variable_type_hint_fires_for_int_literal() {
     let src = "function entrypoint() -> nothing {\n  let x = 42\n}\n";
     let (db, sf) = single_file(src);
     let hints = variable_type_hints(&db, sf);
-    assert!(!hints.is_empty(), "unannotated let must produce a type hint");
+    assert!(
+        !hints.is_empty(),
+        "unannotated let must produce a type hint"
+    );
     assert!(
         hints.iter().any(|h| h.type_text == "int"),
         "inferred type must be `int`; got: {:?}",
@@ -47,7 +51,8 @@ fn test_variable_type_hint_suppressed_for_annotated_let() {
     let hints = variable_type_hints(&db, sf);
     assert!(
         hints.is_empty(),
-        "annotated let must produce zero type hints; got: {:?}", hints
+        "annotated let must produce zero type hints; got: {:?}",
+        hints
     );
 }
 
@@ -80,7 +85,9 @@ fn test_let_to_const_fires_for_never_reassigned() {
     let (db, sf) = single_file(src);
     let hints = let_to_const_promotion_hints(&db, sf);
     assert!(
-        hints.iter().any(|h| matches!(h.kind, PromotionKind::LetToConst)),
+        hints
+            .iter()
+            .any(|h| matches!(h.kind, PromotionKind::LetToConst)),
         "never-reassigned let must emit LetToConst hint"
     );
 }
@@ -103,10 +110,14 @@ fn test_let_to_const_suppressed_when_reassigned() {
     let src = "function entrypoint() -> nothing {\n  let x = 0\n  x = 1\n}\n";
     let (db, sf) = single_file(src);
     let hints = let_to_const_promotion_hints(&db, sf);
-    let for_x: Vec<_> = hints.iter().filter(|h| matches!(h.kind, PromotionKind::LetToConst)).collect();
+    let for_x: Vec<_> = hints
+        .iter()
+        .filter(|h| matches!(h.kind, PromotionKind::LetToConst))
+        .collect();
     assert!(
         for_x.is_empty(),
-        "reassigned let must not emit const-promotion hint; got: {:?}", for_x
+        "reassigned let must not emit const-promotion hint; got: {:?}",
+        for_x
     );
 }
 
@@ -122,7 +133,9 @@ fn test_array_to_fixed_fires_for_annotated_never_grown() {
     let (db, sf) = single_file(src);
     let hints = array_to_fixed_promotion_hints(&db, sf);
     assert!(
-        hints.iter().any(|h| matches!(h.kind, PromotionKind::ArrayToFixed)),
+        hints
+            .iter()
+            .any(|h| matches!(h.kind, PromotionKind::ArrayToFixed)),
         "never-grown array<int> must emit ArrayToFixed hint"
     );
 }
@@ -142,7 +155,8 @@ fn test_copy_point_does_not_fire_for_string_arg() {
     for h in &hints {
         assert!(
             h.size_text != "N bytes",
-            "copy hint should not fire for string arg; got: {:?}", hints
+            "copy hint should not fire for string arg; got: {:?}",
+            hints
         );
     }
 }

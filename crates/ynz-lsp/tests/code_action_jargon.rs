@@ -85,7 +85,7 @@ fn banned_jargon_identifier_produces_replacement_code_action() {
 
     let action = jargon_action.expect(
         "no code action title containing `infer` found among actions; \
-         action title must reference the banned term"
+         action title must reference the banned term",
     );
 
     // The action must carry a workspace edit that replaces `infer`.
@@ -94,8 +94,13 @@ fn banned_jargon_identifier_produces_replacement_code_action() {
         .as_ref()
         .and_then(|e| e.changes.as_ref())
         .expect("code action must have a workspace edit with changes");
-    let edits = changes.get(&uri).expect("edit changes must target the open file");
-    assert!(!edits.is_empty(), "edit changes must contain at least one TextEdit");
+    let edits = changes
+        .get(&uri)
+        .expect("edit changes must target the open file");
+    assert!(
+        !edits.is_empty(),
+        "edit changes must contain at least one TextEdit"
+    );
 
     // The replacement text must come from the registry (not hardcoded here).
     // The registry entry for `infer` says: replacement = "figure out automatically"

@@ -24,7 +24,12 @@ fn state_two_files(
     dep_name: &str,
     dep_src: &str,
     main_src: &str,
-) -> (ServerState, lsp_types::Url, lsp_types::Url, std::path::PathBuf) {
+) -> (
+    ServerState,
+    lsp_types::Url,
+    lsp_types::Url,
+    std::path::PathBuf,
+) {
     let dir = std::env::temp_dir().join(format!(
         "ynz_lsp_rename_{}",
         std::time::SystemTime::now()
@@ -52,7 +57,9 @@ fn state_two_files(
 }
 
 fn position_at(src: &str, needle: &str) -> lsp_types::Position {
-    let offset = src.find(needle).unwrap_or_else(|| panic!("{needle:?} not in source"));
+    let offset = src
+        .find(needle)
+        .unwrap_or_else(|| panic!("{needle:?} not in source"));
     LineTable::new(src).byte_offset_to_position(src, offset, PositionEncoding::Utf8)
 }
 
@@ -95,10 +102,17 @@ fn test_prepare_rename_returns_identifier_range_for_let_binding() {
     let (state, uri) = state_single("/tmp/ynz_rename_prep_let.ynz", src);
     let pos = position_at(src, "score");
     let range = prepare_rename_response(&state, &uri, pos);
-    assert!(range.is_some(), "prepare_rename must succeed on `let` binding");
+    assert!(
+        range.is_some(),
+        "prepare_rename must succeed on `let` binding"
+    );
     let r = range.unwrap();
     // "score" is 5 chars — end.character should be start.character + 5
-    assert_eq!(r.end.character - r.start.character, 5, "range spans `score`");
+    assert_eq!(
+        r.end.character - r.start.character,
+        5,
+        "range spans `score`"
+    );
 }
 
 #[test]
@@ -108,7 +122,10 @@ fn test_prepare_rename_returns_identifier_range_for_function_call() {
     let (state, uri) = state_single("/tmp/ynz_rename_prep_fn.ynz", src);
     let pos = position_at(src, "greet()"); // call site
     let range = prepare_rename_response(&state, &uri, pos);
-    assert!(range.is_some(), "prepare_rename must succeed on function call");
+    assert!(
+        range.is_some(),
+        "prepare_rename must succeed on function call"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -120,7 +137,10 @@ fn test_prepare_rename_returns_none_for_keyword() {
     // WHY: `function` is a keyword — it has no declaration site and cannot be renamed.
     let src = "function entrypoint() -> nothing {}\n";
     let (state, uri) = state_single("/tmp/ynz_rename_prep_kw.ynz", src);
-    let pos = lsp_types::Position { line: 0, character: 0 }; // `function`
+    let pos = lsp_types::Position {
+        line: 0,
+        character: 0,
+    }; // `function`
     assert!(prepare_rename_response(&state, &uri, pos).is_none());
 }
 
@@ -143,9 +163,16 @@ fn test_rename_local_let_produces_workspace_edit_with_one_file() {
     let (state, uri) = state_single("/tmp/ynz_rename_local.ynz", src);
     let pos = position_at(src, "score = 0");
     let result = rename_response(&state, &uri, pos, "points", &mock_sender());
-    assert!(result.is_ok(), "rename local let must succeed: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "rename local let must succeed: {:?}",
+        result
+    );
     let edit = result.unwrap();
-    let changes = edit.changes.as_ref().expect("WorkspaceEdit must have changes");
+    let changes = edit
+        .changes
+        .as_ref()
+        .expect("WorkspaceEdit must have changes");
     assert_eq!(changes.len(), 1, "only one file affected");
     let edits = changes.values().next().unwrap();
     assert!(edits.len() >= 1, "at least one edit");
@@ -189,7 +216,10 @@ fn test_rename_reserved_keyword_returns_error_code_32002() {
     let result = rename_response(&state, &uri, pos, "let", &mock_sender());
     let (code, msg) = result.expect_err("must error on keyword new-name");
     assert_eq!(code, -32002, "keyword new-name must produce code -32002");
-    assert!(msg.contains("WHY"), "error message must include WHY explanation");
+    assert!(
+        msg.contains("WHY"),
+        "error message must include WHY explanation"
+    );
 }
 
 #[test]
@@ -208,7 +238,10 @@ fn test_rename_non_symbol_position_returns_error_code_32001() {
     // WHY: cursor on whitespace/punctuation must produce -32001 (not a panic or silent no-op).
     let src = "function entrypoint() -> nothing {  }\n";
     let (state, uri) = state_single("/tmp/ynz_rename_notsym.ynz", src);
-    let pos = lsp_types::Position { line: 0, character: 34 }; // whitespace
+    let pos = lsp_types::Position {
+        line: 0,
+        character: 34,
+    }; // whitespace
     let result = rename_response(&state, &uri, pos, "newname", &mock_sender());
     let (code, _msg) = result.expect_err("must error on non-symbol position");
     assert_eq!(code, -32001, "non-symbol must produce code -32001");
@@ -227,7 +260,10 @@ fn test_rename_imported_symbol_returns_error_code_32006() {
     let pos = position_at(main_src, "greet()");
     let result = rename_response(&state, &main_uri, pos, "hello", &mock_sender());
     let (code, msg) = result.expect_err("must reject rename from import site");
-    assert_eq!(code, -32006, "imported-symbol rename must produce code -32006");
+    assert_eq!(
+        code, -32006,
+        "imported-symbol rename must produce code -32006"
+    );
     assert!(
         msg.contains("WHAT INSTEAD"),
         "error must include WHAT INSTEAD guidance"
@@ -270,7 +306,10 @@ fn test_rename_error_produces_no_workspace_edit() {
     let pos = position_at(src, "total");
     // Bad new-name: contains a space (invalid identifier)
     let result = rename_response(&state, &uri, pos, "bad name", &mock_sender());
-    assert!(result.is_err(), "invalid new-name must always return Err, never Ok(partial edit)");
+    assert!(
+        result.is_err(),
+        "invalid new-name must always return Err, never Ok(partial edit)"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

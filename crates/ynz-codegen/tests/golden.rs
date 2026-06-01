@@ -476,7 +476,11 @@ fn v03_m1_background_ir_snapshot() {
     // If the Background lowering drifts (wrong ctx size, wrong closure name, missing
     // shutdown call), this snapshot fails and catches it immediately.
     let db = ynz_parser::CompilerDb::default();
-    let sf = ynz_parser::SourceFile::new(&db, "v03m1bg.ynz".to_string(), V03_M1_BACKGROUND_SOURCE.to_string());
+    let sf = ynz_parser::SourceFile::new(
+        &db,
+        "v03m1bg.ynz".to_string(),
+        V03_M1_BACKGROUND_SOURCE.to_string(),
+    );
     let output = codegen_query(&db, sf);
     assert!(
         output.diagnostics.is_empty(),
@@ -492,7 +496,11 @@ fn v03_m1_while_loop_preempt_ir_snapshot() {
     // If someone removes emit_loop_preempt from the while-loop lowering, this snapshot
     // fails (preempt call disappears from the IR).
     let db = ynz_parser::CompilerDb::default();
-    let sf = ynz_parser::SourceFile::new(&db, "v03m1while.ynz".to_string(), V03_M1_WHILE_PREEMPT_SOURCE.to_string());
+    let sf = ynz_parser::SourceFile::new(
+        &db,
+        "v03m1while.ynz".to_string(),
+        V03_M1_WHILE_PREEMPT_SOURCE.to_string(),
+    );
     let output = codegen_query(&db, sf);
     assert!(
         output.diagnostics.is_empty(),
@@ -620,10 +628,7 @@ function entrypoint() -> nothing {
     );
     // sm_pending must have a predecessor comment showing live control flow to it.
     // A dead sm_pending would show "No predecessors!" — that was the pre-fix bug.
-    let sm_pending_line = ir
-        .lines()
-        .find(|l| l.contains("sm_pending:"))
-        .unwrap_or("");
+    let sm_pending_line = ir.lines().find(|l| l.contains("sm_pending:")).unwrap_or("");
     assert!(
         !sm_pending_line.contains("No predecessors!"),
         "sm_pending must have live predecessors after wait-in-if fix; \
@@ -692,8 +697,11 @@ function entrypoint() -> nothing {
 }
 "#;
     let ir = run_m2_sm_codegen("v03m2_bg_spawn_sm.ynz", source);
-    let spawn_calls = ir.lines()
-        .filter(|l| l.contains("call") && l.contains("ynz_rt_spawn") && !l.contains("ynz_rt_spawn_blocking"))
+    let spawn_calls = ir
+        .lines()
+        .filter(|l| {
+            l.contains("call") && l.contains("ynz_rt_spawn") && !l.contains("ynz_rt_spawn_blocking")
+        })
         .count();
     assert!(
         spawn_calls > 0,
@@ -702,11 +710,13 @@ function entrypoint() -> nothing {
     );
     // Must NOT use ynz_rt_spawn_blocking for state-machine callees.
     // Check for actual call instructions (not just declare statements which always appear).
-    let spawn_blocking_calls = ir.lines()
+    let spawn_blocking_calls = ir
+        .lines()
         .filter(|l| l.contains("call") && l.contains("ynz_rt_spawn_blocking"))
         .count();
     assert_eq!(
-        spawn_blocking_calls, 0,
+        spawn_blocking_calls,
+        0,
         "background SM call must NOT emit ynz_rt_spawn_blocking call instructions; got:\n{}",
         ir.lines().take(60).collect::<Vec<_>>().join("\n")
     );
@@ -728,7 +738,8 @@ function entrypoint() -> nothing {
 }
 "#;
     let ir = run_m2_sm_codegen("v03m2_bg_regular.ynz", source);
-    let spawn_blocking_calls = ir.lines()
+    let spawn_blocking_calls = ir
+        .lines()
         .filter(|l| l.contains("call") && l.contains("ynz_rt_spawn_blocking"))
         .count();
     assert!(
