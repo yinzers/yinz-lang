@@ -18,7 +18,7 @@
 // Now typeck rejects it before codegen fires, producing a clean teaching error.
 
 function pauseThenReturn() -> int {
-    wait sleepAsync(50)
+    wait sleep(50)
     return 7
 }
 
@@ -39,14 +39,14 @@ function triggerSubExprSuspend() -> nothing {
 // Per-frame layout metadata for mixed cycles ships in v0.3-M3.
 
 function orderPing(n: int) -> nothing {
-    wait sleepAsync(10)
+    wait sleep(10)
     // WHY: MutualRecursionSuspendingCycle — orderPing calls orderPong which calls
     // orderPing back, forming a mutual cycle where both functions suspend.
     orderPong(n - 1)
 }
 
 function orderPong(n: int) -> nothing {
-    wait sleepAsync(10)
+    wait sleep(10)
     orderPing(n - 1)
 }
 
@@ -59,7 +59,7 @@ function orderPong(n: int) -> nothing {
 function triggerWaitInLoop() -> nothing {
     // WHY: WaitInsideLoop — wait inside a for loop is not supported in v0.3-M2.
     for (i in range(3)) {
-        wait sleepAsync(50)
+        wait sleep(50)
         print(`step ${i}`)
     }
 }
@@ -73,7 +73,7 @@ function triggerWaitInLoop() -> nothing {
 function triggerLocalCrossesWait() -> nothing {
     let orderName = `pierogies`
     // WHY: LocalCrossesWait — orderName is declared before the wait and used after.
-    wait sleepAsync(20)
+    wait sleep(20)
     print(`order: ${orderName}`)
 }
 
@@ -122,7 +122,7 @@ function processOrder(share self: PrimantisVendor) -> nothing {
 }
 
 function triggerCantInferDynamic(v: dynamic Vendor) -> nothing {
-    sleepAsync(10)
+    sleep(10)
     // WHY: CantInferDynamicDispatch — v.processOrder() is a dynamic-dispatch
     // call from a suspending function; concrete callee unknown at compile time.
     v.processOrder()
@@ -145,7 +145,7 @@ function triggerCantInferDynamic(v: dynamic Vendor) -> nothing {
 
 // Direct-statement form — no sub-expression nesting.
 function validSuspendingHelper() -> int {
-    wait sleepAsync(10)
+    wait sleep(10)
     return 42
 }
 
@@ -160,7 +160,7 @@ function countdown(n: int) -> nothing {
         print(`done`)
         return
     }
-    wait sleepAsync(10)
+    wait sleep(10)
     countdown(n - 1)
 }
 

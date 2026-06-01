@@ -1,11 +1,11 @@
 // Phase 6 fixture: can't-infer cross-module compile error.
-// `entrypoint` is suspending (reaches sleepAsync). It calls `remoteOp` from another
+// `entrypoint` is suspending (reaches sleep). It calls `remoteOp` from another
 // module. The compiler can't determine if `remoteOp` suspends intra-unit — this is
 // a clean WHAT/WHAT-INSTEAD/WHY compile error per design/future/concurrency.md.
 // Expected: exits 1 with the can't-infer error mentioning "cross-module".
 import { remoteOp } from `utils`
 
 function entrypoint() -> nothing {
-  sleepAsync(10)
+  sleep(10)
   remoteOp()
 }

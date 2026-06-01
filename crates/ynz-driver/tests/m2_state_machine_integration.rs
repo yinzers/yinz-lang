@@ -190,7 +190,7 @@ fn errors_cascade_through_nested_sm_2level() {
 // WHY: nested SM calls must use inline poll-and-yield (composed frames); the
 // program-entry driver is only at the top-level wrapper→resume handoff. A 3-level
 // call chain drives inner sub-frames inline, not by recursing into the driver.
-// This test exercises the full chain: entrypoint→outer→middle→inner→sleepAsync.
+// This test exercises the full chain: entrypoint→outer→middle→inner→sleep.
 #[test]
 fn nested_sm_3level_prints_in_order_exits_0() {
     let (stdout, _, code) = run_fixture("v0_3_m2_nested_sm_3level.ynz");
@@ -237,7 +237,7 @@ fn background_from_suspending_entrypoint_runs_concurrently() {
 
 // WHY: The P6/P7 seam — typeck marks transitive fns as suspends=true, but P6
 // codegen still used local contains_wait. P7 wires codegen to read suspends_set
-// from typeck. The dev5 adversarial case (bar→sleepAsync no wait,
+// from typeck. The dev5 adversarial case (bar→sleep no wait,
 // entrypoint→bar no wait) previously crashed with "no reactor running" because
 // the codegen didn't classify bar/entrypoint as state machines.
 #[test]
@@ -255,7 +255,7 @@ fn transitive_suspends_no_explicit_wait_runs_correctly() {
 
 // WHY: One ynz_alloc per spawned task tree is the design-doc model
 // ("low memory, fast spawn — like Rust's async"). A per-call alloc would mean
-// N sleepAsync calls = N allocs. We verify the behavior is correct (not the
+// N sleep calls = N allocs. We verify the behavior is correct (not the
 // alloc count directly — that requires runtime instrumentation in Phase 9).
 #[test]
 fn alloc_counter_fixture_produces_correct_result() {
@@ -543,7 +543,7 @@ fn recursion_cancellation_negative_control_skip_drop_leaks() {
 }
 
 // WHY: "one alloc per task tree" is the design-doc model (design/future/concurrency.md:
-// "low memory, fast spawn — like Rust's async"). A per-call alloc would mean N sleepAsync
+// "low memory, fast spawn — like Rust's async"). A per-call alloc would mean N sleep
 // calls = N allocs. Instrumenting ynz_alloc with a counter and asserting count==1 for a
 // 3-level synchronous tree proves composed frames are actually ONE allocation.
 // This is a behavioral claim about memory layout that cargo test can't verify otherwise.
@@ -599,17 +599,19 @@ fn subexpr_suspending_call_rejected_with_teaching_error() {
         "teaching error text missing 'suspending call inside a larger expression': {combined}"
     );
     assert!(
-        combined.contains("v0.3-M3"),
-        "teaching error must mention v0.3-M3 as the future resolution: {combined}"
+        combined.contains("step-by-step") || combined.contains("one operation per line"),
+        "teaching error must explain the step-by-step style rationale: {combined}"
     );
 }
 
 // WHY: non-self mutual recursion among suspending functions corrupts heap on
 // cancellation because SpawnStateFnFuture::Drop assumes uniform frame layout
 // (self-recursion: same function = same size + offset at every level). A mutual
-// cycle (ping→pong→ping) has mixed layouts. After Fix 2, typeck rejects it
-// with a clean teaching error pointing at M3. This test is the regression
-// anchor: if this passes with exit 0, the heap corruption path is live.
+// cycle (ping→pong→ping) has mixed layouts. Typeck rejects it with a teaching
+// error explaining that self-recursion works and mutual cycles can be restructured.
+// This test is the regression anchor: if this passes with exit 0, the heap
+// corruption path is live. The assertion checks for self-recursive/restructure
+// teaching content — not a milestone reference.
 #[test]
 fn mutual_recursion_suspending_rejected_with_teaching_error() {
     let (stdout, stderr, exit_code) = run_fixture("v0_3_m2_mutual_recursion_error.ynz");
@@ -624,8 +626,8 @@ fn mutual_recursion_suspending_rejected_with_teaching_error() {
         "teaching error text missing 'mutually-recursive suspending cycle': {combined}"
     );
     assert!(
-        combined.contains("v0.3-M3"),
-        "teaching error must mention v0.3-M3 as the future resolution: {combined}"
+        combined.contains("self-recursive") || combined.contains("restructure"),
+        "teaching error must explain that self-recursion works and mutual cycles can be restructured: {combined}"
     );
 }
 
@@ -799,7 +801,9 @@ fn result_binding_crosses_later_suspension_rejected_with_teaching_error() {
         "teaching error must name the crossing binding `slot`; stderr={stderr:?}"
     );
     assert!(
-        stderr.contains("v0.3-M3"),
-        "teaching error must reference v0.3-M3 as the resolution milestone; stderr={stderr:?}"
+        stderr.contains("frame-slot")
+            || stderr.contains("v0.3-M3a")
+            || stderr.contains("frame slot"),
+        "teaching error must reference the frame-slot transform; stderr={stderr:?}"
     );
 }

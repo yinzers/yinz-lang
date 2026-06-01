@@ -451,7 +451,7 @@ fn m3_codegen_query_returns_no_diagnostics_on_valid_m3_source() {
 
 const V03_M1_BACKGROUND_SOURCE: &str = r#"
 function worker() -> nothing {
-  sleepMs(1)
+  sleepBlocking(1)
 }
 
 function entrypoint() -> nothing {
@@ -544,11 +544,11 @@ fn v03_m2_single_wait_ir_snapshot() {
     // this snapshot fails and the reviewer can audit the diff.
     let source = r#"
 function pause() -> nothing {
-  wait sleepAsync(100)
+  wait sleep(100)
 }
 function entrypoint() -> nothing {
   background pause()
-  sleepMs(200)
+  sleepBlocking(200)
 }
 "#;
     let ir = run_m2_sm_codegen("v03m2_single_wait.ynz", source);
@@ -576,12 +576,12 @@ fn v03_m2_multi_wait_ir_snapshot() {
     // A regression in state-block numbering or resume_point tracking will appear here.
     let source = r#"
 function chain() -> nothing {
-  wait sleepAsync(50)
-  wait sleepAsync(50)
+  wait sleep(50)
+  wait sleep(50)
 }
 function entrypoint() -> nothing {
   background chain()
-  sleepMs(200)
+  sleepBlocking(200)
 }
 "#;
     let ir = run_m2_sm_codegen("v03m2_multi_wait.ynz", source);
@@ -606,12 +606,12 @@ fn v03_m2_wait_in_if_ir_snapshot() {
     let source = r#"
 function maybeWait(b: boolean) -> nothing {
   if (b) {
-    wait sleepAsync(100)
+    wait sleep(100)
   }
 }
 function entrypoint() -> nothing {
   background maybeWait(true)
-  sleepMs(200)
+  sleepBlocking(200)
 }
 "#;
     let ir = run_m2_sm_codegen("v03m2_wait_in_if.ynz", source);
@@ -644,7 +644,7 @@ fn v03_m2_non_sm_caller_block_on_ir_snapshot() {
     // the program silently returns wrong values.
     let source = r#"
 function sleeper() -> nothing {
-  wait sleepAsync(100)
+  wait sleep(100)
 }
 function entrypoint() -> nothing {
   sleeper()
@@ -667,7 +667,7 @@ fn v03_m2_main_with_wait_ir_snapshot() {
     // with "ynz_rt_init not called before ynz_rt_run_entrypoint call".
     let source = r#"
 function entrypoint() -> nothing {
-  wait sleepAsync(1)
+  wait sleep(1)
 }
 "#;
     let ir = run_m2_sm_codegen("v03m2_main_with_wait.ynz", source);
@@ -689,11 +689,11 @@ fn v03_m2_background_spawn_sm_fn_ir_snapshot() {
     // state machines would tie up OS threads during their wait, defeating M2.
     let source = r#"
 function worker() -> nothing {
-  wait sleepAsync(100)
+  wait sleep(100)
 }
 function entrypoint() -> nothing {
   background worker()
-  sleepMs(200)
+  sleepBlocking(200)
 }
 "#;
     let ir = run_m2_sm_codegen("v03m2_bg_spawn_sm.ynz", source);
@@ -730,11 +730,11 @@ fn v03_m2_background_spawn_regular_fn_ir_snapshot() {
     // This is the M1 behavior that must not regress when M2 routing is added.
     let source = r#"
 function worker() -> nothing {
-  sleepMs(100)
+  sleepBlocking(100)
 }
 function entrypoint() -> nothing {
   background worker()
-  sleepMs(200)
+  sleepBlocking(200)
 }
 "#;
     let ir = run_m2_sm_codegen("v03m2_bg_regular.ynz", source);
@@ -761,7 +761,7 @@ fn main_rt_init_is_first_instruction() {
     // `call void @ynz_rt_spawn` instruction in main's text.
     let source = r#"
 function entrypoint() -> nothing {
-  wait sleepAsync(1)
+  wait sleep(1)
 }
 "#;
     let ir = run_m2_sm_codegen("v03m2_rt_init_first.ynz", source);

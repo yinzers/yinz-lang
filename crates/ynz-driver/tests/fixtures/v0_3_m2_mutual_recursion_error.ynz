@@ -6,12 +6,12 @@
 // WHY: verifies non-self mutual recursion is rejected before heap corruption.
 
 function ping(n: int) -> nothing {
-    wait sleepAsync(10)
+    wait sleep(10)
     pong(n - 1)
 }
 
 function pong(n: int) -> nothing {
-    wait sleepAsync(10)
+    wait sleep(10)
     ping(n - 1)
 }
 

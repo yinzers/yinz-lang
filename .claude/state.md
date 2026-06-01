@@ -17,7 +17,7 @@
 - webpage-docs (Patrick Rizzardi) — 0 active plans — 2026-05-20
 
 ### Active Workstreams
-- v0-3-m3a-suspension-codegen (Patrick Rizzardi) — 12 files touched — 0/94 done — roadmap: v0-3-concurrency-perf — 2026-06-01
+- v0-3-m3a-suspension-codegen (Patrick Rizzardi) — 12 files touched — 0/95 done — roadmap: v0-3-concurrency-perf — 2026-06-01
 <!-- RADAR-END -->
 
 ---

@@ -1875,7 +1875,7 @@ fn incremental_rebuild_invalidates_when_imported_signature_changes() {
         .collect();
     // test-ratchet: restoring is_empty() — round-2 swallow filter removed; reverted gate
     // makes pure cross-file compile clean again (Phase-6 round-3). `entrypoint` here does
-    // NOT independently suspend (no sleepAsync), so no can't-infer error fires under the
+    // NOT independently suspend (no sleep), so no can't-infer error fires under the
     // design-correct `current_fn_suspends` gate.
     assert_eq!(
         v1_errors.len(),
@@ -2395,7 +2395,7 @@ fn cross_file_inline_shape_structural_equivalence_positive() {
         .collect();
     // test-ratchet: restoring is_empty() — round-2 swallow filter removed; reverted gate
     // makes pure cross-file compile clean again (Phase-6 round-3). `entrypoint` here does
-    // NOT independently suspend (no sleepAsync), so no can't-infer error fires under the
+    // NOT independently suspend (no sleep), so no can't-infer error fires under the
     // design-correct `current_fn_suspends` gate. This is the inline-shape structural
     // equivalence guard — the only valid errors would be type-mismatch; none should fire.
     assert!(
@@ -2515,22 +2515,22 @@ function entrypoint() -> nothing {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// v0.3-M1: sleepMs intrinsic typeck
+// v0.3-M1: sleepBlocking intrinsic typeck
 // ─────────────────────────────────────────────────────────────────────────────
 
-// WHY: sleepMs(int) -> nothing must type-check cleanly with an int arg and
+// WHY: sleepBlocking(int) -> nothing must type-check cleanly with an int arg and
 // return nothing. If the typeck dispatch arm is missing, users get a confusing
 // "not defined" error instead of a successful type-check.
 #[test]
 fn sleep_ms_with_int_arg_is_clean() {
-    assert_clean("function entrypoint() -> nothing {\n  sleepMs(50)\n}");
+    assert_clean("function entrypoint() -> nothing {\n  sleepBlocking(50)\n}");
 }
 
-// WHY: sleepMs with a non-int arg must produce a clear teaching error.
+// WHY: sleepBlocking with a non-int arg must produce a clear teaching error.
 // Guards against the typeck arm silently accepting wrong-typed arguments.
 #[test]
 fn sleep_ms_with_wrong_type_produces_error() {
-    let out = run("function entrypoint() -> nothing {\n  sleepMs(`not an int`)\n}");
+    let out = run("function entrypoint() -> nothing {\n  sleepBlocking(`not an int`)\n}");
     let errors: Vec<_> = out
         .diagnostics
         .iter()
@@ -2538,19 +2538,19 @@ fn sleep_ms_with_wrong_type_produces_error() {
         .collect();
     assert!(
         !errors.is_empty(),
-        "sleepMs with string arg must produce an error"
+        "sleepBlocking with string arg must produce an error"
     );
     assert!(
-        errors[0].what.contains("int") || errors[0].what.contains("sleepMs"),
-        "error must mention int or sleepMs; got: {:?}",
+        errors[0].what.contains("int") || errors[0].what.contains("sleepBlocking"),
+        "error must mention int or sleepBlocking; got: {:?}",
         errors[0].what
     );
 }
 
-// WHY: sleepMs with 0 args must produce an arity error.
+// WHY: sleepBlocking with 0 args must produce an arity error.
 #[test]
 fn sleep_ms_with_no_args_produces_error() {
-    let out = run("function entrypoint() -> nothing {\n  sleepMs()\n}");
+    let out = run("function entrypoint() -> nothing {\n  sleepBlocking()\n}");
     let errors: Vec<_> = out
         .diagnostics
         .iter()
@@ -2558,14 +2558,14 @@ fn sleep_ms_with_no_args_produces_error() {
         .collect();
     assert!(
         !errors.is_empty(),
-        "sleepMs with no args must produce an error"
+        "sleepBlocking with no args must produce an error"
     );
 }
 
-// WHY: sleepMs with 2 args must produce an arity error.
+// WHY: sleepBlocking with 2 args must produce an arity error.
 #[test]
 fn sleep_ms_with_two_args_produces_error() {
-    let out = run("function entrypoint() -> nothing {\n  sleepMs(50, 100)\n}");
+    let out = run("function entrypoint() -> nothing {\n  sleepBlocking(50, 100)\n}");
     let errors: Vec<_> = out
         .diagnostics
         .iter()
@@ -2573,7 +2573,7 @@ fn sleep_ms_with_two_args_produces_error() {
         .collect();
     assert!(
         !errors.is_empty(),
-        "sleepMs with 2 args must produce an error"
+        "sleepBlocking with 2 args must produce an error"
     );
 }
 
@@ -2830,7 +2830,7 @@ fn wait_in_while_loop_is_an_error() {
 function entrypoint() -> nothing {
   let i: int = 0
   while (i < 3) {
-    wait sleepAsync(100)
+    wait sleep(100)
     i = i + 1
   }
 }
@@ -2863,7 +2863,7 @@ fn wait_in_for_loop_is_an_error() {
     let src = r#"
 function entrypoint() -> nothing {
   for (i in range(0, 3)) {
-    wait sleepAsync(100)
+    wait sleep(100)
   }
 }
 "#;
@@ -2890,7 +2890,7 @@ fn local_binding_crossing_wait_is_an_error() {
     let src = r#"
 function entrypoint() -> nothing {
   let x: int = 5
-  wait sleepAsync(30)
+  wait sleep(30)
   print(x.toString())
 }
 "#;
@@ -2926,7 +2926,7 @@ fn param_read_after_wait_is_accepted() {
     let src = r#"
 function pause(n: int) -> nothing {
   print(n.toString())
-  wait sleepAsync(100)
+  wait sleep(100)
   print(n.toString())
 }
 function entrypoint() -> nothing {
@@ -2944,13 +2944,13 @@ fn wait_at_top_level_and_in_if_is_accepted() {
     let src = r#"
 function maybeWait(b: boolean) -> nothing {
   if (b) {
-    wait sleepAsync(50)
+    wait sleep(50)
   }
-  wait sleepAsync(10)
+  wait sleep(10)
 }
 function entrypoint() -> nothing {
   background maybeWait(true)
-  sleepMs(200)
+  sleepBlocking(200)
 }
 "#;
     assert_clean(src);
@@ -2966,7 +2966,7 @@ fn local_before_if_nested_wait_read_after_if_is_an_error() {
 function entrypoint() -> nothing {
   let x: int = 5
   if (x < 10) {
-    wait sleepAsync(30)
+    wait sleep(30)
   }
   print(x.toString())
 }
@@ -3005,7 +3005,7 @@ fn local_before_if_nested_wait_read_inside_branch_is_an_error() {
 function entrypoint() -> nothing {
   let x: int = 5
   if (x < 10) {
-    wait sleepAsync(30)
+    wait sleep(30)
     print(x.toString())
   }
 }
@@ -3036,7 +3036,7 @@ fn local_inside_if_branch_before_wait_read_after_wait_is_an_error() {
 function entrypoint() -> nothing {
   if (true) {
     let y: int = 7
-    wait sleepAsync(30)
+    wait sleep(30)
     print(y.toString())
   }
 }
@@ -3067,7 +3067,7 @@ fn local_declared_and_read_before_wait_is_accepted() {
 function entrypoint() -> nothing {
   let x: int = 5
   print(x.toString())
-  wait sleepAsync(10)
+  wait sleep(10)
 }
 "#;
     assert_clean(src);
@@ -3079,7 +3079,7 @@ function entrypoint() -> nothing {
 fn local_declared_after_wait_is_accepted() {
     let src = r#"
 function entrypoint() -> nothing {
-  wait sleepAsync(10)
+  wait sleep(10)
   let z: int = 99
   print(z.toString())
 }
@@ -3098,7 +3098,7 @@ function entrypoint() -> nothing {
 fn result_binding_crosses_later_suspension_is_an_error() {
     let src = r#"
 function sleeper() -> int {
-  wait sleepAsync(10)
+  wait sleep(10)
   return 5
 }
 function compute() -> int {
@@ -3108,7 +3108,7 @@ function compute() -> int {
 }
 function entrypoint() -> nothing {
   background compute()
-  sleepMs(200)
+  sleepBlocking(200)
 }
 "#;
     let out = run(src);
@@ -3142,7 +3142,7 @@ function entrypoint() -> nothing {
 fn result_binding_not_used_after_later_suspension_is_accepted() {
     let src = r#"
 function sleeper() -> int {
-  wait sleepAsync(10)
+  wait sleep(10)
   return 5
 }
 function compute(n: int) -> int {
@@ -3152,7 +3152,7 @@ function compute(n: int) -> int {
 }
 function entrypoint() -> nothing {
   background compute(1)
-  sleepMs(200)
+  sleepBlocking(200)
 }
 "#;
     assert_clean(src);
@@ -3166,7 +3166,7 @@ function entrypoint() -> nothing {
 fn result_binding_used_immediately_no_second_suspension_is_accepted() {
     let src = r#"
 function sleeper() -> int {
-  wait sleepAsync(10)
+  wait sleep(10)
   return 5
 }
 function compute(n: int) -> int {
@@ -3175,13 +3175,13 @@ function compute(n: int) -> int {
 }
 function entrypoint() -> nothing {
   background compute(1)
-  sleepMs(200)
+  sleepBlocking(200)
 }
 "#;
     assert_clean(src);
 }
 
-// ── v0.3-M2 typeck surface: wait diagnostics + sleepAsync/internal intrinsics ──
+// ── v0.3-M2 typeck surface: wait diagnostics + sleep/internal intrinsics ──
 
 // WHY: `wait` applied to a non-call expression (a literal, a variable, etc.) must
 // produce a hard error. Catches regressions where the check is removed and `wait 42`
@@ -3215,7 +3215,7 @@ function entrypoint() -> nothing {
 fn wait_of_wait_rejected() {
     let src = r#"
 function entrypoint() -> nothing {
-  wait (wait sleepAsync(10))
+  wait (wait sleep(10))
 }
 "#;
     let out = run(src);
@@ -3227,13 +3227,13 @@ function entrypoint() -> nothing {
     assert!(!errors.is_empty(), "wait of wait must produce an error");
 }
 
-// WHY: `wait sleepAsync(100)` is the canonical correct usage; must compile clean.
+// WHY: `wait sleep(100)` is the canonical correct usage; must compile clean.
 // Guards that the wait_on_non_may_block_warning does NOT fire for may-block callees.
 #[test]
 fn wait_sleep_async_is_clean() {
     let src = r#"
 function entrypoint() -> nothing {
-  wait sleepAsync(100)
+  wait sleep(100)
 }
 "#;
     assert_clean(src);
@@ -3279,7 +3279,7 @@ function entrypoint() -> nothing {
     );
 }
 
-// WHY: Phase 6 inference model — `sleepAsync(100)` without explicit `wait` is valid.
+// WHY: Phase 6 inference model — `sleep(100)` without explicit `wait` is valid.
 // The transitive may-block analysis marks the enclosing function as `suspends` and the
 // codegen emits the suspension automatically. `unawaited_sleep_async` is retired because
 // there is nothing to warn about: the function suspends correctly without writing `wait`.
@@ -3289,11 +3289,11 @@ fn unawaited_sleep_async_no_longer_warns() {
     // test-ratchet: unawaited_sleep_async retired by Phase 6 inference model; old warning was bridge-era artifact
     let src = r#"
 function entrypoint() -> nothing {
-  sleepAsync(100)
+  sleep(100)
 }
 "#;
     let out = run(src);
-    // Under inference, sleepAsync without `wait` is silently handled — no warning.
+    // Under inference, sleep without `wait` is silently handled — no warning.
     let unawaited_warnings: Vec<_> = out
         .diagnostics
         .iter()
@@ -3315,7 +3315,7 @@ function entrypoint() -> nothing {
         .collect();
     assert!(
         errors.is_empty(),
-        "sleepAsync without wait must compile clean; got: {:#?}",
+        "sleep without wait must compile clean; got: {:#?}",
         errors
     );
 }
@@ -3330,10 +3330,10 @@ fn state_machine_calling_state_machine_without_wait_clean_under_inference() {
     // test-ratchet: wait_required_on_state_machine_call retired by Phase 6; bridge-era artifact; no-wait SM→SM calls are correct under inference
     let src = r#"
 function inner() -> nothing {
-  wait sleepAsync(10)
+  wait sleep(10)
 }
 function outer() -> nothing {
-  wait sleepAsync(5)
+  wait sleep(5)
   inner()
 }
 function entrypoint() -> nothing {
@@ -3375,10 +3375,10 @@ function entrypoint() -> nothing {
 fn state_machine_calling_state_machine_with_wait_is_clean() {
     let src = r#"
 function inner() -> nothing {
-  wait sleepAsync(10)
+  wait sleep(10)
 }
 function outer() -> nothing {
-  wait sleepAsync(5)
+  wait sleep(5)
   wait inner()
 }
 function entrypoint() -> nothing {
@@ -3395,10 +3395,10 @@ function entrypoint() -> nothing {
 fn state_machine_can_background_state_machine_without_wait() {
     let src = r#"
 function inner() -> nothing {
-  wait sleepAsync(10)
+  wait sleep(10)
 }
 function outer() -> nothing {
-  wait sleepAsync(5)
+  wait sleep(5)
   background inner()
 }
 function entrypoint() -> nothing {
@@ -3415,7 +3415,7 @@ function entrypoint() -> nothing {
 fn non_state_machine_calling_state_machine_is_clean() {
     let src = r#"
 function inner() -> nothing {
-  wait sleepAsync(10)
+  wait sleep(10)
 }
 function outer() -> nothing {
   inner()
@@ -3427,13 +3427,13 @@ function entrypoint() -> nothing {
     assert_clean(src);
 }
 
-// WHY: `sleepAsync` must be rejected in --kernel mode because the Tokio runtime does not
+// WHY: `sleep` must be rejected in --kernel mode because the Tokio runtime does not
 // run in kernel mode. Guards the kernel_mode_rejects_sleep_async acceptance criterion.
 #[test]
 fn kernel_mode_rejects_sleep_async() {
     let src = r#"
 function entrypoint() -> nothing {
-  sleepAsync(100)
+  sleep(100)
 }
 "#;
     let out = run_kernel(src);
@@ -3444,7 +3444,7 @@ function entrypoint() -> nothing {
         .collect();
     assert!(
         !errors.is_empty(),
-        "sleepAsync in --kernel mode must produce an error"
+        "sleep in --kernel mode must produce an error"
     );
     let has_kernel = errors.iter().any(|d| d.what.contains("kernel"));
     assert!(
@@ -3456,7 +3456,7 @@ function entrypoint() -> nothing {
 
 // WHY: Phase 6 inference model — transitive may-block analysis correctly marks `bar` and
 // `foo` as `suspends` even without explicit `wait` tokens in their bodies. `bar` reaches
-// `sleepAsync` directly; `foo` calls `bar` transitively. `wait foo()` is now valid since
+// `sleep` directly; `foo` calls `bar` transitively. `wait foo()` is now valid since
 // `foo.suspends==true` — the `wait_on_non_may_block` warning no longer fires.
 // This REPLACES the M2 local-predicate checkpoint. Under Phase 6, the whole fixture
 // compiles clean — no warnings, no errors. Catches regressions where transitive
@@ -3469,12 +3469,12 @@ function entrypoint() -> nothing {
 #[test]
 fn transitive_no_wait_compiles_clean_under_inference() {
     // test-ratchet: Phase 6 transitive analysis makes bar.suspends=true and foo.suspends=true; wait foo() is valid; old M2-local-predicate checkpoint superseded
-    // bar calls sleepAsync without wait — Phase 6 analysis: bar.suspends = true.
+    // bar calls sleep without wait — Phase 6 analysis: bar.suspends = true.
     // foo calls bar() — Phase 6 analysis: foo.suspends = true (transitive).
     // wait foo() — foo.suspends is true, so this is valid-but-redundant (no warning).
     let src = r#"
 function bar() -> nothing {
-  sleepAsync(100)
+  sleep(100)
 }
 function foo() -> nothing {
   bar()
@@ -3494,7 +3494,7 @@ function entrypoint() -> nothing {
         let suspends = ynz_typeck::may_block_suspends_set(&module, &HashSet::new());
         assert!(
             suspends.contains("bar"),
-            "fixpoint must mark bar as suspends (direct sleepAsync caller); set={suspends:?}"
+            "fixpoint must mark bar as suspends (direct sleep caller); set={suspends:?}"
         );
         assert!(
             suspends.contains("foo"),
@@ -3530,10 +3530,10 @@ function entrypoint() -> nothing {
     );
 }
 
-// WHY: `wait inner(sleepMs(10))` — `wait` applies to `inner`, not to `sleepMs` which is an
-// argument. If inside_wait leaks into argument recursion, `sleepMs(10)` (a non-may-block
+// WHY: `wait inner(sleepBlocking(10))` — `wait` applies to `inner`, not to `sleepBlocking` which is an
+// argument. If inside_wait leaks into argument recursion, `sleepBlocking(10)` (a non-may-block
 // call inside the arg list) spuriously gets a `wait_on_non_may_block` warning even though
-// the user never wrote `wait sleepMs(10)`. The fix: clear inside_wait before recursing into
+// the user never wrote `wait sleepBlocking(10)`. The fix: clear inside_wait before recursing into
 // call.args, so only the directly-awaited call sees the wait context.
 #[test]
 fn wait_on_non_may_block_does_not_warn_on_nested_arg_call() {
@@ -3545,7 +3545,7 @@ function addOne(n: int) -> int {
   return n + 1
 }
 function inner(n: int) -> nothing {
-  sleepMs(n)
+  sleepBlocking(n)
 }
 function entrypoint() -> nothing {
   wait inner(addOne(5))
@@ -3557,7 +3557,7 @@ function entrypoint() -> nothing {
         .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning))
         .collect();
-    // Exactly ONE wait_on_non_may_block warning (on inner), none on sleepMs.
+    // Exactly ONE wait_on_non_may_block warning (on inner), none on sleepBlocking.
     let no_effect_warnings: Vec<_> = warnings
         .iter()
         .filter(|d| d.what.contains("no effect"))
@@ -3593,26 +3593,26 @@ function entrypoint() -> nothing {
     assert!(errors.is_empty(), "no errors expected; got: {:#?}", errors);
 }
 
-// WHY: Phase 6 inference — `wait wrapper(sleepAsync(100))` where `wrapper` is not suspending.
-// `unawaited_sleep_async` is retired under inference (sleepAsync in arg position is auto-
+// WHY: Phase 6 inference — `wait wrapper(sleep(100))` where `wrapper` is not suspending.
+// `unawaited_sleep_async` is retired under inference (sleep in arg position is auto-
 // handled by the transitive analysis). The remaining behavior: `wait wrapper(...)` still
 // fires `wait_on_non_may_block` for `wrapper` (wrapper doesn't suspend). Guards that the
 // `inside_wait` flag is correctly cleared before arg recursion so arg-position calls don't
 // inherit the `wait` context of the outer call.
 #[test]
 fn wait_on_non_suspending_callee_fires_for_wrapper_not_for_sleep_async_arg() {
-    // test-ratchet: Fix 1 (Round 4) added sub-expression suspending call guard; sleepAsync(100) as an argument IS a sub-expression position → now a hard error. The old Phase 6 assertion ("no hard errors") is superseded by the HALT-class fix that correctly rejects this pattern.
-    // wrapper is NOT suspending (only calls sleepMs). wait wrapper() fires the
-    // wait_on_non_may_block warning. sleepAsync(100) in the arg is a sub-expression
+    // test-ratchet: Fix 1 (Round 4) added sub-expression suspending call guard; sleep(100) as an argument IS a sub-expression position → now a hard error. The old Phase 6 assertion ("no hard errors") is superseded by the HALT-class fix that correctly rejects this pattern.
+    // wrapper is NOT suspending (only calls sleepBlocking). wait wrapper() fires the
+    // wait_on_non_may_block warning. sleep(100) in the arg is a sub-expression
     // position suspending call — Fix 1 correctly rejects it with a teaching error.
-    // The entrypoint is suspending (calls sleepAsync, even in arg position) so the
+    // The entrypoint is suspending (calls sleep, even in arg position) so the
     // sub-expression guard fires.
     let src = r#"
 function wrapper(n: nothing) -> nothing {
-  sleepMs(1)
+  sleepBlocking(1)
 }
 function entrypoint() -> nothing {
-  wait wrapper(sleepAsync(100))
+  wait wrapper(sleep(100))
 }
 "#;
     let out = run(src);
@@ -3630,8 +3630,9 @@ function entrypoint() -> nothing {
         "unawaited_sleep_async must NOT fire under Phase 6 inference; got: {:#?}",
         unawaited_warns
     );
-    // Fix 1: sleepAsync(100) in arg position IS a sub-expression suspending call.
-    // The new guard correctly rejects it with a teaching error pointing at M3.
+    // WHY: sleep(100) in arg position IS a sub-expression suspending call.
+    // The guard rejects it with a teaching error stating the permanent step-by-step /
+    // auto-parallelization rationale (Golden Rule 7), no milestone reference.
     let subexpr_errors: Vec<_> = out
         .diagnostics
         .iter()
@@ -3643,13 +3644,19 @@ function entrypoint() -> nothing {
         .collect();
     assert!(
         !subexpr_errors.is_empty(),
-        "sub-expression suspending call guard must fire for sleepAsync in arg position; \
+        "sub-expression suspending call guard must fire for sleep in arg position; \
          got: {:#?}",
         out.diagnostics
     );
+    // WHY: SubExprSuspendViolation is a permanent style constraint (Golden Rule 7 — step-by-step
+    // over chaining), not a temporary M3-era guard. The WHY text must explain the design rationale
+    // (readability + auto-parallelization), never a milestone reference that implies future removal.
     assert!(
-        subexpr_errors.iter().any(|d| d.why.contains("v0.3-M3")),
-        "teaching error must reference v0.3-M3; got: {:#?}",
+        subexpr_errors
+            .iter()
+            .any(|d| d.why.contains("step-by-step") && d.why.contains("auto-parallelize")),
+        "teaching error must explain step-by-step / auto-parallelization rationale (permanent constraint); \
+         got: {:#?}",
         subexpr_errors
     );
 }
@@ -3666,16 +3673,16 @@ fn background_arg_state_machine_call_is_clean_under_inference() {
     // test-ratchet: wait_required_on_state_machine_call retired by Phase 6; sm_bar() as arg-of-background now correctly fires the subexpr suspension error (args evaluate in caller context before spawn)
     // sm_bar is suspending (contains wait). foo is also suspending.
     // background foo(sm_bar()) — sm_bar() in arg position evaluates in calling context.
-    // entrypoint calls sleepAsync directly → entrypoint.suspends = true.
+    // entrypoint calls sleep directly → entrypoint.suspends = true.
     let src = r#"
 function sm_bar() -> nothing {
-  wait sleepAsync(10)
+  wait sleep(10)
 }
 function foo(ignored: nothing) -> nothing {
-  wait sleepAsync(10)
+  wait sleep(10)
 }
 function entrypoint() -> nothing {
-  wait sleepAsync(1)
+  wait sleep(1)
   background foo(sm_bar())
 }
 "#;
@@ -3786,9 +3793,9 @@ fn cant_infer_suspension_cross_module_fires_error() {
 
     // utils.ynz — exported pure-CPU function (doesn't suspend, but entrypoint can't know that)
     let utils_src = "export function remoteOp() -> nothing { print(`remote op`) }";
-    // entrypoint.ynz — suspending function (reaches sleepAsync) calling the imported function
+    // entrypoint.ynz — suspending function (reaches sleep) calling the imported function
     let entry_src = "import { remoteOp } from `utils`\n\
-                     function entrypoint() -> nothing { sleepAsync(10)\n  remoteOp() }";
+                     function entrypoint() -> nothing { sleep(10)\n  remoteOp() }";
 
     let utils_path = dir.join("utils.ynz");
     let entry_path = dir.join("entrypoint.ynz");
@@ -3827,10 +3834,10 @@ fn cant_infer_suspension_cross_module_fires_error() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// WHY: a function that independently suspends (local sleepAsync) AND makes a cross-module
+// WHY: a function that independently suspends (local sleep) AND makes a cross-module
 // call that can't be analyzed gets the clean can't-infer compile error. This is the
 // design-correct gate per design/future/concurrency.md:61-67 — the caller already IS a
-// state machine (reaches intra-unit sleepAsync), and calling an un-analyzable boundary
+// state machine (reaches intra-unit sleep), and calling an un-analyzable boundary
 // from inside a state machine requires the explicit can't-infer fence. Cross-module
 // suspension propagation is deferred to M3+M8 (requires binary package metadata).
 // Guards regressions where the check is NOT gated on current_fn_suspends and wrongly
@@ -3847,11 +3854,11 @@ fn cant_infer_suspension_cross_module_with_local_sleep_fires_error() {
     std::fs::create_dir_all(&dir).expect("create temp dir");
 
     // utils.ynz — cross-module function; pure CPU, but entrypoint can't know that.
-    // entrypoint independently suspends (local sleepAsync) AND calls this boundary fn
+    // entrypoint independently suspends (local sleep) AND calls this boundary fn
     // → the can't-infer error fires under the design-correct current_fn_suspends gate.
     let utils_src = "export function maybeBlocking() -> nothing { print(`runs`) }";
     let entry_src = "import { maybeBlocking } from `utils`\n\
-                     function entrypoint() -> nothing { sleepAsync(1)\n  maybeBlocking() }";
+                     function entrypoint() -> nothing { sleep(1)\n  maybeBlocking() }";
 
     let utils_path = dir.join("utils.ynz");
     let entry_path = dir.join("entrypoint.ynz");
@@ -3889,7 +3896,7 @@ fn cant_infer_suspension_cross_module_with_local_sleep_fires_error() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// WHY: a function that independently suspends (local sleepAsync) AND makes a
+// WHY: a function that independently suspends (local sleep) AND makes a
 // dynamic-dispatch call through a vtable gets the can't-infer compile error. This is
 // the design-correct gate per design/future/concurrency.md:75 — the caller already IS
 // a state machine, and calling an unanalyzable vtable from inside a state machine
@@ -3912,7 +3919,7 @@ function doWork(share self: FastWorker) -> nothing {
 }
 
 function runWorker(w: dynamic Worker) -> nothing {
-    sleepAsync(1)
+    sleep(1)
     w.doWork()
 }
 
@@ -3945,7 +3952,7 @@ function entrypoint() -> nothing {
 // WHY: the free-fn form `dispatch(w)` where `w: dynamic Worker` and `dispatch` expects
 // `dynamic Worker` must fire the can't-infer error when the caller independently suspends.
 // Guards the code path at check.rs:2048-2068 (arg-loop Dynamic==Dynamic gate) — distinct
-// from the dot-call vtable path at check.rs:2543. The scenario: relay suspends (sleepAsync)
+// from the dot-call vtable path at check.rs:2543. The scenario: relay suspends (sleep)
 // and passes an already-dynamic value `w` to `dispatch(w: dynamic Worker)`. The gate fires
 // because expected_ty=Dynamic Worker, actual_ty=Dynamic Worker, and current_fn_suspends=true.
 // Without this test, the free-fn gate could be removed while the dot-call test still passes.
@@ -3969,7 +3976,7 @@ function dispatch(w: dynamic Worker) -> nothing {
 }
 
 function relay(w: dynamic Worker) -> nothing {
-    sleepAsync(1)
+    sleep(1)
     dispatch(w)
 }
 

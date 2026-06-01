@@ -16,7 +16,7 @@ function doWork(share self: FastWorker) -> nothing {
 }
 
 function runWithDynamicWorker(w: dynamic Worker) -> nothing {
-  sleepAsync(10)
+  sleep(10)
   w.doWork()
 }
 

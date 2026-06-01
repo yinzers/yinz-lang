@@ -58,7 +58,7 @@ use crate::runtime_decls::RuntimeDecls;
 /// Byte offset of the `resume_point` i32 field within each (sub-)frame.
 pub const FRAME_OFFSET_RESUME_POINT: u64 = 0;
 /// Byte offset of the `sleep_handle` pointer field within each (sub-)frame.
-/// Present regardless of whether the fn directly sleepAsyncs; zeroed when unused.
+/// Present regardless of whether the fn directly calls `sleep`; zeroed when unused.
 pub const FRAME_OFFSET_SLEEP_HANDLE: u64 = 8;
 /// Byte offset of the 16-byte return slot within each (sub-)frame.
 ///
@@ -550,7 +550,7 @@ pub fn free_frame<'ctx>(
     Ok(())
 }
 
-/// Emit the poll-and-yield sequence for a `wait sleepAsync(ms)` call inside a state machine.
+/// Emit the poll-and-yield sequence for a `wait sleep(ms)` call inside a state machine.
 ///
 /// # Flow
 ///

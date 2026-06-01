@@ -1,0 +1,9 @@
+// WHY: asserts that `wait sleepBlocking(...)` still triggers the "`wait` has no effect"
+// warning after the sleepMs→sleepBlocking rename. The check.rs:1716 list must contain
+// "sleepBlocking" — if the rename was applied to the dispatch arm but not to the
+// redundant-wait CPU-only-intrinsic list, this warning silently stops firing.
+// sleepBlocking blocks the OS thread; the `wait` keyword has no effect on it.
+function entrypoint() -> nothing {
+  wait sleepBlocking(100)
+  print(`done`)
+}

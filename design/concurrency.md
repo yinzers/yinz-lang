@@ -234,6 +234,50 @@ Full database stdlib design (connection pooling, transactions, query builder, mi
 
 ---
 
+## Permanent Positional Constraints on `wait`
+
+Two restrictions on `wait` are **permanent design decisions** — not temporary M2 limitations. Both are enforced at typeck and will remain even after M3a lifts the `LocalCrossesWait` and `WaitInsideLoop` guards.
+
+### `SubExprSuspendViolation` — suspending call in a sub-expression position
+
+A suspending call nested inside a larger expression is a compile error:
+
+```
+// ❌ — inner() is inside a + expression
+let x = 1 + inner()
+
+// ✅ — give it its own line
+let result = inner()
+let x = 1 + result
+```
+
+**Rationale**: Step-by-step style — one operation per line with a named variable — is Yinz's deliberate design (Golden Rule 7). Keeping each suspending call on its own statement also enables M3b's auto-parallelization of independent statements: two `let a = wait fa()` / `let b = wait fb()` lines can be analyzed as independent and parallelized automatically. Expression-position suspension would require a different, more complex codegen path that buys nothing over the step-by-step style.
+
+This guard is not a codegen limitation. It is a style constraint enforced at the language level.
+
+### `MutualSuspensionCycle` — mutually-recursive suspending functions
+
+Two or more different functions that call each other AND all suspend is a compile error:
+
+```
+// ❌ — ping and pong mutually call each other and both suspend
+function ping(n: int) -> nothing { wait sleep(10); pong(n - 1) }
+function pong(n: int) -> nothing { wait sleep(10); ping(n - 1) }
+
+// ✅ — self-recursion works correctly
+function countdown(n: int) -> nothing {
+  if (n > 0) { wait sleep(100); countdown(n - 1) }
+}
+
+// ✅ — restructure: one function delegates to the other without suspending
+function step(n: int) -> nothing { wait sleep(10) }
+function loop(n: int) -> nothing { if (n > 0) { step(n); loop(n - 1) } }
+```
+
+**Rationale**: Self-recursive suspending functions work correctly — a function calling itself is always self-contained (the recursive frame is a heap-boxed child of the same function, and the drop guard walks the chain). Mutually-recursive suspending cycles require per-frame size metadata to safely cancel mid-wait, and the cases that arise in practice can always be restructured into non-mutual forms. The guard is permanent because the restructured form is always cleaner and the mutual-recursion case is rare.
+
+---
+
 ## Runtime Implementation (Internal — Developer Never Sees This)
 
 Thread pool sized to CPU cores. I/O operations use the OS event system (epoll/kqueue/IOCP). The compiler's dependency graph determines scheduling. Developers never configure or think about any of this.

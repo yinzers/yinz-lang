@@ -1,5 +1,5 @@
 function sleeper() -> int {
-  wait sleepAsync(10)
+  wait sleep(10)
   return 5
 }
 function compute() -> int {

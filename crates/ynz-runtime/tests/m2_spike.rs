@@ -94,7 +94,7 @@ fn net_string_count() -> isize {
 // ── Spike fixture: FnFetchEvent (Contract #1) ─────────────────────────────────
 //
 // Mimics codegen output for:
-//   function fetchEvent() -> nothing { wait sleepAsync(100); print("done") }
+//   function fetchEvent() -> nothing { wait sleep(100); print("done") }
 //
 // State machine states:
 //   0: initial — create the sleep handle
@@ -158,7 +158,7 @@ impl Future for FnFetchEvent {
 
 // ── Contract #1: single-wait suspension + resume ──────────────────────────────
 
-// WHY: core promise of `wait sleepAsync(N)` — the OS thread is freed during the
+// WHY: core promise of `wait sleep(N)` — the OS thread is freed during the
 // wait. 8 simultaneous spawns completing in ~100ms proves thread sharing. If each
 // held its own thread they'd need 8 threads but still finish in ~100ms; what we're
 // proving is that the completion time stays in [80ms, 150ms] proving cooperative
@@ -209,7 +209,7 @@ impl Future for FetchEventWrapper {
 // ── Spike fixture: FnChain (Contract #2) ─────────────────────────────────────
 //
 // Mimics:
-//   function chain() -> nothing { wait sleepAsync(50); print("mid"); wait sleepAsync(50); print("end") }
+//   function chain() -> nothing { wait sleep(50); print("mid"); wait sleep(50); print("end") }
 
 static CHAIN_MID_TIME: AtomicI64 = AtomicI64::new(0);
 static CHAIN_END_TIME: AtomicI64 = AtomicI64::new(0);
@@ -330,7 +330,7 @@ impl Future for FnChainWrapper {
 // ── Spike fixture: FnMaybeWait (Contract #3) ──────────────────────────────────
 //
 // Mimics:
-//   function maybeWait(b: bool) -> nothing { if (b) { wait sleepAsync(100) }; print("done") }
+//   function maybeWait(b: bool) -> nothing { if (b) { wait sleep(100) }; print("done") }
 
 struct FnMaybeWait {
     resume_point: i32,
@@ -979,7 +979,7 @@ fn contract_6_frame_ownership_no_leak() {
 // ── Spike fixture: FnPulse (Contract #7 — wait-in-loop) ─────────────────────
 //
 // Mimics:
-//   function pulse() -> nothing { for (i in range(0, 10)) { wait sleepAsync(10) } }
+//   function pulse() -> nothing { for (i in range(0, 10)) { wait sleep(10) } }
 //
 // The loop body shares a single state; slot for i reused across iterations.
 // Frame must stay ≤ 64 bytes.
@@ -1226,7 +1226,7 @@ fn contract_8_wait_in_if_condition() {
 //
 // Mimics:
 //   function chat(greeting: string) -> nothing {
-//     print(greeting); wait sleepAsync(50); print(greeting + " again")
+//     print(greeting); wait sleep(50); print(greeting + " again")
 //   }
 //
 // Yinz strings are a 16-byte SSO+heap struct per M7 ABI.
@@ -1678,7 +1678,7 @@ fn contract_12_codegen_invariant_documented() {
     //
     // Where this invariant gets validated instead:
     //   Phase 2 (codegen layer) Step 5: IR snapshot test `main_rt_init_is_first_instruction`
-    //   compiles a .ynz fixture containing `wait sleepAsync(100)` via `ynz-driver`,
+    //   compiles a .ynz fixture containing `wait sleep(100)` via `ynz-driver`,
     //   extracts the LLVM IR with `--emit-llvm`, and asserts:
     //     - `define i32 @main(...)` function exists
     //     - First non-alloca instruction is `call void @ynz_rt_init()`

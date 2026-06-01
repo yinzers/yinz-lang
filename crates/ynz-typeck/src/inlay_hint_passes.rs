@@ -40,7 +40,7 @@ use crate::{
 ///
 /// All v0.1/v0.2 builtin free-fns are read-only by contract — they inspect
 /// their arguments and never take ownership or mutate through a borrow.
-/// `range` and `sleepMs` are in `registry/features.toml` as `kind = "free_fn"`;
+/// `range` and `sleepBlocking` are in `registry/features.toml` as `kind = "free_fn"`;
 /// `print` and `sensitive` are special-cased in `check.rs` and not in the
 /// free-fn registry table, so they are listed here explicitly.
 ///
@@ -53,7 +53,7 @@ fn builtin_free_fn_is_readonly(name: &str) -> bool {
     if matches!(name, "print" | "sensitive") {
         return true;
     }
-    // Registry free-fn builtins (range overloads, sleepMs, and any future additions).
+    // Registry free-fn builtins (range overloads, sleepBlocking, and any future additions).
     // PrimitiveIntrinsicTable::free_fn_names() is the SSOT for this list.
     static REGISTRY_FREE_FNS: OnceLock<Vec<&'static str>> = OnceLock::new();
     let registry_names =
@@ -387,7 +387,7 @@ fn collect_maybe_mutated_expr(
             // read access) do not count — they let the `let→const` hint fire.
             //
             // Lookup order: user sig_table → imported → generic_fn_table → builtin free-fns
-            // (print, range, sleepMs, sensitive, and any registry free-fns).  Builtin
+            // (print, range, sleepBlocking, sensitive, and any registry free-fns).  Builtin
             // free-fns are all read-only (share) in v0.1/v0.2 — none mutate their args.
             //
             // Conservative fallback: if the callee cannot be resolved through any path
@@ -783,7 +783,7 @@ fn collect_ownership_hints_expr(
             // Resolve the callee's parameter ownership list via the shared helper.
             //
             // Lookup order: user sig_table → imported → generic_fn_table.
-            // Builtin free-fns (print, range, sleepMs, sensitive) are not in any of these
+            // Builtin free-fns (print, range, sleepBlocking, sensitive) are not in any of these
             // tables and get no ownership hint — correct, because their params carry no
             // explicit Yinz-source ownership modifier.
             //

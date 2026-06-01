@@ -21,7 +21,7 @@ pub struct FreeFnSig {
 /// added before M3 must explicitly edit this const (caught at code review). That is cheaper than
 /// schema migration for a list that M3 makes obsolete.
 // CARVE-OUT: compiler-internal constant; M2 predicate only; M3 replaces via call-graph analysis.
-pub const M2_MAY_BLOCK_INTRINSICS: &[&str] = &["sleepAsync", "__testFallibleAsync"];
+pub const M2_MAY_BLOCK_INTRINSICS: &[&str] = &["sleep", "__testFallibleAsync"];
 
 /// Returns true when a call to `callee_name` may pause the calling state machine.
 ///
@@ -30,7 +30,7 @@ pub const M2_MAY_BLOCK_INTRINSICS: &[&str] = &["sleepAsync", "__testFallibleAsyn
 /// 2. Callee is a user-defined function whose body syntactically contains `wait`
 ///    (the `FunctionSig.contains_wait` flag — see `signatures.rs`).
 ///
-/// NOT transitive: if `foo()` calls `bar()` and `bar()` calls `sleepAsync(100)` without
+/// NOT transitive: if `foo()` calls `bar()` and `bar()` calls `sleep(100)` without
 /// `wait`, then `bar.contains_wait == false` and `bar` is NOT flagged as may-block in M2.
 /// M3 ships the transitive predicate.
 pub fn is_may_block_callee(callee_name: &str, callee_contains_wait: bool) -> bool {

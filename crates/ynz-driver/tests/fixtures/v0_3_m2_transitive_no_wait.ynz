@@ -1,9 +1,9 @@
 // v0.3-M2 Phase 7: transitive suspension — no explicit wait tokens.
-// The dev5 adversarial case: bar→sleepAsync (no wait), entrypoint→bar (no wait).
+// The dev5 adversarial case: bar→sleep (no wait), entrypoint→bar (no wait).
 // Was: "no reactor running" crash. After P7: runs correctly.
 
 function bar() -> nothing {
-  sleepAsync(10)
+  sleep(10)
   print(`bar done`)
 }
 

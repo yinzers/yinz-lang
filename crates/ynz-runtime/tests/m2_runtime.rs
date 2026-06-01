@@ -57,7 +57,7 @@ fn net_frames() -> isize {
 // ── Minimal state-machine fixture ────────────────────────────────────────────
 //
 // Mimics what Phase 2 codegen will emit for:
-//   function fetchEvent() -> nothing { wait sleepAsync(N); }
+//   function fetchEvent() -> nothing { wait sleep(N); }
 //
 // States:
 //   0: create sleep handle via ynz_rt_async_sleep_create
@@ -189,9 +189,9 @@ fn sleep_create_zero_ms_fires_immediately() {
 }
 
 // WHY: ynz_rt_async_sleep_poll drives the full suspend+resume cycle for a 100ms sleep.
-// This is the core `wait sleepAsync(N)` primitive. Validates that the waker is registered
+// This is the core `wait sleep(N)` primitive. Validates that the waker is registered
 // (no tight-loop), the sleep fires after ~100ms, and the handle is freed on Ready (poll
-// returns 0). Without this, sleepAsync suspends forever or busy-polls.
+// returns 0). Without this, sleep suspends forever or busy-polls.
 #[test]
 fn sleep_poll_suspend_and_resume() {
     with_private_runtime(|rt| {
@@ -216,7 +216,7 @@ fn sleep_poll_suspend_and_resume() {
     });
 }
 
-// WHY: 8 simultaneous sleepAsync(100) tasks must complete in ~100ms wall-clock (not 800ms).
+// WHY: 8 simultaneous sleep(100) tasks must complete in ~100ms wall-clock (not 800ms).
 // Proves the OS thread is freed during wait (cooperative scheduling). If each task held a
 // thread, 8 tasks would still finish in ~100ms on a 4-core machine — what we're proving
 // is that the thread pool shares threads across tasks rather than serialising them.

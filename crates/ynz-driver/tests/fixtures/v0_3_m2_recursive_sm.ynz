@@ -4,7 +4,7 @@
 
 function countdown(n: int) -> nothing {
   if (n > 0) {
-    wait sleepAsync(100)
+    wait sleep(100)
     countdown(n - 1)
   }
 }

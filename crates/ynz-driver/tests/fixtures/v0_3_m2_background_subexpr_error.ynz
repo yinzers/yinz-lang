@@ -6,7 +6,7 @@
 // as the non-background form — the guard must catch it before codegen fires.
 
 function inner() -> int {
-    wait sleepAsync(10)
+    wait sleep(10)
     return 5
 }
 

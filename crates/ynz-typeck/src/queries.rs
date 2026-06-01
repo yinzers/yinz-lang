@@ -216,14 +216,14 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
                              with `{members_display}`."
                         ),
                         "Restructure so the recursion is self-recursive (a single function \
-                         calling itself), or remove the `wait` call from the cycle so it is \
-                         no longer suspending."
+                         calling itself — self-recursion is supported), or remove the `wait` \
+                         call from the cycle so it is no longer suspending."
                             .to_string(),
-                        "v0.3-M2 supports self-recursive suspending functions (a function \
-                         calling itself directly). Mutually-recursive suspending cycles — \
-                         where two or more different functions call each other and all suspend \
-                         — require per-frame size metadata to safely cancel mid-wait. \
-                         That support ships in v0.3-M3.",
+                        "Self-recursive suspending functions work correctly. Mutually-recursive \
+                         suspending cycles — where two or more DIFFERENT functions call each other \
+                         and all suspend — are rare in practice and can always be restructured: \
+                         extract the shared logic into a helper, make one of the functions \
+                         non-suspending, or use a self-recursive form instead.",
                     ));
                 }
             }

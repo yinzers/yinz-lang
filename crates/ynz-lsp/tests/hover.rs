@@ -375,7 +375,7 @@ fn hover_request_via_lsp_returns_response() {
 // If this fails, the keyword hover docs weren't updated in the registry.
 #[test]
 fn hover_wait_keyword_returns_m2_suspension_text() {
-    let src = "wait sleepAsync(100)";
+    let src = "wait sleep(100)";
     let tokens = tokenize(src);
     let table = LineTable::new(src);
     let h = hover_response(

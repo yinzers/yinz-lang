@@ -1,7 +1,7 @@
 function entrypoint() -> nothing {
   let i: int = 0
   while (i < 3) {
-    wait sleepAsync(100)
+    wait sleep(100)
     i = i + 1
   }
 }

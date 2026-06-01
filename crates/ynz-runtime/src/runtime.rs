@@ -286,7 +286,7 @@ pub extern "C" fn ynz_rt_shutdown() {
 
 /// Sleep the current OS thread for `ms` milliseconds (blocking sleep, NOT `wait`).
 ///
-/// Used by the Yinz intrinsic `sleepMs(int)`. This is a synchronous blocking sleep
+/// Used by the Yinz intrinsic `sleepBlocking(int)`. This is a synchronous blocking sleep
 /// on the calling thread; it does not use `wait` / async semantics (those ship in
 /// v0.3-M2). The name `ynz_thread_sleep_ms` avoids any confusion with the `wait` keyword.
 #[no_mangle]
@@ -298,7 +298,7 @@ pub extern "C" fn ynz_thread_sleep_ms(ms: i64) {
 
 // ── v0.3-M2: async state-machine runtime shims ────────────────────────────────
 //
-// These four shims back the `wait sleepAsync(N)` Yinz intrinsic and the
+// These four shims back the `wait sleep(N)` Yinz intrinsic and the
 // state-machine codegen infrastructure. They are declared in `runtime_decls.rs`
 // for the LLVM backend but no call sites are emitted until Phase 2 codegen lands.
 //
@@ -565,7 +565,7 @@ pub unsafe extern "C" fn ynz_rt_spawn(
     }
 }
 
-/// Allocate and return a heap-pinned `tokio::time::Sleep` future for `sleepAsync(ms)`.
+/// Allocate and return a heap-pinned `tokio::time::Sleep` future for `sleep(ms)`.
 ///
 /// # Flow
 /// 1. Create `tokio::time::sleep(Duration::from_millis(ms))` — a `Sleep` future.

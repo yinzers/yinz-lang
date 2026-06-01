@@ -1006,7 +1006,7 @@ fn m5_dyn_dispatch_no_follows_still_errors() {
 fn m5_dyn_dispatch_chained_both_calls_succeed() {
     // WHY: a concrete shape passed through two function calls each accepting `dynamic Contract`
     //      must pass through correctly — verifies the coerce works at multiple call sites.
-    //      Neither `showDynamic` nor `relay` independently suspend (no sleepAsync), so no
+    //      Neither `showDynamic` nor `relay` independently suspend (no sleep), so no
     //      can't-infer error fires under the design-correct current_fn_suspends gate. A non-
     //      suspending caller with dynamic dispatch compiles clean per design/future/concurrency.md.
     // test-ratchet: restoring exit-0 assertion — round-2 changed this to expect a can't-infer
@@ -1492,7 +1492,7 @@ fn m8_background_runs_concurrently() {
 
 #[test]
 fn v03_m2_concurrent_waits_proof() {
-    // WHY: Core M2 correctness proof — 8 background tasks each containing `wait sleepAsync(100)`
+    // WHY: Core M2 correctness proof — 8 background tasks each containing `wait sleep(100)`
     // must all print their START line before any DONE line. This is only possible if state
     // machines work correctly: each task suspends at the `wait` (yielding the thread), prints
     // START, then resumes ~100ms later to print DONE. Sequential execution would interleave
@@ -1502,15 +1502,15 @@ fn v03_m2_concurrent_waits_proof() {
     // cooperative scheduling ensures all 8 STARTs are emitted before the first DONE because
     // they all suspend at `wait` before any timer fires.
     //
-    // DEVIATION NOTE: the fixture uses sleepMs(300) to keep main alive until background tasks
+    // DEVIATION NOTE: the fixture uses sleepBlocking(300) to keep main alive until background tasks
     // complete (Tokio drops pending futures on ynz_rt_shutdown without a wait). M4 handle-form
     // will eliminate this requirement.
     //
     // The no-op / sequential-execution detector is the ORDERING assertion below
     // (all 8 START lines before any DONE) — deterministic and core-count-independent.
-    // The wall-clock bounds are loose sanity guards ONLY and do NOT detect a sleepAsync
-    // no-op: main's blocking sleepMs(300) keep-alive dominates total runtime, so the binary
-    // runs ~300ms whether or not sleepAsync suspends. We build the fixture first, then time
+    // The wall-clock bounds are loose sanity guards ONLY and do NOT detect a sleep
+    // no-op: main's blocking sleepBlocking(300) keep-alive dominates total runtime, so the binary
+    // runs ~300ms whether or not sleep suspends. We build the fixture first, then time
     // execution only (excluding compile), so the bounds measure the program, not the build.
     let tmp = std::env::temp_dir().join(format!("ynz-concurrent-proof-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).expect("create temp dir for concurrent waits proof");
@@ -1584,12 +1584,12 @@ fn v03_m2_concurrent_waits_proof() {
     );
 
     // Sanity floor only: confirms the compiled binary actually executed (it must run at
-    // least main's sleepMs(300) keep-alive). This is NOT a sleepAsync no-op detector — a
-    // no-op would still run ~300ms because sleepMs(300) dominates. The ordering assertion
-    // above is what proves sleepAsync genuinely suspends. The upper bound catches a hang.
+    // least main's sleepBlocking(300) keep-alive). This is NOT a sleep no-op detector — a
+    // no-op would still run ~300ms because sleepBlocking(300) dominates. The ordering assertion
+    // above is what proves sleep genuinely suspends. The upper bound catches a hang.
     assert!(
         elapsed_ms >= 80,
-        "execution time {elapsed_ms}ms is below 80ms — sleepAsync may have no-opped; \
+        "execution time {elapsed_ms}ms is below 80ms — sleep may have no-opped; \
          check that wait actually suspends for 100ms"
     );
     assert!(
@@ -1967,12 +1967,12 @@ fn duplicate_entrypoint_in_project_produces_teaching_diagnostic() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// v0.3-M1: sleepMs intrinsic end-to-end
+// v0.3-M1: sleepBlocking intrinsic end-to-end
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn sleep_ms_intrinsic_links_and_runs() {
-    // WHY: sleepMs(int) must be reachable end-to-end — typeck → codegen → link
+    // WHY: sleepBlocking(int) must be reachable end-to-end — typeck → codegen → link
     // → execute. This test catches regressions where the intrinsic is registered
     // in the registry but not wired through typeck dispatch (making it unreachable
     // from .ynz source). The timing assertion is generous to avoid CI flake.
@@ -1980,16 +1980,47 @@ fn sleep_ms_intrinsic_links_and_runs() {
     let start = Instant::now();
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m1_sleep_ms.ynz"));
     let elapsed = start.elapsed();
-    assert_eq!(code, 0, "sleepMs fixture must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        code, 0,
+        "sleepBlocking fixture must exit 0; stderr:\n{stderr}"
+    );
     assert_eq!(
         stdout.trim(),
         "slept",
-        "sleepMs fixture must print `slept`; got:\n{stdout}"
+        "sleepBlocking fixture must print `slept`; got:\n{stdout}"
     );
     assert!(
         elapsed.as_millis() >= 40,
-        "sleepMs(50) must sleep at least 40ms, but the whole run took {:?}",
+        "sleepBlocking(50) must sleep at least 40ms, but the whole run took {:?}",
         elapsed
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.3-M3a Phase 0: `wait sleepBlocking(...)` still triggers "`wait` has no effect" warning
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn wait_on_sleep_blocking_still_warns() {
+    // WHY: After the sleepMs→sleepBlocking rename, check.rs line ~1716 must contain
+    // "sleepBlocking" in the CPU-only-intrinsic matches! list, not the old "sleepMs".
+    // If the rename hit the dispatch arm but not this list, the warning silently stops
+    // firing — sleepBlocking blocks the OS thread; `wait` has no effect on it.
+    // This fixture asserts the warning still fires post-rename.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_wait_on_sleep_blocking_warning.ynz"));
+    assert_eq!(
+        code, 0,
+        "`wait sleepBlocking` must compile and run (warning, not error); stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "done",
+        "fixture must print `done`; got:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("no effect") || stderr.contains("does not suspend"),
+        "`wait sleepBlocking` must produce a 'wait has no effect' warning; got stderr:\n{stderr}"
     );
 }
 

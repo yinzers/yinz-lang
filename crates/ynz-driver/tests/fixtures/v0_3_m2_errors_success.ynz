@@ -2,7 +2,7 @@
 // Verifies that .or() reads the success slot correctly.
 
 function maybeFail() -> int errors {
-  wait sleepAsync(5)
+  wait sleep(5)
   return 42
 }
 

@@ -264,7 +264,7 @@ struct Checker<'b> {
     /// may-block analysis result). Set at the start of each function by `check_function`.
     ///
     /// The can't-infer diagnostic gates on this field: a caller that independently suspends
-    /// (reaches an intra-unit `sleepAsync`) AND makes an unanalyzable cross-module or
+    /// (reaches an intra-unit `sleep`) AND makes an unanalyzable cross-module or
     /// dynamic-dispatch call gets the clean compile error. A caller that does NOT
     /// independently suspend treats the boundary call as a non-suspending leaf — the
     /// M2-documented under-approximation per `design/future/concurrency.md:61-67`
@@ -365,7 +365,7 @@ impl<'b> Checker<'b> {
         self.errors_consumed.clear();
         // Track whether the caller transitively suspends (analysis result). The can't-infer
         // diagnostic gates on this: a function that independently reaches a suspension point
-        // (intra-unit sleepAsync) AND makes an unanalyzable boundary call gets the error.
+        // (intra-unit `sleep`) AND makes an unanalyzable boundary call gets the error.
         // Functions that do NOT independently suspend treat the boundary call as a
         // non-suspending leaf — the M2 under-approximation per design/future/concurrency.md:75.
         self.current_fn_suspends = self
@@ -416,7 +416,7 @@ impl<'b> Checker<'b> {
         // Build the suspending-function set once; reused by checks 2 and 3.
         // Contains all user-defined functions whose `suspends` flag is set by the
         // Phase-6 may-block fixpoint. `is_suspending_call` also folds in
-        // `M2_MAY_BLOCK_INTRINSICS` (sleepAsync etc.) which are not in sig_table.
+        // `M2_MAY_BLOCK_INTRINSICS` (`sleep` etc.) which are not in sig_table.
         let suspending_fns: std::collections::HashSet<&str> = if is_suspending_fn {
             self.sig_table
                 .fns
@@ -436,7 +436,7 @@ impl<'b> Checker<'b> {
                         span,
                         "`wait` inside a loop is not supported yet.",
                         "Move the `wait` to a standalone function called inside the loop: \
-                         `function step() -> nothing { wait sleepAsync(100) }`, \
+                         `function step() -> nothing { wait sleep(100) }`, \
                          then call `step()` from the loop body.",
                         "v0.3-M2 can only pause at the top level of a function or inside an `if` \
                          block. Pausing inside a loop requires saving and restoring the loop counter \
@@ -471,8 +471,8 @@ impl<'b> Checker<'b> {
                             crossing.name, crossing.name
                         ),
                         "v0.3-M2 can only preserve function parameters across a `wait` point. \
-                         Preserving a local binding across a pause requires a more complex \
-                         transform that ships in v0.3-M3.",
+                         Preserving a local binding across a suspension requires a frame-slot \
+                         transform that ships in v0.3-M3a.",
                     ));
                 }
             }
@@ -480,33 +480,33 @@ impl<'b> Checker<'b> {
 
         // Check 3: suspending call in a sub-expression position.
         //
-        // v0.3-M2 compiles each suspending call as its own state-machine step. The
-        // codegen handles three direct-statement forms: `foo()`, `let x = foo()`, and
+        // The codegen compiles each suspending call as its own state-machine step. The
+        // three supported direct-statement forms are: `foo()`, `let x = foo()`, and
         // `return foo()` (with or without `wait`). Any suspending call nested deeper —
         // as an operand of `+`/`-`/etc., inside an interpolation `${...}`, as an `if`
         // condition, as an argument to another call, etc. — falls through the codegen
         // switcher to a wrapper path that panics at runtime ("Cannot start a runtime
         // from within a runtime"). Catching it here (typeck) prevents the runtime abort.
         //
-        // Expression-position suspension is the M3 feature: auto-`wait` insertion at
-        // arbitrary expression positions (design/future/concurrency.md:35).
+        // This guard is permanent (not a temporary M2 limitation): step-by-step style —
+        // one operation per line with a named variable — is Yinz's deliberate design
+        // (Golden Rule 7). Keeping each suspending call on its own statement also means
+        // M3b's auto-parallelization of independent statements works naturally: two
+        // `let a = wait fa()` / `let b = wait fb()` lines get parallelized automatically.
         if !self.kernel_mode && is_suspending_fn {
             let violations = suspending_calls_in_subexpr_position(&f.body.stmts, &suspending_fns);
             for (span, callee_name) in violations {
                 self.diags.push(Diagnostic::error(
                     span,
+                    format!("`{callee_name}` is a suspending call inside a larger expression."),
                     format!(
-                        "`{callee_name}` is a suspending call inside a larger expression — \
-                         this is not supported yet."
-                    ),
-                    format!(
-                        "Give it its own line first: `let result = {callee_name}(...)`, \
+                        "Give it its own line: `let result = {callee_name}(...)`, \
                          then use `result` in the expression."
                     ),
-                    "v0.3-M2 compiles each suspending call as its own step. Calls nested \
-                     inside an expression need expression-position suspension, which ships \
-                     in v0.3-M3. Step-by-step style (one operation per line with a named \
-                     variable) avoids this limit and matches Yinz's preferred style.",
+                    "Yinz compiles each suspending call as its own state-machine step, \
+                     and the step-by-step style (one operation per line with a named \
+                     variable) is the language's preferred form — it keeps code readable \
+                     and enables the compiler to auto-parallelize independent statements.",
                 ));
             }
         }
@@ -1707,13 +1707,13 @@ impl<'b> Checker<'b> {
         }
 
         // Phase 6: explicit `wait` on a known-CPU-only intrinsic — the `wait` has no effect.
-        // Only fires for non-suspending builtins. `sleepAsync` and `__testFallibleAsync` are
+        // Only fires for non-suspending builtins. `sleep` and `__testFallibleAsync` are
         // may-block so they are excluded. User-defined function dispatch handles `suspends`
         // via the transitive analysis result on the sig table.
         if self.inside_wait
             && matches!(
                 callee_name.as_str(),
-                "print" | "range" | "sleepMs" | "sensitive"
+                "print" | "range" | "sleepBlocking" | "sensitive"
             )
         {
             self.diags.push(Diagnostic::warning(
@@ -1740,20 +1740,20 @@ impl<'b> Checker<'b> {
         let result = match callee_name.as_str() {
             "print" => self.check_print_call(call),
             "range" => self.check_range_call(call),
-            // sleepMs(ms: int) — synchronous blocking sleep; lowers to ynz_thread_sleep_ms.
-            "sleepMs" => self.check_sleep_ms_call(call),
-            // sleepAsync(ms: int) — non-blocking sleep; codegen emits state-machine wait point.
-            // Under the Phase-6 inference model, `sleepAsync` is auto-awaited by the
-            // transitive may-block analysis. Writing `wait sleepAsync(...)` is valid-but-redundant
+            // sleepBlocking(ms: int) — synchronous blocking sleep; lowers to ynz_thread_sleep_ms.
+            "sleepBlocking" => self.check_sleep_blocking_call(call),
+            // sleep(ms: int) — non-blocking sleep; codegen emits state-machine wait point.
+            // Under the Phase-6 inference model, `sleep` is auto-awaited by the
+            // transitive may-block analysis. Writing `wait sleep(...)` is valid-but-redundant
             // (the `wait_on_non_may_block` warning does NOT fire for may-block intrinsics).
-            "sleepAsync" => {
+            "sleep" => {
                 if self.kernel_mode {
                     self.diags.push(Diagnostic::error(
                         call.span.clone(),
-                        "`sleepAsync` is not available in --kernel mode.",
-                        "Use `sleepMs` for blocking sleep, or remove the call. \
+                        "`sleep` is not available in --kernel mode.",
+                        "Use `sleepBlocking` for blocking sleep, or remove the call. \
                          Kernel-mode programs run without a scheduler runtime.",
-                        "`sleepAsync` requires the Tokio runtime (started by `ynz_rt_init`), \
+                        "`sleep` requires the Tokio runtime (started by `ynz_rt_init`), \
                          which does not run in kernel mode. \
                          See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
                     ));
@@ -1762,7 +1762,7 @@ impl<'b> Checker<'b> {
                     }
                     return Type::Nothing;
                 }
-                self.check_sleep_async_call(call)
+                self.check_sleep_call(call)
             }
             // __testFallibleAsync(succeed: bool) -> int errors — internal M2 test intrinsic.
             // Not in registry; not in LSP completion. Used only in P3/P5 driver fixtures.
@@ -1855,7 +1855,7 @@ impl<'b> Checker<'b> {
                     let callee_is_cross_module = self.imported_fn_names.contains(name);
 
                     // Can't-infer: the caller independently suspends (reaches an intra-unit
-                    // sleepAsync transitively) AND makes a cross-module call the analysis
+                    // `sleep` transitively) AND makes a cross-module call the analysis
                     // can't traverse. This is the design-correct M2 gate from
                     // design/future/concurrency.md:61-67 — cross-module suspension propagation
                     // requires M8 binary package metadata and ships in M3. When the caller does
@@ -1928,7 +1928,7 @@ impl<'b> Checker<'b> {
                 // Unknown
                 let mut candidates: Vec<&str> = self.sig_table.all_names();
                 candidates.extend(self.generic_fn_table.all_names());
-                candidates.extend(["print", "range", "sleepMs", "sleepAsync"]);
+                candidates.extend(["print", "range", "sleepBlocking", "sleep"]);
                 self.diags.push(make_not_defined_diag(
                     name,
                     call.callee.span().clone(),
@@ -2049,16 +2049,16 @@ impl<'b> Checker<'b> {
         }
     }
 
-    fn check_sleep_ms_call(&mut self, call: &CallExpr) -> Type {
+    fn check_sleep_blocking_call(&mut self, call: &CallExpr) -> Type {
         if call.args.len() != 1 {
             self.diags.push(Diagnostic::error(
                 call.span.clone(),
                 format!(
-                    "`sleepMs` takes exactly 1 argument, but {} were given.",
+                    "`sleepBlocking` takes exactly 1 argument, but {} were given.",
                     call.args.len()
                 ),
-                "Write `sleepMs(200)` — pass the number of milliseconds to sleep.",
-                "`sleepMs` pauses the current thread for the given number of milliseconds. \
+                "Write `sleepBlocking(200)` — pass the number of milliseconds to sleep.",
+                "`sleepBlocking` pauses the current thread for the given number of milliseconds. \
                  It takes one `int` argument.",
             ));
             for arg in &call.args {
@@ -2070,29 +2070,29 @@ impl<'b> Checker<'b> {
         if ty != Type::Int && ty != Type::Error {
             self.diags.push(Diagnostic::error(
                 call.args[0].span().clone(),
-                format!("`sleepMs` requires an `int` argument, but got `{}`.", type_name(&ty)),
-                "Pass an integer number of milliseconds: `sleepMs(200)`.",
-                "`sleepMs` converts the argument to a millisecond duration. Only `int` is accepted.",
+                format!("`sleepBlocking` requires an `int` argument, but got `{}`.", type_name(&ty)),
+                "Pass an integer number of milliseconds: `sleepBlocking(200)`.",
+                "`sleepBlocking` converts the argument to a millisecond duration. Only `int` is accepted.",
             ));
         }
         Type::Nothing
     }
 
-    /// Validate `sleepAsync(ms)` call argument shape — non-blocking sleep for `wait` expressions.
+    /// Validate `sleep(ms)` call argument shape — non-blocking sleep for `wait` expressions.
     ///
     /// Accepts exactly one `int` argument. Returns `nothing` (the sleep completes silently).
-    /// The `unawaited_sleep_async` warning and kernel-mode rejection are handled by the
-    /// dispatch arm in `check_call` before this helper is called.
-    fn check_sleep_async_call(&mut self, call: &CallExpr) -> Type {
+    /// The kernel-mode rejection is handled by the dispatch arm in `check_call` before this
+    /// helper is called.
+    fn check_sleep_call(&mut self, call: &CallExpr) -> Type {
         if call.args.len() != 1 {
             self.diags.push(Diagnostic::error(
                 call.span.clone(),
                 format!(
-                    "`sleepAsync` takes exactly 1 argument, but {} were given.",
+                    "`sleep` takes exactly 1 argument, but {} were given.",
                     call.args.len()
                 ),
-                "Write `wait sleepAsync(200)` — pass the number of milliseconds to pause.",
-                "`sleepAsync` suspends the calling function for the given number of milliseconds \
+                "Write `wait sleep(200)` — pass the number of milliseconds to pause.",
+                "`sleep` suspends the calling function for the given number of milliseconds \
                  without blocking the OS thread. It takes one `int` argument.",
             ));
             for arg in &call.args {
@@ -2104,9 +2104,12 @@ impl<'b> Checker<'b> {
         if ty != Type::Int && ty != Type::Error {
             self.diags.push(Diagnostic::error(
                 call.args[0].span().clone(),
-                format!("`sleepAsync` requires an `int` argument, but got `{}`.", type_name(&ty)),
-                "Pass an integer number of milliseconds: `wait sleepAsync(200)`.",
-                "`sleepAsync` converts the argument to a millisecond duration. Only `int` is accepted.",
+                format!(
+                    "`sleep` requires an `int` argument, but got `{}`.",
+                    type_name(&ty)
+                ),
+                "Pass an integer number of milliseconds: `wait sleep(200)`.",
+                "`sleep` converts the argument to a millisecond duration. Only `int` is accepted.",
             ));
         }
         Type::Nothing
@@ -2708,7 +2711,7 @@ impl<'b> Checker<'b> {
                     // Can't-infer: dynamic dispatch through a vtable from a suspending caller.
                     // The concrete callee is unknown at compile time so its suspension status
                     // cannot be determined. Gate on current_fn_suspends: only callers that
-                    // independently reach a suspension point (intra-unit sleepAsync) get the
+                    // independently reach a suspension point (intra-unit `sleep`) get the
                     // error; non-suspending callers treat this as a non-suspending leaf per
                     // design/future/concurrency.md:75 (the M2 intentional under-approximation).
                     if self.current_fn_suspends {
@@ -4861,7 +4864,7 @@ struct LocalCrossesWait {
 ///
 /// Suspension points include both explicit `wait` AST nodes AND inferred-suspension
 /// calls — bare calls to functions whose `suspends` flag is set by the may-block
-/// fixpoint (or to M2 may-block intrinsics like `sleepAsync`). Both forms compile to
+/// fixpoint (or to M2 may-block intrinsics like `sleep`). Both forms compile to
 /// state-machine resume steps in M2 codegen; without a frame slot the local's value
 /// is undefined after the step, producing an LLVM SSA dominance failure.
 ///
@@ -5227,7 +5230,7 @@ struct SubExprSuspendViolation {
 /// positions (not the direct-statement forms the M2 codegen handles).
 ///
 /// `suspending` is the set of user-defined function names whose `suspends == true`
-/// in the current compilation unit. May-block intrinsics (`sleepAsync`,
+/// in the current compilation unit. May-block intrinsics (`sleep`,
 /// `__testFallibleAsync`) are included via `M2_MAY_BLOCK_INTRINSICS`.
 fn suspending_calls_in_subexpr_position(
     stmts: &[Stmt],

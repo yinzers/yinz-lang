@@ -506,9 +506,9 @@ fn compute_frame_size(
 ///
 /// The cost of keeping this as an in-code constant (rather than a registry field) is explicit:
 /// every new may-block intrinsic added before M3 must edit this list. Caught at code review.
-// CARVE-OUT: compiler-internal constant — predicate for M2 sleepAsync dispatch in codegen.
+// CARVE-OUT: compiler-internal constant — predicate for M2 sleep dispatch in codegen.
 // Not a user-facing feature. M3's transitive analysis replaces this entirely.
-const M2_MAY_BLOCK_INTRINSICS: &[&str] = &["sleepAsync", "__testFallibleAsync"];
+const M2_MAY_BLOCK_INTRINSICS: &[&str] = &["sleep", "__testFallibleAsync"];
 
 // is_may_block_callee (local-syntactic predicate) removed in P7.
 // The SM-selection predicate is now SuspendSet (transitive, from typeck).
@@ -685,7 +685,7 @@ fn build_module<'ctx, 'g>(
 
     // Pass 0.6 — forward-declare resume functions for ALL SUSPENDING functions.
     // Phase 7: use suspend_set (transitive) instead of wait_cache (local) so fns that
-    // reach sleepAsync transitively (without explicit `wait`) get a resume fn declared.
+    // reach `sleep` transitively (without explicit `wait`) get a resume fn declared.
     for item in &typed.module.items {
         if let Item::Function(f) = item {
             if f.generics.is_empty() && suspend_set.contains(&f.name) {
@@ -1392,7 +1392,7 @@ fn lower_function<'ctx, 'g>(
 ) -> Result<(), String> {
     // v0.3-M2 P7 path selection: functions in the transitive suspend_set get the
     // state-machine path. Uses suspend_set (from typeck FunctionSig.suspends) instead
-    // of the local wait_cache, so fns that reach sleepAsync transitively — without an
+    // of the local wait_cache, so fns that reach `sleep` transitively — without an
     // explicit `wait` — are now correctly compiled as state machines.
     if suspend_set.contains(&f.name) {
         return lower_function_with_waits(
@@ -1562,7 +1562,7 @@ fn lower_function<'ctx, 'g>(
 ///
 /// # Wait dispatch strategy
 ///
-/// Each `Expr::Wait(Call { callee: "sleepAsync", args: [ms] }, _)` in the body
+/// Each `Expr::Wait(Call { callee: "sleep", args: [ms] }, _)` in the body
 /// generates:
 /// - **State N (before wait)**: create the sleep handle, store in `frame[SLEEP_HANDLE]`,
 ///   set `resume_point = N+1`, return Pending.
@@ -2322,8 +2322,8 @@ fn lower_sm_block<'ctx, 'g>(
 /// Lower a statement that contains at least one `Expr::Wait`.
 ///
 /// Handles:
-/// - `Stmt::Expr(Expr::Wait(...))` — a bare `wait sleepAsync(ms)` statement
-/// - `Stmt::Let { value: Expr::Wait(...), ... }` — `let x = wait sleepAsync(ms)`
+/// - `Stmt::Expr(Expr::Wait(...))` — a bare `wait sleep(ms)` statement
+/// - `Stmt::Let { value: Expr::Wait(...), ... }` — `let x = wait sleep(ms)`
 /// - `Stmt::If { cond, body, .. }` whose body contains a wait — recurses into the branch
 ///   so the nested wait suspends correctly (the branch and its continuation converge at a
 ///   merge block; Yinz `if` has no else — multi-case uses `Stmt::Match`).
@@ -2348,7 +2348,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
     current_state: &mut usize,
 ) -> Result<(), String> {
     match stmt {
-        // `wait sleepAsync(ms)` as a bare expression statement.
+        // `wait sleep(ms)` as a bare expression statement.
         Stmt::Expr(Expr::Wait(inner, _)) if is_sleep_async_call(inner) => {
             emit_wait_point(
                 cg,
@@ -2399,7 +2399,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
             let _ = return_val;
         }
 
-        // `wait sleepAsync(ms)` as a bare expression statement (non-ident call — fallback).
+        // `wait sleep(ms)` as a bare expression statement (non-ident call — fallback).
         Stmt::Expr(Expr::Wait(inner, _)) => {
             emit_wait_point(
                 cg,
@@ -2415,7 +2415,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
             )?;
         }
 
-        // `let name = wait sleepAsync(ms)` — sleepAsync is nothing-returning; bind zero.
+        // `let name = wait sleep(ms)` — sleep is nothing-returning; bind zero.
         Stmt::Let {
             name,
             value: Expr::Wait(inner, _),
@@ -2433,7 +2433,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                 shape_table,
                 current_state,
             )?;
-            // sleepAsync returns nothing; bind zero to name.
+            // sleep returns nothing; bind zero to name.
             let alloca = cg
                 .builder
                 .build_alloca(cg.i64(), &format!("{name}_alloca"))
@@ -2675,9 +2675,9 @@ fn bind_sm_return_value<'ctx>(
     }
 }
 
-/// True when `expr` is a `sleepAsync(...)` call.
+/// True when `expr` is a `sleep(...)` call (the yielding non-blocking sleep intrinsic).
 fn is_sleep_async_call(expr: &Expr) -> bool {
-    matches!(expr, Expr::Call(c) if matches!(&c.callee, Expr::Ident(n, _) if n == "sleepAsync"))
+    matches!(expr, Expr::Call(c) if matches!(&c.callee, Expr::Ident(n, _) if n == "sleep"))
 }
 
 /// True when `expr` is a direct call to a user-defined suspending function (not a may-block intrinsic).
@@ -2712,7 +2712,7 @@ fn is_direct_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool {
 /// # Waker contract (P0 #11, ABI-locked)
 ///
 /// `waker_ctx` is forwarded verbatim to the child resume fn. No fabricated wakers.
-/// The child registers the waker with its own sub-future (sleepAsync handle etc.);
+/// The child registers the waker with its own sub-future (sleep handle etc.);
 /// the parent merely forwards the outer context.
 ///
 /// # Return value
@@ -3222,7 +3222,7 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
     Ok(ret_val)
 }
 
-/// Emit the IR for a single `wait sleepAsync(ms)` point within a state-machine body.
+/// Emit the IR for a single `wait sleep(ms)` point within a state-machine body.
 ///
 /// # Flow
 ///
@@ -3239,7 +3239,7 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
 ///
 /// # Failure modes
 ///
-/// - Inner expression is not a `sleepAsync` call: falls back to evaluating the inner
+/// - Inner expression is not a `sleep` call: falls back to evaluating the inner
 ///   expression normally (no suspension). Kept as safe fallback — typeck warns first.
 #[allow(clippy::too_many_arguments)]
 fn emit_wait_point<'ctx, 'g>(
@@ -3256,10 +3256,10 @@ fn emit_wait_point<'ctx, 'g>(
 ) -> Result<(), String> {
     let ctx = cg.ctx;
 
-    // Determine if the inner call is `sleepAsync(ms)`.
+    // Determine if the inner call is `sleep(ms)` (the yielding non-blocking sleep intrinsic).
     let is_sleep_async = matches!(
         inner,
-        Expr::Call(c) if matches!(&c.callee, Expr::Ident(n, _) if n == "sleepAsync")
+        Expr::Call(c) if matches!(&c.callee, Expr::Ident(n, _) if n == "sleep")
     );
 
     if !is_sleep_async {
@@ -3288,7 +3288,7 @@ fn emit_wait_point<'ctx, 'g>(
         return Ok(());
     }
 
-    // Extract the ms argument from sleepAsync(ms).
+    // Extract the ms argument from sleep(ms).
     let ms_val = if let Expr::Call(c) = inner {
         if c.args.is_empty() {
             ctx.i64_type().const_int(0, false)
@@ -5151,11 +5151,11 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     let val = lower_expr(cg, &call.args[0])?;
                     Ok(val)
                 }
-                // v0.3-M1: sleepMs(ms: int) — synchronous blocking sleep; lowers to ynz_thread_sleep_ms.
-                "sleepMs" if call.args.len() == 1 => {
+                // v0.3-M1: sleepBlocking(ms: int) — synchronous blocking sleep; lowers to ynz_thread_sleep_ms.
+                "sleepBlocking" if call.args.len() == 1 => {
                     let ms = lower_expr(cg, &call.args[0])?.into_int_value();
                     cg.builder
-                        .build_call(cg.rt.ynz_thread_sleep_ms, &[ms.into()], "sleepMs")
+                        .build_call(cg.rt.ynz_thread_sleep_ms, &[ms.into()], "sleepBlocking")
                         .map_err(|e| format!("{e}"))?;
                     Ok(cg.i32().const_int(0, false).into())
                 }
@@ -5198,13 +5198,13 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         .map_err(|e| format!("{e}"))?;
                     Ok(slot.into())
                 }
-                // v0.3-M2: sleepAsync(ms: int) — non-blocking sleep; lowers to state-machine wait point.
-                // Only reaches here when called WITHOUT `wait` wrapping (e.g., bare `sleepAsync(100)`).
+                // v0.3-M2: sleep(ms: int) — non-blocking sleep; lowers to state-machine wait point.
+                // Only reaches here when called WITHOUT `wait` wrapping (e.g., bare `sleep(100)`).
                 // With `wait`, the call is handled by emit_wait_point / lower_sm_body.
                 // Without `wait`, evaluate to a no-op (discards the sleep handle immediately).
-                // WHY: typeck emits `unawaited_sleep_async` warning for this case; codegen still
+                // WHY: typeck emits `unawaited_sleep` warning for this case; codegen still
                 // needs to produce valid IR without crashing.
-                "sleepAsync" if call.args.len() == 1 => {
+                "sleep" if call.args.len() == 1 => {
                     // Evaluate the ms argument for side effects but discard the sleep handle.
                     let ms = lower_expr(cg, &call.args[0])?.into_int_value();
                     let handle = cg
@@ -5214,7 +5214,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                             &[ms.into()],
                             "sleep_handle",
                         )
-                        .map_err(|e| format!("sleepAsync: {e}"))?
+                        .map_err(|e| format!("sleep: {e}"))?
                         .try_as_basic_value()
                         .basic()
                         .ok_or("ynz_rt_async_sleep_create void")?;
@@ -6020,7 +6020,7 @@ fn lower_expr_background<'ctx>(
     // the blocking pool would hold a dedicated OS thread captive during the wait, defeating
     // the entire point of the state machine. The I/O pool shares threads cooperatively.
     // v0.3-M2 P7: use suspend_set (transitive) instead of wait_cache (local) for routing.
-    // Any suspending fn (transitively reaches sleepAsync) routes to the I/O pool via ynz_rt_spawn.
+    // Any suspending fn (transitively reaches `sleep`) routes to the I/O pool via ynz_rt_spawn.
     if cg.suspend_set.contains(&callee_name) {
         return lower_expr_background_state_machine(cg, call, &callee_name);
     }

@@ -419,8 +419,8 @@ function m3m1_demo() -> nothing {
 
 // ────── v0.3-M2: wait actually suspends ──────
 //
-// Before v0.3-M2: `wait sleepAsync(100)` blocked the calling OS thread for 100ms.
-// After v0.3-M2:  `wait sleepAsync(100)` SUSPENDS the function — the OS thread
+// Before v0.3-M2: `wait sleep(100)` blocked the calling OS thread for 100ms.
+// After v0.3-M2:  `wait sleep(100)` SUSPENDS the function — the OS thread
 // is freed for other tasks; the function resumes after the timer fires.
 //
 // Demonstration: 8 background tasks each wait 100ms. With M1 blocking behavior,
@@ -430,7 +430,7 @@ function m3m1_demo() -> nothing {
 // pausePirate — a suspending function. The `wait` is explicit; the IDE shows
 // it as a real suspension point via the muted `wait` hint at the call site.
 function pausePirate(name: string) -> nothing {
-  wait sleepAsync(100)
+  wait sleep(100)
   print(`${name}: done`)
 }
 
@@ -445,7 +445,7 @@ function announcePirate(name: string) -> nothing {
 // waitForRosterSlot — a value-returning state machine.
 // Demonstrates: a function can return a value AND suspend.
 function waitForRosterSlot(n: int) -> int {
-  wait sleepAsync(10)
+  wait sleep(10)
   return n + 1
 }
 
@@ -479,7 +479,7 @@ function m3m2_demo() -> nothing {
   // Keep main alive while background pirates suspend concurrently.
   // All 8 complete in ~100ms total (not 800ms) because each suspends
   // and yields its OS thread back to the pool.
-  wait sleepAsync(150)
+  wait sleep(150)
 
   print(`all 8 pirates done`)
 
@@ -521,10 +521,10 @@ function m3m2_demo() -> nothing {
 function recordPittsburghAnalytics(event: string) -> nothing {
   // Sleep 200ms (simulating slow disk write) so the main thread visibly
   // gets ahead of us.
-  // NOTE: `sleepMs` (NOT `wait`) — `wait` is the keyword and stays
+  // NOTE: `sleepBlocking` (NOT `wait`) — `wait` is the keyword and stays
   // synchronous in M1; the state-machine suspension semantics ship in v0.3-M2.
-  // `sleepMs` is the Yinz-language intrinsic added in v0.3-M1 (P2).
-  sleepMs(200)
+  // `sleepBlocking` is the Yinz-language intrinsic added in v0.3-M1 (P2).
+  sleepBlocking(200)
   print(`background analytics done`)
 }
 
