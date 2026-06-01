@@ -2,6 +2,27 @@
 
 All notable changes to the Yinz Language extension are documented here.
 
+## [0.3.0-m3] — 2026-06-01
+
+### Added
+
+- **`wait` actually suspends** — hover over `wait` shows live semantics: "Suspends the calling function until the awaited expression completes. The OS thread is freed for other tasks during the suspension." M1 placeholder text removed.
+- **`sleepAsync(ms)` intrinsic in autocomplete** — non-blocking sleep. `wait sleepAsync(100)` suspends without blocking the OS thread. Hover shows may-block doc.
+- **New compile errors and warnings**:
+  - `wait 42` → `WaitOnNonCallExpression` (error): "`wait` must be followed by a function call."
+  - `wait print("hi")` → `WaitOnNonMayBlock` (Tier 3 warning): "`print` never suspends; the `wait` has no effect."
+  - Suspending call in sub-expression → `SubExpressionSuspendPosition` (error): give it its own `let` line first.
+  - Mutually-recursive suspending functions → `MutualRecursionSuspendingCycle` (error): restructure as self-recursion.
+  - `wait` inside a loop body → `WaitInsideLoop` (error): loop-state transform ships in v0.3-M3.
+  - Local declared before `wait` and used after → `LocalCrossesWait` (error): use function parameters instead.
+  - Dynamic-dispatch call from suspending function → `CantInferDynamicDispatch` (error): use a concrete type.
+  - Cross-module call from suspending function → `CantInferCrossModule` (error): keep the call intra-unit until v0.3-M3.
+- **Inferred `wait` muted hint** — when a suspending function is called without an explicit `wait`, the IDE renders a muted `wait` annotation at the call site (informational; click jumps to the function signature).
+
+### Screenshots
+
+See `screenshots/wait-suspension.png.PLACEHOLDER` — full screenshot captured at release time (requires a live VSCode instance; not available in CI).
+
 ## [0.3.0-m2] — 2026-05-31
 
 ### Added

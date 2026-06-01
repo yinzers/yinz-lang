@@ -620,6 +620,29 @@ fn no_bridge_via_subexpr_position_rejected_at_typeck() {
     );
 }
 
+// ── Phase 9: state_machine_errors_before_first_wait ──────────────────────────
+
+// WHY: An errors-capable SM can error on a branch that exits BEFORE reaching
+// the first `wait`. The error is produced at resume_point=0 (state-0, before
+// any suspension). Verifies the error propagates through the SM return slot
+// even though the wait path is never taken. Distinct from
+// errors_capable_sm_error_propagates_through_suspension (which errors AFTER a
+// wait) — this guards the state-0 early-return error path.
+#[test]
+fn state_machine_errors_before_first_wait() {
+    let (stdout, stderr, code) = run_fixture("v0_3_m2_errors_before_first_wait.ynz");
+    assert_eq!(
+        code, 0,
+        "should exit 0 (error propagated cleanly, not a crash); \
+         stdout={stdout:?} stderr={stderr:?}"
+    );
+    assert!(
+        stdout.contains("v=99"),
+        "expected 'v=99' (.or(99) must return fallback when error propagated before wait); \
+         got: {stdout:?}"
+    );
+}
+
 // ── Round-5 fix: errors-capable wait-result local in arithmetic ───────────────
 
 // WHY: Before the Round-5 fix, using an EC local (bound from `wait <ec_call>`)
@@ -640,5 +663,70 @@ fn errors_arith_across_wait_success_and_error_paths() {
         stdout.trim(),
         "success=52\nerror=99",
         "success path: 42+10=52; error path: .or(99)=99"
+    );
+}
+
+// ── Phase 9 Step 4b: free-fn symmetric negative test — can't-infer gate ──────
+
+// WHY: The can't-infer dynamic-dispatch gate at check.rs guards both the dot-call
+// form (w.doWork() — covered by the existing dynamic_dispatch fixture) AND the
+// free-fn form (dispatch(w) where w: dynamic Contract — this test). The gate must
+// ONLY fire when current_fn_suspends=true. A NON-suspending relay that calls
+// dispatch(w) must NOT receive a can't-infer error. If the current_fn_suspends
+// guard were dropped from the free-fn branch, this test would receive a
+// "Can't determine whether" typeck error and fail — proving non-vacuousness.
+//
+// The fixture hits a codegen error (dynamic dispatch codegen deferred to M4 P4)
+// but that error must NOT mention "Can't determine" — that would indicate the
+// typeck gate over-fired before codegen ran.
+#[test]
+fn free_fn_non_suspending_relay_no_cant_infer_error() {
+    let (_, stderr, _) = run_fixture("v0_3_m2_free_fn_non_suspending_relay.ynz");
+    // relay() is non-suspending (current_fn_suspends=false) so the free-fn
+    // can't-infer gate must not fire. Any failure here is a codegen error
+    // ("dynamic dispatch call sites not yet lowered"), never a typeck can't-infer.
+    assert!(
+        !stderr.contains("Can't determine whether"),
+        "can't-infer error must not fire for a non-suspending free-fn relay caller; \
+         stderr: {stderr}"
+    );
+}
+
+// ── Round-3 fix: result-binding crosses a LATER suspension ───────────────────
+
+// WHY: `let slot = sleeper(); let other = sleeper(); return slot + other` — `slot`
+// is the result of the FIRST suspending call. Before the round-3 fix, `slot` was
+// never added to the `declared` crossing-candidates set, so the typeck analysis
+// missed that it crosses the SECOND suspension (`let other = sleeper()`). The
+// codegen emitted LLVM IR where `slot`'s alloca did not dominate its use after the
+// second resume block — LLVM's module verifier caught this and aborted (exit 1 via
+// "LLVM module verify failed", not the intended teaching error).
+//
+// After the round-3 fix in `collect_crossings_in_stmts` (check.rs), the
+// result-binding arms defer `name` into `pending_result_bindings` and flush it
+// into `declared` at the next suspension, so `slot` is caught as a crossing when
+// `return slot + other` is reached. The output must be exit 1 with a clean
+// LocalCrossesWait teaching error — NOT the LLVM crash message.
+#[test]
+fn result_binding_crosses_later_suspension_rejected_with_teaching_error() {
+    let (_, stderr, exit_code) =
+        run_fixture("v0_3_m2_result_binding_crosses_later_suspension_error.ynz");
+    assert_eq!(
+        exit_code, 1,
+        "result-binding read after a later suspension must be a compile error (exit 1), \
+         not an LLVM crash (also exit 1 but with 'LLVM module verify failed' in output). \
+         stderr={stderr:?}"
+    );
+    assert!(
+        !stderr.contains("LLVM module verify failed"),
+        "must be a clean typeck teaching error, not an LLVM backend crash; stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("`slot`"),
+        "teaching error must name the crossing binding `slot`; stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("v0.3-M3"),
+        "teaching error must reference v0.3-M3 as the resolution milestone; stderr={stderr:?}"
     );
 }

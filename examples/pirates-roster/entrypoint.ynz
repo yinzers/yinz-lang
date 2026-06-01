@@ -226,6 +226,8 @@ function entrypoint() -> nothing {
   print(`  Multi-file build: ALL .ynz files in the project compiled + linked.`)
   // ────── v0.3-M1: background runs on a separate thread ──────
   m3m1_demo()
+  // ────── v0.3-M2: wait actually suspends ──────
+  m3m2_demo()
 }
 
 // ────── M3 helper functions ──────
@@ -407,6 +409,90 @@ function m3m1_demo() -> nothing {
   const event = `pirate_seventh_inning_stretch`
   background recordPittsburghAnalytics(event.copy())
   print(`main done with v0.3-M1`)
+}
+
+// ────── v0.3-M2: wait actually suspends ──────
+//
+// Before v0.3-M2: `wait sleepAsync(100)` blocked the calling OS thread for 100ms.
+// After v0.3-M2:  `wait sleepAsync(100)` SUSPENDS the function — the OS thread
+// is freed for other tasks; the function resumes after the timer fires.
+//
+// Demonstration: 8 background tasks each wait 100ms. With M1 blocking behavior,
+// all 8 would need separate OS threads and run serially or starve. With M2
+// state-machine suspension, they share threads and ALL complete in ~100ms total.
+
+// pausePirate — a suspending function. The `wait` is explicit; the IDE shows
+// it as a real suspension point via the muted `wait` hint at the call site.
+function pausePirate(name: string) -> nothing {
+  wait sleepAsync(100)
+  print(`${name}: done`)
+}
+
+// announcePirate — NO explicit `wait` written here. The compiler's transitive
+// may-block analysis sees that pausePirate() suspends, so announcePirate() is
+// also a state machine. The IDE shows a muted `wait` hint before pausePirate().
+// This demonstrates v0.3-M2's inference model: no function coloring required.
+function announcePirate(name: string) -> nothing {
+  pausePirate(name)
+}
+
+// waitForRosterSlot — a value-returning state machine.
+// Demonstrates: a function can return a value AND suspend.
+function waitForRosterSlot(n: int) -> int {
+  wait sleepAsync(10)
+  return n + 1
+}
+
+// scheduleCheck — a nested state machine: calls waitForRosterSlot (value-returning
+// SM), then announcePirate (also suspending). Demonstrates inline poll-and-yield:
+// each nested suspending call is driven as an embedded sub-frame — no OS bridge.
+// Step-by-step style naturally avoids the M2 local-crossing-wait constraint: each
+// local is used before the next suspension point (frame-backed locals across
+// arbitrary suspension boundaries ship in v0.3-M3).
+function scheduleCheck(name: string) -> nothing {
+  let slot = waitForRosterSlot(7)
+  let slotStr = slot.toString()
+  print(`${name} roster slot: ${slotStr}`)
+  announcePirate(name)
+}
+
+function m3m2_demo() -> nothing {
+  print(``)
+  print(`v0.3-M2 — wait actually suspends (8 pirates, ~100ms total):`)
+  print(`scheduling 8 pirates...`)
+
+  background pausePirate(`Clemente`)
+  background pausePirate(`Stargell`)
+  background pausePirate(`Mazeroski`)
+  background pausePirate(`Bonds`)
+  background pausePirate(`Kiner`)
+  background pausePirate(`McCutchen`)
+  background pausePirate(`Wagner`)
+  background pausePirate(`Beaumont`)
+
+  // Keep main alive while background pirates suspend concurrently.
+  // All 8 complete in ~100ms total (not 800ms) because each suspends
+  // and yields its OS thread back to the pool.
+  wait sleepAsync(150)
+
+  print(`all 8 pirates done`)
+
+  // Inference demo: announcePirate has no explicit `wait` but suspends transitively.
+  print(``)
+  print(`v0.3-M2 — inferred wait (no explicit wait written):`)
+  announcePirate(`Honus`)
+
+  // Value-returning SM demo.
+  print(``)
+  print(`v0.3-M2 — value-returning state machine:`)
+  let slot = waitForRosterSlot(7)
+  let slotStr = slot.toString()
+  print(`roster slot: ${slotStr}`)
+
+  // Nested SM demo.
+  print(``)
+  print(`v0.3-M2 — nested state machines (inline poll-and-yield):`)
+  scheduleCheck(`Sanguillen`)
 }
 
 // ====== v0.2-M5 LSP features ======

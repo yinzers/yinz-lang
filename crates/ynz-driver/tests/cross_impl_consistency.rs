@@ -146,10 +146,25 @@ fn corpus_produces_deterministic_output_across_runs() {
         // with non-deterministic scheduling order (which task's START/DONE prints first depends
         // on the Tokio I/O pool scheduler). The ordering assertions live in the dedicated driver
         // integration test (v0_3_m2_concurrent_waits_proof), not in the determinism harness.
+        //
+        // WHY examples/pirates-roster/entrypoint.ynz is excluded: the v0.3-M2 section spawns 8
+        // background state machines with non-deterministic print ordering across runs.
+        // The ordering assertions live in the dedicated M2 integration tests.
         let is_timing_fixture = path
             .file_name()
             .and_then(|n| n.to_str())
-            .map(|n| n.contains("timing") || n.contains("background") || n.contains("concurrent"))
+            .map(|n| {
+                n.contains("timing")
+                    || n.contains("background")
+                    || n.contains("concurrent")
+                    // v0.3-M2 demo: spawns 8 concurrent background state machines whose print
+                    // order varies between runs — non-deterministic by design (proves concurrency).
+                    || (n == "entrypoint.ynz"
+                        && path.parent()
+                            .and_then(|p| p.file_name())
+                            .and_then(|n| n.to_str())
+                            == Some("pirates-roster"))
+            })
             .unwrap_or(false);
 
         if !is_timing_fixture {

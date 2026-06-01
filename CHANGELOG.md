@@ -1,5 +1,67 @@
 # Changelog
 
+## [0.3.0-m3] — 2026-06-01 — `wait` Actually Suspends + State Machine Codegen
+
+Commit range: v0.3.0-m1..v0.3.0-m3
+
+### What changed
+
+v0.3.0-m3 makes `wait expr` actually suspend the calling function and yield the OS thread back to the scheduler — instead of blocking the thread for the duration of the awaited operation. After this release, `wait sleepAsync(200)` pauses for 200ms WITHOUT holding an OS thread captive; the freed thread runs other ready tasks during the pause; the function resumes when the timer fires. This release ships the entire state-machine coroutine infrastructure that v0.3-M3 (cross-module may-block propagation + auto-parallelization) builds on.
+
+The inference model: the compiler analyzes the full call graph of each compilation unit to determine which functions reach a suspension point (transitive may-block analysis). Those functions are automatically compiled to stackless state machines. No function-coloring: every function is still declared with `function`, and the compiler handles the rest.
+
+#### Features
+
+- **`wait` actually suspends** — a function containing `wait sleepAsync(ms)` yields its OS thread for `ms` milliseconds and resumes when the timer fires. Previously (v0.3-M1), `wait` was a pass-through; the thread blocked. Now the thread is freed for other tasks. The OS-visible semantic is unchanged: code after `wait expr` runs only after `expr` completes.
+- **State-machine codegen** — functions that transitively reach `sleepAsync` are compiled to stackless coroutines (same model as Rust async, without function coloring). Frame: heap-allocated per spawned task tree via `ynz_alloc`; freed by RAII guard on completion or cancellation. Composed frames: a call tree that is one background task = one `ynz_alloc`.
+- **Transitive may-block analysis** — the compiler builds an intra-unit call graph and propagates the `suspends` property from `sleepAsync` upward to a fixpoint. Functions that transitively reach `sleepAsync` become state machines automatically; pure-CPU functions compile to straight-line code with zero overhead. Cross-module propagation ships in v0.3-M3.
+- **`sleepAsync(ms: int) -> nothing` intrinsic** — non-blocking sleep. `wait sleepAsync(200)` suspends for 200ms, thread freed. Pairs with `sleepMs(ms)` (blocking, ships M1) for cases where thread-blocking is correct.
+- **Inferred `wait`** — calling a suspending function without writing `wait` is valid: the compiler infers the suspension point. The IDE shows a muted `wait` hint at the call site. Both forms — explicit and inferred — produce identical code.
+- **Value-returning state machines** — `function fetchData() -> int errors { wait sleepAsync(50); return 42 }` suspends and returns a typed value. The `{i64, i64}` error-capable ABI threads through `Poll<T>` across suspension boundaries.
+- **Errors cascade through suspension** — an errors-capable state machine that produces an error AFTER a wait suspension correctly propagates the error through the SM return slot. The `Frame` trace and `SourceLoc` data survive the resume boundary.
+- **Nested state machines** — a state machine calling another state machine uses inline poll-and-yield (composed sub-frames), not a OS bridge. The call tree is one composed struct; no per-call-site allocation beyond the task-tree root.
+- **`background` from inside a state machine** — spawning a background task from inside a suspending function is now correct (was a deadlock in M1 due to runtime mutex contention).
+- **Recursive state machines** — a function calling itself with `wait` allocates one heap frame per recursive call; frames are freed on cancellation via the RAII guard + `live_mask` bitfield for non-trivial locals.
+
+#### Improvements
+
+- **Composed frames = one allocation per task tree** — the whole SM call tree (entrypoint → middle → inner → sleepAsync) is ONE composed struct and ONE `ynz_alloc`, not one allocation per call. Matches `design/future/concurrency.md`'s "low memory, fast spawn — like Rust's async."
+- **Errors cascade correctly** — errors produced after a `wait` suspension are propagated through the SM return slot to callers. The error frame pointer (`{i64,i64}` ABI field0) survives the `Poll<T>` boundary.
+- **No OS bridge** — the `ynz_rt_call_state_machine_sync` sync bridge shipped in earlier drafts was fully removed (Phase 8). Every suspending call uses inline poll-and-yield. Only `RUNTIME.block_on(entrypoint)` at program entry is the top-level driver. This matches `design/future/concurrency.md`'s no-bridge model.
+- **Concurrency proof** — 8 background tasks each calling `wait sleepAsync(100)` complete in ~100ms total (not 800ms), proving they share OS threads via state-machine suspension.
+
+#### New diagnostics (WHAT/WHAT-INSTEAD/WHY format)
+
+- **`SubExpressionSuspendPosition`** — a suspending call nested inside a larger expression (arithmetic, string interpolation, condition) is rejected with a teaching error. Give it its own `let` line. Expression-position suspension ships in v0.3-M3.
+- **`MutualRecursionSuspendingCycle`** — two or more distinct suspending functions that call each other form a mixed-layout cycle that corrupts heap on cancellation. Self-recursion (one function calling itself) is the M2-supported form. Per-frame layout metadata for mixed cycles ships in v0.3-M3.
+- **`WaitInsideLoop`** — `wait` inside a `for`/`while`/`match` body is rejected. The loop counter requires frame-backed mutable locals (flush-before-suspend + reload-at-resume transform), which ships in v0.3-M3.
+- **`LocalCrossesWait`** — a `let` local declared before an explicit `wait` and used after is rejected. Function parameters are exempt (frame-backed at every resume point). The full mutable-local transform ships in v0.3-M3.
+- **`WaitOnNonCallExpression`** — `wait 42` (applying `wait` to a non-call expression) is rejected.
+- **`WaitOnNonMayBlock`** — `wait print(...)` (applying `wait` to a CPU-bound call) emits a Tier 3 warning; program still runs.
+- **`CantInferDynamicDispatch`** — calling a method via `dynamic Contract` vtable from a suspending function is rejected. The callee's suspension status can't be determined at compile time.
+- **`CantInferCrossModule`** — calling a function defined in another compilation unit from a suspending function is rejected. Cross-module suspension propagation ships in v0.3-M3.
+
+#### Known limitations (retained Option-B guards — deferred to v0.3-M3)
+
+- **`WaitInsideLoop` and `LocalCrossesWait` are compile errors** — the frame-backed mutable locals transform (flush-before-suspend + reload-at-resume) is M3-scope. These guards are intentional teaching errors, not bugs.
+- **Sub-expression suspending calls rejected** — `let x = 1 + suspendingFn()` and `if (suspendingFn() > 0)` are compile errors. Expression-position suspension ships in v0.3-M3.
+- **Non-self mutual recursion rejected** — `foo()` calls `bar()` calls `foo()` where both suspend is a compile error. Mixed-layout cycle frames require per-frame size metadata that ships in v0.3-M3.
+- **Recursive state machines use heap-boxed frames** — self-recursion (`foo()` calling itself) allocates one frame per recursive call on the heap. Stack recursion with suspension is not supported; each recursive depth needs its own live state.
+- **Cross-module suspension analysis deferred** — calling a function from another file that transitively suspends produces a compile error in v0.3-M2. Cross-module propagation requires the M8 multi-file query mechanism and ships in v0.3-M3.
+- **Dynamic dispatch through `dynamic Contract` vtable** — suspension status of dynamic-dispatch callees can't be determined at compile time; rejected from suspending callers. Support ships in a future version.
+
+#### Internal-only
+
+- **`__testFallibleAsync(bool) -> int errors`** — internal test intrinsic used by state-machine error-cascade tests. NOT in the feature registry, NOT in LSP completions, NOT for user code. Deletes when v0.5 ships real fallible async I/O intrinsics.
+- **`ynz_rt_spawn`, `ynz_rt_async_sleep_create`, `ynz_rt_async_sleep_poll`** — new C-ABI runtime shims in `libynz_runtime.a` for state-machine coroutine driving. Internal; no user-facing API surface.
+
+#### Demo / gallery
+
+- `examples/pirates-roster/entrypoint.ynz` extended with v0.3-M2 section (`m3m2_demo`): 8 background pirates each `wait sleepAsync(100)` concurrently, inference demo (no explicit `wait`), value-returning SM, nested SM.
+- `examples/primantis-orders/v0_3_m2_errors.ynz` — compile-error gallery covering all 7 M2 diagnostic classes: SubExprSuspend, MutualRecursion, WaitInsideLoop, LocalCrossesWait, WaitOnNonCallExpression, WaitOnNonMayBlock, CantInferDynamic.
+
+---
+
 ## [0.3.0-m1] — 2026-05-21 — Runtime Bootstrap + Working `background`
 
 Commit range: v0.2.0..v0.3.0-m1

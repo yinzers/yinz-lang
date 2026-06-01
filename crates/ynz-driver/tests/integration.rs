@@ -1627,6 +1627,42 @@ fn v03_m2_local_crossing_wait_produces_clean_error() {
     );
 }
 
+#[test]
+fn v03_m2_inferred_suspension_local_crossing_produces_clean_error() {
+    // WHY: a local declared before a BARE suspending call (no explicit `wait` keyword)
+    // and used after it must emit the same clean LocalCrossesWait teaching error as the
+    // explicit-`wait` form — not crash the backend with "LLVM module verify failed:
+    // Instruction does not dominate all uses!" (SSA dominance failure). Both forms
+    // compile to state-machine resume steps in M2 codegen; the crossing guard must
+    // catch both. Guards the specific hole where `locals_crossing_wait` was keyed only
+    // on `Expr::Wait` tokens and missed inferred-suspension calls.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m2_inferred_suspension_local_crossing_error.ynz",
+    ));
+    assert_ne!(code, 0, "inferred-suspension crossing must exit non-zero; stderr:\n{stderr}");
+    assert!(
+        stdout.is_empty(),
+        "no output on compile error; got:\n{stdout}"
+    );
+    // Must emit the teaching error text, not the LLVM crash message.
+    assert!(
+        !stderr.contains("LLVM module verify failed"),
+        "must not crash the LLVM backend — clean typeck error expected; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Machine-code generation failed"),
+        "must not crash the backend; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("`slot`"),
+        "error must name the offending binding `slot`; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("declared before a `wait`"),
+        "error must use the LocalCrossesWait teaching text; stderr:\n{stderr}"
+    );
+}
+
 // ── v0.3-M2 Phase 6: transitive may-block analysis ────────────────────────────
 
 #[test]
@@ -1740,6 +1776,13 @@ fn examples_basics_runs_end_to_end() {
     // regression in the language demo — wrong output in any M-section fails here.
     // If the demo changes intentionally, run expected_stdout.txt.regenerate.sh
     // and commit the new golden alongside the source change.
+    //
+    // The v0.3-M2 section launches 8 background state machines whose print order
+    // is non-deterministic (Tokio I/O pool scheduling). The golden file covers
+    // output up to and including that section's header ("scheduling 8 pirates..."),
+    // then we check PRESENCE (not order) of the 8 pirate lines, then byte-exact
+    // for the deterministic tail. Same relaxation M1 applied for "background
+    // analytics done" (m8_combo_modules_sensitive_concurrency pattern).
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -1753,10 +1796,52 @@ fn examples_basics_runs_end_to_end() {
         code, 0,
         "examples/pirates-roster must compile and run; stderr:\n{stderr}"
     );
-    assert_eq!(
-        stdout, golden,
-        "stdout must match examples/pirates-roster/expected_stdout.txt"
-    );
+    // Split at the M2 concurrent section: everything before the first pirate's
+    // ": done" line is deterministic and must byte-match the golden prefix.
+    // Everything after "all 8 pirates done" is deterministic again.
+    let m2_marker = "v0.3-M2 — wait actually suspends";
+    let tail_marker = "all 8 pirates done";
+    if let (Some(m2_start), Some(tail_start)) =
+        (stdout.find(m2_marker), stdout.find(tail_marker))
+    {
+        // Byte-exact prefix (all M1 and earlier sections).
+        let stdout_prefix = &stdout[..m2_start];
+        let golden_prefix = &golden[..golden.find(m2_marker).unwrap_or(golden.len())];
+        assert_eq!(
+            stdout_prefix, golden_prefix,
+            "stdout prefix (before M2 concurrent section) must match golden"
+        );
+        // Presence check for each pirate — non-deterministic order.
+        let pirates = [
+            "Clemente: done",
+            "Stargell: done",
+            "Mazeroski: done",
+            "Bonds: done",
+            "Kiner: done",
+            "McCutchen: done",
+            "Wagner: done",
+            "Beaumont: done",
+        ];
+        for pirate in &pirates {
+            assert!(
+                stdout.contains(pirate),
+                "M2 concurrent demo must contain '{pirate}'; stdout: {stdout:?}"
+            );
+        }
+        // Byte-exact tail (deterministic M2 sections after the concurrent block).
+        let stdout_tail = &stdout[tail_start..];
+        let golden_tail = &golden[golden.find(tail_marker).unwrap_or(golden.len())..];
+        assert_eq!(
+            stdout_tail, golden_tail,
+            "stdout tail (after M2 concurrent section) must match golden"
+        );
+    } else {
+        // M2 section not present or no concurrent block — fall back to full byte-exact.
+        assert_eq!(
+            stdout, golden,
+            "stdout must match examples/pirates-roster/expected_stdout.txt"
+        );
+    }
 }
 
 // ── P7: combined-feature integration fixtures ─────────────────────────────────

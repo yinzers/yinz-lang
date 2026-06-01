@@ -1,0 +1,18 @@
+// WHY: result-binding-crosses-later-suspension fixture.
+// `slot` is produced by the FIRST suspending call; `other` is produced by the
+// SECOND. Reading `slot` in `return slot + other` crosses the second suspension —
+// `slot` would need a frame slot across that boundary, which M2 does not allocate.
+// Must reject with LocalCrossesWait teaching error, NOT crash the LLVM backend.
+function sleeper() -> int {
+  wait sleepAsync(10)
+  return 5
+}
+function compute() -> int {
+  let slot = sleeper()
+  let other = sleeper()
+  return slot + other
+}
+function entrypoint() -> nothing {
+  let r = compute()
+  print(r.toString())
+}

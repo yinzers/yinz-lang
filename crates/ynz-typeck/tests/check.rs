@@ -2947,6 +2947,90 @@ function entrypoint() -> nothing {
     assert_clean(src);
 }
 
+// WHY: the round-3 bug — `let slot = sleeper(); let other = sleeper(); return slot + other`.
+// `slot` is produced by the FIRST suspension; `other` by the SECOND. Reading `slot`
+// after the second suspension crosses the second suspension boundary. Before the fix,
+// `slot` was not tracked in `declared` (the result-binding arm omitted it), so typeck
+// missed the crossing and let codegen proceed — the LLVM verifier then aborted with a
+// dominance violation. After the fix, `slot` is flagged with the LocalCrossesWait
+// teaching error. This test guards against regressing back to silent mis-compilation.
+#[test]
+fn result_binding_crosses_later_suspension_is_an_error() {
+    let src = r#"
+function sleeper() -> int {
+  wait sleepAsync(10)
+  return 5
+}
+function compute() -> int {
+  let slot = sleeper()
+  let other = sleeper()
+  return slot + other
+}
+function entrypoint() -> nothing {
+  background compute()
+  sleepMs(200)
+}
+"#;
+    let out = run(src);
+    let errors: Vec<_> = out.diagnostics.iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(
+        !errors.is_empty(),
+        "result-binding crossing a later suspension must produce an error; got no errors"
+    );
+    let has_slot = errors.iter().any(|d| d.what.contains("`slot`"));
+    assert!(has_slot, "error must name the crossing binding `slot`; got: {:#?}", errors);
+    let has_why = errors.iter().any(|d| d.why.contains("v0.3-M3"));
+    assert!(has_why, "error WHY must reference v0.3-M3; got: {:#?}", errors);
+}
+
+// WHY: no-over-fire guard — `let slot = sleeper(); let other = sleeper(); return other`
+// `slot` is never read after the second suspension, so it must NOT be flagged.
+// Over-firing here would break any SM that discards an early result before continuing.
+#[test]
+fn result_binding_not_used_after_later_suspension_is_accepted() {
+    let src = r#"
+function sleeper() -> int {
+  wait sleepAsync(10)
+  return 5
+}
+function compute(n: int) -> int {
+  let slot = sleeper()
+  let other = sleeper()
+  return other
+}
+function entrypoint() -> nothing {
+  background compute(1)
+  sleepMs(200)
+}
+"#;
+    assert_clean(src);
+}
+
+// WHY: single-suspension no-over-fire — `let a = sleeper(); return a` has only ONE
+// suspension. The result-binding arm adds `a` to `pending_result_bindings` (not
+// `declared`), so `return a` is not scanned against `a` — it is safe. If this test
+// regresses (fires an error), the pending-flush logic is broken.
+#[test]
+fn result_binding_used_immediately_no_second_suspension_is_accepted() {
+    let src = r#"
+function sleeper() -> int {
+  wait sleepAsync(10)
+  return 5
+}
+function compute(n: int) -> int {
+  let a = sleeper()
+  return a
+}
+function entrypoint() -> nothing {
+  background compute(1)
+  sleepMs(200)
+}
+"#;
+    assert_clean(src);
+}
+
 // ── v0.3-M2 typeck surface: wait diagnostics + sleepAsync/internal intrinsics ──
 
 // WHY: `wait` applied to a non-call expression (a literal, a variable, etc.) must

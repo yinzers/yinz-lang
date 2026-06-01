@@ -337,25 +337,58 @@ impl<'b> Checker<'b> {
         // Option-B deferral checks: emit clean teaching errors for wait patterns
         // that require the M3 coroutine-locals transform rather than silently
         // no-oping (loop case) or crashing the backend (local-crossing case).
-        if !self.kernel_mode && block_contains_wait(&f.body) {
+        //
+        // Both checks apply whenever the function contains ANY suspension point —
+        // explicit (`wait expr` tokens) OR inferred (a bare call to a suspending
+        // function, which M2 codegen also lowers as a state-machine step).
+        // Without the inferred-suspension arm, a local that crosses a bare
+        // `sleeper()` call (no `wait` keyword) slips past typeck and reaches LLVM
+        // codegen where the composed frame doesn't back it → SSA dominance failure.
+        let has_explicit_waits = block_contains_wait(&f.body);
+        let is_suspending_fn = self.current_fn_suspends;
+
+        // Build the suspending-function set once; reused by checks 2 and 3.
+        // Contains all user-defined functions whose `suspends` flag is set by the
+        // Phase-6 may-block fixpoint. `is_suspending_call` also folds in
+        // `M2_MAY_BLOCK_INTRINSICS` (sleepAsync etc.) which are not in sig_table.
+        let suspending_fns: std::collections::HashSet<&str> = if is_suspending_fn {
+            self.sig_table
+                .fns
+                .iter()
+                .filter_map(|(n, s)| if s.suspends { Some(n.as_str()) } else { None })
+                .collect()
+        } else {
+            std::collections::HashSet::new()
+        };
+
+        if !self.kernel_mode && (has_explicit_waits || is_suspending_fn) {
             // Check 1: `wait` inside a loop or match body.
-            if let Some(span) = wait_in_loop_or_match_body(&f.body.stmts) {
-                self.diags.push(Diagnostic::error(
-                    span,
-                    "`wait` inside a loop is not supported yet.",
-                    "Move the `wait` to a standalone function called inside the loop: \
-                     `function step() -> nothing { wait sleepAsync(100) }`, \
-                     then call `step()` from the loop body.",
-                    "v0.3-M2 can only pause at the top level of a function or inside an `if` \
-                     block. Pausing inside a loop requires saving and restoring the loop counter \
-                     across the pause point — that transform ships in v0.3-M3.",
-                ));
+            // Only applicable when the function has explicit `wait` tokens.
+            if has_explicit_waits {
+                if let Some(span) = wait_in_loop_or_match_body(&f.body.stmts) {
+                    self.diags.push(Diagnostic::error(
+                        span,
+                        "`wait` inside a loop is not supported yet.",
+                        "Move the `wait` to a standalone function called inside the loop: \
+                         `function step() -> nothing { wait sleepAsync(100) }`, \
+                         then call `step()` from the loop body.",
+                        "v0.3-M2 can only pause at the top level of a function or inside an `if` \
+                         block. Pausing inside a loop requires saving and restoring the loop counter \
+                         across the pause point — that transform ships in v0.3-M3.",
+                    ));
+                }
             }
 
-            // Check 2: local binding declared before a `wait` and read after it.
-            // Parameters are excluded — they are frame-backed at every resume point.
+            // Check 2: local binding declared before a suspension point and read after it.
+            //
+            // A suspension point is either an explicit `wait expr` node OR a bare call to
+            // a suspending function — both compile to state-machine resume steps, so both
+            // leave unframed locals in an undefined state after the step.
+            //
+            // Parameters are excluded: the SM codegen gives every parameter a frame slot
+            // and reloads it at each resume point, so they are always safe.
             let param_names: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
-            let crossings = locals_crossing_wait(&f.body.stmts, &param_names);
+            let crossings = locals_crossing_wait(&f.body.stmts, &param_names, &suspending_fns);
             // Emit one diagnostic per crossing (deduplicated by name to reduce noise).
             let mut reported: std::collections::HashSet<String> = std::collections::HashSet::new();
             for crossing in crossings {
@@ -391,14 +424,8 @@ impl<'b> Checker<'b> {
         //
         // Expression-position suspension is the M3 feature: auto-`wait` insertion at
         // arbitrary expression positions (design/future/concurrency.md:35).
-        if !self.kernel_mode && self.current_fn_suspends {
-            let suspending: std::collections::HashSet<&str> = self
-                .sig_table
-                .fns
-                .iter()
-                .filter_map(|(n, s)| if s.suspends { Some(n.as_str()) } else { None })
-                .collect();
-            let violations = suspending_calls_in_subexpr_position(&f.body.stmts, &suspending);
+        if !self.kernel_mode && is_suspending_fn {
+            let violations = suspending_calls_in_subexpr_position(&f.body.stmts, &suspending_fns);
             for (span, callee_name) in violations {
                 self.diags.push(Diagnostic::error(
                     span,
@@ -4473,6 +4500,27 @@ fn expr_contains_wait_anywhere(expr: &Expr) -> bool {
     }
 }
 
+/// Returns `true` if any statement in `block` is a statement-position inferred-suspension
+/// call — i.e., a bare `Stmt::Expr(Expr::Call)` or `Stmt::Let { value: Expr::Call, .. }`
+/// where `is_suspending_call` is true.
+///
+/// Used by `collect_crossings_in_stmts` to decide whether an `if`-body contains a
+/// suspension point when no explicit `wait` token is present.
+fn block_contains_inferred_suspension(
+    block: &Block,
+    suspending: &std::collections::HashSet<&str>,
+) -> bool {
+    block.stmts.iter().any(|stmt| match stmt {
+        Stmt::Expr(Expr::Call(c)) => is_suspending_call(c, suspending),
+        Stmt::Let { value: Expr::Call(c), .. } => is_suspending_call(c, suspending),
+        // Recurse into nested `if` bodies — a branch inside a branch can suspend.
+        Stmt::If { body, .. } => {
+            block_contains_wait(body) || block_contains_inferred_suspension(body, suspending)
+        }
+        _ => false,
+    })
+}
+
 /// Describes a local binding declared before a `wait` in a function body that is
 /// also referenced after that wait.
 struct LocalCrossesWait {
@@ -4483,62 +4531,150 @@ struct LocalCrossesWait {
 }
 
 /// Scan `stmts` for local (`let`/`const`) bindings declared before any reachable
-/// `wait` suspend point (including waits nested inside `if` branches at any depth)
-/// that are then referenced after that wait.
+/// suspension point that are then referenced after it.
 ///
-/// Suspend points include:
-/// - `Stmt::Expr(Expr::Wait(...))` — top-level bare wait
-/// - `Stmt::Let { value: Expr::Wait(...), .. }` — top-level let-wait
-/// - An `if` branch whose body contains a wait — the `if` block is a suspend point
-///   because the branch may execute and suspend before control reaches later statements
+/// Suspension points include both explicit `wait` AST nodes AND inferred-suspension
+/// calls — bare calls to functions whose `suspends` flag is set by the may-block
+/// fixpoint (or to M2 may-block intrinsics like `sleepAsync`). Both forms compile to
+/// state-machine resume steps in M2 codegen; without a frame slot the local's value
+/// is undefined after the step, producing an LLVM SSA dominance failure.
 ///
-/// `wait`-in-loop is already caught by `wait_in_loop_or_match_body` before this runs,
-/// so only top-level and `if`-nested waits reach here.
+/// Concrete suspend-point forms detected:
+/// - `Stmt::Expr(Expr::Wait(...))` — top-level bare explicit wait
+/// - `Stmt::Let { value: Expr::Wait(...), .. }` — top-level let with explicit wait
+/// - `Stmt::Expr(Expr::Call(c))` where `is_suspending_call(c, suspending)` is true
+/// - `Stmt::Let { value: Expr::Call(c), .. }` where `is_suspending_call(c, …)` is true
+/// - An `if` branch whose body contains any of the above forms
+///
+/// `wait`-in-loop is caught by `wait_in_loop_or_match_body` before this runs, so
+/// only top-level and `if`-nested suspension points reach here.
 ///
 /// Function parameters are excluded: the SM codegen gives every parameter a frame
 /// slot and reloads it at each resume point, so they are always safe.
-fn locals_crossing_wait(stmts: &[Stmt], param_names: &[&str]) -> Vec<LocalCrossesWait> {
+fn locals_crossing_wait(
+    stmts: &[Stmt],
+    param_names: &[&str],
+    suspending: &std::collections::HashSet<&str>,
+) -> Vec<LocalCrossesWait> {
     let mut problems = Vec::new();
-    collect_crossings_in_stmts(stmts, param_names, &mut Vec::new(), &mut problems);
+    collect_crossings_in_stmts(stmts, param_names, suspending, &mut Vec::new(), &mut problems);
     problems
 }
 
 /// Recursive crossing-analysis kernel.
 ///
-/// `declared` accumulates all local names declared before any wait point seen so far
-/// in this statement sequence. When a wait (or an `if` containing a wait) is
-/// encountered, subsequent statements (and the post-wait portion of the same `if`
-/// branch) are scanned for references to those accumulated names.
+/// `declared` accumulates all local names declared before any suspension point seen
+/// so far in this statement sequence. When a suspension point (explicit `wait` node
+/// OR an inferred-suspension call) is encountered, subsequent statements are scanned
+/// for references to those accumulated names.
 fn collect_crossings_in_stmts(
     stmts: &[Stmt],
     param_names: &[&str],
+    suspending: &std::collections::HashSet<&str>,
     declared: &mut Vec<String>,
     out: &mut Vec<LocalCrossesWait>,
 ) {
-    // Whether a reachable suspend point has been seen in this statement list.
+    // Whether a reachable suspension point has been seen in this statement list.
     let mut past_wait = false;
+    // Result-binding names from the most-recent suspension step, not yet flushed
+    // into `declared`. A result-binding is safe across its OWN producing suspension
+    // (the state machine stores it in the frame and resumes with it), but becomes
+    // a crossing candidate for any LATER suspension. We defer adding it to
+    // `declared` until the next suspension so that reads between the producing
+    // suspension and the next one are not falsely flagged.
+    let mut pending_result_bindings: Vec<String> = Vec::new();
 
     for stmt in stmts {
         if past_wait {
-            // We are post-wait: any reference to a pre-wait local is a crossing.
-            collect_ident_refs_in_stmt(stmt, declared, out);
+            // Before checking references, flush any result-binding names from the
+            // PREVIOUS suspension that were deferred. At this point we are inside a
+            // body that already has `past_wait = true`, which means there could be
+            // another suspension ahead — so these names are now real crossing
+            // candidates if read after that next suspension.
+            //
+            // We check for a NEW suspension first; if this statement IS a suspension,
+            // flush before scanning so the binding isn't falsely flagged for being
+            // read by its own producing step.
+            let this_stmt_suspends = match stmt {
+                Stmt::Expr(Expr::Wait(_, _)) => true,
+                Stmt::Expr(Expr::Call(c)) if is_suspending_call(c, suspending) => true,
+                Stmt::Let { value: Expr::Wait(_, _), .. } => true,
+                Stmt::Let { value: Expr::Call(c), .. }
+                    if is_suspending_call(c, suspending) => true,
+                _ => false,
+            };
+            if this_stmt_suspends {
+                // Flush pending result-bindings from the prior suspension into
+                // `declared` so they are live for any suspension AFTER this one.
+                for name in pending_result_bindings.drain(..) {
+                    if !declared.contains(&name) {
+                        declared.push(name);
+                    }
+                }
+                // Collect the new result-binding (if any) into pending.
+                match stmt {
+                    Stmt::Let { name, value: Expr::Wait(_, _), .. }
+                    | Stmt::Let { name, value: Expr::Call(_), .. }
+                        if !param_names.contains(&name.as_str()) =>
+                    {
+                        if !pending_result_bindings.contains(name) {
+                            pending_result_bindings.push(name.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            } else {
+                // Non-suspension statement: scan for references to already-declared
+                // (pre-suspension) locals. Pending result-bindings are NOT yet in
+                // `declared`, so reads of the just-produced binding are not flagged.
+                collect_ident_refs_in_stmt(stmt, declared, out);
+            }
         } else {
             match stmt {
-                // Bare top-level wait — all currently-declared locals are crossing candidates.
+                // Explicit bare top-level wait — all currently-declared locals cross.
                 Stmt::Expr(Expr::Wait(_, _)) => {
                     past_wait = true;
                 }
-                // `let name = wait expr` — name is post-wait, not a crossing candidate.
-                Stmt::Let { name: _, value: Expr::Wait(_, _), .. } => {
+                // Inferred-suspension bare call (no `wait` keyword) at statement position.
+                // Under M2 inference this lowers to the same state-machine step as an
+                // explicit `wait`, so locals declared before it must not be read after.
+                Stmt::Expr(Expr::Call(c)) if is_suspending_call(c, suspending) => {
                     past_wait = true;
+                }
+                // `let name = wait expr` — name is safe across its OWN producing suspension
+                // (the state machine writes it to the frame, resumes with it available), but
+                // is a crossing candidate for every LATER suspension. Defer tracking to
+                // `pending_result_bindings`; it flushes into `declared` when the next
+                // suspension is encountered, making it catchable only then.
+                Stmt::Let { name, value: Expr::Wait(_, _), .. } => {
+                    past_wait = true;
+                    if !declared.contains(name) && !param_names.contains(&name.as_str())
+                        && !pending_result_bindings.contains(name)
+                    {
+                        pending_result_bindings.push(name.clone());
+                    }
+                }
+                // `let name = suspending_call()` — same semantics as the explicit-wait form.
+                // Safe across its OWN producing suspension; a crossing candidate only for
+                // subsequent suspensions. Defer into `pending_result_bindings` for the same
+                // reason as the `wait` arm above.
+                Stmt::Let { name, value: Expr::Call(c), .. }
+                    if is_suspending_call(c, suspending) =>
+                {
+                    past_wait = true;
+                    if !declared.contains(name) && !param_names.contains(&name.as_str())
+                        && !pending_result_bindings.contains(name)
+                    {
+                        pending_result_bindings.push(name.clone());
+                    }
                 }
                 Stmt::Let { name, value, .. } => {
                     if !declared.contains(name) && !param_names.contains(&name.as_str()) {
                         declared.push(name.clone());
                     }
                     // The RHS could contain an `if`-nested wait in theory (rare), recurse.
-                    // In practice the parser rejects that for `wait` used as an expression
-                    // nested under `let`; this is a conservative safety net.
+                    // In practice the parser rejects `wait` used as an expression nested
+                    // under `let`; this is a conservative safety net.
                     if expr_contains_wait_anywhere(value) {
                         past_wait = true;
                     }
@@ -4548,27 +4684,29 @@ fn collect_crossings_in_stmts(
                         declared.push(name.clone());
                     }
                 }
-                // An `if` block whose body contains a wait is a reachable suspend point.
+                // An `if` block that contains a suspension point (explicit or inferred)
+                // is itself a reachable suspension point for the outer statement sequence.
                 // Two sub-cases:
                 //   (a) Locals declared BEFORE this `if` and read AFTER it cross the
-                //       potential wait inside the branch.
-                //   (b) Locals declared INSIDE the branch, before the wait, and read
-                //       after the wait IN THE SAME BRANCH also cross — handle via
-                //       recursive call into the branch.
-                Stmt::If { body, .. } if block_contains_wait(body) => {
+                //       potential suspension inside the branch.
+                //   (b) Locals declared INSIDE the branch, before the suspension, and
+                //       read after it IN THE SAME BRANCH — handled via recursive call.
+                Stmt::If { body, .. }
+                    if block_contains_wait(body)
+                        || block_contains_inferred_suspension(body, suspending) =>
+                {
                     // Sub-case (b): recurse into the branch, seeding with the outer
-                    // `declared` set so that outer-scope names declared before this if
-                    // are also tracked inside the branch.
+                    // `declared` set so outer-scope names are also tracked inside.
                     let mut branch_declared = declared.clone();
                     collect_crossings_in_stmts(
                         &body.stmts,
                         param_names,
+                        suspending,
                         &mut branch_declared,
                         out,
                     );
-                    // Sub-case (a): any name declared before this if is now potentially
-                    // crossing (the branch may have suspended). Mark wait seen for the
-                    // outer sequence so post-if statements are checked.
+                    // Sub-case (a): mark suspension seen for the outer sequence so
+                    // post-if statements are checked against pre-if declared locals.
                     past_wait = true;
                 }
                 _ => {}

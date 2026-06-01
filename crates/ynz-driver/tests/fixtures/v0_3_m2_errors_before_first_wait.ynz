@@ -1,0 +1,24 @@
+// v0.3-M2 Phase 9: errors-before-first-wait in a state machine.
+// earlyErrorSM is a state machine (contains `wait sleepAsync`) but can error
+// on a path that exits BEFORE reaching the wait point. The if-branch errors
+// immediately via __testFallibleAsync(true); the wait branch is only taken
+// when the if is not entered.
+//
+// Verifies that the error produced at resume_point=0 (state-0 before any
+// suspension) propagates correctly through the SM return slot.
+
+function earlyErrorSM(n: int) -> int errors {
+    if (n > 0) {
+        let r = __testFallibleAsync(true)
+        return r
+    }
+    wait sleepAsync(5)
+    return 42
+}
+
+function entrypoint() -> nothing {
+    // n=1: takes the error branch before the wait fires.
+    let x = earlyErrorSM(1)
+    let v = x.or(99)
+    print(`v=${v.toString()}`)
+}

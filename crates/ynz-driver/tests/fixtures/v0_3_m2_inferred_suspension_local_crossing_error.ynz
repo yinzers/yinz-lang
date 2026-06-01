@@ -1,0 +1,13 @@
+function sleeper() -> int {
+  wait sleepAsync(10)
+  return 5
+}
+function compute() -> int {
+  let slot = 7
+  let other = sleeper()
+  return slot + other
+}
+function entrypoint() -> nothing {
+  let r = compute()
+  print(r.toString())
+}

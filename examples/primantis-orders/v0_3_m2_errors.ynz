@@ -77,6 +77,70 @@ function triggerLocalCrossesWait() -> nothing {
     print(`order: ${orderName}`)
 }
 
+// -- v0.3-M2 Error Class 5: `wait` on a non-call expression --
+//
+// WHY: WaitOnNonCallExpression — `wait` must be followed by a function call.
+// A primitive value (int, string, bool) is not a call and cannot be a suspension
+// point. Write `wait someFn()` to wait for a function to complete.
+
+function triggerWaitNonCall() -> nothing {
+    // WHY: WaitOnNonCallExpression — `wait` applied to a literal integer, not a call.
+    wait 42
+    print(`order fulfilled`)
+}
+
+// -- v0.3-M2 Warning Class 1: redundant `wait` on a non-suspending call --
+//
+// WHY: WaitOnNonMayBlock — `wait` on a call to a purely CPU-bound function has
+// no effect. `print` never suspends; the `wait` keyword is noise here.
+// The compiler emits a warning (not an error) and the program still runs.
+// Remove the `wait` for clarity.
+
+function triggerRedundantWait() -> nothing {
+    // WHY: WaitOnNonMayBlock — print() is CPU-bound; wait has no effect here.
+    wait print(`order received`)
+}
+
+// -- v0.3-M2 Error Class 6: can't-infer from dynamic-dispatch vtable --
+//
+// WHY: CantInferDynamicDispatch — a suspending function calling a method on a
+// `dynamic Contract` value can't determine the concrete callee's suspension
+// status at compile time. Use a concrete type, or restructure so the call is
+// statically resolvable. Dynamic-dispatch suspension support ships in a future
+// version.
+
+shape Vendor {
+    processOrder(share self) -> nothing
+}
+
+shape PrimantisVendor follows Vendor {
+    name: string
+}
+
+function processOrder(share self: PrimantisVendor) -> nothing {
+    print(`Primantis order processed`)
+}
+
+function triggerCantInferDynamic(v: dynamic Vendor) -> nothing {
+    sleepAsync(10)
+    // WHY: CantInferDynamicDispatch — v.processOrder() is a dynamic-dispatch
+    // call from a suspending function; concrete callee unknown at compile time.
+    v.processOrder()
+}
+
+// -- v0.3-M2 Error Class 7: can't-infer from cross-module call --
+//
+// WHY: CantInferCrossModule — calling a function defined in another file from
+// inside a suspending function is a compile error in v0.3-M2. The compiler
+// analyzes one compilation unit; cross-module suspension propagation ships in
+// v0.3-M3 via the M8 multi-file query.
+//
+// NOTE: this error class requires a multi-file project to trigger. See the
+// integration test fixture at:
+//   crates/ynz-driver/tests/fixtures/v0_3_m2_cant_infer_cross_module/
+// for an end-to-end example. A single-file gallery cannot trigger cross-module
+// errors because all functions are in one compilation unit.
+
 // -- Happy-path (correct v0.3-M2 forms) --
 
 // Direct-statement form — no sub-expression nesting.

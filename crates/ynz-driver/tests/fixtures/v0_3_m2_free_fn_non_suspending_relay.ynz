@@ -1,0 +1,43 @@
+// Phase 9 Step 4b: free-fn symmetric negative test for the can't-infer dynamic gate.
+//
+// relay() calls dispatch(h) where h is `dynamic Handler` — the free-fn form
+// (compare: w.doWork() is the dot-call form tested by the existing dynamic-dispatch
+// fixture). relay() is NON-suspending: it has no `wait`, no calls to sleepAsync,
+// and the transitive may-block analysis does not reach any blocking primitive.
+//
+// The free-fn gate at check.rs checks `current_fn_suspends` before emitting the
+// can't-infer error. Because relay() is non-suspending, the gate must NOT fire.
+// Typeck must pass clean; any failure here must be a codegen error (dynamic dispatch
+// codegen is deferred to M4 P4), never a can't-infer typeck error.
+//
+// This guards the check.rs free-fn gate against an R2-style over-fire where
+// dropping the current_fn_suspends guard would cause non-suspending callers to
+// incorrectly receive can't-infer errors.
+
+shape Handler {
+    handle(share self) -> nothing
+}
+
+shape EchoHandler follows Handler {
+    tag: string
+}
+
+function handle(share self: EchoHandler) -> nothing {
+    print(`echo: ${self.tag}`)
+}
+
+// dispatch is a free function taking a dynamic Handler — the free-fn dynamic-call form.
+function dispatch(h: dynamic Handler) -> nothing {
+    h.handle()
+}
+
+// relay is NON-suspending. It calls dispatch(h) with a dynamic value.
+// current_fn_suspends=false for relay => no can't-infer error should fire.
+function relay(h: dynamic Handler) -> nothing {
+    dispatch(h)
+}
+
+function entrypoint() -> nothing {
+    const eh: EchoHandler = { tag: `relay-test` }
+    relay(eh)
+}
