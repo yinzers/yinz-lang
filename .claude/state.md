@@ -1,6 +1,8 @@
 # Session State: ynz
 
-**Last Updated**: 2026-05-31 (CORRECTED after fetch: local main was 19 commits STALE. origin/main already shipped **v0.3.0-m2** = M10 teaching-surface bug hunt MERGED (`fe15e5c`/`13264af`). So "M10 unmerged/consolidate" was a stale-local artifact — M10 is DONE+SHIPPED. Reconciled local↔origin via merge (`e924faf`). Repo cleanup still stands: gitignored ephemera (`.claude/worktrees/`,`.analysis/`,`.claire/`,`*.snap.new`); dropped 3 dead stashes; deleted 73 dead branches. **NAMING TRAP**: the *release* `v0.3.0-m2` = M10 (v0.2.1) teaching-surface work; the *workstream* `v0-3-m2-wait-and-state-machines` is a SEPARATE in-flight concurrency milestone — do NOT conflate. v0.2.1 M1/M3/M5 LSP plan ON HOLD (serial-not-parallel). webpage branch parked.)
+**Last Updated**: 2026-06-01 (**SHIPPED v0.3.0-m3** = `v0-3-m2-wait-and-state-machines` concurrency milestone — wait-suspension + state-machine codegen, no `block_on` bridge except the single program-entry driver. Merged to main alongside all M10 teaching-surface fixes; main now fully up to date. Both plans moved to `done/`. Release m-number tracks ship-order (m3), decoupled from roadmap milestone numbering — `v0.3.0-m2` was M10's teaching-surface release, NOT this. Next: plan the v0.3 concurrency cross-module-propagation milestone. Prior context below.)
+
+**Prior** (2026-05-31, CORRECTED after fetch: local main was 19 commits STALE. origin/main already shipped **v0.3.0-m2** = M10 teaching-surface bug hunt MERGED (`fe15e5c`/`13264af`). So "M10 unmerged/consolidate" was a stale-local artifact — M10 is DONE+SHIPPED. Reconciled local↔origin via merge (`e924faf`). Repo cleanup still stands: gitignored ephemera (`.claude/worktrees/`,`.analysis/`,`.claire/`,`*.snap.new`); dropped 3 dead stashes; deleted 73 dead branches. **NAMING TRAP**: the *release* `v0.3.0-m2` = M10 (v0.2.1) teaching-surface work; the *workstream* `v0-3-m2-wait-and-state-machines` is a SEPARATE in-flight concurrency milestone — do NOT conflate. v0.2.1 M1/M3/M5 LSP plan ON HOLD (serial-not-parallel). webpage branch parked.)
 
 ---
 
@@ -10,11 +12,11 @@
 
 <!-- RADAR-START -->
 ### Active Roadmaps
-- v0-3-concurrency-perf (Patrick Rizzardi) — 1 active plans — 2026-05-31
+- v0-3-concurrency-perf (Patrick Rizzardi) — 0 active plans — 2026-06-01
 - webpage-docs (Patrick Rizzardi) — 0 active plans — 2026-05-20
 
 ### Active Workstreams
-- v0-3-m2-wait-and-state-machines (Patrick Rizzardi) — 15 files touched — 108/226 done — roadmap: v0-3-concurrency-perf — 2026-05-31
+*(no active workstreams — v0.3.0-m3 shipped; next: plan the v0.3 concurrency cross-module-propagation milestone)*
 <!-- RADAR-END -->
 
 ---

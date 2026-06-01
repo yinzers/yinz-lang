@@ -2,9 +2,9 @@
 slug: v0-3-m2-wait-and-state-machines
 type: execution
 owner: Patrick Rizzardi
-status: active
+status: done
 created: 2026-05-30
-last_updated: 2026-06-01
+last_updated: 2026-06-01 (SHIPPED as v0.3.0-m3 — all phases complete, merged to main with M10)
 roadmap: v0-3-concurrency-perf
 files:
   - crates/ynz-runtime/**
