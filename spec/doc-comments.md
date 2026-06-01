@@ -1,33 +1,50 @@
 # Doc Comments
 
-Triple-slash `///` comments on exported items appear in generated documentation. Regular `//` comments are for readers of the code and are ignored by the doc generator.
+A `//` comment block immediately above a declaration — with no blank line between it and the declaration — is the doc comment for that item. It shows in IDE hover and in `ynz doc` generated output.
+
+Regular `//` comments anywhere else (inside function bodies, with a blank line above the declaration) are for readers of the source only. The IDE and doc generator ignore them.
 
 ---
 
 ## On functions
 
-```
-/// Fetches a user by their unique ID.
-/// Returns none if the user doesn't exist.
-/// Errors on database connection failure.
+```ynz
+// Fetches a user by their unique ID.
+// Returns none if the user doesn't exist.
+// Errors on database connection failure.
 export function fetchUser(id: UserId) -> maybe User errors {
-  // implementation notes here — not in docs
+  // This note is inside the body — never shows in hover or docs
 }
 ```
 
+Hover over a call to `fetchUser` shows the three `//` lines as prose, then the function signature as a colored code block. No `@param` or `@returns` tags needed — the types tell you the structure, the comment tells you the behavior.
+
 ---
 
-## On types and fields
+## On shapes
 
-```
-/// Represents a player in the game world.
+```ynz
+// Represents a player in the game world.
 export shape Player {
-  /// The player's display name.
-  name: string
-  /// Current health points, clamped to 0-100.
-  health: number
-  /// Position in the game world.
-  position: Position
+  name: string          // The player's display name.
+  health: int           // Current HP, clamped 0–100. Never negative.
+  position: Position    // World-space coordinates in meters.
+}
+```
+
+Hover over `Player` at any use site shows the shape's fields in a colored code block with the doc comment above it.
+
+---
+
+## On options types
+
+```ynz
+// The category of a tradable asset on Alpaca.
+export options AssetClass {
+  us_equity
+  us_option
+  crypto: `Cryptocurrency`
+  ipo:    `IPO Indication of Interest`
 }
 ```
 
@@ -35,29 +52,44 @@ export shape Player {
 
 ## On constants
 
-```
-/// Maximum health any player can have.
+```ynz
+// Maximum health any player can have.
 export const MAX_HEALTH = 100
 ```
 
 ---
 
-## Rules
+## The blank-line rule
 
-- `///` only works on exported items. Commenting a private function has no effect on generated docs.
-- Multiple `///` lines become a multi-line doc entry.
-- `///` goes immediately above the item. A blank line between the comment and the item breaks the association.
-- No block doc syntax (`/** */`) — triple-slash only.
+A blank line between the comment and the declaration breaks the association. The comment becomes free-floating source-only trivia.
+
+```ynz
+// This will NOT show as a doc comment — blank line breaks it.
+
+export function greet(share self: Player) -> string {
+```
+
+```ynz
+// This WILL show as a doc comment — immediately above with no gap.
+export function greet(share self: Player) -> string {
+```
 
 ---
 
-## Regular comments vs doc comments
+## Inside function bodies
 
-```
-// This explains something to readers of THIS file — never in generated docs
-/// This documents the public API — appears in generated docs
+`//` inside a function body is always a private implementation note — never a doc comment, regardless of position.
 
-export function process() -> nothing {
-  // Private implementation notes — ignored by the doc generator
+```ynz
+export function process(share data: array<int>) -> int {
+  // This is only visible when reading this file
+  const filtered = data.where(n => n > 0)
+  return filtered.sum()
 }
 ```
+
+---
+
+## Non-exported items
+
+Doc comments on non-exported items still show in IDE hover within the same project. They are excluded from `ynz doc` generated output, since external users cannot reach those items.

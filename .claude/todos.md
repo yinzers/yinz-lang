@@ -54,7 +54,7 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 - [ ] **Jargon-CI sweep** — add a CI script that greps `design/*.md`, `spec/*.md`, all `.claude/rules/*.md`, and crate source files for banned-jargon words. Scope: extend `crates/ynz-diagnostics/src/banned_jargon.rs` AND add a doc-grep CI step.
 - [ ] Wire up GitHub Actions CI (ci.yml already written, just needs configuration)
-- [ ] macOS CI golden hash for ynz-codegen
+- [ ] **macos-ci-codegen-support** — macOS was REMOVED from the CI matrix on 2026-06-01 (`.github/workflows/ci.yml` is now `os: [ubuntu-latest]`). Reason: after the CI repair greened Ubuntu, the macOS job finally reached `cargo test` and 21 `crates/ynz-codegen/tests/golden.rs` tests failed. NOT all are stale goldens — IR-text snapshots + object-SHA goldens are x86_64-linux-pinned (expected to differ), BUT `m3_fib_sha256_golden` (auto-records when golden missing → only fails if codegen emits diagnostics) and `m4_player_ir_has_readonly_on_share_param` (a substring check, not a snapshot) ALSO failed — hinting at REAL macOS codegen differences that can't be verified from Linux. So we dropped the platform rather than gate-and-pretend. **To re-add** (needs a Mac): (1) diagnose the non-golden failures — real codegen bug or env? (2) record per-triple SHA goldens (`load_golden`/`save_golden` infra already supports it — run with golden absent, it auto-writes); (3) make IR-text snapshots target-aware or gate to the golden host; (4) re-add `macos-latest` to the matrix. Full design doc: `design/future/macos-platform-support.md` (+ `design/decisions.md` + `design/future/index.md` index rows).
 
 - [x] **lsp-range-formatting** — shipped in v0.2-M5 Phase 5: `ynz_fmt::format_range` + `textDocument/rangeFormatting` LSP handler.
 

@@ -32,7 +32,7 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Control flow | `design/control-flow.md` | No standalone `else`, multi-case `if`, exhaustiveness, jump table optimization |
 | Scope | `design/scope.md` | Block scoping, no mutable globals, const expressions, export for sharing |
 | Main entry | `design/main-entry.md` | `function entrypoint()`, file from yinz.toml, args from stdlib, errors to default handler |
-| Doc comments | `design/doc-comments.md` | `///` only, no block docs, exported items only, field documentation |
+| Doc comments | `design/doc-comments.md` | Go-model `//` leading comments (no `///`, no block docs), exported items only, field documentation. `ynz doc` generator design in `design/future/doc-generator.md`. |
 | Testing | `design/testing.md` | Built-in `test` keyword, setup/teardown (file+per-test), single-level groups, `assertFails`/`assertPanics`, file-level parallelism |
 | Packages | `design/packages.md` | `ynz add/remove/update`, lock file, yinz_modules, tree shaking |
 | Operators | `design/operators.md` | `follows` contracts, `Self` keyword, `print()` default, `&&`/`\|\|`/`!` symbols, bitwise symbols, no `===` |
@@ -84,6 +84,7 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Compiled-package binary format | `design/future/packages.md` | v0.1 binary-format reservation + v0.2 implementation. May-block metadata, ownership signatures, kernel-mode compatibility flags, allocator requirements, LLVM attribute hints, self-referential markers, doc comments per exported item. |
 | Release-mode builds | `design/future/release-mode.md` | v0.4+ — `--release` flag: LLVM `-O3`, strip debug info, disable dev-only flags (`--reveal-sensitive`, `--emit-ir`). Strips dev-only env-var checks via `cfg(release_build)`. |
 | String `{ptr, len}` overhaul | `design/future/string-ptr-len-overhaul.md` | TBD (likely v0.5 alongside file I/O) — migrate strings from NUL-terminated C strings to `{ptr, len}` slices. Removes embedded-NUL footgun, makes `length` O(1). Multi-day rewrite. |
+| macOS platform support | `design/future/macos-platform-support.md` | Deferred — macOS removed from CI 2026-06-01 (codegen golden tests are x86_64-linux-pinned; some macOS failures hint at real codegen differences unverifiable from Linux). Linux x86_64 is the only verified target. Re-add `macos-latest` once macOS codegen is validated + per-triple goldens recorded on a Mac. |
 
 ## Standard Library
 
