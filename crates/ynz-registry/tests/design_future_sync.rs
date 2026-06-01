@@ -51,6 +51,14 @@ const SKIP: &[(&str, &str)] = &[
         "supervisor.md",
         "deferred_stdlib_api kind, zero M1 entries per schema",
     ),
+    (
+        "doc-generator.md",
+        "parking-lot tooling direction (`ynz doc`), no concrete deferred user token yet",
+    ),
+    (
+        "macos-platform-support.md",
+        "CI/infra deferral (macOS dropped from matrix), no user-facing token",
+    ),
 ];
 
 fn is_skipped(filename: &str) -> bool {
