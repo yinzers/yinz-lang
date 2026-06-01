@@ -12,11 +12,12 @@
 
 <!-- RADAR-START -->
 ### Active Roadmaps
-- v0-3-concurrency-perf (Patrick Rizzardi) — 0 active plans — 2026-06-01
+- v0-2-1-lsp-gap-closure (Patrick Rizzardi) — 0 active plans — 2026-05-30
+- v0-3-concurrency-perf (Patrick Rizzardi) — 1 active plans — 2026-05-31
 - webpage-docs (Patrick Rizzardi) — 0 active plans — 2026-05-20
 
 ### Active Workstreams
-*(no active workstreams — v0.3.0-m3 shipped; next: plan the v0.3 concurrency cross-module-propagation milestone)*
+- v0-3-m3a-suspension-codegen (Patrick Rizzardi) — 12 files touched — 0/94 done — roadmap: v0-3-concurrency-perf — 2026-06-01
 <!-- RADAR-END -->
 
 ---
@@ -125,7 +126,10 @@ cargo fmt --all
 
 **M2-boundary decisions deferred to M3 (locked):** `WaitInsideLoop` and `LocalCrossesWait` are M3-scope (frame-backed mutable locals transform). Sub-expression suspending calls and non-self mutual recursion are M3-scope (per-frame layout metadata + expression-position suspension). These are compile errors in v0.3-M3, not regressions.
 
-**Next milestone:** v0.3-M3 — cross-module may-block propagation (M8 multi-file query), auto-`wait` insertion (lifts `WaitInsideLoop`/`LocalCrossesWait` via frame-backed locals), expression-position suspension (lifts sub-expression guard), auto-parallelization of independent statements, mutual-recursion mixed-layout frames. See roadmap `v0-3-concurrency-perf.md`.
+**Next milestone — v0.3-M3 SPLIT into M3a + M3b (2026-06-01, Patrick):** the old single "M3" bundled ~10 capabilities across two concerns (codegen-completion vs. analysis), and the codegen half is a prerequisite for the analysis half (same unbuildable-boundary shape as the M2 HALT). Split documented loudly in roadmap `v0-3-concurrency-perf.md` ("M3 SPLIT" + "Kept M2 positional guards" Architectural Decisions).
+- **M3a — Suspension Codegen Completion** (`plans/active/v0-3-m3a-suspension-codegen.md`, status: pending_approval, plan-reviewer PASS Tier A): lifts `LocalCrossesWait` + `WaitInsideLoop` via frame-backed mutable locals (P1) + loop/match suspension (P2 while, P3 for+match); P0 = `sleepAsync`→`sleep` / `sleepMs`→`sleepBlocking` rename + reword the two KEPT guards; P4 = demo/gallery/verification. KEEPS `SubExprSuspendViolation` (Golden Rule 7) + `MutualSuspensionCycle` (rare) as permanent design decisions. **Three stale roadmap claims corrected by source verification:** M8 cross-file typeck is ALREADY DONE (not a blocker); `ynz_rt_spawn` already exists (shipped M2); sleep rename was decided-but-undone. Tier-A trap caught in review: `number` is decimal128 (16 bytes) but frame local slots are 8-byte i64 → P1 must use two-slot/pointer-back, never truncate.
+- **M3b — Cross-Module + Auto-Parallelization** (`v0-3-m3b-auto-parallelization`, planned AFTER M3a ships): cross-module `suspends` propagation (rides existing salsa `module_signatures_query` — no compiled-package format needed), dependency-graph auto-parallelize pass, `background` give/copy inference, CPU/IO routing, `wait_points` + `background_routing` IDE hints.
+**Status: M3a plan awaiting Patrick approval (Step 8). Not yet executing.**
 
 ---
 
