@@ -8,6 +8,7 @@ use crate::{
     check::{check, TypedModule},
     exports::{collect_exports, ExportTable},
     generics::{GenericFnTable, GenericShapeTable, MonomorphizationTable},
+    may_block,
     intrinsics::PrimitiveIntrinsicTable,
     options_table::collect_options,
     resolve_import::resolve_imports,
@@ -155,6 +156,18 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
             .or_insert_with(|| sig.clone());
     }
 
+    // Run the transitive may-block analysis to populate `FunctionSig.suspends`.
+    // The analysis sees only this compilation unit — cross-module calls produce
+    // `UnresolvableEdge::CrossModule` entries recorded in the analysis result.
+    // The body checker gates can't-infer diagnostics on `current_fn_suspends`
+    // (set from sig.suspends): only callers that independently suspend AND make
+    // an unanalyzable boundary call receive the error.
+    let imported_fn_names: HashSet<String> = sig_output.imported_fns.keys().cloned().collect();
+    let may_block_result = may_block::analyze(&parse.module, &imported_fn_names);
+    for (name, sig) in merged_sig_table.fns.iter_mut() {
+        sig.suspends = may_block_result.suspends.contains(name.as_str());
+    }
+
     let (typed, mono_table, check_diags, referenced_names) = check(
         &parse.module,
         &merged_sig_table,
@@ -163,6 +176,7 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
         &sig_output.generic_shape_table,
         &PrimitiveIntrinsicTable::m6().with_m2_internals(),
         &sig_output.imported_options,
+        imported_fn_names,
     );
     for d in check_diags.into_iter() {
         all_diags.push(d);

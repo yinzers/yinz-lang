@@ -15,7 +15,7 @@ use crate::{
         apply_substitution, unify_param, GenericFnSig, GenericFnTable, GenericShapeTable,
         MonoSignature, MonomorphizationTable, Substitution,
     },
-    intrinsics::{is_may_block_callee, PrimitiveIntrinsicTable},
+    intrinsics::{M2_MAY_BLOCK_INTRINSICS, PrimitiveIntrinsicTable},
     options_table::{collect_options, OptionsTable},
     return_paths::analyze_return_paths,
     scope::{Scope, ScopeEntry},
@@ -49,6 +49,7 @@ pub fn check(
     generic_shape_table: &GenericShapeTable,
     intrinsics: &PrimitiveIntrinsicTable,
     imported_options: &std::collections::HashMap<String, crate::options_table::OptionsEntry>,
+    imported_fn_names: HashSet<String>,
 ) -> (TypedModule, MonomorphizationTable, DiagnosticBucket, HashSet<String>) {
     let mut diags = DiagnosticBucket::new();
     let mut options_table = collect_options(module, &mut diags);
@@ -84,7 +85,8 @@ pub fn check(
         kernel_mode: false,
         inside_wait: false,
         inside_background: false,
-        current_fn_contains_wait: false,
+        current_fn_suspends: false,
+        imported_fn_names,
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -138,7 +140,9 @@ pub fn check_with_kernel_mode(
         kernel_mode: true,
         inside_wait: false,
         inside_background: false,
-        current_fn_contains_wait: false,
+        current_fn_suspends: false,
+        // Kernel-mode check uses no imported functions — only local fns are relevant.
+        imported_fn_names: HashSet::new(),
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -228,8 +232,8 @@ struct Checker<'b> {
     // Set to true while recursing inside `Expr::Wait` or `Expr::Background`
     // respectively. Used by call-site checks to distinguish:
     //   - `wait fn()` (inside_wait=true) → correct usage
-    //   - `fn()` bare (both false) → possibly `unawaited_sleep_async` or `wait_required`
-    //   - `background fn()` (inside_background=true) → exempted from wait_required warning
+    //   - `fn()` bare (both false) → known-safe (analysis drove the decision)
+    //   - `background fn()` (inside_background=true) → graph cut, not propagated
     //
     // (true, true) is unreachable per parser: `background` is statement-position only;
     // `wait background X()` fails at parse time before typeck runs.
@@ -238,11 +242,20 @@ struct Checker<'b> {
     // direct inner of the corresponding wrapper is being checked.
     inside_wait: bool,
     inside_background: bool,
-    /// True when the function currently being checked has `contains_wait == true` in its
-    /// `FunctionSig`. Used by `wait_required_on_state_machine_call` to decide whether
-    /// to check callee state-machine status. Populated at the start of each function by
-    /// `check_function`; defaults to false.
-    current_fn_contains_wait: bool,
+    /// True when the function currently being checked has `suspends == true` (transitive
+    /// may-block analysis result). Set at the start of each function by `check_function`.
+    ///
+    /// The can't-infer diagnostic gates on this field: a caller that independently suspends
+    /// (reaches an intra-unit `sleepAsync`) AND makes an unanalyzable cross-module or
+    /// dynamic-dispatch call gets the clean compile error. A caller that does NOT
+    /// independently suspend treats the boundary call as a non-suspending leaf — the
+    /// M2-documented under-approximation per `design/future/concurrency.md:61-67`
+    /// (cross-module suspension propagation requires M8 binary package metadata and
+    /// ships in M3).
+    current_fn_suspends: bool,
+    /// Names of functions imported from other modules. Used to emit can't-infer
+    /// diagnostics when a cross-module callee is called from a suspending function.
+    imported_fn_names: HashSet<String>,
 }
 
 impl<'b> Checker<'b> {
@@ -284,12 +297,16 @@ impl<'b> Checker<'b> {
         self.current_fn_errors_capable = f.errors_capable;
         self.errors_success_narrowed.clear();
         self.errors_consumed.clear();
-        // M2: track whether the caller is a state machine (body syntactically contains wait).
-        self.current_fn_contains_wait = self
+        // Track whether the caller transitively suspends (analysis result). The can't-infer
+        // diagnostic gates on this: a function that independently reaches a suspension point
+        // (intra-unit sleepAsync) AND makes an unanalyzable boundary call gets the error.
+        // Functions that do NOT independently suspend treat the boundary call as a
+        // non-suspending leaf — the M2 under-approximation per design/future/concurrency.md:75.
+        self.current_fn_suspends = self
             .sig_table
             .fns
             .get(&f.name)
-            .map(|s| s.contains_wait)
+            .map(|s| s.suspends)
             .unwrap_or(false);
 
         self.scope.push();
@@ -1551,9 +1568,10 @@ impl<'b> Checker<'b> {
             return self.check_test_fn_call(call, &callee_name, &sig);
         }
 
-        // M2: `wait` on a call that cannot suspend — emit a teaching warning.
-        // sleepAsync and __testFallibleAsync are may-block, so they're excluded.
-        // User-defined functions handle this inline where `sig.contains_wait` is accessible.
+        // Phase 6: explicit `wait` on a known-CPU-only intrinsic — the `wait` has no effect.
+        // Only fires for non-suspending builtins. `sleepAsync` and `__testFallibleAsync` are
+        // may-block so they are excluded. User-defined function dispatch handles `suspends`
+        // via the transitive analysis result on the sig table.
         if self.inside_wait
             && matches!(callee_name.as_str(), "print" | "range" | "sleepMs" | "sensitive")
         {
@@ -1584,7 +1602,9 @@ impl<'b> Checker<'b> {
             // sleepMs(ms: int) — synchronous blocking sleep; lowers to ynz_thread_sleep_ms.
             "sleepMs" => self.check_sleep_ms_call(call),
             // sleepAsync(ms: int) — non-blocking sleep; codegen emits state-machine wait point.
-            // Registry entry + unawaited_sleep_async warning + kernel-mode rejection land in P3.
+            // Under the Phase-6 inference model, `sleepAsync` is auto-awaited by the
+            // transitive may-block analysis. Writing `wait sleepAsync(...)` is valid-but-redundant
+            // (the `wait_on_non_may_block` warning does NOT fire for may-block intrinsics).
             "sleepAsync" => {
                 if self.kernel_mode {
                     self.diags.push(Diagnostic::error(
@@ -1601,37 +1621,7 @@ impl<'b> Checker<'b> {
                     }
                     return Type::Nothing;
                 }
-                let result = self.check_sleep_async_call(call);
-                // `sleepAsync` called without `wait` is a useless no-op: the sleep handle is
-                // constructed then immediately dropped. Warn so the user learns the pattern.
-                if !was_inside_wait {
-                    // Extract argument text for the WHAT-INSTEAD message (first int arg or "ms").
-                    let ms_hint = call
-                        .args
-                        .first()
-                        .and_then(|a| {
-                            if let Expr::IntLit(n, _) = a {
-                                Some(n.to_string())
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or_else(|| "ms".to_string());
-                    self.diags.push(Diagnostic::warning(
-                        call.span.clone(),
-                        "`sleepAsync(ms)` creates a sleep handle but discards it without \
-                         waiting — the function returns immediately, the sleep never fires.",
-                        format!(
-                            "Write `wait sleepAsync({ms_hint})` to actually pause for \
-                             {ms_hint} milliseconds. Or use `sleepMs({ms_hint})` for the \
-                             blocking-sleep semantics if `wait` isn't appropriate here."
-                        ),
-                        "`sleepAsync` is a may-block intrinsic — calling it without `wait` \
-                         constructs the sleep object then drops it. The `wait` keyword is the \
-                         user-visible signal that a suspension point happens here.",
-                    ));
-                }
-                result
+                self.check_sleep_async_call(call)
             }
             // __testFallibleAsync(succeed: bool) -> int errors — internal M2 test intrinsic.
             // Not in registry; not in LSP completion. Used only in P3/P5 driver fixtures.
@@ -1720,53 +1710,55 @@ impl<'b> Checker<'b> {
                     let params = sig.params.clone();
                     let ownerships = sig.param_ownerships.clone();
                     let ret = sig.ret.clone();
-                    let callee_contains_wait = sig.contains_wait;
+                    let callee_suspends = sig.suspends;
+                    let callee_is_cross_module = self.imported_fn_names.contains(name);
 
-                    // M2: `wait fn()` where fn is not a state machine and not a may-block intrinsic.
-                    // Use the pre-clear saved values — self.inside_wait is false by this point
-                    // because arg recursion must not see the wait context.
-                    if was_inside_wait && !is_may_block_callee(name, callee_contains_wait) {
+                    // Can't-infer: the caller independently suspends (reaches an intra-unit
+                    // sleepAsync transitively) AND makes a cross-module call the analysis
+                    // can't traverse. This is the design-correct M2 gate from
+                    // design/future/concurrency.md:61-67 — cross-module suspension propagation
+                    // requires M8 binary package metadata and ships in M3. When the caller does
+                    // NOT independently suspend, the cross-module callee is treated as a
+                    // non-suspending leaf (the M2 intentional under-approximation).
+                    if callee_is_cross_module && self.current_fn_suspends {
+                        self.diags.push(Diagnostic::error(
+                            call.span.clone(),
+                            format!(
+                                "Can't determine whether `{name}` suspends — it's a \
+                                 cross-module call the compiler can't analyze in one unit."
+                            ),
+                            format!(
+                                "Make the boundary explicit: keep `{name}` in the same file, \
+                                 or restructure so the call doesn't cross a module boundary \
+                                 from inside a suspending function."
+                            ),
+                            "v0.3-M2 analyzes one compilation unit. Cross-module suspension \
+                             propagation ships in v0.3-M3 via the M8 multi-file query. \
+                             Until then, external calls from suspending functions must be \
+                             intra-unit — externals are the user's responsibility.",
+                        ));
+                    }
+
+                    // Phase 6: explicit `wait` on a non-suspending callee — redundant hint.
+                    // Uses the transitive `suspends` predicate (not the local `contains_wait`).
+                    // Explicit `wait` on a suspending callee is valid-but-redundant; no warning.
+                    if was_inside_wait && !callee_suspends && !M2_MAY_BLOCK_INTRINSICS.contains(&name) {
                         self.diags.push(Diagnostic::warning(
                             call.span.clone(),
-                            "`wait` on a function that does not suspend — the `wait` has no effect.",
+                            format!("`{name}` never suspends — this explicit `wait` has no effect."),
                             format!("Remove the `wait` keyword — call `{name}({})` directly.",
                                 params.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")),
                             format!(
-                                "`wait` only has effect when the awaited expression can suspend \
-                                 (calls a may-block intrinsic or another function whose body \
-                                 contains `wait`). Currently, `{name}` is purely CPU-bound; the \
-                                 runtime semantics are identical with or without `wait`."
+                                "Suspension is determined from the call graph: `{name}` reaches \
+                                 no may-block call, so `wait` here changes nothing."
                             ),
                         ));
                     }
 
-                    // M2: caller is a state machine AND callee is a state machine, but the
-                    // call is not wrapped in `wait` AND not inside `background`. Emit teaching
-                    // warning — the runtime is panic-safe via `ynz_rt_call_state_machine_sync`,
-                    // so this is Tier 3 (warning, exit 0) not a correctness gate.
-                    // M3 auto-`wait` insertion lifts this warning with zero source change.
-                    if !was_inside_wait
-                        && !was_inside_background
-                        && self.current_fn_contains_wait
-                        && callee_contains_wait
-                    {
-                        self.diags.push(Diagnostic::warning(
-                            call.span.clone(),
-                            format!(
-                                "`{name}` may suspend (its body contains `wait`); calling it \
-                                 from another state-machine function without `wait` is not \
-                                 allowed in v0.3-M2."
-                            ),
-                            format!("Write `wait {name}({})` to suspend the caller at this call site.",
-                                params.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")),
-                            "v0.3-M2 keeps the no-coloring promise via a `block_on` bridge — \
-                             but only for callers that aren't already state machines. \
-                             State-machine-to-state-machine without `wait` would require \
-                             auto-`wait` insertion that ships in v0.3-M3. Until then, the \
-                             keyword must be explicit at these call sites only. M3 \
-                             auto-insertion lifts this requirement with zero source change.",
-                        ));
-                    }
+                    // Phase 6: `wait_required_on_state_machine_call` is RETIRED under inference.
+                    // Under the transitive analysis, every suspending caller is itself a state
+                    // machine, and every suspending call is an inline-poll-yield — `wait` is
+                    // never required. No replacement warning is needed.
 
                     let r = self.check_user_fn_call(call, name, &params, &ownerships, ret);
                     // M7 P3a: if the called function returns ErrorsCapable, handle context.
@@ -2042,6 +2034,38 @@ impl<'b> Checker<'b> {
             // Ownership enforcement on direct identifier arguments.
             if let Some(binding_name) = simple_ident_name(arg) {
                 self.check_arg_ownership(binding_name, ownership, name, arg.span());
+            }
+
+            // Can't-infer: UFCS free-fn form of dynamic dispatch. When the EXPECTED param
+            // type is `dynamic Contract` (the function explicitly takes a dynamic receiver)
+            // AND the actual argument is also `dynamic Contract`, this is the free-fn
+            // equivalent of `handler.method(args)` — both call forms must emit the error.
+            // Note: passing a CONCRETE shape to a `dynamic Contract` param is valid (widening
+            // coerce at the call site); only passing an ALREADY-dynamic value triggers this.
+            // Gate on current_fn_suspends: only a caller that independently reaches a
+            // suspension point needs this error; non-suspending callers treat dynamic calls
+            // as non-suspending leaves per design/future/concurrency.md:75.
+            if let (Type::Dynamic { contract: expected_contract }, Type::Dynamic { contract: actual_contract })
+                = (expected_ty, &actual_ty)
+            {
+                if expected_contract == actual_contract && self.current_fn_suspends {
+                    self.diags.push(Diagnostic::error(
+                        arg.span().clone(),
+                        format!(
+                            "Can't determine whether `{name}` suspends — it's called with a \
+                             `dynamic {expected_contract}` value whose concrete type is unknown at compile time."
+                        ),
+                        format!(
+                            "Use a concrete type instead of `dynamic {expected_contract}`, or restructure \
+                             so the call is statically resolvable from inside a suspending function."
+                        ),
+                        "Dynamic dispatch resolves the callee at runtime — the compiler \
+                         can't determine its suspension status at compile time. \
+                         v0.3-M2 requires static resolution for calls from suspending \
+                         functions; dynamic dispatch support for suspending callees \
+                         ships in a future version.",
+                    ));
+                }
             }
 
             // M7 P3c: range values are first-class — can be passed as function arguments.
@@ -2520,6 +2544,31 @@ impl<'b> Checker<'b> {
             // Dynamic dispatch: look up the method on the contract shape's sigs.
             if let Some(shape_def) = self.shape_table.get(contract) {
                 if let Some(sig) = shape_def.contract_sigs.iter().find(|s| s.name == method) {
+                    // Can't-infer: dynamic dispatch through a vtable from a suspending caller.
+                    // The concrete callee is unknown at compile time so its suspension status
+                    // cannot be determined. Gate on current_fn_suspends: only callers that
+                    // independently reach a suspension point (intra-unit sleepAsync) get the
+                    // error; non-suspending callers treat this as a non-suspending leaf per
+                    // design/future/concurrency.md:75 (the M2 intentional under-approximation).
+                    if self.current_fn_suspends {
+                        self.diags.push(Diagnostic::error(
+                            method_span.clone(),
+                            format!(
+                                "Can't determine whether `{method}` suspends — it's a \
+                                 dynamic-dispatch call through a `dynamic {contract}` vtable."
+                            ),
+                            format!(
+                                "Make the boundary explicit: use a concrete type instead of \
+                                 `dynamic {contract}`, or restructure so the call is statically \
+                                 resolvable from inside a suspending function."
+                            ),
+                            "Dynamic dispatch resolves the callee at runtime — the compiler \
+                             can't determine its suspension status at compile time. \
+                             v0.3-M2 requires static resolution for calls from suspending \
+                             functions; dynamic dispatch support for suspending callees \
+                             ships in a future version.",
+                        ));
+                    }
                     return sig.ret_ty.clone();
                 }
             }
@@ -5104,6 +5153,7 @@ mod tests {
             &generic_shape_table,
             &intrinsics,
             &std::collections::HashMap::new(),
+            std::collections::HashSet::new(),
         );
         let diags: Vec<_> = diags.into_iter().collect();
         assert_eq!(

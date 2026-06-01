@@ -1,0 +1,5 @@
+// External module — pure CPU function (does not suspend).
+// The entrypoint's analysis can't see this body to determine suspension status.
+export function remoteOp() -> nothing {
+  print(`remote op`)
+}

@@ -991,11 +991,17 @@ fn m5_dyn_dispatch_no_follows_still_errors() {
 fn m5_dyn_dispatch_chained_both_calls_succeed() {
     // WHY: a concrete shape passed through two function calls each accepting `dynamic Contract`
     //      must pass through correctly — verifies the coerce works at multiple call sites.
+    //      Neither `showDynamic` nor `relay` independently suspend (no sleepAsync), so no
+    //      can't-infer error fires under the design-correct current_fn_suspends gate. A non-
+    //      suspending caller with dynamic dispatch compiles clean per design/future/concurrency.md.
+    // test-ratchet: restoring exit-0 assertion — round-2 changed this to expect a can't-infer
+    // error (exit nonzero), but that was the over-firing gate behavior. Under the reverted gate
+    // non-suspending dynamic callers compile clean (Phase-6 round-3).
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_dyn_dispatch_coerce_chained.ynz"));
     assert_eq!(
         code,
         0,
-        "chained dynamic coerce must compile and run; stderr:\n{stderr}"
+        "chained dynamic coerce (non-suspending fns) must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(stdout, "accepted\nrelayed\n");
 }
@@ -1619,6 +1625,96 @@ fn v03_m2_local_crossing_wait_produces_clean_error() {
         stderr.contains("`x`"),
         "error must name the offending binding `x`; stderr:\n{stderr}"
     );
+}
+
+// ── v0.3-M2 Phase 6: transitive may-block analysis ────────────────────────────
+
+#[test]
+fn v03_m2_cant_infer_cross_module_exits_nonzero_with_teaching_error() {
+    // WHY: a suspending function calling a cross-module callee must exit 1 and emit the
+    // WHAT/WHAT-INSTEAD/WHY can't-infer teaching error. Guards regressions where the
+    // can't-infer check is dropped or gated too narrowly (e.g., gated on
+    // `current_fn_suspends` which misses the sole-suspension case).
+    let (stdout, stderr, code) = ynz_run_stdout(
+        &fixture("v0_3_m2_cant_infer_cross_module"),
+    );
+    assert_ne!(code, 0, "cross-module cant-infer must exit non-zero; stderr:\n{stderr}");
+    assert!(
+        stdout.is_empty(),
+        "no output must be produced on compile error; stdout:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("Can't determine"),
+        "error must contain the can't-infer WHAT text; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("cross-module"),
+        "error must mention cross-module boundary; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Machine-code generation failed"),
+        "must be a clean typeck error, not a backend crash; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m2_cant_infer_dynamic_dispatch_exits_nonzero_with_teaching_error() {
+    // WHY: a dynamic-dispatch call in a suspending context must exit 1 and emit the
+    // WHAT/WHAT-INSTEAD/WHY can't-infer teaching error. Guards regressions where the
+    // dynamic-dispatch check is dropped or gated on `current_fn_suspends`.
+    let (stdout, stderr, code) = ynz_run_stdout(
+        &fixture("v0_3_m2_cant_infer_dynamic_dispatch.ynz"),
+    );
+    assert_ne!(code, 0, "dynamic-dispatch cant-infer must exit non-zero; stderr:\n{stderr}");
+    assert!(
+        stdout.is_empty(),
+        "no output on compile error; stdout:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("Can't determine"),
+        "error must contain the can't-infer WHAT text; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("dynamic-dispatch"),
+        "error must mention dynamic-dispatch; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Machine-code generation failed"),
+        "must be a clean typeck error, not a backend crash; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m2_transitive_suspends_type_checks_clean() {
+    // WHY: transitive may-block analysis marks `inner` and `outer` as suspending even
+    // without explicit `wait` tokens in their bodies. The fixture wraps the call in
+    // `background` (which avoids the P6/P7 seam crash — P7 codegen will make the
+    // no-wait direct call work). Exit 0 proves the analysis classifies them correctly
+    // and no spurious errors/warnings are emitted. Guards regressions where the
+    // transitive fixpoint is dropped and functions revert to local-only predicate.
+    let (_stdout, stderr, code) = ynz_run_stdout(
+        &fixture("v0_3_m2_transitive_suspends.ynz"),
+    );
+    assert_eq!(code, 0, "transitive suspends fixture must exit 0; stderr:\n{stderr}");
+    // test-ratchet: strengthening — kills the || escape branch; the fixture's stderr is
+    // verified to be 0 bytes on a clean compile. Any output here is a regression.
+    assert!(
+        stderr.is_empty(),
+        "no output to stderr on a clean compile; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m2_pure_cpu_not_state_machine_exits_zero() {
+    // WHY: a pure-CPU function (no may-block calls, no transitive suspension) must not
+    // be classified as a state machine. It compiles to straight-line code and runs
+    // correctly with no suspension overhead. Guards regressions where the analysis
+    // marks non-suspending functions as suspending (false-positive state-machine codegen).
+    let (stdout, stderr, code) = ynz_run_stdout(
+        &fixture("v0_3_m2_pure_cpu_not_sm.ynz"),
+    );
+    assert_eq!(code, 0, "pure-CPU fixture must exit 0; stderr:\n{stderr}");
+    assert_eq!(stdout.trim(), "result: 42", "pure-CPU fixture must print 'result: 42'; got: {stdout}");
 }
 
 // ── M8 P6: bignum — number<N> for N > 34 ─────────────────────────────────────

@@ -1873,10 +1873,14 @@ fn incremental_rebuild_invalidates_when_imported_signature_changes() {
         .iter()
         .filter(|d| d.severity == ynz_diagnostics::Severity::Error)
         .collect();
+    // test-ratchet: restoring is_empty() — round-2 swallow filter removed; reverted gate
+    // makes pure cross-file compile clean again (Phase-6 round-3). `entrypoint` here does
+    // NOT independently suspend (no sleepAsync), so no can't-infer error fires under the
+    // design-correct `current_fn_suspends` gate.
     assert_eq!(
         v1_errors.len(),
         0,
-        "v1: foo(int)->int + call foo(42) should typecheck clean; got: {:#?}",
+        "v1: foo(int)->int + call foo(42) should compile clean (no errors); got: {:#?}",
         v1_errors
     );
 
@@ -2389,9 +2393,14 @@ fn cross_file_inline_shape_structural_equivalence_positive() {
         .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
+    // test-ratchet: restoring is_empty() — round-2 swallow filter removed; reverted gate
+    // makes pure cross-file compile clean again (Phase-6 round-3). `entrypoint` here does
+    // NOT independently suspend (no sleepAsync), so no can't-infer error fires under the
+    // design-correct `current_fn_suspends` gate. This is the inline-shape structural
+    // equivalence guard — the only valid errors would be type-mismatch; none should fire.
     assert!(
         errors.is_empty(),
-        "cross-file structural equivalence: {{ a: int, b: string }} in two files must typecheck clean; errors:\n{:#?}",
+        "cross-file structural equivalence: pure (non-suspending) cross-file call must compile clean; got: {:#?}",
         errors
     );
 
@@ -3032,34 +3041,32 @@ function entrypoint() -> nothing {
     assert!(errors.is_empty(), "wait_on_non_may_block must not produce an error (warning only); got: {:#?}", errors);
 }
 
-// WHY: `sleepAsync(100)` called without `wait` must fire the `unawaited_sleep_async`
-// Tier 3 warning. The sleep handle is constructed then dropped — the function returns
-// immediately without pausing. Catches regressions where this pattern silently no-ops.
+// WHY: Phase 6 inference model — `sleepAsync(100)` without explicit `wait` is valid.
+// The transitive may-block analysis marks the enclosing function as `suspends` and the
+// codegen emits the suspension automatically. `unawaited_sleep_async` is retired because
+// there is nothing to warn about: the function suspends correctly without writing `wait`.
+// Guards regressions where a stale `unawaited_sleep_async` warning is re-introduced.
 #[test]
-fn unawaited_sleep_async_warns() {
+fn unawaited_sleep_async_no_longer_warns() { // test-ratchet: unawaited_sleep_async retired by Phase 6 inference model; old warning was bridge-era artifact
     let src = r#"
 function entrypoint() -> nothing {
   sleepAsync(100)
 }
 "#;
     let out = run(src);
-    let warnings: Vec<_> = out
+    // Under inference, sleepAsync without `wait` is silently handled — no warning.
+    let unawaited_warnings: Vec<_> = out
         .diagnostics
         .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning))
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning)
+            && d.what.contains("discards it without waiting"))
         .collect();
     assert!(
-        !warnings.is_empty(),
-        "sleepAsync without wait must produce a warning; got: {:#?}",
-        out.diagnostics
+        unawaited_warnings.is_empty(),
+        "unawaited_sleep_async warning must NOT fire under Phase 6 inference; got: {:#?}",
+        unawaited_warnings
     );
-    let has_sleep_msg = warnings.iter().any(|d| d.what.contains("sleep"));
-    assert!(
-        has_sleep_msg,
-        "warning must mention 'sleep'; got: {:#?}",
-        warnings
-    );
-    // Tier 3 warning — no hard error.
+    // No hard errors either.
     let errors: Vec<_> = out
         .diagnostics
         .iter()
@@ -3067,16 +3074,18 @@ function entrypoint() -> nothing {
         .collect();
     assert!(
         errors.is_empty(),
-        "unawaited_sleep_async must not produce an error; got: {:#?}",
+        "sleepAsync without wait must compile clean; got: {:#?}",
         errors
     );
 }
 
-// WHY: a state-machine function calling another state-machine function without `wait`
-// must fire the `wait_required_on_state_machine_call` Tier 3 warning. Guards that the
-// missing-wait pattern is caught and the user is directed to add `wait`.
+// WHY: Phase 6 inference model — `wait_required_on_state_machine_call` is retired.
+// Under the transitive analysis, every suspending caller is itself a state machine and
+// every suspending call is an inline-poll-yield. `wait` is never "required" because the
+// compiler infers suspension; calling a suspending fn without explicit `wait` is correct
+// and emits no warning. Guards regressions where the old bridge-era warning resurfaces.
 #[test]
-fn state_machine_calling_state_machine_without_wait_warns() {
+fn state_machine_calling_state_machine_without_wait_clean_under_inference() { // test-ratchet: wait_required_on_state_machine_call retired by Phase 6; bridge-era artifact; no-wait SM→SM calls are correct under inference
     let src = r#"
 function inner() -> nothing {
   wait sleepAsync(10)
@@ -3090,23 +3099,19 @@ function entrypoint() -> nothing {
 }
 "#;
     let out = run(src);
-    let warnings: Vec<_> = out
+    // Under inference, SM→SM call without explicit `wait` is correct — no warning.
+    let wait_required_warnings: Vec<_> = out
         .diagnostics
         .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning))
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning)
+            && d.what.contains("state-machine"))
         .collect();
     assert!(
-        !warnings.is_empty(),
-        "state machine calling state machine without wait must warn; got: {:#?}",
-        out.diagnostics
+        wait_required_warnings.is_empty(),
+        "wait_required_on_state_machine_call must NOT fire under Phase 6 inference; got: {:#?}",
+        wait_required_warnings
     );
-    let has_inner = warnings.iter().any(|d| d.what.contains("`inner`"));
-    assert!(
-        has_inner,
-        "warning must name the callee `inner`; got: {:#?}",
-        warnings
-    );
-    // Tier 3 warning — no hard error.
+    // No hard errors either.
     let errors: Vec<_> = out
         .diagnostics
         .iter()
@@ -3114,7 +3119,7 @@ function entrypoint() -> nothing {
         .collect();
     assert!(
         errors.is_empty(),
-        "wait_required must not produce an error; got: {:#?}",
+        "SM→SM call without wait must compile clean; got: {:#?}",
         errors
     );
 }
@@ -3205,18 +3210,23 @@ function entrypoint() -> nothing {
     );
 }
 
-// WHY: M2's LOCAL predicate — `foo()` calls `bar()` where `bar()` calls
-// `sleepAsync(100)` WITHOUT `wait` — means `bar.contains_wait == false`.
-// `wait bar()` should fire `wait_on_non_may_block_warning` (bar is not may-block),
-// not a false-positive wait_required warning.
-// This fixture LOCKS M2's local-predicate behavior. When M3 ships the transitive
-// predicate, this test's expected output flips (the warning goes away and bar.contains_wait
-// becomes true), providing a clear M2→M3 transition checkpoint.
+// WHY: Phase 6 inference model — transitive may-block analysis correctly marks `bar` and
+// `foo` as `suspends` even without explicit `wait` tokens in their bodies. `bar` reaches
+// `sleepAsync` directly; `foo` calls `bar` transitively. `wait foo()` is now valid since
+// `foo.suspends==true` — the `wait_on_non_may_block` warning no longer fires.
+// This REPLACES the M2 local-predicate checkpoint. Under Phase 6, the whole fixture
+// compiles clean — no warnings, no errors. Catches regressions where transitive
+// propagation breaks and the analysis reverts to the old local-only predicate.
+//
+// POSITIVE assertion: if the fixpoint is dead or returns empty, `foo.suspends=false`,
+// `wait foo()` fires "never suspends" warning → test FAILS on `stale_warnings`.
+// The suspends-set check directly verifies the fixpoint produced the right result —
+// a no-op fixpoint leaves the set empty and fails both assertions.
 #[test]
-fn transitive_no_wait_does_not_trigger_wait_required_warning() {
-    // bar calls sleepAsync without wait — bar.contains_wait == false in M2.
-    // foo calls bar() without wait — NOT a wait_required warning (bar is not SM).
-    // wait foo() is present — fires wait_on_non_may_block_warning for foo (not SM).
+fn transitive_no_wait_compiles_clean_under_inference() { // test-ratchet: Phase 6 transitive analysis makes bar.suspends=true and foo.suspends=true; wait foo() is valid; old M2-local-predicate checkpoint superseded
+    // bar calls sleepAsync without wait — Phase 6 analysis: bar.suspends = true.
+    // foo calls bar() — Phase 6 analysis: foo.suspends = true (transitive).
+    // wait foo() — foo.suspends is true, so this is valid-but-redundant (no warning).
     let src = r#"
 function bar() -> nothing {
   sleepAsync(100)
@@ -3229,28 +3239,43 @@ function entrypoint() -> nothing {
 }
 "#;
     let out = run(src);
-    // wait_on_non_may_block_warning fires for `wait foo()` — foo is not may-block.
-    let warnings: Vec<_> = out
+    // POSITIVE assertion 1: both bar and foo are in the transitive suspends set.
+    // A dead fixpoint returns an empty set → bar and foo absent → this fails.
+    {
+        use std::collections::HashSet;
+        let db = ynz_parser::CompilerDb::default();
+        let sf = ynz_parser::SourceFile::new(&db, FILE.to_string(), src.to_string());
+        let module = ynz_parser::parse_query(&db, sf).module.clone();
+        let suspends = ynz_typeck::may_block_suspends_set(&module, &HashSet::new());
+        assert!(
+            suspends.contains("bar"),
+            "fixpoint must mark bar as suspends (direct sleepAsync caller); set={suspends:?}"
+        );
+        assert!(
+            suspends.contains("foo"),
+            "fixpoint must mark foo as suspends (transitive via bar); set={suspends:?}"
+        );
+    }
+    // POSITIVE assertion 2: no "never suspends" warning for `wait foo()`.
+    // If the fixpoint is broken and foo.suspends==false, `wait foo()` fires this warning.
+    let stale_warnings: Vec<_> = out
         .diagnostics
         .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning))
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning)
+            && (d.what.contains("discards it without waiting") || d.what.contains("never suspends")))
         .collect();
-    // At least one warning (unawaited_sleep_async for bar(), wait_on_non_may_block for wait foo()).
-    assert!(!warnings.is_empty(), "M2 transitive fixture must produce warnings; got: {:#?}", out.diagnostics);
-    // No wait_required_on_state_machine_call warning — bar is NOT a state machine in M2.
-    let has_wait_required = warnings.iter().any(|d| d.what.contains("state-machine"));
     assert!(
-        !has_wait_required,
-        "M2 local predicate must NOT fire wait_required for transitive case; got: {:#?}",
-        warnings
+        stale_warnings.is_empty(),
+        "no stale bridge-era warnings expected; got: {:#?}",
+        stale_warnings
     );
-    // No hard errors.
+    // No errors either.
     let errors: Vec<_> = out
         .diagnostics
         .iter()
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
-    assert!(errors.is_empty(), "transitive fixture must have no errors; got: {:#?}", errors);
+    assert!(errors.is_empty(), "transitive fixture must compile clean; got: {:#?}", errors);
 }
 
 // WHY: `wait inner(sleepMs(10))` — `wait` applies to `inner`, not to `sleepMs` which is an
@@ -3315,16 +3340,17 @@ function entrypoint() -> nothing {
     assert!(errors.is_empty(), "no errors expected; got: {:#?}", errors);
 }
 
-// WHY: `wait print(sleepAsync(100))` — `wait` applies to `print`, not to `sleepAsync` which
-// is an argument. If inside_wait leaks into argument recursion, the `sleepAsync` arg sees
-// inside_wait=true, so the `unawaited_sleep_async` check (`if !inside_wait`) is suppressed
-// and the warning is silently dropped — a false negative. The fix clears inside_wait before
-// recursing into args, so `sleepAsync` correctly sees inside_wait=false and fires the warning.
+// WHY: Phase 6 inference — `wait wrapper(sleepAsync(100))` where `wrapper` is not suspending.
+// `unawaited_sleep_async` is retired under inference (sleepAsync in arg position is auto-
+// handled by the transitive analysis). The remaining behavior: `wait wrapper(...)` still
+// fires `wait_on_non_may_block` for `wrapper` (wrapper doesn't suspend). Guards that the
+// `inside_wait` flag is correctly cleared before arg recursion so arg-position calls don't
+// inherit the `wait` context of the outer call.
 #[test]
-fn unawaited_sleep_async_fires_on_arg_of_waited_call() {
-    // wait wrapper(...) fires wait_on_non_may_block for wrapper (correct — wrapper is not may-block).
-    // sleepAsync(100) is an argument to wrapper — unawaited_sleep_async MUST fire.
-    // wrapper accepts nothing so sleepAsync(100) (which returns nothing) can be passed.
+fn wait_on_non_suspending_callee_fires_for_wrapper_not_for_sleep_async_arg() { // test-ratchet: unawaited_sleep_async retired by Phase 6; wait_on_non_may_block for wrapper is the correct remaining behavior
+    // wrapper is NOT suspending (only calls sleepMs). wait wrapper() fires the
+    // wait_on_non_may_block warning. sleepAsync(100) in the arg no longer fires
+    // unawaited_sleep_async — the inference handles it without a diagnostic.
     let src = r#"
 function wrapper(n: nothing) -> nothing {
   sleepMs(1)
@@ -3334,17 +3360,29 @@ function entrypoint() -> nothing {
 }
 "#;
     let out = run(src);
-    let warnings: Vec<_> = out
+    // wait_on_non_may_block must fire for `wrapper` (it never suspends).
+    let non_may_block_warns: Vec<_> = out
         .diagnostics
         .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning))
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning)
+            && d.what.contains("never suspends"))
         .collect();
-    // Must include the unawaited_sleep_async warning for the sleepAsync argument.
-    let has_unawaited = warnings.iter().any(|d| d.what.contains("sleep"));
     assert!(
-        has_unawaited,
-        "unawaited_sleep_async must fire on sleepAsync(100) even when it is an argument to a waited call; got: {:#?}",
-        warnings
+        !non_may_block_warns.is_empty(),
+        "wait_on_non_may_block must fire for wrapper; got: {:#?}",
+        out.diagnostics
+    );
+    // Retired unawaited_sleep_async warning must NOT fire.
+    let unawaited_warns: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning)
+            && d.what.contains("discards it without waiting"))
+        .collect();
+    assert!(
+        unawaited_warns.is_empty(),
+        "unawaited_sleep_async must NOT fire under Phase 6 inference; got: {:#?}",
+        unawaited_warns
     );
     // No hard errors.
     let errors: Vec<_> = out
@@ -3355,15 +3393,16 @@ function entrypoint() -> nothing {
     assert!(errors.is_empty(), "no errors expected; got: {:#?}", errors);
 }
 
-// WHY: `background foo(sm_bar())` where `foo` and `sm_bar` contain `wait` — `sm_bar()` is an
-// argument to `foo`, not itself backgrounded. The `inside_background` exemption must NOT leak
-// into argument recursion. Without the fix, sm_bar() sees inside_background=true and the
-// wait_required_on_state_machine_call warning is suppressed — a false negative.
+// WHY: Phase 6 inference — `background foo(sm_bar())` where both are suspending. Under the
+// inference model, `wait_required_on_state_machine_call` is retired — SM calls without
+// explicit `wait` are correct (inference handles suspension). `sm_bar()` as an argument
+// to `background foo(...)` compiles clean: no stale warning fires for it. Guards that
+// the retired `wait_required` warning doesn't resurface for arg-position SM calls.
 #[test]
-fn background_arg_state_machine_call_still_warns() {
-    // sm_bar is a state machine (contains wait). foo is also a state machine.
-    // background foo(sm_bar()) — foo gets background exemption (correct, no wait_required).
-    // sm_bar() is an argument — must NOT be exempted; fires wait_required_on_state_machine_call.
+fn background_arg_state_machine_call_is_clean_under_inference() { // test-ratchet: wait_required_on_state_machine_call retired by Phase 6; sm_bar() as arg-of-background is correct and produces no warning
+    // sm_bar is suspending (contains wait). foo is also suspending.
+    // background foo(sm_bar()) — Phase 6: no wait_required warning for sm_bar() arg.
+    // entrypoint calls sleepAsync directly → entrypoint.suspends = true.
     let src = r#"
 function sm_bar() -> nothing {
   wait sleepAsync(10)
@@ -3377,18 +3416,25 @@ function entrypoint() -> nothing {
 }
 "#;
     let out = run(src);
-    let warnings: Vec<_> = out
+    // No wait_required-style warning for sm_bar() — the whole pattern is correct under inference.
+    let state_machine_warns: Vec<_> = out
         .diagnostics
         .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning))
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Warning)
+            && d.what.contains("state-machine"))
         .collect();
-    // wait_required_on_state_machine_call must fire for sm_bar() — it's an arg, not backgrounded.
-    let has_wait_required = warnings.iter().any(|d| d.what.contains("state-machine"));
     assert!(
-        has_wait_required,
-        "wait_required_on_state_machine_call must fire for sm_bar() inside background foo(sm_bar()); got: {:#?}",
-        warnings
+        state_machine_warns.is_empty(),
+        "wait_required_on_state_machine_call must NOT fire under Phase 6; got: {:#?}",
+        state_machine_warns
     );
+    // No errors.
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(errors.is_empty(), "background foo(sm_bar()) must compile clean; got: {:#?}", errors);
 }
 
 // WHY: `wait __testFallibleAsync(true)` must typecheck cleanly through the production
@@ -3446,6 +3492,278 @@ function entrypoint() -> nothing {
         has_got_zero,
         "arity error must say 'got 0', not the self-contradictory 'got 1'; got: {:#?}",
         errors
+    );
+}
+
+// WHY: Phase 6 can't-infer error — a suspending function calling a cross-module callee
+// produces a clean compile error. The compiler can't determine if the imported function
+// suspends intra-unit, so it rejects the call rather than guessing or bridging.
+// Guards regressions where the can't-infer check is silently dropped.
+#[test]
+fn cant_infer_suspension_cross_module_fires_error() {
+    let dir = std::env::temp_dir().join(format!(
+        "ynz_cant_infer_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+
+    // utils.ynz — exported pure-CPU function (doesn't suspend, but entrypoint can't know that)
+    let utils_src = "export function remoteOp() -> nothing { print(`remote op`) }";
+    // entrypoint.ynz — suspending function (reaches sleepAsync) calling the imported function
+    let entry_src = "import { remoteOp } from `utils`\n\
+                     function entrypoint() -> nothing { sleepAsync(10)\n  remoteOp() }";
+
+    let utils_path = dir.join("utils.ynz");
+    let entry_path = dir.join("entrypoint.ynz");
+    std::fs::write(&utils_path, utils_src).expect("write utils.ynz");
+    std::fs::write(&entry_path, entry_src).expect("write entrypoint.ynz");
+
+    let mut db = ynz_parser::CompilerDb::default();
+    let sf_utils = ynz_parser::SourceFile::new(&db, utils_path.display().to_string(), utils_src.to_string());
+    let sf_entry = ynz_parser::SourceFile::new(&db, entry_path.display().to_string(), entry_src.to_string());
+    db.register_source(sf_utils);
+    db.register_source(sf_entry);
+
+    let output = ynz_typeck::check_query(&db, sf_entry);
+    let errors: Vec<_> = output
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(
+        !errors.is_empty(),
+        "can't-infer cross-module call from suspending fn must produce an error; got: {:#?}",
+        output.diagnostics
+    );
+    // "Can't determine" (capital C) is the exact what-field text — use case-sensitive match.
+    let has_cant_infer = errors.iter().any(|d| d.what.contains("Can't determine") || d.what.contains("cross-module"));
+    assert!(
+        has_cant_infer,
+        "error must mention Can't-determine or cross-module; got: {:#?}",
+        errors
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// WHY: a function that independently suspends (local sleepAsync) AND makes a cross-module
+// call that can't be analyzed gets the clean can't-infer compile error. This is the
+// design-correct gate per design/future/concurrency.md:61-67 — the caller already IS a
+// state machine (reaches intra-unit sleepAsync), and calling an un-analyzable boundary
+// from inside a state machine requires the explicit can't-infer fence. Cross-module
+// suspension propagation is deferred to M3+M8 (requires binary package metadata).
+// Guards regressions where the check is NOT gated on current_fn_suspends and wrongly
+// fires on pure (non-suspending) cross-module callers.
+#[test]
+fn cant_infer_suspension_cross_module_with_local_sleep_fires_error() {
+    let dir = std::env::temp_dir().join(format!(
+        "ynz_cant_infer_local_sleep_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+
+    // utils.ynz — cross-module function; pure CPU, but entrypoint can't know that.
+    // entrypoint independently suspends (local sleepAsync) AND calls this boundary fn
+    // → the can't-infer error fires under the design-correct current_fn_suspends gate.
+    let utils_src = "export function maybeBlocking() -> nothing { print(`runs`) }";
+    let entry_src = "import { maybeBlocking } from `utils`\n\
+                     function entrypoint() -> nothing { sleepAsync(1)\n  maybeBlocking() }";
+
+    let utils_path = dir.join("utils.ynz");
+    let entry_path = dir.join("entrypoint.ynz");
+    std::fs::write(&utils_path, utils_src).expect("write utils.ynz");
+    std::fs::write(&entry_path, entry_src).expect("write entrypoint.ynz");
+
+    let mut db = ynz_parser::CompilerDb::default();
+    let sf_utils = ynz_parser::SourceFile::new(&db, utils_path.display().to_string(), utils_src.to_string());
+    let sf_entry = ynz_parser::SourceFile::new(&db, entry_path.display().to_string(), entry_src.to_string());
+    db.register_source(sf_utils);
+    db.register_source(sf_entry);
+
+    let output = ynz_typeck::check_query(&db, sf_entry);
+    let errors: Vec<_> = output
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(
+        !errors.is_empty(),
+        "suspending fn + cross-module call must produce a can't-infer error; got: {:#?}",
+        output.diagnostics
+    );
+    let has_cant_infer = errors.iter().any(|d| d.what.contains("Can't determine") || d.what.contains("cross-module"));
+    assert!(
+        has_cant_infer,
+        "error must mention Can't-determine or cross-module; got: {:#?}",
+        errors
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// WHY: a function that independently suspends (local sleepAsync) AND makes a
+// dynamic-dispatch call through a vtable gets the can't-infer compile error. This is
+// the design-correct gate per design/future/concurrency.md:75 — the caller already IS
+// a state machine, and calling an unanalyzable vtable from inside a state machine
+// requires the fence. A non-suspending caller with only dynamic dispatch compiles clean
+// (M2 under-approximation — dynamic suspension propagation deferred to a future version).
+// Guards regressions where the check fires on non-suspending dynamic callers (R2 regression).
+#[test]
+fn cant_infer_suspension_dynamic_dispatch_with_local_sleep_fires_error() {
+    let src = r#"
+shape Worker {
+    doWork(share self) -> nothing
+}
+
+shape FastWorker follows Worker {
+    speed: int
+}
+
+function doWork(share self: FastWorker) -> nothing {
+    print(`fast`)
+}
+
+function runWorker(w: dynamic Worker) -> nothing {
+    sleepAsync(1)
+    w.doWork()
+}
+
+function entrypoint() -> nothing {
+    let fw: FastWorker = { speed: 10 }
+    runWorker(fw)
+}
+"#;
+    let out = run(src);
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(
+        !errors.is_empty(),
+        "suspending fn + dynamic-dispatch call must produce a can't-infer error; got: {:#?}",
+        out.diagnostics
+    );
+    let has_cant_infer = errors
+        .iter()
+        .any(|d| d.what.contains("Can't determine") && d.what.contains("dynamic-dispatch"));
+    assert!(
+        has_cant_infer,
+        "error must mention Can't-determine and dynamic-dispatch; got: {:#?}",
+        errors
+    );
+}
+
+// WHY: the free-fn form `dispatch(w)` where `w: dynamic Worker` and `dispatch` expects
+// `dynamic Worker` must fire the can't-infer error when the caller independently suspends.
+// Guards the code path at check.rs:2048-2068 (arg-loop Dynamic==Dynamic gate) — distinct
+// from the dot-call vtable path at check.rs:2543. The scenario: relay suspends (sleepAsync)
+// and passes an already-dynamic value `w` to `dispatch(w: dynamic Worker)`. The gate fires
+// because expected_ty=Dynamic Worker, actual_ty=Dynamic Worker, and current_fn_suspends=true.
+// Without this test, the free-fn gate could be removed while the dot-call test still passes.
+#[test]
+fn cant_infer_suspension_dynamic_dispatch_free_fn_form_fires_error() {
+    let src = r#"
+shape Worker {
+    doWork(share self) -> nothing
+}
+
+shape FastWorker follows Worker {
+    speed: int
+}
+
+function doWork(share self: FastWorker) -> nothing {
+    print(`fast`)
+}
+
+function dispatch(w: dynamic Worker) -> nothing {
+    w.doWork()
+}
+
+function relay(w: dynamic Worker) -> nothing {
+    sleepAsync(1)
+    dispatch(w)
+}
+
+function entrypoint() -> nothing {
+    let fw: FastWorker = { speed: 10 }
+    relay(fw)
+}
+"#;
+    let out = run(src);
+    let errors: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+    assert!(
+        !errors.is_empty(),
+        "suspending fn + free-fn dynamic-dispatch call must produce a can't-infer error; got: {:#?}",
+        out.diagnostics
+    );
+    let has_cant_infer = errors
+        .iter()
+        .any(|d| d.what.contains("Can't determine") && d.what.contains("dynamic"));
+    assert!(
+        has_cant_infer,
+        "error must mention Can't-determine and dynamic; got: {:#?}",
+        errors
+    );
+}
+
+// WHY: a non-suspending function that only makes a dynamic-dispatch call must NOT fire
+// the can't-infer error. Guards the R2 regression: design/future/concurrency.md:75
+// specifies that dynamic dispatch from a non-suspending caller is treated as a
+// non-suspending leaf in the M2 under-approximation (cross-module/dynamic suspension
+// propagation is deferred to M3+M8). A future gate edit that re-broke R2 (over-firing
+// on non-suspending callers) would make THIS test fail. The assertion is non-vacuous:
+// it filters diagnostics to those mentioning "Can't determine" and asserts that filtered
+// list is empty — so re-enabling the gate unconditionally causes a loud failure here.
+#[test]
+fn dynamic_dispatch_non_suspending_caller_compiles_clean() {
+    let src = r#"
+shape Worker {
+    doWork(share self) -> nothing
+}
+
+shape FastWorker follows Worker {
+    speed: int
+}
+
+function doWork(share self: FastWorker) -> nothing {
+    print(`fast`)
+}
+
+function relay(w: dynamic Worker) -> nothing {
+    w.doWork()
+}
+
+function entrypoint() -> nothing {
+    let fw: FastWorker = { speed: 10 }
+    relay(fw)
+}
+"#;
+    let out = run(src);
+    let cant_infer_errors: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| {
+            matches!(d.severity, ynz_diagnostics::Severity::Error)
+                && d.what.contains("Can't determine")
+        })
+        .collect();
+    assert!(
+        cant_infer_errors.is_empty(),
+        "non-suspending dynamic caller must NOT fire can't-infer error; \
+         re-enabling the gate unconditionally would break the M2 under-approximation \
+         (design/future/concurrency.md:75). got: {:#?}",
+        cant_infer_errors
     );
 }
 

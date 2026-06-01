@@ -41,6 +41,7 @@
 pub mod ast_offset;
 pub mod builtins;
 pub mod inlay_hint_passes;
+pub mod may_block;
 pub mod type_at_offset;
 pub mod check;
 pub mod exports;
@@ -57,6 +58,7 @@ pub mod signatures;
 pub mod types;
 
 pub use check::{check, check_with_kernel_mode, type_attached_const_type, TypedModule};
+pub use may_block::suspends_set_for_test as may_block_suspends_set;
 pub use generics::{GenericFnTable, GenericShapeTable, MonomorphizationTable};
 pub use intrinsics::PrimitiveIntrinsicTable;
 pub use queries::{check_query, exports_query, module_signatures_query, CheckOutput, SignatureOutput};

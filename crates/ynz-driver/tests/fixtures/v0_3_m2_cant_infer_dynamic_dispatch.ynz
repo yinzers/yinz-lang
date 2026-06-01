@@ -1,0 +1,25 @@
+// Phase 6 fixture: can't-infer dynamic-dispatch compile error.
+// A `dynamic Worker` vtable call from a suspending function can't be statically
+// analyzed — the concrete callee is unknown at compile time.
+// Expected: exits 1 with a can't-infer error mentioning "dynamic-dispatch".
+
+shape Worker {
+  doWork(share self) -> nothing
+}
+
+shape FastWorker follows Worker {
+  speed: int
+}
+
+function doWork(share self: FastWorker) -> nothing {
+  print(`fast worker done`)
+}
+
+function runWithDynamicWorker(w: dynamic Worker) -> nothing {
+  sleepAsync(10)
+  w.doWork()
+}
+
+function entrypoint() -> nothing {
+  print(`should not reach here`)
+}

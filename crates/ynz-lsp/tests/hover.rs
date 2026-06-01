@@ -66,6 +66,7 @@ fn hover_user_defined_function() {
             ret: Type::String,
             decl_span: SourceSpan::new("test.ynz", 0, 0),
             contains_wait: false,
+            suspends: false,
         },
     );
     let sig = SignatureTable { fns };
@@ -182,6 +183,7 @@ fn hover_with_doc_comment_prepends_content() {
             ret: Type::Nothing,
             decl_span: SourceSpan::new("test.ynz", 0, 0),
             contains_wait: false,
+            suspends: false,
         },
     );
     let sig = SignatureTable { fns };
@@ -228,6 +230,7 @@ fn hover_without_doc_comment_shows_signature_only() {
             ret: Type::Nothing,
             decl_span: SourceSpan::new("test.ynz", 0, 0),
             contains_wait: false,
+            suspends: false,
         },
     );
     let sig = SignatureTable { fns };

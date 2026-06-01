@@ -20,14 +20,22 @@ pub struct FunctionSig {
     pub decl_span: SourceSpan,
     /// True when the function body syntactically contains at least one `Expr::Wait` node.
     ///
-    /// Used by the v0.3-M2 may-block predicate (`is_may_block_callee`) to determine
-    /// whether this function is a state machine. A caller that calls this function
-    /// from another state machine should wrap the call in `wait`.
-    ///
-    /// NOT transitive in M2: if `foo` calls `bar` and `bar` contains `wait`, then
-    /// `bar.contains_wait == true` — but `foo.contains_wait` depends solely on `foo`'s
-    /// own body. Transitive analysis ships in v0.3-M3.
+    /// Kept for the "has a literal `wait` token" check (e.g. the redundant-explicit-`wait`
+    /// hint in `wait_on_non_may_block`). NOT used as the "is state machine" predicate —
+    /// use `suspends` for that.
     pub contains_wait: bool,
+    /// True when this function **transitively** reaches a suspension point (calls a
+    /// may-block intrinsic or calls another function that `suspends`).
+    ///
+    /// This is the v0.3-M2 "is state machine" predicate, computed by
+    /// `crate::may_block::analyze`. It is initially `false` in the signature pre-pass
+    /// and set to the analysis result before the body-checking pass runs in
+    /// `check_query`. Functions whose `suspends == true` are compiled as state machines
+    /// by the v0.3-M2 codegen; functions with `suspends == false` compile to straight-line
+    /// code with no suspension overhead.
+    ///
+    /// v0.3-M3 extends this to cross-module call graphs via M8 package metadata.
+    pub suspends: bool,
 }
 
 /// All user-defined function signatures collected from a module.
@@ -131,6 +139,9 @@ pub fn collect_signatures(
                         ret,
                         decl_span: f.span.clone(),
                         contains_wait: body_contains_wait(&f.body),
+                        // Populated by `check_query` after `may_block::analyze` runs.
+                        // False during the signature pre-pass; must not be used there.
+                        suspends: false,
                     },
                 );
             }

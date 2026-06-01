@@ -1,0 +1,13 @@
+// Phase 6 fixture: pure CPU function is NOT a state machine.
+// `compute` calls only print and arithmetic — no may-block intrinsics, no suspending callees.
+// The analysis must NOT mark it as suspending; it compiles to straight-line code.
+// Expected: compiles clean; prints "result: 42" and exits 0.
+
+function compute(n: int) -> int {
+  return n * 6
+}
+
+function entrypoint() -> nothing {
+  const result = compute(7)
+  print(`result: ${result.toString()}`)
+}
