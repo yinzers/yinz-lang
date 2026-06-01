@@ -4,7 +4,7 @@ type: execution
 owner: Patrick Rizzardi
 status: active
 created: 2026-05-30
-last_updated: 2026-05-31
+last_updated: 2026-06-01
 roadmap: v0-3-concurrency-perf
 files:
   - crates/ynz-runtime/**
@@ -1862,7 +1862,7 @@ The Phase 5 executor WORKED AROUND these (omitted `errors_cascade_through_state_
 - [x] plan-adherence-verifier: PASS 2026-06-01T05:10 (round-1 BLOCK: Phase-9 plan persistence stale [ACs/gates/checklist unticked, no phase9 scratch] → coordinator filled all artifacts; all 4 phases' Steps MET; Design-Doc Alignment CONFIRMED; 5 env-snapshots unchanged across all phases)
 - [x] acceptance-verifier: PASS 2026-06-01T05:00 (OVERALL PASS — all 8 milestone success criteria run LIVE on the real binary: 8-pirate concurrency, errors-cascade both ways, no-wait runs, --workspace green-except-5, demo, gallery, m3 tag)
 - [x] design-compliance-reviewer: PASS 2026-06-01T04:55 (whole rework conforms to `design/future/concurrency.md` end-to-end — bridge gone, transitive may-block engine, composed 1-alloc frames, M2-boundary rejects are codegen-capability limits framed M3, NOT permanent coloring; "no bridge reachable from resume; no permanent coloring dressed as a limit")
-- [x] Committed: <commit SHA>
+- [x] Committed: 4ab4540 (Phase-9 round-1 work `1e29c91`; round-4 HALT-fix + persistence `4ab4540`)
 
 **Findings Log**:
 - 2026-06-01 — ROUND 1: **BLOCK (coordinator pre-fanout verification).** Most of Phase 9 is good (demo reverted to `wait sleepAsync`, gallery extended, Cargo.toml→`0.3.0-m3`, CHANGELOG/state.md/package.json staged, 22 m2 tests + cross-impl pass, free-fn negative test added). **BUT the executor's Approach Deviation #2 admitted — and silently worked around in the demo — a RESIDUAL CODEGEN CRASH that is a HALT-class hole. This is the Phase-5-omission anti-pattern recurring at the finish line. HARD BLOCK.**
