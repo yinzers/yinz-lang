@@ -1,7 +1,7 @@
 <!-- Flex row with configurable gap and alignment -->
 <script setup lang="ts">
 const props = withDefaults(
-  defineProps<{ gap: string | null; align: string | null }>(),
+  defineProps<{ gap?: string | null; align?: string | null }>(),
   { gap: null, align: null },
 )
 </script>

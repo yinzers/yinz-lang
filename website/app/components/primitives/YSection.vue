@@ -1,7 +1,7 @@
 <!-- Vertical padding section; optional top border via border prop -->
 <script setup lang="ts">
 const props = withDefaults(
-  defineProps<{ border: boolean | null; tag: string | null }>(),
+  defineProps<{ border?: boolean | null; tag?: string | null }>(),
   { border: null, tag: null },
 )
 </script>

@@ -1,7 +1,7 @@
 <!-- Small all-caps monospace label, gold by default -->
 <script setup lang="ts">
 const props = withDefaults(
-  defineProps<{ mute: boolean | null }>(),
+  defineProps<{ mute?: boolean | null }>(),
   { mute: null },
 )
 </script>

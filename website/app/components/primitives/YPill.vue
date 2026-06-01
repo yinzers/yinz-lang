@@ -1,7 +1,7 @@
 <!-- Status badge; pass any color string to dot, or null for no dot -->
 <script setup lang="ts">
 const props = withDefaults(
-  defineProps<{ dot: string | null }>(),
+  defineProps<{ dot?: string | null }>(),
   { dot: null },
 )
 </script>

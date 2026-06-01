@@ -1,7 +1,7 @@
 <!-- Button with primary (gold) and ghost (outlined) variants -->
 <script setup lang="ts">
 withDefaults(
-  defineProps<{ variant: 'primary' | 'ghost' | null }>(),
+  defineProps<{ variant?: 'primary' | 'ghost' | null }>(),
   { variant: 'primary' },
 )
 defineEmits<{ click: [] }>()

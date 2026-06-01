@@ -9,14 +9,15 @@ export default defineNuxtConfig({
 
   // Inline SSR content into HTML so code highlighting works without JS
   experimental: {
-    // 'client' = full-static: SSR HTML in initial response + payload in separate files
-    payloadExtraction: 'client',
+    // 'client' needed for generate (SSG HTML has inline content for Shiki colors etc)
+    // undefined in dev — dev server does inline SSR per-request so serializing computed
+    // refs into the hydration payload is unnecessary and causes circular JSON errors
+    payloadExtraction: process.env.NODE_ENV !== 'development' ? 'client' : undefined,
   },
 
   modules: [
     '@nuxt/fonts',
     'nuxt-schema-org',
-    'nuxt-og-image',
     '@nuxtjs/sitemap',
     '@nuxt/image',
   ],

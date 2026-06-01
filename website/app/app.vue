@@ -1,8 +1,8 @@
 <script setup lang="ts">
-const route = useRoute()
 const siteUrl = 'https://yinzlang.com'
 
-// Global head defaults — individual pages override title/description as needed
+// Global head defaults — individual pages override as needed
+// Canonical is set per-page (useHead in each page component) to avoid reactive serialization issues
 useHead({
   titleTemplate: (title) => title ? `${title} · Yinz` : 'Yinz',
   meta: [
@@ -10,13 +10,6 @@ useHead({
     { property: 'og:type', content: 'website' },
     { name: 'twitter:card', content: 'summary_large_image' },
   ],
-  link: computed(() => [
-    { rel: 'canonical', href: `${siteUrl}${route.path}` },
-  ]),
-})
-
-// Schema.org: site identity injected via useHead for reliable SSG
-useHead({
   script: [
     {
       type: 'application/ld+json',

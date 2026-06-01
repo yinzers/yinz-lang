@@ -1,7 +1,7 @@
 <!-- Text link; defaults to gold with hover to gold-soft -->
 <script setup lang="ts">
 withDefaults(
-  defineProps<{ href: string; external: boolean | null }>(),
+  defineProps<{ href: string; external?: boolean | null }>(),
   { external: null },
 )
 </script>

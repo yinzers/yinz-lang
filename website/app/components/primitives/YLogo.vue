@@ -1,7 +1,7 @@
 <!-- Block-Y logo: SVG mark + Anton wordmark "yinz" + optional mono extension -->
 <script setup lang="ts">
 withDefaults(
-  defineProps<{ ext: string | null; size: 'sm' | 'md' | 'lg' | null }>(),
+  defineProps<{ ext?: string | null; size?: 'sm' | 'md' | 'lg' | null }>(),
   { ext: null, size: 'md' },
 )
 const sizeMap: Record<'sm' | 'md' | 'lg', { mark: string; text: string }> = {

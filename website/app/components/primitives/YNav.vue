@@ -7,7 +7,7 @@ interface NavLink {
 }
 
 const props = withDefaults(
-  defineProps<{ links: NavLink[] | null }>(),
+  defineProps<{ links?: NavLink[] | null }>(),
   { links: null },
 )
 

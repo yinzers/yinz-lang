@@ -2,8 +2,8 @@
 <script setup lang="ts">
 const props = withDefaults(
   defineProps<{
-    variant: 'info' | 'warn' | 'note' | null
-    tag: string | null
+    variant?: 'info' | 'warn' | 'note' | null
+    tag?: string | null
   }>(),
   { variant: 'note', tag: null },
 )

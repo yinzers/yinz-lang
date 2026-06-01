@@ -1,7 +1,7 @@
 <!-- Max-width wrapper with responsive horizontal padding -->
 <script setup lang="ts">
 const props = withDefaults(
-  defineProps<{ tag: string | null }>(),
+  defineProps<{ tag?: string | null }>(),
   { tag: null },
 )
 </script>

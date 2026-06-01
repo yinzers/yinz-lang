@@ -11,7 +11,7 @@ interface FooterColumn {
 }
 
 withDefaults(
-  defineProps<{ columns: FooterColumn[] | null; copyright: string | null }>(),
+  defineProps<{ columns?: FooterColumn[] | null; copyright?: string | null }>(),
   { columns: null, copyright: null },
 )
 </script>
