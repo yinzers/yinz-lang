@@ -60,6 +60,9 @@ pub fn code_action_response(
                     uri, text, &table, diag, keyword, kind.kind_name(), state.encoding,
                 )
             }
+            DiagnosticKind::BannedJargon { term } => {
+                build_banned_jargon_action(uri, text, &table, diag, term, state.encoding)
+            }
             DiagnosticKind::NotDefined => {
                 let name =
                     text.get(diag.span.start..diag.span.end.min(text.len())).unwrap_or("").trim();
@@ -98,6 +101,54 @@ fn build_banned_keyword_action(
 ) -> Option<CodeAction> {
     let replacement = ynz_registry::lsp_code_action_replacement_for(kind_name, keyword)?;
     let label = ynz_registry::lsp_code_action_label_for(kind_name, keyword)?;
+
+    let diag_range = {
+        let start = table.byte_offset_to_position(text, diag.span.start, encoding);
+        let end = table.byte_offset_to_position(
+            text,
+            diag.span.end.min(text.len()),
+            encoding,
+        );
+        lsp_types::Range { start, end }
+    };
+
+    let edit = TextEdit {
+        range: diag_range,
+        new_text: replacement.to_string(),
+    };
+
+    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+    changes.insert(uri.clone(), vec![edit]);
+
+    Some(CodeAction {
+        title: label,
+        kind: Some(CodeActionKind::QUICKFIX),
+        edit: Some(WorkspaceEdit {
+            changes: Some(changes),
+            ..Default::default()
+        }),
+        is_preferred: Some(true),
+        ..Default::default()
+    })
+}
+
+/// Build a quick-fix for a `BannedJargon` diagnostic.
+///
+/// The action title includes the registry `reason` field so users learn WHY
+/// the word is banned, not just that it needs to change.  The replacement text
+/// comes from the registry `replacement` field — no duplicate hardcoding here.
+///
+/// Returns `None` when the term has no registry entry (unknown jargon).
+fn build_banned_jargon_action(
+    uri: &Url,
+    text: &str,
+    table: &LineTable,
+    diag: &ynz_diagnostics::Diagnostic,
+    term: &str,
+    encoding: crate::capabilities::PositionEncoding,
+) -> Option<CodeAction> {
+    let replacement = ynz_registry::lsp_code_action_replacement_for("BannedJargon", term)?;
+    let label = ynz_registry::lsp_code_action_label_for_jargon(term)?;
 
     let diag_range = {
         let start = table.byte_offset_to_position(text, diag.span.start, encoding);

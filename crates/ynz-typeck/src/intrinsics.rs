@@ -278,6 +278,26 @@ impl PrimitiveIntrinsicTable {
             .collect()
     }
 
+    /// All scalar-primitive intrinsic method names (zero-arg and one-arg combined),
+    /// used to identify methods that are always read-only (share receiver).
+    ///
+    /// Collection methods (`add`, `remove`, `set`, etc.) are dispatched separately
+    /// by `check.rs` and are excluded here because `build_table` already skips
+    /// `array`, `fixed`, `maybe`, and `map` receiver types.
+    ///
+    /// Time: O(m)  Space: O(m)  where m = total scalar intrinsic method entries.
+    pub fn all_scalar_intrinsic_method_names(&self) -> Vec<&'static str> {
+        let mut names: Vec<&'static str> = self
+            .methods
+            .iter()
+            .map(|(_, n, _)| *n)
+            .chain(self.methods_1arg.iter().map(|(_, n, _, _)| *n))
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        names
+    }
+
     #[cfg(test)]
     pub fn lookup_test_fn(&self, name: &str) -> Option<&FreeFnSig> {
         self.test_fns

@@ -93,7 +93,12 @@ pub fn check(
         module: module.clone(),
         expr_types: checker.expr_types,
     };
-    (typed, checker.mono_table, checker.diags, checker.referenced_names)
+    (
+        typed,
+        checker.mono_table,
+        checker.diags,
+        checker.referenced_names,
+    )
 }
 
 /// Like `check` but with kernel-mode enabled.
@@ -114,7 +119,10 @@ pub fn check_with_kernel_mode(
     let mut diags = DiagnosticBucket::new();
     let mut options_table = collect_options(module, &mut diags);
     for (name, entry) in imported_options {
-        options_table.options.entry(name.clone()).or_insert_with(|| entry.clone());
+        options_table
+            .options
+            .entry(name.clone())
+            .or_insert_with(|| entry.clone());
     }
     let mut checker = Checker {
         intrinsics,
@@ -267,13 +275,61 @@ impl<'b> Checker<'b> {
         for item in &module.items {
             match item {
                 Item::Function(f) => self.check_function(f),
-                Item::ShapeDecl(_) => {}
+                Item::ShapeDecl(s) => {
+                    // Walk the shape declaration to record imported names that are used
+                    // only in structural positions (field types, extends parent). The
+                    // check pass never enters ShapeDecl bodies — shapes are pre-resolved
+                    // in shapes.rs — so without this walk those imports were invisible
+                    // to referenced_names and incorrectly flagged as unused.
+                    //
+                    // `follows` contract names are recorded in check_follows_contracts
+                    // (the single chokepoint for shapes that have contracts). `extends`
+                    // is handled here because check_follows_contracts only visits shapes
+                    // with non-empty follows lists.
+                    if let Some((parent_name, _)) = &s.extends {
+                        self.referenced_names.insert(parent_name.clone());
+                    }
+                    // Collect type-param names so the walker can skip them. A field
+                    // typed `T` in `shape Box<T> { value: T }` is a local placeholder,
+                    // not an imported name — walking it with ast_type_to_type would emit
+                    // a spurious "T is not a known type" diagnostic. The diagnostic-free
+                    // walker skips these names while still tracking concrete imported
+                    // types used alongside type params (e.g. `meta: ImportedMeta`).
+                    let type_params: HashSet<String> =
+                        s.generics.iter().map(|g| g.name.clone()).collect();
+                    for field in &s.fields {
+                        self.collect_referenced_names_in_ast_type(&field.ty, &type_params);
+                    }
+                    // Union type alias RHS: `shape PghEvent = SouthSideEvent | StripeDistrictEvent`.
+                    // alias_ty is the raw AstType (Union) written in source. Because the check
+                    // pass never enters ShapeDecl bodies, these member names are otherwise
+                    // invisible to referenced_names — the same gap the field-type walk above
+                    // closes for regular shape fields.
+                    if let Some(alias) = &s.alias_ty {
+                        self.collect_referenced_names_in_ast_type(alias, &type_params);
+                    }
+                }
                 // M6: options declarations are validated and registered by collect_options()
                 // which runs before check_module. Nothing to do here.
                 Item::OptionsDecl(_) => {}
-                // M8: import/export/const declarations — validated by collect_exports/imports
+                Item::ConstDecl(c) => {
+                    // Walk the const declaration's type annotation and initializer so
+                    // that imports referenced only in module-level const positions are
+                    // recorded in referenced_names. Phase 0 tracks reference presence
+                    // only — full type-checking of const bodies is out of scope here
+                    // (infer_expr emits diagnostics and is reserved for function bodies).
+                    // The diagnostic-free walkers below emit zero diagnostics; they only
+                    // insert names into referenced_names so the unused-import pass does
+                    // not false-positive on a genuinely-used import.
+                    let no_type_params: HashSet<String> = HashSet::new();
+                    if let Some(ty) = &c.ty {
+                        self.collect_referenced_names_in_ast_type(ty, &no_type_params);
+                    }
+                    self.collect_referenced_names_in_expr(&c.value);
+                }
+                // M8: import/export declarations — validated by collect_exports/imports
                 // which runs before check_module. Function-body typeck is unaffected.
-                Item::ImportDecl(_) | Item::ConstDecl(_) | Item::ReExport(_) => {}
+                Item::ImportDecl(_) | Item::ReExport(_) => {}
             }
         }
         lint_repeated_inline_shapes(module, &mut self.diags);
@@ -1502,7 +1558,10 @@ impl<'b> Checker<'b> {
                 };
                 if let Some(name) = callee_name {
                     if let Some(sig) = self.sig_table.fns.get(name) {
-                        if sig.param_ownerships.contains(&Some(OwnershipModifier::Share)) {
+                        if sig
+                            .param_ownerships
+                            .contains(&Some(OwnershipModifier::Share))
+                        {
                             self.diags.push(Diagnostic::error(
                                 inner.span().clone(),
                                 "Cannot use `background` with a function that borrows its arguments.",
@@ -1511,7 +1570,10 @@ impl<'b> Checker<'b> {
                             ));
                         }
                         // `lend` across a thread boundary is a safety error (same hole as `share`).
-                        if sig.param_ownerships.contains(&Some(OwnershipModifier::Lend)) {
+                        if sig
+                            .param_ownerships
+                            .contains(&Some(OwnershipModifier::Lend))
+                        {
                             self.diags.push(Diagnostic::error(
                                 inner.span().clone(),
                                 "Cannot use `background` with a function that mutates its arguments via `lend`.",
@@ -1921,7 +1983,7 @@ impl<'b> Checker<'b> {
                         type_name(&arg_ty)
                     ),
                     what_instead,
-                    "`print` works with: int, float, number, booleanean, string, and any shape.",
+                    "`print` works with: int, float, number, boolean, string, and any shape.",
                 ));
             }
             return Type::Error;
@@ -1967,7 +2029,10 @@ impl<'b> Checker<'b> {
         if call.args.len() != 1 {
             self.diags.push(Diagnostic::error(
                 call.span.clone(),
-                format!("`sleepMs` takes exactly 1 argument, but {} were given.", call.args.len()),
+                format!(
+                    "`sleepMs` takes exactly 1 argument, but {} were given.",
+                    call.args.len()
+                ),
                 "Write `sleepMs(200)` — pass the number of milliseconds to sleep.",
                 "`sleepMs` pauses the current thread for the given number of milliseconds. \
                  It takes one `int` argument.",
@@ -2407,7 +2472,7 @@ impl<'b> Checker<'b> {
                         call.span.clone(),
                         format!("Cannot work out the type parameter `{tp_name}` for function `{name}` — pass a value or annotate explicitly."),
                         format!("Examples: `{name}(5)` (T = int) or `{name}<int>()`"),
-                        "Yinz infers type parameters from the argument types. If there are no arguments, specify the type explicitly.",
+                        "Yinz figures out type parameters from the argument types. If there are no arguments, specify the type explicitly.",
                     ));
                 }
                 n => {
@@ -2420,7 +2485,7 @@ impl<'b> Checker<'b> {
                         call.span.clone(),
                         format!("{n} type parameters could not be resolved for `{name}`: {list}."),
                         format!("Annotate the call explicitly: `{name}<Type1, Type2>(...)` or pass typed arguments."),
-                        "Yinz infers type parameters from the argument types. If there are no arguments, specify all types explicitly.",
+                        "Yinz figures out type parameters from the argument types. If there are no arguments, specify all types explicitly.",
                     ));
                 }
             }
@@ -2656,10 +2721,16 @@ impl<'b> Checker<'b> {
                         // this UFCS dot-call path AND the regular function-call arg loop so
                         // the diagnostic text is byte-identical between `p.heal(20)` and
                         // `heal(p, 20)` per design/ide-hints.md shared-wording rule.
-                        let receiver_ownership = sig.param_ownerships.first().and_then(|o| o.as_ref());
+                        let receiver_ownership =
+                            sig.param_ownerships.first().and_then(|o| o.as_ref());
                         if let Some(recv_expr) = receiver_expr {
                             if let Some(binding_name) = simple_ident_name(recv_expr) {
-                                self.check_arg_ownership(binding_name, receiver_ownership, method, recv_expr.span());
+                                self.check_arg_ownership(
+                                    binding_name,
+                                    receiver_ownership,
+                                    method,
+                                    recv_expr.span(),
+                                );
                             }
                         }
                         return sig.ret.clone();
@@ -2893,6 +2964,9 @@ impl<'b> Checker<'b> {
             },
             AstType::Dynamic { contract, span } => {
                 if self.shape_table.contains(contract) {
+                    // Record the contract name as referenced so an import used exclusively
+                    // in `dynamic Contract` type position is not flagged as unused.
+                    self.referenced_names.insert(contract.clone());
                     Type::Dynamic {
                         contract: contract.clone(),
                     }
@@ -2978,6 +3052,10 @@ impl<'b> Checker<'b> {
                     }
                     _ => {
                         if self.generic_shape_table.contains(name) {
+                            // Record the generic shape name as referenced so an import
+                            // used exclusively in `Container<T>` type position is not
+                            // flagged as unused.
+                            self.referenced_names.insert(name.clone());
                             Type::Generic {
                                 name: name.clone(),
                                 args: resolved_args,
@@ -3031,6 +3109,201 @@ impl<'b> Checker<'b> {
             AstType::AnonShape { fields, .. } => Type::Shape {
                 name: crate::shapes::canonical_anon_name(fields),
             },
+        }
+    }
+
+    /// Walk an `AstType` tree and record every referenced user-defined name
+    /// (shape, options, generic shape) in `self.referenced_names`.
+    ///
+    /// This is the non-diagnostic-emitting companion to `ast_type_to_type`. It
+    /// exists so the unused-import pass can see names used only in type-annotation
+    /// positions (shape fields, const type annotations, generic type arguments)
+    /// without triggering spurious "T is not a known type" diagnostics for bare
+    /// type-parameter names inside generic shapes.
+    ///
+    /// `type_params` is the set of type-parameter names in the enclosing generic
+    /// context (e.g. `{"T", "U"}` for `shape Box<T, U>`). Names in this set are
+    /// skipped — they are local placeholders, not imported symbols.
+    ///
+    /// Time: O(n)  Space: O(n)  where n = nodes in the AST type tree (recursion
+    /// depth bounds the stack; generic args recurse).
+    fn collect_referenced_names_in_ast_type(
+        &mut self,
+        ast_ty: &AstType,
+        type_params: &HashSet<String>,
+    ) {
+        match ast_ty {
+            // Primitives and keywords carry no user-defined symbol references.
+            AstType::Nothing
+            | AstType::Int
+            | AstType::Float
+            | AstType::Number { .. }
+            | AstType::Bool
+            | AstType::Error
+            | AstType::Range { .. }
+            | AstType::SelfType { .. } => {}
+
+            AstType::Named(n, _) => {
+                // Skip bare type-parameter names — they are not imported symbols.
+                if type_params.contains(n.as_str()) {
+                    return;
+                }
+                if self.options_table.contains(n)
+                    || self.shape_table.contains(n)
+                    || self.union_aliases.contains_key(n)
+                    || self.generic_shape_table.contains(n)
+                {
+                    self.referenced_names.insert(n.clone());
+                }
+            }
+
+            // TypeParam is a resolved placeholder — the name is the param itself,
+            // not an imported symbol, so there is nothing to record here.
+            AstType::TypeParam { .. } => {}
+
+            AstType::Dynamic { contract, .. } => {
+                if self.shape_table.contains(contract) {
+                    self.referenced_names.insert(contract.clone());
+                }
+            }
+
+            AstType::Generic { name, args, .. } => {
+                if self.generic_shape_table.contains(name) {
+                    self.referenced_names.insert(name.clone());
+                }
+                for arg in args {
+                    self.collect_referenced_names_in_ast_type(arg, type_params);
+                }
+            }
+
+            AstType::Maybe { inner, .. } => {
+                self.collect_referenced_names_in_ast_type(inner, type_params);
+            }
+
+            AstType::Union { variants, .. } => {
+                for v in variants {
+                    self.collect_referenced_names_in_ast_type(v, type_params);
+                }
+            }
+
+            AstType::ErrorCapable { inner, .. } => {
+                self.collect_referenced_names_in_ast_type(inner, type_params);
+            }
+
+            AstType::Sensitive(inner) => {
+                self.collect_referenced_names_in_ast_type(inner, type_params);
+            }
+
+            AstType::AnonShape { fields, .. } => {
+                for f in fields {
+                    self.collect_referenced_names_in_ast_type(&f.ty, type_params);
+                }
+            }
+        }
+    }
+
+    /// Walk an `Expr` tree and record every identifier that names a user-defined
+    /// symbol (shape, options type, or any known function/binding) in
+    /// `self.referenced_names`.
+    ///
+    /// This is the non-diagnostic-emitting companion to `infer_expr`. It exists
+    /// so the unused-import pass can track names referenced in module-level const
+    /// initializers without triggering type-checking diagnostics (which is
+    /// `infer_expr`'s job and runs only inside function bodies or generic bodies).
+    ///
+    /// The walk mirrors `symbol_lookup::collect_use_sites_in_expr` in structure —
+    /// full traversal, no leaves skipped — but instead of checking canonical
+    /// resolution it simply inserts every `Ident` name that belongs to a known
+    /// imported symbol table. For the module-level const case the universe of
+    /// "imported names" is the union of shape_table, options_table, sig_table,
+    /// generic_shape_table, and generic_fn_table; any ident in any of those is
+    /// a candidate referenced name.
+    ///
+    /// Time: O(n)  Space: O(n)  where n = nodes in the expression tree (recursion
+    /// depth bounds the stack).
+    fn collect_referenced_names_in_expr(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Ident(n, _) => {
+                // An identifier in expression position references an imported
+                // name when it is a known shape, options type, or function.
+                // sig_table covers user-defined functions (including imported ones).
+                if self.shape_table.contains(n)
+                    || self.options_table.contains(n)
+                    || self.sig_table.fns.contains_key(n)
+                    || self.generic_shape_table.contains(n)
+                    || self.generic_fn_table.fns.contains_key(n)
+                {
+                    self.referenced_names.insert(n.clone());
+                }
+            }
+            Expr::Call(call) => {
+                self.collect_referenced_names_in_expr(&call.callee);
+                for arg in &call.args {
+                    self.collect_referenced_names_in_expr(arg);
+                }
+            }
+            Expr::MethodCall { receiver, args, .. } => {
+                self.collect_referenced_names_in_expr(receiver);
+                for arg in args {
+                    self.collect_referenced_names_in_expr(arg);
+                }
+            }
+            Expr::FieldAccess { receiver, .. } => {
+                self.collect_referenced_names_in_expr(receiver);
+            }
+            Expr::BinOp { lhs, rhs, .. } => {
+                self.collect_referenced_names_in_expr(lhs);
+                self.collect_referenced_names_in_expr(rhs);
+            }
+            Expr::UnaryOp { operand, .. } => {
+                self.collect_referenced_names_in_expr(operand);
+            }
+            Expr::StructLit { fields, .. } => {
+                for f in fields {
+                    self.collect_referenced_names_in_expr(&f.value);
+                }
+            }
+            Expr::PostfixOp { receiver, .. } => {
+                self.collect_referenced_names_in_expr(receiver);
+            }
+            Expr::IndexAccess {
+                receiver, index, ..
+            } => {
+                self.collect_referenced_names_in_expr(receiver);
+                self.collect_referenced_names_in_expr(index);
+            }
+            Expr::ArrayLit { elements, .. } => {
+                for e in elements {
+                    self.collect_referenced_names_in_expr(e);
+                }
+            }
+            Expr::MapLit { entries, .. } => {
+                for (k, v) in entries {
+                    self.collect_referenced_names_in_expr(k);
+                    self.collect_referenced_names_in_expr(v);
+                }
+            }
+            Expr::Is { expr, .. } => {
+                self.collect_referenced_names_in_expr(expr);
+            }
+            Expr::InterpolatedString(parts, _) => {
+                for part in parts {
+                    if let ynz_ast::nodes::StringPart::Expr(e, _) = part {
+                        self.collect_referenced_names_in_expr(e);
+                    }
+                }
+            }
+            Expr::Wait(inner, _) | Expr::Background(inner, _) => {
+                self.collect_referenced_names_in_expr(inner);
+            }
+            // Leaves that carry no sub-expressions referencing imported names.
+            Expr::StringLit(..)
+            | Expr::IntLit(..)
+            | Expr::NumberLit(..)
+            | Expr::BoolLit(..)
+            | Expr::NoneLit { .. }
+            | Expr::SelfValue { .. }
+            | Expr::Error(..) => {}
         }
     }
 
@@ -3113,6 +3386,16 @@ impl<'b> Checker<'b> {
             let shape_ty = Type::Shape {
                 name: shape_name.clone(),
             };
+            // Record all `follows` contract names as referenced. An import used
+            // only as `shape X follows ImportedContract` would otherwise go unseen
+            // by the check pass (shapes are pre-resolved in shapes.rs before
+            // referenced_names exists). This is the single chokepoint for follows
+            // because check_follows_contracts already iterates every shape that
+            // has at least one follows contract. The extends case is handled in
+            // the ShapeDecl arm of check_module, which sees ALL shape decls.
+            for contract_name in contracts.iter() {
+                self.referenced_names.insert(contract_name.clone());
+            }
             for contract_name in contracts {
                 let Some(contract_def) = self.shape_table.get(contract_name) else {
                     continue; // already errored in collect_shapes
@@ -4087,6 +4370,11 @@ impl<'b> Checker<'b> {
                         }
                     })
                     .collect();
+                // Record the variant name as referenced so an import used exclusively
+                // via `is TypeName` arm pattern is not flagged as unused.
+                if !type_path.name.is_empty() {
+                    self.referenced_names.insert(type_path.name.clone());
+                }
                 if !type_path.name.is_empty() && !valid.contains(&type_path.name) {
                     self.diags.push(Diagnostic::error(
                         type_path.span.clone(),
@@ -4129,6 +4417,9 @@ impl<'b> Checker<'b> {
         if type_path.name.is_empty() {
             return Type::Bool; // parse error already emitted
         }
+        // Record the variant type name as referenced so an import used exclusively
+        // via `is TypeName` expression is not flagged as unused.
+        self.referenced_names.insert(type_path.name.clone());
         match &scrutinee_ty {
             Type::Union { variants } => {
                 let variant_names: Vec<String> = variants
@@ -4173,6 +4464,9 @@ impl<'b> Checker<'b> {
     /// that names an options type. Returns `Type::Options { name }` on success.
     fn check_options_value(&mut self, type_name: &str, variant: &str, span: &SourceSpan) -> Type {
         let entry = self.options_table.get(type_name).unwrap(); // caller verified contains()
+        // Record the options type name as referenced so an import used exclusively
+        // via variant access (`Timeframe.fiveMinute`) is not flagged as unused.
+        self.referenced_names.insert(type_name.to_string());
         if entry.variants.contains(&variant.to_string()) {
             Type::Options {
                 name: type_name.to_string(),

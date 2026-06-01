@@ -35,7 +35,7 @@ pub fn server_capabilities(encoding: PositionEncoding) -> ServerCapabilities {
             },
         )),
         completion_provider: Some(CompletionOptions {
-            trigger_characters: Some(vec![".".to_string(), " ".to_string()]),
+            trigger_characters: Some(vec![".".to_string()]),
             resolve_provider: Some(false),
             ..Default::default()
         }),

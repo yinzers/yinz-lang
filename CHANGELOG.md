@@ -59,6 +59,54 @@ The inference model: the compiler analyzes the full call graph of each compilati
 
 - `examples/pirates-roster/entrypoint.ynz` extended with v0.3-M2 section (`m3m2_demo`): 8 background pirates each `wait sleepAsync(100)` concurrently, inference demo (no explicit `wait`), value-returning SM, nested SM.
 - `examples/primantis-orders/v0_3_m2_errors.ynz` — compile-error gallery covering all 7 M2 diagnostic classes: SubExprSuspend, MutualRecursion, WaitInsideLoop, LocalCrossesWait, WaitOnNonCallExpression, WaitOnNonMayBlock, CantInferDynamic.
+## [0.3.0-m2] — 2026-05-31 — Teaching-Surface Bug Hunt
+
+Commit range: v0.3.0-m1..v0.3.0-m2 (PR #68)
+
+### What changed
+
+v0.3.0-m2 fixes every bug found by the four-agent teaching-surface audit — 14 cataloged bugs plus 3 same-class siblings caught during execution. These are all teaching-surface regressions: a false warning on valid code, or an inlay hint (`let → const`, `array → fixed`) firing on a binding that is actually mutated. A teaching language whose teaching surface lies is worse than one with no hints; this milestone closes that gap. Shipped from the `v0.2.1-m10` (LSP-gap-closure roadmap) work, folded straight into the 0.3 line.
+
+#### Fixes — unused-import false positives
+
+- **Imports used only in a type position no longer warn "imported but never used."** Seven positions were invisible to the reference tracker: options-variant access (`Timeframe.fiveMinute` — the user-reported repro), `is`-narrowing, `follows`/`extends`, shape field-type, module-`const`, `dynamic`, generic position, and union-alias RHS (`shape X = A | B`). Genuinely-unused imports still warn (no over-suppression).
+
+#### Fixes — inlay hints never fire on a mutated binding
+
+- **`else =>` catch-all arms** are now visited by all six inlay-hint walkers (a `let` mutated only in an `else` arm no longer shows "effectively const").
+- **Nested mutation paths** (`player.address.street = x`, `arr[i][j] = v`) now mark their root binding mutated.
+- **Ownership-aware suppression**: a `let` passed to a call only suppresses its `let → const` hint when the callee's parameter is `lend`/`give` — so `print(count)` keeps the hint. Previously almost every `let` lost its hint.
+- **Literal-argument mutations** (inside struct/array/map literals) are now tracked.
+- **Concurrency-wrapper mutations**: a `lend`/`give` mutation hidden inside `wait foo(x)`, `background foo(x)`, an `is` expression, or string interpolation `${foo(x)}` is now tracked across all three inlay-hint expression walkers (was invisible — `wait heal(buf)` had been printing a misleading "effectively const" hint).
+
+#### Fixes — hover, completion, ownership/copy hints
+
+- **Hover**: a variable named like a contextual keyword (`let share = 5; share + 1`) now hovers to its type instead of the keyword doc; the keyword hover is preserved in genuine signature-modifier positions; the end-of-token cursor returns content.
+- **Completion** no longer triggers on space (only `.`).
+- **Ownership hints** now fire for UFCS method calls (`player.heal(20)`) and generic-function calls, matching the free-function form.
+- **Copy hints** now recurse into nested call arguments (`outer(inner(n))`).
+
+#### Features — teaching surface
+
+- **Banned-jargon quick-fix**: a banned-jargon identifier now offers a one-click code action that replaces it with the Yinz term AND carries the WHY (sourced from the registry `[[banned_jargon]]` entry) — the fix teaches, not just swaps.
+- **`array → fixed` click-to-make-explicit**: the inlay hint now carries a `TextEdit` (parity with `let → const`).
+
+#### Behavior changes worth noting
+
+- **`let → const` hints now appear far more often** — the over-suppression bug meant the flagship auto-promotion hint almost never fired in real code; it now fires whenever a binding is provably never mutated.
+- **Inlay hints render in Pittsburgh gold (`#ffd23f`) and anchor at end-of-line** instead of on the `let` keyword (VSCode `[ynz]`-scoped contribution).
+
+#### Cleanup
+
+- `booleanean` typo → `boolean` in the `print` diagnostic; banned `infers`/`inferred` removed from user-facing diagnostic + registry-description + inlay-hover text (internal/design uses correctly retained). Four jargon-audit tests guard against reintroduction.
+
+#### Tests
+
+- ~60 new regression tests across 10 files (`ynz-typeck`, `ynz-lsp`, `ynz-diagnostics`, `ynz-driver`), each fail-before / pass-after. The `examples/pirates-roster/` demo gained a "Three Rivers schedule" section exercising 7 import patterns with a zero-spurious-warning snapshot guard.
+
+#### Known follow-ups (deferred, tracked in `.claude/todos.md`)
+
+- Inlay-hint walker completeness: ownership/copy hints don't yet cover every statement form / container expression / UFCS-copy (missed hints, not lies). Cross-file `follows`/`extends` remains a same-file-only compile constraint pending the M8 cross-file-resolution work.
 
 ---
 

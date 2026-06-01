@@ -25,6 +25,12 @@ import { newPirate, announce } from `services/players`
 
 import { clamp, square } from `utils/math_extra`
 
+// v0.2.1-M10 import-pattern coverage — six type symbols, one per previously-false-positive
+// AST position (Bugs 1 + 2.1–2.5). Each is used below in a realistic Three Rivers
+// schedule context that exercises the pattern without calling cross-file functions.
+import { ScheduleDay, Announceable, StripeDistrictEvent, SouthSideEvent } from `services/players`
+import { StatCategory } from `utils/math_extra`
+
 function entrypoint() -> nothing {
   // ────── M1: hello-world end-to-end ──────
   print(`Pittsburgh Pirates Roster — Yinz v0.1 Showcase`)
@@ -521,3 +527,123 @@ function recordPittsburghAnalytics(event: string) -> nothing {
   sleepMs(200)
   print(`background analytics done`)
 }
+
+// ────── v0.2.1-M10: Three Rivers schedule — import-pattern coverage ──────
+//
+// Each declaration below exercises an AST position that previously triggered a
+// spurious "imported but never used" warning. Building with zero such warnings
+// proves that Bugs 1 and 2.1–2.5 hold in a realistic multi-file project.
+//
+// Driver constraints noted:
+//   - options types as function PARAMETER types are not yet lowered in codegen
+//     (v0.1 limitation); options imports are exercised via variant access,
+//     field types, module-const, and generic fields instead.
+//   - Cross-file `follows` and `extends` cannot be demonstrated here because
+//     `collect_shapes` (shapes.rs:298-322) builds `all_names` only from
+//     module-local items. The `all_names.contains(contract)` guard at shapes.rs:406
+//     and `all_names.contains(parent)` at shapes.rs:393 reject imported contract/parent
+//     names with "not defined" before the unused-import check even runs. Imported shapes
+//     ARE seeded into the shape_table (shapes.rs:244) but not into `all_names`, so
+//     cross-file `follows`/`extends` is a compile error today. Both patterns are covered
+//     by dedicated typeck unit tests (see `two_file_db` tests in
+//     crates/ynz-typeck/tests/unused_import_false_positives.rs:
+//     `follows_contract_does_not_warn_unused_import` and
+//     `extends_parent_does_not_warn_unused_import`). The root cause is tracked in
+//     .claude/todos.md "m8-typeck-cross-file-resolution" — fixing it is out of M10 scope.
+//
+// Pattern map (import → AST position exercised in this file):
+//   ScheduleDay         → options-variant access  (Bug 1: Timeframe.fiveMinute repro)
+//   StripeDistrictEvent → is-narrowing             (Bug 2.1: multi-case if arm)
+//   Announceable        → dynamic contract         (Bug 2.4: dynamic Announceable param)
+//   ScheduleDay         → shape field-type         (Bug 2.3: field: ScheduleDay in ShapeDecl)
+//   ScheduleDay         → module-const type        (Bug 2.3: const …: ScheduleDay = …)
+//   StatCategory        → generic field type       (Bug 2.5: concrete field in shape<T>)
+//   SouthSideEvent      → union-alias RHS member   (Phase 0 alias_ty walk in ShapeDecl arm)
+// follows/extends (Bug 2.2): covered by unit tests (shapes.rs:393/406 limitation above).
+// Union alias RHS: exercised in Pattern 9 below (SouthSideEvent → shape RiverEvent) AND
+//   by unit tests in crates/ynz-typeck/tests/unused_import_false_positives.rs:
+//   union_alias_rhs_member_does_not_warn_unused_import +
+//   union_alias_rhs_with_options_member_does_not_warn_unused_import.
+// The driver calls the same check_query path as the unit tests — both exercise the
+// Phase 0 ShapeDecl arm's alias_ty walk (check.rs:273-274). Zero spurious warnings
+// confirmed by the demo build at Phase 11 completion.
+
+// Pattern 1 — options-variant access (Bug 1).
+// ScheduleDay is referenced via ScheduleDay.home — the exact variant-access form
+// that triggered the false positive before check_options_value was patched.
+// The variant is accessed in a body expression (not a function parameter) because
+// options types as function parameter types are not yet codegen-lowered in v0.1.
+function showOpeningDay() -> nothing {
+  let openingSlot = ScheduleDay.home
+  print(openingSlot.toString())
+  if (openingSlot == ScheduleDay.doubleHeader) {
+    print(`doubleheader at PNC Park`)
+  }
+}
+
+// Pattern 2 — is-narrowing (Bug 2.1).
+// StripeDistrictEvent is imported and used only via the multi-case `is` arm.
+// A local shape provides the other union arm; StripeDistrictEvent is the arm
+// whose name is tracked via check_is_arm_pattern (the fixed path).
+shape LocalVenueEvent {
+  venue: string
+}
+
+shape PghMarketEvent = StripeDistrictEvent | LocalVenueEvent
+
+function describeMarketEvent(e: PghMarketEvent) -> string {
+  if (e) {
+    is StripeDistrictEvent => {
+      return `Strip District vendor stand`
+    }
+    is LocalVenueEvent => {
+      return `other Pittsburgh venue`
+    }
+  }
+  return `unknown`
+}
+
+// Pattern 9 — union-alias RHS member.
+// SouthSideEvent is imported and used ONLY as a member on the union-alias RHS.
+// This exercises the Phase 0 ShapeDecl arm's alias_ty walk (check.rs:273-274):
+// check_module now calls collect_referenced_names_in_ast_type on alias_ty, so
+// union members are visible to referenced_names even though no function body
+// references them. The driver calls the same check_query path as the unit tests.
+shape RiverEvent = SouthSideEvent | LocalVenueEvent
+
+// Pattern 7 — dynamic contract (Bug 2.4).
+// Announceable is imported and used as `dynamic Announceable` in a parameter
+// type. This exercises the AstType::Dynamic branch fixed in check.rs.
+function runAnnouncement(a: dynamic Announceable) -> nothing {
+  print(`announcing`)
+}
+
+// Pattern 5 — shape field-type annotation (Bug 2.3).
+// ScheduleDay is imported and used only as a field type in a local shape.
+// This exercises the check_module ShapeDecl field-type walk that was added for
+// Bug 2.3 — the same walk also covers follows/extends parent names (Bug 2.2),
+// so fixing the field-type path fixed all three positions in one patch.
+shape ScheduleSlot {
+  day: ScheduleDay
+  runsScored: int
+  opponent: string
+}
+
+// Pattern 6 — module-const type annotation (Bug 2.3).
+// ScheduleDay appears as both the type annotation and the initializer value,
+// exercising the check_module ConstDecl arm's collect_referenced_names_in_ast_type
+// and collect_referenced_names_in_expr walks added for Bug 2.3.
+export const OPENING_DAY_SLOT: ScheduleDay = ScheduleDay.home
+
+// Pattern 8 — generic shape with concrete imported field type (Bug 2.5).
+// StatCategory is imported from utils/math_extra and used as a concrete field
+// type inside a generic shape. Before the fix, the field-walk in check_module
+// skipped the entire ShapeDecl for generic shapes (generics.is_empty() guard),
+// so StatCategory was never recorded. The fix walks concrete fields while
+// skipping bare TypeParam placeholders.
+shape StatBook<T> {
+  entry: T
+  category: StatCategory
+  seasonYear: int
+}
+

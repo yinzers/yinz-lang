@@ -20,3 +20,38 @@ export function announce(player: Pirate) -> string {
 export function recordHits(player: Pirate, count: int) -> Pirate {
   return { name: player.name, careerHits: player.careerHits + count }
 }
+
+// ────── M10 demo exports — import-pattern coverage ──────
+// These types are imported in entrypoint.ynz and used via the eight AST positions
+// that previously triggered spurious "imported but never used" warnings (Bugs 1 + 2.1–2.5).
+// The exports live here so a multi-file build exercises the cross-file import resolver.
+
+/// Day types on the Pirates home schedule.
+export options ScheduleDay {
+  home
+  away
+  doubleHeader
+}
+
+/// Contract for shapes that can be announced over PA at PNC Park.
+export shape Announceable {
+  announce(share self) -> string
+}
+
+/// Base record for any single-game outcome at PNC Park.
+export shape GameRecord {
+  gameId: int
+  opponent: string
+}
+
+/// A street-market vendor event in the Strip District (union left arm).
+export shape StripeDistrictEvent {
+  vendor: string
+  stand: int
+}
+
+/// A South Side pub event (union right arm for is-narrowing demo).
+export shape SouthSideEvent {
+  bar: string
+  capacity: int
+}
