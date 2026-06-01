@@ -3479,15 +3479,17 @@ function entrypoint() -> nothing {
     );
 }
 
-// WHY: Phase 6 inference — `background foo(sm_bar())` where both are suspending. Under the
-// inference model, `wait_required_on_state_machine_call` is retired — SM calls without
-// explicit `wait` are correct (inference handles suspension). `sm_bar()` as an argument
-// to `background foo(...)` compiles clean: no stale warning fires for it. Guards that
-// the retired `wait_required` warning doesn't resurface for arg-position SM calls.
+// WHY: `background foo(sm_bar())` where both are suspending. The `wait_required_on_state_machine_call`
+// warning (retired by Phase 6) must NOT fire — SM calls without explicit `wait` are correct under
+// inference. HOWEVER, `sm_bar()` appears in an ARGUMENT position to the background spawn: arguments
+// evaluate in the CALLING context before the spawn, so `sm_bar()` suspending there is the same
+// sub-expression violation class as `add(inner(), 4)`. Round-4 fix closes this hole — the pattern
+// now produces the subexpr teaching error (not a wait_required warning). This test verifies: (a) no
+// stale wait_required-style warning, and (b) the subexpr error fires (the hole is closed).
 #[test]
-fn background_arg_state_machine_call_is_clean_under_inference() { // test-ratchet: wait_required_on_state_machine_call retired by Phase 6; sm_bar() as arg-of-background is correct and produces no warning
+fn background_arg_state_machine_call_is_clean_under_inference() { // test-ratchet: wait_required_on_state_machine_call retired by Phase 6; sm_bar() as arg-of-background now correctly fires the subexpr suspension error (args evaluate in caller context before spawn)
     // sm_bar is suspending (contains wait). foo is also suspending.
-    // background foo(sm_bar()) — Phase 6: no wait_required warning for sm_bar() arg.
+    // background foo(sm_bar()) — sm_bar() in arg position evaluates in calling context.
     // entrypoint calls sleepAsync directly → entrypoint.suspends = true.
     let src = r#"
 function sm_bar() -> nothing {
@@ -3502,7 +3504,7 @@ function entrypoint() -> nothing {
 }
 "#;
     let out = run(src);
-    // No wait_required-style warning for sm_bar() — the whole pattern is correct under inference.
+    // No wait_required-style warning for sm_bar() — that diagnostic is retired.
     let state_machine_warns: Vec<_> = out
         .diagnostics
         .iter()
@@ -3514,13 +3516,18 @@ function entrypoint() -> nothing {
         "wait_required_on_state_machine_call must NOT fire under Phase 6; got: {:#?}",
         state_machine_warns
     );
-    // No errors.
-    let errors: Vec<_> = out
+    // The sub-expression guard MUST fire: sm_bar() in arg position is a violation.
+    let subexpr_errors: Vec<_> = out
         .diagnostics
         .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error)
+            && d.what.contains("suspending call inside a larger expression"))
         .collect();
-    assert!(errors.is_empty(), "background foo(sm_bar()) must compile clean; got: {:#?}", errors);
+    assert!(
+        !subexpr_errors.is_empty(),
+        "sm_bar() in background arg position must produce 'suspending call inside a larger expression' error; got: {:#?}",
+        out.diagnostics
+    );
 }
 
 // WHY: `wait __testFallibleAsync(true)` must typecheck cleanly through the production

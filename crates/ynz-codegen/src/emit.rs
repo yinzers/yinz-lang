@@ -1959,58 +1959,6 @@ fn expr_contains_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool 
     }
 }
 
-/// Count `Expr::Wait` occurrences in a block.
-///
-/// Retained for reference; P7 uses `count_suspension_points` instead (also counts
-/// suspending callee calls, not just explicit `wait` nodes).
-#[allow(dead_code)]
-fn count_waits_in_block(block: &ynz_ast::nodes::Block) -> usize {
-    block.stmts.iter().map(count_waits_in_stmt).sum()
-}
-
-#[allow(dead_code)]
-fn count_waits_in_stmt(stmt: &Stmt) -> usize {
-    match stmt {
-        Stmt::Expr(e) => count_waits_in_expr(e),
-        Stmt::Let { value, .. } => count_waits_in_expr(value),
-        Stmt::Assign { value, .. } => count_waits_in_expr(value),
-        Stmt::If { cond, body, .. } => count_waits_in_expr(cond) + count_waits_in_block(body),
-        Stmt::Match { scrutinee, arms, else_arm, .. } => {
-            count_waits_in_expr(scrutinee)
-                + arms.iter().map(|a| count_waits_in_block(&a.body)).sum::<usize>()
-                + else_arm.as_ref().map_or(0, count_waits_in_block)
-        }
-        Stmt::While { cond, body, .. } => {
-            count_waits_in_expr(cond) + count_waits_in_block(body)
-        }
-        Stmt::For { iter, body, .. } => {
-            count_waits_in_expr(iter) + count_waits_in_block(body)
-        }
-        Stmt::Return { value, .. } => value.as_ref().map_or(0, count_waits_in_expr),
-        Stmt::FieldAssign { target, value, .. } => {
-            count_waits_in_expr(target) + count_waits_in_expr(value)
-        }
-        Stmt::IndexAssign { receiver, index, value, .. } => {
-            count_waits_in_expr(receiver) + count_waits_in_expr(index) + count_waits_in_expr(value)
-        }
-    }
-}
-
-#[allow(dead_code)]
-fn count_waits_in_expr(expr: &Expr) -> usize {
-    match expr {
-        Expr::Wait(..) => 1,
-        Expr::Call(c) => c.args.iter().map(count_waits_in_expr).sum(),
-        Expr::BinOp { lhs, rhs, .. } => count_waits_in_expr(lhs) + count_waits_in_expr(rhs),
-        Expr::UnaryOp { operand, .. } => count_waits_in_expr(operand),
-        Expr::MethodCall { receiver, args, .. } => {
-            count_waits_in_expr(receiver) + args.iter().map(count_waits_in_expr).sum::<usize>()
-        }
-        Expr::Background(inner, _) => count_waits_in_expr(inner),
-        _ => 0,
-    }
-}
-
 /// Reload all frame parameters into their allocas.
 ///
 /// Called at the start of EVERY state block in the resume function because each call to
@@ -2140,7 +2088,7 @@ fn lower_sm_body<'ctx, 'g>(
 /// `lower_sm_stmt_with_wait` (which handles bare/let waits AND recurses into `if`/loop
 /// bodies); otherwise lower it normally. The `current_state` counter threads through the
 /// recursion so each `wait` — regardless of nesting depth — consumes the next pre-allocated
-/// continuation state, matching the `count_waits_in_block` pre-count that sized `state_blocks`.
+/// continuation state, matching the `count_suspension_points` pre-count that sized `state_blocks`.
 ///
 /// Extracted from `lower_sm_body` so control-flow handlers (`Stmt::If`, future loops) can
 /// recurse into their branch bodies with the same walk.

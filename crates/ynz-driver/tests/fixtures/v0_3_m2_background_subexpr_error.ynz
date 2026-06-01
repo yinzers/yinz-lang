@@ -1,0 +1,20 @@
+// Fixture: suspending call nested inside a `background` call's argument.
+// Typeck must reject this (exit 1, "suspending call inside a larger expression").
+//
+// WHY: background arguments evaluate in the CALLING context before the spawn.
+// A suspending call in arg position triggers the same nested-block_on abort
+// as the non-background form — the guard must catch it before codegen fires.
+
+function inner() -> int {
+    wait sleepAsync(10)
+    return 5
+}
+
+function add(a: int, b: int) -> int {
+    return a + b
+}
+
+function entrypoint() -> nothing {
+    background add(inner(), 4)
+    print(`done`)
+}

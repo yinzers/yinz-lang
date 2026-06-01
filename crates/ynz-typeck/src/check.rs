@@ -5034,8 +5034,33 @@ fn collect_subexpr_violations_in_expr(
         }
         // `wait expr` in sub-expression position: the inner is already inside the larger expr.
         Expr::Wait(inner, _) => collect_subexpr_violations_in_expr(inner, suspending, out),
-        // Background is a call-graph cut — `background foo()` does not suspend the caller.
-        Expr::Background(_, _) => {}
+        // `background foo(a, b)`: the spawn target (`foo`) becomes its own state machine
+        // and is a call-graph cut for suspension propagation.  BUT the arguments `a` and `b`
+        // evaluate in the CALLING context before the spawn — exactly like the non-background
+        // `foo(a, b)` form.  A suspending call nested inside an argument therefore runs on the
+        // caller's thread in a sub-expression position, triggering the same nested-block_on
+        // abort that this guard exists to prevent.
+        //
+        // Rule: scan the spawned call's arguments for violations; do NOT flag the direct
+        // spawn callee itself (that is the legal route-to-I/O-pool pattern).
+        Expr::Background(inner, _) => match inner.as_ref() {
+            Expr::Call(c) => {
+                // Direct-spawn callee is a graph cut — skip `c.callee`. Scan args only.
+                for arg in &c.args {
+                    collect_subexpr_violations_in_expr(arg, suspending, out);
+                }
+            }
+            Expr::MethodCall { receiver, args, .. } => {
+                // Same reasoning: receiver + args evaluate in the caller.
+                collect_subexpr_violations_in_expr(receiver, suspending, out);
+                for arg in args {
+                    collect_subexpr_violations_in_expr(arg, suspending, out);
+                }
+            }
+            // Unexpected inner shape (rare — background is statement-position-only in M2).
+            // Recurse conservatively to catch any nested violations.
+            other => collect_subexpr_violations_in_expr(other, suspending, out),
+        },
         Expr::BinOp { lhs, rhs, .. } => {
             collect_subexpr_violations_in_expr(lhs, suspending, out);
             collect_subexpr_violations_in_expr(rhs, suspending, out);

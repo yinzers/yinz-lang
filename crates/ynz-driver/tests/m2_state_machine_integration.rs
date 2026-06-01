@@ -301,47 +301,59 @@ fn no_bridge_reachable_from_resume_fns() {
     );
 
     // Use objdump to find call sites to ynz_rt_run_entrypoint
-    // in ynz_sm_* functions. The driver should NOT appear inside any resume fn.
+    // in ynz_sm_* functions. The driver must NOT appear inside any resume fn.
     let binary = fixture_path.with_extension("");
-    if !binary.exists() {
-        // Binary might be in a temp dir — skip this check when binary isn't found
-        return;
-    }
+    // The binary MUST exist — if the build succeeded the output is here.
+    // A vacuous early return would green-light a real bridge regression on a
+    // box where the binary ends up in an unexpected location.
+    assert!(
+        binary.exists(),
+        "binary {:?} must exist after a successful build — the no-bridge check cannot \
+         run without it. Check the build output path.",
+        binary
+    );
 
     let nm_out = Command::new("objdump")
         .args(["-d", binary.to_str().expect("valid path")])
-        .output();
+        .output()
+        .expect("objdump must be available — the no-bridge invariant test cannot pass without \
+                  disassembling the binary. Install binutils or run on a CI image that has it.");
 
-    if let Ok(nm_out) = nm_out {
-        let disasm = String::from_utf8_lossy(&nm_out.stdout).to_string();
-        // Check if any ynz_sm_*_resume function calls ynz_rt_run_entrypoint.
-        // Simple heuristic: look for the driver symbol in functions starting with ynz_sm_
-        let mut in_resume_fn = false;
-        let mut bridge_in_resume = false;
-        for line in disasm.lines() {
-            if line.contains("<ynz_sm_") && line.contains("resume>:") {
-                in_resume_fn = true;
-            } else if in_resume_fn && line.contains("<ynz_sm_") && !line.contains("resume") {
-                // left previous resume fn
-                in_resume_fn = false;
-            } else if in_resume_fn && line.contains("ynz_rt_run_entrypoint") {
-                bridge_in_resume = true;
-                break;
-            } else if in_resume_fn
-                && line.starts_with(|c: char| c.is_ascii_hexdigit())
-                && line.contains(" <")
-                && !line.contains("ynz_sm_")
-                && line.contains(">:")
-            {
-                // new non-SM function — left previous resume fn
-                in_resume_fn = false;
-            }
+    assert!(
+        nm_out.status.success(),
+        "objdump exited non-zero ({}); cannot verify no-bridge invariant. stderr: {}",
+        nm_out.status,
+        String::from_utf8_lossy(&nm_out.stderr)
+    );
+
+    let disasm = String::from_utf8_lossy(&nm_out.stdout).to_string();
+    // Check if any ynz_sm_*_resume function calls ynz_rt_run_entrypoint.
+    // Simple heuristic: look for the driver symbol in functions starting with ynz_sm_
+    let mut in_resume_fn = false;
+    let mut bridge_in_resume = false;
+    for line in disasm.lines() {
+        if line.contains("<ynz_sm_") && line.contains("resume>:") {
+            in_resume_fn = true;
+        } else if in_resume_fn && line.contains("<ynz_sm_") && !line.contains("resume") {
+            // left previous resume fn
+            in_resume_fn = false;
+        } else if in_resume_fn && line.contains("ynz_rt_run_entrypoint") {
+            bridge_in_resume = true;
+            break;
+        } else if in_resume_fn
+            && line.starts_with(|c: char| c.is_ascii_hexdigit())
+            && line.contains(" <")
+            && !line.contains("ynz_sm_")
+            && line.contains(">:")
+        {
+            // new non-SM function — left previous resume fn
+            in_resume_fn = false;
         }
-        assert!(
-            !bridge_in_resume,
-            "ynz_rt_run_entrypoint found inside a ynz_sm_*_resume fn — program-entry driver must not be called from resume fns"
-        );
     }
+    assert!(
+        !bridge_in_resume,
+        "ynz_rt_run_entrypoint found inside a ynz_sm_*_resume fn — program-entry driver must not be called from resume fns"
+    );
     // Clean up binary
     let _ = std::fs::remove_file(&binary);
 }
@@ -617,6 +629,49 @@ fn no_bridge_via_subexpr_position_rejected_at_typeck() {
     assert!(
         stderr.contains("suspending call inside a larger expression"),
         "must mention the sub-expression position restriction: {stderr}"
+    );
+}
+
+// WHY: `background add(inner(), 4)` where inner() suspends must reject at typeck
+// with the same "suspending call inside a larger expression" error as the non-background
+// form.  Background arguments evaluate in the CALLING context before the spawn, so a
+// suspending call nested in an arg runs on the caller's thread in sub-expression position
+// — the same nested-block_on path that caused the original Phase-5 HALT crash.
+// Without this guard the compiler emits code that panics at runtime with "Cannot start
+// a runtime from within a runtime". This test is the regression anchor for that hole.
+// It also confirms the direct-spawn form (`background worker()` where worker suspends)
+// is NOT rejected — that is the legal route-to-I/O-pool pattern.
+#[test]
+fn background_subexpr_suspending_call_rejected_with_teaching_error() {
+    let (stdout, stderr, exit_code) = run_fixture("v0_3_m2_background_subexpr_error.ynz");
+    assert_eq!(
+        exit_code, 1,
+        "background call with a suspending call in an arg must be a compile error (exit 1), \
+         not exit 0 (which would mean the runtime-panic path was hit). \
+         stdout={stdout:?} stderr={stderr:?}"
+    );
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("suspending call inside a larger expression"),
+        "teaching error text must mention 'suspending call inside a larger expression': {combined}"
+    );
+}
+
+// WHY: The legal direct-spawn form — `background worker()` where worker is a suspending
+// function — must NOT be rejected by the sub-expression guard.  worker becomes its own
+// state machine; the caller merely hands it to the runtime.  If this test fails with
+// exit 1, the guard is over-firing and the route-to-I/O-pool pattern is broken.
+#[test]
+fn background_direct_spawn_of_suspending_fn_still_runs() {
+    let (stdout, _, exit_code) = run_fixture_with_timeout("v0_3_m2_background_from_sm.ynz", 5);
+    assert_eq!(
+        exit_code, 0,
+        "direct spawn of a suspending fn must run successfully (exit 0). \
+         Fix 1 must not over-fire on this legal pattern."
+    );
+    assert!(
+        stdout.contains("worker done"),
+        "expected 'worker done' in output: {stdout:?}"
     );
 }
 
