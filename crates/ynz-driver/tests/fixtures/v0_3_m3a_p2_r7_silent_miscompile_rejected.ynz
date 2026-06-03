@@ -1,0 +1,22 @@
+// WHY: Code-reviewer R6 silent-miscompile repro. Parameter `p` shadowed inside an
+// `if` body that contains a `wait sleep(5)`. The inner `let p=99` crosses the wait
+// inside the if body. Under R6's non-crossing predicate this was incorrectly allowed
+// and silently miscompiled: `f(7)` printed `99` then garbage (or a second `7`
+// depending on reload ordering) instead of the correct single `7` from the outer param.
+//
+// Under Option A (design/concurrency.md § ShadowsCrossingLocal), ANY nested `let p`
+// in a suspending function is a clean compile error. The blunt guard
+// param_has_nested_let_shadow catches this regardless of crossing position.
+//
+// Must exit 1 (compile error), NOT `99\ngarbage`. No ICE text.
+function f(p: int) -> nothing {
+  if (p > 0) {
+    let p: int = 99
+    print(p.toString())
+    wait sleep(5)
+  }
+  print(p.toString())
+}
+function entrypoint() -> nothing {
+  f(7)
+}

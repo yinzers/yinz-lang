@@ -1447,6 +1447,39 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         }
     }
 
+    /// Build an alloca in the function's ENTRY block, regardless of where the builder
+    /// currently points. LLVM SSA requires allocas to dominate every use; placing them
+    /// in the entry block is the canonical way to satisfy this for values that may be
+    /// used across multiple successor blocks (e.g., inside if/while bodies that are
+    /// separate basic blocks). This matches what `materialize_param` does for params.
+    ///
+    /// Yinz allows variable shadowing (spec/linting.md `shadowed-variables` lint).
+    /// When a shadow `let x` appears inside a nested scope that is a separate LLVM basic
+    /// block, its alloca must be in the entry block so it dominates its uses inside that
+    /// block. The outer binding is restored to `cg.locals` on scope exit (restore-all
+    /// protocol), so the shadow has no effect on the outer name after the scope closes.
+    fn alloca_in_entry(&self, ty: &Type, name: &str) -> Result<PointerValue<'ctx>, String> {
+        let entry_bb = self
+            .current_fn
+            .get_first_basic_block()
+            .ok_or_else(|| format!("alloca_in_entry: no entry block for `{name}`"))?;
+        // Position at the end of the entry block (before its terminator, if any).
+        // We save and restore the builder's current insertion point so the caller's
+        // ongoing block emission is unaffected.
+        let saved_bb = self.builder.get_insert_block();
+        if let Some(term) = entry_bb.get_terminator() {
+            self.builder.position_before(&term);
+        } else {
+            self.builder.position_at_end(entry_bb);
+        }
+        let slot = self.alloca(ty, name)?;
+        // Restore the builder to wherever it was before we moved it.
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Ok(slot)
+    }
+
     fn append_block(&self, name: &str) -> BasicBlock<'ctx> {
         self.ctx.append_basic_block(self.current_fn, name)
     }
@@ -3478,15 +3511,10 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                 current_state,
             )?;
             cg.sm_scope_depth -= 1;
-            // Restore crossing-local entries so their sm_entry allocas remain active
-            // after the scope exits. Non-crossing new locals from inside the body are
-            // ephemeral and should not outlive this scope.
-            if let Some(ref crossing_names) = cg.sm_crossing_names.clone() {
-                for cname in crossing_names {
-                    if let Some(&outer_alloca) = locals_snapshot.get(cname.as_str()) {
-                        cg.locals.insert(cname.clone(), outer_alloca);
-                    }
-                }
+            // Restore ALL snapshot entries — same lexical-scoping rationale as lower_stmt's
+            // Stmt::If arm. Crossing sm_entry allocas stay active; shadow bindings are unwound.
+            for (name, &outer_alloca) in &locals_snapshot {
+                cg.locals.insert(name.clone(), outer_alloca);
             }
             if !is_block_terminated(cg) {
                 cg.builder
@@ -3569,11 +3597,78 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                 .map_err(|e| format!("sm return after inline-poll: {e}"))?;
         }
 
+        // `while (cond) { ...wait/suspending_call... }` — emit a frame-backed loop.
+        //
+        // Control flow mirrors the non-SM lower_stmt_while but walks the body with
+        // lower_sm_block so each wait inside consumes a pre-allocated continuation
+        // state. Crossing loop-carried locals (declared before the while or accumulated
+        // inside it) are frame-backed by P1's slot machinery — no separate alloc.
+        //
+        // Resume behaviour: after a suspension inside the body, the continuation state
+        // reloads params/crossing-locals and branches to post_wait_bb (inside the body).
+        // The rest of the body statements run, then execution falls through to the branch
+        // back to while_header_bb, which re-checks the condition. If still true, the body
+        // runs again (potentially suspending again). Each iteration is therefore a distinct
+        // poll cycle: sequential by construction (the runtime never resumes the same task
+        // twice concurrently), satisfying the "loop iterations sequential by default" design.
+        Stmt::While { cond, body, .. } => {
+            let locals_snapshot = cg.locals.clone();
+            cg.sm_scope_depth += 1;
+
+            let while_header_bb = cg.append_block("sm_while_header");
+            let while_body_bb = cg.append_block("sm_while_body");
+            let while_exit_bb = cg.append_block("sm_while_exit");
+
+            // Branch from current position (whatever state block we are in) to header.
+            cg.builder
+                .build_unconditional_branch(while_header_bb)
+                .map_err(|e| format!("sm while entry branch: {e}"))?;
+
+            // Header: evaluate condition; branch to body or exit.
+            cg.builder.position_at_end(while_header_bb);
+            let cond_val = lower_expr(cg, cond)?.into_int_value();
+            cg.builder
+                .build_conditional_branch(cond_val, while_body_bb, while_exit_bb)
+                .map_err(|e| format!("sm while cond branch: {e}"))?;
+
+            // Body: lower via SM block walker so nested waits consume continuation states.
+            cg.builder.position_at_end(while_body_bb);
+            lower_sm_block(
+                cg,
+                body,
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
+            if !is_block_terminated(cg) {
+                // Body didn't contain a return; flush preempt hook then loop back to header.
+                emit_loop_preempt(cg)?;
+                cg.builder
+                    .build_unconditional_branch(while_header_bb)
+                    .map_err(|e| format!("sm while body->header branch: {e}"))?;
+            }
+
+            cg.sm_scope_depth -= 1;
+            // Restore ALL snapshot entries — same lexical-scoping rationale as lower_stmt's
+            // Stmt::While arm. sm_entry allocas for crossing locals stay active; shadow
+            // bindings introduced inside the body are unwound so the outer scope is clean.
+            for (name, &outer_alloca) in &locals_snapshot {
+                cg.locals.insert(name.clone(), outer_alloca);
+            }
+
+            cg.builder.position_at_end(while_exit_bb);
+        }
+
         _ => {
             if stmt_contains_wait(stmt) && !stmt_contains_suspending_call(stmt, cg.suspend_set) {
                 panic!(
                     "BUG: SM codegen reached a wait-bearing statement that typeck should have \
-                     rejected. The WaitInsideLoop or LocalCrossesWait guard regressed. \
+                     rejected. The WaitInsideLoop guard (for/match) regressed. \
                      Statement: {stmt:?}"
                 );
             }
@@ -5058,9 +5153,14 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                         format!("sm crossing alloca for `{name}` missing in entry")
                     })?
                 } else {
-                    // Not a crossing local: fresh alloca in the current block (SSA-safe
-                    // because the value is defined and used within the same resume state).
-                    let s = cg.alloca(&val_ty, name)?;
+                    // Not a crossing local: alloca in the ENTRY block so it dominates all
+                    // successor blocks. Yinz allows variable shadowing (design/linting.md
+                    // `shadowed-variables` lint); a shadow `let x` inside an if/while body
+                    // is a separate LLVM basic block — its alloca must be in the entry block
+                    // or LLVM rejects the IR with "Instruction does not dominate all uses!".
+                    // The outer binding is restored to cg.locals on scope exit (restore-all
+                    // protocol), so the shadow has no lasting effect outside its own scope.
+                    let s = cg.alloca_in_entry(&val_ty, name)?;
                     cg.locals.insert(name.clone(), s);
                     s
                 };
@@ -5132,21 +5232,20 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
         }
 
         Stmt::If { cond, body, .. } => {
-            // Save locals snapshot so crossing-local shadow bindings introduced inside
-            // the if body don't persist in cg.locals after the scope exits (Bug 6).
+            // Snapshot before entering the if body so we can restore every name on exit.
+            // This preserves lexical scoping: crossing-local sm_entry allocas stay active
+            // after the block (not replaced by a shadow binding's fresh alloca), and
+            // non-crossing names don't leak into the outer scope after the block closes.
+            // Yinz allows variable shadowing (design/linting.md `shadowed-variables` lint);
+            // restoring all snapshot entries makes shadowing safe at the codegen level.
             let locals_snapshot = cg.locals.clone();
             cg.sm_scope_depth += 1;
             let r = lower_stmt_if(cg, cond, body);
             cg.sm_scope_depth -= 1;
-            // Restore crossing-local entries to their pre-if allocas; non-crossing new
-            // locals introduced inside the if are ephemeral and should not outlive it.
-            // Only restore crossing locals (their allocas must stay as the sm_entry ones).
-            if let Some(ref crossing_names) = cg.sm_crossing_names.clone() {
-                for cname in crossing_names {
-                    if let Some(&outer_alloca) = locals_snapshot.get(cname.as_str()) {
-                        cg.locals.insert(cname.clone(), outer_alloca);
-                    }
-                }
+            // Restore ALL names that were present before the scope — not just crossing names.
+            // Crossing locals get back their sm_entry allocas; shadow bindings are unwound.
+            for (name, &outer_alloca) in &locals_snapshot {
+                cg.locals.insert(name.clone(), outer_alloca);
             }
             r?;
         }
@@ -5161,12 +5260,9 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
             cg.sm_scope_depth += 1;
             let r = lower_stmt_match(cg, scrutinee, arms, else_arm.as_ref());
             cg.sm_scope_depth -= 1;
-            if let Some(ref crossing_names) = cg.sm_crossing_names.clone() {
-                for cname in crossing_names {
-                    if let Some(&outer_alloca) = locals_snapshot.get(cname.as_str()) {
-                        cg.locals.insert(cname.clone(), outer_alloca);
-                    }
-                }
+            // Restore ALL snapshot entries — same lexical-scoping rationale as Stmt::If.
+            for (name, &outer_alloca) in &locals_snapshot {
+                cg.locals.insert(name.clone(), outer_alloca);
             }
             r?;
         }
@@ -5176,12 +5272,9 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
             cg.sm_scope_depth += 1;
             let r = lower_stmt_while(cg, cond, body);
             cg.sm_scope_depth -= 1;
-            if let Some(ref crossing_names) = cg.sm_crossing_names.clone() {
-                for cname in crossing_names {
-                    if let Some(&outer_alloca) = locals_snapshot.get(cname.as_str()) {
-                        cg.locals.insert(cname.clone(), outer_alloca);
-                    }
-                }
+            // Restore ALL snapshot entries — same lexical-scoping rationale as Stmt::If.
+            for (name, &outer_alloca) in &locals_snapshot {
+                cg.locals.insert(name.clone(), outer_alloca);
             }
             r?;
         }
@@ -5193,12 +5286,9 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
             cg.sm_scope_depth += 1;
             let r = lower_stmt_for(cg, var, iter, body);
             cg.sm_scope_depth -= 1;
-            if let Some(ref crossing_names) = cg.sm_crossing_names.clone() {
-                for cname in crossing_names {
-                    if let Some(&outer_alloca) = locals_snapshot.get(cname.as_str()) {
-                        cg.locals.insert(cname.clone(), outer_alloca);
-                    }
-                }
+            // Restore ALL snapshot entries — same lexical-scoping rationale as Stmt::If.
+            for (name, &outer_alloca) in &locals_snapshot {
+                cg.locals.insert(name.clone(), outer_alloca);
             }
             r?;
         }

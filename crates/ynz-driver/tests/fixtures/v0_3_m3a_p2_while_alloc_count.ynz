@@ -1,0 +1,13 @@
+// Fixture: alloc-count baseline for while-loop suspension.
+// A while loop over 5 iterations each pausing must still use ONE ynz_alloc
+// (no per-iteration alloc). The composed frame is allocated once at task spawn;
+// loop-carried locals occupy pre-sized slots within that frame.
+// Expected output: done (checked by alloc_counter harness for alloc=1/free=1)
+function entrypoint() -> nothing {
+  let i: int = 0
+  while (i < 5) {
+    wait sleep(5)
+    i = i + 1
+  }
+  print(`done`)
+}

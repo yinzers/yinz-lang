@@ -1,0 +1,27 @@
+// WHY: A function parameter `p` shadowed by an inner `let p = 99` inside a suspending
+// `while` body where the shadow crosses the `wait`. `collect_crossings_in_stmts`
+// dropped the inner `let p` via `!param_names.contains("p")` — no sm_entry alloca was
+// pre-created. `lower_stmt` then emitted a fresh alloca in the while-body block (not
+// sm_entry), and `reload_params_from_frame` in the continuation state stored to that
+// non-entry alloca → LLVM dominance ICE. Phase 2's WaitInsideLoop lift exposed this
+// ICE: before Phase 2, `wait` inside a `while` was a clean WaitInsideLoop error that
+// prevented codegen from ever being reached.
+//
+// This is the canonical Phase-2-owned repro. The fix rejects any nested `let`
+// shadowing a parameter in an SM function regardless of whether `param_is_genuine_-
+// crossing_after_wait` returns true (dropped from the guard entirely).
+//
+// This fixture MUST produce a clean compile error (exit 1). It must NOT produce any
+// ICE text ("does not dominate", "Machine-code generation failed", "compiler bug").
+function worker(p: int) -> nothing {
+  let count: int = 2
+  while (count > 0) {
+    let p: int = 99
+    wait sleep(5)
+    print(p.toString())
+    count = count - 1
+  }
+}
+function entrypoint() -> nothing {
+  worker(3)
+}

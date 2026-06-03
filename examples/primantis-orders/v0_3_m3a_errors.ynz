@@ -103,6 +103,19 @@ function processQuantity(qty: int) -> nothing {
     print(adjusted.toString())
 }
 
+// -- v0.3-M3a Phase 2 Error: wait inside a `for` loop (P3 deferred) --
+//
+// WHY: WaitInsideLoop (for/match) — `wait` inside a `for` loop is not yet supported.
+// `while`-loop suspension ships in Phase 2; `for` and `match` ship in Phase 3.
+// Workaround: convert to a `while` loop with a counter, which supports `wait` now.
+
+function processItems(n: int) -> nothing {
+    for (i in range(0, n)) {
+        wait sleep(5)                  // WHY: WaitInsideLoop — `for` suspension ships in Phase 3
+        print(i.toString())
+    }
+}
+
 function entrypoint() -> nothing {
     processOrder(8, 12)
 }

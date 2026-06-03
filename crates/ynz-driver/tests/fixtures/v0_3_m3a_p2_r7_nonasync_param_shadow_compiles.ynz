@@ -1,0 +1,18 @@
+// WHY: Non-async function (no `wait`) with a parameter shadow. Yinz allows
+// shadowing per design/linting.md (`shadowed-variables` Tier-3 lint). The
+// conservative param-shadow guard (param_has_nested_let_shadow) only fires inside
+// the `if !kernel_mode && (has_explicit_waits || is_suspending_fn)` block — a
+// function with no suspension never enters that block, so the shadow compiles.
+//
+// Regression guard: if the param guard starts firing for non-SM functions, this
+// test catches it. `describe(9)` → `5` (inner shadow) then `9` (outer param), exit 0.
+function describe(p: int) -> nothing {
+  if (p > 0) {
+    let p: int = 5
+    print(p.toString())
+  }
+  print(p.toString())
+}
+function entrypoint() -> nothing {
+  describe(9)
+}

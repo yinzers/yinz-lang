@@ -2820,12 +2820,12 @@ fn background_with_zero_byte_struct_no_warn() {
 
 // ── v0.3-M2 Option-B deferral errors ────────────────────────────────────────
 
-// WHY: `wait` inside a `while` loop must emit a clean teaching error instead of
-// silently no-oping the wait. Catches regressions where the loop-body check is
-// removed and the codegen quietly discards the suspension, making programs appear
-// to work while never actually pausing.
+// WHY: `wait` inside a `while` loop is accepted since M3a Phase 2 — the guard was
+// narrowed to `for`/`match` only. This test prevents regression to the old state
+// where `while`-body suspension was rejected. If it fails, the guard was incorrectly
+// widened to cover `while` again, breaking a supported feature.
 #[test]
-fn wait_in_while_loop_is_an_error() {
+fn wait_in_while_loop_is_accepted() {
     let src = r#"
 function entrypoint() -> nothing {
   let i: int = 0
@@ -2842,15 +2842,8 @@ function entrypoint() -> nothing {
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
     assert!(
-        !errors.is_empty(),
-        "wait inside while loop must produce an error"
-    );
-    let has_loop_msg = errors.iter().any(|d| d.what.contains("loop"));
-    assert!(has_loop_msg, "error must mention loop; got: {:#?}", errors);
-    let has_why = errors.iter().any(|d| d.why.contains("v0.3-M3"));
-    assert!(
-        has_why,
-        "error WHY must reference v0.3-M3; got: {:#?}",
+        errors.is_empty(),
+        "`wait` inside `while` must produce no typeck error since M3a Phase 2; errors: {:#?}",
         errors
     );
 }

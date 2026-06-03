@@ -234,6 +234,8 @@ function entrypoint() -> nothing {
   m3m1_demo()
   // ────── v0.3-M2: wait actually suspends ──────
   m3m2_demo()
+  // ────── v0.3-M3a Phase 2: while-loop suspension ──────
+  m3a_p2_demo()
 }
 
 // ────── M3 helper functions ──────
@@ -663,5 +665,38 @@ shape StatBook<T> {
   entry: T
   category: StatCategory
   seasonYear: int
+}
+
+// ── v0.3-M3a Phase 2: while-loop suspension ──────────────────────────────────
+//
+// `wait sleep` now works inside a `while` body. Loop-carried locals are
+// frame-backed (one `ynz_alloc` for the whole task, not per-iteration).
+// Iterations are sequential: each pause-and-resume is a single poll cycle.
+//
+// awaitCrewReady simulates checking each pirate's readiness with a delay between
+// checks. The counter `i` and accumulator `ready` are loop-carried crossing locals:
+// each suspension preserves them in the composed frame so the next iteration sees
+// the correct values. One `ynz_alloc` for the entire loop — no per-iteration alloc.
+function awaitCrewReady(checks: int) -> int {
+  let ready: int = 0
+  let i: int = 0
+  while (i < checks) {
+    wait sleep(5)
+    ready = ready + 1
+    i = i + 1
+  }
+  return ready
+}
+
+// m3a_p2_demo — called from entrypoint() to show while-loop suspension in context.
+// Counts down pirate slot availability with a pause between each roster check.
+// The loop counter and accumulator survive each `wait` via the frame-backed locals
+// mechanism from Phase 1 — no extra allocation, sequential execution order.
+function m3a_p2_demo() -> nothing {
+  print(``)
+  print(`v0.3-M3a Phase 2 — while-loop suspension (3 roster checks, ~15ms total):`)
+  let crewCount: int = wait awaitCrewReady(3)
+  let crewStr = crewCount.toString()
+  print(`crew ready: ${crewStr}`)
 }
 

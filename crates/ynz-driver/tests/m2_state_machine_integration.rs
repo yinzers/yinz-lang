@@ -882,3 +882,24 @@ fn alloc_counter_number_errors_suspending_no_leak() {
         "alloc/free must be balanced for number errors suspending return; got alloc={alloc}, free={free}"
     );
 }
+
+// ── M3a Phase 2: while-loop suspension — alloc invariant ─────────────────────
+
+#[test]
+fn alloc_counter_while_loop_suspension_one_alloc() {
+    // WHY: a `while` loop over N suspending iterations must still use ONE ynz_alloc for
+    // the composed frame. A per-iteration alloc would show alloc=N+1 (or leak if freed
+    // differently). alloc=1/free=1 proves the loop does not allocate inside the body.
+    // Regression: removing the frame-backed-locals path and re-introducing per-iteration
+    // alloc (the discarded heap-promote approach) would produce alloc=6/free=6 here.
+    let (alloc, free) = run_with_alloc_counter("v0_3_m3a_p2_while_alloc_count.ynz");
+    assert_eq!(
+        alloc, 1,
+        "while-loop suspension must use one ynz_alloc for all iterations; got alloc={}",
+        alloc
+    );
+    assert_eq!(
+        free, alloc,
+        "alloc/free must be balanced for while-loop suspension; got alloc={alloc}, free={free}"
+    );
+}

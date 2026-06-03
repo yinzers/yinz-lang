@@ -1,0 +1,13 @@
+// Fixture: countdown loop — counter DECREMENTED before the wait.
+// The crossing analysis must treat loop-carried locals as crossing even when the
+// write precedes the `wait` textually. The back-edge (the while condition re-reads
+// `n` after each suspension) means `n` must survive the `wait` in the frame.
+// Expected output: 3\n2\n1
+function entrypoint() -> nothing {
+  let n: int = 3
+  while (n > 0) {
+    print(n.toString())
+    n = n - 1
+    wait sleep(3)
+  }
+}

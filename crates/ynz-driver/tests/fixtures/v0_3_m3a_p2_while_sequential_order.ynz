@@ -1,0 +1,14 @@
+// Fixture: per-iteration side effects appear in strict sequence.
+// Prints 0, 1, 2, 3, 4 — any reordering means iterations were parallelized (impossible
+// in M3a, but a codegen bug could cause it by building duplicate LLVM BBs with
+// non-deterministic ordering). The strict sequence guard locks the design doc's
+// "loop iterations sequential by default" invariant.
+// Expected output: 0\n1\n2\n3\n4
+function entrypoint() -> nothing {
+  let i: int = 0
+  while (i < 5) {
+    print(i.toString())
+    wait sleep(2)
+    i = i + 1
+  }
+}

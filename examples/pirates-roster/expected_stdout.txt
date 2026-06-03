@@ -109,3 +109,6 @@ Sanguillen: done
 
 v0.3-M3a — suspending number errors (exact decimal128):
 ticket price: 24.50
+
+v0.3-M3a Phase 2 — while-loop suspension (3 roster checks, ~15ms total):
+crew ready: 3

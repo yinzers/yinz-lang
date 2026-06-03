@@ -1,0 +1,27 @@
+// WHY: A function parameter shadowed by an inner `let` inside an `if` body that
+// contains a `wait`. The inner `let p = 99` is a DISTINCT binding but shares the
+// name of the parameter `p`. `collect_crossings_in_stmts` filtered it out via
+// `!param_names.contains(name)` — the inner binding was never added to the crossing
+// set, so no sm_entry alloca was pre-created. `lower_stmt` then emitted a fresh alloca
+// in the if-body block (not sm_entry), and `reload_params_from_frame` in the
+// continuation state read cg.locals["p"] — now pointing to that non-entry alloca —
+// producing an LLVM dominance ICE ("Instruction does not dominate all uses!").
+//
+// The fix (M3a locked decision, design/concurrency.md § ShadowsCrossingLocal):
+// reject any nested `let` shadowing a parameter in an SM function, unconditionally.
+// The `param_is_genuine_crossing_after_wait` gate was too narrow — the ICE occurs
+// regardless of whether the parameter is read after the wait.
+//
+// This fixture MUST produce a clean compile error (exit 1) with the shadow
+// diagnostic. It must NOT produce any ICE text ("does not dominate",
+// "Machine-code generation failed", "compiler bug").
+function worker(p: int) -> nothing {
+  if (true) {
+    let p: int = 99
+    wait sleep(5)
+    print(p.toString())
+  }
+}
+function entrypoint() -> nothing {
+  worker(3)
+}

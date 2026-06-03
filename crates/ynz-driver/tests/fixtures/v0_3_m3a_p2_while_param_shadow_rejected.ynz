@@ -1,0 +1,21 @@
+// WHY: A parameter shadowed inside a suspending `while` whose only reads of the
+// parameter are via the loop condition (a back-edge read). The param shadow guard
+// (Check 3b, `param_is_genuine_crossing_after_wait`) previously scanned only
+// `stmts[susp_idx+1..]` — statements after the while node — and found nothing,
+// so it returned false and skipped the diagnostic. The broken shadow then reached
+// codegen: the inner `let p` had no sm_entry alloca, producing an LLVM dominance
+// ICE ("Instruction does not dominate all uses!").
+//
+// This fixture MUST produce a clean compile error (exit 1) with the shadow
+// diagnostic. It must NOT produce any ICE text ("does not dominate",
+// "Machine-code generation failed", "compiler bug").
+function worker(p: int) -> nothing {
+  while (p > 0) {
+    let p: int = 99
+    wait sleep(5)
+    print(p.toString())
+  }
+}
+function entrypoint() -> nothing {
+  worker(3)
+}

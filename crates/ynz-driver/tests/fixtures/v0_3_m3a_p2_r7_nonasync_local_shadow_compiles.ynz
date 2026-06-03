@@ -1,0 +1,17 @@
+// WHY: Non-async function (no `wait`) with a local variable shadow. Yinz allows
+// shadowing; only suspending functions reject same-name reuse. The local-shadow
+// guard (Check 3, find_shadow_in_stmts) only fires for crossing locals in SM
+// functions — a function with no suspension has no crossing locals.
+//
+// Regression guard: `printVal(3)` → `2` (inner shadow) then `1` (outer local), exit 0.
+function printVal(n: int) -> nothing {
+  let x: int = 1
+  if (n > 0) {
+    let x: int = 2
+    print(x.toString())
+  }
+  print(x.toString())
+}
+function entrypoint() -> nothing {
+  printVal(3)
+}

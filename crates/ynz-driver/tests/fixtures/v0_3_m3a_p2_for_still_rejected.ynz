@@ -1,0 +1,9 @@
+// Fixture: wait inside a for loop — must still emit a compile error in Phase 2.
+// `for`-loop suspension ships in Phase 3. This fixture verifies the guard stays
+// active for `for` after the `while`-loop guard is lifted.
+// Expected: compile error mentioning `for`, exit non-zero.
+function entrypoint() -> nothing {
+  for (i in range(0, 3)) {
+    wait sleep(5)
+  }
+}

@@ -1601,32 +1601,22 @@ fn v03_m2_concurrent_waits_proof() {
 // ── v0.3-M2 Option-B deferral errors ─────────────────────────────────────────
 
 #[test]
-fn v03_m2_wait_in_loop_produces_clean_error() {
-    // WHY: `wait` inside a while loop must emit a clean teaching error with a non-zero
-    // exit code rather than silently no-oping the wait or crashing the backend.
-    // Catches regressions where the loop-body guard is removed and programs silently
-    // skip the suspension point — the user sees no output and no error.
+fn v03_m2_wait_in_while_loop_now_compiles() {
+    // WHY: `wait` inside a `while` body is supported since M3a Phase 2. The old guard that
+    // rejected it is narrowed to `for`/`match` only. This test guards against a regression
+    // that re-introduces the `while` rejection — if it fires, the guard was widened back.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m2_wait_in_loop_error.ynz"));
-    assert_ne!(
+    assert_eq!(
         code, 0,
-        "wait in loop must exit non-zero; stderr:\n{stderr}"
+        "`wait` in `while` must compile and run; stderr:\n{stderr}"
     );
     assert!(
         stdout.is_empty(),
-        "no output must be produced on compile error; got:\n{stdout}"
+        "loop-only program produces no output; got:\n{stdout}"
     );
     assert!(
-        stderr.contains("loop"),
-        "error must mention `loop` in the message; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("v0.3-M3"),
-        "error must reference v0.3-M3 as the fix milestone; stderr:\n{stderr}"
-    );
-    // Must NOT contain the crash message that would appear if the codegen ran.
-    assert!(
-        !stderr.contains("Machine-code generation failed"),
-        "must not crash the backend — clean typeck error expected; stderr:\n{stderr}"
+        !stderr.contains("not supported"),
+        "must not emit the old `not supported` diagnostic; stderr:\n{stderr}"
     );
 }
 
@@ -2721,25 +2711,41 @@ fn v03_m3a_p1_union_crossing_local_rejected() {
 }
 
 #[test]
+// test-ratchet: behavior changed from compile-error to compile-and-run.
+// WHY: parameter-shadow guard (Check 3b) — a `let x` inside an `if` body shadows the
+// function parameter `x`. The `wait` is at the TOP LEVEL (before the `if`). With the R6
+// lexical-scope codegen fix, the inner shadow uses a separate entry-block alloca, and
+// `cg.locals["x"]` is restored to the param alloca via restore-all after the `if` exits.
+// The `reload_params_from_frame` at state-1 start runs BEFORE the if body is entered, so
+// it sees the param alloca — correct. The inner shadow prints its own value (99); the outer
+// param prints its value (7) after the if. If this test fails with LLVM ICE, the
+// entry-block alloca or restore-all protocol regressed. If it fails with wrong output
+// (both 7, or 99/99), restore-all doesn't unwind the shadow correctly.
 fn v03_m3a_p1_param_shadow_crossing_rejected() {
-    // WHY: parameter-shadow guard (Check 3b) — a `let x` inside a nested scope shadows
-    // the function parameter `x`, which crosses a `wait` and is read after it resolving
-    // to the parameter. Before this guard, codegen hit an LLVM SSA dominance ICE because
-    // the parameter's frame-slot alloca (%x) did not dominate all uses when the inner
-    // shadow's load ran first. The guard must fire with a clean ShadowsCrossingLocal error,
-    // not an LLVM ICE. Regression guard: this exact case was the Round-12 reproducer.
+    // WHY: Conservative Option-A param-shadow guard (design/concurrency.md §
+    // ShadowsCrossingLocal). ANY nested `let x` in a suspending function shares the
+    // parameter's name-keyed frame slot; reload_params_from_frame in continuation
+    // states overwrites cg.locals["x"] regardless of crossing. Must exit 1 with a
+    // clean diagnostic. R6 allowed this (non-crossing predicate); R7 reverts to
+    // conservative reject — R6's compile path silently miscompiled the code-reviewer's
+    // repro `f(7)` (printed garbage instead of 7).
+    // test-ratchet: reverted from compile-and-run back to compile-error (Option A).
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_param_shadow_crossing.ynz"));
     assert_eq!(
         code, 1,
-        "parameter shadow across wait must fail to compile with a clean error, not an ICE; stderr:\n{stderr}"
+        "any nested param shadow in a suspending function must produce a compile error \
+         (Option A: conservative blunt guard); \
+         stderr:\n{stderr}\nstdout:\n{stdout}"
     );
     assert!(
-        stderr.contains("declared again") || stderr.contains("crosses a `wait`"),
-        "diagnostic must mention 'declared again' or 'crosses a `wait`'; stderr:\n{stderr}"
+        !stderr.contains("does not dominate")
+            && !stderr.contains("Machine-code generation failed")
+            && !stderr.contains("compiler bug"),
+        "must produce a clean diagnostic, not an LLVM ICE; stderr:\n{stderr}"
     );
     assert!(
-        stdout.is_empty(),
-        "no stdout on compile error; got:\n{stdout}"
+        !stderr.is_empty(),
+        "a compile error must produce a non-empty diagnostic; got empty stderr"
     );
 }
 
@@ -2877,5 +2883,405 @@ fn v03_m3a_p1_ec_crossing_local_propagated_error_path() {
         stdout.trim(),
         "99",
         "EC error path must fire .or(99) — error discriminant must survive crossing + propagation; got:\n{stdout}"
+    );
+}
+
+// ── M3a Phase 2: while-loop suspension ───────────────────────────────────────
+
+#[test]
+fn v03_m3a_p2_while_counter_runs_in_order() {
+    // WHY: guards that (1) the WaitInsideLoop guard no longer fires for `while`, (2) loop
+    // counter is frame-backed and survives each suspension, (3) exactly 3 iterations run.
+    // Any regression to the old guard would exit non-zero with a compile error. A wrong
+    // counter value would mean the frame slot was clobbered or not reloaded on resume.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p2_while_counter.ynz"));
+    assert_eq!(
+        code, 0,
+        "while-loop suspension must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "0\n1\n2",
+        "counter must increment 0→1→2 across suspensions; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p2_while_accumulator_correct() {
+    // WHY: a loop-carried accumulator must survive N suspensions with the correct total.
+    // A stale reload (frame slot not flushed after each mutation) produces 10 instead of
+    // 40 (last iteration value only). Catching the flush-after-mutation invariant.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p2_while_accumulator.ynz"));
+    assert_eq!(
+        code, 0,
+        "while accumulator must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "40",
+        "accumulator must equal 4*10=40 after 4 suspended iterations; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p2_while_value_returning_correct() {
+    // WHY: a non-nothing return type from a suspending function containing a while loop
+    // must produce the correct value. Catches the case where the SM return path drops the
+    // loop-accumulated value (returns 0 instead of 15).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p2_while_value_returning.ynz"));
+    assert_eq!(
+        code, 0,
+        "value-returning while suspension must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "15",
+        "sum_n(5) must return 1+2+3+4+5=15 accumulated across suspensions; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p2_while_sequential_order_preserved() {
+    // WHY: per-iteration prints must appear in strict 0→4 order. Parallelization of
+    // iterations would produce non-deterministic ordering. This locks the design doc's
+    // "loop iterations sequential by default" invariant — M3a has no auto-parallel.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p2_while_sequential_order.ynz"));
+    assert_eq!(
+        code, 0,
+        "sequential-order fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "0\n1\n2\n3\n4",
+        "iterations must run in strict 0→4 sequence (not parallelized); got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p2_while_conditional_wait_correct() {
+    // WHY: when only some iterations suspend (conditional wait), the crossing locals
+    // (i and x) must be correctly preserved for BOTH suspending and non-suspending
+    // iterations. A missed flush after a non-suspending iteration would corrupt x on
+    // the next iteration, breaking the alternating pattern.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p2_while_conditional_wait.ynz"));
+    assert_eq!(
+        code, 0,
+        "conditional-wait fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "0\n1\n2\n3",
+        "all 4 iterations must complete in order, alternating suspend/no-suspend; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p2_for_wait_still_rejected() {
+    // WHY: `wait` inside `for` is still guarded (ships in Phase 3). This test prevents
+    // accidentally lifting the `for` guard while implementing the `while` guard lift.
+    // If it fails, the for-loop suspension shipped prematurely without P3 codegen support.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p2_for_still_rejected.ynz"));
+    assert_ne!(
+        code, 0,
+        "wait in for must still be rejected; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("for"),
+        "error must mention `for`; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no output on compile error; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p2_while_countdown_before_wait_correct() {
+    // WHY: guards the back-edge crossing-local fix. A loop counter decremented BEFORE
+    // the `wait` (textually earlier in the body) must be treated as a crossing local
+    // because the while condition re-reads it after each suspension. Without the fix,
+    // the alloca for `n` lands in a non-dominating block → LLVM ICE
+    // ("Instruction does not dominate all uses!"). With the fix, `n` gets a frame slot
+    // in sm_entry and the loop produces 3→2→1 in order.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p2_while_countdown_before_wait.ynz"));
+    assert_eq!(
+        code, 0,
+        "countdown-before-wait must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "3\n2\n1",
+        "counter must count down 3→2→1 across suspensions; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p2_two_sequential_while_loops_correct() {
+    // WHY: guards the has_top_level_let_before_suspension fix. A second suspending
+    // `while` loop using a distinct counter (`k`) after a first suspending `while`
+    // must compile and run — `k`'s `let` is after a suspension (the first loop),
+    // not before one, so the shadow/redeclaration check must not fire. Without the
+    // fix, the compiler spuriously rejects `let k` as a "redeclaration after wait".
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p2_two_sequential_while_loops.ynz"));
+    assert_eq!(
+        code, 0,
+        "two sequential suspending while loops must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "3",
+        "second loop must complete 3 iterations; k must equal 3; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p2_while_shadow_no_postloop_read_is_rejected() {
+    // WHY: Probe-6 silent-miscompile regression. An inner `let n` inside a suspending
+    // `while` body shadows an outer `n` that is read by the loop condition (back-edge).
+    // When nothing AFTER the loop references `n`, the pre-fix guard's post-wait scan
+    // found no references and returned false — shadow check skipped — inner shadow
+    // compiled silently. The inner `n` resets to 99 every iteration, making `n > 0`
+    // always true → infinite loop. With the Case-3 fix, the guard detects the
+    // back-edge read of `n` in the condition and the shadow is rejected at compile time.
+    // Must exit 1 (compile error), never hang (timeout = infinite-loop regression).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p2_while_shadow_no_postloop_read_rejected.ynz",
+    ));
+    assert_eq!(
+        code, 1,
+        "inner shadow of a back-edge local with no post-loop outer read must be rejected \
+         at compile time; if exit 0 or timeout, the silent-miscompile is back; \
+         stderr:\n{stderr}\nstdout:\n{stdout}"
+    );
+    assert!(
+        !stderr.is_empty(),
+        "a compile error must produce a non-empty diagnostic; got empty stderr"
+    );
+}
+
+#[test]
+fn v03_m3a_p2_while_param_shadow_in_suspending_while_rejected() {
+    // WHY: A function parameter shadowed by an inner `let` inside a suspending `while`,
+    // where the parameter is read only via the loop condition back-edge. The inner shadow
+    // creates a non-entry alloca that `reload_params_from_frame` stores to in the
+    // continuation state — LLVM ICE without this guard. This test verifies the check
+    // fires for the back-edge-only case. Must exit 1 with a non-empty diagnostic and
+    // NO ICE text — ICE text means the guard is not firing and the raw ICE is back.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p2_while_param_shadow_rejected.ynz"));
+    assert_eq!(
+        code, 1,
+        "param shadowed inside a suspending while (condition back-edge read) must \
+         produce a compile error; if exit 0, the guard was skipped; \
+         stderr:\n{stderr}\nstdout:\n{stdout}"
+    );
+    assert!(
+        !stderr.contains("does not dominate")
+            && !stderr.contains("Machine-code generation failed")
+            && !stderr.contains("compiler bug"),
+        "got an LLVM ICE instead of a clean compile error; \
+         stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.is_empty(),
+        "a compile error must produce a non-empty diagnostic; got empty stderr"
+    );
+}
+
+#[test]
+fn v03_m3a_p2_if_param_shadow_crossing_rejected() {
+    // WHY: A parameter `p` shadowed by `let p = 99` inside an `if` body that contains a
+    // `wait`. The inner alloca lives in the if-body block (not sm_entry); the continuation
+    // state's reload overwrites cg.locals["p"] with the non-dominating alloca → LLVM ICE.
+    // The fix removes `param_is_genuine_crossing_after_wait` from the Shape (a) gate:
+    // any nested param shadow in an SM function is rejected unconditionally.
+    // Must exit 1 with a clean diagnostic and NO ICE text.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p2_if_param_shadow_crossing_rejected.ynz",
+    ));
+    assert_eq!(
+        code, 1,
+        "param shadowed inside a suspending if-body must produce a compile error; \
+         stderr:\n{stderr}\nstdout:\n{stdout}"
+    );
+    assert!(
+        !stderr.contains("does not dominate")
+            && !stderr.contains("Machine-code generation failed")
+            && !stderr.contains("compiler bug"),
+        "got LLVM ICE text instead of a clean compile error; \
+         stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.is_empty(),
+        "a compile error must produce a non-empty diagnostic; got empty stderr"
+    );
+}
+
+#[test]
+fn v03_m3a_p2_while_param_shadow_crossing_rejected() {
+    // WHY: The canonical Phase-2-owned param-shadow ICE: `function worker(p: int)` with a
+    // `while(count>0){ let p = 99; wait sleep(5); print(p); ... }`. The inner `let p` is
+    // filtered by `!param_names.contains("p")` in `collect_crossings_in_stmts` — no
+    // sm_entry alloca — then the continuation-state reload corrupts cg.locals["p"] with the
+    // while-body alloca → LLVM ICE. Renaming `let p` to `let q` compiles clean (control).
+    // Must exit 1 with a clean diagnostic and NO ICE text.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p2_while_param_shadow_crossing_rejected.ynz",
+    ));
+    assert_eq!(
+        code, 1,
+        "param shadowed inside a suspending while (shadow crosses wait) must produce a \
+         compile error; stderr:\n{stderr}\nstdout:\n{stdout}"
+    );
+    assert!(
+        !stderr.contains("does not dominate")
+            && !stderr.contains("Machine-code generation failed")
+            && !stderr.contains("compiler bug"),
+        "got LLVM ICE text instead of a clean compile error; \
+         stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.is_empty(),
+        "a compile error must produce a non-empty diagnostic; got empty stderr"
+    );
+}
+
+#[test]
+// WHY: Conservative Option-A param-shadow guard (design/concurrency.md §
+// ShadowsCrossingLocal). A non-crossing param shadow in a suspending function is
+// still rejected — the blunt `param_has_nested_let_shadow` guard rejects ANY nested
+// `let pname` regardless of crossing position, because reload_params_from_frame
+// would corrupt cg.locals[pname] across the next suspension even for non-crossing
+// allocas. Must exit 1 with a clean diagnostic, not an ICE.
+// test-ratchet: reverted from compile-and-run (R6) back to compile-error (R7 Option A).
+// R6's non-crossing compile path silently miscompiled the code-reviewer's repro.
+fn v03_m3a_p2_param_shadow_noncrossing_rejected() {
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p2_param_shadow_noncrossing_rejected.ynz",
+    ));
+    assert_eq!(
+        code, 1,
+        "non-crossing param shadow in a suspending function must still produce a compile \
+         error (Option A conservative guard); \
+         stderr:\n{stderr}\nstdout:\n{stdout}"
+    );
+    assert!(
+        !stderr.contains("does not dominate")
+            && !stderr.contains("Machine-code generation failed")
+            && !stderr.contains("compiler bug"),
+        "must produce a clean diagnostic, not an LLVM ICE; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.is_empty(),
+        "a compile error must produce a non-empty diagnostic; got empty stderr"
+    );
+}
+
+// === R7 Option-A regression fixtures ===
+// The four tests below lock the Option-A (conservative, safe) boundary:
+//   (1) crossing-param-shadow in SM function → reject (silent-miscompile repro)
+//   (2) crossing-local-shadow in SM function → reject (judge A8 case)
+//   (3) non-async param shadow → compile
+//   (4) non-async local shadow → compile
+
+#[test]
+fn v03_m3a_p2_r7_silent_miscompile_rejected() {
+    // WHY: Code-reviewer R6 silent-miscompile repro. `f(7)` where param `p` is
+    // shadowed inside an if body containing a `wait sleep(5)`. Under R6's non-crossing
+    // predicate this was allowed and printed `99` + garbage (the coordinator reproduced
+    // the miscompile). Under Option A (blunt param_has_nested_let_shadow guard) this
+    // must exit 1 with a clean diagnostic — loud error beats silent wrong answer.
+    // Regression guard: if this compiles, R6's miscompile has returned.
+    let (_stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p2_r7_silent_miscompile_rejected.ynz"));
+    assert_eq!(
+        code, 1,
+        "param shadow with wait inside the if body must be a compile error (Option A); \
+         stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("does not dominate")
+            && !stderr.contains("Machine-code generation failed")
+            && !stderr.contains("compiler bug"),
+        "must produce a clean diagnostic, not an LLVM ICE; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.is_empty(),
+        "compile error must produce a non-empty diagnostic; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p2_r7_local_shadow_crossing_rejected() {
+    // WHY: Judge A8 local case. Outer `y` is a crossing local (declared before `wait`,
+    // read after it). Inner `let y=7` inside an if body shadows the crossing local.
+    // Check 3 (find_shadow_in_stmts, gated on outer_is_genuine_crossing_local) rejects
+    // this — consistent with Option A: BOTH param and local same-name shadows around a
+    // suspension are rejected conservatively to prevent silent miscompiles.
+    // Regression guard: if this compiles, the conservative local guard has been loosened.
+    let (_stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p2_r7_local_shadow_crossing_rejected.ynz",
+    ));
+    assert_eq!(
+        code, 1,
+        "local shadow of a crossing local must be a compile error (Option A); \
+         stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("does not dominate")
+            && !stderr.contains("Machine-code generation failed")
+            && !stderr.contains("compiler bug"),
+        "must produce a clean diagnostic, not an LLVM ICE; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.is_empty(),
+        "compile error must produce a non-empty diagnostic; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p2_r7_nonasync_param_shadow_compiles() {
+    // WHY: Non-async function (no `wait`) with a parameter shadow. Yinz allows
+    // shadowing; the conservative param guard only fires for SM functions (inside the
+    // `if !kernel_mode && (has_explicit_waits || is_suspending_fn)` block). Non-SM
+    // param shadows must compile and run correctly.
+    // Regression guard: if this fails (exit 1), the guard is incorrectly firing for
+    // non-suspending functions.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p2_r7_nonasync_param_shadow_compiles.ynz",
+    ));
+    assert_eq!(
+        code, 0,
+        "non-async param shadow must compile and run correctly; \
+         stderr:\n{stderr}\nstdout:\n{stdout}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "5\n9",
+        "inner shadow prints 5; outer param (9) prints after the if; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p2_r7_nonasync_local_shadow_compiles() {
+    // WHY: Non-async function (no `wait`) with a local variable shadow. The local-shadow
+    // guard (Check 3) only fires for crossing locals in SM functions — a function with no
+    // suspension has no crossing locals, so the guard never runs.
+    // Regression guard: if this fails, the local-shadow guard is incorrectly firing for
+    // non-SM functions.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p2_r7_nonasync_local_shadow_compiles.ynz",
+    ));
+    assert_eq!(
+        code, 0,
+        "non-async local shadow must compile and run correctly; \
+         stderr:\n{stderr}\nstdout:\n{stdout}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "2\n1",
+        "inner shadow prints 2; outer local (1) prints after the if; got:\n{stdout}"
     );
 }

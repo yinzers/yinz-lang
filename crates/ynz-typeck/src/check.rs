@@ -428,19 +428,21 @@ impl<'b> Checker<'b> {
         };
 
         if !self.kernel_mode && (has_explicit_waits || is_suspending_fn) {
-            // Check 1: `wait` inside a loop or match body.
+            // Check 1: `wait` inside a `for` loop or `match` arm.
+            // `while`-loop suspension is supported (loop state is frame-backed, one alloc per
+            // task tree). `for`/`match` suspension ships in Phase 3.
             // Only applicable when the function has explicit `wait` tokens.
             if has_explicit_waits {
-                if let Some(span) = wait_in_loop_or_match_body(&f.body.stmts) {
+                if let Some(span) = wait_in_for_or_match_body(&f.body.stmts) {
                     self.diags.push(Diagnostic::error(
                         span,
-                        "`wait` inside a loop is not supported yet.",
-                        "Move the `wait` to a standalone function called inside the loop: \
+                        "`wait` inside a `for` loop or `match` arm is not supported yet.",
+                        "Move the `wait` to a `while` loop or a standalone function: \
                          `function step() -> nothing { wait sleep(100) }`, \
                          then call `step()` from the loop body.",
-                        "v0.3-M2 can only pause at the top level of a function or inside an `if` \
-                         block. Pausing inside a loop requires saving and restoring the loop counter \
-                         across the pause point — that transform ships in v0.3-M3.",
+                        "`for` loop iteration state and `match` arm bindings cannot yet be saved \
+                         across a suspension. Use a `while` loop with a counter instead, which \
+                         does support `wait` inside the body.",
                     ));
                 }
             }
@@ -751,34 +753,50 @@ impl<'b> Checker<'b> {
 
             // Check 3b (parameter-shadow detection): a `let` that re-declares a PARAMETER
             // name triggers the same alloca-collision as the let-vs-let case above — parameters
-            // are frame-slotted at function entry, so their name occupies a slot across every
-            // suspension in the function.
+            // are frame-slotted at function entry, so their name occupies a slot from the
+            // moment the function is entered. The frame-slot system keys slots by name; a
+            // nested `let pname` shares that same slot, and the codegen cannot hold two
+            // distinct values under one name simultaneously.
             //
             // Two collision shapes for parameters:
-            //   (a) Nested shadow: inner `let param_name` inside a nested block where the
-            //       parameter is also read after a suspension resolving to the parameter.
+            //   (a) Nested shadow: a `let param_name` inside any nested block (if/while/
+            //       for/match body) shares the parameter's name-keyed frame slot. Even a
+            //       shadow that does NOT itself cross a `wait` is unsafe: the Part-A
+            //       entry-block alloca path would place the inner alloca in sm_entry and
+            //       reload_params_from_frame in each continuation state would overwrite
+            //       cg.locals[pname] with the inner alloca — corrupting the parameter across
+            //       any subsequent suspension. Per design/concurrency.md § ShadowsCrossingLocal
+            //       (M3c roadmap), same-name shadows in async functions are rejected until
+            //       per-binding-ID slot allocation lands (1–2 sessions, tracked in M3c plan).
+            //       Workaround: use a distinct name for the inner binding.
             //   (b) Top-level redeclaration: `let param_name` at the TOP LEVEL of the
             //       function body — same slot as the parameter, guaranteed clobber.
             for param in &f.params {
                 let pname = param.name.as_str();
-                // Shape (a): nested shadow of parameter.
-                if param_has_nested_let_shadow(&f.body.stmts, pname)
-                    && param_is_genuine_crossing_after_wait(&f.body.stmts, pname, &suspending_fns)
-                {
+                // Shape (a): any nested `let pname` in any block body. The conservative
+                // reject covers all nested shadows regardless of whether the inner binding
+                // itself crosses a suspension — the name-keyed frame slot is shared, and
+                // the reload path in continuation states cannot distinguish inner from outer.
+                // See design/concurrency.md § ShadowsCrossingLocal for the per-binding-ID
+                // lifting path (roadmap M3c).
+                if param_has_nested_let_shadow(&f.body.stmts, pname) {
                     self.diags.push(Diagnostic::error(
                         param.span.clone(),
                         format!(
-                            "`{pname}` is a parameter that is declared again inside a nested \
-                             scope, but `{pname}` crosses a `wait`."
+                            "`{pname}` is already bound in this function, which suspends at a \
+                             `wait`. Re-using the name `{pname}` in a nested scope would share \
+                             one frame slot across the suspension."
                         ),
                         format!(
                             "Rename the inner binding to something distinct (e.g., \
-                             `let inner_{pname} = ...`) so the parameter and the inner value \
-                             are unambiguously named across the suspension boundary."
+                             `let inner_{pname} = ...`). (Full same-name support across a \
+                             suspension is tracked — see design/concurrency.md \
+                             ShadowsCrossingLocal.)"
                         ),
-                        "Across a `wait`, one name must mean one value. A shadowing `let` inside \
-                         a nested scope creates a second binding with the same name — the compiler \
-                         cannot tell which value should survive the suspension.",
+                        "In a function that suspends at a `wait`, every name maps to one frame \
+                         slot. Two bindings sharing a name across a suspension boundary share \
+                         that slot — the compiler cannot hold both values simultaneously under \
+                         one name.",
                     ));
                 }
                 // Shape (b): top-level redeclaration of parameter — a `let param_name` at
@@ -5040,10 +5058,14 @@ pub fn type_attached_const_type(type_name: &str, const_name: &str) -> Option<Typ
 /// Only the immediate children of these constructs are tested; `wait` inside
 /// nested `if` blocks at the same level is handled by the SM walker, not here.
 /// Top-level `wait` in `stmts` itself is NOT returned — only loop/match-nested ones.
-fn wait_in_loop_or_match_body(stmts: &[Stmt]) -> Option<SourceSpan> {
+/// Narrowed variant used by the `WaitInsideLoop` guard in Phase 2+. Fires for `for` loops
+/// and `match` arms (not yet supported), but NOT for `while` loops (supported since Phase 2).
+///
+/// `while`-loop suspension is handled by the SM codegen (frame-backed loop state, one alloc
+/// per task tree, sequential iteration). `for`/`match` suspension ships in Phase 3.
+fn wait_in_for_or_match_body(stmts: &[Stmt]) -> Option<SourceSpan> {
     for stmt in stmts {
         let found = match stmt {
-            Stmt::While { body, span, .. } if block_contains_wait(body) => Some(span.clone()),
             Stmt::For { body, span, .. } if block_contains_wait(body) => Some(span.clone()),
             Stmt::Match {
                 arms,
@@ -5055,8 +5077,9 @@ fn wait_in_loop_or_match_body(stmts: &[Stmt]) -> Option<SourceSpan> {
             {
                 Some(span.clone())
             }
-            // `if` blocks are handled — recurse into them looking for nested loops/match.
-            Stmt::If { body, .. } => wait_in_loop_or_match_body(&body.stmts),
+            // Recurse into `if` and `while` bodies looking for nested `for`/`match`.
+            Stmt::If { body, .. } => wait_in_for_or_match_body(&body.stmts),
+            Stmt::While { body, .. } => wait_in_for_or_match_body(&body.stmts),
             _ => None,
         };
         if found.is_some() {
@@ -5362,6 +5385,15 @@ fn has_top_level_let_before_suspension(
             {
                 return false;
             }
+            // A `while` body containing a wait is equally a suspension point for the outer
+            // sequence — the loop may suspend and resume, so any `let target` appearing
+            // AFTER the while is past a suspension boundary, not before it.
+            Stmt::While { body, .. }
+                if block_contains_wait(body)
+                    || block_contains_inferred_suspension(body, suspending) =>
+            {
+                return false;
+            }
             // A top-level `let target` found before any suspension.
             Stmt::Let { name, .. } if name == target => return true,
             _ => {}
@@ -5496,9 +5528,9 @@ fn has_top_level_let_after_suspension(
 /// - An `if` body that itself contains a wait (the if is therefore a suspension point
 ///   for the enclosing sequence, because the resume_switch must be able to jump into it)
 ///
-/// Used by `outer_is_genuine_crossing_local` and `param_is_genuine_crossing_after_wait`
-/// to identify the slice of statements that follow the first suspension — the slice that
-/// must be scanned for outer-binding reads via `stmts_ref_target_non_shadowed_sequential`.
+/// Used by `outer_is_genuine_crossing_local` to identify the slice of statements that
+/// follow the first suspension — the slice that must be scanned for outer-binding reads
+/// via `stmts_ref_target_non_shadowed_sequential`.
 fn first_top_level_suspension_idx(
     stmts: &[Stmt],
     suspending: &std::collections::HashSet<&str>,
@@ -5516,6 +5548,15 @@ fn first_top_level_suspension_idx(
                 ..
             } if is_suspending_call(c, suspending) => return Some(i),
             Stmt::If { body, .. }
+                if block_contains_wait(body)
+                    || block_contains_inferred_suspension(body, suspending) =>
+            {
+                return Some(i);
+            }
+            // A `while` body that contains a suspension is itself a suspension point at
+            // the top level — each iteration may suspend, so any local declared before
+            // the loop and read after it crosses a suspension boundary.
+            Stmt::While { body, .. }
                 if block_contains_wait(body)
                     || block_contains_inferred_suspension(body, suspending) =>
             {
@@ -5572,80 +5613,68 @@ fn outer_is_genuine_crossing_local(
     // Case 2: top-level re-declaration after the suspension (slot collision even when
     // all reads are masked). The sequential walker stops at `let target` and returns
     // false for reads, but the slot collision exists regardless.
-    post_wait
+    if post_wait
         .iter()
         .any(|stmt| matches!(stmt, Stmt::Let { name, .. } if name == target))
-}
-
-/// Returns `true` if any nested scope (if/while/for/match body) within `stmts` contains
-/// a `let target` declaration, where `target` is a FUNCTION PARAMETER.
-///
-/// Unlike `find_shadow_in_stmts`, this function does not require an outer top-level
-/// `let target` — the outer binding IS the parameter, which is implicit. It only checks
-/// for inner `let target` declarations inside nested blocks (not at the top level of
-/// `stmts`, where a `let target` would be a new top-level binding, not a nested shadow).
-///
-/// Used by the parameter-shadow guard (Check 3b) to detect the case where an inner
-/// `let param_name` shadows a parameter across a suspension boundary.
-fn param_has_nested_let_shadow(stmts: &[Stmt], target: &str) -> bool {
-    for stmt in stmts {
-        match stmt {
-            Stmt::If { body, .. } if let_in_stmts_at_top_or_nested(&body.stmts, target) => {
-                return true;
-            }
-            Stmt::While { body, .. } | Stmt::For { body, .. }
-                if let_in_stmts_at_top_or_nested(&body.stmts, target) =>
-            {
-                return true;
-            }
-            Stmt::Match { arms, else_arm, .. } => {
-                for arm in arms {
-                    if let_in_stmts_at_top_or_nested(&arm.body.stmts, target) {
-                        return true;
-                    }
-                }
-                if let Some(eb) = else_arm {
-                    if let_in_stmts_at_top_or_nested(&eb.stmts, target) {
-                        return true;
-                    }
-                }
-            }
-            _ => {}
+    {
+        return true;
+    }
+    // Case 3: the first top-level suspension is a suspending `while` loop. The loop
+    // condition is a back-edge read: after the first iteration's `wait` completes, the
+    // runtime loops back to re-evaluate the condition, reading `target` from the frame
+    // slot written by the previous iteration. This read occurs AFTER a suspension even
+    // though it appears textually before the `wait` in the source. A purely post-wait
+    // scan (Cases 1-2) misses it entirely because the back-edge read is inside the
+    // while node itself, not in the statements that follow it.
+    //
+    // `stmt_refs_target_non_shadowed` already handles `Stmt::While` — it scans cond
+    // then body with correct inner-shadow semantics — so one call covers the whole node.
+    if let Stmt::While { .. } = &stmts[susp_idx] {
+        if stmt_refs_target_non_shadowed(&stmts[susp_idx], target) {
+            return true;
         }
     }
     false
 }
 
-/// Returns `true` if a function PARAMETER named `target` is read after a top-level
-/// suspension in `stmts` in a position where the read lexically resolves to the parameter
-/// (not to an inner shadow or a same-level `let target` re-declaration after the wait).
+/// Returns `true` when any nested block inside `stmts` (if/while/for/match body)
+/// contains a `let target` declaration anywhere within it (at any depth).
 ///
-/// This is the parameter analogue of `outer_is_genuine_crossing_local`. The difference:
-/// parameters are always defined before the first statement, so there is no
-/// `has_top_level_let_before_suspension` gate — the precondition is unconditionally
-/// satisfied for any parameter.
+/// Used by Check 3b Shape (a) to conservatively reject any nested param shadow in a
+/// suspending function. The conservative guard is necessary because the frame-slot system
+/// keys every crossing local and parameter by NAME — a nested `let pname` shares the
+/// parameter's name-keyed slot, and every continuation state's `reload_params_from_frame`
+/// overwrites `cg.locals[pname]` with the current slot pointer. Even a non-crossing
+/// inner shadow would cause the reload to install the inner alloca into `cg.locals`,
+/// corrupting the parameter across the next suspension.
 ///
-/// Like `outer_is_genuine_crossing_local`, the post-suspension scan uses
-/// `stmts_ref_target_non_shadowed_sequential` so a same-level `let target = ...` after
-/// the wait masks subsequent reads from being attributed to the parameter. This fixes the
-/// ADV11 false positive: `function f(p: int){ wait; let p=99; if{let p=7; print(p)};
-/// if{print(p)} }` — the top-level `let p=99` re-declares the name after the wait; reads
-/// inside later if-bodies resolve to the re-declaration, not the parameter → must NOT fire.
+/// The precise per-binding-ID lifting path (one slot per binding ID, keyed by span or
+/// monotonic counter rather than by name) is tracked as roadmap M3c
+/// (`v0-3-m3c-shadow-parity`). Until then, same-name reuse in a nested scope is a
+/// safe-conservative compile error for all suspending functions.
 ///
-/// Used by the parameter-shadow guard (Check 3b) to confirm the parameter genuinely
-/// crosses a suspension boundary with an unmasked read, before emitting the diagnostic.
-fn param_is_genuine_crossing_after_wait(
-    stmts: &[Stmt],
-    target: &str,
-    suspending: &std::collections::HashSet<&str>,
-) -> bool {
-    // Parameters are implicitly defined before any statement — no let-before-suspension
-    // gate needed. Find the first suspension, then scan the post-suspension slice with
-    // the sequential walker (which stops at a same-level `let target` re-declaration).
-    let Some(susp_idx) = first_top_level_suspension_idx(stmts, suspending) else {
-        return false;
-    };
-    stmts_ref_target_non_shadowed_sequential(&stmts[susp_idx + 1..], target)
+/// Time: O(n) where n = total statement count in `stmts` (recursive).
+fn param_has_nested_let_shadow(stmts: &[Stmt], target: &str) -> bool {
+    for stmt in stmts {
+        let bodies: Vec<&[Stmt]> = match stmt {
+            Stmt::If { body, .. } => vec![&body.stmts],
+            Stmt::While { body, .. } | Stmt::For { body, .. } => vec![&body.stmts],
+            Stmt::Match { arms, else_arm, .. } => {
+                let mut bs: Vec<&[Stmt]> = arms.iter().map(|a| a.body.stmts.as_slice()).collect();
+                if let Some(eb) = else_arm {
+                    bs.push(&eb.stmts);
+                }
+                bs
+            }
+            _ => continue,
+        };
+        for body in bodies {
+            if let_in_stmts_at_top_or_nested(body, target) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Returns `true` if `stmt` references `target` in a context where the reference
@@ -5856,8 +5885,9 @@ pub fn crossing_local_names(
 /// - `Stmt::Let { value: Expr::Call(c), .. }` where `is_suspending_call(c, …)` is true
 /// - An `if` branch whose body contains any of the above forms
 ///
-/// `wait`-in-loop is caught by `wait_in_loop_or_match_body` before this runs, so
-/// only top-level and `if`-nested suspension points reach here.
+/// `wait`-in-`for`/`match` is caught by `wait_in_for_or_match_body` before this runs.
+/// `wait`-in-`while` is supported (Phase 2) and loops are handled by recursing into the
+/// `while` body during the analysis.
 ///
 /// Function parameters are excluded: the SM codegen gives every parameter a frame
 /// slot and reloads it at each resume point, so they are always safe.
@@ -6115,6 +6145,40 @@ fn collect_crossings_in_stmts(
                     );
                     // Sub-case (a): mark suspension seen for the outer sequence so
                     // post-if statements are checked against pre-if declared locals.
+                    past_wait = true;
+                }
+                // A `while` body that contains a suspension is also a reachable suspension
+                // point from the outer sequence — the same two sub-cases apply:
+                //   (a) Locals declared BEFORE the while and read AFTER it are crossing
+                //       locals (the while loop may suspend and resume between them).
+                //   (b) Locals declared INSIDE the body, before the inner suspension, and
+                //       read after it WITHIN THE SAME BODY — found by recursive call.
+                //
+                // Back-edge crossing: any outer-declared local referenced in the condition
+                // OR anywhere in the body must be treated as a crossing local immediately,
+                // even if textually the write/read precedes the `wait` inside the body.
+                // On every iteration after the first, the condition re-reads the local
+                // AFTER the prior iteration's suspension has completed — so the value must
+                // survive each `wait` via the frame slot. A purely forward textual scan
+                // misses this because the write and the condition-read both appear before
+                // the `wait` in textual order, yet execution cycles back through them.
+                Stmt::While { body, .. }
+                    if block_contains_wait(body)
+                        || block_contains_inferred_suspension(body, suspending) =>
+                {
+                    // Scan the condition and body for reads of outer-declared locals.
+                    // This catches the back-edge case: counter/accumulator locals are
+                    // read by the condition on each iteration, which comes AFTER the
+                    // suspension from the previous iteration's `wait`.
+                    collect_ident_refs_in_stmt(stmt, declared, out);
+                    let mut branch_declared = declared.clone();
+                    collect_crossings_in_stmts(
+                        &body.stmts,
+                        param_names,
+                        suspending,
+                        &mut branch_declared,
+                        out,
+                    );
                     past_wait = true;
                 }
                 _ => {}
