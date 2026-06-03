@@ -1,0 +1,26 @@
+// Fixture: suspending `-> Player errors` must be rejected at compile time.
+//
+// WHY: The SM EC-return path for a non-crossing shape success value previously called
+// ynz_alloc(size) and stored the pointer as ok without a matching free — memory leak.
+// Additionally, the FRAME_OFFSET_LOCALS_START staging path clobbered child sub-frames.
+// The WideValueSuspendingReturn typeck guard rejects this pattern loudly so no binary
+// is produced and no leak/crash can occur.
+//
+// Expected: exit code 1, diagnostic mentions the type and suspension.
+// Expected: no stdout (compile error, no binary produced).
+shape Player {
+  health: int
+}
+
+function sleepingShapeErrors() -> Player errors {
+  wait sleep(5)
+  let p: Player = { health: 100 }
+  return p
+}
+
+function entrypoint() -> nothing {
+  let fallback: Player = { health: 0 }
+  const r = sleepingShapeErrors()
+  const p = r.or(fallback)
+  print(p.health.toString())
+}

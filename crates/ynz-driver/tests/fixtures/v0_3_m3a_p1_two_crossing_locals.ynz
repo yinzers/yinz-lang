@@ -1,0 +1,9 @@
+// Fixture (c): two crossing locals — both must survive the suspension independently.
+// `a` and `b` occupy distinct frame slots; the sum printed must be 7 (3 + 4).
+function entrypoint() -> nothing {
+  let a: int = 3
+  let b: int = 4
+  wait sleep(5)
+  let sum: int = a + b
+  print(sum.toString())
+}

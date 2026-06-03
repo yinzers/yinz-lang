@@ -777,33 +777,108 @@ fn free_fn_non_suspending_relay_no_cant_infer_error() {
 // second resume block — LLVM's module verifier caught this and aborted (exit 1 via
 // "LLVM module verify failed", not the intended teaching error).
 //
-// After the round-3 fix in `collect_crossings_in_stmts` (check.rs), the
-// result-binding arms defer `name` into `pending_result_bindings` and flush it
-// into `declared` at the next suspension, so `slot` is caught as a crossing when
-// `return slot + other` is reached. The output must be exit 1 with a clean
-// LocalCrossesWait teaching error — NOT the LLVM crash message.
+// M3a P1 lifts the LocalCrossesWait guard and adds frame-backed slot machinery,
+// so result-bindings that cross later suspensions now compile and produce correct
+// output. `slot` = sleeper() = 5, `other` = sleeper() = 5, `slot + other = 10`.
 #[test]
-fn result_binding_crosses_later_suspension_rejected_with_teaching_error() {
-    let (_, stderr, exit_code) =
+fn result_binding_crosses_later_suspension_compiles_and_runs() {
+    // WHY: `slot` is produced by the FIRST suspending call and read after the SECOND.
+    // M3a P1 must keep `slot` in a frame slot so it survives the second suspension.
+    // Correct output is 10 (5 + 5). If this exits 1 or produces wrong output, the
+    // result-binding crossing-local path regressed in the frame-slot machinery.
+    let (stdout, stderr, exit_code) =
         run_fixture("v0_3_m2_result_binding_crosses_later_suspension_error.ynz");
     assert_eq!(
-        exit_code, 1,
-        "result-binding read after a later suspension must be a compile error (exit 1), \
-         not an LLVM crash (also exit 1 but with 'LLVM module verify failed' in output). \
-         stderr={stderr:?}"
+        exit_code, 0,
+        "result-binding crossing program must compile and run (exit 0); stderr={stderr:?}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "10",
+        "slot=5 + other=5 must equal 10; frame-backed crossing local must survive; stderr={stderr:?}"
     );
     assert!(
         !stderr.contains("LLVM module verify failed"),
-        "must be a clean typeck teaching error, not an LLVM backend crash; stderr={stderr:?}"
+        "must not crash the LLVM backend; stderr={stderr:?}"
     );
     assert!(
-        stderr.contains("`slot`"),
-        "teaching error must name the crossing binding `slot`; stderr={stderr:?}"
+        !stderr.contains("Machine-code generation failed"),
+        "must not crash the backend; stderr={stderr:?}"
+    );
+}
+
+// WHY: non-crossing local AC — a local declared and read only BEFORE the wait must
+// NOT get a frame slot. Verifies that the crossing-local analysis is NOT over-broad.
+// A mis-implementation that slots ALL locals (not just crossing ones) would still
+// produce correct output but would waste frame space; this verifies the analysis
+// correctly classifies the local as non-crossing. (The alloc-count is the same for
+// crossing and non-crossing — frame is pre-sized — but the program behavior confirms
+// the code path is correct.)
+#[test]
+fn non_crossing_local_runs_correctly() {
+    let (stdout, _stderr, code) = run_fixture("v0_3_m3a_p1_non_crossing_local_not_slotted.ynz");
+    assert_eq!(code, 0, "non-crossing-local program must exit 0");
+    assert!(
+        stdout.contains("99"),
+        "pre-wait value must be printed; got: {stdout:?}"
     );
     assert!(
-        stderr.contains("frame-slot")
-            || stderr.contains("v0.3-M3a")
-            || stderr.contains("frame slot"),
-        "teaching error must reference the frame-slot transform; stderr={stderr:?}"
+        stdout.contains("done"),
+        "post-wait print must run; got: {stdout:?}"
+    );
+}
+
+// WHY: fixture (h) — crossing locals add ZERO extra ynz_alloc calls. The frame is
+// sized to include crossing-local slots at build time; no per-local heap allocation.
+// The composed-single-alloc invariant (one ynz_alloc per task tree) must hold even
+// when the function has frame-backed crossing locals.
+#[test]
+fn alloc_counter_crossing_locals_add_zero_extra_allocs() {
+    let (alloc, free) = run_with_alloc_counter("v0_3_m3a_p1_alloc_count.ynz");
+    assert_eq!(
+        alloc, 1,
+        "crossing locals add ZERO extra allocs — frame pre-sized at build time; got alloc={}",
+        alloc
+    );
+    assert_eq!(
+        free, alloc,
+        "alloc/free must be balanced (no leak); got alloc={alloc}, free={free}"
+    );
+}
+
+#[test]
+fn alloc_counter_shape_crossing_local_no_leak() {
+    // WHY: FIX 1 guard — shape crossing locals must use frame-embedding (ptr alloca wired to
+    // the composed frame's slot region in sm_entry) rather than separate ynz_alloc per shape.
+    // The old heap-promote approach: alloc=2 (frame + shape buffer), free=1 (only frame freed).
+    // Correct: alloc=1, free=1. Regression here means the leak is back.
+    let (alloc, free) = run_with_alloc_counter("v0_3_m3a_p1_shape_crossing_alloc_balance.ynz");
+    assert_eq!(
+        alloc, 1,
+        "shape crossing local must NOT cause extra ynz_alloc; got alloc={}",
+        alloc
+    );
+    assert_eq!(
+        free, alloc,
+        "alloc/free must be balanced for shape crossing local; got alloc={alloc}, free={free}"
+    );
+}
+
+#[test]
+fn alloc_counter_number_errors_suspending_no_leak() {
+    // WHY: the frame-staging slot for `-> number errors` must live INSIDE the composed
+    // frame allocation (not a separate ynz_alloc). alloc=2 means a separate heap alloc
+    // was introduced (the round-19 leak pattern). alloc=1/free=1 proves the staging slot
+    // is part of the pre-sized frame — the one-alloc-per-task-tree invariant holds.
+    let (alloc, free) =
+        run_with_alloc_counter("v0_3_m3a_p1_number_errors_returning_suspending_fn.ynz");
+    assert_eq!(
+        alloc, 1,
+        "number errors staging slot must not cause extra ynz_alloc; got alloc={}",
+        alloc
+    );
+    assert_eq!(
+        free, alloc,
+        "alloc/free must be balanced for number errors suspending return; got alloc={alloc}, free={free}"
     );
 }

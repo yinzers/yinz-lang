@@ -1,0 +1,16 @@
+// Fixture: float crossing local obtained via .toFloat().
+// `f` is a float produced from an int before the suspension, then mutated
+// after it to exercise both the reload AND the flush-back path.
+// `f` starts as 7.toFloat() = 7, then has 1.toFloat() = 1 added after
+// the wait, so the final value is 8.
+// This proves the float bitcast path (sitofp → bitcast i64 → frame slot →
+// reload bitcast i64 → float) round-trips correctly: a regressed all-zeros
+// slot would print 1 (0.0 + 1.0) instead of 8.
+function entrypoint() -> nothing {
+  let n: int = 7
+  let m: int = 1
+  let f = n.toFloat()
+  wait sleep(5)
+  f = f + m.toFloat()
+  print(f.toString())
+}

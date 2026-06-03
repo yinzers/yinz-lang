@@ -234,6 +234,174 @@ Full database stdlib design (connection pooling, transactions, query builder, mi
 
 ---
 
+## M3a Scope Boundaries — Deliberate Constraints and Deferrals
+
+M3a lifted the `LocalCrossesWait` guard (scalars, shapes, strings, arrays can now cross a `wait`). Two cases were deliberately left as compile errors; one is deferred to a later milestone.
+
+### `ShadowsCrossingLocal` — same name re-declared around a suspension (deferred, clean compile error today)
+
+A `let` binding that re-uses a name that already has a crossing-local frame slot is a compile error today. The guard is **safe-conservative**: it rejects any program where two bindings share a name around a suspension boundary, even when one of them might technically be unreachable from the other.
+
+Two shapes are rejected:
+
+**Shape A — nested shadow**: an outer `let x` before a `wait` AND a `let x` inside a nested block (if/while/for/match body) in the same function, where the outer `x` is read after the suspension resolving to the outer binding.
+
+```
+// ❌ — x crosses the wait AND is re-declared inside the if
+function broken() -> nothing {
+  let x = 10
+  wait sleep(5)
+  if (someCondition) {
+    let x = 20        // compile error — shadows crossing local x
+    print(x.toString())
+  }
+  print(x.toString())
+}
+
+// ✅ — rename the inner binding
+function fixed() -> nothing {
+  let x = 10
+  wait sleep(5)
+  if (someCondition) {
+    let innerX = 20
+    print(innerX.toString())
+  }
+  print(x.toString())
+}
+```
+
+**Shape B — top-level redeclaration**: an outer `let x` before a `wait` AND a second `let x` at the TOP LEVEL of the function body after the suspension. Even when all post-wait reads resolve to the redeclared binding (not the outer one), both top-level `let x` bindings share the same name-keyed frame slot — the second write clobbers the first, producing a silent wrong answer at runtime.
+
+```
+// ❌ — x=10 and x=99 both at top level, separated by a wait
+function broken() -> nothing {
+  let x = 10
+  wait sleep(5)
+  let x = 99     // compile error — two top-level bindings share one frame slot
+  print(x.toString())
+}
+
+// ✅ — use distinct names
+function fixed() -> nothing {
+  let x = 10
+  wait sleep(5)
+  let xAfter = 99
+  print(xAfter.toString())
+}
+```
+
+The same two shapes apply to **parameters**: a parameter `p` occupies a frame slot at function entry. Any `let p` inside a nested block (Shape A) or at the top level (Shape B) of the function body shares that slot and is rejected.
+
+**Why the guard is conservative (not precise)**: the frame-slot system maps each crossing local to a slot by NAME — one slot per unique name across the entire function body. A precise implementation would assign each `let` declaration a unique binding ID (keyed by source span or a monotonic counter), then allocate one slot per binding ID. The conservative guard rejects all same-name cases because it cannot distinguish two bindings that would slot correctly from two bindings that would collide. The workaround is always: use distinct names.
+
+**What it costs to lift** (1–2 sessions): assign each `let` declaration a unique binding ID; key crossing-local frame slots by binding ID rather than name; propagate ID-keyed resolution through the flush/reload and typeck layers so the compiler can distinguish "same name, different slot" at every read and write site.
+
+**Trigger**: user demand for re-using a name around a suspension in a program that cannot be restructured, OR when per-binding slot identity is added to the crossing analysis and codegen.
+
+**Workaround** (always applies): rename any binding that re-uses a name already in use across a suspension boundary — two values with different semantics should have different names anyway (Golden Rule 2).
+
+### `NestedShapeCrossing` — a shape with nested shape fields crossing a `wait` (deferred)
+
+A `shape` whose fields are themselves `shape` types cannot cross a `wait` when those fields contain heap-allocated children (e.g. strings, arrays). The frame-embed codegen writes struct bytes directly into the composed frame; for nested shapes, this only copies the OUTER struct's bytes — any inner shape pointers that point into separately-allocated or stack regions become dangling after the suspension.
+
+```
+// ❌ (currently) — inner shape crosses a wait
+shape Inner { value: int }
+shape Outer { child: Inner, score: int }
+
+function example() -> nothing {
+  let o: Outer = { child: { value: 42 }, score: 100 }
+  wait sleep(5)         // compile error — Outer.child is a nested shape
+  print(o.score.toString())
+}
+
+// ✅ — flatten into primitive fields
+shape FlatOuter { childValue: int, score: int }
+```
+
+**Why deferred**: the memcpy that stages the outer struct bytes doesn't recursively follow inner shape pointers. A correct implementation would either (a) walk the entire shape graph and embed all nested structs transitively in the frame, or (b) heap-allocate inner shapes and store pointers (with a drop guard). Both require non-trivial additions to the frame layout and drop subsystem. The flat-fields workaround always applies.
+
+**What it costs to lift** (1–2 sessions): extend frame layout to recursively compute embedded nested-shape slot regions; add recursive memcpy at definition and reload sites; add a drop-on-cancel path for any heap-allocated inner shapes. Each of these is a well-contained change, but they need to be consistent across the frame-layout, codegen, and runtime layers.
+
+**Trigger**: a user program that requires crossing a nested-shape local without a flatten workaround.
+
+### `WideValueSuspendingReturn` — shape returns from suspending functions (deferred, clean compile error today)
+
+A suspending function (one whose body contains a `wait`) cannot yet return a `Shape` or `Shape errors` value by value. These two return types require a variable-size EC/shape return-staging slot entangled with the pre-existing non-suspending shape-return base bug.
+
+**`-> number errors` is fully supported** as of M3a Phase 1. A 16-byte staging slot is reserved in the composed frame (after own-local slots, before child sub-frames) when the function returns `-> number errors`. The resume function writes the i128 decimal to that slot, points the EC ok-word at it, and the staging slot is freed when the frame drops (alloc=1/free=1 — no leak). See the frame-layout comments in `crates/ynz-codegen/src/emit.rs` `build_frame_layouts`.
+
+**Why each remaining variant fails without the guard**:
+
+- **`-> Shape`** (non-crossing shape literal or call result): the old codegen staged the shape bytes at `FRAME_OFFSET_LOCALS_START` (frame offset 32). Offset 32 is where child sub-frames are embedded — writing there overwrites the sleep sub-frame's `resume_point` field, causing a `SIGSEGV` at the next `rt_async_sleep_poll` call.
+
+- **`-> Shape errors`** (shape success value in an EC return): needs variable-size staging (shape size varies per declaration) and is also entangled with the pre-existing non-suspending `-> Shape` return base bug (shapes returned by value produce garbage for int fields even without suspension). Fixing the non-suspending bug first is the prerequisite.
+
+**What IS supported** (verified clean in Phase 1):
+
+| Return type | Suspending function | Status |
+|---|---|---|
+| `-> int`, `-> bool`, `-> float` | yes | CLEAN — scalar, no staging needed |
+| `-> number` (plain) | yes | CLEAN — i128 stored directly in the 16-byte return slot |
+| `-> number errors` | yes | CLEAN — i128 in 16-byte frame staging slot; alloc=1/free=1 |
+| `-> int errors` | yes | CLEAN — `{err=0, ok=int_bits}` stored directly |
+| `-> string`, `-> array<T>`, `-> map<K,V>` | yes | CLEAN — heap-stable pointer, `ptr_to_int` safe |
+| `-> Shape` (crossing local) | N/A (frame-backed, not a return) | CLEAN — frame-embedded crossing locals work |
+
+**Workarounds**:
+- For `-> Shape`: return the shape's fields individually as primitives, or bind the shape to a crossing local and return a derived primitive.
+- For `-> Shape errors`: return each field individually (e.g. `-> int errors`), or compute a primitive result inside the function and return that.
+
+**What it costs to lift Shape/Shape-errors** (~1 session): fix the non-suspending `-> Shape` return base bug first (shapes returned by value silently produce garbage for int fields), then add variable-size staging to the frame layout for the suspending case. The staging region size is the shape's ABI size (computed by the shape-size table). The return-path GEPs to the region after the resume function memcpys the shape bytes there.
+
+**Trigger**: a suspending function (body contains `wait`) whose declared return type is `Shape` or `Shape errors`.
+
+---
+
+### `UnsupportedCrossingLocalType` — `union`, `maybe`, and `dynamic` crossing locals (deferred, clean compile error today)
+
+A local binding of type `union`, `maybe<T>`, or `dynamic Contract` cannot yet cross a `wait` boundary.
+
+**Why each variant fails without the guard**:
+
+The frame-slot classifier in codegen handles int, bool, float, number, string, array, map, Shape, and ErrorsCapable crossing locals. All other types fall into the generic pointer flush/reload path (`ptr_to_int` at flush, `int_to_ptr` at reload). For `union` and `maybe<T>`, the value is internally represented as a pointer to a `{tag, payload}` struct alloca that lives on the resume function's stack. Flushing the alloca pointer to the frame slot and reloading it after the next resume stores and re-reads a dangling stack address. LLVM may detect this as "Instruction does not dominate all uses!" (producing a raw compiler ICE) or silently corrupt the callee's stack at runtime. `dynamic Contract` has similar representation characteristics.
+
+**What IS supported** (crossing locals that work correctly):
+
+| Type | Status |
+|---|---|
+| `int`, `bool`, `float` | CLEAN — scalar frame slot |
+| `number` (decimal128) | CLEAN — 2-slot i128 frame storage |
+| `string`, `array<T>`, `map<K,V>` | CLEAN — heap-stable pointer, ptr_to_int safe |
+| `Shape` (primitive fields only) | CLEAN — frame-embedded |
+| `T errors` (ErrorsCapable) | CLEAN — 2-slot {err, ok} frame storage |
+
+**Workaround**: extract the inner value before the `wait`, or restructure so the `union`, `maybe`, or `dynamic` local is not needed after the suspension.
+
+**What it costs to lift**: implement per-type flush/reload strategies for `union` (store tag + payload fields to separate frame slots), `maybe<T>` (store the none/some discriminant and inner value separately), and `dynamic Contract` (store the fat-pointer pair). Each is ~half a session once the slot-layout decision is made. This is tracked in `registry/features.toml` as `unsupported-crossing-local-type`.
+
+**Trigger**: a local of type `union`, `maybe<T>`, or `dynamic Contract` that is declared before a `wait` and read after it.
+
+---
+
+### `ECWrapperResultCollection` — collecting the result of a `background`-spawned `-> T errors` task (deferred to M3b)
+
+The standalone EC wrapper (emitted for `background`-spawned suspending `-> T errors` functions) reconstructs the `{i64, i64}` EC struct from the frame's return slot and then calls `free_frame`. For `-> number errors`, the ok-word in that struct points into the composed frame's 16-byte staging slot — a region freed by `free_frame`. The returned struct's ok-pointer is therefore invalid after the wrapper returns.
+
+This is **safe in M3a** because the only reachable caller of the wrapper is `background` (fire-and-forget), which discards the EC result entirely without dereferencing the ok-pointer.
+
+A caller that **collects** the result — reads the ok-word and uses the pointed-at value — must copy it BEFORE `free_frame`. Implementing that read-before-free + copy requires the scheduler to know whether a spawned task's result is collected or discarded, and when the collection happens relative to the frame lifetime. That is M3b background result-collection machinery.
+
+**Workaround**: use the inline-poll path — a suspending caller that calls another `-> T errors` suspending function composes the callee inline via the state-machine resume path, and the inline path is correct and complete. Only `background` hits the standalone wrapper; avoid collecting `background` handle return values for `-> T errors` spawns until M3b.
+
+**What it costs to lift** (~half a session inside M3b): when the scheduler runs the wrapper function to completion, if the spawned task's result handle is collected, read the EC struct before freeing the frame, copy the ok-value to a heap buffer, update the ok-word to point to the heap buffer, then free the frame. The copy is conditional on whether the handle is collected — discarded handles skip it.
+
+**Trigger**: storing or using the return value of a `background`-spawned suspending function whose declared return type is `-> T errors`.
+
+This is tracked in `registry/features.toml` as `ec-wrapper-collect-on-completion`.
+
+---
+
 ## Permanent Positional Constraints on `wait`
 
 Two restrictions on `wait` are **permanent design decisions** — not temporary M2 limitations. Both are enforced at typeck and will remain even after M3a lifts the `LocalCrossesWait` and `WaitInsideLoop` guards.

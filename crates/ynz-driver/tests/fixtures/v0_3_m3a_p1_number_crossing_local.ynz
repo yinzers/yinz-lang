@@ -1,0 +1,12 @@
+// Fixture (i): number (decimal128) crossing local — exact value round-trip.
+// `number` is pointer-backed (the i128 lives in an alloca, the pointer goes in
+// the frame slot). The value 0.1 + 0.2 = 0.3 in decimal128 (exact, no float
+// rounding) must be preserved exactly after the suspension.
+// This fixture is the truncation guard: an 8-byte slot that stored raw i128
+// bits would silently truncate to 0 (or garbage) — the frame slot must hold
+// the 8-byte POINTER to the i128 alloca instead, not the i128 value itself.
+function entrypoint() -> nothing {
+  let x = 0.1 + 0.2
+  wait sleep(5)
+  print(x)
+}

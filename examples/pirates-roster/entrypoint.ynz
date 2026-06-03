@@ -462,6 +462,14 @@ function scheduleCheck(name: string) -> nothing {
   announcePirate(name)
 }
 
+// fetchTicketPrice — suspending fallible function returning exact decimal128 price.
+// Uses a frame staging slot for the 16-byte i128 value so the EC ok-pointer
+// remains valid after the resume function returns (no separate heap allocation).
+function fetchTicketPrice() -> number errors {
+  wait sleep(5)
+  return 24.50
+}
+
 function m3m2_demo() -> nothing {
   print(``)
   print(`v0.3-M2 — wait actually suspends (8 pirates, ~100ms total):`)
@@ -499,6 +507,16 @@ function m3m2_demo() -> nothing {
   print(``)
   print(`v0.3-M2 — nested state machines (inline poll-and-yield):`)
   scheduleCheck(`Sanguillen`)
+
+  // Suspending `-> number errors` demo (v0.3-M3a Phase 1).
+  // fetchTicketPrice suspends (wait sleep) and returns an exact decimal128 price.
+  // The 16-byte decimal is stored in the composed frame's staging slot — no leak.
+  print(``)
+  print(`v0.3-M3a — suspending number errors (exact decimal128):`)
+  const priceResult = fetchTicketPrice()
+  const price = priceResult.or(0.0)
+  const priceStr = price.toString()
+  print(`ticket price: ${priceStr}`)
 }
 
 // ====== v0.2-M5 LSP features ======

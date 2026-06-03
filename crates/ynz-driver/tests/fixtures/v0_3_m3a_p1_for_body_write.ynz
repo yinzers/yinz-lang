@@ -1,0 +1,11 @@
+// Fixture: for-body write crossing local — mutation inside a for body is flushed.
+// Accumulates sum over [10, 20, 30]; after the wait, prints 60.
+// Expected output: 60
+function entrypoint() -> nothing {
+  let total = 0
+  for (x in [10, 20, 30]) {
+    total = total + x
+  }
+  wait sleep(5)
+  print(total.toString())
+}

@@ -1,0 +1,16 @@
+// Fixture (e): shape-typed crossing local — frame-embedded so the struct survives suspension.
+// A shape literal (stack-allocated struct) is assigned before a wait and read after.
+// The ptr alloca for `p` is pre-wired to the composed frame's slot region in sm_entry;
+// field accesses and writes go directly to the frame — no separate heap allocation.
+// Expected output: 30  (p.x + p.y = 10 + 20)
+shape Point {
+  x: int
+  y: int
+}
+
+function entrypoint() -> nothing {
+  let p: Point = { x: 10, y: 20 }
+  wait sleep(5)
+  let sum = p.x + p.y
+  print(sum.toString())
+}

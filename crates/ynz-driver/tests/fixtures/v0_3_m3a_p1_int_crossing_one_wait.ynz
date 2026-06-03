@@ -1,0 +1,8 @@
+// Fixture (a): int local crossing one wait.
+// `x` is declared before the sleep and read after it.
+// Frame-backed slot must preserve the value across the suspension.
+function entrypoint() -> nothing {
+  let x: int = 42
+  wait sleep(5)
+  print(x.toString())
+}

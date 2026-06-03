@@ -2881,12 +2881,12 @@ function entrypoint() -> nothing {
     assert!(has_loop_msg, "error must mention loop; got: {:#?}", errors);
 }
 
-// WHY: a local binding declared before a `wait` and read after must emit a clean
-// teaching error instead of crashing the backend with an LLVM dominance violation.
-// Catches regressions where the local-crossing check is removed and a user hits
-// "Machine-code generation failed inside the backend" with no useful message.
+// WHY: M3a P1 lifts the LocalCrossesWait guard — a local declared before a `wait` and
+// read after is now ACCEPTED and frame-backed by codegen. Typeck must produce no error.
+// Guards against regressing to the old "local binding crossing wait is an error" check,
+// which would break any program that passes a computed value across a suspension.
 #[test]
-fn local_binding_crossing_wait_is_an_error() {
+fn local_binding_crossing_wait_is_accepted() {
     let src = r#"
 function entrypoint() -> nothing {
   let x: int = 5
@@ -2894,28 +2894,7 @@ function entrypoint() -> nothing {
   print(x.toString())
 }
 "#;
-    let out = run(src);
-    let errors: Vec<_> = out
-        .diagnostics
-        .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
-        .collect();
-    assert!(
-        !errors.is_empty(),
-        "local binding crossing wait must produce an error"
-    );
-    let has_name = errors.iter().any(|d| d.what.contains("`x`"));
-    assert!(
-        has_name,
-        "error must name the offending binding `x`; got: {:#?}",
-        errors
-    );
-    let has_why = errors.iter().any(|d| d.why.contains("v0.3-M3"));
-    assert!(
-        has_why,
-        "error WHY must reference v0.3-M3; got: {:#?}",
-        errors
-    );
+    assert_clean(src);
 }
 
 // WHY: function PARAMETERS read after a `wait` must NOT produce an error — they are
@@ -2956,12 +2935,12 @@ function entrypoint() -> nothing {
     assert_clean(src);
 }
 
-// WHY: a local declared before an if-nested wait and read AFTER the if block crosses
-// the wait boundary. Before this fix, this pattern crashed the LLVM backend with a
-// dominance violation ("Instruction does not dominate all uses"). Must emit the clean
-// LocalCrossesWait teaching error instead.
+// WHY: M3a P1 lifts LocalCrossesWait — a local declared before an if-nested wait and
+// read after the if block must now be accepted. The crossing-local analysis identifies
+// `x` as frame-backed; codegen preserves it across the conditional suspension. Guards
+// against regressing to an over-rejecting check that blocks this common pattern.
 #[test]
-fn local_before_if_nested_wait_read_after_if_is_an_error() {
+fn local_before_if_nested_wait_read_after_if_is_accepted() {
     let src = r#"
 function entrypoint() -> nothing {
   let x: int = 5
@@ -2971,36 +2950,15 @@ function entrypoint() -> nothing {
   print(x.toString())
 }
 "#;
-    let out = run(src);
-    let errors: Vec<_> = out
-        .diagnostics
-        .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
-        .collect();
-    assert!(
-        !errors.is_empty(),
-        "local declared before if-nested wait and read after must produce an error"
-    );
-    let has_name = errors.iter().any(|d| d.what.contains("`x`"));
-    assert!(
-        has_name,
-        "error must name the offending binding `x`; got: {:#?}",
-        errors
-    );
-    let no_crash = errors
-        .iter()
-        .all(|d| !d.what.contains("Machine-code generation failed"));
-    assert!(
-        no_crash,
-        "must be a clean typeck error, not a backend crash; got: {:#?}",
-        errors
-    );
+    assert_clean(src);
 }
 
-// WHY: a local declared before an if-nested wait and read INSIDE THE SAME BRANCH after
-// the wait also crosses. Before this fix, this variant also crashed the LLVM backend.
+// WHY: M3a P1 lifts LocalCrossesWait — a local declared before an if-nested wait and
+// read inside the same branch after the wait must now be accepted. The frame-backed
+// slot keeps `x` alive across the conditional suspension. Guards against regressing
+// to over-rejection that blocks reading locals in the post-wait continuation.
 #[test]
-fn local_before_if_nested_wait_read_inside_branch_is_an_error() {
+fn local_before_if_nested_wait_read_inside_branch_is_accepted() {
     let src = r#"
 function entrypoint() -> nothing {
   let x: int = 5
@@ -3010,28 +2968,15 @@ function entrypoint() -> nothing {
   }
 }
 "#;
-    let out = run(src);
-    let errors: Vec<_> = out
-        .diagnostics
-        .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
-        .collect();
-    assert!(
-        !errors.is_empty(),
-        "local read inside same branch after wait must produce an error"
-    );
-    let has_name = errors.iter().any(|d| d.what.contains("`x`"));
-    assert!(
-        has_name,
-        "error must name the offending binding `x`; got: {:#?}",
-        errors
-    );
+    assert_clean(src);
 }
 
-// WHY: a local declared INSIDE an if branch before the wait and read after the wait in
-// that same branch crosses the wait. Before this fix, this variant crashed the backend.
+// WHY: M3a P1 lifts LocalCrossesWait — a local declared inside an if branch before
+// a wait and read after the wait in the same branch must now be ACCEPTED. The crossing
+// analysis identifies `y` as frame-backed; the alloca is in sm_entry so it dominates
+// all uses. Guards against over-rejection of inline-if-scoped locals in SM functions.
 #[test]
-fn local_inside_if_branch_before_wait_read_after_wait_is_an_error() {
+fn local_inside_if_branch_before_wait_read_after_wait_is_accepted() {
     let src = r#"
 function entrypoint() -> nothing {
   if (true) {
@@ -3041,26 +2986,11 @@ function entrypoint() -> nothing {
   }
 }
 "#;
-    let out = run(src);
-    let errors: Vec<_> = out
-        .diagnostics
-        .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
-        .collect();
-    assert!(
-        !errors.is_empty(),
-        "local declared inside branch before wait and read after must produce an error"
-    );
-    let has_name = errors.iter().any(|d| d.what.contains("`y`"));
-    assert!(
-        has_name,
-        "error must name the offending binding `y`; got: {:#?}",
-        errors
-    );
+    assert_clean(src);
 }
 
-// WHY: a local declared AND fully read BEFORE any wait must be accepted.
-// Over-rejection here would break valid programs that use locals for setup before a wait.
+// WHY: a local declared and read ONLY BEFORE the wait does not cross a suspension
+// boundary — no frame slot needed. Must be accepted (not slotted) even after M3a.
 #[test]
 fn local_declared_and_read_before_wait_is_accepted() {
     let src = r#"
@@ -3087,15 +3017,14 @@ function entrypoint() -> nothing {
     assert_clean(src);
 }
 
-// WHY: the round-3 bug — `let slot = sleeper(); let other = sleeper(); return slot + other`.
-// `slot` is produced by the FIRST suspension; `other` by the SECOND. Reading `slot`
-// after the second suspension crosses the second suspension boundary. Before the fix,
-// `slot` was not tracked in `declared` (the result-binding arm omitted it), so typeck
-// missed the crossing and let codegen proceed — the LLVM verifier then aborted with a
-// dominance violation. After the fix, `slot` is flagged with the LocalCrossesWait
-// teaching error. This test guards against regressing back to silent mis-compilation.
+// WHY: M3a P1 lifts LocalCrossesWait — `let slot = sleeper(); let other = sleeper();
+// return slot + other` must now be ACCEPTED. `slot` is frame-backed (produced by the
+// first suspension, survives the second). The old test guarded against silent LLVM
+// crashes; that crash path is now closed by the frame-slot machinery. This test guards
+// against regressing to over-rejection of the result-binding-crosses-later-suspension
+// pattern, which is the primary motivating use case for M3b auto-parallelization.
 #[test]
-fn result_binding_crosses_later_suspension_is_an_error() {
+fn result_binding_crosses_later_suspension_is_accepted() {
     let src = r#"
 function sleeper() -> int {
   wait sleep(10)
@@ -3111,28 +3040,7 @@ function entrypoint() -> nothing {
   sleepBlocking(200)
 }
 "#;
-    let out = run(src);
-    let errors: Vec<_> = out
-        .diagnostics
-        .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
-        .collect();
-    assert!(
-        !errors.is_empty(),
-        "result-binding crossing a later suspension must produce an error; got no errors"
-    );
-    let has_slot = errors.iter().any(|d| d.what.contains("`slot`"));
-    assert!(
-        has_slot,
-        "error must name the crossing binding `slot`; got: {:#?}",
-        errors
-    );
-    let has_why = errors.iter().any(|d| d.why.contains("v0.3-M3"));
-    assert!(
-        has_why,
-        "error WHY must reference v0.3-M3; got: {:#?}",
-        errors
-    );
+    assert_clean(src);
 }
 
 // WHY: no-over-fire guard — `let slot = sleeper(); let other = sleeper(); return other`
@@ -3428,7 +3336,7 @@ function entrypoint() -> nothing {
 }
 
 // WHY: `sleep` must be rejected in --kernel mode because the Tokio runtime does not
-// run in kernel mode. Guards the kernel_mode_rejects_sleep_async acceptance criterion.
+// run in kernel mode. Guards the kernel_mode_rejects_sleep acceptance criterion.
 #[test]
 fn kernel_mode_rejects_sleep_async() {
     let src = r#"
@@ -3530,8 +3438,8 @@ function entrypoint() -> nothing {
     );
 }
 
-// WHY: `wait inner(sleepBlocking(10))` — `wait` applies to `inner`, not to `sleepBlocking` which is an
-// argument. If inside_wait leaks into argument recursion, `sleepBlocking(10)` (a non-may-block
+// WHY: `wait inner(sleepBlocking(10))` — `wait` applies to `inner`, not to `sleepBlocking` which is
+// an argument. If inside_wait leaks into argument recursion, `sleepBlocking(10)` (a non-may-block
 // call inside the arg list) spuriously gets a `wait_on_non_may_block` warning even though
 // the user never wrote `wait sleepBlocking(10)`. The fix: clear inside_wait before recursing into
 // call.args, so only the directly-awaited call sees the wait context.
@@ -3594,11 +3502,9 @@ function entrypoint() -> nothing {
 }
 
 // WHY: Phase 6 inference — `wait wrapper(sleep(100))` where `wrapper` is not suspending.
-// `unawaited_sleep_async` is retired under inference (sleep in arg position is auto-
-// handled by the transitive analysis). The remaining behavior: `wait wrapper(...)` still
-// fires `wait_on_non_may_block` for `wrapper` (wrapper doesn't suspend). Guards that the
-// `inside_wait` flag is correctly cleared before arg recursion so arg-position calls don't
-// inherit the `wait` context of the outer call.
+// The remaining behavior: `wait wrapper(...)` still fires `wait_on_non_may_block` for
+// `wrapper` (wrapper doesn't suspend). Guards that the `inside_wait` flag is correctly
+// cleared before arg recursion so arg-position calls don't inherit the `wait` context.
 #[test]
 fn wait_on_non_suspending_callee_fires_for_wrapper_not_for_sleep_async_arg() {
     // test-ratchet: Fix 1 (Round 4) added sub-expression suspending call guard; sleep(100) as an argument IS a sub-expression position → now a hard error. The old Phase 6 assertion ("no hard errors") is superseded by the HALT-class fix that correctly rejects this pattern.
@@ -3630,9 +3536,8 @@ function entrypoint() -> nothing {
         "unawaited_sleep_async must NOT fire under Phase 6 inference; got: {:#?}",
         unawaited_warns
     );
-    // WHY: sleep(100) in arg position IS a sub-expression suspending call.
-    // The guard rejects it with a teaching error stating the permanent step-by-step /
-    // auto-parallelization rationale (Golden Rule 7), no milestone reference.
+    // Fix 1: sleep(100) in arg position IS a sub-expression suspending call.
+    // The new guard correctly rejects it with a teaching error pointing at M3.
     let subexpr_errors: Vec<_> = out
         .diagnostics
         .iter()
@@ -3648,15 +3553,13 @@ function entrypoint() -> nothing {
          got: {:#?}",
         out.diagnostics
     );
-    // WHY: SubExprSuspendViolation is a permanent style constraint (Golden Rule 7 — step-by-step
-    // over chaining), not a temporary M3-era guard. The WHY text must explain the design rationale
-    // (readability + auto-parallelization), never a milestone reference that implies future removal.
+    // test-ratchet: P0 reworded SubExprSuspendViolation WHY to state the Golden-Rule-7 rationale;
+    // "v0.3-M3" was removed. Assert the new canonical WHY text is present instead.
     assert!(
         subexpr_errors
             .iter()
-            .any(|d| d.why.contains("step-by-step") && d.why.contains("auto-parallelize")),
-        "teaching error must explain step-by-step / auto-parallelization rationale (permanent constraint); \
-         got: {:#?}",
+            .any(|d| d.why.contains("step-by-step") || d.why.contains("auto-parallelize")),
+        "teaching error must state the step-by-step / auto-parallelize rationale; got: {:#?}",
         subexpr_errors
     );
 }

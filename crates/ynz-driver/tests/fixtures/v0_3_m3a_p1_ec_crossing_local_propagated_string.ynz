@@ -1,0 +1,23 @@
+// EC string errors value crossing a second wait and RETURNED (propagated) by the caller.
+//
+// WHY: Same class as the int-errors propagation fix. String-errors inner type: the
+// ok-word is a heap pointer (stable), so the pointer path is correct — but without
+// the errors_capable_locals registration the codegen treated the companion-struct
+// stack pointer as the heap pointer and read garbage. This fixture proves the fix
+// covers string errors as well as int errors.
+//
+// Expected: stdout = "hello", exit 0.
+function inner() -> string errors {
+  wait sleep(1)
+  return `hello`
+}
+function middle() -> string errors {
+  let x = inner()
+  wait sleep(1)
+  return x
+}
+function entrypoint() -> nothing {
+  const r = middle()
+  const v = r.or(`fallback`)
+  print(v)
+}

@@ -1,0 +1,11 @@
+// Fixture (h): alloc-count proof — crossing locals add ZERO extra ynz_alloc calls.
+// The crossing locals `a` and `b` live inside the composed frame that was already
+// allocated once; the frame just needs to be larger to hold their slots.
+// ONE ynz_alloc for the whole task tree — same as the param-only baseline.
+function entrypoint() -> nothing {
+  let a: int = 10
+  let b: int = 20
+  wait sleep(5)
+  let sum: int = a + b
+  print(sum.toString())
+}

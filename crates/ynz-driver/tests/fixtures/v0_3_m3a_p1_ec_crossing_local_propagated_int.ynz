@@ -1,0 +1,26 @@
+// EC int errors value crossing a second wait and RETURNED (propagated) by the caller.
+//
+// WHY: This is the round-25 regression guard for the silent miscompile fixed in
+// lower_sm_stmt_with_wait. An EC crossing local bound by a suspending call was not
+// added to errors_capable_locals, so `return x` (in the continuation state after the
+// 2nd wait) sent the companion-struct stack pointer as the ok-word instead of the
+// actual integer bits. The caller read a garbage stack address rather than 42.
+//
+// The LOCAL-CONSUME case (x.or(0) in entrypoint) already worked — the frame was still
+// live. The RETURN-PROPAGATION case broke because the pointer escaped past frame-free.
+//
+// Expected: stdout = "42", exit 0.
+function inner() -> int errors {
+  wait sleep(1)
+  return 42
+}
+function middle() -> int errors {
+  let x = inner()
+  wait sleep(1)
+  return x
+}
+function entrypoint() -> nothing {
+  const r = middle()
+  const v = r.or(0)
+  print(v.toString())
+}

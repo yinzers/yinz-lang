@@ -1,0 +1,24 @@
+// EC crossing local RETURN-PROPAGATION: error path. inner() returns an error;
+// middle() propagates x (the error) up; entrypoint() uses .or(99).
+//
+// WHY: The success-path propagation fix (round-25) is necessary but not sufficient —
+// the fix must also preserve the error DISCRIMINANT across the crossing + propagation.
+// If the fix hardcodes err=0 or flips the discriminant check, the error path is silently
+// swallowed and .or(99) never fires. Regression: if this prints "0" (the unset ok-word
+// passed as success) instead of "99" (the fallback), the error discriminant is broken.
+//
+// Expected: stdout = "99", exit 0.
+function inner() -> int errors {
+  wait sleep(1)
+  return __testFallibleAsync(true)
+}
+function middle() -> int errors {
+  let x = inner()
+  wait sleep(1)
+  return x
+}
+function entrypoint() -> nothing {
+  const r = middle()
+  const v = r.or(99)
+  print(v.toString())
+}

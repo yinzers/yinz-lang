@@ -1,0 +1,12 @@
+// Fixture: boolean crossing local — FIX A (Round 7).
+// A `boolean` value declared before a `wait`, mutated after it, then printed.
+// Exercises the i1 alloca flush (zext i1→i64 to frame slot) and reload (trunc i64→i1
+// from frame slot back to alloca). Prior to FIX A the flush loaded i64 from an i1
+// alloca — an 8-byte read from a 1-byte region — causing SIGSEGV (exit 139).
+// Expected output: true (initial `false` is flipped to `true` after the wait).
+function entrypoint() -> nothing {
+  let flag: boolean = false
+  wait sleep(5)
+  flag = true
+  print(flag.toString())
+}

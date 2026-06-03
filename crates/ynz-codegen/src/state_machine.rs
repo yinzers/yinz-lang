@@ -258,6 +258,103 @@ pub fn store_return_value_errors<'ctx>(
     Ok(())
 }
 
+/// Store an f64 (float) return value in the return slot at offset 16.
+///
+/// The f64 is bitcast to i64 before storing so both the STORE and LOAD sides use the same
+/// 8-byte integer representation. The return slot is 16 bytes; only the first 8 are used.
+///
+/// # Side effects
+///
+/// Writes 8 bytes at frame offset 16.
+pub fn store_return_value_f64<'ctx>(
+    ctx: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    value: inkwell::values::FloatValue<'ctx>,
+) -> Result<(), String> {
+    let slot = return_slot_ptr(ctx, builder, frame_ptr)?;
+    // Bitcast f64 → i64 so the slot stores the raw IEEE-754 bits. The matching load
+    // does the inverse bitcast. Storing the f64 directly would mismatch the i64-typed
+    // slot pointer and produce an LLVM type error.
+    let as_i64 = builder
+        .build_bit_cast(value, ctx.i64_type(), "ret_f_to_i")
+        .map_err(|e| format!("store_return_value_f64 bitcast: {e}"))?
+        .into_int_value();
+    builder
+        .build_store(slot, as_i64)
+        .map_err(|e| format!("store_return_value_f64: {e}"))?;
+    Ok(())
+}
+
+/// Load the f64 (float) return value from the return slot at offset 16.
+///
+/// Loads the 8-byte i64 and bitcasts back to f64 — the inverse of `store_return_value_f64`.
+///
+/// # Side effects
+///
+/// None — read only.
+pub fn load_return_value_f64<'ctx>(
+    ctx: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    name: &str,
+) -> Result<inkwell::values::FloatValue<'ctx>, String> {
+    let slot = return_slot_ptr(ctx, builder, frame_ptr)?;
+    let as_i64 = builder
+        .build_load(ctx.i64_type(), slot, &format!("{name}_i64"))
+        .map_err(|e| format!("load_return_value_f64 load: {e}"))?
+        .into_int_value();
+    let f_val = builder
+        .build_bit_cast(as_i64, ctx.f64_type(), name)
+        .map_err(|e| format!("load_return_value_f64 bitcast: {e}"))?
+        .into_float_value();
+    Ok(f_val)
+}
+
+/// Store a decimal128 (i128) return value in the 16-byte return slot at offset 16.
+///
+/// The i128 exactly fills the 16-byte slot. It is stored as a single i128 load rather
+/// than as two i64 halves so that the return slot doubles as a stable heap-resident
+/// value the wrapper can load directly — no intermediate alloca required.
+///
+/// # Side effects
+///
+/// Writes 16 bytes at frame offset 16.
+pub fn store_return_value_i128<'ctx>(
+    ctx: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    value: inkwell::values::IntValue<'ctx>,
+) -> Result<(), String> {
+    let slot = return_slot_ptr(ctx, builder, frame_ptr)?;
+    builder
+        .build_store(slot, value)
+        .map_err(|e| format!("store_return_value_i128: {e}"))?;
+    Ok(())
+}
+
+/// Load the decimal128 (i128) return value from the 16-byte return slot at offset 16.
+///
+/// The inverse of `store_return_value_i128`. The slot is 16 bytes = exactly the size
+/// of an i128, so this is a direct aligned load — no GEP arithmetic needed.
+///
+/// # Side effects
+///
+/// None — read only.
+pub fn load_return_value_i128<'ctx>(
+    ctx: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    name: &str,
+) -> Result<inkwell::values::IntValue<'ctx>, String> {
+    let slot = return_slot_ptr(ctx, builder, frame_ptr)?;
+    let v = builder
+        .build_load(ctx.i128_type(), slot, name)
+        .map_err(|e| format!("load_return_value_i128: {e}"))?
+        .into_int_value();
+    Ok(v)
+}
+
 /// Load the i64 return value from the return slot at offset 16.
 ///
 /// Used by the parent frame or top-level driver after a child returns Ready.
@@ -448,6 +545,39 @@ pub fn store_local_slot<'ctx>(
         .build_store(slot, val_i64)
         .map_err(|e| format!("local store [{idx}]: {e}"))?;
     Ok(())
+}
+
+/// Return a GEP pointer to the 16-byte `number errors` staging slot at `staging_byte_offset`.
+///
+/// The staging slot stores the raw i128 decimal128 value between the point where the resume
+/// function writes the success value and the point where the wrapper reads the EC ok-pointer.
+/// The slot lives inside the composed frame (after own-local slots, before child sub-frames)
+/// so it is freed automatically when the frame drops — no extra `ynz_free` needed.
+///
+/// `staging_byte_offset` is the absolute byte offset within the composed frame, computed by
+/// `build_frame_layouts` and stored in `FrameLayout::number_errors_staging_offset`.
+///
+/// # Side effects
+///
+/// None — produces a pointer without reading or writing it.
+pub fn number_errors_staging_ptr<'ctx>(
+    ctx: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    staging_byte_offset: u64,
+) -> Result<PointerValue<'ctx>, String> {
+    // SAFETY: staging_byte_offset is within the composed frame (build_frame_layouts guarantees it).
+    let ptr = unsafe {
+        builder
+            .build_gep(
+                ctx.i8_type(),
+                frame_ptr,
+                &[ctx.i64_type().const_int(staging_byte_offset, false)],
+                "num_err_staging_ptr",
+            )
+            .map_err(|e| format!("number_errors_staging_ptr gep: {e}"))?
+    };
+    Ok(ptr)
 }
 
 /// Return a GEP pointer to the embedded child sub-frame at `child_byte_offset` within `parent_frame`.

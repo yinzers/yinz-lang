@@ -1,0 +1,16 @@
+// Fixture: scope-aware shadow analysis — outer `x` read ONLY before the if-block
+// containing the wait. The inner `let x = 42` (inside the if-body) crosses the inner
+// wait, but the outer `let x = `hello`` does NOT cross any top-level suspension.
+// Prior to the scope-aware shadow guard fix, this wrongly produced:
+//   "x is declared again inside a nested scope, but the outer x crosses a `wait`"
+// The outer x has zero reads after any top-level suspension, so the shadow guard
+// must not fire. Expected output: hello (printed before the if) then 42 (inside).
+function entrypoint() -> nothing {
+  let x = `hello`
+  print(x)
+  if (1 > 0) {
+    let x = 42
+    wait sleep(5)
+    print(x.toString())
+  }
+}

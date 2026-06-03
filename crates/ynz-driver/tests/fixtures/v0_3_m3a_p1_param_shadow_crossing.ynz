@@ -1,0 +1,17 @@
+// Fixture: parameter-shadow guard — a `let x` inside a nested scope shadows
+// the function parameter `x`, which crosses a `wait` and is read after it.
+// The codegen frame-slot for parameter `x` is allocated at sm_entry; a nested
+// `let x` shadow creates a second binding with the same name, causing an LLVM
+// SSA dominance failure (%x alloca does not dominate all uses).
+// Expected: exit 1, clean ShadowsCrossingLocal diagnostic, NOT an LLVM ICE.
+function f(x: int) -> nothing {
+  wait sleep(5)
+  if (1 > 0) {
+    let x = 99
+    print(x.toString())
+  }
+  print(x.toString())
+}
+function entrypoint() -> nothing {
+  f(7)
+}

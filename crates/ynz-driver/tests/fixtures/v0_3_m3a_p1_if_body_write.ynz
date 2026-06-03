@@ -1,0 +1,13 @@
+// Fixture: if-body write (assign, not let) crossing local — mutation inside an if
+// body is flushed to the frame slot so the assigned value survives the wait.
+// `val` starts at 0; the if body assigns it to 99; after the wait val=99.
+// Expected output: 99
+function entrypoint() -> nothing {
+  let val = 0
+  const flag = 1
+  if (flag == 1) {
+    val = 99
+  }
+  wait sleep(5)
+  print(val.toString())
+}

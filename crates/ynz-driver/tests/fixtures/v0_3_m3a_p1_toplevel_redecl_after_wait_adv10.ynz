@@ -1,0 +1,16 @@
+// ADV10: top-level re-declaration of `x` AFTER the wait. The outer `let x = 10` crosses
+// the wait; a second `let x = 99` appears at the same top level after the wait. Both
+// bindings share the same name-keyed frame slot in codegen — the second declaration
+// clobbers the first, producing a silent wrong answer (output 7/7 instead of 7/99).
+//
+// The guard must fire with a clean ShadowsCrossingLocal error (exit 1). Compiling this
+// program would produce incorrect output because all three `x` bindings (x=10, x=99,
+// x=7 inside if) share one name-keyed frame slot.
+// Expected: exit 1, diagnostic mentions `x` and `wait`
+function entrypoint() -> nothing {
+  let x = 10
+  wait sleep(5)
+  let x = 99
+  if (1 > 0) { let x = 7  print(x.toString()) }
+  if (1 > 0) { print(x.toString()) }
+}

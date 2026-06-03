@@ -1,0 +1,12 @@
+// Fixture: FIX 2 — crossing local whose SOLE definition is inside an if-arm that
+// also contains the wait. Previously caused an LLVM dominance ICE because the
+// alloca was created in the non-entry state block instead of sm_entry.
+// Expected output: 42
+function entrypoint() -> nothing {
+  let flag = true
+  if (flag) {
+    let inner = 42
+    wait sleep(5)
+    print(inner.toString())
+  }
+}

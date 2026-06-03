@@ -1,0 +1,21 @@
+// Fixture: suspending `-> { health: int }` (anon-shape return) must be rejected with a
+// readable diagnostic — not a raw internal name like `__anon__health__int`.
+//
+// WHY: WideValueSuspendingReturn guard (Round-22 FIX a). The diagnostic used to call
+// `type_name` on the raw internal shape name, printing "__anon__health__int" instead of
+// "{ health: int }". This leaked compiler-internal naming into user-facing output (Golden
+// Rule 11 violation). The fix routes all Shape name rendering through `type_name()`, which
+// formats anon shapes as `{ field: type }` pairs. This fixture verifies the readable form
+// appears in stderr.
+//
+// Expected: exit code 1, diagnostic says "cannot yet return" and mentions "{ health: int }".
+// Expected: no stdout (compile error, no binary produced).
+function sleepingAnon() -> { health: int } {
+  wait sleep(5)
+  return { health: 42 }
+}
+
+function entrypoint() -> nothing {
+  const r = sleepingAnon()
+  print(r.health.toString())
+}

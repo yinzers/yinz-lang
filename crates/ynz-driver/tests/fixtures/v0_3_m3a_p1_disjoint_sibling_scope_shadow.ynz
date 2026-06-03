@@ -1,0 +1,18 @@
+// Fixture: two disjoint sibling scopes each with their own `let x` crossing a wait.
+// Neither scope encloses the other; neither outer `let x` exists at the top level.
+// Both are inner-only crossings — the shadow guard must NOT fire for either.
+// Expected output: 42 (first if-arm) then 99 (second if-arm).
+function entrypoint() -> nothing {
+  let flag1 = true
+  let flag2 = true
+  if (flag1) {
+    let x = 42
+    wait sleep(5)
+    print(x.toString())
+  }
+  if (flag2) {
+    let x = 99
+    wait sleep(5)
+    print(x.toString())
+  }
+}

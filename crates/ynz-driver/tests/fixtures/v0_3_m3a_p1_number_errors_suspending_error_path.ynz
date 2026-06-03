@@ -1,0 +1,19 @@
+// Fixture: suspending `-> number errors` error path.
+//
+// WHY: Verifies that the EC discriminant survives suspension for the ERROR case.
+// __testFallibleAsync(true) returns an error. The error propagates out of fetchPrice(),
+// so r.or(99.9) returns the fallback. If the staging path hardcodes success,
+// this would print the wrong value instead of the fallback.
+//
+// Expected: stdout = "99.9", exit 0.
+function fetchPrice() -> number errors {
+  let v = wait __testFallibleAsync(true)
+  const n = v.toNumber()
+  return n
+}
+
+function entrypoint() -> nothing {
+  const r = fetchPrice()
+  const n = r.or(99.9)
+  print(n.toString())
+}

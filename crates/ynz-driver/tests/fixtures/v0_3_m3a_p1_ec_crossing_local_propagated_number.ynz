@@ -1,0 +1,25 @@
+// EC number errors value crossing a second wait and RETURNED (propagated) by the caller.
+//
+// WHY: Same class as the int-errors propagation fix, but for decimal128 (number errors).
+// The ok-word is a staging-slot pointer, which is doubly fragile: (1) the companion-struct
+// pointer miscompile (same as int/string) and (2) the staging slot lives inside the frame
+// whose lifetime is the resume fn call. Without the errors_capable_locals fix, the pointer
+// returned was the companion-struct stack address. This fixture uses a value (9999999999.000000001)
+// that requires the full 16-byte decimal128 precision; truncation or wrong pointer both produce
+// a different or garbage value.
+//
+// Expected: stdout = "9999999999.000000001", exit 0.
+function inner() -> number errors {
+  wait sleep(1)
+  return 9999999999.000000001
+}
+function middle() -> number errors {
+  let x = inner()
+  wait sleep(1)
+  return x
+}
+function entrypoint() -> nothing {
+  const r = middle()
+  const v = r.or(0.0)
+  print(v.toString())
+}

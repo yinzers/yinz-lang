@@ -8,6 +8,21 @@ use std::path::PathBuf;
 use ynz_codegen::{codegen_query, sha256, CompiledArtifact};
 use ynz_parser::{CompilerDb, SourceFile};
 
+const NON_CROSSING_LOCAL_FILE: &str = "v0_3_m3a_p1_non_crossing_local_not_slotted.ynz";
+
+/// Read the non-crossing-local fixture source from disk.
+///
+/// The fixture file is the single source of truth for this program. Reading it directly
+/// avoids maintaining a parallel inline copy that can silently diverge if the fixture
+/// changes — one definition, one place to update.
+fn non_crossing_local_source() -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../ynz-driver/tests/fixtures")
+        .join(NON_CROSSING_LOCAL_FILE);
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))
+}
+
 const FILE: &str = "hello.ynz";
 // test-ratchet: M7 P1 migrates double-quoted string to backtick syntax — double-quotes now
 // produce an error diagnostic, so any test source must use backticks. The golden SHA-256
@@ -174,6 +189,47 @@ fn sha256_of_abc_matches_known_value() {
         sha256(b"abc"),
         expected,
         "SHA-256 of \"abc\" must match FIPS test vector"
+    );
+}
+
+#[test]
+fn non_crossing_local_not_frame_slotted_ir_inspection() {
+    // WHY: AC#8 — a local that is read only BEFORE a `wait` must NOT receive a frame slot.
+    // The frame-slot system pre-creates allocas only for locals in `crossing_local_names`
+    // (declared before a suspension AND read after it). `setup=99` here is read before the
+    // wait and never referenced after, so it must not be in that set.
+    //
+    // The IR signal: frame-slot stores use the GEP name `ls_{slot_index}` (from
+    // `store_local_slot`). A function with zero crossing locals emits no `ls_0`, `ls_1`, etc.
+    // If `setup` were spuriously slotted it would appear as `ls_0` in the IR. Asserting
+    // its ABSENCE proves non-crossing locals stay in SSA registers — no frame overhead.
+    //
+    // This test would FAIL if `flush_crossing_local_if_needed` were changed to slot every
+    // local instead of only crossing locals — making it mutation-resistant.
+    let db = CompilerDb::default();
+    let sf = SourceFile::new(
+        &db,
+        NON_CROSSING_LOCAL_FILE.to_string(),
+        non_crossing_local_source(),
+    );
+    let output = codegen_query(&db, sf);
+    assert!(
+        !output.diagnostics.has_errors(),
+        "Non-crossing-local source must compile clean; has errors: {:#?}",
+        output.diagnostics
+    );
+    let ir = &output.artifact.ir_text;
+    // Frame-slot store GEP names follow the `ls_{idx}` pattern (state_machine.rs store_local_slot).
+    // A function with no crossing locals emits none of these names.
+    assert!(
+        !ir.contains("ls_0"),
+        "Non-crossing local `setup` must NOT be frame-slotted; found `ls_0` in IR.\n\
+         This means `flush_crossing_local_if_needed` slotted a non-crossing local — \
+         fix `crossing_local_names` to exclude locals that are never read after a wait."
+    );
+    assert!(
+        !ir.contains("ls_1"),
+        "Non-crossing local `setup` must NOT be frame-slotted; found `ls_1` in IR."
     );
 }
 

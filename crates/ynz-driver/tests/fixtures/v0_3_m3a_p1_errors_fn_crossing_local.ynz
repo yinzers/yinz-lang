@@ -1,0 +1,14 @@
+// Fixture (g): `-> T errors` SM function with a crossing local.
+// `prefix` crosses the suspension; the success path must see its value.
+// Expected output: 114 (prefix=107 + n=7 = 114).
+function compute(n: int) -> int errors {
+  let prefix = n + 100
+  wait sleep(5)
+  return prefix + n
+}
+
+function entrypoint() -> nothing {
+  const r = compute(7)
+  const n = r.or(0)
+  print(n.toString())
+}

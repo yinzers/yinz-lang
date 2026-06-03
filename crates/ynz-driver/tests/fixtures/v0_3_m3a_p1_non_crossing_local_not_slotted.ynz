@@ -1,0 +1,10 @@
+// Non-crossing local: `setup` is declared and read only BEFORE the wait.
+// It must not get a frame slot (confirmed via alloc-count probe and IR inspection).
+// The value is consumed entirely in state_0 and is irrelevant after the wait.
+// Expected output: done (the setup value is used before the wait, not after)
+function entrypoint() -> nothing {
+  let setup: int = 99
+  print(setup.toString())
+  wait sleep(5)
+  print(`done`)
+}

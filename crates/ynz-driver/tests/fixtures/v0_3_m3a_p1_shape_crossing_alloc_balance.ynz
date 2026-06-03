@@ -1,0 +1,15 @@
+// Alloc-balance guard for frame-embedded shape crossing locals.
+// One shape-typed local crosses a wait. The composed frame (alloc=1) must be
+// the sole allocation — no separate ynz_alloc per shape. Regression shows alloc=2.
+// Expected output: 30  (p.x + p.y = 10 + 20)
+shape Point {
+  x: int
+  y: int
+}
+
+function entrypoint() -> nothing {
+  let p: Point = { x: 10, y: 20 }
+  wait sleep(5)
+  let sum = p.x + p.y
+  print(sum.toString())
+}

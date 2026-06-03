@@ -1121,6 +1121,54 @@ ships_in = "v0.2"
 design_doc = "design/future/arena.md"
 triggers = "Writing `scratch { ... }` in Yinz source (keyword not yet reserved — no current trigger)"
 
+# --- Nested-shape crossing a wait (design/concurrency.md M3a scope) ---
+[[deferred_language_feature]]
+name = "nested-shape-crossing-wait"
+substitute = "Flatten the nested shape into primitive fields, or store the outer shape as a non-crossing local (assign it entirely after the last suspension in the function)."
+why = "The frame-embed codegen copies the outer shape's bytes into the composed heap frame at suspension time. Nested shape fields are opaque pointers — the recursive memcpy that would copy the inner shape's bytes is not yet implemented. The fix requires extending frame layout to recursively embed all nested shape bytes (1-2 sessions of work)."
+ships_in = "v0.3+"
+design_doc = "design/concurrency.md"
+triggers = "A `let` binding whose type is a shape with nested-shape fields, where that binding is read after a `wait` suspension in the same function"
+
+# --- Shadowing a crossing local — same name re-used around a suspension (design/concurrency.md M3a scope) ---
+[[deferred_language_feature]]
+name = "shadow-crossing-local-support"
+substitute = "Rename the colliding binding to a distinct name (e.g. `innerX` instead of `x`, or `xAfter` for a post-wait rebinding). Two values with different semantics should have different names anyway — the rename produces clearer code."
+why = "The frame-slot system keys crossing-local slots by name (one slot per name). Two bindings with the same name around a suspension share one slot — the second write silently clobbers the first. The guard is deliberately conservative: it rejects all same-name re-uses around a suspension, including cases where reads might not reach the clobbered value, because the alternative is a silent wrong answer. Lifting this requires per-binding slot identity: each `let` declaration gets a unique ID, and flush/reload use that ID instead of the name. This is 1-2 sessions of work in the crossing analysis, frame layout, and codegen layers."
+ships_in = "v0.3+"
+design_doc = "design/concurrency.md"
+triggers = "Two cases both trigger the error: (1) a `let x` inside a nested scope (if/while/for/match body) when an outer `let x` declared before a `wait` is read after the `wait` at the outer scope; (2) a second top-level `let x` in the function body after a suspension when a first top-level `let x` was declared before the suspension. Both produce a silent slot-collision miscompile if allowed. Parameters count as an outer binding for both shapes."
+
+# --- Wide-value shape returns from suspending functions (design/concurrency.md) ---
+# Note: `-> number errors` (decimal128 EC) is SUPPORTED as of M3a Phase 1 — a 16-byte
+# staging slot in the composed frame stores the i128 and is freed with the frame (alloc=1/free=1).
+# This entry covers only the remaining deferred cases: `-> Shape` and `-> Shape errors`.
+[[deferred_language_feature]]
+name = "wide-value-suspending-return"
+substitute = "For `-> Shape`: return the shape's fields individually as primitives, or bind the shape to a crossing local and return a primitive derived from it. For `-> Shape errors`: return the shape's fields individually (e.g. `-> int errors`) or compute a primitive value inside the function and return that."
+why = "Returning a Shape value from a suspending function needs a variable-size frame staging slot entangled with the pre-existing non-suspending shape-return base bug (shapes returned by value produce garbage for int fields even without suspension). Without it: `-> Shape` clobbers child sub-frames (staging bytes at FRAME_OFFSET_LOCALS_START=32 overwrites the sleep sub-frame's resume_point → SIGSEGV); `-> Shape errors` needs the same variable-size staging. The shape base bug must be fixed first. `-> number errors` is fully supported (16-byte fixed staging slot, alloc=1/free=1)."
+ships_in = "v0.3+"
+design_doc = "design/concurrency.md"
+triggers = "A suspending function (one whose body contains a `wait`) whose return type is `Shape` or `Shape errors` — these trigger the WideValueSuspendingReturn compile error."
+
+# --- union/maybe/dynamic crossing locals (design/concurrency.md) ---
+[[deferred_language_feature]]
+name = "unsupported-crossing-local-type"
+substitute = "Extract the inner value before the `wait`, or restructure so the `union`, `maybe`, or `dynamic` value is not needed after the suspension."
+why = "The frame-slot classifier in codegen handles int, bool, float, number, string, array, map, Shape, and ErrorsCapable crossing locals. `union`, `maybe<T>`, and `dynamic Contract` values are internally represented as pointers to {tag, payload} allocas on the resume function's stack — stack frames that are destroyed between suspension and resume. Flushing the alloca pointer to the frame and reloading it after resume produces undefined behavior (reading a dangling stack address). The UnsupportedCrossingLocalType guard in typeck/check.rs rejects these crossing locals at compile time, converting what was previously a raw LLVM ICE into a clean teaching diagnostic."
+ships_in = "v0.3+"
+design_doc = "design/concurrency.md"
+triggers = "A local binding of type `union`, `maybe<T>`, or `dynamic Contract` that is declared before a `wait` and read after it — any of these triggers the UnsupportedCrossingLocalType compile error."
+
+# --- EC wrapper collect-on-completion (design/concurrency.md M3a Scope Boundaries) ---
+[[deferred_language_feature]]
+name = "ec-wrapper-collect-on-completion"
+substitute = "Use the inline-poll path: a suspending function that calls another suspending `-> T errors` function composes the callee inline (the state-machine resume path). Only `background` (fire-and-forget) hits the standalone EC wrapper, and it safely discards the completed value. If you need to read the completed value of a `background`-spawned `-> T errors` task, this ships in v0.3-M3b."
+why = "The standalone EC wrapper (emitted for `background`-spawned suspending `-> T errors` functions) reads the `{i64, i64}` EC value from the frame return slot and then frees the frame. For `-> number errors`, the ok-word in that value points into the composed frame's 16-byte staging slot — storage freed at the same time as the frame. The ok-pointer therefore becomes invalid after the wrapper returns. This is safe today because the only reachable caller is `background` (fire-and-forget), which DISCARDS the EC value without dereferencing the ok-pointer. A caller that reads and uses the ok-pointer must copy it BEFORE freeing the frame; implementing that copy requires the scheduler to know whether a spawned task's completed value is read or discarded — that is M3b task-collection machinery, not M3a."
+ships_in = "v0.3-M3b"
+design_doc = "design/concurrency.md"
+triggers = "Storing or reading the return value of a `background`-spawned suspending function whose declared type is `-> T errors` — specifically, using the `background` task handle to collect the completed value"
+
 # --- Self-referential shapes (design/future/self-references.md) ---
 [[deferred_language_feature]]
 name = "self-referential-shape"

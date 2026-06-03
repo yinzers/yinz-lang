@@ -17,7 +17,7 @@
 - webpage-docs (Patrick Rizzardi) — 0 active plans — 2026-05-20
 
 ### Active Workstreams
-- v0-3-m3a-suspension-codegen (Patrick Rizzardi) — 12 files touched — 0/95 done — roadmap: v0-3-concurrency-perf — 2026-06-01
+- v0-3-m3a-suspension-codegen (Patrick Rizzardi) — 12 files touched — 47/107 done — roadmap: v0-3-concurrency-perf — 2026-06-01
 <!-- RADAR-END -->
 
 ---
@@ -115,6 +115,7 @@ cargo fmt --all
 - **M6 catch-up obligations from M3**: `is Type` narrowing in multi-case `if`; options-variant matching; exhaustiveness checking for options/unions.
 - **M7 catch-up obligations from M3**: replace `range` builtin with `Iterable[T]` protocol; allow Range as first-class value; remove M3 special-cases in typeck + codegen; Unicode canonical equivalence for string multi-case (`ynz_string_eq`).
 - **M4 plan must include**: 5-subsection Invariants block per `.claude/rules/plan-invariants.md` (Safety, Performance, Teaching, Runtime Dependencies, Kernel-Mode Behavior). const deep-immutability invariants required in Safety + Performance. `shape` keyword reservation in P1 lexer.
+- **[2026-06-02] v0.3-M3a Phase 1 (crossing-local suspension codegen) — IN FINAL GATE via `/execute-plan` on branch `feat/m3a-suspension-codegen`** (full round-by-round in the plan's resume anchor). Core (locals crossing a `wait`: int/bool/float/number/string/shape/decimal128) is rock-solid — 8/8 ACs, 30-probe shadow-judge clean, frame-embed ownership-correct (one alloc/task, no leak), suite 1672/0. Took 22 fix-rounds (2 owned bounces — R14 silent-miscompile + R19 leak, both reverted next round; a shadow-guard whack-a-mole resolved at R15 by safe-conservative+deferral; R17 return-path scope-creep caused the R18-22 cascade). Surface now FULLY SAFE: every unsupported case fails LOUD at compile time (no silent-wrong/leak/SIGSEGV/raw-ICE) — wide-value suspending returns (Shape/Shape-errors/number-errors) + union/maybe/dynamic crossing locals are clean-reject deferrals. **NOT-M3a pre-existing base-compiler bugs to file**: composite-of-shape value returns (maybe/union/map<Shape>) silently miscompile with or without suspension; non-suspending `-> Shape` return-by-value garbage. **STOPPING RULE**: if next re-gate finds another return-path defect → revert R17 return scope-creep to AC-minimum (int + int-errors) and ship.
 
 ---
 

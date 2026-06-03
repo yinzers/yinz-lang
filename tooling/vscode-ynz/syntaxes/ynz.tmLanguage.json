@@ -46,7 +46,7 @@
       ]
     },
     "deferred-features": {
-      "match": "\\b(self-referential-shape|scratch|foreign|test|f32|f64|i16|i32|i64|u16|u32|u64|gpu|i8|u8)\\b",
+      "match": "\\b(ec-wrapper-collect-on-completion|unsupported-crossing-local-type|shadow-crossing-local-support|wide-value-suspending-return|nested-shape-crossing-wait|self-referential-shape|scratch|foreign|test|f32|f64|i16|i32|i64|u16|u32|u64|gpu|i8|u8)\\b",
       "name": "invalid.illegal"
     },
     "keywords": {

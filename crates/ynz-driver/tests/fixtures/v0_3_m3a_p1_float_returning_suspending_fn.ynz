@@ -1,0 +1,16 @@
+// Fixture: float-returning suspending function (Round 17 — wrapper-return float type mismatch).
+// A `-> float` suspending function that suspends and returns a float literal.
+// Prior to this fix the SM wrapper emitted `ret void` (falling through the `_ =>` fallback
+// in the wrapper-return match) because `Type::Float` had no explicit arm. LLVM module
+// verification failed: "Function return type does not match operand type of return inst!"
+// Expected output: 8.5
+function sleepingFloat() -> float {
+  wait sleep(5)
+  let v = (8).toFloat() + 0.5.toFloat()
+  return v
+}
+
+function entrypoint() -> nothing {
+  let r = sleepingFloat()
+  print(r.toString())
+}

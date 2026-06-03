@@ -1,0 +1,15 @@
+// ErrorsCapable result crossing a second wait.
+// `r = wait getVal(7)` is a {i64,i64} StructValue. It must cross the second wait
+// without crashing (the bind_sm_result_and_flush StructValue arm was missing in
+// the round-2 implementation). Expected output: 7
+function getVal(n: int) -> int errors {
+  wait sleep(5)
+  return n
+}
+
+function entrypoint() -> nothing {
+  let r = wait getVal(7)
+  wait sleep(5)
+  let v = r.or(0)
+  print(v.toString())
+}

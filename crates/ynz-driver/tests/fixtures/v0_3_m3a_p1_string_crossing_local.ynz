@@ -1,0 +1,9 @@
+// Fixture (d): string-typed crossing local.
+// `msg` is a heap pointer — the frame slot stores ptr_to_int; reload
+// does int_to_ptr. The string must be usable after the suspension.
+// Expected output: hello
+function entrypoint() -> nothing {
+  let msg = `hello`
+  wait sleep(5)
+  print(msg)
+}

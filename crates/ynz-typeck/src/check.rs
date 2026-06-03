@@ -444,37 +444,78 @@ impl<'b> Checker<'b> {
                     ));
                 }
             }
+        }
 
-            // Check 2: local binding declared before a suspension point and read after it.
-            //
-            // A suspension point is either an explicit `wait expr` node OR a bare call to
-            // a suspending function — both compile to state-machine resume steps, so both
-            // leave unframed locals in an undefined state after the step.
-            //
-            // Parameters are excluded: the SM codegen gives every parameter a frame slot
-            // and reloads it at each resume point, so they are always safe.
-            let param_names: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
-            let crossings = locals_crossing_wait(&f.body.stmts, &param_names, &suspending_fns);
-            // Emit one diagnostic per crossing (deduplicated by name to reduce noise).
-            let mut reported: std::collections::HashSet<String> = std::collections::HashSet::new();
-            for crossing in crossings {
-                if reported.insert(crossing.name.clone()) {
-                    self.diags.push(Diagnostic::error(
-                        crossing.use_span,
-                        format!(
-                            "`{}` is declared before a `wait` and used after — this is not supported yet.",
-                            crossing.name
-                        ),
-                        format!(
-                            "Move `{}` to a function parameter (parameters are preserved across \
-                             pause points) or restructure so `{}` is not needed after the `wait`.",
-                            crossing.name, crossing.name
-                        ),
-                        "v0.3-M2 can only preserve function parameters across a `wait` point. \
-                         Preserving a local binding across a suspension requires a frame-slot \
-                         transform that ships in v0.3-M3a.",
-                    ));
+        // Check WideValueSuspendingReturn: a suspending function whose return type is a
+        // wide-inner value that the SM return path cannot correctly handle without a dedicated
+        // frame staging slot.
+        //
+        // Two classes remain rejected:
+        //   • `-> Shape errors`   — EC success path stores a shape pointer that points into
+        //                           the resume fn's stack frame; staging at FRAME_OFFSET_LOCALS_START
+        //                           (offset 32) clobbers child sub-frames. Needs variable-size
+        //                           staging (shape size varies) and is also entangled with the
+        //                           pre-existing non-suspending shape-return base bug.
+        //   • `-> Shape`          — Bare shape return stages bytes at FRAME_OFFSET_LOCALS_START+0
+        //                           (offset 32), which is where child sub-frames begin. Writing
+        //                           there clobbers the child frame → SIGSEGV at resume.
+        //
+        // `-> number errors` (decimal128 EC) is NOT rejected: its 16-byte staging slot is
+        // allocated at a fixed offset in the composed frame (after own-local slots, before
+        // child sub-frames) by build_frame_layouts. The slot lives inside the single composed
+        // frame allocation — alloc=1/free=1 invariant preserved.
+        //
+        // The guard must NOT reject:
+        //   `-> number errors`, `-> int errors`, `-> float`, `-> number`, `-> bool`,
+        //   `-> string`, `-> array`, `-> map` from suspending functions — all verified clean.
+        //
+        // Scoped to RETURN TYPE only. Shapes as CROSSING LOCALS still work correctly
+        // (frame-embedded via the crossing-local slot machinery, not the return-slot path).
+        if !self.kernel_mode && is_suspending_fn {
+            let is_wide_return = match &ret_ty {
+                // `-> Shape` bare: crashing staging at child-sub-frame region.
+                Type::Shape { .. } => true,
+                // `-> Shape errors` (shape pointer into stack frame, variable-size staging).
+                // `-> number errors` is explicitly NOT rejected — it has a correct implementation.
+                Type::ErrorsCapable { inner } => {
+                    matches!(inner.as_ref(), Type::Shape { .. })
                 }
+                _ => false,
+            };
+            if is_wide_return {
+                let (what_instead, type_label) = match &ret_ty {
+                    Type::Shape { .. } => {
+                        let rendered = type_name(&ret_ty);
+                        (
+                            format!(
+                                "Return the shape's fields individually as primitives, or \
+                                 bind `{rendered}` to a crossing local and return a primitive derived from it."
+                            ),
+                            format!("`{rendered}`"),
+                        )
+                    }
+                    Type::ErrorsCapable { inner } => match inner.as_ref() {
+                        Type::Shape { .. } => {
+                            let rendered = type_name(inner.as_ref());
+                            (
+                                "Return the shape's fields individually (e.g. `-> int errors`), \
+                                 or compute a primitive result inside the function and return that."
+                                    .to_string(),
+                                format!("`{rendered} errors`"),
+                            )
+                        }
+                        _ => ("".to_string(), "this type".to_string()),
+                    },
+                    _ => ("".to_string(), "this type".to_string()),
+                };
+                self.diags.push(Diagnostic::error(
+                    f.span.clone(),
+                    format!("A suspending function cannot yet return {type_label} by value."),
+                    what_instead,
+                    "Returning a shape value from a suspended function needs a variable-size \
+                     frame staging slot entangled with the shape-return base fix — that work is \
+                     deferred. See design/concurrency.md 'WideValueSuspendingReturn'.",
+                ));
             }
         }
 
@@ -513,6 +554,260 @@ impl<'b> Checker<'b> {
 
         self.check_stmts(&f.body.stmts);
         self.scope.pop();
+
+        // Check 2 (run after check_stmts so expr_types is populated):
+        // A crossing local whose shape has a nested-shape field cannot yet cross a `wait`.
+        // Shapes with only primitive / heap-stable fields (int, bool, float, number, string,
+        // array, map) are frame-embedded inline and work correctly. Shapes with a nested-shape
+        // field store an opaque pointer to a stack-allocated struct in their LLVM layout; that
+        // pointer becomes invalid after the resume function returns and resumes.
+        // Full recursive aggregate frame-embedding ships in a later milestone.
+        if !self.kernel_mode && (has_explicit_waits || is_suspending_fn) {
+            let param_names_ref: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
+            let crossings = crossing_local_names(&f.body.stmts, &param_names_ref, &suspending_fns);
+            for crossing_name in &crossings {
+                // Look up the typeck-resolved type now that expr_types is populated.
+                let resolved_ty = find_crossing_local_typeck_type_in_map(
+                    &f.body.stmts,
+                    crossing_name.as_str(),
+                    &self.expr_types,
+                );
+                if let Some(Type::Shape {
+                    name: ref shape_name,
+                }) = resolved_ty
+                {
+                    let has_nested_shape = self
+                        .shape_table
+                        .shapes
+                        .get(shape_name.as_str())
+                        .is_some_and(|def| {
+                            def.fields
+                                .iter()
+                                .any(|field| matches!(&field.ty, Type::Shape { .. }))
+                        });
+                    if has_nested_shape {
+                        let span = find_crossing_local_span(&f.body.stmts, crossing_name.as_str())
+                            .unwrap_or_else(|| f.span.clone());
+                        self.diags.push(Diagnostic::error(
+                            span,
+                            format!(
+                                "`{crossing_name}` is a `{shape_name}` value that crosses a \
+                                 `wait` — but `{shape_name}` has a nested-shape field, which \
+                                 cannot be frame-embedded yet."
+                            ),
+                            format!(
+                                "Restructure `{shape_name}` so all its fields are primitive \
+                                 types (int, bool, float, number, string), or flatten the \
+                                 nested shape's fields into `{shape_name}` directly."
+                            ),
+                            "Shapes with nested-shape fields store an internal pointer to a \
+                             stack buffer. That pointer becomes invalid after a `wait` suspends \
+                             and resumes the function. Full recursive aggregate frame-embedding \
+                             ships in a later milestone.",
+                        ));
+                    }
+                }
+            }
+
+            // Check 2b (UnsupportedCrossingLocalType): a crossing local whose type is
+            // `union`, `maybe<T>`, or `dynamic Contract` cannot yet cross a `wait`.
+            //
+            // The frame-slot classifier in codegen handles: int, bool, float, number,
+            // string, array, map, Shape, ErrorsCapable. All others fall into the generic
+            // pointer flush/reload path, which calls `ptr_to_int` on the alloca pointer.
+            // For `union` and `maybe`, the alloca pointer targets a {tag, payload} struct
+            // that lives on the RESUME FUNCTION'S STACK — a stack frame that is destroyed
+            // between suspension and resume. Reloading the stored address after resume
+            // produces undefined behavior (LLVM may ICE with "Instruction does not dominate
+            // all uses!" or silently corrupt the callee's stack). This guard converts that
+            // raw LLVM ICE into a clean teaching diagnostic.
+            //
+            // We check BOTH the RHS expression type (from expr_types, after check_stmts)
+            // AND the resolved annotation type (from the AST `ty` field + union-alias lookup).
+            // The annotation type catches union-alias annotations like `let fig: Figure = c`
+            // where the RHS resolves to the concrete variant type (e.g. `Circle`), not the
+            // union alias type (`Figure`). Either unsupported type triggers the guard.
+            for crossing_name in &crossings {
+                // RHS expression type.
+                let rhs_ty = find_crossing_local_typeck_type_in_map(
+                    &f.body.stmts,
+                    crossing_name.as_str(),
+                    &self.expr_types,
+                );
+                // Annotation type, resolved through union aliases.
+                let ann_ty =
+                    find_let_annotation_type_in_stmts(&f.body.stmts, crossing_name.as_str())
+                        .and_then(|ast_ty| self.resolve_type_for_guard(&ast_ty));
+                // Pick the type that best describes the binding — prefer the annotation type
+                // when it is unsupported (it encodes the programmer's intent more precisely
+                // than the inferred RHS type for union-aliased variables).
+                let effective_ty = [&ann_ty, &rhs_ty]
+                    .iter()
+                    .find_map(|opt| {
+                        opt.as_ref().filter(|ty| {
+                            matches!(
+                                ty,
+                                Type::Union { .. } | Type::Maybe { .. } | Type::Dynamic { .. }
+                            )
+                        })
+                    })
+                    .cloned();
+                if let Some(ty) = effective_ty {
+                    let ty_display = type_name(&ty);
+                    let span = find_crossing_local_span(&f.body.stmts, crossing_name.as_str())
+                        .unwrap_or_else(|| f.span.clone());
+                    self.diags.push(Diagnostic::error(
+                        span,
+                        format!("a `{ty_display}` value cannot yet cross a `wait`."),
+                        format!(
+                            "Extract the inner value before the `wait`, or restructure so \
+                             `{crossing_name}` is not needed after the suspension."
+                        ),
+                        "The frame-slot save/restore for `union`, `maybe`, and `dynamic` values \
+                         is not yet implemented — without it the value would be read from a stack \
+                         address that no longer exists after the function resumes. \
+                         See design/concurrency.md 'UnsupportedCrossingLocalType'.",
+                    ));
+                }
+            }
+
+            // Check 3 (shadow detection): a `let` that re-declares a crossing-local name
+            // is ambiguous — the same name means two different values across a `wait`. Reject
+            // it with a clean WHAT/WHAT-INSTEAD/WHY error.
+            //
+            // Codegen keys frame slots by NAME: one alloca per name, pre-created in sm_entry.
+            // Two bindings with the same name around a suspension share ONE slot — the later
+            // write clobbers the earlier value, producing a silent wrong answer. Rejecting is
+            // the correct design: two bindings with the same name across a suspension is
+            // confusing (Golden Rule 2) AND currently unrepresentable in the frame-slot layout.
+            //
+            // Two distinct collision shapes are caught here:
+            //   (a) Nested shadow: outer `let x` before suspension + inner `let x` in a nested
+            //       block (if/while/for/match body) — shadowing inside a nested scope means
+            //       codegen generates two writes to the same name-keyed slot.
+            //   (b) Top-level redeclaration: outer `let x` before suspension + another `let x`
+            //       at the TOP LEVEL of the function body after the suspension — same slot,
+            //       different values, guaranteed clobber at the assignment point.
+            //
+            // Only apply this check when the crossing local has a TOP-LEVEL outer `let`
+            // declaration in the function body (one not nested inside any if/while/for/match).
+            // An inner-only crossing local (declared solely inside a nested block) cannot be
+            // shadowed by a later outer `let` with the same name — the outer `let` is not a
+            // crossing local, so there is no alloca ambiguity.
+            for crossing_name in &crossings {
+                let name_str = crossing_name.as_str();
+                if !outer_is_genuine_crossing_local(&f.body.stmts, name_str, &suspending_fns) {
+                    // The outer `let target` either doesn't exist, appears after the first
+                    // suspension, or has no reads/redeclarations after a top-level suspension
+                    // attributable to the outer binding. Shadow detection must not fire — there
+                    // is no outer crossing local to protect.
+                    continue;
+                }
+                // Shape (a): nested shadow — inner `let name` inside a nested block.
+                if find_shadow_in_stmts(&f.body.stmts, name_str) {
+                    let span = find_crossing_local_span(&f.body.stmts, name_str)
+                        .unwrap_or_else(|| f.span.clone());
+                    self.diags.push(Diagnostic::error(
+                        span,
+                        format!(
+                            "`{crossing_name}` is declared again inside a nested scope, but the \
+                             outer `{crossing_name}` crosses a `wait`."
+                        ),
+                        format!(
+                            "Rename the inner binding to something distinct (e.g., \
+                             `let inner_{crossing_name} = ...`) so the two values are \
+                             unambiguously named across the suspension boundary."
+                        ),
+                        "Across a `wait`, one name must mean one value. A shadowing `let` inside \
+                         a nested scope creates a second binding with the same name — the compiler \
+                         cannot tell which value should survive the suspension.",
+                    ));
+                }
+                // Shape (b): top-level redeclaration after suspension — a second `let name`
+                // at the top level of the function body, after a suspension point. Both the
+                // pre-wait outer binding and the post-wait redeclaration share the same
+                // name-keyed frame slot; the redeclaration clobbers the outer value.
+                if has_top_level_let_after_suspension(&f.body.stmts, name_str, &suspending_fns) {
+                    let span = find_crossing_local_span(&f.body.stmts, name_str)
+                        .unwrap_or_else(|| f.span.clone());
+                    self.diags.push(Diagnostic::error(
+                        span,
+                        format!(
+                            "`{crossing_name}` is declared before a `wait` and then declared \
+                             again at the top level after the `wait`."
+                        ),
+                        format!(
+                            "Rename the second binding to something distinct (e.g., \
+                             `let {crossing_name}_after = ...`) so the two values are \
+                             unambiguously named across the suspension boundary."
+                        ),
+                        "Across a `wait`, one name must mean one value. Two top-level `let` \
+                         declarations with the same name — one before and one after a `wait` — \
+                         share the same frame slot. The second declaration overwrites the first, \
+                         producing a silent wrong answer.",
+                    ));
+                }
+            }
+
+            // Check 3b (parameter-shadow detection): a `let` that re-declares a PARAMETER
+            // name triggers the same alloca-collision as the let-vs-let case above — parameters
+            // are frame-slotted at function entry, so their name occupies a slot across every
+            // suspension in the function.
+            //
+            // Two collision shapes for parameters:
+            //   (a) Nested shadow: inner `let param_name` inside a nested block where the
+            //       parameter is also read after a suspension resolving to the parameter.
+            //   (b) Top-level redeclaration: `let param_name` at the TOP LEVEL of the
+            //       function body — same slot as the parameter, guaranteed clobber.
+            for param in &f.params {
+                let pname = param.name.as_str();
+                // Shape (a): nested shadow of parameter.
+                if param_has_nested_let_shadow(&f.body.stmts, pname)
+                    && param_is_genuine_crossing_after_wait(&f.body.stmts, pname, &suspending_fns)
+                {
+                    self.diags.push(Diagnostic::error(
+                        param.span.clone(),
+                        format!(
+                            "`{pname}` is a parameter that is declared again inside a nested \
+                             scope, but `{pname}` crosses a `wait`."
+                        ),
+                        format!(
+                            "Rename the inner binding to something distinct (e.g., \
+                             `let inner_{pname} = ...`) so the parameter and the inner value \
+                             are unambiguously named across the suspension boundary."
+                        ),
+                        "Across a `wait`, one name must mean one value. A shadowing `let` inside \
+                         a nested scope creates a second binding with the same name — the compiler \
+                         cannot tell which value should survive the suspension.",
+                    ));
+                }
+                // Shape (b): top-level redeclaration of parameter — a `let param_name` at
+                // the top level of the function body shares the parameter's frame slot and
+                // clobbers it, regardless of whether any read resolves to the parameter or
+                // the redeclaration. Only applicable when the function has a suspension
+                // (otherwise the parameter is not frame-slotted at all).
+                if first_top_level_suspension_idx(&f.body.stmts, &suspending_fns).is_some()
+                    && has_top_level_let_in_stmts(&f.body.stmts, pname)
+                {
+                    self.diags.push(Diagnostic::error(
+                        param.span.clone(),
+                        format!(
+                            "`{pname}` is a parameter that is declared again at the top level \
+                             of the function, but `{pname}` crosses a `wait`."
+                        ),
+                        format!(
+                            "Rename the top-level binding to something distinct (e.g., \
+                             `let {pname}_val = ...`) so the parameter and the local value \
+                             are unambiguously named across the suspension boundary."
+                        ),
+                        "Across a `wait`, one name must mean one value. A top-level `let` that \
+                         re-declares a parameter name shares the parameter's frame slot — the \
+                         declaration overwrites the parameter value, producing a silent wrong \
+                         answer.",
+                    ));
+                }
+            }
+        }
 
         // Return-path analysis for non-nothing functions.
         // For ErrorsCapable functions, report the inner type name (not "string errors")
@@ -4519,6 +4814,37 @@ impl<'b> Checker<'b> {
     /// Typecheck an `OptionName` arm in a multi-case `if`.
     ///
     /// Validates: scrutinee is an options type; variant name is valid for that type.
+    /// Resolve an AST type annotation to a typeck `Type` for the crossing-local guard.
+    ///
+    /// Handles union aliases, maybe, dynamic, and inline union types. Returns `None` for
+    /// types that cannot be classified without mutating the checker (e.g., unknown type names
+    /// that would push an error). Callers use the result only for the
+    /// UnsupportedCrossingLocalType guard; unresolved annotations are silently skipped.
+    fn resolve_type_for_guard(&self, ast_ty: &AstType) -> Option<Type> {
+        match ast_ty {
+            // Union alias: `let fig: Figure = ...` where `Figure = Circle | Square`.
+            AstType::Named(n, _) if self.union_aliases.contains_key(n) => {
+                Some(self.union_aliases[n].clone())
+            }
+            // Inline union: `let x: Circle | Square = ...`
+            AstType::Union { variants, .. } if variants.len() >= 2 => {
+                Some(Type::Union {
+                    // Inner types not needed for classification; use placeholders.
+                    variants: vec![Type::Int; variants.len()],
+                })
+            }
+            // `maybe<T>` annotation.
+            AstType::Maybe { .. } => Some(Type::Maybe {
+                inner: Box::new(Type::Int),
+            }),
+            // `dynamic Contract` annotation.
+            AstType::Dynamic { contract, .. } => Some(Type::Dynamic {
+                contract: contract.clone(),
+            }),
+            _ => None,
+        }
+    }
+
     fn check_option_name_arm(
         &mut self,
         scrutinee_ty: &Type,
@@ -4850,13 +5176,668 @@ fn block_contains_inferred_suspension(
     })
 }
 
+/// Look up the typeck-resolved `Type` for a `let` or `const` binding named `target`
+/// by scanning `stmts` and reading the resolved type from the typed module's expr_types.
+///
+/// Used by the nested-shape crossing guard (Check 2) to get the authoritative type
+/// for a crossing local, including inferred types that may differ from the annotation.
+pub fn find_crossing_local_typeck_type(
+    stmts: &[Stmt],
+    target: &str,
+    typed: &TypedModule,
+) -> Option<Type> {
+    find_crossing_local_typeck_type_in_map(stmts, target, &typed.expr_types)
+}
+
+/// Implementation of type lookup using an expr_types map directly.
+/// Called from Check 2 after check_stmts runs (where self.expr_types is populated)
+/// and from the public helper above.
+fn find_crossing_local_typeck_type_in_map(
+    stmts: &[Stmt],
+    target: &str,
+    expr_types: &HashMap<(usize, usize), Type>,
+) -> Option<Type> {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { name, value, .. } if name == target => {
+                let key = (value.span().start, value.span().end);
+                return expr_types.get(&key).cloned();
+            }
+            Stmt::If { body, .. } => {
+                if let Some(t) =
+                    find_crossing_local_typeck_type_in_map(&body.stmts, target, expr_types)
+                {
+                    return Some(t);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::For { body, .. } => {
+                if let Some(t) =
+                    find_crossing_local_typeck_type_in_map(&body.stmts, target, expr_types)
+                {
+                    return Some(t);
+                }
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                for arm in arms {
+                    if let Some(t) =
+                        find_crossing_local_typeck_type_in_map(&arm.body.stmts, target, expr_types)
+                    {
+                        return Some(t);
+                    }
+                }
+                if let Some(eb) = else_arm {
+                    if let Some(t) =
+                        find_crossing_local_typeck_type_in_map(&eb.stmts, target, expr_types)
+                    {
+                        return Some(t);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Scan `stmts` for the first `let`/`const` binding named `target` and return its
+/// annotation AST type (the `ty` field), if any.
+///
+/// Used by Check 2b (UnsupportedCrossingLocalType) to read the annotation type of a
+/// crossing local without going through the mutating `ast_type_to_type` path.
+fn find_let_annotation_type_in_stmts(stmts: &[Stmt], target: &str) -> Option<AstType> {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { name, ty, .. } if name == target => {
+                return ty.clone();
+            }
+            Stmt::If { body, .. } => {
+                if let Some(t) = find_let_annotation_type_in_stmts(&body.stmts, target) {
+                    return Some(t);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::For { body, .. } => {
+                if let Some(t) = find_let_annotation_type_in_stmts(&body.stmts, target) {
+                    return Some(t);
+                }
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                for arm in arms {
+                    if let Some(t) = find_let_annotation_type_in_stmts(&arm.body.stmts, target) {
+                        return Some(t);
+                    }
+                }
+                if let Some(eb) = else_arm {
+                    if let Some(t) = find_let_annotation_type_in_stmts(&eb.stmts, target) {
+                        return Some(t);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Find the span of a `let`/`const` binding named `target` in `stmts`.
+/// Returns `None` if the binding is not found (should not happen for valid crossings).
+fn find_crossing_local_span(stmts: &[Stmt], target: &str) -> Option<SourceSpan> {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { name, span, .. } if name == target => {
+                return Some(span.clone());
+            }
+            Stmt::If { body, .. } => {
+                if let Some(s) = find_crossing_local_span(&body.stmts, target) {
+                    return Some(s);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::For { body, .. } => {
+                if let Some(s) = find_crossing_local_span(&body.stmts, target) {
+                    return Some(s);
+                }
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                for arm in arms {
+                    if let Some(s) = find_crossing_local_span(&arm.body.stmts, target) {
+                        return Some(s);
+                    }
+                }
+                if let Some(eb) = else_arm {
+                    if let Some(s) = find_crossing_local_span(&eb.stmts, target) {
+                        return Some(s);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Returns `true` if `target` has a `let` declaration at the TOP LEVEL of `stmts`
+/// that appears BEFORE any suspension point (explicit `wait` or inferred-suspension
+/// call). Used to guard shadow detection: a crossing local that is only defined inside
+/// a nested block, or whose top-level `let` appears AFTER all suspensions, cannot be
+/// shadowed by the same name elsewhere — the outer `let` is not itself a crossing local.
+fn has_top_level_let_before_suspension(
+    stmts: &[Stmt],
+    target: &str,
+    suspending: &std::collections::HashSet<&str>,
+) -> bool {
+    for stmt in stmts {
+        match stmt {
+            // A suspension point before any top-level `let target` → the target is inner-only.
+            Stmt::Expr(Expr::Wait(_, _)) => return false,
+            Stmt::Expr(Expr::Call(c)) if is_suspending_call(c, suspending) => return false,
+            Stmt::Let {
+                name,
+                value: Expr::Wait(_, _),
+                ..
+            } if name == target => {
+                // The target itself is a result-binding of a wait — it crosses by its OWN
+                // wait, so it's a top-level crossing candidate.
+                return true;
+            }
+            Stmt::Let {
+                name,
+                value: Expr::Wait(_, _),
+                ..
+            } => {
+                // A DIFFERENT result-binding wait — counts as a suspension point.
+                let _ = name;
+                return false;
+            }
+            Stmt::Let {
+                name,
+                value: Expr::Call(c),
+                ..
+            } if is_suspending_call(c, suspending) && name != target => {
+                // A different result-binding via suspending call — suspension point.
+                return false;
+            }
+            // An `if` body containing a wait is a suspension point for the outer sequence.
+            Stmt::If { body, .. }
+                if block_contains_wait(body)
+                    || block_contains_inferred_suspension(body, suspending) =>
+            {
+                return false;
+            }
+            // A top-level `let target` found before any suspension.
+            Stmt::Let { name, .. } if name == target => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Returns `true` if `target` is re-declared with a `let` inside any nested scope
+/// (if/while/for/match body) within `stmts`, AND there is also an outer `let target`
+/// at the top level of `stmts` that establishes the crossing local.
+///
+/// This distinguishes two cases:
+///   (a) Shadow: outer `let x = 10` at top level, inner `let x = 99` in nested scope.
+///       Both exist → this is a shadow. Return true.
+///   (b) Sole nested definition: crossing local `let inner = 42` is ONLY defined inside
+///       a nested scope, no outer `let inner` exists at top level.
+///       Only inner exists → NOT a shadow. Return false.
+///
+/// Case (a) is rejected at typeck (ambiguous name across suspension boundary).
+/// Case (b) is handled by codegen: the sm_entry alloca is reused regardless of depth.
+fn find_shadow_in_stmts(stmts: &[Stmt], target: &str) -> bool {
+    // Check: is there an outer top-level `let target` definition?
+    let has_outer_def = stmts
+        .iter()
+        .any(|stmt| matches!(stmt, Stmt::Let { name, .. } if name == target));
+    if !has_outer_def {
+        // No outer definition at this level — any nested `let target` is the SOLE
+        // definition of this crossing local, not a shadow.
+        return false;
+    }
+    // Outer definition exists: now check if there's also a re-declaration inside
+    // any nested scope.
+    for stmt in stmts {
+        match stmt {
+            Stmt::If { body, .. } if let_in_stmts_at_top_or_nested(&body.stmts, target) => {
+                return true;
+            }
+            Stmt::While { body, .. } | Stmt::For { body, .. }
+                if let_in_stmts_at_top_or_nested(&body.stmts, target) =>
+            {
+                return true;
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                for arm in arms {
+                    if let_in_stmts_at_top_or_nested(&arm.body.stmts, target) {
+                        return true;
+                    }
+                }
+                if let Some(eb) = else_arm {
+                    if let_in_stmts_at_top_or_nested(&eb.stmts, target) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Returns `true` if a `let target = ...` appears anywhere in `stmts` (at top level
+/// of this list or in any nested scope within it).
+fn let_in_stmts_at_top_or_nested(stmts: &[Stmt], target: &str) -> bool {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { name, .. } if name == target => return true,
+            Stmt::If { body, .. } if let_in_stmts_at_top_or_nested(&body.stmts, target) => {
+                return true;
+            }
+            Stmt::While { body, .. } | Stmt::For { body, .. }
+                if let_in_stmts_at_top_or_nested(&body.stmts, target) =>
+            {
+                return true;
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                for arm in arms {
+                    if let_in_stmts_at_top_or_nested(&arm.body.stmts, target) {
+                        return true;
+                    }
+                }
+                if let Some(eb) = else_arm {
+                    if let_in_stmts_at_top_or_nested(&eb.stmts, target) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Returns `true` if a `let target = ...` appears at the TOP LEVEL of `stmts` — not
+/// inside any nested block. Used by Check 3b to detect top-level parameter shadowing.
+///
+/// Time: O(n) where n = len(stmts).
+fn has_top_level_let_in_stmts(stmts: &[Stmt], target: &str) -> bool {
+    stmts
+        .iter()
+        .any(|stmt| matches!(stmt, Stmt::Let { name, .. } if name == target))
+}
+
+/// Returns `true` if a `let target = ...` appears at the TOP LEVEL of `stmts` AFTER the
+/// first suspension point.
+///
+/// Used by Check 3 shape (b): a crossing local (pre-wait binding exists) that is also
+/// re-declared at the top level after a suspension has a guaranteed frame-slot collision
+/// regardless of whether any read resolves to the outer or redeclared binding.
+///
+/// Time: O(n) where n = len(stmts).
+fn has_top_level_let_after_suspension(
+    stmts: &[Stmt],
+    target: &str,
+    suspending: &std::collections::HashSet<&str>,
+) -> bool {
+    let Some(susp_idx) = first_top_level_suspension_idx(stmts, suspending) else {
+        return false;
+    };
+    stmts[susp_idx + 1..]
+        .iter()
+        .any(|stmt| matches!(stmt, Stmt::Let { name, .. } if name == target))
+}
+
+/// Returns the index of the FIRST top-level suspension point in `stmts`, or `None`
+/// if there is no suspension at the top level.
+///
+/// A "top-level suspension" is one of:
+/// - An explicit `wait expr` statement
+/// - A direct suspending-call statement
+/// - A `let name = wait expr` or `let name = suspending_call(...)` binding
+/// - An `if` body that itself contains a wait (the if is therefore a suspension point
+///   for the enclosing sequence, because the resume_switch must be able to jump into it)
+///
+/// Used by `outer_is_genuine_crossing_local` and `param_is_genuine_crossing_after_wait`
+/// to identify the slice of statements that follow the first suspension — the slice that
+/// must be scanned for outer-binding reads via `stmts_ref_target_non_shadowed_sequential`.
+fn first_top_level_suspension_idx(
+    stmts: &[Stmt],
+    suspending: &std::collections::HashSet<&str>,
+) -> Option<usize> {
+    for (i, stmt) in stmts.iter().enumerate() {
+        match stmt {
+            Stmt::Expr(Expr::Wait(_, _)) => return Some(i),
+            Stmt::Expr(Expr::Call(c)) if is_suspending_call(c, suspending) => return Some(i),
+            Stmt::Let {
+                value: Expr::Wait(_, _),
+                ..
+            } => return Some(i),
+            Stmt::Let {
+                value: Expr::Call(c),
+                ..
+            } if is_suspending_call(c, suspending) => return Some(i),
+            Stmt::If { body, .. }
+                if block_contains_wait(body)
+                    || block_contains_inferred_suspension(body, suspending) =>
+            {
+                return Some(i);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Returns `true` when `target` is a GENUINE top-level crossing local, gating the shadow
+/// and top-level-redeclaration checks in Check 3.
+///
+/// Two cases both return `true` (either triggers the subsequent collision checks):
+///
+/// - **Unmasked post-wait read**: outer `let target` before suspension AND `target` is
+///   read after a top-level suspension in a context where the read lexically resolves to
+///   the outer binding (not masked by a same-level re-declaration).
+///
+/// - **Top-level redeclaration after suspension**: outer `let target` before suspension
+///   AND another `let target` at the TOP LEVEL of `stmts` after the suspension. Even
+///   when all post-wait reads resolve to the re-declared binding (not the outer one),
+///   both bindings share the same name-keyed frame slot — the redeclaration clobbers the
+///   outer value, producing a silent wrong answer. The caller (Check 3) emits a distinct
+///   error for this shape via `has_top_level_let_after_suspension`.
+///
+/// Contrasting cases:
+///   GENUINE (error, unmasked read): `let x=10; wait; print(x)` → outer x read after wait
+///   GENUINE (error, deep shadow): `let x=10; wait; if{ if{let x=99}; print(x) }` →
+///     `print(x)` at the outer if-body level resolves to outer x → error
+///   GENUINE (error, top-level redecl): `let x=10; wait; let x=99; if{print(x)}` →
+///     top-level `let x=99` after wait → slot collision → error (shape b in Check 3)
+///   FALSE POSITIVE (outer read-only before wait): `let x=hi; print(x); if{let x=42;
+///     wait; print(x)}` — outer x has NO read and NO redeclaration after any top-level
+///     suspension → must NOT fire
+fn outer_is_genuine_crossing_local(
+    stmts: &[Stmt],
+    target: &str,
+    suspending: &std::collections::HashSet<&str>,
+) -> bool {
+    // Precondition: outer `let target` must exist before a top-level suspension.
+    if !has_top_level_let_before_suspension(stmts, target, suspending) {
+        return false;
+    }
+    let Some(susp_idx) = first_top_level_suspension_idx(stmts, suspending) else {
+        return false;
+    };
+    let post_wait = &stmts[susp_idx + 1..];
+    // Case 1: unmasked post-wait read resolving to the outer binding.
+    if stmts_ref_target_non_shadowed_sequential(post_wait, target) {
+        return true;
+    }
+    // Case 2: top-level re-declaration after the suspension (slot collision even when
+    // all reads are masked). The sequential walker stops at `let target` and returns
+    // false for reads, but the slot collision exists regardless.
+    post_wait
+        .iter()
+        .any(|stmt| matches!(stmt, Stmt::Let { name, .. } if name == target))
+}
+
+/// Returns `true` if any nested scope (if/while/for/match body) within `stmts` contains
+/// a `let target` declaration, where `target` is a FUNCTION PARAMETER.
+///
+/// Unlike `find_shadow_in_stmts`, this function does not require an outer top-level
+/// `let target` — the outer binding IS the parameter, which is implicit. It only checks
+/// for inner `let target` declarations inside nested blocks (not at the top level of
+/// `stmts`, where a `let target` would be a new top-level binding, not a nested shadow).
+///
+/// Used by the parameter-shadow guard (Check 3b) to detect the case where an inner
+/// `let param_name` shadows a parameter across a suspension boundary.
+fn param_has_nested_let_shadow(stmts: &[Stmt], target: &str) -> bool {
+    for stmt in stmts {
+        match stmt {
+            Stmt::If { body, .. } if let_in_stmts_at_top_or_nested(&body.stmts, target) => {
+                return true;
+            }
+            Stmt::While { body, .. } | Stmt::For { body, .. }
+                if let_in_stmts_at_top_or_nested(&body.stmts, target) =>
+            {
+                return true;
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                for arm in arms {
+                    if let_in_stmts_at_top_or_nested(&arm.body.stmts, target) {
+                        return true;
+                    }
+                }
+                if let Some(eb) = else_arm {
+                    if let_in_stmts_at_top_or_nested(&eb.stmts, target) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Returns `true` if a function PARAMETER named `target` is read after a top-level
+/// suspension in `stmts` in a position where the read lexically resolves to the parameter
+/// (not to an inner shadow or a same-level `let target` re-declaration after the wait).
+///
+/// This is the parameter analogue of `outer_is_genuine_crossing_local`. The difference:
+/// parameters are always defined before the first statement, so there is no
+/// `has_top_level_let_before_suspension` gate — the precondition is unconditionally
+/// satisfied for any parameter.
+///
+/// Like `outer_is_genuine_crossing_local`, the post-suspension scan uses
+/// `stmts_ref_target_non_shadowed_sequential` so a same-level `let target = ...` after
+/// the wait masks subsequent reads from being attributed to the parameter. This fixes the
+/// ADV11 false positive: `function f(p: int){ wait; let p=99; if{let p=7; print(p)};
+/// if{print(p)} }` — the top-level `let p=99` re-declares the name after the wait; reads
+/// inside later if-bodies resolve to the re-declaration, not the parameter → must NOT fire.
+///
+/// Used by the parameter-shadow guard (Check 3b) to confirm the parameter genuinely
+/// crosses a suspension boundary with an unmasked read, before emitting the diagnostic.
+fn param_is_genuine_crossing_after_wait(
+    stmts: &[Stmt],
+    target: &str,
+    suspending: &std::collections::HashSet<&str>,
+) -> bool {
+    // Parameters are implicitly defined before any statement — no let-before-suspension
+    // gate needed. Find the first suspension, then scan the post-suspension slice with
+    // the sequential walker (which stops at a same-level `let target` re-declaration).
+    let Some(susp_idx) = first_top_level_suspension_idx(stmts, suspending) else {
+        return false;
+    };
+    stmts_ref_target_non_shadowed_sequential(&stmts[susp_idx + 1..], target)
+}
+
+/// Returns `true` if `stmt` references `target` in a context where the reference
+/// lexically resolves to an OUTER declaration — i.e., the nearest enclosing `let target`
+/// at the point of the read is the outer binding, not an inner shadow.
+///
+/// Lexical resolution rule: a `let target` only shadows `target` within its own scope
+/// (the block it is declared in) from its declaration point forward. It does NOT shadow
+/// `target` in statements at the SAME level before the inner `let target` appears, and it
+/// does NOT shadow `target` in statements AFTER a nested block whose INTERIOR declares
+/// `target` (the inner scope has closed by then).
+///
+/// Correct examples:
+///   `if { if { let x=99 }; print(x) }` — the `print(x)` is at the outer if-body level;
+///     the inner `let x=99` is inside a deeper nested scope that has closed before `print`.
+///     `print(x)` lexically resolves to the outer `x` → returns true.
+///   `if { let x=42; print(x) }` — `let x=42` is at THIS level; `print(x)` after it
+///     resolves to the INNER binding, not the outer → returns false.
+///
+/// Used by `outer_is_genuine_crossing_local`.
+fn stmt_refs_target_non_shadowed(stmt: &Stmt, target: &str) -> bool {
+    match stmt {
+        Stmt::Expr(e) => expr_refs_ident(e, target),
+        Stmt::Let { value, .. } => {
+            // The RHS is evaluated before the new binding takes effect; even if this
+            // stmt re-declares `target`, the RHS read resolves to the outer binding.
+            expr_refs_ident(value, target)
+        }
+        Stmt::Assign { value, .. } => expr_refs_ident(value, target),
+        Stmt::Return { value, .. } => value.as_ref().is_some_and(|e| expr_refs_ident(e, target)),
+        Stmt::FieldAssign {
+            target: recv,
+            value,
+            ..
+        } => expr_refs_ident(recv, target) || expr_refs_ident(value, target),
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => {
+            expr_refs_ident(receiver, target)
+                || expr_refs_ident(index, target)
+                || expr_refs_ident(value, target)
+        }
+        Stmt::If { cond, body, .. } => {
+            if expr_refs_ident(cond, target) {
+                return true;
+            }
+            stmts_ref_target_non_shadowed_sequential(&body.stmts, target)
+        }
+        Stmt::While { cond, body, .. }
+        | Stmt::For {
+            iter: cond, body, ..
+        } => {
+            if expr_refs_ident(cond, target) {
+                return true;
+            }
+            stmts_ref_target_non_shadowed_sequential(&body.stmts, target)
+        }
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
+            if expr_refs_ident(scrutinee, target) {
+                return true;
+            }
+            for arm in arms {
+                if stmts_ref_target_non_shadowed_sequential(&arm.body.stmts, target) {
+                    return true;
+                }
+            }
+            if let Some(eb) = else_arm {
+                if stmts_ref_target_non_shadowed_sequential(&eb.stmts, target) {
+                    return true;
+                }
+            }
+            false
+        }
+    }
+}
+
+/// Walks `stmts` sequentially, returning `true` if any statement references `target`
+/// where the reference lexically resolves to an outer binding (not an inner shadow
+/// declared at THIS scope level).
+///
+/// A `let target` at the top level of `stmts` creates a shadow from its declaration
+/// point forward within THIS scope. Statements before that `let` still resolve to the
+/// outer binding. Statements after it at THIS level resolve to the inner binding and
+/// are NOT counted. A `let target` inside a nested sub-block (e.g., `if { let target }`)
+/// only shadows within that sub-block — it has NO effect on sibling statements at THIS
+/// level, even those appearing AFTER the sub-block.
+///
+/// Time: O(n × d) where n = stmts count, d = nesting depth.
+fn stmts_ref_target_non_shadowed_sequential(stmts: &[Stmt], target: &str) -> bool {
+    for stmt in stmts {
+        match stmt {
+            // A `let target` AT THIS SCOPE LEVEL: the RHS resolves to the outer binding,
+            // but all subsequent statements at this level now see the inner binding.
+            // Return based only on the RHS, then stop (remaining stmts shadow the outer).
+            Stmt::Let { name, value, .. } if name == target => {
+                return expr_refs_ident(value, target);
+            }
+            // Any other statement: check if it references `target` resolving to the outer.
+            s => {
+                if stmt_refs_target_non_shadowed(s, target) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Returns `true` if `expr` contains an `Expr::Ident` node whose name is `target`.
+fn expr_refs_ident(expr: &Expr, target: &str) -> bool {
+    match expr {
+        Expr::Ident(name, _) => name == target,
+        Expr::Wait(inner, _) | Expr::Background(inner, _) => expr_refs_ident(inner, target),
+        Expr::Call(c) => {
+            expr_refs_ident(&c.callee, target) || c.args.iter().any(|a| expr_refs_ident(a, target))
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            expr_refs_ident(lhs, target) || expr_refs_ident(rhs, target)
+        }
+        Expr::UnaryOp { operand, .. } => expr_refs_ident(operand, target),
+        Expr::MethodCall { receiver, args, .. } => {
+            expr_refs_ident(receiver, target) || args.iter().any(|a| expr_refs_ident(a, target))
+        }
+        Expr::FieldAccess { receiver, .. } => expr_refs_ident(receiver, target),
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => expr_refs_ident(receiver, target) || expr_refs_ident(index, target),
+        Expr::StructLit { fields, .. } => fields.iter().any(|f| expr_refs_ident(&f.value, target)),
+        Expr::ArrayLit { elements, .. } => elements.iter().any(|e| expr_refs_ident(e, target)),
+        Expr::MapLit { entries, .. } => entries
+            .iter()
+            .any(|(k, v)| expr_refs_ident(k, target) || expr_refs_ident(v, target)),
+        Expr::PostfixOp { receiver, .. } => expr_refs_ident(receiver, target),
+        Expr::Is { expr: inner, .. } => expr_refs_ident(inner, target),
+        Expr::InterpolatedString(parts, _) => parts.iter().any(|p| {
+            if let ynz_ast::nodes::StringPart::Expr(e, _) = p {
+                expr_refs_ident(e, target)
+            } else {
+                false
+            }
+        }),
+        Expr::StringLit(_, _)
+        | Expr::IntLit(_, _)
+        | Expr::NumberLit(_, _)
+        | Expr::BoolLit(_, _)
+        | Expr::SelfValue { .. }
+        | Expr::NoneLit { .. }
+        | Expr::Error(_) => false,
+    }
+}
+
 /// Describes a local binding declared before a `wait` in a function body that is
 /// also referenced after that wait.
-struct LocalCrossesWait {
+pub struct LocalCrossesWait {
     /// Name of the local binding.
-    name: String,
+    pub name: String,
     /// Span of the usage AFTER the wait (for error reporting).
-    use_span: SourceSpan,
+    pub use_span: SourceSpan,
+}
+
+/// Return the deduplicated set of local binding NAMES that cross a suspension
+/// boundary in `f` — the subset that codegen must frame-back.
+///
+/// Excludes parameters (they already have frame slots). The result is a sorted,
+/// deduplicated `Vec<String>` suitable for deterministic slot index assignment.
+pub fn crossing_local_names(
+    stmts: &[Stmt],
+    param_names: &[&str],
+    suspending: &std::collections::HashSet<&str>,
+) -> Vec<String> {
+    let crossings = locals_crossing_wait(stmts, param_names, suspending);
+    let mut seen = std::collections::HashSet::new();
+    let mut names: Vec<String> = crossings
+        .into_iter()
+        .filter_map(|c| {
+            if seen.insert(c.name.clone()) {
+                Some(c.name)
+            } else {
+                None
+            }
+        })
+        .collect();
+    names.sort();
+    names
 }
 
 /// Scan `stmts` for local (`let`/`const`) bindings declared before any reachable
@@ -4880,7 +5861,7 @@ struct LocalCrossesWait {
 ///
 /// Function parameters are excluded: the SM codegen gives every parameter a frame
 /// slot and reloads it at each resume point, so they are always safe.
-fn locals_crossing_wait(
+pub fn locals_crossing_wait(
     stmts: &[Stmt],
     param_names: &[&str],
     suspending: &std::collections::HashSet<&str>,
@@ -4970,10 +5951,83 @@ fn collect_crossings_in_stmts(
                     _ => {}
                 }
             } else {
-                // Non-suspension statement: scan for references to already-declared
-                // (pre-suspension) locals. Pending result-bindings are NOT yet in
-                // `declared`, so reads of the just-produced binding are not flagged.
+                // Non-suspension statement after a prior suspension: scan for references to
+                // already-declared (pre-suspension) locals. Pending result-bindings are NOT
+                // yet in `declared`, so reads of the just-produced binding are not flagged.
                 collect_ident_refs_in_stmt(stmt, declared, out);
+                // A new `let` binding introduced BETWEEN two suspension points is itself
+                // a crossing candidate for any suspension that follows it. Add it to
+                // `declared` so the next suspension will catch any reads after it.
+                if let Stmt::Let { name, .. } = stmt {
+                    if !declared.contains(name) && !param_names.contains(&name.as_str()) {
+                        declared.push(name.clone());
+                    }
+                }
+                // If this nested control-flow block contains its OWN suspension, recurse into
+                // it to detect crossing locals DECLARED INSIDE that block (e.g., a `let x`
+                // inside an `if` arm that also contains a `wait`). Without recursion, those
+                // inner-declared crossing locals never enter `declared`, so no sm_entry alloca
+                // is created, and the alloca lands in a non-dominating state block → LLVM SSA
+                // dominance failure ("Instruction does not dominate all uses").
+                match stmt {
+                    Stmt::If { body, .. }
+                        if block_contains_wait(body)
+                            || block_contains_inferred_suspension(body, suspending) =>
+                    {
+                        let mut branch_declared = declared.clone();
+                        collect_crossings_in_stmts(
+                            &body.stmts,
+                            param_names,
+                            suspending,
+                            &mut branch_declared,
+                            out,
+                        );
+                    }
+                    Stmt::While { body, .. } | Stmt::For { body, .. }
+                        if block_contains_wait(body)
+                            || block_contains_inferred_suspension(body, suspending) =>
+                    {
+                        let mut branch_declared = declared.clone();
+                        collect_crossings_in_stmts(
+                            &body.stmts,
+                            param_names,
+                            suspending,
+                            &mut branch_declared,
+                            out,
+                        );
+                    }
+                    Stmt::Match { arms, else_arm, .. } => {
+                        for arm in arms {
+                            if block_contains_wait(&arm.body)
+                                || block_contains_inferred_suspension(&arm.body, suspending)
+                            {
+                                let mut branch_declared = declared.clone();
+                                collect_crossings_in_stmts(
+                                    &arm.body.stmts,
+                                    param_names,
+                                    suspending,
+                                    &mut branch_declared,
+                                    out,
+                                );
+                            }
+                        }
+                        if let Some(eb) = else_arm {
+                            if block_contains_wait(eb)
+                                || block_contains_inferred_suspension(eb, suspending)
+                            {
+                                let mut branch_declared = declared.clone();
+                                collect_crossings_in_stmts(
+                                    &eb.stmts,
+                                    param_names,
+                                    suspending,
+                                    &mut branch_declared,
+                                    out,
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
         } else {
             match stmt {

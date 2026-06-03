@@ -106,3 +106,6 @@ roster slot: 8
 v0.3-M2 — nested state machines (inline poll-and-yield):
 Sanguillen roster slot: 8
 Sanguillen: done
+
+v0.3-M3a — suspending number errors (exact decimal128):
+ticket price: 24.50

@@ -1,0 +1,108 @@
+// v0.3-M3a compile-error gallery
+//
+// Every block below intentionally triggers a diagnostic class added in v0.3-M3a.
+// Run `ynz build v0_3_m3a_errors.ynz` to see all diagnostics.
+// Yinz reports up to 50 diagnostics per compile so a single run surfaces all.
+//
+// Each block has a // WHY: comment naming the diagnostic class it exercises.
+//
+// These are the two guards that remain after M3a lifted LocalCrossesWait:
+//  1. ShadowsCrossingLocal — same name re-declared inside a nested scope when
+//     the outer binding crosses a wait. Deferred (not permanent): requires
+//     per-binding slot keys instead of per-name slot keys. Workaround: rename
+//     the inner binding. See design/concurrency.md "M3a Scope Boundaries".
+//  2. NestedShapeField — nested-shape fields in a crossing local.
+//     Deferred: full recursive frame-embed is not yet implemented.
+//     See design/concurrency.md "M3a Scope Boundaries".
+
+shape OrderItem {
+  price: int
+  quantity: int
+}
+
+// -- v0.3-M3a Error Class 1: shadow of a crossing local inside a nested scope --
+//
+// WHY: ShadowsCrossingLocal — `subtotal` is declared before the wait (it will
+// cross the suspension boundary) and then re-declared with the same name inside
+// the `if` body. One name must mean one value across a suspension boundary.
+// Rename the inner binding (e.g. `discountedSubtotal`) to resolve.
+
+function processOrder(basePrice: int, qty: int) -> nothing {
+    let subtotal = basePrice * qty
+    wait sleep(10)
+    // Re-declaring `subtotal` inside a nested scope shadows the crossing local.
+    if (qty > 10) {
+        let subtotal = subtotal - 5    // WHY: ShadowsCrossingLocal — rename to `discountedSubtotal`
+        print(subtotal.toString())
+    }
+    print(subtotal.toString())
+}
+
+// -- v0.3-M3a Error Class 2: crossing local whose shape has a nested-shape field --
+//
+// WHY: NestedShapeCrossing — `OrderLine` has a nested shape field (`item: OrderItem`).
+// Frame-embedding for shapes with nested-shape fields is deferred to a later milestone:
+// the inner shape is stored as a pointer to a stack buffer which becomes invalid after
+// `wait` suspends and resumes the function. Restructure by flattening the nested fields.
+
+shape OrderLine {
+  item: OrderItem
+  quantity: int
+}
+
+function shipOrder(basePrice: int) -> nothing {
+    let line: OrderLine = { item: { price: basePrice, quantity: 1 }, quantity: 3 }
+    wait sleep(10)
+    // WHY: NestedShapeCrossing — `line` is an OrderLine with a nested OrderItem field,
+    // which cannot be frame-embedded across a `wait` yet.
+    print(line.quantity.toString())
+}
+
+// -- v0.3-M3a Error Class 3: wide-value return from a suspending function --
+//
+// WHY: WideValueSuspendingReturn — a suspending function returning `Item` (shape) or
+// `Item errors` (shape errors) by value.
+// Without the guard: `-> Shape` causes a SIGSEGV (staging at offset 32 clobbers child
+// sub-frames); `-> Shape errors` needs variable-size staging entangled with the
+// non-suspending shape-return base bug (deferred).
+// Workaround: return primitive fields individually, or use a narrower return type.
+//
+// Note: `-> number errors` (decimal128 EC) is supported — it has a correct frame-staging
+// implementation. Only Shape/Shape-errors returns remain deferred.
+
+shape Item {
+  price: int
+}
+
+function suspendingReturnShape() -> Item {
+  wait sleep(5)
+  let i: Item = { price: 99 }
+  return i                           // WHY: WideValueSuspendingReturn — `-> Item` from suspending fn
+}
+
+function suspendingReturnShapeErrors() -> Item errors {
+  wait sleep(5)
+  let i: Item = { price: 99 }
+  return i                           // WHY: WideValueSuspendingReturn — `-> Item errors` from suspending fn
+}
+
+// -- v0.3-M3a Error Class 4: union/maybe/dynamic crossing local --
+//
+// WHY: UnsupportedCrossingLocalType — a `maybe<int>` local crosses a `wait`. The
+// frame-slot save/restore for `union`, `maybe`, and `dynamic` values is not yet
+// implemented: internally these types are pointers to {tag, payload} allocas on
+// the resume function's stack — a frame that is destroyed between suspension and
+// resume. Flushing and reloading the alloca pointer produces undefined behavior.
+// Extract the inner value before the `wait` to work around this.
+
+function processQuantity(qty: int) -> nothing {
+    let adjusted: maybe<int> = qty.toString().toInt()
+    wait sleep(5)
+    // WHY: UnsupportedCrossingLocalType — `adjusted` is a `maybe<int>` that crosses
+    // the `wait` boundary. Extract the int value before `wait sleep(5)` instead.
+    print(adjusted.toString())
+}
+
+function entrypoint() -> nothing {
+    processOrder(8, 12)
+}

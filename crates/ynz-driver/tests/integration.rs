@@ -1502,15 +1502,15 @@ fn v03_m2_concurrent_waits_proof() {
     // cooperative scheduling ensures all 8 STARTs are emitted before the first DONE because
     // they all suspend at `wait` before any timer fires.
     //
-    // DEVIATION NOTE: the fixture uses sleepBlocking(300) to keep main alive until background tasks
-    // complete (Tokio drops pending futures on ynz_rt_shutdown without a wait). M4 handle-form
-    // will eliminate this requirement.
+    // DEVIATION NOTE: the fixture uses sleepBlocking(300) to keep main alive until background
+    // tasks complete (Tokio drops pending futures on ynz_rt_shutdown without a wait). M4
+    // handle-form will eliminate this requirement.
     //
     // The no-op / sequential-execution detector is the ORDERING assertion below
     // (all 8 START lines before any DONE) — deterministic and core-count-independent.
     // The wall-clock bounds are loose sanity guards ONLY and do NOT detect a sleep
-    // no-op: main's blocking sleepBlocking(300) keep-alive dominates total runtime, so the binary
-    // runs ~300ms whether or not sleep suspends. We build the fixture first, then time
+    // no-op: main's blocking sleepBlocking(300) keep-alive dominates total runtime, so the
+    // binary runs ~300ms whether or not sleep suspends. We build the fixture first, then time
     // execution only (excluding compile), so the bounds measure the program, not the build.
     let tmp = std::env::temp_dir().join(format!("ynz-concurrent-proof-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).expect("create temp dir for concurrent waits proof");
@@ -1585,8 +1585,8 @@ fn v03_m2_concurrent_waits_proof() {
 
     // Sanity floor only: confirms the compiled binary actually executed (it must run at
     // least main's sleepBlocking(300) keep-alive). This is NOT a sleep no-op detector — a
-    // no-op would still run ~300ms because sleepBlocking(300) dominates. The ordering assertion
-    // above is what proves sleep genuinely suspends. The upper bound catches a hang.
+    // no-op would still run ~300ms because sleepBlocking(300) dominates. The ordering
+    // assertion above is what proves sleep genuinely suspends. The upper bound catches a hang.
     assert!(
         elapsed_ms >= 80,
         "execution time {elapsed_ms}ms is below 80ms — sleep may have no-opped; \
@@ -1631,67 +1631,55 @@ fn v03_m2_wait_in_loop_produces_clean_error() {
 }
 
 #[test]
-fn v03_m2_local_crossing_wait_produces_clean_error() {
-    // WHY: a local binding declared before a `wait` and read after must emit a clean
-    // teaching error rather than crashing the backend with an LLVM dominance violation
-    // ("Machine-code generation failed inside the backend"). Catches regressions where
-    // the local-crossing guard is removed.
+fn v03_m3a_local_crossing_wait_compiles_and_runs() {
+    // WHY: a local declared before a `wait` and read after must now COMPILE and produce
+    // the correct value — M3a P1 lifts the old LocalCrossesWait guard and adds frame-backed
+    // slot machinery so the local survives the suspension. If this test fails with exit 1
+    // or wrong output, the frame-backed local path regressed. If it crashes the backend,
+    // the alloca-in-sm_entry invariant broke (LLVM SSA dominance violation).
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m2_local_crossing_wait_error.ynz"));
-    assert_ne!(
+    assert_eq!(
         code, 0,
-        "local crossing wait must exit non-zero; stderr:\n{stderr}"
+        "crossing-local program must compile and run successfully; stderr:\n{stderr}"
     );
-    assert!(
-        stdout.is_empty(),
-        "no output must be produced on compile error; got:\n{stdout}"
-    );
-    // Must NOT contain the backend crash message.
-    assert!(
-        !stderr.contains("Machine-code generation failed"),
-        "must not crash the backend — clean typeck error expected; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("`x`"),
-        "error must name the offending binding `x`; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m2_inferred_suspension_local_crossing_produces_clean_error() {
-    // WHY: a local declared before a BARE suspending call (no explicit `wait` keyword)
-    // and used after it must emit the same clean LocalCrossesWait teaching error as the
-    // explicit-`wait` form — not crash the backend with "LLVM module verify failed:
-    // Instruction does not dominate all uses!" (SSA dominance failure). Both forms
-    // compile to state-machine resume steps in M2 codegen; the crossing guard must
-    // catch both. Guards the specific hole where `locals_crossing_wait` was keyed only
-    // on `Expr::Wait` tokens and missed inferred-suspension calls.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
-        "v0_3_m2_inferred_suspension_local_crossing_error.ynz",
-    ));
-    assert_ne!(
-        code, 0,
-        "inferred-suspension crossing must exit non-zero; stderr:\n{stderr}"
-    );
-    assert!(
-        stdout.is_empty(),
-        "no output on compile error; got:\n{stdout}"
-    );
-    // Must emit the teaching error text, not the LLVM crash message.
-    assert!(
-        !stderr.contains("LLVM module verify failed"),
-        "must not crash the LLVM backend — clean typeck error expected; stderr:\n{stderr}"
+    assert_eq!(
+        stdout.trim(),
+        "5",
+        "int local x=5 must survive the suspension and print correctly; stderr:\n{stderr}"
     );
     assert!(
         !stderr.contains("Machine-code generation failed"),
         "must not crash the backend; stderr:\n{stderr}"
     );
-    assert!(
-        stderr.contains("`slot`"),
-        "error must name the offending binding `slot`; stderr:\n{stderr}"
+}
+
+#[test]
+fn v03_m3a_inferred_suspension_local_crossing_compiles_and_runs() {
+    // WHY: a local declared before a BARE suspending call (no explicit `wait` keyword)
+    // and read after it must compile and produce the correct value after M3a P1 lifts
+    // the LocalCrossesWait guard. The inferred-suspension path (bare `sleeper()` call
+    // without explicit `wait`) was historically the most common LLVM SSA dominance crash
+    // source — this test anchors that it now works through frame-backed slots. Correct
+    // output is 12 (slot=7 + sleeper()=5).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m2_inferred_suspension_local_crossing_error.ynz",
+    ));
+    assert_eq!(
+        code, 0,
+        "inferred-suspension crossing must compile and run (exit 0); stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "12",
+        "slot=7 + sleeper()=5 must equal 12; local must survive the suspension; stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("declared before a `wait`"),
-        "error must use the LocalCrossesWait teaching text; stderr:\n{stderr}"
+        !stderr.contains("LLVM module verify failed"),
+        "must not crash the LLVM backend; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Machine-code generation failed"),
+        "must not crash the backend; stderr:\n{stderr}"
     );
 }
 
@@ -1997,34 +1985,6 @@ fn sleep_ms_intrinsic_links_and_runs() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// v0.3-M3a Phase 0: `wait sleepBlocking(...)` still triggers "`wait` has no effect" warning
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn wait_on_sleep_blocking_still_warns() {
-    // WHY: After the sleepMs→sleepBlocking rename, check.rs line ~1716 must contain
-    // "sleepBlocking" in the CPU-only-intrinsic matches! list, not the old "sleepMs".
-    // If the rename hit the dispatch arm but not this list, the warning silently stops
-    // firing — sleepBlocking blocks the OS thread; `wait` has no effect on it.
-    // This fixture asserts the warning still fires post-rename.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_wait_on_sleep_blocking_warning.ynz"));
-    assert_eq!(
-        code, 0,
-        "`wait sleepBlocking` must compile and run (warning, not error); stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "done",
-        "fixture must print `done`; got:\n{stdout}"
-    );
-    assert!(
-        stderr.contains("no effect") || stderr.contains("does not suspend"),
-        "`wait sleepBlocking` must produce a 'wait has no effect' warning; got stderr:\n{stderr}"
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // v0.3-M1: background runs on a separate thread (P3 core contract)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -2062,5 +2022,860 @@ fn background_runs_on_separate_thread_timing() {
         total_elapsed.as_millis() >= 150,
         "background task must have actually slept; total elapsed {:?}",
         total_elapsed
+    );
+}
+
+// ── v0.3-M3a Phase 1: frame-backed mutable locals (lift LocalCrossesWait) ────
+
+#[test]
+fn v03_m3a_p1_int_local_crossing_one_wait() {
+    // WHY: fixture (a) — int local declared before `wait`, read after.
+    // The frame slot must preserve the value (42) across the suspension.
+    // If the alloca is not pre-created in sm_entry, LLVM SSA dominance fails.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_int_crossing_one_wait.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "42",
+        "int local must survive suspension; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_mutated_local_crosses_two_waits() {
+    // WHY: fixture (b) — local mutated between two waits, read after both.
+    // Guards that mutation flushes to frame AND the reload at each continuation
+    // state sees the latest value. Expected: count=2 (incremented twice).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_mutated_crossing_local.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "2",
+        "mutated local must see cumulative value; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_two_crossing_locals() {
+    // WHY: fixture (c) — two crossing locals (a=3, b=4), read after wait.
+    // Each must occupy a distinct frame slot. Sum = 7.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_two_crossing_locals.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "7",
+        "two crossing locals must sum correctly; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_string_crossing_local() {
+    // WHY: fixture (d) — string-typed crossing local (heap pointer).
+    // Frame slot stores ptr_to_int; reload does int_to_ptr. Must survive.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_string_crossing_local.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "hello",
+        "string local must survive suspension; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_shape_crossing_local() {
+    // WHY: fixture (e) — shape-typed crossing local. Shape literals are stack-allocated
+    // by lower_struct_lit; the codegen frame-embeds them by pre-wiring the ptr alloca to
+    // the composed frame's slot region in sm_entry. Field reads/writes go directly to the
+    // frame — no separate heap allocation, no alloc leak. A regression back to the old
+    // heap-promote approach would show alloc=2 (leaking). Expected: 30 = p.x + p.y.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_shape_crossing_local.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "30",
+        "shape crossing local must survive suspension; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_value_returning_fn_with_crossing_local() {
+    // WHY: fixture (f) — value-returning SM fn with a crossing local.
+    // `acc = n*2` crosses the wait; return value must include it.
+    // Expected: 11 (5*2 + 1 = 11).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_value_returning_fn.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "11",
+        "return value must incorporate crossing local; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_errors_fn_with_crossing_local() {
+    // WHY: fixture (g) — `-> T errors` SM fn with a crossing local.
+    // `prefix = n + 100` crosses the wait; success path returns prefix+n.
+    // Expected: 114 (7+100 + 7 = 114).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_errors_fn_crossing_local.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "114",
+        "errors-fn crossing local must produce correct value; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_number_decimal128_crossing_local() {
+    // WHY: fixture (i) — number (decimal128) crossing local.
+    // The value (0.1 + 0.2 = 0.3 exact in decimal128) is stored across the suspension
+    // using TWO consecutive frame slots (16 bytes total — no truncation to 8 bytes).
+    // A regression back to 1 slot would SILENTLY produce 0 or garbage (truncation guard).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_number_crossing_local.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "0.3",
+        "decimal128 crossing local must survive exact; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_conditional_crossing_local() {
+    // WHY: fixture (j) — crossing local mutated inside a non-suspending `if` arm.
+    // The mutation must be flushed to the frame slot even when inside an if body.
+    // Expected: 15 (initial=10 + extra=5 from the if arm).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_conditional_crossing_local.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "15",
+        "if-body assign must flush to frame slot; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_while_body_write() {
+    // WHY: Bug 2 guard — mutations inside a while body must be flushed to the frame slot.
+    // collect_crossing_writes previously had a `_ => {}` arm that dropped While bodies,
+    // so acc=30 computed before the wait would silently reset to 0. Regression returns 0.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_while_body_write.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "30",
+        "while-body assign must flush crossing local; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_for_body_write() {
+    // WHY: Bug 2 guard — mutations inside a for body must be flushed to the frame slot.
+    // Accumulates sum over [10,20,30]; regression returns 0.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_for_body_write.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "60",
+        "for-body assign must flush crossing local; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_if_body_assign_crossing_local() {
+    // WHY: Bug 2 guard for Stmt::Assign (not Stmt::Let) inside an if body.
+    // val=99 assigned inside the if must survive the wait.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_if_body_write.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "99",
+        "if-body Stmt::Assign must flush crossing local; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_contdef_crossing_local() {
+    // WHY: Bug 3 guard — a crossing local first-defined BETWEEN two waits must have its
+    // alloca in sm_entry (not in a continuation state block that wouldn't dominate uses).
+    // Regression: LLVM dominance crash or uses-before-def reading 0.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_contdef_crossing_local.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "3",
+        "b defined after wait-1, read after wait-2 must produce 3; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_shadow_crossing_local() {
+    // WHY: ShadowsCrossingLocal guard — a `let x` inside a nested scope that shadows a
+    // crossing local `x` must be rejected at typeck with a clean compile error. Codegen
+    // assumes one alloca per crossing-local name (the sm_entry alloca); a shadow would
+    // require two allocas for the same name, which violates the frame-slot invariant.
+    // The name ambiguity across a suspension boundary also violates Golden Rule 2.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_shadow_crossing_local.ynz"));
+    assert_eq!(
+        code, 1,
+        "shadow of crossing local must fail to compile; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("declared again"),
+        "diagnostic must mention 'declared again'; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("crosses a `wait`"),
+        "diagnostic must mention 'crosses a `wait`'; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no stdout on compile error; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_float_crossing_local() {
+    // WHY: float (f64) crossing local obtained via .toFloat() — exercises the bitcast
+    // path (sitofp → bitcast i64 → frame slot → reload → bitcast back to float).
+    // The fixture mutates `f` after the wait (adds 1.0) to exercise both reload AND
+    // flush-back. Expected output: 8 (7 + 1). A regressed zero-slot would print 1
+    // (0.0 + 1.0), proving the bitcast round-trip is required, not optional.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_float_crossing_local.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "8",
+        "float crossing local must survive suspension and mutation; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_nested_shape_crossing_rejected_clean_error() {
+    // WHY: FIX 1b guard — a shape whose field is another shape cannot be frame-embedded
+    // (nested shapes are stored as opaque pointers to stack-allocated structs; those ptrs
+    // dangle after suspension). Must produce a clean WHAT/WHAT-INSTEAD/WHY compile error,
+    // NOT silent garbage output (which was what happened before the guard).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_nested_shape_crossing_rejected.ynz"));
+    assert_eq!(
+        code, 1,
+        "nested-shape crossing must fail to compile; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("nested-shape field"),
+        "diagnostic must mention nested-shape field; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("cannot be frame-embedded"),
+        "diagnostic must mention cannot be frame-embedded; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no stdout on compile error; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_ec_result_crosses_second_wait() {
+    // WHY: FIX 2 guard — an ErrorsCapable result crossing a second wait previously crashed
+    // with "unexpected return type" because bind_sm_result_and_flush had no StructValue arm.
+    // Now it extracts both fields, stores to the companion struct alloca, and flushes 2 slots.
+    // Expected: 7 (getVal(7) succeeds, r.or(0) = 7).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_ec_result_crosses_second_wait.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "7",
+        "EC result crossing 2nd wait must produce correct value; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_shadow_inside_wait_bearing_if() {
+    // WHY: ShadowsCrossingLocal guard for wait-bearing if body — a `let x` inside a
+    // wait-bearing if body that shadows a crossing local `x` must be rejected at typeck.
+    // Previously this caused an LLVM dominance ICE: the shadow's alloca was created in
+    // the non-entry state block, not sm_entry, violating SSA dominance requirements.
+    // Clean compile error is the correct fix — same invariant as the non-wait-bearing case.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_shadow_inside_wait_bearing_if.ynz"));
+    assert_eq!(
+        code, 1,
+        "shadow of crossing local in wait-bearing if must fail to compile; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("declared again"),
+        "diagnostic must mention 'declared again'; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("crosses a `wait`"),
+        "diagnostic must mention 'crosses a `wait`'; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no stdout on compile error; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_sole_nested_int_crossing() {
+    // WHY: FIX 2 guard — a crossing local whose SOLE definition is inside an if-arm that
+    // also contains the wait must compile and run correctly. Previously caused an LLVM
+    // dominance ICE because the alloca for `inner` was created in the state block (not
+    // sm_entry), and the resume continuation could not reach it. The fix: crossing locals
+    // always reuse the pre-created sm_entry alloca regardless of nesting depth (safe since
+    // shadows are now rejected at typeck by ShadowsCrossingLocal).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_sole_nested_int_crossing.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "42",
+        "crossing local defined solely inside if-arm must produce correct value; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_shape_result_crosses_second_wait() {
+    // WHY: WideValueSuspendingReturn guard — `makePoint` is a suspending function returning
+    // `-> Point` (bare shape). Round-20 adds a typeck guard that rejects this at compile
+    // time: the non-crossing shape staging path writes bytes to FRAME_OFFSET_LOCALS_START
+    // (offset 32), which is where child sub-frames are embedded. Even though the specific
+    // trivial case (all waits completed, return is terminal) happens not to crash, the general
+    // case clobbers active child sub-frames → SIGSEGV. The guard conservatively rejects ALL
+    // `-> Shape` returns from suspending functions until a dedicated staging slot is added.
+    // The shape-crossing-local case (r in entrypoint) is separate and still works — the guard
+    // is on the RETURN TYPE of the suspending callee, not on crossing locals in the caller.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_shape_result_crosses_second_wait.ynz"));
+    assert_eq!(
+        code, 1,
+        "suspending `-> Shape` must be rejected at compile time (exit 1); stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("cannot yet return"),
+        "diagnostic must contain 'cannot yet return'; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no stdout when compile fails; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_bool_crossing_local() {
+    // WHY: FIX A (Round 7) — boolean crossing local. Prior to this fix, the flush path
+    // loaded i64 from a bool's i1 alloca — an 8-byte read from a 1-byte region — causing
+    // SIGSEGV (exit 139). The fix: separate `sm_crossing_bool_set` (i1 alloca, zext/trunc
+    // at the frame boundary) from `sm_crossing_scalar_set` (i64 alloca, raw load/store).
+    // Compiled-binary verification: exit 0, output "true", no SIGSEGV on all 5 runs.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_bool_crossing_local.ynz"));
+    assert_eq!(
+        code, 0,
+        "bool crossing local must exit 0; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "true",
+        "bool crossing local must flip false→true across wait; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_bool_crossing_via_shape() {
+    // WHY: FIX A (Round 7) — boolean crossing local sourced from a shape field. The
+    // bool value is extracted from a struct GEP before the wait and read after it.
+    // Exercises the same i1 flush/reload path as the direct bool case but with the
+    // initial value coming from a struct field read rather than a literal assignment.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_bool_crossing_via_shape.ynz"));
+    assert_eq!(
+        code, 0,
+        "bool crossing via shape field must exit 0; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "true",
+        "bool from shape field must survive suspension; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_nested_after_toplevel_wait() {
+    // WHY: FIX B (Round 7) — crossing local declared inside an if-arm that also contains
+    // a wait, when a prior top-level wait exists. Previously caused LLVM ICE ("Instruction
+    // does not dominate all uses") because collect_crossings_in_stmts skipped recursion
+    // into nested blocks when past_wait==true, leaving inner-declared crossing locals
+    // without sm_entry allocas. The fix: the past_wait else-branch now recurses into any
+    // suspension-bearing nested block to detect crossing locals declared inside it.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_nested_after_toplevel_wait.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "42\n100",
+        "nested-after-wait must print 42 then 100; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_shadow_false_positive_compiles() {
+    // WHY: FIX C (Round 7) — shadow detection false positive. An outer `let x = 100`
+    // after an if block (non-crossing) must NOT trigger ShadowsCrossingLocal for the
+    // inner crossing `let x = 42` inside the if. Prior to this fix, the shadow check
+    // ran for ALL crossing locals including inner-only ones; the outer post-if `let x`
+    // was treated as if it were itself a crossing local being shadowed. The fix: only
+    // apply shadow-detection to crossing locals whose `let` declaration is at the
+    // function body's top level AND appears before a suspension.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_shadow_false_positive.ynz"));
+    assert_eq!(
+        code, 0,
+        "inner crossing x + outer non-crossing x must compile clean; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "42\n100",
+        "must print 42 (inner) then 100 (outer); stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_scope_aware_shadow_false_positive_compiles() {
+    // WHY: scope-aware shadow analysis (Round 9). The outer `let x` is read ONLY before
+    // the if-block that contains the wait — i.e., the outer x has zero reads after any
+    // top-level suspension. The inner `let x = 42` crosses the inner wait, but that is
+    // an inner-scope crossing, not a shadow of an outer crossing local. The shadow guard
+    // must NOT fire. Catches regressions where has_top_level_let_before_suspension alone
+    // gates the check (insufficient — must also verify an outer read exists after the
+    // suspension, attributable to the outer binding).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p1_scope_aware_shadow_false_positive.ynz",
+    ));
+    assert_eq!(
+        code, 0,
+        "outer-pre-wait x + inner-wait-crossing x must compile clean; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "hello\n42",
+        "must print hello (outer, before if) then 42 (inner, after wait); stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_disjoint_sibling_scope_shadow_compiles() {
+    // WHY: two sibling if-blocks each with their own inner-only `let x` crossing an
+    // inner wait. Neither x exists at the top level of the function; neither is a
+    // genuine outer crossing local. The shadow guard must not fire for either. Catches
+    // regressions where any name collision between sibling scopes triggers the guard.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_disjoint_sibling_scope_shadow.ynz"));
+    assert_eq!(
+        code, 0,
+        "two disjoint sibling-scope x crossings must compile clean; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "42\n99",
+        "must print 42 (first arm) then 99 (second arm); stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_bool_returning_suspending_fn() {
+    // WHY: FIX 2 (Round 9) — `-> boolean` suspending function wrapper-return type mismatch.
+    // The SM wrapper function is declared with i1 return type but the return slot stores
+    // bools as i64 (zext). Without trunc i64→i1, LLVM rejects "ret i64 ... i1" with a
+    // module verify failure (ICE). Catches regressions at the SM wrapper-return boundary
+    // for bool, which is the only scalar with a non-i64 LLVM return type.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_bool_returning_suspending_fn.ynz"));
+    assert_eq!(
+        code, 0,
+        "bool-returning suspending fn must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "true\nfalse",
+        "hasCrossingBool(true)→true, computeBool(5)→false (5 < 0 is false); stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_float_returning_suspending_fn() {
+    // WHY: Round-17 fix — `-> float` suspending function SM wrapper-return type mismatch.
+    // The wrapper-return match had no `Type::Float` arm; the `_ =>` fallback emitted
+    // `ret void` instead of the declared `double` return type, causing LLVM module
+    // verification failure ("Function return type does not match operand type of return
+    // inst!"). Guards the SM wrapper-return Float arm against regression.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_float_returning_suspending_fn.ynz"));
+    assert_eq!(
+        code, 0,
+        "float-returning suspending fn must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "8.5",
+        "sleepingFloat() must return 8.5 exactly; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_number_returning_suspending_fn() {
+    // WHY: Round-17 fix — `-> number` (decimal128) suspending function SM wrapper-return.
+    // Three bugs fixed: (1) wrapper-return lacked Type::Number arm → `ret void` vs `ptr`,
+    // LLVM verification failure; (2) resume-fn return-slot stored a stack pointer (ptr_to_int
+    // via to_i64_bits fallback) rather than the full i128 value — Tier-A silent-wrong-value;
+    // (3) the parent callee's inline-poll path read the child's return slot as i64 (8 bytes)
+    // then stored to an i64 alloca, corrupting the subsequent i128 load from that alloca.
+    // Asserts the EXACT value 0.3 (= 0.1 + 0.2 in decimal128, exact — no float rounding).
+    // If the lo-64-bit-only truncation bug regresses, the output becomes
+    // 0.000000000000000000000000000000000000000000000 (zeroed frame) or garbage.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_number_returning_suspending_fn.ynz"));
+    assert_eq!(
+        code, 0,
+        "number-returning suspending fn must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "0.3",
+        "sleepingNumber() must return 0.3 exactly (decimal128 exact); stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_number_errors_returning_suspending_fn_success() {
+    // WHY: suspending `-> number errors` returns the EXACT high-precision decimal128 value.
+    // The value 9999999999.000000001 requires all 16 bytes of decimal128 — truncation to
+    // 8 bytes would produce a different value. The frame-staging slot stores the i128 inside
+    // the composed frame so the EC ok-pointer survives the resume fn returning (alloc=1/free=1).
+    // Regression guard: if the staging slot is removed or the precision drops, this fails.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p1_number_errors_returning_suspending_fn.ynz",
+    ));
+    assert_eq!(
+        code, 0,
+        "suspending `-> number errors` must compile and run (exit 0); stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "9999999999.000000001",
+        "must print exact high-precision value (no truncation); got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_number_errors_suspending_error_path() {
+    // WHY: suspending `-> number errors` error path — the EC discriminant must survive
+    // suspension for the ERROR case. If the staging path hardcodes success, the error
+    // discriminant is ignored and .or(fallback) never fires. Regression guard: removing
+    // the staging path or inverting the discriminant check makes this print the wrong value.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p1_number_errors_suspending_error_path.ynz",
+    ));
+    assert_eq!(
+        code, 0,
+        "error path must produce exit 0 via .or(fallback); stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "99.9",
+        "error path must return fallback 99.9; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_shape_errors_returning_suspending_fn_rejected() {
+    // WHY: WideValueSuspendingReturn guard — `-> Shape errors` from a suspending function
+    // previously leaked memory (heap-staged shape pointer stored as ok, never freed) AND
+    // the FRAME_OFFSET_LOCALS_START staging path clobbered child sub-frames. The guard
+    // rejects at compile time (exit 1) so no binary is produced, no leak, no SIGSEGV.
+    // Round-20. Regression guard: if the guard is removed, this test will fail.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p1_shape_errors_returning_suspending_fn.ynz",
+    ));
+    assert_eq!(
+        code, 1,
+        "suspending `-> Shape errors` must be rejected at compile time (exit 1); stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("cannot yet return"),
+        "diagnostic must contain 'cannot yet return'; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no stdout when compile fails; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_shape_returning_suspending_fn_rejected() {
+    // WHY: WideValueSuspendingReturn guard — bare `-> Shape` from a suspending function
+    // previously caused a SIGSEGV: the non-crossing shape staging path GEP'd to
+    // FRAME_OFFSET_LOCALS_START (offset 32) and memcpy'd shape bytes there, clobbering
+    // the sleep sub-frame's resume_point (also at offset 32). The guard rejects at compile
+    // time (exit 1) so no binary is produced and no SIGSEGV can occur. Round-20.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_shape_returning_suspending_fn.ynz"));
+    assert_eq!(
+        code, 1,
+        "suspending `-> Shape` must be rejected at compile time (exit 1); stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("cannot yet return"),
+        "diagnostic must contain 'cannot yet return'; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no stdout when compile fails; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_anon_shape_returning_suspending_fn_rejected() {
+    // WHY: FIX (a) Round-22 — WideValueSuspendingReturn guard rendered raw internal anon-shape
+    // names (e.g. "__anon__health__int") in the diagnostic instead of the user-readable form
+    // "{ health: int }". The fix routes Shape name rendering through `type_name()` which formats
+    // anon shapes as `{ field: type }`. This test verifies the readable name appears in the
+    // diagnostic and that the guard still fires (exit 1, no binary produced).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p1_anon_shape_returning_suspending_fn.ynz",
+    ));
+    assert_eq!(
+        code, 1,
+        "suspending `-> {{ health: int }}` must be rejected at compile time (exit 1); stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("cannot yet return"),
+        "diagnostic must contain 'cannot yet return'; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("__anon__"),
+        "diagnostic must NOT leak internal anon-shape names; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no stdout when compile fails; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_maybe_crossing_local_rejected() {
+    // WHY: FIX (d) Round-22 — UnsupportedCrossingLocalType guard. A `maybe<int>` local
+    // crossing a `wait` previously fell into the generic pointer flush/reload path in codegen,
+    // which stored a pointer to a stack-alloca {tag, payload} that no longer exists after
+    // resume. LLVM detected this as "Instruction does not dominate all uses!" (a raw compiler
+    // ICE). The guard rejects at typeck with a clean teaching diagnostic (exit 1, no binary,
+    // no LLVM ICE text). This test verifies the clean rejection AND that working crossing-local
+    // types (int, string, etc.) are NOT affected (tested separately in other fixtures).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_maybe_crossing_local_rejected.ynz"));
+    assert_eq!(
+        code, 1,
+        "maybe<int> crossing local must be rejected at compile time (exit 1); stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("cannot yet cross a `wait`"),
+        "diagnostic must contain 'cannot yet cross a `wait`'; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("LLVM ERROR") && !stderr.contains("does not dominate"),
+        "must be a clean compile error, not a raw LLVM ICE; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no stdout when compile fails; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_union_crossing_local_rejected() {
+    // WHY: FIX (d) Round-22 — UnsupportedCrossingLocalType guard for union-typed locals.
+    // A union-type crossing local falls into the same dangling-pointer flush/reload path
+    // as maybe<T>. This test verifies the clean compile-time rejection for the union case.
+    // Regression guard: the guard must fire before codegen runs (exit 1, no LLVM ICE).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_union_crossing_local_rejected.ynz"));
+    assert_eq!(
+        code, 1,
+        "union-type crossing local must be rejected at compile time (exit 1); stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("cannot yet cross a `wait`"),
+        "diagnostic must contain 'cannot yet cross a `wait`'; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("LLVM ERROR") && !stderr.contains("does not dominate"),
+        "must be a clean compile error, not a raw LLVM ICE; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no stdout when compile fails; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_param_shadow_crossing_rejected() {
+    // WHY: parameter-shadow guard (Check 3b) — a `let x` inside a nested scope shadows
+    // the function parameter `x`, which crosses a `wait` and is read after it resolving
+    // to the parameter. Before this guard, codegen hit an LLVM SSA dominance ICE because
+    // the parameter's frame-slot alloca (%x) did not dominate all uses when the inner
+    // shadow's load ran first. The guard must fire with a clean ShadowsCrossingLocal error,
+    // not an LLVM ICE. Regression guard: this exact case was the Round-12 reproducer.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_param_shadow_crossing.ynz"));
+    assert_eq!(
+        code, 1,
+        "parameter shadow across wait must fail to compile with a clean error, not an ICE; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("declared again") || stderr.contains("crosses a `wait`"),
+        "diagnostic must mention 'declared again' or 'crosses a `wait`'; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no stdout on compile error; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_plain_crossing_param_compiles() {
+    // WHY: regression guard for the parameter-shadow guard (Check 3b). A parameter that
+    // crosses a `wait` with NO inner shadow must continue to compile and produce the
+    // correct output — the guard must not reject normal crossing parameters. This is the
+    // primary false-positive regression for the Round-12 fix: tightening Check 3b to
+    // cover parameters must not break the `function f(x: int) { wait; print(x) }` case.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_plain_crossing_param.ynz"));
+    assert_eq!(
+        code, 0,
+        "plain crossing parameter (no shadow) must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "7",
+        "must print the original parameter value (7) after suspension; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_toplevel_redecl_after_wait_adv10_rejected() {
+    // WHY: top-level re-declaration after wait is a SILENT MISCOMPILE (ADV10). `let x=10`
+    // crosses the wait; `let x=99` at top level after the wait shares the same name-keyed
+    // frame slot — the second write clobbers the first, producing wrong output (7/7 instead
+    // of 7/99). Round 14 incorrectly allowed this program by treating the top-level
+    // `let x=99` as "masking" all post-wait reads of the outer binding. The guard must
+    // REJECT this shape (exit 1, clean error) — loud error beats silent wrong answer.
+    // Regression guard: if round-14's permissive sequential-walk returns, this program
+    // will compile to a miscompile instead of printing a safe error.
+    // test-ratchet: changing to expect compile would reintroduce ADV10 silent miscompile
+    let (_stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_toplevel_redecl_after_wait_adv10.ynz"));
+    assert_eq!(
+        code, 1,
+        "top-level re-declaration after wait must be rejected (silent miscompile); stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains('x') && (stderr.contains("wait") || stderr.contains("suspension")),
+        "diagnostic must mention `x` and the wait boundary; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_param_toplevel_redecl_after_wait_adv11_rejected() {
+    // WHY: top-level re-declaration of a parameter after wait is a SILENT MISCOMPILE (ADV11).
+    // Parameter `p` is frame-slotted at function entry; `let p=99` at top level after the
+    // wait shares that frame slot — the `let` write clobbers the parameter value. Round 14
+    // incorrectly allowed this program; the guard must REJECT it (exit 1, clean error).
+    // Regression guard: if round-14's permissive param scan returns, this program compiles
+    // to a miscompile (parameter value silently disappears) instead of a clear error.
+    // test-ratchet: changing to expect compile would reintroduce ADV11 silent miscompile
+    let (_stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p1_param_toplevel_redecl_after_wait_adv11.ynz",
+    ));
+    assert_eq!(
+        code, 1,
+        "param with top-level re-declaration after wait must be rejected (silent miscompile); stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains('p') && (stderr.contains("wait") || stderr.contains("suspension")),
+        "diagnostic must mention `p` and the wait boundary; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_ec_crossing_local_propagated_int() {
+    // WHY: round-25 regression guard for the EC-crossing-local return-propagation silent
+    // miscompile. An EC int-errors value bound from a suspending call, crossing a second
+    // suspension, and RETURNED by the caller previously propagated the companion-struct
+    // stack pointer as the ok-word instead of the integer bits. The caller received a
+    // garbage stack address (e.g. 140734710005520). Regression: if this prints anything
+    // other than "42", the errors_capable_locals registration in bind_sm_result_and_flush
+    // was removed or the SM ident handler's error/success paths broke.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_ec_crossing_local_propagated_int.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "42",
+        "EC int-errors value must survive crossing + return-propagation; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_ec_crossing_local_propagated_string() {
+    // WHY: same EC-crossing-local propagation class as the int case, but for string errors.
+    // The ok-word is a heap pointer (stable), but without the errors_capable_locals fix the
+    // companion-struct stack pointer was propagated instead. Regression: prints garbage or
+    // crashes if the fix is reverted.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p1_ec_crossing_local_propagated_string.ynz",
+    ));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "hello",
+        "EC string-errors value must survive crossing + return-propagation; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_ec_crossing_local_propagated_number() {
+    // WHY: same EC-crossing-local propagation class, but for number (decimal128) errors.
+    // The value 9999999999.000000001 requires all 16 bytes of decimal128 precision —
+    // truncation or a wrong pointer both produce a different or garbage value.
+    // Also exercises the UAF fix in the EC wrapper: the ok-word is a staging-slot pointer
+    // inside the frame; without the heap-copy-before-free the staging slot is freed before
+    // the caller reads it. Regression: wrong value or crash.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p1_ec_crossing_local_propagated_number.ynz",
+    ));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "9999999999.000000001",
+        "EC number-errors value must survive crossing + return-propagation with full precision; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3a_p1_ec_crossing_local_propagated_error_path() {
+    // WHY: proves the error DISCRIMINANT survives the crossing + propagation, not just the
+    // success value. If the fix hardcodes err=0 or flips the discriminant check, inner()'s
+    // error is silently swallowed and .or(99) never fires — the output would be "0" (garbage
+    // ok-word passed as success) instead of "99" (the fallback). Regression: any value other
+    // than "99" means the error discriminant is broken across suspension.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p1_ec_crossing_local_propagated_error_path.ynz",
+    ));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "99",
+        "EC error path must fire .or(99) — error discriminant must survive crossing + propagation; got:\n{stdout}"
     );
 }

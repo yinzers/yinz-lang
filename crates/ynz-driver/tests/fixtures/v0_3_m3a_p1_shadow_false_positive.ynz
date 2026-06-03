@@ -1,0 +1,17 @@
+// Fixture: shadow false-positive — FIX C (Round 7).
+// An inner crossing local `x` (declared inside an if-arm before a wait) must NOT
+// trigger a ShadowsCrossingLocal error for an OUTER `let x = 100` that appears AFTER
+// the if block (and is NOT itself a crossing local). Prior to FIX C, the shadow check
+// ran for ALL crossing locals including inner-only ones, and the outer post-if `let x`
+// was mistakenly treated as a shadowed crossing local — producing a false compile error.
+// Expected output: 42 then 100
+function entrypoint() -> nothing {
+  let flag = true
+  if (flag) {
+    let x = 42
+    wait sleep(5)
+    print(x.toString())
+  }
+  let x = 100
+  print(x.toString())
+}
