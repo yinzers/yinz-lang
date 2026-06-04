@@ -427,10 +427,11 @@ impl<'b> Checker<'b> {
             std::collections::HashSet::new()
         };
 
-        // Check 1 (WaitInsideLoop) — lifted in Phase 3. `wait` inside `for`/`while`/`match`
-        // is now supported via frame-backed loop state: one ynz_alloc per task tree, sequential
-        // iterations, loop-carried locals frame-backed by P1 slot machinery. The
-        // `wait_in_for_or_match_body` detector is retired with this guard.
+        // `wait` inside `for`/`while`/`match` is a supported, safe position.
+        // Frame-backed loop state carries the loop counter and loop-carried locals across
+        // each suspension (one ynz_alloc per task tree, sequential iterations), so no
+        // positional guard is needed for loop-body waits. Only the checks below (wide-value
+        // return; array-shape-runtime-field) remain active.
 
         // Check WideValueSuspendingReturn: a suspending function whose return type is a
         // wide-inner value that the SM return path cannot correctly handle without a dedicated
@@ -2129,7 +2130,7 @@ impl<'b> Checker<'b> {
                                         arg.span().clone(),
                                         format!("Copying {} bytes into a background task.", size),
                                         "Pass ownership with `background fn(value.give)` if you don't need the value after. Click `.give` to apply.",
-                                        "`.give` transfers ownership without copying. Auto-detection of unused-after-call ships in v0.3-M3; until then, the choice is yours to make explicit.",
+                                        "`.give` transfers ownership without copying. Auto-detection of unused-after-call ships in v0.3-M3b; until then, the choice is yours to make explicit.",
                                     ));
                                 }
                             }
@@ -2392,7 +2393,7 @@ impl<'b> Checker<'b> {
                                  from inside a suspending function."
                             ),
                             "v0.3-M2 analyzes one compilation unit. Cross-module suspension \
-                             propagation ships in v0.3-M3 via the M8 multi-file query. \
+                             propagation ships in v0.3-M3b via the M8 multi-file query. \
                              Until then, external calls from suspending functions must be \
                              intra-unit — externals are the user's responsibility.",
                         ));

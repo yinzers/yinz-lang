@@ -4036,6 +4036,103 @@ fn v03_m3a_r7_array_shape_nested_if_rejected() {
     );
 }
 
+// ── v0.3-M3a Phase 4: cross-impl consistency gate ────────────────────────────
+
+/// Build a fixture to a tmpdir binary (default or --no-auto-parallel) and run it.
+///
+/// The binary is placed in a unique tmpdir so concurrent tests don't collide.
+/// Caller is responsible for nothing — the tmpdir is cleaned up by TempDir's Drop.
+fn build_to_tmpdir_and_run(src: &Path, no_auto_parallel: bool) -> (String, String, i32) {
+    let tmp = tempfile::TempDir::new().expect("failed to create tmpdir");
+    let mut build_cmd = Command::new(ynz_binary());
+    build_cmd.arg("build").arg(src).env("CLICOLOR", "0");
+    if no_auto_parallel {
+        build_cmd.arg("--no-auto-parallel");
+    }
+    let build_out = build_cmd.output().expect("failed to spawn ynz build");
+    if !build_out.status.success() {
+        let stderr = String::from_utf8_lossy(&build_out.stderr).into_owned();
+        return (String::new(), format!("build failed: {stderr}"), 1);
+    }
+
+    // ynz build writes the binary alongside the source file with the extension stripped
+    // (e.g., foo.ynz -> foo). Copy it to tmpdir to avoid leaving build artifacts in
+    // the fixtures directory alongside committed test sources.
+    // test-ratchet: binary path is src.with_extension(""), not src_dir/bin; fixing a
+    // bug in the original helper path logic introduced in the same edit.
+    let built_binary = src.with_extension("");
+    let run_binary = tmp.path().join("bin");
+    if let Err(e) = std::fs::copy(&built_binary, &run_binary) {
+        return (String::new(), format!("failed to copy binary: {e}"), 1);
+    }
+    // Clean up the binary next to the fixture to avoid polluting the fixtures dir.
+    let _ = std::fs::remove_file(&built_binary);
+
+    let run_out = Command::new(&run_binary)
+        .env("CLICOLOR", "0")
+        .output()
+        .expect("failed to run compiled binary");
+    let stdout = String::from_utf8_lossy(&run_out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&run_out.stderr).into_owned();
+    let code = run_out.status.code().unwrap_or(-1);
+    (stdout, stderr, code)
+}
+
+#[test]
+fn v03_m3a_p4_no_auto_parallel_byte_identical_to_default_on_simple_wait() {
+    // WHY: --no-auto-parallel must produce byte-identical stdout/stderr/exit-code to
+    // the default build on every fixture where the parallel pass is a no-op. In M3a
+    // the pass does not yet exist (main.rs:210 discards the flag), so this is
+    // trivially true — but the gate must be WIRED so M3b cannot accidentally break
+    // consistency without a failing test. Guards the cross-impl consistency AC in P4.
+    let src = fixture("v0_3_m3a_p1_int_crossing_one_wait.ynz");
+    // Confirm the fixture passes via `ynz run` (the canonical dev path).
+    let (run_stdout, run_stderr, run_code) = ynz_run_stdout(&src);
+    assert_eq!(
+        run_code, 0,
+        "fixture must pass ynz run; stderr:\n{run_stderr}"
+    );
+    // Build with --no-auto-parallel and compare output.
+    let (nopar_stdout, nopar_stderr, nopar_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        nopar_code, 0,
+        "--no-auto-parallel build must exit 0; error:\n{nopar_stderr}"
+    );
+    // Build without --no-auto-parallel and compare.
+    let (default_stdout, _default_stderr, default_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(default_code, 0, "default build must exit 0");
+    // The three outputs must be byte-identical (trivially true in M3a — no parallel pass).
+    assert_eq!(
+        nopar_stdout, default_stdout,
+        "--no-auto-parallel stdout must equal default build stdout"
+    );
+    assert_eq!(
+        run_stdout.trim(),
+        default_stdout.trim(),
+        "ynz run stdout must equal ynz build+run stdout"
+    );
+}
+
+#[test]
+fn v03_m3a_p4_no_auto_parallel_byte_identical_on_for_loop_suspension() {
+    // WHY: Cross-impl consistency check on the for-loop-with-wait fixture (P3 feature).
+    // The for-loop SM codegen must be byte-identical regardless of the --no-auto-parallel
+    // flag. Catches any future M3b auto-parallel pass that accidentally changes the
+    // sequential per-iteration ordering that P3's design locks in.
+    let src = fixture("v0_3_m3a_p3_for_array_wait.ynz");
+    let (nopar_stdout, nopar_stderr, nopar_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        nopar_code, 0,
+        "--no-auto-parallel for-loop fixture must exit 0; error:\n{nopar_stderr}"
+    );
+    let (default_stdout, _default_stderr, default_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(default_code, 0, "default for-loop build must exit 0");
+    assert_eq!(
+        nopar_stdout, default_stdout,
+        "--no-auto-parallel stdout must equal default stdout on for-loop suspension"
+    );
+}
+
 /// Run a fixture with alloc-counter instrumentation and return (alloc_count, free_count).
 /// Used by audit tests that need to verify the one-alloc-per-task-tree invariant.
 fn ynz_run_with_alloc_counter(fixture_name: &str) -> (u64, u64) {

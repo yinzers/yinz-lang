@@ -236,6 +236,8 @@ function entrypoint() -> nothing {
   m3m2_demo()
   // ────── v0.3-M3a Phase 2: while-loop suspension ──────
   m3a_p2_demo()
+  // ────── v0.3-M3a Phase 4: for-loop + crossing-local suspension ──────
+  m3a_p4_demo()
 }
 
 // ────── M3 helper functions ──────
@@ -454,9 +456,9 @@ function waitForRosterSlot(n: int) -> int {
 // scheduleCheck — a nested state machine: calls waitForRosterSlot (value-returning
 // SM), then announcePirate (also suspending). Demonstrates inline poll-and-yield:
 // each nested suspending call is driven as an embedded sub-frame — no OS bridge.
-// Step-by-step style naturally avoids the M2 local-crossing-wait constraint: each
-// local is used before the next suspension point (frame-backed locals across
-// arbitrary suspension boundaries ship in v0.3-M3).
+// Step-by-step style (Golden Rule 7) keeps each local's use within a single
+// suspension segment — the clearest form. Frame-backed crossing locals, which
+// span suspension points, are also supported for cases that need them.
 function scheduleCheck(name: string) -> nothing {
   let slot = waitForRosterSlot(7)
   let slotStr = slot.toString()
@@ -665,6 +667,43 @@ shape StatBook<T> {
   entry: T
   category: StatCategory
   seasonYear: int
+}
+
+// ── v0.3-M3a Phase 4: for-loop + crossing-local suspension ───────────────────
+//
+// `wait sleep` now works inside a `for` body (P3 lifted WaitInsideLoop for `for`
+// and `match`). The loop index is frame-backed — it survives each suspension —
+// and any local declared BEFORE the loop can be updated across the suspensions.
+//
+// `tallyScouts` processes scouting ratings for a list of pirates one-by-one,
+// pausing between each to simulate an async report fetch. `total` is a crossing
+// local: it is declared before the loop, updated inside it across multiple `wait`
+// suspensions, and read after the loop ends. ONE `ynz_alloc` covers the whole
+// task — no per-iteration allocation.
+
+function tallyScouts(ratings: array<int>) -> int {
+  // `total` is a crossing local — declared before the loop, accumulated across
+  // each `wait sleep`, read after the loop. The compiler frame-backs it so each
+  // resumed iteration sees the correct running total.
+  let total: int = 0
+  for (rating in ratings) {
+    // Simulate an async scout-report fetch between ratings.
+    wait sleep(5)
+    total = total + rating
+  }
+  return total
+}
+
+// m3a_p4_demo — called from entrypoint() to show for-loop + crossing-local
+// suspension in realistic context. Each rating is processed with a pause;
+// the accumulated total crosses every suspension boundary unscathed.
+function m3a_p4_demo() -> nothing {
+  print(``)
+  print(`v0.3-M3a Phase 4 — for-loop + crossing-local suspension (5 scouts, ~25ms total):`)
+  let pirateRatings: array<int> = [85, 92, 78, 95, 88]
+  let scoutTotal = wait tallyScouts(pirateRatings)
+  let scoutStr = scoutTotal.toString()
+  print(`scout total: ${scoutStr}`)
 }
 
 // ── v0.3-M3a Phase 2: while-loop suspension ──────────────────────────────────

@@ -2174,7 +2174,8 @@ fn lower_function_with_waits<'ctx, 'g>(
     //   - Writes to shape fields go directly to the frame — no flush needed
     //   - Across suspension boundaries, the frame already holds the current bytes
     //   - At reload, the ptr alloca is re-initialized to the same frame offset — no reload needed
-    // This eliminates the separate ynz_alloc per shape crossing local (the old bug).
+    // One ynz_alloc backs the whole task tree; shape crossing locals live inline
+    // in the composed frame's slot region — no per-shape allocation is needed.
     {
         let shape_names = cg_resume.sm_crossing_shape_names.clone();
         let shape_alloca_map = cg_resume.sm_crossing_shape_allocas.clone();

@@ -3,7 +3,7 @@ slug: v0-3-m3a-suspension-codegen
 type: execution
 owner: Patrick Rizzardi
 roadmap: v0-3-concurrency-perf
-status: active
+status: done
 depends_on: [v0-3-m2-wait-and-state-machines]
 plan_base: 24d7fee081d96ab6eb04dfa493649f0435ae6a79
 files:
@@ -516,7 +516,7 @@ Each phase ends with an **Exit Sequence** block listing actions to execute (pers
 - [x] acceptance-verifier: PASS 2026-06-04 (final; full probe matrix RUN — 16 reject deterministic exit-1, 11 allow correct, alloc=1×3, 218/218; AC#4 finally graded MET, not overridden after 3 prior overrides)
 - [x] design-compliance-reviewer: PASS 2026-06-04 (final; conservative over-reject = legit documented interim 4-field deferral, GR5-honored safe-by-construction, no block_on/coloring, SC#2 holds across 7 deferrals, the by-value m3c design is GR3/GR8-sound)
 - [x] deviation-judges (cumulative across 8 rounds): all resolved/PASS at final state. Rounds 1-6 judges (D1-D6, D-A/D-B, R3 D1/D2, R4 D1/D2, R6 D1/D2) drove the per-round fixes; the two final-gate-relevant ones (R6 D1 between-waits under-rejection, R6 code-reviewer nested under-rejection) resolved by the round-7 pre-check deletion (verified safe-by-construction at final gate — no judges needed since round 7/8 were the agreed deletion + honest-conservative text, no new adversarial deviations).
-- [ ] Committed: <pending Patrick review-before-commit>
+- [x] Committed: e7bd2cd1914f1490e746cb3b659910256f162649 (2026-06-04, Patrick-approved; 54 files +4253/-493, 8 fix rounds; 3 superseded orphan fixtures deleted)
 
 <!-- ✅ P3 COMPLETE 2026-06-04 — all 5 FINAL reviewers PASS after 8 fix rounds. NEXT: surface commit for Patrick review (review-before-commit) → on go, commit P3 → Phase 4 (demo/gallery + cumulative opus sweep + status→done) → STOP before /release → /plan + execute m3c-array-by-value (the long-term right answer). -->
 
@@ -577,16 +577,16 @@ Each phase ends with an **Exit Sequence** block listing actions to execute (pers
 5. `jargon_audit`, `cargo test --workspace`, `cargo clippy -- -D warnings`, `cargo fmt --all`.
 6. CHANGELOG `[v0.3.0-m{n}]` section.
 **Acceptance criteria**:
-- [ ] `pirates-roster/entrypoint.ynz` has a loop-with-`wait` + local-crossing-`wait` section that compiles and runs (snapshot of stdout)
-  - Evidence: (filled at phase completion)
-- [ ] `primantis-orders` error gallery: `LocalCrossesWait`/`WaitInsideLoop` triggers removed; `SubExprSuspendViolation` + `MutualSuspensionCycle` triggers present with reworded diagnostics in the snapshot
-  - Evidence: (filled at phase completion)
-- [ ] `--no-auto-parallel` == default on every fixture (consistency gate green)
-  - Evidence: (filled at phase completion)
-- [ ] `cargo test --workspace` green; `jargon_audit` green; clippy `-D warnings` clean
-  - Evidence: (filled at phase completion)
-- [ ] CHANGELOG + VSCode version bumped; PR explicitly states M3a adds no new IDE muted-hint/lint surface (with reason)
-  - Evidence: (filled at phase completion)
+- [x] `pirates-roster/entrypoint.ynz` has a loop-with-`wait` + local-crossing-`wait` section that compiles and runs (snapshot of stdout)
+  - Evidence: `ynz run examples/pirates-roster/` → `scout total: 438` from `tallyScouts` (for-over-`array<int>` with a crossing-local accumulator across `wait sleep` — real context, not a toy), exit 0; deterministic `crew ready: 3` + `ticket price: 24.50` also correct (acceptance cumulative sweep, live binary, 2026-06-04).
+- [x] `primantis-orders` error gallery: `LocalCrossesWait`/`WaitInsideLoop` triggers removed; `SubExprSuspendViolation` + `MutualSuspensionCycle` triggers present with reworded diagnostics in the snapshot
+  - Evidence: `v0_3_m3a_errors.ynz` — `grep LocalCrossesWait|WaitInsideLoop` → 0 hits; kept guards present (SubExprSuspendViolation:23, MutualSuspensionCycle:42) with `// WHY:` comments + 5 deferral triggers; emits 30 error lines (acceptance). `v0_3_m2_errors.ynz` — dead `triggerWaitInLoop`/`triggerLocalCrossesWait` deleted, classes renumbered, Class 1/2 rationale reworded to permanent-constraint framing; kept guards still fire (plan-adherence cleanup re-gate + design-compliance design-aligned, 2026-06-04). No snapshot test references the M2 gallery.
+- [x] `--no-auto-parallel` == default on every fixture (consistency gate green)
+  - Evidence: `cargo test v03_m3a_p4_no_auto_parallel` → 2 passed, 0 failed; harness uses `ynz build --no-auto-parallel` (flag lives on the `build` subcommand) + asserts byte-identical stdout vs default on simple-wait + for-loop fixtures (acceptance cumulative, live, 2026-06-04).
+- [x] `cargo test --workspace` green; `jargon_audit` green; clippy `-D warnings` clean
+  - Evidence: jargon_audit 9/0; `cargo clippy --workspace -- -D warnings` Finished clean; `cargo test --workspace` green modulo one documented wall-clock/RSS timing flake (passed on immediate re-run + isolated — same class as the plan's documented `read_debounce_ms_custom`/`current_rss_bytes`/`sync_bridge_overhead` flakes, not a correctness regression). Cleanup round re-verified build + jargon 9/0 + clippy clean (refactor-executor `ab2ff928`, 2026-06-04).
+- [x] CHANGELOG + VSCode version bumped; PR explicitly states M3a adds no new IDE muted-hint/lint surface (with reason)
+  - Evidence: CHANGELOG `## [0.3.0-m4] — M3a` section (frame-backed crossing locals, while/for/match suspension, sleep rename, 12 deferrals enumerated); `tooling/vscode-ynz/package.json` `0.3.0-m3`→`0.3.0-m4`; Invariants `### Teaching` states "M3a introduces NO new muted-hint domain and NO new lint rule" (`wait_points`/`background_routing` are M3b) with rationale.
 **Quality gate**:
 - [ ] Demo shows the feature in REAL context (not `print(featureName())`)
 - [ ] Error gallery accurately reflects the post-M3a guard set
@@ -594,16 +594,18 @@ Each phase ends with an **Exit Sequence** block listing actions to execute (pers
 - [ ] No jargon; all gates green
 **Verification**: run `pirates-roster` + error gallery through the compiler; snapshot review; `cargo test --workspace`; consistency harness.
 
-**Phase Review Gates**:
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
-- [ ] design-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] Committed: <commit SHA>
+**Phase Review Gates** (final verdicts — cumulative opus sweep + cleanup re-gate):
+- [x] code-reviewer: **PASS** (cumulative opus sweep, 2026-06-04) — "the unified flush killed the hydra"; per-type-drift disease structurally dead; 1743 workspace/220 integration/193 typeck/9 jargon green. Non-blocking follow-ups: `Type::Options` correct-by-coincidence (else-ptr); `array<boolean>` literal ICE (pre-existing base bug) → todos.
+- [x] rules-compliance-reviewer: **PASS** (cleanup re-gate, 2026-06-04) — cumulative BLOCK on 2 changelog comments (`emit.rs:2177`, `check.rs:430`) + P1-deferral under-enumeration RESOLVED; reworded comments durable, no banned phrases.
+- [x] plan-adherence-verifier: **PASS** (cleanup re-gate, 2026-06-04) — cumulative BLOCK on P4 Step 2 (dead M2-gallery triggers) RESOLVED; dead triggers deleted + renumbered, kept guards fire; scope expansion documented + same-class.
+- [x] acceptance-verifier: **PASS** (cumulative opus sweep, 2026-06-04) — all 28 ACs MET on the live binary across P0–P4.
+- [x] design-compliance-reviewer: **PASS** (cumulative + cleanup re-gate, 2026-06-04) — frame-embed reconciles all locked docs; reworked teaching text confirmed design-aligned (SubExpr/MutualSuspensionCycle permanent per `design/concurrency.md`; M3b labels correct).
+- [ ] Committed: <pending Patrick's end-of-milestone review>
 
 **Findings Log**:
-_(empty until a reviewer returns BLOCK)_
+- 2026-06-04 — **Cumulative end-of-plan opus sweep (Step 4.a)** against `git diff 24d7fee` (full P0→P4 diff, 171 files). Verdicts: **design-compliance PASS**, **code-reviewer PASS** ("the unified flush killed the hydra" — per-type-drift disease structurally dead; 1743 workspace/220 integration/193 typeck/9 jargon green), **acceptance PASS** (all 28 ACs MET on the live binary), **rules-compliance BLOCK** (2 changelog comments: `emit.rs:2177` "eliminates…the old bug"; `check.rs:430` "lifted in Phase 3…retired" + plan-invariant under-enumeration of the P1 deferrals), **plan-adherence BLOCK** (P4 Step 2 half-done: `examples/primantis-orders/v0_3_m2_errors.ynz` still carried `triggerWaitInLoop`/`triggerLocalCrossesWait` — both compile clean post-M3a but the gallery claimed they error, with stale "ships in v0.3-M3" framing). Non-blocking notes: 2 more stale "ships in v0.3-M3" diagnostic strings (`check.rs:2132`/`:2395` — M3b features); `pirates-roster:461` stale label; `Type::Options` correct-by-coincidence via else-ptr branch; `array<boolean>` literal ICE (pre-existing base bug); concurrency-snapshot + timing-test flakes (pre-existing, no AC impact).
+- 2026-06-04 — **Cleanup round dispatched (refactor-executor `ab2ff928`)** to clear both BLOCKs. **Scope decision (coordinator):** rather than the 2 literal BLOCK fixes alone, the round purged the FULL `ships in v0.3-M3` stale-milestone-label defect class surfaced by the cumulative review — same defect, same milestone-split cause (M3→M3a+M3b), cheap to fix together, design-contradicting if left. 8 spots / 4 files: (1) `emit.rs:2177` + (2) `check.rs:430` reworded durable (rules BLOCK); (3) `v0_3_m2_errors.ynz` deleted the 2 dead triggers + renumbered classes (plan-adherence BLOCK); (4) `v0_3_m2_errors.ynz` Class 1/2 kept-guard rationale reworded to **permanent-constraint** framing aligned to `design/concurrency.md` "Permanent Positional Constraints on `wait`" (executor independently confirmed `MutualSuspensionCycle` is permanent — "rare in practice, always restructurable" — not deferred); (5) `check.rs:2132`/`:2395` + `v0_3_m2_errors.ynz` Class 5 + `pirates-roster:461` stale labels → M3b / durable (code-reviewer + design notes). No snapshot test references the M2 gallery (confirmed — only separate `ynz-driver` fixtures). Executor verified: build PASS, jargon_audit 9/0, clippy `-D warnings` clean, gallery emits correct diagnostics (deleted triggers absent, all kept guards fire). No deviations.
+- 2026-06-04 — **Plan invariant `### Feature Registry Entries` completed**: added the 5 P1 `[[deferred_language_feature]]` entries (`nested-shape-crossing-wait`, `shadow-crossing-local-support`, `wide-value-suspending-return`, `unsupported-crossing-local-type`, `ec-wrapper-collect-on-completion`) that were enacted in P1 but not enumerated in the invariant (rules-compliance under-enumeration note). Total milestone suspension deferrals now fully enumerated: 5 (P1) + 7 (P3) = 12, all loud-reject, all registry+design+fixture tracked.
 
 **Exit Sequence (FINAL PHASE) — RUN THESE STEPS**: per-phase fan-out (`$BASE` = Phase 3's `Committed:` SHA) PLUS the final cumulative sweep per `execute-plan.md` Step 4.a — fan out all 5 reviewers + cumulative deviation-judges with `model: "opus"` against the cumulative diff (`git diff <plan_base>` if uncommitted else `git diff <plan_base>..HEAD`). Flip `status: active`→`status: done` only after all return PASS. Then `/release`.
 
@@ -649,6 +651,13 @@ _(empty until a reviewer returns BLOCK)_
 - **Modify** 2 `[[primitive_intrinsic]]` entries: `sleepAsync`→`sleep` (yielding, may-block member), `sleepMs`→`sleepBlocking` (blocking) — name + hover text (P0).
 - **Audit + reclassify** any `[[deferred_language_feature]]`/`[[deferred_tooling_feature]]` entry naming the four guards: remove deferred entries for the two LIFTED guards (they ship in M3a); ensure the two KEPT guards are not framed as "deferred to M3" (P0).
 - **No new** `[[keyword]]`, `[[banned_jargon]]`, `[[muted_hint_domain]]`, `[[lint_rule]]`, or `[[diagnostic_template]]` entries. (Reworded kept-guard diagnostics are text edits to existing emission sites, not new templates — confirm during P0 whether either is registry-backed; if so, modify in place.) Stated explicitly so reviewers know it was considered.
+- **[CONSOLIDATED — P1, frame-backed crossing locals]** Phase 1 surfaced crossing-local shapes the frame-slot machinery cannot yet preserve across a suspension; each became a loud-reject deferral (no silent-wrong) with full registry + `design/concurrency.md` + clean-error-fixture tracking. **Phase 1 adds 5 new `[[deferred_language_feature]]` entries** to `registry/features.toml` (all loud-reject, all tracked):
+  1. `nested-shape-crossing-wait` — a crossing-local shape with nested-shape fields (frame-embed memcpy is one-level; recursive embed not implemented). SUBSTITUTE: flatten to primitive fields, or assign the outer shape after the last suspension. SHIPS_IN `v0.3+`.
+  2. `shadow-crossing-local-support` — a same-name binding re-used around a suspension (name-keyed slots → the second write clobbers the first). Conservative: rejects all same-name re-uses. SUBSTITUTE: rename the colliding binding. Lift requires per-binding slot identity. SHIPS_IN `v0.3+`.
+  3. `wide-value-suspending-return` — `-> Shape` / `-> Shape errors` (variable-size return staging clobbers child sub-frames; entangled with the pre-existing non-suspending shape-return base bug). `-> number errors` (decimal128) IS supported (16-byte fixed staging slot, alloc=1/free=1). SUBSTITUTE: return primitive fields individually. SHIPS_IN `v0.3+`.
+  4. `unsupported-crossing-local-type` — a `union` / `maybe<T>` / `dynamic Contract` crossing local (internally a pointer to a stack `{tag, payload}` alloca that dangles across suspension). SUBSTITUTE: extract the inner value before the `wait`. SHIPS_IN `v0.3+`.
+  5. `ec-wrapper-collect-on-completion` — reading the completed value of a `background`-spawned suspending `-> T errors` task (the standalone EC wrapper's ok-pointer points into the freed frame; safe today only because `background` discards it). SUBSTITUTE: inline-poll compose; reading the value is M3b task-collection machinery. SHIPS_IN `v0.3-M3b`.
+  - All have a `design/concurrency.md` section + a clean-error fixture. (Registry lines `registry/features.toml:1126-1170`.)
 - **[CONSOLIDATED — final, supersedes the "No new `[[deferred_*]]`" line above]** Across P3 rounds 2-8, codegen surfaced shapes that cannot yet preserve state across a suspension; per `no-duct-tape.md` + the north star (every unsupported `wait`-position fails LOUD, never silent), each became a clean compile-error deferral with full registry + `design` + clean-error-fixture tracking. **Phase 3 adds 7 new `[[deferred_language_feature]]` entries** to `registry/features.toml` (all loud-reject, all tracked, all lifted by a named future milestone):
   1. `fixed-array-iter-with-wait` — `fixed<T>` (stack) array as a `for`-iterator whose body has a `wait`; stack pointer dangles. SUBSTITUTE: `array<T>`. DESIGN_DOC: design/concurrency.md.
   2. `stored-range-with-wait` — a range bound to a local then iterated with a `wait`; bounds-recovery not implemented. SUBSTITUTE: inline `for (i in range(...))`. DESIGN_DOC: design/concurrency.md.
