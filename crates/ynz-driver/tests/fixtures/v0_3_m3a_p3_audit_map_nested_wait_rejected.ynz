@@ -1,0 +1,15 @@
+// Audit: map entry.value read after a NESTED wait (inside if) — must be LOUD compile error.
+// The flat-scan bug: a wait inside `if (c) { wait }` was previously missed by the
+// body_reads_field_after_wait detector. Now uses stmt_contains_wait_anywhere (recursive).
+function entrypoint() -> nothing {
+  let scores: map<string, int> = { `alice`: 90, `bob`: 85 }
+  let total: int = 0
+  let flag: boolean = true
+  for (entry in scores) {
+    if (flag) {
+      wait sleep(5)
+    }
+    total = total + entry.value
+  }
+  print(total.toString())
+}

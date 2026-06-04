@@ -1,0 +1,22 @@
+// Audit: dynamic Contract crossing local must be CLEAN-REJECTED.
+// dynamic values hold a {data-ptr, vtable-ptr} fat pointer on the resume stack.
+// The stack is freed on suspension; the stored fat-pointer dangles on the next resume.
+// UnsupportedCrossingLocalType must fire with a teaching error.
+shape Printable {
+  display(share self) -> string
+}
+
+shape Ticker {
+  symbol: string
+}
+
+function display(share self: Ticker) -> string {
+  return `ticker`
+}
+
+function entrypoint() -> nothing {
+  let t: Ticker = { symbol: `AAPL` }
+  let d: dynamic Printable = t
+  wait sleep(5)
+  print(d.display())
+}

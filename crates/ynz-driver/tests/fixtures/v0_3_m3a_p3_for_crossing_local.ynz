@@ -1,0 +1,12 @@
+// Fixture: for loop with an outer crossing local AND a wait inside.
+// `total` is declared before the loop and accumulated across N suspensions.
+// Guards that P1 crossing-local + P3 for-loop suspension compose correctly.
+// Expected output: 6 (0+1+2+3)
+function entrypoint() -> nothing {
+  let total: int = 0
+  for (i in range(0, 4)) {
+    wait sleep(5)
+    total = total + i
+  }
+  print(total.toString())
+}

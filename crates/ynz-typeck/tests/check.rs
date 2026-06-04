@@ -2848,11 +2848,12 @@ function entrypoint() -> nothing {
     );
 }
 
-// WHY: `wait` inside a `for` loop must emit the same teaching error. Guards that
-// the check covers `for` in addition to `while` — both need the loop-counter
-// frame-backing transform from M3.
+// WHY: P3 lifts the WaitInsideLoop guard for `for` — `wait` inside a `for` loop is now
+// accepted (the codegen handles frame-backed loop-state). This test was previously checking
+// that an error fires; it now guards the opposite: NO error fires.
+// test-ratchet: P3 lifted the for-loop guard; updated from expect-error to expect-ok.
 #[test]
-fn wait_in_for_loop_is_an_error() {
+fn wait_in_for_loop_is_accepted() {
     let src = r#"
 function entrypoint() -> nothing {
   for (i in range(0, 3)) {
@@ -2867,11 +2868,10 @@ function entrypoint() -> nothing {
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
     assert!(
-        !errors.is_empty(),
-        "wait inside for loop must produce an error"
+        errors.is_empty(),
+        "wait inside for loop must now be accepted (P3 lifted the guard); errors: {:#?}",
+        errors
     );
-    let has_loop_msg = errors.iter().any(|d| d.what.contains("loop"));
-    assert!(has_loop_msg, "error must mention loop; got: {:#?}", errors);
 }
 
 // WHY: M3a P1 lifts the LocalCrossesWait guard — a local declared before a `wait` and

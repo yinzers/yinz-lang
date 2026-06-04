@@ -363,29 +363,48 @@ A suspending function (one whose body contains a `wait`) cannot yet return a `Sh
 
 ---
 
-### `UnsupportedCrossingLocalType` — `union`, `maybe`, and `dynamic` crossing locals (deferred, clean compile error today)
+### `UnsupportedCrossingLocalType` — types that cannot yet cross a `wait` (deferred, clean compile error today)
 
-A local binding of type `union`, `maybe<T>`, or `dynamic Contract` cannot yet cross a `wait` boundary.
+Several types cannot yet cross a `wait` boundary. The type classifier is complete for the supported set; any unhandled type produces a clean WHAT/WHAT-INSTEAD/WHY compile error rather than a silent miscompile, UAF, or SIGSEGV.
 
 **Why each variant fails without the guard**:
 
-The frame-slot classifier in codegen handles int, bool, float, number, string, array, map, Shape, and ErrorsCapable crossing locals. All other types fall into the generic pointer flush/reload path (`ptr_to_int` at flush, `int_to_ptr` at reload). For `union` and `maybe<T>`, the value is internally represented as a pointer to a `{tag, payload}` struct alloca that lives on the resume function's stack. Flushing the alloca pointer to the frame slot and reloading it after the next resume stores and re-reads a dangling stack address. LLVM may detect this as "Instruction does not dominate all uses!" (producing a raw compiler ICE) or silently corrupt the callee's stack at runtime. `dynamic Contract` has similar representation characteristics.
+The frame-slot classifier in codegen handles int, bool, float, number, string, array, map, Shape, and ErrorsCapable crossing locals. All others fall into buckets with safety problems:
+
+- **`union` / `maybe<T>` / `dynamic Contract`**: internally represented as a pointer to a `{tag, payload}` struct alloca on the RESUME FUNCTION'S STACK. Flushing the alloca pointer to the frame slot and reloading it after the next resume stores and re-reads a dangling stack address. LLVM may detect this ("Instruction does not dominate all uses!") or silently corrupt the stack.
+
+- **`fixed<T>` binding (crossing local)**: fixed arrays are stack-allocated allocas in the resume function's stack frame. When the resume function returns to the scheduler after a `wait`, that stack frame is freed. The crossing-local frame slot holds a dangling pointer — reading elements after resume is UB. (`fixed<T>` as a for-loop iterator is caught separately by `FixedArrayIterWithWait`.) Registry entry: `fixed-crossing-local-with-wait`.
+
+- **`range` binding (crossing local)**: a range binding (`let r = range(0,3)`) is stored on the resume function's stack as a pair of bounds (i64 lo, i64 hi). When the function suspends the stack frame is freed; the crossing-local frame slot holds a dangling pointer on the next resume. Iterating that dangling range produces zero iterations — silent wrong output. The wait-inside-body form is caught separately by `StoredRangeWithWait`; this guard catches the case where the wait is at the TOP LEVEL before the loop. Registry entry: `range-crossing-local-with-wait`.
+
+- **`MapEntry<K,V>` (for-loop var over a map)**: the loop variable in `for (entry in m)` is a `{key, value}` struct pair. The current frame-slot mechanism assigns ONE i64 slot per crossing local — fine for scalar/pointer types, but only covers `entry.key` (field[0]). `entry.value` (field[1]) has no slot and reads garbage after resume. Registry entry: `map-entry-fields-after-wait`.
 
 **What IS supported** (crossing locals that work correctly):
 
-| Type | Status |
+| Type | Status | Frame strategy |
+|---|---|---|
+| `int`, `bool`, `float` | CLEAN | scalar i64/i1/f64 slot |
+| `number` (decimal128) | CLEAN | 2 consecutive i64 slots (lo+hi) |
+| `string`, `array<T>`, `map<K,V>` | CLEAN | heap-stable pointer stored as i64 |
+| `Shape` (primitive fields only) | CLEAN | frame-embedded struct bytes |
+| `T errors` (ErrorsCapable) | CLEAN | 2-slot {err, ok} struct |
+
+**Blocked types and workarounds**:
+
+| Type | Workaround |
 |---|---|
-| `int`, `bool`, `float` | CLEAN — scalar frame slot |
-| `number` (decimal128) | CLEAN — 2-slot i128 frame storage |
-| `string`, `array<T>`, `map<K,V>` | CLEAN — heap-stable pointer, ptr_to_int safe |
-| `Shape` (primitive fields only) | CLEAN — frame-embedded |
-| `T errors` (ErrorsCapable) | CLEAN — 2-slot {err, ok} frame storage |
+| `union` / `maybe<T>` / `dynamic Contract` | Extract the inner value before `wait`; use the primitive after |
+| `fixed<T>` binding (crossing `wait`) | Redeclare as `array<T>` — heap-allocated, pointer survives suspension |
+| `range` binding (crossing `wait`) | Inline the range in the `for` header: `for (i in range(0,n))` |
+| `MapEntry<K,V>` after `wait` | Read `entry.key`/`entry.value` before `wait`, bind to separate `let k`/`let v`, use those after |
 
-**Workaround**: extract the inner value before the `wait`, or restructure so the `union`, `maybe`, or `dynamic` local is not needed after the suspension.
+**What it costs to lift each**:
+- `union`/`maybe`/`dynamic`: per-type flush/reload strategies (store tag + payload fields to separate frame slots). ~half a session each.
+- `fixed<T>` crossing local: embed the fixed-array bytes directly in the composed heap frame (similar to Shape frame-embedding), using compile-time size to compute slot count. ~1 session.
+- `range` crossing local: store lo/hi bounds as two consecutive i64 frame slots and reconstruct the range alloca on reload. ~half a session.
+- `MapEntry<K,V>`: two consecutive frame slots (mirroring the ErrorsCapable 2-slot path). ~half a session.
 
-**What it costs to lift**: implement per-type flush/reload strategies for `union` (store tag + payload fields to separate frame slots), `maybe<T>` (store the none/some discriminant and inner value separately), and `dynamic Contract` (store the fat-pointer pair). Each is ~half a session once the slot-layout decision is made. This is tracked in `registry/features.toml` as `unsupported-crossing-local-type`.
-
-**Trigger**: a local of type `union`, `maybe<T>`, or `dynamic Contract` that is declared before a `wait` and read after it.
+**Trigger**: a local of any blocked type that is declared before a `wait` and read after it.
 
 ---
 
@@ -404,6 +423,125 @@ A caller that **collects** the result — reads the ok-word and uses the pointed
 **Trigger**: storing or using the return value of a `background`-spawned suspending function whose declared return type is `-> T errors`.
 
 This is tracked in `registry/features.toml` as `ec-wrapper-collect-on-completion`.
+
+---
+
+### `FixedArrayIterWithWait` — `fixed<T>` array iterator in a suspending for-loop (deferred, clean compile error today)
+
+A `for` loop that contains a `wait` cannot use a `fixed<T>` array as its iterator.
+
+```ynz
+// COMPILE ERROR (FixedArrayIterWithWait):
+let flags: fixed<boolean> = [true, false, true]
+for (b in flags) { wait sleep(5) }
+
+// WORKS: use array<T> instead
+let flags: array<boolean> = [true, false, true]
+for (b in flags) { wait sleep(5) }
+```
+
+**Why**: `fixed<T>` arrays are stack-allocated (`build_alloca([N x i64])`) in the current resume-function's stack frame. The crossing-local mechanism stores the array's pointer in the composed heap frame slot via `ptr_to_int`. When a `wait` suspends the function and the resume function returns to the Tokio scheduler, the resume function's stack frame is freed. On the next resume call, the pointer is reloaded from the heap frame slot via `int_to_ptr`, but it now points to freed stack memory. Reading the array elements after the first suspension produces undefined behavior — silently wrong values or memory corruption.
+
+**Workaround**: use `array<T>` instead. `array<T>` is heap-allocated via `ynz_array_new` and its pointer remains valid after suspension.
+
+**What it costs to lift** (~one session): two options: (a) heap-allocate `fixed<T>` when used as a for-loop iterator in a suspending function (changes semantics — fixed arrays would no longer be unconditionally stack-allocated); (b) embed the fixed-array bytes directly in the composed heap frame (similar to Shape crossing-local embedding), using the array size at compile time to compute the slot count. Option (b) is architecturally cleaner but requires computing `size * sizeof(element)` slots and storing bytes in consecutive frame slots.
+
+**Trigger**: a `for` loop whose body contains a `wait` and whose iterator resolves to `Type::BuiltinFixed` — either a variable annotated as `fixed<T>` or an inline `[...]` literal in a `fixed<T>` context.
+
+This is tracked in `registry/features.toml` as `fixed-array-iter-with-wait`.
+
+---
+
+### `StoredRangeWithWait` — stored range variable as a suspending for-loop iterator (deferred, clean compile error today)
+
+A `for` loop that contains a `wait` cannot yet use a stored range variable as its iterator.
+
+```ynz
+// COMPILE ERROR (StoredRangeWithWait):
+let r = range(0, 3)
+for (i in r) { wait sleep(5) }
+
+// WORKS: inline the range in the loop header
+for (i in range(0, 3)) { wait sleep(5) }
+```
+
+**Why**: the state-machine codegen for `for (i in range(...))` calls `extract_range_bounds(iter)`, which requires the iterator to be a literal `range(...)` call expression. For a stored range variable (`let r = range(...); for (i in r)`), the bounds must be recovered from the range's frame-backed alloca. That recovery path is not yet implemented; without the guard the codegen would ICE on "for-loop iter is not a call expression".
+
+**Workaround**: inline the range directly: `for (i in range(0, n)) { ... }`. If `n` is a local that crosses a `wait`, it is already frame-backed and the inline form works without any changes.
+
+**What it costs to lift** (~one session): in the SM range arm of `lower_sm_for`, detect when `iter` is an `Expr::Ident` with a `Type::Range` type, load the start and end from the range struct alloca in the frame (using `build_struct_gep` on the `{i64, i64}` range alloca), and use those values as the loop bounds. The rest of the range-loop SM codegen applies unchanged.
+
+**Trigger**: a `for` loop whose body contains a `wait` and whose iterator is a variable with `Type::Range` — e.g. `let r = range(0,3); for (i in r) { wait sleep(1) }`.
+
+This is tracked in `registry/features.toml` as `stored-range-with-wait`.
+
+---
+
+### `ExpressionIterWithWait` — call-expression iterator in a suspending for-loop (deferred, clean compile error today)
+
+A `for` loop that contains a `wait` cannot yet use a call expression as its iterator.
+
+```ynz
+// COMPILE ERROR (ExpressionIterWithWait):
+for (x in makeArray()) { wait sleep(5) }
+
+// WORKS: bind the collection first
+let items = makeArray()
+for (x in items) { wait sleep(5) }
+```
+
+**Why**: the state-machine codegen calls `lower_expr(iter)` at the loop header to obtain the array pointer and count. For a plain identifier iter, this loads from the frame-backed crossing-local alloca — stable across resumes. For a call-expression iter, this RE-INVOKES the function on every loop header visit (once for the count check, once for the element load per body_bb entry), meaning N+1 calls instead of 1. For expressions with side effects (heap allocation, network I/O), this breaks the one-alloc-per-task invariant and produces wrong behavior.
+
+**Workaround**: bind the collection to a local before the loop. The bound variable becomes a frame-backed crossing local whose pointer survives suspension and is reloaded at each resume.
+
+**What it costs to lift** (~one session): before the loop header, evaluate `lower_expr(iter)` once to obtain the collection pointer, store it in a synthetic frame slot (similar to `__ynz_for_idx_N`), and reload from that slot at the header on each resume instead of re-evaluating the expression. Both the pointer and the count are stable after the first evaluation, so only one frame slot (for the pointer) is needed.
+
+**Trigger**: a `for` loop whose body contains a `wait` and whose iterator is a call expression — e.g. `for (x in makeArray()) { wait sleep(5) }`.
+
+This is tracked in `registry/features.toml` as `expression-iter-with-wait`.
+
+---
+
+### `ArrayShapeRuntimeFieldWithWait` — `array<Shape>` with runtime field values crossing a `wait` (deferred, clean compile error today)
+
+An `array<Shape>` local declared before a `wait` and read after it is permitted in general — the array's heap buffer survives suspension correctly (the YnzArray pointer is stored via `ptr_to_int` in the frame and reloaded on resume). **However**, if the array literal contains elements whose field values are runtime-computed (e.g. `{ id: 1, qty: a }` where `a` is a variable), those element structs are stored as pointers to stack allocas in the constructing resume function's frame. That stack frame is freed when the function suspends; on the next resume the element pointers are dangling, producing undefined behavior (ASLR-varying stack garbage or a crash).
+
+Elements whose fields are ALL compile-time `IntLit` or `BoolLit` values work correctly — codegen emits LLVM module-level globals for those structs (stable, eternal addresses). The guard fires only when at least one element has a runtime-computed field value.
+
+```ynz
+// COMPILE ERROR (ArrayShapeRuntimeFieldWithWait):
+let a: int = 10
+let items: array<Item> = [{ id: 1, qty: a }]   // runtime field: qty = a
+wait sleep(5)
+for (it in items) { print(it.qty.toString()) }
+
+// WORKS: all-literal fields (module-level globals)
+let items2: array<Item> = [{ id: 1, qty: 10 }, { id: 2, qty: 20 }]
+wait sleep(5)
+for (it in items2) { total = total + it.qty }   // total = 30
+
+// WORKS: move the array into a helper function that does not use wait
+// (no suspension in buildItems — the runtime-field construction is safe there)
+function buildItems(qty: int) -> array<Item> {
+    return [{ id: 1, qty: qty }]
+}
+let a: int = 10
+wait sleep(5)
+let items3: array<Item> = buildItems(a)
+for (it in items3) { print(it.qty.toString()) }
+```
+
+**Root cause**: `YnzArray` stores each Shape element as an `i64` pointer to the struct's bytes. The codegen path for runtime-field shapes emits a stack alloca in the current resume function — which is freed on suspension. The permanent fix is **by-value inline element storage**: the array heap buffer stores the shape bytes directly (variable slot size = `sizeof(elem)`), so no pointer indirection is needed and suspension is safe regardless of field values.
+
+**What it costs to lift**: 2–3 sessions — a breaking ABI change to `YnzArray` (add `elem_size`, update `ynz_array_new`/`ynz_array_push`/`ynz_array_get`/`ynz_array_set`, and all codegen call sites). See `design/future/array-by-value-element-storage.md` for the full design.
+
+**Guard scope (conservative)**: the interim guard fires on the full `crossing_names` set from the crossing analysis, which conservatively includes some after-last-wait constructions (e.g. `let items = [...]` declared after a `wait` but iterated by a for-loop, which the crossing analysis tracks as an in-scope reference). The guard intentionally over-rejects these — loud over silent — because distinguishing them precisely would require a more complex pre-suspension-only scan. The `m3c-array-by-value` milestone lifts the guard entirely by making runtime-field elements safe across any suspension.
+
+**Workaround**: use only plain literal field values (`[{ id: 1, qty: 10 }]`), or move the array construction and all its uses into a separate helper function that does not contain any `wait`.
+
+**Trigger**: an `array<Shape>` crossing local whose initializer `ArrayLit` contains at least one `StructLit` element with a non-literal field value. The `ArrayShapeRuntimeFieldWithWait` guard in `crates/ynz-typeck/src/check.rs` (Check 2d) rejects these at compile time.
+
+This is tracked in `registry/features.toml` as `array-shape-runtime-field-with-wait`.
 
 ---
 

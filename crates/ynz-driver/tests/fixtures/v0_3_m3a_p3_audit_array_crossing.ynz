@@ -1,0 +1,9 @@
+// Audit: array<int> crossing local across top-level wait — must be CLEAN (correct output, no crash).
+// array<T> is heap-allocated; its pointer is heap-stable and stored as i64 in the frame slot.
+function entrypoint() -> nothing {
+  let nums: array<int> = [10, 20, 30]
+  wait sleep(5)
+  for (n in nums) {
+    print(n.toString())
+  }
+}

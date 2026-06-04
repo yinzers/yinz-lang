@@ -1,0 +1,11 @@
+// Fixture: per-iteration side effects appear in strict sequence.
+// Prints 0, 1, 2, 3, 4 — any reordering means iterations were parallelized
+// (impossible in M3a, but a codegen bug could cause it). Locks the design doc's
+// "loop iterations sequential by default" invariant for `for` loops.
+// Expected output: 0\n1\n2\n3\n4
+function entrypoint() -> nothing {
+  for (i in range(0, 5)) {
+    print(i.toString())
+    wait sleep(2)
+  }
+}

@@ -1,0 +1,11 @@
+// Fixture: wait inside a for-range loop, checking ordered output.
+// Each iteration pauses, then prints the index. Guards that the loop counter (i)
+// is preserved across suspension (frame-backed via P3 synthetic crossing-local slot)
+// and that exactly 3 iterations run in order.
+// Expected output: 0\n1\n2
+function entrypoint() -> nothing {
+  for (i in range(0, 3)) {
+    wait sleep(5)
+    print(i.toString())
+  }
+}

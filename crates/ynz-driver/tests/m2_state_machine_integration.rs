@@ -903,3 +903,21 @@ fn alloc_counter_while_loop_suspension_one_alloc() {
         "alloc/free must be balanced for while-loop suspension; got alloc={alloc}, free={free}"
     );
 }
+
+#[test]
+fn alloc_counter_for_loop_suspension_one_alloc() {
+    // WHY: a `for` loop over N suspending iterations must use ONE ynz_alloc — same
+    // invariant as the while-loop case. P3's frame-backed for-loop index (synthetic
+    // crossing local in the composed frame) must not allocate separately. Per-iteration
+    // alloc would show alloc=6/free=6; a leak would show alloc>free.
+    let (alloc, free) = run_with_alloc_counter("v0_3_m3a_p3_for_alloc_count.ynz");
+    assert_eq!(
+        alloc, 1,
+        "for-loop suspension must use one ynz_alloc for all iterations; got alloc={}",
+        alloc
+    );
+    assert_eq!(
+        free, alloc,
+        "alloc/free must be balanced for for-loop suspension; got alloc={alloc}, free={free}"
+    );
+}

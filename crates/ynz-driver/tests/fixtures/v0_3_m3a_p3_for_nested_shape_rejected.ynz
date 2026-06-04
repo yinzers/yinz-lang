@@ -1,0 +1,19 @@
+// Check: array<NestedShape> loop var must be CLEAN-REJECTED.
+// NestedShape has a Shape field, which cannot be frame-embedded yet.
+shape Point {
+  x: int
+  y: int
+}
+
+shape Nested {
+  name: string
+  location: Point
+}
+
+function entrypoint() -> nothing {
+  let things: array<Nested> = []
+  for (t in things) {
+    wait sleep(5)
+    print(t.name)
+  }
+}

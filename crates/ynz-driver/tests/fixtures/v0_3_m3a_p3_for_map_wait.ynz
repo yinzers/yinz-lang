@@ -1,0 +1,14 @@
+// Fixture: wait inside a for-over-map loop — all entries must be visited.
+// A counter declared before the loop tracks how many iterations ran; it crosses the
+// suspension boundary and is read after the loop to verify all 3 entries were visited.
+// (The map loop variable is not read after the wait — see plan deviation note.)
+// Expected output: 3
+function entrypoint() -> nothing {
+  let scores: map<string, int> = { `alice`: 90, `bob`: 85, `carol`: 95 }
+  let count: int = 0
+  for (entry in scores) {
+    wait sleep(5)
+    count = count + 1
+  }
+  print(count.toString())
+}

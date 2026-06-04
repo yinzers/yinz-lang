@@ -1,0 +1,11 @@
+// Audit: range binding crossing top-level wait — must be LOUD compile error (exit 1).
+// A stored range is stack-allocated; its pointer dangles after suspension.
+// Iterating the dangling range produces zero iterations (silent wrong output without guard).
+// The UnsupportedCrossingLocalType guard catches this and emits WHAT/WHAT-INSTEAD/WHY.
+function entrypoint() -> nothing {
+  let r = range(0, 3)
+  wait sleep(5)
+  for (i in r) {
+    print(i.toString())
+  }
+}

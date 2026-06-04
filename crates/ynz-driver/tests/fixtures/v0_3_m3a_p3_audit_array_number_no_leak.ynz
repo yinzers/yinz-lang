@@ -1,0 +1,11 @@
+// Audit: array<number> in a suspending function must have alloc==free (no leak).
+// NumberLit decimal128 elements use module-level LLVM globals (eternal address, no heap).
+// Mirrors the non-SM array<number> behavior (alloc=0 for the elements).
+// alloc=1 is for the task frame; free=1 is the frame free. Elements: 0 extra alloc.
+function entrypoint() -> nothing {
+  let prices: array<number> = [1.5, 2.25, 3.125]
+  for (x in prices) {
+    wait sleep(5)
+    print(x.toString())
+  }
+}

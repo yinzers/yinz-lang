@@ -1,0 +1,16 @@
+// Fixture: `for (entry in m) { wait; total += entry.value }` — reading entry.* after wait.
+// Must produce a clean WHAT/WHAT-INSTEAD/WHY compile error (exit 1).
+// MapEntry<K,V> is a {key,value} struct pair; the frame-slot mechanism stores one i64
+// per crossing local and can only preserve field[0] (entry.key). field[1] (entry.value)
+// has no slot and would read garbage after resume.
+// See design/concurrency.md 'UnsupportedCrossingLocalType — map-entry-fields-after-wait'.
+// Workaround: read entry.value BEFORE the wait and bind to a separate let binding.
+function entrypoint() -> nothing {
+  let scores: map<string, int> = { `alice`: 90, `bob`: 85, `carol`: 95 }
+  let total: int = 0
+  for (entry in scores) {
+    wait sleep(5)
+    total = total + entry.value
+  }
+  print(total.toString())
+}

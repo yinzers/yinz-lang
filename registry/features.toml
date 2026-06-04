@@ -1169,6 +1169,69 @@ ships_in = "v0.3-M3b"
 design_doc = "design/concurrency.md"
 triggers = "Storing or reading the return value of a `background`-spawned suspending function whose declared type is `-> T errors` — specifically, using the `background` task handle to collect the completed value"
 
+# --- Stored range variable as a suspending for-loop iterator (design/concurrency.md) ---
+[[deferred_language_feature]]
+name = "stored-range-with-wait"
+substitute = "Inline the range directly in the loop header: `for (i in range(0, n)) { ... }`. If `n` is a local that crosses a `wait`, it is already frame-backed and the inline form works without any extra changes."
+why = "The state-machine codegen for `for (i in range(...))` re-evaluates the range bounds at each loop header by calling `extract_range_bounds(iter)`, which requires the iterator to be a literal `range(...)` call expression. When the iterator is a stored variable (`let r = range(0,3); for (i in r)`), the bounds must be recovered from the range alloca in the composed frame. That recovery path is not yet implemented; the codegen would ICE on 'for-loop iter is not a call expression'. This guard converts the raw ICE into a clean compile error."
+ships_in = "v0.3+"
+design_doc = "design/concurrency.md"
+triggers = "A `for` loop whose body contains a `wait` and whose iterator is an identifier with `Type::Range` — e.g. `let r = range(0,3); for (i in r) { wait sleep(1) }`"
+
+# --- fixed<T> array iterator in a suspending for-loop (design/concurrency.md) ---
+[[deferred_language_feature]]
+name = "fixed-array-iter-with-wait"
+substitute = "Use `array<T>` instead: `let items: array<T> = [...]`. An `array<T>` is heap-allocated so its pointer survives suspension."
+why = "fixed<T> arrays are stack-allocated using LLVM allocas in the current resume-function's stack frame. When a `wait` suspends the function and the resume function returns to the scheduler, that stack frame is freed. On the next resume, the crossing-local frame slot holds the pointer to the old stack-allocated array — a dangling pointer. Reading it is undefined behavior. Two fix paths: (a) heap-allocating fixed arrays (changing their semantics), or (b) a different frame-embedding strategy (store the fixed-array bytes directly in the composed heap frame, similar to how Shape crossing locals work)."
+ships_in = "v0.3+"
+design_doc = "design/concurrency.md"
+triggers = "A `for` loop whose body contains a `wait` and whose iterator resolves to a `fixed<T>` variable or literal — e.g. `let flags: fixed<boolean> = [true,false]; for (b in flags) { wait sleep(1) }`"
+
+# --- Call-expression iterator in a suspending for-loop (design/concurrency.md) ---
+[[deferred_language_feature]]
+name = "expression-iter-with-wait"
+substitute = "Bind the collection to a local variable first: `let items = makeArray()` then `for (x in items) { ... }`. The `items` variable is frame-backed and survives `wait` correctly, and the collection expression is evaluated exactly once."
+why = "The state-machine codegen re-evaluates `lower_expr(iter)` at each loop header visit — once for the element count check and once for the element load — meaning a call-expression iterator would be called once per iteration instead of once total. For expressions with side effects (heap allocation, I/O), this breaks the one-alloc-per-task invariant and produces wrong semantics. Binding the collection first ensures a single evaluation; the bound variable becomes a frame-backed crossing local whose pointer is stable across resumes."
+ships_in = "v0.3+"
+design_doc = "design/concurrency.md"
+triggers = "A `for` loop whose body contains a `wait` and whose iterator is a call expression — e.g. `for (x in makeArray()) { wait sleep(1) }`"
+
+# --- fixed<T> binding (not iter) as a crossing local across a wait (design/concurrency.md) ---
+[[deferred_language_feature]]
+name = "fixed-crossing-local-with-wait"
+substitute = "Declare the variable as `array<T>` instead of `fixed<T>`. An `array<T>` is heap-allocated so its pointer survives suspension across a `wait`."
+why = "fixed<T> values are stack-allocated allocas (LLVM build_alloca) in the resume function's stack frame. When a `wait` suspends the function and the resume function returns to the scheduler, that stack frame is freed. On the next resume call, the crossing-local frame slot holds a dangling pointer to the old stack-allocated array. Reading elements after resume is undefined behavior — silently wrong values or memory corruption. This guard catches `let arr: fixed<T> = ...; wait ...; use(arr)` (the variable itself is the crossing local); the for-loop-iterator form is caught separately by fixed-array-iter-with-wait."
+ships_in = "v0.3+"
+design_doc = "design/concurrency.md"
+triggers = "A `fixed<T>` binding declared before a `wait` and used after — e.g. `let arr: fixed<int> = [1,2,3]; wait sleep(1); for (v in arr) { print(v) }`"
+
+# --- Range binding (not iter) as a crossing local across a wait (design/concurrency.md) ---
+[[deferred_language_feature]]
+name = "range-crossing-local-with-wait"
+substitute = "Inline the range directly in the `for` loop header: `for (i in range(0, n))` instead of binding to a `let` first. An inline `range(...)` call expression is reconstructed on each resume from its literal arguments; a stored range binding is a stack-allocated value whose pointer dangles after suspension."
+why = "A range binding (`let r = range(0,3)`) is stored on the resume function's stack as a pair of bounds. When a `wait` suspends the function and the resume function returns to the scheduler, that stack frame is freed. On the next resume, the crossing-local frame slot holds a dangling stack pointer; iterating that range produces zero iterations (silent wrong output). The iterator form is caught separately by stored-range-with-wait when the wait is inside the loop body; this guard catches the case where the wait is at the TOP LEVEL of the function before the loop (the range crossing a suspension boundary)."
+ships_in = "v0.3+"
+design_doc = "design/concurrency.md"
+triggers = "A `range` binding declared before a top-level `wait` and used as a `for`-loop iterator after the suspension — e.g. `let r = range(0,3); wait sleep(1); for (i in r) { print(i) }`"
+
+# --- Map entry fields (entry.key/entry.value) across a wait (design/concurrency.md) ---
+[[deferred_language_feature]]
+name = "map-entry-fields-after-wait"
+substitute = "Read `entry.key` and `entry.value` before the `wait` and bind them to separate primitive crossing locals (e.g. `let k = entry.key; let v = entry.value`), then use `k` and `v` after the suspension. An outer counter or accumulator that does not access entry fields can cross the wait freely."
+why = "A for-loop variable over a map (`for (entry in m)`) is a {key, value} pair (MapEntry<K,V>). The current frame-slot mechanism assigns one i64 slot per crossing local — sufficient for scalar types (int, bool, float) and pointer types (string, array, map) but not for a two-field pair. Only the first field (entry.key via field[0]) would survive suspension; entry.value (field[1]) would read garbage from an uninitialized frame slot. Full MapEntry frame-backing (two consecutive frame slots, mirroring the ErrorsCapable 2-slot path) ships in a later milestone."
+ships_in = "v0.3+"
+design_doc = "design/concurrency.md"
+triggers = "A `for (entry in map)` loop whose body contains a `wait` and reads `entry.key` or `entry.value` after the suspension — e.g. `for (entry in m) { wait sleep(1); total = total + entry.value }`"
+
+# --- array<Shape> with runtime field values crossing a wait (design/concurrency.md + design/future/array-by-value-element-storage.md) ---
+[[deferred_language_feature]]
+name = "array-shape-runtime-field-with-wait"
+substitute = "Two options work today: (1) Use only plain literal numbers or true/false as field values — `let items = [{ id: 1, qty: 10 }]` works. (2) Move the array and all its uses into a separate helper function that does not contain any `wait` — `function buildItems(qty: int) -> array<Item> { return [{ id: 1, qty: qty }] }` works because there is no suspension in that function. Full support ships in the m3c-array-by-value milestone."
+why = "Each element of an array<Shape> is stored as a reference pointing to memory created while the array is built. When a field value is a simple literal (a plain number or true/false), the compiler places that element in permanent memory that outlives any suspension. When a field value is computed at runtime (a variable, a function call, an expression), the element is placed in temporary memory tied to the current call — that temporary memory is released when the function pauses at a `wait`. On the next resume, the reference points at freed memory, and reading it gives wrong values (stack garbage or a crash). The permanent fix is storing shape bytes directly in the array buffer so no separate reference is needed — this ships in the m3c-array-by-value milestone. See design/future/array-by-value-element-storage.md for the full design."
+ships_in = "v0.3+"
+design_doc = "design/future/array-by-value-element-storage.md"
+triggers = "An `array<Shape>` local declared before a `wait` and read after it (crossing local), where the array literal contains at least one element whose field values are runtime-computed (not compile-time `IntLit` or `BoolLit`). The `ArrayShapeRuntimeFieldWithWait` guard in typeck/check.rs rejects these at compile time with a WHAT/WHAT-INSTEAD/WHY error. Lifted when the m3c-array-by-value milestone ships by-value element storage and removes this guard."
+
 # --- Self-referential shapes (design/future/self-references.md) ---
 [[deferred_language_feature]]
 name = "self-referential-shape"

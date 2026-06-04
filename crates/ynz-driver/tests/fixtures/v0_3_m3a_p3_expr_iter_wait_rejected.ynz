@@ -1,0 +1,15 @@
+// Fixture: call-expression iterator in a suspending for-loop.
+// Must produce a clean WHAT/WHAT-INSTEAD/WHY compile error (exit 1),
+// not silent N×-evaluation of the collection expression.
+// See design/concurrency.md 'ExpressionIterWithWait'.
+function makeItems() -> array<int> {
+  let result: array<int> = [1, 2, 3]
+  return result
+}
+
+function entrypoint() -> nothing {
+  for (x in makeItems()) {
+    wait sleep(5)
+    print(x.toString())
+  }
+}

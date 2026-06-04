@@ -1,0 +1,12 @@
+// Fixture: `fixed<string>` array as iterator in a suspending for-loop.
+// Must produce a clean WHAT/WHAT-INSTEAD/WHY compile error (exit 1).
+// fixed<T> arrays are stack-allocated; their pointer becomes dangling after suspension.
+// See design/concurrency.md 'FixedArrayIterWithWait'.
+// Workaround: use array<string> instead.
+function entrypoint() -> nothing {
+  let names: fixed<string> = [`amy`, `bob`, `carol`]
+  for (n in names) {
+    wait sleep(5)
+    print(n)
+  }
+}

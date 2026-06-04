@@ -1,0 +1,14 @@
+// Fixture: empty for loop (zero iterations) with a suspending body.
+// The loop body (with `wait sleep`) never executes because the array is empty.
+// A local declared before the loop must be readable after it — the frame slot
+// is preserved even when the suspending body never ran.
+// Expected output: 42
+function entrypoint() -> nothing {
+  let result: int = 42
+  let empty: array<int> = []
+  for (x in empty) {
+    wait sleep(5)
+    result = x
+  }
+  print(result.toString())
+}
