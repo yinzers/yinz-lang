@@ -2,7 +2,7 @@
 //
 // relay() calls dispatch(h) where h is `dynamic Handler` — the free-fn form
 // (compare: w.doWork() is the dot-call form tested by the existing dynamic-dispatch
-// fixture). relay() is NON-suspending: it has no `wait`, no calls to sleepAsync,
+// fixture). relay() is NON-suspending: it has no `wait`, no calls to sleep,
 // and the transitive may-block analysis does not reach any blocking primitive.
 //
 // The free-fn gate at check.rs checks `current_fn_suspends` before emitting the

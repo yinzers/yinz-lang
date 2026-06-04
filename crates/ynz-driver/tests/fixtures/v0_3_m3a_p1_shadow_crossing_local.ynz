@@ -1,0 +1,14 @@
+// Fixture: shadowing guard — a `let x` inside a nested if body shadows a crossing
+// local `x` that crosses a `wait`. Yinz rejects this with a compile error because
+// two bindings of the same name across a suspension boundary is ambiguous.
+// Expected: exit 1, diagnostic mentions "declared again" and "crosses a `wait`".
+function entrypoint() -> nothing {
+  let x = 10
+  wait sleep(5)
+  if (1 == 1) {
+    let x = 99
+    print(x.toString())
+  }
+  wait sleep(5)
+  print(x.toString())
+}

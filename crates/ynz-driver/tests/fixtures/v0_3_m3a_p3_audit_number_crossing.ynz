@@ -1,0 +1,7 @@
+// Audit: number (decimal128) crossing local across top-level wait — must be CLEAN (exact value).
+// decimal128 uses 2 consecutive i64 frame slots (lo+hi halves of the i128 bits).
+function entrypoint() -> nothing {
+  let price: number = 0.1 + 0.2
+  wait sleep(5)
+  print(price.toString())
+}

@@ -170,7 +170,7 @@ pub struct RuntimeDecls<'ctx> {
     pub ynz_rt_check_preempt: FunctionValue<'ctx>,
     // ynz_rt_shutdown() → void  — drain runtime at main exit (shutdown_timeout 5s)
     pub ynz_rt_shutdown: FunctionValue<'ctx>,
-    // ynz_thread_sleep_ms(ms: i64) → void  — blocking sleep; used by sleepMs() intrinsic
+    // ynz_thread_sleep_ms(ms: i64) → void  — blocking sleep; used by sleepBlocking() intrinsic
     pub ynz_thread_sleep_ms: FunctionValue<'ctx>,
 
     // ── v0.3-M2: async state-machine runtime ─────────────────────────────

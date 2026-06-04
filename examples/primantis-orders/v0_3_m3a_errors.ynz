@@ -1,0 +1,206 @@
+// v0.3-M3a compile-error gallery
+//
+// Every block below intentionally triggers a diagnostic class added or retained
+// in v0.3-M3a. Run `ynz build v0_3_m3a_errors.ynz` to see all diagnostics.
+// Yinz reports up to 50 diagnostics per compile so a single run surfaces all.
+//
+// Each block has a // WHY: comment naming the diagnostic class it exercises.
+//
+// Permanent kept guards (fire for all future milestones):
+//   SubExprSuspendViolation       — suspending call nested inside a larger expression.
+//   MutualSuspensionCycle         — two distinct suspending functions that call each other.
+//
+// Deferred guards (lifted by named future milestones):
+//   ShadowsCrossingLocal           — shadow of a crossing local inside a nested scope.
+//   NestedShapeCrossing            — shape with a nested-shape field crosses a wait.
+//   WideValueSuspendingReturn      — suspending fn returns a shape value by value.
+//   UnsupportedCrossingLocalType   — maybe/union/dynamic crosses a wait.
+//   FixedArrayIterWithWait         — fixed<T> used as for-iterator with a wait in body.
+//   StoredRangeWithWait            — range bound to a local then iterated with a wait.
+//   MapEntryFieldAfterWait         — entry.value read after a wait in for-over-map.
+//   ArrayShapeRuntimeFieldWithWait — array<Shape> with runtime-computed field crosses a wait.
+
+// ── Permanent Guard 1: SubExprSuspendViolation ────────────────────────────────
+//
+// WHY: SubExprSuspendViolation — `fetchRating()` is a suspending call nested inside
+// a larger expression (`1 + fetchRating()`). Yinz compiles each suspending call as
+// its own state-machine step; the step-by-step style — one operation per line with
+// a named variable — is the language's deliberate design (Golden Rule 7) and enables
+// the compiler to auto-parallelize independent statements in a future release.
+// Fix: `let r = wait fetchRating()` then use `r` in the expression.
+
+function fetchRating() -> int {
+  wait sleep(10)
+  return 92
+}
+
+function displayAdjusted(pts: int) -> nothing {
+  let adjusted = pts + fetchRating()    // WHY: SubExprSuspendViolation — suspending call inside arithmetic
+  print(adjusted.toString())
+}
+
+// ── Permanent Guard 2: MutualSuspensionCycle ──────────────────────────────────
+//
+// WHY: MutualSuspensionCycle — `pingRoster` and `pongRoster` are two different
+// suspending functions that call each other. Self-recursion (a single function
+// calling itself) works correctly. A mutual cycle between distinct suspending
+// functions creates an interleaved frame layout that cannot be safely freed on
+// cancellation. Restructure so only one function suspends, or extract shared
+// logic into a self-recursive helper.
+
+function pingRoster(n: int) -> nothing {
+  wait sleep(5)
+  pongRoster(n - 1)                     // WHY: MutualSuspensionCycle — mutual call with pongRoster
+}
+
+function pongRoster(n: int) -> nothing {
+  wait sleep(5)
+  pingRoster(n - 1)                     // WHY: MutualSuspensionCycle — mutual call with pingRoster
+}
+
+// ── Deferred Guard 1: ShadowsCrossingLocal ────────────────────────────────────
+//
+// WHY: ShadowsCrossingLocal — `subtotal` is declared before the wait (it crosses
+// the suspension boundary) and then re-declared inside the `if` body with the same
+// name. Across a `wait`, one name must mean one value. Rename the inner binding
+// (e.g. `discountedSubtotal`) to resolve.
+
+shape OrderItem {
+  price: int
+  quantity: int
+}
+
+function processOrder(basePrice: int, qty: int) -> nothing {
+  let subtotal = basePrice * qty
+  wait sleep(10)
+  if (qty > 10) {
+    let subtotal = subtotal - 5         // WHY: ShadowsCrossingLocal — rename to `discountedSubtotal`
+    print(subtotal.toString())
+  }
+  print(subtotal.toString())
+}
+
+// ── Deferred Guard 2: NestedShapeCrossing ─────────────────────────────────────
+//
+// WHY: NestedShapeCrossing — `OrderLine` has a nested shape field (`item: OrderItem`).
+// Frame-embedding for shapes with nested-shape fields is deferred: the inner shape
+// is stored as a pointer to a stack buffer that becomes invalid after `wait` suspends
+// and resumes the function. Flatten the nested fields to work around this.
+
+shape OrderLine {
+  item: OrderItem
+  quantity: int
+}
+
+function shipOrder(unitPrice: int) -> nothing {
+  let line: OrderLine = { item: { price: unitPrice, quantity: 1 }, quantity: 3 }
+  wait sleep(10)
+  print(line.quantity.toString())       // WHY: NestedShapeCrossing — OrderLine has nested OrderItem field
+}
+
+// ── Deferred Guard 3: WideValueSuspendingReturn ───────────────────────────────
+//
+// WHY: WideValueSuspendingReturn — a suspending function returning `Item` by value
+// needs a variable-size frame staging slot entangled with the shape-return base fix.
+// Deferred to a later milestone. Workaround: return primitive fields individually.
+// Note: `-> number errors` (decimal128 EC) IS supported — only Shape returns are deferred.
+
+shape Item {
+  price: int
+}
+
+function suspendingReturnShape() -> Item {
+  wait sleep(5)
+  let i: Item = { price: 99 }
+  return i                              // WHY: WideValueSuspendingReturn — `-> Item` from suspending fn
+}
+
+function suspendingReturnShapeErrors() -> Item errors {
+  wait sleep(5)
+  let i: Item = { price: 99 }
+  return i                              // WHY: WideValueSuspendingReturn — `-> Item errors` from suspending fn
+}
+
+// ── Deferred Guard 4: UnsupportedCrossingLocalType (maybe) ───────────────────
+//
+// WHY: UnsupportedCrossingLocalType — `adjusted` is a `maybe<int>` that crosses a
+// `wait`. The frame-slot save/restore for `union`, `maybe`, and `dynamic` values is
+// not yet implemented: these types are pointers to stack-allocated tag+payload pairs
+// that become invalid after suspension. Extract the inner value before the `wait`.
+
+function processQuantity(qty: int) -> nothing {
+  let adjusted: maybe<int> = qty.toString().toInt()
+  wait sleep(5)
+  let val = adjusted.or(0)             // WHY: UnsupportedCrossingLocalType — maybe<int> crosses wait
+  print(val.toString())
+}
+
+// ── Deferred Guard 5: FixedArrayIterWithWait ──────────────────────────────────
+//
+// WHY: FixedArrayIterWithWait — `ratings` is a `fixed<int>` array used as a
+// for-iterator whose body contains a `wait`. `fixed<T>` is stack-allocated; its
+// pointer becomes dangling when the function suspends and resumes in a new call
+// frame. Use `array<int>` instead — heap-allocated pointers survive suspension.
+
+function scanFixed() -> nothing {
+  let ratings: fixed<int> = [85, 92, 78]
+  for (r in ratings) {
+    wait sleep(5)                       // WHY: FixedArrayIterWithWait — fixed<int> iter + wait in body
+    print(r.toString())
+  }
+}
+
+// ── Deferred Guard 6: StoredRangeWithWait ─────────────────────────────────────
+//
+// WHY: StoredRangeWithWait — `r` is a range bound to a local and then iterated in
+// a `for` whose body has a `wait`. Recovering range bounds from a frame-backed alloca
+// is not yet implemented. Inline the range directly: `for (i in range(0, 3))`.
+
+function scanStoredRange() -> nothing {
+  let r = range(0, 3)
+  for (i in r) {
+    wait sleep(5)                       // WHY: StoredRangeWithWait — stored range local + wait in body
+    print(i.toString())
+  }
+}
+
+// ── Deferred Guard 7: MapEntryFieldAfterWait ──────────────────────────────────
+//
+// WHY: MapEntryFieldAfterWait — `entry.value` is read AFTER a `wait` inside a
+// `for (entry in map)` body. The MapEntry iterator struct is not yet 2-slot
+// frame-backed; its fields yield a dangling pointer after suspension.
+// Read entry fields before the `wait`, or accumulate into an outer crossing local.
+
+function scanMap() -> nothing {
+  let scores: map<string, int> = { `clemente`: 3000, `wagner`: 3420 }
+  let total: int = 0
+  for (entry in scores) {
+    wait sleep(5)
+    total = total + entry.value         // WHY: MapEntryFieldAfterWait — entry.value read after wait
+  }
+  print(total.toString())
+}
+
+// ── Deferred Guard 8: ArrayShapeRuntimeFieldWithWait ──────────────────────────
+//
+// WHY: ArrayShapeRuntimeFieldWithWait — `roster` is an `array<Scout>` crossing a
+// `wait`. Its literal has a runtime-computed field (`baseRating + 5`), not a
+// compile-time literal. The conservative guard rejects this to avoid unsafe pointer
+// reuse across suspension. Use all-literal field values, or build and use the array
+// in a separate non-suspending helper. This guard lifts when the m3c-array-by-value
+// milestone ships by-value inline element storage.
+
+shape Scout {
+  name: string
+  rating: int
+}
+
+function processRoster(scoutRating: int) -> nothing {
+  let roster: array<Scout> = [{ name: `clemente`, rating: scoutRating + 5 }]
+  wait sleep(5)                         // WHY: ArrayShapeRuntimeFieldWithWait — runtime field in array<Scout>
+  print(roster.count().toString())
+}
+
+function entrypoint() -> nothing {
+  processOrder(8, 12)
+}

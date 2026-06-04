@@ -1,0 +1,10 @@
+// Audit: fixed<int> crossing local across top-level wait — must be LOUD compile error (exit 1).
+// fixed<T> is stack-allocated; its pointer dangles after suspension.
+// UnsupportedCrossingLocalType fires; use array<T> (heap) instead.
+function entrypoint() -> nothing {
+  let arr: fixed<int> = [1, 2, 3]
+  wait sleep(5)
+  for (v in arr) {
+    print(v.toString())
+  }
+}

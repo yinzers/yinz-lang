@@ -400,22 +400,22 @@ fn check_preempt_noop_per_call_cost_acceptable() {
 }
 
 // ---------------------------------------------------------------------------
-// Measurement: sleepMs intrinsic accuracy.
+// Measurement: sleepBlocking intrinsic accuracy.
 // ---------------------------------------------------------------------------
 
-// WHY: sleepMs is used in the timing fixture for timing-observable tests.
+// WHY: sleepBlocking is used in the timing fixture for timing-observable tests.
 // Verify it actually sleeps approximately the right duration.
 #[test]
-fn sleep_ms_approximately_correct() {
+fn sleep_blocking_approximately_correct() {
     let start = Instant::now();
     ynz_thread_sleep_ms(50);
     let elapsed = start.elapsed();
     assert!(
         elapsed >= Duration::from_millis(40),
-        "sleepMs(50) returned too fast: {elapsed:?}"
+        "sleepBlocking(50) returned too fast: {elapsed:?}"
     );
     assert!(
         elapsed < Duration::from_millis(500),
-        "sleepMs(50) took too long: {elapsed:?}"
+        "sleepBlocking(50) took too long: {elapsed:?}"
     );
 }

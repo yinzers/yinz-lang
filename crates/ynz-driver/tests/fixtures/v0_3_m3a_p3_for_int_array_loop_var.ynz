@@ -1,0 +1,11 @@
+// Fixture: `array<int>` loop var across a wait — verifies the loop variable survives
+// suspension correctly for heap-allocated collections (pointer type, stable across frames).
+// The loop variable `x` is read AFTER the wait in each iteration.
+// Expected output: 10\n20\n30
+function entrypoint() -> nothing {
+  let nums: array<int> = [10, 20, 30]
+  for (x in nums) {
+    wait sleep(5)
+    print(x.toString())
+  }
+}

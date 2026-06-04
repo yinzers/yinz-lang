@@ -3,7 +3,7 @@
 //! # What this computes
 //!
 //! A function `suspends` if it can reach a suspension point: either it directly
-//! calls a may-block intrinsic (`sleepAsync`, `__testFallibleAsync`) or it calls
+//! calls a may-block intrinsic (`sleep`, `__testFallibleAsync`) or it calls
 //! another function that `suspends`. The property propagates up the call graph to
 //! a fixpoint.
 //!
@@ -146,11 +146,11 @@ struct FnEdges {
     /// Contains only user-defined function names (intra-unit callees). May-block
     /// intrinsics are tracked separately via `calls_may_block_intrinsic` so that
     /// the seed step is a boolean check, not a name scan. Keeping them separate
-    /// also prevents a user function named `sleepAsync` from false-positiving
+    /// also prevents a user function named `sleep` from false-positiving
     /// into the seed set via name collision.
     direct: Vec<String>,
     /// True when this function makes a non-background call to a may-block
-    /// intrinsic (`sleepAsync`, `__testFallibleAsync`).
+    /// intrinsic (`sleep`, `__testFallibleAsync`).
     calls_may_block_intrinsic: bool,
 }
 
@@ -446,7 +446,7 @@ fn collect_calls_in_expr(
                     if local_fns.contains(&name) {
                         // Intra-unit user-defined function — add a propagation edge.
                         // User-defined fns shadow intrinsics of the same name, so this branch
-                        // must come BEFORE the intrinsic check. A function named `sleepAsync`
+                        // must come BEFORE the intrinsic check. A function named `sleep`
                         // that does not itself call the intrinsic is NOT a suspension source.
                         if !edges.direct.contains(&name) {
                             edges.direct.push(name.clone());
@@ -454,7 +454,7 @@ fn collect_calls_in_expr(
                     } else if M2_MAY_BLOCK_INTRINSICS.contains(&name.as_str()) {
                         // May-block intrinsic (not shadowed by a local fn of the same name) —
                         // record the boolean flag. This avoids putting intrinsic names into
-                        // `direct`, which would cause a user function named `sleepAsync` to
+                        // `direct`, which would cause a user function named `sleep` to
                         // false-positive via name collision in the seed step.
                         edges.calls_may_block_intrinsic = true;
                     } else if imported_fns.contains(&name) {
@@ -866,14 +866,14 @@ function entrypoint() -> nothing {
         let suspends = suspends_set(
             r#"
 function pause() -> nothing {
-    wait sleepAsync(100)
+    wait sleep(100)
 }
 function entrypoint() -> nothing { }
 "#,
         );
         assert!(
             suspends.contains("pause"),
-            "direct sleepAsync caller must be suspends"
+            "direct sleep caller must be suspends"
         );
         assert!(
             !suspends.contains("entrypoint"),
@@ -886,7 +886,7 @@ function entrypoint() -> nothing { }
         let suspends = suspends_set(
             r#"
 function inner() -> nothing {
-    wait sleepAsync(50)
+    wait sleep(50)
 }
 function outer() -> nothing {
     inner()
@@ -913,12 +913,12 @@ function entrypoint() -> nothing {
 
     #[test]
     fn background_decouples_propagation() {
-        // A function whose ONLY path to sleepAsync is through `background`
+        // A function whose ONLY path to `sleep` is through `background`
         // does not itself suspend — it fires and forgets.
         let suspends = suspends_set(
             r#"
 function worker() -> nothing {
-    wait sleepAsync(100)
+    wait sleep(100)
 }
 function launcher() -> nothing {
     background worker()
@@ -939,7 +939,7 @@ function entrypoint() -> nothing { }
 
     #[test]
     fn cyclic_call_graph_converges() {
-        // Mutual recursion: a() calls b(), b() calls a(). Neither reaches sleepAsync.
+        // Mutual recursion: a() calls b(), b() calls a(). Neither reaches `sleep`.
         let suspends = suspends_set(
             r#"
 function a() -> nothing { b() }
@@ -956,11 +956,11 @@ function entrypoint() -> nothing { }
             "b (cycle, no may-block) must NOT be suspends"
         );
 
-        // Mutual recursion where one reaches sleepAsync — both should be suspends.
+        // Mutual recursion where one reaches `sleep` — both should be suspends.
         let suspends2 = suspends_set(
             r#"
 function a() -> nothing { b() }
-function b() -> nothing { wait sleepAsync(10); a() }
+function b() -> nothing { wait sleep(10); a() }
 function entrypoint() -> nothing { }
 "#,
         );
@@ -999,7 +999,7 @@ function entrypoint() -> nothing {
         let suspends = suspends_set(
             r#"
 function worker(n: int) -> nothing {
-    wait sleepAsync(n)
+    wait sleep(n)
 }
 function compute() -> int {
     return 5
@@ -1031,7 +1031,7 @@ function entrypoint() -> nothing { }
             r#"
 function maybePause(flag: bool) -> nothing {
     if (flag) {
-        wait sleepAsync(50)
+        wait sleep(50)
     }
 }
 function caller() -> nothing {
@@ -1069,30 +1069,30 @@ function entrypoint() -> nothing {
     }
 
     #[test]
-    fn user_fn_named_sleep_async_is_not_suspends_without_intrinsic_call() {
+    fn user_fn_named_sleep_is_not_suspends_without_intrinsic_call() {
         // WHY: guards against the name-collision class where a user function named
-        // exactly `sleepAsync` would false-positive into the seed set because the
+        // exactly `sleep` would false-positive into the seed set because the
         // old implementation pushed intrinsic names into `direct` and the seed step
         // scanned `direct` for intrinsic names. With `calls_may_block_intrinsic: bool`,
         // only a real intrinsic CALL sets the flag — a function whose NAME matches an
         // intrinsic but whose body calls nothing does not.
         let suspends = suspends_set(
             r#"
-function sleepAsync(ms: int) -> nothing {
+function sleep(ms: int) -> nothing {
     print(`this is a user fn, not the intrinsic`)
 }
 function entrypoint() -> nothing {
-    sleepAsync(100)
+    sleep(100)
 }
 "#,
         );
         assert!(
-            !suspends.contains("sleepAsync"),
-            "user fn named sleepAsync without an intrinsic call must NOT be suspends"
+            !suspends.contains("sleep"),
+            "user fn named sleep without an intrinsic call must NOT be suspends"
         );
         assert!(
             !suspends.contains("entrypoint"),
-            "caller of user-fn-named-sleepAsync without intrinsic must NOT be suspends"
+            "caller of user-fn-named-sleep without intrinsic must NOT be suspends"
         );
     }
 }

@@ -1,0 +1,23 @@
+// Fixture: a `maybe<int>` local that crosses a `wait` must be rejected with a clean
+// compile error — not a raw LLVM ICE or SIGSEGV.
+//
+// WHY: UnsupportedCrossingLocalType guard (Round-22 FIX d). Before this guard, a
+// `maybe<int>` crossing local fell into the generic pointer flush/reload path in codegen,
+// which stored and reloaded a pointer to a {tag, payload} alloca on the resume function's
+// stack. After suspension and resume, the stack frame is gone and the pointer is dangling —
+// LLVM detected the SSA dominance violation and produced a raw ICE. The guard converts
+// this into a clean compile error before codegen runs.
+//
+// Expected: exit code 1, diagnostic says "cannot yet cross a `wait`".
+// Expected: no stdout (compile error, no binary produced).
+// Expected: no LLVM ICE text ("Instruction does not dominate" / "LLVM ERROR") in stderr.
+// Expected: no binary produced (SIGSEGV is impossible when no binary exists).
+function sleepWithMaybe() -> nothing {
+  let m: maybe<int> = `42`.toInt()
+  wait sleep(5)
+  print(m.or(0).toString())
+}
+
+function entrypoint() -> nothing {
+  sleepWithMaybe()
+}

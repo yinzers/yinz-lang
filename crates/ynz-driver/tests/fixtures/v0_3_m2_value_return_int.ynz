@@ -2,7 +2,7 @@
 // Verifies Bug A fix: resume fn can return typed int through the return slot.
 
 function compute() -> int {
-  wait sleepAsync(5)
+  wait sleep(5)
   return 42
 }
 

@@ -1,0 +1,7 @@
+// Audit: string crossing local across top-level wait — must be CLEAN (correct output, no crash).
+// string is a heap-stable pointer; flush stores ptr_to_int to frame slot, reload uses int_to_ptr.
+function entrypoint() -> nothing {
+  let s: string = `hello world`
+  wait sleep(5)
+  print(s)
+}

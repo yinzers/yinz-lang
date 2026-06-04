@@ -6,12 +6,12 @@
 // scheduling the task. The test verifies `main done` appears within 50ms
 // and `background done` appears after (ordering proves separate-thread scheduling).
 //
-// NOTE: sleepMs (NOT wait) — `wait` stays synchronous in M1 (state machines ship
-// in v0.3-M2). sleepMs is the v0.3-M1 Yinz intrinsic that calls the blocking
+// NOTE: sleepBlocking (NOT wait) — `wait` stays synchronous in M1 (state machines ship
+// in v0.3-M2). sleepBlocking is the v0.3-M1 Yinz intrinsic that calls the blocking
 // sleep helper on the background thread pool.
 
 function recordEvent() -> nothing {
-  sleepMs(200)
+  sleepBlocking(200)
   print(`background done`)
 }
 

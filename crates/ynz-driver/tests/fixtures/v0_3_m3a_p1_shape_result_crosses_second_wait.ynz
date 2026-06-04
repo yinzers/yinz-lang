@@ -1,0 +1,32 @@
+// Fixture: suspending `-> Point` (bare shape return) must be rejected at compile time.
+//
+// WHY: WideValueSuspendingReturn guard (Round 20). `makePoint` is a suspending function
+// returning `-> Point`. The non-crossing shape staging path previously wrote bytes to
+// FRAME_OFFSET_LOCALS_START (offset 32), where child sub-frames are embedded — this
+// clobbers child frame data in the general case, causing a SIGSEGV at resume.
+// The guard rejects all `-> Shape` returns from suspending functions conservatively
+// until a dedicated staging slot is implemented in the frame layout.
+//
+// Note: `r` in `entrypoint` as a CROSSING LOCAL (declared before wait, read after) is
+// a separate concern and would still work — but `makePoint`'s `-> Point` return type
+// causes the rejection first.
+//
+// Expected: exit code 1, diagnostic mentions the shape type.
+// Expected: no stdout (compile error, no binary produced).
+shape Point {
+  x: int
+  y: int
+}
+
+function makePoint(a: int, b: int) -> Point {
+  wait sleep(5)
+  let p: Point = { x: a, y: b }
+  return p
+}
+
+function entrypoint() -> nothing {
+  let r = wait makePoint(3, 7)
+  wait sleep(5)
+  let sum = r.x + r.y
+  print(sum.toString())
+}

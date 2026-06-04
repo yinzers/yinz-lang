@@ -10,7 +10,7 @@
 // isolation property: background task completing normally, main exits 0.
 
 function backgroundWork() -> nothing {
-  sleepMs(50)
+  sleepBlocking(50)
   print(`background finished`)
 }
 

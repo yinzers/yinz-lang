@@ -1,0 +1,14 @@
+// Fixture (j): conditionally-defined crossing local.
+// `initial` is declared before the if block; `extra` is mutated inside an
+// `if` arm before the wait. Both must be frame-backed and readable after
+// the suspension. Correct output: 15 (initial=10 + extra=5).
+function entrypoint() -> nothing {
+  let initial: int = 10
+  let extra: int = 0
+  if (initial > 5) {
+    extra = 5
+  }
+  wait sleep(5)
+  let result: int = initial + extra
+  print(result.toString())
+}

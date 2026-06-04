@@ -8,6 +8,21 @@ use std::path::PathBuf;
 use ynz_codegen::{codegen_query, sha256, CompiledArtifact};
 use ynz_parser::{CompilerDb, SourceFile};
 
+const NON_CROSSING_LOCAL_FILE: &str = "v0_3_m3a_p1_non_crossing_local_not_slotted.ynz";
+
+/// Read the non-crossing-local fixture source from disk.
+///
+/// The fixture file is the single source of truth for this program. Reading it directly
+/// avoids maintaining a parallel inline copy that can silently diverge if the fixture
+/// changes — one definition, one place to update.
+fn non_crossing_local_source() -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../ynz-driver/tests/fixtures")
+        .join(NON_CROSSING_LOCAL_FILE);
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))
+}
+
 const FILE: &str = "hello.ynz";
 // test-ratchet: M7 P1 migrates double-quoted string to backtick syntax — double-quotes now
 // produce an error diagnostic, so any test source must use backticks. The golden SHA-256
@@ -174,6 +189,47 @@ fn sha256_of_abc_matches_known_value() {
         sha256(b"abc"),
         expected,
         "SHA-256 of \"abc\" must match FIPS test vector"
+    );
+}
+
+#[test]
+fn non_crossing_local_not_frame_slotted_ir_inspection() {
+    // WHY: AC#8 — a local that is read only BEFORE a `wait` must NOT receive a frame slot.
+    // The frame-slot system pre-creates allocas only for locals in `crossing_local_names`
+    // (declared before a suspension AND read after it). `setup=99` here is read before the
+    // wait and never referenced after, so it must not be in that set.
+    //
+    // The IR signal: frame-slot stores use the GEP name `ls_{slot_index}` (from
+    // `store_local_slot`). A function with zero crossing locals emits no `ls_0`, `ls_1`, etc.
+    // If `setup` were spuriously slotted it would appear as `ls_0` in the IR. Asserting
+    // its ABSENCE proves non-crossing locals stay in SSA registers — no frame overhead.
+    //
+    // This test would FAIL if `flush_crossing_local_if_needed` were changed to slot every
+    // local instead of only crossing locals — making it mutation-resistant.
+    let db = CompilerDb::default();
+    let sf = SourceFile::new(
+        &db,
+        NON_CROSSING_LOCAL_FILE.to_string(),
+        non_crossing_local_source(),
+    );
+    let output = codegen_query(&db, sf);
+    assert!(
+        !output.diagnostics.has_errors(),
+        "Non-crossing-local source must compile clean; has errors: {:#?}",
+        output.diagnostics
+    );
+    let ir = &output.artifact.ir_text;
+    // Frame-slot store GEP names follow the `ls_{idx}` pattern (state_machine.rs store_local_slot).
+    // A function with no crossing locals emits none of these names.
+    assert!(
+        !ir.contains("ls_0"),
+        "Non-crossing local `setup` must NOT be frame-slotted; found `ls_0` in IR.\n\
+         This means `flush_crossing_local_if_needed` slotted a non-crossing local — \
+         fix `crossing_local_names` to exclude locals that are never read after a wait."
+    );
+    assert!(
+        !ir.contains("ls_1"),
+        "Non-crossing local `setup` must NOT be frame-slotted; found `ls_1` in IR."
     );
 }
 
@@ -451,7 +507,7 @@ fn m3_codegen_query_returns_no_diagnostics_on_valid_m3_source() {
 
 const V03_M1_BACKGROUND_SOURCE: &str = r#"
 function worker() -> nothing {
-  sleepMs(1)
+  sleepBlocking(1)
 }
 
 function entrypoint() -> nothing {
@@ -544,11 +600,11 @@ fn v03_m2_single_wait_ir_snapshot() {
     // this snapshot fails and the reviewer can audit the diff.
     let source = r#"
 function pause() -> nothing {
-  wait sleepAsync(100)
+  wait sleep(100)
 }
 function entrypoint() -> nothing {
   background pause()
-  sleepMs(200)
+  sleepBlocking(200)
 }
 "#;
     let ir = run_m2_sm_codegen("v03m2_single_wait.ynz", source);
@@ -576,12 +632,12 @@ fn v03_m2_multi_wait_ir_snapshot() {
     // A regression in state-block numbering or resume_point tracking will appear here.
     let source = r#"
 function chain() -> nothing {
-  wait sleepAsync(50)
-  wait sleepAsync(50)
+  wait sleep(50)
+  wait sleep(50)
 }
 function entrypoint() -> nothing {
   background chain()
-  sleepMs(200)
+  sleepBlocking(200)
 }
 "#;
     let ir = run_m2_sm_codegen("v03m2_multi_wait.ynz", source);
@@ -606,12 +662,12 @@ fn v03_m2_wait_in_if_ir_snapshot() {
     let source = r#"
 function maybeWait(b: boolean) -> nothing {
   if (b) {
-    wait sleepAsync(100)
+    wait sleep(100)
   }
 }
 function entrypoint() -> nothing {
   background maybeWait(true)
-  sleepMs(200)
+  sleepBlocking(200)
 }
 "#;
     let ir = run_m2_sm_codegen("v03m2_wait_in_if.ynz", source);
@@ -644,7 +700,7 @@ fn v03_m2_non_sm_caller_block_on_ir_snapshot() {
     // the program silently returns wrong values.
     let source = r#"
 function sleeper() -> nothing {
-  wait sleepAsync(100)
+  wait sleep(100)
 }
 function entrypoint() -> nothing {
   sleeper()
@@ -667,7 +723,7 @@ fn v03_m2_main_with_wait_ir_snapshot() {
     // with "ynz_rt_init not called before ynz_rt_run_entrypoint call".
     let source = r#"
 function entrypoint() -> nothing {
-  wait sleepAsync(1)
+  wait sleep(1)
 }
 "#;
     let ir = run_m2_sm_codegen("v03m2_main_with_wait.ynz", source);
@@ -689,11 +745,11 @@ fn v03_m2_background_spawn_sm_fn_ir_snapshot() {
     // state machines would tie up OS threads during their wait, defeating M2.
     let source = r#"
 function worker() -> nothing {
-  wait sleepAsync(100)
+  wait sleep(100)
 }
 function entrypoint() -> nothing {
   background worker()
-  sleepMs(200)
+  sleepBlocking(200)
 }
 "#;
     let ir = run_m2_sm_codegen("v03m2_bg_spawn_sm.ynz", source);
@@ -730,11 +786,11 @@ fn v03_m2_background_spawn_regular_fn_ir_snapshot() {
     // This is the M1 behavior that must not regress when M2 routing is added.
     let source = r#"
 function worker() -> nothing {
-  sleepMs(100)
+  sleepBlocking(100)
 }
 function entrypoint() -> nothing {
   background worker()
-  sleepMs(200)
+  sleepBlocking(200)
 }
 "#;
     let ir = run_m2_sm_codegen("v03m2_bg_regular.ynz", source);
@@ -761,7 +817,7 @@ fn main_rt_init_is_first_instruction() {
     // `call void @ynz_rt_spawn` instruction in main's text.
     let source = r#"
 function entrypoint() -> nothing {
-  wait sleepAsync(1)
+  wait sleep(1)
 }
 "#;
     let ir = run_m2_sm_codegen("v03m2_rt_init_first.ynz", source);

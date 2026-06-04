@@ -6,7 +6,7 @@
 // WHY: verifies the HALT-class hole is closed at typeck.
 
 function inner() -> int {
-    wait sleepAsync(10)
+    wait sleep(10)
     return 5
 }
 

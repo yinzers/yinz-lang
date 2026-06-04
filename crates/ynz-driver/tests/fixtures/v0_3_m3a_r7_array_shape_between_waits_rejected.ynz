@@ -1,0 +1,24 @@
+// WHY: under-rejection hole in the R6 pre-check — an array<Shape> whose `let` binding
+// is declared BETWEEN two waits (after the first wait, before the second) was silently
+// miscompiling: the old pre-check returned false (not before the first wait at top level)
+// and skipped the guard, so the second wait dangled the element pointers. After deleting
+// the pre-check, `items` is in `crossings` (there IS a wait after its declaration) and
+// the guard must fire with exit 1.
+// See design/concurrency.md 'ArrayShapeRuntimeFieldWithWait'.
+shape Item {
+  id: int
+  qty: int
+}
+
+function entrypoint() -> nothing {
+  let a: int = 10
+  let b: int = 20
+  wait sleep(5)
+  let items: array<Item> = [{ id: 1, qty: a }, { id: 2, qty: b }]
+  let total: int = 0
+  wait sleep(5)
+  for (it in items) {
+    total = total + it.qty
+  }
+  print(total.toString())
+}

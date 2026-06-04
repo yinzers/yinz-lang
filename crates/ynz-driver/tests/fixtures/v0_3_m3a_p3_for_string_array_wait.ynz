@@ -1,0 +1,10 @@
+// Fixture: `array<string>` loop variable in a suspending for-loop.
+// Each string element must survive the wait via ptr_to_int/int_to_ptr frame flush/reload.
+// Guards the pointer-backed type path in flush_for_loop_var.
+function entrypoint() -> nothing {
+  let names: array<string> = [`amy`, `bob`, `cy`]
+  for (n in names) {
+    wait sleep(5)
+    print(n)
+  }
+}

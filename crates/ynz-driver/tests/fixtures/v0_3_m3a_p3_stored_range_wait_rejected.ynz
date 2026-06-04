@@ -1,0 +1,11 @@
+// Fixture: stored range variable as iterator in a suspending for-loop.
+// Must produce a clean WHAT/WHAT-INSTEAD/WHY compile error (exit 1),
+// not a raw ICE ("for-loop iter is not a call expression").
+// See design/concurrency.md 'StoredRangeWithWait'.
+function entrypoint() -> nothing {
+  let r = range(0, 3)
+  for (i in r) {
+    wait sleep(5)
+    print(i.toString())
+  }
+}

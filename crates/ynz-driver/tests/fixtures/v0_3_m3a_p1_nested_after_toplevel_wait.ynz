@@ -1,0 +1,18 @@
+// Fixture: crossing local DECLARED inside an if-arm, after a prior top-level wait.
+// FIX B (Round 7): `collect_crossings_in_stmts` now recurses into nested blocks
+// when `past_wait == true`, so inner-declared crossing locals are detected and get
+// sm_entry allocas (dominating all state blocks). Previously the analysis skipped
+// the nested body, the alloca landed in a non-entry state block, and LLVM rejected
+// the IR with "Instruction does not dominate all uses".
+// Expected output: 42 then 100 (two separate prints)
+function entrypoint() -> nothing {
+  let a = 1
+  wait sleep(5)
+  if (a > 0) {
+    let x = 42
+    wait sleep(5)
+    print(x.toString())
+  }
+  let x = 100
+  print(x.toString())
+}

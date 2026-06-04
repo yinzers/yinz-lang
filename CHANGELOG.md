@@ -1,5 +1,60 @@
 # Changelog
 
+## [0.3.0-m4] — 2026-06-04 — M3a: `wait` in Loops + Frame-Backed Crossing Locals
+
+Commit range: v0.3.0-m3..v0.3.0-m4
+
+### What changed
+
+v0.3.0-m4 lifts the two harshest M2 compile-error guards (`LocalCrossesWait` and `WaitInsideLoop`) by completing the state-machine codegen substrate: frame-backed mutable locals and loop suspension. Every program that previously errored with one of these guards now compiles and produces correct output. Programs that compiled before are byte-identical.
+
+This is v0.3-M3a — the first half of the original M3 plan, split out as its own shippable slice. M3b (statement-level auto-parallelization) builds on this substrate.
+
+#### Features
+
+- **Frame-backed crossing locals** — a `let` local declared before a `wait` and used after now compiles correctly. The compiler flushes the local's value into the task frame before suspension and reloads it on resume. Every Yinz type is handled: `int`, `bool` (i1 zero-extended), `float` (bitcast), `number` (decimal128, 2 i64 slots), `string` (pointer via `ptr_to_int`), `Shape` (direct struct), `array<T>` (heap pointer), `map<K,V>` (heap pointer), and `options` (int-encoded). ONE `ynz_alloc` per task tree even for local-heavy functions — no per-crossing-local allocation.
+- **`wait` inside `while` loops** — the loop counter and any loop-carried locals are frame-backed; each `wait` suspension preserves them. Resume re-enters the loop body for the current iteration. Iterations run **sequentially** (design/concurrency.md "Loop Iterations — Sequential by Default") — NOT parallelized. M3b handles auto-parallelization of independent statements.
+- **`wait` inside `for` loops** — `for (x in array<T>)` and `for (entry in map<K,V>)` loops with `wait` in the body. The array index and heap pointer are frame-backed; resume re-enters for the current index. Iteration order is preserved; output matches the hand-unrolled sequential form.
+- **`wait` inside `match` arms** — a `wait` in any `match` arm resumes into the correct arm. Any bindings live across the suspension are frame-backed via the P1 mechanism.
+- **`sleepAsync`→`sleep` / `sleepMs`→`sleepBlocking` rename** (P0) — the two sleep intrinsics now have their final names. `sleep(ms)` is the yielding form (suspends the function, OS thread freed). `sleepBlocking(ms)` blocks the OS thread (use only where thread-blocking is correct, e.g., background analytics). `wait sleepBlocking(...)` still emits the "`wait` has no effect" warning — intentional.
+
+#### New diagnostics (WHAT/WHAT-INSTEAD/WHY format)
+
+Kept-guard diagnostics reworded (P0) — no more false "ships in v0.3-M3":
+- **`SubExprSuspendViolation`** — reworded WHY states the step-by-step design rationale (Golden Rule 7) and notes M3b auto-parallelization of independent statements.
+- **`MutualSuspensionCycle`** — reworded WHY states that self-recursion works and mutual cycles are always restructurable.
+
+New P3 deferral diagnostics (clean compile errors, never silent wrong output):
+- **`FixedArrayIterWithWait`** — `fixed<T>` array as a `for`-iterator with a `wait`; stack pointer dangles after suspension. Use `array<T>`.
+- **`StoredRangeWithWait`** — a `range` local iterated by a `for` with `wait`; inline the range expression.
+- **`ExpressionIterWithWait`** — a call-expression collection (`for (x in makeArray())`) with `wait`; bind to a local first.
+- **`UnsupportedCrossingLocalType` (fixed)** — a `fixed<T>` local crossing a `wait`; use `array<T>`.
+- **`MapEntryFieldAfterWait`** — `entry.key`/`entry.value` read after a `wait` in a `for (entry in map)` body; read fields before the `wait`.
+- **`RangeCrossingLocalWithWait`** — a `range` local crossing a top-level `wait`; inline the range.
+- **`ArrayShapeRuntimeFieldWithWait`** — `array<Shape>` crossing a `wait` with runtime-computed element fields; use all-literal field values. Conservative interim guard; lifts entirely when the `m3c-array-by-value` milestone ships.
+
+#### Known limitations (seven P3 deferrals — compile errors, not silent wrong output)
+
+All seven are loud compile errors with WHAT/WHAT-INSTEAD/WHY diagnostics pointing to `design/concurrency.md` sections and named future milestones. None produce silent wrong output or crashes:
+
+1. `fixed<T>` as for-iterator with a wait — stack pointer dangles; use `array<T>`
+2. Stored range local then iterated with a wait — inline the range
+3. Call-expression collection with a wait — bind to a local first
+4. `fixed<T>` crossing local with a wait — use `array<T>`
+5. Map `entry.key`/`entry.value` after a wait — read before `wait` or use an outer accumulator
+6. `range` crossing local with a wait — inline the range
+7. `array<Shape>` with runtime-computed element fields crossing a wait (conservative guard) — lifted by `m3c-array-by-value`
+
+#### IDE surface
+
+M3a adds NO new muted-hint domain and NO new lint rule. The `wait_points` muted-hint domain and `background_routing` fire in M3b. The `prefer-yielding-sleep` Tier-3 lint rides M4's `[[lint_rule]]` infra (not yet built). `sleep`/`sleepBlocking` hover docs updated with their renamed names and per-stdlib-design-rule danger annotation for `sleepBlocking`.
+
+#### Demo / gallery
+
+- `examples/pirates-roster/entrypoint.ynz` extended with v0.3-M3a Phase 4 section (`m3a_p4_demo`): a roster scouting loop that `wait sleep`s per item, with a crossing-local `total` accumulator updated across 5 suspensions. Demonstrates `for`+`wait`+crossing-local in realistic context (85+92+78+95+88=438).
+- `examples/primantis-orders/v0_3_m3a_errors.ynz` updated: removed the `WaitInsideLoop` trigger for `for` loops (P3 lifted it); added `SubExprSuspendViolation` and `MutualSuspensionCycle` triggers for the two permanent kept guards; added triggers for four representative P3 deferrals (`FixedArrayIterWithWait`, `StoredRangeWithWait`, `MapEntryFieldAfterWait`, `ArrayShapeRuntimeFieldWithWait`).
+- Two cross-impl consistency tests added (`v03_m3a_p4_no_auto_parallel_*`): assert `--no-auto-parallel` produces byte-identical output to default on a crossing-local fixture and a for-loop fixture. Gate wired for M3b.
+
 ## [0.3.0-m3] — 2026-06-01 — `wait` Actually Suspends + State Machine Codegen
 
 Commit range: v0.3.0-m1..v0.3.0-m3

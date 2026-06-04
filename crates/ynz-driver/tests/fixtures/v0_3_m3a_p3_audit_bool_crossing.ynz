@@ -1,0 +1,7 @@
+// Audit: boolean crossing local across top-level wait — must be CLEAN (correct output, no crash).
+// bool is i1; flush uses zext to i64 (bool is stored as i64 in the frame slot), reload uses trunc.
+function entrypoint() -> nothing {
+  let flag: boolean = true
+  wait sleep(5)
+  print(flag.toString())
+}

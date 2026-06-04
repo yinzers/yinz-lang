@@ -1,0 +1,18 @@
+// FIX 2 verification: array<Shape> as for-loop variable crossing a wait.
+// Each element's field values must survive suspension and produce correct output.
+// Before the fix: prints ASLR garbage (heap address interpreted as int) on resume.
+// After the fix: memcpy into frame region preserves bytes; total = 10 + 20 = 30.
+shape Item {
+  id: int
+  qty: int
+}
+
+function entrypoint() -> nothing {
+  let items: array<Item> = [{ id: 1, qty: 10 }, { id: 2, qty: 20 }]
+  let total: int = 0
+  for (it in items) {
+    wait sleep(5)
+    total = total + it.qty
+  }
+  print(total.toString())
+}

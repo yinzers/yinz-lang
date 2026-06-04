@@ -1,0 +1,14 @@
+// Fixture: while-body write crossing local — mutation inside a while body is flushed
+// to the frame slot so the accumulated value survives the suspension.
+// `acc` starts at 0; the while loop adds 10 three times; after the wait acc=30.
+// Expected output: 30
+function entrypoint() -> nothing {
+  let acc = 0
+  let i = 0
+  while (i < 3) {
+    acc = acc + 10
+    i = i + 1
+  }
+  wait sleep(5)
+  print(acc.toString())
+}

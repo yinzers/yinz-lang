@@ -1,0 +1,19 @@
+// WHY: no-over-reject boundary for ArrayShapeRuntimeFieldWithWait — an array<Shape>
+// whose elements have ALL-LITERAL int/bool field values is safe (codegen emits
+// LLVM module-level globals) and must NOT be rejected by the guard. Confirms the
+// round-5 literal-field win is preserved: total must print 30.
+// See design/concurrency.md 'ArrayShapeRuntimeFieldWithWait'.
+shape Item {
+  id: int
+  qty: int
+}
+
+function entrypoint() -> nothing {
+  let items: array<Item> = [{ id: 1, qty: 10 }, { id: 2, qty: 20 }]
+  let total: int = 0
+  wait sleep(5)
+  for (it in items) {
+    total = total + it.qty
+  }
+  print(total.toString())
+}

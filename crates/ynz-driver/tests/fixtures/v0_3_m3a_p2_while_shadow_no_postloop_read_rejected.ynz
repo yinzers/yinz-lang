@@ -1,0 +1,17 @@
+// WHY: Probe-6 regression — inner shadow of a back-edge local when NOTHING after the
+// loop references the outer binding. Without the Case-3 fix in
+// outer_is_genuine_crossing_local, the shadow guard never fires because its post-wait
+// scan finds no references to `n` after the loop (only `acc` is used there). The
+// inner `let n = 99` then silently clobbers the outer `n`, making the condition
+// `n > 0` always true (inner n resets to 99 on each iteration) → infinite loop.
+// This fixture MUST produce a clean compile error (exit 1), never infinite-loop.
+function entrypoint() -> nothing {
+  let n: int = 3
+  let acc: int = 0
+  while (n > 0) {
+    let n: int = 99
+    wait sleep(5)
+    n = n - 1
+  }
+  print(acc.toString())
+}

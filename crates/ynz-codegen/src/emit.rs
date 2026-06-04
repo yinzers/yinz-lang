@@ -30,8 +30,8 @@ use ynz_ast::nodes::{
 };
 use ynz_numerics; // parse(s: &str) -> Option<u128>
 use ynz_typeck::{
-    type_attached_const_type, GenericFnTable, MonomorphizationTable, ShapeTable, SignatureTable,
-    Type, TypedModule,
+    crossing_local_names, type_attached_const_type, GenericFnTable, MonomorphizationTable,
+    ShapeTable, SignatureTable, Type, TypedModule,
 };
 
 use crate::{
@@ -190,6 +190,32 @@ pub struct FrameLayout {
     /// recursive edge in its call graph. The slot stores a `*mut u8` to a heap-boxed
     /// child frame (`ynz_alloc`), freed after the recursive call returns Ready.
     pub recursion_slot: Option<u64>,
+    /// Byte offset of the 16-byte `number errors` staging slot, when this function returns
+    /// `-> number errors` and is suspending.
+    ///
+    /// The slot stores the raw decimal128 i128 between the SM return-store and the wrapper
+    /// read. It is placed after all own-local slots and before child sub-frames so it lives
+    /// inside the single composed frame allocation (zero extra `ynz_alloc`).
+    pub number_errors_staging_offset: Option<u64>,
+}
+
+/// True when `f` is a suspending function that returns `-> number errors` (decimal128 EC).
+///
+/// These functions need a 16-byte staging slot in their composed frame: the SM EC-return
+/// path stores the i128 decimal there and points the EC `ok` word at it. The slot is freed
+/// automatically when the frame drops (one `ynz_alloc` invariant, alloc=1/free=1).
+/// True when `f` returns `-> number errors` (decimal128 EC).
+///
+/// The AST stores `-> number errors` as `return_type = ErrorCapable { inner = Number { .. } }`.
+/// These functions need a 16-byte staging slot in their composed frame so the EC ok-word
+/// points at a frame-stable region rather than a resume-stack alloca.
+fn is_number_errors_return(f: &FunctionDecl) -> bool {
+    match &f.return_type {
+        ynz_ast::nodes::Type::ErrorCapable { inner, .. } => {
+            matches!(inner.as_ref(), ynz_ast::nodes::Type::Number { precision } if *precision <= 34)
+        }
+        _ => false,
+    }
 }
 
 /// Build `FrameLayout` for every suspending function in the module.
@@ -205,6 +231,7 @@ pub struct FrameLayout {
 fn build_frame_layouts(
     typed: &TypedModule,
     suspend_set: &SuspendSet,
+    shape_abi_sizes: &HashMap<String, u64>,
 ) -> HashMap<String, FrameLayout> {
     // Step 1: collect direct suspending callees for each suspending fn.
     let mut direct_children: HashMap<String, Vec<String>> = HashMap::new();
@@ -222,7 +249,15 @@ fn build_frame_layouts(
     let fn_names: Vec<String> = direct_children.keys().cloned().collect();
     for name in &fn_names {
         let mut visiting = HashSet::new();
-        compute_frame_size(name, &direct_children, typed, &mut sizes, &mut visiting);
+        compute_frame_size(
+            name,
+            &direct_children,
+            typed,
+            suspend_set,
+            shape_abi_sizes,
+            &mut sizes,
+            &mut visiting,
+        );
     }
 
     // Step 4: build FrameLayout for each fn using the computed sizes.
@@ -230,15 +265,39 @@ fn build_frame_layouts(
     for item in &typed.module.items {
         let Item::Function(f) = item else { continue };
         if f.generics.is_empty() && suspend_set.contains(&f.name) {
-            let n_locals = f.params.len();
+            // Total local slots = params + crossing-local slots. Crossing locals are those
+            // declared before a suspension and read after it — they must survive across
+            // the resume boundary by living in the heap frame rather than SSA registers.
+            // decimal128 crossing locals use 2 slots (16 bytes); all others use 1.
+            let param_names_ref: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
+            let suspending_refs: HashSet<&str> = suspend_set.iter().map(|s| s.as_str()).collect();
+            let crossing = crossing_local_names(
+                &f.body.stmts,
+                &param_names_ref,
+                &suspending_refs,
+                &typed.expr_types,
+            );
+            let crossing_slots = crossing_local_total_slots(f, &crossing, typed, shape_abi_sizes);
+            let n_locals = f.params.len() + crossing_slots;
             let own_base =
                 state_machine::FRAME_HEADER_SIZE + state_machine::own_locals_size(n_locals);
             let children_raw = direct_children.get(&f.name).cloned().unwrap_or_default();
 
+            // Reserve a 16-byte staging slot after own-local slots when the function returns
+            // `-> number errors` (decimal128 EC). The slot is placed before child sub-frames
+            // so it remains part of the single composed frame allocation (alloc=1/free=1).
+            let number_errors_staging_offset = if is_number_errors_return(f) {
+                Some(own_base)
+            } else {
+                None
+            };
+            // Child sub-frames start after the optional staging slot.
+            let children_start = own_base + number_errors_staging_offset.map_or(0, |_| 16);
+
             // Build child offset list, detecting recursion edges.
             let mut children: Vec<(String, u64)> = Vec::new();
             let mut recursion_slot: Option<u64> = None;
-            let mut cursor = own_base;
+            let mut cursor = children_start;
 
             // Detect which children are recursive (cycle in the call graph).
             // Simple heuristic: a child is "recursive" if its name == the current fn OR
@@ -268,6 +327,7 @@ fn build_frame_layouts(
                     n_locals,
                     children,
                     recursion_slot,
+                    number_errors_staging_offset,
                 },
             );
         }
@@ -442,6 +502,8 @@ fn compute_frame_size(
     fn_name: &str,
     direct_children: &HashMap<String, Vec<String>>,
     typed: &TypedModule,
+    suspend_set: &SuspendSet,
+    shape_abi_sizes: &HashMap<String, u64>,
     sizes: &mut HashMap<String, u64>,
     visiting: &mut HashSet<String>,
 ) -> u64 {
@@ -454,23 +516,36 @@ fn compute_frame_size(
     }
     visiting.insert(fn_name.to_string());
 
-    // Find n_locals for this fn.
-    let n_locals = typed
+    // Find n_locals and staging requirements for this fn.
+    let (n_locals, needs_number_errors_staging) = typed
         .module
         .items
         .iter()
         .find_map(|item| {
             if let Item::Function(f) = item {
                 if f.name == fn_name {
-                    return Some(f.params.len());
+                    let param_names: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
+                    let suspending_refs: HashSet<&str> =
+                        suspend_set.iter().map(|s| s.as_str()).collect();
+                    let crossing = crossing_local_names(
+                        &f.body.stmts,
+                        &param_names,
+                        &suspending_refs,
+                        &typed.expr_types,
+                    );
+                    let crossing_slots =
+                        crossing_local_total_slots(f, &crossing, typed, shape_abi_sizes);
+                    return Some((f.params.len() + crossing_slots, is_number_errors_return(f)));
                 }
             }
             None
         })
-        .unwrap_or(0);
+        .unwrap_or((0, false));
 
     let own_base = state_machine::FRAME_HEADER_SIZE + state_machine::own_locals_size(n_locals);
-    let mut total = own_base;
+    // Include the 16-byte `number errors` staging slot in the own-locals region when needed.
+    let staging_size = if needs_number_errors_staging { 16 } else { 0 };
+    let mut total = own_base + staging_size;
 
     if let Some(children) = direct_children.get(fn_name) {
         let mut seen_recursive: HashSet<String> = HashSet::new();
@@ -481,7 +556,15 @@ fn compute_frame_size(
                     total += 8;
                 }
             } else {
-                let child_size = compute_frame_size(child, direct_children, typed, sizes, visiting);
+                let child_size = compute_frame_size(
+                    child,
+                    direct_children,
+                    typed,
+                    suspend_set,
+                    shape_abi_sizes,
+                    sizes,
+                    visiting,
+                );
                 if child_size == 0 {
                     // Child had a cycle; treat as recursive pointer.
                     if seen_recursive.insert(child.clone()) {
@@ -506,9 +589,9 @@ fn compute_frame_size(
 ///
 /// The cost of keeping this as an in-code constant (rather than a registry field) is explicit:
 /// every new may-block intrinsic added before M3 must edit this list. Caught at code review.
-// CARVE-OUT: compiler-internal constant — predicate for M2 sleepAsync dispatch in codegen.
+// CARVE-OUT: compiler-internal constant — predicate for M2 sleep dispatch in codegen.
 // Not a user-facing feature. M3's transitive analysis replaces this entirely.
-const M2_MAY_BLOCK_INTRINSICS: &[&str] = &["sleepAsync", "__testFallibleAsync"];
+const M2_MAY_BLOCK_INTRINSICS: &[&str] = &["sleep", "__testFallibleAsync"];
 
 // is_may_block_callee (local-syntactic predicate) removed in P7.
 // The SM-selection predicate is now SuspendSet (transitive, from typeck).
@@ -674,6 +757,30 @@ fn build_module<'ctx, 'g>(
     // Pass 0 — emit LLVM struct types for all user-defined shapes.
     let shape_types = emit_shape_types(ctx, shape_table);
 
+    // Compute ABI byte sizes for shapes using LLVM TargetData (the authoritative layout
+    // source, same as the memcpy size used in lower_function_with_waits). Stored as a
+    // plain HashMap<name, bytes> so frame-layout computation (no LLVM context) and codegen
+    // (has LLVM context) share one source of truth.
+    //
+    // Prior impl used `struct_ty.size_of().get_zero_extended_constant()`, which fails
+    // for GEP-based size constants (returns None for non-trivial structs) — causing the
+    // frame-layout fallback to 1 slot per shape, then an out-of-bounds frame write on
+    // shapes with 2+ slots (e.g. Point{x,y} = 2 slots = 16 bytes). Fixed by using
+    // TargetData::get_abi_size which always returns the real byte count.
+    let shape_abi_sizes: HashMap<String, u64> = {
+        let dl_owned = module.get_data_layout();
+        let dl_str = dl_owned.as_str().to_str().unwrap_or("");
+        let target_data = inkwell::targets::TargetData::create(dl_str);
+        shape_types
+            .named
+            .iter()
+            .map(|(name, &struct_ty)| {
+                let bytes = target_data.get_abi_size(&struct_ty);
+                (name.clone(), bytes)
+            })
+            .collect()
+    };
+
     // Pass 0.5 — build the wait cache (kept for backward-compat with generic lowering +
     // background routing) AND compute frame layouts for all suspending functions.
     //
@@ -681,11 +788,11 @@ fn build_module<'ctx, 'g>(
     // frame_layouts encodes the composed structure (embedded child sub-frames) used by
     // lower_function_with_waits to allocate ONE frame per task tree.
     let wait_cache = build_wait_cache(typed);
-    let frame_layouts = build_frame_layouts(typed, suspend_set);
+    let frame_layouts = build_frame_layouts(typed, suspend_set, &shape_abi_sizes);
 
     // Pass 0.6 — forward-declare resume functions for ALL SUSPENDING functions.
     // Phase 7: use suspend_set (transitive) instead of wait_cache (local) so fns that
-    // reach sleepAsync transitively (without explicit `wait`) get a resume fn declared.
+    // reach `sleep` transitively (without explicit `wait`) get a resume fn declared.
     for item in &typed.module.items {
         if let Item::Function(f) = item {
             if f.generics.is_empty() && suspend_set.contains(&f.name) {
@@ -746,6 +853,7 @@ fn build_module<'ctx, 'g>(
                 f,
                 shape_table,
                 &shape_types,
+                &shape_abi_sizes,
                 mono_table,
                 &options_table,
                 &wait_cache,
@@ -932,6 +1040,20 @@ fn lower_generic_function<'ctx>(
         frame_layouts: empty_frame_layouts(),
         sm_frame_ptr: None,
         sm_yinz_ret_ty: None,
+        sm_crossing_names: None,
+        sm_crossing_scalar_set: HashSet::new(),
+        sm_crossing_bool_set: HashSet::new(),
+        sm_crossing_slot_indices: Vec::new(),
+        sm_crossing_decimal128_set: HashSet::new(),
+        sm_crossing_float_set: HashSet::new(),
+        sm_crossing_errors_capable_set: HashSet::new(),
+        sm_crossing_shape_embed_set: HashSet::new(),
+        sm_crossing_ec_struct_allocas: HashMap::new(),
+        sm_crossing_shape_names: HashMap::new(),
+        sm_crossing_shape_allocas: HashMap::new(),
+        sm_scope_depth: 0,
+        sm_for_loop_counter: 0,
+        sm_number_errors_staging_offset: None,
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -1146,6 +1268,65 @@ struct Cg<'ctx, 'g> {
     // instead of the usual LLVM `ret <value>`.
     sm_frame_ptr: Option<PointerValue<'ctx>>,
     sm_yinz_ret_ty: Option<Type>,
+    // v0.3-M3a P1: crossing-local metadata for frame-backed locals.
+    // `sm_crossing_names` is the sorted list of local names that cross a suspension
+    // boundary. `sm_crossing_scalar_set` contains the subset of crossing locals that
+    // use a raw i64 alloca (int only — NOT bool, which uses i1 alloca + zext/trunc).
+    // Non-SM Cg contexts use None/empty.
+    sm_crossing_names: Option<Vec<String>>,
+    sm_crossing_scalar_set: HashSet<String>,
+    // Set of crossing local names whose type is bool. These use an i1 alloca (matching
+    // the rest of codegen); flush zexts i1→i64 for the frame slot and reload truncates
+    // the i64 frame slot back to i1 before storing. One frame slot (8 bytes) per bool.
+    sm_crossing_bool_set: HashSet<String>,
+    // Slot index for each crossing local (parallel to sm_crossing_names).
+    // int/bool/float/ptr types use 1 slot; decimal128 and ErrorsCapable use 2 slots
+    // (16 bytes stored directly in the frame — not a pointer to a stack buffer).
+    sm_crossing_slot_indices: Vec<usize>,
+    // Set of crossing local names whose type is decimal128 (number with precision ≤ 34).
+    // These use 2 frame slots and i128 alloca (not ptr alloca).
+    sm_crossing_decimal128_set: HashSet<String>,
+    // Set of crossing local names whose type is float (f64).
+    // These use a bitcast (f64 ↔ i64) rather than a raw integer load.
+    sm_crossing_float_set: HashSet<String>,
+    // Set of crossing local names whose type is ErrorsCapable {i64, i64}.
+    // These use 2 frame slots (the two i64 fields stored directly); a companion
+    // sm_entry struct alloca is pre-created and refreshed on every reload.
+    sm_crossing_errors_capable_set: HashSet<String>,
+    // Set of crossing local names whose type is a Shape (frame-embedded struct).
+    // The struct bytes are stored directly in consecutive frame slots (no separate
+    // heap allocation). The frame slot region is the persistent storage; the
+    // sm_entry struct alloca is the working copy valid within one resume call.
+    sm_crossing_shape_embed_set: HashSet<String>,
+    // Companion alloca for each ErrorsCapable crossing local: a sm_entry {i64,i64}
+    // struct alloca whose contents are refreshed from the frame slots on every reload.
+    // Keyed by local name.
+    sm_crossing_ec_struct_allocas: HashMap<String, PointerValue<'ctx>>,
+    // Shape name for each shape-typed crossing local (used by frame-embed codegen to
+    // look up the LLVM struct type for memcpy size computation).
+    sm_crossing_shape_names: HashMap<String, String>,
+    // sm_entry struct alloca for each shape-typed crossing local.
+    // The alloca has the shape's LLVM struct type (not ptr). On each resume call:
+    // - reload: memcpy frame slot region → this alloca
+    // - flush:  memcpy this alloca → frame slot region
+    // cg.locals[name] points to this alloca so field access GEPs work correctly.
+    sm_crossing_shape_allocas: HashMap<String, PointerValue<'ctx>>,
+    // Nesting depth inside if/while/for/match bodies in a SM resume function.
+    // Used for the snapshot/restore protocol that prevents non-crossing locals introduced
+    // inside a nested scope from leaking into cg.locals after the scope exits. Shadow
+    // bindings (a `let x` where outer `x` crosses a wait) are rejected at typeck
+    // (ShadowsCrossingLocal), so at codegen time depth > 0 never signals a shadow.
+    sm_scope_depth: usize,
+    // Counter tracking how many suspending for-loops have been emitted in this SM function.
+    // Generates the matching synthetic crossing-local name `__ynz_for_idx_N` that
+    // typeck pre-allocates a frame slot for. Must increment in the same order as
+    // `collect_for_loop_synthetic_crossings_inner` in check.rs.
+    sm_for_loop_counter: usize,
+    // Byte offset of the 16-byte `number errors` staging slot within the composed frame,
+    // when the current SM function returns `-> number errors`. None for all other functions.
+    // Used by lower_stmt_return to write the i128 decimal to a frame-stable location so
+    // the EC ok-pointer survives the resume function returning.
+    sm_number_errors_staging_offset: Option<u64>,
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
@@ -1281,8 +1462,69 @@ impl<'ctx, 'g> Cg<'ctx, 'g> {
         }
     }
 
+    /// Build an alloca in the function's ENTRY block, regardless of where the builder
+    /// currently points. LLVM SSA requires allocas to dominate every use; placing them
+    /// in the entry block is the canonical way to satisfy this for values that may be
+    /// used across multiple successor blocks (e.g., inside if/while bodies that are
+    /// separate basic blocks). This matches what `materialize_param` does for params.
+    ///
+    /// Yinz allows variable shadowing (spec/linting.md `shadowed-variables` lint).
+    /// When a shadow `let x` appears inside a nested scope that is a separate LLVM basic
+    /// block, its alloca must be in the entry block so it dominates its uses inside that
+    /// block. The outer binding is restored to `cg.locals` on scope exit (restore-all
+    /// protocol), so the shadow has no effect on the outer name after the scope closes.
+    fn alloca_in_entry(&self, ty: &Type, name: &str) -> Result<PointerValue<'ctx>, String> {
+        let entry_bb = self
+            .current_fn
+            .get_first_basic_block()
+            .ok_or_else(|| format!("alloca_in_entry: no entry block for `{name}`"))?;
+        // Position at the end of the entry block (before its terminator, if any).
+        // We save and restore the builder's current insertion point so the caller's
+        // ongoing block emission is unaffected.
+        let saved_bb = self.builder.get_insert_block();
+        if let Some(term) = entry_bb.get_terminator() {
+            self.builder.position_before(&term);
+        } else {
+            self.builder.position_at_end(entry_bb);
+        }
+        let slot = self.alloca(ty, name)?;
+        // Restore the builder to wherever it was before we moved it.
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Ok(slot)
+    }
+
     fn append_block(&self, name: &str) -> BasicBlock<'ctx> {
         self.ctx.append_basic_block(self.current_fn, name)
+    }
+
+    /// Build an alloca of a raw LLVM basic type in the function's ENTRY block.
+    /// Used by SM for-loop codegen for internal index/pointer slots that have no
+    /// corresponding Yinz type (e.g., collection pointers, entry-struct slots).
+    fn alloca_in_entry_llvm(
+        &self,
+        llvm_ty: impl inkwell::types::BasicType<'ctx>,
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let entry_bb = self
+            .current_fn
+            .get_first_basic_block()
+            .ok_or_else(|| format!("alloca_in_entry_llvm: no entry block for `{name}`"))?;
+        let saved_bb = self.builder.get_insert_block();
+        if let Some(term) = entry_bb.get_terminator() {
+            self.builder.position_before(&term);
+        } else {
+            self.builder.position_at_end(entry_bb);
+        }
+        let slot = self
+            .builder
+            .build_alloca(llvm_ty, name)
+            .map_err(|e| format!("{e}"))?;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Ok(slot)
     }
 
     /// Build an alloca holding a `maybe<T>` with `has_value = 0`.
@@ -1384,6 +1626,7 @@ fn lower_function<'ctx, 'g>(
     f: &FunctionDecl,
     shape_table: &'g ShapeTable,
     shape_types: &'g ShapeLlvmTypes<'ctx>,
+    shape_abi_sizes: &'g HashMap<String, u64>,
     mono_table: &'g MonomorphizationTable,
     options_table: &'g ynz_typeck::options_table::OptionsTable,
     wait_cache: &'g WaitCache,
@@ -1392,7 +1635,7 @@ fn lower_function<'ctx, 'g>(
 ) -> Result<(), String> {
     // v0.3-M2 P7 path selection: functions in the transitive suspend_set get the
     // state-machine path. Uses suspend_set (from typeck FunctionSig.suspends) instead
-    // of the local wait_cache, so fns that reach sleepAsync transitively — without an
+    // of the local wait_cache, so fns that reach `sleep` transitively — without an
     // explicit `wait` — are now correctly compiled as state machines.
     if suspend_set.contains(&f.name) {
         return lower_function_with_waits(
@@ -1404,6 +1647,7 @@ fn lower_function<'ctx, 'g>(
             f,
             shape_table,
             shape_types,
+            shape_abi_sizes,
             mono_table,
             options_table,
             wait_cache,
@@ -1450,6 +1694,20 @@ fn lower_function<'ctx, 'g>(
         frame_layouts,
         sm_frame_ptr: None,
         sm_yinz_ret_ty: None,
+        sm_crossing_names: None,
+        sm_crossing_scalar_set: HashSet::new(),
+        sm_crossing_bool_set: HashSet::new(),
+        sm_crossing_slot_indices: Vec::new(),
+        sm_crossing_decimal128_set: HashSet::new(),
+        sm_crossing_float_set: HashSet::new(),
+        sm_crossing_errors_capable_set: HashSet::new(),
+        sm_crossing_shape_embed_set: HashSet::new(),
+        sm_crossing_ec_struct_allocas: HashMap::new(),
+        sm_crossing_shape_names: HashMap::new(),
+        sm_crossing_shape_allocas: HashMap::new(),
+        sm_scope_depth: 0,
+        sm_for_loop_counter: 0,
+        sm_number_errors_staging_offset: None,
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -1562,7 +1820,7 @@ fn lower_function<'ctx, 'g>(
 ///
 /// # Wait dispatch strategy
 ///
-/// Each `Expr::Wait(Call { callee: "sleepAsync", args: [ms] }, _)` in the body
+/// Each `Expr::Wait(Call { callee: "sleep", args: [ms] }, _)` in the body
 /// generates:
 /// - **State N (before wait)**: create the sleep handle, store in `frame[SLEEP_HANDLE]`,
 ///   set `resume_point = N+1`, return Pending.
@@ -1593,24 +1851,61 @@ fn lower_function_with_waits<'ctx, 'g>(
     f: &'g FunctionDecl,
     shape_table: &'g ShapeTable,
     shape_types: &'g ShapeLlvmTypes<'ctx>,
+    shape_abi_sizes: &'g HashMap<String, u64>,
     mono_table: &'g MonomorphizationTable,
     options_table: &'g ynz_typeck::options_table::OptionsTable,
     wait_cache: &'g WaitCache,
     suspend_set: &'g SuspendSet,
     frame_layouts: &'g HashMap<String, FrameLayout>,
 ) -> Result<(), String> {
-    // Collect the names of parameters that cross the wait boundary.
-    // In M2, ALL parameters are live across any wait in the function body.
-    // M3 may add liveness analysis to shrink this set.
+    // Collect the names of parameters. ALL parameters are live across any wait.
     let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
-    let n_locals = param_names.len(); // each param gets one i64 frame slot
+
+    // Compute the set of locals that cross a suspension boundary (declared before
+    // a wait, read after it). These must live in the heap frame instead of SSA
+    // registers so their values survive across resume calls.
+    let param_name_refs: Vec<&str> = param_names.iter().map(|s| s.as_str()).collect();
+    let suspending_refs: HashSet<&str> = suspend_set.iter().map(|s| s.as_str()).collect();
+    let crossing_names: Vec<String> = crossing_local_names(
+        &f.body.stmts,
+        &param_name_refs,
+        &suspending_refs,
+        &typed.expr_types,
+    );
+
+    // Slot index layout: params occupy slots [0..n_params), crossing locals occupy
+    // slots starting at n_params. decimal128 + EC use 2 consecutive slots; shapes use
+    // ceil(N/8) consecutive slots (frame-embedded); all others use 1.
+    // This matches the slot counting in build_frame_layouts.
+    let n_params = param_names.len();
+    // Compute per-crossing-local slot indices using typeck types (catches inferred number).
+    let crossing_slot_indices: Vec<usize> = {
+        let mut indices = Vec::with_capacity(crossing_names.len());
+        let mut cursor = n_params;
+        for cname in &crossing_names {
+            indices.push(cursor);
+            let ty = find_let_typeck_type_in_stmts(&f.body.stmts, cname.as_str(), typed);
+            let slots = match ty {
+                Some(Type::Number { precision }) if precision <= 34 => 2,
+                Some(Type::ErrorsCapable { .. }) => 2,
+                Some(Type::Shape { name: ref sname }) => shape_frame_slots(sname, shape_abi_sizes),
+                _ => 1,
+            };
+            cursor += slots;
+        }
+        indices
+    };
+    let n_locals =
+        n_params + crossing_local_total_slots(f, &crossing_names, typed, shape_abi_sizes);
 
     // Look up the composed frame layout for this function. The total_size covers
-    // header(32) + own_locals + all embedded child sub-frames = ONE allocation per task tree.
+    // header(32) + own_locals + optional 16-byte number-errors staging slot + embedded child
+    // sub-frames = ONE allocation per task tree.
     let frame_layout = frame_layouts.get(&f.name);
     let frame_bytes = frame_layout.map(|l| l.total_size).unwrap_or_else(|| {
         state_machine::FRAME_HEADER_SIZE + state_machine::own_locals_size(n_locals)
     });
+    let number_errors_staging_offset = frame_layout.and_then(|l| l.number_errors_staging_offset);
 
     let is_main = f.name == "entrypoint";
     let llvm_name = if is_main { "main" } else { f.name.as_str() };
@@ -1699,13 +1994,29 @@ fn lower_function_with_waits<'ctx, 'g>(
         frame_layouts,
         sm_frame_ptr: Some(frame_param),
         sm_yinz_ret_ty: Some(yinz_ret_ty.clone()),
+        sm_crossing_names: Some(crossing_names.clone()),
+        sm_crossing_scalar_set: HashSet::new(), // populated during alloca creation below
+        sm_crossing_bool_set: HashSet::new(),   // populated during alloca creation below
+        sm_crossing_slot_indices: crossing_slot_indices.clone(),
+        sm_crossing_decimal128_set: HashSet::new(), // populated during alloca creation below
+        sm_crossing_float_set: HashSet::new(),      // populated during alloca creation below
+        sm_crossing_errors_capable_set: HashSet::new(), // populated during alloca creation below
+        sm_crossing_shape_embed_set: HashSet::new(), // populated during alloca creation below
+        sm_crossing_ec_struct_allocas: HashMap::new(), // populated during alloca creation below
+        sm_crossing_shape_names: HashMap::new(),    // populated during alloca creation below
+        sm_crossing_shape_allocas: HashMap::new(),  // populated during alloca creation below
+        sm_scope_depth: 0,
+        sm_for_loop_counter: 0,
+        sm_number_errors_staging_offset: number_errors_staging_offset,
         // Carry errors-capable flag separately so lower_stmt_return can handle it.
     };
 
     // Step 1 — Emit allocas in the entry block (sm_entry). LLVM SSA requires all allocas
     // to be in the function entry block so they dominate every use across all state blocks.
+    // Both parameters AND crossing locals get i64 allocas here; each is loaded from its
+    // frame slot at the start of every continuation state block.
     cg_resume.builder.position_at_end(resume_entry);
-    for (slot_idx, pname) in param_names.iter().enumerate() {
+    for pname in &param_names {
         // Alloca sized to i64 (the frame slot width). The actual LLVM type is i64.
         let alloca = cg_resume
             .builder
@@ -1713,7 +2024,200 @@ fn lower_function_with_waits<'ctx, 'g>(
             .map_err(|e| format!("sm param alloca: {e}"))?;
         // Register in locals map — state blocks load from these allocas.
         cg_resume.locals.insert(pname.clone(), alloca);
-        let _ = slot_idx; // slot loading happens per-state-block below
+    }
+    // Crossing locals also get allocas in sm_entry so lower_stmt can reuse them.
+    // LLVM SSA requires allocas to dominate all uses — sm_entry dominates all state
+    // blocks, so every crossing local's alloca is visible in every resume state.
+    //
+    // Per-type alloca strategy (types wider than 8 bytes cannot use a stack pointer
+    // stored in the frame — the resume fn's stack is destroyed between calls):
+    //   int / bool         → i64 alloca; raw i64 load/store in frame slot
+    //   float              → f64 alloca; bitcast f64↔i64 for frame slot
+    //   decimal128         → i128 alloca; 2 consecutive frame slots (lo + hi)
+    //   ErrorsCapable      → ptr alloca (holds ptr to companion {i64,i64} alloca);
+    //                        2 frame slots for the two i64 fields; companion struct
+    //                        alloca is also in sm_entry so it dominates all states
+    //   Shape              → ptr alloca; pre-wired to the composed frame's slot region
+    //                        (frame-embed, not heap-promotion); bytes live directly in
+    //                        the frame — no separate allocation needed
+    //   string/array/map   → ptr alloca; pointer already lives on the heap (stable)
+    {
+        let mut scalar_set: HashSet<String> = HashSet::new();
+        let mut bool_set: HashSet<String> = HashSet::new();
+        let mut decimal128_set: HashSet<String> = HashSet::new();
+        let mut float_set: HashSet<String> = HashSet::new();
+        let mut errors_capable_set: HashSet<String> = HashSet::new();
+        let mut shape_embed_set: HashSet<String> = HashSet::new();
+        let mut ec_struct_allocas: HashMap<String, PointerValue<'ctx>> = HashMap::new();
+        let mut shape_names_map: HashMap<String, String> = HashMap::new();
+        let mut shape_allocas_map: HashMap<String, PointerValue<'ctx>> = HashMap::new();
+
+        for cname in &crossing_names {
+            // Resolve the typeck type (catches inferred types like number).
+            let crossing_ty = crossing_local_type_from_body(&f.body, cname.as_str(), &cg_resume);
+            // Cross-check against typeck expr_types for decimal128 (annotation may miss inferred).
+            let crossing_ty = {
+                let typeck_ty = find_let_typeck_type_in_stmts(&f.body.stmts, cname.as_str(), typed);
+                match typeck_ty {
+                    Some(ty @ Type::Number { .. }) => ty,
+                    _ => crossing_ty,
+                }
+            };
+
+            // Classify the crossing local so flush/reload know which strategy to use.
+            // Bool is separate from Int: both get 1 frame slot, but Bool's alloca is i1
+            // (matching the rest of codegen) while Int's is i64. Flush zexts i1→i64;
+            // reload truncates the i64 frame slot back to i1.
+            let is_int = matches!(&crossing_ty, Type::Int);
+            let is_bool = matches!(&crossing_ty, Type::Bool);
+            let is_float = matches!(&crossing_ty, Type::Float);
+            let is_decimal128 =
+                matches!(&crossing_ty, Type::Number { precision } if *precision <= 34);
+            let is_errors_capable = matches!(&crossing_ty, Type::ErrorsCapable { .. });
+            let is_shape = matches!(&crossing_ty, Type::Shape { .. });
+
+            if is_int {
+                scalar_set.insert(cname.clone());
+            }
+            if is_bool {
+                bool_set.insert(cname.clone());
+            }
+            if is_float {
+                float_set.insert(cname.clone());
+            }
+            if is_decimal128 {
+                decimal128_set.insert(cname.clone());
+            }
+            if is_errors_capable {
+                errors_capable_set.insert(cname.clone());
+            }
+            if is_shape {
+                shape_embed_set.insert(cname.clone());
+                if let Type::Shape { name: ref sn } = crossing_ty {
+                    shape_names_map.insert(cname.clone(), sn.clone());
+                }
+            }
+
+            // Create the sm_entry alloca for this crossing local.
+            //
+            // Per-type alloca strategy (types wider than 8 bytes cannot use a stack pointer
+            // stored in the frame — the resume fn's stack is destroyed between calls):
+            //   int              → i64 alloca; raw i64 load/store in frame slot
+            //   bool             → i1 alloca (matches rest of codegen); flush zexts i1→i64,
+            //                      reload truncates i64→i1; 1 frame slot
+            //   float            → f64 alloca; bitcast f64↔i64 for frame slot
+            //   decimal128       → i128 alloca; 2 consecutive frame slots (lo + hi)
+            //   ErrorsCapable    → ptr alloca (holds ptr to companion {i64,i64} alloca);
+            //                      2 frame slots for the two i64 fields
+            //   Shape            → ptr alloca; pre-initialized to point into the composed
+            //                      frame's slot region (see Step 1b below); bytes are
+            //                      stored directly in the frame — no separate heap alloc
+            //   string/array/map → ptr alloca; pointer already lives on the heap (stable)
+            let llvm_ty: inkwell::types::BasicTypeEnum<'ctx> = match &crossing_ty {
+                Type::Int => cg_resume.i64().into(),
+                // Bool keeps its natural i1 alloca; flush/reload convert at the frame boundary.
+                Type::Bool => cg_resume.ctx.bool_type().into(),
+                Type::Float => cg_resume.ctx.f64_type().into(),
+                // decimal128: i128 alloca; 2 consecutive frame slots hold the bits directly.
+                Type::Number { precision } if *precision <= 34 => cg_resume.ctx.i128_type().into(),
+                // All pointer-backed types (Shape, ErrorsCapable, string, array):
+                // ptr alloca holds the pointer.
+                _ => cg_resume.ctx.ptr_type(AddressSpace::default()).into(),
+            };
+            let alloca = cg_resume
+                .builder
+                .build_alloca(llvm_ty, &format!("{cname}_alloca"))
+                .map_err(|e| format!("sm crossing alloca {cname}: {e}"))?;
+            cg_resume.locals.insert(cname.clone(), alloca);
+            if is_shape {
+                shape_allocas_map.insert(cname.clone(), alloca);
+            }
+
+            // ErrorsCapable: also create a companion {i64,i64} struct alloca in sm_entry.
+            // Its contents are refreshed from the two frame slots on every reload.
+            // The ptr alloca above holds the address of this struct alloca — stable
+            // across resumes because sm_entry allocas dominate all state blocks.
+            if is_errors_capable {
+                let ec_struct_ty = cg_resume
+                    .ctx
+                    .struct_type(&[cg_resume.i64().into(), cg_resume.i64().into()], false);
+                let ec_struct_alloca = cg_resume
+                    .builder
+                    .build_alloca(ec_struct_ty, &format!("{cname}_ec_struct"))
+                    .map_err(|e| format!("sm ec struct alloca {cname}: {e}"))?;
+                // Wire the ptr alloca to point at the companion struct.
+                cg_resume
+                    .builder
+                    .build_store(alloca, ec_struct_alloca)
+                    .map_err(|e| format!("sm ec ptr init {cname}: {e}"))?;
+                ec_struct_allocas.insert(cname.clone(), ec_struct_alloca);
+            }
+        }
+        cg_resume.sm_crossing_scalar_set = scalar_set;
+        cg_resume.sm_crossing_bool_set = bool_set;
+        cg_resume.sm_crossing_decimal128_set = decimal128_set;
+        cg_resume.sm_crossing_float_set = float_set;
+        cg_resume.sm_crossing_errors_capable_set = errors_capable_set;
+        cg_resume.sm_crossing_shape_embed_set = shape_embed_set;
+        cg_resume.sm_crossing_ec_struct_allocas = ec_struct_allocas;
+        cg_resume.sm_crossing_shape_names = shape_names_map;
+        cg_resume.sm_crossing_shape_allocas = shape_allocas_map;
+    }
+
+    // Step 1b — Wire shape crossing-local ptr allocas to point into the composed frame.
+    //
+    // Shape crossing locals use frame-embedding: their struct bytes live directly in the
+    // composed heap frame's slot region (consecutive i64 slots). The ptr alloca (created
+    // in Step 1 above) is pre-initialized here to hold a pointer to that slot region.
+    // This means:
+    //   - Field accesses (load ptr → GEP into struct) now GEP into the frame directly
+    //   - Writes to shape fields go directly to the frame — no flush needed
+    //   - Across suspension boundaries, the frame already holds the current bytes
+    //   - At reload, the ptr alloca is re-initialized to the same frame offset — no reload needed
+    // One ynz_alloc backs the whole task tree; shape crossing locals live inline
+    // in the composed frame's slot region — no per-shape allocation is needed.
+    {
+        let shape_names = cg_resume.sm_crossing_shape_names.clone();
+        let shape_alloca_map = cg_resume.sm_crossing_shape_allocas.clone();
+        for (cname, alloca) in &shape_alloca_map {
+            // Find this crossing local's slot index.
+            let pos = crossing_names
+                .iter()
+                .position(|n| n == cname)
+                .ok_or_else(|| {
+                    format!("sm shape wire: crossing local `{cname}` not found in crossing_names")
+                })?;
+            let slot_idx = crossing_slot_indices[pos];
+            let shape_name = shape_names
+                .get(cname.as_str())
+                .ok_or_else(|| format!("sm shape wire: shape name for `{cname}` not found"))?;
+            // Compute the GEP into the frame's slot region for this shape.
+            let frame_slot_byte_offset = state_machine::FRAME_OFFSET_LOCALS_START
+                + (slot_idx as u64) * state_machine::FRAME_LOCAL_SLOT_SIZE;
+            let shape_region_ptr = unsafe {
+                cg_resume
+                    .builder
+                    .build_gep(
+                        ctx.i8_type(),
+                        frame_param,
+                        &[ctx.i64_type().const_int(frame_slot_byte_offset, false)],
+                        &format!("{cname}_frame_region"),
+                    )
+                    .map_err(|e| format!("sm shape frame GEP {cname}: {e}"))?
+            };
+            // Verify the struct type is known (for documentation; GEP is byte-level).
+            let _ = cg_resume
+                .shape_types
+                .get(shape_name.as_str())
+                .ok_or_else(|| format!("sm shape wire: LLVM type for `{shape_name}` not found"))?;
+            // Store the frame region ptr into the ptr alloca so field access GEPs land
+            // directly in the frame. This is the sole persistent source of truth — no
+            // separate allocation, no flush/reload for shape bytes.
+            cg_resume
+                .builder
+                .build_store(*alloca, shape_region_ptr)
+                .map_err(|e| format!("sm shape wire store {cname}: {e}"))?;
+        }
     }
 
     // Step 2 — Emit the switch on resume_point (still in sm_entry, after allocas).
@@ -1752,6 +2256,10 @@ fn lower_function_with_waits<'ctx, 'g>(
     }
 
     // Step 5 — Emit state_blocks[0] (initial state). Load params from frame into allocas.
+    // Crossing locals are NOT reloaded at state 0 — they are defined inline later in the
+    // function body and stored to the frame at their definition site. Reloading them here
+    // would read uninitialized frame bytes (the frame was zeroed by ynz_alloc_zeroed, so
+    // it's safe memory-wise, but the value would be 0 rather than the actual value).
     cg_resume.builder.position_at_end(state_blocks[0]);
 
     for (slot_idx, pname) in param_names.iter().enumerate() {
@@ -1778,6 +2286,8 @@ fn lower_function_with_waits<'ctx, 'g>(
     }
 
     // Emit the function body statements, intercepting waits at the right state boundaries.
+    // crossing_names is threaded through so lower_sm_body can flush/reload crossing locals
+    // at suspension boundaries.
     lower_sm_body(
         &mut cg_resume,
         &f.body,
@@ -1872,7 +2382,18 @@ fn lower_function_with_waits<'ctx, 'g>(
             .build_return(Some(&exit_i32))
             .map_err(|e| format!("main ret: {e}"))?;
     } else if is_errors_capable {
-        // errors-capable wrapper: read {i64, i64} from return slot, free frame, return struct.
+        // Errors-capable wrapper: read {i64, i64} from return slot, free frame, return struct.
+        //
+        // The ok-word may reference frame-resident storage (e.g. the 16-byte `-> number errors`
+        // staging slot inside the composed frame). That storage is freed by free_frame below,
+        // so the returned EC struct's ok-pointer becomes invalid after this function returns.
+        //
+        // This is safe for the only reachable caller today: `background` (fire-and-forget)
+        // DISCARDS the EC result entirely — the returned struct is never dereferenced. A caller
+        // that COLLECTS the result must read and copy the ok-value BEFORE free_frame; that
+        // read-before-free + copy path is deferred to M3b (`background` result-collection).
+        // See `registry/features.toml` entry `ec-wrapper-collect-on-completion` and
+        // `design/concurrency.md` M3a Scope Boundaries for the full rationale.
         let (err_i64, ok_i64) = state_machine::load_return_value_errors(ctx, &builder, frame_ptr)?;
         state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
         // Reconstruct the {i64, i64} struct value for the caller.
@@ -1898,13 +2419,67 @@ fn lower_function_with_waits<'ctx, 'g>(
                     .build_return(None)
                     .map_err(|e| format!("wrapper void ret: {e}"))?;
             }
-            Type::Int | Type::Bool => {
+            Type::Int => {
                 let val =
                     state_machine::load_return_value_i64(ctx, &builder, frame_ptr, "ret_i64")?;
                 state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
                 builder
                     .build_return(Some(&val))
                     .map_err(|e| format!("wrapper int ret: {e}"))?;
+            }
+            Type::Bool => {
+                // The frame return slot stores bool as i64 (zext on write). The wrapper
+                // function is declared with i1 return type (per declare_function). Truncate
+                // i64→i1 here to match; without the trunc LLVM rejects "ret i64 ... i1".
+                let as_i64 =
+                    state_machine::load_return_value_i64(ctx, &builder, frame_ptr, "ret_bool_i64")?;
+                state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
+                let as_i1 = builder
+                    .build_int_truncate(as_i64, ctx.bool_type(), "ret_bool_i1")
+                    .map_err(|e| format!("wrapper bool trunc: {e}"))?;
+                builder
+                    .build_return(Some(&as_i1))
+                    .map_err(|e| format!("wrapper bool ret: {e}"))?;
+            }
+            Type::Float => {
+                // Float: the resume fn stored the f64 as i64 bits (bitcast) in the slot.
+                // Load the i64 and bitcast back to f64 before returning — the declared
+                // wrapper return type is f64, so returning the raw i64 would cause LLVM
+                // to emit "ret i64 ... double" and fail module verification.
+                let f_val =
+                    state_machine::load_return_value_f64(ctx, &builder, frame_ptr, "ret_f64")?;
+                state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
+                builder
+                    .build_return(Some(&f_val))
+                    .map_err(|e| format!("wrapper float ret: {e}"))?;
+            }
+            Type::Number { precision } if *precision <= 34 => {
+                // Decimal128 (i128): the resume fn stored the full 16-byte i128 value
+                // directly in the 16-byte return slot. The wrapper is declared as ptr-returning
+                // (matching the non-SM number ABI: callers expect a pointer to a heap i128).
+                // Allocate 16 bytes, copy the i128 from the return slot, free the frame, then
+                // return the heap pointer — the caller owns the allocation and may read from it.
+                let i128_val =
+                    state_machine::load_return_value_i128(ctx, &builder, frame_ptr, "ret_i128")?;
+                // Allocate 16 bytes for the i128 return value on the heap.
+                let heap_ptr = builder
+                    .build_call(
+                        rt.ynz_alloc,
+                        &[ctx.i64_type().const_int(16, false).into()],
+                        "ret_dec_alloc",
+                    )
+                    .map_err(|e| format!("ret_dec_alloc: {e}"))?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or("ret_dec_alloc: expected ptr")?
+                    .into_pointer_value();
+                builder
+                    .build_store(heap_ptr, i128_val)
+                    .map_err(|e| format!("ret_dec_store: {e}"))?;
+                state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
+                builder
+                    .build_return(Some(&heap_ptr))
+                    .map_err(|e| format!("wrapper number ret: {e}"))?;
             }
             Type::String
             | Type::Shape { .. }
@@ -1926,11 +2501,15 @@ fn lower_function_with_waits<'ctx, 'g>(
                     .map_err(|e| format!("wrapper ptr ret: {e}"))?;
             }
             _ => {
-                // Fallback: free and return void (shouldn't happen for well-typed programs).
-                state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
-                builder
-                    .build_return(None)
-                    .map_err(|e| format!("wrapper fallback ret: {e}"))?;
+                // Any Yinz type not handled above (e.g., a new type added to the AST without
+                // a corresponding wrapper-return arm) must fail loud at compile time — not
+                // silently emit `ret void` and crash the LLVM backend. The fallback void
+                // return was the original source of the Float/Number module-verification bug.
+                return Err(format!(
+                    "BUG: SM wrapper-return has no arm for return type {ret_ty:?}. \
+                     Add an explicit arm in lower_function_with_waits wrapper-return match. \
+                     Emitting `ret void` would produce an LLVM module verification failure."
+                ));
             }
         }
     }
@@ -2145,30 +2724,32 @@ fn expr_contains_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool 
     }
 }
 
-/// Reload all frame parameters into their allocas.
+/// Reload parameters and crossing locals from their frame slots into allocas.
 ///
-/// Called at the start of EVERY state block in the resume function because each call to
-/// the resume function creates fresh allocas (stack frame). Parameters live in the heap
-/// frame across suspensions; without reloading, continuation states see uninitialized allocas.
+/// Called at the start of EVERY continuation state block (state 1+). Each call to the
+/// resume function creates fresh allocas (the stack frame is new); without reloading,
+/// continuation states see uninitialized allocas for values that lived across the
+/// previous suspension.
 ///
-/// # Why per-state-block, not just in state_0
+/// Parameters occupy slots [0..n_params); crossing locals occupy slots
+/// [n_params..n_params+n_crossing). Both sets are reloaded here — parameters because
+/// they are always live, crossing locals because they were stored to the frame just
+/// before the suspension and must be restored for post-wait code.
 ///
-/// The resume function is called once per Tokio poll. Each call has a NEW stack frame,
-/// so allocas start uninitialized. State_0 runs normally because it loads params fresh.
-/// State_1 (continuation after first wait) also gets a new stack frame — without this
-/// reload, `n` would be garbage in `print('DONE ${n}')`.
-///
-/// This is a straightforward (if slightly redundant) solution for M2: all params are live
-/// across all wait boundaries. M3's liveness analysis can narrow the reload to only
-/// the slots that are actually live at each state.
+/// State 0 does NOT call this for crossing locals (they are defined inline and stored
+/// to the frame at their definition site — no prior stored value exists to reload).
+/// `reload_crossing` controls whether frame-backed crossing locals are also reloaded.
+/// Pass `false` for state 0 (locals not yet stored) and `true` for all continuation states.
 fn reload_params_from_frame<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     frame_ptr: PointerValue<'ctx>,
     param_names: &[String],
     f: &FunctionDecl,
     shape_table: &ShapeTable,
+    reload_crossing: bool,
 ) -> Result<(), String> {
     let ctx = cg.ctx;
+    // Reload parameters.
     for (slot_idx, pname) in param_names.iter().enumerate() {
         let bits = state_machine::load_local_slot(ctx, &cg.builder, frame_ptr, slot_idx, pname)?;
         let param_decl = &f.params[slot_idx];
@@ -2182,6 +2763,161 @@ fn reload_params_from_frame<'ctx>(
             .build_store(alloca, bits_to_store)
             .map_err(|e| format!("sm reload store {pname}: {e}"))?;
     }
+    // Reload crossing locals from their frame slots (defined after state 0, live at state 1+).
+    // The crossing names and slot-start are stored on the Cg when inside a SM resume fn.
+    if reload_crossing {
+        if let Some(ref crossing_names) = cg.sm_crossing_names.clone() {
+            let slot_indices = cg.sm_crossing_slot_indices.clone();
+            let scalar_set = cg.sm_crossing_scalar_set.clone();
+            let bool_set = cg.sm_crossing_bool_set.clone();
+            let float_set = cg.sm_crossing_float_set.clone();
+            let decimal128_set = cg.sm_crossing_decimal128_set.clone();
+            let errors_capable_set = cg.sm_crossing_errors_capable_set.clone();
+            let shape_embed_set = cg.sm_crossing_shape_embed_set.clone();
+            let ec_struct_allocas = cg.sm_crossing_ec_struct_allocas.clone();
+            for (i, cname) in crossing_names.iter().enumerate() {
+                let slot_idx = slot_indices[i];
+                let bits =
+                    state_machine::load_local_slot(ctx, &cg.builder, frame_ptr, slot_idx, cname)?;
+                if let Some(&alloca) = cg.locals.get(cname) {
+                    let is_int = scalar_set.contains(cname.as_str());
+                    let is_bool = bool_set.contains(cname.as_str());
+                    let is_float = float_set.contains(cname.as_str());
+                    let is_decimal128 = decimal128_set.contains(cname.as_str());
+                    let is_errors_capable = errors_capable_set.contains(cname.as_str());
+                    let is_shape_embed = shape_embed_set.contains(cname.as_str());
+                    if is_int {
+                        // Int: i64 alloca — store i64 frame bits directly.
+                        cg.builder
+                            .build_store(alloca, bits)
+                            .map_err(|e| format!("sm crossing reload store {cname}: {e}"))?;
+                    } else if is_bool {
+                        // Bool: i1 alloca — truncate the i64 frame slot back to i1 before storing.
+                        // The frame slot holds the zero-extended bit; the alloca expects i1.
+                        let bit = cg
+                            .builder
+                            .build_int_truncate(
+                                bits,
+                                ctx.bool_type(),
+                                &format!("{cname}_reload_trunc"),
+                            )
+                            .map_err(|e| format!("sm crossing reload bool trunc {cname}: {e}"))?;
+                        cg.builder
+                            .build_store(alloca, bit)
+                            .map_err(|e| format!("sm crossing reload bool store {cname}: {e}"))?;
+                    } else if is_float {
+                        // Float: bitcast i64 frame bits back to f64, store into f64 alloca.
+                        let f_val = cg
+                            .builder
+                            .build_bit_cast(bits, ctx.f64_type(), &format!("{cname}_reload_i_to_f"))
+                            .map_err(|e| format!("sm crossing reload f64 bitcast {cname}: {e}"))?;
+                        cg.builder
+                            .build_store(alloca, f_val)
+                            .map_err(|e| format!("sm crossing reload f64 store {cname}: {e}"))?;
+                    } else if is_decimal128 {
+                        // Decimal128: load 2 slots (lo + hi), reconstruct i128, store.
+                        let hi_bits = state_machine::load_local_slot(
+                            ctx,
+                            &cg.builder,
+                            frame_ptr,
+                            slot_idx + 1,
+                            &format!("{cname}_hi"),
+                        )?;
+                        let lo_128 = cg
+                            .builder
+                            .build_int_z_extend(bits, ctx.i128_type(), &format!("{cname}_lo_128"))
+                            .map_err(|e| format!("reload i128 lo zext {cname}: {e}"))?;
+                        let hi_128 = cg
+                            .builder
+                            .build_int_z_extend(
+                                hi_bits,
+                                ctx.i128_type(),
+                                &format!("{cname}_hi_128"),
+                            )
+                            .map_err(|e| format!("reload i128 hi zext {cname}: {e}"))?;
+                        let shift_amt = ctx.i128_type().const_int(64, false);
+                        let hi_shifted = cg
+                            .builder
+                            .build_left_shift(hi_128, shift_amt, &format!("{cname}_hi_shift"))
+                            .map_err(|e| format!("reload i128 hi shift {cname}: {e}"))?;
+                        let i128_val = cg
+                            .builder
+                            .build_or(lo_128, hi_shifted, &format!("{cname}_i128_or"))
+                            .map_err(|e| format!("reload i128 or {cname}: {e}"))?;
+                        cg.builder
+                            .build_store(alloca, i128_val)
+                            .map_err(|e| format!("sm crossing reload i128 store {cname}: {e}"))?;
+                    } else if is_errors_capable {
+                        // ErrorsCapable: reload 2 frame slots into the companion sm_entry
+                        // struct alloca, then ensure the ptr alloca points at it.
+                        let hi_bits = state_machine::load_local_slot(
+                            ctx,
+                            &cg.builder,
+                            frame_ptr,
+                            slot_idx + 1,
+                            &format!("{cname}_ec_hi"),
+                        )?;
+                        let ec_struct_ty =
+                            ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false);
+                        // Use the pre-created companion alloca (lives in sm_entry — stable).
+                        let struct_alloca =
+                            *ec_struct_allocas.get(cname.as_str()).ok_or_else(|| {
+                                format!("sm reload ec: companion alloca for `{cname}` missing")
+                            })?;
+                        let f0_ptr = cg
+                            .builder
+                            .build_struct_gep(
+                                ec_struct_ty,
+                                struct_alloca,
+                                0,
+                                &format!("{cname}_r_f0_gep"),
+                            )
+                            .map_err(|e| format!("reload ec f0 gep {cname}: {e}"))?;
+                        let f1_ptr = cg
+                            .builder
+                            .build_struct_gep(
+                                ec_struct_ty,
+                                struct_alloca,
+                                1,
+                                &format!("{cname}_r_f1_gep"),
+                            )
+                            .map_err(|e| format!("reload ec f1 gep {cname}: {e}"))?;
+                        cg.builder
+                            .build_store(f0_ptr, bits)
+                            .map_err(|e| format!("reload ec f0 store {cname}: {e}"))?;
+                        cg.builder
+                            .build_store(f1_ptr, hi_bits)
+                            .map_err(|e| format!("reload ec f1 store {cname}: {e}"))?;
+                        // Ensure the ptr alloca (the local's alloca) points at the struct.
+                        cg.builder
+                            .build_store(alloca, struct_alloca)
+                            .map_err(|e| format!("reload ec ptr store {cname}: {e}"))?;
+                    } else if is_shape_embed {
+                        // Shape crossing local: frame-embedded. The ptr alloca is re-wired
+                        // to the frame's slot region in Step 1b on every resume call — no
+                        // reload needed here. The alloca already holds the correct ptr.
+                        // This is a no-op for shape crossing locals.
+                    } else {
+                        // Pointer alloca (string/array/map/etc.): reconstruct ptr from i64.
+                        let ptr_val = cg
+                            .builder
+                            .build_int_to_ptr(
+                                bits,
+                                ctx.ptr_type(AddressSpace::default()),
+                                &format!("{cname}_reload_i2p"),
+                            )
+                            .map_err(|e| format!("sm crossing reload int_to_ptr {cname}: {e}"))?;
+                        cg.builder
+                            .build_store(alloca, ptr_val)
+                            .map_err(|e| format!("sm crossing reload ptr store {cname}: {e}"))?;
+                    }
+                }
+                // If the alloca is not registered (local defined only in a conditional branch
+                // that was never entered before the first suspension), the frame slot holds zeroed
+                // bytes — safe to skip since the local is not yet in scope.
+            }
+        }
+    } // end reload_crossing guard
     Ok(())
 }
 
@@ -2215,9 +2951,10 @@ fn lower_sm_body<'ctx, 'g>(
     f: &FunctionDecl,
     shape_table: &'g ShapeTable,
 ) -> Result<(), String> {
-    // State 0 already has the builder positioned by the caller. Reload params from frame
-    // so they're available in case the wait is at the end of state 0.
-    reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table)?;
+    // State 0 already has the builder positioned by the caller. Reload params from frame.
+    // Crossing locals are NOT reloaded here — they are defined inline later in this state
+    // and stored to the frame at their definition site (no prior stored value to load).
+    reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, false)?;
 
     // Track which state block index we are currently emitting into.
     let mut current_state: usize = 0;
@@ -2256,7 +2993,7 @@ fn lower_sm_body<'ctx, 'g>(
     for &bb in state_blocks.iter() {
         if bb.get_terminator().is_none() {
             cg.builder.position_at_end(bb);
-            reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table)?;
+            reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, false)?;
             state_machine::store_return_value_i64(
                 cg.ctx,
                 &cg.builder,
@@ -2314,16 +3051,321 @@ fn lower_sm_block<'ctx, 'g>(
             )?;
         } else {
             lower_stmt(cg, stmt)?;
+            // Shape-typed crossing locals at a `let` definition site: `lower_struct_lit`
+            // creates a fresh stack alloca and stores its pointer in cg.locals[name].
+            // The stack alloca dies when this resume call returns. Copy the struct bytes
+            // into the pre-existing sm_entry struct alloca (the stable working copy that
+            // `flush_crossing_local_if_needed` then memcpy's into the frame slots).
+            anchor_shape_crossing_locals_to_frame_alloca(cg, stmt)?;
+            // After lowering a non-wait statement, flush any crossing local it defined or
+            // mutated back to the frame slot so the value survives the next suspension.
+            flush_crossing_local_if_needed(cg, stmt, frame_ptr)?;
         }
     }
     Ok(())
 }
 
+/// No-op stub: shape crossing locals now write directly to the composed frame via
+/// the pre-wired ptr alloca (Step 1b in lower_function_with_waits). The definition
+/// site memcpy is handled directly in `lower_stmt`'s SM shape special case.
+fn anchor_shape_crossing_locals_to_frame_alloca<'ctx>(
+    _cg: &mut Cg<'ctx, '_>,
+    _stmt: &Stmt,
+) -> Result<(), String> {
+    Ok(())
+}
+
+/// Single per-type flush: read from `alloca` and write to the frame slot(s) for `name`.
+///
+/// This is the canonical per-type dispatch for every frame flush operation. Both
+/// `flush_crossing_local_if_needed` (written crossing locals after a statement) and
+/// `flush_for_loop_var` (for-loop element after binding) delegate here so each type is
+/// handled in exactly one place. Adding a new type requires updating only this function.
+///
+/// Type strategies (matching the reload path in `reload_params_from_frame`):
+///   int            → i64 alloca, raw 1-slot load/store
+///   bool           → i1 alloca, zero-extend to i64 (frame slot is always 8 bytes)
+///   float          → f64 alloca, bitcast f64↔i64, 1 slot
+///   decimal128     → i128 alloca, split lo/hi, 2 consecutive slots
+///   ErrorsCapable  → ptr alloca → companion {i64,i64} struct → 2 frame slots
+///   shape-embed    → no-op: ptr alloca points into frame region (Step 1b wiring);
+///                    all field writes go directly to frame — bytes are already live
+///   pointer types  → ptr alloca, ptr_to_int, 1 slot (string/array/map/dynamic)
+fn flush_var_slot_to_frame<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    name: &str,
+    alloca: PointerValue<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    slot_idx: usize,
+) -> Result<(), String> {
+    let ctx = cg.ctx;
+    if cg.sm_crossing_scalar_set.contains(name) {
+        // Int: i64 alloca — raw i64 load, 1 slot.
+        let bits = cg
+            .builder
+            .build_load(ctx.i64_type(), alloca, &format!("{name}_flush_load"))
+            .map_err(|e| format!("crossing flush load {name}: {e}"))?
+            .into_int_value();
+        state_machine::store_local_slot(ctx, &cg.builder, frame_ptr, slot_idx, bits)?;
+    } else if cg.sm_crossing_bool_set.contains(name) {
+        // Bool: i1 alloca — load i1, zero-extend to i64 for the frame slot.
+        // The frame slot is always 8 bytes; storing a raw i1 would write 1 byte
+        // into an 8-byte region (UB and SIGSEGV on reload).
+        let bit = cg
+            .builder
+            .build_load(ctx.bool_type(), alloca, &format!("{name}_flush_bool"))
+            .map_err(|e| format!("crossing flush bool load {name}: {e}"))?
+            .into_int_value();
+        let bits = cg
+            .builder
+            .build_int_z_extend(bit, ctx.i64_type(), &format!("{name}_flush_zext"))
+            .map_err(|e| format!("crossing flush bool zext {name}: {e}"))?;
+        state_machine::store_local_slot(ctx, &cg.builder, frame_ptr, slot_idx, bits)?;
+    } else if cg.sm_crossing_float_set.contains(name) {
+        // Float: f64 alloca — load f64, bitcast to i64, 1 slot.
+        let f_val = cg
+            .builder
+            .build_load(ctx.f64_type(), alloca, &format!("{name}_flush_f64"))
+            .map_err(|e| format!("crossing flush f64 {name}: {e}"))?
+            .into_float_value();
+        let bits = cg
+            .builder
+            .build_bit_cast(f_val, ctx.i64_type(), &format!("{name}_f_to_i"))
+            .map_err(|e| format!("crossing flush f64 bitcast {name}: {e}"))?
+            .into_int_value();
+        state_machine::store_local_slot(ctx, &cg.builder, frame_ptr, slot_idx, bits)?;
+    } else if cg.sm_crossing_decimal128_set.contains(name) {
+        // Decimal128: i128 alloca — split into 2 i64 halves, 2 slots.
+        // Frame holds the value directly (not a pointer to stack) so the bits survive
+        // suspension even though the resume function's stack frame is freed between calls.
+        let i128_val = cg
+            .builder
+            .build_load(ctx.i128_type(), alloca, &format!("{name}_flush_i128"))
+            .map_err(|e| format!("crossing flush i128 {name}: {e}"))?
+            .into_int_value();
+        let lo = cg
+            .builder
+            .build_int_truncate(i128_val, ctx.i64_type(), &format!("{name}_lo"))
+            .map_err(|e| format!("crossing flush i128 lo {name}: {e}"))?;
+        let shift_amt = ctx.i128_type().const_int(64, false);
+        let shifted = cg
+            .builder
+            .build_right_shift(i128_val, shift_amt, false, &format!("{name}_sh"))
+            .map_err(|e| format!("crossing flush i128 shift {name}: {e}"))?;
+        let hi = cg
+            .builder
+            .build_int_truncate(shifted, ctx.i64_type(), &format!("{name}_hi"))
+            .map_err(|e| format!("crossing flush i128 hi {name}: {e}"))?;
+        state_machine::store_local_slot(ctx, &cg.builder, frame_ptr, slot_idx, lo)?;
+        state_machine::store_local_slot(ctx, &cg.builder, frame_ptr, slot_idx + 1, hi)?;
+    } else if cg.sm_crossing_errors_capable_set.contains(name) {
+        // ErrorsCapable {i64,i64}: load the ptr from the ptr alloca, then load
+        // both i64 fields from the companion struct and store to 2 frame slots.
+        // The companion struct alloca lives in sm_entry so it is always valid here.
+        let ec_struct_ty = ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false);
+        let struct_ptr = cg
+            .builder
+            .build_load(
+                ctx.ptr_type(AddressSpace::default()),
+                alloca,
+                &format!("{name}_flush_ec_ptr"),
+            )
+            .map_err(|e| format!("crossing flush ec ptr {name}: {e}"))?
+            .into_pointer_value();
+        let f0_ptr = cg
+            .builder
+            .build_struct_gep(ec_struct_ty, struct_ptr, 0, &format!("{name}_f0_gep"))
+            .map_err(|e| format!("crossing flush ec f0 gep {name}: {e}"))?;
+        let f1_ptr = cg
+            .builder
+            .build_struct_gep(ec_struct_ty, struct_ptr, 1, &format!("{name}_f1_gep"))
+            .map_err(|e| format!("crossing flush ec f1 gep {name}: {e}"))?;
+        let f0 = cg
+            .builder
+            .build_load(ctx.i64_type(), f0_ptr, &format!("{name}_f0"))
+            .map_err(|e| format!("crossing flush ec f0 {name}: {e}"))?
+            .into_int_value();
+        let f1 = cg
+            .builder
+            .build_load(ctx.i64_type(), f1_ptr, &format!("{name}_f1"))
+            .map_err(|e| format!("crossing flush ec f1 {name}: {e}"))?
+            .into_int_value();
+        state_machine::store_local_slot(ctx, &cg.builder, frame_ptr, slot_idx, f0)?;
+        state_machine::store_local_slot(ctx, &cg.builder, frame_ptr, slot_idx + 1, f1)?;
+    } else if cg.sm_crossing_shape_embed_set.contains(name) {
+        // Shape crossing local: frame-embedded.
+        // The ptr alloca points directly into the composed frame's slot region
+        // (wired in Step 1b of lower_function_with_waits). All field writes through
+        // the alloca go directly to the frame — no flush needed.
+        // No-op: the frame bytes are already live at the correct location.
+    } else {
+        // Pointer alloca (string/array/map/dynamic/etc.): load the heap pointer, ptr_to_int.
+        // These types already live on the heap so the pointer is stable across suspension.
+        let ptr_val = cg
+            .builder
+            .build_load(
+                ctx.ptr_type(AddressSpace::default()),
+                alloca,
+                &format!("{name}_flush_ptr_load"),
+            )
+            .map_err(|e| format!("crossing flush ptr load {name}: {e}"))?
+            .into_pointer_value();
+        let bits = cg
+            .builder
+            .build_ptr_to_int(ptr_val, ctx.i64_type(), &format!("{name}_flush_p2i"))
+            .map_err(|e| format!("crossing flush ptr_to_int {name}: {e}"))?;
+        state_machine::store_local_slot(ctx, &cg.builder, frame_ptr, slot_idx, bits)?;
+    }
+    Ok(())
+}
+
+/// If `stmt` is a `let` or `assign` targeting a crossing local, store the current
+/// alloca value to the local's frame slot.
+///
+/// Called after every non-wait statement in the SM walk. Crossing locals not yet
+/// defined (local declared in a branch not yet entered) are skipped because their
+/// alloca is not in `cg.locals`.
+fn flush_crossing_local_if_needed<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    stmt: &Stmt,
+    frame_ptr: PointerValue<'ctx>,
+) -> Result<(), String> {
+    let Some(ref crossing_names) = cg.sm_crossing_names.clone() else {
+        return Ok(());
+    };
+
+    // Collect all crossing-local names written by this statement (recursively for if/while).
+    // `Stmt::If` and `Stmt::While` can contain assigns to crossing locals in their bodies.
+    let mut written_names: Vec<String> = Vec::new();
+    collect_crossing_writes(
+        stmt,
+        cg.sm_crossing_names.as_deref().unwrap_or(&[]),
+        &mut written_names,
+    );
+
+    for name in &written_names {
+        let name = name.as_str();
+        let Some(slot_pos) = crossing_names
+            .iter()
+            .position(|n| n == name.to_string().as_str())
+        else {
+            continue;
+        };
+        let slot_idx = cg.sm_crossing_slot_indices[slot_pos];
+        if let Some(&alloca) = cg.locals.get(name) {
+            flush_var_slot_to_frame(cg, name, alloca, frame_ptr, slot_idx)?;
+        }
+    } // end for name in written_names
+    Ok(())
+}
+
+/// Recursively collect names of crossing locals that are written (defined at their
+/// top-level `Stmt::Let` site, or mutated by `Stmt::Assign`/`FieldAssign`/`IndexAssign`)
+/// anywhere in `stmt` or any nested block body, filtering against `crossing_names`.
+///
+/// Recurses into: `If`, `While`, `For`, `Match` (arms + else arm) bodies so that
+/// mutations inside any control-flow construct trigger a flush to the frame slot.
+///
+/// Shadowing: a `Stmt::Let` inside a NESTED scope (if/while/for body) with the same
+/// name as a crossing local introduces a new inner binding — it is NOT a write to
+/// the outer crossing local's frame slot. Only `Stmt::Assign` in nested scopes
+/// counts as a mutation. This prevents Bug 6: `let x` inside an if arm from
+/// clobbering the outer x frame slot with the shadow's value.
+fn collect_crossing_writes(stmt: &Stmt, crossing_names: &[String], out: &mut Vec<String>) {
+    collect_crossing_writes_impl(stmt, crossing_names, out, false);
+}
+
+fn collect_crossing_writes_impl(
+    stmt: &Stmt,
+    crossing_names: &[String],
+    out: &mut Vec<String>,
+    nested_scope: bool,
+) {
+    let push_unique = |out: &mut Vec<String>, name: &String| {
+        if !out.contains(name) {
+            out.push(name.clone());
+        }
+    };
+    match stmt {
+        // Definition site of a crossing local (only at the outer scope, not in a nested
+        // scope where `let x` creates a shadow binding instead of writing the outer slot).
+        Stmt::Let { name, .. } if !nested_scope && crossing_names.iter().any(|n| n == name) => {
+            push_unique(out, name);
+        }
+        // Mutation of a crossing local (re-assignment, valid at any nesting depth).
+        Stmt::Assign { target, .. } if crossing_names.iter().any(|n| n == target) => {
+            push_unique(out, target);
+        }
+        // FieldAssign: struct is mutated in place through the crossing-local pointer.
+        // The frame slot value (the pointer) is unchanged — no slot update needed.
+        // Include so callers that check for "was this local mutated" see it.
+        Stmt::FieldAssign { target, .. } => {
+            let root = root_ident(target);
+            if let Some(r) = root {
+                if crossing_names.iter().any(|n| n == r) {
+                    push_unique(out, &r.to_string());
+                }
+            }
+        }
+        // IndexAssign: same as FieldAssign — pointer is stable.
+        Stmt::IndexAssign { receiver, .. } => {
+            let root = root_ident(receiver);
+            if let Some(r) = root {
+                if crossing_names.iter().any(|n| n == r) {
+                    push_unique(out, &r.to_string());
+                }
+            }
+        }
+        // Recurse into all control-flow bodies. nested_scope=true so inner `let x` is
+        // not treated as a write to the outer crossing local (shadowing guard).
+        Stmt::If { body, .. } => {
+            for s in &body.stmts {
+                collect_crossing_writes_impl(s, crossing_names, out, true);
+            }
+        }
+        Stmt::While { body, .. } => {
+            for s in &body.stmts {
+                collect_crossing_writes_impl(s, crossing_names, out, true);
+            }
+        }
+        Stmt::For { body, .. } => {
+            for s in &body.stmts {
+                collect_crossing_writes_impl(s, crossing_names, out, true);
+            }
+        }
+        Stmt::Match { arms, else_arm, .. } => {
+            for arm in arms {
+                for s in &arm.body.stmts {
+                    collect_crossing_writes_impl(s, crossing_names, out, true);
+                }
+            }
+            if let Some(else_body) = else_arm {
+                for s in &else_body.stmts {
+                    collect_crossing_writes_impl(s, crossing_names, out, true);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Extract the root identifier from a field-access or index-access expression chain.
+///
+/// Used by `collect_crossing_writes` to find the base local name being mutated.
+fn root_ident(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Ident(name, _) => Some(name.as_str()),
+        Expr::FieldAccess { receiver, .. } => root_ident(receiver),
+        Expr::IndexAccess { receiver, .. } => root_ident(receiver),
+        _ => None,
+    }
+}
+
 /// Lower a statement that contains at least one `Expr::Wait`.
 ///
 /// Handles:
-/// - `Stmt::Expr(Expr::Wait(...))` — a bare `wait sleepAsync(ms)` statement
-/// - `Stmt::Let { value: Expr::Wait(...), ... }` — `let x = wait sleepAsync(ms)`
+/// - `Stmt::Expr(Expr::Wait(...))` — a bare `wait sleep(ms)` statement
+/// - `Stmt::Let { value: Expr::Wait(...), ... }` — `let x = wait sleep(ms)`
 /// - `Stmt::If { cond, body, .. }` whose body contains a wait — recurses into the branch
 ///   so the nested wait suspends correctly (the branch and its continuation converge at a
 ///   merge block; Yinz `if` has no else — multi-case uses `Stmt::Match`).
@@ -2348,8 +3390,8 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
     current_state: &mut usize,
 ) -> Result<(), String> {
     match stmt {
-        // `wait sleepAsync(ms)` as a bare expression statement.
-        Stmt::Expr(Expr::Wait(inner, _)) if is_sleep_async_call(inner) => {
+        // `wait sleep(ms)` as a bare expression statement.
+        Stmt::Expr(Expr::Wait(inner, _)) if is_sleep_call(inner) => {
             emit_wait_point(
                 cg,
                 inner,
@@ -2399,7 +3441,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
             let _ = return_val;
         }
 
-        // `wait sleepAsync(ms)` as a bare expression statement (non-ident call — fallback).
+        // `wait sleep(ms)` as a bare expression statement (non-ident call — fallback).
         Stmt::Expr(Expr::Wait(inner, _)) => {
             emit_wait_point(
                 cg,
@@ -2415,12 +3457,12 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
             )?;
         }
 
-        // `let name = wait sleepAsync(ms)` — sleepAsync is nothing-returning; bind zero.
+        // `let name = wait sleep(ms)` — sleep is nothing-returning; bind zero.
         Stmt::Let {
             name,
             value: Expr::Wait(inner, _),
             ..
-        } if is_sleep_async_call(inner) => {
+        } if is_sleep_call(inner) => {
             emit_wait_point(
                 cg,
                 inner,
@@ -2433,7 +3475,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                 shape_table,
                 current_state,
             )?;
-            // sleepAsync returns nothing; bind zero to name.
+            // sleep returns nothing; bind zero to name.
             let alloca = cg
                 .builder
                 .build_alloca(cg.i64(), &format!("{name}_alloca"))
@@ -2462,11 +3504,18 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                 shape_table,
                 current_state,
             )?;
-            // Bind the return value to `name`.
-            // For errors-capable callees: return_val is {i64,i64} struct — store via alloca pointer.
-            // For all others: return_val is i64 — store directly.
-            let alloca = bind_sm_return_value(cg, name, return_val)?;
+            // Bind the return value to `name`, flushing to frame slot if it is a
+            // crossing local (needed before any subsequent suspension point).
+            let alloca = bind_sm_result_and_flush(cg, name, return_val, frame_ptr)?;
             cg.locals.insert(name.clone(), alloca);
+            // EC crossing locals must be tracked in errors_capable_locals so that
+            // lower_expr's ident handler can extract the success value (or propagate the
+            // error) when `name` is used AFTER a subsequent suspension. Without this,
+            // `return x` where x is an EC crossing local sends the companion-struct
+            // pointer as the ok-word instead of the actual success bits.
+            if cg.sm_crossing_errors_capable_set.contains(name.as_str()) {
+                cg.errors_capable_locals.insert(name.clone());
+            }
         }
 
         // `let name = suspendingCallee(args)` — no explicit `wait`, bind the return value.
@@ -2485,8 +3534,12 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                 shape_table,
                 current_state,
             )?;
-            let alloca = bind_sm_return_value(cg, name, return_val)?;
+            let alloca = bind_sm_result_and_flush(cg, name, return_val, frame_ptr)?;
             cg.locals.insert(name.clone(), alloca);
+            // Same EC-crossing-local registration as the wait-let arm above.
+            if cg.sm_crossing_errors_capable_set.contains(name.as_str()) {
+                cg.errors_capable_locals.insert(name.clone());
+            }
         }
 
         // `let name = wait non_sleep_async_call(...)` — non-suspension wait; lower normally.
@@ -2508,6 +3561,11 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                 .map_err(|e| format!("sm if branch: {e}"))?;
 
             cg.builder.position_at_end(then_bb);
+            // Save locals snapshot + bump scope depth so shadow bindings inside the
+            // wait-bearing if body don't clobber the outer crossing local's sm_entry alloca.
+            // This mirrors the same guard in lower_stmt's Stmt::If arm.
+            let locals_snapshot = cg.locals.clone();
+            cg.sm_scope_depth += 1;
             lower_sm_block(
                 cg,
                 body,
@@ -2520,6 +3578,12 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                 shape_table,
                 current_state,
             )?;
+            cg.sm_scope_depth -= 1;
+            // Restore ALL snapshot entries — same lexical-scoping rationale as lower_stmt's
+            // Stmt::If arm. Crossing sm_entry allocas stay active; shadow bindings are unwound.
+            for (name, &outer_alloca) in &locals_snapshot {
+                cg.locals.insert(name.clone(), outer_alloca);
+            }
             if !is_block_terminated(cg) {
                 cg.builder
                     .build_unconditional_branch(merge_bb)
@@ -2571,6 +3635,16 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                             ok_i64,
                         )?;
                     }
+                    // Float callee: load_sm_return_value_typed returns FloatValue.
+                    inkwell::values::BasicValueEnum::FloatValue(fv) => {
+                        state_machine::store_return_value_f64(cg.ctx, &cg.builder, own_frame, fv)?;
+                    }
+                    // Decimal128 callee: load_sm_return_value_typed returns i128 IntValue.
+                    inkwell::values::BasicValueEnum::IntValue(iv)
+                        if iv.get_type() == cg.ctx.i128_type() =>
+                    {
+                        state_machine::store_return_value_i128(cg.ctx, &cg.builder, own_frame, iv)?;
+                    }
                     _ => {
                         // Non-errors callee: store the i64/ptr return value.
                         let val_ty = cg.expr_type(inner);
@@ -2591,18 +3665,1045 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                 .map_err(|e| format!("sm return after inline-poll: {e}"))?;
         }
 
+        // `while (cond) { ...wait/suspending_call... }` — emit a frame-backed loop.
+        //
+        // Control flow mirrors the non-SM lower_stmt_while but walks the body with
+        // lower_sm_block so each wait inside consumes a pre-allocated continuation
+        // state. Crossing loop-carried locals (declared before the while or accumulated
+        // inside it) are frame-backed by P1's slot machinery — no separate alloc.
+        //
+        // Resume behaviour: after a suspension inside the body, the continuation state
+        // reloads params/crossing-locals and branches to post_wait_bb (inside the body).
+        // The rest of the body statements run, then execution falls through to the branch
+        // back to while_header_bb, which re-checks the condition. If still true, the body
+        // runs again (potentially suspending again). Each iteration is therefore a distinct
+        // poll cycle: sequential by construction (the runtime never resumes the same task
+        // twice concurrently), satisfying the "loop iterations sequential by default" design.
+        Stmt::While { cond, body, .. } => {
+            let locals_snapshot = cg.locals.clone();
+            cg.sm_scope_depth += 1;
+
+            let while_header_bb = cg.append_block("sm_while_header");
+            let while_body_bb = cg.append_block("sm_while_body");
+            let while_exit_bb = cg.append_block("sm_while_exit");
+
+            // Branch from current position (whatever state block we are in) to header.
+            cg.builder
+                .build_unconditional_branch(while_header_bb)
+                .map_err(|e| format!("sm while entry branch: {e}"))?;
+
+            // Header: evaluate condition; branch to body or exit.
+            cg.builder.position_at_end(while_header_bb);
+            let cond_val = lower_expr(cg, cond)?.into_int_value();
+            cg.builder
+                .build_conditional_branch(cond_val, while_body_bb, while_exit_bb)
+                .map_err(|e| format!("sm while cond branch: {e}"))?;
+
+            // Body: lower via SM block walker so nested waits consume continuation states.
+            cg.builder.position_at_end(while_body_bb);
+            lower_sm_block(
+                cg,
+                body,
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
+            if !is_block_terminated(cg) {
+                // Body didn't contain a return; flush preempt hook then loop back to header.
+                emit_loop_preempt(cg)?;
+                cg.builder
+                    .build_unconditional_branch(while_header_bb)
+                    .map_err(|e| format!("sm while body->header branch: {e}"))?;
+            }
+
+            cg.sm_scope_depth -= 1;
+            // Restore ALL snapshot entries — same lexical-scoping rationale as lower_stmt's
+            // Stmt::While arm. sm_entry allocas for crossing locals stay active; shadow
+            // bindings introduced inside the body are unwound so the outer scope is clean.
+            for (name, &outer_alloca) in &locals_snapshot {
+                cg.locals.insert(name.clone(), outer_alloca);
+            }
+
+            cg.builder.position_at_end(while_exit_bb);
+        }
+
+        // `for (var in iter) { ...wait/suspending_call... }` — frame-backed for-loop.
+        //
+        // Control flow mirrors the non-SM lower_stmt_for but walks the body with
+        // lower_sm_block so each wait inside consumes a pre-allocated continuation state.
+        // The iteration index (for array/range) or entry cursor (for map) is stored in a
+        // stack alloca, which the SM resume-switch lands inside the body on each resume.
+        // Loop-carried outer locals are frame-backed by P1's slot machinery — no extra alloc.
+        //
+        // Resume behaviour: after a suspension inside the body, the continuation state
+        // reloads params/crossing-locals and branches to post_wait_bb (inside the body).
+        // The remaining body statements run, then execution increments the index and falls
+        // through to the back-edge branch that re-checks the condition. Each iteration is
+        // therefore a distinct poll cycle: sequential by construction (the runtime never
+        // resumes the same task twice concurrently), satisfying "loop iterations sequential
+        // by default" in design/concurrency.md.
+        //
+        // The alloca for the loop index is placed in the current (state) block, not sm_entry,
+        // because it is re-initialized at the start of the for-loop, not carried across
+        // resumes at the function level. Crossing OUTER locals (declared before the for-loop
+        // and read after it, or read inside the body) DO get sm_entry allocas via P1.
+        Stmt::For {
+            var, iter, body, ..
+        } => {
+            let locals_snapshot = cg.locals.clone();
+            cg.sm_scope_depth += 1;
+            lower_sm_for(
+                cg,
+                var,
+                iter,
+                body,
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
+            cg.sm_scope_depth -= 1;
+            // Restore ALL snapshot entries — same lexical-scoping rationale as Stmt::While arm.
+            // sm_entry allocas for crossing locals stay active; shadow bindings introduced
+            // inside the for body are unwound so the outer scope is clean.
+            for (name, &outer_alloca) in &locals_snapshot {
+                cg.locals.insert(name.clone(), outer_alloca);
+            }
+        }
+
+        // `match (scrutinee) { pat => { ...wait/suspending_call... } }` — SM match.
+        //
+        // Control flow mirrors the non-SM lower_stmt_match but walks each arm body that
+        // contains a suspension with lower_sm_block. Arms without a suspension use the
+        // regular lower_stmt path. The scrutinee is evaluated once before the arm dispatch;
+        // the matching arm's body is then walked by the SM block walker.
+        //
+        // Resume behaviour: after a suspension inside an arm body, the continuation state
+        // reloads params/crossing-locals and branches to post_wait_bb (inside that arm body).
+        // The remaining arm-body statements run, then execution falls through to the merge block.
+        //
+        // Note: `match` in Yinz is the multi-case form of `if` (see parser.rs). Arms without
+        // a suspension lower normally; only arms containing a wait go through lower_sm_block.
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
+            let locals_snapshot = cg.locals.clone();
+            cg.sm_scope_depth += 1;
+            lower_sm_match(
+                cg,
+                scrutinee,
+                arms,
+                else_arm.as_ref(),
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
+            cg.sm_scope_depth -= 1;
+            // Restore ALL snapshot entries — same lexical-scoping rationale as Stmt::If arm.
+            for (name, &outer_alloca) in &locals_snapshot {
+                cg.locals.insert(name.clone(), outer_alloca);
+            }
+        }
+
         _ => {
-            if stmt_contains_wait(stmt) && !stmt_contains_suspending_call(stmt, cg.suspend_set) {
+            if stmt_contains_wait(stmt) || stmt_contains_suspending_call(stmt, cg.suspend_set) {
                 panic!(
-                    "BUG: SM codegen reached a wait-bearing statement that typeck should have \
-                     rejected. The WaitInsideLoop or LocalCrossesWait guard regressed. \
-                     Statement: {stmt:?}"
+                    "BUG: SM codegen reached a wait-bearing statement with no handler. \
+                     This is a compiler bug — all suspendable statement forms should have \
+                     an explicit arm above. Statement: {stmt:?}"
                 );
             }
             lower_stmt(cg, stmt)?;
         }
     }
     Ok(())
+}
+
+/// Flush a for-loop variable to its crossing-local frame slot after binding.
+///
+/// The for-loop variable is bound by the iteration mechanism (not via `Stmt::Let`),
+/// so `flush_crossing_local_if_needed` does not see it. We flush manually so the
+/// continuation state's reload path can restore the value after a suspension.
+///
+/// Delegates to `flush_var_slot_to_frame` for the per-type conversion so both flush
+/// paths share a single dispatch — adding a new type requires updating only that helper.
+fn flush_for_loop_var<'ctx>(
+    cg: &Cg<'ctx, '_>,
+    var: &str,
+    var_slot: PointerValue<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+) -> Result<(), String> {
+    // Find the slot index for `var` in the crossing-names/slot-indices parallel arrays.
+    let Some(pos) = cg
+        .sm_crossing_names
+        .as_deref()
+        .and_then(|names| names.iter().position(|n| n == var))
+    else {
+        // `var` is not a crossing local — no frame slot to flush.
+        return Ok(());
+    };
+    let slot_idx = cg.sm_crossing_slot_indices[pos];
+    flush_var_slot_to_frame(cg, var, var_slot, frame_ptr, slot_idx)
+}
+
+/// Emit state-machine codegen for `for (var in iter) { ...body with waits... }`.
+///
+/// The iteration index is a synthetic crossing local (`__ynz_for_idx_N`) whose frame slot
+/// was pre-allocated by `crossing_local_names`. This lets the index survive suspension the
+/// same way user-declared crossing locals do — no extra alloc, no separate mechanism.
+///
+/// Control flow mirrors `lower_stmt_for` but uses `lower_sm_block` for the body so each
+/// wait inside allocates a continuation state. After the body, the index is incremented
+/// and explicitly flushed to its frame slot before the back-edge branch.
+///
+/// All for-loop variants (array, map, range, fixed, string, shape-iter) are handled.
+/// Non-SM iteration (no wait in body) falls through to `lower_stmt_for` via the non-SM
+/// path in `lower_sm_block`.
+#[allow(clippy::too_many_arguments)]
+fn lower_sm_for<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    var: &str,
+    iter: &Expr,
+    body: &ynz_ast::nodes::Block,
+    state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
+    pending_block: inkwell::basic_block::BasicBlock<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    waker_ctx: PointerValue<'ctx>,
+    param_names: &[String],
+    f: &FunctionDecl,
+    shape_table: &'g ShapeTable,
+    current_state: &mut usize,
+) -> Result<(), String> {
+    // Claim the synthetic index slot for this for-loop.
+    let loop_idx = cg.sm_for_loop_counter;
+    cg.sm_for_loop_counter += 1;
+    let syn_name = format!("__ynz_for_idx_{loop_idx}");
+
+    // Find the frame slot index for the synthetic crossing local.
+    // `crossing_local_names` pre-allocated a slot for every suspending for-loop under
+    // the same counter — the slot must exist or the frame-layout invariant is violated.
+    let slot_pos = cg
+        .sm_crossing_names
+        .as_deref()
+        .and_then(|names| names.iter().position(|n| n == &syn_name))
+        .ok_or_else(|| {
+            format!(
+                "SM for-loop: synthetic crossing local `{syn_name}` not found in frame. \
+                 This is a compiler bug — crossing_local_names must pre-allocate this slot."
+            )
+        })?;
+    let slot_idx = cg.sm_crossing_slot_indices[slot_pos];
+
+    let iter_ty = cg.expr_type(iter);
+
+    // Create an sm_entry alloca for the working-copy of the index. The frame slot
+    // (idx_slot) holds the durable value across resume calls; the alloca holds the
+    // in-progress value within one resume call.
+    let idx_alloca = cg.alloca_in_entry_llvm(cg.i64(), &syn_name)?;
+
+    // ── Range-based: `for (i in range(start, end))` ──────────────────────────────
+    // The synthetic slot holds the loop counter (index). The range end is re-evaluated
+    // at the header on each iteration — range expressions are pure (no side effects) and
+    // always produce the same end value. This avoids the need for a second frame slot.
+    if matches!(iter_ty, Type::Range { .. }) {
+        let (start_val, _) = extract_range_bounds(cg, iter)?;
+
+        // Init index and flush to frame slot.
+        cg.builder
+            .build_store(idx_alloca, start_val)
+            .map_err(|e| format!("sm range idx init: {e}"))?;
+        state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, start_val)
+            .map_err(|e| format!("sm range flush idx: {e}"))?;
+
+        let header_bb = cg.append_block("sm_for_r_header");
+        let body_bb = cg.append_block("sm_for_r_body");
+        let exit_bb = cg.append_block("sm_for_r_exit");
+        cg.builder
+            .build_unconditional_branch(header_bb)
+            .map_err(|e| format!("sm for range entry: {e}"))?;
+
+        // Header: reload idx from frame slot; re-evaluate end; check idx < end.
+        // Re-evaluating end at the header is correct because range bounds are pure
+        // expressions (literals or reads of frame-backed crossing locals) — same value
+        // on every iteration.
+        cg.builder.position_at_end(header_bb);
+        let idx_cur =
+            state_machine::load_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, "sm_r_idx")?;
+        cg.builder
+            .build_store(idx_alloca, idx_cur)
+            .map_err(|e| format!("{e}"))?;
+        let (_, end_cur_val) = extract_range_bounds(cg, iter)?;
+        let in_range = cg
+            .builder
+            .build_int_compare(IntPredicate::SLT, idx_cur, end_cur_val, "sm_r_cond")
+            .map_err(|e| format!("{e}"))?;
+        cg.builder
+            .build_conditional_branch(in_range, body_bb, exit_bb)
+            .map_err(|e| format!("sm for range cond: {e}"))?;
+
+        // Body: bind loop variable (= index for range loops), run SM body.
+        // Use existing crossing-local alloca if present (avoids creating a duplicate that
+        // the frame reload would miss on subsequent resumes).
+        cg.builder.position_at_end(body_bb);
+        let var_slot = if let Some(&existing) = cg.locals.get(var) {
+            existing
+        } else {
+            let s = cg.alloca_in_entry(&Type::Int, var)?;
+            cg.locals.insert(var.to_string(), s);
+            s
+        };
+        cg.builder
+            .build_store(var_slot, idx_cur)
+            .map_err(|e| format!("sm range var bind: {e}"))?;
+        // Flush the loop variable to its frame slot so the continuation state can reload
+        // it after a suspension. The for-loop binding is not via Stmt::Let, so
+        // flush_crossing_local_if_needed does not see it — flush manually here.
+        flush_for_loop_var(cg, var, var_slot, frame_ptr)?;
+
+        lower_sm_block(
+            cg,
+            body,
+            state_blocks,
+            pending_block,
+            frame_ptr,
+            waker_ctx,
+            param_names,
+            f,
+            shape_table,
+            current_state,
+        )?;
+
+        if !is_block_terminated(cg) {
+            let idx_after = state_machine::load_local_slot(
+                cg.ctx,
+                &cg.builder,
+                frame_ptr,
+                slot_idx,
+                "sm_r_idx_after",
+            )?;
+            let one = cg.i64().const_int(1, false);
+            let idx_next = cg
+                .builder
+                .build_int_add(idx_after, one, "sm_r_idx_next")
+                .map_err(|e| format!("{e}"))?;
+            state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, idx_next)
+                .map_err(|e| format!("sm range flush next: {e}"))?;
+            emit_loop_preempt(cg)?;
+            cg.builder
+                .build_unconditional_branch(header_bb)
+                .map_err(|e| format!("sm for range back-edge: {e}"))?;
+        }
+
+        cg.builder.position_at_end(exit_bb);
+        cg.locals.remove(var);
+        return Ok(());
+    }
+
+    // ── Array-based: `for (x in arr)` where arr: array<T> ────────────────────────
+    // The array pointer and count are re-evaluated at the header on each iteration.
+    // `lower_expr(iter)` for a variable identifier loads from `cg.locals["arr"]`, which
+    // is a crossing local alloca whose value is reloaded from the frame on each resume.
+    // The count is stable (arrays don't grow during suspension). No extra frame slots needed.
+    if let Type::BuiltinArray { elem } = &iter_ty {
+        let elem = elem.as_ref().clone();
+
+        // Init index to 0 and flush to frame slot.
+        let zero = cg.i64().const_zero();
+        cg.builder
+            .build_store(idx_alloca, zero)
+            .map_err(|e| format!("{e}"))?;
+        state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, zero)
+            .map_err(|e| format!("sm array flush zero: {e}"))?;
+
+        let header_bb = cg.append_block("sm_for_a_header");
+        let body_bb = cg.append_block("sm_for_a_body");
+        let exit_bb = cg.append_block("sm_for_a_exit");
+        cg.builder
+            .build_unconditional_branch(header_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        cg.builder.position_at_end(header_bb);
+        let idx_cur =
+            state_machine::load_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, "sm_a_idx")?;
+        cg.builder
+            .build_store(idx_alloca, idx_cur)
+            .map_err(|e| format!("{e}"))?;
+        // Re-evaluate array pointer and count at header — reloads from frame-backed local.
+        let arr_ptr_h = lower_expr(cg, iter)?.into_pointer_value();
+        let cnt_cur = cg
+            .builder
+            .build_call(cg.rt.ynz_array_count, &[arr_ptr_h.into()], "sm_a_cnt")
+            .map_err(|e| format!("{e}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or("array_count void")?
+            .into_int_value();
+        let in_range = cg
+            .builder
+            .build_int_compare(IntPredicate::SLT, idx_cur, cnt_cur, "sm_a_cond")
+            .map_err(|e| format!("{e}"))?;
+        cg.builder
+            .build_conditional_branch(in_range, body_bb, exit_bb)
+            .map_err(|e| format!("sm for array cond: {e}"))?;
+
+        cg.builder.position_at_end(body_bb);
+        let arr_cur = lower_expr(cg, iter)?.into_pointer_value();
+        let out = cg
+            .builder
+            .build_alloca(cg.maybe_type(), "sm_a_get")
+            .map_err(|e| format!("{e}"))?;
+        cg.builder
+            .build_call(
+                cg.rt.ynz_array_get,
+                &[arr_cur.into(), idx_cur.into(), out.into()],
+                "sm_a_get_call",
+            )
+            .map_err(|e| format!("{e}"))?;
+        let val_gep = cg
+            .builder
+            .build_struct_gep(cg.maybe_type(), out, 1, "sm_a_val")
+            .map_err(|e| format!("{e}"))?;
+        let bits = cg
+            .builder
+            .build_load(cg.i64(), val_gep, "sm_a_bits")
+            .map_err(|e| format!("{e}"))?
+            .into_int_value();
+        let elem_val = cg.i64_bits_to(bits, &elem)?;
+        // Use the existing crossing-local alloca if `var` is already frame-backed; otherwise
+        // create a new sm_entry alloca. Creating a duplicate alloca would make cg.locals[var]
+        // point to a different alloca than the one the frame reload writes into, causing the
+        // reload to update the stale alloca while the body reads from the new (uninitialized) one.
+        let var_slot = if let Some(&existing) = cg.locals.get(var) {
+            existing
+        } else {
+            let s = cg.alloca_in_entry(&elem, var)?;
+            cg.locals.insert(var.to_string(), s);
+            s
+        };
+        // Shape-embed loop var: `var_slot` is the ptr alloca pre-wired to the frame region
+        // (Step 1b in lower_function_with_waits). `elem_val` is a pointer to the heap element
+        // (from ynz_array_get via i64_bits_to). Copy the element bytes into the frame region
+        // directly — this is the frame-persistent copy. A regular store would overwrite the
+        // frame region pointer in the ptr alloca with the heap element pointer, breaking the
+        // frame-embed invariant and causing every field read after suspension to GEP into the
+        // heap element (whose lifetime is not controlled by the task frame).
+        if cg.sm_crossing_shape_embed_set.contains(var) {
+            if let Some(shape_name) = cg.sm_crossing_shape_names.get(var).cloned() {
+                let struct_ty = cg.shape_types.get(&shape_name).ok_or_else(|| {
+                    format!("sm for array shape-embed: LLVM type for `{shape_name}` missing")
+                })?;
+                let size_val = struct_ty.size_of().ok_or_else(|| {
+                    format!("sm for array shape-embed: size_of `{shape_name}` unavailable")
+                })?;
+                let size_i64 = cg
+                    .builder
+                    .build_int_z_extend(size_val, cg.ctx.i64_type(), &format!("{var}_arr_shape_sz"))
+                    .map_err(|e| format!("sm for array shape size extend {var}: {e}"))?;
+                // `elem_val` is the heap element pointer (int_to_ptr from ynz_array_get bits).
+                let src_ptr = elem_val.into_pointer_value();
+                // Load the frame region ptr from the ptr alloca (pre-wired in Step 1b).
+                let dest_ptr = cg
+                    .builder
+                    .build_load(
+                        cg.ctx.ptr_type(inkwell::AddressSpace::default()),
+                        var_slot,
+                        &format!("{var}_arr_shape_frame_ptr"),
+                    )
+                    .map_err(|e| format!("sm for array shape frame ptr load {var}: {e}"))?
+                    .into_pointer_value();
+                cg.builder
+                    .build_memcpy(dest_ptr, 1, src_ptr, 1, size_i64)
+                    .map_err(|e| format!("sm for array shape memcpy {var}: {e}"))?;
+                // No flush needed — frame bytes are already live at the correct location.
+            }
+        } else {
+            store(cg, elem_val, &elem, var_slot)?;
+            flush_for_loop_var(cg, var, var_slot, frame_ptr)?;
+        }
+
+        lower_sm_block(
+            cg,
+            body,
+            state_blocks,
+            pending_block,
+            frame_ptr,
+            waker_ctx,
+            param_names,
+            f,
+            shape_table,
+            current_state,
+        )?;
+
+        if !is_block_terminated(cg) {
+            let idx_after = state_machine::load_local_slot(
+                cg.ctx,
+                &cg.builder,
+                frame_ptr,
+                slot_idx,
+                "sm_a_idx_after",
+            )?;
+            let one = cg.i64().const_int(1, false);
+            let idx_next = cg
+                .builder
+                .build_int_add(idx_after, one, "sm_a_idx_next")
+                .map_err(|e| format!("{e}"))?;
+            state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, idx_next)
+                .map_err(|e| format!("sm array flush next: {e}"))?;
+            emit_loop_preempt(cg)?;
+            cg.builder
+                .build_unconditional_branch(header_bb)
+                .map_err(|e| format!("sm for array back: {e}"))?;
+        }
+
+        cg.builder.position_at_end(exit_bb);
+        cg.locals.remove(var);
+        return Ok(());
+    }
+
+    // ── Fixed array: `for (x in arr)` where arr: fixed<T> ────────────────────────
+    // Array pointer and compile-time size are re-evaluated at the header. Size is a
+    // compile-time constant; pointer comes from a frame-backed crossing local.
+    if let Type::BuiltinFixed { elem, size } = &iter_ty {
+        let elem = elem.as_ref().clone();
+        let n = match size {
+            Some(n) => *n as u64,
+            None => return Err("SM for-loop: fixed array with unknown size".to_string()),
+        };
+        let size_val = cg.i64().const_int(n, false);
+
+        let zero = cg.i64().const_zero();
+        cg.builder
+            .build_store(idx_alloca, zero)
+            .map_err(|e| format!("{e}"))?;
+        state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, zero)
+            .map_err(|e| format!("sm fixed flush zero: {e}"))?;
+
+        let header_bb = cg.append_block("sm_for_ff_header");
+        let body_bb = cg.append_block("sm_for_ff_body");
+        let exit_bb = cg.append_block("sm_for_ff_exit");
+        cg.builder
+            .build_unconditional_branch(header_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        cg.builder.position_at_end(header_bb);
+        let idx_cur =
+            state_machine::load_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, "sm_ff_idx")?;
+        cg.builder
+            .build_store(idx_alloca, idx_cur)
+            .map_err(|e| format!("{e}"))?;
+        let lt = cg
+            .builder
+            .build_int_compare(IntPredicate::SLT, idx_cur, size_val, "sm_ff_cond")
+            .map_err(|e| format!("{e}"))?;
+        cg.builder
+            .build_conditional_branch(lt, body_bb, exit_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        cg.builder.position_at_end(body_bb);
+        let arr_cur = lower_expr(cg, iter)?.into_pointer_value();
+        let gep = unsafe {
+            cg.builder
+                .build_gep(cg.i64(), arr_cur, &[idx_cur], "sm_ff_gep")
+                .map_err(|e| format!("{e}"))?
+        };
+        let bits = cg
+            .builder
+            .build_load(cg.i64(), gep, "sm_ff_bits")
+            .map_err(|e| format!("{e}"))?
+            .into_int_value();
+        let elem_val = cg.i64_bits_to(bits, &elem)?;
+        let var_slot = if let Some(&existing) = cg.locals.get(var) {
+            existing
+        } else {
+            let s = cg.alloca_in_entry(&elem, var)?;
+            cg.locals.insert(var.to_string(), s);
+            s
+        };
+        store(cg, elem_val, &elem, var_slot)?;
+        flush_for_loop_var(cg, var, var_slot, frame_ptr)?;
+
+        lower_sm_block(
+            cg,
+            body,
+            state_blocks,
+            pending_block,
+            frame_ptr,
+            waker_ctx,
+            param_names,
+            f,
+            shape_table,
+            current_state,
+        )?;
+
+        if !is_block_terminated(cg) {
+            let idx_after = state_machine::load_local_slot(
+                cg.ctx,
+                &cg.builder,
+                frame_ptr,
+                slot_idx,
+                "sm_ff_idx_after",
+            )?;
+            let one = cg.i64().const_int(1, false);
+            let idx_next = cg
+                .builder
+                .build_int_add(idx_after, one, "sm_ff_idx_next")
+                .map_err(|e| format!("{e}"))?;
+            state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, idx_next)
+                .map_err(|e| format!("sm fixed flush next: {e}"))?;
+            emit_loop_preempt(cg)?;
+            cg.builder
+                .build_unconditional_branch(header_bb)
+                .map_err(|e| format!("{e}"))?;
+        }
+
+        cg.builder.position_at_end(exit_bb);
+        cg.locals.remove(var);
+        return Ok(());
+    }
+
+    // ── Map-based: `for ((k, v) in m)` where m: map<K,V> ────────────────────────
+    // Map pointer and count are re-evaluated at the header on each iteration.
+    // The map pointer comes from a frame-backed crossing local (always fresh on resume).
+    if let Type::BuiltinMap { key, val } = &iter_ty {
+        let key_ty = key.as_ref().clone();
+        let _val_ty = val.as_ref().clone();
+
+        let zero = cg.i64().const_zero();
+        cg.builder
+            .build_store(idx_alloca, zero)
+            .map_err(|e| format!("{e}"))?;
+        state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, zero)
+            .map_err(|e| format!("sm map flush zero: {e}"))?;
+
+        let header_bb = cg.append_block("sm_mfor_header");
+        let body_bb = cg.append_block("sm_mfor_body");
+        let exit_bb = cg.append_block("sm_mfor_exit");
+        cg.builder
+            .build_unconditional_branch(header_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        cg.builder.position_at_end(header_bb);
+        let idx_cur =
+            state_machine::load_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, "sm_mf_idx")?;
+        cg.builder
+            .build_store(idx_alloca, idx_cur)
+            .map_err(|e| format!("{e}"))?;
+        // Re-evaluate map pointer and count at header — reloads from frame-backed local.
+        let map_ptr_h = lower_expr(cg, iter)?.into_pointer_value();
+        let cnt_cur = cg
+            .builder
+            .build_call(cg.rt.ynz_map_count, &[map_ptr_h.into()], "sm_mf_cnt")
+            .map_err(|e| format!("{e}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or("map_count void")?
+            .into_int_value();
+        let lt = cg
+            .builder
+            .build_int_compare(IntPredicate::SLT, idx_cur, cnt_cur, "sm_mf_cond")
+            .map_err(|e| format!("{e}"))?;
+        cg.builder
+            .build_conditional_branch(lt, body_bb, exit_bb)
+            .map_err(|e| format!("{e}"))?;
+
+        cg.builder.position_at_end(body_bb);
+        let map_cur = lower_expr(cg, iter)?.into_pointer_value();
+        let entry_ty = cg
+            .ctx
+            .struct_type(&[cg.i64().into(), cg.i64().into()], false);
+        // Entry slot uses alloca_in_entry_llvm since MapEntry has an LLVM struct type.
+        let entry_slot = cg.alloca_in_entry_llvm(entry_ty, var)?;
+        cg.locals.insert(var.to_string(), entry_slot);
+
+        let triple_ty = cg
+            .ctx
+            .struct_type(&[cg.i64().into(), cg.i64().into(), cg.i64().into()], false);
+        let triple_slot = cg
+            .builder
+            .build_alloca(triple_ty, "sm_mf_triple")
+            .map_err(|e| format!("{e}"))?;
+        if key_is_string(&key_ty) {
+            cg.builder
+                .build_call(
+                    cg.rt.ynz_map_iter_get_str,
+                    &[map_cur.into(), idx_cur.into(), triple_slot.into()],
+                    "sm_mf_iter_s",
+                )
+                .map_err(|e| format!("{e}"))?;
+        } else {
+            cg.builder
+                .build_call(
+                    cg.rt.ynz_map_iter_get,
+                    &[map_cur.into(), idx_cur.into(), triple_slot.into()],
+                    "sm_mf_iter",
+                )
+                .map_err(|e| format!("{e}"))?;
+        }
+        let k_src = cg
+            .builder
+            .build_struct_gep(triple_ty, triple_slot, 1, "sm_mf_ks")
+            .map_err(|e| format!("{e}"))?;
+        let v_src = cg
+            .builder
+            .build_struct_gep(triple_ty, triple_slot, 2, "sm_mf_vs")
+            .map_err(|e| format!("{e}"))?;
+        let k_dst = cg
+            .builder
+            .build_struct_gep(entry_ty, entry_slot, 0, "sm_mf_kd")
+            .map_err(|e| format!("{e}"))?;
+        let v_dst = cg
+            .builder
+            .build_struct_gep(entry_ty, entry_slot, 1, "sm_mf_vd")
+            .map_err(|e| format!("{e}"))?;
+        cg.builder
+            .build_store(
+                k_dst,
+                cg.builder
+                    .build_load(cg.i64(), k_src, "sm_mf_kv")
+                    .map_err(|e| format!("{e}"))?,
+            )
+            .map_err(|e| format!("{e}"))?;
+        cg.builder
+            .build_store(
+                v_dst,
+                cg.builder
+                    .build_load(cg.i64(), v_src, "sm_mf_vv")
+                    .map_err(|e| format!("{e}"))?,
+            )
+            .map_err(|e| format!("{e}"))?;
+        // No loop-var flush for map entries: the entry struct has two i64 fields and
+        // uses a struct alloca (not a scalar slot). The body must not read the loop variable
+        // after a `wait` inside the body — crossing-local analysis handles this correctly
+        // because map entry destructure bindings are not yet tracked as scalar crossing locals.
+
+        lower_sm_block(
+            cg,
+            body,
+            state_blocks,
+            pending_block,
+            frame_ptr,
+            waker_ctx,
+            param_names,
+            f,
+            shape_table,
+            current_state,
+        )?;
+
+        if !is_block_terminated(cg) {
+            let idx_after = state_machine::load_local_slot(
+                cg.ctx,
+                &cg.builder,
+                frame_ptr,
+                slot_idx,
+                "sm_mf_idx_after",
+            )?;
+            let one = cg.i64().const_int(1, false);
+            let idx_next = cg
+                .builder
+                .build_int_add(idx_after, one, "sm_mf_idx_next")
+                .map_err(|e| format!("{e}"))?;
+            state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, idx_next)
+                .map_err(|e| format!("sm map flush next: {e}"))?;
+            emit_loop_preempt(cg)?;
+            cg.builder
+                .build_unconditional_branch(header_bb)
+                .map_err(|e| format!("{e}"))?;
+        }
+
+        cg.builder.position_at_end(exit_bb);
+        cg.locals.remove(var);
+        return Ok(());
+    }
+
+    // Fallback: string iteration, shape iteration, stored-range variables.
+    // These forms with a suspension body are unsupported — typeck should have caught them
+    // via the WaitInsideLoop guard before this point. Fall back to non-SM lowering
+    // (which will panic if it hits a wait, surfacing the bug cleanly).
+    lower_stmt_for(cg, var, iter, body)
+}
+
+/// Emit state-machine codegen for a multi-case `if` (`Stmt::Match`) with a `wait`
+/// in one or more arms.
+///
+/// The scrutinee is evaluated once before arm dispatch. Each arm whose body contains
+/// a suspension is walked by `lower_sm_block` so its waits get continuation states.
+/// Arms without a suspension use the regular `lower_stmt` path. After each arm (SM or
+/// non-SM), control merges to `match_merge_bb`.
+///
+/// Resume behaviour: after a suspension inside an arm body, the continuation state
+/// reloads params/crossing-locals and resumes inside that arm. Execution reaches the
+/// merge block after the remaining arm stmts complete.
+#[allow(clippy::too_many_arguments)]
+fn lower_sm_match<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    scrutinee: &Expr,
+    arms: &[ynz_ast::nodes::MatchArm],
+    else_arm: Option<&ynz_ast::nodes::Block>,
+    state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
+    pending_block: inkwell::basic_block::BasicBlock<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    waker_ctx: PointerValue<'ctx>,
+    param_names: &[String],
+    f: &FunctionDecl,
+    shape_table: &'g ShapeTable,
+    current_state: &mut usize,
+) -> Result<(), String> {
+    let scrutinee_ty = cg.expr_type(scrutinee);
+    let scrutinee_val = lower_expr(cg, scrutinee)?;
+
+    let merge_bb = cg.append_block("sm_match_merge");
+    let final_fallthrough_bb = if else_arm.is_some() {
+        cg.append_block("sm_match_else")
+    } else {
+        merge_bb
+    };
+
+    for (i, arm) in arms.iter().enumerate() {
+        let arm_body_bb = cg.append_block(&format!("sm_match_arm{i}"));
+        let next_check_bb = if i + 1 < arms.len() {
+            cg.append_block(&format!("sm_match_check{}", i + 1))
+        } else {
+            final_fallthrough_bb
+        };
+
+        let pat_cond = match &arm.pattern.kind {
+            MatchPatternKind::Value(pat_expr) => {
+                let pat_val = lower_expr(cg, pat_expr)?;
+                match_cmp(cg, &scrutinee_ty, scrutinee_val, pat_val)?
+            }
+            MatchPatternKind::OptionName(variant_name) => {
+                if let Type::Options { name: opts_name } = &scrutinee_ty {
+                    if let Some(entry) = cg.options_table.options.get(opts_name.as_str()) {
+                        let tag = entry.variants.iter().position(|v| v == variant_name)
+                            .ok_or_else(|| format!("SM match: unknown variant `{variant_name}` in options `{opts_name}`"))? as u64;
+                        let tag_val = cg.ctx.i8_type().const_int(tag, false);
+                        cg.builder
+                            .build_int_compare(
+                                inkwell::IntPredicate::EQ,
+                                scrutinee_val.into_int_value(),
+                                tag_val,
+                                "sm_opt_arm_cmp",
+                            )
+                            .map_err(|e| format!("{e}"))?
+                    } else {
+                        return Err(format!("SM match: unknown options type `{opts_name}`"));
+                    }
+                } else {
+                    return Err(format!(
+                        "SM match: OptionName arm on non-options type {:?}",
+                        scrutinee_ty
+                    ));
+                }
+            }
+            MatchPatternKind::Is(type_path) => {
+                if let Type::Union { variants } = &scrutinee_ty {
+                    let tag = variants
+                        .iter()
+                        .position(|v| {
+                            if let Type::Shape { name } = v {
+                                name == &type_path.name
+                            } else {
+                                false
+                            }
+                        })
+                        .ok_or_else(|| {
+                            format!("SM match: union variant `{}` not found", type_path.name)
+                        })? as u64;
+                    let tag_const = cg.i64().const_int(tag, false);
+                    let union_st = cg
+                        .ctx
+                        .struct_type(&[cg.i64().into(), cg.i64().into()], false);
+                    let tag_gep = cg
+                        .builder
+                        .build_struct_gep(
+                            union_st,
+                            scrutinee_val.into_pointer_value(),
+                            0,
+                            "sm_union_tag_gep",
+                        )
+                        .map_err(|e| format!("SM match union tag gep: {e}"))?;
+                    let tag_loaded = cg
+                        .builder
+                        .build_load(cg.i64(), tag_gep, "sm_union_tag")
+                        .map_err(|e| format!("{e}"))?;
+                    cg.builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::EQ,
+                            tag_loaded.into_int_value(),
+                            tag_const,
+                            "sm_union_arm_cmp",
+                        )
+                        .map_err(|e| format!("{e}"))?
+                } else {
+                    return Err(format!(
+                        "SM match: Is arm on non-union type {:?}",
+                        scrutinee_ty
+                    ));
+                }
+            }
+        };
+
+        cg.builder
+            .build_conditional_branch(pat_cond, arm_body_bb, next_check_bb)
+            .map_err(|e| format!("SM match arm cond: {e}"))?;
+
+        cg.builder.position_at_end(arm_body_bb);
+        let arm_has_wait = function_contains_wait(&arm.body)
+            || arm
+                .body
+                .stmts
+                .iter()
+                .any(|s| stmt_contains_suspending_call(s, cg.suspend_set));
+        let locals_snapshot = cg.locals.clone();
+        cg.sm_scope_depth += 1;
+        if arm_has_wait {
+            lower_sm_block(
+                cg,
+                &arm.body,
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
+        } else {
+            for stmt in &arm.body.stmts {
+                if is_block_terminated(cg) {
+                    break;
+                }
+                lower_stmt(cg, stmt)?;
+            }
+        }
+        cg.sm_scope_depth -= 1;
+        for (name, &outer_alloca) in &locals_snapshot {
+            cg.locals.insert(name.clone(), outer_alloca);
+        }
+        if !is_block_terminated(cg) {
+            cg.builder
+                .build_unconditional_branch(merge_bb)
+                .map_err(|e| format!("SM match arm to merge: {e}"))?;
+        }
+
+        if i + 1 < arms.len() {
+            cg.builder.position_at_end(next_check_bb);
+        }
+    }
+
+    // Else arm (if present).
+    if let Some(else_body) = else_arm {
+        cg.builder.position_at_end(final_fallthrough_bb);
+        let else_has_wait = function_contains_wait(else_body)
+            || else_body
+                .stmts
+                .iter()
+                .any(|s| stmt_contains_suspending_call(s, cg.suspend_set));
+        let locals_snapshot = cg.locals.clone();
+        cg.sm_scope_depth += 1;
+        if else_has_wait {
+            lower_sm_block(
+                cg,
+                else_body,
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                param_names,
+                f,
+                shape_table,
+                current_state,
+            )?;
+        } else {
+            for stmt in &else_body.stmts {
+                if is_block_terminated(cg) {
+                    break;
+                }
+                lower_stmt(cg, stmt)?;
+            }
+        }
+        cg.sm_scope_depth -= 1;
+        for (name, &outer_alloca) in &locals_snapshot {
+            cg.locals.insert(name.clone(), outer_alloca);
+        }
+        if !is_block_terminated(cg) {
+            cg.builder
+                .build_unconditional_branch(merge_bb)
+                .map_err(|e| format!("{e}"))?;
+        }
+    }
+
+    cg.builder.position_at_end(merge_bb);
+    Ok(())
+}
+
+/// Load a suspending callee's return value from its return slot, using the callee's
+/// declared return type to pick the correct load primitive.
+///
+/// Returns the value in the same representation `lower_expr` would produce for a
+/// non-SM call to the same callee — so `bind_sm_return_value` and the SM `Stmt::Return`
+/// forwarder can handle it without knowing the specific type.
+///
+/// - `Int` / `Bool` / `String` / `Shape` / `Array` / pointer-family: load i64, return IntValue.
+/// - `Float`: load f64 (via i64 bitcast), return FloatValue.
+/// - `Number { precision ≤ 34 }`: load i128 from 16-byte slot, return as i128 IntValue.
+///   `bind_sm_return_value`'s I128Value arm allocates an i128 alloca and stores the value
+///   so that `load(slot, &Type::Number, ...)` can read the full i128 from it.
+/// - Anything else: fall back to i64 load.
+fn load_sm_return_value_typed<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    ctx: &'ctx inkwell::context::Context,
+    frame_ptr: PointerValue<'ctx>,
+    callee_name: &str,
+    tag: &str,
+) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
+    // Look up the callee's declared return type.
+    let callee_ret_ty = cg.typed.module.items.iter().find_map(|item| {
+        if let ynz_ast::nodes::Item::Function(f) = item {
+            if f.name == callee_name {
+                return Some(ast_type_to_typeck_type(&f.return_type, cg.shape_table));
+            }
+        }
+        None
+    });
+
+    match callee_ret_ty {
+        Some(Type::Float) => {
+            // Float: return slot holds f64-as-i64 bits. Load as f64 via bitcast.
+            let f_val = state_machine::load_return_value_f64(ctx, &cg.builder, frame_ptr, tag)?;
+            Ok(f_val.into())
+        }
+        Some(Type::Number { precision }) if precision <= 34 => {
+            // Decimal128: return slot holds the full i128. Load and return as IntValue.
+            // bind_sm_return_value's I128Value arm will create an i128 alloca for it.
+            let i128_val = state_machine::load_return_value_i128(ctx, &cg.builder, frame_ptr, tag)?;
+            Ok(i128_val.into())
+        }
+        _ => {
+            // All other types (int, bool, string, shape, array, etc.): load the i64
+            // from the return slot (ptr-as-i64 for pointer-family; raw i64 for scalars).
+            let ret_i64 = state_machine::load_return_value_i64(ctx, &cg.builder, frame_ptr, tag)?;
+            Ok(ret_i64.into())
+        }
+    }
 }
 
 /// Bind a suspending call's return value to a named local alloca.
@@ -2617,13 +4718,33 @@ fn bind_sm_return_value<'ctx>(
 ) -> Result<PointerValue<'ctx>, String> {
     match return_val {
         inkwell::values::BasicValueEnum::IntValue(iv) => {
+            // load_sm_return_value_typed returns an i128 IntValue for decimal128 callees.
+            // Use an i128 alloca so `load(slot, &Type::Number, ...)` reads the full value.
+            // For all other types the value is i64 and an i64 alloca is correct.
+            let alloca_ty: inkwell::types::BasicTypeEnum = if iv.get_type() == cg.ctx.i128_type() {
+                cg.ctx.i128_type().into()
+            } else {
+                cg.i64().into()
+            };
             let alloca = cg
                 .builder
-                .build_alloca(cg.i64(), &format!("{name}_alloca"))
+                .build_alloca(alloca_ty, &format!("{name}_alloca"))
                 .map_err(|e| format!("sm let alloca {name}: {e}"))?;
             cg.builder
                 .build_store(alloca, iv)
                 .map_err(|e| format!("sm let store {name}: {e}"))?;
+            Ok(alloca)
+        }
+        // Float: load_sm_return_value_typed returns a FloatValue for float-returning callees.
+        // Allocate an f64 alloca and store the value so subsequent reads via lower_expr work.
+        inkwell::values::BasicValueEnum::FloatValue(fv) => {
+            let alloca = cg
+                .builder
+                .build_alloca(cg.ctx.f64_type(), &format!("{name}_f_alloca"))
+                .map_err(|e| format!("sm let f alloca {name}: {e}"))?;
+            cg.builder
+                .build_store(alloca, fv)
+                .map_err(|e| format!("sm let f store {name}: {e}"))?;
             Ok(alloca)
         }
         inkwell::values::BasicValueEnum::StructValue(sv) => {
@@ -2675,9 +4796,430 @@ fn bind_sm_return_value<'ctx>(
     }
 }
 
-/// True when `expr` is a `sleepAsync(...)` call.
-fn is_sleep_async_call(expr: &Expr) -> bool {
-    matches!(expr, Expr::Call(c) if matches!(&c.callee, Expr::Ident(n, _) if n == "sleepAsync"))
+/// Bind a state-machine callee's return value to `name`, then flush to frame if crossing.
+///
+/// If `name` was pre-allocated as a crossing local (frame-backed), reuse that alloca
+/// and store the return value bits into it, then flush to the frame slot(s).
+/// Otherwise, create a fresh alloca via `bind_sm_return_value` (non-crossing result binding).
+///
+/// Handles three value shapes:
+/// - `IntValue` — int/bool/nothing: z-extend to i64, store, flush 1 slot.
+/// - `PointerValue` — string/shape/array/map: ptr_to_int, store, flush 1 slot.
+/// - `StructValue` — ErrorsCapable `{i64,i64}`: extract both fields, store into companion
+///   struct alloca, flush 2 slots. This mirrors the EC flush path in
+///   `flush_crossing_local_if_needed` and is the fix for wait-ecFn crossing a 2nd wait.
+///
+/// After this call the alloca is registered in `cg.locals` under `name`.
+fn bind_sm_result_and_flush<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    name: &str,
+    return_val: inkwell::values::BasicValueEnum<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+) -> Result<PointerValue<'ctx>, String> {
+    let is_crossing = cg
+        .sm_crossing_names
+        .as_ref()
+        .is_some_and(|v| v.iter().any(|n| n == name));
+
+    if is_crossing {
+        // The alloca was pre-created in sm_entry. Store the return value bits into it
+        // and flush to the frame slot(s) so the value survives the next suspension.
+        let alloca = *cg.locals.get(name).ok_or_else(|| {
+            format!("bind_sm_result_and_flush: alloca for crossing local `{name}` missing")
+        })?;
+        // Look up slot index once (needed for both single and dual-slot paths).
+        let slot_idx = {
+            let crossing_names = cg
+                .sm_crossing_names
+                .as_ref()
+                .ok_or_else(|| "bind_sm_result_and_flush: sm_crossing_names is None".to_string())?;
+            let pos = crossing_names
+                .iter()
+                .position(|n| n == name)
+                .ok_or_else(|| {
+                    format!("bind_sm_result_and_flush: crossing local `{name}` not in slot index")
+                })?;
+            cg.sm_crossing_slot_indices[pos]
+        };
+        match return_val {
+            inkwell::values::BasicValueEnum::StructValue(sv)
+                if cg.sm_crossing_errors_capable_set.contains(name) =>
+            {
+                // ErrorsCapable {i64, i64}: extract both fields, store into the companion
+                // sm_entry struct alloca (pre-created for this crossing local), and flush
+                // both words to the 2 consecutive frame slots. Mirrors the EC flush path.
+                let ec_struct_ty = cg
+                    .ctx
+                    .struct_type(&[cg.ctx.i64_type().into(), cg.ctx.i64_type().into()], false);
+                let f0 = cg
+                    .builder
+                    .build_extract_value(sv, 0, &format!("{name}_ec_f0"))
+                    .map_err(|e| format!("bind_sm_result ec extract f0 {name}: {e}"))?
+                    .into_int_value();
+                let f1 = cg
+                    .builder
+                    .build_extract_value(sv, 1, &format!("{name}_ec_f1"))
+                    .map_err(|e| format!("bind_sm_result ec extract f1 {name}: {e}"))?
+                    .into_int_value();
+                // The alloca is a ptr alloca pointing at the companion struct alloca.
+                let struct_ptr = *cg.sm_crossing_ec_struct_allocas.get(name).ok_or_else(|| {
+                    format!("bind_sm_result_and_flush: EC companion alloca for `{name}` missing")
+                })?;
+                let f0_ptr = cg
+                    .builder
+                    .build_struct_gep(ec_struct_ty, struct_ptr, 0, &format!("{name}_bind_f0_gep"))
+                    .map_err(|e| format!("bind_sm_result ec gep f0 {name}: {e}"))?;
+                let f1_ptr = cg
+                    .builder
+                    .build_struct_gep(ec_struct_ty, struct_ptr, 1, &format!("{name}_bind_f1_gep"))
+                    .map_err(|e| format!("bind_sm_result ec gep f1 {name}: {e}"))?;
+                cg.builder
+                    .build_store(f0_ptr, f0)
+                    .map_err(|e| format!("bind_sm_result ec store f0 {name}: {e}"))?;
+                cg.builder
+                    .build_store(f1_ptr, f1)
+                    .map_err(|e| format!("bind_sm_result ec store f1 {name}: {e}"))?;
+                // Ensure ptr alloca points at companion struct.
+                cg.builder
+                    .build_store(alloca, struct_ptr)
+                    .map_err(|e| format!("bind_sm_result ec ptr init {name}: {e}"))?;
+                // Flush both words to frame slots.
+                state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, f0)?;
+                state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx + 1, f1)?;
+            }
+            // Shape crossing local: the callee stored the struct pointer as i64 bits in the
+            // return slot (lower_stmt_return: `ptr_to_int → store_return_value_i64`). The
+            // alloca is a ptr alloca pre-wired to the composed frame's slot region (Step 1b).
+            // Convert the i64 bits back to a pointer, then memcpy the struct bytes into the
+            // frame region — the frame IS the persistent storage for the shape.
+            inkwell::values::BasicValueEnum::IntValue(bits_iv)
+                if cg.sm_crossing_shape_embed_set.contains(name) =>
+            {
+                let shape_name = cg
+                    .sm_crossing_shape_names
+                    .get(name)
+                    .ok_or_else(|| {
+                        format!("bind_sm_result_and_flush: shape name for `{name}` missing")
+                    })?
+                    .clone();
+                let struct_ty = cg.shape_types.get(&shape_name).ok_or_else(|| {
+                    format!("bind_sm_result_and_flush: LLVM type for `{shape_name}` missing")
+                })?;
+                let size_val = struct_ty.size_of().ok_or_else(|| {
+                    format!("bind_sm_result_and_flush: size_of `{shape_name}` unavailable")
+                })?;
+                let size_i64 = cg
+                    .builder
+                    .build_int_z_extend(size_val, cg.ctx.i64_type(), &format!("{name}_bind_sz"))
+                    .map_err(|e| format!("bind_sm_result shape size extend {name}: {e}"))?;
+                // Reconstruct the pointer from the i64 bits (reverses lower_stmt_return's ptr_to_int).
+                let src_ptr = cg
+                    .builder
+                    .build_int_to_ptr(
+                        bits_iv,
+                        cg.ctx.ptr_type(inkwell::AddressSpace::default()),
+                        &format!("{name}_bind_i2p"),
+                    )
+                    .map_err(|e| format!("bind_sm_result shape int_to_ptr {name}: {e}"))?;
+                // Load the frame region ptr from the ptr alloca (pre-wired to frame slot region).
+                let dest_ptr = cg
+                    .builder
+                    .build_load(
+                        cg.ctx.ptr_type(inkwell::AddressSpace::default()),
+                        alloca,
+                        &format!("{name}_bind_frame_ptr"),
+                    )
+                    .map_err(|e| format!("bind_sm_result shape load frame ptr {name}: {e}"))?
+                    .into_pointer_value();
+                cg.builder
+                    .build_memcpy(dest_ptr, 1, src_ptr, 1, size_i64)
+                    .map_err(|e| format!("bind_sm_result shape memcpy {name}: {e}"))?;
+                // No frame slot store needed — the bytes are already in the frame region.
+                // The alloca holds the frame region ptr (set in Step 1b); it is stable.
+            }
+            // Decimal128 crossing local: load_sm_return_value_typed returns i128 IntValue.
+            // Split i128 into lo/hi i64 halves and store in 2 consecutive frame slots —
+            // matching the decimal128 flush/reload scheme used for let-defined crossing locals.
+            inkwell::values::BasicValueEnum::IntValue(iv)
+                if iv.get_type() == cg.ctx.i128_type() =>
+            {
+                cg.builder
+                    .build_store(alloca, iv)
+                    .map_err(|e| format!("bind_sm_result dec store {name}: {e}"))?;
+                let lo = cg
+                    .builder
+                    .build_int_truncate(iv, cg.ctx.i64_type(), &format!("{name}_bind_lo"))
+                    .map_err(|e| format!("bind_sm_result dec lo {name}: {e}"))?;
+                let shift_amt = cg.ctx.i128_type().const_int(64, false);
+                let shifted = cg
+                    .builder
+                    .build_right_shift(iv, shift_amt, false, &format!("{name}_bind_sh"))
+                    .map_err(|e| format!("bind_sm_result dec shift {name}: {e}"))?;
+                let hi = cg
+                    .builder
+                    .build_int_truncate(shifted, cg.ctx.i64_type(), &format!("{name}_bind_hi"))
+                    .map_err(|e| format!("bind_sm_result dec hi {name}: {e}"))?;
+                state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, lo)?;
+                state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx + 1, hi)?;
+            }
+            // Float crossing local: load_sm_return_value_typed returns FloatValue.
+            // Bitcast f64 → i64 and flush 1 slot — matching the float flush scheme.
+            inkwell::values::BasicValueEnum::FloatValue(fv) => {
+                let as_i64 = cg
+                    .builder
+                    .build_bit_cast(fv, cg.ctx.i64_type(), &format!("{name}_bind_f_to_i"))
+                    .map_err(|e| format!("bind_sm_result float bitcast {name}: {e}"))?
+                    .into_int_value();
+                cg.builder
+                    .build_store(alloca, fv)
+                    .map_err(|e| format!("bind_sm_result float store {name}: {e}"))?;
+                state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, as_i64)?;
+            }
+            _ => {
+                // Int/bool/ptr (non-shape): convert to i64 bits, store into alloca, flush 1 slot.
+                let bits = match return_val {
+                    inkwell::values::BasicValueEnum::IntValue(iv) => {
+                        if iv.get_type() != cg.ctx.i64_type() {
+                            cg.builder
+                                .build_int_z_extend(iv, cg.ctx.i64_type(), &format!("{name}_widen"))
+                                .map_err(|e| format!("bind_sm_result widen {name}: {e}"))?
+                        } else {
+                            iv
+                        }
+                    }
+                    inkwell::values::BasicValueEnum::PointerValue(pv) => cg
+                        .builder
+                        .build_ptr_to_int(pv, cg.ctx.i64_type(), &format!("{name}_ptr_i64"))
+                        .map_err(|e| format!("bind_sm_result ptr_to_int {name}: {e}"))?,
+                    other => {
+                        return Err(format!(
+                    "bind_sm_result_and_flush: unexpected return type for crossing local `{name}`: {other:?}"
+                ))
+                    }
+                };
+                cg.builder
+                    .build_store(alloca, bits)
+                    .map_err(|e| format!("bind_sm_result store {name}: {e}"))?;
+                state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, bits)?;
+            }
+        }
+        Ok(alloca)
+    } else {
+        // Non-crossing: use the standard bind path.
+        let alloca = bind_sm_return_value(cg, name, return_val)?;
+        Ok(alloca)
+    }
+}
+
+/// Number of i64 frame slots needed to store a shape's bytes inline in the composed frame.
+///
+/// Uses the pre-computed ABI byte size from LLVM (`struct_ty.size_of()`) — the same
+/// source as the memcpy in the shape-let codegen — so slot-count and memcpy-size never
+/// diverge. `ceil(byte_size / 8)` rounds up to the next 8-byte slot boundary.
+fn shape_frame_slots(shape_name: &str, shape_abi_sizes: &HashMap<String, u64>) -> usize {
+    // Fallback to 1 slot (8 bytes) if the shape is not in the precomputed map. This
+    // can only happen for shapes not seen during emit_shape_types (compiler bug).
+    let byte_size = shape_abi_sizes.get(shape_name).copied().unwrap_or(8);
+    // At minimum 1 slot even for a zero-byte struct (degenerate; avoids zero-size alloca).
+    (byte_size.max(8) as usize).div_ceil(8)
+}
+
+/// Most types fit in 1 slot (8 bytes). Decimal128 (number with precision ≤ 34) is
+/// 16 bytes and stored directly in the frame using 2 consecutive i64 slots.
+/// ErrorsCapable `{i64,i64}` similarly uses 2 consecutive slots.
+/// Shape crossing locals are frame-embedded: their bytes occupy `ceil(N/8)` consecutive
+/// slots (no separate heap allocation — avoids the leak + re-promotion bugs).
+///
+/// Uses LLVM ABI sizes (via `shape_abi_sizes`) so slot-count and the memcpy in
+/// lower_function_with_waits read from the same source of truth.
+/// Uses typeck expr_types (from `typed`) to detect decimal128 locals including
+/// inferred ones (no annotation).
+fn crossing_local_total_slots(
+    f: &ynz_ast::nodes::FunctionDecl,
+    crossing_names: &[String],
+    typed: &TypedModule,
+    shape_abi_sizes: &HashMap<String, u64>,
+) -> usize {
+    let mut total = 0usize;
+    for cname in crossing_names {
+        let ty = find_let_typeck_type_in_stmts(&f.body.stmts, cname.as_str(), typed);
+        let slots = match ty {
+            // decimal128: 16-byte value stored in 2 consecutive i64 frame slots.
+            Some(Type::Number { precision }) if precision <= 34 => 2,
+            // ErrorsCapable {i64,i64}: 2 frame slots for the two fields directly.
+            Some(Type::ErrorsCapable { .. }) => 2,
+            // Shape: frame-embed the struct bytes in ceil(N/8) consecutive slots.
+            Some(Type::Shape { name: ref sname }) => shape_frame_slots(sname, shape_abi_sizes),
+            _ => 1,
+        };
+        total += slots;
+    }
+    total
+}
+
+/// Look up the typeck-inferred `Type` for a let binding or for-loop variable by scanning
+/// the function body.
+///
+/// Handles both `Stmt::Let` bindings (returns the RHS expression type from `expr_types`)
+/// and `Stmt::For` loop variables (returns the element type derived from the iterator's
+/// collection type). The for-loop case is required so that decimal128 loop vars (which
+/// have no Stmt::Let) get their correct 2-slot width in crossing_local_total_slots and
+/// crossing_slot_indices — without it, a `number` loop var is assigned 1 slot and the
+/// flush/reload writes out of bounds into the next local's slot region.
+fn find_let_typeck_type_in_stmts(
+    stmts: &[Stmt],
+    target: &str,
+    typed: &TypedModule,
+) -> Option<Type> {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { name, value, .. } if name == target => {
+                let key = (value.span().start, value.span().end);
+                return typed.expr_types.get(&key).cloned();
+            }
+            // For-loop variables have no Stmt::Let — derive the element type from the
+            // iterator expression's collection type as recorded in expr_types.
+            Stmt::For {
+                var, iter, body, ..
+            } if var == target => {
+                let key = (iter.span().start, iter.span().end);
+                if let Some(iter_ty) = typed.expr_types.get(&key).cloned() {
+                    let elem_ty = match iter_ty {
+                        Type::BuiltinArray { elem } | Type::BuiltinFixed { elem, .. } => {
+                            Some(*elem)
+                        }
+                        Type::Range { .. } => Some(Type::Int),
+                        Type::BuiltinMap { key: k, val: v } => {
+                            Some(Type::MapEntry { key: k, val: v })
+                        }
+                        _ => None,
+                    };
+                    if let Some(t) = elem_ty {
+                        return Some(t);
+                    }
+                }
+                // Recurse into body for declarations sharing the var name (unlikely but safe).
+                if let Some(t) = find_let_typeck_type_in_stmts(&body.stmts, target, typed) {
+                    return Some(t);
+                }
+            }
+            Stmt::If { body, .. } => {
+                if let Some(t) = find_let_typeck_type_in_stmts(&body.stmts, target, typed) {
+                    return Some(t);
+                }
+            }
+            // Recurse into loop/match bodies so a crossing local declared inside one of
+            // these constructs is found by slot-width classification. Without this, a
+            // decimal128 or EC local declared in a while/for/match body would default to
+            // 1 slot and silently truncate (Tier-A silent-wrong-output).
+            Stmt::While { body, .. } | Stmt::For { body, .. } => {
+                if let Some(t) = find_let_typeck_type_in_stmts(&body.stmts, target, typed) {
+                    return Some(t);
+                }
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                for arm in arms {
+                    if let Some(t) = find_let_typeck_type_in_stmts(&arm.body.stmts, target, typed) {
+                        return Some(t);
+                    }
+                }
+                if let Some(eb) = else_arm {
+                    if let Some(t) = find_let_typeck_type_in_stmts(&eb.stmts, target, typed) {
+                        return Some(t);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Look up the typeck `Type` of a crossing local's value expression.
+///
+/// Scans the function body for the first `Stmt::Let { name }` or `Stmt::For { var }`
+/// matching `target` and returns its type. Falls back to `Type::Int` when no match is
+/// found, which is safe for two reasons:
+///   1. Synthetic loop-index locals (`__ynz_for_idx_N`) have no Stmt::Let and ARE Int.
+///   2. Unsupported types (MapEntry, BuiltinFixed, union, maybe, dynamic) are blocked
+///      by UnsupportedCrossingLocalType at typeck before any codegen runs, so they
+///      never reach this function on valid input.
+///
+/// The Int fallback is intentional-and-documented, not a silent-wrong classification.
+fn crossing_local_type_from_body<'ctx>(
+    body: &ynz_ast::nodes::Block,
+    target: &str,
+    cg: &Cg<'ctx, '_>,
+) -> Type {
+    find_let_type_in_stmts(&body.stmts, target, cg).unwrap_or(Type::Int)
+}
+
+fn find_let_type_in_stmts<'ctx>(stmts: &[Stmt], target: &str, cg: &Cg<'ctx, '_>) -> Option<Type> {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { name, value, .. } if name == target => {
+                return Some(cg.expr_type(value));
+            }
+            // For-loop variable: the loop var is bound by the iteration mechanism, not via
+            // Stmt::Let, so the Stmt::Let arm above never fires. Derive the element type
+            // directly from the iterator expression's collection type so the type classifier
+            // picks the correct alloca (i1 for bool, f64 for float, i64 for int, i128 for
+            // decimal128, {i64,i64} struct for MapEntry).
+            Stmt::For {
+                var, iter, body, ..
+            } if var == target => {
+                let iter_ty = cg.expr_type(iter);
+                let elem_ty = match iter_ty {
+                    Type::BuiltinArray { elem } | Type::BuiltinFixed { elem, .. } => Some(*elem),
+                    // Range element is always Int.
+                    Type::Range { .. } => Some(Type::Int),
+                    // Map iteration: the loop var is a MapEntry<K,V> struct. Returning
+                    // the real type here ensures UnsupportedCrossingLocalType is triggered
+                    // by codegen's classifier for names that reach flush_for_loop_var.
+                    Type::BuiltinMap { key, val } => Some(Type::MapEntry { key, val }),
+                    _ => None,
+                };
+                if let Some(t) = elem_ty {
+                    return Some(t);
+                }
+                // Recurse into body for declarations with the same name.
+                if let Some(t) = find_let_type_in_stmts(&body.stmts, target, cg) {
+                    return Some(t);
+                }
+            }
+            Stmt::If { body, .. } => {
+                if let Some(t) = find_let_type_in_stmts(&body.stmts, target, cg) {
+                    return Some(t);
+                }
+            }
+            // Mirror the same recursion as find_let_typeck_type_in_stmts: crossing locals
+            // declared inside loop/match bodies must be found for correct type classification.
+            Stmt::While { body, .. } | Stmt::For { body, .. } => {
+                if let Some(t) = find_let_type_in_stmts(&body.stmts, target, cg) {
+                    return Some(t);
+                }
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                for arm in arms {
+                    if let Some(t) = find_let_type_in_stmts(&arm.body.stmts, target, cg) {
+                        return Some(t);
+                    }
+                }
+                if let Some(eb) = else_arm {
+                    if let Some(t) = find_let_type_in_stmts(&eb.stmts, target, cg) {
+                        return Some(t);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// True when `expr` is a `sleep(...)` call (the yielding non-blocking sleep intrinsic).
+fn is_sleep_call(expr: &Expr) -> bool {
+    matches!(expr, Expr::Call(c) if matches!(&c.callee, Expr::Ident(n, _) if n == "sleep"))
 }
 
 /// True when `expr` is a direct call to a user-defined suspending function (not a may-block intrinsic).
@@ -2712,7 +5254,7 @@ fn is_direct_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool {
 /// # Waker contract (P0 #11, ABI-locked)
 ///
 /// `waker_ctx` is forwarded verbatim to the child resume fn. No fabricated wakers.
-/// The child registers the waker with its own sub-future (sleepAsync handle etc.);
+/// The child registers the waker with its own sub-future (sleep handle etc.);
 /// the parent merely forwards the outer context.
 ///
 /// # Return value
@@ -2866,7 +5408,7 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
     // GEPs must be recomputed in each basic block (LLVM SSA dominance requirement).
     *current_state = continuation_state;
     cg.builder.position_at_end(cont_state_bb);
-    reload_params_from_frame(cg, parent_frame, param_names, f, shape_table)?;
+    reload_params_from_frame(cg, parent_frame, param_names, f, shape_table, true)?;
 
     // Recompute child frame pointer (same offset, but new instruction in this BB).
     let child_frame_re = state_machine::child_frame_ptr(
@@ -2924,7 +5466,9 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
     )?;
 
     // For errors-capable callees: reconstruct the {i64, i64} struct from the return slot.
-    // For all others: return the i64 directly.
+    // For float/number callees: load the typed value from the return slot using the
+    // appropriate helper (the slot stores f64-as-i64 for float, full i128 for number).
+    // For all other non-errors callees: load the i64 from the return slot.
     if is_errors_capable_fn(cg.typed, &callee_name) {
         let (err_i64, ok_i64) =
             state_machine::load_return_value_errors(ctx, &cg.builder, child_frame_post)?;
@@ -2942,9 +5486,7 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
             .into_struct_value();
         Ok(result.into())
     } else {
-        let ret_i64 =
-            state_machine::load_return_value_i64(ctx, &cg.builder, child_frame_post, "child_ret")?;
-        Ok(ret_i64.into())
+        load_sm_return_value_typed(cg, ctx, child_frame_post, &callee_name, "child_ret")
     }
 }
 
@@ -3090,7 +5632,7 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
     // cont_state_bb: re-poll.
     *current_state = continuation_state;
     cg.builder.position_at_end(cont_state_bb);
-    reload_params_from_frame(cg, parent_frame, param_names, f, shape_table)?;
+    reload_params_from_frame(cg, parent_frame, param_names, f, shape_table, true)?;
 
     // Reload the heap child frame pointer from the recursion slot.
     let rec_frame =
@@ -3193,9 +5735,7 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
             .into_struct_value();
         r.into()
     } else {
-        let ret_i64 =
-            state_machine::load_return_value_i64(ctx, &cg.builder, rec_frame_post, "rec_ret")?;
-        ret_i64.into()
+        load_sm_return_value_typed(cg, ctx, rec_frame_post, callee_name, "rec_ret")?
     };
 
     // Free the heap child frame (normal completion path).
@@ -3222,7 +5762,7 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
     Ok(ret_val)
 }
 
-/// Emit the IR for a single `wait sleepAsync(ms)` point within a state-machine body.
+/// Emit the IR for a single `wait sleep(ms)` point within a state-machine body.
 ///
 /// # Flow
 ///
@@ -3239,7 +5779,7 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
 ///
 /// # Failure modes
 ///
-/// - Inner expression is not a `sleepAsync` call: falls back to evaluating the inner
+/// - Inner expression is not a `sleep` call: falls back to evaluating the inner
 ///   expression normally (no suspension). Kept as safe fallback — typeck warns first.
 #[allow(clippy::too_many_arguments)]
 fn emit_wait_point<'ctx, 'g>(
@@ -3256,10 +5796,10 @@ fn emit_wait_point<'ctx, 'g>(
 ) -> Result<(), String> {
     let ctx = cg.ctx;
 
-    // Determine if the inner call is `sleepAsync(ms)`.
+    // Determine if the inner call is `sleep(ms)` (the yielding non-blocking sleep intrinsic).
     let is_sleep_async = matches!(
         inner,
-        Expr::Call(c) if matches!(&c.callee, Expr::Ident(n, _) if n == "sleepAsync")
+        Expr::Call(c) if matches!(&c.callee, Expr::Ident(n, _) if n == "sleep")
     );
 
     if !is_sleep_async {
@@ -3280,7 +5820,7 @@ fn emit_wait_point<'ctx, 'g>(
         *current_state = continuation_state;
         // Fill the continuation state with a direct branch to post_wait_bb.
         cg.builder.position_at_end(cont_state_bb);
-        reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table)?;
+        reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, true)?;
         cg.builder
             .build_unconditional_branch(post_wait_bb)
             .map_err(|e| format!("cont noop branch: {e}"))?;
@@ -3288,7 +5828,7 @@ fn emit_wait_point<'ctx, 'g>(
         return Ok(());
     }
 
-    // Extract the ms argument from sleepAsync(ms).
+    // Extract the ms argument from sleep(ms).
     let ms_val = if let Expr::Call(c) = inner {
         if c.args.is_empty() {
             ctx.i64_type().const_int(0, false)
@@ -3375,7 +5915,7 @@ fn emit_wait_point<'ctx, 'g>(
     // Then re-poll the handle to confirm Ready and transition to post_wait_bb.
     *current_state = continuation_state;
     cg.builder.position_at_end(cont_state_bb);
-    reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table)?;
+    reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, true)?;
     state_machine::emit_sleep_poll_branch(
         ctx,
         &cg.builder,
@@ -3630,9 +6170,91 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
                 false
             };
             if !union_constructed {
-                let slot = cg.alloca(&val_ty, name)?;
-                store(cg, val, &val_ty, slot)?;
-                cg.locals.insert(name.clone(), slot);
+                // When inside a SM resume function and this name is a crossing local,
+                // the alloca was pre-created in the sm_entry block (LLVM SSA dominance
+                // requires allocas to be in the entry block). Reuse that alloca instead
+                // of creating a new one in the current state block.
+                //
+                // Exception: if we are inside a nested scope (sm_scope_depth > 0), this
+                // `let name = ...` is a SHADOW binding that creates a new inner local —
+                // not a write to the outer crossing local. Create a fresh alloca so the
+                // outer crossing alloca is not clobbered by the shadow's value.
+                let is_sm_crossing = cg
+                    .sm_crossing_names
+                    .as_ref()
+                    .is_some_and(|v| v.iter().any(|n| n == name.as_str()));
+                let slot = if is_sm_crossing {
+                    // Crossing local: reuse the pre-created sm_entry alloca regardless of
+                    // nesting depth. LLVM SSA dominance requires allocas to be in the entry
+                    // block; the sm_entry alloca dominates all state blocks. Shadow bindings
+                    // (a nested `let x` where outer `x` crosses a wait) are rejected at
+                    // typeck (ShadowsCrossingLocal), so any `let name` here is the first
+                    // and only definition of that crossing local.
+                    *cg.locals.get(name.as_str()).ok_or_else(|| {
+                        format!("sm crossing alloca for `{name}` missing in entry")
+                    })?
+                } else {
+                    // Not a crossing local: alloca in the ENTRY block so it dominates all
+                    // successor blocks. Yinz allows variable shadowing (design/linting.md
+                    // `shadowed-variables` lint); a shadow `let x` inside an if/while body
+                    // is a separate LLVM basic block — its alloca must be in the entry block
+                    // or LLVM rejects the IR with "Instruction does not dominate all uses!".
+                    // The outer binding is restored to cg.locals on scope exit (restore-all
+                    // protocol), so the shadow has no lasting effect outside its own scope.
+                    let s = cg.alloca_in_entry(&val_ty, name)?;
+                    cg.locals.insert(name.clone(), s);
+                    s
+                };
+                // Shape crossing local: val is a PointerValue to a temp stack struct (from
+                // lower_struct_lit). The slot is a ptr alloca pre-wired to the frame's slot
+                // region (Step 1b). Memcpy from the temp into the frame region by loading the
+                // frame region ptr from the ptr alloca and memcpy-ing into it. Works at any
+                // nesting depth — the ptr alloca is always the sm_entry one.
+                let stored = if is_sm_crossing
+                    && matches!(val_ty, Type::Shape { .. })
+                    && cg.sm_crossing_shape_embed_set.contains(name.as_str())
+                {
+                    let shape_name = match &val_ty {
+                        Type::Shape { name: sn } => sn.clone(),
+                        _ => unreachable!(),
+                    };
+                    if let Some(struct_ty) = cg.shape_types.get(&shape_name) {
+                        let src_ptr = val.into_pointer_value();
+                        let size_val = struct_ty.size_of().ok_or_else(|| {
+                            format!("sm shape let: size_of `{shape_name}` unavailable")
+                        })?;
+                        let size_i64 = cg
+                            .builder
+                            .build_int_z_extend(
+                                size_val,
+                                cg.ctx.i64_type(),
+                                &format!("{name}_let_sz"),
+                            )
+                            .map_err(|e| format!("sm shape let size extend {name}: {e}"))?;
+                        // Load the frame region ptr from the ptr alloca (pre-wired to frame
+                        // in Step 1b). Memcpy from the temp stack alloca into the frame region.
+                        let dest_ptr = cg
+                            .builder
+                            .build_load(
+                                cg.ctx.ptr_type(AddressSpace::default()),
+                                slot,
+                                &format!("{name}_frame_ptr"),
+                            )
+                            .map_err(|e| format!("sm shape let load frame ptr {name}: {e}"))?
+                            .into_pointer_value();
+                        cg.builder
+                            .build_memcpy(dest_ptr, 1, src_ptr, 1, size_i64)
+                            .map_err(|e| format!("sm shape let memcpy {name}: {e}"))?;
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if !stored {
+                    store(cg, val, &val_ty, slot)?;
+                }
                 // M7 P4a: track bindings that hold errors-capable results.
                 if matches!(val_ty, Type::ErrorsCapable { .. }) {
                     cg.errors_capable_locals.insert(name.clone());
@@ -3651,7 +6273,22 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
         }
 
         Stmt::If { cond, body, .. } => {
-            lower_stmt_if(cg, cond, body)?;
+            // Snapshot before entering the if body so we can restore every name on exit.
+            // This preserves lexical scoping: crossing-local sm_entry allocas stay active
+            // after the block (not replaced by a shadow binding's fresh alloca), and
+            // non-crossing names don't leak into the outer scope after the block closes.
+            // Yinz allows variable shadowing (design/linting.md `shadowed-variables` lint);
+            // restoring all snapshot entries makes shadowing safe at the codegen level.
+            let locals_snapshot = cg.locals.clone();
+            cg.sm_scope_depth += 1;
+            let r = lower_stmt_if(cg, cond, body);
+            cg.sm_scope_depth -= 1;
+            // Restore ALL names that were present before the scope — not just crossing names.
+            // Crossing locals get back their sm_entry allocas; shadow bindings are unwound.
+            for (name, &outer_alloca) in &locals_snapshot {
+                cg.locals.insert(name.clone(), outer_alloca);
+            }
+            r?;
         }
 
         Stmt::Match {
@@ -3660,17 +6297,41 @@ fn lower_stmt<'ctx>(cg: &mut Cg<'ctx, '_>, stmt: &Stmt) -> Result<(), String> {
             else_arm,
             ..
         } => {
-            lower_stmt_match(cg, scrutinee, arms, else_arm.as_ref())?;
+            let locals_snapshot = cg.locals.clone();
+            cg.sm_scope_depth += 1;
+            let r = lower_stmt_match(cg, scrutinee, arms, else_arm.as_ref());
+            cg.sm_scope_depth -= 1;
+            // Restore ALL snapshot entries — same lexical-scoping rationale as Stmt::If.
+            for (name, &outer_alloca) in &locals_snapshot {
+                cg.locals.insert(name.clone(), outer_alloca);
+            }
+            r?;
         }
 
         Stmt::While { cond, body, .. } => {
-            lower_stmt_while(cg, cond, body)?;
+            let locals_snapshot = cg.locals.clone();
+            cg.sm_scope_depth += 1;
+            let r = lower_stmt_while(cg, cond, body);
+            cg.sm_scope_depth -= 1;
+            // Restore ALL snapshot entries — same lexical-scoping rationale as Stmt::If.
+            for (name, &outer_alloca) in &locals_snapshot {
+                cg.locals.insert(name.clone(), outer_alloca);
+            }
+            r?;
         }
 
         Stmt::For {
             var, iter, body, ..
         } => {
-            lower_stmt_for(cg, var, iter, body)?;
+            let locals_snapshot = cg.locals.clone();
+            cg.sm_scope_depth += 1;
+            let r = lower_stmt_for(cg, var, iter, body);
+            cg.sm_scope_depth -= 1;
+            // Restore ALL snapshot entries — same lexical-scoping rationale as Stmt::If.
+            for (name, &outer_alloca) in &locals_snapshot {
+                cg.locals.insert(name.clone(), outer_alloca);
+            }
+            r?;
         }
 
         Stmt::Return { value, .. } => {
@@ -4715,38 +7376,138 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                     }
                 } else {
                     match &ret_ty {
-                        // ErrorsCapable: val may be a pointer to {i64,i64} (errors-capable local)
-                        // OR a plain success value (int literal, int from another fn, etc.).
+                        // ErrorsCapable: val_ty tells us whether the PointerValue is the EC
+                        // struct itself (val_ty == ErrorsCapable) or the success value
+                        // (val_ty == inner type). The two cases require different handling:
+                        // - ErrorsCapable val_ty: ptr → {i64,i64} EC struct; load and extract.
+                        // - Non-ErrorsCapable val_ty: ptr IS the success value; wrap as {0, ok}.
+                        //   Wide inner types (Number/Shape) need heap-stable staging because the
+                        //   pointer may be into the resume fn's stack (dies when resume returns).
+                        //   String/Array/Map are already heap-allocated — safe to ptr_to_int.
                         Type::ErrorsCapable { inner } => {
                             match val {
                                 inkwell::values::BasicValueEnum::PointerValue(ptr) => {
-                                    // errors-capable local: load the {i64,i64} struct and store.
-                                    let result_ty = errors_result_type(cg.ctx);
-                                    let ec_struct = cg
-                                        .builder
-                                        .build_load(result_ty, ptr, "sm_ret_ec_struct")
-                                        .map_err(|e| format!("sm_ret_ec_struct: {e}"))?
-                                        .into_struct_value();
-                                    let err_i64 = cg
-                                        .builder
-                                        .build_extract_value(ec_struct, 0, "sm_ret_ec_err")
-                                        .map_err(|e| format!("sm_ret_ec_err: {e}"))?
-                                        .into_int_value();
-                                    let ok_i64 = cg
-                                        .builder
-                                        .build_extract_value(ec_struct, 1, "sm_ret_ec_ok")
-                                        .map_err(|e| format!("sm_ret_ec_ok: {e}"))?
-                                        .into_int_value();
-                                    state_machine::store_return_value_errors(
-                                        cg.ctx,
-                                        &cg.builder,
-                                        frame_ptr,
-                                        err_i64,
-                                        ok_i64,
-                                    )?;
+                                    if matches!(val_ty, Type::ErrorsCapable { .. }) {
+                                        // val_ty == ErrorsCapable: ptr points to the {i64,i64}
+                                        // EC result struct (an errors-capable local or call result).
+                                        // Load and extract the two fields directly.
+                                        let result_ty = errors_result_type(cg.ctx);
+                                        let ec_struct = cg
+                                            .builder
+                                            .build_load(result_ty, ptr, "sm_ret_ec_struct")
+                                            .map_err(|e| format!("sm_ret_ec_struct: {e}"))?
+                                            .into_struct_value();
+                                        let err_i64 = cg
+                                            .builder
+                                            .build_extract_value(ec_struct, 0, "sm_ret_ec_err")
+                                            .map_err(|e| format!("sm_ret_ec_err: {e}"))?
+                                            .into_int_value();
+                                        let ok_i64 = cg
+                                            .builder
+                                            .build_extract_value(ec_struct, 1, "sm_ret_ec_ok")
+                                            .map_err(|e| format!("sm_ret_ec_ok: {e}"))?
+                                            .into_int_value();
+                                        state_machine::store_return_value_errors(
+                                            cg.ctx,
+                                            &cg.builder,
+                                            frame_ptr,
+                                            err_i64,
+                                            ok_i64,
+                                        )?;
+                                    } else {
+                                        // val_ty is the inner success type (Number, Shape, String,
+                                        // Array, Map, etc.): ptr IS the success value.
+                                        // Wrap as {err=null, ok=ptr_to_int(stable_ptr)}.
+                                        // Wide inner types (Number/Shape) need heap-stable staging.
+                                        // Number: write the i128 into the dedicated 16-byte staging
+                                        // slot in the composed frame, then point ok at that slot.
+                                        // Shape: still rejected by WideValueSuspendingReturn at typeck.
+                                        let ok_i64 = match inner.as_ref() {
+                                            Type::Number { precision } if *precision <= 34 => {
+                                                // The decimal128 value is a pointer to an i128 alloca
+                                                // on the resume fn's stack. That stack dies when the
+                                                // resume fn returns. Store the i128 in the dedicated
+                                                // 16-byte staging slot in the composed frame so the
+                                                // ok-pointer remains valid when the wrapper reads it.
+                                                let staging_offset = cg
+                                                    .sm_number_errors_staging_offset
+                                                    .ok_or_else(|| {
+                                                        "ICE: `-> number errors` SM return: \
+                                                         sm_number_errors_staging_offset is None — \
+                                                         build_frame_layouts must have omitted the \
+                                                         staging slot for this function"
+                                                            .to_string()
+                                                    })?;
+                                                let staging_ptr =
+                                                    state_machine::number_errors_staging_ptr(
+                                                        cg.ctx,
+                                                        &cg.builder,
+                                                        frame_ptr,
+                                                        staging_offset,
+                                                    )?;
+                                                // Load the i128 from the stack-alloca pointer and
+                                                // store it into the frame-stable staging slot.
+                                                let i128_val = cg
+                                                    .builder
+                                                    .build_load(
+                                                        cg.ctx.i128_type(),
+                                                        ptr,
+                                                        "num_err_i128",
+                                                    )
+                                                    .map_err(|e| format!("num err i128 load: {e}"))?
+                                                    .into_int_value();
+                                                cg.builder
+                                                    .build_store(staging_ptr, i128_val)
+                                                    .map_err(|e| {
+                                                        format!("num err staging store: {e}")
+                                                    })?;
+                                                // The EC ok-word is the staging slot address as i64.
+                                                cg.builder
+                                                    .build_ptr_to_int(
+                                                        staging_ptr,
+                                                        cg.ctx.i64_type(),
+                                                        "num_err_ok_i64",
+                                                    )
+                                                    .map_err(|e| {
+                                                        format!("num err ok ptr_to_int: {e}")
+                                                    })?
+                                            }
+                                            Type::Shape { .. } => {
+                                                // WideValueSuspendingReturn at typeck rejects every
+                                                // `-> Shape errors` suspending return before codegen.
+                                                // Reaching here means the guard was bypassed — fail
+                                                // loud so the ICE is visible immediately.
+                                                return Err(
+                                                    "ICE: `Shape errors` return from a suspending \
+                                                     function reached codegen — \
+                                                     WideValueSuspendingReturn typeck guard should \
+                                                     have rejected it"
+                                                        .to_string(),
+                                                );
+                                            }
+                                            // String, Array, Map, Maybe, Union: all heap-allocated
+                                            // (global literals or ynz_alloc). The pointer survives
+                                            // resume fn return — ptr_to_int is safe.
+                                            _ => cg
+                                                .builder
+                                                .build_ptr_to_int(
+                                                    ptr,
+                                                    cg.ctx.i64_type(),
+                                                    "sm_ec_ptr_ok",
+                                                )
+                                                .map_err(|e| format!("sm_ec_ptr_ok p2i: {e}"))?,
+                                        };
+                                        state_machine::store_return_value_errors(
+                                            cg.ctx,
+                                            &cg.builder,
+                                            frame_ptr,
+                                            cg.ctx.i64_type().const_int(0, false),
+                                            ok_i64,
+                                        )?;
+                                    }
                                 }
                                 _ => {
-                                    // Plain success value: wrap as {0, success_bits}.
+                                    // Non-pointer success value (Int/Bool/Float): wrap as {0, bits}.
                                     let success_bits = cg
                                         .to_i64_bits(val, inner)
                                         .unwrap_or_else(|_| cg.i64().const_int(0, false));
@@ -4754,7 +7515,7 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                         cg.ctx,
                                         &cg.builder,
                                         frame_ptr,
-                                        cg.i64().const_int(0, false), // null error ptr = success
+                                        cg.i64().const_int(0, false),
                                         success_bits,
                                     )?;
                                 }
@@ -4776,8 +7537,54 @@ fn lower_stmt_return<'ctx>(cg: &mut Cg<'ctx, '_>, value: Option<&Expr>) -> Resul
                                 wide,
                             )?;
                         }
+                        // Bare `-> Shape` from a suspending function.
+                        //
+                        // WideValueSuspendingReturn at typeck rejects every such return before
+                        // codegen reaches here. Reaching this arm means the guard was bypassed —
+                        // fail loud so the ICE is visible immediately rather than producing a
+                        // silent SIGSEGV from staging at FRAME_OFFSET_LOCALS_START.
+                        Type::Shape { .. } => {
+                            return Err(
+                                "ICE: bare `Shape` return from a suspending function reached \
+                                 codegen — WideValueSuspendingReturn typeck guard should have \
+                                 rejected it"
+                                    .to_string(),
+                            );
+                        }
+                        Type::Float => {
+                            // Float: bitcast f64 → i64, store in the first 8 bytes of the
+                            // 16-byte return slot. The wrapper-return load does the inverse
+                            // bitcast. Storing the raw f64 directly into an i64-typed slot
+                            // pointer would produce an LLVM type mismatch at verification.
+                            let f_val = val.into_float_value();
+                            state_machine::store_return_value_f64(
+                                cg.ctx,
+                                &cg.builder,
+                                frame_ptr,
+                                f_val,
+                            )?;
+                        }
+                        Type::Number { precision } if *precision <= 34 => {
+                            // Decimal128 (i128): load the full 16-byte value through the
+                            // pointer (lower_expr returns a ptr-to-i128 alloca for number
+                            // values), then store the i128 directly into the 16-byte return
+                            // slot. Storing the pointer itself (as to_i64_bits would do via
+                            // ptr_to_int) would write a stack address that becomes invalid
+                            // once this resume function returns — Tier-A silent-wrong-value bug.
+                            let ptr_v = val.into_pointer_value();
+                            let i128_val = cg
+                                .builder
+                                .build_load(cg.ctx.i128_type(), ptr_v, "sm_ret_dec_load")
+                                .map_err(|e| format!("sm ret number i128 load: {e}"))?
+                                .into_int_value();
+                            state_machine::store_return_value_i128(
+                                cg.ctx,
+                                &cg.builder,
+                                frame_ptr,
+                                i128_val,
+                            )?;
+                        }
                         Type::String
-                        | Type::Shape { .. }
                         | Type::BuiltinArray { .. }
                         | Type::BuiltinFixed { .. }
                         | Type::Maybe { .. }
@@ -4939,7 +7746,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     return Ok(global.as_pointer_value().into());
                 }
             }
-            // Hardware decimal128 path (N ≤ 34).
+            // Hardware decimal128 path (N ≤ 34): stack alloca holds i128 bits.
             let bits: u128 =
                 ynz_numerics::parse(s).ok_or_else(|| format!("bad decimal literal `{s}`"))?;
             let slot = cg
@@ -5151,11 +7958,11 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     let val = lower_expr(cg, &call.args[0])?;
                     Ok(val)
                 }
-                // v0.3-M1: sleepMs(ms: int) — synchronous blocking sleep; lowers to ynz_thread_sleep_ms.
-                "sleepMs" if call.args.len() == 1 => {
+                // v0.3-M1: sleepBlocking(ms: int) — synchronous blocking sleep; lowers to ynz_thread_sleep_ms.
+                "sleepBlocking" if call.args.len() == 1 => {
                     let ms = lower_expr(cg, &call.args[0])?.into_int_value();
                     cg.builder
-                        .build_call(cg.rt.ynz_thread_sleep_ms, &[ms.into()], "sleepMs")
+                        .build_call(cg.rt.ynz_thread_sleep_ms, &[ms.into()], "sleepBlocking")
                         .map_err(|e| format!("{e}"))?;
                     Ok(cg.i32().const_int(0, false).into())
                 }
@@ -5198,13 +8005,13 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         .map_err(|e| format!("{e}"))?;
                     Ok(slot.into())
                 }
-                // v0.3-M2: sleepAsync(ms: int) — non-blocking sleep; lowers to state-machine wait point.
-                // Only reaches here when called WITHOUT `wait` wrapping (e.g., bare `sleepAsync(100)`).
+                // v0.3-M2: sleep(ms: int) — non-blocking sleep; lowers to state-machine wait point.
+                // Only reaches here when called WITHOUT `wait` wrapping (e.g., bare `sleep(100)`).
                 // With `wait`, the call is handled by emit_wait_point / lower_sm_body.
                 // Without `wait`, evaluate to a no-op (discards the sleep handle immediately).
-                // WHY: typeck emits `unawaited_sleep_async` warning for this case; codegen still
+                // WHY: typeck emits `unawaited_sleep` warning for this case; codegen still
                 // needs to produce valid IR without crashing.
-                "sleepAsync" if call.args.len() == 1 => {
+                "sleep" if call.args.len() == 1 => {
                     // Evaluate the ms argument for side effects but discard the sleep handle.
                     let ms = lower_expr(cg, &call.args[0])?.into_int_value();
                     let handle = cg
@@ -5214,7 +8021,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                             &[ms.into()],
                             "sleep_handle",
                         )
-                        .map_err(|e| format!("sleepAsync: {e}"))?
+                        .map_err(|e| format!("sleep: {e}"))?
                         .try_as_basic_value()
                         .basic()
                         .ok_or("ynz_rt_async_sleep_create void")?;
@@ -5584,9 +8391,70 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         .basic()
                         .ok_or("ynz_array_new returned void")?
                         .into_pointer_value();
-                    for elem_expr in elements {
+                    let in_sm = cg.sm_frame_ptr.is_some();
+                    for (elem_idx, elem_expr) in elements.iter().enumerate() {
                         let elem_ty2 = cg.expr_type(elem_expr);
-                        let elem_val = lower_expr(cg, elem_expr)?;
+                        // NumberLit decimal128 elements in SM functions: emit a module-level
+                        // constant global instead of a stack alloca so the pointer survives
+                        // across suspension boundaries. Module globals have static lifetime —
+                        // no ynz_alloc, no ynz_free, zero per-element heap overhead. This
+                        // mirrors the non-SM array<number> path (also alloc=0/free=0) and
+                        // the existing string-global pattern in NumberLit lowering.
+                        //
+                        // Shape struct-literal elements in SM functions: same global approach.
+                        // Stack allocas created by lower_struct_lit are freed when the resume
+                        // function returns after a suspension. The heap array retains the
+                        // (now dangling) stack pointer as an i64 — reading it on the next
+                        // resume is UB. Emitting a module-level global for all-literal-field
+                        // struct elements gives the array a stable, statically-allocated source
+                        // pointer that survives across any number of resume calls.
+                        let elem_val = if in_sm
+                            && matches!(elem_ty2, Type::Number { precision } if precision <= 34)
+                        {
+                            if let Expr::NumberLit(s, _) = elem_expr {
+                                let bits: u128 = ynz_numerics::parse(s)
+                                    .ok_or_else(|| format!("bad decimal literal `{s}`"))?;
+                                let gname =
+                                    format!(".arr.dec.{}.{}", elem_idx, &s[..s.len().min(8)]);
+                                let g = build_decimal_global(cg.ctx, cg.module, bits, &gname);
+                                g.as_pointer_value().into()
+                            } else {
+                                lower_expr(cg, elem_expr)?
+                            }
+                        } else if in_sm {
+                            if let (
+                                Type::Shape { name: ref sname },
+                                Expr::StructLit { ref fields, .. },
+                            ) = (&elem_ty2, elem_expr)
+                            {
+                                let sname = sname.clone();
+                                let struct_ty_opt = cg.shape_types.get(&sname);
+                                let shape_def_opt = cg.shape_table.get(&sname).cloned();
+                                if let (Some(struct_ty), Some(shape_def)) =
+                                    (struct_ty_opt, shape_def_opt)
+                                {
+                                    let gname = format!(".arr.shape.{}.{}", elem_idx, sname);
+                                    if let Some(g) = try_build_shape_global(
+                                        cg.ctx,
+                                        cg.module,
+                                        struct_ty,
+                                        fields,
+                                        &shape_def.fields,
+                                        &gname,
+                                    ) {
+                                        g.as_pointer_value().into()
+                                    } else {
+                                        lower_expr(cg, elem_expr)?
+                                    }
+                                } else {
+                                    lower_expr(cg, elem_expr)?
+                                }
+                            } else {
+                                lower_expr(cg, elem_expr)?
+                            }
+                        } else {
+                            lower_expr(cg, elem_expr)?
+                        };
                         let bits = cg.to_i64_bits(elem_val, &elem_ty2)?;
                         cg.builder
                             .build_call(
@@ -6020,7 +8888,7 @@ fn lower_expr_background<'ctx>(
     // the blocking pool would hold a dedicated OS thread captive during the wait, defeating
     // the entire point of the state machine. The I/O pool shares threads cooperatively.
     // v0.3-M2 P7: use suspend_set (transitive) instead of wait_cache (local) for routing.
-    // Any suspending fn (transitively reaches sleepAsync) routes to the I/O pool via ynz_rt_spawn.
+    // Any suspending fn (transitively reaches `sleep`) routes to the I/O pool via ynz_rt_spawn.
     if cg.suspend_set.contains(&callee_name) {
         return lower_expr_background_state_machine(cg, call, &callee_name);
     }
@@ -9869,6 +12737,56 @@ fn build_decimal_global<'ctx>(
     g.set_linkage(inkwell::module::Linkage::Private);
     g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
     g
+}
+
+/// Attempt to build a module-level global for a shape struct literal whose fields are
+/// all compile-time integer/boolean literals.
+///
+/// Returns `Some(global_ptr)` when all fields of the struct literal are int or bool
+/// literals that can be folded into LLVM constant values. Returns `None` when any field
+/// is a non-literal expression (runtime value) — the caller falls back to the stack-alloca path.
+///
+/// Module-level globals have static lifetime and survive across suspension boundaries.
+/// Used for `array<Shape>` literals in SM functions so the element pointers stored in
+/// the array remain valid between resume calls — stack allocas from one resume call are
+/// freed when that call returns, making those pointers dangle on the next resume.
+fn try_build_shape_global<'ctx>(
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    struct_ty: inkwell::types::StructType<'ctx>,
+    fields_lit: &[ynz_ast::nodes::StructLitField],
+    shape_def_fields: &[ynz_typeck::shapes::FieldDef],
+    global_name: &str,
+) -> Option<inkwell::values::GlobalValue<'ctx>> {
+    let i64t = ctx.i64_type();
+    // Build one i64 constant per shape field in layout order.
+    // Only int and bool literals produce folded constants; other types fall through to None.
+    let mut field_vals: Vec<inkwell::values::IntValue<'ctx>> =
+        Vec::with_capacity(shape_def_fields.len());
+    for def_field in shape_def_fields {
+        let lit_field = fields_lit.iter().find(|f| f.name == def_field.name)?;
+        let const_val = match &lit_field.value {
+            ynz_ast::nodes::Expr::IntLit(n, _) => {
+                i64t.const_int(*n as u64, true) // bit-reinterpret signed int literal as u64
+            }
+            ynz_ast::nodes::Expr::BoolLit(b, _) => i64t.const_int(u64::from(*b), false),
+            _ => return None, // non-literal field — cannot fold to a global
+        };
+        field_vals.push(const_val);
+    }
+    let init_vals: Vec<inkwell::values::BasicValueEnum<'ctx>> =
+        field_vals.iter().map(|v| (*v).into()).collect();
+    let init = struct_ty.const_named_struct(&init_vals);
+    let g = module.add_global(
+        struct_ty,
+        Some(inkwell::AddressSpace::default()),
+        global_name,
+    );
+    g.set_initializer(&init);
+    g.set_constant(true);
+    g.set_linkage(inkwell::module::Linkage::Private);
+    g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
+    Some(g)
 }
 
 #[cfg(test)]

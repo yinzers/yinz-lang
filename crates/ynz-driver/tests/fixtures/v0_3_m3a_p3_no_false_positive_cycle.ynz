@@ -1,0 +1,20 @@
+// Fixture: self-recursive suspending fn that also calls a second suspending fn
+// non-recursively. Guards that MutualSuspensionCycle does NOT false-positive —
+// a non-mutual call between two suspending fns is NOT a cycle.
+// Expected output: done
+function worker(n: int) -> nothing {
+  if (n > 0) {
+    wait sleep(2)
+    worker(n - 1)
+  }
+}
+
+function helper() -> nothing {
+  wait sleep(1)
+}
+
+function entrypoint() -> nothing {
+  worker(2)
+  helper()
+  print(`done`)
+}

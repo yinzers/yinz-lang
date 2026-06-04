@@ -1,0 +1,28 @@
+// WHY: A function parameter `x` shadowed inside an `if` body. The top-level `wait`
+// appears BEFORE the `if`, so the inner `let x = 99` does not cross a suspension
+// within the if body. However, under Option A (design/concurrency.md §
+// ShadowsCrossingLocal), ANY nested `let x` in a suspending function is a compile
+// error — the conservative guard rejects all same-name nested shadows regardless of
+// position relative to the `wait`.
+//
+// The root cause: reload_params_from_frame in every continuation state overwrites
+// cg.locals["x"] with the frame-slot pointer. If the inner alloca is placed in the
+// entry block by Part-A codegen, the reload still runs and restores cg.locals to
+// the SLOT pointer — not the inner alloca — corrupting the scope separation. The
+// safe answer is a clean compile error until per-binding-ID slot allocation lands
+// (roadmap M3c, `v0-3-m3c-shadow-parity`).
+//
+// This fixture MUST produce a clean compile error (exit 1). No ICE text.
+// test-ratchet: R6 flipped this to compile (non-crossing predicate); R7 reverts to
+// conservative reject (Option A, blunt param_has_nested_let_shadow guard).
+function f(x: int) -> nothing {
+  wait sleep(5)
+  if (1 > 0) {
+    let x = 99
+    print(x.toString())
+  }
+  print(x.toString())
+}
+function entrypoint() -> nothing {
+  f(7)
+}

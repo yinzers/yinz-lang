@@ -745,13 +745,15 @@ fn anon_shapes_excluded_from_completion() {
     );
 }
 
-// WHY: `sleepAsync` is a public may-block intrinsic registered in registry/features.toml
-// and must appear in bare-identifier completion. `__testFallibleAsync` is an internal
-// intrinsic stored in `internal_fns` (excluded from free_fn_names) and must NOT appear.
-// This boundary is the load-bearing guarantee that internal intrinsics stay invisible
-// to users — if it breaks, `__testFallibleAsync` starts showing up in Ctrl+Space.
+// WHY: `sleep` and `sleepBlocking` are both public may-block free_fn intrinsics registered
+// in registry/features.toml and must appear in bare-identifier completion. `__testFallibleAsync`
+// is an internal intrinsic stored in `internal_fns` (excluded from free_fn_names) and must NOT
+// appear. This boundary is the load-bearing guarantee that internal intrinsics stay invisible to
+// users — if it breaks, `__testFallibleAsync` starts showing up in Ctrl+Space. Either public
+// intrinsic silently dropping from completions (e.g. a registry rename not reflected in the LSP
+// filter) is the other failure class this test guards.
 #[test]
-fn sleep_async_visible_test_fallible_async_not_visible() {
+fn public_may_block_intrinsics_visible_internal_not_visible() {
     use lsp_types::Position;
     use ynz_lsp::{completion::completion_list, position::LineTable};
 
@@ -775,8 +777,12 @@ fn sleep_async_visible_test_fallible_async_not_visible() {
     let labels: Vec<&str> = list.items.iter().map(|i| i.label.as_str()).collect();
 
     assert!(
-        labels.contains(&"sleepAsync"),
-        "sleepAsync must appear in completion (registered in registry/features.toml); got: {labels:?}"
+        labels.contains(&"sleep"),
+        "sleep must appear in completion (registered in registry/features.toml); got: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"sleepBlocking"),
+        "sleepBlocking must appear in completion (registered in registry/features.toml); got: {labels:?}"
     );
     assert!(
         !labels.iter().any(|l| l.contains("__testFallibleAsync")),

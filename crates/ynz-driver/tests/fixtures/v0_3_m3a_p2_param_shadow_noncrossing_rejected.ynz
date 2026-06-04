@@ -1,0 +1,26 @@
+// WHY: A function parameter `p` shadowed inside an `if` body that has NO suspension
+// within that if body (the top-level `wait` is outside the if). Under Option A
+// (design/concurrency.md § ShadowsCrossingLocal), any nested `let p` in a suspending
+// function is rejected — the frame-slot system keys slots by NAME, and every
+// continuation state's reload_params_from_frame overwrites cg.locals["p"] with the
+// slot pointer. Even a non-crossing inner shadow would install the wrong alloca at
+// the next suspension. The per-binding-ID lifting path is roadmap M3c.
+//
+// This fixture MUST produce a clean compile error (exit 1) with the shadow
+// diagnostic. It must NOT produce any ICE text.
+// test-ratchet: R6 flipped this to compile (param_shadow_has_genuine_crossing);
+// R7 reverts to conservative reject (param_has_nested_let_shadow, Option A).
+// Rationale: R6's non-crossing compile path silently miscompiled `f(7)` → printed
+// garbage instead of 7 in the code-reviewer's repro. Conservative reject is the
+// correct safe answer per design/concurrency.md ShadowsCrossingLocal.
+function worker(p: int) -> nothing {
+  if (p > 0) {
+    let p: int = 42
+    print(p.toString())
+  }
+  wait sleep(5)
+  print(p.toString())
+}
+function entrypoint() -> nothing {
+  worker(10)
+}

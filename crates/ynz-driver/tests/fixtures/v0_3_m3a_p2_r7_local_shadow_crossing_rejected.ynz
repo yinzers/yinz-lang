@@ -1,0 +1,21 @@
+// WHY: Judge A8 local case (same shape as silent-miscompile but with a local, not
+// a param). `y` is a crossing local (declared before the `wait`, read after it).
+// An inner `let y=7` inside an `if` body shadows the crossing local. Check 3
+// (find_shadow_in_stmts, gated on outer_is_genuine_crossing_local) rejects this
+// because the outer `y` has reads after the top-level suspension.
+//
+// Under Option A (design/concurrency.md § ShadowsCrossingLocal), the conservative
+// local-shadow guard (find_shadow_in_stmts) rejects all nested shadows of crossing
+// locals — consistent with the blunt param guard. Must exit 1 (compile error). No ICE.
+function runner() -> nothing {
+  let y: int = 100
+  if (1 == 1) {
+    let y: int = 7
+    print(y.toString())
+  }
+  wait sleep(1)
+  print(y.toString())
+}
+function entrypoint() -> nothing {
+  runner()
+}

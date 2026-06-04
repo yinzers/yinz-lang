@@ -2,7 +2,7 @@
 // Verifies Bug B fix: nested SM calls use inline poll-and-yield (no bridge abort).
 
 function inner() -> int {
-  wait sleepAsync(5)
+  wait sleep(5)
   return 7
 }
 

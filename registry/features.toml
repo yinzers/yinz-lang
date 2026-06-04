@@ -627,25 +627,29 @@ param_types = ["int", "int"]
 return_type = "range<int>"
 since = "M3"
 
-# --- free_fn: sleepMs (v0.3-M1) ---
-# Synchronous blocking sleep on the calling thread. Does NOT use `wait` semantics
-# (those ship in v0.3-M2). Named sleepMs to avoid any overlap with the `wait` keyword.
+# --- free_fn: sleepBlocking (v0.3-M1, renamed from sleepMs at v0.3-M3a) ---
+# Synchronous blocking sleep on the calling thread. Blocks the OS thread for the
+# full duration — no scheduler involvement. Name intentionally signals its danger:
+# blocking the thread prevents other tasks from running on that thread during the wait.
+# Use `sleep` (yielding) when inside a suspending function — `sleepBlocking` with
+# an explicit `wait` produces a "`wait` has no effect" warning because it does not
+# pause the state machine; it blocks the thread instead.
 # Lowers to ynz_thread_sleep_ms(ms: i64) in libynz_runtime.a.
 [[primitive_intrinsic]]
-name = "sleepMs"
+name = "sleepBlocking"
 kind = "free_fn"
 param_types = ["int"]
 return_type = "nothing"
 since = "v0.3-M1"
 
-# --- free_fn: sleepAsync (v0.3-M2) ---
-# Non-blocking sleep. `wait sleepAsync(ms)` suspends the calling function for ms
+# --- free_fn: sleep (v0.3-M2, renamed from sleepAsync at v0.3-M3a) ---
+# Non-blocking (yielding) sleep. `wait sleep(ms)` suspends the calling function for ms
 # milliseconds without blocking the OS thread — the thread is freed for other tasks
-# during the suspension. Pairs with sleepMs (blocking sleep, v0.3-M1).
+# during the suspension. Pairs with sleepBlocking (blocking sleep, v0.3-M1).
 # Lowers to ynz_rt_async_sleep_create + ynz_rt_async_sleep_poll in libynz_runtime.a.
 # May-block: TRUE — member of M2_MAY_BLOCK_INTRINSICS in crates/ynz-typeck/src/intrinsics.rs.
 [[primitive_intrinsic]]
-name = "sleepAsync"
+name = "sleep"
 kind = "free_fn"
 param_types = ["int"]
 return_type = "nothing"
@@ -1117,6 +1121,117 @@ ships_in = "v0.2"
 design_doc = "design/future/arena.md"
 triggers = "Writing `scratch { ... }` in Yinz source (keyword not yet reserved — no current trigger)"
 
+# --- Nested-shape crossing a wait (design/concurrency.md M3a scope) ---
+[[deferred_language_feature]]
+name = "nested-shape-crossing-wait"
+substitute = "Flatten the nested shape into primitive fields, or store the outer shape as a non-crossing local (assign it entirely after the last suspension in the function)."
+why = "The frame-embed codegen copies the outer shape's bytes into the composed heap frame at suspension time. Nested shape fields are opaque pointers — the recursive memcpy that would copy the inner shape's bytes is not yet implemented. The fix requires extending frame layout to recursively embed all nested shape bytes (1-2 sessions of work)."
+ships_in = "v0.3+"
+design_doc = "design/concurrency.md"
+triggers = "A `let` binding whose type is a shape with nested-shape fields, where that binding is read after a `wait` suspension in the same function"
+
+# --- Shadowing a crossing local — same name re-used around a suspension (design/concurrency.md M3a scope) ---
+[[deferred_language_feature]]
+name = "shadow-crossing-local-support"
+substitute = "Rename the colliding binding to a distinct name (e.g. `innerX` instead of `x`, or `xAfter` for a post-wait rebinding). Two values with different semantics should have different names anyway — the rename produces clearer code."
+why = "The frame-slot system keys crossing-local slots by name (one slot per name). Two bindings with the same name around a suspension share one slot — the second write silently clobbers the first. The guard is deliberately conservative: it rejects all same-name re-uses around a suspension, including cases where reads might not reach the clobbered value, because the alternative is a silent wrong answer. Lifting this requires per-binding slot identity: each `let` declaration gets a unique ID, and flush/reload use that ID instead of the name. This is 1-2 sessions of work in the crossing analysis, frame layout, and codegen layers."
+ships_in = "v0.3+"
+design_doc = "design/concurrency.md"
+triggers = "Two cases both trigger the error: (1) a `let x` inside a nested scope (if/while/for/match body) when an outer `let x` declared before a `wait` is read after the `wait` at the outer scope; (2) a second top-level `let x` in the function body after a suspension when a first top-level `let x` was declared before the suspension. Both produce a silent slot-collision miscompile if allowed. Parameters count as an outer binding for both shapes."
+
+# --- Wide-value shape returns from suspending functions (design/concurrency.md) ---
+# Note: `-> number errors` (decimal128 EC) is SUPPORTED as of M3a Phase 1 — a 16-byte
+# staging slot in the composed frame stores the i128 and is freed with the frame (alloc=1/free=1).
+# This entry covers only the remaining deferred cases: `-> Shape` and `-> Shape errors`.
+[[deferred_language_feature]]
+name = "wide-value-suspending-return"
+substitute = "For `-> Shape`: return the shape's fields individually as primitives, or bind the shape to a crossing local and return a primitive derived from it. For `-> Shape errors`: return the shape's fields individually (e.g. `-> int errors`) or compute a primitive value inside the function and return that."
+why = "Returning a Shape value from a suspending function needs a variable-size frame staging slot entangled with the pre-existing non-suspending shape-return base bug (shapes returned by value produce garbage for int fields even without suspension). Without it: `-> Shape` clobbers child sub-frames (staging bytes at FRAME_OFFSET_LOCALS_START=32 overwrites the sleep sub-frame's resume_point → SIGSEGV); `-> Shape errors` needs the same variable-size staging. The shape base bug must be fixed first. `-> number errors` is fully supported (16-byte fixed staging slot, alloc=1/free=1)."
+ships_in = "v0.3+"
+design_doc = "design/concurrency.md"
+triggers = "A suspending function (one whose body contains a `wait`) whose return type is `Shape` or `Shape errors` — these trigger the WideValueSuspendingReturn compile error."
+
+# --- union/maybe/dynamic crossing locals (design/concurrency.md) ---
+[[deferred_language_feature]]
+name = "unsupported-crossing-local-type"
+substitute = "Extract the inner value before the `wait`, or restructure so the `union`, `maybe`, or `dynamic` value is not needed after the suspension."
+why = "The frame-slot classifier in codegen handles int, bool, float, number, string, array, map, Shape, and ErrorsCapable crossing locals. `union`, `maybe<T>`, and `dynamic Contract` values are internally represented as pointers to {tag, payload} allocas on the resume function's stack — stack frames that are destroyed between suspension and resume. Flushing the alloca pointer to the frame and reloading it after resume produces undefined behavior (reading a dangling stack address). The UnsupportedCrossingLocalType guard in typeck/check.rs rejects these crossing locals at compile time, converting what was previously a raw LLVM ICE into a clean teaching diagnostic."
+ships_in = "v0.3+"
+design_doc = "design/concurrency.md"
+triggers = "A local binding of type `union`, `maybe<T>`, or `dynamic Contract` that is declared before a `wait` and read after it — any of these triggers the UnsupportedCrossingLocalType compile error."
+
+# --- EC wrapper collect-on-completion (design/concurrency.md M3a Scope Boundaries) ---
+[[deferred_language_feature]]
+name = "ec-wrapper-collect-on-completion"
+substitute = "Use the inline-poll path: a suspending function that calls another suspending `-> T errors` function composes the callee inline (the state-machine resume path). Only `background` (fire-and-forget) hits the standalone EC wrapper, and it safely discards the completed value. If you need to read the completed value of a `background`-spawned `-> T errors` task, this ships in v0.3-M3b."
+why = "The standalone EC wrapper (emitted for `background`-spawned suspending `-> T errors` functions) reads the `{i64, i64}` EC value from the frame return slot and then frees the frame. For `-> number errors`, the ok-word in that value points into the composed frame's 16-byte staging slot — storage freed at the same time as the frame. The ok-pointer therefore becomes invalid after the wrapper returns. This is safe today because the only reachable caller is `background` (fire-and-forget), which DISCARDS the EC value without dereferencing the ok-pointer. A caller that reads and uses the ok-pointer must copy it BEFORE freeing the frame; implementing that copy requires the scheduler to know whether a spawned task's completed value is read or discarded — that is M3b task-collection machinery, not M3a."
+ships_in = "v0.3-M3b"
+design_doc = "design/concurrency.md"
+triggers = "Storing or reading the return value of a `background`-spawned suspending function whose declared type is `-> T errors` — specifically, using the `background` task handle to collect the completed value"
+
+# --- Stored range variable as a suspending for-loop iterator (design/concurrency.md) ---
+[[deferred_language_feature]]
+name = "stored-range-with-wait"
+substitute = "Inline the range directly in the loop header: `for (i in range(0, n)) { ... }`. If `n` is a local that crosses a `wait`, it is already frame-backed and the inline form works without any extra changes."
+why = "The state-machine codegen for `for (i in range(...))` re-evaluates the range bounds at each loop header by calling `extract_range_bounds(iter)`, which requires the iterator to be a literal `range(...)` call expression. When the iterator is a stored variable (`let r = range(0,3); for (i in r)`), the bounds must be recovered from the range alloca in the composed frame. That recovery path is not yet implemented; the codegen would ICE on 'for-loop iter is not a call expression'. This guard converts the raw ICE into a clean compile error."
+ships_in = "v0.3+"
+design_doc = "design/concurrency.md"
+triggers = "A `for` loop whose body contains a `wait` and whose iterator is an identifier with `Type::Range` — e.g. `let r = range(0,3); for (i in r) { wait sleep(1) }`"
+
+# --- fixed<T> array iterator in a suspending for-loop (design/concurrency.md) ---
+[[deferred_language_feature]]
+name = "fixed-array-iter-with-wait"
+substitute = "Use `array<T>` instead: `let items: array<T> = [...]`. An `array<T>` is heap-allocated so its pointer survives suspension."
+why = "fixed<T> arrays are stack-allocated using LLVM allocas in the current resume-function's stack frame. When a `wait` suspends the function and the resume function returns to the scheduler, that stack frame is freed. On the next resume, the crossing-local frame slot holds the pointer to the old stack-allocated array — a dangling pointer. Reading it is undefined behavior. Two fix paths: (a) heap-allocating fixed arrays (changing their semantics), or (b) a different frame-embedding strategy (store the fixed-array bytes directly in the composed heap frame, similar to how Shape crossing locals work)."
+ships_in = "v0.3+"
+design_doc = "design/concurrency.md"
+triggers = "A `for` loop whose body contains a `wait` and whose iterator resolves to a `fixed<T>` variable or literal — e.g. `let flags: fixed<boolean> = [true,false]; for (b in flags) { wait sleep(1) }`"
+
+# --- Call-expression iterator in a suspending for-loop (design/concurrency.md) ---
+[[deferred_language_feature]]
+name = "expression-iter-with-wait"
+substitute = "Bind the collection to a local variable first: `let items = makeArray()` then `for (x in items) { ... }`. The `items` variable is frame-backed and survives `wait` correctly, and the collection expression is evaluated exactly once."
+why = "The state-machine codegen re-evaluates `lower_expr(iter)` at each loop header visit — once for the element count check and once for the element load — meaning a call-expression iterator would be called once per iteration instead of once total. For expressions with side effects (heap allocation, I/O), this breaks the one-alloc-per-task invariant and produces wrong semantics. Binding the collection first ensures a single evaluation; the bound variable becomes a frame-backed crossing local whose pointer is stable across resumes."
+ships_in = "v0.3+"
+design_doc = "design/concurrency.md"
+triggers = "A `for` loop whose body contains a `wait` and whose iterator is a call expression — e.g. `for (x in makeArray()) { wait sleep(1) }`"
+
+# --- fixed<T> binding (not iter) as a crossing local across a wait (design/concurrency.md) ---
+[[deferred_language_feature]]
+name = "fixed-crossing-local-with-wait"
+substitute = "Declare the variable as `array<T>` instead of `fixed<T>`. An `array<T>` is heap-allocated so its pointer survives suspension across a `wait`."
+why = "fixed<T> values are stack-allocated allocas (LLVM build_alloca) in the resume function's stack frame. When a `wait` suspends the function and the resume function returns to the scheduler, that stack frame is freed. On the next resume call, the crossing-local frame slot holds a dangling pointer to the old stack-allocated array. Reading elements after resume is undefined behavior — silently wrong values or memory corruption. This guard catches `let arr: fixed<T> = ...; wait ...; use(arr)` (the variable itself is the crossing local); the for-loop-iterator form is caught separately by fixed-array-iter-with-wait."
+ships_in = "v0.3+"
+design_doc = "design/concurrency.md"
+triggers = "A `fixed<T>` binding declared before a `wait` and used after — e.g. `let arr: fixed<int> = [1,2,3]; wait sleep(1); for (v in arr) { print(v) }`"
+
+# --- Range binding (not iter) as a crossing local across a wait (design/concurrency.md) ---
+[[deferred_language_feature]]
+name = "range-crossing-local-with-wait"
+substitute = "Inline the range directly in the `for` loop header: `for (i in range(0, n))` instead of binding to a `let` first. An inline `range(...)` call expression is reconstructed on each resume from its literal arguments; a stored range binding is a stack-allocated value whose pointer dangles after suspension."
+why = "A range binding (`let r = range(0,3)`) is stored on the resume function's stack as a pair of bounds. When a `wait` suspends the function and the resume function returns to the scheduler, that stack frame is freed. On the next resume, the crossing-local frame slot holds a dangling stack pointer; iterating that range produces zero iterations (silent wrong output). The iterator form is caught separately by stored-range-with-wait when the wait is inside the loop body; this guard catches the case where the wait is at the TOP LEVEL of the function before the loop (the range crossing a suspension boundary)."
+ships_in = "v0.3+"
+design_doc = "design/concurrency.md"
+triggers = "A `range` binding declared before a top-level `wait` and used as a `for`-loop iterator after the suspension — e.g. `let r = range(0,3); wait sleep(1); for (i in r) { print(i) }`"
+
+# --- Map entry fields (entry.key/entry.value) across a wait (design/concurrency.md) ---
+[[deferred_language_feature]]
+name = "map-entry-fields-after-wait"
+substitute = "Read `entry.key` and `entry.value` before the `wait` and bind them to separate primitive crossing locals (e.g. `let k = entry.key; let v = entry.value`), then use `k` and `v` after the suspension. An outer counter or accumulator that does not access entry fields can cross the wait freely."
+why = "A for-loop variable over a map (`for (entry in m)`) is a {key, value} pair (MapEntry<K,V>). The current frame-slot mechanism assigns one i64 slot per crossing local — sufficient for scalar types (int, bool, float) and pointer types (string, array, map) but not for a two-field pair. Only the first field (entry.key via field[0]) would survive suspension; entry.value (field[1]) would read garbage from an uninitialized frame slot. Full MapEntry frame-backing (two consecutive frame slots, mirroring the ErrorsCapable 2-slot path) ships in a later milestone."
+ships_in = "v0.3+"
+design_doc = "design/concurrency.md"
+triggers = "A `for (entry in map)` loop whose body contains a `wait` and reads `entry.key` or `entry.value` after the suspension — e.g. `for (entry in m) { wait sleep(1); total = total + entry.value }`"
+
+# --- array<Shape> with runtime field values crossing a wait (design/concurrency.md + design/future/array-by-value-element-storage.md) ---
+[[deferred_language_feature]]
+name = "array-shape-runtime-field-with-wait"
+substitute = "Two options work today: (1) Use only plain literal numbers or true/false as field values — `let items = [{ id: 1, qty: 10 }]` works. (2) Move the array and all its uses into a separate helper function that does not contain any `wait` — `function buildItems(qty: int) -> array<Item> { return [{ id: 1, qty: qty }] }` works because there is no suspension in that function. Full support ships in the m3c-array-by-value milestone."
+why = "Each element of an array<Shape> is stored as a reference pointing to memory created while the array is built. When a field value is a simple literal (a plain number or true/false), the compiler places that element in permanent memory that outlives any suspension. When a field value is computed at runtime (a variable, a function call, an expression), the element is placed in temporary memory tied to the current call — that temporary memory is released when the function pauses at a `wait`. On the next resume, the reference points at freed memory, and reading it gives wrong values (stack garbage or a crash). The permanent fix is storing shape bytes directly in the array buffer so no separate reference is needed — this ships in the m3c-array-by-value milestone. See design/future/array-by-value-element-storage.md for the full design."
+ships_in = "v0.3+"
+design_doc = "design/future/array-by-value-element-storage.md"
+triggers = "An `array<Shape>` local declared before a `wait` and read after it (crossing local), where the array literal contains at least one element whose field values are runtime-computed (not compile-time `IntLit` or `BoolLit`). The `ArrayShapeRuntimeFieldWithWait` guard in typeck/check.rs rejects these at compile time with a WHAT/WHAT-INSTEAD/WHY error. Lifted when the m3c-array-by-value milestone ships by-value element storage and removes this guard."
+
 # --- Self-referential shapes (design/future/self-references.md) ---
 [[deferred_language_feature]]
 name = "self-referential-shape"
@@ -1259,7 +1374,7 @@ triggers = "User request OR a real codebase pattern emerges where aliased re-exp
 # v0.3-M2 async I/O deferral — real file/network/db async intrinsics wait for their stdlib modules
 [[deferred_tooling_feature]]
 name = "async-io-stdlib-intrinsics-v0-5"
-substitute = "Use `sleepAsync(int)` (v0.3-M2) to test suspension in your code. Real file, network, and database intrinsics ship per-module starting in v0.5."
+substitute = "Use `sleep(int)` (v0.3-M2) to test suspension in your code. Real file, network, and database intrinsics ship per-module starting in v0.5."
 why = "Each stdlib module (file v0.5, database v0.10, http v0.15) has its own API design questions (path encoding, error variants, connection pooling) that belong to the module's design milestone, not to the state-machine ABI milestone."
 ships_in = "v0.5+ (file, database, http modules each ship their own suspension intrinsics)"
 design_doc = "design/stdlib/filesystem.md"
@@ -1408,14 +1523,14 @@ why_template = "`.give` transfers ownership without copying. Auto-detection of u
 [[diagnostic_template]]
 kind_name = "WaitInsideLoop"
 what_template = "`wait` inside a loop is not supported yet."
-what_instead_template = "Move the `wait` to a standalone function called inside the loop: `function step() -> nothing { wait sleepAsync(100) }`, then call `step()` from the loop body."
-why_template = "v0.3-M2 can only pause at the top level of a function or inside an `if` block. Pausing inside a loop requires saving and restoring the loop counter across the pause point — that transform ships in v0.3-M3."
+what_instead_template = "Move the `wait` to a standalone function called inside the loop: `function step() -> nothing { wait sleep(100) }`, then call `step()` from the loop body."
+why_template = "v0.3-M2 can only pause at the top level of a function or inside an `if` block. Pausing inside a loop requires saving and restoring the loop counter across the pause point — that transform ships in v0.3-M3a."
 
 [[diagnostic_template]]
 kind_name = "LocalCrossesWait"
 what_template = "`{name}` is declared before a `wait` and used after — this is not supported yet."
 what_instead_template = "Move `{name}` to a function parameter (parameters are preserved across pause points) or restructure so `{name}` is not needed after the `wait`."
-why_template = "v0.3-M2 can only preserve function parameters across a `wait` point. Preserving a local binding across a pause requires a more complex transform that ships in v0.3-M3."
+why_template = "v0.3-M2 can only preserve function parameters across a `wait` point. Preserving a local binding across a suspension requires a frame-slot transform that ships in v0.3-M3a."
 
 # v0.3-M2 wait-semantics teaching diagnostic templates
 
@@ -1432,15 +1547,17 @@ what_instead_template = "Write `wait someFn()` to wait for `someFn` to complete.
 why_template = "`wait` schedules a suspension point. It only applies to function calls whose result must be waited for."
 
 # UnawaitedSleepAsync — RETIRED by v0.3-M2 Phase 6 (transitive inference model).
-# Under the inference model, `sleepAsync` without explicit `wait` is correct: the transitive
+# Under the inference model, `sleep` without explicit `wait` is correct: the transitive
 # may-block analysis marks the enclosing function as `suspends` and codegen emits the
 # suspension automatically. This diagnostic_template is retained as a registry record
 # for the forensic trail of the bridge-era design; it is NOT emitted by the compiler.
+# NOTE: intrinsic was renamed sleepAsync→sleep at v0.3-M3a; this record uses the old name
+# for historical accuracy only.
 [[diagnostic_template]]
 kind_name = "UnawaitedSleepAsync"
-what_template = "`sleepAsync(ms)` creates a sleep handle but discards it without waiting — the function returns immediately, the sleep never fires."
-what_instead_template = "Write `wait sleepAsync({ms})` to actually pause for `{ms}` milliseconds. Or use `sleepMs({ms})` for the blocking-sleep semantics if `wait` isn't appropriate here."
-why_template = "`sleepAsync` is a may-block intrinsic — calling it without `wait` constructs the sleep object then drops it. The `wait` keyword is the user-visible signal that a suspension point happens here."
+what_template = "`sleep(ms)` creates a sleep handle but discards it without waiting — the function returns immediately, the sleep never fires."
+what_instead_template = "Write `wait sleep({ms})` to actually pause for `{ms}` milliseconds. Or use `sleepBlocking({ms})` for the blocking-sleep semantics if `wait` isn't appropriate here."
+why_template = "`sleep` is a may-block intrinsic — calling it without `wait` constructs the sleep object then drops it. The `wait` keyword is the user-visible signal that a suspension point happens here."
 retired_since = "v0.3-M2-Phase6"
 
 # WaitRequiredOnStateMachineCall — RETIRED by v0.3-M2 Phase 6 (transitive inference model).
@@ -1950,8 +2067,8 @@ triggers_on_background_call_site = true
 domain = "wait_points"
 placement_category = "Addition"
 description = "Shows the compiler-figured `wait` at suspension points — calls to functions the transitive may-block analysis marks as suspending. Active in v0.3-M2 (Phase 6) when the analysis engine ships."
-example_source = "sleepAsync(100)"
-example_hint_rendered = "wait (sleepAsync suspends here)"
+example_source = "sleep(100)"
+example_hint_rendered = "wait (sleep suspends here)"
 active_since = "v0.3-M2"
 
 [[muted_hint_domain]]

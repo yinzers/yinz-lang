@@ -234,6 +234,10 @@ function entrypoint() -> nothing {
   m3m1_demo()
   // ────── v0.3-M2: wait actually suspends ──────
   m3m2_demo()
+  // ────── v0.3-M3a Phase 2: while-loop suspension ──────
+  m3a_p2_demo()
+  // ────── v0.3-M3a Phase 4: for-loop + crossing-local suspension ──────
+  m3a_p4_demo()
 }
 
 // ────── M3 helper functions ──────
@@ -419,8 +423,8 @@ function m3m1_demo() -> nothing {
 
 // ────── v0.3-M2: wait actually suspends ──────
 //
-// Before v0.3-M2: `wait sleepAsync(100)` blocked the calling OS thread for 100ms.
-// After v0.3-M2:  `wait sleepAsync(100)` SUSPENDS the function — the OS thread
+// Before v0.3-M2: `wait sleep(100)` blocked the calling OS thread for 100ms.
+// After v0.3-M2:  `wait sleep(100)` SUSPENDS the function — the OS thread
 // is freed for other tasks; the function resumes after the timer fires.
 //
 // Demonstration: 8 background tasks each wait 100ms. With M1 blocking behavior,
@@ -430,7 +434,7 @@ function m3m1_demo() -> nothing {
 // pausePirate — a suspending function. The `wait` is explicit; the IDE shows
 // it as a real suspension point via the muted `wait` hint at the call site.
 function pausePirate(name: string) -> nothing {
-  wait sleepAsync(100)
+  wait sleep(100)
   print(`${name}: done`)
 }
 
@@ -445,21 +449,29 @@ function announcePirate(name: string) -> nothing {
 // waitForRosterSlot — a value-returning state machine.
 // Demonstrates: a function can return a value AND suspend.
 function waitForRosterSlot(n: int) -> int {
-  wait sleepAsync(10)
+  wait sleep(10)
   return n + 1
 }
 
 // scheduleCheck — a nested state machine: calls waitForRosterSlot (value-returning
 // SM), then announcePirate (also suspending). Demonstrates inline poll-and-yield:
 // each nested suspending call is driven as an embedded sub-frame — no OS bridge.
-// Step-by-step style naturally avoids the M2 local-crossing-wait constraint: each
-// local is used before the next suspension point (frame-backed locals across
-// arbitrary suspension boundaries ship in v0.3-M3).
+// Step-by-step style (Golden Rule 7) keeps each local's use within a single
+// suspension segment — the clearest form. Frame-backed crossing locals, which
+// span suspension points, are also supported for cases that need them.
 function scheduleCheck(name: string) -> nothing {
   let slot = waitForRosterSlot(7)
   let slotStr = slot.toString()
   print(`${name} roster slot: ${slotStr}`)
   announcePirate(name)
+}
+
+// fetchTicketPrice — suspending fallible function returning exact decimal128 price.
+// Uses a frame staging slot for the 16-byte i128 value so the EC ok-pointer
+// remains valid after the resume function returns (no separate heap allocation).
+function fetchTicketPrice() -> number errors {
+  wait sleep(5)
+  return 24.50
 }
 
 function m3m2_demo() -> nothing {
@@ -479,7 +491,7 @@ function m3m2_demo() -> nothing {
   // Keep main alive while background pirates suspend concurrently.
   // All 8 complete in ~100ms total (not 800ms) because each suspends
   // and yields its OS thread back to the pool.
-  wait sleepAsync(150)
+  wait sleep(150)
 
   print(`all 8 pirates done`)
 
@@ -499,6 +511,16 @@ function m3m2_demo() -> nothing {
   print(``)
   print(`v0.3-M2 — nested state machines (inline poll-and-yield):`)
   scheduleCheck(`Sanguillen`)
+
+  // Suspending `-> number errors` demo (v0.3-M3a Phase 1).
+  // fetchTicketPrice suspends (wait sleep) and returns an exact decimal128 price.
+  // The 16-byte decimal is stored in the composed frame's staging slot — no leak.
+  print(``)
+  print(`v0.3-M3a — suspending number errors (exact decimal128):`)
+  const priceResult = fetchTicketPrice()
+  const price = priceResult.or(0.0)
+  const priceStr = price.toString()
+  print(`ticket price: ${priceStr}`)
 }
 
 // ====== v0.2-M5 LSP features ======
@@ -521,10 +543,10 @@ function m3m2_demo() -> nothing {
 function recordPittsburghAnalytics(event: string) -> nothing {
   // Sleep 200ms (simulating slow disk write) so the main thread visibly
   // gets ahead of us.
-  // NOTE: `sleepMs` (NOT `wait`) — `wait` is the keyword and stays
+  // NOTE: `sleepBlocking` (NOT `wait`) — `wait` is the keyword and stays
   // synchronous in M1; the state-machine suspension semantics ship in v0.3-M2.
-  // `sleepMs` is the Yinz-language intrinsic added in v0.3-M1 (P2).
-  sleepMs(200)
+  // `sleepBlocking` is the Yinz-language intrinsic added in v0.3-M1 (P2).
+  sleepBlocking(200)
   print(`background analytics done`)
 }
 
@@ -645,5 +667,75 @@ shape StatBook<T> {
   entry: T
   category: StatCategory
   seasonYear: int
+}
+
+// ── v0.3-M3a Phase 4: for-loop + crossing-local suspension ───────────────────
+//
+// `wait sleep` now works inside a `for` body (P3 lifted WaitInsideLoop for `for`
+// and `match`). The loop index is frame-backed — it survives each suspension —
+// and any local declared BEFORE the loop can be updated across the suspensions.
+//
+// `tallyScouts` processes scouting ratings for a list of pirates one-by-one,
+// pausing between each to simulate an async report fetch. `total` is a crossing
+// local: it is declared before the loop, updated inside it across multiple `wait`
+// suspensions, and read after the loop ends. ONE `ynz_alloc` covers the whole
+// task — no per-iteration allocation.
+
+function tallyScouts(ratings: array<int>) -> int {
+  // `total` is a crossing local — declared before the loop, accumulated across
+  // each `wait sleep`, read after the loop. The compiler frame-backs it so each
+  // resumed iteration sees the correct running total.
+  let total: int = 0
+  for (rating in ratings) {
+    // Simulate an async scout-report fetch between ratings.
+    wait sleep(5)
+    total = total + rating
+  }
+  return total
+}
+
+// m3a_p4_demo — called from entrypoint() to show for-loop + crossing-local
+// suspension in realistic context. Each rating is processed with a pause;
+// the accumulated total crosses every suspension boundary unscathed.
+function m3a_p4_demo() -> nothing {
+  print(``)
+  print(`v0.3-M3a Phase 4 — for-loop + crossing-local suspension (5 scouts, ~25ms total):`)
+  let pirateRatings: array<int> = [85, 92, 78, 95, 88]
+  let scoutTotal = wait tallyScouts(pirateRatings)
+  let scoutStr = scoutTotal.toString()
+  print(`scout total: ${scoutStr}`)
+}
+
+// ── v0.3-M3a Phase 2: while-loop suspension ──────────────────────────────────
+//
+// `wait sleep` now works inside a `while` body. Loop-carried locals are
+// frame-backed (one `ynz_alloc` for the whole task, not per-iteration).
+// Iterations are sequential: each pause-and-resume is a single poll cycle.
+//
+// awaitCrewReady simulates checking each pirate's readiness with a delay between
+// checks. The counter `i` and accumulator `ready` are loop-carried crossing locals:
+// each suspension preserves them in the composed frame so the next iteration sees
+// the correct values. One `ynz_alloc` for the entire loop — no per-iteration alloc.
+function awaitCrewReady(checks: int) -> int {
+  let ready: int = 0
+  let i: int = 0
+  while (i < checks) {
+    wait sleep(5)
+    ready = ready + 1
+    i = i + 1
+  }
+  return ready
+}
+
+// m3a_p2_demo — called from entrypoint() to show while-loop suspension in context.
+// Counts down pirate slot availability with a pause between each roster check.
+// The loop counter and accumulator survive each `wait` via the frame-backed locals
+// mechanism from Phase 1 — no extra allocation, sequential execution order.
+function m3a_p2_demo() -> nothing {
+  print(``)
+  print(`v0.3-M3a Phase 2 — while-loop suspension (3 roster checks, ~15ms total):`)
+  let crewCount: int = wait awaitCrewReady(3)
+  let crewStr = crewCount.toString()
+  print(`crew ready: ${crewStr}`)
 }
 

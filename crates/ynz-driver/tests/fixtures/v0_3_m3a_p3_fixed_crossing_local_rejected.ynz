@@ -1,0 +1,13 @@
+// Fixture: `fixed<int>` as a crossing local (declared before wait, used after).
+// Must produce a clean WHAT/WHAT-INSTEAD/WHY compile error (exit 1).
+// fixed<T> allocas are stack-allocated in the resume function's stack frame; after
+// suspension the stack frame is freed and the stored pointer becomes dangling.
+// See design/concurrency.md 'UnsupportedCrossingLocalType — fixed-crossing-local-with-wait'.
+// Workaround: use array<int> instead.
+function entrypoint() -> nothing {
+  let arr: fixed<int> = [10, 20, 30]
+  wait sleep(5)
+  for (v in arr) {
+    print(v.toString())
+  }
+}

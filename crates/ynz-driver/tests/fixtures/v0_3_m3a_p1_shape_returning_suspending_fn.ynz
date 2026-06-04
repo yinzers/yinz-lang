@@ -1,0 +1,24 @@
+// Fixture: suspending `-> Player` (bare shape return) must be rejected at compile time.
+//
+// WHY: The SM resume-fn shape-return path previously staged bytes at
+// FRAME_OFFSET_LOCALS_START (offset 32), which is where child sub-frames are embedded.
+// Writing there clobbered the sleep sub-frame's resume_point, causing a SIGSEGV at the
+// next resume. The WideValueSuspendingReturn typeck guard rejects this pattern loudly so
+// no binary is produced and no crash can occur.
+//
+// Expected: exit code 1, diagnostic mentions the type and suspension.
+// Expected: no stdout (compile error, no binary produced).
+shape Player {
+  health: int
+}
+
+function sleepingShape() -> Player {
+  wait sleep(5)
+  let p: Player = { health: 30 }
+  return p
+}
+
+function entrypoint() -> nothing {
+  const p = sleepingShape()
+  print(p.health.toString())
+}

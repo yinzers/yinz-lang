@@ -1,0 +1,13 @@
+// Fixture (f): value-returning SM function with a crossing local.
+// `acc` crosses the wait; the return value must include it.
+// Expected output: 11 (n*2 + 1 = 5*2 + 1 = 11).
+function compute(n: int) -> int {
+  let acc = n * 2
+  wait sleep(5)
+  return acc + 1
+}
+
+function entrypoint() -> nothing {
+  let result = compute(5)
+  print(result.toString())
+}

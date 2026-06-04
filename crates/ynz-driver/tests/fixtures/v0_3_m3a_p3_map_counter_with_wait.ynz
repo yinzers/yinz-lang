@@ -1,0 +1,15 @@
+// Fixture: non-destructured `for (entry in m) { wait }` with an outer counter.
+// Verifies that the map SM iteration index (frame-backed) increments correctly across
+// suspension and that all N entries are visited. The outer `count` crossing local is
+// the only value read after wait — entry.* is NOT accessed, avoiding the MapEntry
+// two-field limitation. See design/concurrency.md 'map-entry-fields-after-wait'
+// for the deferral covering entry.key/entry.value reads after a wait.
+function entrypoint() -> nothing {
+  let scores: map<string, int> = { `alice`: 90, `bob`: 85, `carol`: 95 }
+  let count: int = 0
+  for (entry in scores) {
+    count = count + 1
+    wait sleep(5)
+  }
+  print(count.toString())
+}

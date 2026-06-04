@@ -4,7 +4,7 @@
 // `slot` would need a frame slot across that boundary, which M2 does not allocate.
 // Must reject with LocalCrossesWait teaching error, NOT crash the LLVM backend.
 function sleeper() -> int {
-  wait sleepAsync(10)
+  wait sleep(10)
   return 5
 }
 function compute() -> int {

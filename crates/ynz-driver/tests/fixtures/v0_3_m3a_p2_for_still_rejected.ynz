@@ -1,0 +1,9 @@
+// Fixture: wait inside a for loop — compiled and run correctly in Phase 3.
+// P3 lifts the WaitInsideLoop guard; `for`-loop suspension is now supported.
+// Each iteration pauses (wait sleep), then continues; the loop runs to completion.
+// Expected: exit 0 (no output — the loop runs silently).
+function entrypoint() -> nothing {
+  for (i in range(0, 3)) {
+    wait sleep(5)
+  }
+}

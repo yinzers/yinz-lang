@@ -1,0 +1,17 @@
+// ADV11: parameter `p` is re-declared at the top level AFTER the wait. The parameter
+// crosses the wait (it is frame-slotted at function entry); the top-level `let p = 99`
+// shares the same name-keyed frame slot as the parameter, clobbering its value.
+// Codegen would silently produce incorrect output — the parameter value disappears.
+//
+// The guard must fire with a clean error (exit 1). Compiling this program would produce
+// a slot collision: parameter `p` and `let p = 99` share frame slot "p".
+// Expected: exit 1, diagnostic mentions `p` and `wait`
+function work(p: int) -> nothing {
+  wait sleep(5)
+  let p = 99
+  if (1 > 0) { print(p.toString()) }
+}
+
+function entrypoint() -> nothing {
+  wait work(10)
+}

@@ -1,0 +1,11 @@
+// Fixture: alloc-count baseline for for-loop suspension.
+// A for loop over 5 elements each pausing must still use ONE ynz_alloc
+// (no per-iteration alloc). The composed frame is allocated once at task spawn;
+// loop state occupies pre-sized slots within that frame.
+// Expected output: done (checked by alloc_counter harness for alloc=1/free=1)
+function entrypoint() -> nothing {
+  for (i in range(0, 5)) {
+    wait sleep(5)
+  }
+  print(`done`)
+}

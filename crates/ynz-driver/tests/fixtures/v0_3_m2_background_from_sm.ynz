@@ -2,13 +2,13 @@
 // Verifies Bug C fix: background task runs concurrently while parent SM waits.
 
 function worker() -> nothing {
-  wait sleepAsync(50)
+  wait sleep(50)
   print(`worker done`)
 }
 
 function entrypoint() -> nothing {
   background worker()
   print(`main waiting`)
-  wait sleepAsync(100)
+  wait sleep(100)
   print(`main done`)
 }

@@ -1,0 +1,12 @@
+// Fixture: wait inside a for-over-array loop, checking ordered output.
+// Each iteration pauses (wait sleep), then prints the element.
+// Guards that the loop variable survives suspension (frame-backed via P3 machinery)
+// and that exactly 3 elements are visited in index order.
+// Expected output: 10\n20\n30
+function entrypoint() -> nothing {
+  let nums: array<int> = [10, 20, 30]
+  for (x in nums) {
+    wait sleep(5)
+    print(x.toString())
+  }
+}

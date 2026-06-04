@@ -1,0 +1,22 @@
+// Fixture: conditional wait inside a while body — only even iterations suspend.
+// Iterations 0 and 2 sleep (x == 0 at entry); iterations 1 and 3 skip the sleep
+// (x == 1 at entry). All 4 prints must appear in order regardless of which
+// iterations suspended.
+// Guards that resume re-enters at the correct sub-position and that crossing
+// locals (i and x) are correctly preserved whether or not a given iteration suspends.
+// Expected output: 0\n1\n2\n3
+function entrypoint() -> nothing {
+  let i: int = 0
+  let x: int = 0
+  while (i < 4) {
+    print(i.toString())
+    if (x == 0) {
+      wait sleep(5)
+      x = 1
+    }
+    if (x == 1) {
+      x = 0
+    }
+    i = i + 1
+  }
+}

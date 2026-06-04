@@ -1,6 +1,8 @@
 // v0.3-M2 compile-error gallery
 //
-// Every block below intentionally triggers a diagnostic class added in v0.3-M2.
+// Every block below intentionally triggers a diagnostic class added in v0.3-M2
+// that is still active. WaitInsideLoop and LocalCrossesWait were lifted in M3a
+// and compile clean — their triggers have been removed from this file.
 // Run `ynz build v0_3_m2_errors.ynz` to see all diagnostics.
 // Yinz reports up to 50 diagnostics per compile so a single run surfaces all.
 //
@@ -9,16 +11,18 @@
 // -- v0.3-M2 Error Class 1: suspending call in a sub-expression position --
 //
 // WHY: SubExpressionSuspendPosition — a suspending call nested inside a larger
-// expression (as an operand, argument, interpolation slot, or condition) is not
-// handled by v0.3-M2 codegen. Give it its own `let` line first. Expression-
-// position suspension (auto-`wait` at arbitrary positions) ships in v0.3-M3.
+// expression (as an operand, argument, interpolation slot, or condition) is a
+// permanent compile error. Give it its own `let` line first. Step-by-step style
+// (one operation per line, named variable) is required so the compiler can
+// analyze independent statements and auto-parallelize them in M3b. Expression-
+// position suspension would prevent that analysis.
 //
 // The HALT-class bug this closes: before Fix 1, this pattern silently called
 // block_on from inside a Tokio worker thread → non-unwinding abort, exit 0.
 // Now typeck rejects it before codegen fires, producing a clean teaching error.
 
 function pauseThenReturn() -> int {
-    wait sleepAsync(50)
+    wait sleep(50)
     return 7
 }
 
@@ -34,50 +38,25 @@ function triggerSubExprSuspend() -> nothing {
 // WHY: MutualRecursionSuspendingCycle — two or more distinct suspending functions
 // that call each other form a cycle with mixed frame layouts. SpawnStateFnFuture::Drop
 // walks the recursion chain assuming uniform layout (self-recursion); mixed layouts
-// corrupt heap on cancellation. Structuring as self-recursion (one function calling
-// itself) or removing `wait` from the cycle are the M2-supported alternatives.
-// Per-frame layout metadata for mixed cycles ships in v0.3-M3.
+// corrupt heap on cancellation. This is a permanent design constraint: mutually-
+// recursive suspending cycles are rare in practice and can always be restructured —
+// extract shared logic into a helper, make one function non-suspending, or use a
+// self-recursive form. Structuring as self-recursion (one function calling itself)
+// or removing `wait` from the cycle are the supported alternatives.
 
 function orderPing(n: int) -> nothing {
-    wait sleepAsync(10)
+    wait sleep(10)
     // WHY: MutualRecursionSuspendingCycle — orderPing calls orderPong which calls
     // orderPing back, forming a mutual cycle where both functions suspend.
     orderPong(n - 1)
 }
 
 function orderPong(n: int) -> nothing {
-    wait sleepAsync(10)
+    wait sleep(10)
     orderPing(n - 1)
 }
 
-// -- v0.3-M2 Error Class 3: `wait` inside a loop body --
-//
-// WHY: WaitInsideLoop — the loop counter must survive the pause point, requiring
-// frame-backed mutable locals. That transform ships in v0.3-M3. Move the `wait`
-// to a standalone function called from the loop body instead.
-
-function triggerWaitInLoop() -> nothing {
-    // WHY: WaitInsideLoop — wait inside a for loop is not supported in v0.3-M2.
-    for (i in range(3)) {
-        wait sleepAsync(50)
-        print(`step ${i}`)
-    }
-}
-
-// -- v0.3-M2 Error Class 4: local binding crossing a `wait` point --
-//
-// WHY: LocalCrossesWait — a local declared before a `wait` and used after requires
-// a frame slot with flush-before-suspend discipline; that transform ships in v0.3-M3.
-// Function parameters are exempt — they are frame-backed at every resume point.
-
-function triggerLocalCrossesWait() -> nothing {
-    let orderName = `pierogies`
-    // WHY: LocalCrossesWait — orderName is declared before the wait and used after.
-    wait sleepAsync(20)
-    print(`order: ${orderName}`)
-}
-
-// -- v0.3-M2 Error Class 5: `wait` on a non-call expression --
+// -- v0.3-M2 Error Class 3: `wait` on a non-call expression --
 //
 // WHY: WaitOnNonCallExpression — `wait` must be followed by a function call.
 // A primitive value (int, string, bool) is not a call and cannot be a suspension
@@ -101,7 +80,7 @@ function triggerRedundantWait() -> nothing {
     wait print(`order received`)
 }
 
-// -- v0.3-M2 Error Class 6: can't-infer from dynamic-dispatch vtable --
+// -- v0.3-M2 Error Class 4: can't-infer from dynamic-dispatch vtable --
 //
 // WHY: CantInferDynamicDispatch — a suspending function calling a method on a
 // `dynamic Contract` value can't determine the concrete callee's suspension
@@ -122,18 +101,18 @@ function processOrder(share self: PrimantisVendor) -> nothing {
 }
 
 function triggerCantInferDynamic(v: dynamic Vendor) -> nothing {
-    sleepAsync(10)
+    sleep(10)
     // WHY: CantInferDynamicDispatch — v.processOrder() is a dynamic-dispatch
     // call from a suspending function; concrete callee unknown at compile time.
     v.processOrder()
 }
 
-// -- v0.3-M2 Error Class 7: can't-infer from cross-module call --
+// -- v0.3-M2 Error Class 5: can't-infer from cross-module call --
 //
 // WHY: CantInferCrossModule — calling a function defined in another file from
 // inside a suspending function is a compile error in v0.3-M2. The compiler
 // analyzes one compilation unit; cross-module suspension propagation ships in
-// v0.3-M3 via the M8 multi-file query.
+// v0.3-M3b via the M8 multi-file query.
 //
 // NOTE: this error class requires a multi-file project to trigger. See the
 // integration test fixture at:
@@ -145,7 +124,7 @@ function triggerCantInferDynamic(v: dynamic Vendor) -> nothing {
 
 // Direct-statement form — no sub-expression nesting.
 function validSuspendingHelper() -> int {
-    wait sleepAsync(10)
+    wait sleep(10)
     return 42
 }
 
@@ -160,7 +139,7 @@ function countdown(n: int) -> nothing {
         print(`done`)
         return
     }
-    wait sleepAsync(10)
+    wait sleep(10)
     countdown(n - 1)
 }
 

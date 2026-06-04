@@ -1,0 +1,23 @@
+// Fixture: bool-returning suspending function (FIX 2 — wrapper-return bool width).
+// A `-> boolean` suspending function with a crossing bool local AND a freshly-computed
+// boolean return value. Prior to FIX 2 the SM wrapper emitted `ret i64 ... i1`,
+// causing LLVM module verification failure (ICE). The fix: trunc i64→i1 before
+// build_return when the wrapper's declared return type is bool (i1).
+// Expected output: true (crossing bool) then false (n < 0 with n=5).
+function hasCrossingBool(flag: boolean) -> boolean {
+  let crossing: boolean = flag
+  wait sleep(5)
+  return crossing
+}
+
+function computeBool(n: int) -> boolean {
+  wait sleep(5)
+  return n < 0
+}
+
+function entrypoint() -> nothing {
+  let a = hasCrossingBool(true)
+  print(a.toString())
+  let b = computeBool(5)
+  print(b.toString())
+}

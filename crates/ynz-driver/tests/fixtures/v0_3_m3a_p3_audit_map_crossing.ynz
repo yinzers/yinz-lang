@@ -1,0 +1,11 @@
+// Audit: map<string,int> crossing local across top-level wait — must be CLEAN (correct output).
+// map<K,V> is heap-allocated; its pointer is heap-stable and stored as i64 in the frame slot.
+function entrypoint() -> nothing {
+  let m: map<string, int> = { `a`: 1, `b`: 2, `c`: 3 }
+  wait sleep(5)
+  let count: int = 0
+  for (entry in m) {
+    count = count + 1
+  }
+  print(count.toString())
+}

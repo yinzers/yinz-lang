@@ -1,10 +1,10 @@
 // Phase 6 fixture: transitive may-block analysis marks outer and inner as suspending.
-// `inner` calls `sleepAsync` directly; `outer` calls `inner` — both are state machines.
+// `inner` calls `sleep` directly; `outer` calls `inner` — both are state machines.
 // No explicit `wait` tokens needed in outer or the entrypoint: the analysis infers it.
 // Expected: compiles clean; outer and inner both suspending under the transitive predicate.
 
 function inner() -> nothing {
-  sleepAsync(50)
+  sleep(50)
 }
 
 function outer() -> nothing {

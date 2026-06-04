@@ -1,0 +1,19 @@
+// Nested-shape crossing guard: a shape with a nested-shape field must be rejected
+// at typeck with a clean WHAT/WHAT-INSTEAD/WHY compile error (not silent garbage).
+// Expected: exit 1, diagnostic mentions nested-shape field / cannot be frame-embedded.
+shape Inner {
+  val: int
+}
+
+shape Outer {
+  inner: Inner
+  extra: int
+}
+
+function entrypoint() -> nothing {
+  let inner: Inner = { val: 42 }
+  let o: Outer = { inner: inner, extra: 7 }
+  wait sleep(5)
+  let v = o.inner.val
+  print(v.toString())
+}

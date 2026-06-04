@@ -29,13 +29,13 @@
 
 function countdown(n: int) -> nothing {
   if (n > 0) {
-    wait sleepAsync(200)
+    wait sleep(200)
     countdown(n - 1)
   }
 }
 
 function entrypoint() -> nothing {
   background countdown(3)
-  wait sleepAsync(500)
+  wait sleep(500)
   print(`done`)
 }

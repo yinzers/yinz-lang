@@ -57,7 +57,10 @@ pub mod symbol_lookup;
 pub mod type_at_offset;
 pub mod types;
 
-pub use check::{check, check_with_kernel_mode, type_attached_const_type, TypedModule};
+pub use check::{
+    check, check_with_kernel_mode, crossing_local_names, type_attached_const_type,
+    LocalCrossesWait, TypedModule,
+};
 pub use exports::ExportTable;
 pub use generics::{GenericFnTable, GenericShapeTable, MonomorphizationTable};
 pub use inlay_hint_passes::{

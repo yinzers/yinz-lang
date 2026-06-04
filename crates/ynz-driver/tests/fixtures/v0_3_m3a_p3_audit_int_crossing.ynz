@@ -1,0 +1,7 @@
+// Audit: int crossing local across top-level wait — must be CLEAN (correct output, no crash).
+// int is a scalar i64; flush stores directly to a frame slot, reload reads it back.
+function entrypoint() -> nothing {
+  let x: int = 42
+  wait sleep(5)
+  print(x.toString())
+}

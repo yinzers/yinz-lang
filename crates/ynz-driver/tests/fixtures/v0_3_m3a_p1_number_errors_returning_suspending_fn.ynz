@@ -1,0 +1,21 @@
+// Fixture: suspending `-> number errors` returning a high-precision decimal128 value.
+//
+// WHY: This verifies the frame-staging path for decimal128 EC returns from suspending
+// functions. The SM return path stores the i128 in a 16-byte staging slot inside the
+// composed frame (after own-local slots, before child sub-frames), points the EC ok-word
+// at it, and frees the staging slot with the frame (alloc=1/free=1 — no leak).
+//
+// The value 9999999999.000000001 requires the full 16 bytes of decimal128 precision:
+// truncation to 8 bytes would produce the wrong value.
+//
+// Expected: stdout = "9999999999.000000001", exit 0.
+function sleepingNumberErrors() -> number errors {
+  wait sleep(5)
+  return 9999999999.000000001
+}
+
+function entrypoint() -> nothing {
+  const r = sleepingNumberErrors()
+  const v = r.or(0.0)
+  print(v.toString())
+}

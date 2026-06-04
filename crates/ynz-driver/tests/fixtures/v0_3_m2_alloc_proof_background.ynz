@@ -3,12 +3,12 @@
 // Expected: alloc=2 (1 for the main task tree + 1 for the spawned task).
 
 function worker() -> nothing {
-  wait sleepAsync(1)
+  wait sleep(1)
   print(`worker done`)
 }
 
 function entrypoint() -> nothing {
   background worker()
-  wait sleepAsync(5)
+  wait sleep(5)
   print(`main done`)
 }

@@ -1,0 +1,13 @@
+// Audit: options crossing local across a wait — must WORK.
+// options values are i8 tag bytes — 1 frame slot, zext flush / i8-truncate reload.
+// The tag survives suspension: the match arm fires correctly after the wait.
+options Status { active, inactive }
+
+function entrypoint() -> nothing {
+  let s: Status = Status.active
+  wait sleep(5)
+  if (s) {
+    active => { print(`active`) }
+    inactive => { print(`inactive`) }
+  }
+}

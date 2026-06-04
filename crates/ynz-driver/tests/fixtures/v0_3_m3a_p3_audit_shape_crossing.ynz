@@ -1,0 +1,13 @@
+// Audit: Shape crossing local across top-level wait — must be CLEAN (correct output, no crash).
+// Shape with primitive fields is frame-embedded (bytes stored inline in the composed heap frame).
+shape Point {
+  x: int
+  y: int
+}
+
+function entrypoint() -> nothing {
+  let p: Point = { x: 10, y: 20 }
+  wait sleep(5)
+  let sum: int = p.x + p.y
+  print(sum.toString())
+}

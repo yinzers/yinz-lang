@@ -1,0 +1,13 @@
+// Fixture: while loop with counter — each iteration suspends.
+// Prints 0, 1, 2 in order then exits. Guards that the loop counter is preserved
+// across each suspension (frame-backed via P1 slot machinery) and that exactly N
+// iterations execute (no double-execution or skipped iterations).
+// Expected output: 0\n1\n2
+function entrypoint() -> nothing {
+  let i: int = 0
+  while (i < 3) {
+    print(i.toString())
+    wait sleep(5)
+    i = i + 1
+  }
+}

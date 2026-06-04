@@ -234,6 +234,361 @@ Full database stdlib design (connection pooling, transactions, query builder, mi
 
 ---
 
+## M3a Scope Boundaries — Deliberate Constraints and Deferrals
+
+M3a lifted the `LocalCrossesWait` guard (scalars, shapes, strings, arrays can now cross a `wait`). Two cases were deliberately left as compile errors; one is deferred to a later milestone.
+
+### `ShadowsCrossingLocal` — same name re-declared around a suspension (deferred, clean compile error today)
+
+A `let` binding that re-uses a name that already has a crossing-local frame slot is a compile error today. The guard is **safe-conservative**: it rejects any program where two bindings share a name around a suspension boundary, even when one of them might technically be unreachable from the other.
+
+Two shapes are rejected:
+
+**Shape A — nested shadow**: an outer `let x` before a `wait` AND a `let x` inside a nested block (if/while/for/match body) in the same function, where the outer `x` is read after the suspension resolving to the outer binding.
+
+```
+// ❌ — x crosses the wait AND is re-declared inside the if
+function broken() -> nothing {
+  let x = 10
+  wait sleep(5)
+  if (someCondition) {
+    let x = 20        // compile error — shadows crossing local x
+    print(x.toString())
+  }
+  print(x.toString())
+}
+
+// ✅ — rename the inner binding
+function fixed() -> nothing {
+  let x = 10
+  wait sleep(5)
+  if (someCondition) {
+    let innerX = 20
+    print(innerX.toString())
+  }
+  print(x.toString())
+}
+```
+
+**Shape B — top-level redeclaration**: an outer `let x` before a `wait` AND a second `let x` at the TOP LEVEL of the function body after the suspension. Even when all post-wait reads resolve to the redeclared binding (not the outer one), both top-level `let x` bindings share the same name-keyed frame slot — the second write clobbers the first, producing a silent wrong answer at runtime.
+
+```
+// ❌ — x=10 and x=99 both at top level, separated by a wait
+function broken() -> nothing {
+  let x = 10
+  wait sleep(5)
+  let x = 99     // compile error — two top-level bindings share one frame slot
+  print(x.toString())
+}
+
+// ✅ — use distinct names
+function fixed() -> nothing {
+  let x = 10
+  wait sleep(5)
+  let xAfter = 99
+  print(xAfter.toString())
+}
+```
+
+The same two shapes apply to **parameters**: a parameter `p` occupies a frame slot at function entry.
+
+- **Shape A (nested shadow)**: a `let p` inside any nested block (if/while/for/match body) is rejected in a suspending function. The frame-slot system keys every crossing local and parameter by NAME — a nested `let p` shares the parameter's name-keyed slot. Every continuation state's `reload_params_from_frame` overwrites `cg.locals[p]` with the slot pointer, which means even a non-crossing inner shadow would install the wrong alloca across the next suspension. All nested param shadows in suspending functions are therefore conservatively rejected until per-binding-ID slot allocation ships (M3c).
+- **Shape B (top-level redeclaration)**: a `let p` at the TOP LEVEL of the function body shares the parameter's frame slot and is rejected regardless of whether the inner binding is read post-wait.
+
+**Non-async functions**: a `let p` shadowing a parameter in a function that does NOT contain any `wait` is allowed — Yinz permits shadowing per `design/linting.md` (`shadowed-variables` Tier-3 lint). The conservative guard only applies to suspending (async) functions where parameters are frame-slotted.
+
+**Why the guard is conservative (not precise)**: the frame-slot system maps each crossing local to a slot by NAME — one slot per unique name across the entire function body. A precise implementation would assign each `let` declaration a unique binding ID (keyed by source span or a monotonic counter), then allocate one slot per binding ID. The conservative guard rejects all same-name cases because it cannot distinguish two bindings that would slot correctly from two bindings that would collide. The workaround is always: use distinct names.
+
+**What it costs to lift** (1–2 sessions): assign each `let` declaration a unique binding ID; key crossing-local frame slots by binding ID rather than name; propagate ID-keyed resolution through the flush/reload and typeck layers so the compiler can distinguish "same name, different slot" at every read and write site.
+
+**Trigger**: user demand for re-using a name around a suspension in a program that cannot be restructured, OR when per-binding slot identity is added to the crossing analysis and codegen.
+
+**Workaround** (always applies): rename any binding that re-uses a name already in use across a suspension boundary — two values with different semantics should have different names anyway (Golden Rule 2).
+
+### `NestedShapeCrossing` — a shape with nested shape fields crossing a `wait` (deferred)
+
+A `shape` whose fields are themselves `shape` types cannot cross a `wait` when those fields contain heap-allocated children (e.g. strings, arrays). The frame-embed codegen writes struct bytes directly into the composed frame; for nested shapes, this only copies the OUTER struct's bytes — any inner shape pointers that point into separately-allocated or stack regions become dangling after the suspension.
+
+```
+// ❌ (currently) — inner shape crosses a wait
+shape Inner { value: int }
+shape Outer { child: Inner, score: int }
+
+function example() -> nothing {
+  let o: Outer = { child: { value: 42 }, score: 100 }
+  wait sleep(5)         // compile error — Outer.child is a nested shape
+  print(o.score.toString())
+}
+
+// ✅ — flatten into primitive fields
+shape FlatOuter { childValue: int, score: int }
+```
+
+**Why deferred**: the memcpy that stages the outer struct bytes doesn't recursively follow inner shape pointers. A correct implementation would either (a) walk the entire shape graph and embed all nested structs transitively in the frame, or (b) heap-allocate inner shapes and store pointers (with a drop guard). Both require non-trivial additions to the frame layout and drop subsystem. The flat-fields workaround always applies.
+
+**What it costs to lift** (1–2 sessions): extend frame layout to recursively compute embedded nested-shape slot regions; add recursive memcpy at definition and reload sites; add a drop-on-cancel path for any heap-allocated inner shapes. Each of these is a well-contained change, but they need to be consistent across the frame-layout, codegen, and runtime layers.
+
+**Trigger**: a user program that requires crossing a nested-shape local without a flatten workaround.
+
+### `WideValueSuspendingReturn` — shape returns from suspending functions (deferred, clean compile error today)
+
+A suspending function (one whose body contains a `wait`) cannot yet return a `Shape` or `Shape errors` value by value. These two return types require a variable-size EC/shape return-staging slot entangled with the pre-existing non-suspending shape-return base bug.
+
+**`-> number errors` is fully supported** as of M3a Phase 1. A 16-byte staging slot is reserved in the composed frame (after own-local slots, before child sub-frames) when the function returns `-> number errors`. The resume function writes the i128 decimal to that slot, points the EC ok-word at it, and the staging slot is freed when the frame drops (alloc=1/free=1 — no leak). See the frame-layout comments in `crates/ynz-codegen/src/emit.rs` `build_frame_layouts`.
+
+**Why each remaining variant fails without the guard**:
+
+- **`-> Shape`** (non-crossing shape literal or call result): the old codegen staged the shape bytes at `FRAME_OFFSET_LOCALS_START` (frame offset 32). Offset 32 is where child sub-frames are embedded — writing there overwrites the sleep sub-frame's `resume_point` field, causing a `SIGSEGV` at the next `rt_async_sleep_poll` call.
+
+- **`-> Shape errors`** (shape success value in an EC return): needs variable-size staging (shape size varies per declaration) and is also entangled with the pre-existing non-suspending `-> Shape` return base bug (shapes returned by value produce garbage for int fields even without suspension). Fixing the non-suspending bug first is the prerequisite.
+
+**What IS supported** (verified clean in Phase 1):
+
+| Return type | Suspending function | Status |
+|---|---|---|
+| `-> int`, `-> bool`, `-> float` | yes | CLEAN — scalar, no staging needed |
+| `-> number` (plain) | yes | CLEAN — i128 stored directly in the 16-byte return slot |
+| `-> number errors` | yes | CLEAN — i128 in 16-byte frame staging slot; alloc=1/free=1 |
+| `-> int errors` | yes | CLEAN — `{err=0, ok=int_bits}` stored directly |
+| `-> string`, `-> array<T>`, `-> map<K,V>` | yes | CLEAN — heap-stable pointer, `ptr_to_int` safe |
+| `-> Shape` (crossing local) | N/A (frame-backed, not a return) | CLEAN — frame-embedded crossing locals work |
+
+**Workarounds**:
+- For `-> Shape`: return the shape's fields individually as primitives, or bind the shape to a crossing local and return a derived primitive.
+- For `-> Shape errors`: return each field individually (e.g. `-> int errors`), or compute a primitive result inside the function and return that.
+
+**What it costs to lift Shape/Shape-errors** (~1 session): fix the non-suspending `-> Shape` return base bug first (shapes returned by value silently produce garbage for int fields), then add variable-size staging to the frame layout for the suspending case. The staging region size is the shape's ABI size (computed by the shape-size table). The return-path GEPs to the region after the resume function memcpys the shape bytes there.
+
+**Trigger**: a suspending function (body contains `wait`) whose declared return type is `Shape` or `Shape errors`.
+
+---
+
+### `UnsupportedCrossingLocalType` — types that cannot yet cross a `wait` (deferred, clean compile error today)
+
+Several types cannot yet cross a `wait` boundary. The type classifier is complete for the supported set; any unhandled type produces a clean WHAT/WHAT-INSTEAD/WHY compile error rather than a silent miscompile, UAF, or SIGSEGV.
+
+**Why each variant fails without the guard**:
+
+The frame-slot classifier in codegen handles int, bool, float, number, string, array, map, Shape, and ErrorsCapable crossing locals. All others fall into buckets with safety problems:
+
+- **`union` / `maybe<T>` / `dynamic Contract`**: internally represented as a pointer to a `{tag, payload}` struct alloca on the RESUME FUNCTION'S STACK. Flushing the alloca pointer to the frame slot and reloading it after the next resume stores and re-reads a dangling stack address. LLVM may detect this ("Instruction does not dominate all uses!") or silently corrupt the stack.
+
+- **`fixed<T>` binding (crossing local)**: fixed arrays are stack-allocated allocas in the resume function's stack frame. When the resume function returns to the scheduler after a `wait`, that stack frame is freed. The crossing-local frame slot holds a dangling pointer — reading elements after resume is UB. (`fixed<T>` as a for-loop iterator is caught separately by `FixedArrayIterWithWait`.) Registry entry: `fixed-crossing-local-with-wait`.
+
+- **`range` binding (crossing local)**: a range binding (`let r = range(0,3)`) is stored on the resume function's stack as a pair of bounds (i64 lo, i64 hi). When the function suspends the stack frame is freed; the crossing-local frame slot holds a dangling pointer on the next resume. Iterating that dangling range produces zero iterations — silent wrong output. The wait-inside-body form is caught separately by `StoredRangeWithWait`; this guard catches the case where the wait is at the TOP LEVEL before the loop. Registry entry: `range-crossing-local-with-wait`.
+
+- **`MapEntry<K,V>` (for-loop var over a map)**: the loop variable in `for (entry in m)` is a `{key, value}` struct pair. The current frame-slot mechanism assigns ONE i64 slot per crossing local — fine for scalar/pointer types, but only covers `entry.key` (field[0]). `entry.value` (field[1]) has no slot and reads garbage after resume. Registry entry: `map-entry-fields-after-wait`.
+
+**What IS supported** (crossing locals that work correctly):
+
+| Type | Status | Frame strategy |
+|---|---|---|
+| `int`, `bool`, `float` | CLEAN | scalar i64/i1/f64 slot |
+| `number` (decimal128) | CLEAN | 2 consecutive i64 slots (lo+hi) |
+| `string`, `array<T>`, `map<K,V>` | CLEAN | heap-stable pointer stored as i64 |
+| `Shape` (primitive fields only) | CLEAN | frame-embedded struct bytes |
+| `T errors` (ErrorsCapable) | CLEAN | 2-slot {err, ok} struct |
+
+**Blocked types and workarounds**:
+
+| Type | Workaround |
+|---|---|
+| `union` / `maybe<T>` / `dynamic Contract` | Extract the inner value before `wait`; use the primitive after |
+| `fixed<T>` binding (crossing `wait`) | Redeclare as `array<T>` — heap-allocated, pointer survives suspension |
+| `range` binding (crossing `wait`) | Inline the range in the `for` header: `for (i in range(0,n))` |
+| `MapEntry<K,V>` after `wait` | Read `entry.key`/`entry.value` before `wait`, bind to separate `let k`/`let v`, use those after |
+
+**What it costs to lift each**:
+- `union`/`maybe`/`dynamic`: per-type flush/reload strategies (store tag + payload fields to separate frame slots). ~half a session each.
+- `fixed<T>` crossing local: embed the fixed-array bytes directly in the composed heap frame (similar to Shape frame-embedding), using compile-time size to compute slot count. ~1 session.
+- `range` crossing local: store lo/hi bounds as two consecutive i64 frame slots and reconstruct the range alloca on reload. ~half a session.
+- `MapEntry<K,V>`: two consecutive frame slots (mirroring the ErrorsCapable 2-slot path). ~half a session.
+
+**Trigger**: a local of any blocked type that is declared before a `wait` and read after it.
+
+---
+
+### `ECWrapperResultCollection` — collecting the result of a `background`-spawned `-> T errors` task (deferred to M3b)
+
+The standalone EC wrapper (emitted for `background`-spawned suspending `-> T errors` functions) reconstructs the `{i64, i64}` EC struct from the frame's return slot and then calls `free_frame`. For `-> number errors`, the ok-word in that struct points into the composed frame's 16-byte staging slot — a region freed by `free_frame`. The returned struct's ok-pointer is therefore invalid after the wrapper returns.
+
+This is **safe in M3a** because the only reachable caller of the wrapper is `background` (fire-and-forget), which discards the EC result entirely without dereferencing the ok-pointer.
+
+A caller that **collects** the result — reads the ok-word and uses the pointed-at value — must copy it BEFORE `free_frame`. Implementing that read-before-free + copy requires the scheduler to know whether a spawned task's result is collected or discarded, and when the collection happens relative to the frame lifetime. That is M3b background result-collection machinery.
+
+**Workaround**: use the inline-poll path — a suspending caller that calls another `-> T errors` suspending function composes the callee inline via the state-machine resume path, and the inline path is correct and complete. Only `background` hits the standalone wrapper; avoid collecting `background` handle return values for `-> T errors` spawns until M3b.
+
+**What it costs to lift** (~half a session inside M3b): when the scheduler runs the wrapper function to completion, if the spawned task's result handle is collected, read the EC struct before freeing the frame, copy the ok-value to a heap buffer, update the ok-word to point to the heap buffer, then free the frame. The copy is conditional on whether the handle is collected — discarded handles skip it.
+
+**Trigger**: storing or using the return value of a `background`-spawned suspending function whose declared return type is `-> T errors`.
+
+This is tracked in `registry/features.toml` as `ec-wrapper-collect-on-completion`.
+
+---
+
+### `FixedArrayIterWithWait` — `fixed<T>` array iterator in a suspending for-loop (deferred, clean compile error today)
+
+A `for` loop that contains a `wait` cannot use a `fixed<T>` array as its iterator.
+
+```ynz
+// COMPILE ERROR (FixedArrayIterWithWait):
+let flags: fixed<boolean> = [true, false, true]
+for (b in flags) { wait sleep(5) }
+
+// WORKS: use array<T> instead
+let flags: array<boolean> = [true, false, true]
+for (b in flags) { wait sleep(5) }
+```
+
+**Why**: `fixed<T>` arrays are stack-allocated (`build_alloca([N x i64])`) in the current resume-function's stack frame. The crossing-local mechanism stores the array's pointer in the composed heap frame slot via `ptr_to_int`. When a `wait` suspends the function and the resume function returns to the Tokio scheduler, the resume function's stack frame is freed. On the next resume call, the pointer is reloaded from the heap frame slot via `int_to_ptr`, but it now points to freed stack memory. Reading the array elements after the first suspension produces undefined behavior — silently wrong values or memory corruption.
+
+**Workaround**: use `array<T>` instead. `array<T>` is heap-allocated via `ynz_array_new` and its pointer remains valid after suspension.
+
+**What it costs to lift** (~one session): two options: (a) heap-allocate `fixed<T>` when used as a for-loop iterator in a suspending function (changes semantics — fixed arrays would no longer be unconditionally stack-allocated); (b) embed the fixed-array bytes directly in the composed heap frame (similar to Shape crossing-local embedding), using the array size at compile time to compute the slot count. Option (b) is architecturally cleaner but requires computing `size * sizeof(element)` slots and storing bytes in consecutive frame slots.
+
+**Trigger**: a `for` loop whose body contains a `wait` and whose iterator resolves to `Type::BuiltinFixed` — either a variable annotated as `fixed<T>` or an inline `[...]` literal in a `fixed<T>` context.
+
+This is tracked in `registry/features.toml` as `fixed-array-iter-with-wait`.
+
+---
+
+### `StoredRangeWithWait` — stored range variable as a suspending for-loop iterator (deferred, clean compile error today)
+
+A `for` loop that contains a `wait` cannot yet use a stored range variable as its iterator.
+
+```ynz
+// COMPILE ERROR (StoredRangeWithWait):
+let r = range(0, 3)
+for (i in r) { wait sleep(5) }
+
+// WORKS: inline the range in the loop header
+for (i in range(0, 3)) { wait sleep(5) }
+```
+
+**Why**: the state-machine codegen for `for (i in range(...))` calls `extract_range_bounds(iter)`, which requires the iterator to be a literal `range(...)` call expression. For a stored range variable (`let r = range(...); for (i in r)`), the bounds must be recovered from the range's frame-backed alloca. That recovery path is not yet implemented; without the guard the codegen would ICE on "for-loop iter is not a call expression".
+
+**Workaround**: inline the range directly: `for (i in range(0, n)) { ... }`. If `n` is a local that crosses a `wait`, it is already frame-backed and the inline form works without any changes.
+
+**What it costs to lift** (~one session): in the SM range arm of `lower_sm_for`, detect when `iter` is an `Expr::Ident` with a `Type::Range` type, load the start and end from the range struct alloca in the frame (using `build_struct_gep` on the `{i64, i64}` range alloca), and use those values as the loop bounds. The rest of the range-loop SM codegen applies unchanged.
+
+**Trigger**: a `for` loop whose body contains a `wait` and whose iterator is a variable with `Type::Range` — e.g. `let r = range(0,3); for (i in r) { wait sleep(1) }`.
+
+This is tracked in `registry/features.toml` as `stored-range-with-wait`.
+
+---
+
+### `ExpressionIterWithWait` — call-expression iterator in a suspending for-loop (deferred, clean compile error today)
+
+A `for` loop that contains a `wait` cannot yet use a call expression as its iterator.
+
+```ynz
+// COMPILE ERROR (ExpressionIterWithWait):
+for (x in makeArray()) { wait sleep(5) }
+
+// WORKS: bind the collection first
+let items = makeArray()
+for (x in items) { wait sleep(5) }
+```
+
+**Why**: the state-machine codegen calls `lower_expr(iter)` at the loop header to obtain the array pointer and count. For a plain identifier iter, this loads from the frame-backed crossing-local alloca — stable across resumes. For a call-expression iter, this RE-INVOKES the function on every loop header visit (once for the count check, once for the element load per body_bb entry), meaning N+1 calls instead of 1. For expressions with side effects (heap allocation, network I/O), this breaks the one-alloc-per-task invariant and produces wrong behavior.
+
+**Workaround**: bind the collection to a local before the loop. The bound variable becomes a frame-backed crossing local whose pointer survives suspension and is reloaded at each resume.
+
+**What it costs to lift** (~one session): before the loop header, evaluate `lower_expr(iter)` once to obtain the collection pointer, store it in a synthetic frame slot (similar to `__ynz_for_idx_N`), and reload from that slot at the header on each resume instead of re-evaluating the expression. Both the pointer and the count are stable after the first evaluation, so only one frame slot (for the pointer) is needed.
+
+**Trigger**: a `for` loop whose body contains a `wait` and whose iterator is a call expression — e.g. `for (x in makeArray()) { wait sleep(5) }`.
+
+This is tracked in `registry/features.toml` as `expression-iter-with-wait`.
+
+---
+
+### `ArrayShapeRuntimeFieldWithWait` — `array<Shape>` with runtime field values crossing a `wait` (deferred, clean compile error today)
+
+An `array<Shape>` local declared before a `wait` and read after it is permitted in general — the array's heap buffer survives suspension correctly (the YnzArray pointer is stored via `ptr_to_int` in the frame and reloaded on resume). **However**, if the array literal contains elements whose field values are runtime-computed (e.g. `{ id: 1, qty: a }` where `a` is a variable), those element structs are stored as pointers to stack allocas in the constructing resume function's frame. That stack frame is freed when the function suspends; on the next resume the element pointers are dangling, producing undefined behavior (ASLR-varying stack garbage or a crash).
+
+Elements whose fields are ALL compile-time `IntLit` or `BoolLit` values work correctly — codegen emits LLVM module-level globals for those structs (stable, eternal addresses). The guard fires only when at least one element has a runtime-computed field value.
+
+```ynz
+// COMPILE ERROR (ArrayShapeRuntimeFieldWithWait):
+let a: int = 10
+let items: array<Item> = [{ id: 1, qty: a }]   // runtime field: qty = a
+wait sleep(5)
+for (it in items) { print(it.qty.toString()) }
+
+// WORKS: all-literal fields (module-level globals)
+let items2: array<Item> = [{ id: 1, qty: 10 }, { id: 2, qty: 20 }]
+wait sleep(5)
+for (it in items2) { total = total + it.qty }   // total = 30
+
+// WORKS: move the array into a helper function that does not use wait
+// (no suspension in buildItems — the runtime-field construction is safe there)
+function buildItems(qty: int) -> array<Item> {
+    return [{ id: 1, qty: qty }]
+}
+let a: int = 10
+wait sleep(5)
+let items3: array<Item> = buildItems(a)
+for (it in items3) { print(it.qty.toString()) }
+```
+
+**Root cause**: `YnzArray` stores each Shape element as an `i64` pointer to the struct's bytes. The codegen path for runtime-field shapes emits a stack alloca in the current resume function — which is freed on suspension. The permanent fix is **by-value inline element storage**: the array heap buffer stores the shape bytes directly (variable slot size = `sizeof(elem)`), so no pointer indirection is needed and suspension is safe regardless of field values.
+
+**What it costs to lift**: 2–3 sessions — a breaking ABI change to `YnzArray` (add `elem_size`, update `ynz_array_new`/`ynz_array_push`/`ynz_array_get`/`ynz_array_set`, and all codegen call sites). See `design/future/array-by-value-element-storage.md` for the full design.
+
+**Guard scope (conservative)**: the interim guard fires on the full `crossing_names` set from the crossing analysis, which conservatively includes some after-last-wait constructions (e.g. `let items = [...]` declared after a `wait` but iterated by a for-loop, which the crossing analysis tracks as an in-scope reference). The guard intentionally over-rejects these — loud over silent — because distinguishing them precisely would require a more complex pre-suspension-only scan. The `m3c-array-by-value` milestone lifts the guard entirely by making runtime-field elements safe across any suspension.
+
+**Workaround**: use only plain literal field values (`[{ id: 1, qty: 10 }]`), or move the array construction and all its uses into a separate helper function that does not contain any `wait`.
+
+**Trigger**: an `array<Shape>` crossing local whose initializer `ArrayLit` contains at least one `StructLit` element with a non-literal field value. The `ArrayShapeRuntimeFieldWithWait` guard in `crates/ynz-typeck/src/check.rs` (Check 2d) rejects these at compile time.
+
+This is tracked in `registry/features.toml` as `array-shape-runtime-field-with-wait`.
+
+---
+
+## Permanent Positional Constraints on `wait`
+
+Two restrictions on `wait` are **permanent design decisions** — not temporary M2 limitations. Both are enforced at typeck and will remain even after M3a lifts the `LocalCrossesWait` and `WaitInsideLoop` guards.
+
+### `SubExprSuspendViolation` — suspending call in a sub-expression position
+
+A suspending call nested inside a larger expression is a compile error:
+
+```
+// ❌ — inner() is inside a + expression
+let x = 1 + inner()
+
+// ✅ — give it its own line
+let result = inner()
+let x = 1 + result
+```
+
+**Rationale**: Step-by-step style — one operation per line with a named variable — is Yinz's deliberate design (Golden Rule 7). Keeping each suspending call on its own statement also enables M3b's auto-parallelization of independent statements: two `let a = wait fa()` / `let b = wait fb()` lines can be analyzed as independent and parallelized automatically. Expression-position suspension would require a different, more complex codegen path that buys nothing over the step-by-step style.
+
+This guard is not a codegen limitation. It is a style constraint enforced at the language level.
+
+### `MutualSuspensionCycle` — mutually-recursive suspending functions
+
+Two or more different functions that call each other AND all suspend is a compile error:
+
+```
+// ❌ — ping and pong mutually call each other and both suspend
+function ping(n: int) -> nothing { wait sleep(10); pong(n - 1) }
+function pong(n: int) -> nothing { wait sleep(10); ping(n - 1) }
+
+// ✅ — self-recursion works correctly
+function countdown(n: int) -> nothing {
+  if (n > 0) { wait sleep(100); countdown(n - 1) }
+}
+
+// ✅ — restructure: one function delegates to the other without suspending
+function step(n: int) -> nothing { wait sleep(10) }
+function loop(n: int) -> nothing { if (n > 0) { step(n); loop(n - 1) } }
+```
+
+**Rationale**: Self-recursive suspending functions work correctly — a function calling itself is always self-contained (the recursive frame is a heap-boxed child of the same function, and the drop guard walks the chain). Mutually-recursive suspending cycles require per-frame size metadata to safely cancel mid-wait, and the cases that arise in practice can always be restructured into non-mutual forms. The guard is permanent because the restructured form is always cleaner and the mutual-recursion case is rare.
+
+---
+
 ## Runtime Implementation (Internal — Developer Never Sees This)
 
 Thread pool sized to CPU cores. I/O operations use the OS event system (epoll/kqueue/IOCP). The compiler's dependency graph determines scheduling. Developers never configure or think about any of this.

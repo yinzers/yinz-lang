@@ -1,0 +1,15 @@
+// Fixture: while loop with frame-backed accumulator.
+// Each iteration suspends, then adds 10 to acc. After 4 iterations acc == 40.
+// Guards that the accumulator's frame slot survives each suspension — a single-slot
+// read of a stale value would produce 10 (only last iteration) instead of 40.
+// Expected output: 40
+function entrypoint() -> nothing {
+  let acc: int = 0
+  let i: int = 0
+  while (i < 4) {
+    wait sleep(5)
+    acc = acc + 10
+    i = i + 1
+  }
+  print(acc.toString())
+}

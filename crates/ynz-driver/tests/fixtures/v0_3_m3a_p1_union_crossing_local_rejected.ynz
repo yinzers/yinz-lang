@@ -1,0 +1,36 @@
+// Fixture: a union-type local that crosses a `wait` must be rejected with a clean
+// compile error — not a raw LLVM ICE or SIGSEGV.
+//
+// WHY: UnsupportedCrossingLocalType guard (Round-22 FIX d). Before this guard, a
+// union-typed crossing local fell into the generic pointer flush/reload path in codegen,
+// which stored and reloaded a pointer to a tagged-struct alloca on the resume function's
+// stack. After suspension and resume, the stack frame is gone and the pointer is dangling
+// — LLVM detected the SSA dominance violation as a raw ICE. The guard converts this into
+// a clean compile error before codegen runs.
+//
+// Expected: exit code 1, diagnostic says "cannot yet cross a `wait`".
+// Expected: no stdout (compile error, no binary produced).
+// Expected: no LLVM ICE text in stderr.
+shape Circle {
+  radius: float
+}
+
+shape Square {
+  side: float
+}
+
+shape Figure = Circle | Square
+
+function sleepWithUnion(v: int) -> nothing {
+  let c: Circle = { radius: 3.0 }
+  let fig: Figure = c
+  wait sleep(5)
+  if (v > 0) {
+    let inner = fig
+    print(`used`)
+  }
+}
+
+function entrypoint() -> nothing {
+  sleepWithUnion(1)
+}

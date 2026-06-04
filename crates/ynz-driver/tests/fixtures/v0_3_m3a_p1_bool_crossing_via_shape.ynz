@@ -1,0 +1,15 @@
+// Fixture: boolean crossing local obtained from a shape field — FIX A (Round 7).
+// A shape `Flag` has a `boolean` field `on`. The field value is extracted into a
+// local `check: boolean` that crosses a `wait`. Tests the same i1 flush/reload path
+// as v0_3_m3a_p1_bool_crossing_local.ynz but with the bool sourced from a struct GEP.
+// Expected output: true
+shape Flag {
+  on: boolean
+}
+
+function entrypoint() -> nothing {
+  let result: Flag = { on: true }
+  let check: boolean = result.on
+  wait sleep(5)
+  print(check.toString())
+}

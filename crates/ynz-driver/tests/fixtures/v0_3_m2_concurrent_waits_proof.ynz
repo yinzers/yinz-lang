@@ -1,24 +1,24 @@
 // v0.3-M2 concurrency proof fixture.
 //
 // Spawns 8 background tasks, each of which prints START N, suspends for 100ms via
-// wait sleepAsync(100), then prints DONE N. The test asserts that all 8 START lines
+// wait sleep(100), then prints DONE N. The test asserts that all 8 START lines
 // appear before any DONE line — proof that the state machines suspend cooperatively
 // (not sequentially) regardless of the CI runner's core count.
 //
-// sleepMs(300) keeps the main thread alive long enough for all 8 background tasks
+// sleepBlocking(300) keeps the main thread alive long enough for all 8 background tasks
 // to complete their 100ms sleep and print DONE before shutdown. Without this, Tokio
 // drops all pending futures on shutdown_timeout. M4 handle-form will eliminate the
 // need for this explicit wait.
 //
 // The no-op / sequential-execution detector is the ORDERING assertion in the test
 // (all 8 START lines before any DONE) — deterministic and core-count-independent. The
-// wall-clock bounds in the test are loose sanity guards only: main's blocking sleepMs(300)
-// keep-alive dominates total runtime, so timing CANNOT detect a sleepAsync no-op (the
+// wall-clock bounds in the test are loose sanity guards only: main's blocking sleepBlocking(300)
+// keep-alive dominates total runtime, so timing CANNOT detect a sleep no-op (the
 // binary runs ~300ms either way). M4's handle form removes the keep-alive and lets timing tighten.
 
 function pause(n: int) -> nothing {
   print(`START ${n}`)
-  wait sleepAsync(100)
+  wait sleep(100)
   print(`DONE ${n}`)
 }
 
@@ -32,5 +32,5 @@ function entrypoint() -> nothing {
   background pause(7)
   background pause(8)
   print(`MAIN`)
-  sleepMs(300)
+  sleepBlocking(300)
 }

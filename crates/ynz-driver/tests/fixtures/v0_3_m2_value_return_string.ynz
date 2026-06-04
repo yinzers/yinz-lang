@@ -2,7 +2,7 @@
 // Verifies Bug A fix for pointer types: string return survives the typed store/load.
 
 function greeting() -> string {
-  wait sleepAsync(5)
+  wait sleep(5)
   return `hello from SM`
 }
 
