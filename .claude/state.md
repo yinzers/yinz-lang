@@ -13,11 +13,11 @@
 <!-- RADAR-START -->
 ### Active Roadmaps
 - v0-2-1-lsp-gap-closure (Patrick Rizzardi) — 0 active plans — 2026-05-30
-- v0-3-concurrency-perf (Patrick Rizzardi) — 1 active plans — 2026-05-31
+- v0-3-concurrency-perf (Patrick Rizzardi) — 0 active plans — 2026-05-31
 - webpage-docs (Patrick Rizzardi) — 0 active plans — 2026-05-20
 
 ### Active Workstreams
-- v0-3-m3a-suspension-codegen (Patrick Rizzardi) — 12 files touched — 92/109 done — roadmap: v0-3-concurrency-perf — 2026-06-01
+*(no active workstreams)*
 <!-- RADAR-END -->
 
 ---
