@@ -339,15 +339,14 @@ Per Patrick's standing preference (`all-phases-then-review`): run the 5-reviewer
   - Evidence: `incremental_non_susp_to_susp_flips_caller_to_state_machine` test: v1 non-susp, `sf_a.set_text(&mut db)` update, v2 check re-runs and `suspends_set` now contains `caller`. The diamond test proves both B and C importers are re-checked.
 **Verification**: build the two-module fixture with `ynz run`; `cargo test --workspace`; the incremental test.
 
-**Phase Review Gates**:
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
-- [ ] design-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] Committed: <commit SHA>
+**Phase Review Gates** (Phase 1 = the SOLID half + universal-reject floor; cross-module suspending-CALL codegen deferred to M3e):
+- [x] propagation + circular-import halves: GATED CLEAN across 3 gate rounds (design-compliance, plan-adherence, J-B cycle, rules, the typeck ACs all PASS; see Findings Log).
+- [x] universal-reject floor: sound-by-construction (no frame prediction → no escape) + coordinator-verified live (former crash combos → exit 1 clean; same-module suspension → exit 0; `cargo test --workspace` 0 failures). Not gated by the 9-agent fan-out because a reject-everything guard cannot silently miscompile.
+- [x] design-compliance-reviewer: PASS 2026-06-05 (no-coloring/no-bridge intact; loud-reject = the M3a→M3c documented-decomposition pattern).
+- [x] Committed: 9ed31b0
 
 **Findings Log**:
+- 2026-06-05 — **CLOSE-OUT (Patrick decision): the predictive `composed_frame_simple` guard leaked 5 distinct silent crashes across 2 gates (it predicts codegen frame safety with a different/shallower typeck analysis — no-duct-tape #6/#8 duct tape). Replaced with a UNIVERSAL sound reject** (any cross-module call to a suspending fn → clean exit-1 error, no prediction → no escape). composed_frame_simple field + is_composed_frame_simple removed; composed_frame_size KEPT (same-module use). 5 working cross-module fixtures flipped to assert clean reject. `cargo test --workspace` green. **Phase 1 committed `9ed31b0` as the honest partial.** The full fix (cross-module FrameLayout serialization) = milestone `v0-3-m3e-cross-module-frame-serialization`, to be `/plan`'d fresh. M3b Phases 2-6 resume after M3e (or independently — they don't need cross-module suspending-call codegen). NOTE: minor stale doc comment at `resolve_import.rs:369` still references the removed `is_composed_frame_simple` — M3e cleanup.
 - 2026-06-05 — **Gate round 1 (9 agents: 5 reviewers + 4 deviation-judges). 4 PASS, 5 BLOCK.** PASS: design-compliance (no-bridge/no-coloring intact, cross-module propagation IS the whole-program model), J2 (resolve_import salsa — circular-import ICE is PRE-EXISTING, identical query stack at baseline `e4dd97c`), J3 (codegen/queries plumbing minimal+fresh). BLOCK:
   - **J1 (emit.rs) — SILENT MISCOMPILE (live run).** `-> int errors` cross-module suspending call returns `0` not `42`: `is_errors_capable_fn`/`load_sm_return_value_typed` scan only local `typed.module.items`, misclassify the imported callee → read err-ptr slot (0 on success) not the value slot; Pass 0.25 also lacks a `Type::ErrorsCapable` arm (ABI-mismatched wrapper). → step 7.
   - **code-reviewer — SIGILL (live run).** Transitively-suspending cross-module export (`export slow(){ innerSleep() }`, innerSleep non-exported + suspends) → illegal instruction, exit 132, zero output, builds clean. Frame seeded `FRAME_HEADER_SIZE` but real composed frame must embed innerSleep's sub-frame (importer can't see it). → step 8.
