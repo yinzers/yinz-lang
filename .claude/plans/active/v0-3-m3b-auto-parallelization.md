@@ -236,18 +236,18 @@ Per Patrick's standing preference (`all-phases-then-review`): run the 5-reviewer
 6. **(REQUIRED — Patrick-decided 2026-06-05)** create `.claude/design-sources.md` registering `design/concurrency.md`, `design/future/concurrency.md`, `design/ide-hints.md` as `[locked]` (format per `~/.claude/memory/design-sources.md`). This hardens the design-compliance gate out of loud-fallback for this milestone and all future ones.
 7. `cargo test -p ynz-registry` (registry parse/codegen) + `cargo build -p ynz-registry`; jargon audit green.
 **Acceptance criteria**:
-- [ ] `design/concurrency.md` states Model A semantics verbatim (suspension auto; independent ops parallelize; `wait`=ordering barrier; loops sequential)
-  - Evidence: (filled at phase completion)
-- [ ] `spec/concurrency.md` explains auto-parallel + `wait` + background give/copy in HS-grad language with ≥1 compiler-error example
-  - Evidence: (filled at phase completion)
-- [ ] `registry/features.toml` has a `[[muted_hint_domain]]` `background_routing` entry (Informational); `ynz-registry` builds with it
-  - Evidence: (filled at phase completion)
-- [ ] `wait`/`background` keyword hover text updated to real-concurrency behavior
-  - Evidence: (filled at phase completion)
-- [ ] `cargo test -p ynz-registry` green; `jargon_audit` green
-  - Evidence: (filled at phase completion)
-- [ ] `.claude/design-sources.md` created, registering the three concurrency docs `[locked]`; the design-compliance gate reads it (no loud-fallback warning on subsequent gate runs)
-  - Evidence: (filled at phase completion)
+- [x] `design/concurrency.md` states Model A semantics verbatim (suspension auto; independent ops parallelize; `wait`=ordering barrier; loops sequential)
+  - Evidence: `design/concurrency.md` new section "Suspension vs. Ordering — What's Automatic and What `wait` Does (LOCKED 2026-06-05)" (diff +26–+68): "Suspension is automatic. You never write `wait` for it."; "Independent operations run concurrently"; "`wait` does exactly one thing the compiler cannot infer: it forces a causal order between operations that are otherwise independent." Loops-sequential leg via the pre-existing "Loop Iterations — Sequential by Default" section (present, untouched). All four Model A pillars verbatim. (acceptance-verifier R2)
+- [x] `spec/concurrency.md` explains auto-parallel + `wait` + background give/copy in HS-grad language with ≥1 compiler-error example
+  - Evidence: `spec/concurrency.md:72-75` ("**Suspension is automatic — you never type `wait` to make I/O suspend.**" + "**`wait` is only for ordering.**"); `spec/concurrency.md:168` ("The compiler infers whether to move or copy the argument — you don't have to write `.give` or `.copy` yourself."); compiler-error example at `spec/concurrency.md:177` (`// COMPILE ERROR: Cannot share with a background task.`). HS-grad vocabulary clean (no Rust jargon). (acceptance-verifier R2)
+- [x] `registry/features.toml` has a `[[muted_hint_domain]]` `background_routing` entry (Informational); `ynz-registry` builds with it
+  - Evidence: `registry/features.toml:2075` new `[[muted_hint_domain]]` — `domain = "background_routing"`, `placement_category = "Informational"`, `example_source = "background process(order)"`, `example_hint_rendered = "// routed to I/O pool — calls sleep (may suspend)"`, `active_since = "v0.3-M3b"`. Live `cargo test -p ynz-registry` 26/26 green proves the new entry parses through codegen. (acceptance-verifier R2)
+- [x] `wait`/`background` keyword hover text updated to real-concurrency behavior
+  - Evidence: `registry/features.toml` `wait` `hover_what` = "Forces this call to complete before execution continues… Suspension at I/O points is automatic"; `background` `hover_what` = "Schedules a function to run as a concurrent task… The compiler infers whether to move or copy". Hover tests in `crates/ynz-lsp/tests/hover.rs` + `crates/ynz-registry/tests/lsp_adapter.rs` assert the new ordering-barrier / thread-pool-routing text AND assert the stale M2 text is absent. (acceptance-verifier R2)
+- [x] `cargo test -p ynz-registry` green; `jargon_audit` green
+  - Evidence: live run — `cargo test -p ynz-registry`: 26 passed, 0 failed. `cargo test jargon`: 8 passed, 0 failed, incl. `no_banned_jargon_in_muted_hint_domain_descriptions` (audits the new `background_routing` description) + `no_banned_jargon_in_lsp_inlay_hint_hover_output` (audits the updated hover fields). (acceptance-verifier R2, observed live)
+- [x] `.claude/design-sources.md` created, registering the three concurrency docs `[locked]`; the design-compliance gate reads it (no loud-fallback warning on subsequent gate runs)
+  - Evidence: **static** — new `.claude/design-sources.md` (10 lines) with 3 `[locked]` entries: `design/concurrency.md`, `design/future/concurrency.md`, `design/ide-hints.md`. **paths-resolve** — `ls` confirms all 3 registered paths exist on disk. **runtime (no loud-fallback)** — the design-compliance gate is realized by the `design-compliance-reviewer` agent (no standalone script); its live Phase 0 run reported "Registry status: present-and-valid", "Fallback globs used: no", "Stale Registry Entries: None — all three registry globs resolved to exactly one file on disk." Zero-match globs are the ONLY loud-fallback trigger; all 3 match → no loud-fallback is structurally possible. (acceptance-verifier R2; design-compliance-reviewer R1)
 **Quality gate**:
 - [ ] No banned jargon in new doc/registry text
 - [ ] Examples use only real Yinz operations (dot-postfix rule)
@@ -255,15 +255,20 @@ Per Patrick's standing preference (`all-phases-then-review`): run the 5-reviewer
 **Verification**: `cargo build -p ynz-registry && cargo test -p ynz-registry`; grep `design/concurrency.md` for the locked-semantics subsection; `cargo test jargon`.
 
 **Phase Review Gates**:
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
-- [ ] design-compliance-reviewer: <verdict + ISO timestamp>
+- [x] code-reviewer: PASS 2026-06-05T04:20 (2 non-blocking concerns — stale test fn names; no live lookup test for `background_routing` — deferred to Phase 3)
+- [x] rules-compliance-reviewer: PASS 2026-06-05T04:20
+- [x] plan-adherence-verifier: PASS 2026-06-05T04:20 (R2 — round-1 BLOCK on 3 undocumented deviations resolved by scratch-file record + 3 judge PASSes)
+- [x] acceptance-verifier: PASS 2026-06-05T04:20 (R2 — round-1 AC#6 WEAK resolved by design-compliance gate-run witness "Fallback globs used: no")
+- [x] design-compliance-reviewer: PASS 2026-06-05T04:20
+- [x] deviation-judge #1 (scope: lsp_adapter.rs hover assertions test-sync to M3b text): PASS 2026-06-05T04:20
+- [x] deviation-judge #2 (scope: hover.rs LSP hover assertions test-sync to M3b text): PASS 2026-06-05T04:20
+- [x] deviation-judge #3 (scope: cspell "callees" for new background_routing description): PASS 2026-06-05T04:20
 - [ ] Committed: <commit SHA>
 
 **Findings Log**:
-_(empty until a reviewer returns BLOCK)_
+- 2026-06-05T04:20 — acceptance-verifier R1: BLOCK. AC#6 WEAK — its second clause ("design-compliance gate reads it, no loud-fallback") is a runtime behavior unwitnessable from the static diff. Adjudication: NOT a code defect. The design-compliance gate has no standalone script — it is realized by the `design-compliance-reviewer` agent, which ran against this diff and reported "Fallback globs used: no" + "all three globs resolved to exactly one file." Coordinator re-spawned acceptance-verifier (R2) with that gate-run output + the reproducible glob-resolution check as AC#6 runtime evidence → R2 PASS, all 6 ACs MET. No executor code change.
+- 2026-06-05T04:20 — plan-adherence-verifier R1: BLOCK. 3 files outside `Files (expected scope)` (`crates/ynz-registry/tests/lsp_adapter.rs`, `crates/ynz-lsp/tests/hover.rs`, `cspell.json`) flagged "undocumented in committed artifact." R1 itself judged them "forced consequences, not substantive scope creep." Adjudication: the deviations ARE documented in `.claude/plans/scratch/v0-3-m3b-auto-parallelization-phase0-deviations.md` (persisted pre-gate, staged into the Phase 0 commit) and all 3 were independently PASSed by deviation-judges. Coordinator re-spawned plan-adherence (R2) pointed at the scratch record → R2 PASS. Rationales carried into the Phase 0 commit message.
+- 2026-06-05T04:20 — DEFERRED (tracked): two test functions in `crates/ynz-lsp/tests/hover.rs` — `hover_wait_keyword_returns_m2_suspension_text` and `hover_background_keyword_returns_routing_distinction_text` — have stale "m2"-era names while their bodies now assert M3b semantics (flagged by code-reviewer + executor; deviation-judge confirmed the assertions self-correct, so this is a cosmetic name lie, NOT a coverage hole). WHAT: rename both to M3b-accurate names. WHY deferred not fixed-now: Phase 3 ("Teaching surfaces — `wait_points` firing + `background_routing` hint") re-touches `hover.rs`/inlay test infrastructure — folding the rename there avoids a disproportionate standalone executor+re-gate round for a cosmetic rename. COST: trivial (2 fn renames). TRIGGER: Phase 3 execution. Tracked here per `no-duct-tape.md` legitimate-deferral shape (all four fields named) and in Phase 3 Steps.
 
 **Exit Sequence — RUN THESE STEPS:** per Phase Execution Protocol above. `$BASE` for Phase 0 = `plan_base` (`0a4b6d8390b1cffd462681429d159ce8db25198a`).
 
@@ -397,6 +402,7 @@ _(empty until a reviewer returns BLOCK)_
 3. Wire both into `inlay_hint_response` (two new domain loops); hover text from the registry (`lsp_inlay_hint_hover_for`), WHAT/WHAT-INSTEAD/WHY.
 4. (Modest auto-parallel visibility) If P4's grouping data is available as a query, optionally surface a "runs concurrently with N other operations" informational hint; else note it as a P4/P6 follow-on. The full graphical execution-plan view (`design/concurrency.md` "IDE Execution Plan") beyond muted hints is a candidate `[[deferred_tooling_feature]]` if it exceeds this phase — record it loudly if deferred.
 5. Tests: `wait_points` pass fires on a suspending call, not on a non-suspending one, not where `wait` is explicit; `background_routing` fires I/O vs CPU correctly; LSP handler returns the hints; hover text present + jargon-clean.
+6. **(Carried from P0 Findings Log — deferred cosmetic cleanup)** Rename the two stale-named hover tests in `crates/ynz-lsp/tests/hover.rs` whose bodies assert M3b semantics but whose names still say "m2"/old: `hover_wait_keyword_returns_m2_suspension_text` → e.g. `hover_wait_keyword_returns_ordering_barrier_text`, and `hover_background_keyword_returns_routing_distinction_text` (verify the name matches the M3b assertion it now makes). Rename only — do NOT weaken the assertions. This phase re-touches `hover.rs`, so the rename rides along here.
 **Acceptance criteria**:
 - [ ] `wait_points` pass fires a muted `wait` hint at suspending call sites (and NOT at non-suspending sites or where `wait` is explicit) — pass test
   - Evidence: (filled at phase completion)

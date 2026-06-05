@@ -23,6 +23,45 @@ Most developers don't bother parallelizing reads — they write sequential code 
 
 ---
 
+## Suspension vs. Ordering — What's Automatic and What `wait` Does (LOCKED 2026-06-05)
+
+This is the authoritative statement of what `wait` means. Two different jobs were historically conflated — they are separate, and only the second is `wait`'s job.
+
+**Suspension is automatic. You never write `wait` for it.** A call that can block (transitively reaches an I/O / may-block operation — in v0.3 that is `sleep`) is compiled into a suspension point by the compiler's whole-program may-block analysis (no function coloring — see `design/future/concurrency.md`). The function suspends and hands its thread back to the scheduler automatically. The IDE shows the inferred suspension as the muted `wait_points` hint. The user does **not** type `wait` to make a call suspend correctly — that shipped in v0.3-M2.
+
+**Ordering is also mostly automatic.** The compiler orders operations it can prove are dependent:
+- **Data dependency** — if B uses A's result, B waits for A. (No `wait` needed.)
+- **Same-resource ownership** — two writes to the same `lend` target are sequenced. (No `wait` needed.)
+- **Independent operations run concurrently** — reads, and writes to *different* resources, with no data dependency between them, auto-parallelize. This is the default and it is the maximal-performance choice.
+
+```
+// No data flows between these two calls — the compiler overlaps them automatically.
+let user = fetchUser(a)
+let orders = fetchOrders(b)
+render(user, orders)     // waits for both; overlap is free, no user action required
+```
+
+**`wait` does exactly one thing the compiler cannot infer: it forces a causal order between operations that are otherwise independent.** Write `wait foo()` when `foo` must complete before the next statement runs even though they touch different resources and pass no value between them — a happens-before that lives in the outside world, not in the Yinz value graph.
+
+```
+// Different external services, no value flows between them →
+// the compiler would otherwise run these concurrently. `wait` forces charge-before-email.
+wait chargePayment(order)      // Stripe
+sendConfirmationEmail(order)   // SendGrid — must not fire if the charge failed
+```
+
+**The observable difference between writing `wait` and not is ordering vs. overlap:**
+- `wait foo()` then `bar()` → `foo` completes, then `bar` starts. Guaranteed order.
+- `foo()` then `bar()` (independent) → `foo` and `bar` overlap; either may finish first.
+
+If two operations are already dependent (data or same-resource), `wait` is redundant — they were ordered anyway. **`wait` only changes behavior for _independent_ operations.**
+
+**Idiomatic note**: prefer a data dependency over `wait` when one exists. `let receipt = chargePayment(order)` then `sendConfirmationEmail(receipt)` orders the two via the threaded `receipt` and needs no `wait`. Reserve `wait` for the genuinely-no-value-to-thread, different-resource causal-ordering case (and for FFI, where the compiler can't see effects at all).
+
+**Why this is the locked default (Model A)**: independent writes to different resources auto-parallelize (maximal throughput for write-heavy work), and the ordering responsibility for the residual causal cases is on the user via `wait`. The rejected alternative — preserving source order for *all* writes by default — leaves real throughput on the floor for intensive work, and the read-parallelism win survives either way. The accepted cost: independent side effects can race unless ordered, surfaced through the IDE concurrency hints. A superseded earlier proposal treated `wait` as non-ordering ("just I need the result here"); that is **dead** — in Yinz, `wait` IS ordering.
+
+---
+
 ## Reads vs Writes — Ownership Does Double Duty
 
 **Decision**: Use the existing `share`/`lend` ownership system to classify reads vs writes. No new annotations needed.
@@ -51,14 +90,14 @@ The compiler traces through user functions to determine if they contain writes. 
 
 ## `wait` Keyword — Explicit Ordering
 
-**Decision**: `wait` forces a function call to complete before execution continues. Used for side effects and external API ordering that the dependency graph can't infer.
+**Decision**: `wait` forces a function call to complete before execution continues. It is the user's tool for the one thing the compiler can't infer — a causal order between operations that are otherwise *independent* (different resources, no value threaded between them). See the authoritative "Suspension vs. Ordering" section above for the full model; `wait` is never needed for suspension (automatic) or for already-dependent operations (auto-ordered).
 
 **When `wait` is necessary**:
 
-Side effects that must be ordered but don't use each other's return values:
+Side effects that must be ordered but don't use each other's return values *and touch different resources* (so the compiler would otherwise overlap them):
 ```
-wait chargePayment(order)      // must complete before email
-sendConfirmationEmail(order)   // only starts after payment
+wait chargePayment(order)      // Stripe — must complete before email
+sendConfirmationEmail(order)   // SendGrid (different resource) — only starts after payment
 ```
 
 External API calls where the compiler can't see the relationship:

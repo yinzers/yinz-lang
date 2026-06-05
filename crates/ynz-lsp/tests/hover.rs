@@ -368,10 +368,11 @@ fn hover_request_via_lsp_returns_response() {
     );
 }
 
-// WHY: v0.3-M2 replaced the forward-pointing M1 hover text for `wait` with real
-// suspension semantics. This test verifies the registry-sourced hover text now
-// reflects "Suspends the calling function" (the M2 WHAT clause), not the old
-// M1 placeholder that said "Runtime suspension semantics ship in v0.3-M2."
+// WHY: v0.3-M3b updated `wait` hover to the ordering-barrier semantics locked
+// 2026-06-05. `wait` is NOT a suspension trigger (suspension is automatic) — it
+// is an explicit ordering barrier. This test verifies the registry-sourced hover
+// now describes `wait` as an "ordering barrier", not the old M2 text that said
+// "Suspends the calling function" (which conflated suspension with ordering).
 // If this fails, the keyword hover docs weren't updated in the registry.
 #[test]
 fn hover_wait_keyword_returns_m2_suspension_text() {
@@ -396,23 +397,24 @@ fn hover_wait_keyword_returns_m2_suspension_text() {
             panic!("expected Markup hover contents for 'wait' keyword");
         };
         assert!(
-            mc.value.contains("Suspends the calling function"),
-            "wait hover must contain M2 suspension text 'Suspends the calling function'; got: {}",
+            mc.value.contains("ordering barrier"),
+            "wait hover must describe wait as an ordering barrier (M3b locked semantics); got: {}",
             mc.value
         );
-        // Must NOT contain the old M1 forward-pointing placeholder text
+        // Must NOT contain the stale suspension-trigger text from M2
         assert!(
-            !mc.value.contains("Runtime suspension semantics ship"),
-            "wait hover must NOT contain old M1 placeholder text; got: {}",
+            !mc.value.contains("Suspends the calling function"),
+            "wait hover must NOT contain old M2 suspension text (wait is an ordering barrier, not a suspension trigger); got: {}",
             mc.value
         );
     }
 }
 
-// WHY: v0.3-M2 added the I/O-pool vs blocking-pool routing distinction to the
-// `background` keyword hover. This test verifies the registry-sourced hover now
-// contains the routing note. If this fails, the background hover docs weren't
-// updated (and users hovering `background` in v0.3-M2 code see stale M1 text).
+// WHY: v0.3-M3b updated `background` hover to describe real routing semantics —
+// I/O thread pool for suspending callees, CPU thread pool for non-suspending ones.
+// The old M2 text said "separate thread" (inaccurate — background uses a thread
+// pool, not a dedicated single thread). This test verifies the routing note is
+// present. If this fails, the background hover docs weren't updated in the registry.
 #[test]
 fn hover_background_keyword_returns_routing_distinction_text() {
     let src = "background doWork()";
@@ -439,8 +441,8 @@ fn hover_background_keyword_returns_routing_distinction_text() {
             panic!("expected Markup hover contents for 'background' keyword");
         };
         assert!(
-            mc.value.contains("I/O pool") || mc.value.contains("blocking pool"),
-            "background hover must contain routing-distinction note (I/O pool / blocking pool); got: {}",
+            mc.value.contains("I/O thread pool") || mc.value.contains("CPU thread pool"),
+            "background hover must contain routing-distinction note (I/O thread pool / CPU thread pool); got: {}",
             mc.value
         );
     }

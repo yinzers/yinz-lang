@@ -122,8 +122,9 @@ fn hover_unregistered_returns_none() {
 #[test]
 fn hover_wait_includes_what_what_instead_why() {
     // WHY: `wait` hover must contain Rule-11 WHAT/WHAT-INSTEAD/WHY content from
-    // the new KeywordEntry.hover_what/hover_what_instead/hover_why schema fields.
-    // v0.3-M2 updated this to real suspension semantics — "Suspends the calling function".
+    // the KeywordEntry.hover_what/hover_what_instead/hover_why schema fields.
+    // v0.3-M3b updated to ordering-barrier semantics (LOCKED 2026-06-05): `wait` is an
+    // explicit ordering tool, not a suspension trigger — suspension is automatic.
     let h = lsp_hover_for_token("wait").expect("wait must have hover content");
     assert_eq!(h.kind, HoverKind::Keyword);
     let body = &h.markdown_body;
@@ -137,15 +138,18 @@ fn hover_wait_includes_what_what_instead_why() {
     );
     assert!(body.contains("**WHY:**"), "wait hover must have WHY clause");
     assert!(
-        body.contains("Suspends the calling function"),
-        "wait hover must mention v0.3-M2 suspension semantics"
+        body.contains("ordering barrier"),
+        "wait hover must describe wait as an ordering barrier (M3b locked semantics)"
     );
 }
 
 #[test]
 fn hover_background_includes_what_what_instead_why() {
     // WHY: `background` hover must contain Rule-11 WHAT/WHAT-INSTEAD/WHY content
-    // reflecting v0.3-M1 semantics (separate thread). Old hover was just "Introduced in M8."
+    // from the KeywordEntry.hover_what/hover_what_instead/hover_why schema fields.
+    // v0.3-M3b updated to describe real routing semantics and give/copy inference
+    // (the old text said "separate thread" — background routes to a thread pool, not
+    // a single dedicated thread; the routing depends on whether the callee suspends).
     let h = lsp_hover_for_token("background").expect("background must have hover content");
     assert_eq!(h.kind, HoverKind::Keyword);
     let body = &h.markdown_body;
@@ -162,8 +166,8 @@ fn hover_background_includes_what_what_instead_why() {
         "background hover must have WHY clause"
     );
     assert!(
-        body.contains("separate thread"),
-        "background hover must mention separate thread (v0.3-M1 semantics)"
+        body.contains("concurrent task"),
+        "background hover must describe background as a concurrent task (M3b semantics)"
     );
 }
 

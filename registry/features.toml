@@ -166,19 +166,19 @@ since = "M8"
 name = "wait"
 token = "Wait"
 since = "M8"
-# Rule 11 hover docs — v0.3-M2 (real suspension semantics now shipped)
-hover_what = "Suspends the calling function until the awaited expression completes. The OS thread is freed for other tasks during the suspension."
-hover_what_instead = "Write `wait foo()` at a call site to suspend until `foo()` returns. Code after the `wait` runs only after `foo()` completes."
-hover_why = "`wait` makes the function pause without blocking the OS thread — the thread runs other ready tasks during the pause. If the caller of this function is not itself a state machine, the caller blocks until completion (this gap closes in v0.3-M3 when auto-insertion ships)."
+# Rule 11 hover docs — v0.3-M3b (ordering-barrier semantics locked 2026-06-05)
+hover_what = "Forces this call to complete before execution continues. Also joins any prior auto-parallel in-flight work. Suspension at I/O points is automatic and does not require `wait`."
+hover_what_instead = "Write `wait foo()` when `foo` must finish before the next statement runs AND the two operations are independent (different resources, no value threaded between them). For data-dependent calls, the compiler already orders them — `wait` is redundant."
+hover_why = "`wait` is an ordering barrier, not a suspension trigger. The compiler auto-inserts suspension at every call that transitively reaches a blocking operation — you never write `wait` for that. `wait` is the tool for causal ordering the compiler cannot infer: charge a payment, THEN send a confirmation email to a different service."
 
 [[keyword]]
 name = "background"
 token = "Background"
 since = "M8"
-# Rule 11 hover docs — v0.3-M2 (routing-distinction note added)
-hover_what = "Runs the function on a separate thread."
-hover_what_instead = "Write `background fn(value.give)` or `background fn(value.copy)` to schedule `fn` to run independently."
-hover_why = "The background task runs concurrently with whatever follows the `background` call. In v0.3-M2, functions containing `wait` route to the I/O pool (cooperative scheduling); functions without `wait` route to the blocking pool (dedicated OS thread per task). Handle-form (`let h = background fn()`) ships in v0.3-M4."
+# Rule 11 hover docs — v0.3-M3b (give/copy inference + real routing semantics)
+hover_what = "Schedules a function to run as a concurrent task outside the current function's lifetime. The compiler infers whether to move or copy each argument based on whether you use it after the call."
+hover_what_instead = "Write `background fn(value)` — the compiler picks `.give` (zero-copy move) when `value` is not used after, or `.copy` when it is. Write `background fn(value.give)` or `background fn(value.copy)` to be explicit. Functions whose parameter is `share` cannot be called via `background` — a shared borrow would dangle if the caller returns first."
+hover_why = "A `background` task runs concurrently with whatever follows the call. Functions that transitively reach a blocking operation route to the I/O thread pool (cooperative scheduling); functions with no blocking calls route to the CPU thread pool. The IDE shows the routing decision as a muted comment at the call site."
 
 # ---------------------------------------------------------------------------
 # [[banned_declaration_keyword]] — keywords from other languages Yinz rejects
@@ -2070,6 +2070,14 @@ description = "Shows the compiler-figured `wait` at suspension points — calls 
 example_source = "sleep(100)"
 example_hint_rendered = "wait (sleep suspends here)"
 active_since = "v0.3-M2"
+
+[[muted_hint_domain]]
+domain = "background_routing"
+placement_category = "Informational"
+description = "Shows which thread pool a `background` spawn routes to — I/O pool (for callees the may-block analysis marks as suspending) or CPU pool (for callees with no may-block calls in their call graph). Reads the same FunctionSig.suspends flag that drives codegen routing so the hint and the actual routing always agree."
+example_source = "background process(order)"
+example_hint_rendered = "// routed to I/O pool — calls sleep (may suspend)"
+active_since = "v0.3-M3b"
 
 [[muted_hint_domain]]
 domain = "lifetimes"
