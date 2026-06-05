@@ -1,0 +1,14 @@
+// Danger case (b): caller of a cross-module suspending -> int errors function.
+// The {i64, i64} return struct must be correctly received by the importer.
+// Expected output: "got: 42"
+import { fetchData } from `data_ops`
+
+function caller() -> nothing {
+  const result = fetchData()
+  const v = result.or(0)
+  print(`got: ${v}`)
+}
+
+function entrypoint() -> nothing {
+  caller()
+}

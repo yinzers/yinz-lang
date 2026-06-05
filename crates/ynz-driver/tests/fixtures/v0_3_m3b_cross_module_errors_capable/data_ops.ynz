@@ -1,0 +1,9 @@
+// Cross-module errors-capable suspending function.
+// Danger case (b): the importer's Pass 0.25 must forward-declare this with the
+// {i64, i64} return ABI (errors_result_type), not the ptr fallback.
+// Expected: fetchData() returns 42 on the success path.
+
+export function fetchData() -> int errors {
+  sleep(10)
+  return 42
+}

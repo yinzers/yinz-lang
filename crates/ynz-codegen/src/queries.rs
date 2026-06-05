@@ -39,6 +39,11 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
     // Pass check.suspends_set (from may_block::analyze via check_query) directly to
     // emit_artifact so codegen reads the TRANSITIVE suspends flags, not the pre-analysis
     // sig_table (which has suspends=false for all fns — the Phase-7 seam fix).
+    //
+    // Pass imported_fns so emit_artifact can forward-declare cross-module functions as
+    // LLVM external declarations — without these, calls to imported functions fail with
+    // "function not found in module" during codegen (the linker would resolve them, but
+    // LLVM's verifier needs them declared before it will emit a reference).
     match emit_artifact(
         source_path.as_str(),
         &check.typed_module,
@@ -49,6 +54,7 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
         None,
         &sig_output.imported_options,
         &check.suspends_set,
+        &sig_output.imported_fns,
     ) {
         Ok(artifact) => Arc::new(CodegenOutput {
             artifact,

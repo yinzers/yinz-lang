@@ -1676,31 +1676,23 @@ fn v03_m3a_inferred_suspension_local_crossing_compiles_and_runs() {
 // ── v0.3-M2 Phase 6: transitive may-block analysis ────────────────────────────
 
 #[test]
-fn v03_m2_cant_infer_cross_module_exits_nonzero_with_teaching_error() {
-    // WHY: a suspending function calling a cross-module callee must exit 1 and emit the
-    // WHAT/WHAT-INSTEAD/WHY can't-infer teaching error. Guards regressions where the
-    // can't-infer check is dropped or gated too narrowly (e.g., gated on
-    // `current_fn_suspends` which misses the sole-suspension case).
+fn v03_m2_cross_module_non_suspending_exits_zero_and_prints() {
+    // WHY: a non-suspending cross-module callee must be accepted (exit 0, run correctly).
+    // The compiler propagates `suspends` flags across module boundaries via check_query.
+    // A regression that reintroduces an all-cross-module-calls-rejected guard would cause
+    // this fixture to exit non-zero.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m2_cant_infer_cross_module"));
-    assert_ne!(
+    assert_eq!(
         code, 0,
-        "cross-module cant-infer must exit non-zero; stderr:\n{stderr}"
+        "non-suspending cross-module call must compile and run; stderr:\n{stderr}"
     );
     assert!(
-        stdout.is_empty(),
-        "no output must be produced on compile error; stdout:\n{stdout}"
+        stdout.contains("remote op"),
+        "must print the output from the cross-module callee; stdout:\n{stdout}"
     );
     assert!(
-        stderr.contains("Can't determine"),
-        "error must contain the can't-infer WHAT text; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("cross-module"),
-        "error must mention cross-module boundary; stderr:\n{stderr}"
-    );
-    assert!(
-        !stderr.contains("Machine-code generation failed"),
-        "must be a clean typeck error, not a backend crash; stderr:\n{stderr}"
+        stderr.is_empty(),
+        "no errors expected for non-suspending cross-module call; stderr:\n{stderr}"
     );
 }
 
@@ -1766,6 +1758,221 @@ fn v03_m2_pure_cpu_not_state_machine_exits_zero() {
         stdout.trim(),
         "result: 42",
         "pure-CPU fixture must print 'result: 42'; got: {stdout}"
+    );
+}
+
+// ── v0.3-M3b P1: cross-module suspends propagation ───────────────────────────
+//
+// M3e universal-reject: ALL calls to imported suspending functions now loud-reject
+// (exit 1 + WHAT/WHAT-INSTEAD/WHY diagnostic). The predictive `composed_frame_simple`
+// guard escaped 5 times — a guard that allows nothing cannot be wrong.
+// M3e (cross-module frame-layout serialization) will lift this universal reject
+// and make all these cases compile + run correctly.
+
+#[test]
+fn v03_m3b_cross_module_suspending_caller_exits_one_clean_reject() {
+    // WHY: under the M3e universal reject, ANY call to an imported suspending function
+    // emits a WHAT/WHAT-INSTEAD/WHY compile error (exit 1) rather than silently running
+    // or silently crashing. This was previously "working" under the predictive
+    // composed_frame_simple guard, but that guard escaped 5 times — the universal reject
+    // is the provably sound floor. M3e will restore correct execution.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_cross_module_suspending_caller"));
+    assert_eq!(
+        code, 1,
+        "cross-module suspending caller must exit 1 (universal reject); exit was {code}; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no program output expected from a compile error; stdout:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("module boundary"),
+        "stderr must contain module boundary diagnostic; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("SIGILL") && !stderr.contains("illegal instruction"),
+        "stderr must not contain crash signal text; stderr:\n{stderr}"
+    );
+}
+
+// ── v0.3-M3b fix round: cross-module codegen cases — all now loud-reject ─────
+
+#[test]
+fn v03_m3b_cross_module_int_return_exits_one_clean_reject() {
+    // WHY: cross-module suspending call with `-> int` return. Under the M3e universal
+    // reject this is a clean compile error (exit 1), not a live run. Previously
+    // "working" via the predictive guard; that guard escaped 5 times. M3e restores.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_cross_module_int_return"));
+    assert_eq!(
+        code, 1,
+        "cross-module int return must exit 1 (universal reject); exit was {code}; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no program output expected from a compile error; stdout:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("module boundary"),
+        "stderr must contain module boundary diagnostic; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3b_cross_module_errors_capable_exits_one_clean_reject() {
+    // WHY: cross-module suspending call with `-> T errors` return. Universal reject
+    // (exit 1 + diagnostic). Previously "working" via the predictive guard; that
+    // guard escaped 5 times. M3e restores correct execution for all return types.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_cross_module_errors_capable"));
+    assert_eq!(
+        code, 1,
+        "cross-module errors-capable return must exit 1 (universal reject); exit was {code}; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no program output expected from a compile error; stdout:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("module boundary"),
+        "stderr must contain module boundary diagnostic; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3b_transitive_suspend_exits_one_clean_reject() {
+    // WHY: transitive suspension through a non-exported inner function is a cross-module
+    // suspending call. Universal reject (exit 1 + diagnostic). Previously "working" via
+    // the predictive guard; that guard escaped 5 times. M3e restores.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_transitive_suspend"));
+    assert_eq!(
+        code, 1,
+        "transitive suspend must exit 1 (universal reject); exit was {code}; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no program output expected from a compile error; stdout:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("module boundary"),
+        "stderr must contain module boundary diagnostic; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3b_crossing_local_cross_module_exits_one_clean_reject() {
+    // WHY: a crossing local across a cross-module suspending call. Universal reject
+    // (exit 1 + diagnostic). Previously "working" via the predictive guard; that
+    // guard escaped 5 times. M3e restores correct execution including crossing locals.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_crossing_local_cross_module"));
+    assert_eq!(
+        code, 1,
+        "crossing local cross-module must exit 1 (universal reject); exit was {code}; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no program output expected from a compile error; stdout:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("module boundary"),
+        "stderr must contain module boundary diagnostic; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3b_circular_import_exits_one_clean_diagnostic() {
+    // WHY: A↔B circular import must produce a clean WHAT/WHAT-INSTEAD/WHY diagnostic
+    // (exit 1) rather than a salsa "dependency graph cycle" ICE (exit 2). The salsa
+    // cycle_fn/cycle_initial recovery on module_signatures_query and check_query converts
+    // the infinite dependency chain into a graceful compiler error.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_circular_import"));
+    assert_eq!(
+        code, 1,
+        "circular import must exit 1 (compiler error); exit code was {code}; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no program output expected from a compile error; stdout:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("Circular import"),
+        "stderr must contain 'Circular import' diagnostic; stderr:\n{stderr}"
+    );
+}
+
+// ── v0.3-M3b loud-reject guard: combos that silently crash without the guard ──
+
+#[test]
+fn v03_m3b_loud_reject_reexport_exits_one_clean_diagnostic() {
+    // WHY: a 3-module re-export chain (a_ops exports innerSleep; b_ops imports
+    // innerSleep and exports doWork; entrypoint imports doWork) is one of the three
+    // combos the scalar composed_frame_size cannot safely reconstruct. Without the
+    // M3e guard this produces a SIGILL (exit 132), not a clean error. The guard must
+    // emit a WHAT/WHAT-INSTEAD/WHY diagnostic and exit 1 — not crash the binary.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_loud_reject_reexport"));
+    assert_eq!(
+        code, 1,
+        "loud-reject reexport must exit 1 (compile error); exit code was {code}; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no program output expected from a compile error; stdout:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("module boundary"),
+        "stderr must contain module boundary diagnostic; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("SIGILL") && !stderr.contains("illegal instruction"),
+        "stderr must not contain crash signal text; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3b_loud_reject_shape_crossing_exits_one_clean_diagnostic() {
+    // WHY: a cross-module suspending export with a shape-typed crossing local is the
+    // second unsupported combo. LLVM ABI sizes for shapes may differ from the typeck
+    // field-count approximation, causing silent memory corruption. The guard must
+    // produce a clean compile error (exit 1), not a SIGILL (exit 132).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_loud_reject_shape_crossing"));
+    assert_eq!(
+        code, 1,
+        "loud-reject shape crossing must exit 1 (compile error); exit code was {code}; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no program output expected from a compile error; stdout:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("module boundary"),
+        "stderr must contain module boundary diagnostic; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3b_loud_reject_ec_transitive_exits_one_clean_diagnostic() {
+    // WHY: an errors-capable export that suspends transitively (via an inner
+    // non-exported function that calls sleep) is the third unsupported combo. The EC
+    // staging slot + child sub-frame interact in ways the scalar approach cannot
+    // reconstruct. The guard must produce a clean compile error (exit 1), not crash.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_loud_reject_ec_transitive"));
+    assert_eq!(
+        code, 1,
+        "loud-reject ec-transitive must exit 1 (compile error); exit code was {code}; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no program output expected from a compile error; stdout:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("module boundary"),
+        "stderr must contain module boundary diagnostic; stderr:\n{stderr}"
     );
 }
 

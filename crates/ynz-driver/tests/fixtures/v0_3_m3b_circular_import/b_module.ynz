@@ -1,0 +1,6 @@
+// Part of circular import chain: b_module imports a_module back.
+import { aFunc } from `a_module`
+
+export function bFunc() -> nothing {
+  print(`b`)
+}

@@ -1,0 +1,15 @@
+// Loud-reject case (b): exported suspending function with a shape crossing-local.
+// The shape-typed local `item` crosses the sleep() suspension boundary.
+// LLVM ABI sizes for shapes may differ from the typeck field-count approximation,
+// so the importer cannot safely reconstruct the frame layout from the scalar size.
+
+shape Item {
+  x: int
+  y: int
+}
+
+export function processItem() -> nothing {
+  let item: Item = { x: 1, y: 2 }
+  sleep(10)
+  print(`${item.x}`)
+}

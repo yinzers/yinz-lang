@@ -1,0 +1,8 @@
+// Loud-reject case (b): caller of a cross-module suspending function that has
+// a shape-typed crossing local. Must produce a clean compile error (exit 1),
+// NOT a silent abort.
+import { processItem } from `shape_ops`
+
+function entrypoint() -> nothing {
+  processItem()
+}

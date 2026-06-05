@@ -145,6 +145,14 @@ fn empty_frame_layouts() -> &'static HashMap<String, FrameLayout> {
     EMPTY_FRAME_LAYOUTS.get_or_init(HashMap::new)
 }
 
+static EMPTY_IMPORTED_FNS: std::sync::OnceLock<
+    std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+> = std::sync::OnceLock::new();
+fn empty_imported_fns(
+) -> &'static std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig> {
+    EMPTY_IMPORTED_FNS.get_or_init(std::collections::HashMap::new)
+}
+
 /// Build the `WaitCache` for all non-generic functions in the module.
 ///
 /// Generic functions are excluded because their concrete instantiations are lowered
@@ -232,6 +240,7 @@ fn build_frame_layouts(
     typed: &TypedModule,
     suspend_set: &SuspendSet,
     shape_abi_sizes: &HashMap<String, u64>,
+    imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
 ) -> HashMap<String, FrameLayout> {
     // Step 1: collect direct suspending callees for each suspending fn.
     let mut direct_children: HashMap<String, Vec<String>> = HashMap::new();
@@ -258,6 +267,28 @@ fn build_frame_layouts(
             &mut sizes,
             &mut visiting,
         );
+    }
+
+    // Imported suspending functions are in suspend_set but never entered direct_children
+    // (they're not local functions), so compute_frame_size never runs for them and sizes
+    // has no entry. Without an entry, the step-4 layout builder classifies them as
+    // recursion edges (heap-pointer-slot) — causing SSA dominance violations.
+    //
+    // Use `composed_frame_size` from the imported FunctionSig when available — that value
+    // was computed by `load_export_table` in typeck and carries the real sub-frame size
+    // (header + own locals + child sub-frames of the callee). This fixes the transitive-
+    // suspend SIGILL where a local function embeds an imported suspending callee's sub-frame
+    // at offset 32 (FRAME_HEADER_SIZE) but the callee's real frame is larger.
+    //
+    // Fall back to FRAME_HEADER_SIZE only for unknown imported callees (future-proofing).
+    for name in suspend_set.iter() {
+        sizes.entry(name.clone()).or_insert_with(|| {
+            imported_fns
+                .get(name.as_str())
+                .filter(|sig| sig.composed_frame_size > 0)
+                .map(|sig| sig.composed_frame_size)
+                .unwrap_or(state_machine::FRAME_HEADER_SIZE)
+        });
     }
 
     // Step 4: build FrameLayout for each fn using the computed sizes.
@@ -614,6 +645,7 @@ pub fn emit_artifact(
     target_triple: Option<&str>,
     imported_options: &std::collections::HashMap<String, ynz_typeck::options_table::OptionsEntry>,
     suspends_set_arg: &HashSet<String>,
+    imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
 ) -> Result<CompiledArtifact, String> {
     Target::initialize_x86(&InitializationConfig::default());
 
@@ -657,6 +689,7 @@ pub fn emit_artifact(
         mono_table,
         imported_options,
         &suspend_set,
+        imported_fns,
     )?;
 
     module
@@ -694,11 +727,12 @@ struct ModuleGlobals<'ctx> {
 
 /// Emit LLVM IR for one Yinz source module.
 ///
-/// # Flow (5 passes — order is mandatory)
+/// # Flow (6 passes — order is mandatory)
 ///
 /// | Pass | What | Requires from prior passes |
 /// |------|------|---------------------------|
 /// | 0 | Emit LLVM struct types for all user-defined shapes | nothing |
+/// | 0.25 | Forward-declare imported (cross-module) functions as external LLVM declarations | Pass 0 (shape types for param/return type mapping) |
 /// | 1 | Forward-declare every non-generic function | Pass 0 (shape types used in param/return types) |
 /// | 1.5 | Forward-declare monomorphized generic functions | Pass 0 + Pass 1 (non-generic functions may be called from generic bodies) |
 /// | 1.6 | Emit vtable globals for `dynamic Foo` dispatch | Pass 1 (vtable entries point to forward-declared function values) |
@@ -718,6 +752,7 @@ fn build_module<'ctx, 'g>(
     mono_table: &'g MonomorphizationTable,
     imported_options: &std::collections::HashMap<String, ynz_typeck::options_table::OptionsEntry>,
     suspend_set: &'g SuspendSet,
+    imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
 ) -> Result<(), String> {
     let rt = RuntimeDecls::declare(ctx, module);
 
@@ -757,6 +792,59 @@ fn build_module<'ctx, 'g>(
     // Pass 0 — emit LLVM struct types for all user-defined shapes.
     let shape_types = emit_shape_types(ctx, shape_table);
 
+    // Pass 0.25 — forward-declare imported (cross-module) functions as LLVM external declarations.
+    //
+    // Each imported function lives in another translation unit (another .o file). The linker
+    // resolves the reference at link time. Without this pass, `get_function(name)` in Pass 2
+    // returns None for cross-module calls, producing a codegen error.
+    //
+    // For suspending imported functions: the SM inline-poll mechanism calls the callee's
+    // RESUME FUNCTION (`ynz_sm_<name>_resume`), not the outer wrapper. Both declarations
+    // are emitted here — the wrapper for non-SM callers, the resume fn for SM callers.
+    for (name, sig) in imported_fns {
+        if module.get_function(name.as_str()).is_none() {
+            let ptr = ctx.ptr_type(AddressSpace::default());
+            let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = sig
+                .params
+                .iter()
+                .map(|(_, ty)| match ty {
+                    Type::Int => ctx.i64_type().into(),
+                    Type::Float => ctx.f64_type().into(),
+                    Type::Bool => ctx.bool_type().into(),
+                    Type::Number { precision } if *precision <= 34 => ctx.i128_type().into(),
+                    _ => ptr.into(),
+                })
+                .collect();
+            let fn_ty = match &sig.ret {
+                Type::Nothing => ctx.void_type().fn_type(&param_types, false),
+                Type::Int => ctx.i64_type().fn_type(&param_types, false),
+                Type::Float => ctx.f64_type().fn_type(&param_types, false),
+                Type::Bool => ctx.bool_type().fn_type(&param_types, false),
+                Type::Number { precision } if *precision <= 34 => {
+                    ctx.i128_type().fn_type(&param_types, false)
+                }
+                // Errors-capable functions return `{i64, i64}` — the same ABI as the
+                // errors_result_type struct. Using ptr here produces an ABI mismatch:
+                // the importer reads an i64 where the callee returns a {i64,i64} struct,
+                // silently returning 0 instead of the real value.
+                Type::ErrorsCapable { .. } => errors_result_type(ctx).fn_type(&param_types, false),
+                _ => ptr.fn_type(&param_types, false),
+            };
+            module.add_function(name.as_str(), fn_ty, None);
+        }
+
+        // For suspending imported functions, also declare the resume function.
+        // SM callers call `ynz_sm_<name>_resume` for inline poll-yield rather than
+        // the wrapper — without this declaration, `emit_suspending_call` panics with
+        // "resume fn not declared".
+        if sig.suspends {
+            let resume_name = state_machine::resume_fn_name(name.as_str());
+            if module.get_function(&resume_name).is_none() {
+                state_machine::declare_resume_fn(ctx, module, &resume_name);
+            }
+        }
+    }
+
     // Compute ABI byte sizes for shapes using LLVM TargetData (the authoritative layout
     // source, same as the memcpy size used in lower_function_with_waits). Stored as a
     // plain HashMap<name, bytes> so frame-layout computation (no LLVM context) and codegen
@@ -781,14 +869,36 @@ fn build_module<'ctx, 'g>(
             .collect()
     };
 
+    // Extend the suspend_set to include imported functions that are suspending.
+    //
+    // `suspend_set` from check_query contains only LOCAL function names (the
+    // may-block fixpoint runs on this module's body). Call-site routing in
+    // `is_direct_suspending_call` and frame-layout child collection both consult
+    // this set. Without importing names here:
+    //
+    // 1. `build_frame_layouts` won't embed child sub-frames for cross-module
+    //    suspending callees, causing heap-boxed fallback paths with SSA dominator bugs.
+    // 2. `is_direct_suspending_call` won't route calls to imported suspending fns
+    //    through inline poll-yield, instead calling the SM wrapper directly — which
+    //    panics ("Cannot start a runtime from within a runtime") inside a resume body.
+    let mut effective_suspend_set = suspend_set.clone();
+    for (name, sig) in imported_fns {
+        if sig.suspends {
+            effective_suspend_set.insert(name.clone());
+        }
+    }
+    let suspend_set = &effective_suspend_set;
+
     // Pass 0.5 — build the wait cache (kept for backward-compat with generic lowering +
     // background routing) AND compute frame layouts for all suspending functions.
     //
     // The wait_cache still serves the local-syntactic check used by non-SM call sites.
     // frame_layouts encodes the composed structure (embedded child sub-frames) used by
     // lower_function_with_waits to allocate ONE frame per task tree.
+    // Uses the extended suspend_set so cross-module suspending callees are included
+    // as embedded children (not heap-boxed recursion edges).
     let wait_cache = build_wait_cache(typed);
-    let frame_layouts = build_frame_layouts(typed, suspend_set, &shape_abi_sizes);
+    let frame_layouts = build_frame_layouts(typed, suspend_set, &shape_abi_sizes, imported_fns);
 
     // Pass 0.6 — forward-declare resume functions for ALL SUSPENDING functions.
     // Phase 7: use suspend_set (transitive) instead of wait_cache (local) so fns that
@@ -859,6 +969,7 @@ fn build_module<'ctx, 'g>(
                 &wait_cache,
                 suspend_set,
                 &frame_layouts,
+                imported_fns,
             )?,
             Item::Function(_)
             | Item::ShapeDecl(_)
@@ -1038,6 +1149,7 @@ fn lower_generic_function<'ctx>(
         wait_cache: empty_wait_cache(),
         suspend_set: empty_suspend_set(),
         frame_layouts: empty_frame_layouts(),
+        imported_fns: empty_imported_fns(),
         sm_frame_ptr: None,
         sm_yinz_ret_ty: None,
         sm_crossing_names: None,
@@ -1262,6 +1374,9 @@ struct Cg<'ctx, 'g> {
     suspend_set: &'g SuspendSet,
     // v0.3-M2 P7: composed-frame layouts for all suspending functions.
     frame_layouts: &'g HashMap<String, FrameLayout>,
+    // v0.3-M3b: imported function signatures — needed so helpers that look up
+    // callee return types and errors-capable flags can find cross-module callees.
+    imported_fns: &'g std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
     // v0.3-M2 P7: when non-None, this Cg is inside a state-machine resume function.
     // The frame pointer and Yinz return type are needed so Stmt::Return stores the
     // typed value in frame[FRAME_OFFSET_RETURN_SLOT] and returns `i32 0` (Ready)
@@ -1632,6 +1747,7 @@ fn lower_function<'ctx, 'g>(
     wait_cache: &'g WaitCache,
     suspend_set: &'g SuspendSet,
     frame_layouts: &'g HashMap<String, FrameLayout>,
+    imported_fns: &'g std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
 ) -> Result<(), String> {
     // v0.3-M2 P7 path selection: functions in the transitive suspend_set get the
     // state-machine path. Uses suspend_set (from typeck FunctionSig.suspends) instead
@@ -1653,6 +1769,7 @@ fn lower_function<'ctx, 'g>(
             wait_cache,
             suspend_set,
             frame_layouts,
+            imported_fns,
         );
     }
 
@@ -1692,6 +1809,7 @@ fn lower_function<'ctx, 'g>(
         wait_cache,
         suspend_set,
         frame_layouts,
+        imported_fns,
         sm_frame_ptr: None,
         sm_yinz_ret_ty: None,
         sm_crossing_names: None,
@@ -1857,6 +1975,7 @@ fn lower_function_with_waits<'ctx, 'g>(
     wait_cache: &'g WaitCache,
     suspend_set: &'g SuspendSet,
     frame_layouts: &'g HashMap<String, FrameLayout>,
+    imported_fns: &'g std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
 ) -> Result<(), String> {
     // Collect the names of parameters. ALL parameters are live across any wait.
     let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
@@ -1992,6 +2111,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         wait_cache,
         suspend_set,
         frame_layouts,
+        imported_fns,
         sm_frame_ptr: Some(frame_param),
         sm_yinz_ret_ty: Some(yinz_ret_ty.clone()),
         sm_crossing_names: Some(crossing_names.clone()),
@@ -4675,15 +4795,22 @@ fn load_sm_return_value_typed<'ctx>(
     callee_name: &str,
     tag: &str,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
-    // Look up the callee's declared return type.
-    let callee_ret_ty = cg.typed.module.items.iter().find_map(|item| {
-        if let ynz_ast::nodes::Item::Function(f) = item {
-            if f.name == callee_name {
-                return Some(ast_type_to_typeck_type(&f.return_type, cg.shape_table));
+    // Look up the callee's declared return type — check local items first, then
+    // imported functions for cross-module callees.
+    let callee_ret_ty = cg
+        .typed
+        .module
+        .items
+        .iter()
+        .find_map(|item| {
+            if let ynz_ast::nodes::Item::Function(f) = item {
+                if f.name == callee_name {
+                    return Some(ast_type_to_typeck_type(&f.return_type, cg.shape_table));
+                }
             }
-        }
-        None
-    });
+            None
+        })
+        .or_else(|| cg.imported_fns.get(callee_name).map(|sig| sig.ret.clone()));
 
     match callee_ret_ty {
         Some(Type::Float) => {
@@ -5469,7 +5596,7 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
     // For float/number callees: load the typed value from the return slot using the
     // appropriate helper (the slot stores f64-as-i64 for float, full i128 for number).
     // For all other non-errors callees: load the i64 from the return slot.
-    if is_errors_capable_fn(cg.typed, &callee_name) {
+    if is_errors_capable_fn(cg.typed, cg.imported_fns, &callee_name) {
         let (err_i64, ok_i64) =
             state_machine::load_return_value_errors(ctx, &cg.builder, child_frame_post)?;
         let struct_ty = errors_result_type(ctx);
@@ -5718,7 +5845,7 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
             child_frame
         };
 
-    let ret_val = if is_errors_capable_fn(cg.typed, callee_name) {
+    let ret_val = if is_errors_capable_fn(cg.typed, cg.imported_fns, callee_name) {
         let (err_i64, ok_i64) =
             state_machine::load_return_value_errors(ctx, &cg.builder, rec_frame_post)?;
         let struct_ty = errors_result_type(ctx);
@@ -8177,7 +8304,7 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         .map_err(|e| format!("call {effective_name}: {e}"))?;
 
                     // M7 P4a: if callee is errors-capable, handle the {i64, i64} result.
-                    let callee_is_ec = is_errors_capable_fn(cg.typed, &effective_name);
+                    let callee_is_ec = is_errors_capable_fn(cg.typed, cg.imported_fns, &effective_name);
                     if callee_is_ec {
                         let result_struct = call_site
                             .try_as_basic_value()
@@ -11376,15 +11503,29 @@ fn lower_maybe_method<'ctx>(
 
 // ── M7 P4a: errors-capable helpers ───────────────────────────────────────────
 
-/// True when the named function in `typed_module` has `errors_capable = true`.
-fn is_errors_capable_fn(typed: &TypedModule, fn_name: &str) -> bool {
-    typed.module.items.iter().any(|item| {
+/// True when the named function has `errors_capable = true`, checking both local
+/// module items and the imported function table for cross-module callees.
+fn is_errors_capable_fn(
+    typed: &TypedModule,
+    imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+    fn_name: &str,
+) -> bool {
+    // Check local functions first.
+    let local = typed.module.items.iter().any(|item| {
         if let ynz_ast::nodes::Item::Function(f) = item {
             f.name == fn_name && f.errors_capable
         } else {
             false
         }
-    })
+    });
+    if local {
+        return true;
+    }
+    // Check imported functions: ErrorsCapable return type means the function is
+    // errors-capable even when the importer's AST has no FunctionDecl for it.
+    imported_fns
+        .get(fn_name)
+        .map_or(false, |sig| matches!(sig.ret, ynz_typeck::types::Type::ErrorsCapable { .. }))
 }
 
 /// Emit auto-propagation for an errors-capable result struct.

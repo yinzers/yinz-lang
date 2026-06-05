@@ -1,0 +1,6 @@
+// Loud-reject case (a): first module in a 3-module re-export chain.
+// innerSleep suspends directly via sleep.
+
+export function innerSleep() -> nothing {
+  sleep(10)
+}

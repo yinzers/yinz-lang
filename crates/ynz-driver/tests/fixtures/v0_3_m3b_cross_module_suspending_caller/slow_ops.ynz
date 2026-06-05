@@ -1,0 +1,8 @@
+// Module that exports a suspending function.
+// v0.3-M3b P1: `slow` reaches sleep, so its suspends flag is true.
+// The importer's may-block analysis seeds from this flag.
+
+export function slow() -> nothing {
+  sleep(10)
+  print(`slow done`)
+}

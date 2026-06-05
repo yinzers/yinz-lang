@@ -7,16 +7,18 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use ynz_ast::nodes::{ImportDecl, ImportItem, ImportKind};
+use ynz_ast::nodes::{FunctionDecl, ImportDecl, ImportItem, ImportKind, Item};
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 use ynz_parser::{parse_query, SourceFileRegistry};
 
 use crate::{
+    check::crossing_local_names,
     exports::{collect_exports, ExportTable},
     options_table::{collect_options, OptionsEntry},
-    queries::module_signatures_query,
-    shapes::ShapeDef,
+    queries::{check_query, module_signatures_query},
+    shapes::{ShapeDef, ShapeTable},
     signatures::FunctionSig,
+    types::Type,
 };
 
 /// Result of resolving a single `import { ... } from "path"` declaration.
@@ -314,6 +316,313 @@ fn bind_named_import(
     }
 }
 
+/// Estimate the number of 8-byte frame slots needed to store one value of `ty`
+/// in a suspending function's composed frame, using only typeck type information.
+///
+/// The LLVM ABI-precise byte count (from `TargetData::get_abi_size`) is unavailable
+/// at typeck time. This approximation is conservative: it matches or slightly exceeds
+/// the real count, so the frame allocated is the same size or slightly larger —
+/// never smaller — than what codegen computes. An over-estimated frame is safe;
+/// an under-estimated one would cause out-of-bounds writes.
+///
+/// Rules (mirrors `shape_frame_slots` + `crossing_local_total_slots` in emit.rs):
+/// - `Number { precision ≤ 34 }` (decimal128): 2 slots (16 bytes)
+/// - `ErrorsCapable { .. }`: 2 slots (two i64 fields)
+/// - `Shape { name }`: recursively count field slots from ShapeTable; fallback = 1
+/// - All other types (int, bool, float, string, ptr-family): 1 slot (8 bytes)
+fn typeck_type_frame_slots(ty: &Type, shape_table: &ShapeTable) -> usize {
+    match ty {
+        Type::Number { precision } if *precision <= 34 => 2,
+        Type::ErrorsCapable { .. } => 2,
+        Type::Shape { name } => {
+            let bytes = match shape_table.get(name) {
+                Some(def) => {
+                    let field_bytes: u64 = def
+                        .fields
+                        .iter()
+                        .map(|f| typeck_type_frame_slots(&f.ty, shape_table) as u64 * 8)
+                        .sum();
+                    field_bytes.max(8) // at minimum 8 bytes (one slot)
+                }
+                None => 8, // unknown shape: 1 slot fallback
+            };
+            bytes.div_ceil(8) as usize
+        }
+        _ => 1,
+    }
+}
+
+/// Compute the total composed frame size (bytes) for a suspending exported function.
+///
+/// This is a LOSSY APPROXIMATION of `build_frame_layouts` in emit.rs. It reimplements
+/// the frame-layout arithmetic using typeck-derived shape sizes rather than the LLVM
+/// TargetData ABI sizes the codegen pass uses. The result is conservative (≥ real
+/// codegen value) for scalar types, but breaks down for three known combos:
+///
+/// 1. Re-export / multi-level transitive suspension (3-module chain): the approximation
+///    for the middle module's frame cannot be reconstructed at the outer boundary.
+/// 2. Shape-typed crossing locals: LLVM ABI sizes differ from the typeck field-count
+///    approximation for shapes with non-8-byte fields or alignment padding.
+/// 3. Errors-capable export with transitive child sub-frames: the EC staging slot
+///    interacts with child offsets in ways the scalar formula cannot reproduce.
+///
+/// These three combos are caught at import-resolution time by `is_composed_frame_simple`
+/// and rejected with a clean diagnostic (exit 1) rather than silently emitting a
+/// wrong-sized sub-frame that causes SIGILL or memory corruption at runtime.
+///
+/// M3e (v0.3-M3e: see design/future/cross-module-frame-serialization.md) replaces this
+/// function by serializing the full FrameLayout into the export table, making the guard
+/// unnecessary and all three combos correctly embeddable at import sites.
+fn compute_composed_frame_size(
+    fn_decl: &FunctionDecl,
+    all_items: &[ynz_ast::nodes::Item],
+    suspends_set: &HashSet<String>,
+    shape_table: &ShapeTable,
+    expr_types: &std::collections::HashMap<(usize, usize), Type>,
+    visited: &mut HashSet<String>,
+    memo: &mut std::collections::HashMap<String, u64>,
+) -> u64 {
+    // Frame header is always 32 bytes.
+    const FRAME_HEADER_SIZE: u64 = 32;
+
+    if let Some(&cached) = memo.get(&fn_decl.name) {
+        return cached;
+    }
+    // Cycle guard: if we're currently computing this function's size, return
+    // FRAME_HEADER_SIZE as a placeholder (the cycle will resolve on unwind).
+    if !visited.insert(fn_decl.name.clone()) {
+        return FRAME_HEADER_SIZE;
+    }
+
+    // Compute crossing locals.
+    let param_names: Vec<&str> = fn_decl.params.iter().map(|p| p.name.as_str()).collect();
+    let suspending_refs: HashSet<&str> = suspends_set.iter().map(|s| s.as_str()).collect();
+    let crossings = crossing_local_names(
+        &fn_decl.body.stmts,
+        &param_names,
+        &suspending_refs,
+        expr_types,
+    );
+
+    // Count slots: params (1 slot each) + crossing locals (type-dependent).
+    let n_params = fn_decl.params.len();
+    let crossing_slots: usize = crossings
+        .iter()
+        .map(|cname| {
+            // Look up the binding's typeck type via expr_types. Walking the AST stmts
+            // to find the let binding's expr span is expensive; use the conservative
+            // fallback (1 slot) unless the name appears in expr_types as a Number type
+            // or ErrorsCapable type. Shapes are approximated by ShapeTable field count.
+            // Exact correctness is not required — only the conservative (≥ real) property.
+            let ty = find_let_typeck_type(
+                &fn_decl.body.stmts,
+                cname.as_str(),
+                expr_types,
+                shape_table,
+            );
+            typeck_type_frame_slots(&ty, shape_table)
+        })
+        .sum();
+
+    let n_locals = n_params + crossing_slots;
+    let own_base = FRAME_HEADER_SIZE + (n_locals as u64) * 8;
+
+    // Optional 16-byte staging slot for `-> number errors` functions.
+    let staging_extra: u64 = if matches!(fn_decl.return_type, ynz_ast::nodes::Type::Number { .. })
+        && fn_decl.errors_capable
+    {
+        16
+    } else {
+        0
+    };
+
+    let children_start = own_base + staging_extra;
+
+    // Collect direct suspending callees, then sum their composed frame sizes.
+    let callee_names = collect_direct_suspending_callees(&fn_decl.body.stmts, suspends_set);
+    let mut cursor = children_start;
+    for callee_name in &callee_names {
+        // Skip self-recursion (infinite loop guard) and already-visited nodes.
+        if callee_name == &fn_decl.name {
+            continue;
+        }
+        // Find the callee FunctionDecl in the module items.
+        let callee_decl = all_items.iter().find_map(|item| {
+            if let Item::Function(f) = item {
+                if f.name == *callee_name && suspends_set.contains(f.name.as_str()) {
+                    return Some(f);
+                }
+            }
+            None
+        });
+        if let Some(callee) = callee_decl {
+            let child_size = compute_composed_frame_size(
+                callee,
+                all_items,
+                suspends_set,
+                shape_table,
+                expr_types,
+                visited,
+                memo,
+            );
+            cursor += child_size;
+        }
+        // Imported callee (not in all_items): its composed_frame_size was set when
+        // WE were loaded as an export. At this point the imported callee's check_query
+        // already ran; we don't recurse into foreign modules here — the importer's
+        // build_frame_layouts uses sig.composed_frame_size for those.
+        // Skip: use FRAME_HEADER_SIZE placeholder for unknown callees (same as the
+        // old codegen behaviour before this fix — at minimum we handle the local callees).
+    }
+
+    let total = cursor;
+    memo.insert(fn_decl.name.clone(), total);
+    visited.remove(&fn_decl.name);
+    total
+}
+
+/// Walk expression AST to collect names of directly-called suspending functions.
+/// Deduplicates by name (same callee called twice → one child sub-frame).
+fn collect_direct_suspending_callees(
+    stmts: &[ynz_ast::nodes::Stmt],
+    suspends_set: &HashSet<String>,
+) -> Vec<String> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<String> = Vec::new();
+    for stmt in stmts {
+        collect_callees_in_stmt(stmt, suspends_set, &mut seen, &mut out);
+    }
+    out
+}
+
+fn collect_callees_in_stmt(
+    stmt: &ynz_ast::nodes::Stmt,
+    suspends_set: &HashSet<String>,
+    seen: &mut HashSet<String>,
+    out: &mut Vec<String>,
+) {
+    use ynz_ast::nodes::Stmt;
+    match stmt {
+        Stmt::Expr(value) => {
+            collect_callees_in_expr(value, suspends_set, seen, out);
+        }
+        Stmt::Let { value, .. } => {
+            collect_callees_in_expr(value, suspends_set, seen, out);
+        }
+        Stmt::Return { value: Some(e), .. } => {
+            collect_callees_in_expr(e, suspends_set, seen, out);
+        }
+        Stmt::Return { value: None, .. } => {}
+        Stmt::Assign { value, .. } => collect_callees_in_expr(value, suspends_set, seen, out),
+        Stmt::FieldAssign { target, value, .. } => {
+            collect_callees_in_expr(target, suspends_set, seen, out);
+            collect_callees_in_expr(value, suspends_set, seen, out);
+        }
+        Stmt::IndexAssign { receiver, index, value, .. } => {
+            collect_callees_in_expr(receiver, suspends_set, seen, out);
+            collect_callees_in_expr(index, suspends_set, seen, out);
+            collect_callees_in_expr(value, suspends_set, seen, out);
+        }
+        Stmt::If { cond, body, .. } => {
+            collect_callees_in_expr(cond, suspends_set, seen, out);
+            for s in &body.stmts {
+                collect_callees_in_stmt(s, suspends_set, seen, out);
+            }
+        }
+        Stmt::While { cond, body, .. } => {
+            collect_callees_in_expr(cond, suspends_set, seen, out);
+            for s in &body.stmts {
+                collect_callees_in_stmt(s, suspends_set, seen, out);
+            }
+        }
+        Stmt::For { iter, body, .. } => {
+            collect_callees_in_expr(iter, suspends_set, seen, out);
+            for s in &body.stmts {
+                collect_callees_in_stmt(s, suspends_set, seen, out);
+            }
+        }
+        Stmt::Match { scrutinee, arms, else_arm, .. } => {
+            collect_callees_in_expr(scrutinee, suspends_set, seen, out);
+            for arm in arms {
+                for s in &arm.body.stmts {
+                    collect_callees_in_stmt(s, suspends_set, seen, out);
+                }
+            }
+            if let Some(eb) = else_arm {
+                for s in &eb.stmts {
+                    collect_callees_in_stmt(s, suspends_set, seen, out);
+                }
+            }
+        }
+    }
+}
+
+fn collect_callees_in_expr(
+    expr: &ynz_ast::nodes::Expr,
+    suspends_set: &HashSet<String>,
+    seen: &mut HashSet<String>,
+    out: &mut Vec<String>,
+) {
+    use ynz_ast::nodes::Expr;
+    match expr {
+        Expr::Call(call_expr) => {
+            if let Expr::Ident(name, _) = &call_expr.callee {
+                if suspends_set.contains(name.as_str()) && seen.insert(name.clone()) {
+                    out.push(name.clone());
+                }
+            }
+            for arg in &call_expr.args {
+                collect_callees_in_expr(arg, suspends_set, seen, out);
+            }
+            collect_callees_in_expr(&call_expr.callee, suspends_set, seen, out);
+        }
+        Expr::Wait(inner, _) => collect_callees_in_expr(inner, suspends_set, seen, out),
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_callees_in_expr(lhs, suspends_set, seen, out);
+            collect_callees_in_expr(rhs, suspends_set, seen, out);
+        }
+        Expr::UnaryOp { operand, .. } => {
+            collect_callees_in_expr(operand, suspends_set, seen, out);
+        }
+        Expr::FieldAccess { receiver, .. } | Expr::PostfixOp { receiver, .. } => {
+            collect_callees_in_expr(receiver, suspends_set, seen, out);
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            collect_callees_in_expr(receiver, suspends_set, seen, out);
+            for arg in args {
+                collect_callees_in_expr(arg, suspends_set, seen, out);
+            }
+        }
+        Expr::IndexAccess { receiver, index, .. } => {
+            collect_callees_in_expr(receiver, suspends_set, seen, out);
+            collect_callees_in_expr(index, suspends_set, seen, out);
+        }
+        _ => {}
+    }
+}
+
+/// Look up a let-binding's type from stmts (shallow scan, not recursive into blocks).
+/// Returns a conservative Type::Int fallback (1 slot) if not found.
+fn find_let_typeck_type(
+    stmts: &[ynz_ast::nodes::Stmt],
+    name: &str,
+    expr_types: &std::collections::HashMap<(usize, usize), Type>,
+    _shape_table: &ShapeTable,
+) -> Type {
+    use ynz_ast::nodes::Stmt;
+    for stmt in stmts {
+        if let Stmt::Let { name: n, value, .. } = stmt {
+            if n == name {
+                let key = (value.span().start, value.span().end);
+                if let Some(ty) = expr_types.get(&key) {
+                    return ty.clone();
+                }
+            }
+        }
+    }
+    Type::Int // 1-slot conservative fallback
+}
+
 /// Load (or build) the ExportTable for a file at `resolved_path`.
 ///
 /// Looks up the SourceFile via `db.source_by_path` so salsa tracks the
@@ -355,9 +664,11 @@ fn load_export_table(
     // Mark as visiting to detect circular imports in recursive calls.
     visiting.insert(resolved_path.to_path_buf());
 
-    // Use the salsa-memoized signature query — shapes and function signatures
-    // are computed once and cached; salsa re-runs only when the source changes.
-    let sig_output = module_signatures_query(db, sf);
+    // Parse the importee FIRST (before module_signatures_query) so we can detect
+    // circular imports before salsa enters a dependency cycle. module_signatures_query
+    // recursively resolves imports — if the importee imports back a file already in
+    // `visiting`, salsa would panic with an unhandled dependency cycle. Checking the
+    // import declarations here lets us emit a clean error and return early.
     let parse = parse_query(db, sf);
 
     // Propagate parse errors as a summary diagnostic rather than re-emitting
@@ -378,6 +689,41 @@ fn load_export_table(
         return ExportTable::empty();
     }
 
+    // Scan the importee's import declarations for any path that is already in the
+    // visiting set. A match means this import chain would form a cycle: A imports B
+    // and B (directly or transitively) imports A. Salsa cannot resolve such a cycle
+    // because module_signatures_query is tracked — the second call on an in-progress
+    // query panics. Detect it here and emit a clean diagnostic.
+    for item in &parse.module.items {
+        let ynz_ast::nodes::Item::ImportDecl(decl) = item else {
+            continue;
+        };
+        let resolved_path_str = resolved_path.display().to_string();
+        let back_path = match resolve_module_path(&resolved_path_str, &decl.source) {
+            Some(p) => p,
+            None => continue,
+        };
+        if visiting.contains(&back_path) {
+            diags.push(Diagnostic::error(
+                span.clone(),
+                format!(
+                    "Circular import: \"{module_str}\" imports back into the current module chain."
+                ),
+                "Move the shared definitions to a third file that both modules can import \
+                 without creating a cycle.",
+                "Circular imports create an unresolvable dependency order — the compiler \
+                 cannot determine which module to compile first. Extract the shared types, \
+                 functions, or shapes into a new file and import that file from both modules.",
+            ));
+            visiting.remove(resolved_path);
+            return ExportTable::empty();
+        }
+    }
+
+    // Use the salsa-memoized signature query — shapes and function signatures
+    // are computed once and cached; salsa re-runs only when the source changes.
+    let sig_output = module_signatures_query(db, sf);
+
     // OptionsTable isn't part of SignatureOutput, so we collect it inline here.
     // This pass is uncached; the shape/sig tables above are memoized via the
     // tracked query, so this is the only repeated work for cross-file imports.
@@ -386,10 +732,60 @@ fn load_export_table(
 
     visiting.remove(resolved_path);
 
-    collect_exports(
+    // Build the export table using the pre-analysis sig_table for shape and options
+    // resolution, then overwrite the `suspends` flag on each exported function with
+    // the result from check_query. check_query runs the may-block fixpoint and
+    // populates `suspends_set` — that is the authoritative per-file suspension
+    // analysis. The sig_table from module_signatures_query always has suspends=false
+    // (the analysis runs later in check_query), so without this correction every
+    // imported function would appear non-suspending regardless of its body.
+    //
+    // Calling check_query here creates a salsa dependency: the importer's
+    // module_signatures_query re-runs whenever the importee's check_query result
+    // changes (e.g., the importee gains or loses a sleep call). That is the
+    // correct incremental behaviour — if A's slow() gains a sleep, B's
+    // module_signatures_query must re-run to see the updated suspends=true.
+    let check_out = check_query(db, sf);
+    let mut export_table = collect_exports(
         &parse.module,
         &sig_output.shape_table,
         &options_table,
         &sig_output.sig_table,
-    )
+    );
+    // Compute per-function frame sizes so the importing module's build_frame_layouts
+    // can embed sub-frames at the real size instead of the FRAME_HEADER_SIZE placeholder.
+    // composed_frame_size is still used by the importer's codegen (emit.rs) to size the
+    // embedded sub-frame slot — it is the only cross-module frame metadata until M3e
+    // ships full FrameLayout serialization.
+    //
+    // The typeck-side loud-reject guard (queries.rs) now universally rejects ALL calls to
+    // imported suspending functions, so the composed_frame_size value is only reached for
+    // SAME-MODULE suspending callees — the intra-module transitive case that works correctly.
+    let mut frame_size_memo: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    for (name, sig) in export_table.functions.iter_mut() {
+        sig.suspends = check_out.suspends_set.contains(name.as_str());
+        if sig.suspends {
+            // Find the FunctionDecl for this exported function.
+            if let Some(fn_decl) = parse.module.items.iter().find_map(|item| {
+                if let Item::Function(f) = item {
+                    if f.name == *name {
+                        return Some(f);
+                    }
+                }
+                None
+            }) {
+                let mut visited: HashSet<String> = HashSet::new();
+                sig.composed_frame_size = compute_composed_frame_size(
+                    fn_decl,
+                    &parse.module.items,
+                    &check_out.suspends_set,
+                    &sig_output.shape_table,
+                    &check_out.typed_module.expr_types,
+                    &mut visited,
+                    &mut frame_size_memo,
+                );
+            }
+        }
+    }
+    export_table
 }

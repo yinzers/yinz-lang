@@ -1,0 +1,10 @@
+// Loud-reject case (a): middle module in a 3-module re-export chain.
+// doWork calls innerSleep from a_ops — an imported suspending callee.
+// The scalar composed_frame_size cannot represent doWork's frame at the next
+// import boundary because b_ops doesn't carry a_ops's full FrameLayout.
+
+import { innerSleep } from `a_ops`
+
+export function doWork() -> nothing {
+  innerSleep()
+}

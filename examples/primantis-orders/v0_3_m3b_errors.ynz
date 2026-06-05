@@ -1,0 +1,94 @@
+// v0.3-M3b compile-error gallery
+//
+// M3b adds cross-module suspension codegen. Calling any imported suspending
+// function is universally rejected at compile time until M3e ships full
+// FrameLayout serialization across the export table.
+//
+// WHY the universal reject: the typeck-side frame analysis that tried to predict
+// which cross-module cases were safe proved wrong five times — number crossing-local,
+// transitive×caller-frame, and three other combos all slipped through and crashed
+// silently. A guard that rejects everything cannot miss a case.
+//
+// ALL cross-module suspending calls are CROSS-MODULE errors — they require a two- or
+// three-file project to trigger. Each class is exercised by a fixture project under
+// `crates/ynz-driver/tests/fixtures/v0_3_m3b_loud_reject_*/` and covered by
+// integration tests. This gallery file documents the error classes.
+//
+// Single-file errors added in M3b (none — all guards are cross-module):
+// There are no new single-file error classes in M3b.
+//
+// To see the universal-reject diagnostic, run any of these fixture projects:
+//   ynz run crates/ynz-driver/tests/fixtures/v0_3_m3b_cross_module_suspending_caller
+//   ynz run crates/ynz-driver/tests/fixtures/v0_3_m3b_cross_module_int_return
+//   ynz run crates/ynz-driver/tests/fixtures/v0_3_m3b_cross_module_errors_capable
+//   ynz run crates/ynz-driver/tests/fixtures/v0_3_m3b_transitive_suspend
+//   ynz run crates/ynz-driver/tests/fixtures/v0_3_m3b_crossing_local_cross_module
+//   ynz run crates/ynz-driver/tests/fixtures/v0_3_m3b_loud_reject_reexport
+//   ynz run crates/ynz-driver/tests/fixtures/v0_3_m3b_loud_reject_shape_crossing
+//   ynz run crates/ynz-driver/tests/fixtures/v0_3_m3b_loud_reject_ec_transitive
+
+// -- M3b Guard: CrossModuleImportedSuspendingCall (universal) --
+//
+// WHY: CrossModuleImportedSuspendingCall — calling any imported function that
+// suspends (directly or transitively) is rejected at compile time. The caller's
+// state machine needs the callee's full saved-state layout — exact slot positions
+// for every variable that survives a pause, plus any nested calls — to embed the
+// callee's saved-state block at the right offset. Carrying only a scalar size
+// across the module boundary cannot reconstruct that layout.
+//
+// The diagnostic emitted (WHAT / WHAT-INSTEAD / WHY):
+//
+//   WHAT: Calling `<name>` across a module boundary isn't supported yet —
+//         it (or a function it calls) suspends, and composing the caller's
+//         saved state needs the callee's exact memory layout, which isn't
+//         carried across modules yet.
+//
+//   WHAT INSTEAD: Move `<name>` into this module, or avoid suspending it
+//                 across the boundary, until v0.3-M3e ships cross-module
+//                 frame-layout serialization.
+//
+//   WHY: The caller's state machine needs the callee's full slot map — exact
+//        positions for every variable that survives a pause, plus any nested
+//        calls — to embed the callee's saved-state block at the right offset.
+//        A scalar size alone cannot reconstruct that. Calling with a wrong
+//        layout silently corrupts memory; a clean error here is the safe floor.
+//        See design/future/cross-module-frame-serialization.md for the M3e plan.
+//
+// The guard fires for ALL cross-module suspending call shapes:
+//
+//   (a) Direct export: module A exports a function that calls sleep() directly.
+//       Fixture: crates/ynz-driver/tests/fixtures/v0_3_m3b_cross_module_suspending_caller/
+//
+//   (b) Int-return export: same as (a) but the suspending function returns int.
+//       Fixture: crates/ynz-driver/tests/fixtures/v0_3_m3b_cross_module_int_return/
+//
+//   (c) Errors-capable export: the suspending function is declared `-> T errors`.
+//       Fixture: crates/ynz-driver/tests/fixtures/v0_3_m3b_cross_module_errors_capable/
+//
+//   (d) Transitive suspend: the exported function calls an inner non-exported
+//       function that suspends. The outer function is marked suspends=true
+//       transitively and is still rejected.
+//       Fixture: crates/ynz-driver/tests/fixtures/v0_3_m3b_transitive_suspend/
+//
+//   (e) Crossing local in caller: the caller has a variable that crosses a wait
+//       boundary in addition to calling the imported suspending function.
+//       Fixture: crates/ynz-driver/tests/fixtures/v0_3_m3b_crossing_local_cross_module/
+//
+//   (f) Re-export / multi-level transitive (3-module chain):
+//       Module B imports a suspending function from A and re-exports its own
+//       function that calls it. Module C imports from B.
+//       Fixture: crates/ynz-driver/tests/fixtures/v0_3_m3b_loud_reject_reexport/
+//
+//   (g) Shape-typed crossing local in the callee:
+//       The exported suspending function has a local of a shape type that
+//       crosses the suspension boundary.
+//       Fixture: crates/ynz-driver/tests/fixtures/v0_3_m3b_loud_reject_shape_crossing/
+//
+//   (h) Errors-capable export that suspends transitively:
+//       An exported `-> T errors` function calls an inner function that suspends.
+//       The EC staging slot interacts with sub-frame offsets.
+//       Fixture: crates/ynz-driver/tests/fixtures/v0_3_m3b_loud_reject_ec_transitive/
+//
+// All eight emit a WHAT/WHAT-INSTEAD/WHY diagnostic (exit 1) instead of silently
+// crashing with SIGILL (exit 132). M3e ships full FrameLayout serialization and
+// removes the universal reject (design/future/cross-module-frame-serialization.md).

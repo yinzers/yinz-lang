@@ -36,6 +36,19 @@ pub struct FunctionSig {
     ///
     /// v0.3-M3 extends this to cross-module call graphs via M8 package metadata.
     pub suspends: bool,
+    /// Total composed frame size in bytes, including the frame header, own locals,
+    /// and all recursively-embedded child sub-frame sizes.
+    ///
+    /// Set by `load_export_table` for exported functions so the importing module's
+    /// codegen can seed `build_frame_layouts` with the real size instead of the
+    /// `FRAME_HEADER_SIZE` placeholder that caused the transitive-suspend SIGILL.
+    /// Zero means "use the local default (FRAME_HEADER_SIZE)" for non-exported or
+    /// non-suspending functions.
+    ///
+    /// M3e replaces this scalar with the full serialized `FrameLayout`, allowing
+    /// the importing module to correctly embed the callee's sub-frame at the right
+    /// offset for all cross-module suspending call patterns.
+    pub composed_frame_size: u64,
 }
 
 /// All user-defined function signatures collected from a module.
@@ -142,6 +155,9 @@ pub fn collect_signatures(
                         // Populated by `check_query` after `may_block::analyze` runs.
                         // False during the signature pre-pass; must not be used there.
                         suspends: false,
+                        // Populated by `load_export_table` for cross-module callee frame sizing.
+                        // Zero here; set on exported suspending functions only.
+                        composed_frame_size: 0,
                     },
                 );
             }

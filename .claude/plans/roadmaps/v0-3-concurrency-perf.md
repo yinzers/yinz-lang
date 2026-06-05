@@ -11,6 +11,7 @@ milestones:
   - v0-3-m3a-suspension-codegen        # SPLIT 2026-06-01 from old "v0-3-m3-auto-parallelization"
   - v0-3-m3b-auto-parallelization      # I/O-overlap auto-parallel (interleaved inline poll, zero new runtime)
   - v0-3-m3d-cpu-parallelization       # SPLIT 2026-06-05 from M3b: pure-CPU statement parallelization (new runtime ABI + SM-promotion + deadlock-safe join)
+  - v0-3-m3e-cross-module-frame-serialization  # SPLIT 2026-06-05 from M3b P1: full cross-module FrameLayout serialization (lifts P1's loud-reject guards for re-export-transitive / shape-in-callee / errors×transitive)
   - v0-3-m4-channels-soa-release
 ---
 
@@ -253,6 +254,19 @@ These BLOCK the milestones listed next to them. They must be resolved (and the r
 - **Kernel-mode**: a CPU-only auto-parallel function under `--kernel` (no runtime/scheduler) — clean reject vs. inline-sequential fallback (decide at plan time).
 - Demo (`pirates-roster` CPU multicore section) + error gallery + cross-impl consistency on all CPU fixtures.
 **Trigger to schedule**: after M3b ships, or whenever compute-bound multicore speedup is wanted. **Adversarial gate is mandatory** — the CPU join is M2-HALT-corpse-adjacent (one synchronous-join mistake reintroduces the crash); the plan MUST validate every join path through the real compiler + a blocking-pool-exhaustion stress fixture.
+**Ships via**: `/pr` per phase, `/release` for a `v0.3.0-m{next}` tag.
+
+### Milestone 3e: v0.3-M3e — Cross-Module FrameLayout Serialization — multi-session
+> **⚠️ SPLIT 2026-06-05 from M3b Phase 1 (Patrick decision).** M3b P1 lifted the cross-module-call stopgap and made the may-block analysis propagate `suspends` across module boundaries (solid). It also attempted the *codegen* to make cross-module suspending calls actually run. That codegen turned out to be the same magnitude as M3a's intra-module suspension codegen: the importer must reconstruct the imported callee's FULL `FrameLayout` (child sub-frame offsets, errors-capable `{i64,i64}` staging slot, shape-embed slot indices) to compose its own frame correctly. P1 shipped a SCALAR `composed_frame_size` shortcut that is lossy-by-design — it sizes the embed but corrupts the internal offsets, deterministically SIGILL-ing/aborting on: re-export/multi-level transitive chains (A→B→C where B re-exports a fn calling A's suspending export), shape crossing-locals inside a cross-module suspending callee, and errors-capable-transitive exports. The adversarial gate (J-A + code-reviewer, round 2) caught all three via live runs. Cramming an export-table ABI serialization change into a P1 fix loop was the wrong call; it deserves its own focused, adversarially-gated milestone — exactly how M3a's hard cases were deferred to M3c.
+**Value delivered**: EVERY analyzable cross-module suspending call runs correctly — re-export chains, shape/number/float locals and returns across the boundary, errors×transitive — with no silent miscompile and no SIGILL. Lifts the P1 loud-reject guards.
+**Execution plan**: `v0-3-m3e-cross-module-frame-serialization` (status: NOT YET PLANNED — run `/plan` when picked up; do not detail-plan now)
+**Depends on**: v0.3-M3b (the typeck propagation + the working scalar cases + the loud-reject guards it must lift). Independent of M3c/M3d.
+**Rough scope** (its `/plan` sharpens this):
+- **Serialize the full `FrameLayout` across the export table**, not a scalar size. Compute the layout ONCE in codegen (the source of truth) and carry the whole structure (child offsets, EC staging offset, shape-embed slot indices, crossing-local slot map) in the export-table `FunctionSig`. KILL the typeck-side `compute_composed_frame_size`/`typeck_type_frame_slots` reimplementation (no-duct-tape #7 — it's a lossy parallel impl of `build_frame_layouts`).
+- **Importer reconstructs the imported callee's `FrameLayout`** from the serialized form so the embed offsets match the callee's own resume codegen exactly.
+- **Lift the M3b P1 loud-reject guards** (`CrossModuleFrameLayoutUnsupported` or whatever P1 names them) once each combo is proven by a live-run fixture.
+- **Full danger matrix** (the M3a intra-module matrix, now cross-module): every value type × {crossing-local, loop-var, return} × {direct, transitive, re-export-chain} × {scalar, shape, number/decimal128 two-slot, errors-capable}. Each must run correctly OR (for genuinely-unanalyzable edges only) loud-reject.
+**Trigger to schedule**: after M3b ships, or whenever cross-module suspending calls beyond the scalar cases are needed. **Adversarial gate is mandatory** — this is the M2-HALT/M3a silent-miscompile surface; the plan MUST validate every combo through the real compiler (the round-2 gate found 3 silent crashes the executor's happy-path fixtures missed).
 **Ships via**: `/pr` per phase, `/release` for a `v0.3.0-m{next}` tag.
 
 ### Milestone 4: v0.3-M4 — Channels + Auto-Arc + Auto-SoA + v0.3.0 Release — multi-session

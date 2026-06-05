@@ -31,6 +31,7 @@ Each doc in this directory has a **Status header** stating one of:
 | [`string-ptr-len-overhaul.md`](string-ptr-len-overhaul.md) | Locked direction, implementation deferred | TBD (likely v0.5 alongside file I/O) | Migrate strings from NUL-terminated C strings to `{ptr, len}` slices. Removes the NUL-byte footgun, makes `length` O(1). Multi-day rewrite across parser/codegen/runtime/stdlib. |
 | [`doc-generator.md`](doc-generator.md) | Parking lot — direction confirmed | v0.3+ or v0.4+ | `ynz doc` command: generates structured HTML/JSON/Markdown docs from `//` leading comments + type signatures derived from the AST. No `@param` tags — types ARE the structured docs. |
 | [`macos-platform-support.md`](macos-platform-support.md) | Deferred (infra) | TBD — needs a Mac | macOS dropped from CI 2026-06-01 (codegen golden tests x86_64-linux-pinned; some failures may be real macOS codegen differences unverifiable from Linux). Re-add `macos-latest` once codegen is validated + per-triple goldens recorded on a Mac. |
+| [`cross-module-frame-serialization.md`](cross-module-frame-serialization.md) | Locked, M3e | v0.3-M3e | Full FrameLayout serialization across the export table. Replaces the scalar `composed_frame_size` shortcut; enables re-export chains, shape crossing-locals, and EC×transitive combos across module boundaries. |
 
 ---
 

@@ -1,0 +1,6 @@
+// Module with a suspending function used in a crossing-local test.
+
+export function fetchNum() -> nothing {
+  sleep(10)
+  print(`fetched`)
+}

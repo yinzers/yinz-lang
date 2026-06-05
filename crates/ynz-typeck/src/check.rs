@@ -54,7 +54,6 @@ pub fn check(
     generic_shape_table: &GenericShapeTable,
     intrinsics: &PrimitiveIntrinsicTable,
     imported_options: &std::collections::HashMap<String, crate::options_table::OptionsEntry>,
-    imported_fn_names: HashSet<String>,
 ) -> (
     TypedModule,
     MonomorphizationTable,
@@ -96,7 +95,6 @@ pub fn check(
         inside_wait: false,
         inside_background: false,
         current_fn_suspends: false,
-        imported_fn_names,
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -159,8 +157,6 @@ pub fn check_with_kernel_mode(
         inside_wait: false,
         inside_background: false,
         current_fn_suspends: false,
-        // Kernel-mode check uses no imported functions — only local fns are relevant.
-        imported_fn_names: HashSet::new(),
     };
     checker.check_module(module);
     let typed = TypedModule {
@@ -271,9 +267,6 @@ struct Checker<'b> {
     /// (cross-module suspension propagation requires M8 binary package metadata and
     /// ships in M3).
     current_fn_suspends: bool,
-    /// Names of functions imported from other modules. Used to emit can't-infer
-    /// diagnostics when a cross-module callee is called from a suspending function.
-    imported_fn_names: HashSet<String>,
 }
 
 impl<'b> Checker<'b> {
@@ -2371,33 +2364,11 @@ impl<'b> Checker<'b> {
                     let ownerships = sig.param_ownerships.clone();
                     let ret = sig.ret.clone();
                     let callee_suspends = sig.suspends;
-                    let callee_is_cross_module = self.imported_fn_names.contains(name);
 
-                    // Can't-infer: the caller independently suspends (reaches an intra-unit
-                    // `sleep` transitively) AND makes a cross-module call the analysis
-                    // can't traverse. This is the design-correct M2 gate from
-                    // design/future/concurrency.md:61-67 — cross-module suspension propagation
-                    // requires M8 binary package metadata and ships in M3. When the caller does
-                    // NOT independently suspend, the cross-module callee is treated as a
-                    // non-suspending leaf (the M2 intentional under-approximation).
-                    if callee_is_cross_module && self.current_fn_suspends {
-                        self.diags.push(Diagnostic::error(
-                            call.span.clone(),
-                            format!(
-                                "Can't determine whether `{name}` suspends — it's a \
-                                 cross-module call the compiler can't analyze in one unit."
-                            ),
-                            format!(
-                                "Make the boundary explicit: keep `{name}` in the same file, \
-                                 or restructure so the call doesn't cross a module boundary \
-                                 from inside a suspending function."
-                            ),
-                            "v0.3-M2 analyzes one compilation unit. Cross-module suspension \
-                             propagation ships in v0.3-M3b via the M8 multi-file query. \
-                             Until then, external calls from suspending functions must be \
-                             intra-unit — externals are the user's responsibility.",
-                        ));
-                    }
+                    // Cross-module calls are resolved: `check_query` on the imported module
+                    // sets `callee_suspends` correctly via the may-block fixpoint seeded by
+                    // `imported_suspending_names`. No can't-infer error is emitted here —
+                    // the call graph is fully traversable across module boundaries.
 
                     // Phase 6: explicit `wait` on a non-suspending callee — redundant hint.
                     // Uses the transitive `suspends` predicate (not the local `contains_wait`).
@@ -8022,7 +7993,6 @@ mod tests {
             &generic_shape_table,
             &intrinsics,
             &std::collections::HashMap::new(),
-            std::collections::HashSet::new(),
         );
         let diags: Vec<_> = diags.into_iter().collect();
         assert_eq!(

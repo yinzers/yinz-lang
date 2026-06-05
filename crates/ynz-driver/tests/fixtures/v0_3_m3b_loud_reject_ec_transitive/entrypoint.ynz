@@ -1,0 +1,11 @@
+// Loud-reject case (c): caller of an errors-capable cross-module suspending fn
+// that suspends transitively. Must produce a clean compile error (exit 1),
+// NOT a silent abort.
+import { compute } from `ec_ops`
+
+function entrypoint() -> nothing {
+  let result = compute()
+  if (result is int) {
+    print(`got: ${result}`)
+  }
+}

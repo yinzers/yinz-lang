@@ -1,0 +1,13 @@
+// Loud-reject case (c): errors-capable export that suspends TRANSITIVELY.
+// compute() is EC and calls innerWork() (non-exported, suspends via sleep).
+// The EC staging slot + child sub-frame interact in ways the scalar
+// composed_frame_size cannot reconstruct at the import site.
+
+function innerWork() -> nothing {
+  sleep(10)
+}
+
+export function compute() -> int errors {
+  innerWork()
+  return 42
+}

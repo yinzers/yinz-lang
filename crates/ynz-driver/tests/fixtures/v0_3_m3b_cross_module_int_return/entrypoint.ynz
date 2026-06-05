@@ -1,0 +1,13 @@
+// Danger case (a): caller of a cross-module suspending -> int function.
+// The return value must survive the state-machine resume boundary.
+// Expected output: "42"
+import { fetchValue } from `number_ops`
+
+function caller() -> nothing {
+  let v = fetchValue()
+  print(v.toString())
+}
+
+function entrypoint() -> nothing {
+  caller()
+}
