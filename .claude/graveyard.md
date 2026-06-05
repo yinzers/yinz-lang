@@ -409,3 +409,42 @@ Command::new\("ld"\)
 **Severity**: high — `ynz watch` (default mode, not `--check`) silently fails to spawn the compiled program on every rebuild in any container that has LLVM installed but not build-essential.
 
 **Originating incident**: Discovered 2026-05-20 during first real-world `ynz watch` use on trading-v4 devcontainer.
+
+---
+
+## Parallel Per-Type Dispatch / Flat-Scan Re-Derivation in Suspension Codegen — 2026-06-04
+
+**Scope**: `crates/ynz-codegen/src/emit.rs` (frame flush/reload for crossing locals + loop vars) and `crates/ynz-typeck/src/check.rs` (the crossing-analysis consumers — `wait`-position guards). The disease is "a second hand-rolled per-type/per-position dispatch that parallels the authoritative one and drifts from it."
+**Exemption**:
+- A new `flush_*`/`reload_*` that is a **thin delegating wrapper** around `flush_var_slot_to_frame` / `reload_params_from_frame` (e.g. `flush_for_loop_var` after the round-5 unification — it just forwards).
+- Reads of the crossing set that go through the authoritative producers (`crossing_local_names` / `locals_crossing_wait` / the synthetic `collect_for_loop_synthetic_crossings_*` outputs) rather than re-deriving membership.
+- A genuinely new value-type branch ADDED INSIDE the single `flush_var_slot_to_frame` dispatch (extending the one dispatch is correct; forking a second one is the bug).
+**Last verified**: 2026-06-04
+**Category**: regex+judgment
+
+**Pre-filter patterns**:
+```
+crates/ynz-codegen/src/emit\.rs
+crates/ynz-typeck/src/check\.rs
+flush_var_slot_to_frame
+flush_for_loop_var
+reload_params_from_frame
+declared.*before.*wait
+crossing
+to_i64_bits
+```
+
+**Cause**: M3a frame-backing was first written as TWO parallel hand-rolled per-type dispatches — the crossing-local flush AND a separate `flush_for_loop_var` — each `match`-ing on the value type to store it into the composed frame slot. They DRIFTED: `number` (decimal128, 2-slot i128) was handled in one but not the other; `shape`/`string`/`options` branches were missing or wrong in the second → values stored/reloaded as 8-byte i64 garbage or stack-dangling pointers, producing SILENT wrong output (`0.000`, stack garbage) across a suspension. Whack-a-mole: each round fixed one type in one dispatch; ~10 silent-miscompile rounds before the root fix (round 5) unified both into the single `flush_var_slot_to_frame`, with `reload_params_from_frame` mirroring the identical N-way dispatch (store/load symmetric by construction). **Second instance, same milestone**: the `ArrayShapeRuntimeFieldWithWait` guard added `is_let_declared_before_wait_in_stmts`, a FLAT statement-order scan that RE-DERIVED "is this let declared before the wait" instead of consuming the crossing-analysis set the compiler already computes. Deleting it → under-rejection; keeping it → over-rejection; resolved only by consuming the authoritative `crossing_names` set. Both are `no-duct-tape.md` #7 (parallel implementation that drifts) specialized to suspension codegen, where the drift is invisible (silent-wrong, no crash).
+
+**Detection signature**: (1) A second function in `emit.rs` that `match`es on value type (`Type::Int|Bool|Float|Number|String|Shape|...`) and performs frame store/GEP (`build_store`, `build_gep`, `FRAME_OFFSET_LOCALS_START`, `to_i64_bits`) for a crossing local or loop var, living OUTSIDE `flush_var_slot_to_frame`/`reload_params_from_frame`. (2) A new helper that walks a statement list to decide whether a binding is "declared before a `wait`" / crosses a suspension, instead of reading `crossing_local_names`/`locals_crossing_wait`/the synthetic crossings. (3) A `flush`/`reload` change that edits ONE dispatch's type-match without the symmetric edit to its partner (store without reload, or vice versa).
+
+**Constraint**: There is ONE frame-flush dispatch (`flush_var_slot_to_frame`) and ONE reload dispatch (`reload_params_from_frame`); every crossing-local AND loop-var flush routes through them, and any new value-type slot handling is a branch ADDED INSIDE that single dispatch (store + reload edited together). The set of "what crosses a suspension / is declared before a `wait`" is produced ONCE by the crossing analysis — consume `crossing_local_names`/`locals_crossing_wait`/the synthetic crossing collectors; never re-derive membership with a parallel flat statement scan. A suspension-codegen change that fails any acceptance check must be re-tested across the FULL per-type × per-position adversarial matrix on the live binary (silent-wrong has no crash to catch it).
+
+**Bouncer checks** (each runnable as shell against a diff):
+- [ ] Diff to `emit.rs` adds a function (not a thin wrapper over `flush_var_slot_to_frame`) that `match`es `Type::` variants AND calls `build_store`/`build_gep`/`to_i64_bits` with `FRAME_OFFSET_LOCALS_START` → WARNING (parallel flush dispatch — route through `flush_var_slot_to_frame`).
+- [ ] Diff adds a helper whose name or body re-derives crossing/declared-before-wait membership (name matches `before.*wait|declared_before|is_let_.*wait`, body iterates stmts testing for `Wait`) → WARNING (re-derives the crossing set; consume `crossing_local_names`/`locals_crossing_wait`).
+- [ ] Diff edits the type-match inside `flush_var_slot_to_frame` (add/remove/change a `Type::` arm) WITHOUT a corresponding edit to `reload_params_from_frame` in the same diff → WARNING (store/reload asymmetry → reload reads what store never wrote).
+
+**Severity**: critical — silent-wrong codegen across a suspension is the worst failure class (no crash, no panic; the program runs and prints the wrong number). This exact disease cost ~10 silent-miscompile rounds in M3a P1+P3.
+
+**Originating incident**: 2026-06-04, v0.3-M3a suspension codegen. Two parallel per-type flush dispatches drifted (decimal128/shape/string/options branches present in one, missing/wrong in the other) → `0.000`/stack-garbage across `wait` suspensions; ~10 whack-a-mole rounds. Root fix round 5: unify into `flush_var_slot_to_frame` + symmetric `reload_params_from_frame`; `flush_for_loop_var` became a thin wrapper. Second instance: `is_let_declared_before_wait_in_stmts` flat-scan re-derived the crossing set → under/over-rejection on the `ArrayShapeRuntimeFieldWithWait` guard; fixed by consuming the authoritative `crossing_names`. The cumulative Opus code-reviewer that finally certified the milestone called it "the unified flush killed the hydra." See `.claude/plans/done/v0-3-m3a-suspension-codegen.md` Phase 1/3 Findings Logs.
