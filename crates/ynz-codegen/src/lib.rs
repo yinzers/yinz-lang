@@ -34,4 +34,5 @@ pub mod state_machine;
 pub mod vtable;
 
 pub use artifact::{sha256, CompiledArtifact};
-pub use queries::{codegen_query, CodegenOutput};
+pub use emit::FrameLayout;
+pub use queries::{codegen_query, frame_layouts_query, CodegenOutput};

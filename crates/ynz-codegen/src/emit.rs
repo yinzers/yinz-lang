@@ -182,6 +182,7 @@ pub type SuspendSet = HashSet<String>;
 /// A composed frame embeds the sub-frames of all directly-called suspending children
 /// at compile-time-fixed byte offsets, so the entire intra-function call tree shares
 /// ONE `ynz_alloc` per spawned task.
+#[derive(Clone, Debug, PartialEq)]
 pub struct FrameLayout {
     /// Total frame size: per-frame header (32 bytes) + own locals + all child sub-frames.
     pub total_size: u64,
@@ -207,14 +208,11 @@ pub struct FrameLayout {
 
 /// True when `f` is a suspending function that returns `-> number errors` (decimal128 EC).
 ///
-/// These functions need a 16-byte staging slot in their composed frame: the SM EC-return
-/// path stores the i128 decimal there and points the EC `ok` word at it. The slot is freed
-/// automatically when the frame drops (one `ynz_alloc` invariant, alloc=1/free=1).
-/// True when `f` returns `-> number errors` (decimal128 EC).
-///
-/// The AST stores `-> number errors` as `return_type = ErrorCapable { inner = Number { .. } }`.
-/// These functions need a 16-byte staging slot in their composed frame so the EC ok-word
-/// points at a frame-stable region rather than a resume-stack alloca.
+/// The AST encodes `-> number errors` as `ErrorCapable { inner = Number { precision ≤ 34 } }`.
+/// These functions need a 16-byte staging slot in their composed frame: the SM EC-return path
+/// stores the raw i128 decimal there and points the EC `ok` word at the slot. Placing the
+/// slot inside the heap frame (after own-local slots, before child sub-frames) keeps
+/// alloc=1/free=1 — no separate `ynz_alloc` for the staging region.
 fn is_number_errors_return(f: &FunctionDecl) -> bool {
     match &f.return_type {
         ynz_ast::nodes::Type::ErrorCapable { inner, .. } => {
@@ -228,17 +226,28 @@ fn is_number_errors_return(f: &FunctionDecl) -> bool {
 ///
 /// # Algorithm (O(N²) where N = number of suspending fns — bounded in practice)
 ///
-/// 1. Walk each function's AST to collect its direct suspending callees in call order
+/// 1. Walk each local function's AST to collect its direct suspending callees in call order
 ///    (deduplicating per callee name).
-/// 2. Detect recursion edges via a simple ancestor-set DFS (no topological sort needed
-///    for the recursion-detection goal).
-/// 3. Compute total_size bottom-up: leaf functions have size = header + own_locals;
-///    internal nodes add the sizes of all non-recursive children.
-fn build_frame_layouts(
+/// 2. Pre-seed `sizes` for every imported suspending callee (in `suspend_set` but not a local
+///    function) by calling `callee_size_resolver`. This must happen BEFORE step 3 so that
+///    when the recursive descent encounters an imported callee, the cache entry is already
+///    present and the real resolver value is used instead of the local-fn fallback path.
+/// 3. Compute total_size bottom-up for local fns: leaf functions have size = header + own_locals;
+///    internal nodes add the sizes of all non-recursive children (imported children now read
+///    their pre-seeded resolver values from the cache).
+/// 4. Build the final `FrameLayout` records for each local suspending function.
+///
+/// `callee_size_resolver` is called for each imported suspending callee (step 2). It returns
+/// the callee's total composed frame size in bytes, or `None` to fall back to `FRAME_HEADER_SIZE`.
+/// The resolver is pluggable so the same computation can be used by `frame_layouts_query`
+/// (resolving recursively via `frame_layouts_query(callee_file)` for cross-module accuracy —
+/// Guard G2). For a local-only module the pre-seed loop (step 2) is empty and behavior is
+/// byte-identical to pre-M3e.
+pub fn build_frame_layouts_with_resolver(
     typed: &TypedModule,
     suspend_set: &SuspendSet,
     shape_abi_sizes: &HashMap<String, u64>,
-    imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+    callee_size_resolver: &dyn Fn(&str) -> Option<u64>,
 ) -> HashMap<String, FrameLayout> {
     // Step 1: collect direct suspending callees for each suspending fn.
     let mut direct_children: HashMap<String, Vec<String>> = HashMap::new();
@@ -250,9 +259,37 @@ fn build_frame_layouts(
         }
     }
 
-    // Step 2 + 3: compute frame sizes recursively with cycle detection.
-    // Use a memo map and a visiting set.
+    // Step 2: pre-seed imported suspending callees BEFORE compute_frame_size runs.
+    //
+    // Imported callees are in suspend_set but are NOT local functions (i.e., not in
+    // direct_children). They must be seeded in `sizes` before the recursive descent
+    // below so that when compute_frame_size("doWork") recurses into "getValue" (an
+    // imported callee), it hits the cache entry on the first lookup and uses the
+    // resolver's real value instead of falling through to the local-fn path (which
+    // computes n_locals=0 + no children = FRAME_HEADER_SIZE and caches that stale 32).
+    //
+    // The sole caller for cross-module work is `frame_layouts_query`, which passes
+    // `frame_layouts_query(callee_file)[name].total_size` as the resolver (Guard G2) —
+    // this is what makes re-export chains (A→B→C) compose B's total_size including A's
+    // real sub-frame. Falls back to FRAME_HEADER_SIZE when the resolver returns None
+    // (unresolvable import; codegen is skipped on errors anyway).
+    //
+    // For a LOCAL-ONLY module (no imported suspending callees), every name in suspend_set
+    // IS in direct_children, so this loop is empty and compute_frame_size behaves exactly
+    // as before — byte-identity for intra-module codegen is preserved.
+    let local_fn_names: HashSet<&str> = direct_children.keys().map(|s| s.as_str()).collect();
     let mut sizes: HashMap<String, u64> = HashMap::new();
+    for name in suspend_set.iter() {
+        if !local_fn_names.contains(name.as_str()) {
+            let resolved =
+                callee_size_resolver(name.as_str()).unwrap_or(state_machine::FRAME_HEADER_SIZE);
+            sizes.insert(name.clone(), resolved);
+        }
+    }
+
+    // Step 3: compute frame sizes for local fns recursively with cycle detection.
+    // Imported callees are already in `sizes` (Step 2), so compute_frame_size reads
+    // the resolver value from the cache on the first recursive lookup.
     let fn_names: Vec<String> = direct_children.keys().cloned().collect();
     for name in &fn_names {
         let mut visiting = HashSet::new();
@@ -267,29 +304,7 @@ fn build_frame_layouts(
         );
     }
 
-    // Imported suspending functions are in suspend_set but never entered direct_children
-    // (they're not local functions), so compute_frame_size never runs for them and sizes
-    // has no entry. Without an entry, the step-4 layout builder classifies them as
-    // recursion edges (heap-pointer-slot) — causing SSA dominance violations.
-    //
-    // Use `composed_frame_size` from the imported FunctionSig when available — that value
-    // was computed by `load_export_table` in typeck and carries the real sub-frame size
-    // (header + own locals + child sub-frames of the callee). This fixes the transitive-
-    // suspend SIGILL where a local function embeds an imported suspending callee's sub-frame
-    // at offset 32 (FRAME_HEADER_SIZE) but the callee's real frame is larger.
-    //
-    // Fall back to FRAME_HEADER_SIZE only for unknown imported callees (future-proofing).
-    for name in suspend_set.iter() {
-        sizes.entry(name.clone()).or_insert_with(|| {
-            imported_fns
-                .get(name.as_str())
-                .filter(|sig| sig.composed_frame_size > 0)
-                .map(|sig| sig.composed_frame_size)
-                .unwrap_or(state_machine::FRAME_HEADER_SIZE)
-        });
-    }
-
-    // Step 4: build FrameLayout for each fn using the computed sizes.
+    // Step 4: build FrameLayout for each local fn using the fully-populated sizes map.
     let mut layouts: HashMap<String, FrameLayout> = HashMap::new();
     for item in &typed.module.items {
         let Item::Function(f) = item else { continue };
@@ -632,6 +647,11 @@ pub fn module_identifier(source_path: &str) -> String {
 }
 
 /// Emit a relocatable object file for an M5 program.
+///
+/// `frame_layouts` must come from `frame_layouts_query` (built with the same target machine
+/// as `emit_artifact` — Guard G1) so the emitter uses the identical layout the importer
+/// reads when it calls `frame_layouts_query(callee_file)`. This is the single-source-of-truth
+/// guarantee: one computation, consumed by both the emitter and future cross-module importers.
 #[allow(clippy::too_many_arguments)]
 pub fn emit_artifact(
     source_path: &str,
@@ -644,6 +664,7 @@ pub fn emit_artifact(
     imported_options: &std::collections::HashMap<String, ynz_typeck::options_table::OptionsEntry>,
     suspends_set_arg: &HashSet<String>,
     imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+    frame_layouts: &HashMap<String, FrameLayout>,
 ) -> Result<CompiledArtifact, String> {
     Target::initialize_x86(&InitializationConfig::default());
 
@@ -696,6 +717,7 @@ pub fn emit_artifact(
         imported_options,
         &suspend_set,
         imported_fns,
+        frame_layouts,
     )?;
 
     module
@@ -759,6 +781,7 @@ fn build_module<'ctx, 'g>(
     imported_options: &std::collections::HashMap<String, ynz_typeck::options_table::OptionsEntry>,
     suspend_set: &'g SuspendSet,
     imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+    frame_layouts_arg: &HashMap<String, FrameLayout>,
 ) -> Result<(), String> {
     let rt = RuntimeDecls::declare(ctx, module);
 
@@ -896,15 +919,16 @@ fn build_module<'ctx, 'g>(
     let suspend_set = &effective_suspend_set;
 
     // Pass 0.5 — build the wait cache (kept for backward-compat with generic lowering +
-    // background routing) AND compute frame layouts for all suspending functions.
+    // background routing) AND bind the pre-computed frame layouts.
     //
     // The wait_cache still serves the local-syntactic check used by non-SM call sites.
-    // frame_layouts encodes the composed structure (embedded child sub-frames) used by
-    // lower_function_with_waits to allocate ONE frame per task tree.
-    // Uses the extended suspend_set so cross-module suspending callees are included
-    // as embedded children (not heap-boxed recursion edges).
+    // frame_layouts comes from frame_layouts_query (pre-computed, LLVM-accurate): it
+    // encodes the composed structure (embedded child sub-frames) used by
+    // lower_function_with_waits to allocate ONE frame per task tree. Using the query
+    // result here ensures the emitter and any future cross-module importers read the
+    // identical layout (single source of truth — Guard G1 + G2 integrity).
     let wait_cache = build_wait_cache(typed);
-    let frame_layouts = build_frame_layouts(typed, suspend_set, &shape_abi_sizes, imported_fns);
+    let frame_layouts = frame_layouts_arg;
 
     // Pass 0.6 — forward-declare resume functions for ALL SUSPENDING functions.
     // Phase 7: use suspend_set (transitive) instead of wait_cache (local) so fns that
@@ -974,7 +998,7 @@ fn build_module<'ctx, 'g>(
                 &options_table,
                 &wait_cache,
                 suspend_set,
-                &frame_layouts,
+                frame_layouts,
                 imported_fns,
             )?,
             Item::Function(_)

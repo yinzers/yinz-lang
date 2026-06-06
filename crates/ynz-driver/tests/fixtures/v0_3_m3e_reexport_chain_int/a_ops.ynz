@@ -1,7 +1,13 @@
 // M3e danger-matrix: re-export chain, module A (leaf).
-// getValue suspends directly and returns an int.
+// getValue suspends, keeps a crossing local live across the sleep, and returns int.
+// The crossing local (offset: int) means frame_layouts_query(a_sf)["getValue"].total_size
+// is FRAME_HEADER_SIZE + own_locals_size(1) = 40 bytes — NOT 32 (the FRAME_HEADER_SIZE
+// fallback). Tests that pass a cross-module resolver for getValue must observe 40, not 32,
+// so they fail if the resolver is bypassed and the local-fn fallback (which computes 32)
+// fires instead.
 
 export function getValue() -> int {
+  const offset = 7
   sleep(10)
-  return 7
+  return offset
 }
