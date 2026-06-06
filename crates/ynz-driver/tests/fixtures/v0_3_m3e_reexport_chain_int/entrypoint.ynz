@@ -1,0 +1,11 @@
+// M3e danger-matrix: int × return × re-export chain A→B→C (escape #1).
+// C (entrypoint) imports doWork from B; B imports getValue from A.
+// Without the codegen-query fix, B's frame as seen by C is under-sized (missing A's sub-frame).
+// Under the M3e universal reject this exits 1 (compile error).
+// Reject-baseline fixture (int × return × re-export chain A→B→C). Correct runtime output once the M3e plan's frame-serialization fix ships: "result: 7" — currently a clean cross-module reject; correctness is tracked in the M3e execution plan.
+import { doWork } from `b_ops`
+
+function entrypoint() -> nothing {
+  const r = doWork()
+  print(`result: ${r.toString()}`)
+}

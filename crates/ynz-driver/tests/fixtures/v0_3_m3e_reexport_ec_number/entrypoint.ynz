@@ -1,0 +1,12 @@
+// M3e danger-matrix: stacked escapes #1+#3+#4 — re-export × EC × number (escape #5).
+// C (entrypoint) imports calcTotal from B; B imports fetchPrice from A.
+// B's frame must correctly include A's sub-frame, the EC staging slot, and two number slots.
+// Under the M3e universal reject this exits 1 (compile error).
+// Reject-baseline fixture (stacked escapes: re-export × errors-capable × number/decimal128). Correct runtime output once the M3e plan's frame-serialization fix ships: "total: 3.5" — currently a clean cross-module reject; correctness is tracked in the M3e execution plan.
+import { calcTotal } from `b_ops`
+
+function entrypoint() -> nothing {
+  const result = calcTotal()
+  const v = result.or(0.0)
+  print(`total: ${v.toString()}`)
+}

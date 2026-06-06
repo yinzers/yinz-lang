@@ -448,6 +448,12 @@ fn collect_calls_in_stmt(
     }
 }
 
+// All 8 params are genuinely independent state for a recursive AST tree-walk;
+// bundling into a struct would add a type used nowhere else in the crate.
+// `enclosing_fn` and `unresolvable` are thread-through params in the recursive
+// protocol — used by the callee's recursive arms and reserved for future arms.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::only_used_in_recursion)]
 fn collect_calls_in_expr(
     expr: &Expr,
     local_fns: &HashSet<String>,
@@ -498,15 +504,12 @@ fn collect_calls_in_expr(
                         // `direct`, which would cause a user function named `sleep` to
                         // false-positive via name collision in the seed step.
                         edges.calls_may_block_intrinsic = true;
-                    } else if imported_fns.contains(&name) {
-                        if imported_suspending.contains(&name) {
-                            // Imported fn with known suspension status: suspends.
-                            // Treat it like a direct intrinsic call — the enclosing
-                            // function transitively reaches a suspension point.
-                            edges.calls_may_block_intrinsic = true;
-                        }
-                        // else: imported fn known to be non-suspending — non-suspending
-                        // leaf, no propagation edge needed, no error emitted.
+                    } else if imported_fns.contains(&name) && imported_suspending.contains(&name) {
+                        // Imported fn with known suspension status: suspends.
+                        // Treat it like a direct intrinsic call — the enclosing
+                        // function transitively reaches a suspension point.
+                        // Non-suspending imported fns: non-suspending leaf, no edge needed.
+                        edges.calls_may_block_intrinsic = true;
                     }
                     // else: unknown name — normal typeck will emit "not defined" diagnostic
                 }

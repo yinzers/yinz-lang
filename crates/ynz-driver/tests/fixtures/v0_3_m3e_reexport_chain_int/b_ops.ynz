@@ -1,0 +1,11 @@
+// M3e danger-matrix: re-export chain, module B (middle).
+// doWork calls getValue from a_ops and re-exports the result.
+// B's composed frame must include A's sub-frame — escape #1: B's scalar composed_frame_size
+// omits A's frame, so C (the importer of B) would under-size B's sub-frame embed.
+
+import { getValue } from `a_ops`
+
+export function doWork() -> int {
+  const v = getValue()
+  return v
+}

@@ -18,9 +18,7 @@ use inkwell::{
     basic_block::BasicBlock,
     context::Context,
     module::Module,
-    targets::{
-        CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
-    },
+    targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple},
     types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum},
     values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, GlobalValue, PointerValue},
     AddressSpace, IntPredicate, OptimizationLevel,
@@ -653,24 +651,32 @@ pub fn emit_artifact(
     let module_id = module_identifier(source_path);
     let module = context.create_module(&module_id);
 
-    let triple = match target_triple {
-        Some(t) => TargetTriple::create(t),
-        None => TargetMachine::get_default_triple(),
+    // Use the shared target-machine constructor for the default triple (Guard G1: same
+    // triple/CPU/data-layout as frame_layouts_query — byte-identical shape ABI sizes
+    // between the emitter and the query). For explicit target_triple overrides (cross-
+    // compilation and tests), construct the machine from the supplied triple directly.
+    let machine = match target_triple {
+        None => crate::state_machine::default_target_machine()?,
+        Some(t) => {
+            let triple = TargetTriple::create(t);
+            module.set_triple(&triple);
+            let target = Target::from_triple(&triple)
+                .map_err(|e| format!("LLVM: no target for triple {:?}: {e}", triple.as_str()))?;
+            target
+                .create_target_machine(
+                    &triple,
+                    "generic",
+                    "",
+                    OptimizationLevel::None,
+                    RelocMode::Default,
+                    CodeModel::Default,
+                )
+                .ok_or_else(|| "LLVM: failed to create target machine".to_string())?
+        }
     };
-    module.set_triple(&triple);
-
-    let target = Target::from_triple(&triple)
-        .map_err(|e| format!("LLVM: no target for triple {:?}: {e}", triple.as_str()))?;
-    let machine = target
-        .create_target_machine(
-            &triple,
-            "generic",
-            "",
-            OptimizationLevel::None,
-            RelocMode::Default,
-            CodeModel::Default,
-        )
-        .ok_or_else(|| "LLVM: failed to create target machine".to_string())?;
+    // Always set triple and data-layout from the machine (the shared constructor uses the
+    // default triple; the override branch already set the triple above).
+    module.set_triple(&machine.get_triple());
     module.set_data_layout(&machine.get_target_data().get_data_layout());
 
     // Use the suspends_set passed in from check_query (computed by may_block::analyze).
@@ -8304,7 +8310,8 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         .map_err(|e| format!("call {effective_name}: {e}"))?;
 
                     // M7 P4a: if callee is errors-capable, handle the {i64, i64} result.
-                    let callee_is_ec = is_errors_capable_fn(cg.typed, cg.imported_fns, &effective_name);
+                    let callee_is_ec =
+                        is_errors_capable_fn(cg.typed, cg.imported_fns, &effective_name);
                     if callee_is_ec {
                         let result_struct = call_site
                             .try_as_basic_value()
@@ -11525,7 +11532,7 @@ fn is_errors_capable_fn(
     // errors-capable even when the importer's AST has no FunctionDecl for it.
     imported_fns
         .get(fn_name)
-        .map_or(false, |sig| matches!(sig.ret, ynz_typeck::types::Type::ErrorsCapable { .. }))
+        .is_some_and(|sig| matches!(sig.ret, ynz_typeck::types::Type::ErrorsCapable { .. }))
 }
 
 /// Emit auto-propagation for an errors-capable result struct.

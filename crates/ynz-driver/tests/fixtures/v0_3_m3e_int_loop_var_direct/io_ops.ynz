@@ -1,0 +1,5 @@
+// M3e danger-matrix: loop-var position — exported suspending function.
+
+export function tick() -> nothing {
+  sleep(10)
+}

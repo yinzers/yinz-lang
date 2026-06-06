@@ -1,0 +1,22 @@
+// M3e danger-matrix: shape × crossing-local × direct (escape #2).
+// A shape-typed local crosses the cross-module suspending call boundary.
+// LLVM ABI padding for the shape may differ from the typeck "8 bytes per field" count,
+// causing the caller's composed frame to be under-sized without the codegen-query fix.
+// Under the M3e universal reject this exits 1 (compile error).
+// Reject-baseline fixture (shape × crossing-local × direct). Correct runtime output once the M3e plan's frame-serialization fix ships: "x: 3, y: 7" — currently a clean cross-module reject; correctness is tracked in the M3e execution plan.
+import { fetchItem } from `io_ops`
+
+shape Point {
+  x: int
+  y: int
+}
+
+function caller() -> nothing {
+  let pt: Point = { x: 3, y: 7 }
+  fetchItem()
+  print(`x: ${pt.x.toString()}, y: ${pt.y.toString()}`)
+}
+
+function entrypoint() -> nothing {
+  caller()
+}

@@ -1,0 +1,7 @@
+// M3e danger-matrix: re-export chain, module A (leaf).
+// getValue suspends directly and returns an int.
+
+export function getValue() -> int {
+  sleep(10)
+  return 7
+}

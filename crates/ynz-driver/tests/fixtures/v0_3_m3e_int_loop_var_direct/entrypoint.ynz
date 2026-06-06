@@ -1,0 +1,13 @@
+// M3e danger-matrix: int × loop-var × direct.
+// An int loop variable crosses the cross-module suspending call inside a for-loop.
+// Under the M3e universal reject this exits 1 (compile error).
+// Reject-baseline fixture (int × loop-var × direct). Correct runtime output once the M3e plan's frame-serialization fix ships: "tick: 1\ntick: 2\ntick: 3" — currently a clean cross-module reject; correctness is tracked in the M3e execution plan.
+import { tick } from `io_ops`
+
+function entrypoint() -> nothing {
+  let items: array<int> = [1, 2, 3]
+  for (n in items) {
+    tick()
+    print(`tick: ${n.toString()}`)
+  }
+}

@@ -286,10 +286,19 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
     let imported_suspending_names: HashSet<String> = sig_output
         .imported_fns
         .iter()
-        .filter_map(|(name, sig)| if sig.suspends { Some(name.clone()) } else { None })
+        .filter_map(|(name, sig)| {
+            if sig.suspends {
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
         .collect();
-    let may_block_result =
-        may_block::analyze(&parse.module, &imported_fn_names, &imported_suspending_names);
+    let may_block_result = may_block::analyze(
+        &parse.module,
+        &imported_fn_names,
+        &imported_suspending_names,
+    );
 
     // Update each merged sig's `suspends` flag using the UNION of:
     // (a) the imported fn's own preserved `suspends` (set by load_export_table),
@@ -391,7 +400,9 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
 
         if !suspending_imported_names.is_empty() {
             for item in &parse.module.items {
-                let Item::Function(fn_decl) = item else { continue };
+                let Item::Function(fn_decl) = item else {
+                    continue;
+                };
                 emit_loud_reject_for_imported_suspending_calls(
                     &fn_decl.body.stmts,
                     &suspending_imported_names,
@@ -499,33 +510,59 @@ fn emit_loud_reject_in_stmt(
             emit_loud_reject_in_expr(target, suspending_imported_names, diags);
             emit_loud_reject_in_expr(value, suspending_imported_names, diags);
         }
-        Stmt::IndexAssign { receiver, index, value, .. } => {
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => {
             emit_loud_reject_in_expr(receiver, suspending_imported_names, diags);
             emit_loud_reject_in_expr(index, suspending_imported_names, diags);
             emit_loud_reject_in_expr(value, suspending_imported_names, diags);
         }
         Stmt::If { cond, body, .. } => {
             emit_loud_reject_in_expr(cond, suspending_imported_names, diags);
-            emit_loud_reject_for_imported_suspending_calls(&body.stmts, suspending_imported_names, diags);
+            emit_loud_reject_for_imported_suspending_calls(
+                &body.stmts,
+                suspending_imported_names,
+                diags,
+            );
         }
         Stmt::While { cond, body, .. } => {
             emit_loud_reject_in_expr(cond, suspending_imported_names, diags);
-            emit_loud_reject_for_imported_suspending_calls(&body.stmts, suspending_imported_names, diags);
+            emit_loud_reject_for_imported_suspending_calls(
+                &body.stmts,
+                suspending_imported_names,
+                diags,
+            );
         }
         Stmt::For { iter, body, .. } => {
             emit_loud_reject_in_expr(iter, suspending_imported_names, diags);
-            emit_loud_reject_for_imported_suspending_calls(&body.stmts, suspending_imported_names, diags);
+            emit_loud_reject_for_imported_suspending_calls(
+                &body.stmts,
+                suspending_imported_names,
+                diags,
+            );
         }
-        Stmt::Match { scrutinee, arms, else_arm, .. } => {
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
             emit_loud_reject_in_expr(scrutinee, suspending_imported_names, diags);
             for arm in arms {
                 emit_loud_reject_for_imported_suspending_calls(
-                    &arm.body.stmts, suspending_imported_names, diags,
+                    &arm.body.stmts,
+                    suspending_imported_names,
+                    diags,
                 );
             }
             if let Some(eb) = else_arm {
                 emit_loud_reject_for_imported_suspending_calls(
-                    &eb.stmts, suspending_imported_names, diags,
+                    &eb.stmts,
+                    suspending_imported_names,
+                    diags,
                 );
             }
         }
@@ -585,7 +622,9 @@ fn emit_loud_reject_in_expr(
                 emit_loud_reject_in_expr(arg, suspending_imported_names, diags);
             }
         }
-        Expr::IndexAccess { receiver, index, .. } => {
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => {
             emit_loud_reject_in_expr(receiver, suspending_imported_names, diags);
             emit_loud_reject_in_expr(index, suspending_imported_names, diags);
         }
@@ -608,7 +647,10 @@ fn emit_loud_reject_in_expr(
                 emit_loud_reject_in_expr(v, suspending_imported_names, diags);
             }
         }
-        Expr::Is { expr: inner, .. } | Expr::PostfixOp { receiver: inner, .. } => {
+        Expr::Is { expr: inner, .. }
+        | Expr::PostfixOp {
+            receiver: inner, ..
+        } => {
             emit_loud_reject_in_expr(inner, suspending_imported_names, diags);
         }
         Expr::InterpolatedString(parts, _) => {

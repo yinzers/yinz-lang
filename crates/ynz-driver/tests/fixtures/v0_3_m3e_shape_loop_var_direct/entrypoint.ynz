@@ -1,0 +1,18 @@
+// M3e danger-matrix: shape × loop-var × direct.
+// A shape loop variable crosses a cross-module suspending call inside a for-loop.
+// LLVM ABI padding for the shape may cause the per-element frame slot to be wrong.
+// Under the M3e universal reject this exits 1 (compile error).
+// Reject-baseline fixture (shape × loop-var × direct). Correct runtime output once the M3e plan's frame-serialization fix ships: "item: 10\nitem: 20" — currently a clean cross-module reject; correctness is tracked in the M3e execution plan.
+import { process } from `io_ops`
+
+shape Entry {
+  value: int
+}
+
+function entrypoint() -> nothing {
+  let entries: array<Entry> = [{ value: 10 }, { value: 20 }]
+  for (e in entries) {
+    process()
+    print(`item: ${e.value.toString()}`)
+  }
+}

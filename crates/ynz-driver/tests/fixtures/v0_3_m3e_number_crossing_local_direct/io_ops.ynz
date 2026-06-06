@@ -1,0 +1,6 @@
+// M3e danger-matrix: number type — exported suspending function.
+// This is the exporter; the dangerous frame-sizing happens in the importer's caller frame.
+
+export function fetchPrice() -> nothing {
+  sleep(10)
+}

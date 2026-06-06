@@ -1,0 +1,16 @@
+// M3e danger-matrix: string × crossing-local × direct.
+// A string local declared before the cross-module suspending call must hold its value after resume.
+// Under the M3e universal reject this exits 1 (compile error).
+// Reject-baseline fixture (string × crossing-local × direct). Correct runtime output once the M3e plan's frame-serialization fix ships: "before: hello\nafter: hello" — currently a clean cross-module reject; correctness is tracked in the M3e execution plan.
+import { fetchData } from `io_ops`
+
+function caller() -> nothing {
+  const name: string = "hello"
+  print(`before: ${name}`)
+  fetchData()
+  print(`after: ${name}`)
+}
+
+function entrypoint() -> nothing {
+  caller()
+}

@@ -1,0 +1,17 @@
+// M3e danger-matrix: int × crossing-local × 1-level transitive (escape #5).
+// The caller has its own int crossing-local AND calls a 1-level transitive suspender.
+// Escape #5: multi-slot caller frame + transitive callee = wrong total size from scalar.
+// Under the M3e universal reject this exits 1 (compile error).
+// Reject-baseline fixture (int × crossing-local × 1-level transitive). Correct runtime output once the M3e plan's frame-serialization fix ships: "before: 42\nafter: 42" — currently a clean cross-module reject; correctness is tracked in the M3e execution plan.
+import { runJob } from `task_ops`
+
+function caller() -> nothing {
+  let count: int = 42
+  print(`before: ${count.toString()}`)
+  runJob()
+  print(`after: ${count.toString()}`)
+}
+
+function entrypoint() -> nothing {
+  caller()
+}

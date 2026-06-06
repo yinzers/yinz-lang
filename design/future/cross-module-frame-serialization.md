@@ -1,104 +1,102 @@
 # Cross-Module Frame Serialization (M3e)
 
-**Status**: Deferred to v0.3-M3e. ALL cross-module suspending calls are rejected at compile
-time with a clean diagnostic until M3e ships. The universal reject replaced a leaky
-predictive guard (M3b Phase 1 close-out): five silent-crash escapes proved that typeck-side
-frame analysis cannot safely predict which cross-module cases codegen can handle.
+**Status**: Shipped in v0.3-M3e.
 
 ---
 
 ## WHAT
 
-Full FrameLayout serialization across the export table. Instead of a scalar `u64`
-approximation (`composed_frame_size`) for the saved-state size of an exported suspending
-function, the compiler serializes the entire `FrameLayout` struct into the export table
-and deserializes it at each import site.
+Codegen-side cross-module `frame_layouts_query` — a salsa-tracked query in `ynz-codegen`
+that computes LLVM-accurate `FrameLayout` values for every suspending function in a source
+file. The importer's codegen, for an imported suspending callee, resolves the callee's
+source file and calls `frame_layouts_query(callee_file)` to read the callee's real
+`total_size` and `n_locals` — the two values the importer needs to reserve and place the
+embedded sub-frame and cap the arg-write count. The query is salsa-memoized per source file
+and uses a single shared target-machine/data-layout constructor (Guard G1) so importer and
+exporter always use byte-identical LLVM ABI sizes.
 
-The serialized layout includes:
-- exact slot offsets for every crossing local (with LLVM-derived ABI sizes, not typeck approximations)
-- the full sub-frame tree (each nested suspending callee's slot range)
-- the EC staging-slot position when present
-- the state-counter offset
+The mechanism corrects five classes of silent crash that the prior scalar `composed_frame_size`
+approach could not handle:
 
-With the full layout, the importing module's `build_frame_layouts` can embed the foreign
-sub-frame at the correct offset instead of treating it as an opaque blob of `composed_frame_size` bytes.
+- exact slot offsets for every crossing local (LLVM-derived ABI sizes, not typeck approximations)
+- correct full sub-frame tree for re-export chains (recursive query call per callee)
+- correct EC staging-slot interaction with child sub-frame offsets
+- correct two-slot number/decimal128 crossing-local sizing
+- correct transitive × caller-frame composition
 
 ---
 
 ## WHY
 
-The typeck-side frame analysis (`is_composed_frame_simple`, now removed) reimplemented a
-subset of `build_frame_layouts` (the codegen pass that lays out state-machine frames) using
-only information from the exported module's AST and typeck types. It is a different,
-shallower algorithm than what codegen actually does — and it disagreed with codegen five
-times, each time producing a silent crash instead of a clean error:
+Two verified facts force the codegen-side query approach:
 
-1. **Re-export / multi-level transitive suspension**: Module B imports a suspending function
-   `f` from A and re-exports its own `g` that calls `f`. Module C imports `g`. C's caller
-   cannot embed B's sub-frame correctly because B's scalar size for `g` only accounts for
-   B's view of A's frame — not the full tree that C's codegen needs.
+**Fact 1 — Separate compilation (decisive).** `ynz-codegen` compiles one LLVM module per
+source file (one `.o` per file, linked by the system C linker). There is no single merged
+LLVM module. The importer cannot reach into the callee's LLVM module at its own compile
+time — the callee's `.o` comes from a separate `codegen_query` invocation. Any mechanism
+that requires the importer to read data that was computed inside the callee's `emit_artifact`
+pass must carry that data across the compilation boundary. The salsa in-process query result
+(`Arc<HashMap<String, FrameLayout>>`) is the correct carrier: it is computed once per source
+file, memoized, and available to any subsequent salsa query in the same process.
 
-2. **Shape-typed crossing locals**: A shape field's LLVM ABI size is computed by the backend
-   (target-dependent struct layout, padding, alignment). The typeck approximation counts
-   fields and assumes 8 bytes each. For shapes with mixed-width fields or nested shapes,
-   the approximation under-sizes the slot, corrupting whatever lives at the real end of
-   the slot in the calling frame.
+**Fact 2 — Shape ABI sizes require LLVM `TargetData` (decisive).** `FrameLayout` slot counts
+depend on each crossing-local's size in bytes. For shape-typed crossing locals, the byte size
+is the LLVM-padded ABI layout of the struct — target-dependent, alignment-padded, NOT the
+typeck field-count approximation (8 bytes × N fields). `TargetData` exists only in
+`ynz-codegen`. Any attempt to compute accurate layout in `ynz-typeck` would require either
+re-creating the LLVM data layout string in the type-checker (rebuilding the lossy parallel
+reimplementation we deleted) or linking LLVM into the type-checker (inverting the
+frontend/backend split that keeps `ynz-typeck` LLVM-free).
 
-3. **EC × transitive child sub-frames**: An errors-capable export that suspends transitively
-   (via an inner function that calls `sleep`) has a 16-byte staging slot whose position
-   interacts with the child sub-frame offsets. The scalar approach cannot reproduce the
-   exact layout the calling module's `build_frame_layouts` expects.
-
-4. **Number-type crossing locals in a cross-module caller**: A caller that has its own
-   number-typed crossing locals AND calls an imported suspending function needs both frames
-   composed correctly. The typeck analysis mis-sized the combined frame.
-
-5. **Transitive × caller-frame combinations**: Any combination where the caller itself has
-   a multi-slot frame AND the callee is a transitive suspender caused the approximation
-   to produce the wrong total size.
-
-All five classes produce silent memory corruption or crash without the universal loud-reject
-guard added in M3b Phase 1 close-out. M3e removes the guard and replaces it with correct
-serialization so ALL cross-module suspending combos work.
+**Why the prior mechanism was wrong.** The original deferral doc prescribed serializing the
+full `FrameLayout` struct into the export table and carrying it in the typeck-side
+`FunctionSig`. This fails on both facts: you cannot compute an accurate `FrameLayout` in
+typeck (Fact 2), and carrying it in `FunctionSig` would be serializing an in-process value
+across a fictitious boundary (separate compilation means the callee's layout is computed by
+its own `codegen_query`, not at import-resolution time in typeck — Fact 1). The codegen-side
+query is the sound realization: one computation, LLVM-accurate, in the right crate.
 
 ---
 
-## COST (implementation cost at fix time)
+## COST (implementation — already paid in v0.3-M3e)
 
-Serializing `FrameLayout` requires:
+1. Extract `frame_layouts_query(db, source) -> Arc<HashMap<String, FrameLayout>>` in
+   `ynz-codegen/src/queries.rs`. Creates a local inkwell `Context` (dropped before return —
+   only `u64`/`FrameLayout` data escapes, no inkwell types in return value).
 
-1. **`FrameLayout` → wire format**: derive `serde::Serialize / Deserialize` (or a manual
-   binary format) on the `FrameLayout` struct in `ynz-codegen`. The struct currently lives
-   only in the codegen pass and is not shared with `ynz-typeck`.
+2. One shared target-machine/data-layout constructor (Guard G1) — a single function owning
+   `TargetMachine::get_default_triple()` + CPU `"generic"` + data-layout string, called by
+   both `emit_artifact` and `frame_layouts_query`. No magic-string duplication.
 
-2. **Move or expose `FrameLayout`**: `ynz-typeck` needs to read the serialized layout at
-   import-resolution time. Either move the type to a shared crate (`ynz-types` or similar)
-   or add a cross-crate accessor. This is the main structural change — it introduces a
-   compile-time dependency from typeck on codegen types, which the current architecture
-   deliberately avoids to keep the salsa query graph acyclic.
+3. Recursive cross-module child resolution (Guard G2): the callee-size resolver, for an
+   imported suspending callee, calls `frame_layouts_query(callee_file)` — NOT the deleted
+   `composed_frame_size` scalar. Re-export chains (A→B→C) recurse naturally and terminate
+   (import DAG).
 
-3. **Export-table wire format**: `FunctionSig` (in `ynz-typeck`) currently stores
-   `composed_frame_size: u64`. M3e replaces that with `frame_layout: Option<FrameLayout>`.
-   (`composed_frame_simple: bool` was removed in M3b Phase 1 close-out — no longer needed
-   for the universal-reject guard.) The salsa-tracked `module_signatures_query` result will
-   change shape, requiring a coordinated update across `resolve_import.rs`, `queries.rs`,
-   `signatures.rs`, and any test that constructs `FunctionSig` literals.
+4. Salsa cycle recovery (Guard G3): `cycle_fn`/`cycle_initial` returning an empty map for
+   the already-handled circular-import case.
 
-4. **`build_frame_layouts` in the importing module**: currently seeds imported-callee slots
-   with `sig.composed_frame_size`. M3e changes this to embed the deserialized layout at the
-   exact offset, using the same slot-placement arithmetic as the exporting module's pass.
+5. Delete `compute_composed_frame_size` + `typeck_type_frame_slots` + `FunctionSig.composed_frame_size`
+   (the lossy parallel reimplementation, no-duct-tape #7).
 
-Estimated scope: one focused session. The structural crate-dependency question (point 2)
-is the decision-point that may require a pre-design step.
+6. Lift the M3b Phase 1 universal-reject guard once the full danger matrix runs correctly
+   through the real compiler.
+
+The `.ynzlib` binary-package format (`design/future/packages.md`), when it ships, will need
+to serialize `frame_layouts_query` results into the package artifact. That is a clean future
+extension — the in-process salsa `Arc` is not a serialization blocker today, and pre-building
+the serialization now would be premature (build-twice against a not-yet-specified wire format).
 
 ---
 
 ## TRIGGER
 
-The universal loud-reject guard added in M3b Phase 1 close-out (any imported suspending
-function → compile error) is the direct trigger: any user who wants cross-module suspension
-is blocked until M3e ships. When user reports of the rejection accumulate, or when a stdlib
-module needs cross-module suspension in any form, M3e becomes load-bearing.
+The universal loud-reject guard from M3b Phase 1 (any imported suspending function →
+compile error) is the direct trigger: any user who wants cross-module suspension is blocked
+until M3e ships. When user reports of the rejection accumulate, or when a stdlib module needs
+cross-module suspension in any form, M3e becomes load-bearing.
 
-The universal reject is provably safe — it rejects everything so it cannot miss a case.
-M3e replaces it with correct serialization so all cross-module suspending combos work.
+M3e replaces the universal reject with correct codegen so all analyzable cross-module
+suspending combos work. Genuinely-unanalyzable edges (dynamic-dispatch-through-vtable, FFI
+cross-module suspending calls) continue to reject via the existing may-block unresolvable-edge
+path — that is correct behavior, not a band-aid.

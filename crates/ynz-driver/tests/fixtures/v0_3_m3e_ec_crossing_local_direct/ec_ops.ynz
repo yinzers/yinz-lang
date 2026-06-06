@@ -1,0 +1,7 @@
+// M3e danger-matrix: errors-capable export that suspends directly.
+// Returns int errors — the {i64, i64} staging slot interacts with the caller's frame.
+
+export function compute() -> int errors {
+  sleep(10)
+  return 99
+}

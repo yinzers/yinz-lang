@@ -1,0 +1,8 @@
+// M3e danger-matrix: shape type — exported suspending function.
+// The shape-typed crossing-local is in the CALLER's frame (entrypoint module).
+// LLVM ABI sizes for shapes may differ from the typeck field-count approximation
+// (escape #2), causing the caller's frame to be under-sized.
+
+export function fetchItem() -> nothing {
+  sleep(10)
+}

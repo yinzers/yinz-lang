@@ -1,0 +1,19 @@
+// M3e danger-matrix: errors-capable × crossing-local × direct (escape #3).
+// An int crossing-local lives across a cross-module errors-capable suspending call.
+// The {i64, i64} EC result ABI stacks on top of the caller's frame slots.
+// Under the M3e universal reject this exits 1 (compile error).
+// Reject-baseline fixture (errors-capable × crossing-local × direct). Correct runtime output once the M3e plan's frame-serialization fix ships: "before: 5\nresult: 99\nafter: 5" — currently a clean cross-module reject; correctness is tracked in the M3e execution plan.
+import { compute } from `ec_ops`
+
+function caller() -> nothing {
+  let x: int = 5
+  print(`before: ${x.toString()}`)
+  const result = compute()
+  const v = result.or(0)
+  print(`result: ${v.toString()}`)
+  print(`after: ${x.toString()}`)
+}
+
+function entrypoint() -> nothing {
+  caller()
+}

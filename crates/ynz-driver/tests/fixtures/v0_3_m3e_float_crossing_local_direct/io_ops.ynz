@@ -1,0 +1,6 @@
+// M3e danger-matrix: float type — exported suspending function.
+// Float (f64) crossing-local must survive the resume boundary (8-byte slot).
+
+export function fetchReading() -> nothing {
+  sleep(10)
+}

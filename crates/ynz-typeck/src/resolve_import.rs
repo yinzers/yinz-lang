@@ -414,12 +414,8 @@ fn compute_composed_frame_size(
             // fallback (1 slot) unless the name appears in expr_types as a Number type
             // or ErrorsCapable type. Shapes are approximated by ShapeTable field count.
             // Exact correctness is not required — only the conservative (≥ real) property.
-            let ty = find_let_typeck_type(
-                &fn_decl.body.stmts,
-                cname.as_str(),
-                expr_types,
-                shape_table,
-            );
+            let ty =
+                find_let_typeck_type(&fn_decl.body.stmts, cname.as_str(), expr_types, shape_table);
             typeck_type_frame_slots(&ty, shape_table)
         })
         .sum();
@@ -518,7 +514,12 @@ fn collect_callees_in_stmt(
             collect_callees_in_expr(target, suspends_set, seen, out);
             collect_callees_in_expr(value, suspends_set, seen, out);
         }
-        Stmt::IndexAssign { receiver, index, value, .. } => {
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => {
             collect_callees_in_expr(receiver, suspends_set, seen, out);
             collect_callees_in_expr(index, suspends_set, seen, out);
             collect_callees_in_expr(value, suspends_set, seen, out);
@@ -541,7 +542,12 @@ fn collect_callees_in_stmt(
                 collect_callees_in_stmt(s, suspends_set, seen, out);
             }
         }
-        Stmt::Match { scrutinee, arms, else_arm, .. } => {
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
             collect_callees_in_expr(scrutinee, suspends_set, seen, out);
             for arm in arms {
                 for s in &arm.body.stmts {
@@ -593,7 +599,9 @@ fn collect_callees_in_expr(
                 collect_callees_in_expr(arg, suspends_set, seen, out);
             }
         }
-        Expr::IndexAccess { receiver, index, .. } => {
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => {
             collect_callees_in_expr(receiver, suspends_set, seen, out);
             collect_callees_in_expr(index, suspends_set, seen, out);
         }
@@ -761,7 +769,8 @@ fn load_export_table(
     // The typeck-side loud-reject guard (queries.rs) now universally rejects ALL calls to
     // imported suspending functions, so the composed_frame_size value is only reached for
     // SAME-MODULE suspending callees — the intra-module transitive case that works correctly.
-    let mut frame_size_memo: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    let mut frame_size_memo: std::collections::HashMap<String, u64> =
+        std::collections::HashMap::new();
     for (name, sig) in export_table.functions.iter_mut() {
         sig.suspends = check_out.suspends_set.contains(name.as_str());
         if sig.suspends {

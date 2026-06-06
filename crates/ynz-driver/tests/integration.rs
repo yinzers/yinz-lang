@@ -1776,7 +1776,8 @@ fn v03_m3b_cross_module_suspending_caller_exits_one_clean_reject() {
     // or silently crashing. This was previously "working" under the predictive
     // composed_frame_simple guard, but that guard escaped 5 times — the universal reject
     // is the provably sound floor. M3e will restore correct execution.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_cross_module_suspending_caller"));
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_cross_module_suspending_caller"));
     assert_eq!(
         code, 1,
         "cross-module suspending caller must exit 1 (universal reject); exit was {code}; stderr:\n{stderr}"
@@ -1802,8 +1803,7 @@ fn v03_m3b_cross_module_int_return_exits_one_clean_reject() {
     // WHY: cross-module suspending call with `-> int` return. Under the M3e universal
     // reject this is a clean compile error (exit 1), not a live run. Previously
     // "working" via the predictive guard; that guard escaped 5 times. M3e restores.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3b_cross_module_int_return"));
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_cross_module_int_return"));
     assert_eq!(
         code, 1,
         "cross-module int return must exit 1 (universal reject); exit was {code}; stderr:\n{stderr}"
@@ -1823,8 +1823,7 @@ fn v03_m3b_cross_module_errors_capable_exits_one_clean_reject() {
     // WHY: cross-module suspending call with `-> T errors` return. Universal reject
     // (exit 1 + diagnostic). Previously "working" via the predictive guard; that
     // guard escaped 5 times. M3e restores correct execution for all return types.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3b_cross_module_errors_capable"));
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_cross_module_errors_capable"));
     assert_eq!(
         code, 1,
         "cross-module errors-capable return must exit 1 (universal reject); exit was {code}; stderr:\n{stderr}"
@@ -1844,8 +1843,7 @@ fn v03_m3b_transitive_suspend_exits_one_clean_reject() {
     // WHY: transitive suspension through a non-exported inner function is a cross-module
     // suspending call. Universal reject (exit 1 + diagnostic). Previously "working" via
     // the predictive guard; that guard escaped 5 times. M3e restores.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3b_transitive_suspend"));
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_transitive_suspend"));
     assert_eq!(
         code, 1,
         "transitive suspend must exit 1 (universal reject); exit was {code}; stderr:\n{stderr}"
@@ -1865,8 +1863,7 @@ fn v03_m3b_crossing_local_cross_module_exits_one_clean_reject() {
     // WHY: a crossing local across a cross-module suspending call. Universal reject
     // (exit 1 + diagnostic). Previously "working" via the predictive guard; that
     // guard escaped 5 times. M3e restores correct execution including crossing locals.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3b_crossing_local_cross_module"));
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_crossing_local_cross_module"));
     assert_eq!(
         code, 1,
         "crossing local cross-module must exit 1 (universal reject); exit was {code}; stderr:\n{stderr}"
@@ -1887,8 +1884,7 @@ fn v03_m3b_circular_import_exits_one_clean_diagnostic() {
     // (exit 1) rather than a salsa "dependency graph cycle" ICE (exit 2). The salsa
     // cycle_fn/cycle_initial recovery on module_signatures_query and check_query converts
     // the infinite dependency chain into a graceful compiler error.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3b_circular_import"));
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_circular_import"));
     assert_eq!(
         code, 1,
         "circular import must exit 1 (compiler error); exit code was {code}; stderr:\n{stderr}"
@@ -1912,8 +1908,7 @@ fn v03_m3b_loud_reject_reexport_exits_one_clean_diagnostic() {
     // combos the scalar composed_frame_size cannot safely reconstruct. Without the
     // M3e guard this produces a SIGILL (exit 132), not a clean error. The guard must
     // emit a WHAT/WHAT-INSTEAD/WHY diagnostic and exit 1 — not crash the binary.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3b_loud_reject_reexport"));
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_loud_reject_reexport"));
     assert_eq!(
         code, 1,
         "loud-reject reexport must exit 1 (compile error); exit code was {code}; stderr:\n{stderr}"
@@ -1938,8 +1933,7 @@ fn v03_m3b_loud_reject_shape_crossing_exits_one_clean_diagnostic() {
     // second unsupported combo. LLVM ABI sizes for shapes may differ from the typeck
     // field-count approximation, causing silent memory corruption. The guard must
     // produce a clean compile error (exit 1), not a SIGILL (exit 132).
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3b_loud_reject_shape_crossing"));
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_loud_reject_shape_crossing"));
     assert_eq!(
         code, 1,
         "loud-reject shape crossing must exit 1 (compile error); exit code was {code}; stderr:\n{stderr}"
@@ -1960,8 +1954,7 @@ fn v03_m3b_loud_reject_ec_transitive_exits_one_clean_diagnostic() {
     // non-exported function that calls sleep) is the third unsupported combo. The EC
     // staging slot + child sub-frame interact in ways the scalar approach cannot
     // reconstruct. The guard must produce a clean compile error (exit 1), not crash.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3b_loud_reject_ec_transitive"));
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_loud_reject_ec_transitive"));
     assert_eq!(
         code, 1,
         "loud-reject ec-transitive must exit 1 (compile error); exit code was {code}; stderr:\n{stderr}"
@@ -1974,6 +1967,142 @@ fn v03_m3b_loud_reject_ec_transitive_exits_one_clean_diagnostic() {
         stderr.contains("module boundary"),
         "stderr must contain module boundary diagnostic; stderr:\n{stderr}"
     );
+}
+
+// ── v0.3-M3e: cross-module danger-matrix fixtures (reject-asserting baseline) ──
+//
+// WHY: these fixtures cover the FULL danger matrix for cross-module suspending
+// calls (value type x position x call shape x wide/EC). Under the M3e universal
+// reject every fixture exits 1 with the "module boundary" diagnostic and NEVER
+// crashes (no SIGILL/abort). These are the current reject-asserting contracts
+// for the baseline; the codegen-query lift is tracked in the M3e execution plan.
+//
+// All 5 M3b silent-crash escapes are represented:
+//   #1 -- re-export chain (v0_3_m3e_reexport_chain_int, v0_3_m3e_reexport_ec_number)
+//   #2 -- shape crossing-local (v0_3_m3e_shape_crossing_local_direct, v0_3_m3e_shape_loop_var_direct)
+//   #3 -- EC x transitive (v0_3_m3e_ec_crossing_local_direct, v0_3_m3e_reexport_ec_number)
+//   #4 -- number/decimal128 crossing-local (v0_3_m3e_number_crossing_local_direct, v0_3_m3e_reexport_ec_number)
+//   #5 -- transitive x caller-frame (v0_3_m3e_int_crossing_local_transitive, v0_3_m3e_caller_own_frame, v0_3_m3e_reexport_ec_number)
+
+fn assert_m3e_reject(fixture_name: &str) {
+    // WHY: shared assertion for the M3e reject-baseline harness. Every M3e fixture must
+    // exit 1 with the "module boundary" diagnostic and no crash signal under the universal
+    // reject. This is the current reject-baseline contract for all M3e cross-module
+    // suspending fixtures.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(fixture_name));
+    assert_eq!(
+        code, 1,
+        "{fixture_name}: must exit 1 (universal reject); exit was {code}; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "{fixture_name}: no program output expected from a compile error; stdout:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("module boundary"),
+        "{fixture_name}: stderr must contain module boundary diagnostic; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("SIGILL") && !stderr.contains("illegal instruction"),
+        "{fixture_name}: stderr must not contain crash signal text; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3e_bool_crossing_local_direct_exits_one_clean_reject() {
+    // WHY: bool x crossing-local x direct. Bool local must survive resume boundary; under
+    // the universal reject this is a clean compile error (exit 1, no crash).
+    assert_m3e_reject("v0_3_m3e_bool_crossing_local_direct");
+}
+
+#[test]
+fn v03_m3e_float_crossing_local_direct_exits_one_clean_reject() {
+    // WHY: float x crossing-local x direct. Float (f64) local must survive resume boundary.
+    // Under the universal reject this is a clean compile error (exit 1, no crash).
+    assert_m3e_reject("v0_3_m3e_float_crossing_local_direct");
+}
+
+#[test]
+fn v03_m3e_string_crossing_local_direct_exits_one_clean_reject() {
+    // WHY: string x crossing-local x direct. String pointer must survive resume boundary.
+    // Under the universal reject this is a clean compile error (exit 1, no crash).
+    assert_m3e_reject("v0_3_m3e_string_crossing_local_direct");
+}
+
+#[test]
+fn v03_m3e_number_crossing_local_direct_exits_one_clean_reject() {
+    // WHY: number/decimal128 x crossing-local x direct (escape #4). A number local uses
+    // two consecutive frame slots (lo + hi halves of the i128). The scalar typeck analysis
+    // counted one slot, under-sizing the frame. Under the universal reject this is a clean
+    // compile error (exit 1, no crash).
+    assert_m3e_reject("v0_3_m3e_number_crossing_local_direct");
+}
+
+#[test]
+fn v03_m3e_shape_crossing_local_direct_exits_one_clean_reject() {
+    // WHY: shape x crossing-local x direct (escape #2). LLVM ABI padding for the shape may
+    // differ from the typeck "8 bytes per field" count, causing under-sizing. Under the
+    // universal reject this is a clean compile error (exit 1, no crash).
+    assert_m3e_reject("v0_3_m3e_shape_crossing_local_direct");
+}
+
+#[test]
+fn v03_m3e_ec_crossing_local_direct_exits_one_clean_reject() {
+    // WHY: errors-capable x crossing-local x direct (escape #3). The {i64, i64} EC staging
+    // slot stacks on top of the caller's crossing-local slots. Under the universal reject
+    // this is a clean compile error (exit 1, no crash).
+    assert_m3e_reject("v0_3_m3e_ec_crossing_local_direct");
+}
+
+#[test]
+fn v03_m3e_int_loop_var_direct_exits_one_clean_reject() {
+    // WHY: int x loop-var x direct. An int loop variable crosses the call boundary inside
+    // a for-loop. Under the universal reject this is a clean compile error (exit 1,
+    // no crash).
+    assert_m3e_reject("v0_3_m3e_int_loop_var_direct");
+}
+
+#[test]
+fn v03_m3e_shape_loop_var_direct_exits_one_clean_reject() {
+    // WHY: shape x loop-var x direct (escape #2). A shape loop variable crosses the call
+    // boundary inside a for-loop; LLVM padding may mis-size the per-element slot. Under
+    // the universal reject this is a clean compile error (exit 1, no crash).
+    assert_m3e_reject("v0_3_m3e_shape_loop_var_direct");
+}
+
+#[test]
+fn v03_m3e_int_crossing_local_transitive_exits_one_clean_reject() {
+    // WHY: int x crossing-local x 1-level transitive (escape #5). The caller has its own
+    // int crossing-local AND calls a 1-level transitive suspender whose composed frame is
+    // larger than a flat frame. The scalar could not represent the combined size. Under
+    // the universal reject this is a clean compile error (exit 1, no crash).
+    assert_m3e_reject("v0_3_m3e_int_crossing_local_transitive");
+}
+
+#[test]
+fn v03_m3e_reexport_chain_int_exits_one_clean_reject() {
+    // WHY: int x return x re-export chain A->B->C (escape #1). B's frame as seen by C is
+    // under-sized without the recursive codegen-query fix (A's sub-frame missing). Under
+    // the universal reject this is a clean compile error (exit 1, no crash).
+    assert_m3e_reject("v0_3_m3e_reexport_chain_int");
+}
+
+#[test]
+fn v03_m3e_reexport_ec_number_exits_one_clean_reject() {
+    // WHY: stacked escapes #1+#3+#4 -- re-export x EC x number (escape #5). B's frame must
+    // correctly include A's sub-frame, the EC staging slot, and two number/decimal128 slots
+    // (lo + hi). This is the highest-risk fixture for residual offset bugs in the lift phase.
+    // Under the universal reject this is a clean compile error (exit 1, no crash).
+    assert_m3e_reject("v0_3_m3e_reexport_ec_number");
+}
+
+#[test]
+fn v03_m3e_caller_own_frame_exits_one_clean_reject() {
+    // WHY: caller-also-has-own-frame (escape #5). The caller has three int crossing-locals
+    // (multi-slot frame) AND an embedded sub-frame for the imported suspender. Without the
+    // codegen-query fix, the total is wrong. Under the universal reject this is a clean
+    // compile error (exit 1, no crash).
+    assert_m3e_reject("v0_3_m3e_caller_own_frame");
 }
 
 // ── M8 P6: bignum — number<N> for N > 34 ─────────────────────────────────────
