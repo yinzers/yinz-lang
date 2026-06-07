@@ -9024,6 +9024,260 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
     }
 }
 
+/// What the background task closure must do with a heap-copied arg after the call returns.
+///
+/// Each `background` arg that was heap-copied (to survive the spawner's frame return) needs
+/// exactly one matching free call inside the closure. Primitives and strings need no free:
+/// primitives are i64 by-value, strings are immutable heap pointers that outlive the frame.
+///
+/// This enum is produced by `prepare_bg_arg_for_ctx` at the spawn site and consumed by the
+/// closure body emitter to generate the matching `ynz_free` / `ynz_array_drop` calls.
+#[derive(Clone, Debug)]
+enum BgArgFreeKind {
+    /// No heap allocation to free — primitives (int/float/bool) and strings.
+    None,
+    /// Shape heap copy: call `ynz_free(ptr, byte_size)` after the fn call.
+    HeapShape { byte_size: u64 },
+    /// Primitive array clone: call `ynz_array_drop(ptr)` after the fn call.
+    HeapArrayPrimitive,
+}
+
+/// Prepare one `background` argument for storage in the task ctx.
+///
+/// Heap types whose pointer would alias the spawner's stack frame are upgraded to
+/// independent heap allocations here — their pointed-to data is `ynz_alloc`'d and
+/// the returned value is the heap pointer (safe to pass to the task via the ctx).
+/// The returned `BgArgFreeKind` tells the closure body what to free after the call.
+///
+/// Two kinds of bg args reach this function:
+/// - Plain-ident args where typeck chose Copy (inferred from use-after-spawn).
+/// - Explicit `.copy()` args whose inner `lower_expr` produced a Shape alloca pointer.
+///   Those also point into spawner stack memory and need the same heap-upgrade.
+///
+/// In both cases the heap allocation outlives the spawner's frame (ynz_rt_spawn_blocking
+/// copies the ctx bytes — the i64 pointer value — before returning; the pointed-to
+/// heap data is what must survive).
+///
+/// Per-type decisions:
+/// - `Shape`: `ynz_alloc(struct_bytes)` + memcpy. BgArgFreeKind::HeapShape.
+/// - `String`: immutable heap bytes, already outlive the spawner frame. BgArgFreeKind::None.
+/// - `array<Int|Float|Bool>`: `ynz_array_clone_primitive`. BgArgFreeKind::HeapArrayPrimitive.
+/// - Primitives (Int/Bool/Float): by-value i64, no pointer. BgArgFreeKind::None.
+/// - Other heap types (array<heap_elem>, map, maybe, union): not yet supported here;
+///   these fall through unchanged (same pointer-alias behavior as today — the caller
+///   is responsible for not mutating these after the spawn, which the typeck enforces
+///   by consuming give bindings and producing a copy warning for inferred-copy cases).
+fn prepare_bg_arg_for_ctx<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    arg: &ynz_ast::nodes::Expr,
+    val: inkwell::values::BasicValueEnum<'ctx>,
+    ty: &Type,
+) -> Result<(inkwell::values::BasicValueEnum<'ctx>, BgArgFreeKind), String> {
+    // Determine whether this arg is a heap type that needs the spawn-lifetime fix.
+    //
+    // Both Give and Copy paths need heap-upgrade for Shape/array<primitive> args:
+    // - Copy: the caller keeps the original; the task needs an independent heap copy.
+    // - Give: the caller no longer uses the value, but the Stack alloca holding the
+    //   struct data is still on the spawner's frame — it is freed when the spawner
+    //   returns. If the spawner returns before the task reads, the task has a dangling
+    //   pointer into freed stack memory (UAF). Heap-upgrading the Give path produces
+    //   a heap copy the task owns; the spawner's alloca is freed harmlessly by the
+    //   normal stack unwind.
+    //
+    // For both cases, the closure body must call ynz_free after the original fn
+    // returns, matching the ynz_alloc emitted here.
+    //
+    // Primitives (Int/Bool/Float) are i64 by-value and need no heap-upgrade.
+    // Strings are immutable heap bytes; the pointer itself survives any frame.
+    let is_heap_arg = match arg {
+        ynz_ast::nodes::Expr::Ident(_, s) => {
+            // Plain ident: any inferred Give or Copy ownership gets the heap fix.
+            let key = (s.start, s.end);
+            cg.typed.background_arg_inferred_ownership.contains_key(&key)
+        }
+        // Explicit .copy() postfix — always heap-upgrade for heap types.
+        ynz_ast::nodes::Expr::PostfixOp {
+            op: ynz_ast::nodes::PostfixOpKind::Copy,
+            ..
+        } => true,
+        _ => false,
+    };
+
+    if !is_heap_arg {
+        return Ok((val, BgArgFreeKind::None));
+    }
+
+    let resolved = cg.resolve_type(ty);
+    match &resolved {
+        Type::Shape { name } => {
+            // Shape: the val is a pointer to struct data on the spawner's stack (whether the
+            // copy came from an alloca+memcpy in inferred-copy or explicit .copy() codegen,
+            // or from the original shape allocation in a give path). Heap-allocate the struct
+            // bytes so the task's pointer survives the spawner's frame return.
+            let name = name.clone();
+            let struct_ty = cg
+                .shape_types
+                .get(&name)
+                .ok_or_else(|| format!("bg heap copy: LLVM type for `{}` not found", name))?;
+            // Byte size of the struct according to LLVM's target data layout.
+            let byte_size_val = struct_ty
+                .size_of()
+                .ok_or_else(|| format!("bg heap copy: size_of unavailable for `{}`", name))?;
+            let byte_size_i64 = cg
+                .builder
+                .build_int_z_extend(byte_size_val, cg.i64(), "shape_size_i64")
+                .map_err(|e| format!("bg heap copy: size zext: {e}"))?;
+            let heap_ptr = cg
+                .builder
+                .build_call(cg.rt.ynz_alloc, &[byte_size_i64.into()], "bg_shape_heap")
+                .map_err(|e| format!("bg heap copy: ynz_alloc call: {e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or_else(|| "bg heap copy: ynz_alloc returned void".to_string())?
+                .into_pointer_value();
+            let struct_val = cg
+                .builder
+                .build_load(struct_ty, val.into_pointer_value(), "bg_shape_src")
+                .map_err(|e| format!("bg heap copy: load src: {e}"))?;
+            cg.builder
+                .build_store(heap_ptr, struct_val)
+                .map_err(|e| format!("bg heap copy: store to heap: {e}"))?;
+            // Byte size for the BgArgFreeKind free call. LLVM `size_of()` is a constant
+            // EXPRESSION (`ptrtoint getelementptr`), NOT a literal ConstantInt, so
+            // `get_zero_extended_constant()` returns None here — the fallback is taken in
+            // practice, not as an error path.
+            //
+            // @design-decision Fall back to 0 when the constant can't be extracted.
+            // @rationale `ynz_free` ignores its size argument today (it wraps libc `free`,
+            //   which tracks allocation size internally), so 0 is observably correct now.
+            //   The authoritative size lives in `shape_abi_sizes` (TargetData::get_abi_size)
+            //   but is not threaded into this helper; wiring it for a currently-ignored value
+            //   would be gold-plating (YAGNI).
+            // @follow-up When kernel-mode sized-dealloc lands (a custom allocator whose free
+            //   DOES use the size), thread `shape_abi_sizes` into `prepare_bg_arg_for_ctx` and
+            //   look the size up by shape name instead of this fallback.
+            // @triggers `--kernel` sized-dealloc support (design/future/no-runtime-mode.md).
+            let byte_size = byte_size_val.get_zero_extended_constant().unwrap_or(0);
+            Ok((heap_ptr.into(), BgArgFreeKind::HeapShape { byte_size }))
+        }
+        Type::BuiltinArray { elem } => {
+            // Clone a primitive-element array so the task gets an independent copy.
+            // For heap-element arrays (shapes, strings, etc.) we cannot recursively
+            // deep-copy without knowing element copy semantics — that is the m3c array-by-value
+            // ABI work. Those fall through unchanged (same behavior as today's explicit
+            // `.copy()` path).
+            let is_primitive_elem = matches!(
+                elem.as_ref(),
+                Type::Int | Type::Bool | Type::Float
+            );
+            if is_primitive_elem {
+                let clone_ptr = cg
+                    .builder
+                    .build_call(
+                        cg.rt.ynz_array_clone_primitive,
+                        &[val.into_pointer_value().into()],
+                        "bg_arr_clone",
+                    )
+                    .map_err(|e| format!("bg arr clone: {e}"))?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or_else(|| "bg arr clone: returned void".to_string())?;
+                Ok((clone_ptr, BgArgFreeKind::HeapArrayPrimitive))
+            } else {
+                // array<heap_elem>: recursive deep-copy is m3c ABI work.
+                // Pass as-is — same pointer-alias behavior as today's explicit `.copy()` on
+                // these types. The binding is already consumed (give path) or copied-shallow
+                // (explicit .copy() path); the task should not mutate elements.
+                Ok((val, BgArgFreeKind::None))
+            }
+        }
+        Type::String => {
+            // String bytes are heap-allocated and immutable — the pointer itself survives the
+            // spawner's frame independently of the stack. No heap copy needed.
+            Ok((val, BgArgFreeKind::None))
+        }
+        _ => {
+            // Primitives (Int/Bool/Float) are i64 by-value — no pointer involved.
+            // All other heap types (map, maybe, union) alias today on explicit .copy() too;
+            // that is the m3c scope, not changed here.
+            Ok((val, BgArgFreeKind::None))
+        }
+    }
+}
+
+/// Emit the free calls for heap-copied `background` args inside the closure body.
+///
+/// After the original function call, each arg that was heap-allocated for the task must be
+/// freed exactly once. Called from inside the closure (`ynz_bg_<name>_<uid>`) after
+/// the original fn call and before the closure returns.
+///
+/// The `ctx_arg` pointer and `arg_types` give the slot layout; `free_kinds` is parallel to
+/// `arg_types` and was recorded at the spawn site.
+fn emit_bg_arg_frees<'ctx>(
+    cg_builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RuntimeDecls<'ctx>,
+    i64_ty: inkwell::types::IntType<'ctx>,
+    ptr_ty: inkwell::types::PointerType<'ctx>,
+    ctx_arg: inkwell::values::PointerValue<'ctx>,
+    free_kinds: &[BgArgFreeKind],
+) -> Result<(), String> {
+    for (i, kind) in free_kinds.iter().enumerate() {
+        match kind {
+            BgArgFreeKind::None => {}
+            BgArgFreeKind::HeapShape { byte_size } => {
+                let slot = unsafe {
+                    cg_builder
+                        .build_gep(
+                            i64_ty,
+                            ctx_arg,
+                            &[i64_ty.const_int(i as u64, false)],
+                            "free_slot",
+                        )
+                        .map_err(|e| format!("bg free gep: {e}"))?
+                };
+                let bits = cg_builder
+                    .build_load(i64_ty, slot, "free_bits")
+                    .map_err(|e| format!("bg free load: {e}"))?
+                    .into_int_value();
+                let heap_ptr = cg_builder
+                    .build_int_to_ptr(bits, ptr_ty, "free_ptr")
+                    .map_err(|e| format!("bg free inttoptr: {e}"))?;
+                let size_val = i64_ty.const_int(*byte_size, false);
+                cg_builder
+                    .build_call(
+                        rt.ynz_free,
+                        &[heap_ptr.into(), size_val.into()],
+                        "bg_shape_free",
+                    )
+                    .map_err(|e| format!("bg shape free call: {e}"))?;
+            }
+            BgArgFreeKind::HeapArrayPrimitive => {
+                let slot = unsafe {
+                    cg_builder
+                        .build_gep(
+                            i64_ty,
+                            ctx_arg,
+                            &[i64_ty.const_int(i as u64, false)],
+                            "free_arr_slot",
+                        )
+                        .map_err(|e| format!("bg arr free gep: {e}"))?
+                };
+                let bits = cg_builder
+                    .build_load(i64_ty, slot, "free_arr_bits")
+                    .map_err(|e| format!("bg arr free load: {e}"))?
+                    .into_int_value();
+                let heap_ptr = cg_builder
+                    .build_int_to_ptr(bits, ptr_ty, "free_arr_ptr")
+                    .map_err(|e| format!("bg arr free inttoptr: {e}"))?;
+                cg_builder
+                    .build_call(rt.ynz_array_drop, &[heap_ptr.into()], "bg_arr_drop")
+                    .map_err(|e| format!("bg arr drop call: {e}"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Lower `background fn(args)` to `ynz_rt_spawn_blocking`.
 ///
 /// # Approach
@@ -9083,16 +9337,23 @@ fn lower_expr_background<'ctx>(
     }
 
     // Step 1: evaluate arguments on the calling thread.
+    // Heap types whose pointer would alias the spawner's stack frame are heap-upgraded via
+    // `prepare_bg_arg_for_ctx`: the pointed-to data is ynz_alloc'd so the task's pointer
+    // survives the spawner's frame return. The returned BgArgFreeKind records what the closure
+    // body must free after calling the original fn.
     let mut arg_vals_i64: Vec<inkwell::values::IntValue<'ctx>> = Vec::new();
     let mut arg_types: Vec<Type> = Vec::new();
+    let mut free_kinds: Vec<BgArgFreeKind> = Vec::new();
     for arg in &call.args {
         let val = lower_expr(cg, arg)?;
         let ty = cg.expr_type(arg);
+        let (val, kind) = prepare_bg_arg_for_ctx(cg, arg, val, &ty)?;
         let bits = cg
             .to_i64_bits(val, &ty)
             .map_err(|e| format!("background arg to_i64_bits: {e}"))?;
         arg_vals_i64.push(bits);
         arg_types.push(ty);
+        free_kinds.push(kind);
     }
 
     let n_args = arg_vals_i64.len();
@@ -9206,6 +9467,14 @@ fn lower_expr_background<'ctx>(
     cg.builder
         .build_call(target_fn, &call_args, "bg_call")
         .map_err(|e| format!("closure call: {e}"))?;
+
+    // Free any heap-copied args now that the original fn has returned.
+    // Each BgArgFreeKind::HeapShape/HeapArrayPrimitive slot holds a heap pointer that was
+    // ynz_alloc'd at spawn time and must be freed exactly once here.
+    let ptr_ty = cg.ctx.ptr_type(inkwell::AddressSpace::default());
+    emit_bg_arg_frees(&cg.builder, cg.rt, cg.i64(), ptr_ty, ctx_arg, &free_kinds)
+        .map_err(|e| format!("bg arg free: {e}"))?;
+
     cg.builder
         .build_return(None)
         .map_err(|e| format!("closure ret: {e}"))?;
@@ -9268,16 +9537,22 @@ fn lower_expr_background_state_machine<'ctx>(
     callee_name: &str,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
     // Step 1: evaluate arguments and convert to i64 bits.
+    // Heap-upgrade copied args so task pointers survive the spawner's frame return.
+    // The resulting heap allocations (Shape via ynz_alloc / array<primitive> via
+    // ynz_array_clone_primitive) are stored in the frame's local slots as i64 bit-patterns.
+    // SpawnStateFnFuture::drop frees them (via arg_drop_ptr/arg_drop_count) after the
+    // callee has read them, keeping alloc/free balanced on every task exit path.
     let mut arg_vals_i64: Vec<inkwell::values::IntValue<'ctx>> = Vec::new();
-    let mut arg_types: Vec<Type> = Vec::new();
+    let mut free_kinds: Vec<BgArgFreeKind> = Vec::new();
     for arg in &call.args {
         let val = lower_expr(cg, arg)?;
         let ty = cg.expr_type(arg);
+        let (val, kind) = prepare_bg_arg_for_ctx(cg, arg, val, &ty)?;
         let bits = cg
             .to_i64_bits(val, &ty)
             .map_err(|e| format!("sm bg arg bits: {e}"))?;
         arg_vals_i64.push(bits);
-        arg_types.push(ty);
+        free_kinds.push(kind);
     }
     let n_locals = arg_vals_i64.len();
 
@@ -9297,7 +9572,7 @@ fn lower_expr_background_state_machine<'ctx>(
         state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, idx, *bits)?;
     }
 
-    // Step 4: find the resume function and call ynz_rt_spawn.
+    // Step 4: find the resume function.
     // When the callee was imported under an alias (`import { getValue as fetchVal }`),
     // the LLVM resume fn uses the original exported symbol name (`ynz_sm_getValue_resume`),
     // not the alias. The module forward-declared the resume fn under the original name
@@ -9331,6 +9606,123 @@ fn lower_expr_background_state_machine<'ctx>(
         true, // sign-extended constant
     );
 
+    // Step 5: build the arg-drop descriptor array for SpawnStateFnFuture::drop.
+    //
+    // Each BgArgDropEntry has three i64 fields (24 bytes total):
+    //   byte_offset: u64 — byte offset in the frame to the i64 slot holding the heap pointer
+    //   kind: u64        — 0=HeapShape (ynz_free), 1=HeapArrayPrimitive (ynz_array_drop)
+    //   size: u64        — byte count for ynz_free (HeapShape); 0 for HeapArrayPrimitive
+    //
+    // Build the descriptor list only for args that were actually heap-copied; skip None.
+    // If no args need freeing, pass null pointer + count=0 (no allocation needed).
+    let heap_args: Vec<(usize, u64, u64)> = free_kinds
+        .iter()
+        .enumerate()
+        .filter_map(|(slot_idx, kind)| match kind {
+            BgArgFreeKind::HeapShape { byte_size } => {
+                let byte_offset =
+                    state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
+                Some((slot_idx, byte_offset, *byte_size))
+            }
+            BgArgFreeKind::HeapArrayPrimitive => {
+                let byte_offset =
+                    state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
+                // Triple is (slot_idx, byte_offset, size). size=0 for arrays —
+                // `ynz_array_drop` knows its own buffer size, so the descriptor's size
+                // field is unused for this kind. The kind (1=array) is re-derived from
+                // `free_kinds[slot_idx]` when the descriptor is written below; slot_idx is
+                // preserved precisely so that re-derivation indexes the original, unfiltered slot.
+                Some((slot_idx, byte_offset, 0_u64))
+            }
+            BgArgFreeKind::None => None,
+        })
+        .collect();
+
+    let (arg_drop_ptr_val, arg_drop_count_val) = if heap_args.is_empty() {
+        // No heap arg-copies — pass null/0. SpawnStateFnFuture::drop skips the loop.
+        let null_ptr = cg
+            .ctx
+            .ptr_type(inkwell::AddressSpace::default())
+            .const_null();
+        (null_ptr.into(), cg.ctx.i64_type().const_int(0, false))
+    } else {
+        // Allocate the descriptor array: heap_args.len() entries × 24 bytes each.
+        let desc_entry_size: u64 = 24; // 3 × u64
+        let desc_total = desc_entry_size * heap_args.len() as u64;
+        let desc_total_val = cg.ctx.i64_type().const_int(desc_total, false);
+        let desc_ptr = cg
+            .builder
+            .build_call(cg.rt.ynz_alloc, &[desc_total_val.into()], "arg_drop_alloc")
+            .map_err(|e| format!("arg drop alloc: {e}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| "arg drop alloc: returned void".to_string())?
+            .into_pointer_value();
+
+        // Fill each descriptor: { byte_offset: u64, kind: u64, size: u64 }.
+        let i64_ty = cg.ctx.i64_type();
+        let i8_ty = cg.ctx.i8_type();
+        for (entry_idx, (slot_idx, byte_offset, size)) in heap_args.iter().enumerate() {
+            let entry_byte_base = entry_idx as u64 * desc_entry_size;
+
+            // field 0: byte_offset
+            let off0 = unsafe {
+                cg.builder
+                    .build_gep(
+                        i8_ty,
+                        desc_ptr,
+                        &[i64_ty.const_int(entry_byte_base, false)],
+                        "desc_off0",
+                    )
+                    .map_err(|e| format!("desc gep 0: {e}"))?
+            };
+            cg.builder
+                .build_store(off0, i64_ty.const_int(*byte_offset, false))
+                .map_err(|e| format!("desc store 0: {e}"))?;
+
+            // field 1: kind (0=HeapShape, 1=HeapArrayPrimitive)
+            let kind_val = match &free_kinds[*slot_idx] {
+                BgArgFreeKind::HeapShape { .. } => 0_u64,
+                BgArgFreeKind::HeapArrayPrimitive => 1_u64,
+                BgArgFreeKind::None => unreachable!("filtered above"),
+            };
+            let off1 = unsafe {
+                cg.builder
+                    .build_gep(
+                        i8_ty,
+                        desc_ptr,
+                        &[i64_ty.const_int(entry_byte_base + 8, false)],
+                        "desc_off1",
+                    )
+                    .map_err(|e| format!("desc gep 1: {e}"))?
+            };
+            cg.builder
+                .build_store(off1, i64_ty.const_int(kind_val, false))
+                .map_err(|e| format!("desc store 1: {e}"))?;
+
+            // field 2: size (byte count for ynz_free; 0 for ynz_array_drop)
+            let off2 = unsafe {
+                cg.builder
+                    .build_gep(
+                        i8_ty,
+                        desc_ptr,
+                        &[i64_ty.const_int(entry_byte_base + 16, false)],
+                        "desc_off2",
+                    )
+                    .map_err(|e| format!("desc gep 2: {e}"))?
+            };
+            cg.builder
+                .build_store(off2, i64_ty.const_int(*size, false))
+                .map_err(|e| format!("desc store 2: {e}"))?;
+        }
+
+        (
+            desc_ptr.into(),
+            i64_ty.const_int(heap_args.len() as u64, false),
+        )
+    };
+
+    // Step 6: call ynz_rt_spawn with the frame + arg-drop descriptor.
     cg.builder
         .build_call(
             cg.rt.ynz_rt_spawn,
@@ -9339,6 +9731,8 @@ fn lower_expr_background_state_machine<'ctx>(
                 frame_ptr.into(),
                 frame_size_val.into(),
                 rec_slot_offset_val.into(),
+                arg_drop_ptr_val,
+                arg_drop_count_val.into(),
             ],
             "sm_spawn",
         )

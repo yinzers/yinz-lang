@@ -1,0 +1,28 @@
+// v0.3-M3b Phase 2 fixture: SM-path heap arg-copy is freed on task completion.
+//
+// `slow` suspends (wait sleep), so `background slow(job)` routes to
+// ynz_rt_spawn (SM codegen path). The Shape arg is heap-copied via
+// prepare_bg_arg_for_ctx so it outlives the spawner's stack frame. The
+// SpawnStateFnFuture::drop frees that heap copy before releasing the frame.
+//
+// Verified: alloc == free (no per-spawn leak). task prints correct id=7,
+// confirming the heap copy is valid throughout the task's lifetime.
+//
+// Expected output:
+//   task sees id: 7
+
+shape Task {
+  id: int
+  priority: int
+}
+
+function slow(t: Task) -> nothing {
+  wait sleep(50)
+  print(`task sees id: ${t.id}`)
+}
+
+function entrypoint() -> nothing {
+  let job: Task = { id: 7, priority: 1 }
+  background slow(job)
+  wait sleep(200)
+}

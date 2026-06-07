@@ -210,6 +210,23 @@ Per Patrick's standing preference (`all-phases-then-review`): run the 5-reviewer
 
 ---
 
+## ⚙️ Execution Resume Note (coordinator, 2026-06-07) — BASE re-resolution after M3e interposition
+
+**Context**: Phases 0 (`e4dd97c`) + 1 (`9ed31b0`) committed 2026-06-05. The milestone `v0-3-m3e-cross-module-frame-serialization` then landed **on this same branch** between P1 and now (commits `6344ce2`→`ab992be`, close-out `d7ea993` = current HEAD), delivering the full cross-module FrameLayout serialization that **lifts the universal-reject floor P1 installed**. M3e was its own fully-gated plan (now in `done/`).
+
+**Empirically verified preconditions for resuming Phases 2–6 (2026-06-07, this session)**:
+- Floor lifted: `v0_3_m3b_cross_module_suspending_caller` → `slow done / caller done` (0); `…int_return` → `42` (0); `…errors_capable` → `got: 42` (0); `…crossing_local_cross_module` → `before:10 / fetched / after:10` (0). All RUN, none reject.
+- Build green (`cargo build --workspace` exit 0).
+- Phase-4 corpse producers intact post-M3e: `crossing_local_names` (check.rs:6208), `locals_crossing_wait` (check.rs:6813), `param_ownerships` (signatures.rs:18); UNIFIED frame dispatch `flush_var_slot_to_frame` (emit.rs:3252) / `reload_params_from_frame` (emit.rs:2901) intact (emit.rs:4003 comment confirms both flush paths route through the unifier). Phase-2 give/copy site drifted to check.rs:2120-2189.
+
+**BASE override (binding for this execution — do NOT use the plan's original "Phase N BASE = Phase N-1 commit" for Phase 2)**: because M3e's ~4k-line codegen is interposed between `9ed31b0` and HEAD, diffing Phase 2 against `9ed31b0` would pollute every reviewer with already-shipped-and-gated M3e work. Therefore:
+- **Phase 2 BASE = `d7ea993`** (current HEAD = M3e close-out), NOT `9ed31b0`.
+- Phase 3 BASE = Phase 2's commit; Phase 4 = Phase 3's; Phase 5 = Phase 4's; Phase 6 per-phase = Phase 5's.
+- **Cumulative sweep BASE = `d7ea993`** (NOT `plan_base` `0a4b6d8`). Phases 0–1 are already gated (their Phase Review Gates show PASS + committed SHAs); M3e is a separately-shipped, separately-reviewed milestone. The cumulative review scope is the NEW work this execution produces (Phases 2–6 on top of `d7ea993`).
+- **Anchor drift**: plan "Current-state anchors" line numbers are pre-M3e (2026-06-05). Symbols are stable; line numbers drifted ~+79. Executors locate by symbol, not line.
+
+---
+
 ## Phases
 
 ### Phase 0: Doc lockdown + semantics + registry teaching scaffolding
@@ -389,33 +406,54 @@ Per Patrick's standing preference (`all-phases-then-review`): run the 5-reviewer
 3. Surface the inferred modifier through `ownership_call_site_hints` at the spawn argument (existing domain, Informational/cautionary styling).
 4. Fixtures: (a) value unused after `background` → `.give` inferred, runs; (b) value used after → `.copy` inferred, both caller value and task value correct; (c) explicit `.give`/`.copy` still honored; (d) `.share`/`.lend`-param callee still rejected (snapshot); (e) large `.copy` warning still fires.
 **Acceptance criteria**:
-- [ ] `background foo(x)` with `x` unused after → compiles, runs, `.give` semantics (zero-copy) — live run correct
-  - Evidence: (filled at phase completion)
-- [ ] `background foo(x)` with `x` used after → compiles, runs, `.copy` semantics (caller keeps original, task has its own) — live run shows both correct
-  - Evidence: (filled at phase completion)
-- [ ] `.share`/`.lend`-param callee still rejected with the existing safety diagnostic (snapshot unchanged)
-  - Evidence: (filled at phase completion)
-- [ ] IDE `ownership_call_site` hint shows the inferred `.give`/`.copy` at the spawn arg (inlay-hint pass test)
-  - Evidence: (filled at phase completion)
-- [ ] Large-copy warning still fires on inferred large `.copy`
-  - Evidence: (filled at phase completion)
+- [x] `background foo(x)` with `x` unused after → compiles, runs, `.give` semantics (zero-copy) — live run correct
+  - Evidence: `ynz run v0_3_m3b_p2_give_inferred_unused_after.ynz` → `before spawn / after spawn / task ran: 42` exit 0. `taskId` not read after the spawn → `BgOwnership::Give` (`background_unused_after_spawn_emits_give_hint` confirms typeck classification). (acceptance-verifier R3)
+- [x] `background foo(x)` with `x` used after → compiles, runs, `.copy` semantics (caller keeps original, task has its own) — live run shows both correct
+  - Evidence: `ynz run v0_3_m3b_p2_copy_inferred_used_after.ynz` → `caller sees: 42 / task ran: 42` exit 0 (both independent). Heap-type independence proven by `v0_3_m3b_p2_copy_heap_independent.ynz` (task sees 7 after caller mutates to 99; alloc=1/free=1) + `v0_3_m3b_p2_bg_copy_survives_frame.ynz` (nested-spawner UAF gone, task sees 7). (acceptance-verifier R3) — NOTE: this AC's correctness rested on the Option-C heap-deep-copy fix (see Findings Log).
+- [x] `.share`/`.lend`-param callee still rejected with the existing safety diagnostic (snapshot unchanged)
+  - Evidence: `ynz run v0_3_m3b_p2_share_param_rejected.ynz` → exit 1, `"Cannot use \`background\` with a function that borrows its arguments."` (WHAT/WHAT-INSTEAD/WHY intact). `cargo test --workspace` exit 0 = no snapshot regression. (acceptance-verifier R3)
+- [x] IDE `ownership_call_site` hint shows the inferred `.give`/`.copy` at the spawn arg (inlay-hint pass test)
+  - Evidence: `cargo test -p ynz-typeck --test inlay_hint_ownership_ufcs` → 9/9; `background_unused_after_spawn_emits_give_hint` + `background_used_after_spawn_emits_copy_hint` assert modifier string AND byte-position (Addition placement). Judge D2 confirmed they form a genuine mutation-detecting pair. (acceptance-verifier R3)
+- [x] Large-copy warning still fires on inferred large `.copy`
+  - Evidence: `ynz run v0_3_m3b_p2_large_copy_warning.ynz` → `"Warning: Copying 72 bytes into a background task (the compiler chose copy because the value is used after the spawn)."` exit 0 — jargon-clean (R1 `inferred` removed; `jargon_audit` extended to guard inflections). (acceptance-verifier R3)
 **Quality gate**:
-- [ ] Wrong-`.give` inference (value used later) is impossible OR caught by use-after-give typeck — tested both directions
-- [ ] No test weakening; safety rejections unchanged
+- [x] Wrong-`.give` inference (value used later) is impossible OR caught by use-after-give typeck — tested both directions
+  - Evidence: conservative liveness walk (`ident_read_in_stmt` over `stmts[i+1..]`) infers `.copy` when it can't prove the binding dead; a wrong `.give` would be a use-after-give compile error (`scope.consume` + `is_consumed`). code-reviewer R3 + judge D8 verified both directions live.
+- [x] No test weakening; safety rejections unchanged
+  - Evidence: test-file diffs 100% additive (judge D3); share/lend rejection untouched; `jargon_audit` STRENGTHENED (3 new inflected forms). (rules-compliance + code-reviewer R3)
 **Verification**: live `ynz run` on the give + copy fixtures; inlay-hint pass test; `cargo test --workspace`.
 
-**Phase Review Gates**:
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
-- [ ] design-compliance-reviewer: <verdict + ISO timestamp>
+**Phase Review Gates** (Round-3, full diff vs `d7ea993` — after the Option-C heap-deep-copy fix):
+- [x] code-reviewer: PASS 2026-06-07T04:10 (Opus; 9 independent adversarial runs incl. 8-in-flight cancellation 25/25, string-field shapes, zero-len array — all alloc-balanced; 3 cosmetic comment concerns + 1 forward-compat `unwrap_or(0)` — all addressed/tracked)
+- [x] rules-compliance-reviewer: PASS 2026-06-07T04:10 (jargon fixed + audit strengthened; no panic in Drop; carve-out correct)
+- [x] plan-adherence-verifier: PASS 2026-06-07T04:10 (all 4 steps + Option-C expansion MET; 9 deviations documented, zero banned phrases)
+- [x] acceptance-verifier: PASS 2026-06-07T04:10 (10/10: 5 ACs + 5 Option-C invariants, all live-verified)
+- [x] design-compliance-reviewer: PASS 2026-06-07T04:10 (registry valid no-fallback; value-copy give/copy model, no premature Arc, no block_on bridge — "M2-HALT corpse stays buried")
+- [x] deviation-judge D4 (scope: Option-C codegen + ynz_rt_spawn 4→6 ABI): PASS 2026-06-07T04:10 — error-cascade/cancellation/zero-len/free-before-read all alloc==free
+- [x] deviation-judge D6 (scope: jargon source-scan extension): PASS 2026-06-07T04:10 — catches inferred/inference inline; pre-built-var blind spot pre-existing (tracked)
+- [x] deviation-judge D8 (approach: Give-path heap-upgrade): PASS 2026-06-07T04:10 — heap-copy is the only correct stack→heap promotion, not overbroad
+- [x] deviation-judge D9 (approach: SM runtime future-drop free): PASS 2026-06-07T04:10 — cancellation/concurrency/recursion drop-order all alloc==free
+- [x] (R1 judges D1/D2/D3/D5/D7 carried prior PASS — code unchanged since Round 1)
 - [ ] Committed: <commit SHA>
 
 **Findings Log**:
-_(empty until a reviewer returns BLOCK)_
+- 2026-06-07 — **Gate Round 1 (5 reviewers + 5 deviation-judges, BASE `d7ea993`). 8 PASS, 2 hard BLOCK + 1 truncated.** PASS: code-reviewer (3 non-blocking concerns), plan-adherence, acceptance-verifier (5/5 ACs MET live), judge#1 (queries.rs salsa cycle-initial sound), judge#2 (inlay tests are a real mutation-detecting pair), judge#3 (integration.rs pure-insertion, no test weakening), judge#5 (explicit-give language claim TRUE — `PostfixOpKind` has only Copy/Freeze). BLOCK:
+  - **rules-compliance — BANNED JARGON.** `check.rs:2284` large-copy warning string `"Copying {} bytes into a background task (inferred from use-after-spawn analysis)."` contains `inferred` (banned in user-facing diagnostics per vocabulary.md). The `jargon_audit` MISSED it (the audit's `inferred` typo-guard didn't scan this string — `jargon-audit-dual-test-pattern` gap). FIX: reword to plain English AND extend the jargon source-scan so it catches `inferred`/`infers`/`inference` in all diagnostic strings (so it can't regress).
+  - **deviation-judge#4 (BgOwnership) — SILENT MISCOMPILE, COORDINATOR-CONFIRMED LIVE.** Paper trace: `let job: Task = {id:7,..}; background process(job); job.id = 99` (job read-after → Phase 2 infers `Copy`); task sleeps then prints `t.id`. **Observed: task sees `99`** (the caller's post-spawn mutation). **Expected (real copy): `7`. Explicit `.copy()` correctly yields `7`.** Residual 99≠7 → inferred-`copy` on a mutable heap type produces a pointer **ALIAS**, not a copy. Codegen ignores `bg_inferred` (grep: zero hits in emit.rs), so the muted `copy` hint + `Copying 72 bytes` warning LIE for heap types, and bare `background process(heapValue)` newly compiles (pre-Phase-2 required explicit `.copy()` — removed diff text confirms). This is a NEW Phase-2 silent-wrong + latent UAF + teaching lie, the same class as M3a/M3e.
+  - **judge#5 also flagged** (folded into fix): the large-copy warning's WHAT-INSTEAD suggests `background fn(value.give)` — invalid Yinz body syntax (would parse as FieldAccess on a nonexistent field). Reword (give is auto-inferred now; the suggestion should not point at non-syntax).
+  - **design-compliance — truncated return (no clean verdict).** Re-spawn fresh in the Round-2 re-gate (full gate re-runs anyway).
+  - **code-reviewer non-blocking concerns**: (1) use-after-give backstop is verified-by-construction but untested-in-isolation (note it's intentionally unreachable); (2) = judge#4 (being fixed); (3) BgOwnership Rust enum is fine (Rust enum, not Yinz `enum`).
+- 2026-06-07 — **⚠️ SCOPE EXPANDED (Round 2) — same under-scoped-codegen defect as Phase 1.** The plan scoped Phase 2 typeck-only (anchors only in check.rs/inlay_hint_passes.rs), resting on the FALSE assumption that codegen already honors give/copy. It does not — codegen never consults `bg_inferred`, so inferred-`copy` on a mutable heap type silently aliases. **Fix direction (settled by no-duct-tape + live facts; not a menu):** inferred-`copy` MUST lower identically to explicit `.copy()` (which is verified-correct — task sees `7`). Mechanism left to executor (AST desugar of the bare-ident arg to `PostfixOp{Copy}` in typeck, OR codegen consults `bg_inferred`). Per-type: primitives = bits already a copy ✓; immutable heap (string) = alias unobservable ✓; mutable heap with sound explicit-copy (Shape) = lower like explicit `.copy()`; mutable heap where explicit `.copy()` itself is NOT yet sound (e.g. array/map if entangled with the v0-3-m3c array-by-value gap) = **LOUD-REJECT consistently with the explicit path — NEVER silent-alias** (defer to m3c, documented). Round-2 `Files (expected scope)` expands to include `crates/ynz-codegen/src/emit.rs` (+ a mutation-aliasing regression fixture locking task-sees-7-not-99). The invariant: **an inferred modifier produces the SAME runtime behavior as the user writing it explicitly — real copy or loud error, never a silent alias.**
 
-**Exit Sequence — RUN THESE STEPS:** per Phase Execution Protocol. `$BASE` = Phase 1's committed SHA.
+- 2026-06-07 — **Round-2 fix landed + coordinator DEEP VERIFICATION (live).** Executor: added `apply_inferred_copy_for_bg_arg` (emit.rs:9039, alloca+load+store — byte-identical to `lower_postfix_op(Copy)` for Shape); reworded the jargon warning ("the compiler chose copy because the value is used after the spawn"); extended `jargon_audit` to catch `inferred`/`inference`; removed the invalid `.give` what_instead suggestion (+ a forced 1-line fix to `crates/ynz-lsp/src/inlay_hint.rs:285` whose hint-gate matched the now-removed `.give` string — documented scope deviation). Coordinator live-verified:
+  - **judge#4 aliasing FIXED (top-level)**: `background process(job); job.id=99` → task sees **7** (was 99). Independent copy. ✓
+  - **inferred ≡ explicit PARITY confirmed for ALL types** (live): array bare-vs-`.copy()` both alias (99); Shape top-level both safe (7); Shape nested-spawner both UAF.
+  - **🔴 DEEPER PRE-EXISTING BUG SURFACED (affects explicit `.copy()` IDENTICALLY — NOT a Phase-2 regression, but Phase-2 newly REACHES it via bare args)**: the background-heap-copy is **stack-alloca'd on the spawner's frame**. From a NESTED function that returns before the task reads → **use-after-free** (live: inferred→`task sees id: 0`, explicit→`task sees id: 4247942` — both garbage, not 7). Arrays/maps don't copy at all (`_ => Ok(recv_val)` array-by-value gap = `v0-3-m3c`). Correct fix = heap-allocate the background arg-copy (deep copy + free-discipline) — milestone-scale, related to m3c. **A silent UAF in a memory-safe language, reachable via `background process(nestedHeapValue)`.**
+- 2026-06-07 — **⛔ ESCALATED TO PATRICK (scope/safety fork — same shape as the Phase-1 codegen escalation).** Phase 2 correctly makes inferred≡explicit (zero new divergence) and fixed the gate's aliasing finding, BUT it enables bare heap-typed `background` args that reach a pre-existing silent UAF/alias. Narrowing Phase 2 to "primitives/strings auto-infer; heap types loud-reject" would be a scope-narrowing requiring approval.
+- 2026-06-07 — **✅ PATRICK DECISION: Option C — FIX THE HEAP DEEP-COPY NOW (balloons P2; "do it right, no band-aids").** Rejected loud-reject (A) and parity-defer (B). The background arg-copy must be **heap-allocated** (`ynz_alloc`, freed by the task on completion — survives the spawner's frame return, killing the nested-frame UAF) and a **real independent copy** for heap types (Shape + string now; array/map real-copy too). Round-2 EXPANDED `Files (expected scope)`: `crates/ynz-codegen/src/emit.rs` (+ runtime free-discipline if needed in `crates/ynz-runtime/`). **Invariant (binding):** a `background` arg that is copied (inferred OR explicit `.copy()`) yields a FULLY-INDEPENDENT value that OUTLIVES the spawner's frame — no alias (mutation-isolated), no UAF (nested-spawner→task sees original), alloc/free balanced. This generalizes/relates to the v0-3-m3c array-by-value work; if a specific heap type's recursive deep-copy proves genuine m3c-ABI-scale, surface it precisely (Phase-1→M3e pattern) — do NOT silently defer or loud-reject without re-escalation.
+- 2026-06-07 — **✅ Option-C IMPLEMENTED + Round-3 gate ALL-PASS.** Two fix rounds: (R-a) `prepare_bg_arg_for_ctx`/`BgArgFreeKind`/`emit_bg_arg_frees` heap-alloc the copy (Shape via `ynz_alloc`+memcpy; array<primitive> via new `ynz_array_clone_primitive`) + non-SM closure free; extended to BOTH give AND copy (D8 — same UAF either label). (R-b) SM-path leak closed via `ynz_rt_spawn` 4→6 ABI extension (`arg_drop_ptr`/`arg_drop_count`) + `SpawnStateFnFuture::drop` free-on-completion (D9 — frees on cancellation too). **Coordinator live-verified the full invariant**: Shape alias→7, nested-frame UAF (SM + non-SM)→7, array real-copy→independent, alloc==free everywhere (non-SM 1/1, SM single 4/4, SM loop-10 31/31). `cargo test --workspace` exit 0. **Per-type buckets** (all inferred≡explicit): primitives (bits=copy ✓), string (immutable, alias-safe ✓), Shape (heap-copied ✓), array<primitive> (real-copied ✓); array<heap-elem>/map/maybe/union deep-copy = `v0-3-m3c` (Yinz `.copy()` is shallow everywhere — pre-existing, not introduced here). **Round-3 9-agent gate: ALL PASS** (D4+D9 exhaustively probed double-free/cancellation/concurrency/recursion/error-path live). code-reviewer's 4 non-blocking concerns addressed: 2 comment-accuracy rewrites + concern#3 give-path comment + concern#1 `unwrap_or(0)` — NOTE the reviewer's suggested `ok_or?` fix was WRONG (LLVM `size_of()` is a constexpr, `get_zero_extended_constant()` legitimately returns None → my attempt broke the build; caught by re-verify) → reverted to the working `unwrap_or(0)` with a 4-field documented-deferral comment + todos entry (real size via `shape_abi_sizes` deferred to kernel-mode sized-dealloc; `ynz_free` ignores size today). 2 pre-existing follow-ups filed in todos (bg byte_size=0; jargon pre-built-var blind spot).
+
+**Exit Sequence — RUN THESE STEPS:** per Phase Execution Protocol. `$BASE` = `d7ea993` (M3e close-out; per the Execution Resume Note — NOT Phase 1's `9ed31b0`).
 
 ---
 

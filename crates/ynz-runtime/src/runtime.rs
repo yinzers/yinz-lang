@@ -3,7 +3,7 @@
 /// C-ABI entry points exported from this module:
 ///   - `ynz_rt_init()` — create the Tokio runtime at program start
 ///   - `ynz_rt_spawn_blocking(fn_ptr, ctx_ptr, ctx_size)` — blocking-pool background task
-///   - `ynz_rt_spawn(resume_fn, frame_ptr, frame_size)` — I/O-pool state-machine task (M2)
+///   - `ynz_rt_spawn(resume_fn, frame_ptr, frame_size, rec_slot, arg_drops, arg_drop_count)` — I/O-pool state-machine task (M2/M3b)
 ///   - `ynz_rt_async_sleep_create(ms)` — allocate a boxed Tokio Sleep future (M2)
 ///   - `ynz_rt_async_sleep_poll(handle_ptr, waker_ctx)` — poll an in-flight sleep (M2)
 ///   - `ynz_rt_run_entrypoint(resume_fn, frame_ptr, frame_size)` — program-entry state-machine driver (M2)
@@ -372,6 +372,24 @@ impl Future for SyncStateFnFuture {
     }
 }
 
+/// Descriptor for one heap-allocated background arg-copy that must be freed when the
+/// spawned state-machine task completes (on both normal completion and cancellation).
+///
+/// Codegen allocates these arg-copies via `ynz_alloc` (Shape) or `ynz_array_clone_primitive`
+/// (array<primitive>) so they outlive the spawner's stack frame. The descriptor records
+/// where in the frame the pointer lives so the Drop impl can recover and free it.
+///
+/// Layout (repr C, matches the alloca'd array in codegen):
+///   byte_offset: u64  — byte offset from frame_ptr to the i64 slot holding the heap pointer
+///   kind: u64         — 0 = HeapShape (free with ynz_free(ptr, size)), 1 = HeapArray (free with ynz_array_drop(ptr))
+///   size: u64         — byte count passed to ynz_free for HeapShape (ignored for HeapArray)
+#[repr(C)]
+pub struct BgArgDropEntry {
+    pub byte_offset: u64,
+    pub kind: u64,
+    pub size: u64,
+}
+
 /// Drives a Yinz codegen-emitted state-machine resume function as a fire-and-forget
 /// Tokio Future. Return value is intentionally discarded — `ynz_rt_spawn` callers
 /// use channels or atomics to observe completion.
@@ -391,31 +409,40 @@ struct SpawnStateFnFuture {
     /// freeing the root frame. Without this, a mid-wait cancellation of a deep recursion
     /// leaks all the child frames that were live at abort time.
     recursion_slot_offset: i64,
+    /// Pointer to a `ynz_alloc`'d array of `BgArgDropEntry` describing heap arg-copies
+    /// stored in this frame's local slots. Null when no heap arg-copies exist (e.g., the
+    /// callee takes only primitives or strings).
+    ///
+    /// The array is heap-allocated by codegen at spawn time and freed here in Drop after
+    /// all arg-copies have been released — exactly once, on every exit path.
+    arg_drop_ptr: *const BgArgDropEntry,
+    /// Number of entries at `arg_drop_ptr`. 0 when `arg_drop_ptr` is null.
+    arg_drop_count: usize,
 }
 
 // SAFETY: SpawnStateFnFuture is owned exclusively by the spawned task for its lifetime.
 unsafe impl Send for SpawnStateFnFuture {}
 
 impl Drop for SpawnStateFnFuture {
-    /// Free the heap state-machine frame when the spawned task ends — on normal completion
-    /// AND on cancellation (Tokio dropping the task before it finishes).
+    /// Free all resources owned by this spawned task — on normal completion AND
+    /// on cancellation (Tokio dropping the task before it finishes).
     ///
-    /// Frame ownership moves into this future at spawn time, so this drop runs exactly
-    /// once; the frame is never aliased.
+    /// # Free order
     ///
-    /// Recursion chain free: if `recursion_slot_offset >= 0`, the frame may have a heap-
-    /// boxed child frame at that offset (stored there by inline-poll-heap-boxed codegen).
-    /// Walk the chain — each child is the same recursive function so uses the same frame
-    /// size and recursion slot offset — and free each frame. The chain terminates when a
-    /// frame's recursion slot holds null (codegen zeroes the slot after `ynz_free` on the
-    /// normal Ready path, so null means either "never reached this depth" or "child already
-    /// freed normally").
+    /// 1. Sleep handle in the root frame (frees the in-flight Tokio Sleep box if cancelled mid-wait).
+    /// 2. Heap arg-copies: read each entry in `arg_drop_descs`, recover the pointer from the
+    ///    frame slot, and free it — BEFORE freeing the frame (avoids use-after-free on the slots).
+    /// 3. Recursion-chain child frames (for self-recursive SM functions — walks the chain).
+    /// 4. The arg-drop descriptor array itself (freed via `ynz_free`, same allocator as codegen).
+    /// 5. The root frame (freed last, after all frame-resident pointers have been read).
+    ///
+    /// Every resource is freed exactly once regardless of which exit path runs.
     fn drop(&mut self) {
         if self.frame_ptr.is_null() {
             return;
         }
         unsafe {
-            // Free the sleep handle in the root frame (if a sleep is live mid-wait).
+            // 1. Free the sleep handle in the root frame (if a sleep is live mid-wait).
             // SAFETY: FRAME_SLEEP_HANDLE_OFFSET=8 is within every valid frame header (32 bytes).
             let handle_slot = self.frame_ptr.add(FRAME_SLEEP_HANDLE_OFFSET) as *const *mut u8;
             let handle_ptr = *handle_slot;
@@ -423,15 +450,41 @@ impl Drop for SpawnStateFnFuture {
                 drop(Box::from_raw(handle_ptr as *mut Pin<Box<Sleep>>));
             }
 
-            // Walk the recursion chain and free any live heap-boxed child frames.
-            // Each recursive call stores the child frame pointer at recursion_slot_offset.
-            // The chain uses the same frame_size and recursion_slot_offset at every level
-            // (all frames are the same self-recursive function's layout).
-            //
-            // Pattern: root.rec_slot → child → child.rec_slot → grandchild → ...
-            // We iterate starting from root's CHILD (root itself freed at the end).
-            // Each iteration: read child.rec_slot (grandchild ptr) BEFORE freeing child,
-            // then free child, then advance to grandchild.
+            // 2. Free heap arg-copies stored as i64 bit-patterns in this frame's local slots.
+            //    Each BgArgDropEntry names one frame slot (by byte offset) and the free protocol.
+            //    Must run BEFORE free_frame so we can still read the slot values.
+            if !self.arg_drop_ptr.is_null() && self.arg_drop_count > 0 {
+                let descs = std::slice::from_raw_parts(self.arg_drop_ptr, self.arg_drop_count);
+                for desc in descs {
+                    // Read the i64 bit-pattern from the frame slot, cast to pointer.
+                    let slot = self.frame_ptr.add(desc.byte_offset as usize) as *const i64;
+                    let bits = *slot;
+                    if bits == 0 {
+                        // Defensive: a descriptor is only emitted for a slot that WAS
+                        // heap-copied (both `give` and `copy` of a heap arg copy — see D8),
+                        // so a 0 here means `ynz_alloc` returned null and an upstream abort
+                        // already fired. Skip rather than free(null).
+                        continue;
+                    }
+                    let heap_ptr = bits as *mut u8;
+                    match desc.kind {
+                        0 => {
+                            // HeapShape: allocated with ynz_alloc; free with ynz_free(ptr, size).
+                            crate::ynz_free(heap_ptr, desc.size as usize);
+                        }
+                        1 => {
+                            // HeapArrayPrimitive: allocated by ynz_array_clone_primitive (malloc);
+                            // free with ynz_array_drop which handles both the data buffer and the header.
+                            crate::ynz_array_drop(heap_ptr as *mut crate::YnzArray);
+                        }
+                        _ => {
+                            // Unknown kind — defensive no-op; avoids a bad free on future kind values.
+                        }
+                    }
+                }
+            }
+
+            // 3. Walk the recursion chain and free any live heap-boxed child frames.
             //
             // test-only: `YNZ_SKIP_RECURSION_DROP` bypasses the chain walk so the
             // negative-control test can verify a measurable leak without this code.
@@ -463,7 +516,14 @@ impl Drop for SpawnStateFnFuture {
                 }
             }
 
-            // Free the root frame last (after the chain is fully walked).
+            // 4. Free the arg-drop descriptor array (ynz_alloc'd by codegen at spawn time).
+            //    24 bytes per entry (3 × u64); freed after all arg-copies are already released.
+            if !self.arg_drop_ptr.is_null() && self.arg_drop_count > 0 {
+                let desc_bytes = self.arg_drop_count * std::mem::size_of::<BgArgDropEntry>();
+                crate::ynz_free(self.arg_drop_ptr as *mut u8, desc_bytes);
+            }
+
+            // 5. Free the root frame last (after all frame-resident pointers have been read).
             // SAFETY: frame_ptr was returned by `ynz_alloc` for `frame_size` bytes and moved
             // into this future exclusively; freed exactly once here.
             crate::ynz_free(self.frame_ptr, self.frame_size as usize);
@@ -502,7 +562,10 @@ impl Future for SpawnStateFnFuture {
 /// 3. The frame pointed to by `frame_ptr` is freed by `SpawnStateFnFuture`'s `Drop` when the
 ///    task ends — on normal completion AND on cancellation. Ownership of the frame moves into
 ///    the future at spawn time, so the drop frees it exactly once via `ynz_free`.
-/// 4. Panic inside `resume_fn` is caught by Tokio's task wrapper; the JoinHandle
+/// 4. Heap arg-copies for heap-typed background arguments (Shape, array<primitive>) are freed
+///    by `SpawnStateFnFuture::drop` using `arg_drop_ptr`/`arg_drop_count` — before the frame
+///    is freed, after the task's callee has read them. Pass null/0 when no heap arg-copies exist.
+/// 5. Panic inside `resume_fn` is caught by Tokio's task wrapper; the JoinHandle
 ///    will surface a `JoinError::is_panic()`. The spawning scope continues normally.
 ///
 /// # Failure modes
@@ -514,25 +577,32 @@ impl Future for SpawnStateFnFuture {
 /// Enqueues a work-stealing task on the Tokio I/O pool. The frame pointed to by
 /// `frame_ptr` must remain valid until the spawned future completes (ownership transfers
 /// into the future at spawn time — the caller must NOT free or alias frame_ptr after
-/// calling this function).
+/// calling this function). The `arg_drop_ptr` array (if non-null) is also owned by this
+/// call and freed by `SpawnStateFnFuture::drop`.
 ///
 /// # Safety
 /// - `resume_fn` must be a valid function pointer matching the `(frame, waker_ctx) -> i32` ABI.
 /// - `frame_ptr` must be valid for `frame_size` bytes and exclusively owned by this call.
-///   After this function returns, the caller must treat `frame_ptr` as moved — any further
-///   access is undefined behaviour.
+///   After this function returns, the caller must treat `frame_ptr` as moved.
+/// - `arg_drop_ptr` must be null (when `arg_drop_count == 0`) or valid for
+///   `arg_drop_count * sizeof(BgArgDropEntry)` bytes and exclusively owned by this call.
+///   May be null when `arg_drop_count == 0` (no heap arg-copies).
 #[no_mangle]
 pub unsafe extern "C" fn ynz_rt_spawn(
     resume_fn: unsafe extern "C" fn(*mut u8, *mut u8) -> i32,
     frame_ptr: *mut u8,
     frame_size: i64,
     recursion_slot_offset: i64,
+    arg_drop_ptr: *const BgArgDropEntry,
+    arg_drop_count: i64,
 ) {
     let future = SpawnStateFnFuture {
         resume_fn,
         frame_ptr,
         frame_size,
         recursion_slot_offset,
+        arg_drop_ptr,
+        arg_drop_count: arg_drop_count as usize,
     };
 
     // Prefer spawning via the current Tokio handle (avoids the RUNTIME mutex deadlock

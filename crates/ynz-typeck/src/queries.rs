@@ -220,6 +220,7 @@ fn check_query_cycle_initial(
                 span: ynz_diagnostics::SourceSpan::new("", 0, 0),
             },
             expr_types: std::collections::HashMap::new(),
+            background_arg_inferred_ownership: std::collections::HashMap::new(),
         },
         mono_table: crate::generics::MonomorphizationTable {
             entries: std::collections::HashMap::new(),

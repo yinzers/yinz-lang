@@ -4745,6 +4745,242 @@ fn v03_m3a_p4_no_auto_parallel_byte_identical_on_for_loop_suspension() {
     );
 }
 
+// ── v0.3-M3b Phase 2: `background` auto give/copy inference ──────────────────
+
+#[test]
+fn v03_m3b_p2_give_inferred_unused_after() {
+    // WHY: Core give/copy inference correctness — when a binding is not read after
+    // the `background` spawn, the compiler infers `.give` (zero-copy ownership
+    // transfer). Wrong inference would fail use-after-give typeck in a later stmt;
+    // missing inference would have failed to compile before Phase 2.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3b_p2_give_inferred_unused_after.ynz",
+    ));
+    assert_eq!(
+        code, 0,
+        "give-inferred fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("before spawn"),
+        "must print before-spawn message; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("after spawn"),
+        "main must continue after scheduling background; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("task ran: 42"),
+        "background task must have run with the given value; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p2_copy_inferred_used_after() {
+    // WHY: Safe direction of give/copy inference — when the caller reads the binding
+    // after the spawn, the compiler infers `.copy` so both caller and task have their
+    // own copy. Wrong inference would lose the caller's value; missing copy would corrupt.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3b_p2_copy_inferred_used_after.ynz",
+    ));
+    assert_eq!(
+        code, 0,
+        "copy-inferred fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("caller sees: 42"),
+        "caller must retain its original value after inferred-copy spawn; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("task ran: 42"),
+        "background task must have its own copy of the value; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p2_explicit_copy_honored() {
+    // WHY: Explicit `.copy()` at a `background` call site must be honored and must
+    // not be overridden or double-applied by the inference path. The explicit path
+    // predates Phase 2; this test is the regression guard.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3b_p2_explicit_give_copy_honored.ynz",
+    ));
+    assert_eq!(
+        code, 0,
+        "explicit-copy fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("caller b: 20"),
+        "caller must retain value after explicit .copy(); stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("taskB: 20"),
+        "background task must receive the copied value; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p2_share_param_still_rejected() {
+    // WHY: Phase 2 must NOT loosen the `share`/`lend` cross-thread safety rejection.
+    // A `share` borrow may outlive the caller scope once the task runs on another
+    // thread — the error must remain byte-identical to pre-Phase-2 behavior.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3b_p2_share_param_rejected.ynz",
+    ));
+    assert_ne!(code, 0, "share-param rejection must exit 1; stdout:\n{stdout}");
+    assert!(
+        stderr.contains("borrows its arguments"),
+        "error must mention borrowing; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("background"),
+        "error must reference `background`; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3b_p2_large_copy_warning_fires_on_inferred_copy() {
+    // WHY: The large-copy warning must fire for inferred `.copy` just as it does for
+    // explicit `.copy()`. Without this, a user gets zero feedback about copying a
+    // 72-byte shape across a thread boundary when the compiler infers the copy.
+    // Threshold = 64 bytes (one cache line); BigRecord has 9 int fields = 72 bytes.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3b_p2_large_copy_warning.ynz",
+    ));
+    assert_eq!(
+        code, 0,
+        "large-copy warning must not block compilation; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Copying 72 bytes"),
+        "large-copy warning must mention byte count; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("1"),
+        "program must still run after warning; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p2_copy_heap_independent() {
+    // WHY: Regression for the silent miscompile where inferred-copy on a Shape arg aliased
+    // the caller's allocation instead of producing an independent copy. Without the codegen
+    // fix, the background task held a pointer alias into the caller's `job` struct — the
+    // caller's `job.id = 99` mutation leaked into the task, producing `task sees id: 99`
+    // instead of `7`.
+    //
+    // With the fix, codegen emits a memcpy (identical to explicit `job.copy()`) before
+    // storing the pointer in the background context. The task must observe the original
+    // value at spawn time, not the later mutation.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3b_p2_copy_heap_independent.ynz",
+    ));
+    assert_eq!(
+        code, 0,
+        "heap-independence fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("caller mutated id to: 99"),
+        "caller must observe its own mutation; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("task sees id: 7"),
+        "task must see the original value at spawn time, not the caller's later mutation; stdout:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("task sees id: 99"),
+        "task must NOT see the caller's post-spawn mutation (aliasing regression); stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p2_bg_copy_survives_frame() {
+    // WHY: Regression for the nested-frame use-after-free where the background arg copy
+    // was stack-alloca'd on the spawner's frame. When `spawnTask` returns before the
+    // background task reads, the alloca is freed and the task reads garbage (observed:
+    // `id: 0` or `id: 4247942`). With heap-upgrade the copy outlives the spawner frame;
+    // task must see the original value (id=7) not garbage.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3b_p2_bg_copy_survives_frame.ynz",
+    ));
+    assert_eq!(
+        code, 0,
+        "survives-frame fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("spawner returned"),
+        "spawner must print its message before task; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("task sees id: 7"),
+        "task must see original value after spawner frame freed; stdout:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("task sees id: 0"),
+        "task must NOT read garbage from freed spawner frame (UAF); stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p2_bg_array_real_copy() {
+    // WHY: array<int> background arg must be a real independent copy — ynz_array_clone_primitive
+    // copies both the header and the data buffer. Without the fix the task holds an alias into
+    // the caller's array and sees the post-spawn mutation (99). With the fix the task sees
+    // the original value at spawn time (10).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3b_p2_bg_array_real_copy.ynz",
+    ));
+    assert_eq!(
+        code, 0,
+        "array-real-copy fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("caller mutated to: 99"),
+        "caller must observe its own mutation; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("task sees first: 10"),
+        "task must see original array element, not caller's post-spawn mutation; stdout:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("task sees first: 99"),
+        "task must NOT see the caller's post-spawn array mutation (aliasing); stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p2_shape_bg_copy_alloc_free_balanced() {
+    // WHY: Every ynz_alloc for a background arg heap-copy must have a matching ynz_free
+    // in the closure body. alloc_count == free_count proves the closure correctly calls
+    // ynz_free after the original fn returns.
+    let (alloc, free) = ynz_run_with_alloc_counter("v0_3_m3b_p2_bg_copy_survives_frame.ynz");
+    assert_eq!(
+        alloc, free,
+        "background arg heap-copies must be balanced: alloc={alloc} free={free}"
+    );
+    assert!(
+        alloc >= 1,
+        "at least one ynz_alloc expected for the Shape heap-copy; alloc={alloc}"
+    );
+}
+
+#[test]
+fn v03_m3b_p2_sm_bg_heap_arg_no_leak() {
+    // WHY: When the callee suspends (wait sleep), background routes to ynz_rt_spawn
+    // (state-machine path). The Shape arg is heap-copied via prepare_bg_arg_for_ctx so
+    // it outlives the spawner's stack frame. SpawnStateFnFuture::drop must free that
+    // heap copy before releasing the frame. alloc == free proves the SM path has no
+    // per-spawn leak (was alloc=3 free=2 before the fix).
+    let (alloc, free) = ynz_run_with_alloc_counter("v0_3_m3b_p2_sm_bg_heap_arg_no_leak.ynz");
+    assert_eq!(
+        alloc, free,
+        "SM-path heap arg-copies must be freed by SpawnStateFnFuture::drop: alloc={alloc} free={free}"
+    );
+    assert!(
+        alloc >= 1,
+        "at least one ynz_alloc expected for the Shape heap-copy + frame: alloc={alloc}"
+    );
+}
+
 /// Run a fixture with alloc-counter instrumentation and return (alloc_count, free_count).
 /// Used by audit tests that need to verify the one-alloc-per-task-tree invariant.
 fn ynz_run_with_alloc_counter(fixture_name: &str) -> (u64, u64) {

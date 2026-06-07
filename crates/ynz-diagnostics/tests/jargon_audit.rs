@@ -393,10 +393,11 @@ fn no_banned_jargon_in_deferred_feature_user_facing_fields() {
 }
 
 // WHY: `booleanean` is a typo for `boolean` that reached the user-facing `print` diagnostic;
-//      `infers` is the inflected verb form of banned jargon `infer` — the whole-word check
-//      for `infer` does not catch `infers` (the trailing `s` breaks the word boundary).
-//      Both must not appear in any diagnostic string. This test provides a precise guard so
-//      `cargo test -p ynz-diagnostics` catches a reintroduction immediately.
+//      `infers`, `inferred`, and `inference` are inflected forms of banned jargon `infer` —
+//      the whole-word check for `"infer"` does not catch these because the trailing character
+//      (`s`, `d`, `n`) breaks the word boundary. All three inflected forms are equally banned
+//      from user-facing diagnostic text. This test closes the gap so that any reintroduction
+//      of an inflected form is caught at CI time by `cargo test -p ynz-diagnostics`.
 #[test]
 fn no_typo_booleanean_or_verb_infers_in_diagnostic_strings() {
     let mut violations: Vec<String> = Vec::new();
@@ -425,14 +426,25 @@ fn no_typo_booleanean_or_verb_infers_in_diagnostic_strings() {
                     "{file}:{line_num}: diagnostic string contains banned jargon verb \"infers\" (use \"figures out\"): {string_content:?}"
                 ));
             }
+            if lower.contains("inferred") {
+                violations.push(format!(
+                    "{file}:{line_num}: diagnostic string contains banned jargon form \"inferred\" (use plain English, e.g. \"the compiler chose\"): {string_content:?}"
+                ));
+            }
+            if lower.contains("inference") {
+                violations.push(format!(
+                    "{file}:{line_num}: diagnostic string contains banned jargon form \"inference\" (use \"the compiler figures out\"): {string_content:?}"
+                ));
+            }
         }
     }
 
     if !violations.is_empty() {
         panic!(
             "Typo/jargon found in {} diagnostic string(s):\n{}\n\n\
-             Replace \"booleanean\" with \"boolean\"; replace \"infers\" with \
-             \"figures out\" (per vocabulary.md — `infer`/`infers` is banned in user-facing text).",
+             Replace \"booleanean\" with \"boolean\"; replace \"infers\"/\"inferred\"/\"inference\" \
+             with plain English (per vocabulary.md — all inflected forms of `infer` are banned \
+             from user-facing diagnostic text).",
             violations.len(),
             violations.join("\n")
         );

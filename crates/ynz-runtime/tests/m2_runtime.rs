@@ -526,8 +526,9 @@ fn rt_spawn_drives_state_machine_on_io_pool() {
 
     // SAFETY: frame_ptr valid for frame_size bytes; signal_sm_resume valid; ownership transferred.
     // -1 = no recursion slot (this test fixture is not a recursive SM).
+    // Null arg_drop_ptr + count=0 = no heap arg-copies to free on this test-only SM.
     unsafe {
-        ynz_rt_spawn(signal_sm_resume, frame_ptr, frame_size, -1);
+        ynz_rt_spawn(signal_sm_resume, frame_ptr, frame_size, -1, std::ptr::null(), 0);
     }
 
     rx.recv_timeout(Duration::from_secs(2))

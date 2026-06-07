@@ -148,3 +148,15 @@ Global cross-workstream items only. Granular per-chat work lives in:
 
 **[webpage] CSP for Shiki inline styles** — Any future CSP at DO edge or via `nuxt-security` MUST allow `style-src 'unsafe-inline'` OR migrate Shiki to class-based theming (`{ colorReplacements: ... }` or CSS classes mode). Fix before M7 launch when CSP is configured.
 - Trigger: M7 launch — when deploying to production and adding security headers
+
+**[ynz-codegen / m3b-P2] Background heap arg-copy `byte_size` falls back to 0** — `prepare_bg_arg_for_ctx` (emit.rs, Shape branch) records `byte_size = size_of().get_zero_extended_constant().unwrap_or(0)` for the `BgArgFreeKind::HeapShape` free descriptor. LLVM `size_of()` is a constexpr (`ptrtoint getelementptr`), so the constant can't be extracted → 0 is used. Harmless today (`ynz_free` ignores its size arg — wraps libc `free`). 
+- What: thread `shape_abi_sizes` (TargetData::get_abi_size, already computed in queries.rs) into `prepare_bg_arg_for_ctx` and look the size up by shape name instead of the 0 fallback.
+- Why deferred: the size is currently ignored by `ynz_free`; wiring the real value for an unused field is YAGNI gold-plating.
+- Cost to fix: ~½ session (add a param to prepare_bg_arg_for_ctx + 2 call sites).
+- Trigger: `--kernel` sized-dealloc support lands (a custom allocator whose free DOES use the size) — design/future/no-runtime-mode.md. Flagged by code-reviewer in v0.3-M3b Phase 2 R3 (non-blocking concern #1).
+
+**[ynz-diagnostics / m3b-P2] jargon source-scan can't see pre-built diagnostic strings** — `find_diagnostic_strings` in `jargon_audit.rs` only captures string literals *inside* a `Diagnostic::*()` call's paren depth. A diagnostic message built into a `let msg = format!(...)` variable BEFORE the `Diagnostic::error(span, ..., msg, ...)` call escapes the scan. Pre-existing (applies to every banned word in `no_typo_..._infers_...`, not just the M3b additions); surfaced by deviation-judge D6 in v0.3-M3b Phase 2.
+- What: extend the scanner to track string literals assigned to vars that later flow into a `Diagnostic::*()` arg (or scan all string literals with a Diagnostic-proximity heuristic).
+- Why deferred: pre-existing limitation, not introduced by M3b; no current production diagnostic builds a banned-word string via a pre-built variable.
+- Cost to fix: ~1 session (the scanner becomes a mini-dataflow over the file).
+- Trigger: a banned word ships in a pre-built diagnostic string and reaches users.

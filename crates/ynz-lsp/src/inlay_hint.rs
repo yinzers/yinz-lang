@@ -280,12 +280,16 @@ pub fn inlay_hint_response(
     // Fires when a BackgroundLargeStructCopy warning is present at the call site.
     // The Tier 3 warning already teaches via the diagnostic; this hint reinforces
     // with an inline annotation at the exact arg position.
+    //
+    // Detection: `d.what.starts_with("Copying ")` uniquely identifies this warning
+    // class. The previous `d.what_instead.contains(".give")` secondary gate has been
+    // removed — `.give` no longer appears in the diagnostic text (`.give` is not valid
+    // Yinz body syntax; the WHAT-INSTEAD was reworded per dot-postfix.md).
 
     let check_out = check_query(&state.db, sf);
     for d in check_out.diagnostics.iter() {
         if d.severity == Severity::Warning
             && d.what.starts_with("Copying ")
-            && d.what_instead.contains(".give")
         {
             let hint_pos = d.span.end;
             if !in_viewport(hint_pos, vp_start, vp_end) {

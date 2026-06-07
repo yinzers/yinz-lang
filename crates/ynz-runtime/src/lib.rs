@@ -1210,6 +1210,50 @@ pub unsafe extern "C" fn ynz_array_drop(arr: *mut YnzArray) {
     free(arr as *mut core::ffi::c_void);
 }
 
+/// Clone an array of primitive elements (int/float/bool — each element is an i64 bit
+/// pattern) into a fresh independent heap allocation.
+///
+/// Each element is a raw i64; no element-level indirection. The cloned array has its
+/// own data buffer and its own header — mutating either the original's elements OR
+/// growing/shrinking the original after this call has NO effect on the clone.
+///
+/// Used when a `background` task receives an `array<int>` / `array<float>` / `array<bool>`
+/// argument: the caller's array must remain independent of the task's array so that
+/// post-spawn mutations by the caller are invisible to the task.
+///
+/// The caller (background task closure) must free the returned pointer with
+/// `ynz_array_drop` when the task completes.
+///
+/// # Safety
+/// `src` must be a valid non-null pointer returned by `ynz_array_new` and not yet dropped.
+/// Returns null if `src` is null (caller should treat null as a bug, but this avoids UB).
+#[no_mangle]
+pub unsafe extern "C" fn ynz_array_clone_primitive(src: *mut YnzArray) -> *mut YnzArray {
+    if src.is_null() {
+        return std::ptr::null_mut();
+    }
+    let src_ref = &*src;
+    let cap = if src_ref.cap > 0 { src_ref.cap } else { 1 };
+    let new_data = malloc((cap as usize) * 8) as *mut u8;
+    if new_data.is_null() {
+        std::process::abort();
+    }
+    if src_ref.len > 0 && !src_ref.data.is_null() {
+        std::ptr::copy_nonoverlapping(src_ref.data, new_data, (src_ref.len as usize) * 8);
+    }
+    let hdr = malloc(std::mem::size_of::<YnzArray>()) as *mut YnzArray;
+    if hdr.is_null() {
+        free(new_data as *mut core::ffi::c_void);
+        std::process::abort();
+    }
+    (*hdr) = YnzArray {
+        data: new_data,
+        len: src_ref.len,
+        cap,
+    };
+    hdr
+}
+
 // ── M4/M5: decimal128 → f64 conversion (needed by (Number).toFloat() and (Number).toInt()) ──
 
 /// Convert a decimal128 value (stored as *const [u8;16]) to f64.

@@ -1,0 +1,19 @@
+// v0.3-M3b Phase 2 fixture (a): `background fn(x)` with `x` unused after the spawn.
+// The compiler infers `.give` — the binding is dead after the `background` statement,
+// so the task takes ownership without a copy.
+//
+// Both `before spawn` and `task ran` must appear; `after spawn` is printed on main
+// immediately. The task takes the `id` value and prints it.
+
+function processTask(id: int) -> nothing {
+  print(`task ran: ${id}`)
+}
+
+function entrypoint() -> nothing {
+  let taskId: int = 42
+  print(`before spawn`)
+  background processTask(taskId)
+  // taskId is NOT read after this point — compiler infers .give
+  print(`after spawn`)
+  sleepBlocking(50)
+}

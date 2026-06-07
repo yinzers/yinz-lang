@@ -654,10 +654,12 @@ fn collect_type_hints_block(
     }
 }
 
-/// Emit `share`/`lend`/`give` hints after call-site arguments.
+/// Emit `share`/`lend`/`give`/`copy` hints after call-site arguments.
 ///
 /// Fires for free-function calls, generic-function calls, and UFCS method calls
 /// (`player.heal(20)` is equivalent to `heal(player, 20)` — both get the same hint).
+/// Also emits inferred `give` or `copy` hints for plain-ident arguments at
+/// `background` call sites (sourced from the check pass's use-after-spawn analysis).
 /// Suppressed when the callee cannot be resolved (unresolvable → no hint, not a crash).
 ///
 /// Time: O(n × signature-lookup).  Space: O(hints).
@@ -668,6 +670,7 @@ pub fn ownership_call_site_hints(
 ) -> Vec<OwnershipHint> {
     let parse = parse_query(db, source);
     let sigs = module_signatures_query(db, source);
+    let check = check_query(db, source);
 
     let mut hints = Vec::new();
     for item in &parse.module.items {
@@ -681,7 +684,67 @@ pub fn ownership_call_site_hints(
             );
         }
     }
+
+    // Emit inferred `give`/`copy` hints for plain-ident arguments at `background`
+    // call sites.  The check pass records which ident-span maps to which inferred
+    // modifier in `background_arg_inferred_ownership`.
+    //
+    // Walk every statement in every function body; when we find a
+    // `Stmt::Expr(Expr::Background(Expr::Call(...)))`, check each plain-ident arg
+    // against the map and emit a hint at `arg.span().end`.
+    let bg_inferred = &check.typed_module.background_arg_inferred_ownership;
+    if !bg_inferred.is_empty() {
+        for item in &parse.module.items {
+            if let Item::Function(f) = item {
+                collect_background_ownership_hints_block(&f.body, bg_inferred, &mut hints);
+            }
+        }
+    }
+
     hints
+}
+
+/// Walk a block collecting inferred `give`/`copy` hints for `background` call sites.
+fn collect_background_ownership_hints_block(
+    block: &ynz_ast::nodes::Block,
+    bg_inferred: &std::collections::HashMap<(usize, usize), crate::check::BgOwnership>,
+    out: &mut Vec<OwnershipHint>,
+) {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Expr(Expr::Background(inner, _)) => {
+                if let Expr::Call(call) = inner.as_ref() {
+                    for arg in &call.args {
+                        if let Expr::Ident(_, span) = arg {
+                            let key = (span.start, span.end);
+                            if let Some(own) = bg_inferred.get(&key) {
+                                out.push(OwnershipHint {
+                                    position: span.end,
+                                    modifier: bg_ownership_modifier_str(own).to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            // Recurse into blocks so nested `background` statements are also covered.
+            Stmt::If { body, .. } => {
+                collect_background_ownership_hints_block(body, bg_inferred, out);
+            }
+            Stmt::While { body, .. } | Stmt::For { body, .. } => {
+                collect_background_ownership_hints_block(body, bg_inferred, out);
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                for arm in arms {
+                    collect_background_ownership_hints_block(&arm.body, bg_inferred, out);
+                }
+                if let Some(eb) = else_arm {
+                    collect_background_ownership_hints_block(eb, bg_inferred, out);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn collect_ownership_hints_block(
@@ -746,6 +809,14 @@ fn ownership_modifier_str(own: &OwnershipModifier) -> &'static str {
         OwnershipModifier::Share => "share",
         OwnershipModifier::Lend => "lend",
         OwnershipModifier::Give => "give",
+    }
+}
+
+/// Map a `BgOwnership` (inferred modifier for `background` args) to the hint string.
+fn bg_ownership_modifier_str(own: &crate::check::BgOwnership) -> &'static str {
+    match own {
+        crate::check::BgOwnership::Give => "give",
+        crate::check::BgOwnership::Copy => "copy",
     }
 }
 

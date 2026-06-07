@@ -1,0 +1,19 @@
+// v0.3-M3b Phase 2 fixture (c): explicit `.copy()` at a `background` call site must
+// be honored — the inferred path must not interfere with explicit user syntax.
+//
+// `b` is passed as `b.copy()` explicitly; the caller still reads `b` after, and
+// the task gets its own copy. The inferred-copy path must not double-copy or
+// emit a conflicting hint.
+
+function taskB(id: int) -> nothing {
+  sleepBlocking(10)
+  print(`taskB: ${id}`)
+}
+
+function entrypoint() -> nothing {
+  let b: int = 20
+  background taskB(b.copy())
+  // b is still accessible — explicit .copy() left the original intact
+  print(`caller b: ${b}`)
+  sleepBlocking(100)
+}

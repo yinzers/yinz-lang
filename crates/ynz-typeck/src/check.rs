@@ -24,6 +24,23 @@ use crate::{
     types::{type_name, Type},
 };
 
+/// Inferred ownership for a plain-ident argument at a `background` call site.
+///
+/// `OwnershipModifier` (from ynz-ast) covers `Share / Lend / Give` — the three
+/// modifiers that appear in function signatures.  `background` inference additionally
+/// needs `Copy` (the argument is cloned because the caller reads the binding again
+/// after the spawn).  Rather than extend the AST enum (which is shared across all
+/// compiler passes), we keep this typeck-local enum.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BgOwnership {
+    /// Transfer ownership to the background task — the caller does not read the
+    /// binding again after this spawn.
+    Give,
+    /// Copy the value into the background task — the caller reads the binding after
+    /// the spawn, so the task needs its own independent copy.
+    Copy,
+}
+
 /// The type-annotated view of a module.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypedModule {
@@ -34,6 +51,17 @@ pub struct TypedModule {
     /// equals its leftmost child's span.start — the parent overwrites the child.
     /// The full `(start, end)` pair is unique per expression node.
     pub expr_types: std::collections::HashMap<(usize, usize), Type>,
+    /// Compiler-inferred ownership for each plain-ident argument at a
+    /// `background` call site, keyed by `(arg_span.start, arg_span.end)`.
+    ///
+    /// Only plain `Expr::Ident` arguments are recorded here — arguments already
+    /// written as `x.give` or `x.copy()` are handled by the postfix-op path and
+    /// are NOT re-inferred (explicit always wins over inferred).
+    ///
+    /// Used by `ownership_call_site_hints` to emit the inferred modifier as a
+    /// muted-text hint at the call site.
+    pub background_arg_inferred_ownership:
+        std::collections::HashMap<(usize, usize), BgOwnership>,
 }
 
 /// Run the M5 type checker over all function bodies.
@@ -95,11 +123,13 @@ pub fn check(
         inside_wait: false,
         inside_background: false,
         current_fn_suspends: false,
+        bg_inferred: HashMap::new(),
     };
     checker.check_module(module);
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
+        background_arg_inferred_ownership: checker.bg_inferred,
     };
     (
         typed,
@@ -157,11 +187,13 @@ pub fn check_with_kernel_mode(
         inside_wait: false,
         inside_background: false,
         current_fn_suspends: false,
+        bg_inferred: HashMap::new(),
     };
     checker.check_module(module);
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
+        background_arg_inferred_ownership: checker.bg_inferred,
     };
     (typed, checker.mono_table, checker.diags)
 }
@@ -267,6 +299,16 @@ struct Checker<'b> {
     /// (cross-module suspension propagation requires M8 binary package metadata and
     /// ships in M3).
     current_fn_suspends: bool,
+
+    /// Inferred ownership modifier for each plain-ident argument at a `background` call site.
+    ///
+    /// Populated during `check_stmts` when a `Stmt::Expr(Expr::Background(...))` is
+    /// encountered. The key is `(arg_span.start, arg_span.end)`. Accumulates across all
+    /// function bodies in the module. Moved into `TypedModule` when the check pass completes.
+    ///
+    /// Only plain `Expr::Ident` args are recorded — explicit `.give`/`.copy()` postfix
+    /// args are handled by the postfix-op path; explicit always wins over inferred.
+    bg_inferred: HashMap<(usize, usize), BgOwnership>,
 }
 
 impl<'b> Checker<'b> {
@@ -1104,7 +1146,8 @@ impl<'b> Checker<'b> {
         // subsequent statements in this block.
         let mut early_return_narrowed: Vec<String> = Vec::new();
 
-        for stmt in stmts {
+        // Indexed iteration so that `background` inference can look at stmts[i+1..].
+        for (i, stmt) in stmts.iter().enumerate() {
             // Apply any early-return narrowing facts from previous `if (!x.exists()) { return }`.
             for name in &early_return_narrowed {
                 self.maybe_non_none.insert(name.clone());
@@ -1112,6 +1155,57 @@ impl<'b> Checker<'b> {
 
             match stmt {
                 Stmt::Expr(expr) => {
+                    // Give/copy inference for `background fn(x)` plain-ident arguments.
+                    //
+                    // Safe direction: if we cannot prove the binding is dead after the spawn,
+                    // infer `.copy` (caller keeps original, task gets its own copy). Only infer
+                    // `.give` when we can prove the binding is NOT read in any remaining statement.
+                    if let Expr::Background(inner, _) = expr {
+                        if let Expr::Call(call) = inner.as_ref() {
+                            let remaining = &stmts[i + 1..];
+                            // Only infer for plain Expr::Ident args — explicit .give/.copy()
+                            // postfix args are handled by the postfix-op path; explicit wins.
+                            let mut gives: Vec<String> = Vec::new();
+                            for arg in &call.args {
+                                if let Expr::Ident(name, span) = arg {
+                                    let used_after = remaining
+                                        .iter()
+                                        .any(|s| ident_read_in_stmt(s, name.as_str()));
+                                    let inferred = if used_after {
+                                        BgOwnership::Copy
+                                    } else {
+                                        BgOwnership::Give
+                                    };
+                                    self.bg_inferred
+                                        .insert((span.start, span.end), inferred.clone());
+                                    if inferred == BgOwnership::Give {
+                                        gives.push(name.clone());
+                                    }
+                                }
+                            }
+                            // Infer_expr runs first (for diagnostics / type registration),
+                            // then we consume the .give bindings so any subsequent stmt
+                            // that reads the binding triggers the use-after-give error.
+                            self.infer_expr(expr, None);
+                            for name in &gives {
+                                // `ident_read_in_stmt` does not distinguish `const` from `let`,
+                                // so a `const` binding not read after spawn would reach this
+                                // path. Consuming a `const` would incorrectly block re-reads in
+                                // later statements (const values are always live). The
+                                // `!entry.is_const` guard is intentionally unreachable via the
+                                // give-inference liveness walk for any well-typed program —
+                                // it exists as a conservative backstop for future liveness
+                                // changes that might re-derive give candidates without the
+                                // const distinction.
+                                if let Some(entry) = self.scope.lookup(name.as_str()) {
+                                    if !entry.is_const && !entry.is_consumed {
+                                        self.scope.consume(name.as_str());
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+                    }
                     self.infer_expr(expr, None);
                 }
                 Stmt::Let {
@@ -2163,14 +2257,14 @@ impl<'b> Checker<'b> {
                     }
                 }
 
-                // Large-copy warning (Tier 3 lint): warn when a `.copy` arg is a shape
-                // with estimated size > 64 bytes.
+                // Large-copy warning (Tier 3 lint): warn when a `.copy` arg (explicit or
+                // inferred) is a shape with estimated size > 64 bytes.
                 // Size estimate: each field = 8 bytes (all values are i64-sized in the
                 // background ctx ABI). Threshold matches cache-line size.
                 const BACKGROUND_LARGE_COPY_BYTES: usize = 64;
                 if let Expr::Call(call) = inner.as_ref() {
                     for arg in &call.args {
-                        // A `.copy` arg is PostfixOp { op: Copy, receiver }
+                        // Explicit `.copy` postfix: PostfixOp { op: Copy, receiver }
                         if let Expr::PostfixOp { op, receiver, .. } = arg {
                             if *op == ynz_ast::nodes::PostfixOpKind::Copy {
                                 let arg_ty = self.infer_expr(receiver, None);
@@ -2179,8 +2273,25 @@ impl<'b> Checker<'b> {
                                     self.diags.push(Diagnostic::warning(
                                         arg.span().clone(),
                                         format!("Copying {} bytes into a background task.", size),
-                                        "Pass ownership with `background fn(value.give)` if you don't need the value after. Click `.give` to apply.",
-                                        "`.give` transfers ownership without copying. Auto-detection of unused-after-call ships in v0.3-M3b; until then, the choice is yours to make explicit.",
+                                        "If you don't need the value after the spawn, remove the `.copy()` — the compiler will transfer ownership to the task without copying.",
+                                        "Transferring ownership is faster than copying for large values — the compiler does it automatically when the value is not used after the spawn. Use `.copy()` only when you need to keep using the value in the caller after the spawn.",
+                                    ));
+                                }
+                            }
+                        }
+                        // Compiler-chosen `.copy` for plain Ident args where the value is
+                        // read again after the spawn (so the task needs its own independent copy).
+                        if let Expr::Ident(_, span) = arg {
+                            let key = (span.start, span.end);
+                            if matches!(self.bg_inferred.get(&key), Some(BgOwnership::Copy)) {
+                                let arg_ty = self.infer_expr(arg, None);
+                                let size = self.estimate_type_size_bytes(&arg_ty);
+                                if size > BACKGROUND_LARGE_COPY_BYTES {
+                                    self.diags.push(Diagnostic::warning(
+                                        arg.span().clone(),
+                                        format!("Copying {} bytes into a background task (the compiler chose copy because the value is used after the spawn).", size),
+                                        "If you don't need the value after the spawn, restructure so the value is not read again — the compiler will transfer ownership instead of copying.",
+                                        "When a value is not read after the spawn point, the compiler transfers ownership to the background task without copying. When the value IS read after the spawn, the compiler makes a copy so both the caller and the task have their own independent value.",
                                     ));
                                 }
                             }
@@ -6026,6 +6137,59 @@ fn param_has_nested_let_shadow(stmts: &[Stmt], target: &str) -> bool {
         }
     }
     false
+}
+
+/// Returns `true` if `stmt` contains ANY read of the identifier `name` — conservative
+/// (may report true for shadowed names in nested scopes).
+///
+/// Used for `background` give/copy inference: safe direction is `.copy` (do not
+/// consume the binding) whenever we cannot PROVE the name is dead after the spawn.
+/// A false positive here only costs a copy (the safe choice); a false negative
+/// (`.give` on a still-live binding) would be a use-after-move bug.
+///
+/// Time: O(stmt nodes).  Space: O(1).
+fn ident_read_in_stmt(stmt: &Stmt, name: &str) -> bool {
+    match stmt {
+        Stmt::Expr(e) => expr_refs_ident(e, name),
+        Stmt::Let { value, .. } | Stmt::Assign { value, .. } => expr_refs_ident(value, name),
+        Stmt::Return { value, .. } => value.as_ref().is_some_and(|e| expr_refs_ident(e, name)),
+        Stmt::FieldAssign { target, value, .. } => {
+            expr_refs_ident(target, name) || expr_refs_ident(value, name)
+        }
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => {
+            expr_refs_ident(receiver, name)
+                || expr_refs_ident(index, name)
+                || expr_refs_ident(value, name)
+        }
+        Stmt::If { cond, body, .. } => {
+            expr_refs_ident(cond, name) || body.stmts.iter().any(|s| ident_read_in_stmt(s, name))
+        }
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
+            expr_refs_ident(scrutinee, name)
+                || arms
+                    .iter()
+                    .any(|arm| arm.body.stmts.iter().any(|s| ident_read_in_stmt(s, name)))
+                || else_arm
+                    .as_ref()
+                    .is_some_and(|b| b.stmts.iter().any(|s| ident_read_in_stmt(s, name)))
+        }
+        Stmt::While { cond, body, .. } => {
+            expr_refs_ident(cond, name) || body.stmts.iter().any(|s| ident_read_in_stmt(s, name))
+        }
+        Stmt::For { iter, body, .. } => {
+            expr_refs_ident(iter, name) || body.stmts.iter().any(|s| ident_read_in_stmt(s, name))
+        }
+    }
 }
 
 /// Returns `true` if `stmt` references `target` in a context where the reference
