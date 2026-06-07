@@ -64,9 +64,10 @@ pub use check::{
 pub use exports::ExportTable;
 pub use generics::{GenericFnTable, GenericShapeTable, MonomorphizationTable};
 pub use inlay_hint_passes::{
-    array_to_fixed_promotion_hints, copy_point_hints, let_to_const_promotion_hints,
-    ownership_call_site_hints, variable_type_hints, CopyHint, OwnershipHint, PromotionHint,
-    PromotionKind, TypeHint,
+    array_to_fixed_promotion_hints, background_routing_hints, copy_point_hints,
+    let_to_const_promotion_hints, ownership_call_site_hints, variable_type_hints,
+    wait_points_hints, BackgroundRoutingHint, CopyHint, OwnershipHint, PromotionHint,
+    PromotionKind, TypeHint, WaitPointHint,
 };
 pub use intrinsics::PrimitiveIntrinsicTable;
 pub use may_block::suspends_set_for_test as may_block_suspends_set;
@@ -74,7 +75,7 @@ pub use queries::{
     check_query, exports_query, module_signatures_query, CheckOutput, SignatureOutput,
 };
 pub use shapes::{ShapeDef, ShapeTable};
-pub use signatures::SignatureTable;
+pub use signatures::{build_effective_suspend_set, SignatureTable};
 pub use symbol_lookup::{
     cross_file_reference_count_estimate, def_site_for_offset, references_for_offset,
     rename_locations, resolve_symbol_at, RenameError, ResolvedSymbol, SymbolKind,

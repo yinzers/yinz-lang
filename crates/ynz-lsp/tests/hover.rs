@@ -378,7 +378,7 @@ fn hover_request_via_lsp_returns_response() {
 // "Suspends the calling function" (which conflated suspension with ordering).
 // If this fails, the keyword hover docs weren't updated in the registry.
 #[test]
-fn hover_wait_keyword_returns_m2_suspension_text() {
+fn hover_wait_keyword_returns_ordering_barrier_text() {
     let src = "wait sleep(100)";
     let tokens = tokenize(src);
     let table = LineTable::new(src);
@@ -419,7 +419,7 @@ fn hover_wait_keyword_returns_m2_suspension_text() {
 // pool, not a dedicated single thread). This test verifies the routing note is
 // present. If this fails, the background hover docs weren't updated in the registry.
 #[test]
-fn hover_background_keyword_returns_routing_distinction_text() {
+fn hover_background_keyword_returns_pool_routing_text() {
     let src = "background doWork()";
     let tokens = tokenize(src);
     let table = LineTable::new(src);

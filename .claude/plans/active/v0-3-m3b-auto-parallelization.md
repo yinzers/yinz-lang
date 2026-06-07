@@ -434,7 +434,7 @@ Per Patrick's standing preference (`all-phases-then-review`): run the 5-reviewer
 - [x] deviation-judge D8 (approach: Give-path heap-upgrade): PASS 2026-06-07T04:10 — heap-copy is the only correct stack→heap promotion, not overbroad
 - [x] deviation-judge D9 (approach: SM runtime future-drop free): PASS 2026-06-07T04:10 — cancellation/concurrency/recursion drop-order all alloc==free
 - [x] (R1 judges D1/D2/D3/D5/D7 carried prior PASS — code unchanged since Round 1)
-- [ ] Committed: <commit SHA>
+- [x] Committed: 5b637e3
 
 **Findings Log**:
 - 2026-06-07 — **Gate Round 1 (5 reviewers + 5 deviation-judges, BASE `d7ea993`). 8 PASS, 2 hard BLOCK + 1 truncated.** PASS: code-reviewer (3 non-blocking concerns), plan-adherence, acceptance-verifier (5/5 ACs MET live), judge#1 (queries.rs salsa cycle-initial sound), judge#2 (inlay tests are a real mutation-detecting pair), judge#3 (integration.rs pure-insertion, no test weakening), judge#5 (explicit-give language claim TRUE — `PostfixOpKind` has only Copy/Freeze). BLOCK:
@@ -481,34 +481,50 @@ Per Patrick's standing preference (`all-phases-then-review`): run the 5-reviewer
 5. Tests: `wait_points` pass fires on a suspending call, not on a non-suspending one, not where `wait` is explicit; `background_routing` fires I/O vs CPU correctly; LSP handler returns the hints; hover text present + jargon-clean.
 6. **(Carried from P0 Findings Log — deferred cosmetic cleanup)** Rename the two stale-named hover tests in `crates/ynz-lsp/tests/hover.rs` whose bodies assert M3b semantics but whose names still say "m2"/old: `hover_wait_keyword_returns_m2_suspension_text` → e.g. `hover_wait_keyword_returns_ordering_barrier_text`, and `hover_background_keyword_returns_routing_distinction_text` (verify the name matches the M3b assertion it now makes). Rename only — do NOT weaken the assertions. This phase re-touches `hover.rs`, so the rename rides along here.
 **Acceptance criteria**:
-- [ ] `wait_points` pass fires a muted `wait` hint at suspending call sites (and NOT at non-suspending sites or where `wait` is explicit) — pass test
-  - Evidence: (filled at phase completion)
-- [ ] `background_routing` pass fires `// routed to I/O pool` for suspending callees and `// routed to CPU pool` for non-suspending — pass test
-  - Evidence: (filled at phase completion)
-- [ ] LSP `textDocument/inlayHint` returns both hint kinds with non-empty WHAT/WHAT-INSTEAD/WHY hovers from the registry
-  - Evidence: (filled at phase completion)
-- [ ] `jargon_audit` green on the new hover/diagnostic text
-  - Evidence: (filled at phase completion)
-- [ ] If the full execution-plan IDE view is deferred, a `[[deferred_tooling_feature]]` entry records it with a trigger
-  - Evidence: (filled at phase completion)
+- [x] `wait_points` pass fires a muted `wait` hint at suspending call sites (and NOT at non-suspending sites or where `wait` is explicit) — pass test
+  - Evidence: `cargo test -p ynz-typeck --test inlay_hint_wait_background` 13/13 — `test_wait_points_fires_for_call_to_suspending_fn` / `_suppressed_for_non_suspending_fn` / `_suppressed_when_explicit_wait_present` (three-way distinction = mutation-detecting); + buried-in-binop/struct-lit + cross-module imported-suspending + suspending-arg-suppression regression tests (the R1/R2 gap-fixes). LSP-layer `test_inlay_hint_wait_points_*` green. (acceptance-verifier R2)
+- [x] `background_routing` pass fires `// routed to I/O pool` for suspending callees and `// routed to CPU pool` for non-suspending — pass test
+  - Evidence: `test_background_routing_io_pool_for_suspending_callee` / `_cpu_pool_for_non_suspending_callee` / `_fires_exactly_once_per_spawn_site`; **`test_background_routing_io_pool_for_imported_suspending_callee`** (the cross-module case — proves the hint no longer LIES about the pool for imported callees, the R1 BLOCK). Reads the effective set via the shared `build_effective_suspend_set` (byte-identical to codegen `queries.rs`/`emit.rs`). (acceptance-verifier R2 + judge D5/D6)
+- [x] LSP `textDocument/inlayHint` returns both hint kinds with non-empty WHAT/WHAT-INSTEAD/WHY hovers from the registry
+  - Evidence: `cargo test -p ynz-lsp --test inlay_hint` 19/19; Domain-7/8 loops route hovers through `ynz_registry::lsp_inlay_hint_hover_for`; `test_inlay_hint_background_routing_tooltip_non_empty` asserts non-empty tooltip. (acceptance-verifier R2)
+- [x] `jargon_audit` green on the new hover/diagnostic text
+  - Evidence: `cargo test jargon --workspace` 8/8 — `no_banned_jargon_in_muted_hint_domain_descriptions` audits the `background_routing` + updated `wait_points` descriptions; jargon-clean. (acceptance-verifier R2, live)
+- [x] If the full execution-plan IDE view is deferred, a `[[deferred_tooling_feature]]` entry records it with a trigger
+  - Evidence: `registry/features.toml` `[[deferred_tooling_feature]]` `ide-execution-plan-graphical-view` with all four no-duct-tape fields (substitute/why/ships_in=v0.4+/triggers). (acceptance-verifier R2)
 **Quality gate**:
-- [ ] Hint placement categories match `.claude/rules/inference.md` (wait_points = Addition; background_routing = Informational)
-- [ ] Sibling-walker completeness (don't repeat the M10 inlay-walker asymmetry) — passes recurse into the same expr/stmt variants as the existing passes
-- [ ] No protocol-only handler left silently empty when data now exists
+- [x] Hint placement categories match `.claude/rules/inference.md` (wait_points = Addition; background_routing = Informational)
+  - Evidence: `WaitPointHint.position = expr.span().start` (Addition); `BackgroundRoutingHint` comment-style at `bg_span.end` (Informational); registry `placement_category` fields match. (design-compliance R1/R2)
+- [x] Sibling-walker completeness (don't repeat the M10 inlay-walker asymmetry) — passes recurse into the same expr/stmt variants as the existing passes
+  - Evidence: both `collect_*_hints_expr` are EXHAUSTIVE matches (no `_ => {}`); buried-in-BinOp/StructLit regression tests pass (R2 code-reviewer fix of the R1 walker-asymmetry BLOCK). (code-reviewer R2/R3)
+- [x] No protocol-only handler left silently empty when data now exists
+  - Evidence: module header updated 5→7 firing domains; the stale `wait_points`-protocol-only-returns-empty test was replaced with positive Domain-7/8 assertions (judge D4 PASS). (code-reviewer R3)
 **Verification**: inlay-hint pass tests; LSP in-process harness test; `cargo test --workspace`; `cargo test jargon`.
 
-**Phase Review Gates**:
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
-- [ ] design-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] Committed: <commit SHA>
+**Phase Review Gates** (final = Round-3, after the judge-D5 helper-extraction fix; 3 gate rounds total):
+- [x] code-reviewer: PASS 2026-06-07T06:20 (R3 — 31/31 golden snapshots byte-identical = no-op refactor; R1's 3 walker/drift BLOCKs + R2's 2 concerns all fixed; 3 trivial tidy-on-touch nits)
+- [x] rules-compliance-reviewer: PASS 2026-06-07T06:20 (R3 — helper kills the 4× parallel-implementation; comments durable, jargon clean)
+- [x] plan-adherence-verifier: PASS 2026-06-07T06:20 (R3 — all 6 steps MET, D6 codegen expansion authorized, rationales clean)
+- [x] acceptance-verifier: PASS 2026-06-07T05:30 (R2 — 5/5 ACs + sibling-walker quality gate MET; carried into R3 unchanged: R3 is a behavior-preserving refactor, all ACs' tests still pass)
+- [x] design-compliance-reviewer: PASS 2026-06-07T05:30 (R2 — placement categories correct, effective-set alignment, no coloring/bridge; carried into R3: refactor only improves SSOT alignment)
+- [x] deviation-judge D3 (scope: lib.rs export): PASS 2026-06-07T04:30 (R1, code unchanged)
+- [x] deviation-judge D4 (approach: protocol-only test replaced): PASS 2026-06-07T04:30 (R1 — valid fires/suppressed complementary guard)
+- [x] deviation-judge D5 (approach: inline effective-set): BLOCK R2 → RESOLVED in R3 (extracted to shared helper)
+- [x] deviation-judge D6 (scope: shared-helper codegen expansion): PASS 2026-06-07T06:20 (R3 — helper exactly reproduces inline; empty/collision/filter/type edge cases all behavior-identical; 31 golden snapshots confirm)
+- [x] (D1/D2 mechanical lint/idiom — covered by reviewers, no judge)
+- [x] Committed: <commit SHA>
 
 **Findings Log**:
-_(empty until a reviewer returns BLOCK)_
+- 2026-06-07 — **Gate Round 1 (5 reviewers + 2 judges, BASE `5b637e3`). 5 PASS, 2 BLOCK.** PASS: rules-compliance (jargon clean, registry entries present), design-compliance (placement categories correct, no coloring), acceptance-verifier (5/5 ACs — but only checked the documented ACs, NOT cross-module), judge D3 (lib.rs export exact), judge D4 (test-replacement is a valid fires/suppressed complementary guard). BLOCK:
+  - **code-reviewer — 3 findings (2 confirmed silent-wrong, the inlay-walker-asymmetry corpse the gate exists to catch).** (1) `collect_wait_point_hints_expr` (inlay_hint_passes.rs:1342-1382) does NOT recurse into compound-expr variants (BinOp/UnaryOp/FieldAccess/IndexAccess/StructLit/ArrayLit/MapLit/PostfixOp → `_ => {}`); live-confirmed `let x = doWork() + 1` → `hints: []`. (2) `collect_background_routing_hints_expr` (1400-1416) has the identical gap. (3) **THE BIG ONE — hint-vs-binary drift**: `background_routing` reads bare `check.suspends_set`, but codegen routes on the EFFECTIVE set = `suspends_set` + imported-suspending names (`queries.rs:90-94` → `cg.suspend_set` at `emit.rs:9335`); live two-module test: `background importedSuspendingFn()` → codegen routes I/O pool, hint says CPU pool (exact opposite). Coordinator NOTE: my intra-module SSOT check missed this; the cross-module test caught it. **The same effective-set fix applies to BOTH passes** (wait_points also reads bare suspends_set → would miss an imported-suspending call site).
+  - **plan-adherence — Step 6 partial (near-false-positive).** Renamed the m2-named `hover_wait_keyword_returns_m2_suspension_text` ✅ but did not rename `hover_background_keyword_returns_routing_distinction_text`. Coordinator adjudication: the plan's Step 6 said rename the FIRST (had "m2") and "verify the name matches" the SECOND — and the second's name IS accurate (it asserts `"I/O thread pool"`/`"CPU thread pool"`, i.e. routing-distinction). So this is a plan-reading discrepancy, not a real defect. Folding a trivial rename into the fix-round to satisfy it cleanly (no behavior change).
+  - judge D4 follow-on (fold in): strengthen the suppression test with a suspending-ARG case (`wait doWork(otherWork())`) — the current zero-arg case is vacuous.
+  - code-reviewer concern (fold in): make the walker matches EXHAUSTIVE (no `_ => {}` catch-all) so a future Expr variant forces a conscious decision.
+- 2026-06-07 — **Round-2 fix landed; Gate Round 2 (5 reviewers + 1 judge D5). 5 PASS, 1 BLOCK.** Executor fixed all 3 R1 code-reviewer findings: exhaustive compound-expr recursion in both walkers (no `_ => {}`), effective-suspend-set read (local + imported) in BOTH passes, byte-identical to codegen `queries.rs:90-94`; + renamed the 2nd hover test, strengthened the suppression test, added BinOp/StructLit/cross-module regression tests. Coordinator-verified live: all 5 gap-tests pass; effective-set construction byte-identical to codegen. Gate R2: code-reviewer PASS (re-ran adversarial mixed-set union + buried-background cases — all green; 2 non-blocking concerns: a stray "allocators are now firing" comment lie at inlay_hint_passes.rs:20 + the `wait_points` registry description still says "Reads check_query.suspends_set" not the effective set), rules/plan-adherence/design/acceptance PASS (acceptance 5/5 + sibling-walker quality gate MET). **BLOCK:**
+  - **judge D5 — no-duct-tape #7 parallel-implementation (the drift-fix is itself drift-prone).** The effective-set construction (`base.clone()` + insert imported `sig.suspends` names) now exists in **4** identical inline copies — `queries.rs:90`, `emit.rs:921` (the pre-existing 2nd codegen copy that actually feeds routing via `emit.rs:9335`), + the 2 new inlay passes. The WHY-anchors point at `queries.rs:90-94` but the real routing gate is `emit.rs:921-927`; a change to the emit copy alone re-drifts the hints. Per coding-style "3+ = extract" + no-duct-tape #7 → extract a shared `build_effective_suspend_set` helper consumed at all 4 sites (also de-dups the pre-existing codegen pair). code-reviewer independently flagged the same as Concern #3 (rated non-blocking, but a judge BLOCK is decisive per `/execute-plan` §3.f). **Coordinator-verified the 4-site count is accurate** (grep). FIX-ROUND: extract the helper + fold in the 2 code-reviewer comment/doc concerns.
+  - acceptance flagged 2 workspace-test failures → **coordinator-verified BOTH are pre-existing flakes** (`v03_m3a_p4_...byte_identical` passes 3/3 in isolation — timing-sensitive under parallel load, Phase 3 doesn't touch codegen; `read_debounce_ms_custom` = known env-flake in todos). NOT Phase-3 regressions.
+- 2026-06-07 — **Round-3 fix (judge-D5 BLOCK): extracted `build_effective_suspend_set` shared helper → Gate Round 3 ALL PASS.** ONE helper in `signatures.rs:83` (exported `lib.rs:78`) consumed at all 4 effective-set sites (queries.rs:92, emit.rs:920, inlay_hint_passes.rs:1280+1506); zero inline copies remain; **31/31 codegen golden IR snapshots byte-identical = provably behavior-preserving**. + fixed code-reviewer's 2 R2 concerns (allocators-comment lie, wait_points description). Gate R3: code-reviewer/rules/plan-adherence/judge-D6 PASS (design + acceptance carried R2 PASS — refactor doesn't touch their lanes). judge D6 adversarially confirmed the helper exactly reproduces the inline (empty imports / name-collision dedup / suspends=false filter / type alignment all behavior-identical). **Phase 3 GREEN across 3 gate rounds.** 2 trivial tidy-on-Phase-6-touch nits noted (duplicated "lifetimes" word in inlay_hint_passes.rs doc-header; a now-stale state.md radar clause — state fixed). **Net Phase-3 value: the no-coloring teaching surface (`wait_points` muted hint + `background_routing` I/O-vs-CPU hint) provably cannot drift from the binary's actual routing — the gate caught + killed a real cross-module hint-lies-about-the-pool bug that intra-module verification missed.**
 
-**Exit Sequence — RUN THESE STEPS:** per Phase Execution Protocol. `$BASE` = Phase 2's committed SHA.
+**Exit Sequence — RUN THESE STEPS:** per Phase Execution Protocol. `$BASE` = Phase 2's committed SHA (`5b637e3`).
 
 ---
 

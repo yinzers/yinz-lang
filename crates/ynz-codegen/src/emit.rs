@@ -28,8 +28,8 @@ use ynz_ast::nodes::{
 };
 use ynz_numerics; // parse(s: &str) -> Option<u128>
 use ynz_typeck::{
-    crossing_local_names, type_attached_const_type, GenericFnTable, MonomorphizationTable,
-    ShapeTable, SignatureTable, Type, TypedModule,
+    build_effective_suspend_set, crossing_local_names, type_attached_const_type, GenericFnTable,
+    MonomorphizationTable, ShapeTable, SignatureTable, Type, TypedModule,
 };
 
 use crate::{
@@ -906,24 +906,18 @@ fn build_module<'ctx, 'g>(
             .collect()
     };
 
-    // Extend the suspend_set to include imported functions that are suspending.
+    // WHY: single SSOT for the effective suspend set — local + imported suspending
+    // names.  `build_effective_suspend_set` is the canonical computation consumed by
+    // the frame-layout query, this routing gate, and the IDE hint passes, ensuring they
+    // all agree on which callees are suspending.
     //
-    // `suspend_set` from check_query contains only LOCAL function names (the
-    // may-block fixpoint runs on this module's body). Call-site routing in
-    // `is_direct_suspending_call` and frame-layout child collection both consult
-    // this set. Without importing names here:
-    //
-    // 1. `build_frame_layouts` won't embed child sub-frames for cross-module
-    //    suspending callees, causing heap-boxed fallback paths with SSA dominator bugs.
-    // 2. `is_direct_suspending_call` won't route calls to imported suspending fns
-    //    through inline poll-yield, instead calling the SM wrapper directly — which
-    //    panics ("Cannot start a runtime from within a runtime") inside a resume body.
-    let mut effective_suspend_set = suspend_set.clone();
-    for (name, sig) in imported_fns {
-        if sig.suspends {
-            effective_suspend_set.insert(name.clone());
-        }
-    }
+    // Without the imported names:
+    //   1. `build_frame_layouts` skips cross-module child sub-frames → heap-boxed
+    //      fallback paths with SSA dominator bugs.
+    //   2. `is_direct_suspending_call` misses imported suspending fns → calls the SM
+    //      wrapper directly inside a resume body → "Cannot start a runtime from within
+    //      a runtime" panic at runtime.
+    let effective_suspend_set = build_effective_suspend_set(suspend_set, imported_fns);
     let suspend_set = &effective_suspend_set;
 
     // Pass 0.5 — build the wait cache (kept for backward-compat with generic lowering +

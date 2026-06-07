@@ -4,7 +4,7 @@ use inkwell::context::Context;
 use ynz_ast::nodes::{ImportKind, Item};
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket};
 use ynz_parser::{parse_query, SourceFile, SourceFileRegistry};
-use ynz_typeck::{check_query, module_signatures_query};
+use ynz_typeck::{build_effective_suspend_set, check_query, module_signatures_query};
 
 use crate::{
     artifact::CompiledArtifact,
@@ -85,14 +85,11 @@ pub fn frame_layouts_query(
     let sig_output = module_signatures_query(db, source);
     let source_path = source.path(db);
 
-    // Build the effective suspend_set (local + imported suspending), mirroring
-    // what build_module does before calling build_frame_layouts.
-    let mut effective_suspend_set: SuspendSet = check.suspends_set.clone();
-    for (name, sig) in &sig_output.imported_fns {
-        if sig.suspends {
-            effective_suspend_set.insert(name.clone());
-        }
-    }
+    // WHY: single SSOT for the effective suspend set — local + imported suspending
+    // names.  `build_effective_suspend_set` is the canonical computation; using it
+    // here ensures frame-layout, codegen routing, and IDE hints all read the same set.
+    let effective_suspend_set: SuspendSet =
+        build_effective_suspend_set(&check.suspends_set, &sig_output.imported_fns);
 
     // Build a map from imported function name → the SourceFile it was imported from.
     // Needed by Guard G2: the callee-size resolver calls frame_layouts_query on the

@@ -186,35 +186,178 @@ fn test_inlay_hint_protocol_only_domains_return_empty_not_error() {
     let _ = hints;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Domain 7: wait_points — muted `wait` before suspending call sites
+// ─────────────────────────────────────────────────────────────────────────────
+
 #[test]
-fn test_inlay_hint_wait_points_protocol_only_returns_empty_on_suspending_call() {
-    // WHY: the wait_points muted-hint domain is registered as protocol-only in
-    // crates/ynz-lsp/src/inlay_hint.rs (returns empty until v0.3+ adds analysis
-    // data). This test asserts the protocol-only contract holds on a source file
-    // that contains a suspending call — the handler must return no wait_points
-    // hints and must not panic or error. If wait_points hints are ever wired up
-    // (v0.3+), this test will start returning hints; update or replace it then
-    // with a positive assertion. Do NOT delete it — the no-crash contract is
-    // the load-bearing invariant.
-    let src = "function entrypoint() -> nothing {\n  wait sleep(10)\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_wait.ynz", src);
+fn test_inlay_hint_wait_points_fires_for_implicit_suspending_call() {
+    // WHY: v0.3-M3b wired the wait_points pass into inlay_hint_response.
+    // A call to a user-defined suspending function without explicit `wait` must
+    // emit a hint labelled "wait " (Addition placement, before the call).
+    // `doWork` calls `sleep` so it is in suspends_set; `run` calls `doWork`
+    // without `wait`, so a wait_points hint must appear.
+    let src = "\
+function doWork() -> nothing {
+  wait sleep(100)
+}
+function run() -> nothing {
+  doWork()
+}
+";
+    let (state, uri) = state_single("/tmp/ynz_ih_wait_fire.ynz", src);
     let hints = inlay_hint_response(&state, &uri, full_range());
-    // The wait_points domain is protocol-only: no wait-point hints fire today.
     let wait_hints: Vec<_> = hints
         .iter()
         .filter(|h| {
             if let lsp_types::InlayHintLabel::String(s) = &h.label {
-                s.contains("wait") || s.contains("suspend")
+                s.trim_start().starts_with("wait")
             } else {
                 false
             }
         })
         .collect();
     assert!(
-        wait_hints.is_empty(),
-        "wait_points is protocol-only (no data yet) — no wait hints must fire; got: {:?}",
-        wait_hints
+        !wait_hints.is_empty(),
+        "implicit suspending call must emit wait_points hint; got hints: {:?}",
+        hints.iter().map(|h| &h.label).collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn test_inlay_hint_wait_points_suppressed_when_explicit_wait_written() {
+    // WHY: `wait doWork()` has explicit `wait` — the pass must NOT emit a
+    // redundant hint. Teaching a user to add `wait` when they already wrote it
+    // is noise that degrades trust in the teaching surface.
+    let src = "\
+function doWork() -> nothing {
+  wait sleep(100)
+}
+function run() -> nothing {
+  wait doWork()
+}
+";
+    let (state, uri) = state_single("/tmp/ynz_ih_wait_suppress.ynz", src);
+    let hints = inlay_hint_response(&state, &uri, full_range());
+    // Filter to wait_points-domain hints only (label starts with "wait")
+    // that appear on the line containing the explicit `wait doWork()` call.
+    let wait_hints: Vec<_> = hints
+        .iter()
+        .filter(|h| {
+            if let lsp_types::InlayHintLabel::String(s) = &h.label {
+                s.trim_start().starts_with("wait")
+            } else {
+                false
+            }
+        })
+        .collect();
+    // The wait_points pass suppresses already-explicit sites — the only `doWork()`
+    // call has explicit `wait`, so no additional hint should appear for it.
+    assert!(
+        wait_hints.is_empty(),
+        "explicit `wait doWork()` must suppress wait_points hint; got: {:?}",
+        wait_hints
+            .iter()
+            .map(|h| &h.label)
+            .collect::<Vec<_>>()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Domain 8: background_routing — I/O vs CPU pool routing comment
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_inlay_hint_background_routing_io_pool_for_suspending_callee() {
+    // WHY: v0.3-M3b wired the background_routing pass into inlay_hint_response.
+    // `background doWork()` where `doWork` is in suspends_set must emit a hint
+    // containing "I/O pool". Reads the same suspends_set SSOT as the codegen
+    // routing predicate (emit.rs:9335).
+    let src = "\
+function doWork() -> nothing {
+  wait sleep(100)
+}
+function run() -> nothing {
+  background doWork()
+}
+";
+    let (state, uri) = state_single("/tmp/ynz_ih_bg_routing_io.ynz", src);
+    let hints = inlay_hint_response(&state, &uri, full_range());
+    let io_hints: Vec<_> = hints
+        .iter()
+        .filter(|h| {
+            if let lsp_types::InlayHintLabel::String(s) = &h.label {
+                s.contains("I/O pool")
+            } else {
+                false
+            }
+        })
+        .collect();
+    assert!(
+        !io_hints.is_empty(),
+        "suspending callee in background must emit I/O-pool routing hint; got hints: {:?}",
+        hints.iter().map(|h| &h.label).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_inlay_hint_background_routing_cpu_pool_for_non_suspending_callee() {
+    // WHY: `background helper()` where `helper` does not call any suspending
+    // intrinsic must emit a hint containing "CPU pool". Mirrors the codegen path
+    // routing non-suspending callees to `ynz_rt_spawn_blocking`.
+    let src = "\
+function helper() -> nothing {
+  print(`working`)
+}
+function run() -> nothing {
+  background helper()
+}
+";
+    let (state, uri) = state_single("/tmp/ynz_ih_bg_routing_cpu.ynz", src);
+    let hints = inlay_hint_response(&state, &uri, full_range());
+    let cpu_hints: Vec<_> = hints
+        .iter()
+        .filter(|h| {
+            if let lsp_types::InlayHintLabel::String(s) = &h.label {
+                s.contains("CPU pool")
+            } else {
+                false
+            }
+        })
+        .collect();
+    assert!(
+        !cpu_hints.is_empty(),
+        "non-suspending callee in background must emit CPU-pool routing hint; got hints: {:?}",
+        hints.iter().map(|h| &h.label).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_inlay_hint_background_routing_tooltip_non_empty() {
+    // WHY: every firing hint must carry a hover tooltip (Golden Rule 11 — compiler
+    // is a teacher). A background_routing hint with tooltip:None is muted text
+    // the user cannot learn from.
+    let src = "\
+function helper() -> nothing {
+  print(`task`)
+}
+function run() -> nothing {
+  background helper()
+}
+";
+    let (state, uri) = state_single("/tmp/ynz_ih_bg_routing_tip.ynz", src);
+    let hints = inlay_hint_response(&state, &uri, full_range());
+    for hint in &hints {
+        if let lsp_types::InlayHintLabel::String(label) = &hint.label {
+            if label.contains("pool") {
+                assert!(
+                    hint.tooltip.is_some(),
+                    "background_routing hint `{}` must have a hover tooltip (Golden Rule 11)",
+                    label
+                );
+            }
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

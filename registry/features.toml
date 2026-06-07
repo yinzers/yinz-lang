@@ -1380,6 +1380,18 @@ ships_in = "v0.5+ (file, database, http modules each ship their own suspension i
 design_doc = "design/stdlib/filesystem.md"
 triggers = "Each module's milestone plan — file v0.5 adds readFileAsync/writeFileAsync; db v0.10 adds dbQueryAsync; http v0.15 adds request.getAsync/postAsync. Cross-references also in design/stdlib/network.md and design/stdlib/database.md."
 
+# v0.3-M3b deferred: IDE graphical execution-plan view (design/concurrency.md
+# "IDE Execution Plan" section). The muted-hint surfaces (wait_points,
+# background_routing) ship in M3b. The graphical DAG/timeline visualization
+# belongs to a future LSP + tooling milestone that pairs with profiling data.
+[[deferred_tooling_feature]]
+name = "ide-execution-plan-graphical-view"
+substitute = "IDE muted hints for `wait` suspension points (wait_points domain) and background routing (background_routing domain) ship in v0.3-M3b and teach the same information inline."
+why = "The graphical execution-plan view (DAG + timeline overlay in the editor panel) requires LSP custom notifications, a client-side panel extension in the VSCode plugin, and runtime profiling data piped back through the language server — all of which exceed the M3b scope of teaching surfaces. The muted-hint protocol covers the static-analysis teaching surface; the graphical view adds dynamic profiling insight that needs its own milestone."
+ships_in = "v0.4+ (pending LSP custom notification design + VSCode panel scaffold)"
+design_doc = "design/concurrency.md"
+triggers = "Patrick explicitly schedules the IDE graphical view milestone AND the LSP custom-notification protocol for client-side panels is designed."
+
 # ---------------------------------------------------------------------------
 # [[deferred_stdlib_api]] — RESERVED, zero entries in M1.
 # Each v0.5+ stdlib milestone populates its own entries.
@@ -2066,10 +2078,10 @@ triggers_on_background_call_site = true
 [[muted_hint_domain]]
 domain = "wait_points"
 placement_category = "Addition"
-description = "Shows the compiler-figured `wait` at suspension points — calls to functions the transitive may-block analysis marks as suspending. Active in v0.3-M2 (Phase 6) when the analysis engine ships."
+description = "Shows the compiler-figured `wait` before calls to functions the transitive may-block analysis marks as suspending. Skipped where the user already wrote explicit `wait`. Reads the effective suspend set (local suspending names PLUS imported functions whose signature marks them as suspending) — the same set that drives codegen routing, so the hint and the binary always agree."
 example_source = "sleep(100)"
-example_hint_rendered = "wait (sleep suspends here)"
-active_since = "v0.3-M2"
+example_hint_rendered = "wait  "
+active_since = "v0.3-M3b"
 
 [[muted_hint_domain]]
 domain = "background_routing"
