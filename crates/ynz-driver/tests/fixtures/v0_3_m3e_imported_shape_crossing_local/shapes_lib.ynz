@@ -1,0 +1,15 @@
+// M3e adversarial S3 regression lock: imported shape as crossing-local.
+// Exports both the shape type and a suspending function so the entrypoint
+// can hold an imported-shape value across the suspension boundary.
+// The shape ABI size must be measured from the *importing* module's shape_table,
+// which includes imported shapes — verified correct by the frame_layouts_query fix.
+
+export shape Coord {
+  x: int
+  y: int
+  z: int
+}
+
+export function fetchData() -> nothing {
+  sleep(10)
+}

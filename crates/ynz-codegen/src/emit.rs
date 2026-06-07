@@ -666,8 +666,6 @@ pub fn emit_artifact(
     imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
     frame_layouts: &HashMap<String, FrameLayout>,
 ) -> Result<CompiledArtifact, String> {
-    Target::initialize_x86(&InitializationConfig::default());
-
     let context = Context::create();
     let module_id = module_identifier(source_path);
     let module = context.create_module(&module_id);
@@ -679,6 +677,8 @@ pub fn emit_artifact(
     let machine = match target_triple {
         None => crate::state_machine::default_target_machine()?,
         Some(t) => {
+            // Override-branch init: default_target_machine() handles it for the None branch.
+            Target::initialize_x86(&InitializationConfig::default());
             let triple = TargetTriple::create(t);
             module.set_triple(&triple);
             let target = Target::from_triple(&triple)
@@ -830,8 +830,14 @@ fn build_module<'ctx, 'g>(
     // For suspending imported functions: the SM inline-poll mechanism calls the callee's
     // RESUME FUNCTION (`ynz_sm_<name>_resume`), not the outer wrapper. Both declarations
     // are emitted here — the wrapper for non-SM callers, the resume fn for SM callers.
-    for (name, sig) in imported_fns {
-        if module.get_function(name.as_str()).is_none() {
+    for (local_name, sig) in imported_fns {
+        // Use the exported symbol name for the LLVM declaration. When the import is aliased
+        // (`import { getValue as fetchVal }`), the exporting module compiled and exported
+        // `getValue` — the LLVM external declaration must use that name so the linker
+        // resolves the reference to the exporting module's object file. The local alias
+        // name is used only by the call-site name lookup (sig_table key, frame_layouts key).
+        let llvm_name = sig.original_name.as_deref().unwrap_or(local_name.as_str());
+        if module.get_function(llvm_name).is_none() {
             let ptr = ctx.ptr_type(AddressSpace::default());
             let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = sig
                 .params
@@ -859,15 +865,17 @@ fn build_module<'ctx, 'g>(
                 Type::ErrorsCapable { .. } => errors_result_type(ctx).fn_type(&param_types, false),
                 _ => ptr.fn_type(&param_types, false),
             };
-            module.add_function(name.as_str(), fn_ty, None);
+            module.add_function(llvm_name, fn_ty, None);
         }
 
         // For suspending imported functions, also declare the resume function.
         // SM callers call `ynz_sm_<name>_resume` for inline poll-yield rather than
         // the wrapper — without this declaration, `emit_suspending_call` panics with
-        // "resume fn not declared".
+        // "resume fn not declared". The resume function uses the original exported name
+        // (not the alias) because state_machine::resume_fn_name derives from the LLVM
+        // symbol, which is the original name in the exporting module's object file.
         if sig.suspends {
-            let resume_name = state_machine::resume_fn_name(name.as_str());
+            let resume_name = state_machine::resume_fn_name(llvm_name);
             if module.get_function(&resume_name).is_none() {
                 state_machine::declare_resume_fn(ctx, module, &resume_name);
             }
@@ -5486,8 +5494,16 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
         &format!("cf_{callee_name}"),
     )?;
 
-    // Find the child's resume function.
-    let resume_name = state_machine::resume_fn_name(&callee_name);
+    // Find the child's resume function. When the callee was imported under an alias
+    // (`import { getValue as fetchVal }`), the LLVM symbol was forward-declared using the
+    // original exported name (`ynz_sm_getValue_resume`), not the alias. Look up the
+    // effective name via FunctionSig.original_name so the module lookup succeeds.
+    let callee_llvm_name = cg
+        .imported_fns
+        .get(callee_name.as_str())
+        .and_then(|sig| sig.original_name.as_deref())
+        .unwrap_or(callee_name.as_str());
+    let resume_name = state_machine::resume_fn_name(callee_llvm_name);
     let child_resume_fn = cg
         .module
         .get_function(&resume_name)
@@ -5684,7 +5700,14 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
     let ctx = cg.ctx;
 
-    let resume_name = state_machine::resume_fn_name(callee_name);
+    // When the callee was imported under an alias, the LLVM resume fn uses the original
+    // exported symbol name. Resolve via FunctionSig.original_name so the lookup succeeds.
+    let callee_llvm_name = cg
+        .imported_fns
+        .get(callee_name)
+        .and_then(|sig| sig.original_name.as_deref())
+        .unwrap_or(callee_name);
+    let resume_name = state_machine::resume_fn_name(callee_llvm_name);
     let child_resume_fn = match cg.module.get_function(&resume_name) {
         Some(rf) => rf,
         None => {
@@ -8297,10 +8320,18 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     lower_errors_capable_call_result(cg, final_result, "__testFallibleAsync")
                 }
                 name => {
-                    // Prefer the direct name. If not found, find the correct monomorphized
-                    // variant by matching argument types against MonomorphizationTable entries.
+                    // Prefer the direct name. If not found, check for an aliased import
+                    // (`import { getValue as fetchVal }`) — the LLVM module declares the
+                    // function under the original exported name, not the local alias.
+                    // Fall back to monomorphization lookup, then the name itself.
                     let effective_name = if cg.module.get_function(name).is_some() {
                         name.to_string()
+                    } else if let Some(orig) = cg
+                        .imported_fns
+                        .get(name)
+                        .and_then(|sig| sig.original_name.as_deref())
+                    {
+                        orig.to_string()
                     } else {
                         // Infer concrete arg types from the call site to pick the right mono.
                         let arg_types: Vec<Type> =
@@ -9151,7 +9182,18 @@ fn lower_expr_background<'ctx>(
 
     // Call the original function from within the closure.
     // Use the same mangled-name resolution as the regular Call path (for generics).
-    let effective_name = if cg.module.get_function(&callee_name).is_some() {
+    // Import-alias check comes FIRST: when a local function has the same name as an
+    // import alias (e.g., local `function doWork()` and `import { compute as doWork }`),
+    // the caller wrote `background doWork()` intending the imported callee — the import
+    // alias must win. Checking module.get_function first would silently dispatch to the
+    // local definition instead, emitting a call to the wrong callee.
+    let effective_name = if let Some(orig) = cg
+        .imported_fns
+        .get(callee_name.as_str())
+        .and_then(|sig| sig.original_name.as_deref())
+    {
+        orig.to_string()
+    } else if cg.module.get_function(&callee_name).is_some() {
         callee_name.clone()
     } else {
         find_mono_name_by_args(cg.mono_table, &callee_name, &arg_types)
@@ -9256,7 +9298,17 @@ fn lower_expr_background_state_machine<'ctx>(
     }
 
     // Step 4: find the resume function and call ynz_rt_spawn.
-    let resume_name = state_machine::resume_fn_name(callee_name);
+    // When the callee was imported under an alias (`import { getValue as fetchVal }`),
+    // the LLVM resume fn uses the original exported symbol name (`ynz_sm_getValue_resume`),
+    // not the alias. The module forward-declared the resume fn under the original name
+    // (see Pass 0.6 / the imported-fn declaration loop). Using the alias here would
+    // produce a lookup failure at runtime: "ynz_sm_fetchVal_resume not found".
+    let callee_exported = cg
+        .imported_fns
+        .get(callee_name)
+        .and_then(|sig| sig.original_name.as_deref())
+        .unwrap_or(callee_name);
+    let resume_name = state_machine::resume_fn_name(callee_exported);
     let resume_fn = cg
         .module
         .get_function(&resume_name)

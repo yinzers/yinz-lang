@@ -1,0 +1,13 @@
+// M3e adversarial axis 5a.iii: diamond import — C imports A and B; A and B both import
+// and call the same suspending leaf D. Confirms frame_layouts_query memoizes D's layout
+// (salsa) and both A's and B's composed frames embed it consistently.
+// Expected output: "a: 10\nb: 20"
+import { a_work } from `a_ops`
+import { b_work } from `b_ops`
+
+function entrypoint() -> nothing {
+  let a: int = a_work()
+  let b: int = b_work()
+  print(`a: ${a.toString()}`)
+  print(`b: ${b.toString()}`)
+}

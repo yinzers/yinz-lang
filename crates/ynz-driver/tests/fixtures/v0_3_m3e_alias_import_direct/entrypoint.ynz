@@ -1,0 +1,10 @@
+// M3e aliased-import regression: cross-module suspending call via an import alias.
+// fetchVal is an alias for getValue from data_ops. The alias must resolve to the
+// suspending callee's true module origin so frame_layouts_query reads the correct layout.
+import { getValue as fetchVal } from `data_ops`
+
+function entrypoint() -> nothing {
+  const result = fetchVal()
+  const v = result.or(0)
+  print(v.toString())
+}

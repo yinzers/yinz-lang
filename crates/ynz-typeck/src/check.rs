@@ -1823,11 +1823,54 @@ impl<'b> Checker<'b> {
                 ..
             } => {
                 let receiver_ty = self.infer_expr(receiver, None);
+                // EC-specific methods on a let/const-bound ErrorsCapable value inside an
+                // errors-capable function: resolve_ident auto-propagates the binding from
+                // ErrorsCapable<T> → T (so the compiler can insert early-return IR). That
+                // means receiver_ty here is the bare inner type, and check_method_call
+                // cannot find .or/.failed/.message etc. on it.
+                //
+                // Restore the full ErrorsCapable<T> for dispatch when ALL of:
+                //   (a) the method is one of the EC-specific set,
+                //   (b) the inferred receiver_ty is NOT already ErrorsCapable (was auto-stripped),
+                //   (c) the receiver is a bare Ident whose SCOPE ENTRY still carries ErrorsCapable.
+                //
+                // This is a narrow, targeted fix — it does not affect normal value-context
+                // auto-propagation (check_user_fn_call etc.) or non-EC method dispatch.
+                const EC_METHODS: &[&str] =
+                    &["or", "failed", "message", "suggestions", "trace", "source"];
+                let effective_receiver_ty = if !matches!(receiver_ty, Type::ErrorsCapable { .. })
+                    && EC_METHODS.contains(&method.as_str())
+                {
+                    if let Expr::Ident(ident_name, ident_span) = receiver.as_ref() {
+                        if let Some(entry) = self.scope.lookup(ident_name) {
+                            if matches!(entry.ty, Type::ErrorsCapable { .. }) {
+                                // Restore the ErrorsCapable type for EC-method dispatch.
+                                // Auto-propagation in resolve_ident already stripped the type
+                                // and wrote the bare inner type into expr_types. Overwrite that
+                                // entry with the full ErrorsCapable type so codegen reads the
+                                // right ABI ({i64,i64} pair) when lowering the EC method call.
+                                let ec_ty = entry.ty.clone();
+                                self.expr_types
+                                    .insert((ident_span.start, ident_span.end), ec_ty.clone());
+                                ec_ty
+                            } else {
+                                receiver_ty
+                            }
+                        } else {
+                            receiver_ty
+                        }
+                    } else {
+                        receiver_ty
+                    }
+                } else {
+                    receiver_ty
+                };
                 // M4 P5: one-arg intrinsic methods (wrapping/saturating arithmetic).
                 // Must NOT use `return` here — the match value feeds expr_types.insert below.
                 if args.len() == 1 {
-                    if let Some((expected_arg_ty, ret_ty)) =
-                        self.intrinsics.lookup_method_1arg(&receiver_ty, method)
+                    if let Some((expected_arg_ty, ret_ty)) = self
+                        .intrinsics
+                        .lookup_method_1arg(&effective_receiver_ty, method)
                     {
                         let expected = expected_arg_ty.clone();
                         let actual = self.infer_expr(&args[0], Some(&expected));
@@ -1844,13 +1887,23 @@ impl<'b> Checker<'b> {
                         for arg in args.iter() {
                             self.infer_expr(arg, None);
                         }
-                        self.check_method_call(&receiver_ty, Some(receiver), method, method_span)
+                        self.check_method_call(
+                            &effective_receiver_ty,
+                            Some(receiver),
+                            method,
+                            method_span,
+                        )
                     }
                 } else {
                     for arg in args.iter() {
                         self.infer_expr(arg, None);
                     }
-                    self.check_method_call(&receiver_ty, Some(receiver), method, method_span)
+                    self.check_method_call(
+                        &effective_receiver_ty,
+                        Some(receiver),
+                        method,
+                        method_span,
+                    )
                 }
             }
 
@@ -2006,7 +2059,11 @@ impl<'b> Checker<'b> {
                         "Remove the keyword or build without `--kernel`. Kernel-mode programs run without a scheduler runtime.",
                         "The thread-pool runtime that powers `wait` does not run in kernel mode. See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
                     ));
-                    return self.infer_expr(inner, hint);
+                    // Return Type::Error without recursing into the inner expression. Recursing
+                    // would visit the inner Expr::Call and trigger the call-dispatch kernel guard,
+                    // emitting a second diagnostic for the same site. One diagnostic per site is
+                    // the contract — the `wait` rejection already names the cause.
+                    return Type::Error;
                 }
                 // `wait` must be followed by a call expression.
                 // `wait background X()` is a parser error (background is statement-position only),
@@ -2369,6 +2426,24 @@ impl<'b> Checker<'b> {
                     // sets `callee_suspends` correctly via the may-block fixpoint seeded by
                     // `imported_suspending_names`. No can't-infer error is emitted here —
                     // the call graph is fully traversable across module boundaries.
+
+                    // Kernel-mode rejection for bare suspending calls. Every Yinz suspending
+                    // call auto-suspends without an explicit `wait` keyword — the no-coloring
+                    // model. The `wait`/`background`/`sleep` arms above each reject under kernel
+                    // mode. This arm must also reject any suspending user-defined callee (bare
+                    // auto-suspension form) to close the gap: a bare cross-module suspending
+                    // call must not reach codegen under --kernel. Exactly ONE diagnostic per
+                    // call site: when the call is under a `wait` that already rejected (the
+                    // `Expr::Wait` arm returns early after emitting its error), this code is not
+                    // reached, so there is no double-report.
+                    if self.kernel_mode && callee_suspends {
+                        self.diags.push(Diagnostic::error(
+                            call.span.clone(),
+                            format!("`{name}` suspends, which is not available in --kernel mode."),
+                            format!("Remove the call to `{name}` or build without `--kernel`. Kernel-mode programs run without a scheduler runtime."),
+                            "Suspension requires the thread-pool runtime, which does not run in kernel mode. See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
+                        ));
+                    }
 
                     // Phase 6: explicit `wait` on a non-suspending callee — redundant hint.
                     // Uses the transitive `suspends` predicate (not the local `contains_wait`).
@@ -2927,6 +3002,25 @@ impl<'b> Checker<'b> {
 
     /// Type-check a call to a generic function, performing type inference and
     /// constraint checking, then recording the instantiation in the MonomorphizationTable.
+    ///
+    /// # Kernel-mode suspension
+    ///
+    /// No kernel-mode rejection guard here. `GenericFnSig` carries no `suspends` flag —
+    /// Yinz generics currently cannot propagate suspension through type parameters because
+    /// monomorphization is resolved at instantiation time, after the may-block fixpoint runs.
+    /// The gap is vacuously safe today: no generic function in the current language surface
+    /// can reach a suspension point through a type parameter.
+    ///
+    /// What: kernel-mode rejection for suspending generic instantiations.
+    /// Why deferred: `GenericFnSig` has no `suspends` field; threading may-block analysis
+    ///   through generic instantiation is a v0.4 generics-overhaul concern (~1 session of
+    ///   work: add `pub suspends: bool` to `GenericFnSig`, propagate in may_block::analyze,
+    ///   mirror the guard from the `Expr::Call name =>` arm at line ~2439 here).
+    /// Cost if left unfixed: a generic function that reaches suspension would bypass the
+    ///   kernel guard and reach codegen under --kernel; codegen would emit a runtime call
+    ///   that panics because no scheduler is running.
+    /// Trigger: any generic monomorphization where the instantiated call graph sets
+    ///   `suspends=true` — requires v0.4 generic+suspension to be possible first.
     fn check_generic_fn_call(&mut self, call: &CallExpr, name: &str, sig: &GenericFnSig) -> Type {
         let non_self_params: Vec<(String, Type)> = sig
             .params
@@ -3255,6 +3349,20 @@ impl<'b> Checker<'b> {
                                     recv_expr.span(),
                                 );
                             }
+                        }
+                        // Kernel-mode rejection for UFCS suspending method calls. The
+                        // bare call-dispatch arm guards `Expr::Call name =>` at the call site;
+                        // UFCS calls route through this path and need the same guard so that
+                        // `player.longJob()` (sugar for `longJob(player)`) is also rejected
+                        // under --kernel when the resolved function suspends.
+                        if self.kernel_mode && sig.suspends {
+                            self.diags.push(Diagnostic::error(
+                                method_span.clone(),
+                                format!("`{method}` suspends, which is not available in --kernel mode."),
+                                format!("Remove the call to `{method}` or build without `--kernel`. Kernel-mode programs run without a scheduler runtime."),
+                                "Suspension requires the thread-pool runtime, which does not run in kernel mode. See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
+                            ));
+                            return sig.ret.clone();
                         }
                         return sig.ret.clone();
                     }

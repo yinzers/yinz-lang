@@ -1,23 +1,22 @@
 // WHY: These tests prove that `frame_layouts_query` produces LLVM-accurate frame layouts
-// before Phase 2 wires it to cross-module emission. The three specific escapes that the
-// typeck-side `composed_frame_size` reimplementation got wrong are verified here:
+// for the cross-module suspending-call cases that Phase 2 wires to emission.
 //
-//   Escape #1 (re-export chain): B's total_size must include A's sub-frame. The old
-//   `compute_composed_frame_size` skipped imported suspending callees → B exported 32 where
-//   64 needed → C undersized the embed → SIGILL exit 132.
+//   Escape #1 (re-export chain): B's total_size must include A's sub-frame. Guard G2
+//   (recursive resolver) ensures frame_layouts_query(B) calls frame_layouts_query(A)
+//   so B's embed uses A's real total_size, not the 32-byte header placeholder that
+//   caused exit 132 (SIGILL) under the old scalar approximation.
 //
 //   Escape #2 (shape LLVM slot count): bool×bool shape ABI = 2 bytes (LLVM) vs 16 bytes
-//   (typeck "8 bytes per field"). The query uses LLVM TargetData; the typeck reimpl used
-//   field-count arithmetic. Wrong slot count → out-of-bounds frame write → abort.
+//   (typeck "8 bytes per field"). The query uses LLVM TargetData for exact slot counts.
+//   Wrong slot count → out-of-bounds frame write → abort.
 //
 //   Guard G3 (cycle recovery): circular imports are already typeck errors; the query must
 //   return an empty map, not infinite-loop or ICE.
 //
-// Calling `frame_layouts_query` directly bypasses the universal reject — the reject lives
-// in `check_query` (a typeck concern), but these tests target the frame-layout arithmetic
-// that lives in codegen and is correct independent of the reject being up or down. The
-// tests use leaf modules (no cross-module suspending calls) or synthetic sources so
-// `check_query` succeeds and the query can run its computation.
+// Phase 1 tests use leaf modules or synthetic sources so `check_query` succeeds and the
+// query can run its composition arithmetic. Phase 2 lifts the universal reject, making
+// cross-module suspending calls legal — the reexport_chain test now verifies that
+// frame_layouts_query produces the correct composed total_size end-to-end.
 
 use std::{cell::Cell, collections::HashMap, path::PathBuf};
 
@@ -156,13 +155,18 @@ fn reexport_chain_b_total_size_includes_a_sub_frame() {
         "Concrete check: getValue total_size must be 40 (not 32)"
     );
 
-    // Get B's typed module. check_query(b_sf) fires the universal reject (doWork calls
-    // getValue, an imported suspending function), so diagnostics.has_errors() == true.
-    // The typed_module is populated regardless — the reject is a diagnostic, not a parse failure.
+    // Get B's typed module. Phase 2 lifted the universal reject, so check_query(b_sf) now
+    // succeeds. doWork calls getValue (an imported suspending function), which is legal.
     let b_check = check_query(&db, b_sf);
+    // WHY: locks the Phase-2 lift contract on b_sf. check_query(b_sf) MUST succeed after the
+    // universal reject is removed — a future regression that re-introduces any diagnostic on
+    // this fixture would cause the resolver/sentinel assertions below to run on a poisoned
+    // typed module, masking the real failure. Asserting clean here is the earliest canary.
     assert!(
-        b_check.diagnostics.has_errors(),
-        "check_query(b_sf) must fire the universal reject: doWork calls imported suspending getValue"
+        !b_check.diagnostics.has_errors(),
+        "check_query(b_sf) must succeed after Phase 2 lifts the universal reject: \
+         doWork calling imported suspending getValue is now legal. Got errors: {:?}",
+        b_check.diagnostics
     );
 
     // Build B's effective suspend_set: local suspends from check_query + imported suspending
@@ -357,9 +361,9 @@ fn bool_bool_shape_crossing_local_uses_one_llvm_slot() {
     // aligns to 1 byte). After `max(2, 8) = 8` and `8.div_ceil(8) = 1`, the shape occupies
     // exactly 1 frame slot (8 bytes).
     //
-    // The typeck reimpl (`typeck_type_frame_slots`) counted fields: 2 bool fields ×
-    // 1 slot/field × 8 bytes = 16 bytes → `16.div_ceil(8) = 2 slots`. This is the
-    // escape #2 divergence: typeck says 2 slots, LLVM ABI says 1 slot.
+    // The prior typeck-side frame-size approximation counted fields: 2 bool fields ×
+    // 1 slot/field × 8 bytes = 16 bytes → `16.div_ceil(8) = 2 slots`. That was the
+    // escape #2 divergence: typeck approximation said 2 slots, LLVM ABI says 1 slot.
     //
     // A function with this shape as a crossing local must use 1 slot (not 2) so the
     // frame layout is tight and subsequent slots (or child sub-frames) start at the
@@ -430,11 +434,11 @@ fn circular_import_returns_empty_map_not_infinite_loop() {
     // triggering the early-return path. This test ensures no infinite loop or ICE occurs.
     //
     // We register two inline sources that would form a cycle if the resolver tried to
-    // recurse into each other. In practice, check_query fires the cross-module reject
-    // (or circular-import error) before the recursion can happen, so the cycle recovery
-    // function frame_layouts_cycle_initial is a defense-in-depth backstop rather than
-    // the primary path. Both paths (early-exit-on-error and cycle-initial) are correct;
-    // the test confirms neither infinite-loops.
+    // recurse into each other. In practice, check_query fires a circular-import error
+    // before the recursion can happen, so the cycle recovery function
+    // frame_layouts_cycle_initial is a defense-in-depth backstop rather than the primary
+    // path. Both paths (early-exit-on-error and cycle-initial) are correct; the test
+    // confirms neither infinite-loops.
     let mut db = CompilerDb::default();
 
     // Two modules with mutually suspicious import declarations. The imports won't resolve
@@ -465,12 +469,12 @@ export function doB() -> nothing {
     // Must complete in finite time (no infinite loop) and return an empty map (errors present).
     let layouts_a = frame_layouts_query(&db, sf_a);
 
-    // a_cycle imports from b_cycle (cross-module suspending call) → check_query fires
-    // the universal reject → frame_layouts_query returns empty map.
+    // a_cycle imports from b_cycle, but b_cycle.ynz doesn't exist on disk — resolve_module_path
+    // returns None → check_query emits "module not found" → frame_layouts_query returns empty map.
     assert!(
         layouts_a.is_empty(),
-        "frame_layouts_query on a module with cross-module suspending imports must return \
-         an empty map (check_query fires the reject → early exit). Got: {:?}",
+        "frame_layouts_query on a module with unresolvable imports must return \
+         an empty map (check_query errors on unresolved import → early exit). Got: {:?}",
         layouts_a.keys().collect::<Vec<_>>()
     );
 }

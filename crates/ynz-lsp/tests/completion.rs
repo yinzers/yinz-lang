@@ -101,7 +101,7 @@ fn completion_list_with_user_fns_includes_them() {
             decl_span: SourceSpan::new("test.ynz", 0, 0),
             contains_wait: false,
             suspends: false,
-            composed_frame_size: 0,
+            original_name: None,
         },
     );
     let sig_table = SignatureTable { fns };
@@ -166,7 +166,7 @@ fn user_symbols_sort_before_keywords() {
             decl_span: SourceSpan::new("test.ynz", 0, 0),
             contains_wait: false,
             suspends: false,
-            composed_frame_size: 0,
+            original_name: None,
         },
     );
     let sig_table = SignatureTable { fns };
@@ -510,7 +510,7 @@ fn user_defined_fn_has_snippet_with_param_tab_stops() {
             decl_span: SourceSpan::new("test.ynz", 0, 0),
             contains_wait: false,
             suspends: false,
-            composed_frame_size: 0,
+            original_name: None,
         },
     );
     let sig_table = SignatureTable { fns };
@@ -593,7 +593,7 @@ fn user_defined_fn_self_only_snippet_has_cursor_stop() {
             decl_span: SourceSpan::new("test.ynz", 0, 0),
             contains_wait: false,
             suspends: false,
-            composed_frame_size: 0,
+            original_name: None,
         },
     );
     let sig_table = SignatureTable { fns };

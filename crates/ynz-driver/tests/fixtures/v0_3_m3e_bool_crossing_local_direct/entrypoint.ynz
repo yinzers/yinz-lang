@@ -1,7 +1,8 @@
-// M3e danger-matrix: boolean x crossing-local x direct.
+// M3e danger-matrix: boolean × crossing-local × direct.
 // A boolean local declared before the cross-module suspending call must hold its value after resume.
-// Under the M3e universal reject this exits 1 (compile error).
-// Reject-baseline fixture (boolean × crossing-local × direct). Correct runtime output once the M3e plan's frame-serialization fix ships: "before: true\nafter: true" — currently a clean cross-module reject; correctness is tracked in the M3e execution plan.
+// The i1 boolean is flushed/reloaded as i64 in the frame slot; the slot must survive the
+// cross-module suspension boundary for the restored value to be correct.
+// Expected output: "before: true\nafter: true"
 import { fetchFlag } from `io_ops`
 
 function caller() -> nothing {

@@ -1,8 +1,8 @@
-// M3e danger-matrix: stacked escapes #1+#3+#4 — re-export × EC × number (escape #5).
+// M3e adversarial axis 5a.ii: stacked escapes #1+#3+#4 — re-export × EC × number.
 // C (entrypoint) imports calcTotal from B; B imports fetchPrice from A.
-// B's frame must correctly include A's sub-frame, the EC staging slot, and two number slots.
-// Under the M3e universal reject this exits 1 (compile error).
-// Reject-baseline fixture (stacked escapes: re-export × errors-capable × number/decimal128). Correct runtime output once the M3e plan's frame-serialization fix ships: "total: 3.5" — currently a clean cross-module reject; correctness is tracked in the M3e execution plan.
+// B's composed frame must include A's sub-frame (escape #1), the EC staging slot
+// (escape #3), and two number/decimal128 slots (escape #4) — all three stacked.
+// Expected output: "total: 3.5"
 import { calcTotal } from `b_ops`
 
 function entrypoint() -> nothing {

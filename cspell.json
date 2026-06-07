@@ -12,6 +12,7 @@
     "dismissable",
     "keepalive",
     "lldb",
+    "malloc",
     "miscompile",
     "miscompiles",
     "multicore",

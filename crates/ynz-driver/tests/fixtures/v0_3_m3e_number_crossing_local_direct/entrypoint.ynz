@@ -1,9 +1,8 @@
 // M3e danger-matrix: number/decimal128 × crossing-local × direct (escape #4).
 // A number local uses two consecutive frame slots (lo + hi halves of the i128 value).
-// The combined frame must be correctly sized to include both slots; the typeck approximation
-// counted one slot (8 bytes) and under-sized it, causing silent memory corruption.
-// Under the M3e universal reject this exits 1 (compile error).
-// Reject-baseline fixture (number/decimal128 × crossing-local × direct). Correct runtime output once the M3e plan's frame-serialization fix ships: "before: 1.5\nafter: 1.5" — currently a clean cross-module reject; correctness is tracked in the M3e execution plan.
+// The combined frame must include both slots; frame_layouts_query counts them accurately
+// where the typeck approximation only counted one 8-byte slot, causing memory corruption.
+// Expected output: "before: 1.5\nafter: 1.5"
 import { fetchPrice } from `io_ops`
 
 function caller() -> nothing {

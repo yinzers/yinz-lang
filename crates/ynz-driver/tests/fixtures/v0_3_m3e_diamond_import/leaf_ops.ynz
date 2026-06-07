@@ -1,0 +1,8 @@
+// M3e adversarial axis 5a.iii: leaf suspending function D. Both A (a_ops) and B (b_ops)
+// import and call this function. C (entrypoint) imports both A and B, creating a diamond.
+// frame_layouts_query(D) must be memoized (salsa) and produce the same layout for both
+// A's and B's frames.
+
+export function suspend() -> nothing {
+  sleep(10)
+}

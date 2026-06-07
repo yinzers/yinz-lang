@@ -1,9 +1,8 @@
 // M3e danger-matrix: caller-also-has-own-frame (escape #5).
 // The caller has THREE of its own crossing locals (multi-slot caller frame) AND calls an
-// imported suspender. Without the codegen-query fix, the combined frame is wrong — the
-// typeck scalar combined the caller's locals with an under-sized imported sub-frame.
-// Under the M3e universal reject this exits 1 (compile error).
-// Reject-baseline fixture (multi-slot caller frame with 3 crossing locals + imported suspender). Correct runtime output once the M3e plan's frame-serialization fix ships: "a: 1, b: 2, c: 3, result: 100" — currently a clean cross-module reject; correctness is tracked in the M3e execution plan.
+// imported suspender. The composed frame must correctly include both the caller's own
+// crossing-local slots AND the imported callee's sub-frame at the right offset.
+// Expected output: "a: 1, b: 2, c: 3, result: 100"
 import { doWork } from `io_ops`
 
 function caller() -> nothing {

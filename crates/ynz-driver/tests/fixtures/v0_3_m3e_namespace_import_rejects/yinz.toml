@@ -1,0 +1,3 @@
+[project]
+name = "v0_3_m3e_namespace_import_rejects"
+entry = "entrypoint.ynz"

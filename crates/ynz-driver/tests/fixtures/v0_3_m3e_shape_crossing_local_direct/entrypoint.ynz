@@ -1,9 +1,9 @@
 // M3e danger-matrix: shape × crossing-local × direct (escape #2).
 // A shape-typed local crosses the cross-module suspending call boundary.
-// LLVM ABI padding for the shape may differ from the typeck "8 bytes per field" count,
-// causing the caller's composed frame to be under-sized without the codegen-query fix.
-// Under the M3e universal reject this exits 1 (compile error).
-// Reject-baseline fixture (shape × crossing-local × direct). Correct runtime output once the M3e plan's frame-serialization fix ships: "x: 3, y: 7" — currently a clean cross-module reject; correctness is tracked in the M3e execution plan.
+// LLVM ABI padding for the shape may differ from the typeck "8 bytes per field" count;
+// frame_layouts_query computes the LLVM-accurate ABI size so the composed frame holds
+// all crossing-local slots correctly across the module boundary.
+// Expected output: "x: 3, y: 7"
 import { fetchItem } from `io_ops`
 
 shape Point {

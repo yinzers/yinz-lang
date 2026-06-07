@@ -1,14 +1,18 @@
 // M3e danger-matrix: float × crossing-local × direct.
 // A float local declared before the cross-module suspending call must hold its value after resume.
-// Under the M3e universal reject this exits 1 (compile error).
-// Reject-baseline fixture (float × crossing-local × direct). Correct runtime output once the M3e plan's frame-serialization fix ships: "before: 3.14\nafter: 3.14" — currently a clean cross-module reject; correctness is tracked in the M3e execution plan.
+// Corruption check: compares temp to a threshold (float > float comparison) instead of
+// interpolating toString() — toString() on float is broken (renders decimal128 zero for all values).
+// If the crossing-local slot is corrupted (zeroed), temp drops to 0.0 and the comparison fails.
 import { fetchReading } from `io_ops`
 
 function caller() -> nothing {
   let temp: float = 3.14
-  print(`before: ${temp.toString()}`)
+  let threshold: float = 3.0
+  let bigBefore: boolean = temp > threshold
+  print(`big_before: ${bigBefore.toString()}`)
   fetchReading()
-  print(`after: ${temp.toString()}`)
+  let bigAfter: boolean = temp > threshold
+  print(`big_after: ${bigAfter.toString()}`)
 }
 
 function entrypoint() -> nothing {

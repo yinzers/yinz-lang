@@ -184,18 +184,63 @@ pub fn frame_layouts_query(
     // instead of reading the lossy FunctionSig.composed_frame_size scalar.
     // This correctly handles re-export chains: frame_layouts_query(B) recursively
     // calls frame_layouts_query(A) so B's total_size includes A's real sub-frame.
+    //
+    // Alias handling: when a function is imported under an alias (`import { getValue as fetchVal }`),
+    // the callee_source_map uses the local name `fetchVal` as key (so the resolver finds the
+    // right SourceFile), but the callee module's frame_layouts map uses the original exported
+    // name `getValue`. The resolver must look up by original name in the callee's layouts.
     let callee_size_resolver = |name: &str| -> Option<u64> {
         let callee_sf = callee_source_map.get(name)?;
         let callee_layouts = frame_layouts_query(db, *callee_sf);
-        callee_layouts.get(name).map(|layout| layout.total_size)
+        // First try the local name (non-aliased case). If not found, try the original
+        // exported name from the FunctionSig (aliased case).
+        callee_layouts
+            .get(name)
+            .map(|layout| layout.total_size)
+            .or_else(|| {
+                let orig = sig_output
+                    .imported_fns
+                    .get(name)?
+                    .original_name
+                    .as_deref()?;
+                callee_layouts.get(orig).map(|layout| layout.total_size)
+            })
     };
 
-    let layouts = build_frame_layouts_with_resolver(
+    let mut layouts = build_frame_layouts_with_resolver(
         &check.typed_module,
         &effective_suspend_set,
         &shape_abi_sizes,
         &callee_size_resolver,
     );
+
+    // Add FrameLayout stubs for imported suspending callees, keyed by their LOCAL alias
+    // name. These stubs carry the callee's real composed total_size (via Guard G2 recursive
+    // lookup) and param count as n_locals. Without these entries, codegen sites that look
+    // up `cg.frame_layouts.get(callee_name)` for an imported callee get None → 32-byte
+    // fallback frame → heap corruption for any callee with crossing-locals.
+    //
+    // The stubs intentionally omit children/recursion_slot/number_errors_staging_offset:
+    // those are the callee's INTERNAL layout details, owned by the callee's resume body.
+    // The importer only needs total_size (to allocate the frame) and n_locals (to cap
+    // the arg-write count at the spawn site).
+    for (local_name, sig) in &sig_output.imported_fns {
+        if !sig.suspends || layouts.contains_key(local_name.as_str()) {
+            continue;
+        }
+        let total_size =
+            callee_size_resolver(local_name.as_str()).unwrap_or(state_machine::FRAME_HEADER_SIZE);
+        layouts.insert(
+            local_name.clone(),
+            FrameLayout {
+                total_size,
+                n_locals: sig.params.len(),
+                children: Vec::new(),
+                recursion_slot: None,
+                number_errors_staging_offset: None,
+            },
+        );
+    }
 
     Arc::new(layouts)
 }

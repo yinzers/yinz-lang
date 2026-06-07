@@ -15,11 +15,12 @@
 <!-- RADAR-START -->
 ### Active Roadmaps
 - v0-2-1-lsp-gap-closure (Patrick Rizzardi) — 0 active plans — 2026-05-30
-- v0-3-concurrency-perf (Patrick Rizzardi) — 0 active plans — 2026-05-31
+- v0-3-concurrency-perf (Patrick Rizzardi) — 2 active plans — 2026-05-31
 - webpage-docs (Patrick Rizzardi) — 0 active plans — 2026-05-20
 
 ### Active Workstreams
-*(no active workstreams)*
+- v0-3-m3b-auto-parallelization (Patrick Rizzardi) — 15 files touched — 26/128 done — roadmap: v0-3-concurrency-perf — 2026-06-05
+- v0-3-m3e-cross-module-frame-serialization (Patrick Rizzardi) — 15 files touched — 34/77 done — roadmap: v0-3-concurrency-perf — 2026-06-06
 <!-- RADAR-END -->
 
 ---

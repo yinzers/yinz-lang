@@ -1,0 +1,8 @@
+// Namespace-import rejection fixture: exports a suspending function.
+// When imported via namespace syntax, the member call is a general Yinz limitation —
+// namespace member-calls are not yet resolved by typeck, so the call rejects cleanly
+// at compile time with a "not defined" diagnostic regardless of whether the callee suspends.
+
+export function runTask() -> nothing {
+  sleep(10)
+}
