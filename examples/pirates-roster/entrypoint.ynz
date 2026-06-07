@@ -25,6 +25,10 @@ import { newPirate, announce } from `services/players`
 
 import { clamp, square } from `utils/math_extra`
 
+// v0.3-M3e: cross-module suspension — the scouting module exports functions
+// that suspend, and entrypoint calls them across the module boundary.
+import { fetchScoutGrade, rankRoster } from `services/scouting`
+
 // v0.2.1-M10 import-pattern coverage — six type symbols, one per previously-false-positive
 // AST position (Bugs 1 + 2.1–2.5). Each is used below in a realistic Three Rivers
 // schedule context that exercises the pattern without calling cross-file functions.
@@ -238,6 +242,8 @@ function entrypoint() -> nothing {
   m3a_p2_demo()
   // ────── v0.3-M3a Phase 4: for-loop + crossing-local suspension ──────
   m3a_p4_demo()
+  // ────── v0.3-M3e: cross-module suspension ──────
+  m3e_demo()
 }
 
 // ────── M3 helper functions ──────
@@ -704,6 +710,50 @@ function m3a_p4_demo() -> nothing {
   let scoutTotal = wait tallyScouts(pirateRatings)
   let scoutStr = scoutTotal.toString()
   print(`scout total: ${scoutStr}`)
+}
+
+// ── v0.3-M3e: cross-module suspension ────────────────────────────────────────
+//
+// fetchScoutGrade is exported from services/scouting.ynz. Calling it here
+// crosses a module boundary: this entrypoint is one compilation unit; scouting.ynz
+// is another. The compiler's frame_layouts_query resolves the callee's LLVM-accurate
+// FrameLayout (total_size, n_locals) so the sub-frame is embedded at the right offset
+// in entrypoint's composed frame. No universal reject, no silent miscompile.
+//
+// The returned grade string drives a verdict decision — the result does real work
+// across the boundary, not just a trivial print.
+
+// reviewTopProspect fetches a single player's scouting grade across the module
+// boundary and prints a verdict based on the result. The `summary` variable is a
+// crossing local: it is bound before the suspension and read again after resume
+// to build the printed line.
+function reviewTopProspect(name: string, atBats: int) -> nothing {
+  let summary = wait fetchScoutGrade(name, atBats)
+  let verdict: string = `average`
+  if (summary.endsWith(`A`)) {
+    verdict = `elite`
+  }
+  print(`${summary} — ${verdict}`)
+}
+
+// m3e_demo calls the cross-module suspending functions in two realistic contexts:
+//   1. A direct cross-module suspending call whose result drives a verdict.
+//   2. A full-roster ranking via rankRoster — cross-module suspension in a loop.
+function m3e_demo() -> nothing {
+  print(``)
+  print(`v0.3-M3e — cross-module suspension (scouting grades from services/scouting):`)
+
+  // Direct cross-module suspending call: fetch one grade, use the result.
+  reviewTopProspect(`McCutchen`, 400)
+  reviewTopProspect(`Clemente`, 300)
+
+  // Cross-module suspension driving a count: rankRoster suspends per player
+  // to fetch each grade, accumulates A grades, and returns the total.
+  let names: array<string> = [`Stargell`, `Mazeroski`, `Wagner`, `Kiner`]
+  let atBats: array<int> = [380, 290, 420, 310]
+  let aCount = wait rankRoster(names, atBats)
+  let aStr = aCount.toString()
+  print(`roster A-grade count: ${aStr}`)
 }
 
 // ── v0.3-M3a Phase 2: while-loop suspension ──────────────────────────────────

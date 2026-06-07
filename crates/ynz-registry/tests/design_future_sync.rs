@@ -59,6 +59,10 @@ const SKIP: &[(&str, &str)] = &[
         "macos-platform-support.md",
         "CI/infra deferral (macOS dropped from matrix), no user-facing token",
     ),
+    (
+        "cross-module-frame-serialization.md",
+        "shipped in v0.3-M3e — deferred_language_feature entry retired; file kept as design record",
+    ),
 ];
 
 fn is_skipped(filename: &str) -> bool {

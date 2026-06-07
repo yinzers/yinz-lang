@@ -2114,11 +2114,6 @@ description = "Shows when a let binding is effectively const because it is never
 example_source = "let count = 5"
 example_hint_rendered = "// effectively const — never reassigned"
 
-# --- Cross-module frame serialization (design/future/cross-module-frame-serialization.md) ---
-[[deferred_language_feature]]
-name = "cross-module-frame-serialization"
-substitute = "ALL cross-module suspending calls are rejected at compile time until M3e ships. Move the suspending function into the calling module, or restructure so suspension only happens within a single module."
-why = "The typeck-side frame analysis cannot safely predict which cross-module suspending combos codegen can handle — five silent-crash escapes proved it (number crossing-local, transitive×caller-frame, etc.). A universal reject is the only provably safe floor. M3e implements a codegen-side cross-module frame_layouts_query (salsa-tracked, ynz-codegen) so the importing module reads the callee's LLVM-accurate FrameLayout (total_size, n_locals) via the query, composing sub-frames correctly at the correct offset and lifting the universal reject. Two verified facts force this mechanism: separate compilation means no shared LLVM module for the importer to reach into; shape ABI sizes need LLVM TargetData, which lives only in ynz-codegen."
-ships_in = "v0.3-M3e"
-design_doc = "design/future/cross-module-frame-serialization.md"
-triggers = "Calling any imported function whose sig.suspends is true (universal reject in queries.rs emit_loud_reject_for_imported_suspending_calls)"
+# Cross-module frame serialization shipped in v0.3-M3e.
+# The deferred_language_feature entry has been retired — the feature is live.
+# See design/future/cross-module-frame-serialization.md for the full design record.

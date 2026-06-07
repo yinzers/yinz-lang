@@ -186,6 +186,37 @@ fn test_inlay_hint_protocol_only_domains_return_empty_not_error() {
     let _ = hints;
 }
 
+#[test]
+fn test_inlay_hint_wait_points_protocol_only_returns_empty_on_suspending_call() {
+    // WHY: the wait_points muted-hint domain is registered as protocol-only in
+    // crates/ynz-lsp/src/inlay_hint.rs (returns empty until v0.3+ adds analysis
+    // data). This test asserts the protocol-only contract holds on a source file
+    // that contains a suspending call — the handler must return no wait_points
+    // hints and must not panic or error. If wait_points hints are ever wired up
+    // (v0.3+), this test will start returning hints; update or replace it then
+    // with a positive assertion. Do NOT delete it — the no-crash contract is
+    // the load-bearing invariant.
+    let src = "function entrypoint() -> nothing {\n  wait sleep(10)\n}\n";
+    let (state, uri) = state_single("/tmp/ynz_ih_wait.ynz", src);
+    let hints = inlay_hint_response(&state, &uri, full_range());
+    // The wait_points domain is protocol-only: no wait-point hints fire today.
+    let wait_hints: Vec<_> = hints
+        .iter()
+        .filter(|h| {
+            if let lsp_types::InlayHintLabel::String(s) = &h.label {
+                s.contains("wait") || s.contains("suspend")
+            } else {
+                false
+            }
+        })
+        .collect();
+    assert!(
+        wait_hints.is_empty(),
+        "wait_points is protocol-only (no data yet) — no wait hints must fire; got: {:?}",
+        wait_hints
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Conservative aliasing: lend-pass suppresses const hint
 // ─────────────────────────────────────────────────────────────────────────────

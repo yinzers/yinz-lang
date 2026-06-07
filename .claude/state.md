@@ -20,7 +20,7 @@
 
 ### Active Workstreams
 - v0-3-m3b-auto-parallelization (Patrick Rizzardi) — 15 files touched — 26/128 done — roadmap: v0-3-concurrency-perf — 2026-06-05
-- v0-3-m3e-cross-module-frame-serialization (Patrick Rizzardi) — 15 files touched — 34/77 done — roadmap: v0-3-concurrency-perf — 2026-06-06
+- v0-3-m3e-cross-module-frame-serialization (Patrick Rizzardi) — 15 files touched — 59/84 done — roadmap: v0-3-concurrency-perf — 2026-06-06
 <!-- RADAR-END -->
 
 ---

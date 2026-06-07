@@ -2,7 +2,7 @@
 slug: v0-3-m3e-cross-module-frame-serialization
 type: execution
 owner: Patrick Rizzardi
-status: active
+status: done
 roadmap: v0-3-concurrency-perf
 depends_on: [v0-3-m3b-auto-parallelization]
 plan_base: 7bdd5f9
@@ -23,7 +23,7 @@ files:
   - examples/primantis-orders/**
   - .claude/plans/roadmaps/v0-3-concurrency-perf.md
 created: 2026-06-05
-last_updated: 2026-06-06
+last_updated: 2026-06-07
 ---
 
 # Plan: v0.3-M3e — Cross-Module FrameLayout (codegen-side cross-module query)
@@ -412,7 +412,7 @@ Each phase ends with an **Exit Sequence** block — execute those actions (persi
 - [x] deviation-judge #5 (approach: aliased resume + layout resolution): PASS R2 2026-06-06 (5 adversarial strategies probed; 3-hop alias chain + UFCS + duplicate-name detection + non-suspending alias mixed — no regressions introduced by the fix)
 - [x] deviation-judge #6 (approach: kernel-mode reject at call-dispatch arm + UFCS): PASS R5 2026-06-07 (`wait_suspending_in_kernel_mode_produces_exactly_one_diagnostic` confirms single-diagnostic; UFCS + bare both guarded; `check_generic_fn_call` deferral documented per `no-duct-tape.md` 4-field format — vacuously safe today, trigger named)
 - [x] deviation-judge #7 (approach: `original_name` on FunctionSig supersedes round-2 mechanisms): PASS R5 2026-06-07 (4 callee-resume sites + 2 background-spawn paths uniformly resolve exported name; collision fixture strengthened so output PROVES dispatch — STATE-B revert makes the integration test FAIL with `LOCAL-BUG` sentinel)
-- [ ] Committed: <commit SHA>
+- [x] Committed: cbd027e
 
 **Findings Log** (filled during any fix loops by the coordinator):
 - 2026-06-06 — **PARTIAL STATE — executor first pass landed, adversarial gate NOT YET RUN, NOT committed.** Base = `80789c8`. The executor's first pass did the CORE lift; coordinator spot-verified live (≥2× deterministic): reject guard DELETED; lossy reimpl + `composed_frame_size` FULLY DELETED (grep-clean in non-comment code); 7 LSP literals updated; `emit.rs` (+21, importer wiring) + `check.rs` (+61, EC-method-dispatch fix) modified (executor's Files-Modified list OMITTED these — reporting gap, not work gap); `reexport_ec_number` → `total: 3.5` exit 0; `shape_crossing_local_direct` → `x: 3, y: 7` exit 0. **The MANDATORY adversarial gate (adversarial-tester + 5 reviewers + 2 judges) has NOT run** — per the M3a precedent (27/7/8 rounds) this is exactly where silent-wrong cases surface, so the lift is NOT trusted/committed until it passes. **Unverified / likely-incomplete (gate must drive):** 5a.iv `--kernel` reject; namespace-import resolver fix-or-reject (Step 1b — the Phase-1 first-wins bug is still latent); alloc=free leak assertions; `--no-auto-parallel` consistency (step 7); the full ≥2× determinism sweep (only 2 fixtures spot-checked); the "total_size+n_locals suffice" assumption verified adversarially (vary a callee's crossing-local count → confirm the embed tracks it, not coincidental). Deviations + the full DONE-vs-REMAINING breakdown persisted in `.claude/plans/scratch/v0-3-m3e-cross-module-frame-serialization-phase2-deviations.md`. **RESUME via `/execute-plan` Step 2** (partial-state detection: working-tree diff present touching Phase-2 files, gates incomplete, uncommitted) — run the adversarial-tester FIRST, then the full fan-out; do NOT commit until the full matrix is green through the real compiler AND all reviewers + judges PASS.

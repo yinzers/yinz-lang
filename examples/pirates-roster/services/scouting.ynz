@@ -1,0 +1,43 @@
+// services/scouting.ynz — cross-module suspending scouting-report fetch.
+//
+// Demonstrates v0.3-M3e: suspending functions exported from one module and
+// called from another compile and run correctly. The importer's state machine
+// embeds this module's sub-frame at the right offset using the codegen-side
+// frame_layouts_query — no universal reject, no silent miscompile.
+//
+// fetchScoutGrade suspends and returns a string grade (A–D).
+// The crossing locals (playerName and atBats) survive the suspension as
+// frame-backed scalars and produce the grade on resume — the direct
+// cross-module suspending call shape that M3e makes work.
+
+// fetchScoutGrade suspends while the scout's report arrives over the wire.
+// playerName is a crossing local: it lives across the suspension boundary and
+// is read again after resume to build the summary string.
+export function fetchScoutGrade(playerName: string, atBats: int) -> string {
+  // Simulate an async network fetch for the scouting report.
+  wait sleep(20)
+  let grade: string = `B`
+  if (atBats > 350) {
+    grade = `A`
+  }
+  let summary = `${playerName}: ${grade}`
+  return summary
+}
+
+// rankRoster fetches scouting grades for every player in the list and returns
+// the count that earned an A. Demonstrates a cross-module suspending call
+// inside a while loop — the loop counter and accumulator cross every suspension.
+export function rankRoster(names: array<string>, atBats: array<int>) -> int {
+  let aGrades: int = 0
+  let i: int = 0
+  while (i < names.count()) {
+    let name = names[i].or(`unknown`)
+    let ab = atBats[i].or(0)
+    let grade = wait fetchScoutGrade(name, ab)
+    if (grade.endsWith(`A`)) {
+      aGrades = aGrades + 1
+    }
+    i = i + 1
+  }
+  return aGrades
+}

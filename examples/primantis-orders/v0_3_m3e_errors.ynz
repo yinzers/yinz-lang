@@ -1,0 +1,96 @@
+// v0.3-M3e compile-error gallery
+//
+// M3e ships full cross-module frame serialization: the compiler's codegen-side
+// frame_layouts_query resolves each imported suspending callee's LLVM-accurate
+// FrameLayout so the importer's state machine can embed the sub-frame at the
+// right offset. All analyzable cross-module suspending call shapes now compile
+// and run correctly.
+//
+// The former universal-reject diagnostic ("Calling `{name}` across a module
+// boundary isn't supported yet …") is REMOVED — the feature it pointed at has
+// shipped. Cross-module suspending calls no longer trigger it.
+//
+// REJECTS THAT REMAIN after M3e:
+// These are the genuinely-unanalyzable cases — the compiler CANNOT determine
+// the callee's suspension status statically, so a cross-module sub-frame embed
+// is impossible. They reject via the existing may-block unresolvable-edge path
+// (NOT via the deleted universal-reject guard).
+//
+// (a) Dynamic dispatch through a `dynamic Contract` vtable
+//     The callee is resolved at runtime — the compiler cannot read its
+//     FrameLayout at compile time. Rejects with a WHAT/WHAT-INSTEAD/WHY
+//     diagnostic naming the vtable and the vtable call site.
+//     Single-file — demonstrable directly below.
+//
+// (b) FFI cross-module suspending calls
+//     A suspending function called through Yinz's foreign-function interface
+//     (when FFI ships) cannot be analyzed statically — the callee's FrameLayout
+//     lives outside the Yinz compiler's view. FFI is not yet reachable in
+//     v0.3-M3e (no FFI surface exists). When FFI ships, this class rejects
+//     via the same unresolvable-edge path with a tailored diagnostic.
+//
+// All remaining rejects emit WHAT/WHAT-INSTEAD/WHY diagnostics (exit 1) and
+// do NOT produce SIGILL (exit 132). The compiler is safe — it refuses to emit
+// a mis-sized frame rather than crash at runtime.
+
+// ── (a) DynamicDispatch: cross-module suspension through a vtable ─────────────
+//
+// WHY: DynamicDispatch — calling a method on a `dynamic Contract` value from
+// inside a suspending function is rejected. The callee is dispatched at runtime
+// through a vtable; the compiler cannot determine at compile time whether the
+// concrete callee suspends, so it cannot compute a FrameLayout for sub-frame
+// embedding. The unresolvable-edge reject fires with a WHAT/WHAT-INSTEAD/WHY
+// diagnostic naming the vtable type and the call site.
+//
+// The diagnostic emitted (WHAT / WHAT-INSTEAD / WHY):
+//
+//   WHAT: Can't determine whether `doWork` suspends — it's a dynamic-dispatch
+//         call through a `dynamic Worker` vtable.
+//
+//   WHAT INSTEAD: Make the boundary explicit: use a concrete type instead of
+//                 `dynamic Worker`, or restructure so the call is statically
+//                 resolvable from inside a suspending function.
+//
+//   WHY: Dynamic dispatch resolves the callee at runtime — the compiler can't
+//        determine its suspension status at compile time. v0.3-M2 requires
+//        static resolution for calls from suspending functions; dynamic dispatch
+//        support for suspending callees ships in a future version.
+//
+// To see this diagnostic, run the single-file fixture that exercises it:
+//   ynz build crates/ynz-driver/tests/fixtures/v0_3_m2_cant_infer_dynamic_dispatch.ynz
+//
+// The fixture shape (single-file, because cross-module is not needed to trigger it):
+//
+//   shape Worker {
+//     doWork(share self) -> nothing
+//   }
+//   function runWithDynamicWorker(w: dynamic Worker) -> nothing {
+//     sleep(10)
+//     w.doWork()   ← DynamicDispatch reject fires here
+//   }
+//
+// Multi-module dynamic-dispatch rejects behave identically: if an imported module
+// exposes a function that takes `dynamic Contract` and calls a vtable method while
+// suspending, the same reject fires at the module-boundary call site. The reject
+// is not cross-module-specific — it fires wherever a vtable call appears inside a
+// suspending context, regardless of which module defines the function.
+
+// ── (b) FFI cross-module suspending calls (not yet reachable) ────────────────
+//
+// WHY: FFI — a Yinz function that calls a foreign (C/C++/Rust) function
+// declared via the FFI interface cannot be statically analyzed for suspension.
+// The foreign callee's FrameLayout is outside the Yinz compiler's view.
+// When FFI ships in a future version, this class will reject via the
+// unresolvable-edge path with a tailored diagnostic. Today (v0.3-M3e) there
+// is no FFI surface in Yinz, so this class is not reachable.
+//
+// When FFI does ship, the expected diagnostic pattern:
+//
+//   WHAT: Can't determine whether `<foreign_fn>` suspends — it's declared
+//         via FFI and its suspension status is unknown to the compiler.
+//
+//   WHAT INSTEAD: Wrap the FFI call in a non-suspending helper, or ensure
+//                 `<foreign_fn>` is called only from a non-suspending context.
+//
+//   WHY: Foreign functions have no Yinz FrameLayout. A suspending caller cannot
+//        embed a sub-frame for a callee whose memory layout is unknown.
