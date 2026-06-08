@@ -705,7 +705,7 @@ SUPERSEDED ORIGINALS (vacuous — kept for audit trail): ~~Collected `-> int err
 - [x] design-compliance-reviewer: **PASS** 2026-06-08 — the fix makes a crashing-valid program compile correctly (design asserting itself, not contradicted); deferral correction is honest (vacuous trigger, `ships_in`→M4 gated on `background-handle-form`, 4-field legitimate deferral); no coloring/`block_on`.
 - [x] deviation-judge (D1 re-scope + crossing-local fix): **PASS** 2026-06-08 — 10 adversarial probes (nested CF, mixed group membership, heap strings, EC error-path, 3+ waits, for/while loop bodies, data-dependent) ALL byte-identical between modes. Fix is minimal + sound: one call-site delegation to the load-bearing `bind_sm_result_and_flush`; per-name `is_crossing` check handles mixed groups correctly.
 - [x] **POST-GATE done**: added `v0_3_m3b_p5_parallel_multi_wait.ynz` + 2 tests (binding survives 2 waits, byte-identical) — the plan-adherence V3 cross-flag is now a permanent regression lock; filed the code-reviewer's pre-existing nested-CF-after-wait crossing-local crash in todos.
-- [x] Committed: **(see SHA below)** — Phase 5 gate GREEN: all 6 reviewers PASS (rules BLOCK was plan-doc-only, resolved). suite green, clippy-D/jargon/fmt clean.
+- [x] Committed: **`a032f9d`** — Phase 5 gate GREEN: all 6 reviewers PASS (rules BLOCK was plan-doc-only, resolved). suite green, clippy-D/jargon/fmt clean.
 
 **Findings Log**:
 - 2026-06-08 — **⚠️ PHASE 5 PLAN-vs-REALITY GAP + a real P4 bug found during investigation. Surfaced to Patrick (per no-duct-tape "legitimate inverse" + CLAUDE.md "surface plan-vs-design gaps LOUDLY"). Coordinator verification (verify-before-fix):**
@@ -771,7 +771,8 @@ SUPERSEDED ORIGINALS (vacuous — kept for audit trail): ~~Collected `-> int err
 - [ ] Committed: <commit SHA>
 
 **Findings Log**:
-_(empty until a reviewer returns BLOCK)_
+- 2026-06-08 — **Cross-impl consistency sweep (step 3): CLEAN.** Coordinator swept every `crates/ynz-driver/tests/fixtures/*.ynz` (excl. loud-reject projects) building each default + `--no-auto-parallel`: **202 deterministic fixtures byte-identical, 1 exempt (`model_a_intended_reorder` — intended Model-A reorder), 141 negative/no-binary (compile-error fixtures), 1 FALSE-POSITIVE.** The false positive is `v0_3_m2_concurrent_waits_proof`: non-deterministic BY DESIGN (8 concurrent `background` tasks — two DEFAULT runs differ from each other: `START 1 2 3 4 6 5 7 8` vs `START 1 3 2 6 7 8 4 5`), so naive byte-equality is the wrong oracle. Its real integration test (`v03_m2_concurrent_waits_proof`, integration.rs:1494) asserts the ORDERING INVARIANT (all 8 START before any DONE — VERIFIED holds in BOTH modes), not byte-equality. Auto-parallel never touches `background` (`Expr::Background` is never grouped). So zero REAL divergences; the cross-impl invariant holds.
+- 2026-06-08 — **VSCode handling (step 5):** the screenshots (`auto-parallel.png`/`routing-hints.png`/`wait-points.png`) require Patrick's local IDE capture (no display/IDE in this environment) → recorded as a release-prep handoff item for Patrick (NOT a code deferral — the M3b LSP hint features themselves shipped in Phase 3; only the marketing screenshots need capture). The `tooling/vscode-ynz/package.json` version bump + the two `.vsix` assets are `/release`'s job (per project CLAUDE.md release convention) — surfaced to Patrick at the cumulative-sweep handoff, NOT auto-done.
 
 **Exit Sequence — RUN THESE STEPS:** per Phase Execution Protocol + the **Final phase** cumulative-sweep additions. Per-phase `$BASE` = Phase 5's committed SHA; cumulative-sweep `$BASE` = `plan_base` (`0a4b6d8390b1cffd462681429d159ce8db25198a`). Opus reviewers over the cumulative diff; `status → done` on all-PASS; STOP before `/release`.
 

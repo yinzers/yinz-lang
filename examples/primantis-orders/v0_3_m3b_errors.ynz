@@ -171,3 +171,76 @@ function appendLineItem(share lineItems: array<int>) -> nothing {
   // `lineItems` is `share` (read-only); declare `lend lineItems: array<int>` to grow it.
   lineItems.add(42)
 }
+
+// -- M3b Phase-4 Error Class: mutate-through-share-param (SHARE SELF receiver) --
+//
+// WHY: ShareParamMutation (share self) — the read-only guarantee covers the method
+// receiver too. A function whose receiver is declared `share self` is a read-only
+// borrow of the value the caller wrote `value.method()` on. Writing a field of
+// `self` contradicts that borrow and is a compile error — IDENTICAL to the named
+// `share` parameter form. (The parser emits `self` as a distinct expression kind,
+// so this is a separate trigger from `bumpQuantity` above; both must be caught.)
+//
+// Diagnostic (WHAT / WHAT-INSTEAD / WHY):
+//   WHAT: `self` is declared `share` — read-only — so its fields cannot be changed.
+//   WHAT INSTEAD: Change the parameter to `lend self: Order` if this function
+//                 needs to modify it.
+//   WHY: A `share` parameter is a read-only borrow: the caller keeps ownership and
+//        trusts the value is unchanged after the call. When a function modifies a
+//        value, declare `lend` so the change is visible at every call site.
+
+function discountSelf(share self: Order) -> nothing {
+  // WHY: ShareParamMutation (share self) — `self` is `share` (read-only); writing a
+  // field of the receiver contradicts the read-only borrow. Declare `lend self: Order`.
+  self.quantity = self.quantity - 1
+}
+
+// -- M3b Phase-4 Error Class: mutate-through-share-param (DIRECT ELEMENT ASSIGN) --
+//
+// WHY: ShareParamMutation (element) — a direct element assign (`xs[i] = v`) writes the
+// receiver in place exactly like a collection mutator method, just through index syntax
+// instead of a `.set()` call. A `share` parameter is a read-only borrow, so an element
+// write on it is a compile error. This is the index-assign sibling of the collection-method
+// class above — a separate AST position, so it needs its own trigger.
+//
+// Diagnostic (WHAT / WHAT-INSTEAD / WHY):
+//   WHAT: `prices` is declared `share` — read-only — so its elements cannot be changed.
+//   WHAT INSTEAD: Change the parameter to `lend prices: array<int>` if this function
+//                 needs to modify it.
+//   WHY: A `share` parameter is a read-only borrow: the caller keeps ownership and trusts
+//        the value is unchanged after the call. When a function modifies a value, declare
+//        `lend` so the change is visible at every call site.
+
+function overwriteFirst(share prices: array<int>) -> nothing {
+  // WHY: ShareParamMutation (element) — `prices[0] = ...` writes an element in place,
+  // mutating the receiver. `prices` is `share` (read-only); declare `lend prices: array<int>`.
+  prices[0] = 99
+}
+
+// -- M3b Phase-4 Error Class: share→explicit-lend/give ESCALATION --
+//
+// WHY: ShareParamMutation (escalation) — passing a `share` value to a callee whose
+// parameter is declared `lend` (or `give`) escalates the read-only borrow to a mutable
+// borrow (or an ownership transfer). Either escalation breaks the read-only promise, so
+// it is a compile error. Unlike the TRANSITIVE class above (callee param is BARE and the
+// fixpoint figures out the effective `lend`), here the callee's `lend` is EXPLICIT — the
+// escalation is visible directly at the call site. Passing `voucher` (declared `share`) to
+// `applyDiscount` (declared `lend voucher`) fires this class.
+//
+// Diagnostic (WHAT / WHAT-INSTEAD / WHY):
+//   WHAT: `voucher` is declared `share` (read-only); `applyDiscount` needs to modify it (`lend`).
+//   WHAT INSTEAD: Declare `voucher` as `lend` to pass it here.
+//   WHY: A `share` parameter is a read-only borrow — the caller keeps ownership and trusts
+//        the value is unchanged after the call. Passing it where the value will be modified
+//        would break that promise; declare `lend` so the change is visible at every call site.
+
+function applyDiscount(lend voucher: Order) -> nothing {
+  voucher.quantity = voucher.quantity - 5
+}
+
+function forwardVoucher(share voucher: Order) -> nothing {
+  // WHY: ShareParamMutation (escalation) — `voucher` is `share` (read-only) but
+  // `applyDiscount` declares its parameter `lend`. Passing a read-only borrow where a
+  // mutable borrow is required is a compile error. Declare `lend voucher: Order` to escalate.
+  applyDiscount(voucher)
+}

@@ -248,6 +248,10 @@ function entrypoint() -> nothing {
   wait m3a_p4_demo()
   // ────── v0.3-M3e: cross-module suspension ──────
   wait m3e_demo()
+  // ────── v0.3-M3b: auto-parallelization — independent suspending work overlaps ──────
+  // `wait` before m3b_demo() keeps THIS section ordered after m3e. The auto-parallel
+  // overlap happens INSIDE m3b_demo (two independent fetches), not between demo sections.
+  wait m3b_demo()
 }
 
 // ────── M3 helper functions ──────
@@ -791,5 +795,85 @@ function m3a_p2_demo() -> nothing {
   let crewCount: int = wait awaitCrewReady(3)
   let crewStr = crewCount.toString()
   print(`crew ready: ${crewStr}`)
+}
+
+// ── v0.3-M3b: auto-parallelization — the compiler overlaps independent work ───
+//
+// When two suspending calls have NO data dependency between them and share no
+// `lend` resource, the compiler proves they are independent and overlaps their
+// suspensions. The wall-clock is ≈ max(each) instead of sum — without the
+// programmer writing anything special. `--no-auto-parallel` turns the overlap
+// off; the OBSERVABLE OUTPUT is byte-identical either way (see below for why).
+//
+// fetchLowerBowlPrice and fetchUpperDeckPrice are two separate suspending price
+// lookups. Each pauses ~60ms simulating a slow ticket-server round-trip, then
+// returns an exact decimal128 price.
+
+function fetchLowerBowlPrice() -> number {
+  // IDE shows: wait (fetchLowerBowlPrice suspends on the sleep below)
+  wait sleep(60)
+  return 24.50
+}
+
+function fetchUpperDeckPrice() -> number {
+  // IDE shows: wait (fetchUpperDeckPrice suspends on the sleep below)
+  wait sleep(60)
+  return 31.75
+}
+
+// recordPromoNight runs on a background thread (fire-and-forget). It pauses to
+// simulate a slow analytics write, then prints. Main never waits for it.
+function recordPromoNight(promo: string) -> nothing {
+  sleepBlocking(40)
+  print(`promo logged: ${promo}`)
+}
+
+// m3b_demo — three faces of v0.3-M3b in one Pittsburgh-themed scene:
+//   (a) independent suspending fetches OVERLAP (≈ max, not sum);
+//   (b) `wait` orders two otherwise-independent side effects;
+//   (c) `background` infers give/copy for fire-and-forget work.
+function m3b_demo() -> nothing {
+  print(``)
+  print(`v0.3-M3b — auto-parallel: two independent price fetches overlap (~60ms, not ~120ms):`)
+
+  // (a) AUTO-PARALLEL OVERLAP.
+  // These two fetches have no data dependency, so the compiler overlaps their
+  // suspensions — total wait is ≈ max(60, 60) ≈ 60ms, not 60 + 60 = 120ms.
+  // NOTE: there is intentionally NO `wait` between these two lines — that is what
+  // lets the auto-parallel pass overlap them.
+  // IDE shows: wait (fetchLowerBowlPrice may suspend on I/O)
+  let lowerBowl = fetchLowerBowlPrice()
+  // IDE shows: wait (fetchUpperDeckPrice may suspend on I/O)
+  let upperDeck = fetchUpperDeckPrice()
+  // The two prints below READ lowerBowl/upperDeck, so they are data-dependent on
+  // the fetches: the compiler keeps them after both fetches complete and in this
+  // exact order. The overlap is in the suspension, not the print order — so the
+  // observable output is deterministic and byte-identical with --no-auto-parallel.
+  print(`lower bowl ticket: ${lowerBowl}`)
+  print(`upper deck ticket: ${upperDeck}`)
+
+  // (b) `wait` AS AN ORDERING BARRIER.
+  // pausePirate prints as a side effect with no return value. Two calls to it are
+  // otherwise independent, but `wait` on the first forces it to finish before the
+  // second begins — `wait` is the ordering barrier between the two side effects.
+  print(``)
+  print(`v0.3-M3b — wait orders two side effects:`)
+  wait pausePirate(`Maz`)
+  wait pausePirate(`Clemente`)
+
+  // (c) `background` give/copy inference.
+  // `promo` is read again on the line after the spawn, so the compiler infers
+  // `.copy` automatically — the background task gets its own copy and main keeps
+  // the original. (If `promo` were dead after the spawn, the compiler would infer
+  // `.give` instead — no copy.) `.copy` is written explicitly here so the demo
+  // reads clearly; the compiler would have inferred the same thing.
+  // IDE shows: background -> routed to I/O pool (recordPromoNight has a blocking sleep)
+  print(``)
+  print(`v0.3-M3b — background give/copy inference:`)
+  const promo = `bobblehead_night`
+  background recordPromoNight(promo.copy())
+  print(`main keeps the promo handle: ${promo}`)
+  // Keep main alive long enough for the background task to finish and print.
+  wait sleep(120)
 }
 
