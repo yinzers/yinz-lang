@@ -1,0 +1,33 @@
+// Fixture: NON-crossing control — a parallel-group binding used IMMEDIATELY, with NO
+// intervening `wait` before the use.
+//
+// `priceA`/`priceB` form an auto-parallel group; `a`/`b` are consumed right after the join,
+// before any further suspension, so they are NOT crossing locals. The fix must leave this
+// path unchanged: `bind_sm_result_and_flush` fresh-allocas in the join block for non-crossing
+// bindings (correct — a non-crossing binding never survives a suspension). This is the
+// regression guard ensuring the crossing-local fix did not perturb the common non-crossing
+// case.
+//
+// The test asserts byte-identical stdout under default and --no-auto-parallel modes.
+//
+// Expected output: a:7\nb:8
+function priceA() -> int {
+  wait sleep(40)
+  return 7
+}
+
+function priceB() -> int {
+  wait sleep(40)
+  return 8
+}
+
+function run() -> nothing {
+  let a = priceA()
+  let b = priceB()
+  print(`a:${a.toString()}`)
+  print(`b:${b.toString()}`)
+}
+
+function entrypoint() -> nothing {
+  run()
+}

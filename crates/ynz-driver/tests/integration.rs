@@ -5897,6 +5897,263 @@ fn v03_m3b_p4_heterogeneous_ec_group_byte_identical() {
 }
 
 #[test]
+fn v03_m3b_p5_parallel_int_crosses_wait_correct_output() {
+    // WHY (P5): a parallel-group `-> int` binding whose value is used AFTER a SUBSEQUENT
+    // `wait` is a crossing local. Before the fix, the parallel binding fresh-allocated an
+    // i64 slot in the parallel-join block and overwrote `cg.locals`, so the post-`wait`
+    // reload read it from a block the join-block alloca does NOT dominate → LLVM verify
+    // failure ("instruction does not dominate all uses") — default mode failed to compile
+    // while --no-auto-parallel built fine. The fix routes the binding through
+    // `bind_sm_result_and_flush`, storing into the dominating entry-block alloca and flushing
+    // to the frame. If the crossing-local parallel binding regresses, this fails to compile.
+    let src = fixture("v0_3_m3b_p5_parallel_int_crosses_wait.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "parallel int-crosses-wait build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par.trim(),
+        "later\na:7\nb:8",
+        "parallel int-crosses-wait must print later, a:7, b:8; stdout:\n{par}"
+    );
+}
+
+#[test]
+fn v03_m3b_p5_parallel_int_crosses_wait_byte_identical() {
+    // WHY (P5): cross-impl consistency — a parallel-group `int` binding crossing a subsequent
+    // `wait` must be byte-identical and exit 0 under both modes. Before the fix, default mode
+    // emitted invalid LLVM (compile failure) while --no-auto-parallel succeeded — a divergence
+    // this locks against recurring.
+    let src = fixture("v0_3_m3b_p5_parallel_int_crosses_wait.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par, seq,
+        "int-crosses-wait stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p5_parallel_number_crosses_wait_correct_output() {
+    // WHY (P5): a parallel-group `-> number errors` (decimal128) binding crossing a subsequent
+    // `wait` is a crossing local stored across the suspension as i128 (2 frame slots) AND as
+    // errors-capable (companion `{i64,i64}` struct). The binding must store into the pre-created
+    // entry-block i128 alloca + EC companion struct and flush both, not a fresh join-block
+    // alloca. The decimal128 value needs full 16-byte precision — truncation or a wrong reload
+    // produces a different value. Locks the number+EC crossing-wait path.
+    let src = fixture("v0_3_m3b_p5_parallel_number_crosses_wait.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "parallel number-crosses-wait build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par.trim(),
+        "later\na:9999999999.000000001\nb:2.5",
+        "parallel number-crosses-wait must print later, a:9999999999.000000001, b:2.5; stdout:\n{par}"
+    );
+}
+
+#[test]
+fn v03_m3b_p5_parallel_number_crosses_wait_byte_identical() {
+    // WHY (P5): cross-impl consistency — a parallel-group `number errors` (decimal128) binding
+    // crossing a subsequent `wait` must be byte-exact in both modes. The failing alloca in the
+    // pre-fix default build was `%a_ec_ptr`/`%a_ec_struct`; this locks the decimal128+EC
+    // crossing reload against drift.
+    let src = fixture("v0_3_m3b_p5_parallel_number_crosses_wait.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par, seq,
+        "number-crosses-wait stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p5_parallel_ec_crosses_wait_correct_output() {
+    // WHY (P5): a parallel-group `-> int errors` binding crossing a subsequent `wait` is an
+    // errors-capable crossing local stored across the suspension as the 2-slot `{i64,i64}`
+    // errors ABI struct, with `name` registered in `errors_capable_locals` so a later use
+    // extracts the success word (not the companion-struct pointer). The binding must store into
+    // the pre-created entry-block EC companion struct and flush both words, not a fresh
+    // join-block alloca. If the EC crossing-wait path regresses, this fails to compile or
+    // segfaults on a collapsed/garbage struct.
+    let src = fixture("v0_3_m3b_p5_parallel_ec_crosses_wait.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "parallel ec-crosses-wait build must exit 0 (no segfault); stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par.trim(),
+        "later\na:10\nb:20",
+        "parallel ec-crosses-wait must print later, a:10, b:20; stdout:\n{par}"
+    );
+}
+
+#[test]
+fn v03_m3b_p5_parallel_ec_crosses_wait_byte_identical() {
+    // WHY (P5): cross-impl consistency — a parallel-group `int errors` binding crossing a
+    // subsequent `wait` must be byte-identical and exit 0 in both modes. Locks the EC crossing
+    // reload against both the dominance miscompile and an EC-struct collapse.
+    let src = fixture("v0_3_m3b_p5_parallel_ec_crosses_wait.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par, seq,
+        "ec-crosses-wait stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p5_parallel_noncrossing_control_correct_output() {
+    // WHY (P5 regression guard): a parallel-group binding used IMMEDIATELY (no intervening
+    // `wait`) is NOT a crossing local. The crossing-local fix must leave this path unchanged —
+    // `bind_sm_result_and_flush` fresh-allocas in the join block for non-crossing bindings,
+    // which is correct (they never survive a suspension). This guards against the fix
+    // perturbing the common non-crossing case.
+    let src = fixture("v0_3_m3b_p5_parallel_noncrossing_control.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "non-crossing control build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par.trim(),
+        "a:7\nb:8",
+        "non-crossing control must print a:7, b:8; stdout:\n{par}"
+    );
+}
+
+#[test]
+fn v03_m3b_p5_parallel_noncrossing_control_byte_identical() {
+    // WHY (P5 regression guard): cross-impl consistency for the non-crossing parallel binding.
+    // Must be byte-identical and exit 0 in both modes — proves the crossing-local fix did not
+    // change the non-crossing path.
+    let src = fixture("v0_3_m3b_p5_parallel_noncrossing_control.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par, seq,
+        "non-crossing control stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p5_parallel_multi_wait_correct_output() {
+    // WHY (P5 regression guard): a parallel-group return binding must survive MULTIPLE
+    // subsequent `wait` barriers — `a`/`b` each cross two suspensions (`wait mid()`,
+    // `wait late()`) and are read interleaved after each. Locks that the dominating
+    // entry-block + frame-backed slot round-trips across any number of suspensions.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p5_parallel_multi_wait.ynz"));
+    assert_eq!(
+        code, 0,
+        "multi-wait fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "mid\na:11\nlate\nb:22",
+        "multi-wait: a survives wait mid(), b survives wait late(); stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p5_parallel_multi_wait_byte_identical() {
+    // WHY (P5 regression guard): cross-impl consistency — a parallel binding crossing two
+    // waits must be byte-identical in both modes (was an LLVM dominance crash before the fix).
+    let src = fixture("v0_3_m3b_p5_parallel_multi_wait.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par, seq,
+        "multi-wait stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p5_parallel_number_ec_inline_collect_correct_output() {
+    // WHY (P5 inline-poll lock): an inline-poll `-> number errors` (decimal128 + errors-capable)
+    // parallel collection with NO intervening `wait` is the already-working non-crossing path.
+    // The parallel-group return load rebuilds the 2-slot EC struct AND carries the full i128
+    // decimal128 value; `bind_sm_result_and_flush` fresh-allocas in the join block. This locks
+    // the non-crossing EC+decimal128 combination so the crossing-local fix does not silently
+    // regress it.
+    let src = fixture("v0_3_m3b_p5_parallel_number_ec_inline_collect.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "inline-poll number+EC collect build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par.trim(),
+        "a:9999999999.000000001\nb:2.5",
+        "inline-poll number+EC collect must print a:9999999999.000000001, b:2.5; stdout:\n{par}"
+    );
+}
+
+#[test]
+fn v03_m3b_p5_parallel_number_ec_inline_collect_byte_identical() {
+    // WHY (P5 inline-poll lock): cross-impl consistency for the non-crossing EC+decimal128
+    // inline-poll collection. Must be byte-exact in both modes.
+    let src = fixture("v0_3_m3b_p5_parallel_number_ec_inline_collect.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par, seq,
+        "inline-poll number+EC collect stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
 fn v03_m3b_p4_share_read_pair_correct_output() {
     // WHY: two suspending calls taking a mutable-heap `share` argument run correctly under the
     // conservative floor (they sequentialize — a mutable-heap arg is a potential write). Output

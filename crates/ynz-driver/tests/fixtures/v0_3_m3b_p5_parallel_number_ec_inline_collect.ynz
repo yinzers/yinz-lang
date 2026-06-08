@@ -1,0 +1,34 @@
+// Fixture: inline-poll `-> number errors` (decimal128 + errors-capable) parallel collection
+// with NO intervening `wait` — the already-working non-crossing EC+decimal128 path.
+//
+// `priceA`/`priceB` form an auto-parallel group of errors-capable decimal128 callees. Their
+// results are consumed immediately (`.or(...)`), so they are NON-crossing: the parallel-group
+// return load rebuilds the 2-slot `{i64, i64}` EC struct AND carries the full i128 decimal128
+// value, and `bind_sm_result_and_flush` fresh-allocas in the join block (no suspension to
+// survive). This locks the inline-poll EC collection that already passes, so the crossing-local
+// fix does not silently regress the non-crossing EC+decimal128 combination.
+//
+// The decimal128 value needs the full 16-byte precision; any truncation produces a different
+// value.
+//
+// The test asserts byte-exact decimal128 stdout under default and --no-auto-parallel modes.
+//
+// Expected output: a:9999999999.000000001\nb:2.5
+function priceA() -> number errors {
+  wait sleep(5)
+  return 9999999999.000000001
+}
+
+function priceB() -> number errors {
+  wait sleep(5)
+  return 2.5
+}
+
+function entrypoint() -> nothing {
+  let a = priceA()
+  let b = priceB()
+  let av = a.or(0.0)
+  let bv = b.or(0.0)
+  print(`a:${av.toString()}`)
+  print(`b:${bv.toString()}`)
+}

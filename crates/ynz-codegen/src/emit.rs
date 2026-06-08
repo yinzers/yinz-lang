@@ -5983,16 +5983,30 @@ fn emit_independent_group_poll<'ctx, 'g>(
 
         // Bind to the let target when the stmt is `let name = calleeF(...)`.
         if let Stmt::Let { name, .. } = stmt {
-            // Route through the unified binder so every return-type shape (int i64,
-            // decimal128 i128, float f64, string/shape ptr, errors-capable {i64,i64})
-            // gets the correct alloca width and store sequence. The hand-rolled
-            // `build_alloca(i64) + to_i64_bits` path panicked for number/float/string
-            // callee return types — see corpse-(a) in graveyard.md.
-            let alloca = bind_sm_return_value(cg, name, ret_val)?;
+            // Route through the SAME unified binder the sequential SM let-path uses
+            // (`bind_sm_result_and_flush`, emit.rs let-arms at ~3778/3806). For a
+            // crossing local — one whose value must survive a SUBSEQUENT `wait` — the
+            // value MUST be stored into the entry-block (sm_entry) alloca pre-created
+            // at the crossing-local setup (~2344, plus the EC companion struct at ~2357)
+            // and flushed to its frame slot(s). That entry-block alloca dominates every
+            // resume block; a fresh alloca built here in the parallel-join block does NOT,
+            // so `reload_params_from_frame` would read it from a block it doesn't dominate
+            // (LLVM "instruction does not dominate all uses"). `bind_sm_result_and_flush`
+            // reuses the dominating alloca for crossing locals and only fresh-allocas for
+            // non-crossing bindings (which never survive a suspension, so a join-block
+            // alloca is correct there). This keeps the parallel path byte-for-byte aligned
+            // with the sequential store-into-existing-alloca contract — no parallel-only
+            // EC/number store that could drift (corpse-(a)).
+            let alloca = bind_sm_result_and_flush(cg, name, ret_val, parent_frame)?;
             cg.locals.insert(name.clone(), alloca);
 
-            // Flush the let-binding to the frame if it's a crossing local.
-            flush_crossing_local_if_needed(cg, stmt, parent_frame)?;
+            // EC crossing locals must be tracked in errors_capable_locals so a later use
+            // (after a subsequent suspension) extracts the success value / propagates the
+            // error instead of reading the companion-struct pointer. Mirrors the sequential
+            // let-arms (emit.rs ~3785/3809).
+            if cg.sm_crossing_errors_capable_set.contains(name.as_str()) {
+                cg.errors_capable_locals.insert(name.clone());
+            }
         }
         // For Stmt::Expr, return value is discarded (the existing sequential path does the same).
     }

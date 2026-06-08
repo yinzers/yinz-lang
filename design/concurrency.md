@@ -447,19 +447,19 @@ The frame-slot classifier in codegen handles int, bool, float, number, string, a
 
 ---
 
-### `ECWrapperResultCollection` — collecting the result of a `background`-spawned `-> T errors` task (deferred to M3b)
+### `ECWrapperResultCollection` — collecting the result of a `background`-spawned `-> T errors` task (gated on background-handle collection)
 
 The standalone EC wrapper (emitted for `background`-spawned suspending `-> T errors` functions) reconstructs the `{i64, i64}` EC struct from the frame's return slot and then calls `free_frame`. For `-> number errors`, the ok-word in that struct points into the composed frame's 16-byte staging slot — a region freed by `free_frame`. The returned struct's ok-pointer is therefore invalid after the wrapper returns.
 
-This is **safe in M3a** because the only reachable caller of the wrapper is `background` (fire-and-forget), which discards the EC result entirely without dereferencing the ok-pointer.
+This is **safe** because the only reachable caller of the wrapper is `background` (fire-and-forget), which discards the EC result entirely without dereferencing the ok-pointer. There is **no way to collect a `background` task's result in M3b**: the handle form `let h = background ecFn()` is rejected by typeck ("Capturing the output of background is not yet supported"), and the collection syntax (`.send`/`.receive`) ships separately with the `background-handle-form` feature. Until handle-collection lands, this copy-before-free path is **unreachable** — the deferral is vacuous in M3b and stays gated on background-handle collection.
 
-A caller that **collects** the result — reads the ok-word and uses the pointed-at value — must copy it BEFORE `free_frame`. Implementing that read-before-free + copy requires the scheduler to know whether a spawned task's result is collected or discarded, and when the collection happens relative to the frame lifetime. That is M3b background result-collection machinery.
+A caller that **collects** the result — reads the ok-word and uses the pointed-at value — must copy it BEFORE `free_frame`. Implementing that read-before-free + copy requires the scheduler to know whether a spawned task's result is collected or discarded, and when the collection happens relative to the frame lifetime. That knowledge only exists once the `background` handle-collection form (`.send`/`.receive`) ships.
 
-**Workaround**: use the inline-poll path — a suspending caller that calls another `-> T errors` suspending function composes the callee inline via the state-machine resume path, and the inline path is correct and complete. Only `background` hits the standalone wrapper; avoid collecting `background` handle return values for `-> T errors` spawns until M3b.
+**Workaround**: use the inline-poll path — a suspending caller that calls another `-> T errors` suspending function composes the callee inline via the state-machine resume path, and the inline path is correct and complete. Only `background` hits the standalone wrapper, and there is no syntax to collect its `-> T errors` result until background-handle collection ships.
 
-**What it costs to lift** (~half a session inside M3b): when the scheduler runs the wrapper function to completion, if the spawned task's result handle is collected, read the EC struct before freeing the frame, copy the ok-value to a heap buffer, update the ok-word to point to the heap buffer, then free the frame. The copy is conditional on whether the handle is collected — discarded handles skip it.
+**What it costs to lift** (~half a session, landing WITH the `background-handle-form` feature): when the scheduler runs the wrapper function to completion, if the spawned task's result handle is collected, read the EC struct before freeing the frame, copy the ok-value to a heap buffer, update the ok-word to point to the heap buffer, then free the frame. The copy is conditional on whether the handle is collected — discarded handles skip it.
 
-**Trigger**: storing or using the return value of a `background`-spawned suspending function whose declared return type is `-> T errors`.
+**Trigger**: collecting the completed value of a `background`-spawned suspending `-> T errors` function via its handle (`.send`/`.receive`) — gated on the `background-handle-form` feature.
 
 This is tracked in `registry/features.toml` as `ec-wrapper-collect-on-completion`.
 
