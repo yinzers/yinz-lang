@@ -5569,12 +5569,15 @@ fn is_direct_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool {
 /// - (b) No flat-scan re-derivation: this function receives the pre-partitioned group from
 ///   `partition_independent_groups`; it does not re-examine statement order.
 ///
-/// # Design divergence
+/// # EC-returning parallel calls
 ///
-/// `-> T errors` (EC) collected results from a parallel group are handled in Phase 5
-/// (ec-wrapper-collect-on-completion). For now EC-returning parallel calls fall back to
-/// sequential (conservative-correct). This function is called only for non-EC suspending
-/// stmts; EC stmts remain Singleton groups.
+/// `-> T errors` (EC) calls DO parallelize through this function: the `{i64,i64}`
+/// companion-struct result is read via `load_sm_return_value_typed`'s `ErrorsCapable` arm
+/// and bound through the unified `bind_sm_result_and_flush` (StructValue arm), so an EC
+/// return survives a later `wait` barrier byte-identically. The still-deferred piece is
+/// collecting a `background`-spawned EC task's result via a handle
+/// (`ec-wrapper-collect-on-completion`, gated on `background-handle-form`, v0.3-M4) — a
+/// separate path that does not flow through this inline-poll function.
 ///
 /// # Failure modes
 ///

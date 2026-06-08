@@ -6196,11 +6196,11 @@ fn v03_m3b_p4_share_read_pair_byte_identical() {
 #[test]
 fn v03_m3b_p4_share_read_pair_sequentializes_under_floor() {
     // test-ratchet: the conservative floor (Golden Rule 5 soundness > Rule 10 perf) forfeits
-    // read-only-mutable-heap parallelism. This test previously asserted the two `share`-heap
-    // reads OVERLAP (≈200ms); that capability rested on a per-form ownership classification
-    // proven unsound across three gate rounds. The floor treats every mutable-heap arg as a
-    // potential write, so the pair now sequentializes in BOTH modes (≈400ms). Assertion
-    // flipped to lock the sound behavior; reversal = a real type+alias-aware ownership analysis.
+    // read-only-mutable-heap parallelism. A mutable-heap arg is unconditionally a potential
+    // aliased write under the floor, which does not trust any per-form ownership classifier
+    // (that approach missed five distinct write forms across three gate rounds), so the pair
+    // sequentializes in BOTH modes (≈400ms). The assertion locks that sound behavior;
+    // reversal = a real type+alias-aware ownership analysis.
     //
     // WHY: a mutable-heap (shape) argument is a potential aliased write under the floor, so
     // the two reads do NOT overlap — default mode takes the full ≈400ms sum, same as
@@ -6386,9 +6386,8 @@ fn v03_m3b_p4_mutable_heap_share_read_byte_identical() {
 #[test]
 fn v03_m3b_p4_mutable_heap_share_read_sequentializes_under_floor() {
     // test-ratchet: conservative floor forfeits read-only-mutable-heap parallelism (GR5 > GR10).
-    // Previously asserted the two `share`-heap reads OVERLAP (≈150ms); under the floor a
-    // mutable-heap arg is always a potential write, so the pair sequentializes (≈300ms) in
-    // both modes. Assertion flipped to lock the sound behavior.
+    // A mutable-heap arg is unconditionally a potential write under the floor, so the pair
+    // sequentializes (≈300ms) in both modes. The assertion locks that sound behavior.
     //
     // WHY: the floor sequentializes any mutable-heap-arg pair — default takes the full ≈300ms
     // sum (no overlap). A future change re-parallelizing it would drop default to ≈150ms and
@@ -6434,9 +6433,8 @@ fn v03_m3b_p4_bare_read_heap_byte_identical() {
 #[test]
 fn v03_m3b_p4_bare_read_heap_sequentializes_under_floor() {
     // test-ratchet: conservative floor forfeits read-only-mutable-heap parallelism (GR5 > GR10).
-    // Previously asserted two bare-read heap calls OVERLAP; under the floor a mutable-heap arg
-    // is always a potential write, so they sequentialize (≈300ms) in both modes. Flipped to
-    // lock the sound behavior.
+    // A mutable-heap arg is unconditionally a potential write under the floor, so two bare-read
+    // heap calls sequentialize (≈300ms) in both modes. The assertion locks that sound behavior.
     //
     // WHY: the floor sequentializes any mutable-heap-arg pair regardless of how the callee
     // uses it — default takes the full ≈300ms (no overlap).

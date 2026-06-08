@@ -419,13 +419,16 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
     }
 
     // Transitive effective-ownership fixpoint (v0.3-M3b Phase 4). Classifies every
-    // parameter as `Reads`/`Unknown`/`Writes` across the whole local call graph. Two
-    // consumers read it:
+    // parameter as `Reads`/`Unknown`/`Writes` across the whole local call graph. One
+    // consumer reads it:
     //   - Part 2 below: reject `share` params that are written transitively (the
     //     `design/concurrency.md` line 651 no-escalation rule, extended past the direct
     //     cases `check.rs` already catches).
-    //   - Codegen independence analysis: classify call-arg positions as potential aliased
-    //     writes (`Writes`/`Unknown`) vs. proven reads (`Reads`).
+    //
+    // Codegen does NOT consume this fixpoint. The auto-parallel write-effect decision uses
+    // the type-based conservative floor in `ynz-codegen/src/independence.rs` (any mutable-heap
+    // arg is a potential write, Golden Rule 5 > Rule 10) — sound by construction, with no
+    // name-based classifier to drift out of sync with this fixpoint.
     //
     // `declared_writes` seeds the fixpoint with each function's explicit `lend`/`give`
     // positions (local AND imported — an imported declared-write position is a definite

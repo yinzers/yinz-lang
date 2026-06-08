@@ -38,3 +38,6 @@ examples/*/bin
 website/node_modules/
 website/.nuxt/
 website/.output/
+
+# Claude Code transient runtime locks (ScheduleWakeup)
+.claude/scheduled_tasks.lock

@@ -27,11 +27,18 @@
 //!
 //! # Scope boundary
 //!
-//! This analysis operates on STRAIGHT-LINE blocks only. It does NOT cross into:
-//! - Loop bodies (`for`, `while`) — always sequential per
-//!   `design/concurrency.md` "Loop Iterations — Sequential by Default".
-//! - `if`/`match` branches — parallel groups are not introduced inside conditionals.
-//! - Across explicit `wait` barriers — a `wait`-prefixed call resets the group.
+//! `partition_independent_groups` scans ONE straight-line statement list. A nested compound
+//! statement (`if`/`match`/`for`/`while`) is one OPAQUE unit in that scan — this function never
+//! flattens a nested block's statements into the current sequence, so a parallel group never
+//! spans a control-flow boundary. emit.rs (`lower_sm_block`/`lower_sm_for`) recurses into each
+//! nested straight-line block and re-runs this partition there, so parallel groups CAN appear
+//! inside an `if`/`match` branch body or a single loop-iteration body — they just never merge
+//! across the boundary. Two hard limits hold regardless:
+//! - Loop ITERATIONS stay sequential — the loop structure runs one iteration at a time
+//!   (`design/concurrency.md` "Loop Iterations — Sequential by Default"); independence only
+//!   ever overlaps statements WITHIN a single iteration body, never across iterations.
+//! - An explicit `wait` barrier resets the group — a `wait`-prefixed call is a sequencing
+//!   point; statements on opposite sides of it never share a parallel group.
 //!
 //! # Corpse guard (no-duct-tape.md + graveyard 2026-06-04)
 //!
@@ -862,11 +869,10 @@ mod tests {
     #[test]
     fn bare_read_heap_pair_sequentializes_under_floor() {
         // test-ratchet: the conservative floor (Golden Rule 5 soundness > Rule 10 perf)
-        // forfeits read-only-mutable-heap parallelism. This test previously asserted that two
-        // read-only bare-heap calls parallelize — a capability that rested on a per-form
-        // ownership classification proven unsound across three gate rounds (it missed five
-        // distinct write forms). The floor treats every mutable-heap arg as a potential write,
-        // so the pair now SEQUENTIALIZES. The assertion is flipped to lock the sound behavior;
+        // forfeits read-only-mutable-heap parallelism. The floor treats every mutable-heap arg
+        // as a potential write — it does not trust any per-form ownership classifier (that
+        // approach missed five distinct write forms across three gate rounds) — so two
+        // read-only bare-heap calls SEQUENTIALIZE. The assertion locks that sound behavior;
         // reversal path (re-enable parallelism) is a real type+alias-aware ownership analysis.
         //
         // WHY: two bare-heap-arg calls sequentialize under the floor — a bare heap arg could
@@ -893,10 +899,9 @@ mod tests {
     #[test]
     fn mutable_heap_share_read_pair_sequentializes_under_floor() {
         // test-ratchet: same forfeiture as `bare_read_heap_pair_sequentializes_under_floor`.
-        // This previously asserted that two `share`-heap reads parallelize; under the
-        // conservative floor a mutable-heap arg is always a potential write (the floor does
-        // not consult `share` enforcement, which proved incomplete), so the pair sequentializes.
-        // Assertion flipped to lock the sound behavior.
+        // Under the conservative floor a mutable-heap arg is unconditionally a potential write
+        // (the floor does not consult `share` enforcement, which proved incomplete), so two
+        // `share`-heap reads sequentialize. The assertion locks that sound behavior.
         //
         // WHY: two share-heap-arg calls sequentialize under the floor — soundness over the
         // read-only-heap-overlap perf capability (Golden Rule 5 > Rule 10).
