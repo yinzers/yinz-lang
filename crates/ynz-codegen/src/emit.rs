@@ -34,6 +34,7 @@ use ynz_typeck::{
 
 use crate::{
     artifact::{sha256, CompiledArtifact},
+    independence::{partition_independent_groups, IndependentGroup},
     runtime_decls::RuntimeDecls,
     shape_types::{emit_shape_types, ShapeLlvmTypes},
     state_machine,
@@ -149,6 +150,13 @@ static EMPTY_IMPORTED_FNS: std::sync::OnceLock<
 fn empty_imported_fns(
 ) -> &'static std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig> {
     EMPTY_IMPORTED_FNS.get_or_init(std::collections::HashMap::new)
+}
+
+// Generic functions cannot reach lower_sm_block (no `wait` in generics), so an empty
+// SignatureTable satisfies the struct field without allocating per-instantiation.
+static EMPTY_SIG_TABLE: std::sync::OnceLock<SignatureTable> = std::sync::OnceLock::new();
+fn empty_sig_table() -> &'static SignatureTable {
+    EMPTY_SIG_TABLE.get_or_init(SignatureTable::empty)
 }
 
 /// Build the `WaitCache` for all non-generic functions in the module.
@@ -706,18 +714,31 @@ pub fn emit_artifact(
     let suspend_set: SuspendSet = suspends_set_arg.clone();
     let _ = sig_table; // sig_table kept in signature for API compatibility
 
+    // Read the auto-parallel kill switch set by main.rs before the salsa dispatch.
+    // The env var is set once before the first salsa call in the CLI path, so the
+    // process-per-build model keeps the memo valid for the lifetime of the process.
+    //
+    // Latent hazard: `ynz watch` (long-lived) and LSP (incremental) would NOT invalidate
+    // the memoized codegen_query when this env var changes between rebuilds — salsa has
+    // no visibility into env vars. The correct fix is to thread `no_auto_parallel` as an
+    // explicit salsa input parameter. Deferred until `ynz watch --no-auto-parallel` or
+    // LSP codegen integration lands. Tracked: .claude/todos.md "no-auto-parallel env-var".
+    let no_auto_parallel = std::env::var("YNZ_NO_AUTO_PARALLEL").is_ok_and(|v| v == "1");
+
     build_module(
         &context,
         &module,
         source_path,
         typed_module,
         shape_table,
+        sig_table,
         generic_fn_table,
         mono_table,
         imported_options,
         &suspend_set,
         imported_fns,
         frame_layouts,
+        no_auto_parallel,
     )?;
 
     module
@@ -776,12 +797,14 @@ fn build_module<'ctx, 'g>(
     source_path: &str,
     typed: &'g TypedModule,
     shape_table: &'g ShapeTable,
+    sig_table: &'g SignatureTable,
     generic_fn_table: &'g GenericFnTable,
     mono_table: &'g MonomorphizationTable,
     imported_options: &std::collections::HashMap<String, ynz_typeck::options_table::OptionsEntry>,
     suspend_set: &'g SuspendSet,
     imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
     frame_layouts_arg: &HashMap<String, FrameLayout>,
+    no_auto_parallel: bool,
 ) -> Result<(), String> {
     let rt = RuntimeDecls::declare(ctx, module);
 
@@ -1002,6 +1025,8 @@ fn build_module<'ctx, 'g>(
                 suspend_set,
                 frame_layouts,
                 imported_fns,
+                sig_table,
+                no_auto_parallel,
             )?,
             Item::Function(_)
             | Item::ShapeDecl(_)
@@ -1198,6 +1223,11 @@ fn lower_generic_function<'ctx>(
         sm_scope_depth: 0,
         sm_for_loop_counter: 0,
         sm_number_errors_staging_offset: None,
+        // Generic functions cannot contain `wait` — auto-parallel is never applicable.
+        no_auto_parallel: false,
+        // Generic functions never reach lower_sm_block; the empty table satisfies
+        // the struct field without the caller needing a real SignatureTable.
+        sig_table: empty_sig_table(),
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -1474,6 +1504,21 @@ struct Cg<'ctx, 'g> {
     // Used by lower_stmt_return to write the i128 decimal to a frame-stable location so
     // the EC ok-pointer survives the resume function returning.
     sm_number_errors_staging_offset: Option<u64>,
+    // v0.3-M3b Phase 4: when true, the auto-parallelize pass is disabled.
+    // All suspending statements lower in pure source order via the existing
+    // single inline-poll path. This is the TRUE dumb-sequential baseline used
+    // as the cross-impl consistency oracle.
+    //
+    // When false (the default), `lower_sm_block` runs `partition_independent_groups`
+    // and routes independent groups through `emit_independent_group_poll`.
+    no_auto_parallel: bool,
+    // v0.3-M3b Phase 4: signature table for write-effect classification in the
+    // independence analysis. Used ONLY by `lower_sm_block` → `partition_independent_groups`.
+    // When `no_auto_parallel` is true, this is never accessed.
+    //
+    // Stored here so the independence analysis can consume `param_ownerships` from
+    // function signatures without re-deriving them (corpse b compliance).
+    sig_table: &'g SignatureTable,
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
@@ -1780,6 +1825,8 @@ fn lower_function<'ctx, 'g>(
     suspend_set: &'g SuspendSet,
     frame_layouts: &'g HashMap<String, FrameLayout>,
     imported_fns: &'g std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+    sig_table: &'g SignatureTable,
+    no_auto_parallel: bool,
 ) -> Result<(), String> {
     // v0.3-M2 P7 path selection: functions in the transitive suspend_set get the
     // state-machine path. Uses suspend_set (from typeck FunctionSig.suspends) instead
@@ -1802,6 +1849,8 @@ fn lower_function<'ctx, 'g>(
             suspend_set,
             frame_layouts,
             imported_fns,
+            sig_table,
+            no_auto_parallel,
         );
     }
 
@@ -1858,6 +1907,11 @@ fn lower_function<'ctx, 'g>(
         sm_scope_depth: 0,
         sm_for_loop_counter: 0,
         sm_number_errors_staging_offset: None,
+        // Non-SM functions cannot contain independent suspending groups.
+        no_auto_parallel: false,
+        // sig_table unused for non-SM functions — independence analysis runs only in
+        // lower_sm_block which is never reached from the non-SM path.
+        sig_table,
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -2008,6 +2062,8 @@ fn lower_function_with_waits<'ctx, 'g>(
     suspend_set: &'g SuspendSet,
     frame_layouts: &'g HashMap<String, FrameLayout>,
     imported_fns: &'g std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+    sig_table: &'g SignatureTable,
+    no_auto_parallel: bool,
 ) -> Result<(), String> {
     // Collect the names of parameters. ALL parameters are live across any wait.
     let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
@@ -2160,7 +2216,12 @@ fn lower_function_with_waits<'ctx, 'g>(
         sm_scope_depth: 0,
         sm_for_loop_counter: 0,
         sm_number_errors_staging_offset: number_errors_staging_offset,
-        // Carry errors-capable flag separately so lower_stmt_return can handle it.
+        // When set, lower_sm_block skips independence analysis and lowers all stmts
+        // sequentially — the TRUE dumb-sequential baseline (not a shared-analysis no-op).
+        no_auto_parallel,
+        // sig_table forwarded so independence analysis can read param_ownerships
+        // without re-deriving write effects from scratch (corpse b compliance).
+        sig_table,
     };
 
     // Step 1 — Emit allocas in the entry block (sm_entry). LLVM SSA requires all allocas
@@ -3184,34 +3245,90 @@ fn lower_sm_block<'ctx, 'g>(
     shape_table: &'g ShapeTable,
     current_state: &mut usize,
 ) -> Result<(), String> {
-    for stmt in &block.stmts {
+    if cg.no_auto_parallel {
+        // TRUE dumb-sequential baseline: lower every statement in source order with zero
+        // consultation of the independence analysis. This is the `--no-auto-parallel` path
+        // and the cross-impl consistency oracle — a bug in independence analysis makes
+        // default mode diverge from this oracle, turning the consistency gate RED.
+        for stmt in &block.stmts {
+            if is_block_terminated(cg) {
+                break;
+            }
+            if stmt_contains_wait(stmt) || stmt_contains_suspending_call(stmt, cg.suspend_set) {
+                lower_sm_stmt_with_wait(
+                    cg,
+                    stmt,
+                    state_blocks,
+                    pending_block,
+                    frame_ptr,
+                    waker_ctx,
+                    param_names,
+                    f,
+                    shape_table,
+                    current_state,
+                )?;
+            } else {
+                lower_stmt(cg, stmt)?;
+                anchor_shape_crossing_locals_to_frame_alloca(cg, stmt)?;
+                flush_crossing_local_if_needed(cg, stmt, frame_ptr)?;
+            }
+        }
+        return Ok(());
+    }
+
+    // Auto-parallel path: partition the block into independent groups.
+    // The suspend_set is the effective suspend set (including imported fns) passed
+    // into this codegen context — `cg.suspend_set` is authoritative (corpse b).
+    let groups =
+        partition_independent_groups(&block.stmts, cg.suspend_set, cg.sig_table, cg.imported_fns);
+
+    for group in &groups {
         if is_block_terminated(cg) {
             break;
         }
-        if stmt_contains_wait(stmt) || stmt_contains_suspending_call(stmt, cg.suspend_set) {
-            lower_sm_stmt_with_wait(
-                cg,
-                stmt,
-                state_blocks,
-                pending_block,
-                frame_ptr,
-                waker_ctx,
-                param_names,
-                f,
-                shape_table,
-                current_state,
-            )?;
-        } else {
-            lower_stmt(cg, stmt)?;
-            // Shape-typed crossing locals at a `let` definition site: `lower_struct_lit`
-            // creates a fresh stack alloca and stores its pointer in cg.locals[name].
-            // The stack alloca dies when this resume call returns. Copy the struct bytes
-            // into the pre-existing sm_entry struct alloca (the stable working copy that
-            // `flush_crossing_local_if_needed` then memcpy's into the frame slots).
-            anchor_shape_crossing_locals_to_frame_alloca(cg, stmt)?;
-            // After lowering a non-wait statement, flush any crossing local it defined or
-            // mutated back to the frame slot so the value survives the next suspension.
-            flush_crossing_local_if_needed(cg, stmt, frame_ptr)?;
+        match group {
+            IndependentGroup::Singleton(stmt) => {
+                // Existing sequential path unchanged for single statements.
+                if stmt_contains_wait(stmt) || stmt_contains_suspending_call(stmt, cg.suspend_set) {
+                    lower_sm_stmt_with_wait(
+                        cg,
+                        stmt,
+                        state_blocks,
+                        pending_block,
+                        frame_ptr,
+                        waker_ctx,
+                        param_names,
+                        f,
+                        shape_table,
+                        current_state,
+                    )?;
+                } else {
+                    lower_stmt(cg, stmt)?;
+                    anchor_shape_crossing_locals_to_frame_alloca(cg, stmt)?;
+                    flush_crossing_local_if_needed(cg, stmt, frame_ptr)?;
+                }
+            }
+            IndependentGroup::Parallel(stmts) => {
+                // Interleaved inline poll for N ≥ 2 independent suspending statements.
+                // Each callee's embedded sub-frame is polled in declaration order;
+                // we yield Pending only when ALL are still Pending.
+                emit_independent_group_poll(
+                    cg,
+                    stmts,
+                    state_blocks,
+                    pending_block,
+                    frame_ptr,
+                    waker_ctx,
+                    param_names,
+                    f,
+                    shape_table,
+                    current_state,
+                )?;
+                // Flush any crossing locals defined by the parallel group's let-bindings.
+                for &stmt in stmts.iter() {
+                    flush_crossing_local_if_needed(cg, stmt, frame_ptr)?;
+                }
+            }
         }
     }
     Ok(())
@@ -4819,6 +4936,11 @@ fn lower_sm_match<'ctx, 'g>(
 /// - `Number { precision ≤ 34 }`: load i128 from 16-byte slot, return as i128 IntValue.
 ///   `bind_sm_return_value`'s I128Value arm allocates an i128 alloca and stores the value
 ///   so that `load(slot, &Type::Number, ...)` can read the full i128 from it.
+/// - errors-capable (`-> T errors`, detected via `is_errors_capable_fn`): load the 2-slot
+///   `{i64, i64}` errors struct from the return slot and rebuild it as a StructValue, so
+///   `bind_sm_return_value`'s StructValue arm registers the binding in `errors_capable_locals`.
+///   Without this an errors-capable callee in a parallel group falls into the i64 catch-all,
+///   collapsing the `{err, ok}` struct to one word and dereferencing garbage (exit 139).
 /// - Anything else: fall back to i64 load.
 fn load_sm_return_value_typed<'ctx>(
     cg: &mut Cg<'ctx, '_>,
@@ -4827,6 +4949,34 @@ fn load_sm_return_value_typed<'ctx>(
     callee_name: &str,
     tag: &str,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
+    // `-> T errors`: the return slot holds the 2-slot `{i64, i64}` errors ABI result
+    // (field0 = error pointer, field1 = success value). Load both halves and rebuild the
+    // StructValue so `bind_sm_return_value`'s StructValue arm fires and registers the binding
+    // in `errors_capable_locals`. This must be checked via `is_errors_capable_fn` — NOT via
+    // the declared return type below — because `ast_type_to_typeck_type` strips the errors
+    // wrapper for LOCAL callees (returns the bare inner type), so a local errors-capable
+    // callee would otherwise fall into the i64 catch-all, collapse the 2-slot struct to one
+    // word, and dereference garbage (exit 139) in a parallel group. Mirrors the single/
+    // recursive EC-return load path (the `is_errors_capable_fn` branch in the non-parallel
+    // callers).
+    if is_errors_capable_fn(cg.typed, cg.imported_fns, callee_name) {
+        let (err_i64, ok_i64) =
+            state_machine::load_return_value_errors(ctx, &cg.builder, frame_ptr)?;
+        let struct_ty = errors_result_type(ctx);
+        let mut result = struct_ty.const_zero();
+        result = cg
+            .builder
+            .build_insert_value(result, err_i64, 0, &format!("{tag}_err"))
+            .map_err(|e| format!("{tag}_err insert: {e}"))?
+            .into_struct_value();
+        result = cg
+            .builder
+            .build_insert_value(result, ok_i64, 1, &format!("{tag}_ok"))
+            .map_err(|e| format!("{tag}_ok insert: {e}"))?
+            .into_struct_value();
+        return Ok(result.into());
+    }
+
     // Look up the callee's declared return type — check local items first, then
     // imported functions for cross-module callees.
     let callee_ret_ty = cg
@@ -5390,6 +5540,484 @@ fn is_direct_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool {
         }
     }
     false
+}
+
+/// Emit interleaved inline-poll for a parallel group of ≥2 independent suspending statements.
+///
+/// # Mechanism (no spawn — corpse (a) compliance)
+///
+/// Each member's child frame is already embedded in the composed parent frame (allocated at
+/// `lower_function_with_waits` time). This function:
+/// 1. Initializes all child frame headers (resume_point=0, sleep_handle=null).
+/// 2. Writes call arguments to each child frame's local slots.
+/// 3. Polls all child frames in order. Any Pending child suspends; we track which are done.
+/// 4. If any child is Pending, save parent resume_point = continuation_state, yield Pending.
+/// 5. On re-entry (continuation_state): re-poll any child that was not yet Ready.
+/// 6. When ALL children are Ready, fall through to post_call_bb.
+/// 7. Reads results from each child frame and binds to the let-target if applicable.
+///
+/// # State budget
+///
+/// A parallel group of N stmts uses 1 shared continuation state. The other N-1 states
+/// pre-allocated by `count_suspension_points` are left unterminated; `lower_sm_body`'s
+/// trailing loop adds an unreachable terminator to any unterminated block so LLVM is valid.
+///
+/// # Corpse guards
+///
+/// - (a) No forked frame dispatch: all frame slot I/O routes through `flush_var_slot_to_frame`
+///   and `reload_params_from_frame`. Return-value reads use `load_sm_return_value_typed`.
+/// - (b) No flat-scan re-derivation: this function receives the pre-partitioned group from
+///   `partition_independent_groups`; it does not re-examine statement order.
+///
+/// # Design divergence
+///
+/// `-> T errors` (EC) collected results from a parallel group are handled in Phase 5
+/// (ec-wrapper-collect-on-completion). For now EC-returning parallel calls fall back to
+/// sequential (conservative-correct). This function is called only for non-EC suspending
+/// stmts; EC stmts remain Singleton groups.
+///
+/// # Failure modes
+///
+/// Returns `Err` propagated from any LLVM builder call or a missing child frame/resume fn.
+/// A missing child frame layout or missing resume fn is always an `Err` (codegen bug).
+#[allow(clippy::too_many_arguments)]
+fn emit_independent_group_poll<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    stmts: &[&Stmt],
+    state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
+    pending_block: inkwell::basic_block::BasicBlock<'ctx>,
+    parent_frame: PointerValue<'ctx>,
+    waker_ctx: PointerValue<'ctx>,
+    param_names: &[String],
+    f: &FunctionDecl,
+    shape_table: &'g ShapeTable,
+    current_state: &mut usize,
+) -> Result<(), String> {
+    let ctx = cg.ctx;
+    // N ≥ 2 by construction (independence.rs only emits Parallel groups with 2+ members).
+
+    // --- Step 1 — collect callee info and child frame pointers ---
+
+    struct Child<'ctx> {
+        callee_name: String,
+        child_frame: PointerValue<'ctx>,
+        resume_fn: inkwell::values::FunctionValue<'ctx>,
+    }
+
+    let mut children: Vec<Child<'ctx>> = Vec::with_capacity(stmts.len());
+
+    for &stmt in stmts {
+        // Extract (callee_name, call_args) from the statement.
+        let (callee_name, call_args) = extract_call_and_args(stmt).ok_or_else(|| {
+            "emit_independent_group_poll: stmt is not a direct ident call".to_string()
+        })?;
+
+        // Find child frame offset from parent's layout.
+        let child_offset = cg
+            .frame_layouts
+            .get(&f.name)
+            .and_then(|layout| {
+                layout
+                    .children
+                    .iter()
+                    .find(|(n, _)| n == &callee_name)
+                    .map(|(_, off)| *off)
+            })
+            .ok_or_else(|| {
+                format!(
+                    "emit_independent_group_poll: no child frame slot for `{callee_name}` in `{}`",
+                    f.name
+                )
+            })?;
+
+        let child_frame = state_machine::child_frame_ptr(
+            ctx,
+            &cg.builder,
+            parent_frame,
+            child_offset,
+            &format!("par_cf_{callee_name}"),
+        )?;
+
+        // Resolve resume function (same alias logic as emit_suspending_call_inline_poll).
+        let callee_llvm_name = cg
+            .imported_fns
+            .get(callee_name.as_str())
+            .and_then(|sig| sig.original_name.as_deref())
+            .unwrap_or(callee_name.as_str());
+        let resume_name = state_machine::resume_fn_name(callee_llvm_name);
+        let resume_fn = cg.module.get_function(&resume_name).ok_or_else(|| {
+            format!(
+                "emit_independent_group_poll: resume fn `{resume_name}` not declared for `{callee_name}`"
+            )
+        })?;
+
+        // Initialize child frame header: resume_point=0, sleep_handle=null.
+        state_machine::store_resume_point(ctx, &cg.builder, child_frame, 0)?;
+        let null_ptr = ctx.ptr_type(AddressSpace::default()).const_null();
+        state_machine::store_sleep_handle(ctx, &cg.builder, child_frame, null_ptr)?;
+
+        // Evaluate args and write to child frame local slots BEFORE any poll.
+        let child_frame_layout = cg.frame_layouts.get(&callee_name);
+        let child_n_locals = child_frame_layout
+            .map(|l| l.n_locals)
+            .unwrap_or(call_args.len());
+        for (idx, arg) in call_args.iter().enumerate().take(child_n_locals) {
+            let arg_val = lower_expr(cg, arg)?;
+            let arg_ty = cg.expr_type(arg);
+            let bits = cg
+                .to_i64_bits(arg_val, &arg_ty)
+                .map_err(|e| format!("par group arg bits: {e}"))?;
+            state_machine::store_local_slot(ctx, &cg.builder, child_frame, idx, bits)?;
+        }
+
+        children.push(Child {
+            callee_name,
+            child_frame,
+            resume_fn,
+        });
+    }
+
+    // --- Step 2 — allocate the shared continuation state ---
+
+    let continuation_state = *current_state + 1;
+    let cont_state_bb = state_blocks
+        .get(continuation_state)
+        .copied()
+        .ok_or_else(|| {
+            format!(
+                "parallel group cont state {continuation_state} out of range (n_states={})",
+                state_blocks.len()
+            )
+        })?;
+    let post_call_bb = ctx.append_basic_block(cg.current_fn, "par_post");
+    // Consumed N slots from state_blocks; only 1 is used. The rest (N-1) will be terminated
+    // as unreachable by lower_sm_body's trailing loop.
+    *current_state = continuation_state + stmts.len() - 1;
+
+    // --- Step 3 — first-poll pass: poll ALL children before deciding to yield ---
+    //
+    // All N children are polled in declaration order on the first pass. This is the
+    // fan-out step: every child's I/O operation (e.g. sleep timer) starts before we
+    // yield. Without this, a child polled after the first Pending result would never
+    // start its I/O and the operations would run sequentially instead of overlapping.
+    //
+    // After all polls:
+    //   - Any child that returned Ready gets the sentinel (0x7FFFFFFF) stored into its
+    //     resume_point, so re-poll passes route to sm_dead and return 0 safely.
+    //   - If ANY child was Pending, we yield with resume_point = continuation_state.
+    //   - If ALL were Ready, we jump directly to post_call_bb.
+    //
+    // An alloca (`par_any_pending`) acts as the "was any child Pending?" accumulator.
+    // It is initialized to 0; each child that is still Pending stores 1 into it.
+
+    let any_pending_alloca = cg
+        .builder
+        .build_alloca(ctx.i32_type(), "par_any_pending")
+        .map_err(|e| format!("par any_pending alloca: {e}"))?;
+    cg.builder
+        .build_store(any_pending_alloca, ctx.i32_type().const_int(0, false))
+        .map_err(|e| format!("par any_pending init: {e}"))?;
+
+    let suspend_bb = ctx.append_basic_block(cg.current_fn, "par_suspend");
+
+    for child in &children {
+        let first_poll = cg
+            .builder
+            .build_call(
+                child.resume_fn,
+                &[child.child_frame.into(), waker_ctx.into()],
+                &format!("par_poll1_{}", child.callee_name),
+            )
+            .map_err(|e| format!("par first poll {}: {e}", child.callee_name))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| format!("par resume fn {} returned void", child.callee_name))?
+            .into_int_value();
+
+        let is_pending = cg
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                first_poll,
+                ctx.i32_type().const_int(0, false),
+                &format!("par_pend1_{}", child.callee_name),
+            )
+            .map_err(|e| format!("par first cmp {}: {e}", child.callee_name))?;
+
+        // Two paths: Pending → set accumulator flag and continue; Ready → mark sentinel and continue.
+        // Both paths continue to the next child poll (no early exit).
+        let pend_bb =
+            ctx.append_basic_block(cg.current_fn, &format!("par_pend1_{}", child.callee_name));
+        let ready_bb =
+            ctx.append_basic_block(cg.current_fn, &format!("par_next1_{}", child.callee_name));
+        let after_bb =
+            ctx.append_basic_block(cg.current_fn, &format!("par_after1_{}", child.callee_name));
+
+        cg.builder
+            .build_conditional_branch(is_pending, pend_bb, ready_bb)
+            .map_err(|e| format!("par first branch {}: {e}", child.callee_name))?;
+
+        // pend_bb: set the accumulator; continue to after_bb.
+        cg.builder.position_at_end(pend_bb);
+        cg.builder
+            .build_store(any_pending_alloca, ctx.i32_type().const_int(1, false))
+            .map_err(|e| format!("par pend store {}: {e}", child.callee_name))?;
+        cg.builder
+            .build_unconditional_branch(after_bb)
+            .map_err(|e| format!("par pend cont {}: {e}", child.callee_name))?;
+
+        // ready_bb: mark child done (sentinel) so re-poll passes skip it safely; continue.
+        cg.builder.position_at_end(ready_bb);
+        // Sentinel routes to sm_dead (default switch arm) on any subsequent re-poll,
+        // preventing a null sleep_handle dereference after the handle was freed on Ready.
+        state_machine::store_resume_point(ctx, &cg.builder, child.child_frame, 0x7FFF_FFFFu64)?;
+        cg.builder
+            .build_unconditional_branch(after_bb)
+            .map_err(|e| format!("par ready cont {}: {e}", child.callee_name))?;
+
+        cg.builder.position_at_end(after_bb);
+    }
+
+    // After all first polls: check the accumulator.
+    let any_pending_val = cg
+        .builder
+        .build_load(ctx.i32_type(), any_pending_alloca, "par_any_pending_val")
+        .map_err(|e| format!("par any_pending load: {e}"))?
+        .into_int_value();
+    let had_pending = cg
+        .builder
+        .build_int_compare(
+            IntPredicate::NE,
+            any_pending_val,
+            ctx.i32_type().const_int(0, false),
+            "par_had_pending",
+        )
+        .map_err(|e| format!("par had_pending cmp: {e}"))?;
+    cg.builder
+        .build_conditional_branch(had_pending, suspend_bb, post_call_bb)
+        .map_err(|e| format!("par first final branch: {e}"))?;
+
+    // --- suspend_bb: at least one child was Pending — save state, yield ---
+    cg.builder.position_at_end(suspend_bb);
+    state_machine::store_resume_point(ctx, &cg.builder, parent_frame, continuation_state as u64)?;
+    cg.builder
+        .build_unconditional_branch(pending_block)
+        .map_err(|e| format!("par suspend branch: {e}"))?;
+
+    // --- cont_state_bb: re-entry — re-poll ALL children (fan-out before yield) ---
+    //
+    // Same fan-out discipline as the first-poll pass: poll every child and accumulate
+    // "any still Pending?" before deciding to yield or proceed. Children whose first-poll
+    // stored a sentinel return 0 from sm_dead immediately (safe, correct). Children that
+    // still have a live sleep timer return 1 and re-register the parent waker for the
+    // next wake-up. After polling all children, yield if any still Pending; otherwise post.
+    cg.builder.position_at_end(cont_state_bb);
+    reload_params_from_frame(cg, parent_frame, param_names, f, shape_table, true)?;
+
+    let re_suspend_bb = ctx.append_basic_block(cg.current_fn, "par_re_suspend");
+    let re_post_bb = ctx.append_basic_block(cg.current_fn, "par_re_post");
+
+    // Accumulator: 0 = all ready so far, 1 = at least one still Pending.
+    let re_any_pending_alloca = cg
+        .builder
+        .build_alloca(ctx.i32_type(), "par_re_any_pending")
+        .map_err(|e| format!("par re_any_pending alloca: {e}"))?;
+    cg.builder
+        .build_store(re_any_pending_alloca, ctx.i32_type().const_int(0, false))
+        .map_err(|e| format!("par re_any_pending init: {e}"))?;
+
+    for child in &children {
+        // Recompute child frame pointer (GEP must be recomputed in each basic block).
+        let child_offset = cg
+            .frame_layouts
+            .get(&f.name)
+            .and_then(|layout| {
+                layout
+                    .children
+                    .iter()
+                    .find(|(n, _)| n == &child.callee_name)
+                    .map(|(_, off)| *off)
+            })
+            .ok_or_else(|| {
+                format!(
+                    "emit_independent_group_poll re: no child frame slot for `{}`",
+                    child.callee_name
+                )
+            })?;
+
+        let child_frame_re = state_machine::child_frame_ptr(
+            ctx,
+            &cg.builder,
+            parent_frame,
+            child_offset,
+            &format!("par_cf_{}_re", child.callee_name),
+        )?;
+
+        let re_poll = cg
+            .builder
+            .build_call(
+                child.resume_fn,
+                &[child_frame_re.into(), waker_ctx.into()],
+                &format!("par_poll_re_{}", child.callee_name),
+            )
+            .map_err(|e| format!("par re-poll {}: {e}", child.callee_name))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| format!("par resume fn {} (re) returned void", child.callee_name))?
+            .into_int_value();
+
+        let is_pending_re = cg
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                re_poll,
+                ctx.i32_type().const_int(0, false),
+                &format!("par_pend_re_{}", child.callee_name),
+            )
+            .map_err(|e| format!("par re cmp {}: {e}", child.callee_name))?;
+
+        // Fan-out: both paths continue to the next child poll.
+        let re_pend_bb =
+            ctx.append_basic_block(cg.current_fn, &format!("par_pend_re_{}", child.callee_name));
+        let re_ready_bb =
+            ctx.append_basic_block(cg.current_fn, &format!("par_next_re_{}", child.callee_name));
+        let re_after_bb = ctx.append_basic_block(
+            cg.current_fn,
+            &format!("par_after_re_{}", child.callee_name),
+        );
+
+        cg.builder
+            .build_conditional_branch(is_pending_re, re_pend_bb, re_ready_bb)
+            .map_err(|e| format!("par re branch {}: {e}", child.callee_name))?;
+
+        // re_pend_bb: still Pending — set accumulator, continue.
+        cg.builder.position_at_end(re_pend_bb);
+        cg.builder
+            .build_store(re_any_pending_alloca, ctx.i32_type().const_int(1, false))
+            .map_err(|e| format!("par re pend store {}: {e}", child.callee_name))?;
+        cg.builder
+            .build_unconditional_branch(re_after_bb)
+            .map_err(|e| format!("par re pend cont {}: {e}", child.callee_name))?;
+
+        // re_ready_bb: Ready — mark sentinel so future re-polls skip this child safely.
+        cg.builder.position_at_end(re_ready_bb);
+        // Sentinel routes to sm_dead on any subsequent re-poll — null sleep_handle safe.
+        state_machine::store_resume_point(ctx, &cg.builder, child_frame_re, 0x7FFF_FFFFu64)?;
+        cg.builder
+            .build_unconditional_branch(re_after_bb)
+            .map_err(|e| format!("par re ready cont {}: {e}", child.callee_name))?;
+
+        cg.builder.position_at_end(re_after_bb);
+    }
+
+    // After all re-polls: check accumulator.
+    let re_any_pending_val = cg
+        .builder
+        .build_load(
+            ctx.i32_type(),
+            re_any_pending_alloca,
+            "par_re_any_pending_val",
+        )
+        .map_err(|e| format!("par re_any_pending load: {e}"))?
+        .into_int_value();
+    let re_had_pending = cg
+        .builder
+        .build_int_compare(
+            IntPredicate::NE,
+            re_any_pending_val,
+            ctx.i32_type().const_int(0, false),
+            "par_re_had_pending",
+        )
+        .map_err(|e| format!("par re had_pending cmp: {e}"))?;
+    cg.builder
+        .build_conditional_branch(re_had_pending, re_suspend_bb, re_post_bb)
+        .map_err(|e| format!("par re final branch: {e}"))?;
+
+    // --- re_suspend_bb: still Pending — yield with same continuation state ---
+    cg.builder.position_at_end(re_suspend_bb);
+    state_machine::store_resume_point(ctx, &cg.builder, parent_frame, continuation_state as u64)?;
+    cg.builder
+        .build_unconditional_branch(pending_block)
+        .map_err(|e| format!("par re_suspend branch: {e}"))?;
+
+    // --- re_post_bb: all Ready on re-poll path — merge into post_call_bb ---
+    cg.builder.position_at_end(re_post_bb);
+    cg.builder
+        .build_unconditional_branch(post_call_bb)
+        .map_err(|e| format!("par re_post merge: {e}"))?;
+
+    // --- post_call_bb: all children Ready; read results and bind let-targets ---
+    cg.builder.position_at_end(post_call_bb);
+
+    // Read each child's return value and bind to the let-target name if applicable.
+    // Results are read in declaration order; each child frame is still valid (embedded,
+    // never freed for inline-poll groups — the composed frame owns the memory).
+    for (child, &stmt) in children.iter().zip(stmts.iter()) {
+        let child_offset = cg
+            .frame_layouts
+            .get(&f.name)
+            .and_then(|layout| {
+                layout
+                    .children
+                    .iter()
+                    .find(|(n, _)| n == &child.callee_name)
+                    .map(|(_, off)| *off)
+            })
+            .ok_or_else(|| {
+                format!(
+                    "emit_independent_group_poll post: no child frame slot for `{}`",
+                    child.callee_name
+                )
+            })?;
+
+        let child_frame_post = state_machine::child_frame_ptr(
+            ctx,
+            &cg.builder,
+            parent_frame,
+            child_offset,
+            &format!("par_cf_{}_post", child.callee_name),
+        )?;
+
+        let ret_val =
+            load_sm_return_value_typed(cg, ctx, child_frame_post, &child.callee_name, "par_ret")?;
+
+        // Bind to the let target when the stmt is `let name = calleeF(...)`.
+        if let Stmt::Let { name, .. } = stmt {
+            // Route through the unified binder so every return-type shape (int i64,
+            // decimal128 i128, float f64, string/shape ptr, errors-capable {i64,i64})
+            // gets the correct alloca width and store sequence. The hand-rolled
+            // `build_alloca(i64) + to_i64_bits` path panicked for number/float/string
+            // callee return types — see corpse-(a) in graveyard.md.
+            let alloca = bind_sm_return_value(cg, name, ret_val)?;
+            cg.locals.insert(name.clone(), alloca);
+
+            // Flush the let-binding to the frame if it's a crossing local.
+            flush_crossing_local_if_needed(cg, stmt, parent_frame)?;
+        }
+        // For Stmt::Expr, return value is discarded (the existing sequential path does the same).
+    }
+
+    Ok(())
+}
+
+/// Extract the callee name and args from a statement that is a direct ident call.
+///
+/// Handles `let _ = calleeF(args)` and `calleeF(args)` (bare expression).
+/// Returns `None` for anything else.
+fn extract_call_and_args(stmt: &Stmt) -> Option<(String, &[Expr])> {
+    match stmt {
+        Stmt::Let {
+            value: Expr::Call(c),
+            ..
+        }
+        | Stmt::Expr(Expr::Call(c)) => {
+            if let Expr::Ident(name, _) = &c.callee {
+                return Some((name.clone(), &c.args));
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 /// Emit inline-poll-and-yield for a call to a user-defined suspending function.
@@ -9087,7 +9715,9 @@ fn prepare_bg_arg_for_ctx<'ctx>(
         ynz_ast::nodes::Expr::Ident(_, s) => {
             // Plain ident: any inferred Give or Copy ownership gets the heap fix.
             let key = (s.start, s.end);
-            cg.typed.background_arg_inferred_ownership.contains_key(&key)
+            cg.typed
+                .background_arg_inferred_ownership
+                .contains_key(&key)
         }
         // Explicit .copy() postfix — always heap-upgrade for heap types.
         ynz_ast::nodes::Expr::PostfixOp {
@@ -9160,10 +9790,7 @@ fn prepare_bg_arg_for_ctx<'ctx>(
             // deep-copy without knowing element copy semantics — that is the m3c array-by-value
             // ABI work. Those fall through unchanged (same behavior as today's explicit
             // `.copy()` path).
-            let is_primitive_elem = matches!(
-                elem.as_ref(),
-                Type::Int | Type::Bool | Type::Float
-            );
+            let is_primitive_elem = matches!(elem.as_ref(), Type::Int | Type::Bool | Type::Float);
             if is_primitive_elem {
                 let clone_ptr = cg
                     .builder
@@ -9614,13 +10241,11 @@ fn lower_expr_background_state_machine<'ctx>(
         .enumerate()
         .filter_map(|(slot_idx, kind)| match kind {
             BgArgFreeKind::HeapShape { byte_size } => {
-                let byte_offset =
-                    state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
+                let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
                 Some((slot_idx, byte_offset, *byte_size))
             }
             BgArgFreeKind::HeapArrayPrimitive => {
-                let byte_offset =
-                    state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
+                let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
                 // Triple is (slot_idx, byte_offset, size). size=0 for arrays —
                 // `ynz_array_drop` knows its own buffer size, so the descriptor's size
                 // field is unused for this kind. The kind (1=array) is re-derived from

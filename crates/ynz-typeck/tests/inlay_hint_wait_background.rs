@@ -96,10 +96,7 @@ function run() -> nothing {
 ";
     let (db, sf) = single_file(src);
     let hints = wait_points_hints(&db, sf);
-    let for_helper: Vec<_> = hints
-        .iter()
-        .filter(|h| h.callee_name == "helper")
-        .collect();
+    let for_helper: Vec<_> = hints.iter().filter(|h| h.callee_name == "helper").collect();
     assert!(
         for_helper.is_empty(),
         "non-suspending `helper` must not emit wait_points hint; got: {:?}",
@@ -121,10 +118,7 @@ function run() -> nothing {
 ";
     let (db, sf) = single_file(src);
     let hints = wait_points_hints(&db, sf);
-    let for_dowork: Vec<_> = hints
-        .iter()
-        .filter(|h| h.callee_name == "doWork")
-        .collect();
+    let for_dowork: Vec<_> = hints.iter().filter(|h| h.callee_name == "doWork").collect();
     assert!(
         for_dowork.is_empty(),
         "explicit `wait doWork()` must suppress the wait_points hint; got: {:?}",
@@ -147,10 +141,7 @@ function run() -> nothing {
     let call_offset = src.rfind("doWork()").expect("doWork() not in source");
     let (db, sf) = single_file(src);
     let hints = wait_points_hints(&db, sf);
-    let matching: Vec<_> = hints
-        .iter()
-        .filter(|h| h.callee_name == "doWork")
-        .collect();
+    let matching: Vec<_> = hints.iter().filter(|h| h.callee_name == "doWork").collect();
     assert!(
         !matching.is_empty(),
         "expected at least one wait_points hint for doWork()"
@@ -339,7 +330,10 @@ function run() -> nothing {
         for_dowork
     );
 
-    let for_other: Vec<_> = hints.iter().filter(|h| h.callee_name == "otherWork").collect();
+    let for_other: Vec<_> = hints
+        .iter()
+        .filter(|h| h.callee_name == "otherWork")
+        .collect();
     assert!(
         !for_other.is_empty(),
         "suspending arg `otherWork()` inside `wait doWork(...)` must still get its own hint; got: {:?}",
@@ -400,13 +394,19 @@ function run() -> nothing {
 ";
     let (db, main_sf, _dir) = two_files_on_disk("ops", dep_src, main_src);
     let hints = background_routing_hints(&db, main_sf);
-    let io_hints: Vec<_> = hints.iter().filter(|h| h.label.contains("I/O pool")).collect();
+    let io_hints: Vec<_> = hints
+        .iter()
+        .filter(|h| h.label.contains("I/O pool"))
+        .collect();
     assert!(
         !io_hints.is_empty(),
         "imported suspending `slow` via background must emit I/O-pool hint (not CPU); got: {:?}",
         hints.iter().map(|h| &h.label).collect::<Vec<_>>()
     );
-    let cpu_hints: Vec<_> = hints.iter().filter(|h| h.label.contains("CPU pool")).collect();
+    let cpu_hints: Vec<_> = hints
+        .iter()
+        .filter(|h| h.label.contains("CPU pool"))
+        .collect();
     assert!(
         cpu_hints.is_empty(),
         "must NOT emit CPU-pool hint for imported suspending `slow`; got: {:?}",

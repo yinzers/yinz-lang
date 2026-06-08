@@ -1,0 +1,34 @@
+// Fixture: two independent suspending `-> number` (decimal128) calls in a Parallel group.
+//
+// Prior to the corpse-(a) fix, the parallel let-binding unconditionally allocated an i64 alloca
+// and called `to_i64_bits` on the return value. For `-> number` callees,
+// `load_sm_return_value_typed` returns an i128 IntValue, and `to_i64_bits`'s Number arm
+// called `.into_pointer_value()` on it — compiler PANIC.
+//
+// The fix routes through `bind_sm_return_value`, which allocates an i128 alloca for i128
+// IntValues and a standard i64 alloca for all other int-valued returns.
+//
+// `priceA` and `priceB` have no data dependency and no shared `lend` resource — the
+// auto-parallel pass groups them as a Parallel pair. Both return exact decimal128 values.
+//
+// The test asserts byte-identical stdout under default and --no-auto-parallel modes.
+// (No timing assertion — decimal128 sleep is short enough that ordering doesn't matter for
+// correctness; the fixture exists to prove the i128 return path does not panic.)
+//
+// Expected output: a:1.5\nb:2.5
+function priceA() -> number {
+  wait sleep(5)
+  return 1.5
+}
+
+function priceB() -> number {
+  wait sleep(5)
+  return 2.5
+}
+
+function entrypoint() -> nothing {
+  let a = priceA()
+  let b = priceB()
+  print(`a:${a}`)
+  print(`b:${b}`)
+}

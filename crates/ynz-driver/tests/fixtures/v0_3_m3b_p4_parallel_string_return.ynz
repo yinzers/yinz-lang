@@ -1,0 +1,32 @@
+// Fixture: two independent suspending `-> string` calls in a Parallel group.
+//
+// Prior to the corpse-(a) fix, the parallel let-binding unconditionally allocated an i64 alloca
+// and called `to_i64_bits` on the return value. For `-> string` callees,
+// `load_sm_return_value_typed` returns a PointerValue, and `to_i64_bits`'s String/ptr arm
+// called `.into_int_value()` on the pointer — compiler PANIC.
+//
+// The fix routes through `bind_sm_return_value`, which allocates an i64 alloca and converts
+// the pointer to i64 bits via `build_ptr_to_int` for PointerValue returns.
+//
+// `labelA` and `labelB` have no data dependency and no shared `lend` resource — the
+// auto-parallel pass groups them as a Parallel pair. Both return string values.
+//
+// The test asserts byte-identical stdout under default and --no-auto-parallel modes.
+//
+// Expected output: first:hello\nsecond:world
+function labelA() -> string {
+  wait sleep(5)
+  return `hello`
+}
+
+function labelB() -> string {
+  wait sleep(5)
+  return `world`
+}
+
+function entrypoint() -> nothing {
+  let first = labelA()
+  let second = labelB()
+  print(`first:${first}`)
+  print(`second:${second}`)
+}

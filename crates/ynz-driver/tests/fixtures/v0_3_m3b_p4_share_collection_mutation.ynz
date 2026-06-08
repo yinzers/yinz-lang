@@ -1,0 +1,23 @@
+// M3b Phase-4 regression lock (HOLE 2): an in-place collection mutator (`array.add`) called
+// on a `share` parameter must be a compile error — the same as a direct element assign.
+//
+// A mutating collection method writes its receiver in place. Before the fix, the effective-
+// ownership fixpoint routed a builtin method receiver through `classify_call_position`, which
+// returns Reads for any builtin method name (the false "intrinsics take args by share/value"
+// premise). So `grow(share xs)` compiled and `xs.add(7)` grew the caller's array — and two
+// aliased `.set()` calls would auto-parallelize into concurrent in-place writes.
+//
+// `grow` declares `xs` as `share` (read-only) but calls `xs.add(7)`, which appends in place.
+//
+// Expected: compile error "`xs` is declared `share` — read-only — so its elements cannot be
+// changed." Exit 1, empty stdout.
+
+function grow(share xs: array<int>) -> nothing {
+  xs.add(7)
+}
+
+function entrypoint() -> nothing {
+  let nums: array<int> = [1, 2, 3]
+  grow(nums)
+  print(`${nums.count().toString()}`)
+}

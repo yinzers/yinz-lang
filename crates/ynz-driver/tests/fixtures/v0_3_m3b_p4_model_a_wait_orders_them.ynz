@@ -1,0 +1,31 @@
+// Fixture: Model-A wait-orders-them — `wait fa()` forces fa before fb even though they
+// are otherwise independent suspending calls with different sleep durations.
+//
+// `fa` waits 100ms then prints "A". `fb` waits 50ms then prints "B".
+// The explicit `wait` before `fa()` forces fa to complete before the next statement
+// (fb) begins — even though fa takes longer than fb.
+//
+// Under BOTH default-parallel and --no-auto-parallel mode the output is "A\nB\ndone"
+// because the `wait` is an ordering barrier: it resets the independent group,
+// forces fa to completion, then fb runs after.
+//
+// This proves `wait` is the user's ordering tool (design/concurrency.md lines 97-120):
+// writing `wait fa()` guarantees fa completes before fb starts, regardless of durations.
+//
+// Expected default output:  A\nB\ndone
+// Expected sequential output: A\nB\ndone
+function fa() -> nothing {
+  wait sleep(100)
+  print(`A`)
+}
+
+function fb() -> nothing {
+  wait sleep(50)
+  print(`B`)
+}
+
+function entrypoint() -> nothing {
+  wait fa()
+  fb()
+  print(`done`)
+}

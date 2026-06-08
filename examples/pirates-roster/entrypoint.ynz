@@ -237,13 +237,17 @@ function entrypoint() -> nothing {
   // ────── v0.3-M1: background runs on a separate thread ──────
   m3m1_demo()
   // ────── v0.3-M2: wait actually suspends ──────
-  m3m2_demo()
+  // `wait` before each suspending demo section forces sequential ordering.
+  // Without it, the M3b auto-parallel pass overlaps independent suspending sections
+  // and interleaves their output. Each section tells its own story; `wait` preserves
+  // the narrative order the demo is designed to show.
+  wait m3m2_demo()
   // ────── v0.3-M3a Phase 2: while-loop suspension ──────
-  m3a_p2_demo()
+  wait m3a_p2_demo()
   // ────── v0.3-M3a Phase 4: for-loop + crossing-local suspension ──────
-  m3a_p4_demo()
+  wait m3a_p4_demo()
   // ────── v0.3-M3e: cross-module suspension ──────
-  m3e_demo()
+  wait m3e_demo()
 }
 
 // ────── M3 helper functions ──────

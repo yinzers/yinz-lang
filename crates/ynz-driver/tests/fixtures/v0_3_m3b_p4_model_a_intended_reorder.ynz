@@ -1,0 +1,32 @@
+// Fixture: Model-A intended reorder — two independent suspending calls with print side effects.
+//
+// `fa` waits 100ms then prints "A". `fb` waits 50ms then prints "B".
+// They have no data dependency and no shared `lend` resource — the auto-parallel pass
+// groups them as a Parallel pair and interleaves their polls.
+//
+// Under default-parallel mode, `fb` (50ms) finishes first → output is "B\nA\ndone".
+// Under --no-auto-parallel, source order is preserved → output is "A\nB\ndone".
+//
+// This deliberate output divergence IS the intended behavior of Model A
+// (design/concurrency.md lines 53-61): "independent operations run concurrently;
+// either may finish first". This fixture is NOT part of the byte-identical sweep —
+// it asserts the TWO SPECIFIC outputs and demonstrates that `wait` (not the absence of
+// parallelism) is the user's tool for ordering independent side effects.
+//
+// Expected default output:  B\nA\ndone
+// Expected sequential output: A\nB\ndone
+function fa() -> nothing {
+  wait sleep(100)
+  print(`A`)
+}
+
+function fb() -> nothing {
+  wait sleep(50)
+  print(`B`)
+}
+
+function entrypoint() -> nothing {
+  fa()
+  fb()
+  print(`done`)
+}

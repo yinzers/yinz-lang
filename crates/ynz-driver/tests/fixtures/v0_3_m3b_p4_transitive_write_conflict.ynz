@@ -1,0 +1,36 @@
+// Fixture (adversarial ii): transitive write conflict — both outer callers
+// expose `lend x` in their own signature (representing a fixpoint-propagated
+// write effect from an inner callee that lends).
+//
+// `outerA` and `outerB` both take `lend c: Acc` — the independence analysis
+// detects the write conflict via `param_ownerships` and sequences them.
+// They must run in order: outerA sets 10, then outerB sets 30.
+//
+// This tests that the write-effect check fires regardless of whether the lend
+// originates in the direct callee or a deeper callee with the same declared
+// ownership in the signature.
+//
+// Expected output: final:30
+shape Acc {
+  value: int
+}
+
+function mid(lend c: Acc, n: int) -> nothing {
+  wait sleep(20)
+  c.value = n
+}
+
+function outerA(lend c: Acc, n: int) -> nothing {
+  mid(c, n)
+}
+
+function outerB(lend c: Acc, n: int) -> nothing {
+  mid(c, n)
+}
+
+function entrypoint() -> nothing {
+  let c: Acc = { value: 0 }
+  outerA(c, 10)
+  outerB(c, 30)
+  print(`final:${c.value}`)
+}

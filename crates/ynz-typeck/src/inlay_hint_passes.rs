@@ -31,7 +31,7 @@ use crate::{
     intrinsics::PrimitiveIntrinsicTable,
     queries::{check_query, module_signatures_query},
     signatures::{build_effective_suspend_set, FunctionSig, SignatureTable},
-    types::{type_name, Type},
+    types::{is_trivially_copyable, type_name, Type},
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -185,13 +185,6 @@ pub struct BackgroundRoutingHint {
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
-
-fn is_trivially_copyable(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::Int | Type::Float | Type::Bool | Type::Number { .. }
-    )
-}
 
 fn copy_size_text(ty: &Type) -> &'static str {
     match ty {
@@ -1325,7 +1318,12 @@ fn collect_wait_point_hints_block(
                 collect_wait_point_hints_expr(iter, suspends_set, out);
                 collect_wait_point_hints_block(body, suspends_set, out);
             }
-            Stmt::Match { scrutinee, arms, else_arm, .. } => {
+            Stmt::Match {
+                scrutinee,
+                arms,
+                else_arm,
+                ..
+            } => {
                 collect_wait_point_hints_expr(scrutinee, suspends_set, out);
                 for arm in arms {
                     collect_wait_point_hints_block(&arm.body, suspends_set, out);
@@ -1397,7 +1395,9 @@ fn collect_wait_point_hints_expr(
         Expr::FieldAccess { receiver, .. } => {
             collect_wait_point_hints_expr(receiver, suspends_set, out);
         }
-        Expr::IndexAccess { receiver, index, .. } => {
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => {
             collect_wait_point_hints_expr(receiver, suspends_set, out);
             collect_wait_point_hints_expr(index, suspends_set, out);
         }
@@ -1553,7 +1553,12 @@ fn collect_background_routing_hints_block(
                 collect_background_routing_hints_expr(iter, suspends_set, out);
                 collect_background_routing_hints_block(body, suspends_set, out);
             }
-            Stmt::Match { scrutinee, arms, else_arm, .. } => {
+            Stmt::Match {
+                scrutinee,
+                arms,
+                else_arm,
+                ..
+            } => {
                 collect_background_routing_hints_expr(scrutinee, suspends_set, out);
                 for arm in arms {
                     collect_background_routing_hints_block(&arm.body, suspends_set, out);
@@ -1644,7 +1649,9 @@ fn collect_background_routing_hints_expr(
         Expr::FieldAccess { receiver, .. } => {
             collect_background_routing_hints_expr(receiver, suspends_set, out);
         }
-        Expr::IndexAccess { receiver, index, .. } => {
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => {
             collect_background_routing_hints_expr(receiver, suspends_set, out);
             collect_background_routing_hints_expr(index, suspends_set, out);
         }

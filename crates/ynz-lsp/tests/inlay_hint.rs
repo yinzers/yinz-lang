@@ -256,10 +256,7 @@ function run() -> nothing {
     assert!(
         wait_hints.is_empty(),
         "explicit `wait doWork()` must suppress wait_points hint; got: {:?}",
-        wait_hints
-            .iter()
-            .map(|h| &h.label)
-            .collect::<Vec<_>>()
+        wait_hints.iter().map(|h| &h.label).collect::<Vec<_>>()
     );
 }
 

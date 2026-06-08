@@ -628,6 +628,42 @@ function loop(n: int) -> nothing { if (n > 0) { step(n); loop(n - 1) } }
 
 ---
 
+## Design Divergences (v0.3-M3b Auto-Parallelization Pass)
+
+The following divergences from the full design doc are documented per `no-duct-tape.md` — each names the concrete cost and the reversal path.
+
+### Same-callee concurrent calls run sequentially
+
+**What the design says**: independent operations auto-parallelize regardless of which function they call.
+
+**What the v0.3 pass does**: two calls to the same suspending function (e.g., `worker(1)` followed by `worker(2)`) are lowered sequentially, even when they are data-independent.
+
+**Named cost**: the composed frame allocates one sub-frame slot per unique callee name (keyed on the function name string). Two concurrent invocations of the same callee would require two slots with a disambiguation scheme — that is a separate concern in `build_frame_layouts`. Any case where the user calls the same suspending helper twice in a row doesn't parallelize in v0.3; it runs sequentially, which is always correct.
+
+**Reversal path**: extend `build_frame_layouts` to allocate N sub-frame slots per callee name when a function is called more than once in a straight-line block, keyed on (callee_name, invocation_index). The independence analysis and join codegen are already class-agnostic; only the frame-layout phase needs the extension. Tracked in `design/future/` for a future phase.
+
+### Write-effect uses a TYPE-BASED conservative floor — mutable-heap arguments never parallelize
+
+**What the design says** (`Reads vs Writes — Ownership Does Double Duty`): "the compiler traces through user functions to determine if they contain writes" — independent writes to *different* resources auto-parallelize.
+
+**What the v0.3 pass does**: the independence analysis treats a call argument as a potential aliased write iff its parameter **type** is a mutable heap reference (`shape`/`array`/`map`/`maybe`/union/`dynamic`). It does **not** attempt to classify per-call-site whether the callee actually mutates the argument. Any suspending call carrying a mutable-heap argument is sequenced against every other statement in the block; only no-argument, primitive-argument, and immutable-`string`-argument suspending calls parallelize.
+
+**Why a type-based floor and not a precise per-form classification**: a precise classification was built (a name-based AST fixpoint over the call graph) and **removed**. Across three adversarial gate rounds it missed five distinct write forms — a mutating method on a `share self` receiver, a mutating method on a parameter directly, mutation through a *field or index* of the parameter (`p.items.add(x)`), a builtin mutator shadowed by a same-named user function, and a local `let`-alias of the argument (`let twin = p; twin.add(x)`) — each a silent runtime miscompile (the analysis classified a real write as a read, so two aliased writes auto-parallelized and reordered observably). The root cause is structural: proving a heap argument is read-only requires receiver types **and** alias tracking — i.e. a full type+alias-aware borrow checker — which an AST-walking pass is not. The `share`-read-only premise the precise analysis leaned on is itself only partially enforced (the same five forms escape typeck's `share` check), so the auto-parallel soundness cannot rest on it. The type-based floor sidesteps the entire class: a mutable-heap argument is *unconditionally* a potential write, sound regardless of how the callee uses it.
+
+This follows the golden rules directly: **Golden Rule 5 (compile-time soundness — never a silent runtime miscompile) outranks Golden Rule 10 (efficiency-first).** When the two conflict, soundness wins.
+
+**Named cost**: two suspending calls that each take a mutable-heap argument do not overlap, even when both only READ their argument (e.g. two suspending reads of distinct shapes). This forfeits the read-only-mutable-heap-argument overlap. It is a perf miss, never a correctness miss — the floor only ever *adds* sequencing, never introduces a wrong parallel execution. The I/O-overlap headline is unaffected: no-argument, primitive-argument, and immutable-`string`-argument suspending calls (the realistic I/O-fan-out shapes) still parallelize.
+
+**Reversal path**: a real type+alias-aware ownership analysis (M4 borrow-checker completion — receiver types threaded through the analysis + intra-procedural alias tracking) that can PROVE a heap argument is both read-only AND non-aliased re-enables narrowing the floor to permit proven-read mutable-heap arguments to overlap. Until that exists, the floor stands. (M3d CPU-parallel reuses this same type-based write-effect source — the floor transfers unchanged.)
+
+### `share` read-only enforcement is best-effort (transitive teaching error)
+
+**What ships**: typeck rejects mutation of an explicit `share` parameter — direct field/element assignment, mutating collection methods (`.add`/`.set`/...), `share self` receivers, passing a `share` argument to an explicit `lend`/`give` position, and the common transitive case (`fa(share x) { helper(x) }` where `helper` mutates) via the `effective_ownership` fixpoint.
+
+**Known-incomplete (deferred to a real ownership analysis)**: the same five forms the auto-parallel floor sidesteps also escape the *transitive* `share` check — a mutation through a field/index of the `share` param via a bare callee, a builtin mutator shadowed by a same-named user function, and a local `let`-alias of the `share` param. These are **missed compile-errors, not miscompiles** — the program still runs soundly (the type-based floor sequentializes regardless), it simply doesn't receive the teaching diagnostic. The `share`-enforcement completeness is decoupled from auto-parallel soundness on purpose: soundness is the floor's job (complete); the `share` error is a teaching aid (best-effort). **Reversal path**: the same M4 type+alias-aware ownership analysis closes both at once.
+
+---
+
 ## Runtime Implementation (Internal — Developer Never Sees This)
 
 Thread pool sized to CPU cores. I/O operations use the OS event system (epoll/kqueue/IOCP). The compiler's dependency graph determines scheduling. Developers never configure or think about any of this.

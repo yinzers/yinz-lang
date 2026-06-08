@@ -92,3 +92,82 @@
 // All eight emit a WHAT/WHAT-INSTEAD/WHY diagnostic (exit 1) instead of silently
 // crashing with SIGILL (exit 132). M3e ships full FrameLayout serialization and
 // removes the universal reject (design/future/cross-module-frame-serialization.md).
+
+// -- M3b Phase-4 Error Class: mutate-through-share-param (single-file) --
+//
+// WHY: ShareParamMutation — auto-parallelization treats a `share` argument as a
+// read-only borrow that cannot conflict with a concurrent write. That soundness
+// premise (design/concurrency.md line 651) only holds if the compiler ENFORCES
+// that a `share` parameter's body cannot change the value. A `share`-param body
+// that mutates a field (or an element) is now a compile error.
+//
+// A bare parameter (no modifier) that mutates IS legal — the compiler figures out
+// the effective `lend`. Only an explicit `share` is the contradiction.
+//
+// Diagnostic (WHAT / WHAT-INSTEAD / WHY):
+//   WHAT: `pickle` is declared `share` — read-only — so its fields cannot be changed.
+//   WHAT INSTEAD: Change the parameter to `lend pickle: Order` if this function
+//                 needs to modify it.
+//   WHY: A `share` parameter is a read-only borrow: the caller keeps ownership and
+//        trusts the value is unchanged after the call. When a function modifies a
+//        value, declare `lend` so the change is visible at every call site.
+
+shape Order {
+  quantity: int
+}
+
+function bumpQuantity(share pickle: Order) -> nothing {
+  // WHY: ShareParamMutation — `pickle` is declared `share` (read-only); writing
+  // a field of it contradicts the read-only borrow. Declare `lend pickle: Order`
+  // to mutate. Bare `pickle: Order` would also compile (the compiler figures out lend).
+  pickle.quantity = pickle.quantity + 1
+}
+
+// -- M3b Phase-4 Error Class: mutate-through-share-param (TRANSITIVE) --
+//
+// WHY: ShareParamMutation (transitive) — the read-only guarantee holds even when the
+// mutation happens through a callee. `relayOrder` declares `ticket` as `share` but passes
+// it to `stamp`, a bare-parameter function that mutates its argument (effective `lend`).
+// `relayOrder` is therefore lending `ticket` onward — a compile error. The transitive
+// effective-ownership fixpoint catches this; the direct-mutation check above does not,
+// because `stamp`'s declared modifier is bare, not `lend`.
+//
+// Diagnostic (WHAT / WHAT-INSTEAD / WHY):
+//   WHAT: `ticket` is declared `share` (read-only) but it is modified through `stamp`.
+//   WHAT INSTEAD: Change the parameter to `lend ticket: Order` — the function (directly
+//                 or through a call) writes to it.
+//   WHY: A `share` parameter is a read-only borrow; the caller trusts the value is
+//        unchanged. Because `stamp` modifies `ticket`, this function lends it onward —
+//        declare `lend` so the write is visible at every call site.
+
+function stamp(order: Order) -> nothing {
+  order.quantity = order.quantity + 10
+}
+
+function relayOrder(share ticket: Order) -> nothing {
+  // WHY: ShareParamMutation (transitive) — `ticket` is `share` (read-only) but `stamp`
+  // mutates it. Declare `lend ticket: Order` to lend it onward for mutation.
+  stamp(ticket)
+}
+
+// -- M3b Phase-4 Error Class: mutate-through-share-param (COLLECTION METHOD) --
+//
+// WHY: ShareParamMutation (collection) — an in-place collection mutator (`array.add`,
+// `array.set`, `map.set`/`remove`/`clear`, `fixed.set`) writes its receiver in place, the
+// same as a direct element assign. A `share` parameter is a read-only borrow, so calling a
+// mutating method on it contradicts that promise and is a compile error. A read method
+// (`.get`, `.count`, `.contains`) leaves the receiver unchanged and is always allowed.
+//
+// Diagnostic (WHAT / WHAT-INSTEAD / WHY):
+//   WHAT: `lineItems` is declared `share` — read-only — so its elements cannot be changed.
+//   WHAT INSTEAD: Change the parameter to `lend lineItems: array<int>` if this function
+//                 needs to modify it.
+//   WHY: A `share` parameter is a read-only borrow: the caller keeps ownership and trusts
+//        the value is unchanged after the call. When a function modifies a value, declare
+//        `lend` so the change is visible at every call site.
+
+function appendLineItem(share lineItems: array<int>) -> nothing {
+  // WHY: ShareParamMutation (collection) — `.add()` appends in place, mutating the receiver.
+  // `lineItems` is `share` (read-only); declare `lend lineItems: array<int>` to grow it.
+  lineItems.add(42)
+}

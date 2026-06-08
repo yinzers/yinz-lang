@@ -41,6 +41,7 @@
 pub mod ast_offset;
 pub mod builtins;
 pub mod check;
+pub mod effective_ownership;
 pub mod exports;
 pub mod generics;
 pub mod inlay_hint_passes;
@@ -61,6 +62,7 @@ pub use check::{
     check, check_with_kernel_mode, crossing_local_names, type_attached_const_type,
     LocalCrossesWait, TypedModule,
 };
+pub use effective_ownership::{EffectiveOwnership, EffectiveOwnershipReport};
 pub use exports::ExportTable;
 pub use generics::{GenericFnTable, GenericShapeTable, MonomorphizationTable};
 pub use inlay_hint_passes::{
@@ -81,4 +83,4 @@ pub use symbol_lookup::{
     rename_locations, resolve_symbol_at, RenameError, ResolvedSymbol, SymbolKind,
 };
 pub use type_at_offset::type_of_expression_at_offset;
-pub use types::Type;
+pub use types::{is_trivially_copyable, Type};

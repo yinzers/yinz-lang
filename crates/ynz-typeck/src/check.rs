@@ -8,7 +8,8 @@ use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 use crate::{
     builtins::{
-        array_method_return, fixed_method_return, map_method_return, maybe_method_return,
+        array_method_is_mutating, array_method_return, fixed_method_is_mutating,
+        fixed_method_return, map_method_is_mutating, map_method_return, maybe_method_return,
         sensitive_method_return, string_method_return,
     },
     generics::{
@@ -60,8 +61,7 @@ pub struct TypedModule {
     ///
     /// Used by `ownership_call_site_hints` to emit the inferred modifier as a
     /// muted-text hint at the call site.
-    pub background_arg_inferred_ownership:
-        std::collections::HashMap<(usize, usize), BgOwnership>,
+    pub background_arg_inferred_ownership: std::collections::HashMap<(usize, usize), BgOwnership>,
 }
 
 /// Run the M5 type checker over all function bodies.
@@ -428,6 +428,7 @@ impl<'b> Checker<'b> {
                     ty: param_ty,
                     is_const: false,
                     is_param: true,
+                    param_ownership: param.ownership.clone(),
                     is_loop_var: false,
                     is_consumed: false,
                     defined_at: param.name_span.clone(),
@@ -1125,6 +1126,7 @@ impl<'b> Checker<'b> {
                     ty: param_ty,
                     is_const: false,
                     is_param: true,
+                    param_ownership: param.ownership.clone(),
                     is_loop_var: false,
                     is_consumed: false,
                     defined_at: param.name_span.clone(),
@@ -1313,6 +1315,7 @@ impl<'b> Checker<'b> {
                     ty: Type::Error,
                     is_const,
                     is_param: false,
+                    param_ownership: None,
                     is_loop_var: false,
                     is_consumed: false,
                     defined_at: name_span.clone(),
@@ -1364,6 +1367,7 @@ impl<'b> Checker<'b> {
                 ty: binding_ty,
                 is_const,
                 is_param: false,
+                param_ownership: None,
                 is_loop_var: false,
                 is_consumed: false,
                 defined_at: name_span.clone(),
@@ -1740,6 +1744,7 @@ impl<'b> Checker<'b> {
                 ty: elem_ty,
                 is_const: false,
                 is_param: false,
+                param_ownership: None,
                 is_loop_var: true,
                 is_consumed: false,
                 defined_at: var_span.clone(),
@@ -2816,6 +2821,15 @@ impl<'b> Checker<'b> {
                             format!("Declare `{binding_name}` with `let` if you need to transfer ownership."),
                             "`const` bindings are fully read-only — the compiler cannot transfer ownership of a value that may not change.",
                         ));
+                    } else if entry.param_ownership
+                        == Some(ynz_ast::nodes::OwnershipModifier::Share)
+                    {
+                        self.diags.push(Diagnostic::error(
+                            arg_span.clone(),
+                            format!("`{binding_name}` is declared `share` (read-only); `{fn_name}` needs to take ownership of it (`give`)."),
+                            format!("Declare `{binding_name}` as `give` to pass it here."),
+                            "A `share` parameter is a read-only borrow — the caller still owns the value and trusts it is unchanged after the call. A function that takes ownership of a value would consume it, which a read-only borrow does not permit.",
+                        ));
                     } else if !entry.is_consumed {
                         self.scope.consume(binding_name);
                     }
@@ -2829,6 +2843,18 @@ impl<'b> Checker<'b> {
                             format!("`{binding_name}` is `const` — `{fn_name}` needs to mutate it but `const` blocks mutation."),
                             format!("Declare `{binding_name}` with `let` if you need `{fn_name}` to modify it."),
                             "`const` bindings cannot be lent for mutation. The `lend` modifier means the function will write to the value.",
+                        ));
+                    } else if entry.param_ownership
+                        == Some(ynz_ast::nodes::OwnershipModifier::Share)
+                    {
+                        // share→lend escalation (`design/concurrency.md` line 651): a function
+                        // that receives a value as `share` (read-only) cannot lend it mutably
+                        // to a callee. This is the load-bearing auto-parallel soundness rule.
+                        self.diags.push(Diagnostic::error(
+                            arg_span.clone(),
+                            format!("`{binding_name}` is declared `share` (read-only); `{fn_name}` needs to modify it (`lend`)."),
+                            format!("Declare `{binding_name}` as `lend` to pass it here."),
+                            "A `share` parameter is a read-only borrow — the caller keeps ownership and trusts the value is unchanged after the call. Passing it where the value will be modified would break that promise; declare `lend` so the change is visible at every call site.",
                         ));
                     }
                 }
@@ -3327,6 +3353,17 @@ impl<'b> Checker<'b> {
         // M5 P3b: built-in collection method dispatch.
         if let Type::BuiltinArray { elem } = receiver_ty {
             let elem = elem.as_ref().clone();
+            // An in-place mutator (`.add`/`.set`/`.remove`/…) writes the receiver — reject it
+            // on a `share` parameter or `const` binding, the same as a direct element assign.
+            if self.reject_mutating_collection_method(
+                receiver_expr,
+                method,
+                "elements",
+                array_method_is_mutating(method),
+                method_span,
+            ) {
+                return Type::Nothing;
+            }
             return if let Some(ret) = array_method_return(method, &elem) {
                 ret
             } else {
@@ -3341,6 +3378,15 @@ impl<'b> Checker<'b> {
         }
         if let Type::BuiltinFixed { elem, .. } = receiver_ty {
             let elem = elem.as_ref().clone();
+            if self.reject_mutating_collection_method(
+                receiver_expr,
+                method,
+                "elements",
+                fixed_method_is_mutating(method),
+                method_span,
+            ) {
+                return Type::Nothing;
+            }
             return if let Some(ret) = fixed_method_return(method, &elem) {
                 ret
             } else {
@@ -3370,6 +3416,15 @@ impl<'b> Checker<'b> {
         if let Type::BuiltinMap { key, val } = receiver_ty {
             let key = key.as_ref().clone();
             let val = val.as_ref().clone();
+            if self.reject_mutating_collection_method(
+                receiver_expr,
+                method,
+                "entries",
+                map_method_is_mutating(method),
+                method_span,
+            ) {
+                return Type::Nothing;
+            }
             return if let Some(ret) = map_method_return(method, &key, &val) {
                 ret
             } else {
@@ -4733,6 +4788,90 @@ impl<'b> Checker<'b> {
     }
 
     /// Type-check a field assignment `target.field = value`.
+    /// Reject a write through a `share`-declared parameter.
+    ///
+    /// `design/ownership.md` (line 41) requires the compiler to verify that an explicit
+    /// ownership modifier matches the body's use of the parameter. A `share` parameter is a
+    /// read-only borrow — the caller keeps ownership and trusts the value is unchanged after
+    /// the call (`design/concurrency.md` line 651 makes this the auto-parallel soundness
+    /// premise). Mutating a field or element of a `share` parameter contradicts that promise.
+    ///
+    /// A *bare* parameter (no explicit modifier) that the body mutates is LEGAL — the compiler
+    /// figures out the effective modifier (`lend`) from the body. Only an explicitly-declared
+    /// `share` parameter (including `share self`) is the contradiction.
+    ///
+    /// Returns `true` when a diagnostic was emitted (the caller skips downstream type-checking
+    /// of the assignment, mirroring the `const` reject); `false` otherwise.
+    ///
+    /// `kind` is the word for what is being changed (`"fields"` for field writes, `"elements"`
+    /// for index/element writes) so the diagnostic reads accurately at each call site.
+    fn reject_share_param_mutation(
+        &mut self,
+        root_name: &str,
+        kind: &str,
+        span: &SourceSpan,
+    ) -> bool {
+        let Some(entry) = self.scope.lookup(root_name) else {
+            return false;
+        };
+        if entry.param_ownership != Some(ynz_ast::nodes::OwnershipModifier::Share) {
+            return false;
+        }
+        let value_ty = type_name(&entry.ty);
+        self.diags.push(Diagnostic::error(
+            span.clone(),
+            format!("`{root_name}` is declared `share` — read-only — so its {kind} cannot be changed."),
+            format!("Change the parameter to `lend {root_name}: {value_ty}` if this function needs to modify it."),
+            "A `share` parameter is a read-only borrow: the caller keeps ownership and trusts the value is unchanged after the call. When a function modifies a value, declare `lend` so the change is visible at every call site.",
+        ));
+        true
+    }
+
+    /// Reject an in-place collection mutator (`array.add`/`map.set`/`fixed.set`/…) called on a
+    /// receiver whose binding cannot be mutated — a `const` binding or a `share`-declared
+    /// parameter (including `share self`).
+    ///
+    /// A mutating method writes its receiver in place, exactly like a field or element assign.
+    /// The pure-named-method contract (`stdlib-design.md` Rule 1) guarantees that only the
+    /// methods named in `*_method_is_mutating` change the receiver; read methods (`.get`,
+    /// `.count`, `.contains`) leave it unchanged and are never rejected here. `kind` is the word
+    /// for what is being changed (`"elements"` for arrays/fixed, `"entries"` for maps) so the
+    /// reused `share` diagnostic reads accurately.
+    ///
+    /// Returns `true` when a diagnostic was emitted (the caller returns `Type::Nothing` without
+    /// running the rest of the method dispatch); `false` otherwise.
+    fn reject_mutating_collection_method(
+        &mut self,
+        receiver_expr: Option<&Expr>,
+        method: &str,
+        kind: &str,
+        is_mutating: bool,
+        span: &SourceSpan,
+    ) -> bool {
+        if !is_mutating {
+            return false;
+        }
+        let Some(recv) = receiver_expr else {
+            return false;
+        };
+        let Some(root_name) = root_binding_name(recv) else {
+            return false;
+        };
+        let Some(entry) = self.scope.lookup(root_name) else {
+            return false;
+        };
+        if entry.is_const {
+            self.diags.push(Diagnostic::error(
+                span.clone(),
+                format!("`{root_name}` is `const` so `.{method}()` cannot change its {kind}."),
+                format!("Declare it with `let` instead: `let {root_name} = ...`"),
+                "`const` bindings are fully read-only — no reassignment, no field changes, no element writes. A method that adds, removes, or replaces items writes the value in place, which `const` does not permit. Use `let` for collections that need to change.",
+            ));
+            return true;
+        }
+        self.reject_share_param_mutation(root_name, kind, span)
+    }
+
     fn check_field_assign(&mut self, target: &Expr, value: &Expr, span: &SourceSpan) {
         let Expr::FieldAccess {
             receiver,
@@ -4750,17 +4889,25 @@ impl<'b> Checker<'b> {
         // The receiver must be a mutable (let-bound, non-const) shape value.
         // Walk the receiver chain to find the root binding and check it.
         if let Some(root_name) = root_binding_name(receiver) {
-            if let Some(entry) = self.scope.lookup(root_name) {
-                if entry.is_const {
-                    self.diags.push(Diagnostic::error(
-                        span.clone(),
-                        format!("`{root_name}` is `const` and its fields cannot be changed."),
-                        format!("Declare it with `let` instead: `let {root_name}: ShapeType = {{ ... }}`"),
-                        "`const` bindings are fully read-only — no reassignment, no field mutation. Use `let` for values that need to change.",
-                    ));
-                    self.infer_expr(value, None);
-                    return;
-                }
+            let is_const = self
+                .scope
+                .lookup(root_name)
+                .is_some_and(|entry| entry.is_const);
+            if is_const {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("`{root_name}` is `const` and its fields cannot be changed."),
+                    format!("Declare it with `let` instead: `let {root_name}: ShapeType = {{ ... }}`"),
+                    "`const` bindings are fully read-only — no reassignment, no field mutation. Use `let` for values that need to change.",
+                ));
+                self.infer_expr(value, None);
+                return;
+            }
+            // A `share` parameter is a read-only borrow — mutating a field contradicts the
+            // ownership promise the caller relies on (`design/ownership.md` line 41).
+            if self.reject_share_param_mutation(root_name, "fields", span) {
+                self.infer_expr(value, None);
+                return;
             }
         }
 
@@ -4900,17 +5047,25 @@ impl<'b> Checker<'b> {
         // const-deep-immutability: reject element writes on const-bound collections,
         // mirroring the same guard in check_field_assign.
         if let Some(root_name) = root_binding_name(receiver) {
-            if let Some(entry) = self.scope.lookup(root_name) {
-                if entry.is_const {
-                    self.diags.push(Diagnostic::error(
-                        span.clone(),
-                        format!("`{root_name}` is `const` and its elements cannot be changed."),
-                        format!("Declare it with `let` instead: `let {root_name}: array<...> = [...]`"),
-                        "`const` bindings are fully read-only — no reassignment, no field changes, no element writes. Use `let` for values that need to change.",
-                    ));
-                    self.infer_expr(value, None);
-                    return;
-                }
+            let is_const = self
+                .scope
+                .lookup(root_name)
+                .is_some_and(|entry| entry.is_const);
+            if is_const {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("`{root_name}` is `const` and its elements cannot be changed."),
+                    format!("Declare it with `let` instead: `let {root_name}: array<...> = [...]`"),
+                    "`const` bindings are fully read-only — no reassignment, no field changes, no element writes. Use `let` for values that need to change.",
+                ));
+                self.infer_expr(value, None);
+                return;
+            }
+            // A `share` parameter is a read-only borrow — writing an element contradicts the
+            // ownership promise the caller relies on (`design/ownership.md` line 41).
+            if self.reject_share_param_mutation(root_name, "elements", span) {
+                self.infer_expr(value, None);
+                return;
             }
         }
 

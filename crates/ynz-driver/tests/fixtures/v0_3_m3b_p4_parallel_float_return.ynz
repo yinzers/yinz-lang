@@ -1,0 +1,33 @@
+// Fixture: two independent suspending `-> float` calls in a Parallel group.
+//
+// Prior to the corpse-(a) fix, the parallel let-binding unconditionally allocated an i64 alloca
+// and called `to_i64_bits` on the return value. For `-> float` callees,
+// `load_sm_return_value_typed` returns a FloatValue (f64), and `to_i64_bits`'s Float arm
+// called `.into_int_value()` on it — compiler PANIC.
+//
+// The fix routes through `bind_sm_return_value`, which allocates an f64 alloca for FloatValues.
+//
+// `rateA` and `rateB` have no data dependency and no shared `lend` resource — the
+// auto-parallel pass groups them as a Parallel pair. Both return f64 values.
+//
+// The test asserts byte-identical stdout under default and --no-auto-parallel modes.
+//
+// Expected output: x:3.5\ny:7
+function rateA() -> float {
+  wait sleep(5)
+  let v = (3).toFloat() + 0.5.toFloat()
+  return v
+}
+
+function rateB() -> float {
+  wait sleep(5)
+  let v = (7).toFloat()
+  return v
+}
+
+function entrypoint() -> nothing {
+  let x = rateA()
+  let y = rateB()
+  print(`x:${x.toString()}`)
+  print(`y:${y.toString()}`)
+}

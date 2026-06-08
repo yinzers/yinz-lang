@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use ynz_ast::nodes::OwnershipModifier;
 use ynz_diagnostics::SourceSpan;
 
 use crate::types::Type;
@@ -11,6 +12,18 @@ pub struct ScopeEntry {
     pub is_const: bool,
     /// True for function parameters — reassignment emits a diagnostic.
     pub is_param: bool,
+    /// The declared ownership modifier when this binding is a parameter.
+    ///
+    /// - `None` for non-parameter bindings (`let`/`const` locals, loop variables).
+    /// - `None` for a parameter with no explicit modifier (`bare` — the compiler figures
+    ///   out the effective modifier from how the body uses it, per `design/ownership.md`).
+    /// - `Some(Share)` for an explicitly read-only parameter — the body may NOT change it.
+    /// - `Some(Lend)` for an explicitly mutable parameter — the body may change it.
+    /// - `Some(Give)` for an explicitly owned parameter — the body owns and may change it.
+    ///
+    /// Used to enforce the `share`-is-read-only rule: an explicit `share` parameter whose
+    /// body mutates a field is a contradiction the compiler rejects.
+    pub param_ownership: Option<OwnershipModifier>,
     /// True for `for`-loop variables — immutable inside the loop body.
     pub is_loop_var: bool,
     /// True after ownership was transferred via a `give` parameter.

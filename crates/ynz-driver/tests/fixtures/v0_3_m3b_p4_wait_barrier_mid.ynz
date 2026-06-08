@@ -1,0 +1,22 @@
+// Fixture: `wait` mid-group — barrier between two otherwise independent calls.
+//
+// `fa` and `fb` are independent (different callee names, no shared args).
+// The explicit `wait` before `fb` forces sequential ordering:
+//   fa completes, THEN fb starts.
+//
+// Expected output: fa\nfb\ndone
+function fa() -> nothing {
+  wait sleep(5)
+  print(`fa`)
+}
+
+function fb() -> nothing {
+  wait sleep(5)
+  print(`fb`)
+}
+
+function entrypoint() -> nothing {
+  fa()
+  wait fb()
+  print(`done`)
+}

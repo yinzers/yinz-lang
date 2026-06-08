@@ -1,0 +1,33 @@
+// Fixture: write-conflict statements stay ordered without `wait`.
+//
+// Both `writeA` and `writeB` take `lend x` (write effect on `x`).
+// The independence analysis detects the conflict via param_ownerships
+// and places them sequentially even though there is no data dependency
+// between the two `let` bindings.
+//
+// We verify ordering by checking the FINAL value of `x` is 20 (set by writeB,
+// which runs after writeA). If they ran in parallel, the result would be
+// non-deterministic. With correct conflict detection, writeA runs first (sets 10),
+// then writeB runs (sets 20), so final value is 20.
+//
+// Expected output: final:20
+shape Acc {
+  value: int
+}
+
+function writeA(lend c: Acc, n: int) -> nothing {
+  wait sleep(20)
+  c.value = n
+}
+
+function writeB(lend c: Acc, n: int) -> nothing {
+  wait sleep(20)
+  c.value = n
+}
+
+function entrypoint() -> nothing {
+  let c: Acc = { value: 0 }
+  writeA(c, 10)
+  writeB(c, 20)
+  print(`final:${c.value}`)
+}

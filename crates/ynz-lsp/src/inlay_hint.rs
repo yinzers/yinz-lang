@@ -291,9 +291,7 @@ pub fn inlay_hint_response(
 
     let check_out = check_query(&state.db, sf);
     for d in check_out.diagnostics.iter() {
-        if d.severity == Severity::Warning
-            && d.what.starts_with("Copying ")
-        {
+        if d.severity == Severity::Warning && d.what.starts_with("Copying ") {
             let hint_pos = d.span.end;
             if !in_viewport(hint_pos, vp_start, vp_end) {
                 continue;

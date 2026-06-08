@@ -1,0 +1,40 @@
+// Fixture: a `give`-heap call is sequenced against a `share`-heap peer (give is a write).
+//
+// `consume(give a)` takes ownership of a heap value — ownership transfer is a write (it
+// consumes and frees the value). The write-effect analysis classifies a `give`-heap argument
+// as write-capable, so the pair `consume(a); inspect(b)` is sequenced (NOT parallelized) even
+// though `a` and `b` are distinct bindings — the analysis cannot prove they don't alias
+// without points-to analysis, so any write-capable argument forces sequencing.
+//
+// Sequencing makes the output deterministic: `consume` (100ms) runs to completion before
+// `inspect` (10ms), so `consumed` always prints before `inspected`. If `give` were NOT
+// classified write-capable (the HOLE A bug), the pair would parallelize and `inspect`'s
+// shorter sleep would let `inspected` print first — a different, non-byte-identical order.
+// Neither function reads its heap field after the `wait`, so the shape-across-wait confound
+// does not affect the observed ordering.
+//
+// The unit-test lock for the analysis rule is `give_arg_produces_singletons`
+// in independence.rs.
+//
+// Expected output: consumed\ninspected\ndone
+shape Parcel {
+  id: int
+}
+
+function consume(give p: Parcel) -> nothing {
+  wait sleep(100)
+  print(`consumed`)
+}
+
+function inspect(share p: Parcel) -> nothing {
+  wait sleep(10)
+  print(`inspected`)
+}
+
+function entrypoint() -> nothing {
+  let a: Parcel = { id: 1 }
+  let b: Parcel = { id: 2 }
+  consume(a)
+  inspect(b)
+  print(`done`)
+}

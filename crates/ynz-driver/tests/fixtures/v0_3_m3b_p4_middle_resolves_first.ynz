@@ -1,0 +1,37 @@
+// Fixture (adversarial iv): three independent suspending statements where the
+// MIDDLE one resolves first.
+//
+// fa() sleeps 50ms, fb() sleeps 5ms, fc() sleeps 50ms.
+// With parallel execution, fb resolves well before fa and fc.
+// Each result must be bound to its own variable, read at first use —
+// NOT in poll-completion order.
+//
+// If the auto-parallel pass incorrectly reads results in completion order
+// instead of declaration order, `b` would get `a`'s or `c`'s value
+// instead of its own.
+//
+// Expected output: a:1\nb:2\nc:3\ndone
+function fa() -> int {
+  wait sleep(50)
+  return 1
+}
+
+function fb() -> int {
+  wait sleep(5)
+  return 2
+}
+
+function fc() -> int {
+  wait sleep(50)
+  return 3
+}
+
+function entrypoint() -> nothing {
+  let a = fa()
+  let b = fb()
+  let c = fc()
+  print(`a:${a}`)
+  print(`b:${b}`)
+  print(`c:${c}`)
+  print(`done`)
+}

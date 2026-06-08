@@ -1,0 +1,40 @@
+// Fixture: a pair where EITHER call has a `lend` arg stays sequenced (not parallelized).
+//
+// The `||` fix in independence.rs — `a_has_lend_arg || b_has_lend_arg` — ensures that
+// when one call has a `lend` (mutable-write) argument and the other has only `share`
+// (read-only) arguments, the pair is NOT grouped as Parallel. Before the `&&` bug,
+// such a pair slipped into the parallel group and could reorder.
+//
+// This fixture has `writeVal(lend c)` (lend arg) followed by `readVal(share c)` (share arg).
+// Because `writeVal` has a lend arg, the `||` guard sequences them. The print in `readVal`
+// fires after `writeVal` completes, giving deterministic output `w\nr\ndone` in BOTH modes.
+//
+// Under the `&&` bug, the pair might have been grouped as Parallel (the share-read has no
+// lend arg, so `a_has_lend && b_has_lend` was false). Parallel reorder + shorter sleep on
+// readVal would have printed `r\nw\ndone` instead.
+//
+// The unit-test lock for the exact independence-analysis fix is
+// `aliased_share_read_vs_lend_write_produces_singletons` in independence.rs.
+// This integration fixture proves the sequencing observable via output ordering.
+//
+// Expected output: w\nr\ndone
+shape Holder {
+  v: int
+}
+
+function writeVal(lend h: Holder) -> nothing {
+  wait sleep(100)
+  print(`w`)
+}
+
+function readVal(share h: Holder) -> nothing {
+  wait sleep(10)
+  print(`r`)
+}
+
+function entrypoint() -> nothing {
+  let h: Holder = { v: 0 }
+  writeVal(h)
+  readVal(h)
+  print(`done`)
+}

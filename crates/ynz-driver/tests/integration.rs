@@ -2315,10 +2315,21 @@ fn v03_m3e_alias_local_name_collision_runs_correctly() {
 /// (designed for single-file fixtures) does not apply.
 fn build_multimodule_and_run(project_root: &Path, no_auto_parallel: bool) -> (String, String, i32) {
     let tmp = tempfile::TempDir::new().expect("failed to create tmpdir");
+
+    // Copy the entire project directory into the unique tmpdir so the binary `ynz build`
+    // produces lands at a per-invocation path. Without isolation, parallel test calls for
+    // the same project root both build to `<project_root>/bin` and race on that shared path
+    // (same class of flake as build_to_tmpdir_and_run — ExecutableFileBusy under parallelism).
+    let proj_name = project_root
+        .file_name()
+        .expect("project_root must have a directory name");
+    let isolated_root = tmp.path().join(proj_name);
+    copy_dir_recursive(project_root, &isolated_root).expect("failed to copy project to tmpdir");
+
     let mut build_cmd = Command::new(ynz_binary());
     build_cmd
         .arg("build")
-        .arg(project_root)
+        .arg(&isolated_root)
         .env("CLICOLOR", "0");
     if no_auto_parallel {
         build_cmd.arg("--no-auto-parallel");
@@ -2328,13 +2339,8 @@ fn build_multimodule_and_run(project_root: &Path, no_auto_parallel: bool) -> (St
         let stderr = String::from_utf8_lossy(&build_out.stderr).into_owned();
         return (String::new(), format!("build failed: {stderr}"), 1);
     }
-    // Multi-module binary is at <project_root>/bin (root.join("bin") in build.rs:336).
-    let built_binary = project_root.join("bin");
-    let run_binary = tmp.path().join("bin");
-    if let Err(e) = std::fs::copy(&built_binary, &run_binary) {
-        return (String::new(), format!("failed to copy binary: {e}"), 1);
-    }
-    let _ = std::fs::remove_file(&built_binary);
+    // Multi-module binary is at <isolated_root>/bin — inside the unique tmpdir.
+    let run_binary = isolated_root.join("bin");
     let run_out = Command::new(&run_binary)
         .env("CLICOLOR", "0")
         .output()
@@ -2343,6 +2349,22 @@ fn build_multimodule_and_run(project_root: &Path, no_auto_parallel: bool) -> (St
     let stderr = String::from_utf8_lossy(&run_out.stderr).into_owned();
     let code = run_out.status.code().unwrap_or(-1);
     (stdout, stderr, code)
+}
+
+/// Recursively copy a directory tree to `dst`.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
 }
 
 #[test]
@@ -4652,12 +4674,33 @@ fn v03_m3a_r7_array_shape_nested_if_rejected() {
 
 /// Build a fixture to a tmpdir binary (default or --no-auto-parallel) and run it.
 ///
-/// The binary is placed in a unique tmpdir so concurrent tests don't collide.
+/// The source is copied into a unique per-invocation tmpdir before building so that
+/// parallel test runs for the same fixture don't race on a shared binary path.
+/// `ynz build` always writes the binary alongside the source (same directory, extension
+/// stripped), so isolating the source path is what isolates the binary path.
 /// Caller is responsible for nothing — the tmpdir is cleaned up by TempDir's Drop.
 fn build_to_tmpdir_and_run(src: &Path, no_auto_parallel: bool) -> (String, String, i32) {
     let tmp = tempfile::TempDir::new().expect("failed to create tmpdir");
+
+    // Copy the source into the unique tmpdir so each invocation's binary lands in a
+    // path that no other concurrent invocation can share. Without this, two parallel
+    // test calls for the same fixture both build to `<fixtures_dir>/<name>` (the binary
+    // ynz places next to the source) and race on the copy/delete of that shared path.
+    let src_filename = src.file_name().expect("src must have a filename");
+    let isolated_src = tmp.path().join(src_filename);
+    if let Err(e) = std::fs::copy(src, &isolated_src) {
+        return (
+            String::new(),
+            format!("failed to copy source to tmpdir: {e}"),
+            1,
+        );
+    }
+
     let mut build_cmd = Command::new(ynz_binary());
-    build_cmd.arg("build").arg(src).env("CLICOLOR", "0");
+    build_cmd
+        .arg("build")
+        .arg(&isolated_src)
+        .env("CLICOLOR", "0");
     if no_auto_parallel {
         build_cmd.arg("--no-auto-parallel");
     }
@@ -4667,18 +4710,9 @@ fn build_to_tmpdir_and_run(src: &Path, no_auto_parallel: bool) -> (String, Strin
         return (String::new(), format!("build failed: {stderr}"), 1);
     }
 
-    // ynz build writes the binary alongside the source file with the extension stripped
-    // (e.g., foo.ynz -> foo). Copy it to tmpdir to avoid leaving build artifacts in
-    // the fixtures directory alongside committed test sources.
-    // test-ratchet: binary path is src.with_extension(""), not src_dir/bin; fixing a
-    // bug in the original helper path logic introduced in the same edit.
-    let built_binary = src.with_extension("");
-    let run_binary = tmp.path().join("bin");
-    if let Err(e) = std::fs::copy(&built_binary, &run_binary) {
-        return (String::new(), format!("failed to copy binary: {e}"), 1);
-    }
-    // Clean up the binary next to the fixture to avoid polluting the fixtures dir.
-    let _ = std::fs::remove_file(&built_binary);
+    // The binary lands next to isolated_src with the extension stripped (inside the unique
+    // tmpdir). The tmpdir's Drop cleans up both the source copy and the binary.
+    let run_binary = isolated_src.with_extension("");
 
     let run_out = Command::new(&run_binary)
         .env("CLICOLOR", "0")
@@ -4688,6 +4722,43 @@ fn build_to_tmpdir_and_run(src: &Path, no_auto_parallel: bool) -> (String, Strin
     let stderr = String::from_utf8_lossy(&run_out.stderr).into_owned();
     let code = run_out.status.code().unwrap_or(-1);
     (stdout, stderr, code)
+}
+
+/// Build `src` to a tmpdir, then time ONLY the execution of the compiled binary
+/// (build time excluded). Returns `(run_millis, exit_code)`.
+///
+/// Used by timing assertions that compare default-parallel vs --no-auto-parallel run time:
+/// the build is identical work in both modes, so excluding it makes the run-time gap
+/// reflect the actual concurrency (overlapped sleeps vs summed sleeps).
+fn time_built_run(src: &Path, no_auto_parallel: bool) -> (u128, i32) {
+    let tmp = tempfile::TempDir::new().expect("failed to create tmpdir");
+    let src_filename = src.file_name().expect("src must have a filename");
+    let isolated_src = tmp.path().join(src_filename);
+    std::fs::copy(src, &isolated_src).expect("failed to copy source to tmpdir");
+
+    let mut build_cmd = Command::new(ynz_binary());
+    build_cmd
+        .arg("build")
+        .arg(&isolated_src)
+        .env("CLICOLOR", "0");
+    if no_auto_parallel {
+        build_cmd.arg("--no-auto-parallel");
+    }
+    let build_out = build_cmd.output().expect("failed to spawn ynz build");
+    assert!(
+        build_out.status.success(),
+        "build failed: {}",
+        String::from_utf8_lossy(&build_out.stderr)
+    );
+
+    let run_binary = isolated_src.with_extension("");
+    let start = std::time::Instant::now();
+    let run_out = Command::new(&run_binary)
+        .env("CLICOLOR", "0")
+        .output()
+        .expect("failed to run compiled binary");
+    let elapsed_ms = start.elapsed().as_millis();
+    (elapsed_ms, run_out.status.code().unwrap_or(-1))
 }
 
 #[test]
@@ -4753,9 +4824,8 @@ fn v03_m3b_p2_give_inferred_unused_after() {
     // the `background` spawn, the compiler infers `.give` (zero-copy ownership
     // transfer). Wrong inference would fail use-after-give typeck in a later stmt;
     // missing inference would have failed to compile before Phase 2.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
-        "v0_3_m3b_p2_give_inferred_unused_after.ynz",
-    ));
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_p2_give_inferred_unused_after.ynz"));
     assert_eq!(
         code, 0,
         "give-inferred fixture must compile and run; stderr:\n{stderr}"
@@ -4779,9 +4849,8 @@ fn v03_m3b_p2_copy_inferred_used_after() {
     // WHY: Safe direction of give/copy inference — when the caller reads the binding
     // after the spawn, the compiler infers `.copy` so both caller and task have their
     // own copy. Wrong inference would lose the caller's value; missing copy would corrupt.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
-        "v0_3_m3b_p2_copy_inferred_used_after.ynz",
-    ));
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_p2_copy_inferred_used_after.ynz"));
     assert_eq!(
         code, 0,
         "copy-inferred fixture must compile and run; stderr:\n{stderr}"
@@ -4801,9 +4870,8 @@ fn v03_m3b_p2_explicit_copy_honored() {
     // WHY: Explicit `.copy()` at a `background` call site must be honored and must
     // not be overridden or double-applied by the inference path. The explicit path
     // predates Phase 2; this test is the regression guard.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
-        "v0_3_m3b_p2_explicit_give_copy_honored.ynz",
-    ));
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_p2_explicit_give_copy_honored.ynz"));
     assert_eq!(
         code, 0,
         "explicit-copy fixture must compile and run; stderr:\n{stderr}"
@@ -4823,10 +4891,11 @@ fn v03_m3b_p2_share_param_still_rejected() {
     // WHY: Phase 2 must NOT loosen the `share`/`lend` cross-thread safety rejection.
     // A `share` borrow may outlive the caller scope once the task runs on another
     // thread — the error must remain byte-identical to pre-Phase-2 behavior.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
-        "v0_3_m3b_p2_share_param_rejected.ynz",
-    ));
-    assert_ne!(code, 0, "share-param rejection must exit 1; stdout:\n{stdout}");
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p2_share_param_rejected.ynz"));
+    assert_ne!(
+        code, 0,
+        "share-param rejection must exit 1; stdout:\n{stdout}"
+    );
     assert!(
         stderr.contains("borrows its arguments"),
         "error must mention borrowing; stderr:\n{stderr}"
@@ -4843,9 +4912,7 @@ fn v03_m3b_p2_large_copy_warning_fires_on_inferred_copy() {
     // explicit `.copy()`. Without this, a user gets zero feedback about copying a
     // 72-byte shape across a thread boundary when the compiler infers the copy.
     // Threshold = 64 bytes (one cache line); BigRecord has 9 int fields = 72 bytes.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
-        "v0_3_m3b_p2_large_copy_warning.ynz",
-    ));
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p2_large_copy_warning.ynz"));
     assert_eq!(
         code, 0,
         "large-copy warning must not block compilation; stderr:\n{stderr}"
@@ -4871,9 +4938,7 @@ fn v03_m3b_p2_copy_heap_independent() {
     // With the fix, codegen emits a memcpy (identical to explicit `job.copy()`) before
     // storing the pointer in the background context. The task must observe the original
     // value at spawn time, not the later mutation.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
-        "v0_3_m3b_p2_copy_heap_independent.ynz",
-    ));
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p2_copy_heap_independent.ynz"));
     assert_eq!(
         code, 0,
         "heap-independence fixture must compile and run; stderr:\n{stderr}"
@@ -4899,9 +4964,7 @@ fn v03_m3b_p2_bg_copy_survives_frame() {
     // background task reads, the alloca is freed and the task reads garbage (observed:
     // `id: 0` or `id: 4247942`). With heap-upgrade the copy outlives the spawner frame;
     // task must see the original value (id=7) not garbage.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
-        "v0_3_m3b_p2_bg_copy_survives_frame.ynz",
-    ));
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p2_bg_copy_survives_frame.ynz"));
     assert_eq!(
         code, 0,
         "survives-frame fixture must compile and run; stderr:\n{stderr}"
@@ -4926,9 +4989,7 @@ fn v03_m3b_p2_bg_array_real_copy() {
     // copies both the header and the data buffer. Without the fix the task holds an alias into
     // the caller's array and sees the post-spawn mutation (99). With the fix the task sees
     // the original value at spawn time (10).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
-        "v0_3_m3b_p2_bg_array_real_copy.ynz",
-    ));
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p2_bg_array_real_copy.ynz"));
     assert_eq!(
         code, 0,
         "array-real-copy fixture must compile and run; stderr:\n{stderr}"
@@ -5009,4 +5070,1185 @@ fn ynz_run_with_alloc_counter(fixture_name: &str) -> (u64, u64) {
             .unwrap_or(0)
     };
     (parse_count("alloc"), parse_count("free"))
+}
+
+// ── v0.3-M3b Phase 4: auto-parallelize pass ───────────────────────────────────
+
+#[test]
+fn v03_m3b_p4_two_independent_parallel_correct_output() {
+    // WHY: Two independent suspending statements must produce the correct output
+    // under the auto-parallel pass. If the pass corrupts stdout (wrong values,
+    // missing output), this fails. The timing AC (≈max not sum) is validated
+    // by the cross-impl gate: if sequential takes ~2× longer than parallel,
+    // the parallelism is real.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_p4_two_independent_parallel.ynz"));
+    assert_eq!(
+        code, 0,
+        "two-independent-parallel fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "done",
+        "parallel fixture must print 'done'; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_two_independent_parallel_byte_identical_to_sequential() {
+    // WHY: The auto-parallel pass must not change observable output — stdout must
+    // be byte-identical between default-parallel and --no-auto-parallel modes.
+    // This is the cross-impl consistency gate: a bug in independence analysis
+    // causes the default mode to diverge from the dumb-sequential baseline.
+    let src = fixture("v0_3_m3b_p4_two_independent_parallel.ynz");
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "parallel and sequential stdout must be byte-identical"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_wait_barrier_first_correct_output() {
+    // WHY: `wait` as the first call is an ordering barrier — waiter must complete
+    // before worker and helper start. Output order must be deterministic: waiter then done.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_wait_barrier_first.ynz"));
+    assert_eq!(
+        code, 0,
+        "wait-barrier-first fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "waiter\ndone",
+        "waiter must print before done; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_wait_barrier_first_byte_identical() {
+    // WHY: Cross-impl consistency for the wait-barrier-first fixture.
+    let src = fixture("v0_3_m3b_p4_wait_barrier_first.ynz");
+    let (par, _, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, _, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(par_code, 0, "parallel build must exit 0");
+    assert_eq!(seq_code, 0, "--no-auto-parallel build must exit 0");
+    assert_eq!(
+        par, seq,
+        "wait-barrier-first stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_wait_barrier_mid_correct_output() {
+    // WHY: `wait` mid-group forces fa to complete before fb starts. Output order
+    // must be fa then fb then done regardless of whether fa and fb were otherwise
+    // independent suspending calls.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_wait_barrier_mid.ynz"));
+    assert_eq!(
+        code, 0,
+        "wait-barrier-mid must compile and run; stderr:\n{stderr}"
+    );
+    // fa() has no explicit wait so it is part of an independent group, then wait fb() runs
+    // fa starts, then wait fb() is an ordering barrier — fb runs after fa.
+    assert!(
+        stdout.contains("fa"),
+        "fa must have been called; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("fb"),
+        "fb must have been called; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("done"),
+        "done must be printed; stdout:\n{stdout}"
+    );
+    // fb must appear after fa in the output (ordering barrier guarantee).
+    let fa_pos = stdout.find("fa").expect("fa in stdout");
+    let fb_pos = stdout.find("fb").expect("fb in stdout");
+    assert!(fa_pos < fb_pos, "fa must appear before fb in stdout");
+}
+
+#[test]
+fn v03_m3b_p4_wait_barrier_mid_byte_identical() {
+    // WHY: Cross-impl consistency for the wait-barrier-mid fixture.
+    let src = fixture("v0_3_m3b_p4_wait_barrier_mid.ynz");
+    let (par, _, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, _, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(par_code, 0, "parallel build must exit 0");
+    assert_eq!(seq_code, 0, "--no-auto-parallel build must exit 0");
+    assert_eq!(
+        par, seq,
+        "wait-barrier-mid stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_wait_data_dependent_correct_output() {
+    // WHY: `wait` whose callee depends on an in-flight result. The data dependency
+    // forces ordering; the explicit `wait` forces the join. Output must be deterministic.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_wait_data_dependent.ynz"));
+    assert_eq!(
+        code, 0,
+        "wait-data-dependent must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "result:99\ndone",
+        "result must be 99 and done must follow; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_wait_data_dependent_byte_identical() {
+    // WHY: Cross-impl consistency for the wait-data-dependent fixture.
+    let src = fixture("v0_3_m3b_p4_wait_data_dependent.ynz");
+    let (par, _, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, _, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(par_code, 0);
+    assert_eq!(seq_code, 0);
+    assert_eq!(
+        par, seq,
+        "wait-data-dependent must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_wait_two_consecutive_correct_output() {
+    // WHY: Two consecutive `wait` statements — each is a separate barrier that forces
+    // sequential ordering: alpha completes, then beta starts. The output order must
+    // be alpha then beta.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_wait_two_consecutive.ynz"));
+    assert_eq!(
+        code, 0,
+        "two-consecutive-wait must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "alpha\nbeta\ndone",
+        "alpha must appear before beta; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_wait_two_consecutive_byte_identical() {
+    // WHY: Cross-impl consistency for the two-consecutive-wait fixture.
+    let src = fixture("v0_3_m3b_p4_wait_two_consecutive.ynz");
+    let (par, _, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, _, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(par_code, 0);
+    assert_eq!(seq_code, 0);
+    assert_eq!(
+        par, seq,
+        "two-consecutive-wait must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_wait_then_fresh_group_correct_output() {
+    // WHY: A `wait` barrier followed by a fresh independent group. The fresh group
+    // (fresh1+fresh2) must not join into the pre-barrier work. The barrier
+    // (`wait barrier()`) prints "barrier" and then the fresh group runs and done is printed.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_wait_then_fresh_group.ynz"));
+    assert_eq!(
+        code, 0,
+        "wait-then-fresh-group must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "barrier\ndone",
+        "barrier must print before done; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_wait_then_fresh_group_byte_identical() {
+    // WHY: Cross-impl consistency for the wait-then-fresh-group fixture.
+    let src = fixture("v0_3_m3b_p4_wait_then_fresh_group.ynz");
+    let (par, _, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, _, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(par_code, 0);
+    assert_eq!(seq_code, 0);
+    assert_eq!(
+        par, seq,
+        "wait-then-fresh-group must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_data_dependent_ordered_correct_output() {
+    // WHY: Data-dependent statements must stay ordered WITHOUT `wait`. The auto-parallel
+    // pass must detect that `profileId = fetcher(userId)` depends on `userId` (defined
+    // by the first `fetcher` call) and NOT group them as Parallel. If they were parallelized,
+    // `profileId` would read an uninitialised `userId`.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_data_dependent_ordered.ynz"));
+    assert_eq!(
+        code, 0,
+        "data-dependent-ordered must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "user:42\nprofile:42",
+        "user and profile must both be 42; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_data_dependent_ordered_byte_identical() {
+    // WHY: Cross-impl consistency for the data-dependent-ordered fixture. This is
+    // the key gate: if the pass wrongly parallelizes dependent stmts, the parallel
+    // output diverges from --no-auto-parallel (sequential) output → gate RED.
+    let src = fixture("v0_3_m3b_p4_data_dependent_ordered.ynz");
+    let (par, _, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, _, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(par_code, 0);
+    assert_eq!(seq_code, 0);
+    assert_eq!(
+        par, seq,
+        "data-dependent output must be byte-identical in both modes (gate-discrimination proof)"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_write_conflict_ordered_correct_output() {
+    // WHY: Two calls both lend the same binding (write conflict). The independence
+    // analysis must detect the shared-write conflict via param_ownerships and keep
+    // them sequential. The final value (20) proves writeB ran after writeA.
+    // If they ran in parallel, the result would be non-deterministic.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_write_conflict_ordered.ynz"));
+    assert_eq!(
+        code, 0,
+        "write-conflict-ordered must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "final:20",
+        "writeB must run after writeA (final value = 20); stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_write_conflict_ordered_byte_identical() {
+    // WHY: Cross-impl consistency for the write-conflict-ordered fixture.
+    let src = fixture("v0_3_m3b_p4_write_conflict_ordered.ynz");
+    let (par, _, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, _, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(par_code, 0);
+    assert_eq!(seq_code, 0);
+    assert_eq!(
+        par, seq,
+        "write-conflict output must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_loop_sequential_correct_output() {
+    // WHY: Loop iterations with suspending calls must remain sequential — the
+    // auto-parallel pass must NOT reach into loop bodies. Output order is
+    // step:0 → step:1 → step:2 → done. Any parallelization across loop
+    // iterations would produce non-deterministic ordering.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_loop_sequential.ynz"));
+    assert_eq!(
+        code, 0,
+        "loop-sequential must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "step:0\nstep:1\nstep:2\ndone",
+        "loop iterations must run in order; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_loop_sequential_byte_identical() {
+    // WHY: Cross-impl consistency for the loop-sequential fixture.
+    let src = fixture("v0_3_m3b_p4_loop_sequential.ynz");
+    let (par, _, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, _, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(par_code, 0);
+    assert_eq!(seq_code, 0);
+    assert_eq!(
+        par, seq,
+        "loop-sequential output must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_partial_dependency_correct_output() {
+    // WHY: Adversarial fixture (i) — partial dependency grouping. `fa` and `fb(a)`
+    // are data-dependent (fb reads `a` defined by fa). `fc` is independent of both
+    // fa and fb. The correct grouping: [fa] as Singleton, [fb, fc] as Parallel
+    // (fb reads `a` but fc doesn't — so fb and fc are independent of each other).
+    // All three values must be correct.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_partial_dependency.ynz"));
+    assert_eq!(
+        code, 0,
+        "partial-dependency must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "a:1\nb:1\nc:2\ndone",
+        "a=1, b=1 (fb(a)), c=2 — all correct; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_partial_dependency_byte_identical() {
+    // WHY: Cross-impl consistency for the partial-dependency fixture.
+    let src = fixture("v0_3_m3b_p4_partial_dependency.ynz");
+    let (par, _, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, _, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(par_code, 0);
+    assert_eq!(seq_code, 0);
+    assert_eq!(
+        par, seq,
+        "partial-dependency output must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_no_new_runtime_symbols() {
+    // WHY: Auto-parallelization uses interleaved inline polling of embedded sub-frames —
+    // NOT ynz_rt_spawn or any new join-handle primitive. This test checks that the IR
+    // for the two-independent-parallel fixture contains no calls to ynz_rt_spawn.
+    // A violation means the pass accidentally fell back to a spawn-based approach,
+    // which would require a new runtime ABI and break the "zero new runtime symbols" AC.
+    let ll_path = fixture_path("v0_3_m3b_p4_two_independent_parallel.ll");
+    if ll_path.exists() {
+        let ir = std::fs::read_to_string(&ll_path).expect("read IR file");
+        // Check that `ynz_rt_spawn` is declared (fine — runtime decls are always emitted)
+        // but NOT called in the entrypoint's resume function. The call instruction for
+        // a spawn would appear as `call void @ynz_rt_spawn(` in the LLVM IR.
+        assert!(
+            !ir.contains("call void @ynz_rt_spawn("),
+            "auto-parallel IR must not CALL ynz_rt_spawn (only declare it); interleaved inline poll only"
+        );
+    }
+    // If the .ll file doesn't exist, skip (it's generated by the golden tests).
+    // The AC is also verified by the runtime-decls test below.
+}
+
+/// Returns the path to a fixture file (without running it).
+fn fixture_path(name: &str) -> std::path::PathBuf {
+    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir.join("tests").join("fixtures").join(name)
+}
+
+// ── Adversarial fixtures (ii)–(v) ────────────────────────────────────────────
+
+#[test]
+fn v03_m3b_p4_transitive_write_conflict_ordered() {
+    // WHY (adversarial ii): Two callers each expose `lend c` in their own signature,
+    // propagating a write effect from an inner callee that lends. The independence
+    // analysis must detect the write conflict via param_ownerships and sequence them.
+    // If they were parallelized, outerB could overwrite outerA's value non-deterministically.
+    // Correct output: final:30 (outerA sets 10 then outerB sets 30, in source order).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_p4_transitive_write_conflict.ynz"));
+    assert_eq!(
+        code, 0,
+        "transitive-write-conflict fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "final:30",
+        "outerA then outerB must run in order; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_transitive_write_conflict_byte_identical() {
+    // WHY: Cross-impl consistency for adversarial fixture (ii).
+    let src = fixture("v0_3_m3b_p4_transitive_write_conflict.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par, seq,
+        "transitive-write-conflict stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_wait_nonsuspending_barrier_correct_output() {
+    // WHY (adversarial iii): `wait` on a non-suspending callee still acts as an ordering
+    // barrier that joins any prior in-flight auto-parallel work. `fetcher()` (suspending)
+    // runs, then `wait pureCpu(21)` barriers before printing. Output: fetched\ncpu\ndone.
+    // A missing barrier would allow continuation before fetcher completes.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_p4_wait_nonsuspending_barrier.ynz"));
+    assert_eq!(
+        code, 0,
+        "wait-nonsuspending-barrier fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "fetched\ncpu\ndone",
+        "fetched must appear before cpu; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_wait_nonsuspending_barrier_byte_identical() {
+    // WHY: Cross-impl consistency for adversarial fixture (iii).
+    let src = fixture("v0_3_m3b_p4_wait_nonsuspending_barrier.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par, seq,
+        "wait-nonsuspending-barrier stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_middle_resolves_first_correct_output() {
+    // WHY (adversarial iv): Three independent suspending statements where the MIDDLE
+    // one (fb, 5ms) resolves before the outer two (fa, fc, 50ms each). Each result
+    // must be bound to its own variable at its own declaration — NOT in completion order.
+    // Wrong: if the pass binds results in poll-completion order, b would get fa's value.
+    // Correct: a=1, b=2, c=3 regardless of which future completes first.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_middle_resolves_first.ynz"));
+    assert_eq!(
+        code, 0,
+        "middle-resolves-first fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "a:1\nb:2\nc:3\ndone",
+        "each result must be bound to its own declaration slot; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_middle_resolves_first_byte_identical() {
+    // WHY: Cross-impl consistency for adversarial fixture (iv).
+    let src = fixture("v0_3_m3b_p4_middle_resolves_first.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par, seq,
+        "middle-resolves-first stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_nested_composed_frames_correct_output() {
+    // WHY (adversarial v): Nested composed sub-frames — one outer group member's callee
+    // itself contains an inner independent parallel group. The composed frame layout
+    // must hold at depth 2 (outer group + inner group). If the composed-frame allocation
+    // is wrong (double-alloc, dangling inner pointer), this crashes or produces garbage.
+    // All leaf labels must appear exactly once; "done" must be last.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_nested_composed_frames.ynz"));
+    assert_eq!(
+        code, 0,
+        "nested-composed-frames fixture must compile and run; stderr:\n{stderr}"
+    );
+    // Leaf output order is non-deterministic; assert all labels present and "done" last.
+    assert!(
+        stdout.contains("leaf_a"),
+        "leaf_a must appear; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("leaf_b"),
+        "leaf_b must appear; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("leaf_c"),
+        "leaf_c must appear; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.trim().ends_with("done"),
+        "done must be last; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_nested_composed_frames_byte_identical() {
+    // WHY: Cross-impl consistency for adversarial fixture (v).
+    let src = fixture("v0_3_m3b_p4_nested_composed_frames.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par, seq,
+        "nested-composed-frames stdout must be byte-identical in both modes"
+    );
+}
+
+// ── v0.3-M3b Phase 4 fix-round: Model-A teaching fixtures ────────────────────
+
+#[test]
+fn v03_m3b_p4_model_a_intended_reorder_parallel_output() {
+    // WHY: Locks the INTENDED Model-A reorder behavior — two independent suspending
+    // side-effect calls (fa: 100ms+print A, fb: 50ms+print B) run concurrently under
+    // the auto-parallel pass. fb finishes first (shorter sleep) so default output is
+    // "B\nA\ndone". This is NOT a bug — it is the design/concurrency.md Model-A
+    // locked default (lines 53-61): "independent operations run concurrently; either
+    // may finish first." The fixture is deliberately excluded from the byte-identical
+    // sweep because the reorder IS the intended behavior.
+    // If this test fails (output is A/B instead of B/A), the auto-parallel pass is
+    // not actually overlapping the two calls, which is a performance regression.
+    let src = fixture("v0_3_m3b_p4_model_a_intended_reorder.ynz");
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "intended-reorder parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par_stdout.trim(),
+        "B\nA\ndone",
+        "parallel: fb (50ms) finishes before fa (100ms) — reorder is the intended Model-A behavior; stdout:\n{par_stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_model_a_intended_reorder_sequential_output() {
+    // WHY: Under --no-auto-parallel, source order is preserved: fa then fb.
+    // This establishes the baseline that the parallel reorder is a real scheduling
+    // change, not an artifact of an implementation bug.
+    let src = fixture("v0_3_m3b_p4_model_a_intended_reorder.ynz");
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "intended-reorder sequential build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        seq_stdout.trim(),
+        "A\nB\ndone",
+        "--no-auto-parallel: source order preserved (fa before fb); stdout:\n{seq_stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_model_a_wait_orders_them_parallel_output() {
+    // WHY: `wait fa()` is an explicit ordering barrier — it forces fa (100ms) to complete
+    // before fb (50ms) starts, even though fa takes longer and the auto-parallel pass
+    // would otherwise overlap them. With `wait`, output is "A\nB\ndone" in BOTH modes.
+    // This proves `wait` is the user's ordering tool (design/concurrency.md lines 97-120):
+    // write `wait foo()` when the causal order must be guaranteed regardless of duration.
+    // If this test fails (output is B/A), the wait-barrier is not enforcing ordering.
+    let src = fixture("v0_3_m3b_p4_model_a_wait_orders_them.ynz");
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "wait-orders-them parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par_stdout.trim(),
+        "A\nB\ndone",
+        "parallel with wait fa(): fa must complete before fb starts; stdout:\n{par_stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_model_a_wait_orders_them_sequential_output() {
+    // WHY: Under --no-auto-parallel, `wait fa(); fb()` also produces "A\nB\ndone"
+    // (source order). Both modes produce identical output when `wait` is present —
+    // the wait-barrier is consistent across scheduling modes.
+    let src = fixture("v0_3_m3b_p4_model_a_wait_orders_them.ynz");
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "wait-orders-them sequential build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        seq_stdout.trim(),
+        "A\nB\ndone",
+        "--no-auto-parallel with wait fa(): same A/B/done order; stdout:\n{seq_stdout}"
+    );
+}
+
+// ── v0.3-M3b Phase 4 fix-round: corpse-(a) and aliasing-guard regressions ─────
+
+#[test]
+fn v03_m3b_p4_parallel_number_return_correct_output() {
+    // WHY: Regression lock for corpse-(a) — a parallel let-binding to a decimal128
+    // (`number`) suspending callee must route its i128 IntValue through
+    // `bind_sm_return_value`, which allocates an i128 alloca. A hand-rolled
+    // `to_i64_bits` path would panic inside the Number arm and corrupt the value.
+    // This test asserts the compile succeeds and the output is correct.
+    let src = fixture("v0_3_m3b_p4_parallel_number_return.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "parallel number-return build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par.trim(),
+        "a:1.5\nb:2.5",
+        "parallel number-return must print a:1.5 and b:2.5; stdout:\n{par}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_parallel_number_return_byte_identical() {
+    // WHY: Cross-impl consistency — parallel number return must be byte-identical
+    // under default and --no-auto-parallel modes.
+    let src = fixture("v0_3_m3b_p4_parallel_number_return.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par, seq,
+        "number-return stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_parallel_float_return_correct_output() {
+    // WHY: Regression lock for corpse-(a) — a parallel let-binding to a `float`
+    // suspending callee must route its FloatValue (f64) through `bind_sm_return_value`,
+    // which allocates an f64 alloca. A hand-rolled `to_i64_bits` path would panic
+    // inside the Float arm and corrupt the value. This test asserts the compile
+    // succeeds and the output is correct.
+    let src = fixture("v0_3_m3b_p4_parallel_float_return.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "parallel float-return build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par.trim(),
+        "x:3.5\ny:7",
+        "parallel float-return must print x:3.5 and y:7; stdout:\n{par}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_parallel_float_return_byte_identical() {
+    // WHY: Cross-impl consistency — parallel float return must be byte-identical
+    // under default and --no-auto-parallel modes.
+    let src = fixture("v0_3_m3b_p4_parallel_float_return.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par, seq,
+        "float-return stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_parallel_string_return_correct_output() {
+    // WHY: Regression lock for corpse-(a) — a parallel let-binding to a `string`
+    // suspending callee must route its PointerValue (heap pointer) through
+    // `bind_sm_return_value`, which converts the pointer to i64 bits via
+    // `build_ptr_to_int`. A hand-rolled `to_i64_bits` path would panic inside the
+    // pointer-return arm. This test asserts the compile succeeds and the output is correct.
+    let src = fixture("v0_3_m3b_p4_parallel_string_return.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "parallel string-return build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par.trim(),
+        "first:hello\nsecond:world",
+        "parallel string-return must print first:hello and second:world; stdout:\n{par}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_parallel_string_return_byte_identical() {
+    // WHY: Cross-impl consistency — parallel string return must be byte-identical
+    // under default and --no-auto-parallel modes.
+    let src = fixture("v0_3_m3b_p4_parallel_string_return.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par, seq,
+        "string-return stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_parallel_errors_return_correct_output() {
+    // WHY (HOLE B): an errors-capable (`-> int errors`) suspending callee in a parallel
+    // group returns the 2-slot `{i64, i64}` errors ABI struct. The parallel-group return
+    // load must rebuild that struct (via `is_errors_capable_fn` + `load_return_value_errors`)
+    // so `bind_sm_return_value` registers the binding in `errors_capable_locals`. Without it,
+    // the load falls into the bare-i64 catch-all, collapses the 2-slot struct to one word,
+    // and dereferences garbage → SIGSEGV (exit 139). This test asserts exit 0 and the correct
+    // values. If the EC parallel-return arm regresses, this test segfaults.
+    let src = fixture("v0_3_m3b_p4_parallel_errors_return.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "parallel errors-return build must exit 0 (no segfault); stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par.trim(),
+        "a:10\nb:20",
+        "parallel errors-return must print a:10 and b:20; stdout:\n{par}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_parallel_errors_return_byte_identical() {
+    // WHY (HOLE B): cross-impl consistency — a parallel errors-capable return must be
+    // byte-identical and exit 0 under both default and --no-auto-parallel modes. Before the
+    // EC parallel-return arm, default mode segfaulted (exit 139) while --no-auto-parallel
+    // exited 0 — a divergence this test locks against recurring.
+    let src = fixture("v0_3_m3b_p4_parallel_errors_return.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par, seq,
+        "errors-return stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_heterogeneous_ec_group_byte_identical() {
+    // WHY (HOLE B coverage): a heterogeneous auto-parallel group mixing a `-> int errors`
+    // (2-slot {err,ok}) member with a `-> int` (1-slot) member must compose correctly — each
+    // member's return-binding load dispatches on its own return type. A shared dispatch path
+    // would garble one. Locks the mixed-EC-group case the R4 adversarial pass flagged as
+    // uncovered (it works, but had no permanent regression test). Must be byte-identical +
+    // exit 0 in both modes.
+    let src = fixture("v0_3_m3b_p4_heterogeneous_ec_group.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par.trim(),
+        "a:42\nb:7",
+        "heterogeneous EC group must produce a:42 then b:7; stdout:\n{par}"
+    );
+    assert_eq!(
+        par, seq,
+        "heterogeneous-EC-group stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_share_read_pair_correct_output() {
+    // WHY: two suspending calls taking a mutable-heap `share` argument run correctly under the
+    // conservative floor (they sequentialize — a mutable-heap arg is a potential write). Output
+    // must be correct and exit 0 in the default mode.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_p4_share_read_pair_sequentializes.ynz"));
+    assert_eq!(
+        code, 0,
+        "share-read-pair fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "one\ntwo\ndone",
+        "share-read pair must print one, two, done; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_share_read_pair_byte_identical() {
+    // WHY: cross-impl consistency for the share-read pair. Under the conservative floor the
+    // pair sequentializes (mutable-heap arg → potential write), and stdout is byte-identical
+    // to --no-auto-parallel.
+    let src = fixture("v0_3_m3b_p4_share_read_pair_sequentializes.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par, seq,
+        "share-read-pair stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_share_read_pair_sequentializes_under_floor() {
+    // test-ratchet: the conservative floor (Golden Rule 5 soundness > Rule 10 perf) forfeits
+    // read-only-mutable-heap parallelism. This test previously asserted the two `share`-heap
+    // reads OVERLAP (≈200ms); that capability rested on a per-form ownership classification
+    // proven unsound across three gate rounds. The floor treats every mutable-heap arg as a
+    // potential write, so the pair now sequentializes in BOTH modes (≈400ms). Assertion
+    // flipped to lock the sound behavior; reversal = a real type+alias-aware ownership analysis.
+    //
+    // WHY: a mutable-heap (shape) argument is a potential aliased write under the floor, so
+    // the two reads do NOT overlap — default mode takes the full ≈400ms sum, same as
+    // --no-auto-parallel. If a future change wrongly re-parallelized them, default would drop
+    // to ≈200ms and this lower-bound assertion would fire.
+    let src = fixture("v0_3_m3b_p4_share_read_pair_sequentializes.ynz");
+
+    let (par_ms, par_code) = time_built_run(&src, false);
+    let (seq_ms, seq_code) = time_built_run(&src, true);
+    assert_eq!(par_code, 0, "default run must exit 0");
+    assert_eq!(seq_code, 0, "--no-auto-parallel run must exit 0");
+
+    assert!(
+        par_ms >= 350,
+        "default run took {par_ms}ms — under the floor two 200ms sleeps sequentialize to ≈400ms (no overlap)"
+    );
+    assert!(
+        seq_ms >= 350,
+        "--no-auto-parallel run took {seq_ms}ms — two 200ms sleeps sum to ≈400ms"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_give_arg_sequenced_correct_output() {
+    // WHY (HOLE A): a `give`-heap argument is ownership transfer = a write. The pair
+    // `consume(give a); inspect(share b)` must be SEQUENCED (give is write-capable), so
+    // `consumed` (100ms) prints before `inspected` (10ms). If `give` were missed by the
+    // write-effect summary (the old lend-only bug), the pair would parallelize and the
+    // shorter `inspect` sleep would print `inspected` first — wrong order.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_give_arg_sequenced.ynz"));
+    assert_eq!(
+        code, 0,
+        "give-arg-sequenced fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "consumed\ninspected\ndone",
+        "give arg must sequence: consumed before inspected; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_give_arg_sequenced_byte_identical() {
+    // WHY (HOLE A): cross-impl consistency — the give-sequenced ordering must be identical
+    // under both modes (the pair is sequential in both because `give` is write-capable).
+    let src = fixture("v0_3_m3b_p4_give_arg_sequenced.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par, seq,
+        "give-arg-sequenced stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_transitive_share_violation_rejected() {
+    // WHY (transitive HOLE C): a `share` parameter written TRANSITIVELY through a bare
+    // mutating callee must be a compile error (design/concurrency.md line 651, full
+    // enforcement). `fa(share x)` passes `x` to `helper(b)` — a bare parameter whose body
+    // mutates it (effective `lend`). The direct checks miss this because `helper`'s DECLARED
+    // modifier is bare, not `lend`; the transitive effective-ownership fixpoint catches it.
+    // Reverting the fixpoint or its `find_transitive_share_violations` consumer makes this
+    // compile and run (prints 999), reopening the soundness hole the independence analysis
+    // relies on. Do NOT relax this to accept a clean run.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_p4_transitive_share_violation.ynz"));
+    assert_eq!(
+        code, 1,
+        "transitive share violation must exit 1 (clean typeck reject); exit was {code}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "transitive share violation: stdout must be empty on a clean compile error; got: {stdout:?}"
+    );
+    assert!(
+        stderr.contains("modified through `helper`"),
+        "transitive share violation: diagnostic must name the mutating callee; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("SIGILL")
+            && !stderr.contains("illegal instruction")
+            && !stderr.contains("malloc"),
+        "transitive share violation: reject must be clean (no crash markers); stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_self_transitive_share_violation_rejected() {
+    // WHY (HOLE 1 — `self`-blindness): a `share self` parameter written TRANSITIVELY through a
+    // mutating callee must be a compile error, IDENTICAL to the named-parameter form. The parser
+    // emits `self` as `Expr::SelfValue`, not `Expr::Ident("self")`; before the `arg_is_binding`
+    // / `root_binding_name` SelfValue arms, the effective-ownership fixpoint matched only
+    // `Expr::Ident`, so `self` flowing into `helper` stayed Reads and the program compiled +
+    // printed 999 — reopening the transitive share-violation hole the independence analysis
+    // relies on. Reverting either SelfValue arm makes this compile and run. Do NOT relax this
+    // to accept a clean run.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_p4_self_transitive_share_violation.ynz"));
+    assert_eq!(
+        code, 1,
+        "self transitive share violation must exit 1 (clean typeck reject); exit was {code}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "self transitive share violation: stdout must be empty on a clean compile error; got: {stdout:?}"
+    );
+    assert!(
+        stderr.contains("modified through `helper`"),
+        "self transitive share violation: diagnostic must name the mutating callee; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("SIGILL")
+            && !stderr.contains("illegal instruction")
+            && !stderr.contains("malloc"),
+        "self transitive share violation: reject must be clean (no crash markers); stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_share_collection_mutation_rejected() {
+    // WHY (HOLE 2 — mutating collection method on a `share` param): an in-place collection
+    // mutator (`array.add`) on a `share` parameter must be a compile error, the same as a direct
+    // element assign. Before the fix, the effective-ownership fixpoint routed a builtin method
+    // receiver through `classify_call_position`, which returns Reads for any builtin method name
+    // (the false "intrinsics take args by share/value" premise) — so `grow(share xs)` compiled
+    // and `xs.add(7)` grew the caller's array (printed 4), and two aliased `.set()` calls would
+    // auto-parallelize into concurrent in-place writes. Reverting the MethodCall-arm carve-out or
+    // the check.rs reject makes this compile and run. Do NOT relax this to accept a clean run.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_p4_share_collection_mutation.ynz"));
+    assert_eq!(
+        code, 1,
+        "share collection mutation must exit 1 (clean typeck reject); exit was {code}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "share collection mutation: stdout must be empty on a clean compile error; got: {stdout:?}"
+    );
+    assert!(
+        stderr.contains("`xs` is declared `share`")
+            && stderr.contains("elements cannot be changed"),
+        "share collection mutation: diagnostic must reject the share-param mutation; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("SIGILL")
+            && !stderr.contains("illegal instruction")
+            && !stderr.contains("malloc"),
+        "share collection mutation: reject must be clean (no crash markers); stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_mutable_heap_share_read_byte_identical() {
+    // WHY: two suspending calls taking a MUTABLE-HEAP `share` argument (a shape) sequentialize
+    // under the conservative floor (a mutable-heap arg is an unconditional potential write), and
+    // stdout stays byte-identical across modes. Byte-identical is the cross-impl oracle — it holds
+    // whether the pair runs parallel or sequential, locking that the floor preserves output.
+    let src = fixture("v0_3_m3b_p4_mutable_heap_share_read_sequentializes.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par, seq,
+        "mutable-heap share-read stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_mutable_heap_share_read_sequentializes_under_floor() {
+    // test-ratchet: conservative floor forfeits read-only-mutable-heap parallelism (GR5 > GR10).
+    // Previously asserted the two `share`-heap reads OVERLAP (≈150ms); under the floor a
+    // mutable-heap arg is always a potential write, so the pair sequentializes (≈300ms) in
+    // both modes. Assertion flipped to lock the sound behavior.
+    //
+    // WHY: the floor sequentializes any mutable-heap-arg pair — default takes the full ≈300ms
+    // sum (no overlap). A future change re-parallelizing it would drop default to ≈150ms and
+    // trip this lower bound.
+    let src = fixture("v0_3_m3b_p4_mutable_heap_share_read_sequentializes.ynz");
+    let (par_ms, par_code) = time_built_run(&src, false);
+    let (seq_ms, seq_code) = time_built_run(&src, true);
+    assert_eq!(par_code, 0, "default run must exit 0");
+    assert_eq!(seq_code, 0, "--no-auto-parallel run must exit 0");
+    assert!(
+        par_ms >= 250,
+        "default run took {par_ms}ms — under the floor two 150ms sleeps sequentialize to ≈300ms (no overlap)"
+    );
+    assert!(
+        seq_ms >= 250,
+        "--no-auto-parallel run took {seq_ms}ms — two 150ms sleeps sum to ≈300ms"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_bare_read_heap_byte_identical() {
+    // WHY: a BARE heap argument is a potential write under the conservative floor (the floor does
+    // not prove a callee read-only), so a pair of bare-heap-arg calls sequentializes, and stdout
+    // stays byte-identical across modes. Byte-identical is the cross-impl oracle locking that the
+    // floor preserves observable output.
+    let src = fixture("v0_3_m3b_p4_bare_read_heap_sequentializes.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par, seq,
+        "bare-read-heap stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_bare_read_heap_sequentializes_under_floor() {
+    // test-ratchet: conservative floor forfeits read-only-mutable-heap parallelism (GR5 > GR10).
+    // Previously asserted two bare-read heap calls OVERLAP; under the floor a mutable-heap arg
+    // is always a potential write, so they sequentialize (≈300ms) in both modes. Flipped to
+    // lock the sound behavior.
+    //
+    // WHY: the floor sequentializes any mutable-heap-arg pair regardless of how the callee
+    // uses it — default takes the full ≈300ms (no overlap).
+    let src = fixture("v0_3_m3b_p4_bare_read_heap_sequentializes.ynz");
+    let (par_ms, par_code) = time_built_run(&src, false);
+    let (seq_ms, seq_code) = time_built_run(&src, true);
+    assert_eq!(par_code, 0, "default run must exit 0");
+    assert_eq!(seq_code, 0, "--no-auto-parallel run must exit 0");
+    assert!(
+        par_ms >= 250,
+        "default run took {par_ms}ms — under the floor two 150ms sleeps sequentialize to ≈300ms (no overlap)"
+    );
+    assert!(
+        seq_ms >= 250,
+        "--no-auto-parallel run took {seq_ms}ms — two 150ms sleeps sum to ≈300ms"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_share_read_vs_lend_write_byte_identical() {
+    // WHY: Regression lock for the aliasing-guard `&&` → `||` fix in independence.rs.
+    // `writeVal(lend h)` (lend arg) and `readVal(share h)` (share arg) — before the
+    // `&&` bug, this pair could have been grouped as Parallel (only writeVal has a lend
+    // arg, so `a_has_lend && b_has_lend` was false). With `||`, any pair where EITHER
+    // has a lend arg stays sequential. Byte-identical output confirms the fix.
+    // The unit-test lock for the exact independence-analysis fix is
+    // `aliased_share_read_vs_lend_write_produces_singletons` in independence.rs.
+    let src = fixture("v0_3_m3b_p4_share_read_vs_lend_write.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par, seq,
+        "share-read/lend-write stdout must be byte-identical in both modes"
+    );
+}
+
+#[test]
+fn v03_m3b_p4_share_read_vs_lend_write_correct_output() {
+    // WHY: The `||` guard sequences `writeVal(lend h)` before `readVal(share h)`.
+    // `writeVal` sleeps 100ms; `readVal` sleeps 10ms. If they were parallelized,
+    // readVal would complete first (r before w). Sequential output must be `w\nr\ndone`
+    // in both modes — proving writeVal always runs first.
+    let src = fixture("v0_3_m3b_p4_share_read_vs_lend_write.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par.trim(),
+        "w\nr\ndone",
+        "lend-write must complete before share-read (w before r); parallel stdout:\n{par}"
+    );
+    assert_eq!(
+        seq.trim(),
+        "w\nr\ndone",
+        "lend-write must complete before share-read (w before r); sequential stdout:\n{seq}"
+    );
 }

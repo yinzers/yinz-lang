@@ -6,6 +6,7 @@ use ynz_parser::{parse_query, SourceFile, SourceFileRegistry};
 
 use crate::{
     check::{check, TypedModule},
+    effective_ownership,
     exports::{collect_exports, ExportTable},
     generics::{GenericFnTable, GenericShapeTable, MonomorphizationTable},
     intrinsics::PrimitiveIntrinsicTable,
@@ -415,6 +416,77 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
                 );
             }
         }
+    }
+
+    // Transitive effective-ownership fixpoint (v0.3-M3b Phase 4). Classifies every
+    // parameter as `Reads`/`Unknown`/`Writes` across the whole local call graph. Two
+    // consumers read it:
+    //   - Part 2 below: reject `share` params that are written transitively (the
+    //     `design/concurrency.md` line 651 no-escalation rule, extended past the direct
+    //     cases `check.rs` already catches).
+    //   - Codegen independence analysis: classify call-arg positions as potential aliased
+    //     writes (`Writes`/`Unknown`) vs. proven reads (`Reads`).
+    //
+    // `declared_writes` seeds the fixpoint with each function's explicit `lend`/`give`
+    // positions (local AND imported — an imported declared-write position is a definite
+    // write even without a body). `imported_fn_names` marks the cross-module boundary so a
+    // flow into an imported callee at a non-declared position resolves to `Unknown` (sound
+    // conservative), never a spurious `Reads`.
+    let mut declared_writes = effective_ownership::declared_write_positions(&parse.module);
+    for (name, sig) in &sig_output.imported_fns {
+        // Local definitions already have their declared writes from the module walk.
+        if declared_writes.contains_key(name) {
+            continue;
+        }
+        let mut set = std::collections::HashSet::new();
+        for (i, ownership) in sig.param_ownerships.iter().enumerate() {
+            if matches!(
+                ownership,
+                Some(ynz_ast::nodes::OwnershipModifier::Lend)
+                    | Some(ynz_ast::nodes::OwnershipModifier::Give)
+            ) {
+                set.insert(i);
+            }
+        }
+        declared_writes.insert(name.clone(), set);
+    }
+    let effective_ownership_report =
+        effective_ownership::analyze(&parse.module, &declared_writes, &imported_fn_names);
+
+    // Part 2 — reject `share` params written TRANSITIVELY through a callee (full
+    // `design/concurrency.md` line 651 enforcement). The DIRECT cases (a `share` body that
+    // field-assigns the param, or passes it to an explicit `lend`/`give` position) are
+    // already rejected by `check.rs` with a precise span; this catches the transitive case
+    // those checks miss (a bare callee that mutates → infers `lend` → the declared modifier
+    // the direct check inspects is `None`, not `lend`). `Unknown` flows are NOT errors —
+    // benefit of the doubt; the independence side keeps soundness by sequentializing them.
+    let share_violations = effective_ownership::find_transitive_share_violations(
+        &parse.module,
+        &effective_ownership_report,
+        &declared_writes,
+        &imported_fn_names,
+    );
+    for v in share_violations {
+        let type_name =
+            crate::types::type_name(&sig_output.shape_table.resolve_ast_type(&v.param_type));
+        all_diags.push(Diagnostic::error(
+            v.span,
+            format!(
+                "`{param}` is declared `share` (read-only) but it is modified through `{callee}`.",
+                param = v.param_name,
+                callee = v.callee_name,
+            ),
+            format!(
+                "Change the parameter to `lend {param}: {ty}` — the function (directly or through a call) writes to it.",
+                param = v.param_name,
+                ty = type_name,
+            ),
+            format!(
+                "A `share` parameter is a read-only borrow; the caller trusts the value is unchanged. Because `{callee}` modifies `{param}`, this function lends it onward — declare `lend` so the write is visible at every call site.",
+                callee = v.callee_name,
+                param = v.param_name,
+            ),
+        ));
     }
 
     // Export the suspends set so codegen can read it directly instead of deriving

@@ -87,12 +87,12 @@ main done with v0.3-M1
 v0.3-M2 — wait actually suspends (8 pirates, ~100ms total):
 scheduling 8 pirates...
 Clemente: done
-Bonds: done
-Stargell: done
-Mazeroski: done
-Kiner: done
-Wagner: done
 Beaumont: done
+Kiner: done
+Stargell: done
+Bonds: done
+Mazeroski: done
+Wagner: done
 McCutchen: done
 all 8 pirates done
 

@@ -254,8 +254,9 @@ function entrypoint() -> nothing {
     );
 
     // Position: the hint anchors at the end of the `taskId` ident token in the background arg.
-    let expected_pos =
-        src.find("background worker(taskId)").unwrap() + "background worker(".len() + "taskId".len();
+    let expected_pos = src.find("background worker(taskId)").unwrap()
+        + "background worker(".len()
+        + "taskId".len();
     assert!(
         give_hints.iter().any(|h| h.position == expected_pos),
         "Expected give hint at position {} (end of `taskId` in background call), got hints: {:?}",
@@ -290,8 +291,9 @@ function entrypoint() -> nothing {
     );
 
     // Position: the hint anchors at the end of the `taskId` ident token in the background arg.
-    let expected_pos =
-        src.find("background worker(taskId)").unwrap() + "background worker(".len() + "taskId".len();
+    let expected_pos = src.find("background worker(taskId)").unwrap()
+        + "background worker(".len()
+        + "taskId".len();
     assert!(
         copy_hints.iter().any(|h| h.position == expected_pos),
         "Expected copy hint at position {} (end of `taskId` in background call), got hints: {:?}",
