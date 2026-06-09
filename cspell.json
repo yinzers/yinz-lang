@@ -131,6 +131,11 @@
     "Yinz",
     "ynz",
     "ynzfmt",
+    "nopar",
+    "repoint",
+    "trunc",
+    "unbuilt",
+    "zext",
     "zstd"
   ]
 }
