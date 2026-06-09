@@ -457,7 +457,7 @@ _(D_count = 0 — executor touched only emit.rs (matches plan); the 2 documented
 - [x] acceptance-verifier (opus, cumulative): PASS 2026-06-09T20:30 (all 26 ACs across all 4 phases MET; Phase 4 graded fresh live)
 - [x] design-compliance-reviewer (opus, cumulative): PASS 2026-06-09T20:30 (both fixes restore locked invariants; doc correction valid; M2-HALT no-block_on honored)
 - [x] deviation-judge #1 (opus, cumulative — Phase-2 crossing rework, cross-phase angle): PASS 2026-06-09T20:30 (3-slot EC<Number> × 1-slot bool compose with zero collision; disjoint slot lanes + dispatch arms, verified via IR offset map)
-- [x] Committed: <commit SHA>
+- [x] Committed: a628e9f
 
 **Findings Log**:
 - 2026-06-09T20:30 — END-OF-PLAN cumulative opus sweep (Step 4.a; 5 reviewers + 1 cross-phase deviation-judge): **ALL PASS**. All 26 ACs across all 4 phases MET (Phase 4 graded fresh live; Phases 1-3 Evidence holds). Both silent miscompiles closed: Bug-1 `31.75/31.75`→`24.50/31.75`, Bug-2 `0`-vs-`42` divergence→`42` both modes. `independence.rs` untouched (no grouping-suppression duct tape). The Phase-2 3-slot EC rework × Phase-3 bool-truncate compose with zero collision (cross-phase judge verified via IR offset map). All-green gate: `cargo test --workspace` exit 0, every binary 0 failed; clippy/fmt/jargon clean.
