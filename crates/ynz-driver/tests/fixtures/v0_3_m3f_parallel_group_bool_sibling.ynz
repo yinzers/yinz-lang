@@ -1,0 +1,38 @@
+// RED until Phase 3 (M3f) — parallel-group bool sibling frame-slot corruption
+//
+// Fixture (MIN-1): `slowCall` (int, suspends) and `other` (boolean, suspends) are independent
+// — no data dependency — so the auto-parallel pass groups them. A subsequent `wait sleep(1)`
+// follows. Both group results are live across that wait. `a` (int) is read in the if-body.
+//
+// Bug 2 root candidate: the boolean crossing-local flush/reload path (`sm_crossing_bool_set`,
+// emit.rs:1455-1458 — i1 alloca; flush: zext i1→i64; reload: trunc i64→i1) corrupts the int
+// sibling's frame slot when both are parallel-group results flushed across the same later wait.
+// The int `a` reloads as 0 instead of 42.
+//
+// Trigger boundary (bisection table, Research Findings):
+//   {auto-parallel group} × {≥2 results crossing a later wait} × {boolean result used after wait}
+// int+int, int+bool-unused, no-group cases are all correct in both modes.
+//
+// Modes: default → `0`; --no-auto-parallel → `42`. Deterministic divergence. Breaks the M3b
+// cross-impl consistency invariant (default == --no-auto-parallel).
+//
+// Expected output (correct — suspension preserves bound values; default == --no-auto-parallel):
+//   42
+function slowCall() -> int {
+  wait sleep(40)
+  return 42
+}
+
+function other() -> boolean {
+  wait sleep(40)
+  return true
+}
+
+function entrypoint() -> nothing {
+  let a = slowCall()
+  let cond = other()
+  wait sleep(1)
+  if (cond) {
+    print(a.toString())
+  }
+}

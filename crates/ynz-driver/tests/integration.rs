@@ -6507,3 +6507,69 @@ fn v03_m3b_p4_share_read_vs_lend_write_correct_output() {
         "lend-write must complete before share-read (w before r); sequential stdout:\n{seq}"
     );
 }
+
+#[test]
+fn v0_3_m3f_ec_same_callee_aliasing_distinct_values() {
+    // WHY (M3f Bug 1): value semantics requires each `let` binding of a `-> number errors`
+    // callee to hold the value produced by ITS OWN call. The ok-word in the EC struct
+    // (`{i64,i64}`) points into the callee's 16-byte decimal128 staging slot instead of
+    // copying the value out. A second call to the same callee reuses that slot, clobbering
+    // the first binding before it is read. Both modes aliased identically wrong (31.75/31.75)
+    // when the correct values are 24.50 (which==0) and 31.75 (which==1).
+    //
+    // Expected: "24.50\n31.75\n" — derived from value-binding semantics (each call's return
+    // belongs to that call's binding; a subsequent same-callee call cannot mutate it).
+    //
+    // RED until Phase 2 (M3f): bind_sm_return_value EC arm + lower_errors_capable_call_result
+    // must copy the wide ok-value out of the shared staging slot into per-binding stable storage.
+    let src = fixture("v0_3_m3f_ec_same_callee_aliasing.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "ec-same-callee-aliasing build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par,
+        "24.50\n31.75\n",
+        "p1=fetchPrice(0) must be 24.50 and p2=fetchPrice(1) must be 31.75; stdout:\n{par}"
+    );
+}
+
+#[test]
+fn v0_3_m3f_parallel_group_bool_sibling_survives_wait() {
+    // WHY (M3f Bug 2): a parallel-group result binding (int `a`) must survive a subsequent
+    // `wait` intact regardless of whether a sibling group result is a boolean. The boolean
+    // crossing-local flush/reload path (i1→i64 zext on flush, i64→i1 trunc on reload) corrupts
+    // the int sibling's frame slot when both are parallel-group results crossing the same later
+    // wait. `a` reloads as 0 (default mode) instead of 42 (correct). --no-auto-parallel (no
+    // grouping) correctly returns 42 — demonstrating the divergence breaks the M3b cross-impl
+    // consistency invariant.
+    //
+    // Expected: "42\n" — derived from suspension-preservation semantics (a let binding's value
+    // survives suspension; default and --no-auto-parallel must be byte-identical).
+    //
+    // RED until Phase 3 (M3f): the frame-slot materialization for mixed-type parallel-group
+    // results crossing a wait must assign non-overlapping slots; the bool's zext/trunc must
+    // touch only its own slot.
+    let src = fixture("v0_3_m3f_parallel_group_bool_sibling.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel bool-sibling build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel bool-sibling build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par,
+        "42\n",
+        "parallel mode: a must be 42 (not 0); stdout:\n{par}"
+    );
+    assert_eq!(
+        par, seq,
+        "default and --no-auto-parallel must be byte-identical (cross-impl consistency); \
+         parallel stdout:\n{par}\n--no-auto-parallel stdout:\n{seq}"
+    );
+}

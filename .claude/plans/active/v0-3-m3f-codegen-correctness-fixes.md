@@ -241,31 +241,32 @@ Each phase ends with an **Exit Sequence** block — run those instructions at ev
 6. Add `integration.rs::v0_3_m3f_parallel_group_bool_sibling_survives_wait`: assert default-mode stdout == `"42\n"` AND default-mode stdout == nopar-mode stdout (cross-impl).
 7. Run both → confirm RED with the documented residuals (`31.75/31.75`; `0` vs `42`).
 **Acceptance criteria**:
-- [ ] Two fixtures exist at `crates/ynz-driver/tests/fixtures/v0_3_m3f_*.ynz` with RED-until-Phase-N header comments
-  - Evidence: (filled at phase completion)
-- [ ] `v0_3_m3f_ec_same_callee_aliasing_distinct_values` FAILS on `d24a5f4` with observed `31.75\n31.75` vs expected `24.50\n31.75`
-  - Evidence: (filled at phase completion)
-- [ ] `v0_3_m3f_parallel_group_bool_sibling_survives_wait` FAILS on `d24a5f4` with default `0` ≠ expected `42` AND default ≠ nopar
-  - Evidence: (filled at phase completion)
-- [ ] Each test's expected value is derived from a stated semantic rule (value-binding / suspension-preservation / cross-impl), not from running the current code
-  - Evidence: (filled at phase completion)
+- [x] Two fixtures exist at `crates/ynz-driver/tests/fixtures/v0_3_m3f_*.ynz` with RED-until-Phase-N header comments
+  - Evidence: `crates/ynz-driver/tests/fixtures/v0_3_m3f_ec_same_callee_aliasing.ynz:1` (`// RED until Phase 2 (M3f) — wide-EC same-callee staging-slot aliasing`); `crates/ynz-driver/tests/fixtures/v0_3_m3f_parallel_group_bool_sibling.ynz:1` (`// RED until Phase 3 (M3f) — parallel-group bool sibling frame-slot corruption`). Both new files present in diff with verbatim RED headers naming their fixing phase. (acceptance-verifier, live diff read)
+- [x] `v0_3_m3f_ec_same_callee_aliasing_distinct_values` FAILS on `d24a5f4` with observed `31.75\n31.75` vs expected `24.50\n31.75`
+  - Evidence: LIVE `cargo test -p ynz-driver --test integration v0_3_m3f` — `integration.rs:6531` panic: `left: "31.75\n31.75\n"` / `right: "24.50\n31.75\n"`, message `p1=fetchPrice(0) must be 24.50 and p2=fetchPrice(1) must be 31.75`. Compiler code byte-identical to `d24a5f4` (only docs/config/test files changed since). (acceptance-verifier, live run)
+- [x] `v0_3_m3f_parallel_group_bool_sibling_survives_wait` FAILS on `d24a5f4` with default `0` ≠ expected `42` AND default ≠ nopar
+  - Evidence: LIVE run — `integration.rs:6565` panic: `left: "0\n"` / `right: "42\n"`, message `parallel mode: a must be 42 (not 0)`. Test halts at first `assert_eq!`; the `par == seq` cross-impl assertion (line 6571) proves default ≠ nopar (default `0` vs nopar `42`). (acceptance-verifier, live run)
+- [x] Each test's expected value is derived from a stated semantic rule (value-binding / suspension-preservation / cross-impl), not from running the current code
+  - Evidence: `integration.rs:6521-6528` WHY comment — "derived from value-binding semantics (each call's return belongs to that call's binding; a subsequent same-callee call cannot mutate it)"; `integration.rs:6539-6546` WHY comment — "derived from suspension-preservation semantics (a let binding's value survives suspension; default and --no-auto-parallel must be byte-identical)". Expected values (`24.50`/`31.75`/`42`) come from fixture source + stated rule, NOT current (wrong) output, which appears on the `left` side of each assertion. (acceptance-verifier + plan-adherence)
 **Quality gate**:
-- [ ] Fixtures use only real Yinz operations in current scope (no invented APIs)
-- [ ] Expected outputs derived from spec/semantics, not current behavior
-- [ ] Both tests are RED (fail) on the base commit, demonstrably for the documented reason
-- [ ] No fix code in this phase
+- [x] Fixtures use only real Yinz operations in current scope (no invented APIs) — verified by code-reviewer + rules-compliance (`boolean`, `sleep`, `.or(0.0)`, `.toString()`, `-> number errors`, `wait` all in M1–M3b scope; no invented APIs)
+- [x] Expected outputs derived from spec/semantics, not current behavior — verified (AC4: value-binding + suspension-preservation WHY comments)
+- [x] Both tests are RED (fail) on the base commit, demonstrably for the documented reason — verified by acceptance-verifier live run (`31.75\n31.75` vs `24.50\n31.75`; `0` vs `42`)
+- [x] No fix code in this phase — verified by code-reviewer (diff purely additive `+138/-0`; zero changes to `emit.rs`/`state_machine.rs`/`check.rs`/`independence.rs`)
 **Verification**: `cargo test -p ynz-driver --test integration v0_3_m3f` → both new tests FAIL with the documented residuals; `git diff` touches only fixtures + integration.rs.
 
 **Phase Review Gates** (filled at phase completion by coordinator):
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
-- [ ] design-compliance-reviewer: <verdict + ISO timestamp>
+- [x] code-reviewer: PASS 2026-06-09T16:23 (round 2 — round-1 BLOCK on stale `24.5` comment resolved)
+- [x] rules-compliance-reviewer: PASS 2026-06-09T16:23
+- [x] plan-adherence-verifier: PASS 2026-06-09T16:23 (7/7 steps; plan-file change is documented coordinator writeback, not scope creep)
+- [x] acceptance-verifier: PASS 2026-06-09T16:23 (4/4 ACs MET, live test run)
+- [x] design-compliance-reviewer: PASS 2026-06-09T16:23
 - [ ] Committed: <commit SHA>
+_(D_count = 0 — no documented deviations, no deviation-judges this phase.)_
 
 **Findings Log**:
-_(empty until a reviewer returns BLOCK)_
+- 2026-06-09T16:20 — code-reviewer round 1: BLOCK. Fixture header "Expected output" comment says `24.5` but the return value (`24.50`), the test assertion (`"24.50\n31.75\n"`), and the live decimal128 formatter (preserves trailing zeros per IEEE 754-2008) all say `24.50` — stale comment contradicts the contract on a silent-value bug. `crates/ynz-driver/tests/fixtures/v0_3_m3f_ec_same_callee_aliasing.ynz:14`. (Other 4 reviewers PASS.)
 
 **Exit Sequence — RUN THESE STEPS:**
 1. Pre-reviewer bookkeeping only (tick Quality gate items the diff verified; bump `last_updated:`; do NOT pre-tick ACs/Evidence/Phase Review Gates).
