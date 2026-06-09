@@ -1216,6 +1216,8 @@ fn lower_generic_function<'ctx>(
         sm_crossing_decimal128_set: HashSet::new(),
         sm_crossing_float_set: HashSet::new(),
         sm_crossing_errors_capable_set: HashSet::new(),
+        sm_crossing_ec_number_set: HashSet::new(),
+        sm_crossing_ec_number_i128_allocas: HashMap::new(),
         sm_crossing_shape_embed_set: HashSet::new(),
         sm_crossing_ec_struct_allocas: HashMap::new(),
         sm_crossing_shape_names: HashMap::new(),
@@ -1470,6 +1472,16 @@ struct Cg<'ctx, 'g> {
     // These use 2 frame slots (the two i64 fields stored directly); a companion
     // sm_entry struct alloca is pre-created and refreshed on every reload.
     sm_crossing_errors_capable_set: HashSet<String>,
+    // Subset of sm_crossing_errors_capable_set for `-> number errors` (decimal128 EC) locals.
+    // These use 3 frame slots: {f0, i128_lo, i128_hi}. The i128 bits are copied from the
+    // callee's staging slot at bind time (guarded on f0==0) so the value does not alias
+    // subsequent same-callee calls that reuse the same staging slot. A sm_entry i128 alloca
+    // (keyed here) holds the reloaded decimal bits; f1 is repointed at it on every reload.
+    sm_crossing_ec_number_set: HashSet<String>,
+    // sm_entry i128 alloca for each EC<Number> crossing local. Holds the decimal bits
+    // between suspend and resume. f1 of the companion EC struct is always set to point
+    // at this alloca so `.or()` / `.failed()` can dereference it correctly after reload.
+    sm_crossing_ec_number_i128_allocas: HashMap<String, PointerValue<'ctx>>,
     // Set of crossing local names whose type is a Shape (frame-embedded struct).
     // The struct bytes are stored directly in consecutive frame slots (no separate
     // heap allocation). The frame slot region is the persistent storage; the
@@ -1900,6 +1912,8 @@ fn lower_function<'ctx, 'g>(
         sm_crossing_decimal128_set: HashSet::new(),
         sm_crossing_float_set: HashSet::new(),
         sm_crossing_errors_capable_set: HashSet::new(),
+        sm_crossing_ec_number_set: HashSet::new(),
+        sm_crossing_ec_number_i128_allocas: HashMap::new(),
         sm_crossing_shape_embed_set: HashSet::new(),
         sm_crossing_ec_struct_allocas: HashMap::new(),
         sm_crossing_shape_names: HashMap::new(),
@@ -2094,6 +2108,11 @@ fn lower_function_with_waits<'ctx, 'g>(
             let ty = find_let_typeck_type_in_stmts(&f.body.stmts, cname.as_str(), typed);
             let slots = match ty {
                 Some(Type::Number { precision }) if precision <= 34 => 2,
+                // EC<Number> (-> number errors): 3 frame slots {f0, i128_lo, i128_hi}.
+                Some(Type::ErrorsCapable { ref inner }) if matches!(inner.as_ref(), Type::Number { precision } if *precision <= 34) => {
+                    3
+                }
+                // All other ErrorsCapable {i64,i64}: 2 frame slots for the two fields.
                 Some(Type::ErrorsCapable { .. }) => 2,
                 Some(Type::Shape { name: ref sname }) => shape_frame_slots(sname, shape_abi_sizes),
                 _ => 1,
@@ -2213,6 +2232,8 @@ fn lower_function_with_waits<'ctx, 'g>(
         sm_crossing_ec_struct_allocas: HashMap::new(), // populated during alloca creation below
         sm_crossing_shape_names: HashMap::new(),    // populated during alloca creation below
         sm_crossing_shape_allocas: HashMap::new(),  // populated during alloca creation below
+        sm_crossing_ec_number_set: HashSet::new(),  // populated during alloca creation below
+        sm_crossing_ec_number_i128_allocas: HashMap::new(), // populated during alloca creation below
         sm_scope_depth: 0,
         sm_for_loop_counter: 0,
         sm_number_errors_staging_offset: number_errors_staging_offset,
@@ -2260,6 +2281,8 @@ fn lower_function_with_waits<'ctx, 'g>(
         let mut decimal128_set: HashSet<String> = HashSet::new();
         let mut float_set: HashSet<String> = HashSet::new();
         let mut errors_capable_set: HashSet<String> = HashSet::new();
+        let mut ec_number_set: HashSet<String> = HashSet::new();
+        let mut ec_number_i128_allocas: HashMap<String, PointerValue<'ctx>> = HashMap::new();
         let mut shape_embed_set: HashSet<String> = HashSet::new();
         let mut ec_struct_allocas: HashMap<String, PointerValue<'ctx>> = HashMap::new();
         let mut shape_names_map: HashMap<String, String> = HashMap::new();
@@ -2287,6 +2310,12 @@ fn lower_function_with_waits<'ctx, 'g>(
             let is_decimal128 =
                 matches!(&crossing_ty, Type::Number { precision } if *precision <= 34);
             let is_errors_capable = matches!(&crossing_ty, Type::ErrorsCapable { .. });
+            // EC<Number>: ErrorsCapable wrapping decimal128. Uses 3 frame slots
+            // ({f0, i128_lo, i128_hi}) so the decimal bits are stable across resumes
+            // even when the callee's staging slot is reused by a second same-callee call.
+            let is_ec_number = matches!(&crossing_ty,
+                Type::ErrorsCapable { inner }
+                    if matches!(inner.as_ref(), Type::Number { precision } if *precision <= 34));
             let is_shape = matches!(&crossing_ty, Type::Shape { .. });
 
             if is_int {
@@ -2303,6 +2332,9 @@ fn lower_function_with_waits<'ctx, 'g>(
             }
             if is_errors_capable {
                 errors_capable_set.insert(cname.clone());
+            }
+            if is_ec_number {
+                ec_number_set.insert(cname.clone());
             }
             if is_shape {
                 shape_embed_set.insert(cname.clone());
@@ -2364,6 +2396,18 @@ fn lower_function_with_waits<'ctx, 'g>(
                     .build_store(alloca, ec_struct_alloca)
                     .map_err(|e| format!("sm ec ptr init {cname}: {e}"))?;
                 ec_struct_allocas.insert(cname.clone(), ec_struct_alloca);
+
+                // EC<Number>: also create a per-binding i128 alloca to hold the decimal
+                // bits between suspend and resume. On every reload, the 3 frame slots
+                // (f0, i128_lo, i128_hi) are reconstructed here and f1 is set to point
+                // at this alloca. The alloca is in sm_entry so it dominates all states.
+                if is_ec_number {
+                    let i128_alloca = cg_resume
+                        .builder
+                        .build_alloca(cg_resume.ctx.i128_type(), &format!("{cname}_ec_num_i128"))
+                        .map_err(|e| format!("sm ec num i128 alloca {cname}: {e}"))?;
+                    ec_number_i128_allocas.insert(cname.clone(), i128_alloca);
+                }
             }
         }
         cg_resume.sm_crossing_scalar_set = scalar_set;
@@ -2371,6 +2415,8 @@ fn lower_function_with_waits<'ctx, 'g>(
         cg_resume.sm_crossing_decimal128_set = decimal128_set;
         cg_resume.sm_crossing_float_set = float_set;
         cg_resume.sm_crossing_errors_capable_set = errors_capable_set;
+        cg_resume.sm_crossing_ec_number_set = ec_number_set;
+        cg_resume.sm_crossing_ec_number_i128_allocas = ec_number_i128_allocas;
         cg_resume.sm_crossing_shape_embed_set = shape_embed_set;
         cg_resume.sm_crossing_ec_struct_allocas = ec_struct_allocas;
         cg_resume.sm_crossing_shape_names = shape_names_map;
@@ -2597,17 +2643,87 @@ fn lower_function_with_waits<'ctx, 'g>(
     } else if is_errors_capable {
         // Errors-capable wrapper: read {i64, i64} from return slot, free frame, return struct.
         //
-        // The ok-word may reference frame-resident storage (e.g. the 16-byte `-> number errors`
-        // staging slot inside the composed frame). That storage is freed by free_frame below,
-        // so the returned EC struct's ok-pointer becomes invalid after this function returns.
+        // For `-> number errors` (inner type = decimal128), the ok-word is a pointer into the
+        // composed heap frame's 16-byte staging slot. Freeing the frame makes that pointer
+        // dangling. Fix: on the success path (err_i64 == 0), copy the i128 from the staging
+        // slot into a heap allocation BEFORE freeing the frame, and return the heap pointer as
+        // the new ok-word. The heap allocation ownership transfers to the caller; it is freed
+        // when the caller calls `.or()` / `.orError()` (the error runtime handles EC lifetime).
         //
-        // This is safe for the only reachable caller today: `background` (fire-and-forget)
-        // DISCARDS the EC result entirely — the returned struct is never dereferenced. A caller
-        // that COLLECTS the result must read and copy the ok-value BEFORE free_frame; that
-        // read-before-free + copy path is deferred to M3b (`background` result-collection).
-        // See `registry/features.toml` entry `ec-wrapper-collect-on-completion` and
-        // `design/concurrency.md` M3a Scope Boundaries for the full rationale.
-        let (err_i64, ok_i64) = state_machine::load_return_value_errors(ctx, &builder, frame_ptr)?;
+        // For other EC inner types (int, bool, ptr — all fit in the i64 ok-word directly),
+        // no staging slot is involved, so the two-step read-then-free is safe as-is.
+        let (err_i64, mut ok_i64) =
+            state_machine::load_return_value_errors(ctx, &builder, frame_ptr)?;
+
+        // `-> number errors`: copy the i128 out of the staging slot before freeing the frame.
+        let is_number_errors_inner =
+            matches!(&ret_ty, Type::Number { precision } if *precision <= 34);
+        if is_number_errors_inner {
+            // Guard the staging-slot deref: only valid on the success path (err_i64 == 0).
+            // On the error path ok_i64 == 0 — dereferencing it is a null crash.
+            let is_ok = builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    err_i64,
+                    ctx.i64_type().const_int(0, false),
+                    "wrap_ec_isok",
+                )
+                .map_err(|e| format!("ec wrapper isok cmp: {e}"))?;
+            let wrap_copy_bb = ctx.append_basic_block(wrapper_fn, "wrap_ec_copy");
+            let wrap_merge_bb = ctx.append_basic_block(wrapper_fn, "wrap_ec_merge");
+            builder
+                .build_conditional_branch(is_ok, wrap_copy_bb, wrap_merge_bb)
+                .map_err(|e| format!("ec wrapper cob branch: {e}"))?;
+
+            // Success path: load i128 from staging slot (still live in frame), copy to heap.
+            builder.position_at_end(wrap_copy_bb);
+            let staging_ptr = builder
+                .build_int_to_ptr(
+                    ok_i64,
+                    ctx.ptr_type(AddressSpace::default()),
+                    "wrap_ec_sptr",
+                )
+                .map_err(|e| format!("ec wrapper int_to_ptr: {e}"))?;
+            let i128_val = builder
+                .build_load(ctx.i128_type(), staging_ptr, "wrap_ec_i128")
+                .map_err(|e| format!("ec wrapper load i128: {e}"))?
+                .into_int_value();
+            let heap_ptr = builder
+                .build_call(
+                    rt.ynz_alloc,
+                    &[ctx.i64_type().const_int(16, false).into()],
+                    "wrap_ec_heap",
+                )
+                .map_err(|e| format!("ec wrapper heap alloc: {e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or("ec wrapper heap alloc: expected ptr")?
+                .into_pointer_value();
+            builder
+                .build_store(heap_ptr, i128_val)
+                .map_err(|e| format!("ec wrapper store i128: {e}"))?;
+            let heap_i64 = builder
+                .build_ptr_to_int(heap_ptr, ctx.i64_type(), "wrap_ec_hptr_i64")
+                .map_err(|e| format!("ec wrapper ptr_to_int: {e}"))?;
+            builder
+                .build_unconditional_branch(wrap_merge_bb)
+                .map_err(|e| format!("ec wrapper cob->merge: {e}"))?;
+
+            // Merge: ok_i64 is the heap pointer on success, 0 (untouched) on error.
+            builder.position_at_end(wrap_merge_bb);
+            let phi = builder
+                .build_phi(ctx.i64_type(), "wrap_ec_ok")
+                .map_err(|e| format!("ec wrapper ok phi: {e}"))?;
+            // Entry BB of the is_errors_capable branch falls through to the isok branch,
+            // then to wrap_copy_bb or wrap_merge_bb. The predecessor of wrap_merge_bb
+            // that did NOT take the copy path is the BB before wrap_copy_bb.
+            let pre_copy_bb = wrap_copy_bb
+                .get_previous_basic_block()
+                .ok_or("ec wrapper: no predecessor of wrap_copy_bb")?;
+            phi.add_incoming(&[(&heap_i64, wrap_copy_bb), (&ok_i64, pre_copy_bb)]);
+            ok_i64 = phi.as_basic_value().into_int_value();
+        }
+
         state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
         // Reconstruct the {i64, i64} struct value for the caller.
         let struct_ty = ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false);
@@ -2986,6 +3102,8 @@ fn reload_params_from_frame<'ctx>(
             let float_set = cg.sm_crossing_float_set.clone();
             let decimal128_set = cg.sm_crossing_decimal128_set.clone();
             let errors_capable_set = cg.sm_crossing_errors_capable_set.clone();
+            let ec_number_set = cg.sm_crossing_ec_number_set.clone();
+            let ec_number_i128_allocas = cg.sm_crossing_ec_number_i128_allocas.clone();
             let shape_embed_set = cg.sm_crossing_shape_embed_set.clone();
             let ec_struct_allocas = cg.sm_crossing_ec_struct_allocas.clone();
             for (i, cname) in crossing_names.iter().enumerate() {
@@ -3061,15 +3179,6 @@ fn reload_params_from_frame<'ctx>(
                             .build_store(alloca, i128_val)
                             .map_err(|e| format!("sm crossing reload i128 store {cname}: {e}"))?;
                     } else if is_errors_capable {
-                        // ErrorsCapable: reload 2 frame slots into the companion sm_entry
-                        // struct alloca, then ensure the ptr alloca points at it.
-                        let hi_bits = state_machine::load_local_slot(
-                            ctx,
-                            &cg.builder,
-                            frame_ptr,
-                            slot_idx + 1,
-                            &format!("{cname}_ec_hi"),
-                        )?;
                         let ec_struct_ty =
                             ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false);
                         // Use the pre-created companion alloca (lives in sm_entry — stable).
@@ -3095,12 +3204,93 @@ fn reload_params_from_frame<'ctx>(
                                 &format!("{cname}_r_f1_gep"),
                             )
                             .map_err(|e| format!("reload ec f1 gep {cname}: {e}"))?;
+                        // Store f0 (slot N) — always safe, never a pointer.
                         cg.builder
                             .build_store(f0_ptr, bits)
                             .map_err(|e| format!("reload ec f0 store {cname}: {e}"))?;
-                        cg.builder
-                            .build_store(f1_ptr, hi_bits)
-                            .map_err(|e| format!("reload ec f1 store {cname}: {e}"))?;
+
+                        if ec_number_set.contains(cname.as_str()) {
+                            // EC<Number>: slots N+1 and N+2 hold the i128 decimal bits (lo/hi).
+                            // Reconstruct the i128 in the per-binding alloca and point f1 at it.
+                            // The caller (.or() / .failed()) checks f0 first; on error f1 is
+                            // never dereferenced, so a stale f1 value on the error path is safe.
+                            let lo_bits = state_machine::load_local_slot(
+                                ctx,
+                                &cg.builder,
+                                frame_ptr,
+                                slot_idx + 1,
+                                &format!("{cname}_ec_num_lo"),
+                            )?;
+                            let hi_bits = state_machine::load_local_slot(
+                                ctx,
+                                &cg.builder,
+                                frame_ptr,
+                                slot_idx + 2,
+                                &format!("{cname}_ec_num_hi"),
+                            )?;
+                            let lo_128 = cg
+                                .builder
+                                .build_int_z_extend(
+                                    lo_bits,
+                                    ctx.i128_type(),
+                                    &format!("{cname}_ec_num_lo128"),
+                                )
+                                .map_err(|e| format!("reload ec num lo zext {cname}: {e}"))?;
+                            let hi_128 = cg
+                                .builder
+                                .build_int_z_extend(
+                                    hi_bits,
+                                    ctx.i128_type(),
+                                    &format!("{cname}_ec_num_hi128"),
+                                )
+                                .map_err(|e| format!("reload ec num hi zext {cname}: {e}"))?;
+                            let shift_amt = ctx.i128_type().const_int(64, false);
+                            let hi_shifted = cg
+                                .builder
+                                .build_left_shift(
+                                    hi_128,
+                                    shift_amt,
+                                    &format!("{cname}_ec_num_hishift"),
+                                )
+                                .map_err(|e| format!("reload ec num hi shift {cname}: {e}"))?;
+                            let i128_val = cg
+                                .builder
+                                .build_or(lo_128, hi_shifted, &format!("{cname}_ec_num_i128"))
+                                .map_err(|e| format!("reload ec num or {cname}: {e}"))?;
+                            // Store the reconstructed bits into the per-binding i128 alloca.
+                            let i128_alloca =
+                                *ec_number_i128_allocas.get(cname.as_str()).ok_or_else(|| {
+                                    format!("sm reload ec_num: i128 alloca for `{cname}` missing")
+                                })?;
+                            cg.builder
+                                .build_store(i128_alloca, i128_val)
+                                .map_err(|e| format!("reload ec num i128 store {cname}: {e}"))?;
+                            // Point f1 at the per-binding i128 alloca (stable across the
+                            // current resume call; the alloca is in sm_entry).
+                            let f1_as_i64 = cg
+                                .builder
+                                .build_ptr_to_int(
+                                    i128_alloca,
+                                    ctx.i64_type(),
+                                    &format!("{cname}_ec_num_f1"),
+                                )
+                                .map_err(|e| format!("reload ec num ptr_to_int {cname}: {e}"))?;
+                            cg.builder
+                                .build_store(f1_ptr, f1_as_i64)
+                                .map_err(|e| format!("reload ec num f1 store {cname}: {e}"))?;
+                        } else {
+                            // All other ErrorsCapable: slot N+1 holds f1 (ok-word as i64).
+                            let hi_bits = state_machine::load_local_slot(
+                                ctx,
+                                &cg.builder,
+                                frame_ptr,
+                                slot_idx + 1,
+                                &format!("{cname}_ec_hi"),
+                            )?;
+                            cg.builder
+                                .build_store(f1_ptr, hi_bits)
+                                .map_err(|e| format!("reload ec f1 store {cname}: {e}"))?;
+                        }
                         // Ensure the ptr alloca (the local's alloca) points at the struct.
                         cg.builder
                             .build_store(alloca, struct_alloca)
@@ -3428,9 +3618,6 @@ fn flush_var_slot_to_frame<'ctx>(
         state_machine::store_local_slot(ctx, &cg.builder, frame_ptr, slot_idx, lo)?;
         state_machine::store_local_slot(ctx, &cg.builder, frame_ptr, slot_idx + 1, hi)?;
     } else if cg.sm_crossing_errors_capable_set.contains(name) {
-        // ErrorsCapable {i64,i64}: load the ptr from the ptr alloca, then load
-        // both i64 fields from the companion struct and store to 2 frame slots.
-        // The companion struct alloca lives in sm_entry so it is always valid here.
         let ec_struct_ty = ctx.struct_type(&[ctx.i64_type().into(), ctx.i64_type().into()], false);
         let struct_ptr = cg
             .builder
@@ -3445,22 +3632,93 @@ fn flush_var_slot_to_frame<'ctx>(
             .builder
             .build_struct_gep(ec_struct_ty, struct_ptr, 0, &format!("{name}_f0_gep"))
             .map_err(|e| format!("crossing flush ec f0 gep {name}: {e}"))?;
-        let f1_ptr = cg
-            .builder
-            .build_struct_gep(ec_struct_ty, struct_ptr, 1, &format!("{name}_f1_gep"))
-            .map_err(|e| format!("crossing flush ec f1 gep {name}: {e}"))?;
         let f0 = cg
             .builder
             .build_load(ctx.i64_type(), f0_ptr, &format!("{name}_f0"))
             .map_err(|e| format!("crossing flush ec f0 {name}: {e}"))?
             .into_int_value();
-        let f1 = cg
-            .builder
-            .build_load(ctx.i64_type(), f1_ptr, &format!("{name}_f1"))
-            .map_err(|e| format!("crossing flush ec f1 {name}: {e}"))?
-            .into_int_value();
         state_machine::store_local_slot(ctx, &cg.builder, frame_ptr, slot_idx, f0)?;
-        state_machine::store_local_slot(ctx, &cg.builder, frame_ptr, slot_idx + 1, f1)?;
+
+        if cg.sm_crossing_ec_number_set.contains(name) {
+            // EC<Number>: f1 is a pointer into the per-binding i128 alloca (set at bind
+            // time). Read the i128 bits from that alloca and flush as lo/hi in slots N+1
+            // and N+2. This stores the value itself (not a pointer), so the bits survive
+            // even when the callee's staging slot is reused by a subsequent same-callee call.
+            let f1_ptr = cg
+                .builder
+                .build_struct_gep(ec_struct_ty, struct_ptr, 1, &format!("{name}_f1_gep"))
+                .map_err(|e| format!("crossing flush ec_num f1 gep {name}: {e}"))?;
+            let f1_bits = cg
+                .builder
+                .build_load(ctx.i64_type(), f1_ptr, &format!("{name}_f1_bits"))
+                .map_err(|e| format!("crossing flush ec_num f1 load {name}: {e}"))?
+                .into_int_value();
+            // On the error path f0 != 0 and f1 == 0; guard the deref so we don't
+            // load from a null pointer. On error we store zero lo/hi (don't care — the
+            // error discriminant f0 tells callers to ignore f1).
+            let is_ok = cg
+                .builder
+                .build_int_compare(
+                    inkwell::IntPredicate::EQ,
+                    f0,
+                    ctx.i64_type().const_int(0, false),
+                    &format!("{name}_flush_isok"),
+                )
+                .map_err(|e| format!("crossing flush ec_num isok cmp {name}: {e}"))?;
+            let flush_copy_bb = cg.append_block(&format!("{name}_flush_copy"));
+            let flush_merge_bb = cg.append_block(&format!("{name}_flush_merge"));
+            cg.builder
+                .build_conditional_branch(is_ok, flush_copy_bb, flush_merge_bb)
+                .map_err(|e| format!("crossing flush ec_num branch {name}: {e}"))?;
+            // Success path: deref f1 as a pointer to the i128 decimal bits.
+            cg.builder.position_at_end(flush_copy_bb);
+            let dec_ptr = cg
+                .builder
+                .build_int_to_ptr(
+                    f1_bits,
+                    ctx.ptr_type(inkwell::AddressSpace::default()),
+                    &format!("{name}_flush_decptr"),
+                )
+                .map_err(|e| format!("crossing flush ec_num int_to_ptr {name}: {e}"))?;
+            let i128_val = cg
+                .builder
+                .build_load(ctx.i128_type(), dec_ptr, &format!("{name}_flush_i128"))
+                .map_err(|e| format!("crossing flush ec_num load i128 {name}: {e}"))?
+                .into_int_value();
+            let lo = cg
+                .builder
+                .build_int_truncate(i128_val, ctx.i64_type(), &format!("{name}_flush_lo"))
+                .map_err(|e| format!("crossing flush ec_num lo {name}: {e}"))?;
+            let shift_amt = ctx.i128_type().const_int(64, false);
+            let shifted = cg
+                .builder
+                .build_right_shift(i128_val, shift_amt, false, &format!("{name}_flush_sh"))
+                .map_err(|e| format!("crossing flush ec_num shift {name}: {e}"))?;
+            let hi = cg
+                .builder
+                .build_int_truncate(shifted, ctx.i64_type(), &format!("{name}_flush_hi"))
+                .map_err(|e| format!("crossing flush ec_num hi {name}: {e}"))?;
+            state_machine::store_local_slot(ctx, &cg.builder, frame_ptr, slot_idx + 1, lo)?;
+            state_machine::store_local_slot(ctx, &cg.builder, frame_ptr, slot_idx + 2, hi)?;
+            cg.builder
+                .build_unconditional_branch(flush_merge_bb)
+                .map_err(|e| format!("crossing flush ec_num copy->merge {name}: {e}"))?;
+            // Error path: store zeros so the frame slots have defined values.
+            cg.builder.position_at_end(flush_merge_bb);
+        } else {
+            // All other ErrorsCapable {i64,i64}: f1 is the ok-word (a heap pointer or
+            // an int-as-i64). Store f1 directly in slot N+1 — it is always valid.
+            let f1_ptr = cg
+                .builder
+                .build_struct_gep(ec_struct_ty, struct_ptr, 1, &format!("{name}_f1_gep"))
+                .map_err(|e| format!("crossing flush ec f1 gep {name}: {e}"))?;
+            let f1 = cg
+                .builder
+                .build_load(ctx.i64_type(), f1_ptr, &format!("{name}_f1"))
+                .map_err(|e| format!("crossing flush ec f1 {name}: {e}"))?
+                .into_int_value();
+            state_machine::store_local_slot(ctx, &cg.builder, frame_ptr, slot_idx + 1, f1)?;
+        }
     } else if cg.sm_crossing_shape_embed_set.contains(name) {
         // Shape crossing local: frame-embedded.
         // The ptr alloca points directly into the composed frame's slot region
@@ -3761,6 +4019,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
             value: Expr::Wait(inner, _),
             ..
         } if is_direct_suspending_call(inner, cg.suspend_set) => {
+            let callee_name_str = callee_name_from_call_expr(inner).unwrap_or("");
             let return_val = emit_suspending_call_inline_poll(
                 cg,
                 inner,
@@ -3775,7 +4034,8 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
             )?;
             // Bind the return value to `name`, flushing to frame slot if it is a
             // crossing local (needed before any subsequent suspension point).
-            let alloca = bind_sm_result_and_flush(cg, name, return_val, frame_ptr)?;
+            let alloca =
+                bind_sm_result_and_flush(cg, name, return_val, frame_ptr, callee_name_str)?;
             cg.locals.insert(name.clone(), alloca);
             // EC crossing locals must be tracked in errors_capable_locals so that
             // lower_expr's ident handler can extract the success value (or propagate the
@@ -3791,6 +4051,7 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
         Stmt::Let {
             name, value: inner, ..
         } if is_direct_suspending_call(inner, cg.suspend_set) => {
+            let callee_name_str = callee_name_from_call_expr(inner).unwrap_or("");
             let return_val = emit_suspending_call_inline_poll(
                 cg,
                 inner,
@@ -3803,7 +4064,8 @@ fn lower_sm_stmt_with_wait<'ctx, 'g>(
                 shape_table,
                 current_state,
             )?;
-            let alloca = bind_sm_result_and_flush(cg, name, return_val, frame_ptr)?;
+            let alloca =
+                bind_sm_result_and_flush(cg, name, return_val, frame_ptr, callee_name_str)?;
             cg.locals.insert(name.clone(), alloca);
             // Same EC-crossing-local registration as the wait-let arm above.
             if cg.sm_crossing_errors_capable_set.contains(name.as_str()) {
@@ -5015,6 +5277,20 @@ fn load_sm_return_value_typed<'ctx>(
     }
 }
 
+/// Extract the callee function name from a `Expr::Call(c)` expression, returning `None`
+/// if the callee is not a simple identifier (e.g., a method call or computed callee).
+///
+/// Used to pass the callee name to `bind_sm_result_and_flush` so it can detect
+/// `-> number errors` wide-EC returns and apply copy-on-bind.
+fn callee_name_from_call_expr(expr: &Expr) -> Option<&str> {
+    if let Expr::Call(c) = expr {
+        if let Expr::Ident(name, _) = &c.callee {
+            return Some(name.as_str());
+        }
+    }
+    None
+}
+
 /// Bind a suspending call's return value to a named local alloca.
 ///
 /// For i64 (int, bool, pointer-as-i64) return values: allocate an i64 alloca and store.
@@ -5118,12 +5394,16 @@ fn bind_sm_return_value<'ctx>(
 ///   struct alloca, flush 2 slots. This mirrors the EC flush path in
 ///   `flush_crossing_local_if_needed` and is the fix for wait-ecFn crossing a 2nd wait.
 ///
+/// `callee_name` is used to detect `-> number errors` returns (wide-EC) so copy-on-bind
+/// can fire for non-crossing bindings (see `bind_sm_return_value`).
+///
 /// After this call the alloca is registered in `cg.locals` under `name`.
 fn bind_sm_result_and_flush<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     name: &str,
-    return_val: inkwell::values::BasicValueEnum<'ctx>,
+    mut return_val: inkwell::values::BasicValueEnum<'ctx>,
     frame_ptr: PointerValue<'ctx>,
+    callee_name: &str,
 ) -> Result<PointerValue<'ctx>, String> {
     let is_crossing = cg
         .sm_crossing_names
@@ -5154,9 +5434,6 @@ fn bind_sm_result_and_flush<'ctx>(
             inkwell::values::BasicValueEnum::StructValue(sv)
                 if cg.sm_crossing_errors_capable_set.contains(name) =>
             {
-                // ErrorsCapable {i64, i64}: extract both fields, store into the companion
-                // sm_entry struct alloca (pre-created for this crossing local), and flush
-                // both words to the 2 consecutive frame slots. Mirrors the EC flush path.
                 let ec_struct_ty = cg
                     .ctx
                     .struct_type(&[cg.ctx.i64_type().into(), cg.ctx.i64_type().into()], false);
@@ -5170,10 +5447,11 @@ fn bind_sm_result_and_flush<'ctx>(
                     .build_extract_value(sv, 1, &format!("{name}_ec_f1"))
                     .map_err(|e| format!("bind_sm_result ec extract f1 {name}: {e}"))?
                     .into_int_value();
-                // The alloca is a ptr alloca pointing at the companion struct alloca.
                 let struct_ptr = *cg.sm_crossing_ec_struct_allocas.get(name).ok_or_else(|| {
                     format!("bind_sm_result_and_flush: EC companion alloca for `{name}` missing")
                 })?;
+                // Always flush f0 (error discriminant) to slot N.
+                state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, f0)?;
                 let f0_ptr = cg
                     .builder
                     .build_struct_gep(ec_struct_ty, struct_ptr, 0, &format!("{name}_bind_f0_gep"))
@@ -5185,16 +5463,134 @@ fn bind_sm_result_and_flush<'ctx>(
                 cg.builder
                     .build_store(f0_ptr, f0)
                     .map_err(|e| format!("bind_sm_result ec store f0 {name}: {e}"))?;
-                cg.builder
-                    .build_store(f1_ptr, f1)
-                    .map_err(|e| format!("bind_sm_result ec store f1 {name}: {e}"))?;
+
+                if cg.sm_crossing_ec_number_set.contains(name) {
+                    // EC<Number>: f1 is a staging-slot pointer. Copy the i128 decimal bits
+                    // into the per-binding alloca immediately so a subsequent same-callee call
+                    // that reuses the staging slot cannot clobber this binding's value.
+                    // Guard the deref: on the error path f0 != 0 and f1 == 0 (null deref).
+                    let i128_alloca =
+                        *cg.sm_crossing_ec_number_i128_allocas
+                            .get(name)
+                            .ok_or_else(|| {
+                                format!(
+                                "bind_sm_result_and_flush: EC num i128 alloca for `{name}` missing"
+                            )
+                            })?;
+                    let is_ok = cg
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::EQ,
+                            f0,
+                            cg.ctx.i64_type().const_int(0, false),
+                            &format!("{name}_cob_isok"),
+                        )
+                        .map_err(|e| format!("bind_sm_result ec_num isok cmp {name}: {e}"))?;
+                    let cob_copy_bb = cg.append_block(&format!("{name}_cob_copy"));
+                    let cob_merge_bb = cg.append_block(&format!("{name}_cob_merge"));
+                    cg.builder
+                        .build_conditional_branch(is_ok, cob_copy_bb, cob_merge_bb)
+                        .map_err(|e| format!("bind_sm_result ec_num branch {name}: {e}"))?;
+                    // Success path: copy i128 from staging slot into per-binding alloca.
+                    cg.builder.position_at_end(cob_copy_bb);
+                    let staging_ptr = cg
+                        .builder
+                        .build_int_to_ptr(
+                            f1,
+                            cg.ctx.ptr_type(inkwell::AddressSpace::default()),
+                            &format!("{name}_cob_sptr"),
+                        )
+                        .map_err(|e| format!("bind_sm_result ec_num int_to_ptr {name}: {e}"))?;
+                    let i128_val = cg
+                        .builder
+                        .build_load(cg.ctx.i128_type(), staging_ptr, &format!("{name}_cob_i128"))
+                        .map_err(|e| format!("bind_sm_result ec_num load i128 {name}: {e}"))?
+                        .into_int_value();
+                    cg.builder
+                        .build_store(i128_alloca, i128_val)
+                        .map_err(|e| format!("bind_sm_result ec_num store i128 {name}: {e}"))?;
+                    cg.builder
+                        .build_unconditional_branch(cob_merge_bb)
+                        .map_err(|e| format!("bind_sm_result ec_num copy->merge {name}: {e}"))?;
+                    cg.builder.position_at_end(cob_merge_bb);
+                    // Repoint f1 at the per-binding alloca (stable for this resume call).
+                    let new_f1 = cg
+                        .builder
+                        .build_ptr_to_int(
+                            i128_alloca,
+                            cg.ctx.i64_type(),
+                            &format!("{name}_cob_newf1"),
+                        )
+                        .map_err(|e| format!("bind_sm_result ec_num ptr_to_int {name}: {e}"))?;
+                    cg.builder
+                        .build_store(f1_ptr, new_f1)
+                        .map_err(|e| format!("bind_sm_result ec_num f1 store {name}: {e}"))?;
+                    // Flush i128 bits as lo/hi into frame slots N+1, N+2.
+                    // Load from i128_alloca here (not from i128_val which lives in cob_copy_bb)
+                    // so the instruction dominates all successors of cob_merge_bb.
+                    let i128_for_flush = cg
+                        .builder
+                        .build_load(
+                            cg.ctx.i128_type(),
+                            i128_alloca,
+                            &format!("{name}_cob_reload"),
+                        )
+                        .map_err(|e| format!("bind_sm_result ec_num reload {name}: {e}"))?
+                        .into_int_value();
+                    let lo = cg
+                        .builder
+                        .build_int_truncate(
+                            i128_for_flush,
+                            cg.ctx.i64_type(),
+                            &format!("{name}_cob_lo"),
+                        )
+                        .map_err(|e| format!("bind_sm_result ec_num lo {name}: {e}"))?;
+                    let shift_amt = cg.ctx.i128_type().const_int(64, false);
+                    let shifted = cg
+                        .builder
+                        .build_right_shift(
+                            i128_for_flush,
+                            shift_amt,
+                            false,
+                            &format!("{name}_cob_sh"),
+                        )
+                        .map_err(|e| format!("bind_sm_result ec_num shift {name}: {e}"))?;
+                    let hi = cg
+                        .builder
+                        .build_int_truncate(shifted, cg.ctx.i64_type(), &format!("{name}_cob_hi"))
+                        .map_err(|e| format!("bind_sm_result ec_num hi {name}: {e}"))?;
+                    state_machine::store_local_slot(
+                        cg.ctx,
+                        &cg.builder,
+                        frame_ptr,
+                        slot_idx + 1,
+                        lo,
+                    )?;
+                    state_machine::store_local_slot(
+                        cg.ctx,
+                        &cg.builder,
+                        frame_ptr,
+                        slot_idx + 2,
+                        hi,
+                    )?;
+                } else {
+                    // All other ErrorsCapable: f1 is the ok-word (a heap pointer or int-as-i64).
+                    // Store f1 directly in slot N+1 and the companion struct.
+                    cg.builder
+                        .build_store(f1_ptr, f1)
+                        .map_err(|e| format!("bind_sm_result ec store f1 {name}: {e}"))?;
+                    state_machine::store_local_slot(
+                        cg.ctx,
+                        &cg.builder,
+                        frame_ptr,
+                        slot_idx + 1,
+                        f1,
+                    )?;
+                }
                 // Ensure ptr alloca points at companion struct.
                 cg.builder
                     .build_store(alloca, struct_ptr)
                     .map_err(|e| format!("bind_sm_result ec ptr init {name}: {e}"))?;
-                // Flush both words to frame slots.
-                state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, f0)?;
-                state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx + 1, f1)?;
             }
             // Shape crossing local: the callee stored the struct pointer as i64 bits in the
             // return slot (lower_stmt_return: `ptr_to_int → store_return_value_i64`). The
@@ -5314,7 +5710,101 @@ fn bind_sm_result_and_flush<'ctx>(
         }
         Ok(alloca)
     } else {
-        // Non-crossing: use the standard bind path.
+        // Non-crossing: copy-on-bind for wide-EC (-> number errors) before delegating to
+        // bind_sm_return_value. The EC ok-word for a `-> number errors` callee is a pointer
+        // into the callee's 16-byte decimal128 staging slot, which lives inside the shared
+        // child sub-frame embedded in the caller's composed heap frame. A second call to
+        // the same callee reuses that sub-frame (and its staging slot), overwriting the i128
+        // before this binding's value is read. Copying the i128 into a per-binding stack
+        // alloca now gives this binding its own stable storage that no subsequent call can
+        // clobber. Stack alloca is correct here: non-crossing bindings never survive a
+        // suspension, so the alloca's lifetime covers all uses within the current resume state.
+        if is_number_errors_callee(cg.typed, cg.imported_fns, callee_name) {
+            if let inkwell::values::BasicValueEnum::StructValue(sv) = return_val {
+                let ec_struct_ty = cg
+                    .ctx
+                    .struct_type(&[cg.ctx.i64_type().into(), cg.ctx.i64_type().into()], false);
+                // Extract the error word (f0) and ok word (f1 = staging slot ptr as i64).
+                let err_bits = cg
+                    .builder
+                    .build_extract_value(sv, 0, &format!("{name}_cob_err"))
+                    .map_err(|e| format!("copy-on-bind extract err {name}: {e}"))?
+                    .into_int_value();
+                let ok_bits = cg
+                    .builder
+                    .build_extract_value(sv, 1, &format!("{name}_cob_ok"))
+                    .map_err(|e| format!("copy-on-bind extract ok {name}: {e}"))?
+                    .into_int_value();
+                // Per-binding stable storage allocated unconditionally so the pointer is
+                // always valid for the EC struct's f1 field. Error path: f0 != 0 → `.or()`
+                // reads f0 first and branches to the fallback without ever loading f1.
+                let binding_alloca = cg
+                    .builder
+                    .build_alloca(cg.ctx.i128_type(), &format!("{name}_dec_own"))
+                    .map_err(|e| format!("copy-on-bind alloca {name}: {e}"))?;
+                // Guard the staging-slot load: only dereference ok_bits (staging slot ptr)
+                // on the success path (f0 == 0). On the error path f1 == 0 — a null deref.
+                let is_ok = cg
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        err_bits,
+                        cg.ctx.i64_type().const_int(0, false),
+                        &format!("{name}_cob_isok"),
+                    )
+                    .map_err(|e| format!("copy-on-bind isok cmp {name}: {e}"))?;
+                let cob_copy_bb = cg.append_block(&format!("{name}_cob_copy"));
+                let cob_merge_bb = cg.append_block(&format!("{name}_cob_merge"));
+                cg.builder
+                    .build_conditional_branch(is_ok, cob_copy_bb, cob_merge_bb)
+                    .map_err(|e| format!("copy-on-bind branch {name}: {e}"))?;
+                // Success path: copy the i128 from the staging slot into the binding alloca.
+                cg.builder.position_at_end(cob_copy_bb);
+                let staging_ptr = cg
+                    .builder
+                    .build_int_to_ptr(
+                        ok_bits,
+                        cg.ctx.ptr_type(inkwell::AddressSpace::default()),
+                        &format!("{name}_cob_sptr"),
+                    )
+                    .map_err(|e| format!("copy-on-bind int_to_ptr {name}: {e}"))?;
+                let i128_val = cg
+                    .builder
+                    .build_load(cg.ctx.i128_type(), staging_ptr, &format!("{name}_cob_i128"))
+                    .map_err(|e| format!("copy-on-bind load i128 {name}: {e}"))?
+                    .into_int_value();
+                cg.builder
+                    .build_store(binding_alloca, i128_val)
+                    .map_err(|e| format!("copy-on-bind store {name}: {e}"))?;
+                cg.builder
+                    .build_unconditional_branch(cob_merge_bb)
+                    .map_err(|e| format!("copy-on-bind copy->merge {name}: {e}"))?;
+                cg.builder.position_at_end(cob_merge_bb);
+                // Repoint ok-word at the per-binding alloca. The EC struct's callers (`.or()`,
+                // `.failed()`) always check f0 first; on error, f1 is never loaded.
+                let new_ok_bits = cg
+                    .builder
+                    .build_ptr_to_int(
+                        binding_alloca,
+                        cg.ctx.i64_type(),
+                        &format!("{name}_cob_newok"),
+                    )
+                    .map_err(|e| format!("copy-on-bind ptr_to_int {name}: {e}"))?;
+                // Rebuild the EC struct with the stable ok-word. err_bits is unchanged.
+                let mut new_sv = ec_struct_ty.const_zero();
+                new_sv = cg
+                    .builder
+                    .build_insert_value(new_sv, err_bits, 0, &format!("{name}_cob_sv0"))
+                    .map_err(|e| format!("copy-on-bind insert err {name}: {e}"))?
+                    .into_struct_value();
+                new_sv = cg
+                    .builder
+                    .build_insert_value(new_sv, new_ok_bits, 1, &format!("{name}_cob_sv1"))
+                    .map_err(|e| format!("copy-on-bind insert ok {name}: {e}"))?
+                    .into_struct_value();
+                return_val = new_sv.into();
+            }
+        }
         let alloca = bind_sm_return_value(cg, name, return_val)?;
         Ok(alloca)
     }
@@ -5355,7 +5845,13 @@ fn crossing_local_total_slots(
         let slots = match ty {
             // decimal128: 16-byte value stored in 2 consecutive i64 frame slots.
             Some(Type::Number { precision }) if precision <= 34 => 2,
-            // ErrorsCapable {i64,i64}: 2 frame slots for the two fields directly.
+            // EC<Number> (-> number errors): 3 frame slots {f0, i128_lo, i128_hi}.
+            // The i128 decimal bits are stored directly so same-callee calls that reuse
+            // the callee's staging slot cannot clobber a live crossing binding.
+            Some(Type::ErrorsCapable { ref inner }) if matches!(inner.as_ref(), Type::Number { precision } if *precision <= 34) => {
+                3
+            }
+            // All other ErrorsCapable {i64,i64}: 2 frame slots for the two fields.
             Some(Type::ErrorsCapable { .. }) => 2,
             // Shape: frame-embed the struct bytes in ceil(N/8) consecutive slots.
             Some(Type::Shape { name: ref sname }) => shape_frame_slots(sname, shape_abi_sizes),
@@ -6000,7 +6496,8 @@ fn emit_independent_group_poll<'ctx, 'g>(
             // alloca is correct there). This keeps the parallel path byte-for-byte aligned
             // with the sequential store-into-existing-alloca contract — no parallel-only
             // EC/number store that could drift (corpse-(a)).
-            let alloca = bind_sm_result_and_flush(cg, name, ret_val, parent_frame)?;
+            let alloca =
+                bind_sm_result_and_flush(cg, name, ret_val, parent_frame, &child.callee_name)?;
             cg.locals.insert(name.clone(), alloca);
 
             // EC crossing locals must be tracked in errors_capable_locals so a later use
@@ -12641,6 +13138,42 @@ fn is_errors_capable_fn(
         .is_some_and(|sig| matches!(sig.ret, ynz_typeck::types::Type::ErrorsCapable { .. }))
 }
 
+/// True when the named function returns `-> number errors` (decimal128 EC).
+///
+/// The EC ok-word for such functions is a pointer into the callee's 16-byte staging slot
+/// (embedded in the shared child sub-frame). Distinct bindings of the same callee share
+/// that staging slot — a second call overwrites the slot before the first binding is read.
+/// Copy-on-bind must fire for every wide-EC (number errors) binding to give each binding
+/// its own per-binding i128 storage that the callee cannot later overwrite.
+fn is_number_errors_callee(
+    typed: &TypedModule,
+    imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+    fn_name: &str,
+) -> bool {
+    // Local function: check the AST return type annotation.
+    let local_match = typed.module.items.iter().any(|item| {
+        if let ynz_ast::nodes::Item::Function(f) = item {
+            f.name == fn_name && is_number_errors_return(f)
+        } else {
+            false
+        }
+    });
+    if local_match {
+        return true;
+    }
+    // Imported function: check the typeck signature's return type.
+    imported_fns.get(fn_name).is_some_and(|sig| {
+        matches!(
+            &sig.ret,
+            ynz_typeck::types::Type::ErrorsCapable { inner }
+                if matches!(
+                    inner.as_ref(),
+                    ynz_typeck::types::Type::Number { precision } if *precision <= 34
+                )
+        )
+    })
+}
+
 /// Emit auto-propagation for an errors-capable result struct.
 ///
 /// Emits IR that:
@@ -12720,11 +13253,98 @@ fn lower_ec_auto_propagate<'ctx>(
 ///   to load the success value from the struct.
 /// - **Outside an errors-capable caller**: just stores the struct; the caller
 ///   handles it via `.or()` / `.failed()`.
+///
+/// For `-> number errors` callees the ok-word is a pointer into the callee's decimal128
+/// stack alloca. Non-SM (non-suspending) callees' stack allocas become invalid the
+/// moment the callee returns; calling the same callee a second time allocates a new
+/// frame at the same stack slot, clobbering the first binding's ok-pointer. Copy-on-bind
+/// copies the i128 into a per-binding alloca so each binding owns stable storage.
 fn lower_errors_capable_call_result<'ctx>(
     cg: &mut Cg<'ctx, '_>,
-    result_struct: inkwell::values::StructValue<'ctx>,
-    _callee_name: &str,
+    mut result_struct: inkwell::values::StructValue<'ctx>,
+    callee_name: &str,
 ) -> Result<BasicValueEnum<'ctx>, String> {
+    // Wide-EC copy-on-bind: for `-> number errors` callees the ok-word holds a pointer
+    // to an i128 alloca inside the callee's (now-returned) stack frame. Copy the i128
+    // into a per-binding alloca so this binding's ok-pointer remains valid regardless
+    // of subsequent calls to the same callee. Stack alloca is correct here: non-SM
+    // EC bindings are used within the same non-suspending scope.
+    if is_number_errors_callee(cg.typed, cg.imported_fns, callee_name) {
+        let ok_bits = cg
+            .builder
+            .build_extract_value(result_struct, 1, "ec_cob_ok")
+            .map_err(|e| format!("ec_result cob extract ok {callee_name}: {e}"))?
+            .into_int_value();
+        let err_bits = cg
+            .builder
+            .build_extract_value(result_struct, 0, "ec_cob_err")
+            .map_err(|e| format!("ec_result cob extract err {callee_name}: {e}"))?
+            .into_int_value();
+        // Per-binding stable storage allocated unconditionally so f1 always points to
+        // valid memory. Error path: f0 != 0 → `.or()` reads f0 first and branches to
+        // the fallback without ever loading f1.
+        let binding_alloca = cg
+            .builder
+            .build_alloca(cg.ctx.i128_type(), "ec_cob_dec_own")
+            .map_err(|e| format!("ec_result cob alloca {callee_name}: {e}"))?;
+        // Guard the staging-slot load: only dereference ok_bits on the success path
+        // (err_bits == 0). On the error path ok_bits == 0 — a null deref without this guard.
+        let is_ok = cg
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                err_bits,
+                cg.ctx.i64_type().const_int(0, false),
+                "ec_cob_isok",
+            )
+            .map_err(|e| format!("ec_result cob isok cmp {callee_name}: {e}"))?;
+        let cob_copy_bb = cg.append_block("ec_cob_copy");
+        let cob_merge_bb = cg.append_block("ec_cob_merge");
+        cg.builder
+            .build_conditional_branch(is_ok, cob_copy_bb, cob_merge_bb)
+            .map_err(|e| format!("ec_result cob branch {callee_name}: {e}"))?;
+        // Success path: copy i128 from the callee's staging slot into the binding alloca.
+        cg.builder.position_at_end(cob_copy_bb);
+        let dec_ptr = cg
+            .builder
+            .build_int_to_ptr(
+                ok_bits,
+                cg.ctx.ptr_type(inkwell::AddressSpace::default()),
+                "ec_cob_dec_ptr",
+            )
+            .map_err(|e| format!("ec_result cob int_to_ptr {callee_name}: {e}"))?;
+        let i128_val = cg
+            .builder
+            .build_load(cg.ctx.i128_type(), dec_ptr, "ec_cob_i128")
+            .map_err(|e| format!("ec_result cob load i128 {callee_name}: {e}"))?
+            .into_int_value();
+        cg.builder
+            .build_store(binding_alloca, i128_val)
+            .map_err(|e| format!("ec_result cob store {callee_name}: {e}"))?;
+        cg.builder
+            .build_unconditional_branch(cob_merge_bb)
+            .map_err(|e| format!("ec_result cob copy->merge {callee_name}: {e}"))?;
+        cg.builder.position_at_end(cob_merge_bb);
+        let new_ok_bits = cg
+            .builder
+            .build_ptr_to_int(binding_alloca, cg.ctx.i64_type(), "ec_cob_newok")
+            .map_err(|e| format!("ec_result cob ptr_to_int {callee_name}: {e}"))?;
+        let ec_struct_ty = cg
+            .ctx
+            .struct_type(&[cg.ctx.i64_type().into(), cg.ctx.i64_type().into()], false);
+        let mut new_sv = ec_struct_ty.const_zero();
+        new_sv = cg
+            .builder
+            .build_insert_value(new_sv, err_bits, 0, "ec_cob_sv0")
+            .map_err(|e| format!("ec_result cob insert err {callee_name}: {e}"))?
+            .into_struct_value();
+        new_sv = cg
+            .builder
+            .build_insert_value(new_sv, new_ok_bits, 1, "ec_cob_sv1")
+            .map_err(|e| format!("ec_result cob insert ok {callee_name}: {e}"))?
+            .into_struct_value();
+        result_struct = new_sv;
+    }
     let result_ty = errors_result_type(cg.ctx);
     let slot = cg
         .builder

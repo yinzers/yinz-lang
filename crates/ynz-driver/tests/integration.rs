@@ -6529,8 +6529,7 @@ fn v0_3_m3f_ec_same_callee_aliasing_distinct_values() {
         "ec-same-callee-aliasing build must exit 0; stderr:\n{par_stderr}"
     );
     assert_eq!(
-        par,
-        "24.50\n31.75\n",
+        par, "24.50\n31.75\n",
         "p1=fetchPrice(0) must be 24.50 and p2=fetchPrice(1) must be 31.75; stdout:\n{par}"
     );
 }
@@ -6563,8 +6562,7 @@ fn v0_3_m3f_parallel_group_bool_sibling_survives_wait() {
         "--no-auto-parallel bool-sibling build must exit 0; stderr:\n{seq_stderr}"
     );
     assert_eq!(
-        par,
-        "42\n",
+        par, "42\n",
         "parallel mode: a must be 42 (not 0); stdout:\n{par}"
     );
     assert_eq!(

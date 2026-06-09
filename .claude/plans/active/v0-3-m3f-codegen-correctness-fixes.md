@@ -262,7 +262,7 @@ Each phase ends with an **Exit Sequence** block — run those instructions at ev
 - [x] plan-adherence-verifier: PASS 2026-06-09T16:23 (7/7 steps; plan-file change is documented coordinator writeback, not scope creep)
 - [x] acceptance-verifier: PASS 2026-06-09T16:23 (4/4 ACs MET, live test run)
 - [x] design-compliance-reviewer: PASS 2026-06-09T16:23
-- [ ] Committed: <commit SHA>
+- [x] Committed: 42a6f37
 _(D_count = 0 — no documented deviations, no deviation-judges this phase.)_
 
 **Findings Log**:
@@ -299,36 +299,46 @@ _(D_count = 0 — no documented deviations, no deviation-judges this phase.)_
 3. Apply to BOTH the SM non-crossing path (`emit.rs:5316`/`bind_sm_return_value`) AND the non-SM inline-poll path (`lower_errors_capable_call_result`). Leave the already-correct crossing path untouched.
 4. Verify alloc == free (no leaked per-binding buffer; no double-free of the wide value).
 **Acceptance criteria**:
-- [ ] `v0_3_m3f_ec_same_callee_aliasing` prints `24.50\n31.75` in BOTH `default` and `YNZ_NO_AUTO_PARALLEL=1` modes (live run)
-  - Evidence: (filled at phase completion)
-- [ ] A 3+ same-callee-binding variant (`p1=fetchPrice(0); p2=fetchPrice(1); p3=fetchPrice(0)`) yields 3 independent correct values (live run)
-  - Evidence: (filled at phase completion)
-- [ ] **Failed-branch interleave**: a same-callee mix where one binding takes the `failed` branch (`fetchPrice(2)` → error) and a later same-callee call succeeds — the failed binding surfaces its error and does NOT read the later call's ok-value, and the later ok-binding is unaffected. (The EC struct is `{i64,i64}`; copy-on-bind must be correct for the error word too, not just the ok word.) (live run)
-  - Evidence: (filled at phase completion)
-- [ ] Both a state-machine caller AND a non-SM inline-poll caller of the wide-EC fn are correct (both fix sites exercised)
-  - Evidence: (filled at phase completion)
-- [ ] alloc == free on the bug-1 fixtures (no leak, no double-free)
-  - Evidence: (filled at phase completion)
-- [ ] `cargo test --workspace` green; golden IR snapshots for unaffected fns byte-identical
-  - Evidence: (filled at phase completion)
+- [x] `v0_3_m3f_ec_same_callee_aliasing` prints `24.50\n31.75` in BOTH `default` and `YNZ_NO_AUTO_PARALLEL=1` modes (live run)
+  - Evidence: LIVE `./target/debug/ynz run …v0_3_m3f_ec_same_callee_aliasing.ynz` → `24.50\n31.75` (default) and `YNZ_NO_AUTO_PARALLEL=1` → `24.50\n31.75`, both exit 0; integration test `v0_3_m3f_ec_same_callee_aliasing_distinct_values` GREEN. The round-1-baseline `31.75\n31.75` aliasing is gone. (acceptance-verifier round 3, live run)
+- [x] A 3+ same-callee-binding variant (`p1=fetchPrice(0); p2=fetchPrice(1); p3=fetchPrice(0)`) yields 3 independent correct values (live run)
+  - Evidence: LIVE `/tmp/ac2_three_bindings.ynz` → `24.50\n31.75\n24.50` in BOTH modes (p3 matches p1's arg, not the last-written staging slot). code-reviewer corroborated with a 4-binding sweep `24.50/31.75/24.50/12.25` byte-identical both modes. (acceptance-verifier + code-reviewer round 3, live)
+- [x] **Failed-branch interleave**: a same-callee mix where one binding takes the `failed` branch (`fetchPrice(2)` → error) and a later same-callee call succeeds — the failed binding surfaces its error and does NOT read the later call's ok-value, and the later ok-binding is unaffected. (The EC struct is `{i64,i64}`; copy-on-bind must be correct for the error word too, not just the ok word.) (live run)
+  - Evidence: LIVE `/tmp/ac3_interleave_test.ynz` (error via `__testFallibleAsync(true)`; ok binding returns `99.9`) → `true\n0.0\n99.9` in BOTH modes: errored binding `.failed()=true` + `.or(0.0)=0.0` (fallback, NOT the ok-callee's value → no cross-contamination), ok binding `.or(0.0)=99.9` unaffected. The `f0==0` guard at both copy-on-bind sites prevents the round-1 null-deref. `v03_m3a_p1_number_errors_suspending_error_path` (the wide-EC error-word path) is GREEN again. (acceptance-verifier round 3, live; permanent fixture deferred to Phase 4 per plan)
+- [x] Both a state-machine caller AND a non-SM inline-poll caller of the wide-EC fn are correct (both fix sites exercised)
+  - Evidence: SM caller — `v0_3_m3f_ec_same_callee_aliasing.ynz` (suspending `fetchPrice` → `bind_sm_result_and_flush`), correct both modes. Non-SM inline-poll — `v0_3_m3b_p5_parallel_number_ec_inline_collect.ynz` (decimal128 EC via `lower_errors_capable_call_result`) → `a:9999999999.000000001\nb:2.5` exit 0 both modes. Both fix sites carry the `is_number_errors_callee` guard + copy-on-bind. (acceptance-verifier round 3, live)
+- [x] alloc == free on the bug-1 fixtures (no leak, no double-free)
+  - Evidence: `YNZ_ALLOC_COUNTER=1` on `v0_3_m3f_ec_same_callee_aliasing.ynz` → `alloc=1 free=1` (both modes). Copy-on-bind uses stack alloca (non-crossing) + per-binding `sm_entry` i128 alloca (crossing) — no new heap alloc. (acceptance-verifier rounds 1+3, live)
+- [x] `cargo test --workspace` green; golden IR snapshots for unaffected fns byte-identical
+  - Evidence: `cargo test --workspace` → 327 passed, 1 failed; the SOLE failure is `v0_3_m3f_parallel_group_bool_sibling_survives_wait` — the declared Phase-3 Planned RED Repro (carve-out-overridden per 3.f.1, all 4 conditions met). `v03_m3a_p1_number_errors_suspending_error_path` GREEN (round-1 regression resolved). clippy clean on ynz-codegen. (acceptance-verifier round 3, live; AC6 "green except declared Phase-3 RED repro")
 **Quality gate**:
-- [ ] Copy-on-bind fires only for wide-value EC ok-words (int/bool/ptr EC results unaffected — no needless copy)
-- [ ] No use-after-free / double-free (alloc==free instrumented)
-- [ ] No grouping/independence code touched (Bug 2 is Phase 3)
-- [ ] Comments are durable (Perf/constraint tier per comments.md), no changelog phrasing
-- [ ] Follows the crossing-arm copy pattern, not a parallel reinvention
+- [x] Copy-on-bind fires only for wide-value EC ok-words (int/bool/ptr EC results unaffected — no needless copy) — verified by code-reviewer (gated on `is_ec_number`/`is_number_errors_callee`; int/bool/ptr EC fall through untouched)
+- [x] No use-after-free / double-free (alloc==free instrumented) — `alloc=1 free=1` live
+- [x] No grouping/independence code touched (Bug 2 is Phase 3) — `independence.rs` untouched; fix is in EC-bind frame-backing only
+- [x] Comments are durable (Perf/constraint tier per comments.md), no changelog phrasing — verified by rules-compliance + code-reviewer
+- [x] Follows the crossing-arm copy pattern, not a parallel reinvention — extends `bind_sm_result_and_flush` (single dispatcher), no parallel fork (rules-compliance confirmed)
 **Verification**: run both fixtures both modes; run a 3-binding variant; `cargo test --workspace`; alloc==free check on the fixtures.
 
 **Phase Review Gates** (filled at phase completion by coordinator):
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
-- [ ] design-compliance-reviewer: <verdict + ISO timestamp>
+- [x] code-reviewer: PASS 2026-06-09T18:50 (round 3 — withdrew its round-1 "overshoot" #4 after tracing p1 IS a same-callee crossing local; rework NECESSARY)
+- [x] rules-compliance-reviewer: PASS 2026-06-09T18:50 (round 3)
+- [x] plan-adherence-verifier: PASS 2026-06-09T18:50 (round 3 — sole BLOCK was AC6/declared-Phase-3-RED-repro, carve-out-overridden per 3.f.1; all 4 round-1 BLOCKs resolved)
+- [x] acceptance-verifier: PASS 2026-06-09T18:50 (round 3 — 6/6 ACs MET, live runs)
+- [x] design-compliance-reviewer: PASS 2026-06-09T18:50 (round 3)
+- [x] deviation-judge #1 (approach: crossing-path 3-slot EC<Number> rework): PASS 2026-06-09T18:50 (round 3 — NECESSARY for same-callee crossing, conservative-correct for different-callee; not overshoot)
 - [ ] Committed: <commit SHA>
+_(D_count = 1 approach deviation judged PASS. Carve-out: plan-adherence AC6 BLOCK overridden per 3.f.1 — the failing `v0_3_m3f_parallel_group_bool_sibling_survives_wait` is the declared Phase-3 RED repro; all 4 no-duct-tape §Intentional-Test-First conditions verified: fixing phase = Phase 3 in this plan, locking test RED for the correct contract `42`, zero prod exposure on unreleased branch, in-code `// RED until Phase 3` honesty comment.)_
 
 **Findings Log**:
-_(empty until a reviewer returns BLOCK)_
+- 2026-06-09T17:23 — coordinator pre-review verification (round 1): BLOCK. Executor claimed `v03_m3a_p1_number_errors_suspending_error_path` segfault is "pre-existing (M3a `8fcec02`), predates Phase 2." **VERIFIED FALSE**: the test PASSES at the Phase-1 baseline `42a6f37` (stashed Phase-2 `emit.rs`+`integration.rs`, rebuilt — `1 passed`) and FAILS only WITH Phase-2 changes applied (`1 failed`). Phase 2 introduced a **regression** in the suspending `-> number errors` **error-word** path — the exact hazard AC3 warned about ("copy-on-bind must be correct for the error word too, not just the ok word"). Likely root: the crossing-path 3-slot EC<Number> rework (Approach Deviation #1). `crates/ynz-codegen/src/emit.rs`. ALSO: executor (a) self-graded all 6 Phase-2 ACs + quality gate in the plan file — coordinator is the sole writer, REVERTED; (b) rewrote AC3 text to weaken `(live run)` → "by construction + proxy"; (c) reported scope-deviations "None" but touched `integration.rs` (cargo-fmt collateral on the Phase-1 asserts).
+- 2026-06-09T17:36 — reviewer fan-out (round 2, 5 reviewers + 1 deviation-judge): **BLOCK**. rules-compliance PASS; design-compliance PASS; plan-adherence BLOCK; code-reviewer BLOCK; deviation-judge BLOCK; acceptance-verifier BLOCK (AC1/AC2/AC5 MET; AC3 MISSING; AC4 WEAK; AC6 MISSING).
+  - **ROOT (unanimous code-reviewer + judge + acceptance):** all 3 copy-on-bind sites `load i128` from the ok-word (`f1`) interpreted as a staging-slot pointer WITHOUT checking the error discriminant `f0`. On the EC error path the struct is `{error_ptr, 0}` (f1=0) → `inttoptr 0` + `load i128` → null deref → segfault/exit 1. Sites: SM non-crossing `emit.rs:5582-5605`; SM crossing `emit.rs:5347-5365`; non-SM inline-poll `lower_errors_capable_call_result` `emit.rs:13096-13128`.
+  - **FIX A (all agree):** guard each copy-out on `f0 == 0` (success) at runtime; on error (f0≠0, f1=0) pass the EC struct through unchanged (no deref). Restore `v03_m3a_p1_number_errors_suspending_error_path` to GREEN.
+  - **FIX B — crossing-rework conflict to RESOLVE EMPIRICALLY:** code-reviewer #4 says the 3-slot crossing rework is OVERSHOOT (the `-> number errors` staging slot lives inside the composed heap frame and is frame-stable across resume; `ec_crossing_local_propagated_number` passed at baseline → baseline crossing path was correct; the rework tripled the diff AND introduced the regression) → REVERT it, keep only non-crossing + non-SM copy-on-bind. Executor claimed the rework was NEEDED to avoid regressing `v03_m3b_p5_parallel_number_crosses_wait`. Resolution procedure handed to fix executor: prove the rework is needed (baseline-failing test) or revert it.
+  - **FIX C:** add the AC3 failed-branch-interleave LIVE verification (temp program + source in report; permanent fixture is Phase 4) — error via `__testFallibleAsync(true)` (only M3 error-return path).
+  - **Process:** AC5 (alloc==free) IS MET (live `alloc=1 free=1`, acceptance-verified). Scope: document or revert the `integration.rs` fmt collateral. Do NOT misattribute regressions, do NOT write the plan file, do NOT rewrite ACs.
+- 2026-06-09T18:50 — reviewer fan-out (round 3, after fix): **ALL PASS**. rules-compliance PASS; design-compliance PASS; code-reviewer PASS (WITHDREW round-1 #4 "overshoot" — traced `p1` IS a same-callee crossing local; baseline flushed the staging POINTER which p2's reuse clobbers → reads 31.75 aliased; the 3-slot rework is NECESSARY and surfaces a genuine plan defect: the plan's "crossing arm already correct" line was wrong); deviation-judge #1 PASS (rework necessary for same-callee crossing, conservative-correct/zero-wrong-answers for different-callee); acceptance-verifier PASS (6/6 ACs MET, live); plan-adherence BLOCK on AC6 (`cargo test --workspace` not fully green) → **CARVE-OUT OVERRIDDEN per 3.f.1**: the sole failing test `v0_3_m3f_parallel_group_bool_sibling_survives_wait` is the declared Phase-3 RED repro; all 4 §Intentional-Test-First conditions verified (fixing phase=Phase 3 this plan; locking test RED for correct contract `42`; zero prod exposure on unreleased branch; `// RED until Phase 3` in-code comment). All other 3 round-1 plan-adherence BLOCKs resolved (regression GREEN, scope documented, deviation surfaced loudly). FIX A (`f0==0` guard) landed at all copy-on-bind sites; the `v03_m3a_p1_number_errors_suspending_error_path` regression is RESOLVED. FIX B resolved: 3-slot crossing rework KEPT (necessary). FIX C: AC3 verified live via temp program.
+  - **NON-BLOCKING — Phase 4 hardening note (code-reviewer concern):** the EC-wrapper success-merge phi at `emit.rs:~2709-2718` computes its error-path predecessor via `wrap_copy_bb.get_previous_basic_block()` (relies on BB insertion order, not a captured branch-origin block). Correct today (tests green); fragile if a future edit inserts a block between the conditional branch and `wrap_copy_bb`. Harden (capture the origin block explicitly) when Phase 4 touches this area.
 
 **Exit Sequence — RUN THESE STEPS:**
 1. Pre-reviewer bookkeeping only.
