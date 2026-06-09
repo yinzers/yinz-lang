@@ -5702,9 +5702,26 @@ fn bind_sm_result_and_flush<'ctx>(
                 ))
                     }
                 };
+                // Bool crossing locals have an i1 alloca (matching the rest of codegen);
+                // the return slot always holds the value as i64 (1-bit zero-extended). Store
+                // i1 into the alloca (truncate from i64) to prevent an i64-into-i1-alloca
+                // type mismatch that overwrites 7 bytes past the alloca, corrupting adjacent
+                // group-member allocas (the parallel-group bool-sibling slot-corruption bug).
+                let store_val: inkwell::values::BasicValueEnum = if cg
+                    .sm_crossing_bool_set
+                    .contains(name)
+                {
+                    cg.builder
+                        .build_int_truncate(bits, cg.ctx.bool_type(), &format!("{name}_bind_trunc"))
+                        .map_err(|e| format!("bind_sm_result bool trunc {name}: {e}"))?
+                        .into()
+                } else {
+                    bits.into()
+                };
                 cg.builder
-                    .build_store(alloca, bits)
+                    .build_store(alloca, store_val)
                     .map_err(|e| format!("bind_sm_result store {name}: {e}"))?;
+                // Frame slot always holds i64 (zext of the bit); slot_idx is already correct.
                 state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, slot_idx, bits)?;
             }
         }

@@ -27,7 +27,7 @@
 - webpage-docs (Patrick Rizzardi) — 0 active plans — 2026-05-20
 
 ### Active Workstreams
-- v0-3-m3f-codegen-correctness-fixes (Patrick Rizzardi) — 9 files touched — 14/77 done — roadmap: v0-3-concurrency-perf — 2026-06-09
+- v0-3-m3f-codegen-correctness-fixes (Patrick Rizzardi) — 9 files touched — 32/78 done — roadmap: v0-3-concurrency-perf — 2026-06-09
 <!-- RADAR-END -->
 
 ---

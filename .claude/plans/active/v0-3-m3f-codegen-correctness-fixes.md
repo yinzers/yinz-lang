@@ -326,7 +326,7 @@ _(D_count = 0 — no documented deviations, no deviation-judges this phase.)_
 - [x] acceptance-verifier: PASS 2026-06-09T18:50 (round 3 — 6/6 ACs MET, live runs)
 - [x] design-compliance-reviewer: PASS 2026-06-09T18:50 (round 3)
 - [x] deviation-judge #1 (approach: crossing-path 3-slot EC<Number> rework): PASS 2026-06-09T18:50 (round 3 — NECESSARY for same-callee crossing, conservative-correct for different-callee; not overshoot)
-- [ ] Committed: <commit SHA>
+- [x] Committed: 9e7ee78
 _(D_count = 1 approach deviation judged PASS. Carve-out: plan-adherence AC6 BLOCK overridden per 3.f.1 — the failing `v0_3_m3f_parallel_group_bool_sibling_survives_wait` is the declared Phase-3 RED repro; all 4 no-duct-tape §Intentional-Test-First conditions verified: fixing phase = Phase 3 in this plan, locking test RED for the correct contract `42`, zero prod exposure on unreleased branch, in-code `// RED until Phase 3` honesty comment.)_
 
 **Findings Log**:
@@ -369,34 +369,36 @@ _(D_count = 1 approach deviation judged PASS. Carve-out: plan-adherence AC6 BLOC
 2. Fix the proven mechanism so each group-result gets a correct, non-overlapping frame slot and the bool's zext/trunc reads/writes ITS slot only. Do not reorder or skip the int sibling's flush/reload.
 3. Confirm the auto-parallel headline still works: the two statements still overlap (independent interleaved poll), not serialized.
 **Acceptance criteria**:
-- [ ] `v0_3_m3f_parallel_group_bool_sibling` prints `42` in BOTH modes AND `default == --no-auto-parallel` (live run)
-  - Evidence: (filled at phase completion)
-- [ ] Full trigger matrix correct in both modes (live runs): int+int (top + nested use), int+bool (bool used after wait — top + nested), **bool-first then int (reverse member order — flushes out any slot-ordering-matches-declaration-order assumption)**, bool+bool, ≥3 group members, a `number`/decimal128 sibling, and **a `-> number errors` wide-EC result (2-slot) paired with the bool (1-slot) both crossing the same later wait (the 2-slot×1-slot interleaving — most likely slot-index-shift hiding spot — with an explicit expected decimal asserted)**
-  - Evidence: (filled at phase completion)
-- [ ] The previously-passing cases (B, C, H1, H2, H3, data-dep from the Research matrix) still pass — no regression
-  - Evidence: (filled at phase completion)
-- [ ] The M3b overlap-timing fixture still shows ≈max-not-sum (headline preserved — grouping not suppressed)
-  - Evidence: (filled at phase completion)
-- [ ] `independence.rs` unchanged (or, if touched, justified as NOT grouping-suppression); `cargo test --workspace` green
-  - Evidence: (filled at phase completion)
+- [x] `v0_3_m3f_parallel_group_bool_sibling` prints `42` in BOTH modes AND `default == --no-auto-parallel` (live run)
+  - Evidence: LIVE — default → `42`, `YNZ_NO_AUTO_PARALLEL=1` → `42` (byte-identical, exit 0); was `default→0`/`nopar→42` pre-fix. Locking test `v0_3_m3f_parallel_group_bool_sibling_survives_wait` GREEN. (acceptance-verifier, live run)
+- [x] Full trigger matrix correct in both modes (live runs): int+int (top + nested use), int+bool (bool used after wait — top + nested), **bool-first then int (reverse member order — flushes out any slot-ordering-matches-declaration-order assumption)**, bool+bool, ≥3 group members, a `number`/decimal128 sibling, and **a `-> number errors` wide-EC result (2-slot) paired with the bool (1-slot) both crossing the same later wait (the 2-slot×1-slot interleaving — most likely slot-index-shift hiding spot — with an explicit expected decimal asserted)**
+  - Evidence: LIVE — all 9 cases byte-identical PAR==SEQ: int+int top `42\n99`, int+int nested `42\n99`, int+bool top `42\ntrue`, int+bool nested `42\ntrue`, bool-first-then-int `42\ntrue`, bool+bool `true\nfalse`, ≥3-member `42\n99\ntrue`, decimal128 sibling `3.14\ntrue`, and **EC `-> number errors`(3-slot post-Phase-2)+bool(1-slot) → `24.50\ntrue`** (the flagged hiding spot — CLEAN). Slot-index integrity confirmed (cursor sums per-type widths; truncate touches only the value type, never slot_idx). Phase-2 EC copy-on-bind + Phase-3 bool-truncate compose correctly. (acceptance-verifier + code-reviewer, live)
+- [x] The previously-passing cases (B, C, H1, H2, H3, data-dep from the Research matrix) still pass — no regression
+  - Evidence: LIVE — Case B `42`, H1/C `42\n99`, H2 `42\n99`, H3 `42`, data-dep `42`, all byte-identical both modes; full suite `cargo test --workspace` → 328 passed, 0 failed. (acceptance-verifier, live)
+- [x] The M3b overlap-timing fixture still shows ≈max-not-sum (headline preserved — grouping not suppressed)
+  - Evidence: `cargo test -p ynz-driver --test integration v03_m3b_p4_two_independent_parallel` → 2 passed in 1.37s (≪ sum of both sleeps → overlap preserved). `git diff 9e7ee78 -- crates/ynz-codegen/src/independence.rs` empty. (acceptance-verifier, live)
+- [x] `independence.rs` unchanged (or, if touched, justified as NOT grouping-suppression); `cargo test --workspace` green
+  - Evidence: `git diff 9e7ee78 -- crates/ynz-codegen/src/independence.rs` → empty (zero output). `cargo test --workspace` → 328 passed, 0 failed, 0 ignored — full-green gate restored (the Phase-3 RED repro that held Phase 2 to 327/1 is now GREEN). (acceptance-verifier, live)
 **Quality gate**:
-- [ ] Fix is in frame-slot materialization, NOT grouping suppression (no-duct-tape)
-- [ ] Each group-result frame slot is non-overlapping and correctly sized (bool=1, int=1, decimal128/EC=2)
-- [ ] bool zext/trunc touches only the bool's slot
-- [ ] Cross-impl oracle holds on every new + existing fixture
-- [ ] Durable comments only (constraint/Perf tier), no changelog phrasing
+- [x] Fix is in frame-slot materialization, NOT grouping suppression (no-duct-tape) — `independence.rs` untouched (empty diff); fix is the bool i64→i1 truncate in `bind_sm_result_and_flush`
+- [x] Each group-result frame slot is non-overlapping and correctly sized (bool=1, int=1, decimal128/EC=2/3) — confirmed by code-reviewer (cursor sums per-type widths; truncate never touches slot_idx)
+- [x] bool zext/trunc touches only the bool's slot — the truncate narrows the value stored into the bool's i1 alloca; frame slot still receives i64 (zext); sibling allocas untouched
+- [x] Cross-impl oracle holds on every new + existing fixture — all 9 matrix cases + 328-test suite byte-identical PAR==SEQ
+- [x] Durable comments only (constraint/Perf tier), no changelog phrasing — verified by rules-compliance + code-reviewer (constraint-tier WHY on the 7-byte-overrun hazard)
 **Verification**: run the full trigger matrix both modes; run the M3b overlap-timing fixture; `cargo test --workspace`; cross-impl sweep.
 
 **Phase Review Gates** (filled at phase completion by coordinator):
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
-- [ ] design-compliance-reviewer: <verdict + ISO timestamp>
+- [x] code-reviewer: PASS 2026-06-09T19:30
+- [x] rules-compliance-reviewer: PASS 2026-06-09T19:30
+- [x] plan-adherence-verifier: PASS 2026-06-09T19:30 (3/3 steps; scope clean — only emit.rs)
+- [x] acceptance-verifier: PASS 2026-06-09T19:30 (5/5 ACs MET, full 9-case matrix live, 328/0)
+- [x] design-compliance-reviewer: PASS 2026-06-09T19:30
 - [ ] Committed: <commit SHA>
+_(D_count = 0 — executor touched only emit.rs (matches plan); the 2 documented "scope deviations" were coordinator/hook artifacts, not executor changes. No deviation-judges this phase.)_
 
 **Findings Log**:
-_(empty until a reviewer returns BLOCK)_
+- 2026-06-09T19:30 — reviewer fan-out (round 1, 5 reviewers, 0 judges): **ALL PASS**. Clean phase, no fix loop. Root: `bind_sm_result_and_flush` catch-all did `build_store(alloca_i1, bits_i64)` — an i64 store into a 1-byte i1 alloca, overrunning 7 bytes into the adjacent sibling result's alloca (zeroing it). Fix: truncate i64→i1 before the bool alloca store (matches the reload-side trunc). `emit.rs:5702-5726`, +18/-1. `independence.rs` untouched (no grouping suppression). Full 9-case matrix incl. EC<Number>(3-slot)×bool(1-slot) interleaving verified live byte-identical PAR==SEQ; 328/0 suite (full-green gate restored).
+  - **NON-BLOCKING — Phase 4 hardening note (code-reviewer):** bool-safety in the `_` catch-all arm now rides on a `sm_crossing_bool_set` HashSet lookup rather than a dedicated `Type::Bool` match arm — a future sub-i64 crossing type (i8/i16) could land in `_` and re-hit the i64-store-into-narrow-alloca hazard. Consider a structural `Type::Bool` match arm when Phase 4 (or later) touches this area. (Joins the Phase-2 phi-fragility note at `emit.rs:~2709-2718`.)
 
 **Exit Sequence — RUN THESE STEPS:**
 1. Pre-reviewer bookkeeping only.
