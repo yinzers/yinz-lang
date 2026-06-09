@@ -1,0 +1,13 @@
+// Danger case (c): importer of a transitively-suspending cross-module function.
+// runTask's composed frame must include innerDelay's sub-frame.
+// Expected output: "delay done\ntask done\ncaller done"
+import { runTask } from `task_ops`
+
+function caller() -> nothing {
+  runTask()
+  print(`caller done`)
+}
+
+function entrypoint() -> nothing {
+  caller()
+}

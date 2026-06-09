@@ -1,0 +1,26 @@
+// M3b Phase-5 regression lock: a parallel-group return binding survives MULTIPLE subsequent
+// `wait` barriers. `loadA`/`loadB` are independent suspending calls → an auto-parallel group;
+// `a` and `b` are crossing locals that each cross TWO suspensions (`wait mid()` and
+// `wait late()`), used interleaved after each. Before the Phase-5 fix, a parallel binding
+// crossing even one subsequent `wait` produced an LLVM "Instruction does not dominate all
+// uses" crash in default mode; this locks that the binding's value (read from its dominating
+// entry-block + frame-backed slot) survives any number of suspensions byte-identical to
+// `--no-auto-parallel`.
+//
+// Expected output (byte-identical default vs --no-auto-parallel): mid / a:11 / late / b:22
+
+function loadA() -> int { wait sleep(30) return 11 }
+function loadB() -> int { wait sleep(30) return 22 }
+function mid() -> nothing { wait sleep(10) print(`mid`) }
+function late() -> nothing { wait sleep(10) print(`late`) }
+
+function run() -> nothing {
+  let a = loadA()
+  let b = loadB()
+  wait mid()
+  print(`a:${a.toString()}`)
+  wait late()
+  print(`b:${b.toString()}`)
+}
+
+function entrypoint() -> nothing { run() }

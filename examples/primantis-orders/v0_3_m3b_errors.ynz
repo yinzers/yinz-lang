@@ -1,0 +1,246 @@
+// v0.3-M3b compile-error gallery
+//
+// M3b adds cross-module suspension codegen. Calling any imported suspending
+// function is universally rejected at compile time until M3e ships full
+// FrameLayout serialization across the export table.
+//
+// WHY the universal reject: the typeck-side frame analysis that tried to predict
+// which cross-module cases were safe proved wrong five times — number crossing-local,
+// transitive×caller-frame, and three other combos all slipped through and crashed
+// silently. A guard that rejects everything cannot miss a case.
+//
+// ALL cross-module suspending calls are CROSS-MODULE errors — they require a two- or
+// three-file project to trigger. Each class is exercised by a fixture project under
+// `crates/ynz-driver/tests/fixtures/v0_3_m3b_loud_reject_*/` and covered by
+// integration tests. This gallery file documents the error classes.
+//
+// Single-file errors added in M3b (none — all guards are cross-module):
+// There are no new single-file error classes in M3b.
+//
+// To see the universal-reject diagnostic, run any of these fixture projects:
+//   ynz run crates/ynz-driver/tests/fixtures/v0_3_m3b_cross_module_suspending_caller
+//   ynz run crates/ynz-driver/tests/fixtures/v0_3_m3b_cross_module_int_return
+//   ynz run crates/ynz-driver/tests/fixtures/v0_3_m3b_cross_module_errors_capable
+//   ynz run crates/ynz-driver/tests/fixtures/v0_3_m3b_transitive_suspend
+//   ynz run crates/ynz-driver/tests/fixtures/v0_3_m3b_crossing_local_cross_module
+//   ynz run crates/ynz-driver/tests/fixtures/v0_3_m3b_loud_reject_reexport
+//   ynz run crates/ynz-driver/tests/fixtures/v0_3_m3b_loud_reject_shape_crossing
+//   ynz run crates/ynz-driver/tests/fixtures/v0_3_m3b_loud_reject_ec_transitive
+
+// -- M3b Guard: CrossModuleImportedSuspendingCall (universal) --
+//
+// WHY: CrossModuleImportedSuspendingCall — calling any imported function that
+// suspends (directly or transitively) is rejected at compile time. The caller's
+// state machine needs the callee's full saved-state layout — exact slot positions
+// for every variable that survives a pause, plus any nested calls — to embed the
+// callee's saved-state block at the right offset. Carrying only a scalar size
+// across the module boundary cannot reconstruct that layout.
+//
+// The diagnostic emitted (WHAT / WHAT-INSTEAD / WHY):
+//
+//   WHAT: Calling `<name>` across a module boundary isn't supported yet —
+//         it (or a function it calls) suspends, and composing the caller's
+//         saved state needs the callee's exact memory layout, which isn't
+//         carried across modules yet.
+//
+//   WHAT INSTEAD: Move `<name>` into this module, or avoid suspending it
+//                 across the boundary, until v0.3-M3e ships cross-module
+//                 frame-layout serialization.
+//
+//   WHY: The caller's state machine needs the callee's full slot map — exact
+//        positions for every variable that survives a pause, plus any nested
+//        calls — to embed the callee's saved-state block at the right offset.
+//        A scalar size alone cannot reconstruct that. Calling with a wrong
+//        layout silently corrupts memory; a clean error here is the safe floor.
+//        See design/future/cross-module-frame-serialization.md for the M3e plan.
+//
+// The guard fires for ALL cross-module suspending call shapes:
+//
+//   (a) Direct export: module A exports a function that calls sleep() directly.
+//       Fixture: crates/ynz-driver/tests/fixtures/v0_3_m3b_cross_module_suspending_caller/
+//
+//   (b) Int-return export: same as (a) but the suspending function returns int.
+//       Fixture: crates/ynz-driver/tests/fixtures/v0_3_m3b_cross_module_int_return/
+//
+//   (c) Errors-capable export: the suspending function is declared `-> T errors`.
+//       Fixture: crates/ynz-driver/tests/fixtures/v0_3_m3b_cross_module_errors_capable/
+//
+//   (d) Transitive suspend: the exported function calls an inner non-exported
+//       function that suspends. The outer function is marked suspends=true
+//       transitively and is still rejected.
+//       Fixture: crates/ynz-driver/tests/fixtures/v0_3_m3b_transitive_suspend/
+//
+//   (e) Crossing local in caller: the caller has a variable that crosses a wait
+//       boundary in addition to calling the imported suspending function.
+//       Fixture: crates/ynz-driver/tests/fixtures/v0_3_m3b_crossing_local_cross_module/
+//
+//   (f) Re-export / multi-level transitive (3-module chain):
+//       Module B imports a suspending function from A and re-exports its own
+//       function that calls it. Module C imports from B.
+//       Fixture: crates/ynz-driver/tests/fixtures/v0_3_m3b_loud_reject_reexport/
+//
+//   (g) Shape-typed crossing local in the callee:
+//       The exported suspending function has a local of a shape type that
+//       crosses the suspension boundary.
+//       Fixture: crates/ynz-driver/tests/fixtures/v0_3_m3b_loud_reject_shape_crossing/
+//
+//   (h) Errors-capable export that suspends transitively:
+//       An exported `-> T errors` function calls an inner function that suspends.
+//       The EC staging slot interacts with sub-frame offsets.
+//       Fixture: crates/ynz-driver/tests/fixtures/v0_3_m3b_loud_reject_ec_transitive/
+//
+// All eight emit a WHAT/WHAT-INSTEAD/WHY diagnostic (exit 1) instead of silently
+// crashing with SIGILL (exit 132). M3e ships full FrameLayout serialization and
+// removes the universal reject (design/future/cross-module-frame-serialization.md).
+
+// -- M3b Phase-4 Error Class: mutate-through-share-param (single-file) --
+//
+// WHY: ShareParamMutation — auto-parallelization treats a `share` argument as a
+// read-only borrow that cannot conflict with a concurrent write. That soundness
+// premise (design/concurrency.md line 651) only holds if the compiler ENFORCES
+// that a `share` parameter's body cannot change the value. A `share`-param body
+// that mutates a field (or an element) is now a compile error.
+//
+// A bare parameter (no modifier) that mutates IS legal — the compiler figures out
+// the effective `lend`. Only an explicit `share` is the contradiction.
+//
+// Diagnostic (WHAT / WHAT-INSTEAD / WHY):
+//   WHAT: `pickle` is declared `share` — read-only — so its fields cannot be changed.
+//   WHAT INSTEAD: Change the parameter to `lend pickle: Order` if this function
+//                 needs to modify it.
+//   WHY: A `share` parameter is a read-only borrow: the caller keeps ownership and
+//        trusts the value is unchanged after the call. When a function modifies a
+//        value, declare `lend` so the change is visible at every call site.
+
+shape Order {
+  quantity: int
+}
+
+function bumpQuantity(share pickle: Order) -> nothing {
+  // WHY: ShareParamMutation — `pickle` is declared `share` (read-only); writing
+  // a field of it contradicts the read-only borrow. Declare `lend pickle: Order`
+  // to mutate. Bare `pickle: Order` would also compile (the compiler figures out lend).
+  pickle.quantity = pickle.quantity + 1
+}
+
+// -- M3b Phase-4 Error Class: mutate-through-share-param (TRANSITIVE) --
+//
+// WHY: ShareParamMutation (transitive) — the read-only guarantee holds even when the
+// mutation happens through a callee. `relayOrder` declares `ticket` as `share` but passes
+// it to `stamp`, a bare-parameter function that mutates its argument (effective `lend`).
+// `relayOrder` is therefore lending `ticket` onward — a compile error. The transitive
+// effective-ownership fixpoint catches this; the direct-mutation check above does not,
+// because `stamp`'s declared modifier is bare, not `lend`.
+//
+// Diagnostic (WHAT / WHAT-INSTEAD / WHY):
+//   WHAT: `ticket` is declared `share` (read-only) but it is modified through `stamp`.
+//   WHAT INSTEAD: Change the parameter to `lend ticket: Order` — the function (directly
+//                 or through a call) writes to it.
+//   WHY: A `share` parameter is a read-only borrow; the caller trusts the value is
+//        unchanged. Because `stamp` modifies `ticket`, this function lends it onward —
+//        declare `lend` so the write is visible at every call site.
+
+function stamp(order: Order) -> nothing {
+  order.quantity = order.quantity + 10
+}
+
+function relayOrder(share ticket: Order) -> nothing {
+  // WHY: ShareParamMutation (transitive) — `ticket` is `share` (read-only) but `stamp`
+  // mutates it. Declare `lend ticket: Order` to lend it onward for mutation.
+  stamp(ticket)
+}
+
+// -- M3b Phase-4 Error Class: mutate-through-share-param (COLLECTION METHOD) --
+//
+// WHY: ShareParamMutation (collection) — an in-place collection mutator (`array.add`,
+// `array.set`, `map.set`/`remove`/`clear`, `fixed.set`) writes its receiver in place, the
+// same as a direct element assign. A `share` parameter is a read-only borrow, so calling a
+// mutating method on it contradicts that promise and is a compile error. A read method
+// (`.get`, `.count`, `.contains`) leaves the receiver unchanged and is always allowed.
+//
+// Diagnostic (WHAT / WHAT-INSTEAD / WHY):
+//   WHAT: `lineItems` is declared `share` — read-only — so its elements cannot be changed.
+//   WHAT INSTEAD: Change the parameter to `lend lineItems: array<int>` if this function
+//                 needs to modify it.
+//   WHY: A `share` parameter is a read-only borrow: the caller keeps ownership and trusts
+//        the value is unchanged after the call. When a function modifies a value, declare
+//        `lend` so the change is visible at every call site.
+
+function appendLineItem(share lineItems: array<int>) -> nothing {
+  // WHY: ShareParamMutation (collection) — `.add()` appends in place, mutating the receiver.
+  // `lineItems` is `share` (read-only); declare `lend lineItems: array<int>` to grow it.
+  lineItems.add(42)
+}
+
+// -- M3b Phase-4 Error Class: mutate-through-share-param (SHARE SELF receiver) --
+//
+// WHY: ShareParamMutation (share self) — the read-only guarantee covers the method
+// receiver too. A function whose receiver is declared `share self` is a read-only
+// borrow of the value the caller wrote `value.method()` on. Writing a field of
+// `self` contradicts that borrow and is a compile error — IDENTICAL to the named
+// `share` parameter form. (The parser emits `self` as a distinct expression kind,
+// so this is a separate trigger from `bumpQuantity` above; both must be caught.)
+//
+// Diagnostic (WHAT / WHAT-INSTEAD / WHY):
+//   WHAT: `self` is declared `share` — read-only — so its fields cannot be changed.
+//   WHAT INSTEAD: Change the parameter to `lend self: Order` if this function
+//                 needs to modify it.
+//   WHY: A `share` parameter is a read-only borrow: the caller keeps ownership and
+//        trusts the value is unchanged after the call. When a function modifies a
+//        value, declare `lend` so the change is visible at every call site.
+
+function discountSelf(share self: Order) -> nothing {
+  // WHY: ShareParamMutation (share self) — `self` is `share` (read-only); writing a
+  // field of the receiver contradicts the read-only borrow. Declare `lend self: Order`.
+  self.quantity = self.quantity - 1
+}
+
+// -- M3b Phase-4 Error Class: mutate-through-share-param (DIRECT ELEMENT ASSIGN) --
+//
+// WHY: ShareParamMutation (element) — a direct element assign (`xs[i] = v`) writes the
+// receiver in place exactly like a collection mutator method, just through index syntax
+// instead of a `.set()` call. A `share` parameter is a read-only borrow, so an element
+// write on it is a compile error. This is the index-assign sibling of the collection-method
+// class above — a separate AST position, so it needs its own trigger.
+//
+// Diagnostic (WHAT / WHAT-INSTEAD / WHY):
+//   WHAT: `prices` is declared `share` — read-only — so its elements cannot be changed.
+//   WHAT INSTEAD: Change the parameter to `lend prices: array<int>` if this function
+//                 needs to modify it.
+//   WHY: A `share` parameter is a read-only borrow: the caller keeps ownership and trusts
+//        the value is unchanged after the call. When a function modifies a value, declare
+//        `lend` so the change is visible at every call site.
+
+function overwriteFirst(share prices: array<int>) -> nothing {
+  // WHY: ShareParamMutation (element) — `prices[0] = ...` writes an element in place,
+  // mutating the receiver. `prices` is `share` (read-only); declare `lend prices: array<int>`.
+  prices[0] = 99
+}
+
+// -- M3b Phase-4 Error Class: share→explicit-lend/give ESCALATION --
+//
+// WHY: ShareParamMutation (escalation) — passing a `share` value to a callee whose
+// parameter is declared `lend` (or `give`) escalates the read-only borrow to a mutable
+// borrow (or an ownership transfer). Either escalation breaks the read-only promise, so
+// it is a compile error. Unlike the TRANSITIVE class above (callee param is BARE and the
+// fixpoint figures out the effective `lend`), here the callee's `lend` is EXPLICIT — the
+// escalation is visible directly at the call site. Passing `voucher` (declared `share`) to
+// `applyDiscount` (declared `lend voucher`) fires this class.
+//
+// Diagnostic (WHAT / WHAT-INSTEAD / WHY):
+//   WHAT: `voucher` is declared `share` (read-only); `applyDiscount` needs to modify it (`lend`).
+//   WHAT INSTEAD: Declare `voucher` as `lend` to pass it here.
+//   WHY: A `share` parameter is a read-only borrow — the caller keeps ownership and trusts
+//        the value is unchanged after the call. Passing it where the value will be modified
+//        would break that promise; declare `lend` so the change is visible at every call site.
+
+function applyDiscount(lend voucher: Order) -> nothing {
+  voucher.quantity = voucher.quantity - 5
+}
+
+function forwardVoucher(share voucher: Order) -> nothing {
+  // WHY: ShareParamMutation (escalation) — `voucher` is `share` (read-only) but
+  // `applyDiscount` declares its parameter `lend`. Passing a read-only borrow where a
+  // mutable borrow is required is a compile error. Declare `lend voucher: Order` to escalate.
+  applyDiscount(voucher)
+}

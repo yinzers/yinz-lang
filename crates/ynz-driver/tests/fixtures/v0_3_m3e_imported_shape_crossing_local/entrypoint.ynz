@@ -1,0 +1,17 @@
+// M3e adversarial S3 regression lock: imported shape as crossing-local.
+// A value of shape Coord (defined in shapes_lib, imported here) is declared before
+// the cross-module suspending call and its fields read after resume.
+// Verifies that collect_shapes seeds the shape_table with imported shapes so
+// frame_layouts_query computes LLVM-accurate ABI sizes for crossing-local slots
+// even when the shape type originates in another module.
+import { Coord, fetchData } from `shapes_lib`
+
+function caller() -> nothing {
+  let pt: Coord = { x: 1, y: 2, z: 3 }
+  fetchData()
+  print(`x: ${pt.x.toString()}, y: ${pt.y.toString()}, z: ${pt.z.toString()}`)
+}
+
+function entrypoint() -> nothing {
+  caller()
+}

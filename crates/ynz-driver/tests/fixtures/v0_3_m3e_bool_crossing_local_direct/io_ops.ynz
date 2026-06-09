@@ -1,0 +1,6 @@
+// M3e danger-matrix: bool type — exported suspending function.
+// Bool crossing-local must survive the resume boundary (1-byte i8 value, 8-byte slot).
+
+export function fetchFlag() -> nothing {
+  sleep(10)
+}

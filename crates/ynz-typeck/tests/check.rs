@@ -2699,7 +2699,10 @@ fn background_with_small_copy_no_warn() {
     );
 }
 
-// WHY: kernel mode must reject `wait` with a teaching error.
+// WHY: kernel mode must reject `wait` with a teaching error. The `Expr::Wait` arm
+// emits the kernel diagnostic and returns Type::Error without recursing into the inner
+// expression. The `slow()` here is non-suspending (no sleep inside) so the only error
+// is from the `wait` keyword itself — one diagnostic, from one arm.
 #[test]
 fn wait_in_kernel_mode_rejected() {
     let src = "function slow() -> int { return 1 }\n\
@@ -2720,6 +2723,49 @@ fn wait_in_kernel_mode_rejected() {
             .any(|d| d.what.contains("wait") || d.what.contains("kernel")),
         "error must mention wait or kernel; got: {:?}",
         errors
+    );
+}
+
+// WHY: `wait suspendingFn()` in kernel mode must produce exactly ONE diagnostic, not two.
+// Before the fix, `Expr::Wait` emitted the kernel reject and then recursed into the inner
+// `Expr::Call` via `self.infer_expr(inner, hint)`. That recursion hit the call-dispatch
+// kernel guard (check.rs:2435) which fired a SECOND diagnostic for the same source site.
+// The fix: `Expr::Wait` returns `Type::Error` immediately after emitting its error, so the
+// inner call is never visited in isolation. This test asserts count == 1 to lock that
+// contract: a regression that re-introduces the recursive call would bump count to 2.
+//
+// This uses an in-module suspending function (calls sleep) so the sig_table marks it
+// suspends=true BEFORE the may-block fixpoint via module_signatures_query. The call-dispatch
+// arm checks `callee_suspends` from the merged sig_table — if the flag is set and the arm
+// is reached, it fires. The Wait arm returning Type::Error prevents reaching the arm at all.
+#[test]
+fn wait_suspending_in_kernel_mode_produces_exactly_one_diagnostic() {
+    // `slow` is defined with sleep inside — after may-block analysis its sig.suspends=true.
+    // Without the fix: wait fires Expr::Wait error, then infers inner Expr::Call(slow),
+    // which hits the call-dispatch kernel guard → 2nd error. With the fix: 1 error total.
+    // NOTE: `sleep` itself fires a kernel error inside `slow`'s body, so we count errors
+    // ONLY at the entrypoint's `wait slow()` call span — filter by containing "wait".
+    let src = "function slow() -> nothing { sleep(50) }\n\
+               function entrypoint() -> nothing { wait slow() }";
+    let out = run_kernel(src);
+    // Count errors whose `what` mentions "wait" — these are `wait`-keyword rejections.
+    // The `sleep` inside `slow` fires a separate kernel error which is correct and not
+    // the double-diagnostic we're guarding against.
+    let wait_errors: Vec<_> = out
+        .diagnostics
+        .iter()
+        .filter(|d| {
+            matches!(d.severity, ynz_diagnostics::Severity::Error)
+                && (d.what.contains("wait") || d.what.contains("`wait`"))
+        })
+        .collect();
+    assert!(
+        wait_errors.len() == 1,
+        "`wait slow()` in kernel mode must produce exactly 1 `wait`-related error, not {}. \
+         A count > 1 indicates the Expr::Wait arm recursed into the inner Expr::Call and \
+         the call-dispatch kernel guard fired a second time. Got: {:#?}",
+        wait_errors.len(),
+        wait_errors
     );
 }
 
@@ -3355,6 +3401,188 @@ function entrypoint() -> nothing {
     );
 }
 
+// WHY: M3e Phase 2 lifts the universal cross-module reject so suspending cross-module
+// calls compile and run. This guard confirms that --kernel mode still REJECTS bare
+// (auto-suspension, no `wait` keyword) cross-module suspending calls. In Yinz the
+// bare call form IS the real production form — every suspending call auto-suspends
+// without `wait`. A test using only `wait longJob()` would fire the `Expr::Wait` arm,
+// not the call-dispatch arm, and would pass even if the call-dispatch arm has no kernel
+// guard at all. This test uses the bare form to guard the correct path.
+//
+// The kernel-mode check fires on the CALLING module (the module that contains a call to
+// a suspending imported fn). check_with_kernel_mode is driven directly here because
+// the salsa check_query always uses kernel_mode=false.
+//
+// test-ratchet: strengthened from `wait longJob()` to bare `longJob()` — the `wait`
+// form tested the Expr::Wait arm (already guarded), not the call-dispatch arm that
+// guards bare auto-suspension. The bare form is the actual production call pattern.
+#[test]
+fn kernel_mode_rejects_cross_module_suspending_call() {
+    use ynz_typeck::check_with_kernel_mode;
+
+    let dir = std::env::temp_dir().join(format!(
+        "ynz_kernel_cross_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    std::fs::write(dir.join("yinz.toml"), "[project]\nname = \"test\"\n").expect("write yinz.toml");
+
+    // Leaf module: exports a suspending function (calls sleep).
+    let leaf_src = "export function longJob() -> nothing {\n  sleep(100)\n}\n";
+    let leaf_path = dir.join("leaf_ops.ynz");
+    std::fs::write(&leaf_path, leaf_src).expect("write leaf_ops.ynz");
+
+    // Entrypoint: bare (no `wait`) cross-module suspending call — the auto-suspension form.
+    // Every real Yinz suspending call uses this form. `wait` would fire the Expr::Wait arm
+    // (already guarded); this tests the call-dispatch arm where the bare suspend is rejected.
+    let entry_src =
+        "import { longJob } from `leaf_ops`\nfunction entrypoint() -> nothing {\n  longJob()\n}\n";
+    let entry_path = dir.join("entrypoint.ynz");
+    std::fs::write(&entry_path, entry_src).expect("write entrypoint.ynz");
+
+    let mut db = ynz_parser::CompilerDb::default();
+    let sf_leaf =
+        ynz_parser::SourceFile::new(&db, leaf_path.display().to_string(), leaf_src.to_string());
+    let sf_entry =
+        ynz_parser::SourceFile::new(&db, entry_path.display().to_string(), entry_src.to_string());
+    db.register_source(sf_leaf);
+    db.register_source(sf_entry);
+
+    // Run check_query on leaf so salsa computes its signatures (marks longJob suspends=true).
+    let _leaf_out = ynz_typeck::check_query(&db, sf_leaf);
+
+    // Run module_signatures_query on the entrypoint so imported_fns carries longJob.suspends=true.
+    let sig_out = ynz_typeck::queries::module_signatures_query(&db, sf_entry);
+    let parse = ynz_parser::parse_query(&db, sf_entry);
+
+    // Merge imported_fns into sig_table so check_with_kernel_mode sees longJob as suspending.
+    let mut merged_sig = sig_out.sig_table.clone();
+    for (name, sig) in &sig_out.imported_fns {
+        merged_sig
+            .fns
+            .entry(name.clone())
+            .or_insert_with(|| sig.clone());
+    }
+
+    // Call check_with_kernel_mode on the entrypoint module.
+    let (_typed, _mono, diags) = check_with_kernel_mode(
+        &parse.module,
+        &merged_sig,
+        &sig_out.shape_table,
+        &sig_out.generic_fn_table,
+        &sig_out.generic_shape_table,
+        &ynz_typeck::intrinsics::PrimitiveIntrinsicTable::m6(),
+        &sig_out.imported_options,
+    );
+
+    let errors: Vec<_> = diags
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+
+    assert!(
+        !errors.is_empty(),
+        "cross-module suspending call in --kernel mode must produce an error; got no errors"
+    );
+    // The error must mention kernel (the existing kernel-mode suspension rejection path).
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.what.contains("kernel") || d.why.contains("kernel")),
+        "error must mention 'kernel'; got: {:#?}",
+        errors
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// WHY: the UFCS dot-call path `player.longJob()` resolves via check_method_call's
+// Shape-receiver branch (check.rs:3308). The bare call-dispatch arm (check.rs:2435)
+// guards `Expr::Call name =>` but UFCS calls route through check_method_call — a separate
+// code path that needs its own kernel guard. Without it, `player.longJob()` in kernel mode
+// passes the call-dispatch guard silently (the name-lookup falls through to the UFCS path)
+// and the suspending call reaches codegen unchecked.
+#[test]
+fn kernel_mode_rejects_cross_module_suspending_method_call() {
+    use ynz_typeck::check_with_kernel_mode;
+
+    let dir = std::env::temp_dir().join(format!(
+        "ynz_kernel_ufcs_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    std::fs::write(dir.join("yinz.toml"), "[project]\nname = \"test\"\n").expect("write yinz.toml");
+
+    // Worker module: a shape + suspending method (standalone function, first param = Worker).
+    let worker_src = "export shape Worker { name: string }\nexport function longJob(share self: Worker) -> nothing {\n  sleep(100)\n}\n";
+    let worker_path = dir.join("worker_ops.ynz");
+    std::fs::write(&worker_path, worker_src).expect("write worker_ops.ynz");
+
+    // Entrypoint: UFCS dot-call form — `w.longJob()` is sugar for `longJob(w)`.
+    // In kernel mode this must be rejected: longJob suspends.
+    let entry_src = "import { Worker, longJob } from `worker_ops`\nfunction entrypoint() -> nothing {\n  const w: Worker = { name: `bob` }\n  w.longJob()\n}\n";
+    let entry_path = dir.join("entrypoint.ynz");
+    std::fs::write(&entry_path, entry_src).expect("write entrypoint.ynz");
+
+    let mut db = ynz_parser::CompilerDb::default();
+    let sf_worker = ynz_parser::SourceFile::new(
+        &db,
+        worker_path.display().to_string(),
+        worker_src.to_string(),
+    );
+    let sf_entry =
+        ynz_parser::SourceFile::new(&db, entry_path.display().to_string(), entry_src.to_string());
+    db.register_source(sf_worker);
+    db.register_source(sf_entry);
+
+    let _worker_out = ynz_typeck::check_query(&db, sf_worker);
+
+    let sig_out = ynz_typeck::queries::module_signatures_query(&db, sf_entry);
+    let parse = ynz_parser::parse_query(&db, sf_entry);
+
+    // Merge imported_fns into sig_table so check_with_kernel_mode sees longJob as suspending.
+    let mut merged_sig = sig_out.sig_table.clone();
+    for (name, sig) in &sig_out.imported_fns {
+        merged_sig
+            .fns
+            .entry(name.clone())
+            .or_insert_with(|| sig.clone());
+    }
+
+    let (_typed, _mono, diags) = check_with_kernel_mode(
+        &parse.module,
+        &merged_sig,
+        &sig_out.shape_table,
+        &sig_out.generic_fn_table,
+        &sig_out.generic_shape_table,
+        &ynz_typeck::intrinsics::PrimitiveIntrinsicTable::m6(),
+        &sig_out.imported_options,
+    );
+
+    let errors: Vec<_> = diags
+        .iter()
+        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
+        .collect();
+
+    assert!(
+        !errors.is_empty(),
+        "UFCS suspending method call in --kernel mode must produce an error; got no errors"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.what.contains("kernel") || d.why.contains("kernel")),
+        "error must mention 'kernel'; got: {:#?}",
+        errors
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // WHY: Phase 6 inference model — transitive may-block analysis correctly marks `bar` and
 // `foo` as `suspends` even without explicit `wait` tokens in their bodies. `bar` reaches
 // `sleep` directly; `foo` calls `bar` transitively. `wait foo()` is now valid since
@@ -3672,14 +3900,15 @@ function entrypoint() -> nothing {
     );
 }
 
-// WHY: Phase 6 can't-infer error — a suspending function calling a cross-module callee
-// produces a clean compile error. The compiler can't determine if the imported function
-// suspends intra-unit, so it rejects the call rather than guessing or bridging.
-// Guards regressions where the can't-infer check is silently dropped.
+// WHY: P1 lifted the cross-module stopgap. A suspending function calling a non-suspending
+// cross-module callee must compile clean — the compiler now propagates `suspends` flags
+// across module boundaries via check_query, so it knows remoteOp doesn't suspend and
+// allows the call without error. Guards regressions where the stopgap is re-introduced
+// and cross-module calls from suspending functions are blocked again.
 #[test]
-fn cant_infer_suspension_cross_module_fires_error() {
+fn cross_module_call_from_suspending_fn_compiles_clean() {
     let dir = std::env::temp_dir().join(format!(
-        "ynz_cant_infer_{}",
+        "ynz_cross_mod_clean_{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -3687,9 +3916,9 @@ fn cant_infer_suspension_cross_module_fires_error() {
     ));
     std::fs::create_dir_all(&dir).expect("create temp dir");
 
-    // utils.ynz — exported pure-CPU function (doesn't suspend, but entrypoint can't know that)
+    // utils.ynz — exported pure-CPU function (non-suspending)
     let utils_src = "export function remoteOp() -> nothing { print(`remote op`) }";
-    // entrypoint.ynz — suspending function (reaches sleep) calling the imported function
+    // entrypoint.ynz — suspending function (reaches sleep) calling the non-suspending import
     let entry_src = "import { remoteOp } from `utils`\n\
                      function entrypoint() -> nothing { sleep(10)\n  remoteOp() }";
 
@@ -3713,35 +3942,23 @@ fn cant_infer_suspension_cross_module_fires_error() {
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
     assert!(
-        !errors.is_empty(),
-        "can't-infer cross-module call from suspending fn must produce an error; got: {:#?}",
-        output.diagnostics
-    );
-    // "Can't determine" (capital C) is the exact what-field text — use case-sensitive match.
-    let has_cant_infer = errors
-        .iter()
-        .any(|d| d.what.contains("Can't determine") || d.what.contains("cross-module"));
-    assert!(
-        has_cant_infer,
-        "error must mention Can't-determine or cross-module; got: {:#?}",
+        errors.is_empty(),
+        "cross-module call from suspending fn must compile clean after P1; got errors: {:#?}",
         errors
     );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// WHY: a function that independently suspends (local sleep) AND makes a cross-module
-// call that can't be analyzed gets the clean can't-infer compile error. This is the
-// design-correct gate per design/future/concurrency.md:61-67 — the caller already IS a
-// state machine (reaches intra-unit sleep), and calling an un-analyzable boundary
-// from inside a state machine requires the explicit can't-infer fence. Cross-module
-// suspension propagation is deferred to M3+M8 (requires binary package metadata).
-// Guards regressions where the check is NOT gated on current_fn_suspends and wrongly
-// fires on pure (non-suspending) cross-module callers.
+// WHY: P1 lifted the cross-module stopgap. A suspending function that independently
+// reaches sleep AND calls a non-suspending cross-module callee must compile clean.
+// The compiler knows `maybeBlocking` doesn't suspend (via check_query propagation),
+// so the call is safe inside a state machine. Guards regressions where the stopgap
+// is re-introduced for the "has local sleep + cross-module call" specific case.
 #[test]
-fn cant_infer_suspension_cross_module_with_local_sleep_fires_error() {
+fn cross_module_call_from_fn_with_local_sleep_compiles_clean() {
     let dir = std::env::temp_dir().join(format!(
-        "ynz_cant_infer_local_sleep_{}",
+        "ynz_local_sleep_cross_mod_{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -3749,10 +3966,9 @@ fn cant_infer_suspension_cross_module_with_local_sleep_fires_error() {
     ));
     std::fs::create_dir_all(&dir).expect("create temp dir");
 
-    // utils.ynz — cross-module function; pure CPU, but entrypoint can't know that.
-    // entrypoint independently suspends (local sleep) AND calls this boundary fn
-    // → the can't-infer error fires under the design-correct current_fn_suspends gate.
+    // utils.ynz — non-suspending export
     let utils_src = "export function maybeBlocking() -> nothing { print(`runs`) }";
+    // entrypoint.ynz — suspending (reaches sleep) AND calls the non-suspending import
     let entry_src = "import { maybeBlocking } from `utils`\n\
                      function entrypoint() -> nothing { sleep(1)\n  maybeBlocking() }";
 
@@ -3776,16 +3992,8 @@ fn cant_infer_suspension_cross_module_with_local_sleep_fires_error() {
         .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
         .collect();
     assert!(
-        !errors.is_empty(),
-        "suspending fn + cross-module call must produce a can't-infer error; got: {:#?}",
-        output.diagnostics
-    );
-    let has_cant_infer = errors
-        .iter()
-        .any(|d| d.what.contains("Can't determine") || d.what.contains("cross-module"));
-    assert!(
-        has_cant_infer,
-        "error must mention Can't-determine or cross-module; got: {:#?}",
+        errors.is_empty(),
+        "suspending fn + non-suspending cross-module call must compile clean after P1; got: {:#?}",
         errors
     );
 
@@ -3949,5 +4157,462 @@ function entrypoint() -> nothing {
          re-enabling the gate unconditionally would break the M2 under-approximation \
          (design/future/concurrency.md:75). got: {:#?}",
         cant_infer_errors
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.3-M3b P1: cross-module `suspends` propagation — salsa incremental tests
+//
+// These three tests probe the THREE directions where salsa staleness can hide:
+// non-suspending→suspending propagation, suspending→non-suspending clearance, and diamond fan-out.
+// All use real temp files because resolve_module_path canonicalizes via std::fs.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Build a named temp dir with yinz.toml for import resolution.
+fn make_salsa_temp_dir(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "ynz_m3b_salsa_{tag}_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    std::fs::write(dir.join("yinz.toml"), "[project]\nname = \"test\"\n").expect("write yinz.toml");
+    dir
+}
+
+#[test]
+fn incremental_non_suspending_to_suspending_flips_caller_to_state_machine() {
+    // WHY: When module A's exported function changes from non-suspending to suspending
+    // (adds a sleep call), module B's caller must be re-checked and promoted to a state
+    // machine. Guards salsa staleness where B's check_query returns a cached result
+    // with suspends_set missing the caller even after A's source changes.
+    // Tests the load_export_table → check_query dependency chain in resolve_import.rs.
+    use salsa::Setter as _;
+
+    let dir = make_salsa_temp_dir("non_suspending_to_suspending");
+    let a_path = dir.join("a.ynz");
+    let b_path = dir.join("b.ynz");
+
+    // v1: A exports a non-suspending function.
+    let a_v1 = "export function op() -> nothing { print(`op`) }";
+    let b_src = "import { op } from `a`\nfunction caller() -> nothing { op() }";
+
+    std::fs::write(&a_path, a_v1).expect("write a.ynz v1");
+    std::fs::write(&b_path, b_src).expect("write b.ynz");
+
+    let mut db = CompilerDb::default();
+    let sf_a = SourceFile::new(&db, a_path.display().to_string(), a_v1.to_string());
+    let sf_b = SourceFile::new(&db, b_path.display().to_string(), b_src.to_string());
+    db.register_source(sf_a);
+    db.register_source(sf_b);
+
+    let out1 = check_query(&db, sf_b);
+    assert!(
+        !out1.suspends_set.contains("caller"),
+        "v1: caller must NOT be in suspends_set (op is non-suspending); got: {:?}",
+        out1.suspends_set
+    );
+
+    // v2: A's op now calls sleep — it becomes suspending.
+    let a_v2 = "export function op() -> nothing { sleep(10)\nprint(`op`) }";
+    std::fs::write(&a_path, a_v2).expect("write a.ynz v2");
+    sf_a.set_text(&mut db).to(a_v2.to_string());
+
+    let out2 = check_query(&db, sf_b);
+    assert!(
+        out2.suspends_set.contains("caller"),
+        "v2: caller must be in suspends_set (op is now suspending via sleep); \
+         salsa staleness would leave suspends_set unchanged. got: {:?}",
+        out2.suspends_set
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn incremental_suspending_to_non_suspending_clears_caller_from_state_machine() {
+    // WHY: When module A's exported function changes from suspending to non-suspending
+    // (removes the sleep call), module B's caller must be re-checked and the state
+    // machine classification must be cleared. Guards the inverse staleness: stale
+    // over-marking that leaves a function as a state machine after its only suspending
+    // callee is removed. A false SM is a correctness bug (wrong codegen path).
+    use salsa::Setter as _;
+
+    let dir = make_salsa_temp_dir("suspending_to_non_suspending");
+    let a_path = dir.join("a.ynz");
+    let b_path = dir.join("b.ynz");
+
+    // v1: A exports a suspending function.
+    let a_v1 = "export function op() -> nothing { sleep(10)\nprint(`op`) }";
+    let b_src = "import { op } from `a`\nfunction caller() -> nothing { op() }";
+
+    std::fs::write(&a_path, a_v1).expect("write a.ynz v1");
+    std::fs::write(&b_path, b_src).expect("write b.ynz");
+
+    let mut db = CompilerDb::default();
+    let sf_a = SourceFile::new(&db, a_path.display().to_string(), a_v1.to_string());
+    let sf_b = SourceFile::new(&db, b_path.display().to_string(), b_src.to_string());
+    db.register_source(sf_a);
+    db.register_source(sf_b);
+
+    let out1 = check_query(&db, sf_b);
+    assert!(
+        out1.suspends_set.contains("caller"),
+        "v1: caller must be in suspends_set (op suspends); got: {:?}",
+        out1.suspends_set
+    );
+
+    // v2: A's op removes sleep — it becomes non-suspending.
+    let a_v2 = "export function op() -> nothing { print(`op`) }";
+    std::fs::write(&a_path, a_v2).expect("write a.ynz v2");
+    sf_a.set_text(&mut db).to(a_v2.to_string());
+
+    let out2 = check_query(&db, sf_b);
+    assert!(
+        !out2.suspends_set.contains("caller"),
+        "v2: caller must NOT be in suspends_set (op no longer suspends); \
+         stale over-marking would leave caller as a state machine. got: {:?}",
+        out2.suspends_set
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn incremental_diamond_a_imported_by_b_and_c_both_rechecked() {
+    // WHY: When A is the common dependency in a diamond (A→B, A→C), toggling A's
+    // suspending status must invalidate BOTH B's and C's check_query results, not
+    // just the first one salsa happens to re-run. Guards a staleness class where the
+    // second importer sees the cached (pre-toggle) result because salsa only
+    // propagated the dependency to one of the two importers.
+    use salsa::Setter as _;
+
+    let dir = make_salsa_temp_dir("diamond");
+    let a_path = dir.join("a.ynz");
+    let b_path = dir.join("b.ynz");
+    let c_path = dir.join("c.ynz");
+
+    let a_v1 = "export function op() -> nothing { print(`op`) }";
+    let b_src = "import { op } from `a`\nfunction b_caller() -> nothing { op() }";
+    let c_src = "import { op } from `a`\nfunction c_caller() -> nothing { op() }";
+
+    std::fs::write(&a_path, a_v1).expect("write a.ynz v1");
+    std::fs::write(&b_path, b_src).expect("write b.ynz");
+    std::fs::write(&c_path, c_src).expect("write c.ynz");
+
+    let mut db = CompilerDb::default();
+    let sf_a = SourceFile::new(&db, a_path.display().to_string(), a_v1.to_string());
+    let sf_b = SourceFile::new(&db, b_path.display().to_string(), b_src.to_string());
+    let sf_c = SourceFile::new(&db, c_path.display().to_string(), c_src.to_string());
+    db.register_source(sf_a);
+    db.register_source(sf_b);
+    db.register_source(sf_c);
+
+    let out_b1 = check_query(&db, sf_b);
+    let out_c1 = check_query(&db, sf_c);
+    assert!(
+        !out_b1.suspends_set.contains("b_caller"),
+        "v1/b: b_caller must NOT be in suspends_set; got: {:?}",
+        out_b1.suspends_set
+    );
+    assert!(
+        !out_c1.suspends_set.contains("c_caller"),
+        "v1/c: c_caller must NOT be in suspends_set; got: {:?}",
+        out_c1.suspends_set
+    );
+
+    // A's op now calls sleep — both B and C must be re-checked.
+    let a_v2 = "export function op() -> nothing { sleep(10)\nprint(`op`) }";
+    std::fs::write(&a_path, a_v2).expect("write a.ynz v2");
+    sf_a.set_text(&mut db).to(a_v2.to_string());
+
+    let out_b2 = check_query(&db, sf_b);
+    let out_c2 = check_query(&db, sf_c);
+    assert!(
+        out_b2.suspends_set.contains("b_caller"),
+        "v2/b: b_caller must be in suspends_set after A becomes suspending; got: {:?}",
+        out_b2.suspends_set
+    );
+    assert!(
+        out_c2.suspends_set.contains("c_caller"),
+        "v2/c: c_caller must be in suspends_set after A becomes suspending; \
+         both diamond legs must be re-checked, not just the first. got: {:?}",
+        out_c2.suspends_set
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// WHY: The EC-method-dispatch fix (check.rs:1826-1867) restores `ErrorsCapable<T>` for
+// `.or`/`.failed`/`.message`/`.suggestions`/`.trace`/`.source` when resolve_ident strips
+// the wrapper during auto-propagation inside an errors-capable function. Four adversarial
+// cases guard the narrow restoration logic:
+//   (a) `.failed` and `.message` on a let-bound EC value resolve correctly — not just `.or`.
+//   (b) an inner `let x: int` shadows an outer `let x: T errors` — `.or(0)` on the inner
+//       `x` must NOT restore EC (the inner binding is int, not ErrorsCapable).
+//   (c) an EC-method name on a non-EC binding in an EC function must not trigger restoration.
+//   (d) EC method names inside a non-errors-capable function dispatch as normal methods
+//       (no restoration applies because the function context is not EC).
+// All four assert error-count and, where relevant, the absence of spurious EC error.
+
+#[test]
+fn ec_method_dispatch_failed_and_message_resolve_in_ec_fn() {
+    // WHY: guards that `.failed()` and `.message` (not just `.or`) work on a let-bound
+    // EC value inside an errors-capable function. The restoration check in check.rs:1841
+    // covers the full EC_METHODS set — missing methods would produce "has no method `failed`"
+    // even though the value is `T errors`. Catches narrow restoration that forgets siblings.
+    assert_clean(
+        r#"
+function compute() -> int errors {
+  return 42
+}
+
+function entrypoint() -> nothing {
+  let x = compute()
+  const failed = x.failed()
+  const v = x.or(0)
+  print(failed.toString())
+  print(v.toString())
+}
+"#,
+    );
+}
+
+#[test]
+fn ec_method_no_over_restoration_when_inner_shadows_outer_ec() {
+    // WHY: the shadowing boundary check — an inner `let x: int` must block EC restoration
+    // on `x.or(0)` even when an outer `let x: T errors` is in scope. The fix looks up the
+    // INNERMOST scope binding; if the lookup incorrectly walks to the outer binding, it would
+    // restore ErrorsCapable and produce a wrong dispatch (or silently accept int.or(0) as EC).
+    // This test asserts the OUTER-x code is still EC-clean (baseline), and the INNER-x code
+    // produces a type error because int has no `.or` method (the restoration must NOT fire).
+    // One error expected: int does not have method `or`.
+    let out = assert_errors(
+        r#"
+function compute() -> int errors {
+  return 42
+}
+
+function entrypoint() -> nothing {
+  let x = compute()
+  const outer_v = x.or(0)
+  print(outer_v.toString())
+  let x: int = 7
+  const inner_v = x.or(0)
+  print(inner_v.toString())
+}
+"#,
+        1,
+    );
+    // The error must be about `or` on a non-EC type, not a false "unknown binding" error.
+    assert!(
+        out.diagnostics
+            .iter()
+            .any(|d| (d.what.contains("or") || d.what.contains("`int`"))
+                && d.severity == ynz_diagnostics::Severity::Error),
+        "error must be about `or` on int (no EC restoration for shadowed inner int binding); \
+         got: {:#?}",
+        out.diagnostics
+    );
+}
+
+#[test]
+fn ec_method_named_call_on_non_ec_binding_no_restoration() {
+    // WHY: an EC-method-named call (`.or(0)`) on a non-EC binding in an errors-capable
+    // function must not trigger restoration. The restoration check (check.rs:1845) guards
+    // with `matches!(entry.ty, Type::ErrorsCapable { .. })`. If this guard is absent or
+    // wrong, a plain `int` variable would be promoted to ErrorsCapable for dispatch,
+    // hiding the type error and miscompiling the call. One error expected: int.or not found.
+    let out = assert_errors(
+        r#"
+function compute() -> int errors {
+  return 42
+}
+
+function entrypoint() -> nothing {
+  let n: int = 5
+  let _ = n.or(0)
+  let x = compute()
+  const v = x.or(0)
+  print(v.toString())
+}
+"#,
+        1,
+    );
+    assert!(
+        out.diagnostics.iter().any(|d| {
+            d.severity == ynz_diagnostics::Severity::Error
+                && (d.what.contains("or") || d.what.contains("`int`"))
+        }),
+        "error must be about `or` on int; restoration must not fire for non-EC binding; \
+         got: {:#?}",
+        out.diagnostics
+    );
+}
+
+#[test]
+fn ec_method_named_call_in_non_ec_fn_no_restoration() {
+    // WHY: EC-method restoration is gated on the caller being inside an errors-capable
+    // function (check.rs:1841: the fix runs under Expr::MethodCall, but the auto-propagation
+    // that causes stripping only fires when current_fn_errors_capable=true). In a non-EC
+    // function, resolve_ident does NOT strip ErrorsCapable — so the restoration path is
+    // never entered. This test verifies the baseline: in a non-EC function, calling `.or`
+    // on a non-EC type still produces exactly one type error (the method is not found on
+    // the receiver type), and no spurious "kernel" or "EC" errors appear.
+    // Confirms no false EC restoration fires in a non-EC function context.
+    let out = assert_errors(
+        r#"
+function entrypoint() -> nothing {
+  let n: int = 5
+  let _ = n.or(0)
+}
+"#,
+        1,
+    );
+    assert!(
+        out.diagnostics.iter().any(|d| {
+            d.severity == ynz_diagnostics::Severity::Error
+                && (d.what.contains("or") || d.what.contains("`int`"))
+        }),
+        "error must be a type error about `or` on int in a non-EC fn; got: {:#?}",
+        out.diagnostics
+    );
+}
+
+#[test]
+fn ec_method_message_resolves_in_ec_fn() {
+    // WHY: guards that `.message` resolves on an EC value inside an errors-capable function.
+    // EC_METHODS in check.rs includes "message" — removing it would produce "has no method
+    // `message`" on the stripped inner type. The `ec_method_dispatch_failed_and_message_resolve_in_ec_fn`
+    // test covers `.failed` and `.message` together; this test asserts `.message` alone
+    // compiles clean so a narrow regression (removing "message" from EC_METHODS) is caught
+    // even if `.failed` still passes.
+    assert_clean(
+        r#"
+function compute() -> int errors {
+  return 42
+}
+
+function entrypoint() -> nothing {
+  let x = compute()
+  const msg = x.message
+  print(msg)
+}
+"#,
+    );
+}
+
+#[test]
+fn ec_method_suggestions_resolves_in_ec_fn() {
+    // WHY: guards that `.suggestions` resolves on an EC value inside an errors-capable function.
+    // Removing "suggestions" from EC_METHODS drops the restoration and produces a type error
+    // on the stripped inner-type dispatch. Isolated test ensures the sibling is independently
+    // covered — a single combined test cannot pinpoint which EC_METHODS entry was dropped.
+    // `.suggestions` returns array<string> — printable directly (BuiltinArray is printable).
+    assert_clean(
+        r#"
+function compute() -> int errors {
+  return 42
+}
+
+function entrypoint() -> nothing {
+  let x = compute()
+  const sug = x.suggestions
+  print(sug)
+}
+"#,
+    );
+}
+
+#[test]
+fn ec_method_trace_resolves_in_ec_fn() {
+    // WHY: guards that `.trace` resolves on an EC value inside an errors-capable function.
+    // Same rationale as the `.suggestions` test above — each EC_METHODS sibling must have
+    // its own isolated test so a narrow removal is caught by exactly one failure.
+    // `.trace` returns array<Frame> — BuiltinArray is printable; Frame is a compiler shape.
+    assert_clean(
+        r#"
+function compute() -> int errors {
+  return 42
+}
+
+function entrypoint() -> nothing {
+  let x = compute()
+  const t = x.trace
+  print(t)
+}
+"#,
+    );
+}
+
+#[test]
+fn ec_method_source_resolves_in_ec_fn() {
+    // WHY: guards that `.source` resolves on an EC value inside an errors-capable function.
+    // Same rationale as the `.trace` test above. Completes the sibling coverage for all six
+    // members of EC_METHODS: or, failed, message, suggestions, trace, source.
+    assert_clean(
+        r#"
+function compute() -> int errors {
+  return 42
+}
+
+function entrypoint() -> nothing {
+  let x = compute()
+  const src = x.source
+  print(src)
+}
+"#,
+    );
+}
+
+#[test]
+fn ec_method_dispatch_after_failed_guard_narrowing() {
+    // WHY: locks the errors_success_narrowed channel. When `x.failed()` returns true,
+    // the `if` guard narrows `x` to its inner success type (errors_success_narrowed.insert).
+    // After the guard, `x.or(0)` is called on the already-narrowed (non-EC) binding.
+    // Current behavior: accepted because the narrowed type is the inner type and `.or` is
+    // looked up on int — which should produce a type error (int has no `.or`), unless the
+    // restoration check incorrectly re-promotes. This asserts exactly clean compilation for
+    // the non-failing-branch usage pattern: the or() call outside the failed guard on the
+    // original binding is valid, and the inner-guard int binding has no such EC method.
+    assert_clean(
+        r#"
+function compute() -> int errors {
+  return 42
+}
+
+function entrypoint() -> nothing {
+  let x = compute()
+  if (x.failed()) {
+    print(`failed`)
+  }
+  const v = x.or(0)
+  print(v.toString())
+}
+"#,
+    );
+}
+
+#[test]
+fn ec_method_dispatch_on_const_bound_ec_value_in_ec_fn() {
+    // WHY: all existing EC-method tests use `let`-bound EC values. `const`-bound EC values
+    // go through the same restore path (scope lookup by name, type check for ErrorsCapable)
+    // but the binding is `const` — checks that the restoration does not depend on mutability.
+    // If the restoration incorrectly gates on `let` (mutable binding), `const x = compute()`
+    // would fail to restore and `.or(0)` would produce "int has no method `or`".
+    assert_clean(
+        r#"
+function compute() -> int errors {
+  return 42
+}
+
+function entrypoint() -> nothing {
+  const x = compute()
+  const v = x.or(0)
+  print(v.toString())
+}
+"#,
     );
 }

@@ -1,0 +1,7 @@
+// M3e danger-matrix: stacked escapes — module A (leaf).
+// fetchPrice suspends directly and returns a number errors (decimal128 EC).
+
+export function fetchPrice() -> number errors {
+  sleep(10)
+  return 2.5
+}

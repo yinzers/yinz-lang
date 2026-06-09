@@ -1,0 +1,15 @@
+// Danger case (d): crossing local declared before a cross-module suspending call,
+// read after it. The local must survive the resume boundary in the frame slot.
+// Expected output: "before: 10\nfetched\nafter: 10"
+import { fetchNum } from `io_ops`
+
+function caller() -> nothing {
+  let x = 10
+  print(`before: ${x}`)
+  fetchNum()
+  print(`after: ${x}`)
+}
+
+function entrypoint() -> nothing {
+  caller()
+}

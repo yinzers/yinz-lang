@@ -1,7 +1,7 @@
 //! `textDocument/inlayHint` LSP handler — teaching annotations for the editor.
 //!
-//! Fires 5 of the 9 registry-defined muted-hint domains; the other 4 return
-//! empty lists (protocol-only, awaiting v0.3+ analysis data).
+//! Fires 7 of the 9 registry-defined muted-hint domains; the remaining 2 return
+//! empty lists (protocol-only).
 //!
 //! # Firing domains
 //!
@@ -12,6 +12,8 @@
 //! | `copy_points` | Informational | `.copy (N bytes)` for trivially-copyable args |
 //! | `array_to_fixed_promotion` | Replacement | decoration on never-grown arrays |
 //! | `let_to_const_promotion` | Replacement | decoration on never-mutated lets |
+//! | `wait_points` | Addition | muted `wait` before suspending call sites |
+//! | `background_routing` | Informational | I/O-pool vs CPU-pool routing comment |
 //!
 //! Every firing hint carries a WHAT / WHAT-INSTEAD / WHY hover tooltip sourced
 //! from the registry via `ynz_registry::lsp_inlay_hint_hover_for`.  Per Golden
@@ -20,9 +22,9 @@
 //!
 //! # Protocol-only domains (empty list, no error)
 //!
-//! `function_param_type`, `wait_points`, `lifetimes`, `allocators` — each
-//! handled here but returning `[]`.  When v0.3+ adds the underlying analysis,
-//! those branches emit real hints with no further LSP code change.
+//! `function_param_type`, `lifetimes` — each handled here but returning `[]`.
+//! When future milestones add the underlying analysis, those branches emit real
+//! hints with no further LSP code change.
 //!
 //! # Viewport filtering
 //!
@@ -36,8 +38,9 @@ use lsp_types::{
 use ynz_diagnostics::{Severity, SourceSpan};
 use ynz_typeck::queries::check_query;
 use ynz_typeck::{
-    array_to_fixed_promotion_hints, copy_point_hints, let_to_const_promotion_hints,
-    ownership_call_site_hints, variable_type_hints,
+    array_to_fixed_promotion_hints, background_routing_hints, copy_point_hints,
+    let_to_const_promotion_hints, ownership_call_site_hints, variable_type_hints,
+    wait_points_hints,
 };
 
 use crate::{capabilities::PositionEncoding, position::LineTable, state::ServerState};
@@ -280,13 +283,15 @@ pub fn inlay_hint_response(
     // Fires when a BackgroundLargeStructCopy warning is present at the call site.
     // The Tier 3 warning already teaches via the diagnostic; this hint reinforces
     // with an inline annotation at the exact arg position.
+    //
+    // Detection: `d.what.starts_with("Copying ")` uniquely identifies this warning
+    // class. The previous `d.what_instead.contains(".give")` secondary gate has been
+    // removed — `.give` no longer appears in the diagnostic text (`.give` is not valid
+    // Yinz body syntax; the WHAT-INSTEAD was reworded per dot-postfix.md).
 
     let check_out = check_query(&state.db, sf);
     for d in check_out.diagnostics.iter() {
-        if d.severity == Severity::Warning
-            && d.what.starts_with("Copying ")
-            && d.what_instead.contains(".give")
-        {
+        if d.severity == Severity::Warning && d.what.starts_with("Copying ") {
             let hint_pos = d.span.end;
             if !in_viewport(hint_pos, vp_start, vp_end) {
                 continue;
@@ -302,8 +307,40 @@ pub fn inlay_hint_response(
         }
     }
 
-    // ── Protocol-only domains (function_param_type, wait_points, lifetimes,
-    //    allocators) — registered intent: return empty until v0.3+ adds data.
+    // ── Domain 7: wait_points (Addition) — muted `wait` before suspending calls ─
+
+    for h in wait_points_hints(&state.db, sf) {
+        if !in_viewport(h.position, vp_start, vp_end) {
+            continue;
+        }
+        if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
+            hints.push(make_hint(
+                pos,
+                "wait  ".to_string(),
+                InlayHintKind::PARAMETER,
+                "wait_points",
+            ));
+        }
+    }
+
+    // ── Domain 8: background_routing (Informational) — I/O vs CPU pool routing ─
+
+    for h in background_routing_hints(&state.db, sf) {
+        if !in_viewport(h.position, vp_start, vp_end) {
+            continue;
+        }
+        if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
+            hints.push(make_hint(
+                pos,
+                format!("  {}", h.label),
+                InlayHintKind::PARAMETER,
+                "background_routing",
+            ));
+        }
+    }
+
+    // ── Protocol-only domains (function_param_type, lifetimes) — return empty
+    //    until a future milestone adds the underlying analysis.
     //    No code needed: no data → no hints appended → Vec unchanged.
 
     hints

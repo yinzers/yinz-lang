@@ -1,0 +1,30 @@
+// M3b Phase-4 regression lock (HOLE 1): a `share self` parameter written TRANSITIVELY
+// through a callee must be a compile error — IDENTICAL to the named-parameter form.
+//
+// The parser emits the `self` keyword as `Expr::SelfValue`, not `Expr::Ident("self")`.
+// Before the `arg_is_binding` / `root_binding_name` SelfValue arms, the effective-ownership
+// fixpoint matched only `Expr::Ident`, so `self` flowing into a mutating callee slipped past
+// the param-match and stayed Reads — the transitive share-violation check missed it and the
+// program compiled + printed 999. `wrapper` declares `self` as `share` (read-only) but passes
+// it to `helper`, a bare-parameter function that mutates its argument (effective `lend`).
+//
+// Expected: compile error "`self` is declared `share` (read-only) but it is modified
+// through `helper`." Exit 1, empty stdout.
+
+shape Box {
+  v: int
+}
+
+function helper(b: Box) -> nothing {
+  b.v = 999
+}
+
+function wrapper(share self: Box) -> nothing {
+  helper(self)
+}
+
+function entrypoint() -> nothing {
+  let p: Box = { v: 1 }
+  p.wrapper()
+  print(`${p.v.toString()}`)
+}

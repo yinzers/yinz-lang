@@ -227,6 +227,82 @@ function entrypoint() -> nothing {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// v0.3-M3b Phase 2: `background` inferred give/copy hints
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn background_unused_after_spawn_emits_give_hint() {
+    // WHY: AC — `background fn(x)` with `x` unused after the spawn must emit a
+    // `give` hint (inferred `.give` — zero-copy ownership transfer). The hint
+    // teaches the user what the compiler decided without requiring explicit syntax.
+    let src = r#"
+function worker(id: int) -> nothing { }
+
+function entrypoint() -> nothing {
+    let taskId: int = 42
+    background worker(taskId)
+}
+"#;
+    let (db, sf) = single_file("bg_give_hint", src);
+    let hints = ownership_call_site_hints(&db, sf);
+
+    let give_hints: Vec<_> = hints.iter().filter(|h| h.modifier == "give").collect();
+    assert!(
+        !give_hints.is_empty(),
+        "Expected a `give` hint for `taskId` in `background worker(taskId)` (unused after spawn), got hints: {:?}",
+        hints
+    );
+
+    // Position: the hint anchors at the end of the `taskId` ident token in the background arg.
+    let expected_pos = src.find("background worker(taskId)").unwrap()
+        + "background worker(".len()
+        + "taskId".len();
+    assert!(
+        give_hints.iter().any(|h| h.position == expected_pos),
+        "Expected give hint at position {} (end of `taskId` in background call), got hints: {:?}",
+        expected_pos,
+        hints
+    );
+}
+
+#[test]
+fn background_used_after_spawn_emits_copy_hint() {
+    // WHY: AC — `background fn(x)` with `x` read after the spawn must emit a `copy`
+    // hint (inferred `.copy` — the caller retains the original, task gets a copy).
+    // Incorrect inference to `.give` would be a use-after-move bug — this hint proves
+    // the safe direction was chosen.
+    let src = r#"
+function worker(id: int) -> nothing { }
+
+function entrypoint() -> nothing {
+    let taskId: int = 42
+    background worker(taskId)
+    print(taskId.toString())
+}
+"#;
+    let (db, sf) = single_file("bg_copy_hint", src);
+    let hints = ownership_call_site_hints(&db, sf);
+
+    let copy_hints: Vec<_> = hints.iter().filter(|h| h.modifier == "copy").collect();
+    assert!(
+        !copy_hints.is_empty(),
+        "Expected a `copy` hint for `taskId` in `background worker(taskId)` (used after spawn), got hints: {:?}",
+        hints
+    );
+
+    // Position: the hint anchors at the end of the `taskId` ident token in the background arg.
+    let expected_pos = src.find("background worker(taskId)").unwrap()
+        + "background worker(".len()
+        + "taskId".len();
+    assert!(
+        copy_hints.iter().any(|h| h.position == expected_pos),
+        "Expected copy hint at position {} (end of `taskId` in background call), got hints: {:?}",
+        expected_pos,
+        hints
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Graceful: unresolved MethodCall callee yields no hint (no panic)
 // ─────────────────────────────────────────────────────────────────────────────
 

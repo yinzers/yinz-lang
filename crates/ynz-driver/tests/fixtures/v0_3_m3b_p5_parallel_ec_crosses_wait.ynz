@@ -1,0 +1,46 @@
+// Fixture: a parallel-group `-> int errors` return binding that crosses a SUBSEQUENT `wait`.
+//
+// `loadA`/`loadB` are independent suspending `-> int errors` calls → auto-parallel group.
+// Their results cross `wait later()`, so they are errors-capable crossing locals: each must
+// be stored across the second suspension as the 2-slot `{i64, i64}` errors ABI struct (error
+// pointer + success value). The crossing-local binding stores into the pre-created entry-block
+// EC companion struct (`sm_crossing_ec_struct_allocas`) and flushes both words to the 2
+// consecutive frame slots, and registers `name` in `errors_capable_locals` so a use after the
+// suspension extracts the success word rather than the companion-struct pointer. Routed
+// through `bind_sm_result_and_flush`, identical to the sequential SM let-path.
+//
+// Before the fix, the parallel binding fresh-allocated in the join block → the post-`wait`
+// reload referenced a non-dominating alloca → LLVM verify failure.
+//
+// The test asserts byte-identical stdout under default and --no-auto-parallel modes and the
+// correct values after the crossing (no segfault from a collapsed/garbage EC struct).
+//
+// Expected output: later\na:10\nb:20
+function loadA() -> int errors {
+  wait sleep(40)
+  return 10
+}
+
+function loadB() -> int errors {
+  wait sleep(40)
+  return 20
+}
+
+function later() -> nothing {
+  wait sleep(10)
+  print(`later`)
+}
+
+function run() -> nothing {
+  let a = loadA()
+  let b = loadB()
+  wait later()
+  let av = a.or(0)
+  let bv = b.or(0)
+  print(`a:${av}`)
+  print(`b:${bv}`)
+}
+
+function entrypoint() -> nothing {
+  run()
+}

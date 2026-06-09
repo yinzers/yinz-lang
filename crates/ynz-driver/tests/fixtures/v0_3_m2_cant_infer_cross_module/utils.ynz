@@ -1,5 +1,6 @@
 // External module — pure CPU function (does not suspend).
-// The entrypoint's analysis can't see this body to determine suspension status.
+// v0.3-M3b P1: the compiler propagates suspends=false across the module boundary,
+// so the entrypoint's analysis correctly sees remoteOp as non-suspending.
 export function remoteOp() -> nothing {
   print(`remote op`)
 }

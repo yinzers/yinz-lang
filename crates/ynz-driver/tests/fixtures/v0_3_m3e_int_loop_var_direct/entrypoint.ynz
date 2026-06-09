@@ -1,0 +1,14 @@
+// M3e danger-matrix: int × loop-var × direct.
+// An int loop variable crosses the cross-module suspending call inside a for-loop.
+// The loop induction variable must survive each suspension and resume with the correct
+// value for the next iteration — the frame slot is allocated once per loop execution.
+// Expected output: "tick: 1\ntick: 2\ntick: 3"
+import { tick } from `io_ops`
+
+function entrypoint() -> nothing {
+  let items: array<int> = [1, 2, 3]
+  for (n in items) {
+    tick()
+    print(`tick: ${n.toString()}`)
+  }
+}

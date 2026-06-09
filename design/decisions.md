@@ -58,6 +58,7 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Compiler implementation language | `design/compiler-language.md` | Rust + Salsa + inkwell + ariadne + hand-written recursive descent — decision and rationale |
 | MVP scope | `design/mvp-scope.md` | Granular 24-version sequence to v1.0 + 3 post-launch versions |
 | Compiler error style | `design/compiler-errors.md` | Required three-part WHAT/WHAT-INSTEAD/WHY format, jargon ban-list, tone guide, multi-error strategy |
+| Cross-module frame layout (M3e) | `design/future/cross-module-frame-serialization.md` | Codegen-side `frame_layouts_query` (salsa, `ynz-codegen`) — NOT export-table serialization in typeck. Forced by: (1) separate compilation → no shared LLVM module; (2) shape ABI sizes need LLVM `TargetData` → cannot compute accurately in `ynz-typeck`. One LLVM-accurate computation, used by both emitter and importer (no-duct-tape #7 — kills the lossy typeck reimplementation). Approved 2026-06-05 (Patrick). |
 
 ## Reference
 

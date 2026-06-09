@@ -18,9 +18,7 @@ use inkwell::{
     basic_block::BasicBlock,
     context::Context,
     module::Module,
-    targets::{
-        CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
-    },
+    targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple},
     types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum},
     values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, GlobalValue, PointerValue},
     AddressSpace, IntPredicate, OptimizationLevel,
@@ -30,12 +28,13 @@ use ynz_ast::nodes::{
 };
 use ynz_numerics; // parse(s: &str) -> Option<u128>
 use ynz_typeck::{
-    crossing_local_names, type_attached_const_type, GenericFnTable, MonomorphizationTable,
-    ShapeTable, SignatureTable, Type, TypedModule,
+    build_effective_suspend_set, crossing_local_names, type_attached_const_type, GenericFnTable,
+    MonomorphizationTable, ShapeTable, SignatureTable, Type, TypedModule,
 };
 
 use crate::{
     artifact::{sha256, CompiledArtifact},
+    independence::{partition_independent_groups, IndependentGroup},
     runtime_decls::RuntimeDecls,
     shape_types::{emit_shape_types, ShapeLlvmTypes},
     state_machine,
@@ -145,6 +144,21 @@ fn empty_frame_layouts() -> &'static HashMap<String, FrameLayout> {
     EMPTY_FRAME_LAYOUTS.get_or_init(HashMap::new)
 }
 
+static EMPTY_IMPORTED_FNS: std::sync::OnceLock<
+    std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+> = std::sync::OnceLock::new();
+fn empty_imported_fns(
+) -> &'static std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig> {
+    EMPTY_IMPORTED_FNS.get_or_init(std::collections::HashMap::new)
+}
+
+// Generic functions cannot reach lower_sm_block (no `wait` in generics), so an empty
+// SignatureTable satisfies the struct field without allocating per-instantiation.
+static EMPTY_SIG_TABLE: std::sync::OnceLock<SignatureTable> = std::sync::OnceLock::new();
+fn empty_sig_table() -> &'static SignatureTable {
+    EMPTY_SIG_TABLE.get_or_init(SignatureTable::empty)
+}
+
 /// Build the `WaitCache` for all non-generic functions in the module.
 ///
 /// Generic functions are excluded because their concrete instantiations are lowered
@@ -176,6 +190,7 @@ pub type SuspendSet = HashSet<String>;
 /// A composed frame embeds the sub-frames of all directly-called suspending children
 /// at compile-time-fixed byte offsets, so the entire intra-function call tree shares
 /// ONE `ynz_alloc` per spawned task.
+#[derive(Clone, Debug, PartialEq)]
 pub struct FrameLayout {
     /// Total frame size: per-frame header (32 bytes) + own locals + all child sub-frames.
     pub total_size: u64,
@@ -201,14 +216,11 @@ pub struct FrameLayout {
 
 /// True when `f` is a suspending function that returns `-> number errors` (decimal128 EC).
 ///
-/// These functions need a 16-byte staging slot in their composed frame: the SM EC-return
-/// path stores the i128 decimal there and points the EC `ok` word at it. The slot is freed
-/// automatically when the frame drops (one `ynz_alloc` invariant, alloc=1/free=1).
-/// True when `f` returns `-> number errors` (decimal128 EC).
-///
-/// The AST stores `-> number errors` as `return_type = ErrorCapable { inner = Number { .. } }`.
-/// These functions need a 16-byte staging slot in their composed frame so the EC ok-word
-/// points at a frame-stable region rather than a resume-stack alloca.
+/// The AST encodes `-> number errors` as `ErrorCapable { inner = Number { precision ≤ 34 } }`.
+/// These functions need a 16-byte staging slot in their composed frame: the SM EC-return path
+/// stores the raw i128 decimal there and points the EC `ok` word at the slot. Placing the
+/// slot inside the heap frame (after own-local slots, before child sub-frames) keeps
+/// alloc=1/free=1 — no separate `ynz_alloc` for the staging region.
 fn is_number_errors_return(f: &FunctionDecl) -> bool {
     match &f.return_type {
         ynz_ast::nodes::Type::ErrorCapable { inner, .. } => {
@@ -222,16 +234,28 @@ fn is_number_errors_return(f: &FunctionDecl) -> bool {
 ///
 /// # Algorithm (O(N²) where N = number of suspending fns — bounded in practice)
 ///
-/// 1. Walk each function's AST to collect its direct suspending callees in call order
+/// 1. Walk each local function's AST to collect its direct suspending callees in call order
 ///    (deduplicating per callee name).
-/// 2. Detect recursion edges via a simple ancestor-set DFS (no topological sort needed
-///    for the recursion-detection goal).
-/// 3. Compute total_size bottom-up: leaf functions have size = header + own_locals;
-///    internal nodes add the sizes of all non-recursive children.
-fn build_frame_layouts(
+/// 2. Pre-seed `sizes` for every imported suspending callee (in `suspend_set` but not a local
+///    function) by calling `callee_size_resolver`. This must happen BEFORE step 3 so that
+///    when the recursive descent encounters an imported callee, the cache entry is already
+///    present and the real resolver value is used instead of the local-fn fallback path.
+/// 3. Compute total_size bottom-up for local fns: leaf functions have size = header + own_locals;
+///    internal nodes add the sizes of all non-recursive children (imported children now read
+///    their pre-seeded resolver values from the cache).
+/// 4. Build the final `FrameLayout` records for each local suspending function.
+///
+/// `callee_size_resolver` is called for each imported suspending callee (step 2). It returns
+/// the callee's total composed frame size in bytes, or `None` to fall back to `FRAME_HEADER_SIZE`.
+/// The resolver is pluggable so the same computation can be used by `frame_layouts_query`
+/// (resolving recursively via `frame_layouts_query(callee_file)` for cross-module accuracy —
+/// Guard G2). For a local-only module the pre-seed loop (step 2) is empty and behavior is
+/// byte-identical to pre-M3e.
+pub fn build_frame_layouts_with_resolver(
     typed: &TypedModule,
     suspend_set: &SuspendSet,
     shape_abi_sizes: &HashMap<String, u64>,
+    callee_size_resolver: &dyn Fn(&str) -> Option<u64>,
 ) -> HashMap<String, FrameLayout> {
     // Step 1: collect direct suspending callees for each suspending fn.
     let mut direct_children: HashMap<String, Vec<String>> = HashMap::new();
@@ -243,9 +267,37 @@ fn build_frame_layouts(
         }
     }
 
-    // Step 2 + 3: compute frame sizes recursively with cycle detection.
-    // Use a memo map and a visiting set.
+    // Step 2: pre-seed imported suspending callees BEFORE compute_frame_size runs.
+    //
+    // Imported callees are in suspend_set but are NOT local functions (i.e., not in
+    // direct_children). They must be seeded in `sizes` before the recursive descent
+    // below so that when compute_frame_size("doWork") recurses into "getValue" (an
+    // imported callee), it hits the cache entry on the first lookup and uses the
+    // resolver's real value instead of falling through to the local-fn path (which
+    // computes n_locals=0 + no children = FRAME_HEADER_SIZE and caches that stale 32).
+    //
+    // The sole caller for cross-module work is `frame_layouts_query`, which passes
+    // `frame_layouts_query(callee_file)[name].total_size` as the resolver (Guard G2) —
+    // this is what makes re-export chains (A→B→C) compose B's total_size including A's
+    // real sub-frame. Falls back to FRAME_HEADER_SIZE when the resolver returns None
+    // (unresolvable import; codegen is skipped on errors anyway).
+    //
+    // For a LOCAL-ONLY module (no imported suspending callees), every name in suspend_set
+    // IS in direct_children, so this loop is empty and compute_frame_size behaves exactly
+    // as before — byte-identity for intra-module codegen is preserved.
+    let local_fn_names: HashSet<&str> = direct_children.keys().map(|s| s.as_str()).collect();
     let mut sizes: HashMap<String, u64> = HashMap::new();
+    for name in suspend_set.iter() {
+        if !local_fn_names.contains(name.as_str()) {
+            let resolved =
+                callee_size_resolver(name.as_str()).unwrap_or(state_machine::FRAME_HEADER_SIZE);
+            sizes.insert(name.clone(), resolved);
+        }
+    }
+
+    // Step 3: compute frame sizes for local fns recursively with cycle detection.
+    // Imported callees are already in `sizes` (Step 2), so compute_frame_size reads
+    // the resolver value from the cache on the first recursive lookup.
     let fn_names: Vec<String> = direct_children.keys().cloned().collect();
     for name in &fn_names {
         let mut visiting = HashSet::new();
@@ -260,7 +312,7 @@ fn build_frame_layouts(
         );
     }
 
-    // Step 4: build FrameLayout for each fn using the computed sizes.
+    // Step 4: build FrameLayout for each local fn using the fully-populated sizes map.
     let mut layouts: HashMap<String, FrameLayout> = HashMap::new();
     for item in &typed.module.items {
         let Item::Function(f) = item else { continue };
@@ -603,6 +655,11 @@ pub fn module_identifier(source_path: &str) -> String {
 }
 
 /// Emit a relocatable object file for an M5 program.
+///
+/// `frame_layouts` must come from `frame_layouts_query` (built with the same target machine
+/// as `emit_artifact` — Guard G1) so the emitter uses the identical layout the importer
+/// reads when it calls `frame_layouts_query(callee_file)`. This is the single-source-of-truth
+/// guarantee: one computation, consumed by both the emitter and future cross-module importers.
 #[allow(clippy::too_many_arguments)]
 pub fn emit_artifact(
     source_path: &str,
@@ -614,31 +671,41 @@ pub fn emit_artifact(
     target_triple: Option<&str>,
     imported_options: &std::collections::HashMap<String, ynz_typeck::options_table::OptionsEntry>,
     suspends_set_arg: &HashSet<String>,
+    imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+    frame_layouts: &HashMap<String, FrameLayout>,
 ) -> Result<CompiledArtifact, String> {
-    Target::initialize_x86(&InitializationConfig::default());
-
     let context = Context::create();
     let module_id = module_identifier(source_path);
     let module = context.create_module(&module_id);
 
-    let triple = match target_triple {
-        Some(t) => TargetTriple::create(t),
-        None => TargetMachine::get_default_triple(),
+    // Use the shared target-machine constructor for the default triple (Guard G1: same
+    // triple/CPU/data-layout as frame_layouts_query — byte-identical shape ABI sizes
+    // between the emitter and the query). For explicit target_triple overrides (cross-
+    // compilation and tests), construct the machine from the supplied triple directly.
+    let machine = match target_triple {
+        None => crate::state_machine::default_target_machine()?,
+        Some(t) => {
+            // Override-branch init: default_target_machine() handles it for the None branch.
+            Target::initialize_x86(&InitializationConfig::default());
+            let triple = TargetTriple::create(t);
+            module.set_triple(&triple);
+            let target = Target::from_triple(&triple)
+                .map_err(|e| format!("LLVM: no target for triple {:?}: {e}", triple.as_str()))?;
+            target
+                .create_target_machine(
+                    &triple,
+                    "generic",
+                    "",
+                    OptimizationLevel::None,
+                    RelocMode::Default,
+                    CodeModel::Default,
+                )
+                .ok_or_else(|| "LLVM: failed to create target machine".to_string())?
+        }
     };
-    module.set_triple(&triple);
-
-    let target = Target::from_triple(&triple)
-        .map_err(|e| format!("LLVM: no target for triple {:?}: {e}", triple.as_str()))?;
-    let machine = target
-        .create_target_machine(
-            &triple,
-            "generic",
-            "",
-            OptimizationLevel::None,
-            RelocMode::Default,
-            CodeModel::Default,
-        )
-        .ok_or_else(|| "LLVM: failed to create target machine".to_string())?;
+    // Always set triple and data-layout from the machine (the shared constructor uses the
+    // default triple; the override branch already set the triple above).
+    module.set_triple(&machine.get_triple());
     module.set_data_layout(&machine.get_target_data().get_data_layout());
 
     // Use the suspends_set passed in from check_query (computed by may_block::analyze).
@@ -647,16 +714,31 @@ pub fn emit_artifact(
     let suspend_set: SuspendSet = suspends_set_arg.clone();
     let _ = sig_table; // sig_table kept in signature for API compatibility
 
+    // Read the auto-parallel kill switch set by main.rs before the salsa dispatch.
+    // The env var is set once before the first salsa call in the CLI path, so the
+    // process-per-build model keeps the memo valid for the lifetime of the process.
+    //
+    // Latent hazard: `ynz watch` (long-lived) and LSP (incremental) would NOT invalidate
+    // the memoized codegen_query when this env var changes between rebuilds — salsa has
+    // no visibility into env vars. The correct fix is to thread `no_auto_parallel` as an
+    // explicit salsa input parameter. Deferred until `ynz watch --no-auto-parallel` or
+    // LSP codegen integration lands. Tracked: .claude/todos.md "no-auto-parallel env-var".
+    let no_auto_parallel = std::env::var("YNZ_NO_AUTO_PARALLEL").is_ok_and(|v| v == "1");
+
     build_module(
         &context,
         &module,
         source_path,
         typed_module,
         shape_table,
+        sig_table,
         generic_fn_table,
         mono_table,
         imported_options,
         &suspend_set,
+        imported_fns,
+        frame_layouts,
+        no_auto_parallel,
     )?;
 
     module
@@ -694,11 +776,12 @@ struct ModuleGlobals<'ctx> {
 
 /// Emit LLVM IR for one Yinz source module.
 ///
-/// # Flow (5 passes — order is mandatory)
+/// # Flow (6 passes — order is mandatory)
 ///
 /// | Pass | What | Requires from prior passes |
 /// |------|------|---------------------------|
 /// | 0 | Emit LLVM struct types for all user-defined shapes | nothing |
+/// | 0.25 | Forward-declare imported (cross-module) functions as external LLVM declarations | Pass 0 (shape types for param/return type mapping) |
 /// | 1 | Forward-declare every non-generic function | Pass 0 (shape types used in param/return types) |
 /// | 1.5 | Forward-declare monomorphized generic functions | Pass 0 + Pass 1 (non-generic functions may be called from generic bodies) |
 /// | 1.6 | Emit vtable globals for `dynamic Foo` dispatch | Pass 1 (vtable entries point to forward-declared function values) |
@@ -714,10 +797,14 @@ fn build_module<'ctx, 'g>(
     source_path: &str,
     typed: &'g TypedModule,
     shape_table: &'g ShapeTable,
+    sig_table: &'g SignatureTable,
     generic_fn_table: &'g GenericFnTable,
     mono_table: &'g MonomorphizationTable,
     imported_options: &std::collections::HashMap<String, ynz_typeck::options_table::OptionsEntry>,
     suspend_set: &'g SuspendSet,
+    imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+    frame_layouts_arg: &HashMap<String, FrameLayout>,
+    no_auto_parallel: bool,
 ) -> Result<(), String> {
     let rt = RuntimeDecls::declare(ctx, module);
 
@@ -757,6 +844,67 @@ fn build_module<'ctx, 'g>(
     // Pass 0 — emit LLVM struct types for all user-defined shapes.
     let shape_types = emit_shape_types(ctx, shape_table);
 
+    // Pass 0.25 — forward-declare imported (cross-module) functions as LLVM external declarations.
+    //
+    // Each imported function lives in another translation unit (another .o file). The linker
+    // resolves the reference at link time. Without this pass, `get_function(name)` in Pass 2
+    // returns None for cross-module calls, producing a codegen error.
+    //
+    // For suspending imported functions: the SM inline-poll mechanism calls the callee's
+    // RESUME FUNCTION (`ynz_sm_<name>_resume`), not the outer wrapper. Both declarations
+    // are emitted here — the wrapper for non-SM callers, the resume fn for SM callers.
+    for (local_name, sig) in imported_fns {
+        // Use the exported symbol name for the LLVM declaration. When the import is aliased
+        // (`import { getValue as fetchVal }`), the exporting module compiled and exported
+        // `getValue` — the LLVM external declaration must use that name so the linker
+        // resolves the reference to the exporting module's object file. The local alias
+        // name is used only by the call-site name lookup (sig_table key, frame_layouts key).
+        let llvm_name = sig.original_name.as_deref().unwrap_or(local_name.as_str());
+        if module.get_function(llvm_name).is_none() {
+            let ptr = ctx.ptr_type(AddressSpace::default());
+            let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = sig
+                .params
+                .iter()
+                .map(|(_, ty)| match ty {
+                    Type::Int => ctx.i64_type().into(),
+                    Type::Float => ctx.f64_type().into(),
+                    Type::Bool => ctx.bool_type().into(),
+                    Type::Number { precision } if *precision <= 34 => ctx.i128_type().into(),
+                    _ => ptr.into(),
+                })
+                .collect();
+            let fn_ty = match &sig.ret {
+                Type::Nothing => ctx.void_type().fn_type(&param_types, false),
+                Type::Int => ctx.i64_type().fn_type(&param_types, false),
+                Type::Float => ctx.f64_type().fn_type(&param_types, false),
+                Type::Bool => ctx.bool_type().fn_type(&param_types, false),
+                Type::Number { precision } if *precision <= 34 => {
+                    ctx.i128_type().fn_type(&param_types, false)
+                }
+                // Errors-capable functions return `{i64, i64}` — the same ABI as the
+                // errors_result_type struct. Using ptr here produces an ABI mismatch:
+                // the importer reads an i64 where the callee returns a {i64,i64} struct,
+                // silently returning 0 instead of the real value.
+                Type::ErrorsCapable { .. } => errors_result_type(ctx).fn_type(&param_types, false),
+                _ => ptr.fn_type(&param_types, false),
+            };
+            module.add_function(llvm_name, fn_ty, None);
+        }
+
+        // For suspending imported functions, also declare the resume function.
+        // SM callers call `ynz_sm_<name>_resume` for inline poll-yield rather than
+        // the wrapper — without this declaration, `emit_suspending_call` panics with
+        // "resume fn not declared". The resume function uses the original exported name
+        // (not the alias) because state_machine::resume_fn_name derives from the LLVM
+        // symbol, which is the original name in the exporting module's object file.
+        if sig.suspends {
+            let resume_name = state_machine::resume_fn_name(llvm_name);
+            if module.get_function(&resume_name).is_none() {
+                state_machine::declare_resume_fn(ctx, module, &resume_name);
+            }
+        }
+    }
+
     // Compute ABI byte sizes for shapes using LLVM TargetData (the authoritative layout
     // source, same as the memcpy size used in lower_function_with_waits). Stored as a
     // plain HashMap<name, bytes> so frame-layout computation (no LLVM context) and codegen
@@ -781,14 +929,31 @@ fn build_module<'ctx, 'g>(
             .collect()
     };
 
+    // WHY: single SSOT for the effective suspend set — local + imported suspending
+    // names.  `build_effective_suspend_set` is the canonical computation consumed by
+    // the frame-layout query, this routing gate, and the IDE hint passes, ensuring they
+    // all agree on which callees are suspending.
+    //
+    // Without the imported names:
+    //   1. `build_frame_layouts` skips cross-module child sub-frames → heap-boxed
+    //      fallback paths with SSA dominator bugs.
+    //   2. `is_direct_suspending_call` misses imported suspending fns → calls the SM
+    //      wrapper directly inside a resume body → "Cannot start a runtime from within
+    //      a runtime" panic at runtime.
+    let effective_suspend_set = build_effective_suspend_set(suspend_set, imported_fns);
+    let suspend_set = &effective_suspend_set;
+
     // Pass 0.5 — build the wait cache (kept for backward-compat with generic lowering +
-    // background routing) AND compute frame layouts for all suspending functions.
+    // background routing) AND bind the pre-computed frame layouts.
     //
     // The wait_cache still serves the local-syntactic check used by non-SM call sites.
-    // frame_layouts encodes the composed structure (embedded child sub-frames) used by
-    // lower_function_with_waits to allocate ONE frame per task tree.
+    // frame_layouts comes from frame_layouts_query (pre-computed, LLVM-accurate): it
+    // encodes the composed structure (embedded child sub-frames) used by
+    // lower_function_with_waits to allocate ONE frame per task tree. Using the query
+    // result here ensures the emitter and any future cross-module importers read the
+    // identical layout (single source of truth — Guard G1 + G2 integrity).
     let wait_cache = build_wait_cache(typed);
-    let frame_layouts = build_frame_layouts(typed, suspend_set, &shape_abi_sizes);
+    let frame_layouts = frame_layouts_arg;
 
     // Pass 0.6 — forward-declare resume functions for ALL SUSPENDING functions.
     // Phase 7: use suspend_set (transitive) instead of wait_cache (local) so fns that
@@ -858,7 +1023,10 @@ fn build_module<'ctx, 'g>(
                 &options_table,
                 &wait_cache,
                 suspend_set,
-                &frame_layouts,
+                frame_layouts,
+                imported_fns,
+                sig_table,
+                no_auto_parallel,
             )?,
             Item::Function(_)
             | Item::ShapeDecl(_)
@@ -1038,6 +1206,7 @@ fn lower_generic_function<'ctx>(
         wait_cache: empty_wait_cache(),
         suspend_set: empty_suspend_set(),
         frame_layouts: empty_frame_layouts(),
+        imported_fns: empty_imported_fns(),
         sm_frame_ptr: None,
         sm_yinz_ret_ty: None,
         sm_crossing_names: None,
@@ -1054,6 +1223,11 @@ fn lower_generic_function<'ctx>(
         sm_scope_depth: 0,
         sm_for_loop_counter: 0,
         sm_number_errors_staging_offset: None,
+        // Generic functions cannot contain `wait` — auto-parallel is never applicable.
+        no_auto_parallel: false,
+        // Generic functions never reach lower_sm_block; the empty table satisfies
+        // the struct field without the caller needing a real SignatureTable.
+        sig_table: empty_sig_table(),
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -1262,6 +1436,9 @@ struct Cg<'ctx, 'g> {
     suspend_set: &'g SuspendSet,
     // v0.3-M2 P7: composed-frame layouts for all suspending functions.
     frame_layouts: &'g HashMap<String, FrameLayout>,
+    // v0.3-M3b: imported function signatures — needed so helpers that look up
+    // callee return types and errors-capable flags can find cross-module callees.
+    imported_fns: &'g std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
     // v0.3-M2 P7: when non-None, this Cg is inside a state-machine resume function.
     // The frame pointer and Yinz return type are needed so Stmt::Return stores the
     // typed value in frame[FRAME_OFFSET_RETURN_SLOT] and returns `i32 0` (Ready)
@@ -1327,6 +1504,21 @@ struct Cg<'ctx, 'g> {
     // Used by lower_stmt_return to write the i128 decimal to a frame-stable location so
     // the EC ok-pointer survives the resume function returning.
     sm_number_errors_staging_offset: Option<u64>,
+    // v0.3-M3b Phase 4: when true, the auto-parallelize pass is disabled.
+    // All suspending statements lower in pure source order via the existing
+    // single inline-poll path. This is the TRUE dumb-sequential baseline used
+    // as the cross-impl consistency oracle.
+    //
+    // When false (the default), `lower_sm_block` runs `partition_independent_groups`
+    // and routes independent groups through `emit_independent_group_poll`.
+    no_auto_parallel: bool,
+    // v0.3-M3b Phase 4: signature table for write-effect classification in the
+    // independence analysis. Used ONLY by `lower_sm_block` → `partition_independent_groups`.
+    // When `no_auto_parallel` is true, this is never accessed.
+    //
+    // Stored here so the independence analysis can consume `param_ownerships` from
+    // function signatures without re-deriving them (corpse b compliance).
+    sig_table: &'g SignatureTable,
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
@@ -1632,6 +1824,9 @@ fn lower_function<'ctx, 'g>(
     wait_cache: &'g WaitCache,
     suspend_set: &'g SuspendSet,
     frame_layouts: &'g HashMap<String, FrameLayout>,
+    imported_fns: &'g std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+    sig_table: &'g SignatureTable,
+    no_auto_parallel: bool,
 ) -> Result<(), String> {
     // v0.3-M2 P7 path selection: functions in the transitive suspend_set get the
     // state-machine path. Uses suspend_set (from typeck FunctionSig.suspends) instead
@@ -1653,6 +1848,9 @@ fn lower_function<'ctx, 'g>(
             wait_cache,
             suspend_set,
             frame_layouts,
+            imported_fns,
+            sig_table,
+            no_auto_parallel,
         );
     }
 
@@ -1692,6 +1890,7 @@ fn lower_function<'ctx, 'g>(
         wait_cache,
         suspend_set,
         frame_layouts,
+        imported_fns,
         sm_frame_ptr: None,
         sm_yinz_ret_ty: None,
         sm_crossing_names: None,
@@ -1708,6 +1907,11 @@ fn lower_function<'ctx, 'g>(
         sm_scope_depth: 0,
         sm_for_loop_counter: 0,
         sm_number_errors_staging_offset: None,
+        // Non-SM functions cannot contain independent suspending groups.
+        no_auto_parallel: false,
+        // sig_table unused for non-SM functions — independence analysis runs only in
+        // lower_sm_block which is never reached from the non-SM path.
+        sig_table,
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -1857,6 +2061,9 @@ fn lower_function_with_waits<'ctx, 'g>(
     wait_cache: &'g WaitCache,
     suspend_set: &'g SuspendSet,
     frame_layouts: &'g HashMap<String, FrameLayout>,
+    imported_fns: &'g std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+    sig_table: &'g SignatureTable,
+    no_auto_parallel: bool,
 ) -> Result<(), String> {
     // Collect the names of parameters. ALL parameters are live across any wait.
     let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
@@ -1992,6 +2199,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         wait_cache,
         suspend_set,
         frame_layouts,
+        imported_fns,
         sm_frame_ptr: Some(frame_param),
         sm_yinz_ret_ty: Some(yinz_ret_ty.clone()),
         sm_crossing_names: Some(crossing_names.clone()),
@@ -2008,7 +2216,12 @@ fn lower_function_with_waits<'ctx, 'g>(
         sm_scope_depth: 0,
         sm_for_loop_counter: 0,
         sm_number_errors_staging_offset: number_errors_staging_offset,
-        // Carry errors-capable flag separately so lower_stmt_return can handle it.
+        // When set, lower_sm_block skips independence analysis and lowers all stmts
+        // sequentially — the TRUE dumb-sequential baseline (not a shared-analysis no-op).
+        no_auto_parallel,
+        // sig_table forwarded so independence analysis can read param_ownerships
+        // without re-deriving write effects from scratch (corpse b compliance).
+        sig_table,
     };
 
     // Step 1 — Emit allocas in the entry block (sm_entry). LLVM SSA requires all allocas
@@ -3032,34 +3245,90 @@ fn lower_sm_block<'ctx, 'g>(
     shape_table: &'g ShapeTable,
     current_state: &mut usize,
 ) -> Result<(), String> {
-    for stmt in &block.stmts {
+    if cg.no_auto_parallel {
+        // TRUE dumb-sequential baseline: lower every statement in source order with zero
+        // consultation of the independence analysis. This is the `--no-auto-parallel` path
+        // and the cross-impl consistency oracle — a bug in independence analysis makes
+        // default mode diverge from this oracle, turning the consistency gate RED.
+        for stmt in &block.stmts {
+            if is_block_terminated(cg) {
+                break;
+            }
+            if stmt_contains_wait(stmt) || stmt_contains_suspending_call(stmt, cg.suspend_set) {
+                lower_sm_stmt_with_wait(
+                    cg,
+                    stmt,
+                    state_blocks,
+                    pending_block,
+                    frame_ptr,
+                    waker_ctx,
+                    param_names,
+                    f,
+                    shape_table,
+                    current_state,
+                )?;
+            } else {
+                lower_stmt(cg, stmt)?;
+                anchor_shape_crossing_locals_to_frame_alloca(cg, stmt)?;
+                flush_crossing_local_if_needed(cg, stmt, frame_ptr)?;
+            }
+        }
+        return Ok(());
+    }
+
+    // Auto-parallel path: partition the block into independent groups.
+    // The suspend_set is the effective suspend set (including imported fns) passed
+    // into this codegen context — `cg.suspend_set` is authoritative (corpse b).
+    let groups =
+        partition_independent_groups(&block.stmts, cg.suspend_set, cg.sig_table, cg.imported_fns);
+
+    for group in &groups {
         if is_block_terminated(cg) {
             break;
         }
-        if stmt_contains_wait(stmt) || stmt_contains_suspending_call(stmt, cg.suspend_set) {
-            lower_sm_stmt_with_wait(
-                cg,
-                stmt,
-                state_blocks,
-                pending_block,
-                frame_ptr,
-                waker_ctx,
-                param_names,
-                f,
-                shape_table,
-                current_state,
-            )?;
-        } else {
-            lower_stmt(cg, stmt)?;
-            // Shape-typed crossing locals at a `let` definition site: `lower_struct_lit`
-            // creates a fresh stack alloca and stores its pointer in cg.locals[name].
-            // The stack alloca dies when this resume call returns. Copy the struct bytes
-            // into the pre-existing sm_entry struct alloca (the stable working copy that
-            // `flush_crossing_local_if_needed` then memcpy's into the frame slots).
-            anchor_shape_crossing_locals_to_frame_alloca(cg, stmt)?;
-            // After lowering a non-wait statement, flush any crossing local it defined or
-            // mutated back to the frame slot so the value survives the next suspension.
-            flush_crossing_local_if_needed(cg, stmt, frame_ptr)?;
+        match group {
+            IndependentGroup::Singleton(stmt) => {
+                // Existing sequential path unchanged for single statements.
+                if stmt_contains_wait(stmt) || stmt_contains_suspending_call(stmt, cg.suspend_set) {
+                    lower_sm_stmt_with_wait(
+                        cg,
+                        stmt,
+                        state_blocks,
+                        pending_block,
+                        frame_ptr,
+                        waker_ctx,
+                        param_names,
+                        f,
+                        shape_table,
+                        current_state,
+                    )?;
+                } else {
+                    lower_stmt(cg, stmt)?;
+                    anchor_shape_crossing_locals_to_frame_alloca(cg, stmt)?;
+                    flush_crossing_local_if_needed(cg, stmt, frame_ptr)?;
+                }
+            }
+            IndependentGroup::Parallel(stmts) => {
+                // Interleaved inline poll for N ≥ 2 independent suspending statements.
+                // Each callee's embedded sub-frame is polled in declaration order;
+                // we yield Pending only when ALL are still Pending.
+                emit_independent_group_poll(
+                    cg,
+                    stmts,
+                    state_blocks,
+                    pending_block,
+                    frame_ptr,
+                    waker_ctx,
+                    param_names,
+                    f,
+                    shape_table,
+                    current_state,
+                )?;
+                // Flush any crossing locals defined by the parallel group's let-bindings.
+                for &stmt in stmts.iter() {
+                    flush_crossing_local_if_needed(cg, stmt, frame_ptr)?;
+                }
+            }
         }
     }
     Ok(())
@@ -4667,6 +4936,11 @@ fn lower_sm_match<'ctx, 'g>(
 /// - `Number { precision ≤ 34 }`: load i128 from 16-byte slot, return as i128 IntValue.
 ///   `bind_sm_return_value`'s I128Value arm allocates an i128 alloca and stores the value
 ///   so that `load(slot, &Type::Number, ...)` can read the full i128 from it.
+/// - errors-capable (`-> T errors`, detected via `is_errors_capable_fn`): load the 2-slot
+///   `{i64, i64}` errors struct from the return slot and rebuild it as a StructValue, so
+///   `bind_sm_return_value`'s StructValue arm registers the binding in `errors_capable_locals`.
+///   Without this an errors-capable callee in a parallel group falls into the i64 catch-all,
+///   collapsing the `{err, ok}` struct to one word and dereferencing garbage (exit 139).
 /// - Anything else: fall back to i64 load.
 fn load_sm_return_value_typed<'ctx>(
     cg: &mut Cg<'ctx, '_>,
@@ -4675,15 +4949,50 @@ fn load_sm_return_value_typed<'ctx>(
     callee_name: &str,
     tag: &str,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
-    // Look up the callee's declared return type.
-    let callee_ret_ty = cg.typed.module.items.iter().find_map(|item| {
-        if let ynz_ast::nodes::Item::Function(f) = item {
-            if f.name == callee_name {
-                return Some(ast_type_to_typeck_type(&f.return_type, cg.shape_table));
+    // `-> T errors`: the return slot holds the 2-slot `{i64, i64}` errors ABI result
+    // (field0 = error pointer, field1 = success value). Load both halves and rebuild the
+    // StructValue so `bind_sm_return_value`'s StructValue arm fires and registers the binding
+    // in `errors_capable_locals`. This must be checked via `is_errors_capable_fn` — NOT via
+    // the declared return type below — because `ast_type_to_typeck_type` strips the errors
+    // wrapper for LOCAL callees (returns the bare inner type), so a local errors-capable
+    // callee would otherwise fall into the i64 catch-all, collapse the 2-slot struct to one
+    // word, and dereference garbage (exit 139) in a parallel group. Mirrors the single/
+    // recursive EC-return load path (the `is_errors_capable_fn` branch in the non-parallel
+    // callers).
+    if is_errors_capable_fn(cg.typed, cg.imported_fns, callee_name) {
+        let (err_i64, ok_i64) =
+            state_machine::load_return_value_errors(ctx, &cg.builder, frame_ptr)?;
+        let struct_ty = errors_result_type(ctx);
+        let mut result = struct_ty.const_zero();
+        result = cg
+            .builder
+            .build_insert_value(result, err_i64, 0, &format!("{tag}_err"))
+            .map_err(|e| format!("{tag}_err insert: {e}"))?
+            .into_struct_value();
+        result = cg
+            .builder
+            .build_insert_value(result, ok_i64, 1, &format!("{tag}_ok"))
+            .map_err(|e| format!("{tag}_ok insert: {e}"))?
+            .into_struct_value();
+        return Ok(result.into());
+    }
+
+    // Look up the callee's declared return type — check local items first, then
+    // imported functions for cross-module callees.
+    let callee_ret_ty = cg
+        .typed
+        .module
+        .items
+        .iter()
+        .find_map(|item| {
+            if let ynz_ast::nodes::Item::Function(f) = item {
+                if f.name == callee_name {
+                    return Some(ast_type_to_typeck_type(&f.return_type, cg.shape_table));
+                }
             }
-        }
-        None
-    });
+            None
+        })
+        .or_else(|| cg.imported_fns.get(callee_name).map(|sig| sig.ret.clone()));
 
     match callee_ret_ty {
         Some(Type::Float) => {
@@ -5233,6 +5542,501 @@ fn is_direct_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool {
     false
 }
 
+/// Emit interleaved inline-poll for a parallel group of ≥2 independent suspending statements.
+///
+/// # Mechanism (no spawn — corpse (a) compliance)
+///
+/// Each member's child frame is already embedded in the composed parent frame (allocated at
+/// `lower_function_with_waits` time). This function:
+/// 1. Initializes all child frame headers (resume_point=0, sleep_handle=null).
+/// 2. Writes call arguments to each child frame's local slots.
+/// 3. Polls all child frames in order. Any Pending child suspends; we track which are done.
+/// 4. If any child is Pending, save parent resume_point = continuation_state, yield Pending.
+/// 5. On re-entry (continuation_state): re-poll any child that was not yet Ready.
+/// 6. When ALL children are Ready, fall through to post_call_bb.
+/// 7. Reads results from each child frame and binds to the let-target if applicable.
+///
+/// # State budget
+///
+/// A parallel group of N stmts uses 1 shared continuation state. The other N-1 states
+/// pre-allocated by `count_suspension_points` are left unterminated; `lower_sm_body`'s
+/// trailing loop adds an unreachable terminator to any unterminated block so LLVM is valid.
+///
+/// # Corpse guards
+///
+/// - (a) No forked frame dispatch: all frame slot I/O routes through `flush_var_slot_to_frame`
+///   and `reload_params_from_frame`. Return-value reads use `load_sm_return_value_typed`.
+/// - (b) No flat-scan re-derivation: this function receives the pre-partitioned group from
+///   `partition_independent_groups`; it does not re-examine statement order.
+///
+/// # EC-returning parallel calls
+///
+/// `-> T errors` (EC) calls DO parallelize through this function: the `{i64,i64}`
+/// companion-struct result is read via `load_sm_return_value_typed`'s `ErrorsCapable` arm
+/// and bound through the unified `bind_sm_result_and_flush` (StructValue arm), so an EC
+/// return survives a later `wait` barrier byte-identically. The still-deferred piece is
+/// collecting a `background`-spawned EC task's result via a handle
+/// (`ec-wrapper-collect-on-completion`, gated on `background-handle-form`, v0.3-M4) — a
+/// separate path that does not flow through this inline-poll function.
+///
+/// # Failure modes
+///
+/// Returns `Err` propagated from any LLVM builder call or a missing child frame/resume fn.
+/// A missing child frame layout or missing resume fn is always an `Err` (codegen bug).
+#[allow(clippy::too_many_arguments)]
+fn emit_independent_group_poll<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    stmts: &[&Stmt],
+    state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
+    pending_block: inkwell::basic_block::BasicBlock<'ctx>,
+    parent_frame: PointerValue<'ctx>,
+    waker_ctx: PointerValue<'ctx>,
+    param_names: &[String],
+    f: &FunctionDecl,
+    shape_table: &'g ShapeTable,
+    current_state: &mut usize,
+) -> Result<(), String> {
+    let ctx = cg.ctx;
+    // N ≥ 2 by construction (independence.rs only emits Parallel groups with 2+ members).
+
+    // --- Step 1 — collect callee info and child frame pointers ---
+
+    struct Child<'ctx> {
+        callee_name: String,
+        child_frame: PointerValue<'ctx>,
+        resume_fn: inkwell::values::FunctionValue<'ctx>,
+    }
+
+    let mut children: Vec<Child<'ctx>> = Vec::with_capacity(stmts.len());
+
+    for &stmt in stmts {
+        // Extract (callee_name, call_args) from the statement.
+        let (callee_name, call_args) = extract_call_and_args(stmt).ok_or_else(|| {
+            "emit_independent_group_poll: stmt is not a direct ident call".to_string()
+        })?;
+
+        // Find child frame offset from parent's layout.
+        let child_offset = cg
+            .frame_layouts
+            .get(&f.name)
+            .and_then(|layout| {
+                layout
+                    .children
+                    .iter()
+                    .find(|(n, _)| n == &callee_name)
+                    .map(|(_, off)| *off)
+            })
+            .ok_or_else(|| {
+                format!(
+                    "emit_independent_group_poll: no child frame slot for `{callee_name}` in `{}`",
+                    f.name
+                )
+            })?;
+
+        let child_frame = state_machine::child_frame_ptr(
+            ctx,
+            &cg.builder,
+            parent_frame,
+            child_offset,
+            &format!("par_cf_{callee_name}"),
+        )?;
+
+        // Resolve resume function (same alias logic as emit_suspending_call_inline_poll).
+        let callee_llvm_name = cg
+            .imported_fns
+            .get(callee_name.as_str())
+            .and_then(|sig| sig.original_name.as_deref())
+            .unwrap_or(callee_name.as_str());
+        let resume_name = state_machine::resume_fn_name(callee_llvm_name);
+        let resume_fn = cg.module.get_function(&resume_name).ok_or_else(|| {
+            format!(
+                "emit_independent_group_poll: resume fn `{resume_name}` not declared for `{callee_name}`"
+            )
+        })?;
+
+        // Initialize child frame header: resume_point=0, sleep_handle=null.
+        state_machine::store_resume_point(ctx, &cg.builder, child_frame, 0)?;
+        let null_ptr = ctx.ptr_type(AddressSpace::default()).const_null();
+        state_machine::store_sleep_handle(ctx, &cg.builder, child_frame, null_ptr)?;
+
+        // Evaluate args and write to child frame local slots BEFORE any poll.
+        let child_frame_layout = cg.frame_layouts.get(&callee_name);
+        let child_n_locals = child_frame_layout
+            .map(|l| l.n_locals)
+            .unwrap_or(call_args.len());
+        for (idx, arg) in call_args.iter().enumerate().take(child_n_locals) {
+            let arg_val = lower_expr(cg, arg)?;
+            let arg_ty = cg.expr_type(arg);
+            let bits = cg
+                .to_i64_bits(arg_val, &arg_ty)
+                .map_err(|e| format!("par group arg bits: {e}"))?;
+            state_machine::store_local_slot(ctx, &cg.builder, child_frame, idx, bits)?;
+        }
+
+        children.push(Child {
+            callee_name,
+            child_frame,
+            resume_fn,
+        });
+    }
+
+    // --- Step 2 — allocate the shared continuation state ---
+
+    let continuation_state = *current_state + 1;
+    let cont_state_bb = state_blocks
+        .get(continuation_state)
+        .copied()
+        .ok_or_else(|| {
+            format!(
+                "parallel group cont state {continuation_state} out of range (n_states={})",
+                state_blocks.len()
+            )
+        })?;
+    let post_call_bb = ctx.append_basic_block(cg.current_fn, "par_post");
+    // Consumed N slots from state_blocks; only 1 is used. The rest (N-1) will be terminated
+    // as unreachable by lower_sm_body's trailing loop.
+    *current_state = continuation_state + stmts.len() - 1;
+
+    // --- Step 3 — first-poll pass: poll ALL children before deciding to yield ---
+    //
+    // All N children are polled in declaration order on the first pass. This is the
+    // fan-out step: every child's I/O operation (e.g. sleep timer) starts before we
+    // yield. Without this, a child polled after the first Pending result would never
+    // start its I/O and the operations would run sequentially instead of overlapping.
+    //
+    // After all polls:
+    //   - Any child that returned Ready gets the sentinel (0x7FFFFFFF) stored into its
+    //     resume_point, so re-poll passes route to sm_dead and return 0 safely.
+    //   - If ANY child was Pending, we yield with resume_point = continuation_state.
+    //   - If ALL were Ready, we jump directly to post_call_bb.
+    //
+    // An alloca (`par_any_pending`) acts as the "was any child Pending?" accumulator.
+    // It is initialized to 0; each child that is still Pending stores 1 into it.
+
+    let any_pending_alloca = cg
+        .builder
+        .build_alloca(ctx.i32_type(), "par_any_pending")
+        .map_err(|e| format!("par any_pending alloca: {e}"))?;
+    cg.builder
+        .build_store(any_pending_alloca, ctx.i32_type().const_int(0, false))
+        .map_err(|e| format!("par any_pending init: {e}"))?;
+
+    let suspend_bb = ctx.append_basic_block(cg.current_fn, "par_suspend");
+
+    for child in &children {
+        let first_poll = cg
+            .builder
+            .build_call(
+                child.resume_fn,
+                &[child.child_frame.into(), waker_ctx.into()],
+                &format!("par_poll1_{}", child.callee_name),
+            )
+            .map_err(|e| format!("par first poll {}: {e}", child.callee_name))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| format!("par resume fn {} returned void", child.callee_name))?
+            .into_int_value();
+
+        let is_pending = cg
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                first_poll,
+                ctx.i32_type().const_int(0, false),
+                &format!("par_pend1_{}", child.callee_name),
+            )
+            .map_err(|e| format!("par first cmp {}: {e}", child.callee_name))?;
+
+        // Two paths: Pending → set accumulator flag and continue; Ready → mark sentinel and continue.
+        // Both paths continue to the next child poll (no early exit).
+        let pend_bb =
+            ctx.append_basic_block(cg.current_fn, &format!("par_pend1_{}", child.callee_name));
+        let ready_bb =
+            ctx.append_basic_block(cg.current_fn, &format!("par_next1_{}", child.callee_name));
+        let after_bb =
+            ctx.append_basic_block(cg.current_fn, &format!("par_after1_{}", child.callee_name));
+
+        cg.builder
+            .build_conditional_branch(is_pending, pend_bb, ready_bb)
+            .map_err(|e| format!("par first branch {}: {e}", child.callee_name))?;
+
+        // pend_bb: set the accumulator; continue to after_bb.
+        cg.builder.position_at_end(pend_bb);
+        cg.builder
+            .build_store(any_pending_alloca, ctx.i32_type().const_int(1, false))
+            .map_err(|e| format!("par pend store {}: {e}", child.callee_name))?;
+        cg.builder
+            .build_unconditional_branch(after_bb)
+            .map_err(|e| format!("par pend cont {}: {e}", child.callee_name))?;
+
+        // ready_bb: mark child done (sentinel) so re-poll passes skip it safely; continue.
+        cg.builder.position_at_end(ready_bb);
+        // Sentinel routes to sm_dead (default switch arm) on any subsequent re-poll,
+        // preventing a null sleep_handle dereference after the handle was freed on Ready.
+        state_machine::store_resume_point(ctx, &cg.builder, child.child_frame, 0x7FFF_FFFFu64)?;
+        cg.builder
+            .build_unconditional_branch(after_bb)
+            .map_err(|e| format!("par ready cont {}: {e}", child.callee_name))?;
+
+        cg.builder.position_at_end(after_bb);
+    }
+
+    // After all first polls: check the accumulator.
+    let any_pending_val = cg
+        .builder
+        .build_load(ctx.i32_type(), any_pending_alloca, "par_any_pending_val")
+        .map_err(|e| format!("par any_pending load: {e}"))?
+        .into_int_value();
+    let had_pending = cg
+        .builder
+        .build_int_compare(
+            IntPredicate::NE,
+            any_pending_val,
+            ctx.i32_type().const_int(0, false),
+            "par_had_pending",
+        )
+        .map_err(|e| format!("par had_pending cmp: {e}"))?;
+    cg.builder
+        .build_conditional_branch(had_pending, suspend_bb, post_call_bb)
+        .map_err(|e| format!("par first final branch: {e}"))?;
+
+    // --- suspend_bb: at least one child was Pending — save state, yield ---
+    cg.builder.position_at_end(suspend_bb);
+    state_machine::store_resume_point(ctx, &cg.builder, parent_frame, continuation_state as u64)?;
+    cg.builder
+        .build_unconditional_branch(pending_block)
+        .map_err(|e| format!("par suspend branch: {e}"))?;
+
+    // --- cont_state_bb: re-entry — re-poll ALL children (fan-out before yield) ---
+    //
+    // Same fan-out discipline as the first-poll pass: poll every child and accumulate
+    // "any still Pending?" before deciding to yield or proceed. Children whose first-poll
+    // stored a sentinel return 0 from sm_dead immediately (safe, correct). Children that
+    // still have a live sleep timer return 1 and re-register the parent waker for the
+    // next wake-up. After polling all children, yield if any still Pending; otherwise post.
+    cg.builder.position_at_end(cont_state_bb);
+    reload_params_from_frame(cg, parent_frame, param_names, f, shape_table, true)?;
+
+    let re_suspend_bb = ctx.append_basic_block(cg.current_fn, "par_re_suspend");
+    let re_post_bb = ctx.append_basic_block(cg.current_fn, "par_re_post");
+
+    // Accumulator: 0 = all ready so far, 1 = at least one still Pending.
+    let re_any_pending_alloca = cg
+        .builder
+        .build_alloca(ctx.i32_type(), "par_re_any_pending")
+        .map_err(|e| format!("par re_any_pending alloca: {e}"))?;
+    cg.builder
+        .build_store(re_any_pending_alloca, ctx.i32_type().const_int(0, false))
+        .map_err(|e| format!("par re_any_pending init: {e}"))?;
+
+    for child in &children {
+        // Recompute child frame pointer (GEP must be recomputed in each basic block).
+        let child_offset = cg
+            .frame_layouts
+            .get(&f.name)
+            .and_then(|layout| {
+                layout
+                    .children
+                    .iter()
+                    .find(|(n, _)| n == &child.callee_name)
+                    .map(|(_, off)| *off)
+            })
+            .ok_or_else(|| {
+                format!(
+                    "emit_independent_group_poll re: no child frame slot for `{}`",
+                    child.callee_name
+                )
+            })?;
+
+        let child_frame_re = state_machine::child_frame_ptr(
+            ctx,
+            &cg.builder,
+            parent_frame,
+            child_offset,
+            &format!("par_cf_{}_re", child.callee_name),
+        )?;
+
+        let re_poll = cg
+            .builder
+            .build_call(
+                child.resume_fn,
+                &[child_frame_re.into(), waker_ctx.into()],
+                &format!("par_poll_re_{}", child.callee_name),
+            )
+            .map_err(|e| format!("par re-poll {}: {e}", child.callee_name))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| format!("par resume fn {} (re) returned void", child.callee_name))?
+            .into_int_value();
+
+        let is_pending_re = cg
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                re_poll,
+                ctx.i32_type().const_int(0, false),
+                &format!("par_pend_re_{}", child.callee_name),
+            )
+            .map_err(|e| format!("par re cmp {}: {e}", child.callee_name))?;
+
+        // Fan-out: both paths continue to the next child poll.
+        let re_pend_bb =
+            ctx.append_basic_block(cg.current_fn, &format!("par_pend_re_{}", child.callee_name));
+        let re_ready_bb =
+            ctx.append_basic_block(cg.current_fn, &format!("par_next_re_{}", child.callee_name));
+        let re_after_bb = ctx.append_basic_block(
+            cg.current_fn,
+            &format!("par_after_re_{}", child.callee_name),
+        );
+
+        cg.builder
+            .build_conditional_branch(is_pending_re, re_pend_bb, re_ready_bb)
+            .map_err(|e| format!("par re branch {}: {e}", child.callee_name))?;
+
+        // re_pend_bb: still Pending — set accumulator, continue.
+        cg.builder.position_at_end(re_pend_bb);
+        cg.builder
+            .build_store(re_any_pending_alloca, ctx.i32_type().const_int(1, false))
+            .map_err(|e| format!("par re pend store {}: {e}", child.callee_name))?;
+        cg.builder
+            .build_unconditional_branch(re_after_bb)
+            .map_err(|e| format!("par re pend cont {}: {e}", child.callee_name))?;
+
+        // re_ready_bb: Ready — mark sentinel so future re-polls skip this child safely.
+        cg.builder.position_at_end(re_ready_bb);
+        // Sentinel routes to sm_dead on any subsequent re-poll — null sleep_handle safe.
+        state_machine::store_resume_point(ctx, &cg.builder, child_frame_re, 0x7FFF_FFFFu64)?;
+        cg.builder
+            .build_unconditional_branch(re_after_bb)
+            .map_err(|e| format!("par re ready cont {}: {e}", child.callee_name))?;
+
+        cg.builder.position_at_end(re_after_bb);
+    }
+
+    // After all re-polls: check accumulator.
+    let re_any_pending_val = cg
+        .builder
+        .build_load(
+            ctx.i32_type(),
+            re_any_pending_alloca,
+            "par_re_any_pending_val",
+        )
+        .map_err(|e| format!("par re_any_pending load: {e}"))?
+        .into_int_value();
+    let re_had_pending = cg
+        .builder
+        .build_int_compare(
+            IntPredicate::NE,
+            re_any_pending_val,
+            ctx.i32_type().const_int(0, false),
+            "par_re_had_pending",
+        )
+        .map_err(|e| format!("par re had_pending cmp: {e}"))?;
+    cg.builder
+        .build_conditional_branch(re_had_pending, re_suspend_bb, re_post_bb)
+        .map_err(|e| format!("par re final branch: {e}"))?;
+
+    // --- re_suspend_bb: still Pending — yield with same continuation state ---
+    cg.builder.position_at_end(re_suspend_bb);
+    state_machine::store_resume_point(ctx, &cg.builder, parent_frame, continuation_state as u64)?;
+    cg.builder
+        .build_unconditional_branch(pending_block)
+        .map_err(|e| format!("par re_suspend branch: {e}"))?;
+
+    // --- re_post_bb: all Ready on re-poll path — merge into post_call_bb ---
+    cg.builder.position_at_end(re_post_bb);
+    cg.builder
+        .build_unconditional_branch(post_call_bb)
+        .map_err(|e| format!("par re_post merge: {e}"))?;
+
+    // --- post_call_bb: all children Ready; read results and bind let-targets ---
+    cg.builder.position_at_end(post_call_bb);
+
+    // Read each child's return value and bind to the let-target name if applicable.
+    // Results are read in declaration order; each child frame is still valid (embedded,
+    // never freed for inline-poll groups — the composed frame owns the memory).
+    for (child, &stmt) in children.iter().zip(stmts.iter()) {
+        let child_offset = cg
+            .frame_layouts
+            .get(&f.name)
+            .and_then(|layout| {
+                layout
+                    .children
+                    .iter()
+                    .find(|(n, _)| n == &child.callee_name)
+                    .map(|(_, off)| *off)
+            })
+            .ok_or_else(|| {
+                format!(
+                    "emit_independent_group_poll post: no child frame slot for `{}`",
+                    child.callee_name
+                )
+            })?;
+
+        let child_frame_post = state_machine::child_frame_ptr(
+            ctx,
+            &cg.builder,
+            parent_frame,
+            child_offset,
+            &format!("par_cf_{}_post", child.callee_name),
+        )?;
+
+        let ret_val =
+            load_sm_return_value_typed(cg, ctx, child_frame_post, &child.callee_name, "par_ret")?;
+
+        // Bind to the let target when the stmt is `let name = calleeF(...)`.
+        if let Stmt::Let { name, .. } = stmt {
+            // Route through the SAME unified binder the sequential SM let-path uses
+            // (`bind_sm_result_and_flush`, emit.rs let-arms at ~3778/3806). For a
+            // crossing local — one whose value must survive a SUBSEQUENT `wait` — the
+            // value MUST be stored into the entry-block (sm_entry) alloca pre-created
+            // at the crossing-local setup (~2344, plus the EC companion struct at ~2357)
+            // and flushed to its frame slot(s). That entry-block alloca dominates every
+            // resume block; a fresh alloca built here in the parallel-join block does NOT,
+            // so `reload_params_from_frame` would read it from a block it doesn't dominate
+            // (LLVM "instruction does not dominate all uses"). `bind_sm_result_and_flush`
+            // reuses the dominating alloca for crossing locals and only fresh-allocas for
+            // non-crossing bindings (which never survive a suspension, so a join-block
+            // alloca is correct there). This keeps the parallel path byte-for-byte aligned
+            // with the sequential store-into-existing-alloca contract — no parallel-only
+            // EC/number store that could drift (corpse-(a)).
+            let alloca = bind_sm_result_and_flush(cg, name, ret_val, parent_frame)?;
+            cg.locals.insert(name.clone(), alloca);
+
+            // EC crossing locals must be tracked in errors_capable_locals so a later use
+            // (after a subsequent suspension) extracts the success value / propagates the
+            // error instead of reading the companion-struct pointer. Mirrors the sequential
+            // let-arms (emit.rs ~3785/3809).
+            if cg.sm_crossing_errors_capable_set.contains(name.as_str()) {
+                cg.errors_capable_locals.insert(name.clone());
+            }
+        }
+        // For Stmt::Expr, return value is discarded (the existing sequential path does the same).
+    }
+
+    Ok(())
+}
+
+/// Extract the callee name and args from a statement that is a direct ident call.
+///
+/// Handles `let _ = calleeF(args)` and `calleeF(args)` (bare expression).
+/// Returns `None` for anything else.
+fn extract_call_and_args(stmt: &Stmt) -> Option<(String, &[Expr])> {
+    match stmt {
+        Stmt::Let {
+            value: Expr::Call(c),
+            ..
+        }
+        | Stmt::Expr(Expr::Call(c)) => {
+            if let Expr::Ident(name, _) = &c.callee {
+                return Some((name.clone(), &c.args));
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 /// Emit inline-poll-and-yield for a call to a user-defined suspending function.
 ///
 /// # Flow (O(1) per call site)
@@ -5329,8 +6133,16 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
         &format!("cf_{callee_name}"),
     )?;
 
-    // Find the child's resume function.
-    let resume_name = state_machine::resume_fn_name(&callee_name);
+    // Find the child's resume function. When the callee was imported under an alias
+    // (`import { getValue as fetchVal }`), the LLVM symbol was forward-declared using the
+    // original exported name (`ynz_sm_getValue_resume`), not the alias. Look up the
+    // effective name via FunctionSig.original_name so the module lookup succeeds.
+    let callee_llvm_name = cg
+        .imported_fns
+        .get(callee_name.as_str())
+        .and_then(|sig| sig.original_name.as_deref())
+        .unwrap_or(callee_name.as_str());
+    let resume_name = state_machine::resume_fn_name(callee_llvm_name);
     let child_resume_fn = cg
         .module
         .get_function(&resume_name)
@@ -5469,7 +6281,7 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
     // For float/number callees: load the typed value from the return slot using the
     // appropriate helper (the slot stores f64-as-i64 for float, full i128 for number).
     // For all other non-errors callees: load the i64 from the return slot.
-    if is_errors_capable_fn(cg.typed, &callee_name) {
+    if is_errors_capable_fn(cg.typed, cg.imported_fns, &callee_name) {
         let (err_i64, ok_i64) =
             state_machine::load_return_value_errors(ctx, &cg.builder, child_frame_post)?;
         let struct_ty = errors_result_type(ctx);
@@ -5527,7 +6339,14 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
     let ctx = cg.ctx;
 
-    let resume_name = state_machine::resume_fn_name(callee_name);
+    // When the callee was imported under an alias, the LLVM resume fn uses the original
+    // exported symbol name. Resolve via FunctionSig.original_name so the lookup succeeds.
+    let callee_llvm_name = cg
+        .imported_fns
+        .get(callee_name)
+        .and_then(|sig| sig.original_name.as_deref())
+        .unwrap_or(callee_name);
+    let resume_name = state_machine::resume_fn_name(callee_llvm_name);
     let child_resume_fn = match cg.module.get_function(&resume_name) {
         Some(rf) => rf,
         None => {
@@ -5718,7 +6537,7 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
             child_frame
         };
 
-    let ret_val = if is_errors_capable_fn(cg.typed, callee_name) {
+    let ret_val = if is_errors_capable_fn(cg.typed, cg.imported_fns, callee_name) {
         let (err_i64, ok_i64) =
             state_machine::load_return_value_errors(ctx, &cg.builder, rec_frame_post)?;
         let struct_ty = errors_result_type(ctx);
@@ -8140,10 +8959,18 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                     lower_errors_capable_call_result(cg, final_result, "__testFallibleAsync")
                 }
                 name => {
-                    // Prefer the direct name. If not found, find the correct monomorphized
-                    // variant by matching argument types against MonomorphizationTable entries.
+                    // Prefer the direct name. If not found, check for an aliased import
+                    // (`import { getValue as fetchVal }`) — the LLVM module declares the
+                    // function under the original exported name, not the local alias.
+                    // Fall back to monomorphization lookup, then the name itself.
                     let effective_name = if cg.module.get_function(name).is_some() {
                         name.to_string()
+                    } else if let Some(orig) = cg
+                        .imported_fns
+                        .get(name)
+                        .and_then(|sig| sig.original_name.as_deref())
+                    {
+                        orig.to_string()
                     } else {
                         // Infer concrete arg types from the call site to pick the right mono.
                         let arg_types: Vec<Type> =
@@ -8177,7 +9004,8 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
                         .map_err(|e| format!("call {effective_name}: {e}"))?;
 
                     // M7 P4a: if callee is errors-capable, handle the {i64, i64} result.
-                    let callee_is_ec = is_errors_capable_fn(cg.typed, &effective_name);
+                    let callee_is_ec =
+                        is_errors_capable_fn(cg.typed, cg.imported_fns, &effective_name);
                     if callee_is_ec {
                         let result_struct = call_site
                             .try_as_basic_value()
@@ -8835,6 +9663,259 @@ fn lower_expr<'ctx>(cg: &mut Cg<'ctx, '_>, expr: &Expr) -> Result<BasicValueEnum
     }
 }
 
+/// What the background task closure must do with a heap-copied arg after the call returns.
+///
+/// Each `background` arg that was heap-copied (to survive the spawner's frame return) needs
+/// exactly one matching free call inside the closure. Primitives and strings need no free:
+/// primitives are i64 by-value, strings are immutable heap pointers that outlive the frame.
+///
+/// This enum is produced by `prepare_bg_arg_for_ctx` at the spawn site and consumed by the
+/// closure body emitter to generate the matching `ynz_free` / `ynz_array_drop` calls.
+#[derive(Clone, Debug)]
+enum BgArgFreeKind {
+    /// No heap allocation to free — primitives (int/float/bool) and strings.
+    None,
+    /// Shape heap copy: call `ynz_free(ptr, byte_size)` after the fn call.
+    HeapShape { byte_size: u64 },
+    /// Primitive array clone: call `ynz_array_drop(ptr)` after the fn call.
+    HeapArrayPrimitive,
+}
+
+/// Prepare one `background` argument for storage in the task ctx.
+///
+/// Heap types whose pointer would alias the spawner's stack frame are upgraded to
+/// independent heap allocations here — their pointed-to data is `ynz_alloc`'d and
+/// the returned value is the heap pointer (safe to pass to the task via the ctx).
+/// The returned `BgArgFreeKind` tells the closure body what to free after the call.
+///
+/// Two kinds of bg args reach this function:
+/// - Plain-ident args where typeck chose Copy (inferred from use-after-spawn).
+/// - Explicit `.copy()` args whose inner `lower_expr` produced a Shape alloca pointer.
+///   Those also point into spawner stack memory and need the same heap-upgrade.
+///
+/// In both cases the heap allocation outlives the spawner's frame (ynz_rt_spawn_blocking
+/// copies the ctx bytes — the i64 pointer value — before returning; the pointed-to
+/// heap data is what must survive).
+///
+/// Per-type decisions:
+/// - `Shape`: `ynz_alloc(struct_bytes)` + memcpy. BgArgFreeKind::HeapShape.
+/// - `String`: immutable heap bytes, already outlive the spawner frame. BgArgFreeKind::None.
+/// - `array<Int|Float|Bool>`: `ynz_array_clone_primitive`. BgArgFreeKind::HeapArrayPrimitive.
+/// - Primitives (Int/Bool/Float): by-value i64, no pointer. BgArgFreeKind::None.
+/// - Other heap types (array<heap_elem>, map, maybe, union): not yet supported here;
+///   these fall through unchanged (same pointer-alias behavior as today — the caller
+///   is responsible for not mutating these after the spawn, which the typeck enforces
+///   by consuming give bindings and producing a copy warning for inferred-copy cases).
+fn prepare_bg_arg_for_ctx<'ctx>(
+    cg: &mut Cg<'ctx, '_>,
+    arg: &ynz_ast::nodes::Expr,
+    val: inkwell::values::BasicValueEnum<'ctx>,
+    ty: &Type,
+) -> Result<(inkwell::values::BasicValueEnum<'ctx>, BgArgFreeKind), String> {
+    // Determine whether this arg is a heap type that needs the spawn-lifetime fix.
+    //
+    // Both Give and Copy paths need heap-upgrade for Shape/array<primitive> args:
+    // - Copy: the caller keeps the original; the task needs an independent heap copy.
+    // - Give: the caller no longer uses the value, but the Stack alloca holding the
+    //   struct data is still on the spawner's frame — it is freed when the spawner
+    //   returns. If the spawner returns before the task reads, the task has a dangling
+    //   pointer into freed stack memory (UAF). Heap-upgrading the Give path produces
+    //   a heap copy the task owns; the spawner's alloca is freed harmlessly by the
+    //   normal stack unwind.
+    //
+    // For both cases, the closure body must call ynz_free after the original fn
+    // returns, matching the ynz_alloc emitted here.
+    //
+    // Primitives (Int/Bool/Float) are i64 by-value and need no heap-upgrade.
+    // Strings are immutable heap bytes; the pointer itself survives any frame.
+    let is_heap_arg = match arg {
+        ynz_ast::nodes::Expr::Ident(_, s) => {
+            // Plain ident: any inferred Give or Copy ownership gets the heap fix.
+            let key = (s.start, s.end);
+            cg.typed
+                .background_arg_inferred_ownership
+                .contains_key(&key)
+        }
+        // Explicit .copy() postfix — always heap-upgrade for heap types.
+        ynz_ast::nodes::Expr::PostfixOp {
+            op: ynz_ast::nodes::PostfixOpKind::Copy,
+            ..
+        } => true,
+        _ => false,
+    };
+
+    if !is_heap_arg {
+        return Ok((val, BgArgFreeKind::None));
+    }
+
+    let resolved = cg.resolve_type(ty);
+    match &resolved {
+        Type::Shape { name } => {
+            // Shape: the val is a pointer to struct data on the spawner's stack (whether the
+            // copy came from an alloca+memcpy in inferred-copy or explicit .copy() codegen,
+            // or from the original shape allocation in a give path). Heap-allocate the struct
+            // bytes so the task's pointer survives the spawner's frame return.
+            let name = name.clone();
+            let struct_ty = cg
+                .shape_types
+                .get(&name)
+                .ok_or_else(|| format!("bg heap copy: LLVM type for `{}` not found", name))?;
+            // Byte size of the struct according to LLVM's target data layout.
+            let byte_size_val = struct_ty
+                .size_of()
+                .ok_or_else(|| format!("bg heap copy: size_of unavailable for `{}`", name))?;
+            let byte_size_i64 = cg
+                .builder
+                .build_int_z_extend(byte_size_val, cg.i64(), "shape_size_i64")
+                .map_err(|e| format!("bg heap copy: size zext: {e}"))?;
+            let heap_ptr = cg
+                .builder
+                .build_call(cg.rt.ynz_alloc, &[byte_size_i64.into()], "bg_shape_heap")
+                .map_err(|e| format!("bg heap copy: ynz_alloc call: {e}"))?
+                .try_as_basic_value()
+                .basic()
+                .ok_or_else(|| "bg heap copy: ynz_alloc returned void".to_string())?
+                .into_pointer_value();
+            let struct_val = cg
+                .builder
+                .build_load(struct_ty, val.into_pointer_value(), "bg_shape_src")
+                .map_err(|e| format!("bg heap copy: load src: {e}"))?;
+            cg.builder
+                .build_store(heap_ptr, struct_val)
+                .map_err(|e| format!("bg heap copy: store to heap: {e}"))?;
+            // Byte size for the BgArgFreeKind free call. LLVM `size_of()` is a constant
+            // EXPRESSION (`ptrtoint getelementptr`), NOT a literal ConstantInt, so
+            // `get_zero_extended_constant()` returns None here — the fallback is taken in
+            // practice, not as an error path.
+            //
+            // @design-decision Fall back to 0 when the constant can't be extracted.
+            // @rationale `ynz_free` ignores its size argument today (it wraps libc `free`,
+            //   which tracks allocation size internally), so 0 is observably correct now.
+            //   The authoritative size lives in `shape_abi_sizes` (TargetData::get_abi_size)
+            //   but is not threaded into this helper; wiring it for a currently-ignored value
+            //   would be gold-plating (YAGNI).
+            // @follow-up When kernel-mode sized-dealloc lands (a custom allocator whose free
+            //   DOES use the size), thread `shape_abi_sizes` into `prepare_bg_arg_for_ctx` and
+            //   look the size up by shape name instead of this fallback.
+            // @triggers `--kernel` sized-dealloc support (design/future/no-runtime-mode.md).
+            let byte_size = byte_size_val.get_zero_extended_constant().unwrap_or(0);
+            Ok((heap_ptr.into(), BgArgFreeKind::HeapShape { byte_size }))
+        }
+        Type::BuiltinArray { elem } => {
+            // Clone a primitive-element array so the task gets an independent copy.
+            // For heap-element arrays (shapes, strings, etc.) we cannot recursively
+            // deep-copy without knowing element copy semantics — that is the m3c array-by-value
+            // ABI work. Those fall through unchanged (same behavior as today's explicit
+            // `.copy()` path).
+            let is_primitive_elem = matches!(elem.as_ref(), Type::Int | Type::Bool | Type::Float);
+            if is_primitive_elem {
+                let clone_ptr = cg
+                    .builder
+                    .build_call(
+                        cg.rt.ynz_array_clone_primitive,
+                        &[val.into_pointer_value().into()],
+                        "bg_arr_clone",
+                    )
+                    .map_err(|e| format!("bg arr clone: {e}"))?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or_else(|| "bg arr clone: returned void".to_string())?;
+                Ok((clone_ptr, BgArgFreeKind::HeapArrayPrimitive))
+            } else {
+                // array<heap_elem>: recursive deep-copy is m3c ABI work.
+                // Pass as-is — same pointer-alias behavior as today's explicit `.copy()` on
+                // these types. The binding is already consumed (give path) or copied-shallow
+                // (explicit .copy() path); the task should not mutate elements.
+                Ok((val, BgArgFreeKind::None))
+            }
+        }
+        Type::String => {
+            // String bytes are heap-allocated and immutable — the pointer itself survives the
+            // spawner's frame independently of the stack. No heap copy needed.
+            Ok((val, BgArgFreeKind::None))
+        }
+        _ => {
+            // Primitives (Int/Bool/Float) are i64 by-value — no pointer involved.
+            // All other heap types (map, maybe, union) alias today on explicit .copy() too;
+            // that is the m3c scope, not changed here.
+            Ok((val, BgArgFreeKind::None))
+        }
+    }
+}
+
+/// Emit the free calls for heap-copied `background` args inside the closure body.
+///
+/// After the original function call, each arg that was heap-allocated for the task must be
+/// freed exactly once. Called from inside the closure (`ynz_bg_<name>_<uid>`) after
+/// the original fn call and before the closure returns.
+///
+/// The `ctx_arg` pointer and `arg_types` give the slot layout; `free_kinds` is parallel to
+/// `arg_types` and was recorded at the spawn site.
+fn emit_bg_arg_frees<'ctx>(
+    cg_builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RuntimeDecls<'ctx>,
+    i64_ty: inkwell::types::IntType<'ctx>,
+    ptr_ty: inkwell::types::PointerType<'ctx>,
+    ctx_arg: inkwell::values::PointerValue<'ctx>,
+    free_kinds: &[BgArgFreeKind],
+) -> Result<(), String> {
+    for (i, kind) in free_kinds.iter().enumerate() {
+        match kind {
+            BgArgFreeKind::None => {}
+            BgArgFreeKind::HeapShape { byte_size } => {
+                let slot = unsafe {
+                    cg_builder
+                        .build_gep(
+                            i64_ty,
+                            ctx_arg,
+                            &[i64_ty.const_int(i as u64, false)],
+                            "free_slot",
+                        )
+                        .map_err(|e| format!("bg free gep: {e}"))?
+                };
+                let bits = cg_builder
+                    .build_load(i64_ty, slot, "free_bits")
+                    .map_err(|e| format!("bg free load: {e}"))?
+                    .into_int_value();
+                let heap_ptr = cg_builder
+                    .build_int_to_ptr(bits, ptr_ty, "free_ptr")
+                    .map_err(|e| format!("bg free inttoptr: {e}"))?;
+                let size_val = i64_ty.const_int(*byte_size, false);
+                cg_builder
+                    .build_call(
+                        rt.ynz_free,
+                        &[heap_ptr.into(), size_val.into()],
+                        "bg_shape_free",
+                    )
+                    .map_err(|e| format!("bg shape free call: {e}"))?;
+            }
+            BgArgFreeKind::HeapArrayPrimitive => {
+                let slot = unsafe {
+                    cg_builder
+                        .build_gep(
+                            i64_ty,
+                            ctx_arg,
+                            &[i64_ty.const_int(i as u64, false)],
+                            "free_arr_slot",
+                        )
+                        .map_err(|e| format!("bg arr free gep: {e}"))?
+                };
+                let bits = cg_builder
+                    .build_load(i64_ty, slot, "free_arr_bits")
+                    .map_err(|e| format!("bg arr free load: {e}"))?
+                    .into_int_value();
+                let heap_ptr = cg_builder
+                    .build_int_to_ptr(bits, ptr_ty, "free_arr_ptr")
+                    .map_err(|e| format!("bg arr free inttoptr: {e}"))?;
+                cg_builder
+                    .build_call(rt.ynz_array_drop, &[heap_ptr.into()], "bg_arr_drop")
+                    .map_err(|e| format!("bg arr drop call: {e}"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Lower `background fn(args)` to `ynz_rt_spawn_blocking`.
 ///
 /// # Approach
@@ -8894,16 +9975,23 @@ fn lower_expr_background<'ctx>(
     }
 
     // Step 1: evaluate arguments on the calling thread.
+    // Heap types whose pointer would alias the spawner's stack frame are heap-upgraded via
+    // `prepare_bg_arg_for_ctx`: the pointed-to data is ynz_alloc'd so the task's pointer
+    // survives the spawner's frame return. The returned BgArgFreeKind records what the closure
+    // body must free after calling the original fn.
     let mut arg_vals_i64: Vec<inkwell::values::IntValue<'ctx>> = Vec::new();
     let mut arg_types: Vec<Type> = Vec::new();
+    let mut free_kinds: Vec<BgArgFreeKind> = Vec::new();
     for arg in &call.args {
         let val = lower_expr(cg, arg)?;
         let ty = cg.expr_type(arg);
+        let (val, kind) = prepare_bg_arg_for_ctx(cg, arg, val, &ty)?;
         let bits = cg
             .to_i64_bits(val, &ty)
             .map_err(|e| format!("background arg to_i64_bits: {e}"))?;
         arg_vals_i64.push(bits);
         arg_types.push(ty);
+        free_kinds.push(kind);
     }
 
     let n_args = arg_vals_i64.len();
@@ -8993,7 +10081,18 @@ fn lower_expr_background<'ctx>(
 
     // Call the original function from within the closure.
     // Use the same mangled-name resolution as the regular Call path (for generics).
-    let effective_name = if cg.module.get_function(&callee_name).is_some() {
+    // Import-alias check comes FIRST: when a local function has the same name as an
+    // import alias (e.g., local `function doWork()` and `import { compute as doWork }`),
+    // the caller wrote `background doWork()` intending the imported callee — the import
+    // alias must win. Checking module.get_function first would silently dispatch to the
+    // local definition instead, emitting a call to the wrong callee.
+    let effective_name = if let Some(orig) = cg
+        .imported_fns
+        .get(callee_name.as_str())
+        .and_then(|sig| sig.original_name.as_deref())
+    {
+        orig.to_string()
+    } else if cg.module.get_function(&callee_name).is_some() {
         callee_name.clone()
     } else {
         find_mono_name_by_args(cg.mono_table, &callee_name, &arg_types)
@@ -9006,6 +10105,14 @@ fn lower_expr_background<'ctx>(
     cg.builder
         .build_call(target_fn, &call_args, "bg_call")
         .map_err(|e| format!("closure call: {e}"))?;
+
+    // Free any heap-copied args now that the original fn has returned.
+    // Each BgArgFreeKind::HeapShape/HeapArrayPrimitive slot holds a heap pointer that was
+    // ynz_alloc'd at spawn time and must be freed exactly once here.
+    let ptr_ty = cg.ctx.ptr_type(inkwell::AddressSpace::default());
+    emit_bg_arg_frees(&cg.builder, cg.rt, cg.i64(), ptr_ty, ctx_arg, &free_kinds)
+        .map_err(|e| format!("bg arg free: {e}"))?;
+
     cg.builder
         .build_return(None)
         .map_err(|e| format!("closure ret: {e}"))?;
@@ -9068,16 +10175,22 @@ fn lower_expr_background_state_machine<'ctx>(
     callee_name: &str,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, String> {
     // Step 1: evaluate arguments and convert to i64 bits.
+    // Heap-upgrade copied args so task pointers survive the spawner's frame return.
+    // The resulting heap allocations (Shape via ynz_alloc / array<primitive> via
+    // ynz_array_clone_primitive) are stored in the frame's local slots as i64 bit-patterns.
+    // SpawnStateFnFuture::drop frees them (via arg_drop_ptr/arg_drop_count) after the
+    // callee has read them, keeping alloc/free balanced on every task exit path.
     let mut arg_vals_i64: Vec<inkwell::values::IntValue<'ctx>> = Vec::new();
-    let mut arg_types: Vec<Type> = Vec::new();
+    let mut free_kinds: Vec<BgArgFreeKind> = Vec::new();
     for arg in &call.args {
         let val = lower_expr(cg, arg)?;
         let ty = cg.expr_type(arg);
+        let (val, kind) = prepare_bg_arg_for_ctx(cg, arg, val, &ty)?;
         let bits = cg
             .to_i64_bits(val, &ty)
             .map_err(|e| format!("sm bg arg bits: {e}"))?;
         arg_vals_i64.push(bits);
-        arg_types.push(ty);
+        free_kinds.push(kind);
     }
     let n_locals = arg_vals_i64.len();
 
@@ -9097,8 +10210,18 @@ fn lower_expr_background_state_machine<'ctx>(
         state_machine::store_local_slot(cg.ctx, &cg.builder, frame_ptr, idx, *bits)?;
     }
 
-    // Step 4: find the resume function and call ynz_rt_spawn.
-    let resume_name = state_machine::resume_fn_name(callee_name);
+    // Step 4: find the resume function.
+    // When the callee was imported under an alias (`import { getValue as fetchVal }`),
+    // the LLVM resume fn uses the original exported symbol name (`ynz_sm_getValue_resume`),
+    // not the alias. The module forward-declared the resume fn under the original name
+    // (see Pass 0.6 / the imported-fn declaration loop). Using the alias here would
+    // produce a lookup failure at runtime: "ynz_sm_fetchVal_resume not found".
+    let callee_exported = cg
+        .imported_fns
+        .get(callee_name)
+        .and_then(|sig| sig.original_name.as_deref())
+        .unwrap_or(callee_name);
+    let resume_name = state_machine::resume_fn_name(callee_exported);
     let resume_fn = cg
         .module
         .get_function(&resume_name)
@@ -9121,6 +10244,121 @@ fn lower_expr_background_state_machine<'ctx>(
         true, // sign-extended constant
     );
 
+    // Step 5: build the arg-drop descriptor array for SpawnStateFnFuture::drop.
+    //
+    // Each BgArgDropEntry has three i64 fields (24 bytes total):
+    //   byte_offset: u64 — byte offset in the frame to the i64 slot holding the heap pointer
+    //   kind: u64        — 0=HeapShape (ynz_free), 1=HeapArrayPrimitive (ynz_array_drop)
+    //   size: u64        — byte count for ynz_free (HeapShape); 0 for HeapArrayPrimitive
+    //
+    // Build the descriptor list only for args that were actually heap-copied; skip None.
+    // If no args need freeing, pass null pointer + count=0 (no allocation needed).
+    let heap_args: Vec<(usize, u64, u64)> = free_kinds
+        .iter()
+        .enumerate()
+        .filter_map(|(slot_idx, kind)| match kind {
+            BgArgFreeKind::HeapShape { byte_size } => {
+                let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
+                Some((slot_idx, byte_offset, *byte_size))
+            }
+            BgArgFreeKind::HeapArrayPrimitive => {
+                let byte_offset = state_machine::FRAME_OFFSET_LOCALS_START + (slot_idx as u64) * 8;
+                // Triple is (slot_idx, byte_offset, size). size=0 for arrays —
+                // `ynz_array_drop` knows its own buffer size, so the descriptor's size
+                // field is unused for this kind. The kind (1=array) is re-derived from
+                // `free_kinds[slot_idx]` when the descriptor is written below; slot_idx is
+                // preserved precisely so that re-derivation indexes the original, unfiltered slot.
+                Some((slot_idx, byte_offset, 0_u64))
+            }
+            BgArgFreeKind::None => None,
+        })
+        .collect();
+
+    let (arg_drop_ptr_val, arg_drop_count_val) = if heap_args.is_empty() {
+        // No heap arg-copies — pass null/0. SpawnStateFnFuture::drop skips the loop.
+        let null_ptr = cg
+            .ctx
+            .ptr_type(inkwell::AddressSpace::default())
+            .const_null();
+        (null_ptr.into(), cg.ctx.i64_type().const_int(0, false))
+    } else {
+        // Allocate the descriptor array: heap_args.len() entries × 24 bytes each.
+        let desc_entry_size: u64 = 24; // 3 × u64
+        let desc_total = desc_entry_size * heap_args.len() as u64;
+        let desc_total_val = cg.ctx.i64_type().const_int(desc_total, false);
+        let desc_ptr = cg
+            .builder
+            .build_call(cg.rt.ynz_alloc, &[desc_total_val.into()], "arg_drop_alloc")
+            .map_err(|e| format!("arg drop alloc: {e}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| "arg drop alloc: returned void".to_string())?
+            .into_pointer_value();
+
+        // Fill each descriptor: { byte_offset: u64, kind: u64, size: u64 }.
+        let i64_ty = cg.ctx.i64_type();
+        let i8_ty = cg.ctx.i8_type();
+        for (entry_idx, (slot_idx, byte_offset, size)) in heap_args.iter().enumerate() {
+            let entry_byte_base = entry_idx as u64 * desc_entry_size;
+
+            // field 0: byte_offset
+            let off0 = unsafe {
+                cg.builder
+                    .build_gep(
+                        i8_ty,
+                        desc_ptr,
+                        &[i64_ty.const_int(entry_byte_base, false)],
+                        "desc_off0",
+                    )
+                    .map_err(|e| format!("desc gep 0: {e}"))?
+            };
+            cg.builder
+                .build_store(off0, i64_ty.const_int(*byte_offset, false))
+                .map_err(|e| format!("desc store 0: {e}"))?;
+
+            // field 1: kind (0=HeapShape, 1=HeapArrayPrimitive)
+            let kind_val = match &free_kinds[*slot_idx] {
+                BgArgFreeKind::HeapShape { .. } => 0_u64,
+                BgArgFreeKind::HeapArrayPrimitive => 1_u64,
+                BgArgFreeKind::None => unreachable!("filtered above"),
+            };
+            let off1 = unsafe {
+                cg.builder
+                    .build_gep(
+                        i8_ty,
+                        desc_ptr,
+                        &[i64_ty.const_int(entry_byte_base + 8, false)],
+                        "desc_off1",
+                    )
+                    .map_err(|e| format!("desc gep 1: {e}"))?
+            };
+            cg.builder
+                .build_store(off1, i64_ty.const_int(kind_val, false))
+                .map_err(|e| format!("desc store 1: {e}"))?;
+
+            // field 2: size (byte count for ynz_free; 0 for ynz_array_drop)
+            let off2 = unsafe {
+                cg.builder
+                    .build_gep(
+                        i8_ty,
+                        desc_ptr,
+                        &[i64_ty.const_int(entry_byte_base + 16, false)],
+                        "desc_off2",
+                    )
+                    .map_err(|e| format!("desc gep 2: {e}"))?
+            };
+            cg.builder
+                .build_store(off2, i64_ty.const_int(*size, false))
+                .map_err(|e| format!("desc store 2: {e}"))?;
+        }
+
+        (
+            desc_ptr.into(),
+            i64_ty.const_int(heap_args.len() as u64, false),
+        )
+    };
+
+    // Step 6: call ynz_rt_spawn with the frame + arg-drop descriptor.
     cg.builder
         .build_call(
             cg.rt.ynz_rt_spawn,
@@ -9129,6 +10367,8 @@ fn lower_expr_background_state_machine<'ctx>(
                 frame_ptr.into(),
                 frame_size_val.into(),
                 rec_slot_offset_val.into(),
+                arg_drop_ptr_val,
+                arg_drop_count_val.into(),
             ],
             "sm_spawn",
         )
@@ -11376,15 +12616,29 @@ fn lower_maybe_method<'ctx>(
 
 // ── M7 P4a: errors-capable helpers ───────────────────────────────────────────
 
-/// True when the named function in `typed_module` has `errors_capable = true`.
-fn is_errors_capable_fn(typed: &TypedModule, fn_name: &str) -> bool {
-    typed.module.items.iter().any(|item| {
+/// True when the named function has `errors_capable = true`, checking both local
+/// module items and the imported function table for cross-module callees.
+fn is_errors_capable_fn(
+    typed: &TypedModule,
+    imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+    fn_name: &str,
+) -> bool {
+    // Check local functions first.
+    let local = typed.module.items.iter().any(|item| {
         if let ynz_ast::nodes::Item::Function(f) = item {
             f.name == fn_name && f.errors_capable
         } else {
             false
         }
-    })
+    });
+    if local {
+        return true;
+    }
+    // Check imported functions: ErrorsCapable return type means the function is
+    // errors-capable even when the importer's AST has no FunctionDecl for it.
+    imported_fns
+        .get(fn_name)
+        .is_some_and(|sig| matches!(sig.ret, ynz_typeck::types::Type::ErrorsCapable { .. }))
 }
 
 /// Emit auto-propagation for an errors-capable result struct.

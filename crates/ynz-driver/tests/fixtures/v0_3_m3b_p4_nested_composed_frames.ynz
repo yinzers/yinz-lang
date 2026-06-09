@@ -1,0 +1,49 @@
+// Fixture (adversarial v): nested composed sub-frames.
+//
+// One group member's suspending callee (`inner`) itself contains an inner
+// independent suspending group (two independent calls to `leaf`). The composed
+// frame must remain valid at depth 2 — one ynz_alloc per task tree — not
+// one per suspension level.
+//
+// Structure:
+//   entrypoint: [inner_a(), inner_b()] — two independent outer group members.
+//   inner_a: [leaf_a(), leaf_b()] — two independent inner group members.
+//   inner_b: [leaf_c()] — single leaf.
+//
+// All leaf functions sleep and print their own label. The auto-parallel pass
+// composes sub-frames at both levels: outer-group and inner-group.
+//
+// The exact interleaving order is non-deterministic, but ALL six lines must
+// appear exactly once, and "done" must be last.
+//
+// Expected output (any order of leaf lines): leaf_a\nleaf_b\nleaf_c\ndone
+// (inner_a and inner_b are outer group members; inner_a completes leaf_a + leaf_b internally)
+function leaf_a() -> nothing {
+  wait sleep(10)
+  print(`leaf_a`)
+}
+
+function leaf_b() -> nothing {
+  wait sleep(10)
+  print(`leaf_b`)
+}
+
+function leaf_c() -> nothing {
+  wait sleep(10)
+  print(`leaf_c`)
+}
+
+function inner_a() -> nothing {
+  leaf_a()
+  leaf_b()
+}
+
+function inner_b() -> nothing {
+  leaf_c()
+}
+
+function entrypoint() -> nothing {
+  inner_a()
+  inner_b()
+  print(`done`)
+}

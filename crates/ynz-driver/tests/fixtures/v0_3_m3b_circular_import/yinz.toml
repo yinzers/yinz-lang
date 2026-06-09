@@ -1,0 +1,3 @@
+entry = "entrypoint.ynz"
+name = "v0_3_m3b_circular_import"
+version = "0.1.0"

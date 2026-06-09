@@ -1,0 +1,14 @@
+// v0.3-M3b Phase 2 fixture (d): `background` with a `share`-param callee must be
+// rejected — a borrow from the caller's scope cannot outlive the caller across a
+// thread boundary.
+//
+// EXPECTED: compile error exit 1, diagnostic mentions "borrows its arguments".
+
+function reader(share id: int) -> nothing {
+  print(id.toString())
+}
+
+function entrypoint() -> nothing {
+  let x: int = 5
+  background reader(x)
+}

@@ -1,0 +1,10 @@
+// M3b loud-reject case (a): middle module in a 3-module re-export chain.
+// doWork calls innerSleep from a_ops — an imported suspending callee.
+// This fixture tests the M3b-era loud-reject path; the M3e lift makes such chains
+// compile and run correctly via frame_layouts_query recursive composition.
+
+import { innerSleep } from `a_ops`
+
+export function doWork() -> nothing {
+  innerSleep()
+}

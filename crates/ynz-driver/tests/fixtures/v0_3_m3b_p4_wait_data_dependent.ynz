@@ -1,0 +1,23 @@
+// Fixture: `wait` whose callee is data-dependent on an in-flight result.
+//
+// `fetch` suspends. `processor` depends on `fetch`'s result — data dependency
+// joins automatically (no explicit `wait` on `fetch` needed). The explicit
+// `wait` on `processor` forces it to complete before `print`.
+//
+// Expected output: result:99\ndone
+function fetch() -> int {
+  wait sleep(10)
+  return 99
+}
+
+function processor(n: int) -> int {
+  wait sleep(10)
+  return n
+}
+
+function entrypoint() -> nothing {
+  let raw = fetch()
+  let result = wait processor(raw)
+  print(`result:${result}`)
+  print(`done`)
+}

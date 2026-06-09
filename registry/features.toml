@@ -166,19 +166,19 @@ since = "M8"
 name = "wait"
 token = "Wait"
 since = "M8"
-# Rule 11 hover docs — v0.3-M2 (real suspension semantics now shipped)
-hover_what = "Suspends the calling function until the awaited expression completes. The OS thread is freed for other tasks during the suspension."
-hover_what_instead = "Write `wait foo()` at a call site to suspend until `foo()` returns. Code after the `wait` runs only after `foo()` completes."
-hover_why = "`wait` makes the function pause without blocking the OS thread — the thread runs other ready tasks during the pause. If the caller of this function is not itself a state machine, the caller blocks until completion (this gap closes in v0.3-M3 when auto-insertion ships)."
+# Rule 11 hover docs — v0.3-M3b (ordering-barrier semantics locked 2026-06-05)
+hover_what = "Forces this call to complete before execution continues. Also joins any prior auto-parallel in-flight work. Suspension at I/O points is automatic and does not require `wait`."
+hover_what_instead = "Write `wait foo()` when `foo` must finish before the next statement runs AND the two operations are independent (different resources, no value threaded between them). For data-dependent calls, the compiler already orders them — `wait` is redundant."
+hover_why = "`wait` is an ordering barrier, not a suspension trigger. The compiler auto-inserts suspension at every call that transitively reaches a blocking operation — you never write `wait` for that. `wait` is the tool for causal ordering the compiler cannot infer: charge a payment, THEN send a confirmation email to a different service."
 
 [[keyword]]
 name = "background"
 token = "Background"
 since = "M8"
-# Rule 11 hover docs — v0.3-M2 (routing-distinction note added)
-hover_what = "Runs the function on a separate thread."
-hover_what_instead = "Write `background fn(value.give)` or `background fn(value.copy)` to schedule `fn` to run independently."
-hover_why = "The background task runs concurrently with whatever follows the `background` call. In v0.3-M2, functions containing `wait` route to the I/O pool (cooperative scheduling); functions without `wait` route to the blocking pool (dedicated OS thread per task). Handle-form (`let h = background fn()`) ships in v0.3-M4."
+# Rule 11 hover docs — v0.3-M3b (give/copy inference + real routing semantics)
+hover_what = "Schedules a function to run as a concurrent task outside the current function's lifetime. The compiler infers whether to move or copy each argument based on whether you use it after the call."
+hover_what_instead = "Write `background fn(value)` — the compiler picks `.give` (zero-copy move) when `value` is not used after, or `.copy` when it is. Write `background fn(value.give)` or `background fn(value.copy)` to be explicit. Functions whose parameter is `share` cannot be called via `background` — a shared borrow would dangle if the caller returns first."
+hover_why = "A `background` task runs concurrently with whatever follows the call. Functions that transitively reach a blocking operation route to the I/O thread pool (cooperative scheduling); functions with no blocking calls route to the CPU thread pool. The IDE shows the routing decision as a muted comment at the call site."
 
 # ---------------------------------------------------------------------------
 # [[banned_declaration_keyword]] — keywords from other languages Yinz rejects
@@ -1163,11 +1163,11 @@ triggers = "A local binding of type `union`, `maybe<T>`, or `dynamic Contract` t
 # --- EC wrapper collect-on-completion (design/concurrency.md M3a Scope Boundaries) ---
 [[deferred_language_feature]]
 name = "ec-wrapper-collect-on-completion"
-substitute = "Use the inline-poll path: a suspending function that calls another suspending `-> T errors` function composes the callee inline (the state-machine resume path). Only `background` (fire-and-forget) hits the standalone EC wrapper, and it safely discards the completed value. If you need to read the completed value of a `background`-spawned `-> T errors` task, this ships in v0.3-M3b."
-why = "The standalone EC wrapper (emitted for `background`-spawned suspending `-> T errors` functions) reads the `{i64, i64}` EC value from the frame return slot and then frees the frame. For `-> number errors`, the ok-word in that value points into the composed frame's 16-byte staging slot — storage freed at the same time as the frame. The ok-pointer therefore becomes invalid after the wrapper returns. This is safe today because the only reachable caller is `background` (fire-and-forget), which DISCARDS the EC value without dereferencing the ok-pointer. A caller that reads and uses the ok-pointer must copy it BEFORE freeing the frame; implementing that copy requires the scheduler to know whether a spawned task's completed value is read or discarded — that is M3b task-collection machinery, not M3a."
-ships_in = "v0.3-M3b"
+substitute = "Use the inline-poll path: a suspending function that calls another suspending `-> T errors` function composes the callee inline (the state-machine resume path). Only `background` (fire-and-forget) hits the standalone EC wrapper, and it safely discards the completed value. Reading the completed value of a `background`-spawned `-> T errors` task requires the `background` handle-collection form (`.send`/`.receive`), which itself ships with the `background-handle-form` feature."
+why = "The standalone EC wrapper (emitted for `background`-spawned suspending `-> T errors` functions) reads the `{i64, i64}` EC value from the frame return slot and then frees the frame. For `-> number errors`, the ok-word in that value points into the composed frame's 16-byte staging slot — storage freed at the same time as the frame. The ok-pointer therefore becomes invalid after the wrapper returns. This is safe today because the only reachable caller is `background` (fire-and-forget), which DISCARDS the EC value without dereferencing the ok-pointer. A caller that reads and uses the ok-pointer must copy it BEFORE freeing the frame; implementing that copy requires the scheduler to know whether a spawned task's completed value is read or discarded. That knowledge only exists once the `background` handle-collection form (`.send`/`.receive`, the `background-handle-form` feature) lands — there is no syntax in M3b to collect a `background` task's completed value (`let h = background ecFn()` is rejected by typeck), so this deferral is vacuous until handle-collection ships and must stay gated on it."
+ships_in = "v0.3-M4"
 design_doc = "design/concurrency.md"
-triggers = "Storing or reading the return value of a `background`-spawned suspending function whose declared type is `-> T errors` — specifically, using the `background` task handle to collect the completed value"
+triggers = "Collecting the completed value of a `background`-spawned suspending `-> T errors` function via its handle (`.send`/`.receive`) — gated on the `background-handle-form` feature; until that ships there is no way to reach the standalone-wrapper copy-before-free path."
 
 # --- Stored range variable as a suspending for-loop iterator (design/concurrency.md) ---
 [[deferred_language_feature]]
@@ -1379,6 +1379,18 @@ why = "Each stdlib module (file v0.5, database v0.10, http v0.15) has its own AP
 ships_in = "v0.5+ (file, database, http modules each ship their own suspension intrinsics)"
 design_doc = "design/stdlib/filesystem.md"
 triggers = "Each module's milestone plan — file v0.5 adds readFileAsync/writeFileAsync; db v0.10 adds dbQueryAsync; http v0.15 adds request.getAsync/postAsync. Cross-references also in design/stdlib/network.md and design/stdlib/database.md."
+
+# v0.3-M3b deferred: IDE graphical execution-plan view (design/concurrency.md
+# "IDE Execution Plan" section). The muted-hint surfaces (wait_points,
+# background_routing) ship in M3b. The graphical DAG/timeline visualization
+# belongs to a future LSP + tooling milestone that pairs with profiling data.
+[[deferred_tooling_feature]]
+name = "ide-execution-plan-graphical-view"
+substitute = "IDE muted hints for `wait` suspension points (wait_points domain) and background routing (background_routing domain) ship in v0.3-M3b and teach the same information inline."
+why = "The graphical execution-plan view (DAG + timeline overlay in the editor panel) requires LSP custom notifications, a client-side panel extension in the VSCode plugin, and runtime profiling data piped back through the language server — all of which exceed the M3b scope of teaching surfaces. The muted-hint protocol covers the static-analysis teaching surface; the graphical view adds dynamic profiling insight that needs its own milestone."
+ships_in = "v0.4+ (pending LSP custom notification design + VSCode panel scaffold)"
+design_doc = "design/concurrency.md"
+triggers = "Patrick explicitly schedules the IDE graphical view milestone AND the LSP custom-notification protocol for client-side panels is designed."
 
 # ---------------------------------------------------------------------------
 # [[deferred_stdlib_api]] — RESERVED, zero entries in M1.
@@ -2066,10 +2078,18 @@ triggers_on_background_call_site = true
 [[muted_hint_domain]]
 domain = "wait_points"
 placement_category = "Addition"
-description = "Shows the compiler-figured `wait` at suspension points — calls to functions the transitive may-block analysis marks as suspending. Active in v0.3-M2 (Phase 6) when the analysis engine ships."
+description = "Shows the compiler-figured `wait` before calls to functions the transitive may-block analysis marks as suspending. Skipped where the user already wrote explicit `wait`. Reads the effective suspend set (local suspending names PLUS imported functions whose signature marks them as suspending) — the same set that drives codegen routing, so the hint and the binary always agree."
 example_source = "sleep(100)"
-example_hint_rendered = "wait (sleep suspends here)"
-active_since = "v0.3-M2"
+example_hint_rendered = "wait  "
+active_since = "v0.3-M3b"
+
+[[muted_hint_domain]]
+domain = "background_routing"
+placement_category = "Informational"
+description = "Shows which thread pool a `background` spawn routes to — I/O pool (for callees the may-block analysis marks as suspending) or CPU pool (for callees with no may-block calls in their call graph). Reads the same FunctionSig.suspends flag that drives codegen routing so the hint and the actual routing always agree."
+example_source = "background process(order)"
+example_hint_rendered = "// routed to I/O pool — calls sleep (may suspend)"
+active_since = "v0.3-M3b"
 
 [[muted_hint_domain]]
 domain = "lifetimes"
@@ -2105,3 +2125,7 @@ placement_category = "Replacement"
 description = "Shows when a let binding is effectively const because it is never reassigned, mutated, or lent"
 example_source = "let count = 5"
 example_hint_rendered = "// effectively const — never reassigned"
+
+# Cross-module frame serialization shipped in v0.3-M3e.
+# The deferred_language_feature entry has been retired — the feature is live.
+# See design/future/cross-module-frame-serialization.md for the full design record.

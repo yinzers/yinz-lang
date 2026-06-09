@@ -1,0 +1,35 @@
+// v0.3-M3b Phase 2 fixture: heap arg-copies outlive the spawner's stack frame.
+//
+// `spawnTask` is a nested helper that creates a Task on its own stack, spawns a
+// background process, and returns. The caller then sleeps before any task output.
+// The task MUST print the original value (id=7), not a garbage value from the
+// freed spawner frame.
+//
+// This fixture catches the pre-fix UAF where the Shape copy was stack-alloca'd on
+// the spawner's frame — reading the value after the frame was freed yielded 0 or
+// arbitrary garbage instead of 7.
+//
+// Expected output (in order):
+//   spawner returned
+//   task sees id: 7
+
+shape Task {
+  id: int
+  priority: int
+}
+
+function process(t: Task) -> nothing {
+  sleepBlocking(80)
+  print(`task sees id: ${t.id}`)
+}
+
+function spawnTask() -> nothing {
+  let job: Task = { id: 7, priority: 1 }
+  background process(job)
+}
+
+function entrypoint() -> nothing {
+  spawnTask()
+  print(`spawner returned`)
+  sleepBlocking(200)
+}

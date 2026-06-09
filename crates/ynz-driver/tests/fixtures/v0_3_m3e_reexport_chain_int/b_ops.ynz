@@ -1,0 +1,11 @@
+// M3e danger-matrix: re-export chain, module B (middle).
+// doWork calls getValue from a_ops and re-exports the result.
+// frame_layouts_query(B) recursively queries frame_layouts_query(A) so B's total_size
+// includes A's sub-frame; C reads B's correct total_size when embedding B's sub-frame.
+
+import { getValue } from `a_ops`
+
+export function doWork() -> int {
+  const v = getValue()
+  return v
+}

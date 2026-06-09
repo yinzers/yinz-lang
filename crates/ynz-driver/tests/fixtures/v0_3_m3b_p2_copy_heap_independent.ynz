@@ -1,0 +1,35 @@
+// v0.3-M3b Phase 2 regression: inferred .copy on a Shape arg must produce an
+// independent copy, not an alias into the caller's allocation.
+//
+// The compiler infers .copy for `job` because `job.id` is read after the spawn.
+// Without the codegen fix, the background task holds a pointer alias into the
+// caller's `job` struct — the caller's `job.id = 99` mutation leaks into the
+// task, producing `task sees id: 99` instead of `7`.
+//
+// With the fix, codegen emits a memcpy (same as explicit `job.copy()`) before
+// storing the pointer in the background context, so the task holds its own
+// independent slot. The task must print `task sees id: 7` regardless of
+// the caller's later mutation.
+//
+// Timing: task sleeps 80ms; caller mutates then sleeps 200ms.
+// The caller's frame outlives the task — the stack copy remains valid throughout.
+
+shape Task {
+  id: int
+  priority: int
+}
+
+function process(t: Task) -> nothing {
+  sleepBlocking(80)
+  print(`task sees id: ${t.id}`)
+}
+
+function entrypoint() -> nothing {
+  let job: Task = { id: 7, priority: 1 }
+  background process(job)
+  // job IS read after the spawn (job.id assignment below) — compiler infers .copy.
+  // The inferred copy must be independent: task sees id=7, not the mutated 99.
+  job.id = 99
+  print(`caller mutated id to: ${job.id}`)
+  sleepBlocking(200)
+}

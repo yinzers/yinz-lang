@@ -1,0 +1,35 @@
+// M3b Phase-4 regression lock: two suspending calls that take a MUTABLE-HEAP `share`
+// argument (a shape) SEQUENTIALIZE under the conservative floor — a mutable-heap argument
+// is an unconditional potential aliased write, so the floor sequences the pair even though
+// both calls only read. This locks the sound behavior (no overlap) and that stdout is
+// byte-identical across modes. The read-only-mutable-heap overlap is a forfeited capability
+// per `design/concurrency.md` Design Divergences (Golden Rule 5 soundness > Rule 10 perf).
+//
+// `readBox` reads its `share` shape field BEFORE the suspension point (avoiding the
+// pre-existing shape-crossing-`wait` corruption), suspends, then returns.
+//
+// Expected output (byte-identical default vs --no-auto-parallel): done
+
+shape Box {
+  v: int
+}
+
+function readBox(share b: Box) -> int {
+  let snapshot: int = b.v
+  wait sleep(150)
+  return snapshot
+}
+
+function readBox2(share b: Box) -> int {
+  let snapshot: int = b.v
+  wait sleep(150)
+  return snapshot
+}
+
+function entrypoint() -> nothing {
+  let p: Box = { v: 10 }
+  let q: Box = { v: 20 }
+  let a = readBox(p)
+  let c = readBox2(q)
+  print(`done`)
+}

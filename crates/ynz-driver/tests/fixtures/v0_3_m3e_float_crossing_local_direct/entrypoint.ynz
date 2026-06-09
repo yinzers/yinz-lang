@@ -1,0 +1,20 @@
+// M3e danger-matrix: float × crossing-local × direct.
+// A float local declared before the cross-module suspending call must hold its value after resume.
+// Corruption check: compares temp to a threshold (float > float comparison) instead of
+// interpolating toString() — toString() on float is broken (renders decimal128 zero for all values).
+// If the crossing-local slot is corrupted (zeroed), temp drops to 0.0 and the comparison fails.
+import { fetchReading } from `io_ops`
+
+function caller() -> nothing {
+  let temp: float = 3.14
+  let threshold: float = 3.0
+  let bigBefore: boolean = temp > threshold
+  print(`big_before: ${bigBefore.toString()}`)
+  fetchReading()
+  let bigAfter: boolean = temp > threshold
+  print(`big_after: ${bigAfter.toString()}`)
+}
+
+function entrypoint() -> nothing {
+  caller()
+}

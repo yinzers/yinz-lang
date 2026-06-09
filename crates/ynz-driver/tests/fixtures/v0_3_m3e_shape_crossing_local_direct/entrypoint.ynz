@@ -1,0 +1,22 @@
+// M3e danger-matrix: shape × crossing-local × direct (escape #2).
+// A shape-typed local crosses the cross-module suspending call boundary.
+// LLVM ABI padding for the shape may differ from the typeck "8 bytes per field" count;
+// frame_layouts_query computes the LLVM-accurate ABI size so the composed frame holds
+// all crossing-local slots correctly across the module boundary.
+// Expected output: "x: 3, y: 7"
+import { fetchItem } from `io_ops`
+
+shape Point {
+  x: int
+  y: int
+}
+
+function caller() -> nothing {
+  let pt: Point = { x: 3, y: 7 }
+  fetchItem()
+  print(`x: ${pt.x.toString()}, y: ${pt.y.toString()}`)
+}
+
+function entrypoint() -> nothing {
+  caller()
+}

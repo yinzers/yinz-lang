@@ -207,13 +207,22 @@ fn main() {
             file,
             emit_ir,
             json,
-            no_auto_parallel: _,
+            no_auto_parallel,
         } => {
             if json {
                 // --json mode: run check_query only (no codegen/link); emit NDJSON to stdout.
                 // Default ariadne output is suppressed. Exit code mirrors the process exit.
                 let exit_code = build::build_json(&file);
                 process::exit(exit_code);
+            }
+
+            // Thread --no-auto-parallel through the salsa barrier via env var.
+            // codegen_query is salsa-tracked and cannot take extra parameters; emit_artifact
+            // (a normal Rust function called inside codegen_query) reads this env var to
+            // decide whether to skip the independence-analysis pass entirely.
+            // The env var is set BEFORE the build call so it is visible during salsa dispatch.
+            if no_auto_parallel {
+                std::env::set_var("YNZ_NO_AUTO_PARALLEL", "1");
             }
 
             let result = build::build(&file);

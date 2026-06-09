@@ -1,0 +1,20 @@
+// Fixture: suspending calls inside a loop stay sequential — no cross-iteration parallel.
+//
+// The three iterations of the loop each call `step`, each suspending.
+// They must run in order: step 0, step 1, step 2.
+// The auto-parallel pass does NOT reach into loop bodies — loop iterations
+// are sequential by design (design/concurrency.md "Loop Iterations — Sequential by Default").
+//
+// Expected output: step:0\nstep:1\nstep:2\ndone
+function step(n: int) -> nothing {
+  wait sleep(10)
+  print(`step:${n}`)
+}
+
+function entrypoint() -> nothing {
+  let items: array<int> = [0, 1, 2]
+  for (n in items) {
+    step(n)
+  }
+  print(`done`)
+}

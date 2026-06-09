@@ -1,0 +1,25 @@
+// v0.3-M3b Phase 2 fixture: array<int> background arg is a real independent copy.
+//
+// The caller mutates the array element AFTER spawning the background task. The task
+// must see the ORIGINAL element value (10), not the post-spawn mutation (99).
+//
+// This fixture verifies that `ynz_array_clone_primitive` is called at the spawn site
+// so the task holds an independent data buffer rather than a shared pointer into
+// the caller's array.
+//
+// Expected output (in order):
+//   caller mutated to: 99
+//   task sees first: 10
+
+function processArr(nums: array<int>) -> nothing {
+  sleepBlocking(80)
+  print(`task sees first: ${nums[0].or(-1)}`)
+}
+
+function entrypoint() -> nothing {
+  let nums: array<int> = [10, 20, 30]
+  background processArr(nums)
+  nums[0] = 99
+  print(`caller mutated to: ${nums[0].or(-1)}`)
+  sleepBlocking(200)
+}

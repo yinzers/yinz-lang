@@ -1,0 +1,9 @@
+// Cross-module suspending function that returns int.
+// Danger case (a): the importer's codegen must use the callee's real return type
+// (i64), not the ptr fallback that was used before Pass 0.25 was fixed.
+// Expected: fetchValue() returns 42.
+
+export function fetchValue() -> int {
+  sleep(10)
+  return 42
+}

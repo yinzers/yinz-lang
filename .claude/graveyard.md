@@ -448,3 +448,42 @@ to_i64_bits
 **Severity**: critical — silent-wrong codegen across a suspension is the worst failure class (no crash, no panic; the program runs and prints the wrong number). This exact disease cost ~10 silent-miscompile rounds in M3a P1+P3.
 
 **Originating incident**: 2026-06-04, v0.3-M3a suspension codegen. Two parallel per-type flush dispatches drifted (decimal128/shape/string/options branches present in one, missing/wrong in the other) → `0.000`/stack-garbage across `wait` suspensions; ~10 whack-a-mole rounds. Root fix round 5: unify into `flush_var_slot_to_frame` + symmetric `reload_params_from_frame`; `flush_for_loop_var` became a thin wrapper. Second instance: `is_let_declared_before_wait_in_stmts` flat-scan re-derived the crossing set → under/over-rejection on the `ArrayShapeRuntimeFieldWithWait` guard; fixed by consuming the authoritative `crossing_names`. The cumulative Opus code-reviewer that finally certified the milestone called it "the unified flush killed the hydra." See `.claude/plans/done/v0-3-m3a-suspension-codegen.md` Phase 1/3 Findings Logs.
+
+---
+
+## Injected Resolver Dead via Memo-Cache Ordering — Test Green on Fallback Coincidence — 2026-06-06
+
+**Scope**: `crates/ynz-codegen/src/emit.rs` (`build_frame_layouts_with_resolver` / `compute_frame_size` and any frame-size memo) + `crates/ynz-codegen/tests/*.rs` (tests asserting resolver/callback-driven layout values). The disease is broader than frame layout: ANY function that BOTH memoizes a recursive computation AND accepts an injected resolver/closure to supply values for some keys, where the resolver-seed runs AFTER the memo could have cached a fallback for those keys.
+**Exemption**:
+- The resolver SEEDS the memo BEFORE the recursive/memoizing pass runs (e.g. a pre-seed loop that `sizes.insert(name, resolver(name))` for all injected-key names, THEN `compute_frame_size` reads the seeded values on cache-hit). This is the correct ordering.
+- The memoizer itself consults the resolver on a cache MISS (resolver is the miss-handler, not a post-hoc `or_insert_with`).
+- A test that uses a resolver return DISTINCT from the fallback/default constant AND asserts the output tracks the resolver (vary-and-track) OR asserts a call-counter > 0.
+**Last verified**: 2026-06-06
+**Category**: regex+judgment
+
+**Pre-filter patterns**:
+```
+crates/ynz-codegen/src/emit\.rs
+crates/ynz-codegen/src/queries\.rs
+crates/ynz-codegen/tests/.*\.rs$
+or_insert_with
+\.entry\(
+resolver
+callee_size_resolver
+compute_frame_size
+FRAME_HEADER_SIZE
+```
+
+**Cause**: M3e Phase 1 extracted `build_frame_layouts` into `build_frame_layouts_with_resolver(…, callee_size_resolver: &dyn Fn(&str) -> Option<u64>)` to supply imported-callee sizes cross-module. But the function ran the memoizing `compute_frame_size` loop FIRST: `compute_frame_size("doWork")` recursed into the imported callee `getValue`, didn't find it as a local fn, fell through to `FRAME_HEADER_SIZE` (32), and **cached `sizes["getValue"]=32`**. The later `sizes.entry("getValue").or_insert_with(|| resolver(name))` was then a NO-OP — the resolver was NEVER consulted. The bug was INVISIBLE because the happy-path fixture's `getValue` was a leaf with no crossing locals, so its real frame == `FRAME_HEADER_SIZE` == 32 == the fallback: the resolved value coincided with the bypass value. The unit test asserted `doWork.total_size == 64` (32+0+32) and passed — proving nothing, because a bypassed resolver produces the identical 64. For ANY imported callee with its own crossing-locals/children (frame > 32) this silently UNDER-SIZES the embedded sub-frame → SIGILL/corruption (the exact escape-#1 class M3e exists to fix). Caught only by the adversarial gate (code-reviewer varied the resolver's return Some(32)/Some(128)/None → output invariant at 64; a `Cell<bool>` probe → resolver never called). Fixed by moving the resolver-seed BEFORE `compute_frame_size` and rewriting the test with a callee whose real frame=40≠32 + an anti-bypass sentinel (resolver→56 → doWork=88).
+
+**Detection signature**: (1) CODE — a fn takes an injected resolver/closure to supply values for some keys, populates a memo `HashMap` (`sizes`/cache) via a recursive `compute_*` pass, AND seeds the resolver via `entry(k).or_insert_with(resolver)` / `or_insert(resolver(k))` that runs AFTER the recursive pass could have cached a fallback for `k`. The seed-after-compute ordering makes the resolver dead for any key the memo already touched. (2) TEST — an assertion on a resolver/callback-driven value that EQUALS the fallback/default constant (e.g. asserting a frame size == `FRAME_HEADER_SIZE`, or == header+0+header), with NO varied-input assertion and NO call-counter — so a bypassed resolver passes identically.
+
+**Constraint**: When a function both memoizes a recursive computation AND accepts an injected resolver for some keys, the resolver MUST seed the memo BEFORE the memoizing pass (or be the cache-miss handler) — never `or_insert_with(resolver)` after the memoizer could cache a fallback. Any test proving a resolver/callback is exercised MUST (a) use a resolver return value DISTINCT from the fallback/default so a bypass changes the asserted value, AND (b) vary the return and assert the output tracks it OR assert the resolver was actually called (counter > 0). A single-fixed-value assertion that coincides with the fallback proves nothing.
+
+**Bouncer checks** (each runnable as shell against a diff):
+- [ ] Diff to `emit.rs`/`queries.rs` adds/edits a fn taking a `&dyn Fn`/closure resolver param that feeds `.entry(...).or_insert_with(...)` or `.or_insert(...)`: verify a resolver-seed loop (`insert(name, resolver(name))`) runs BEFORE the recursive memo pass (`compute_frame_size`/`compute_*`). If the `or_insert_with(resolver)` is the only consumption AND it runs after the recursive pass → WARNING (resolver likely dead — the memo poisons the key with a fallback first).
+- [ ] Diff to `crates/ynz-codegen/tests/*.rs` adds/edits a test asserting a resolver/callback-driven layout value: verify the asserted value is DISTINCT from the fallback constant (`FRAME_HEADER_SIZE` / header-only) AND the test either varies the resolver return + asserts the output tracks it OR asserts a call-counter > 0. A test asserting a value equal to (or derivable solely from) the fallback, with no vary/counter → WARNING (passes on a fallback coincidence; resolver bypass undetectable).
+
+**Severity**: critical — silent under-sizing of an embedded sub-frame → SIGILL/memory corruption, and the test goes green because the resolved value coincides with the fallback. Worst failure class (no crash in the happy-path fixture; detonates only on a callee with a non-trivial frame).
+
+**Originating incident**: 2026-06-06, v0.3-M3e Phase 1. `build_frame_layouts_with_resolver`'s `compute_frame_size` loop cached the `FRAME_HEADER_SIZE` fallback for imported callees before the `or_insert_with(resolver)` seed ran → the cross-module resolver was dead code. The recursion unit test passed at `doWork.total_size==64` only because the leaf callee's real frame happened to equal the 32-byte fallback. code-reviewer's adversarial probe (vary the resolver return → output invariant; `Cell` counter → resolver never fired) caught it; acceptance-verifier's claim-trusting PASS missed it. Fixed: resolver-seed moved before `compute_frame_size`; test rewritten with a >32 callee frame + anti-bypass sentinel (`resolver→56 → 88`). See `.claude/plans/active/v0-3-m3e-cross-module-frame-serialization.md` Phase 1 Findings Log (round-2/round-3).

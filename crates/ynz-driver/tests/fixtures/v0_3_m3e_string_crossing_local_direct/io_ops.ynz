@@ -1,0 +1,6 @@
+// M3e danger-matrix: string type — exported suspending function.
+// String (pointer-sized) crossing-local must survive the resume boundary (8-byte slot).
+
+export function fetchData() -> nothing {
+  sleep(10)
+}

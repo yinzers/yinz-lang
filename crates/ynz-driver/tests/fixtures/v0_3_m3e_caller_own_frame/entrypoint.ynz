@@ -1,0 +1,18 @@
+// M3e danger-matrix: caller-also-has-own-frame (escape #5).
+// The caller has THREE of its own crossing locals (multi-slot caller frame) AND calls an
+// imported suspender. The composed frame must correctly include both the caller's own
+// crossing-local slots AND the imported callee's sub-frame at the right offset.
+// Expected output: "a: 1, b: 2, c: 3, result: 100"
+import { doWork } from `io_ops`
+
+function caller() -> nothing {
+  let a: int = 1
+  let b: int = 2
+  let c: int = 3
+  const result = doWork()
+  print(`a: ${a.toString()}, b: ${b.toString()}, c: ${c.toString()}, result: ${result.toString()}`)
+}
+
+function entrypoint() -> nothing {
+  caller()
+}

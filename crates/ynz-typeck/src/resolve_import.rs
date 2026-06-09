@@ -14,7 +14,7 @@ use ynz_parser::{parse_query, SourceFileRegistry};
 use crate::{
     exports::{collect_exports, ExportTable},
     options_table::{collect_options, OptionsEntry},
-    queries::module_signatures_query,
+    queries::{check_query, module_signatures_query},
     shapes::ShapeDef,
     signatures::FunctionSig,
 };
@@ -310,7 +310,16 @@ fn bind_named_import(
         result.options.insert(local.clone(), entry.clone());
     }
     if let Some(sig) = found_fn {
-        result.functions.insert(local.clone(), sig.clone());
+        let mut bound_sig = sig.clone();
+        // When the caller renames the import (`import { getValue as fetchVal }`), record
+        // the original exported symbol name so codegen can declare the correct LLVM
+        // external reference. Without this, the importer module declares `fetchVal` as
+        // an external LLVM function, but the exporting module compiled and exported
+        // `getValue` — the linker finds no definition for `fetchVal` and fails.
+        if local != exported {
+            bound_sig.original_name = Some(exported.clone());
+        }
+        result.functions.insert(local.clone(), bound_sig);
     }
 }
 
@@ -355,9 +364,11 @@ fn load_export_table(
     // Mark as visiting to detect circular imports in recursive calls.
     visiting.insert(resolved_path.to_path_buf());
 
-    // Use the salsa-memoized signature query — shapes and function signatures
-    // are computed once and cached; salsa re-runs only when the source changes.
-    let sig_output = module_signatures_query(db, sf);
+    // Parse the importee FIRST (before module_signatures_query) so we can detect
+    // circular imports before salsa enters a dependency cycle. module_signatures_query
+    // recursively resolves imports — if the importee imports back a file already in
+    // `visiting`, salsa would panic with an unhandled dependency cycle. Checking the
+    // import declarations here lets us emit a clean error and return early.
     let parse = parse_query(db, sf);
 
     // Propagate parse errors as a summary diagnostic rather than re-emitting
@@ -378,6 +389,41 @@ fn load_export_table(
         return ExportTable::empty();
     }
 
+    // Scan the importee's import declarations for any path that is already in the
+    // visiting set. A match means this import chain would form a cycle: A imports B
+    // and B (directly or transitively) imports A. Salsa cannot resolve such a cycle
+    // because module_signatures_query is tracked — the second call on an in-progress
+    // query panics. Detect it here and emit a clean diagnostic.
+    for item in &parse.module.items {
+        let ynz_ast::nodes::Item::ImportDecl(decl) = item else {
+            continue;
+        };
+        let resolved_path_str = resolved_path.display().to_string();
+        let back_path = match resolve_module_path(&resolved_path_str, &decl.source) {
+            Some(p) => p,
+            None => continue,
+        };
+        if visiting.contains(&back_path) {
+            diags.push(Diagnostic::error(
+                span.clone(),
+                format!(
+                    "Circular import: \"{module_str}\" imports back into the current module chain."
+                ),
+                "Move the shared definitions to a third file that both modules can import \
+                 without creating a cycle.",
+                "Circular imports create an unresolvable dependency order — the compiler \
+                 cannot determine which module to compile first. Extract the shared types, \
+                 functions, or shapes into a new file and import that file from both modules.",
+            ));
+            visiting.remove(resolved_path);
+            return ExportTable::empty();
+        }
+    }
+
+    // Use the salsa-memoized signature query — shapes and function signatures
+    // are computed once and cached; salsa re-runs only when the source changes.
+    let sig_output = module_signatures_query(db, sf);
+
     // OptionsTable isn't part of SignatureOutput, so we collect it inline here.
     // This pass is uncached; the shape/sig tables above are memoized via the
     // tracked query, so this is the only repeated work for cross-file imports.
@@ -386,10 +432,33 @@ fn load_export_table(
 
     visiting.remove(resolved_path);
 
-    collect_exports(
+    // Build the export table using the pre-analysis sig_table for shape and options
+    // resolution, then overwrite the `suspends` flag on each exported function with
+    // the result from check_query. check_query runs the may-block fixpoint and
+    // populates `suspends_set` — that is the authoritative per-file suspension
+    // analysis. The sig_table from module_signatures_query always has suspends=false
+    // (the analysis runs later in check_query), so without this correction every
+    // imported function would appear non-suspending regardless of its body.
+    //
+    // Calling check_query here creates a salsa dependency: the importer's
+    // module_signatures_query re-runs whenever the importee's check_query result
+    // changes (e.g., the importee gains or loses a sleep call). That is the
+    // correct incremental behaviour — if A's slow() gains a sleep, B's
+    // module_signatures_query must re-run to see the updated suspends=true.
+    let check_out = check_query(db, sf);
+    let mut export_table = collect_exports(
         &parse.module,
         &sig_output.shape_table,
         &options_table,
         &sig_output.sig_table,
-    )
+    );
+    // Set the `suspends` flag on each exported function using the authoritative
+    // may-block fixpoint result from check_query. The sig_table from
+    // module_signatures_query always has suspends=false (the analysis runs later in
+    // check_query), so without this correction every imported function would appear
+    // non-suspending regardless of its body.
+    for (name, sig) in export_table.functions.iter_mut() {
+        sig.suspends = check_out.suspends_set.contains(name.as_str());
+    }
+    export_table
 }

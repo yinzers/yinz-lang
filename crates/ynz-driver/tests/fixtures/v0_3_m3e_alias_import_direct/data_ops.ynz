@@ -1,0 +1,9 @@
+// M3e aliased-import regression: exported suspending function with an int crossing-local.
+// getValue suspends (sleep) with a local alive across the suspend point, then returns it.
+// Locks that the prior fix correctly resolves imported suspending callees through import aliases.
+
+export function getValue() -> int errors {
+  const offset: int = 7
+  sleep(10)
+  return offset
+}

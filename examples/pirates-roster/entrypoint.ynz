@@ -25,6 +25,10 @@ import { newPirate, announce } from `services/players`
 
 import { clamp, square } from `utils/math_extra`
 
+// v0.3-M3e: cross-module suspension — the scouting module exports functions
+// that suspend, and entrypoint calls them across the module boundary.
+import { fetchScoutGrade, rankRoster } from `services/scouting`
+
 // v0.2.1-M10 import-pattern coverage — six type symbols, one per previously-false-positive
 // AST position (Bugs 1 + 2.1–2.5). Each is used below in a realistic Three Rivers
 // schedule context that exercises the pattern without calling cross-file functions.
@@ -233,11 +237,21 @@ function entrypoint() -> nothing {
   // ────── v0.3-M1: background runs on a separate thread ──────
   m3m1_demo()
   // ────── v0.3-M2: wait actually suspends ──────
-  m3m2_demo()
+  // `wait` before each suspending demo section forces sequential ordering.
+  // Without it, the M3b auto-parallel pass overlaps independent suspending sections
+  // and interleaves their output. Each section tells its own story; `wait` preserves
+  // the narrative order the demo is designed to show.
+  wait m3m2_demo()
   // ────── v0.3-M3a Phase 2: while-loop suspension ──────
-  m3a_p2_demo()
+  wait m3a_p2_demo()
   // ────── v0.3-M3a Phase 4: for-loop + crossing-local suspension ──────
-  m3a_p4_demo()
+  wait m3a_p4_demo()
+  // ────── v0.3-M3e: cross-module suspension ──────
+  wait m3e_demo()
+  // ────── v0.3-M3b: auto-parallelization — independent suspending work overlaps ──────
+  // `wait` before m3b_demo() keeps THIS section ordered after m3e. The auto-parallel
+  // overlap happens INSIDE m3b_demo (two independent fetches), not between demo sections.
+  wait m3b_demo()
 }
 
 // ────── M3 helper functions ──────
@@ -706,6 +720,50 @@ function m3a_p4_demo() -> nothing {
   print(`scout total: ${scoutStr}`)
 }
 
+// ── v0.3-M3e: cross-module suspension ────────────────────────────────────────
+//
+// fetchScoutGrade is exported from services/scouting.ynz. Calling it here
+// crosses a module boundary: this entrypoint is one compilation unit; scouting.ynz
+// is another. The compiler's frame_layouts_query resolves the callee's LLVM-accurate
+// FrameLayout (total_size, n_locals) so the sub-frame is embedded at the right offset
+// in entrypoint's composed frame. No universal reject, no silent miscompile.
+//
+// The returned grade string drives a verdict decision — the result does real work
+// across the boundary, not just a trivial print.
+
+// reviewTopProspect fetches a single player's scouting grade across the module
+// boundary and prints a verdict based on the result. The `summary` variable is a
+// crossing local: it is bound before the suspension and read again after resume
+// to build the printed line.
+function reviewTopProspect(name: string, atBats: int) -> nothing {
+  let summary = wait fetchScoutGrade(name, atBats)
+  let verdict: string = `average`
+  if (summary.endsWith(`A`)) {
+    verdict = `elite`
+  }
+  print(`${summary} — ${verdict}`)
+}
+
+// m3e_demo calls the cross-module suspending functions in two realistic contexts:
+//   1. A direct cross-module suspending call whose result drives a verdict.
+//   2. A full-roster ranking via rankRoster — cross-module suspension in a loop.
+function m3e_demo() -> nothing {
+  print(``)
+  print(`v0.3-M3e — cross-module suspension (scouting grades from services/scouting):`)
+
+  // Direct cross-module suspending call: fetch one grade, use the result.
+  reviewTopProspect(`McCutchen`, 400)
+  reviewTopProspect(`Clemente`, 300)
+
+  // Cross-module suspension driving a count: rankRoster suspends per player
+  // to fetch each grade, accumulates A grades, and returns the total.
+  let names: array<string> = [`Stargell`, `Mazeroski`, `Wagner`, `Kiner`]
+  let atBats: array<int> = [380, 290, 420, 310]
+  let aCount = wait rankRoster(names, atBats)
+  let aStr = aCount.toString()
+  print(`roster A-grade count: ${aStr}`)
+}
+
 // ── v0.3-M3a Phase 2: while-loop suspension ──────────────────────────────────
 //
 // `wait sleep` now works inside a `while` body. Loop-carried locals are
@@ -737,5 +795,85 @@ function m3a_p2_demo() -> nothing {
   let crewCount: int = wait awaitCrewReady(3)
   let crewStr = crewCount.toString()
   print(`crew ready: ${crewStr}`)
+}
+
+// ── v0.3-M3b: auto-parallelization — the compiler overlaps independent work ───
+//
+// When two suspending calls have NO data dependency between them and share no
+// `lend` resource, the compiler proves they are independent and overlaps their
+// suspensions. The wall-clock is ≈ max(each) instead of sum — without the
+// programmer writing anything special. `--no-auto-parallel` turns the overlap
+// off; the OBSERVABLE OUTPUT is byte-identical either way (see below for why).
+//
+// fetchLowerBowlPrice and fetchUpperDeckPrice are two separate suspending price
+// lookups. Each pauses ~60ms simulating a slow ticket-server round-trip, then
+// returns an exact decimal128 price.
+
+function fetchLowerBowlPrice() -> number {
+  // IDE shows: wait (fetchLowerBowlPrice suspends on the sleep below)
+  wait sleep(60)
+  return 24.50
+}
+
+function fetchUpperDeckPrice() -> number {
+  // IDE shows: wait (fetchUpperDeckPrice suspends on the sleep below)
+  wait sleep(60)
+  return 31.75
+}
+
+// recordPromoNight runs on a background thread (fire-and-forget). It pauses to
+// simulate a slow analytics write, then prints. Main never waits for it.
+function recordPromoNight(promo: string) -> nothing {
+  sleepBlocking(40)
+  print(`promo logged: ${promo}`)
+}
+
+// m3b_demo — three faces of v0.3-M3b in one Pittsburgh-themed scene:
+//   (a) independent suspending fetches OVERLAP (≈ max, not sum);
+//   (b) `wait` orders two otherwise-independent side effects;
+//   (c) `background` infers give/copy for fire-and-forget work.
+function m3b_demo() -> nothing {
+  print(``)
+  print(`v0.3-M3b — auto-parallel: two independent price fetches overlap (~60ms, not ~120ms):`)
+
+  // (a) AUTO-PARALLEL OVERLAP.
+  // These two fetches have no data dependency, so the compiler overlaps their
+  // suspensions — total wait is ≈ max(60, 60) ≈ 60ms, not 60 + 60 = 120ms.
+  // NOTE: there is intentionally NO `wait` between these two lines — that is what
+  // lets the auto-parallel pass overlap them.
+  // IDE shows: wait (fetchLowerBowlPrice may suspend on I/O)
+  let lowerBowl = fetchLowerBowlPrice()
+  // IDE shows: wait (fetchUpperDeckPrice may suspend on I/O)
+  let upperDeck = fetchUpperDeckPrice()
+  // The two prints below READ lowerBowl/upperDeck, so they are data-dependent on
+  // the fetches: the compiler keeps them after both fetches complete and in this
+  // exact order. The overlap is in the suspension, not the print order — so the
+  // observable output is deterministic and byte-identical with --no-auto-parallel.
+  print(`lower bowl ticket: ${lowerBowl}`)
+  print(`upper deck ticket: ${upperDeck}`)
+
+  // (b) `wait` AS AN ORDERING BARRIER.
+  // pausePirate prints as a side effect with no return value. Two calls to it are
+  // otherwise independent, but `wait` on the first forces it to finish before the
+  // second begins — `wait` is the ordering barrier between the two side effects.
+  print(``)
+  print(`v0.3-M3b — wait orders two side effects:`)
+  wait pausePirate(`Maz`)
+  wait pausePirate(`Clemente`)
+
+  // (c) `background` give/copy inference.
+  // `promo` is read again on the line after the spawn, so the compiler infers
+  // `.copy` automatically — the background task gets its own copy and main keeps
+  // the original. (If `promo` were dead after the spawn, the compiler would infer
+  // `.give` instead — no copy.) `.copy` is written explicitly here so the demo
+  // reads clearly; the compiler would have inferred the same thing.
+  // IDE shows: background -> routed to I/O pool (recordPromoNight has a blocking sleep)
+  print(``)
+  print(`v0.3-M3b — background give/copy inference:`)
+  const promo = `bobblehead_night`
+  background recordPromoNight(promo.copy())
+  print(`main keeps the promo handle: ${promo}`)
+  // Keep main alive long enough for the background task to finish and print.
+  wait sleep(120)
 }
 

@@ -1,0 +1,46 @@
+// Fixture: a parallel-group `-> number errors` (decimal128) return binding that crosses a
+// SUBSEQUENT `wait`.
+//
+// `priceA`/`priceB` are independent suspending `-> number errors` calls → auto-parallel
+// group. Their results cross `wait later()`, so they are crossing locals stored across the
+// second suspension as decimal128 (i128, 2 frame slots) AND as errors-capable (companion
+// `{i64, i64}` struct). The crossing-local binding must store into the pre-created
+// entry-block i128 alloca + EC companion struct (`sm_crossing_ec_struct_allocas`) and flush
+// both halves to consecutive frame slots — never a fresh join-block alloca (which wouldn't
+// dominate the resume blocks). Routed through `bind_sm_result_and_flush`, identical to the
+// sequential SM let-path.
+//
+// The value (9999999999.000000001) needs the full 16-byte decimal128 precision — any
+// truncation or wrong reload produces a different value.
+//
+// The test asserts byte-exact decimal128 stdout under default and --no-auto-parallel modes.
+//
+// Expected output: later\na:9999999999.000000001\nb:2.5
+function priceA() -> number errors {
+  wait sleep(40)
+  return 9999999999.000000001
+}
+
+function priceB() -> number errors {
+  wait sleep(40)
+  return 2.5
+}
+
+function later() -> nothing {
+  wait sleep(10)
+  print(`later`)
+}
+
+function run() -> nothing {
+  let a = priceA()
+  let b = priceB()
+  wait later()
+  let av = a.or(0.0)
+  let bv = b.or(0.0)
+  print(`a:${av.toString()}`)
+  print(`b:${bv.toString()}`)
+}
+
+function entrypoint() -> nothing {
+  run()
+}

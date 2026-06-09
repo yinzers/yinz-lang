@@ -9,15 +9,18 @@
 //!
 //! # Scope boundary
 //!
-//! This is an **intra-compilation-unit** analysis. Cross-module calls (a callee
-//! in another file) cannot be resolved here, so they are reported as
-//! `UnresolvableEdge::CrossModule` — the caller of `analyze` is responsible for
-//! emitting the appropriate can't-infer diagnostic. Same for dynamic dispatch
-//! through a `dynamic Contract` vtable (`UnresolvableEdge::DynamicDispatch`).
+//! Cross-module calls are resolved via `check_query` on the imported module —
+//! the caller passes `imported_suspending_names` (the subset of imported fns
+//! whose `check_query.suspends_set` includes them). These are treated as
+//! suspension seeds: a local function that calls an imported-suspending fn is
+//! itself seeded as suspending in the fixpoint, exactly like a direct intrinsic
+//! call. Imported fns NOT in `imported_suspending_names` are non-suspending
+//! leaves — no edge, no error.
 //!
-//! v0.3-M3 lifts the cross-module limit by propagating the `suspends` flag
-//! through compiled-package metadata (design/future/packages.md) and wiring the
-//! M8 multi-file query.
+//! Dynamic dispatch through a `dynamic Contract` vtable remains
+//! `UnresolvableEdge::DynamicDispatch` — static analysis cannot determine the
+//! concrete callee at compile time. These still emit the conservative-correct
+//! can't-infer diagnostic at the check.rs level.
 //!
 //! # Background edges are call-graph CUTS
 //!
@@ -78,17 +81,28 @@ pub struct MayBlockAnalysis {
 
 /// Run the transitive may-block fixpoint over the intra-unit module.
 ///
-/// `imported_fn_names` is the set of function names imported from OTHER files
-/// and visible in this module — used to distinguish cross-module calls (which
-/// produce an `UnresolvableEdge::CrossModule`) from simple "unknown" names that
-/// are probably user errors (which the normal typeck already handles).
+/// `imported_fn_names` is the set of all function names imported from other
+/// files visible in this module — used to classify calls as "cross-module
+/// non-suspending leaf" rather than "unknown name" (which typeck reports as
+/// "not defined").
+///
+/// `imported_suspending_names` is the subset of `imported_fn_names` that are
+/// known to transitively reach a suspension point (derived from each imported
+/// module's `check_query.suspends_set`). A local function that calls one of
+/// these is seeded as suspending in the fixpoint — same as calling an
+/// intrinsic directly.
 ///
 /// Time: O(F² · E)  Space: O(F + E)
-pub fn analyze(module: &Module, imported_fn_names: &HashSet<String>) -> MayBlockAnalysis {
+pub fn analyze(
+    module: &Module,
+    imported_fn_names: &HashSet<String>,
+    imported_suspending_names: &HashSet<String>,
+) -> MayBlockAnalysis {
     // Step 1 — collect the intra-unit call graph.
-    let graph = build_call_graph(module, imported_fn_names);
+    let graph = build_call_graph(module, imported_fn_names, imported_suspending_names);
 
-    // Step 2 — seed from direct may-block intrinsic calls.
+    // Step 2 — seed from direct may-block intrinsic calls AND from calls to
+    // imported-suspending functions (both are known suspension sources).
     let mut suspends: HashSet<String> = HashSet::new();
     for (fn_name, edges) in &graph.edges {
         if edges.calls_may_block_intrinsic {
@@ -128,7 +142,7 @@ pub fn suspends_set_for_test(
     module: &Module,
     imported_fn_names: &HashSet<String>,
 ) -> HashSet<String> {
-    analyze(module, imported_fn_names).suspends
+    analyze(module, imported_fn_names, &HashSet::new()).suspends
 }
 
 // ── Internal call-graph types ─────────────────────────────────────────────────
@@ -154,7 +168,11 @@ struct FnEdges {
     calls_may_block_intrinsic: bool,
 }
 
-fn build_call_graph(module: &Module, imported_fn_names: &HashSet<String>) -> CallGraph {
+fn build_call_graph(
+    module: &Module,
+    imported_fn_names: &HashSet<String>,
+    imported_suspending_names: &HashSet<String>,
+) -> CallGraph {
     // Collect all local function names so we know which calls are cross-module.
     let local_fns: HashSet<String> = module
         .items
@@ -182,6 +200,7 @@ fn build_call_graph(module: &Module, imported_fn_names: &HashSet<String>) -> Cal
             &f.body.stmts,
             &local_fns,
             imported_fn_names,
+            imported_suspending_names,
             &f.name,
             &mut fn_edges,
             &mut unresolvable,
@@ -199,6 +218,7 @@ fn collect_calls_in_block(
     stmts: &[Stmt],
     local_fns: &HashSet<String>,
     imported_fns: &HashSet<String>,
+    imported_suspending: &HashSet<String>,
     enclosing_fn: &str,
     edges: &mut FnEdges,
     unresolvable: &mut Vec<(String, UnresolvableEdge)>,
@@ -208,6 +228,7 @@ fn collect_calls_in_block(
             stmt,
             local_fns,
             imported_fns,
+            imported_suspending,
             enclosing_fn,
             edges,
             unresolvable,
@@ -219,6 +240,7 @@ fn collect_calls_in_stmt(
     stmt: &Stmt,
     local_fns: &HashSet<String>,
     imported_fns: &HashSet<String>,
+    imported_suspending: &HashSet<String>,
     enclosing_fn: &str,
     edges: &mut FnEdges,
     unresolvable: &mut Vec<(String, UnresolvableEdge)>,
@@ -229,6 +251,7 @@ fn collect_calls_in_stmt(
                 e,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -240,6 +263,7 @@ fn collect_calls_in_stmt(
                 value,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -252,6 +276,7 @@ fn collect_calls_in_stmt(
                     v,
                     local_fns,
                     imported_fns,
+                    imported_suspending,
                     enclosing_fn,
                     edges,
                     unresolvable,
@@ -264,6 +289,7 @@ fn collect_calls_in_stmt(
                 target,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -273,6 +299,7 @@ fn collect_calls_in_stmt(
                 value,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -289,6 +316,7 @@ fn collect_calls_in_stmt(
                 receiver,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -298,6 +326,7 @@ fn collect_calls_in_stmt(
                 index,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -307,6 +336,7 @@ fn collect_calls_in_stmt(
                 value,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -318,6 +348,7 @@ fn collect_calls_in_stmt(
                 cond,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -327,6 +358,7 @@ fn collect_calls_in_stmt(
                 &body.stmts,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -337,6 +369,7 @@ fn collect_calls_in_stmt(
                 cond,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -346,6 +379,7 @@ fn collect_calls_in_stmt(
                 &body.stmts,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -356,6 +390,7 @@ fn collect_calls_in_stmt(
                 iter,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -365,6 +400,7 @@ fn collect_calls_in_stmt(
                 &body.stmts,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -380,6 +416,7 @@ fn collect_calls_in_stmt(
                 scrutinee,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -390,6 +427,7 @@ fn collect_calls_in_stmt(
                     &arm.body.stmts,
                     local_fns,
                     imported_fns,
+                    imported_suspending,
                     enclosing_fn,
                     edges,
                     unresolvable,
@@ -400,6 +438,7 @@ fn collect_calls_in_stmt(
                     &eb.stmts,
                     local_fns,
                     imported_fns,
+                    imported_suspending,
                     enclosing_fn,
                     edges,
                     unresolvable,
@@ -409,10 +448,17 @@ fn collect_calls_in_stmt(
     }
 }
 
+// All 8 params are genuinely independent state for a recursive AST tree-walk;
+// bundling into a struct would add a type used nowhere else in the crate.
+// `enclosing_fn` and `unresolvable` are thread-through params in the recursive
+// protocol — used by the callee's recursive arms and reserved for future arms.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::only_used_in_recursion)]
 fn collect_calls_in_expr(
     expr: &Expr,
     local_fns: &HashSet<String>,
     imported_fns: &HashSet<String>,
+    imported_suspending: &HashSet<String>,
     enclosing_fn: &str,
     edges: &mut FnEdges,
     unresolvable: &mut Vec<(String, UnresolvableEdge)>,
@@ -428,6 +474,7 @@ fn collect_calls_in_expr(
                 inner,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -457,15 +504,12 @@ fn collect_calls_in_expr(
                         // `direct`, which would cause a user function named `sleep` to
                         // false-positive via name collision in the seed step.
                         edges.calls_may_block_intrinsic = true;
-                    } else if imported_fns.contains(&name) {
-                        // Cross-module callee — we can't determine if it suspends.
-                        unresolvable.push((
-                            enclosing_fn.to_string(),
-                            UnresolvableEdge::CrossModule {
-                                callee_name: name.clone(),
-                                import_src: String::new(),
-                            },
-                        ));
+                    } else if imported_fns.contains(&name) && imported_suspending.contains(&name) {
+                        // Imported fn with known suspension status: suspends.
+                        // Treat it like a direct intrinsic call — the enclosing
+                        // function transitively reaches a suspension point.
+                        // Non-suspending imported fns: non-suspending leaf, no edge needed.
+                        edges.calls_may_block_intrinsic = true;
                     }
                     // else: unknown name — normal typeck will emit "not defined" diagnostic
                 }
@@ -475,6 +519,7 @@ fn collect_calls_in_expr(
                         arg,
                         local_fns,
                         imported_fns,
+                        imported_suspending,
                         enclosing_fn,
                         edges,
                         unresolvable,
@@ -486,6 +531,7 @@ fn collect_calls_in_expr(
                     &call.callee,
                     local_fns,
                     imported_fns,
+                    imported_suspending,
                     enclosing_fn,
                     edges,
                     unresolvable,
@@ -497,6 +543,7 @@ fn collect_calls_in_expr(
                     &call.callee,
                     local_fns,
                     imported_fns,
+                    imported_suspending,
                     enclosing_fn,
                     edges,
                     unresolvable,
@@ -507,6 +554,7 @@ fn collect_calls_in_expr(
                         arg,
                         local_fns,
                         imported_fns,
+                        imported_suspending,
                         enclosing_fn,
                         edges,
                         unresolvable,
@@ -525,6 +573,7 @@ fn collect_calls_in_expr(
                 receiver,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -535,6 +584,7 @@ fn collect_calls_in_expr(
                     arg,
                     local_fns,
                     imported_fns,
+                    imported_suspending,
                     enclosing_fn,
                     edges,
                     unresolvable,
@@ -547,6 +597,7 @@ fn collect_calls_in_expr(
                 inner,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -558,6 +609,7 @@ fn collect_calls_in_expr(
                 lhs,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -567,6 +619,7 @@ fn collect_calls_in_expr(
                 rhs,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -578,6 +631,7 @@ fn collect_calls_in_expr(
                 operand,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -591,6 +645,7 @@ fn collect_calls_in_expr(
                 receiver,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -600,6 +655,7 @@ fn collect_calls_in_expr(
                 index,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -611,6 +667,7 @@ fn collect_calls_in_expr(
                 receiver,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -623,6 +680,7 @@ fn collect_calls_in_expr(
                     &f.value,
                     local_fns,
                     imported_fns,
+                    imported_suspending,
                     enclosing_fn,
                     edges,
                     unresolvable,
@@ -636,6 +694,7 @@ fn collect_calls_in_expr(
                     e,
                     local_fns,
                     imported_fns,
+                    imported_suspending,
                     enclosing_fn,
                     edges,
                     unresolvable,
@@ -649,6 +708,7 @@ fn collect_calls_in_expr(
                     k,
                     local_fns,
                     imported_fns,
+                    imported_suspending,
                     enclosing_fn,
                     edges,
                     unresolvable,
@@ -658,6 +718,7 @@ fn collect_calls_in_expr(
                     v,
                     local_fns,
                     imported_fns,
+                    imported_suspending,
                     enclosing_fn,
                     edges,
                     unresolvable,
@@ -670,6 +731,7 @@ fn collect_calls_in_expr(
                 inner,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -683,6 +745,7 @@ fn collect_calls_in_expr(
                         e,
                         local_fns,
                         imported_fns,
+                        imported_suspending,
                         enclosing_fn,
                         edges,
                         unresolvable,
@@ -696,6 +759,7 @@ fn collect_calls_in_expr(
                 receiver,
                 local_fns,
                 imported_fns,
+                imported_suspending,
                 enclosing_fn,
                 edges,
                 unresolvable,
@@ -754,7 +818,9 @@ pub fn find_mutual_suspension_cycles(
     }
 
     // Build the restricted call graph: edges only among suspending functions.
-    let graph = build_call_graph(module, imported_fn_names);
+    // Imported suspending names are not needed here — the mutual-cycle check only
+    // considers local fns (cross-module cycle detection is out of scope for M3b).
+    let graph = build_call_graph(module, imported_fn_names, &HashSet::new());
     let fns: Vec<&str> = suspends.iter().map(|s| s.as_str()).collect();
     let fn_index: HashMap<&str, usize> = fns.iter().enumerate().map(|(i, n)| (*n, i)).collect();
     let n = fns.len();
@@ -843,7 +909,7 @@ mod tests {
 
     fn suspends_set(src: &str) -> HashSet<String> {
         let module = parse_module(src);
-        analyze(&module, &HashSet::new()).suspends
+        analyze(&module, &HashSet::new(), &HashSet::new()).suspends
     }
 
     #[test]
@@ -972,7 +1038,12 @@ function entrypoint() -> nothing { }
     }
 
     #[test]
-    fn imported_fn_produces_cross_module_unresolvable() {
+    fn imported_non_suspending_fn_produces_no_unresolvable_and_no_suspension() {
+        // WHY: an imported fn with known-non-suspending status (in imported_fn_names but
+        // NOT in imported_suspending_names) must be treated as a non-suspending leaf.
+        // No CrossModule unresolvable edge, and the caller must NOT be in suspends_set.
+        // Guards regressions where non-suspending cross-module calls incorrectly poison
+        // the caller's suspension analysis (false-positive state machine classification).
         let module = parse_module(
             r#"
 function entrypoint() -> nothing {
@@ -981,13 +1052,46 @@ function entrypoint() -> nothing {
 "#,
         );
         let imported: HashSet<String> = ["remoteOp"].iter().map(|s| s.to_string()).collect();
-        let result = analyze(&module, &imported);
+        let result = analyze(&module, &imported, &HashSet::new());
         assert!(
-            result.unresolvable.iter().any(|(_, e)| matches!(
-                e,
-                UnresolvableEdge::CrossModule { callee_name, .. } if callee_name == "remoteOp"
-            )),
-            "imported callee must produce CrossModule unresolvable edge"
+            result.unresolvable.is_empty(),
+            "known-non-suspending imported callee must NOT produce any unresolvable edge; got: {:#?}",
+            result.unresolvable
+        );
+        assert!(
+            !result.suspends.contains("entrypoint"),
+            "caller of non-suspending imported fn must NOT be in suspends_set; got: {:?}",
+            result.suspends
+        );
+    }
+
+    #[test]
+    fn imported_suspending_fn_seeds_caller_suspension() {
+        // WHY: an imported fn with known-suspending status (in BOTH imported_fn_names
+        // AND imported_suspending_names) must seed the caller as suspending — same effect
+        // as a direct sleep call. Guards regressions where cross-module suspension fails
+        // to propagate (caller left non-suspending, compiles as straight-line code, panics
+        // at runtime trying to run a state machine outer wrapper from inside a Tokio runtime).
+        let module = parse_module(
+            r#"
+function entrypoint() -> nothing {
+    slowOp()
+}
+"#,
+        );
+        let imported: HashSet<String> = ["slowOp"].iter().map(|s| s.to_string()).collect();
+        let imported_suspending: HashSet<String> =
+            ["slowOp"].iter().map(|s| s.to_string()).collect();
+        let result = analyze(&module, &imported, &imported_suspending);
+        assert!(
+            result.suspends.contains("entrypoint"),
+            "caller of imported suspending fn must be in suspends_set; got: {:?}",
+            result.suspends
+        );
+        assert!(
+            result.unresolvable.is_empty(),
+            "known-suspending imported fn must NOT produce an unresolvable edge; got: {:#?}",
+            result.unresolvable
         );
     }
 

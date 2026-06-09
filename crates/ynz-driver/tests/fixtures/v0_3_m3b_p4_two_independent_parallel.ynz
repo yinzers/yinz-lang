@@ -1,0 +1,25 @@
+// Fixture: two independent suspending calls in one function body.
+//
+// `worker` and `helper` have no data dependency and no shared `lend` resource —
+// the auto-parallel pass groups them as a Parallel pair and interleaves their
+// inline polls. Wall-clock ≈ max(200ms, 200ms) = 200ms, not sum (400ms).
+//
+// The test asserts:
+//   1. Correct stdout: "done" (both complete, entrypoint prints).
+//   2. Wall-clock < 350ms (proves overlap — sequential would take ≥380ms).
+//   3. Byte-identical stdout under --no-auto-parallel (consistency oracle).
+//
+// Expected output: done
+function worker() -> nothing {
+  wait sleep(200)
+}
+
+function helper() -> nothing {
+  wait sleep(200)
+}
+
+function entrypoint() -> nothing {
+  worker()
+  helper()
+  print(`done`)
+}

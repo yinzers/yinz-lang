@@ -69,6 +69,10 @@ function saveUser(lend db: Database, user: User) -> nothing errors
 
 ## `wait` — when you need explicit ordering
 
+**Suspension is automatic — you never type `wait` to make I/O suspend.** When a call can block (for example, a network fetch or `sleep`), the compiler detects this and suspends the function automatically. The IDE shows that suspension as a muted `wait` hint. You don't write `wait` for it.
+
+**`wait` is only for ordering.** Use it when a call must complete before the next statement runs, but the compiler can't infer that — because the two operations touch different resources and no value passes between them.
+
 Most code never needs `wait`. The compiler handles reads automatically and infers write ordering from ownership. Use `wait` when you need explicit ordering that the dependency graph can't figure out on its own.
 
 **When to use `wait` — ordered side effects:**
@@ -160,6 +164,8 @@ If you store the result of `background`, you get a handle you can communicate wi
 ## Ownership with background tasks
 
 Background tasks might outlive the current function. This changes how ownership works.
+
+The compiler infers whether to move or copy the argument — you don't have to write `.give` or `.copy` yourself. The IDE shows the inferred modifier as a muted hint at the call site.
 
 **A `share`-signature function cannot be called via background:**
 

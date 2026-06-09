@@ -1,0 +1,29 @@
+// M3b Phase-4 regression lock: a heterogeneous auto-parallel group — one member returns
+// `-> int errors` (errors-capable, a 2-slot {err,ok} return) and the other returns a plain
+// `-> int` (1-slot). Both are independent suspending reads, so they form one Parallel group.
+// The return-binding load must dispatch per-callee return type (the EC member rebuilds the
+// 2-slot struct; the plain member loads a bare i64) — a single shared dispatch path would
+// garble one of them. This locks that the mixed group composes correctly.
+//
+// Expected output (byte-identical default vs --no-auto-parallel): a:42 / b:7
+
+function loadEC() -> int errors {
+  wait sleep(50)
+  return 42
+}
+
+function loadPlain() -> int {
+  wait sleep(50)
+  return 7
+}
+
+function run() -> nothing errors {
+  let a = loadEC()
+  let b = loadPlain()
+  print(`a:${a.toString()}`)
+  print(`b:${b.toString()}`)
+}
+
+function entrypoint() -> nothing {
+  run()
+}

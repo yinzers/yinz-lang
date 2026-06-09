@@ -1,0 +1,11 @@
+// M3e danger-matrix: int × return × re-export chain A→B→C (escape #1).
+// C (entrypoint) imports doWork from B; B imports getValue from A.
+// frame_layouts_query(B) recursively queries frame_layouts_query(A) so B's total_size
+// correctly includes A's sub-frame — the re-export chain composes all the way down.
+// Expected output: "result: 7"
+import { doWork } from `b_ops`
+
+function entrypoint() -> nothing {
+  const r = doWork()
+  print(`result: ${r.toString()}`)
+}

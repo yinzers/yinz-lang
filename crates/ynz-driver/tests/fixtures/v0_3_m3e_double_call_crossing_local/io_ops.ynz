@@ -1,0 +1,8 @@
+// M3e adversarial axis 5a.i: same callee called twice with a crossing-local live between
+// the two calls. The frame_layouts embedding uses ONE sub-frame slot for doTick() (same
+// callee → same FrameLayout entry). A crossing-local live across BOTH calls must not be
+// clobbered by the second call's sub-frame reuse.
+
+export function doTick() -> nothing {
+  sleep(10)
+}

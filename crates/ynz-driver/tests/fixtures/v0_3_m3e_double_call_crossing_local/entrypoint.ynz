@@ -1,0 +1,17 @@
+// M3e adversarial axis 5a.i: same imported suspending callee called twice, with an int
+// crossing-local live between the two calls.
+// Expected output: "start: 7\nmid: 7\nend: 7"
+import { doTick } from `io_ops`
+
+function caller() -> nothing {
+  let counter: int = 7
+  print(`start: ${counter.toString()}`)
+  doTick()
+  print(`mid: ${counter.toString()}`)
+  doTick()
+  print(`end: ${counter.toString()}`)
+}
+
+function entrypoint() -> nothing {
+  caller()
+}

@@ -248,3 +248,62 @@ fn v0_3_m1_gallery_fires_expected_diagnostics() {
         "v0_3_m1 gallery must include large-copy warning; got:\n{stderr}"
     );
 }
+
+// WHY: v0_3_m3b_errors.ynz exercises every mutate-through-`share`-param error class
+// M3b added — the soundness floor for auto-parallelization (a `share` argument MUST be
+// a read-only borrow, or the independence analysis is unsound). The five classes are:
+// direct field mutation, direct element assign, collection-method mutation, `share self`
+// receiver mutation, transitive-through-bare-callee, and share→explicit-lend escalation.
+// If the error count drops, a class regressed (the auto-parallel soundness premise is
+// silently broken). If it rises, a new class was added without a key-phrase check here.
+#[test]
+fn v0_3_m3b_gallery_fires_expected_diagnostics() {
+    let (stderr, code) = compile_gallery(&gallery("v0_3_m3b_errors.ynz"));
+    // Gallery has intentional errors; must exit non-zero.
+    assert_ne!(code, 0, "v0_3_m3b gallery must exit non-zero");
+
+    let error_count = count_errors(&stderr);
+    // Expected 8 errors: no-entrypoint + 5 share-param classes, where the escalation
+    // class emits TWO diagnostics (the transitive fixpoint catch AND the explicit-lend
+    // escalation catch). Range gives headroom for incidental diagnostic refinements
+    // without masking a class regression.
+    assert!(
+        (6..=10).contains(&error_count),
+        "v0_3_m3b gallery must produce 6–10 errors; got {error_count}.\nstderr:\n{stderr}"
+    );
+
+    // Key-phrase checks — one per mutate-through-`share`-param class.
+    // Direct field mutation (`pickle.quantity = ...`).
+    assert!(
+        stderr.contains("`pickle` is declared `share`")
+            && stderr.contains("fields cannot be changed"),
+        "v0_3_m3b gallery must include direct-field share-mutation diagnostic; got:\n{stderr}"
+    );
+    // Transitive-through-bare-callee (`relayOrder` passes `ticket` to bare `stamp`).
+    assert!(
+        stderr.contains("`ticket`") && stderr.contains("modified through `stamp`"),
+        "v0_3_m3b gallery must include transitive share-mutation diagnostic; got:\n{stderr}"
+    );
+    // Collection-method mutation (`lineItems.add(42)`).
+    assert!(
+        stderr.contains("`lineItems` is declared `share`")
+            && stderr.contains("elements cannot be changed"),
+        "v0_3_m3b gallery must include collection-method share-mutation diagnostic; got:\n{stderr}"
+    );
+    // `share self` receiver mutation (`self.quantity = ...`).
+    assert!(
+        stderr.contains("`self` is declared `share`")
+            && stderr.contains("fields cannot be changed"),
+        "v0_3_m3b gallery must include share-self receiver-mutation diagnostic; got:\n{stderr}"
+    );
+    // Direct element assign (`prices[0] = 99`).
+    assert!(
+        stderr.contains("`prices` is declared `share`") && stderr.contains("elements cannot be changed"),
+        "v0_3_m3b gallery must include direct-element-assign share-mutation diagnostic; got:\n{stderr}"
+    );
+    // share→explicit-lend escalation (`voucher` passed to `lend`-param `applyDiscount`).
+    assert!(
+        stderr.contains("`voucher`") && stderr.contains("needs to modify it (`lend`)"),
+        "v0_3_m3b gallery must include share→explicit-lend escalation diagnostic; got:\n{stderr}"
+    );
+}

@@ -1,0 +1,36 @@
+// Fixture: two independent suspending `-> int errors` calls in a Parallel group.
+//
+// An errors-capable callee returns the 2-slot `{i64, i64}` errors ABI struct (field0 =
+// error pointer, field1 = success value) in its frame return slot. The parallel-group
+// return load in `load_sm_return_value_typed` must detect errors-capable callees and
+// rebuild that 2-slot struct as a StructValue, so `bind_sm_return_value` registers the
+// binding in `errors_capable_locals`. Without that, an errors-capable callee in a parallel
+// group falls into the bare-i64 catch-all, collapses the 2-slot struct to one word, and
+// dereferences garbage — a segfault (exit 139).
+//
+// `loadA` and `loadB` have no data dependency and no shared write resource (no arguments),
+// so the auto-parallel pass groups them as a Parallel pair. The entrypoint is `-> nothing`
+// (NOT `-> nothing errors`) — the errors are consumed at the call site with `.or(...)`.
+//
+// The integration test asserts byte-identical stdout under default and --no-auto-parallel
+// modes, both exit 0 with no segfault.
+//
+// Expected output: a:10\nb:20
+function loadA() -> int errors {
+  wait sleep(5)
+  return 10
+}
+
+function loadB() -> int errors {
+  wait sleep(5)
+  return 20
+}
+
+function entrypoint() -> nothing {
+  let a = loadA()
+  let b = loadB()
+  let av = a.or(0)
+  let bv = b.or(0)
+  print(`a:${av}`)
+  print(`b:${bv}`)
+}

@@ -1,0 +1,30 @@
+// v0.3-M3b Phase 2 fixture (e): large-copy warning fires when the compiler infers
+// `.copy` for a shape argument larger than 64 bytes.
+//
+// `BigRecord` has 9 int fields = 9 × 8 = 72 bytes > 64-byte threshold.
+// `value` is read after the spawn, so the compiler infers `.copy`.
+// EXPECTED: exit 0 (warnings do not block compilation), stderr includes
+// "Copying 72 bytes" warning diagnostic.
+
+shape BigRecord {
+  a: int
+  b: int
+  c: int
+  d: int
+  e: int
+  f: int
+  g: int
+  h: int
+  i: int
+}
+
+function process(record: BigRecord) -> nothing {
+  print(`${record.a}`)
+}
+
+function entrypoint() -> nothing {
+  let value: BigRecord = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9 }
+  background process(value)
+  // `value` is read after spawn — compiler infers .copy (large: 72 bytes → warning)
+  print(`${value.a}`)
+}

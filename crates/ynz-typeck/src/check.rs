@@ -8,7 +8,8 @@ use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 use crate::{
     builtins::{
-        array_method_return, fixed_method_return, map_method_return, maybe_method_return,
+        array_method_is_mutating, array_method_return, fixed_method_is_mutating,
+        fixed_method_return, map_method_is_mutating, map_method_return, maybe_method_return,
         sensitive_method_return, string_method_return,
     },
     generics::{
@@ -24,6 +25,23 @@ use crate::{
     types::{type_name, Type},
 };
 
+/// Inferred ownership for a plain-ident argument at a `background` call site.
+///
+/// `OwnershipModifier` (from ynz-ast) covers `Share / Lend / Give` — the three
+/// modifiers that appear in function signatures.  `background` inference additionally
+/// needs `Copy` (the argument is cloned because the caller reads the binding again
+/// after the spawn).  Rather than extend the AST enum (which is shared across all
+/// compiler passes), we keep this typeck-local enum.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BgOwnership {
+    /// Transfer ownership to the background task — the caller does not read the
+    /// binding again after this spawn.
+    Give,
+    /// Copy the value into the background task — the caller reads the binding after
+    /// the spawn, so the task needs its own independent copy.
+    Copy,
+}
+
 /// The type-annotated view of a module.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypedModule {
@@ -34,6 +52,16 @@ pub struct TypedModule {
     /// equals its leftmost child's span.start — the parent overwrites the child.
     /// The full `(start, end)` pair is unique per expression node.
     pub expr_types: std::collections::HashMap<(usize, usize), Type>,
+    /// Compiler-inferred ownership for each plain-ident argument at a
+    /// `background` call site, keyed by `(arg_span.start, arg_span.end)`.
+    ///
+    /// Only plain `Expr::Ident` arguments are recorded here — arguments already
+    /// written as `x.give` or `x.copy()` are handled by the postfix-op path and
+    /// are NOT re-inferred (explicit always wins over inferred).
+    ///
+    /// Used by `ownership_call_site_hints` to emit the inferred modifier as a
+    /// muted-text hint at the call site.
+    pub background_arg_inferred_ownership: std::collections::HashMap<(usize, usize), BgOwnership>,
 }
 
 /// Run the M5 type checker over all function bodies.
@@ -54,7 +82,6 @@ pub fn check(
     generic_shape_table: &GenericShapeTable,
     intrinsics: &PrimitiveIntrinsicTable,
     imported_options: &std::collections::HashMap<String, crate::options_table::OptionsEntry>,
-    imported_fn_names: HashSet<String>,
 ) -> (
     TypedModule,
     MonomorphizationTable,
@@ -96,12 +123,13 @@ pub fn check(
         inside_wait: false,
         inside_background: false,
         current_fn_suspends: false,
-        imported_fn_names,
+        bg_inferred: HashMap::new(),
     };
     checker.check_module(module);
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
+        background_arg_inferred_ownership: checker.bg_inferred,
     };
     (
         typed,
@@ -159,13 +187,13 @@ pub fn check_with_kernel_mode(
         inside_wait: false,
         inside_background: false,
         current_fn_suspends: false,
-        // Kernel-mode check uses no imported functions — only local fns are relevant.
-        imported_fn_names: HashSet::new(),
+        bg_inferred: HashMap::new(),
     };
     checker.check_module(module);
     let typed = TypedModule {
         module: module.clone(),
         expr_types: checker.expr_types,
+        background_arg_inferred_ownership: checker.bg_inferred,
     };
     (typed, checker.mono_table, checker.diags)
 }
@@ -271,9 +299,16 @@ struct Checker<'b> {
     /// (cross-module suspension propagation requires M8 binary package metadata and
     /// ships in M3).
     current_fn_suspends: bool,
-    /// Names of functions imported from other modules. Used to emit can't-infer
-    /// diagnostics when a cross-module callee is called from a suspending function.
-    imported_fn_names: HashSet<String>,
+
+    /// Inferred ownership modifier for each plain-ident argument at a `background` call site.
+    ///
+    /// Populated during `check_stmts` when a `Stmt::Expr(Expr::Background(...))` is
+    /// encountered. The key is `(arg_span.start, arg_span.end)`. Accumulates across all
+    /// function bodies in the module. Moved into `TypedModule` when the check pass completes.
+    ///
+    /// Only plain `Expr::Ident` args are recorded — explicit `.give`/`.copy()` postfix
+    /// args are handled by the postfix-op path; explicit always wins over inferred.
+    bg_inferred: HashMap<(usize, usize), BgOwnership>,
 }
 
 impl<'b> Checker<'b> {
@@ -393,6 +428,7 @@ impl<'b> Checker<'b> {
                     ty: param_ty,
                     is_const: false,
                     is_param: true,
+                    param_ownership: param.ownership.clone(),
                     is_loop_var: false,
                     is_consumed: false,
                     defined_at: param.name_span.clone(),
@@ -1090,6 +1126,7 @@ impl<'b> Checker<'b> {
                     ty: param_ty,
                     is_const: false,
                     is_param: true,
+                    param_ownership: param.ownership.clone(),
                     is_loop_var: false,
                     is_consumed: false,
                     defined_at: param.name_span.clone(),
@@ -1111,7 +1148,8 @@ impl<'b> Checker<'b> {
         // subsequent statements in this block.
         let mut early_return_narrowed: Vec<String> = Vec::new();
 
-        for stmt in stmts {
+        // Indexed iteration so that `background` inference can look at stmts[i+1..].
+        for (i, stmt) in stmts.iter().enumerate() {
             // Apply any early-return narrowing facts from previous `if (!x.exists()) { return }`.
             for name in &early_return_narrowed {
                 self.maybe_non_none.insert(name.clone());
@@ -1119,6 +1157,57 @@ impl<'b> Checker<'b> {
 
             match stmt {
                 Stmt::Expr(expr) => {
+                    // Give/copy inference for `background fn(x)` plain-ident arguments.
+                    //
+                    // Safe direction: if we cannot prove the binding is dead after the spawn,
+                    // infer `.copy` (caller keeps original, task gets its own copy). Only infer
+                    // `.give` when we can prove the binding is NOT read in any remaining statement.
+                    if let Expr::Background(inner, _) = expr {
+                        if let Expr::Call(call) = inner.as_ref() {
+                            let remaining = &stmts[i + 1..];
+                            // Only infer for plain Expr::Ident args — explicit .give/.copy()
+                            // postfix args are handled by the postfix-op path; explicit wins.
+                            let mut gives: Vec<String> = Vec::new();
+                            for arg in &call.args {
+                                if let Expr::Ident(name, span) = arg {
+                                    let used_after = remaining
+                                        .iter()
+                                        .any(|s| ident_read_in_stmt(s, name.as_str()));
+                                    let inferred = if used_after {
+                                        BgOwnership::Copy
+                                    } else {
+                                        BgOwnership::Give
+                                    };
+                                    self.bg_inferred
+                                        .insert((span.start, span.end), inferred.clone());
+                                    if inferred == BgOwnership::Give {
+                                        gives.push(name.clone());
+                                    }
+                                }
+                            }
+                            // Infer_expr runs first (for diagnostics / type registration),
+                            // then we consume the .give bindings so any subsequent stmt
+                            // that reads the binding triggers the use-after-give error.
+                            self.infer_expr(expr, None);
+                            for name in &gives {
+                                // `ident_read_in_stmt` does not distinguish `const` from `let`,
+                                // so a `const` binding not read after spawn would reach this
+                                // path. Consuming a `const` would incorrectly block re-reads in
+                                // later statements (const values are always live). The
+                                // `!entry.is_const` guard is intentionally unreachable via the
+                                // give-inference liveness walk for any well-typed program —
+                                // it exists as a conservative backstop for future liveness
+                                // changes that might re-derive give candidates without the
+                                // const distinction.
+                                if let Some(entry) = self.scope.lookup(name.as_str()) {
+                                    if !entry.is_const && !entry.is_consumed {
+                                        self.scope.consume(name.as_str());
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+                    }
                     self.infer_expr(expr, None);
                 }
                 Stmt::Let {
@@ -1226,6 +1315,7 @@ impl<'b> Checker<'b> {
                     ty: Type::Error,
                     is_const,
                     is_param: false,
+                    param_ownership: None,
                     is_loop_var: false,
                     is_consumed: false,
                     defined_at: name_span.clone(),
@@ -1277,6 +1367,7 @@ impl<'b> Checker<'b> {
                 ty: binding_ty,
                 is_const,
                 is_param: false,
+                param_ownership: None,
                 is_loop_var: false,
                 is_consumed: false,
                 defined_at: name_span.clone(),
@@ -1653,6 +1744,7 @@ impl<'b> Checker<'b> {
                 ty: elem_ty,
                 is_const: false,
                 is_param: false,
+                param_ownership: None,
                 is_loop_var: true,
                 is_consumed: false,
                 defined_at: var_span.clone(),
@@ -1830,11 +1922,54 @@ impl<'b> Checker<'b> {
                 ..
             } => {
                 let receiver_ty = self.infer_expr(receiver, None);
+                // EC-specific methods on a let/const-bound ErrorsCapable value inside an
+                // errors-capable function: resolve_ident auto-propagates the binding from
+                // ErrorsCapable<T> → T (so the compiler can insert early-return IR). That
+                // means receiver_ty here is the bare inner type, and check_method_call
+                // cannot find .or/.failed/.message etc. on it.
+                //
+                // Restore the full ErrorsCapable<T> for dispatch when ALL of:
+                //   (a) the method is one of the EC-specific set,
+                //   (b) the inferred receiver_ty is NOT already ErrorsCapable (was auto-stripped),
+                //   (c) the receiver is a bare Ident whose SCOPE ENTRY still carries ErrorsCapable.
+                //
+                // This is a narrow, targeted fix — it does not affect normal value-context
+                // auto-propagation (check_user_fn_call etc.) or non-EC method dispatch.
+                const EC_METHODS: &[&str] =
+                    &["or", "failed", "message", "suggestions", "trace", "source"];
+                let effective_receiver_ty = if !matches!(receiver_ty, Type::ErrorsCapable { .. })
+                    && EC_METHODS.contains(&method.as_str())
+                {
+                    if let Expr::Ident(ident_name, ident_span) = receiver.as_ref() {
+                        if let Some(entry) = self.scope.lookup(ident_name) {
+                            if matches!(entry.ty, Type::ErrorsCapable { .. }) {
+                                // Restore the ErrorsCapable type for EC-method dispatch.
+                                // Auto-propagation in resolve_ident already stripped the type
+                                // and wrote the bare inner type into expr_types. Overwrite that
+                                // entry with the full ErrorsCapable type so codegen reads the
+                                // right ABI ({i64,i64} pair) when lowering the EC method call.
+                                let ec_ty = entry.ty.clone();
+                                self.expr_types
+                                    .insert((ident_span.start, ident_span.end), ec_ty.clone());
+                                ec_ty
+                            } else {
+                                receiver_ty
+                            }
+                        } else {
+                            receiver_ty
+                        }
+                    } else {
+                        receiver_ty
+                    }
+                } else {
+                    receiver_ty
+                };
                 // M4 P5: one-arg intrinsic methods (wrapping/saturating arithmetic).
                 // Must NOT use `return` here — the match value feeds expr_types.insert below.
                 if args.len() == 1 {
-                    if let Some((expected_arg_ty, ret_ty)) =
-                        self.intrinsics.lookup_method_1arg(&receiver_ty, method)
+                    if let Some((expected_arg_ty, ret_ty)) = self
+                        .intrinsics
+                        .lookup_method_1arg(&effective_receiver_ty, method)
                     {
                         let expected = expected_arg_ty.clone();
                         let actual = self.infer_expr(&args[0], Some(&expected));
@@ -1851,13 +1986,23 @@ impl<'b> Checker<'b> {
                         for arg in args.iter() {
                             self.infer_expr(arg, None);
                         }
-                        self.check_method_call(&receiver_ty, Some(receiver), method, method_span)
+                        self.check_method_call(
+                            &effective_receiver_ty,
+                            Some(receiver),
+                            method,
+                            method_span,
+                        )
                     }
                 } else {
                     for arg in args.iter() {
                         self.infer_expr(arg, None);
                     }
-                    self.check_method_call(&receiver_ty, Some(receiver), method, method_span)
+                    self.check_method_call(
+                        &effective_receiver_ty,
+                        Some(receiver),
+                        method,
+                        method_span,
+                    )
                 }
             }
 
@@ -2013,7 +2158,11 @@ impl<'b> Checker<'b> {
                         "Remove the keyword or build without `--kernel`. Kernel-mode programs run without a scheduler runtime.",
                         "The thread-pool runtime that powers `wait` does not run in kernel mode. See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
                     ));
-                    return self.infer_expr(inner, hint);
+                    // Return Type::Error without recursing into the inner expression. Recursing
+                    // would visit the inner Expr::Call and trigger the call-dispatch kernel guard,
+                    // emitting a second diagnostic for the same site. One diagnostic per site is
+                    // the contract — the `wait` rejection already names the cause.
+                    return Type::Error;
                 }
                 // `wait` must be followed by a call expression.
                 // `wait background X()` is a parser error (background is statement-position only),
@@ -2113,14 +2262,14 @@ impl<'b> Checker<'b> {
                     }
                 }
 
-                // Large-copy warning (Tier 3 lint): warn when a `.copy` arg is a shape
-                // with estimated size > 64 bytes.
+                // Large-copy warning (Tier 3 lint): warn when a `.copy` arg (explicit or
+                // inferred) is a shape with estimated size > 64 bytes.
                 // Size estimate: each field = 8 bytes (all values are i64-sized in the
                 // background ctx ABI). Threshold matches cache-line size.
                 const BACKGROUND_LARGE_COPY_BYTES: usize = 64;
                 if let Expr::Call(call) = inner.as_ref() {
                     for arg in &call.args {
-                        // A `.copy` arg is PostfixOp { op: Copy, receiver }
+                        // Explicit `.copy` postfix: PostfixOp { op: Copy, receiver }
                         if let Expr::PostfixOp { op, receiver, .. } = arg {
                             if *op == ynz_ast::nodes::PostfixOpKind::Copy {
                                 let arg_ty = self.infer_expr(receiver, None);
@@ -2129,8 +2278,25 @@ impl<'b> Checker<'b> {
                                     self.diags.push(Diagnostic::warning(
                                         arg.span().clone(),
                                         format!("Copying {} bytes into a background task.", size),
-                                        "Pass ownership with `background fn(value.give)` if you don't need the value after. Click `.give` to apply.",
-                                        "`.give` transfers ownership without copying. Auto-detection of unused-after-call ships in v0.3-M3b; until then, the choice is yours to make explicit.",
+                                        "If you don't need the value after the spawn, remove the `.copy()` — the compiler will transfer ownership to the task without copying.",
+                                        "Transferring ownership is faster than copying for large values — the compiler does it automatically when the value is not used after the spawn. Use `.copy()` only when you need to keep using the value in the caller after the spawn.",
+                                    ));
+                                }
+                            }
+                        }
+                        // Compiler-chosen `.copy` for plain Ident args where the value is
+                        // read again after the spawn (so the task needs its own independent copy).
+                        if let Expr::Ident(_, span) = arg {
+                            let key = (span.start, span.end);
+                            if matches!(self.bg_inferred.get(&key), Some(BgOwnership::Copy)) {
+                                let arg_ty = self.infer_expr(arg, None);
+                                let size = self.estimate_type_size_bytes(&arg_ty);
+                                if size > BACKGROUND_LARGE_COPY_BYTES {
+                                    self.diags.push(Diagnostic::warning(
+                                        arg.span().clone(),
+                                        format!("Copying {} bytes into a background task (the compiler chose copy because the value is used after the spawn).", size),
+                                        "If you don't need the value after the spawn, restructure so the value is not read again — the compiler will transfer ownership instead of copying.",
+                                        "When a value is not read after the spawn point, the compiler transfers ownership to the background task without copying. When the value IS read after the spawn, the compiler makes a copy so both the caller and the task have their own independent value.",
                                     ));
                                 }
                             }
@@ -2371,31 +2537,27 @@ impl<'b> Checker<'b> {
                     let ownerships = sig.param_ownerships.clone();
                     let ret = sig.ret.clone();
                     let callee_suspends = sig.suspends;
-                    let callee_is_cross_module = self.imported_fn_names.contains(name);
 
-                    // Can't-infer: the caller independently suspends (reaches an intra-unit
-                    // `sleep` transitively) AND makes a cross-module call the analysis
-                    // can't traverse. This is the design-correct M2 gate from
-                    // design/future/concurrency.md:61-67 — cross-module suspension propagation
-                    // requires M8 binary package metadata and ships in M3. When the caller does
-                    // NOT independently suspend, the cross-module callee is treated as a
-                    // non-suspending leaf (the M2 intentional under-approximation).
-                    if callee_is_cross_module && self.current_fn_suspends {
+                    // Cross-module calls are resolved: `check_query` on the imported module
+                    // sets `callee_suspends` correctly via the may-block fixpoint seeded by
+                    // `imported_suspending_names`. No can't-infer error is emitted here —
+                    // the call graph is fully traversable across module boundaries.
+
+                    // Kernel-mode rejection for bare suspending calls. Every Yinz suspending
+                    // call auto-suspends without an explicit `wait` keyword — the no-coloring
+                    // model. The `wait`/`background`/`sleep` arms above each reject under kernel
+                    // mode. This arm must also reject any suspending user-defined callee (bare
+                    // auto-suspension form) to close the gap: a bare cross-module suspending
+                    // call must not reach codegen under --kernel. Exactly ONE diagnostic per
+                    // call site: when the call is under a `wait` that already rejected (the
+                    // `Expr::Wait` arm returns early after emitting its error), this code is not
+                    // reached, so there is no double-report.
+                    if self.kernel_mode && callee_suspends {
                         self.diags.push(Diagnostic::error(
                             call.span.clone(),
-                            format!(
-                                "Can't determine whether `{name}` suspends — it's a \
-                                 cross-module call the compiler can't analyze in one unit."
-                            ),
-                            format!(
-                                "Make the boundary explicit: keep `{name}` in the same file, \
-                                 or restructure so the call doesn't cross a module boundary \
-                                 from inside a suspending function."
-                            ),
-                            "v0.3-M2 analyzes one compilation unit. Cross-module suspension \
-                             propagation ships in v0.3-M3b via the M8 multi-file query. \
-                             Until then, external calls from suspending functions must be \
-                             intra-unit — externals are the user's responsibility.",
+                            format!("`{name}` suspends, which is not available in --kernel mode."),
+                            format!("Remove the call to `{name}` or build without `--kernel`. Kernel-mode programs run without a scheduler runtime."),
+                            "Suspension requires the thread-pool runtime, which does not run in kernel mode. See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
                         ));
                     }
 
@@ -2659,6 +2821,15 @@ impl<'b> Checker<'b> {
                             format!("Declare `{binding_name}` with `let` if you need to transfer ownership."),
                             "`const` bindings are fully read-only — the compiler cannot transfer ownership of a value that may not change.",
                         ));
+                    } else if entry.param_ownership
+                        == Some(ynz_ast::nodes::OwnershipModifier::Share)
+                    {
+                        self.diags.push(Diagnostic::error(
+                            arg_span.clone(),
+                            format!("`{binding_name}` is declared `share` (read-only); `{fn_name}` needs to take ownership of it (`give`)."),
+                            format!("Declare `{binding_name}` as `give` to pass it here."),
+                            "A `share` parameter is a read-only borrow — the caller still owns the value and trusts it is unchanged after the call. A function that takes ownership of a value would consume it, which a read-only borrow does not permit.",
+                        ));
                     } else if !entry.is_consumed {
                         self.scope.consume(binding_name);
                     }
@@ -2672,6 +2843,18 @@ impl<'b> Checker<'b> {
                             format!("`{binding_name}` is `const` — `{fn_name}` needs to mutate it but `const` blocks mutation."),
                             format!("Declare `{binding_name}` with `let` if you need `{fn_name}` to modify it."),
                             "`const` bindings cannot be lent for mutation. The `lend` modifier means the function will write to the value.",
+                        ));
+                    } else if entry.param_ownership
+                        == Some(ynz_ast::nodes::OwnershipModifier::Share)
+                    {
+                        // share→lend escalation (`design/concurrency.md` line 651): a function
+                        // that receives a value as `share` (read-only) cannot lend it mutably
+                        // to a callee. This is the load-bearing auto-parallel soundness rule.
+                        self.diags.push(Diagnostic::error(
+                            arg_span.clone(),
+                            format!("`{binding_name}` is declared `share` (read-only); `{fn_name}` needs to modify it (`lend`)."),
+                            format!("Declare `{binding_name}` as `lend` to pass it here."),
+                            "A `share` parameter is a read-only borrow — the caller keeps ownership and trusts the value is unchanged after the call. Passing it where the value will be modified would break that promise; declare `lend` so the change is visible at every call site.",
                         ));
                     }
                 }
@@ -2956,6 +3139,25 @@ impl<'b> Checker<'b> {
 
     /// Type-check a call to a generic function, performing type inference and
     /// constraint checking, then recording the instantiation in the MonomorphizationTable.
+    ///
+    /// # Kernel-mode suspension
+    ///
+    /// No kernel-mode rejection guard here. `GenericFnSig` carries no `suspends` flag —
+    /// Yinz generics currently cannot propagate suspension through type parameters because
+    /// monomorphization is resolved at instantiation time, after the may-block fixpoint runs.
+    /// The gap is vacuously safe today: no generic function in the current language surface
+    /// can reach a suspension point through a type parameter.
+    ///
+    /// What: kernel-mode rejection for suspending generic instantiations.
+    /// Why deferred: `GenericFnSig` has no `suspends` field; threading may-block analysis
+    ///   through generic instantiation is a v0.4 generics-overhaul concern (~1 session of
+    ///   work: add `pub suspends: bool` to `GenericFnSig`, propagate in may_block::analyze,
+    ///   mirror the guard from the `Expr::Call name =>` arm at line ~2439 here).
+    /// Cost if left unfixed: a generic function that reaches suspension would bypass the
+    ///   kernel guard and reach codegen under --kernel; codegen would emit a runtime call
+    ///   that panics because no scheduler is running.
+    /// Trigger: any generic monomorphization where the instantiated call graph sets
+    ///   `suspends=true` — requires v0.4 generic+suspension to be possible first.
     fn check_generic_fn_call(&mut self, call: &CallExpr, name: &str, sig: &GenericFnSig) -> Type {
         let non_self_params: Vec<(String, Type)> = sig
             .params
@@ -3151,6 +3353,17 @@ impl<'b> Checker<'b> {
         // M5 P3b: built-in collection method dispatch.
         if let Type::BuiltinArray { elem } = receiver_ty {
             let elem = elem.as_ref().clone();
+            // An in-place mutator (`.add`/`.set`/`.remove`/…) writes the receiver — reject it
+            // on a `share` parameter or `const` binding, the same as a direct element assign.
+            if self.reject_mutating_collection_method(
+                receiver_expr,
+                method,
+                "elements",
+                array_method_is_mutating(method),
+                method_span,
+            ) {
+                return Type::Nothing;
+            }
             return if let Some(ret) = array_method_return(method, &elem) {
                 ret
             } else {
@@ -3165,6 +3378,15 @@ impl<'b> Checker<'b> {
         }
         if let Type::BuiltinFixed { elem, .. } = receiver_ty {
             let elem = elem.as_ref().clone();
+            if self.reject_mutating_collection_method(
+                receiver_expr,
+                method,
+                "elements",
+                fixed_method_is_mutating(method),
+                method_span,
+            ) {
+                return Type::Nothing;
+            }
             return if let Some(ret) = fixed_method_return(method, &elem) {
                 ret
             } else {
@@ -3194,6 +3416,15 @@ impl<'b> Checker<'b> {
         if let Type::BuiltinMap { key, val } = receiver_ty {
             let key = key.as_ref().clone();
             let val = val.as_ref().clone();
+            if self.reject_mutating_collection_method(
+                receiver_expr,
+                method,
+                "entries",
+                map_method_is_mutating(method),
+                method_span,
+            ) {
+                return Type::Nothing;
+            }
             return if let Some(ret) = map_method_return(method, &key, &val) {
                 ret
             } else {
@@ -3284,6 +3515,20 @@ impl<'b> Checker<'b> {
                                     recv_expr.span(),
                                 );
                             }
+                        }
+                        // Kernel-mode rejection for UFCS suspending method calls. The
+                        // bare call-dispatch arm guards `Expr::Call name =>` at the call site;
+                        // UFCS calls route through this path and need the same guard so that
+                        // `player.longJob()` (sugar for `longJob(player)`) is also rejected
+                        // under --kernel when the resolved function suspends.
+                        if self.kernel_mode && sig.suspends {
+                            self.diags.push(Diagnostic::error(
+                                method_span.clone(),
+                                format!("`{method}` suspends, which is not available in --kernel mode."),
+                                format!("Remove the call to `{method}` or build without `--kernel`. Kernel-mode programs run without a scheduler runtime."),
+                                "Suspension requires the thread-pool runtime, which does not run in kernel mode. See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
+                            ));
+                            return sig.ret.clone();
                         }
                         return sig.ret.clone();
                     }
@@ -4543,6 +4788,90 @@ impl<'b> Checker<'b> {
     }
 
     /// Type-check a field assignment `target.field = value`.
+    /// Reject a write through a `share`-declared parameter.
+    ///
+    /// `design/ownership.md` (line 41) requires the compiler to verify that an explicit
+    /// ownership modifier matches the body's use of the parameter. A `share` parameter is a
+    /// read-only borrow — the caller keeps ownership and trusts the value is unchanged after
+    /// the call (`design/concurrency.md` line 651 makes this the auto-parallel soundness
+    /// premise). Mutating a field or element of a `share` parameter contradicts that promise.
+    ///
+    /// A *bare* parameter (no explicit modifier) that the body mutates is LEGAL — the compiler
+    /// figures out the effective modifier (`lend`) from the body. Only an explicitly-declared
+    /// `share` parameter (including `share self`) is the contradiction.
+    ///
+    /// Returns `true` when a diagnostic was emitted (the caller skips downstream type-checking
+    /// of the assignment, mirroring the `const` reject); `false` otherwise.
+    ///
+    /// `kind` is the word for what is being changed (`"fields"` for field writes, `"elements"`
+    /// for index/element writes) so the diagnostic reads accurately at each call site.
+    fn reject_share_param_mutation(
+        &mut self,
+        root_name: &str,
+        kind: &str,
+        span: &SourceSpan,
+    ) -> bool {
+        let Some(entry) = self.scope.lookup(root_name) else {
+            return false;
+        };
+        if entry.param_ownership != Some(ynz_ast::nodes::OwnershipModifier::Share) {
+            return false;
+        }
+        let value_ty = type_name(&entry.ty);
+        self.diags.push(Diagnostic::error(
+            span.clone(),
+            format!("`{root_name}` is declared `share` — read-only — so its {kind} cannot be changed."),
+            format!("Change the parameter to `lend {root_name}: {value_ty}` if this function needs to modify it."),
+            "A `share` parameter is a read-only borrow: the caller keeps ownership and trusts the value is unchanged after the call. When a function modifies a value, declare `lend` so the change is visible at every call site.",
+        ));
+        true
+    }
+
+    /// Reject an in-place collection mutator (`array.add`/`map.set`/`fixed.set`/…) called on a
+    /// receiver whose binding cannot be mutated — a `const` binding or a `share`-declared
+    /// parameter (including `share self`).
+    ///
+    /// A mutating method writes its receiver in place, exactly like a field or element assign.
+    /// The pure-named-method contract (`stdlib-design.md` Rule 1) guarantees that only the
+    /// methods named in `*_method_is_mutating` change the receiver; read methods (`.get`,
+    /// `.count`, `.contains`) leave it unchanged and are never rejected here. `kind` is the word
+    /// for what is being changed (`"elements"` for arrays/fixed, `"entries"` for maps) so the
+    /// reused `share` diagnostic reads accurately.
+    ///
+    /// Returns `true` when a diagnostic was emitted (the caller returns `Type::Nothing` without
+    /// running the rest of the method dispatch); `false` otherwise.
+    fn reject_mutating_collection_method(
+        &mut self,
+        receiver_expr: Option<&Expr>,
+        method: &str,
+        kind: &str,
+        is_mutating: bool,
+        span: &SourceSpan,
+    ) -> bool {
+        if !is_mutating {
+            return false;
+        }
+        let Some(recv) = receiver_expr else {
+            return false;
+        };
+        let Some(root_name) = root_binding_name(recv) else {
+            return false;
+        };
+        let Some(entry) = self.scope.lookup(root_name) else {
+            return false;
+        };
+        if entry.is_const {
+            self.diags.push(Diagnostic::error(
+                span.clone(),
+                format!("`{root_name}` is `const` so `.{method}()` cannot change its {kind}."),
+                format!("Declare it with `let` instead: `let {root_name} = ...`"),
+                "`const` bindings are fully read-only — no reassignment, no field changes, no element writes. A method that adds, removes, or replaces items writes the value in place, which `const` does not permit. Use `let` for collections that need to change.",
+            ));
+            return true;
+        }
+        self.reject_share_param_mutation(root_name, kind, span)
+    }
+
     fn check_field_assign(&mut self, target: &Expr, value: &Expr, span: &SourceSpan) {
         let Expr::FieldAccess {
             receiver,
@@ -4560,17 +4889,25 @@ impl<'b> Checker<'b> {
         // The receiver must be a mutable (let-bound, non-const) shape value.
         // Walk the receiver chain to find the root binding and check it.
         if let Some(root_name) = root_binding_name(receiver) {
-            if let Some(entry) = self.scope.lookup(root_name) {
-                if entry.is_const {
-                    self.diags.push(Diagnostic::error(
-                        span.clone(),
-                        format!("`{root_name}` is `const` and its fields cannot be changed."),
-                        format!("Declare it with `let` instead: `let {root_name}: ShapeType = {{ ... }}`"),
-                        "`const` bindings are fully read-only — no reassignment, no field mutation. Use `let` for values that need to change.",
-                    ));
-                    self.infer_expr(value, None);
-                    return;
-                }
+            let is_const = self
+                .scope
+                .lookup(root_name)
+                .is_some_and(|entry| entry.is_const);
+            if is_const {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("`{root_name}` is `const` and its fields cannot be changed."),
+                    format!("Declare it with `let` instead: `let {root_name}: ShapeType = {{ ... }}`"),
+                    "`const` bindings are fully read-only — no reassignment, no field mutation. Use `let` for values that need to change.",
+                ));
+                self.infer_expr(value, None);
+                return;
+            }
+            // A `share` parameter is a read-only borrow — mutating a field contradicts the
+            // ownership promise the caller relies on (`design/ownership.md` line 41).
+            if self.reject_share_param_mutation(root_name, "fields", span) {
+                self.infer_expr(value, None);
+                return;
             }
         }
 
@@ -4710,17 +5047,25 @@ impl<'b> Checker<'b> {
         // const-deep-immutability: reject element writes on const-bound collections,
         // mirroring the same guard in check_field_assign.
         if let Some(root_name) = root_binding_name(receiver) {
-            if let Some(entry) = self.scope.lookup(root_name) {
-                if entry.is_const {
-                    self.diags.push(Diagnostic::error(
-                        span.clone(),
-                        format!("`{root_name}` is `const` and its elements cannot be changed."),
-                        format!("Declare it with `let` instead: `let {root_name}: array<...> = [...]`"),
-                        "`const` bindings are fully read-only — no reassignment, no field changes, no element writes. Use `let` for values that need to change.",
-                    ));
-                    self.infer_expr(value, None);
-                    return;
-                }
+            let is_const = self
+                .scope
+                .lookup(root_name)
+                .is_some_and(|entry| entry.is_const);
+            if is_const {
+                self.diags.push(Diagnostic::error(
+                    span.clone(),
+                    format!("`{root_name}` is `const` and its elements cannot be changed."),
+                    format!("Declare it with `let` instead: `let {root_name}: array<...> = [...]`"),
+                    "`const` bindings are fully read-only — no reassignment, no field changes, no element writes. Use `let` for values that need to change.",
+                ));
+                self.infer_expr(value, None);
+                return;
+            }
+            // A `share` parameter is a read-only borrow — writing an element contradicts the
+            // ownership promise the caller relies on (`design/ownership.md` line 41).
+            if self.reject_share_param_mutation(root_name, "elements", span) {
+                self.infer_expr(value, None);
+                return;
             }
         }
 
@@ -5947,6 +6292,59 @@ fn param_has_nested_let_shadow(stmts: &[Stmt], target: &str) -> bool {
         }
     }
     false
+}
+
+/// Returns `true` if `stmt` contains ANY read of the identifier `name` — conservative
+/// (may report true for shadowed names in nested scopes).
+///
+/// Used for `background` give/copy inference: safe direction is `.copy` (do not
+/// consume the binding) whenever we cannot PROVE the name is dead after the spawn.
+/// A false positive here only costs a copy (the safe choice); a false negative
+/// (`.give` on a still-live binding) would be a use-after-move bug.
+///
+/// Time: O(stmt nodes).  Space: O(1).
+fn ident_read_in_stmt(stmt: &Stmt, name: &str) -> bool {
+    match stmt {
+        Stmt::Expr(e) => expr_refs_ident(e, name),
+        Stmt::Let { value, .. } | Stmt::Assign { value, .. } => expr_refs_ident(value, name),
+        Stmt::Return { value, .. } => value.as_ref().is_some_and(|e| expr_refs_ident(e, name)),
+        Stmt::FieldAssign { target, value, .. } => {
+            expr_refs_ident(target, name) || expr_refs_ident(value, name)
+        }
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => {
+            expr_refs_ident(receiver, name)
+                || expr_refs_ident(index, name)
+                || expr_refs_ident(value, name)
+        }
+        Stmt::If { cond, body, .. } => {
+            expr_refs_ident(cond, name) || body.stmts.iter().any(|s| ident_read_in_stmt(s, name))
+        }
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
+            expr_refs_ident(scrutinee, name)
+                || arms
+                    .iter()
+                    .any(|arm| arm.body.stmts.iter().any(|s| ident_read_in_stmt(s, name)))
+                || else_arm
+                    .as_ref()
+                    .is_some_and(|b| b.stmts.iter().any(|s| ident_read_in_stmt(s, name)))
+        }
+        Stmt::While { cond, body, .. } => {
+            expr_refs_ident(cond, name) || body.stmts.iter().any(|s| ident_read_in_stmt(s, name))
+        }
+        Stmt::For { iter, body, .. } => {
+            expr_refs_ident(iter, name) || body.stmts.iter().any(|s| ident_read_in_stmt(s, name))
+        }
+    }
 }
 
 /// Returns `true` if `stmt` references `target` in a context where the reference
@@ -8022,7 +8420,6 @@ mod tests {
             &generic_shape_table,
             &intrinsics,
             &std::collections::HashMap::new(),
-            std::collections::HashSet::new(),
         );
         let diags: Vec<_> = diags.into_iter().collect();
         assert_eq!(

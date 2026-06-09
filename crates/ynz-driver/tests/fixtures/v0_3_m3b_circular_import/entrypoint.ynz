@@ -1,0 +1,8 @@
+// Circular import danger case (e): entrypoint imports a_module which imports
+// b_module which imports a_module back. The compiler must exit 1 with a clean
+// WHAT/WHAT-INSTEAD/WHY diagnostic, not panic with an ICE.
+import { aFunc } from `a_module`
+
+function entrypoint() -> nothing {
+  aFunc()
+}

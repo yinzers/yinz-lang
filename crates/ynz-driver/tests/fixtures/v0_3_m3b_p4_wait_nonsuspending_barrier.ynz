@@ -1,0 +1,29 @@
+// Fixture (adversarial iii): `wait` on a non-suspending callee still acts as
+// an ordering barrier — it joins any prior in-flight auto-parallel work first.
+//
+// `fetcher` suspends (uses sleep). `pureCpu` does NOT suspend — it is pure
+// computation. The explicit `wait pureCpu()` forces the barrier:
+//   1. Any prior in-flight `fetcher()` group completes (joined).
+//   2. `pureCpu()` runs.
+//   3. Continuation proceeds.
+//
+// Without the `wait`, `fetcher` could run concurrently with the following
+// statement. With `wait pureCpu()` as a barrier, the prior group is joined
+// before `pureCpu` begins. The output must be ordered: fetched\ncpu\ndone.
+//
+// Expected output: fetched\ncpu\ndone
+function fetcher() -> nothing {
+  wait sleep(10)
+  print(`fetched`)
+}
+
+function pureCpu(n: int) -> int {
+  return n * 2
+}
+
+function entrypoint() -> nothing {
+  fetcher()
+  let result = wait pureCpu(21)
+  print(`cpu`)
+  print(`done`)
+}

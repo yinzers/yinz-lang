@@ -32,8 +32,10 @@ Three things Rust gave up that Yinz keeps:
 
 1. The compiler builds a call graph for every function in the program (Yinz code + Yinz packages — see `packages.md` for the binary metadata that makes cross-package analysis work).
 2. For each function, the compiler determines whether it transitively calls any I/O intrinsic, FFI function marked `may-block`, or `wait`-expression. The "may-block" property propagates up the call graph.
-3. At every call site to a may-block function, the compiler INSERTS a `wait` suspension point in the codegen.
-4. The IDE protocol shows the inserted `wait` as muted text before the call expression. The user can type `wait` explicitly to make it visible in source.
+3. At every call site to a may-block function, the compiler emits a **suspension point** in the codegen. This is the no-coloring mechanism — automatic, never typed by the user.
+4. The IDE protocol shows the inferred suspension as the muted `wait_points` hint before the call expression.
+
+> **Suspension ≠ the `wait` keyword.** The auto-emitted suspension point above is about *suspension correctness* (handing the thread back to the scheduler) — the user never writes `wait` for it. The user-written `wait` keyword is a separate, additional thing: an **ordering barrier** the user adds to force a happens-before between otherwise-independent operations the compiler can't infer. Both are spelled `wait`, but suspension is automatic and ordering is the keyword's only manual job. The authoritative model is `design/concurrency.md` → "Suspension vs. Ordering — What's Automatic and What `wait` Does (LOCKED 2026-06-05)".
 
 ### Runtime
 

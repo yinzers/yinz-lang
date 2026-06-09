@@ -1,0 +1,3 @@
+[project]
+name = "v0_3_m3e_double_call_crossing_local"
+entry = "entrypoint.ynz"

@@ -1,0 +1,8 @@
+// Namespace-import rejection fixture: a cross-module suspending call via namespace syntax.
+// ops.runTask() fails at typeck ("not defined") — namespace member-calls are a general
+// Yinz limitation, not wired yet. The call never reaches codegen, so no SIGILL is possible.
+import ops from `task_ops`
+
+function entrypoint() -> nothing {
+  ops.runTask()
+}

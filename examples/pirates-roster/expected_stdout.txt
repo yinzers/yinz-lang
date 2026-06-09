@@ -86,13 +86,13 @@ main done with v0.3-M1
 
 v0.3-M2 — wait actually suspends (8 pirates, ~100ms total):
 scheduling 8 pirates...
-Clemente: done
-Bonds: done
 Stargell: done
-Mazeroski: done
-Kiner: done
 Wagner: done
 Beaumont: done
+Mazeroski: done
+Bonds: done
+Clemente: done
+Kiner: done
 McCutchen: done
 all 8 pirates done
 
@@ -115,3 +115,20 @@ crew ready: 3
 
 v0.3-M3a Phase 4 — for-loop + crossing-local suspension (5 scouts, ~25ms total):
 scout total: 438
+
+v0.3-M3e — cross-module suspension (scouting grades from services/scouting):
+McCutchen: A — elite
+Clemente: B — average
+roster A-grade count: 2
+
+v0.3-M3b — auto-parallel: two independent price fetches overlap (~60ms, not ~120ms):
+lower bowl ticket: 24.50
+upper deck ticket: 31.75
+
+v0.3-M3b — wait orders two side effects:
+Maz: done
+Clemente: done
+
+v0.3-M3b — background give/copy inference:
+main keeps the promo handle: bobblehead_night
+promo logged: bobblehead_night

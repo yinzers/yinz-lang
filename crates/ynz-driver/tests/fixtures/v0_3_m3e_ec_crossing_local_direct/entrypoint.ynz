@@ -1,0 +1,19 @@
+// M3e danger-matrix: errors-capable × crossing-local × direct (escape #3).
+// An int crossing-local lives across a cross-module errors-capable suspending call.
+// The {i64, i64} EC result ABI stacks on top of the caller's frame slots; the composed
+// frame must reserve space for both the EC staging slot and the crossing-local int slot.
+// Expected output: "before: 5\nresult: 99\nafter: 5"
+import { compute } from `ec_ops`
+
+function caller() -> nothing {
+  let x: int = 5
+  print(`before: ${x.toString()}`)
+  const result = compute()
+  const v = result.or(0)
+  print(`result: ${v.toString()}`)
+  print(`after: ${x.toString()}`)
+}
+
+function entrypoint() -> nothing {
+  caller()
+}

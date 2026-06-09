@@ -23,6 +23,45 @@ Most developers don't bother parallelizing reads — they write sequential code 
 
 ---
 
+## Suspension vs. Ordering — What's Automatic and What `wait` Does (LOCKED 2026-06-05)
+
+This is the authoritative statement of what `wait` means. Two different jobs were historically conflated — they are separate, and only the second is `wait`'s job.
+
+**Suspension is automatic. You never write `wait` for it.** A call that can block (transitively reaches an I/O / may-block operation — in v0.3 that is `sleep`) is compiled into a suspension point by the compiler's whole-program may-block analysis (no function coloring — see `design/future/concurrency.md`). The function suspends and hands its thread back to the scheduler automatically. The IDE shows the inferred suspension as the muted `wait_points` hint. The user does **not** type `wait` to make a call suspend correctly — that shipped in v0.3-M2.
+
+**Ordering is also mostly automatic.** The compiler orders operations it can prove are dependent:
+- **Data dependency** — if B uses A's result, B waits for A. (No `wait` needed.)
+- **Same-resource ownership** — two writes to the same `lend` target are sequenced. (No `wait` needed.)
+- **Independent operations run concurrently** — reads, and writes to *different* resources, with no data dependency between them, auto-parallelize. This is the default and it is the maximal-performance choice.
+
+```
+// No data flows between these two calls — the compiler overlaps them automatically.
+let user = fetchUser(a)
+let orders = fetchOrders(b)
+render(user, orders)     // waits for both; overlap is free, no user action required
+```
+
+**`wait` does exactly one thing the compiler cannot infer: it forces a causal order between operations that are otherwise independent.** Write `wait foo()` when `foo` must complete before the next statement runs even though they touch different resources and pass no value between them — a happens-before that lives in the outside world, not in the Yinz value graph.
+
+```
+// Different external services, no value flows between them →
+// the compiler would otherwise run these concurrently. `wait` forces charge-before-email.
+wait chargePayment(order)      // Stripe
+sendConfirmationEmail(order)   // SendGrid — must not fire if the charge failed
+```
+
+**The observable difference between writing `wait` and not is ordering vs. overlap:**
+- `wait foo()` then `bar()` → `foo` completes, then `bar` starts. Guaranteed order.
+- `foo()` then `bar()` (independent) → `foo` and `bar` overlap; either may finish first.
+
+If two operations are already dependent (data or same-resource), `wait` is redundant — they were ordered anyway. **`wait` only changes behavior for _independent_ operations.**
+
+**Idiomatic note**: prefer a data dependency over `wait` when one exists. `let receipt = chargePayment(order)` then `sendConfirmationEmail(receipt)` orders the two via the threaded `receipt` and needs no `wait`. Reserve `wait` for the genuinely-no-value-to-thread, different-resource causal-ordering case (and for FFI, where the compiler can't see effects at all).
+
+**Why this is the locked default (Model A)**: independent writes to different resources auto-parallelize (maximal throughput for write-heavy work), and the ordering responsibility for the residual causal cases is on the user via `wait`. The rejected alternative — preserving source order for *all* writes by default — leaves real throughput on the floor for intensive work, and the read-parallelism win survives either way. The accepted cost: independent side effects can race unless ordered, surfaced through the IDE concurrency hints. A superseded earlier proposal treated `wait` as non-ordering ("just I need the result here"); that is **dead** — in Yinz, `wait` IS ordering.
+
+---
+
 ## Reads vs Writes — Ownership Does Double Duty
 
 **Decision**: Use the existing `share`/`lend` ownership system to classify reads vs writes. No new annotations needed.
@@ -51,14 +90,14 @@ The compiler traces through user functions to determine if they contain writes. 
 
 ## `wait` Keyword — Explicit Ordering
 
-**Decision**: `wait` forces a function call to complete before execution continues. Used for side effects and external API ordering that the dependency graph can't infer.
+**Decision**: `wait` forces a function call to complete before execution continues. It is the user's tool for the one thing the compiler can't infer — a causal order between operations that are otherwise *independent* (different resources, no value threaded between them). See the authoritative "Suspension vs. Ordering" section above for the full model; `wait` is never needed for suspension (automatic) or for already-dependent operations (auto-ordered).
 
 **When `wait` is necessary**:
 
-Side effects that must be ordered but don't use each other's return values:
+Side effects that must be ordered but don't use each other's return values *and touch different resources* (so the compiler would otherwise overlap them):
 ```
-wait chargePayment(order)      // must complete before email
-sendConfirmationEmail(order)   // only starts after payment
+wait chargePayment(order)      // Stripe — must complete before email
+sendConfirmationEmail(order)   // SendGrid (different resource) — only starts after payment
 ```
 
 External API calls where the compiler can't see the relationship:
@@ -408,19 +447,19 @@ The frame-slot classifier in codegen handles int, bool, float, number, string, a
 
 ---
 
-### `ECWrapperResultCollection` — collecting the result of a `background`-spawned `-> T errors` task (deferred to M3b)
+### `ECWrapperResultCollection` — collecting the result of a `background`-spawned `-> T errors` task (gated on background-handle collection)
 
 The standalone EC wrapper (emitted for `background`-spawned suspending `-> T errors` functions) reconstructs the `{i64, i64}` EC struct from the frame's return slot and then calls `free_frame`. For `-> number errors`, the ok-word in that struct points into the composed frame's 16-byte staging slot — a region freed by `free_frame`. The returned struct's ok-pointer is therefore invalid after the wrapper returns.
 
-This is **safe in M3a** because the only reachable caller of the wrapper is `background` (fire-and-forget), which discards the EC result entirely without dereferencing the ok-pointer.
+This is **safe** because the only reachable caller of the wrapper is `background` (fire-and-forget), which discards the EC result entirely without dereferencing the ok-pointer. There is **no way to collect a `background` task's result in M3b**: the handle form `let h = background ecFn()` is rejected by typeck ("Capturing the output of background is not yet supported"), and the collection syntax (`.send`/`.receive`) ships separately with the `background-handle-form` feature. Until handle-collection lands, this copy-before-free path is **unreachable** — the deferral is vacuous in M3b and stays gated on background-handle collection.
 
-A caller that **collects** the result — reads the ok-word and uses the pointed-at value — must copy it BEFORE `free_frame`. Implementing that read-before-free + copy requires the scheduler to know whether a spawned task's result is collected or discarded, and when the collection happens relative to the frame lifetime. That is M3b background result-collection machinery.
+A caller that **collects** the result — reads the ok-word and uses the pointed-at value — must copy it BEFORE `free_frame`. Implementing that read-before-free + copy requires the scheduler to know whether a spawned task's result is collected or discarded, and when the collection happens relative to the frame lifetime. That knowledge only exists once the `background` handle-collection form (`.send`/`.receive`) ships.
 
-**Workaround**: use the inline-poll path — a suspending caller that calls another `-> T errors` suspending function composes the callee inline via the state-machine resume path, and the inline path is correct and complete. Only `background` hits the standalone wrapper; avoid collecting `background` handle return values for `-> T errors` spawns until M3b.
+**Workaround**: use the inline-poll path — a suspending caller that calls another `-> T errors` suspending function composes the callee inline via the state-machine resume path, and the inline path is correct and complete. Only `background` hits the standalone wrapper, and there is no syntax to collect its `-> T errors` result until background-handle collection ships.
 
-**What it costs to lift** (~half a session inside M3b): when the scheduler runs the wrapper function to completion, if the spawned task's result handle is collected, read the EC struct before freeing the frame, copy the ok-value to a heap buffer, update the ok-word to point to the heap buffer, then free the frame. The copy is conditional on whether the handle is collected — discarded handles skip it.
+**What it costs to lift** (~half a session, landing WITH the `background-handle-form` feature): when the scheduler runs the wrapper function to completion, if the spawned task's result handle is collected, read the EC struct before freeing the frame, copy the ok-value to a heap buffer, update the ok-word to point to the heap buffer, then free the frame. The copy is conditional on whether the handle is collected — discarded handles skip it.
 
-**Trigger**: storing or using the return value of a `background`-spawned suspending function whose declared return type is `-> T errors`.
+**Trigger**: collecting the completed value of a `background`-spawned suspending `-> T errors` function via its handle (`.send`/`.receive`) — gated on the `background-handle-form` feature.
 
 This is tracked in `registry/features.toml` as `ec-wrapper-collect-on-completion`.
 
@@ -586,6 +625,42 @@ function loop(n: int) -> nothing { if (n > 0) { step(n); loop(n - 1) } }
 ```
 
 **Rationale**: Self-recursive suspending functions work correctly — a function calling itself is always self-contained (the recursive frame is a heap-boxed child of the same function, and the drop guard walks the chain). Mutually-recursive suspending cycles require per-frame size metadata to safely cancel mid-wait, and the cases that arise in practice can always be restructured into non-mutual forms. The guard is permanent because the restructured form is always cleaner and the mutual-recursion case is rare.
+
+---
+
+## Design Divergences (v0.3-M3b Auto-Parallelization Pass)
+
+The following divergences from the full design doc are documented per `no-duct-tape.md` — each names the concrete cost and the reversal path.
+
+### Same-callee concurrent calls run sequentially
+
+**What the design says**: independent operations auto-parallelize regardless of which function they call.
+
+**What the v0.3 pass does**: two calls to the same suspending function (e.g., `worker(1)` followed by `worker(2)`) are lowered sequentially, even when they are data-independent.
+
+**Named cost**: the composed frame allocates one sub-frame slot per unique callee name (keyed on the function name string). Two concurrent invocations of the same callee would require two slots with a disambiguation scheme — that is a separate concern in `build_frame_layouts`. Any case where the user calls the same suspending helper twice in a row doesn't parallelize in v0.3; it runs sequentially, which is always correct.
+
+**Reversal path**: extend `build_frame_layouts` to allocate N sub-frame slots per callee name when a function is called more than once in a straight-line block, keyed on (callee_name, invocation_index). The independence analysis and join codegen are already class-agnostic; only the frame-layout phase needs the extension. Tracked in `design/future/` for a future phase.
+
+### Write-effect uses a TYPE-BASED conservative floor — mutable-heap arguments never parallelize
+
+**What the design says** (`Reads vs Writes — Ownership Does Double Duty`): "the compiler traces through user functions to determine if they contain writes" — independent writes to *different* resources auto-parallelize.
+
+**What the v0.3 pass does**: the independence analysis treats a call argument as a potential aliased write iff its parameter **type** is a mutable heap reference (`shape`/`array`/`map`/`maybe`/union/`dynamic`). It does **not** attempt to classify per-call-site whether the callee actually mutates the argument. Any suspending call carrying a mutable-heap argument is sequenced against every other statement in the block; only no-argument, primitive-argument, and immutable-`string`-argument suspending calls parallelize.
+
+**Why a type-based floor and not a precise per-form classification**: a precise classification was built (a name-based AST fixpoint over the call graph) and **removed**. Across three adversarial gate rounds it missed five distinct write forms — a mutating method on a `share self` receiver, a mutating method on a parameter directly, mutation through a *field or index* of the parameter (`p.items.add(x)`), a builtin mutator shadowed by a same-named user function, and a local `let`-alias of the argument (`let twin = p; twin.add(x)`) — each a silent runtime miscompile (the analysis classified a real write as a read, so two aliased writes auto-parallelized and reordered observably). The root cause is structural: proving a heap argument is read-only requires receiver types **and** alias tracking — i.e. a full type+alias-aware borrow checker — which an AST-walking pass is not. The `share`-read-only premise the precise analysis leaned on is itself only partially enforced (the same five forms escape typeck's `share` check), so the auto-parallel soundness cannot rest on it. The type-based floor sidesteps the entire class: a mutable-heap argument is *unconditionally* a potential write, sound regardless of how the callee uses it.
+
+This follows the golden rules directly: **Golden Rule 5 (compile-time soundness — never a silent runtime miscompile) outranks Golden Rule 10 (efficiency-first).** When the two conflict, soundness wins.
+
+**Named cost**: two suspending calls that each take a mutable-heap argument do not overlap, even when both only READ their argument (e.g. two suspending reads of distinct shapes). This forfeits the read-only-mutable-heap-argument overlap. It is a perf miss, never a correctness miss — the floor only ever *adds* sequencing, never introduces a wrong parallel execution. The I/O-overlap headline is unaffected: no-argument, primitive-argument, and immutable-`string`-argument suspending calls (the realistic I/O-fan-out shapes) still parallelize.
+
+**Reversal path**: a real type+alias-aware ownership analysis (M4 borrow-checker completion — receiver types threaded through the analysis + intra-procedural alias tracking) that can PROVE a heap argument is both read-only AND non-aliased re-enables narrowing the floor to permit proven-read mutable-heap arguments to overlap. Until that exists, the floor stands. (M3d CPU-parallel reuses this same type-based write-effect source — the floor transfers unchanged.)
+
+### `share` read-only enforcement is best-effort (transitive teaching error)
+
+**What ships**: typeck rejects mutation of an explicit `share` parameter — direct field/element assignment, mutating collection methods (`.add`/`.set`/...), `share self` receivers, passing a `share` argument to an explicit `lend`/`give` position, and the common transitive case (`fa(share x) { helper(x) }` where `helper` mutates) via the `effective_ownership` fixpoint.
+
+**Known-incomplete (deferred to a real ownership analysis)**: the same five forms the auto-parallel floor sidesteps also escape the *transitive* `share` check — a mutation through a field/index of the `share` param via a bare callee, a builtin mutator shadowed by a same-named user function, and a local `let`-alias of the `share` param. These are **missed compile-errors, not miscompiles** — the program still runs soundly (the type-based floor sequentializes regardless), it simply doesn't receive the teaching diagnostic. The `share`-enforcement completeness is decoupled from auto-parallel soundness on purpose: soundness is the floor's job (complete); the `share` error is a teaching aid (best-effort). **Reversal path**: the same M4 type+alias-aware ownership analysis closes both at once.
 
 ---
 

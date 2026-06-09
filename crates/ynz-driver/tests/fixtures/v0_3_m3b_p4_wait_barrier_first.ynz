@@ -1,0 +1,26 @@
+// Fixture: explicit `wait` as the FIRST call — ordering barrier before a parallel group.
+//
+// `wait waiter()` forces the waiter to complete before worker and helper run.
+// waiter prints "waiter" then returns. Then worker + helper are independent and
+// auto-parallelize. The final print is "done".
+//
+// Expected output: waiter\ndone
+function waiter() -> nothing {
+  wait sleep(5)
+  print(`waiter`)
+}
+
+function worker() -> nothing {
+  wait sleep(10)
+}
+
+function helper() -> nothing {
+  wait sleep(10)
+}
+
+function entrypoint() -> nothing {
+  wait waiter()
+  worker()
+  helper()
+  print(`done`)
+}

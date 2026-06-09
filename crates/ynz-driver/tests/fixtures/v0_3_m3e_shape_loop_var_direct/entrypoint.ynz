@@ -1,0 +1,18 @@
+// M3e danger-matrix: shape × loop-var × direct.
+// A shape loop variable crosses a cross-module suspending call inside a for-loop.
+// LLVM ABI padding means the per-element frame slot must use the actual struct size;
+// frame_layouts_query provides the LLVM-accurate slot size for shape loop variables.
+// Expected output: "item: 10\nitem: 20"
+import { process } from `io_ops`
+
+shape Entry {
+  value: int
+}
+
+function entrypoint() -> nothing {
+  let entries: array<Entry> = [{ value: 10 }, { value: 20 }]
+  for (e in entries) {
+    process()
+    print(`item: ${e.value.toString()}`)
+  }
+}

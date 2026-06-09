@@ -1,0 +1,22 @@
+// Fixture: two consecutive `wait` statements — each is a separate ordering barrier.
+//
+// `alpha` and `beta` are independent but both `wait`-prefixed.
+// Each `wait` forces the call to complete before moving on.
+// They run sequentially: alpha, then beta.
+//
+// Expected output: alpha\nbeta\ndone
+function alpha() -> nothing {
+  wait sleep(5)
+  print(`alpha`)
+}
+
+function beta() -> nothing {
+  wait sleep(5)
+  print(`beta`)
+}
+
+function entrypoint() -> nothing {
+  wait alpha()
+  wait beta()
+  print(`done`)
+}

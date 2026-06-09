@@ -1,0 +1,17 @@
+// M3e danger-matrix: number/decimal128 × crossing-local × direct (escape #4).
+// A number local uses two consecutive frame slots (lo + hi halves of the i128 value).
+// The combined frame must include both slots; frame_layouts_query counts them accurately
+// where the typeck approximation only counted one 8-byte slot, causing memory corruption.
+// Expected output: "before: 1.5\nafter: 1.5"
+import { fetchPrice } from `io_ops`
+
+function caller() -> nothing {
+  let price: number = 1.5
+  print(`before: ${price.toString()}`)
+  fetchPrice()
+  print(`after: ${price.toString()}`)
+}
+
+function entrypoint() -> nothing {
+  caller()
+}

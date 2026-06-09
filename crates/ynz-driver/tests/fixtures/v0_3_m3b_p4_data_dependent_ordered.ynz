@@ -1,0 +1,18 @@
+// Fixture: data-dependent statements stay ordered — no `wait` needed.
+//
+// `fetcher` suspends. `user` is defined by the first call; `profile`
+// reads `userId` which comes from `user` — data dependency forces ordering.
+// The auto-parallel pass must NOT group these as Parallel.
+//
+// Expected output: user:42\nprofile:42
+function fetcher(n: int) -> int {
+  wait sleep(20)
+  return n
+}
+
+function entrypoint() -> nothing {
+  let userId = fetcher(42)
+  let profileId = fetcher(userId)
+  print(`user:${userId}`)
+  print(`profile:${profileId}`)
+}

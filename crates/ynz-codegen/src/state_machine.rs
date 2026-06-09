@@ -49,8 +49,9 @@
 use inkwell::{
     context::Context,
     module::Module,
+    targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine},
     values::{FunctionValue, PointerValue},
-    AddressSpace,
+    AddressSpace, OptimizationLevel,
 };
 
 use crate::runtime_decls::RuntimeDecls;
@@ -733,4 +734,30 @@ pub fn emit_sleep_poll_branch<'ctx>(
         .map_err(|e| format!("poll branch: {e}"))?;
 
     Ok(())
+}
+
+/// Construct the default LLVM `TargetMachine` used for x86 codegen and frame-layout queries.
+///
+/// Both `emit_artifact` and `frame_layouts_query` must use this single constructor so their
+/// data-layout strings are byte-identical. A divergent data-layout string between the emitter
+/// and the query would produce wrong `n_locals` counts for shape-typed crossing locals, causing
+/// silent frame mis-sizing (Guard G1 — see design/future/cross-module-frame-serialization.md).
+///
+/// Always initializes x86 targets before creating the machine. Callers that already initialize
+/// x86 (e.g. `emit_artifact`) may call it redundantly — double-init is a no-op per LLVM.
+pub fn default_target_machine() -> Result<TargetMachine, String> {
+    Target::initialize_x86(&InitializationConfig::default());
+    let triple = TargetMachine::get_default_triple();
+    let target = Target::from_triple(&triple)
+        .map_err(|e| format!("LLVM: no target for triple {:?}: {e}", triple.as_str()))?;
+    target
+        .create_target_machine(
+            &triple,
+            "generic",
+            "",
+            OptimizationLevel::None,
+            RelocMode::Default,
+            CodeModel::Default,
+        )
+        .ok_or_else(|| "LLVM: failed to create target machine".to_string())
 }

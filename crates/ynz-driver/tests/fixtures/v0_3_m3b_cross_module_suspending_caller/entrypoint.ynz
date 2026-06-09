@@ -1,0 +1,14 @@
+// v0.3-M3b P1: cross-module suspending caller.
+// `caller` imports and calls `slow` from slow_ops. Because `slow` suspends,
+// `caller` is correctly marked as suspending and compiled as a state machine.
+// Expected: exits 0, prints "slow done\ncaller done".
+import { slow } from `slow_ops`
+
+function caller() -> nothing {
+  slow()
+  print(`caller done`)
+}
+
+function entrypoint() -> nothing {
+  caller()
+}

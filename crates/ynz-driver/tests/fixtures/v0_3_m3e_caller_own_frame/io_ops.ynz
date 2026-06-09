@@ -1,0 +1,8 @@
+// M3e danger-matrix: caller-also-has-own-frame — exported suspending function.
+// The dangerous combination is in the caller: it has its own multi-slot crossing locals
+// AND an embedded sub-frame for the imported suspender (escape #5).
+
+export function doWork() -> int {
+  sleep(10)
+  return 100
+}

@@ -1,0 +1,17 @@
+// M3e danger-matrix: stacked escapes — module B (middle).
+// calcTotal is errors-capable, re-exports a call to A's suspending export, AND has a
+// number crossing-local. This stacks three independent mis-sizing sources:
+//   - escape #1: re-export chain (B must embed A's sub-frame)
+//   - escape #3: EC staging slot interacts with child sub-frame offsets
+//   - escape #4: number (decimal128) crossing-local uses 2 consecutive frame slots
+// Stacking three independent mis-sizing sources (re-export sub-frame + EC staging slot + decimal128 dual-slot) makes this fixture the highest-sensitivity probe for composed-frame offset correctness.
+
+import { fetchPrice } from `a_ops`
+
+export function calcTotal() -> number errors {
+  let offset = 1.0
+  const price = fetchPrice()
+  const p = price.or(0.0)
+  const total = offset + p
+  return total
+}

@@ -75,6 +75,8 @@ declare i64 @ynz_array_count(ptr)
 
 declare void @ynz_array_drop(ptr)
 
+declare ptr @ynz_array_clone_primitive(ptr)
+
 declare void @ynz_siphash_init()
 
 declare ptr @ynz_map_new()
@@ -181,7 +183,7 @@ declare void @ynz_rt_shutdown()
 
 declare void @ynz_thread_sleep_ms(i64)
 
-declare void @ynz_rt_spawn(ptr, ptr, i64, i64)
+declare void @ynz_rt_spawn(ptr, ptr, i64, i64, ptr, i64)
 
 declare ptr @ynz_rt_async_sleep_create(i64)
 

@@ -1,0 +1,17 @@
+// M3e danger-matrix: int × crossing-local × 1-level transitive (escape #5).
+// The caller has its own int crossing-local AND calls a 1-level transitive suspender.
+// Escape #5: multi-slot caller frame + transitive callee — the combined composed frame
+// must account for both the caller's own crossing locals and the callee's sub-frame.
+// Expected output: "before: 42\nafter: 42"
+import { runJob } from `task_ops`
+
+function caller() -> nothing {
+  let count: int = 42
+  print(`before: ${count.toString()}`)
+  runJob()
+  print(`after: ${count.toString()}`)
+}
+
+function entrypoint() -> nothing {
+  caller()
+}

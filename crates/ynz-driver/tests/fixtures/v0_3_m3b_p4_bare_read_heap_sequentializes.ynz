@@ -1,0 +1,35 @@
+// M3b Phase-4 regression lock: two suspending calls that take a BARE heap argument whose
+// body only READS it SEQUENTIALIZE under the conservative floor. The floor keys on the
+// argument TYPE (mutable-heap = potential write) and does not prove a callee read-only, so
+// a bare-heap-arg pair is sequenced even though neither call mutates. Locks the sound
+// behavior + byte-identical-across-modes. Read-only-heap overlap is a forfeited capability
+// per `design/concurrency.md` Design Divergences.
+//
+// `peek` takes a bare `b: Box` and only reads a field, reading it BEFORE the suspension
+// (avoiding the pre-existing shape-crossing-`wait` corruption).
+//
+// Expected output (byte-identical default vs --no-auto-parallel): done
+
+shape Box {
+  v: int
+}
+
+function peek(b: Box) -> int {
+  let snapshot: int = b.v
+  wait sleep(150)
+  return snapshot
+}
+
+function peek2(b: Box) -> int {
+  let snapshot: int = b.v
+  wait sleep(150)
+  return snapshot
+}
+
+function entrypoint() -> nothing {
+  let p: Box = { v: 3 }
+  let q: Box = { v: 4 }
+  let a = peek(p)
+  let c = peek2(q)
+  print(`done`)
+}

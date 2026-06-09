@@ -1,0 +1,12 @@
+// M3e danger-matrix: 1-level transitive — exported function suspends via private helper.
+// runJob is exported; doSleep is not. The importer sees only runJob's composed frame.
+// The composed frame must include doSleep's sub-frame, so the total size is larger than
+// a flat frame — escape #5: transitive × caller-frame combination.
+
+function doSleep() -> nothing {
+  sleep(10)
+}
+
+export function runJob() -> nothing {
+  doSleep()
+}

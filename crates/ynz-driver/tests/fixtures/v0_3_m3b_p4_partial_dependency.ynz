@@ -1,0 +1,34 @@
+// Fixture (adversarial i): partial dependency — a and c are independent, b depends on a.
+//
+// `let a = fa()` and `let c = fc()` have no data dependency — they overlap.
+// `let b = fb(a)` depends on `a`, so it waits for the a+c group to finish.
+// Grouping: [fa, fc] as Parallel, then [fb] as Singleton, then [print].
+//
+// Expected output: a:1\nb:1\nc:2\ndone
+//
+// NOTE: Since both `a` and `c` run in parallel and we read `a` first in the print
+// order, the output is: a is printed from the joined results.
+function fa() -> int {
+  wait sleep(20)
+  return 1
+}
+
+function fb(n: int) -> int {
+  wait sleep(5)
+  return n
+}
+
+function fc() -> int {
+  wait sleep(20)
+  return 2
+}
+
+function entrypoint() -> nothing {
+  let a = fa()
+  let b = fb(a)
+  let c = fc()
+  print(`a:${a}`)
+  print(`b:${b}`)
+  print(`c:${c}`)
+  print(`done`)
+}

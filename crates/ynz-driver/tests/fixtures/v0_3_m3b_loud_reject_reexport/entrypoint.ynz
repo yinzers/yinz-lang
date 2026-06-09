@@ -1,0 +1,8 @@
+// Loud-reject case (a): entrypoint importing from the re-export chain.
+// This should produce a clean WHAT/WHAT-INSTEAD/WHY compile error (exit 1),
+// NOT a silent SIGILL/abort (exit 132).
+import { doWork } from `b_ops`
+
+function entrypoint() -> nothing {
+  doWork()
+}

@@ -1,0 +1,17 @@
+// M3e danger-matrix: boolean × crossing-local × direct.
+// A boolean local declared before the cross-module suspending call must hold its value after resume.
+// The i1 boolean is flushed/reloaded as i64 in the frame slot; the slot must survive the
+// cross-module suspension boundary for the restored value to be correct.
+// Expected output: "before: true\nafter: true"
+import { fetchFlag } from `io_ops`
+
+function caller() -> nothing {
+  let flag: boolean = true
+  print(`before: ${flag.toString()}`)
+  fetchFlag()
+  print(`after: ${flag.toString()}`)
+}
+
+function entrypoint() -> nothing {
+  caller()
+}

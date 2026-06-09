@@ -1,8 +1,8 @@
-// Phase 6 fixture: can't-infer cross-module compile error.
-// `entrypoint` is suspending (reaches sleep). It calls `remoteOp` from another
-// module. The compiler can't determine if `remoteOp` suspends intra-unit — this is
-// a clean WHAT/WHAT-INSTEAD/WHY compile error per design/future/concurrency.md.
-// Expected: exits 1 with the can't-infer error mentioning "cross-module".
+// Cross-module call from a suspending function to a non-suspending imported function.
+// `entrypoint` reaches sleep (suspending). `remoteOp` is imported from utils and is
+// non-suspending — the compiler now correctly propagates suspension flags across
+// module boundaries (v0.3-M3b P1), so this compiles and runs cleanly.
+// Expected: exits 0, prints "remote op".
 import { remoteOp } from `utils`
 
 function entrypoint() -> nothing {

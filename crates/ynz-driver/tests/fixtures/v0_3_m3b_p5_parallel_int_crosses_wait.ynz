@@ -1,0 +1,43 @@
+// Fixture: a parallel-group `-> int` return binding that crosses a SUBSEQUENT `wait`.
+//
+// `priceA`/`priceB` are independent suspending calls, so the auto-parallel pass groups
+// them. Their results (`a`, `b`) are then used AFTER `wait later()` — so both are crossing
+// locals: their values must survive that second suspension.
+//
+// Before the fix, the parallel binding allocated a FRESH i64 alloca in the parallel-join
+// block and overwrote `cg.locals[a]` / `cg.locals[b]`. The post-`wait` reload then read
+// that join-block alloca from a resume block it does NOT dominate → LLVM verify failure
+// ("instruction does not dominate all uses"). The fix routes the binding through
+// `bind_sm_result_and_flush`, storing into the dominating entry-block (sm_entry) alloca
+// and flushing to the frame, exactly like the sequential SM let-path.
+//
+// The test asserts byte-identical stdout under default and --no-auto-parallel modes and
+// the exact values after the crossing.
+//
+// Expected output: later\na:7\nb:8
+function priceA() -> int {
+  wait sleep(40)
+  return 7
+}
+
+function priceB() -> int {
+  wait sleep(40)
+  return 8
+}
+
+function later() -> nothing {
+  wait sleep(10)
+  print(`later`)
+}
+
+function run() -> nothing {
+  let a = priceA()
+  let b = priceB()
+  wait later()
+  print(`a:${a.toString()}`)
+  print(`b:${b.toString()}`)
+}
+
+function entrypoint() -> nothing {
+  run()
+}

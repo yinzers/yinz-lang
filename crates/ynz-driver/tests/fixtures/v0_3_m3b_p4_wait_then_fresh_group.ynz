@@ -1,0 +1,26 @@
+// Fixture: `wait` followed by a fresh independent group.
+//
+// `barrier` is `wait`-prefixed, so it forms its own barrier.
+// After it, `fresh1` and `fresh2` are independent and auto-parallelize.
+// The fresh group must NOT join pre-barrier work — it is a new group.
+//
+// Expected output: barrier\ndone
+function barrier() -> nothing {
+  wait sleep(5)
+  print(`barrier`)
+}
+
+function fresh1() -> nothing {
+  wait sleep(10)
+}
+
+function fresh2() -> nothing {
+  wait sleep(10)
+}
+
+function entrypoint() -> nothing {
+  wait barrier()
+  fresh1()
+  fresh2()
+  print(`done`)
+}

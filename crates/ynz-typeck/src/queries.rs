@@ -1,11 +1,12 @@
 use std::{collections::HashSet, sync::Arc};
 
-use ynz_ast::nodes::{ImportDecl, ImportKind, Item};
+use ynz_ast::nodes::{ImportDecl, ImportKind, Item, Module};
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, DiagnosticKind};
 use ynz_parser::{parse_query, SourceFile, SourceFileRegistry};
 
 use crate::{
     check::{check, TypedModule},
+    effective_ownership,
     exports::{collect_exports, ExportTable},
     generics::{GenericFnTable, GenericShapeTable, MonomorphizationTable},
     intrinsics::PrimitiveIntrinsicTable,
@@ -49,13 +50,77 @@ pub struct CheckOutput {
     pub suspends_set: std::collections::HashSet<String>,
 }
 
+/// Cycle-initial placeholder returned by salsa when `module_signatures_query` is the
+/// head of a circular-import cycle.
+///
+/// Salsa feeds this value back to other cycle participants as their provisional
+/// view of the cycle-head module. An empty table is correct: the cycle cannot
+/// resolve any real exports, and the `module_signatures_cycle_fn` will inject the
+/// diagnostic on the next pass when salsa hands back the computed value.
+fn module_signatures_cycle_initial(
+    _db: &dyn SourceFileRegistry,
+    _id: salsa::Id,
+    _source: SourceFile,
+) -> Arc<SignatureOutput> {
+    Arc::new(SignatureOutput {
+        sig_table: SignatureTable::empty(),
+        shape_table: ShapeTable::empty(),
+        generic_fn_table: GenericFnTable::default(),
+        generic_shape_table: GenericShapeTable::default(),
+        imported_fns: std::collections::HashMap::new(),
+        imported_options: std::collections::HashMap::new(),
+        diagnostics: DiagnosticBucket::new(),
+    })
+}
+
+/// Cycle-recovery function called by salsa when `module_signatures_query` detects
+/// that it is the head of a circular-import cycle.
+///
+/// Salsa has already run one provisional iteration; `value` is the result from that
+/// pass. We inject a WHAT/WHAT-INSTEAD/WHY circular-import diagnostic into the
+/// diagnostic bucket so `check_query` propagates it and the driver emits exit 1.
+/// Returning `value` unchanged causes salsa to converge immediately (PartialEq
+/// sees the same content on the next pass), so we avoid unbounded iteration.
+fn module_signatures_cycle_fn(
+    db: &dyn SourceFileRegistry,
+    _cycle: &salsa::Cycle,
+    _last_provisional: &Arc<SignatureOutput>,
+    value: Arc<SignatureOutput>,
+    source: SourceFile,
+) -> Arc<SignatureOutput> {
+    // Only inject the diagnostic on the first recovery call (iteration 0 of the
+    // cycle-recovery phase). On subsequent iterations salsa checks PartialEq and
+    // converges — but since we already injected the diagnostic in the first pass
+    // the output is stable and this branch won't fire again.
+    if value.diagnostics.is_empty() {
+        let path = source.path(db);
+        let span = ynz_diagnostics::SourceSpan::new(path.as_str(), 0, 0);
+        let mut diags = value.diagnostics.clone();
+        diags.push(Diagnostic::error(
+            span,
+            "Circular import: this module is part of a mutually-recursive import chain.",
+            "Move the shared definitions to a third module that both can import without \
+             creating a cycle.",
+            "Circular imports cannot be resolved — the compiler cannot determine which \
+             module to compile first. Extract the shared shapes, functions, or types into \
+             a new file and import that file from both modules.",
+        ));
+        // Clone the output and replace the diagnostics bucket.
+        let mut out = (*value).clone();
+        out.diagnostics = diags;
+        Arc::new(out)
+    } else {
+        value
+    }
+}
+
 /// Pass 1: collect all shape declarations and function signatures from the module,
 /// including symbols imported from other files.
 ///
 /// Cross-file import resolution happens here so shape field type annotations
 /// can reference imported shapes and options types.
 // lru = 128: signature computation is moderate cost; keep more results cached.
-#[salsa::tracked(lru = 128)]
+#[salsa::tracked(lru = 128, cycle_fn = module_signatures_cycle_fn, cycle_initial = module_signatures_cycle_initial)]
 pub fn module_signatures_query(
     db: &dyn SourceFileRegistry,
     source: SourceFile,
@@ -135,12 +200,59 @@ pub fn exports_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Exp
     ))
 }
 
+/// Cycle-initial placeholder for `check_query` when the module is part of a circular
+/// import chain.
+///
+/// An empty `CheckOutput` (no suspends, no diagnostics) is returned so that cycle
+/// participants that call `check_query` (e.g. `load_export_table` resolving suspension
+/// flags) get a safe zero-value rather than a salsa panic. The circular-import
+/// diagnostic is injected by `module_signatures_cycle_fn` on `SignatureOutput`, which
+/// `check_query` propagates on its own (non-cycle) invocation after the cycle head
+/// resolves.
+fn check_query_cycle_initial(
+    _db: &dyn SourceFileRegistry,
+    _id: salsa::Id,
+    _source: SourceFile,
+) -> Arc<CheckOutput> {
+    Arc::new(CheckOutput {
+        typed_module: TypedModule {
+            module: Module {
+                items: vec![],
+                span: ynz_diagnostics::SourceSpan::new("", 0, 0),
+            },
+            expr_types: std::collections::HashMap::new(),
+            background_arg_inferred_ownership: std::collections::HashMap::new(),
+        },
+        mono_table: crate::generics::MonomorphizationTable {
+            entries: std::collections::HashMap::new(),
+        },
+        diagnostics: DiagnosticBucket::new(),
+        suspends_set: std::collections::HashSet::new(),
+    })
+}
+
+/// Cycle-recovery function for `check_query`.
+///
+/// Returns the provisional `value` unchanged so salsa converges immediately.
+/// The circular-import error is already injected via `module_signatures_cycle_fn`
+/// into `SignatureOutput.diagnostics`, which `check_query` propagates through
+/// `sig_output.diagnostics` on its own pass.
+fn check_query_cycle_fn(
+    _db: &dyn SourceFileRegistry,
+    _cycle: &salsa::Cycle,
+    _last_provisional: &Arc<CheckOutput>,
+    value: Arc<CheckOutput>,
+    _source: SourceFile,
+) -> Arc<CheckOutput> {
+    value
+}
+
 /// Pass 2: type-check all function bodies.
 ///
 /// Depends on `module_signatures_query` for the signature table.
 /// Depends on `parse_query` for the AST.
 // lru = 64: typechecking is moderately expensive; smaller cap than parse/signatures.
-#[salsa::tracked(lru = 64)]
+#[salsa::tracked(lru = 64, cycle_fn = check_query_cycle_fn, cycle_initial = check_query_cycle_initial)]
 pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<CheckOutput> {
     let parse = parse_query(db, source);
     let sig_output = module_signatures_query(db, source);
@@ -162,15 +274,47 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
     }
 
     // Run the transitive may-block analysis to populate `FunctionSig.suspends`.
-    // The analysis sees only this compilation unit — cross-module calls produce
-    // `UnresolvableEdge::CrossModule` entries recorded in the analysis result.
-    // The body checker gates can't-infer diagnostics on `current_fn_suspends`
-    // (set from sig.suspends): only callers that independently suspend AND make
-    // an unanalyzable boundary call receive the error.
+    //
+    // `imported_fn_names` lets the analysis distinguish known cross-module calls
+    // (non-suspending leaves or known-suspending seeds) from unknown names
+    // (typeck will report "not defined").
+    //
+    // `imported_suspending_names` is the subset of imported fns whose
+    // `check_query.suspends_set` flags them as suspending — derived from the
+    // `suspends` field on each `FunctionSig` in `imported_fns`, which was set by
+    // `load_export_table` calling `check_query` on the imported module. A local fn
+    // that calls one of these is seeded as suspending in the fixpoint.
     let imported_fn_names: HashSet<String> = sig_output.imported_fns.keys().cloned().collect();
-    let may_block_result = may_block::analyze(&parse.module, &imported_fn_names);
+    let imported_suspending_names: HashSet<String> = sig_output
+        .imported_fns
+        .iter()
+        .filter_map(|(name, sig)| {
+            if sig.suspends {
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    let may_block_result = may_block::analyze(
+        &parse.module,
+        &imported_fn_names,
+        &imported_suspending_names,
+    );
+
+    // Update each merged sig's `suspends` flag using the UNION of:
+    // (a) the imported fn's own preserved `suspends` (set by load_export_table),
+    // (b) the local fixpoint result for locally-defined fns.
+    //
+    // Without the union, overwriting with the local-only fixpoint would clear
+    // `suspends=true` on imported fns — those fns' bodies aren't in this unit so
+    // the local analysis can never mark them.
     for (name, sig) in merged_sig_table.fns.iter_mut() {
-        sig.suspends = may_block_result.suspends.contains(name.as_str());
+        let local_suspends = may_block_result.suspends.contains(name.as_str());
+        // Preserve the imported fn's own `suspends` flag (already set by
+        // load_export_table via check_query on the imported module). For locally-
+        // defined fns, sig.suspends starts false and is set here.
+        sig.suspends = sig.suspends || local_suspends;
     }
 
     // Reject non-self mutual recursion among suspending functions.
@@ -238,7 +382,6 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
         &sig_output.generic_shape_table,
         &PrimitiveIntrinsicTable::m6().with_m2_internals(),
         &sig_output.imported_options,
-        imported_fn_names,
     );
     for d in check_diags.into_iter() {
         all_diags.push(d);
@@ -273,6 +416,80 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
                 );
             }
         }
+    }
+
+    // Transitive effective-ownership fixpoint (v0.3-M3b Phase 4). Classifies every
+    // parameter as `Reads`/`Unknown`/`Writes` across the whole local call graph. One
+    // consumer reads it:
+    //   - Part 2 below: reject `share` params that are written transitively (the
+    //     `design/concurrency.md` line 651 no-escalation rule, extended past the direct
+    //     cases `check.rs` already catches).
+    //
+    // Codegen does NOT consume this fixpoint. The auto-parallel write-effect decision uses
+    // the type-based conservative floor in `ynz-codegen/src/independence.rs` (any mutable-heap
+    // arg is a potential write, Golden Rule 5 > Rule 10) — sound by construction, with no
+    // name-based classifier to drift out of sync with this fixpoint.
+    //
+    // `declared_writes` seeds the fixpoint with each function's explicit `lend`/`give`
+    // positions (local AND imported — an imported declared-write position is a definite
+    // write even without a body). `imported_fn_names` marks the cross-module boundary so a
+    // flow into an imported callee at a non-declared position resolves to `Unknown` (sound
+    // conservative), never a spurious `Reads`.
+    let mut declared_writes = effective_ownership::declared_write_positions(&parse.module);
+    for (name, sig) in &sig_output.imported_fns {
+        // Local definitions already have their declared writes from the module walk.
+        if declared_writes.contains_key(name) {
+            continue;
+        }
+        let mut set = std::collections::HashSet::new();
+        for (i, ownership) in sig.param_ownerships.iter().enumerate() {
+            if matches!(
+                ownership,
+                Some(ynz_ast::nodes::OwnershipModifier::Lend)
+                    | Some(ynz_ast::nodes::OwnershipModifier::Give)
+            ) {
+                set.insert(i);
+            }
+        }
+        declared_writes.insert(name.clone(), set);
+    }
+    let effective_ownership_report =
+        effective_ownership::analyze(&parse.module, &declared_writes, &imported_fn_names);
+
+    // Part 2 — reject `share` params written TRANSITIVELY through a callee (full
+    // `design/concurrency.md` line 651 enforcement). The DIRECT cases (a `share` body that
+    // field-assigns the param, or passes it to an explicit `lend`/`give` position) are
+    // already rejected by `check.rs` with a precise span; this catches the transitive case
+    // those checks miss (a bare callee that mutates → infers `lend` → the declared modifier
+    // the direct check inspects is `None`, not `lend`). `Unknown` flows are NOT errors —
+    // benefit of the doubt; the independence side keeps soundness by sequentializing them.
+    let share_violations = effective_ownership::find_transitive_share_violations(
+        &parse.module,
+        &effective_ownership_report,
+        &declared_writes,
+        &imported_fn_names,
+    );
+    for v in share_violations {
+        let type_name =
+            crate::types::type_name(&sig_output.shape_table.resolve_ast_type(&v.param_type));
+        all_diags.push(Diagnostic::error(
+            v.span,
+            format!(
+                "`{param}` is declared `share` (read-only) but it is modified through `{callee}`.",
+                param = v.param_name,
+                callee = v.callee_name,
+            ),
+            format!(
+                "Change the parameter to `lend {param}: {ty}` — the function (directly or through a call) writes to it.",
+                param = v.param_name,
+                ty = type_name,
+            ),
+            format!(
+                "A `share` parameter is a read-only borrow; the caller trusts the value is unchanged. Because `{callee}` modifies `{param}`, this function lends it onward — declare `lend` so the write is visible at every call site.",
+                callee = v.callee_name,
+                param = v.param_name,
+            ),
+        ));
     }
 
     // Export the suspends set so codegen can read it directly instead of deriving

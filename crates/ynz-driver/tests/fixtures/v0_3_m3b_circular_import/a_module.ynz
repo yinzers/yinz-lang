@@ -1,0 +1,7 @@
+// Part of circular import chain: a_module imports b_module, b_module imports a_module.
+// Expected: compiler exits 1 with a clean circular-import error, not a panic.
+import { bFunc } from `b_module`
+
+export function aFunc() -> nothing {
+  print(`a`)
+}

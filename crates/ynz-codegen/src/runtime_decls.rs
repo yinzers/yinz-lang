@@ -54,6 +54,11 @@ pub struct RuntimeDecls<'ctx> {
     pub ynz_array_set: FunctionValue<'ctx>,
     pub ynz_array_count: FunctionValue<'ctx>,
     pub ynz_array_drop: FunctionValue<'ctx>,
+    // Deep-clone for primitive-element arrays (int/float/bool — no element indirection).
+    // Returns a new independent YnzArray with its own data buffer. Must be freed with
+    // ynz_array_drop. Used exclusively by background arg-copy for array<primitive> args
+    // so the task's copy survives the spawner's stack frame.
+    pub ynz_array_clone_primitive: FunctionValue<'ctx>,
 
     // Map runtime (M5 P4b) — SipHash-2-4 + Swiss Tables.
     pub ynz_siphash_init: FunctionValue<'ctx>,
@@ -182,8 +187,10 @@ pub struct RuntimeDecls<'ctx> {
     //   arg1 = waker_ctx (*mut u8 — type-erased &mut Context<'_>)
     //   returns: 0 = Ready, 1 = Pending
     //
-    // ynz_rt_spawn(resume_fn, frame_ptr, frame_size) → void
+    // ynz_rt_spawn(resume_fn, frame_ptr, frame_size, rec_slot_offset, arg_drop_ptr, arg_drop_count) → void
     //   Schedule a state-machine Future on the Tokio I/O worker pool.
+    //   arg_drop_ptr: ptr to ynz_alloc'd BgArgDropEntry array (null when arg_drop_count=0)
+    //   arg_drop_count: number of entries (0 = no heap arg-copies to free)
     pub ynz_rt_spawn: FunctionValue<'ctx>,
     // ynz_rt_async_sleep_create(ms: i64) → *mut u8
     //   Allocate a boxed tokio::time::Sleep future; returns opaque heap pointer.
@@ -335,6 +342,11 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 module,
                 "ynz_array_drop",
                 void.fn_type(&[ptr.into()], false),
+            ),
+            ynz_array_clone_primitive: declare_fn(
+                module,
+                "ynz_array_clone_primitive",
+                ptr.fn_type(&[ptr.into()], false),
             ),
 
             ynz_siphash_init: declare_fn(module, "ynz_siphash_init", void.fn_type(&[], false)),
@@ -592,8 +604,19 @@ impl<'ctx> RuntimeDecls<'ctx> {
             ynz_rt_spawn: declare_fn(
                 module,
                 "ynz_rt_spawn",
-                // (resume_fn: fn(ptr,ptr)->i32, frame_ptr: ptr, frame_size: i64, recursion_slot_offset: i64) -> void
-                void.fn_type(&[ptr.into(), ptr.into(), i64.into(), i64.into()], false),
+                // (resume_fn: fn(ptr,ptr)->i32, frame_ptr: ptr, frame_size: i64,
+                //  recursion_slot_offset: i64, arg_drop_ptr: ptr, arg_drop_count: i64) -> void
+                void.fn_type(
+                    &[
+                        ptr.into(),
+                        ptr.into(),
+                        i64.into(),
+                        i64.into(),
+                        ptr.into(),
+                        i64.into(),
+                    ],
+                    false,
+                ),
             ),
             ynz_rt_async_sleep_create: declare_fn(
                 module,

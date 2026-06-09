@@ -1,0 +1,15 @@
+// Danger case (c): transitive suspend through a non-exported helper.
+// innerDelay is not exported — only runTask is. The importer only sees runTask,
+// but runTask is suspending (transitively via innerDelay -> sleep).
+// The importer's build_frame_layouts must embed runTask's sub-frame at the real
+// composed size, not FRAME_HEADER_SIZE (32 bytes). Getting it wrong causes SIGILL.
+
+function innerDelay() -> nothing {
+  sleep(10)
+  print(`delay done`)
+}
+
+export function runTask() -> nothing {
+  innerDelay()
+  print(`task done`)
+}

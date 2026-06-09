@@ -1,0 +1,8 @@
+// M3e adversarial axis 5a.iii: A imports and calls the shared leaf D. Exports a_work().
+import { suspend } from `leaf_ops`
+
+export function a_work() -> int {
+  let val: int = 10
+  suspend()
+  return val
+}

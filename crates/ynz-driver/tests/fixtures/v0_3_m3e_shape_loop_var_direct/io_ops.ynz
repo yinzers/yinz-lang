@@ -1,0 +1,5 @@
+// M3e danger-matrix: shape loop-var — exported suspending function.
+
+export function process() -> nothing {
+  sleep(10)
+}

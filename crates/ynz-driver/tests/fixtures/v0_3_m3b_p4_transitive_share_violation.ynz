@@ -1,0 +1,30 @@
+// M3b Phase-4 regression lock: a `share` parameter written TRANSITIVELY through a
+// callee must be a compile error (design/concurrency.md line 651, full enforcement).
+//
+// `fa` declares `x` as `share` (read-only) but passes it to `helper`, a bare-parameter
+// function that mutates its argument. The compiler figures out `helper`'s effective
+// modifier is `lend`, so `fa` is lending `x` onward — contradicting the read-only borrow.
+// The direct checks (field-assign on a `share` body, or passing to an EXPLICIT lend/give
+// position) miss this case because `helper`'s DECLARED modifier is bare (`None`), not
+// `lend`. The transitive effective-ownership fixpoint catches it.
+//
+// Expected: compile error "`x` is declared `share` (read-only) but it is modified
+// through `helper`." Exit 1, empty stdout.
+
+shape Box {
+  v: int
+}
+
+function helper(b: Box) -> nothing {
+  b.v = 999
+}
+
+function fa(share x: Box) -> nothing {
+  helper(x)
+}
+
+function entrypoint() -> nothing {
+  let p: Box = { v: 1 }
+  fa(p)
+  print(`${p.v.toString()}`)
+}

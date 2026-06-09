@@ -1,0 +1,15 @@
+// M3e collision regression: exported suspending function with four int crossing-locals.
+// The function prints "IMPORTED-OK" after suspending — this sentinel proves that the
+// background spawn dispatched to this imported callee rather than the local function with
+// the same alias name. Four crossing-locals give a distinctly larger frame (header + 4×8
+// slots = 72+ bytes) vs the local function's header-only frame (32 bytes): if the local's
+// layout wins, the undersized spawn corrupts the heap and the sentinel never prints.
+
+export function compute() -> nothing {
+  let a: int = 1
+  let b: int = 2
+  let c: int = 3
+  let d: int = 4
+  sleep(10)
+  print(`IMPORTED-OK`)
+}

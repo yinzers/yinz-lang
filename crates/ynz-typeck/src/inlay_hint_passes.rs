@@ -1,20 +1,23 @@
-//! Inlay-hint detection passes for the v0.2-M5 LSP teaching surfaces.
+//! Inlay-hint detection passes for the v0.2-M5 + v0.3-M3b LSP teaching surfaces.
 //!
 //! Each pass is a salsa-tracked function so repeated LSP requests at the same
 //! file version reuse the computed hints.  Cache is invalidated when source changes.
 //!
-//! # Firing domains (5 of 9)
+//! # Firing domains (7 of 9)
 //!
 //! - `variable_type_hints`            — `: TypeName` after un-annotated `let` bindings
 //! - `ownership_call_site_hints`      — `share`/`lend`/`give` after call arguments
 //! - `copy_point_hints`               — `.copy (N bytes)` for trivially-copyable passes
 //! - `array_to_fixed_promotion_hints` — decoration on never-grown `array<T>` bindings
 //! - `let_to_const_promotion_hints`   — decoration on never-mutated `let` bindings
+//! - `wait_points_hints`              — muted `wait` before suspending call sites (Addition)
+//! - `background_routing_hints`       — routing comment at `background` spawn sites (Informational)
 //!
-//! # Protocol-only domains (4 of 9)
+//! # Protocol-only domains (2 of 9)
 //!
-//! `function_param_type`, `wait_points`, `lifetimes`, `allocators` are handled
-//! by the LSP layer but return empty hint lists until v0.3+ data exists.
+//! `function_param_type` and `lifetimes` are handled by the LSP layer but return empty
+//! hint lists.  `allocators` is also registered in the registry but not yet firing —
+//! it ships when arena allocation lands (v0.2+).  `lifetimes` remain protocol-only.
 
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -27,8 +30,8 @@ use crate::{
     generics::GenericFnTable,
     intrinsics::PrimitiveIntrinsicTable,
     queries::{check_query, module_signatures_query},
-    signatures::{FunctionSig, SignatureTable},
-    types::{type_name, Type},
+    signatures::{build_effective_suspend_set, FunctionSig, SignatureTable},
+    types::{is_trivially_copyable, type_name, Type},
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -150,16 +153,38 @@ pub struct PromotionHint {
     pub type_keyword_span: Option<SourceSpan>,
 }
 
+/// Suspension-point hint at a call site whose callee transitively `suspends`.
+///
+/// Rendered as muted `wait` BEFORE the call (Addition placement per
+/// `.claude/rules/inference.md`).  Suppressed when the user already wrote `wait`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WaitPointHint {
+    /// Byte offset just before the call expression — where the muted `wait` renders.
+    pub position: usize,
+    /// The callee name, used to produce the contextual WHY: e.g. `"sleep"`.
+    pub callee_name: String,
+}
+
+/// Thread-pool routing hint at a `background` spawn site.
+///
+/// Rendered as a muted comment AFTER the `background` statement (Informational
+/// placement per `.claude/rules/inference.md`).  Reads `suspends_set` — the same
+/// SSOT that drives the codegen routing decision at `emit.rs:9335` — so the hint
+/// and the actual binary routing always agree.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BackgroundRoutingHint {
+    /// Byte offset at the end of the `background` expression — where the routing
+    /// comment renders.
+    pub position: usize,
+    /// The rendered muted comment label, e.g.
+    /// `"// routed to I/O pool — sleep suspends here"` or
+    /// `"// routed to CPU pool — no may-block calls in call graph"`.
+    pub label: String,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
-
-fn is_trivially_copyable(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::Int | Type::Float | Type::Bool | Type::Number { .. }
-    )
-}
 
 fn copy_size_text(ty: &Type) -> &'static str {
     match ty {
@@ -654,10 +679,12 @@ fn collect_type_hints_block(
     }
 }
 
-/// Emit `share`/`lend`/`give` hints after call-site arguments.
+/// Emit `share`/`lend`/`give`/`copy` hints after call-site arguments.
 ///
 /// Fires for free-function calls, generic-function calls, and UFCS method calls
 /// (`player.heal(20)` is equivalent to `heal(player, 20)` — both get the same hint).
+/// Also emits inferred `give` or `copy` hints for plain-ident arguments at
+/// `background` call sites (sourced from the check pass's use-after-spawn analysis).
 /// Suppressed when the callee cannot be resolved (unresolvable → no hint, not a crash).
 ///
 /// Time: O(n × signature-lookup).  Space: O(hints).
@@ -668,6 +695,7 @@ pub fn ownership_call_site_hints(
 ) -> Vec<OwnershipHint> {
     let parse = parse_query(db, source);
     let sigs = module_signatures_query(db, source);
+    let check = check_query(db, source);
 
     let mut hints = Vec::new();
     for item in &parse.module.items {
@@ -681,7 +709,67 @@ pub fn ownership_call_site_hints(
             );
         }
     }
+
+    // Emit inferred `give`/`copy` hints for plain-ident arguments at `background`
+    // call sites.  The check pass records which ident-span maps to which inferred
+    // modifier in `background_arg_inferred_ownership`.
+    //
+    // Walk every statement in every function body; when we find a
+    // `Stmt::Expr(Expr::Background(Expr::Call(...)))`, check each plain-ident arg
+    // against the map and emit a hint at `arg.span().end`.
+    let bg_inferred = &check.typed_module.background_arg_inferred_ownership;
+    if !bg_inferred.is_empty() {
+        for item in &parse.module.items {
+            if let Item::Function(f) = item {
+                collect_background_ownership_hints_block(&f.body, bg_inferred, &mut hints);
+            }
+        }
+    }
+
     hints
+}
+
+/// Walk a block collecting inferred `give`/`copy` hints for `background` call sites.
+fn collect_background_ownership_hints_block(
+    block: &ynz_ast::nodes::Block,
+    bg_inferred: &std::collections::HashMap<(usize, usize), crate::check::BgOwnership>,
+    out: &mut Vec<OwnershipHint>,
+) {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Expr(Expr::Background(inner, _)) => {
+                if let Expr::Call(call) = inner.as_ref() {
+                    for arg in &call.args {
+                        if let Expr::Ident(_, span) = arg {
+                            let key = (span.start, span.end);
+                            if let Some(own) = bg_inferred.get(&key) {
+                                out.push(OwnershipHint {
+                                    position: span.end,
+                                    modifier: bg_ownership_modifier_str(own).to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            // Recurse into blocks so nested `background` statements are also covered.
+            Stmt::If { body, .. } => {
+                collect_background_ownership_hints_block(body, bg_inferred, out);
+            }
+            Stmt::While { body, .. } | Stmt::For { body, .. } => {
+                collect_background_ownership_hints_block(body, bg_inferred, out);
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                for arm in arms {
+                    collect_background_ownership_hints_block(&arm.body, bg_inferred, out);
+                }
+                if let Some(eb) = else_arm {
+                    collect_background_ownership_hints_block(eb, bg_inferred, out);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn collect_ownership_hints_block(
@@ -746,6 +834,14 @@ fn ownership_modifier_str(own: &OwnershipModifier) -> &'static str {
         OwnershipModifier::Share => "share",
         OwnershipModifier::Lend => "lend",
         OwnershipModifier::Give => "give",
+    }
+}
+
+/// Map a `BgOwnership` (inferred modifier for `background` args) to the hint string.
+fn bg_ownership_modifier_str(own: &crate::check::BgOwnership) -> &'static str {
+    match own {
+        crate::check::BgOwnership::Give => "give",
+        crate::check::BgOwnership::Copy => "copy",
     }
 }
 
@@ -1144,5 +1240,458 @@ fn collect_const_hints_block(
             }
             _ => {}
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// wait_points pass (Addition placement)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Emit a muted `wait` hint before each call site whose callee transitively suspends.
+///
+/// Suppressed at call sites where the user already wrote `wait` — the hint is
+/// informational, not redundant.  Per `.claude/rules/inference.md`, this is an
+/// Addition-category hint: the muted text appears in-position before the call,
+/// and click-to-make-explicit inserts `wait ` before the expression.
+///
+/// Uses the EFFECTIVE suspend set (local-suspending names PLUS imported-suspending
+/// names from `module_signatures_query`), mirroring exactly what codegen builds at
+/// `crates/ynz-codegen/src/queries.rs:90-94`.  Without this, a call to an imported
+/// suspending function is correctly routed by codegen but the hint never fires —
+/// the hint and the binary diverge for cross-module callee sites.
+///
+/// Time: O(n) AST walk.  Space: O(hints).
+#[salsa::tracked]
+pub fn wait_points_hints(db: &dyn SourceFileRegistry, source: SourceFile) -> Vec<WaitPointHint> {
+    let parse = parse_query(db, source);
+    let check = check_query(db, source);
+    let sig_output = module_signatures_query(db, source);
+    // WHY: single SSOT — `build_effective_suspend_set` is the same computation that
+    // feeds codegen frame-layout and routing, so the hint can never drift from the
+    // binary's actual suspension decisions.
+    let effective_suspends =
+        build_effective_suspend_set(&check.suspends_set, &sig_output.imported_fns);
+
+    let mut hints = Vec::new();
+    for item in &parse.module.items {
+        if let Item::Function(f) = item {
+            collect_wait_point_hints_block(&f.body, &effective_suspends, &mut hints);
+        }
+    }
+    hints
+}
+
+/// Walk a block collecting `WaitPointHint`s for suspending call sites.
+///
+/// `inside_wait` is `true` when the current expression is the inner expr of an
+/// `Expr::Wait` wrapper — those sites already have an explicit `wait` and are
+/// suppressed.
+fn collect_wait_point_hints_block(
+    block: &Block,
+    suspends_set: &HashSet<String>,
+    out: &mut Vec<WaitPointHint>,
+) {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Expr(e) | Stmt::Let { value: e, .. } => {
+                collect_wait_point_hints_expr(e, suspends_set, out);
+            }
+            Stmt::Assign { value, .. } | Stmt::FieldAssign { value, .. } => {
+                collect_wait_point_hints_expr(value, suspends_set, out);
+            }
+            Stmt::IndexAssign { index, value, .. } => {
+                collect_wait_point_hints_expr(index, suspends_set, out);
+                collect_wait_point_hints_expr(value, suspends_set, out);
+            }
+            Stmt::Return { value: Some(e), .. } => {
+                collect_wait_point_hints_expr(e, suspends_set, out);
+            }
+            Stmt::If { cond, body, .. } => {
+                collect_wait_point_hints_expr(cond, suspends_set, out);
+                collect_wait_point_hints_block(body, suspends_set, out);
+            }
+            Stmt::While { cond, body, .. } => {
+                collect_wait_point_hints_expr(cond, suspends_set, out);
+                collect_wait_point_hints_block(body, suspends_set, out);
+            }
+            Stmt::For { iter, body, .. } => {
+                collect_wait_point_hints_expr(iter, suspends_set, out);
+                collect_wait_point_hints_block(body, suspends_set, out);
+            }
+            Stmt::Match {
+                scrutinee,
+                arms,
+                else_arm,
+                ..
+            } => {
+                collect_wait_point_hints_expr(scrutinee, suspends_set, out);
+                for arm in arms {
+                    collect_wait_point_hints_block(&arm.body, suspends_set, out);
+                }
+                if let Some(eb) = else_arm {
+                    collect_wait_point_hints_block(eb, suspends_set, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Collect wait-point hints for an expression.  A call whose callee is in
+/// `suspends_set` gets a `WaitPointHint` placed before the call's span start.
+///
+/// The match is exhaustive — every `Expr` variant is named explicitly.  Genuine
+/// leaves (literals, identifiers, `self`, `none`) have empty arms.  This forces a
+/// conscious decision whenever a new `Expr` variant is added to the AST instead of
+/// silently dropping it into the `_ => {}` catch-all and missing suspension hints.
+fn collect_wait_point_hints_expr(
+    expr: &Expr,
+    suspends_set: &HashSet<String>,
+    out: &mut Vec<WaitPointHint>,
+) {
+    match expr {
+        Expr::Call(c) => {
+            // Emit a hint if the callee is a known-suspending user-defined function.
+            if let Expr::Ident(name, _) = &c.callee {
+                if suspends_set.contains(name.as_str()) {
+                    out.push(WaitPointHint {
+                        position: expr.span().start,
+                        callee_name: name.clone(),
+                    });
+                }
+            }
+            // Recurse into args and callee for nested suspending calls.
+            for arg in &c.args {
+                collect_wait_point_hints_expr(arg, suspends_set, out);
+            }
+            collect_wait_point_hints_expr(&c.callee, suspends_set, out);
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            collect_wait_point_hints_expr(receiver, suspends_set, out);
+            for arg in args {
+                collect_wait_point_hints_expr(arg, suspends_set, out);
+            }
+        }
+        // A user-written `wait foo()` — skip the top-level hint; recurse into
+        // nested calls inside the inner expression (args to the waited call still
+        // get their own hints if they also suspend).
+        Expr::Wait(inner, _) => {
+            collect_wait_point_hints_expr_no_top(inner, suspends_set, out);
+        }
+        // `background` spawn sites: recurse for any nested suspending calls in args.
+        Expr::Background(inner, _) => {
+            collect_wait_point_hints_expr(inner, suspends_set, out);
+        }
+        // Compound expressions — a suspending call buried inside any of these would
+        // have been silently dropped before this fix.  Mirror the reference walker
+        // `collect_maybe_mutated_expr` which handles all of these.
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_wait_point_hints_expr(lhs, suspends_set, out);
+            collect_wait_point_hints_expr(rhs, suspends_set, out);
+        }
+        Expr::UnaryOp { operand, .. } => {
+            collect_wait_point_hints_expr(operand, suspends_set, out);
+        }
+        Expr::FieldAccess { receiver, .. } => {
+            collect_wait_point_hints_expr(receiver, suspends_set, out);
+        }
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => {
+            collect_wait_point_hints_expr(receiver, suspends_set, out);
+            collect_wait_point_hints_expr(index, suspends_set, out);
+        }
+        Expr::StructLit { fields, .. } => {
+            for field in fields {
+                collect_wait_point_hints_expr(&field.value, suspends_set, out);
+            }
+        }
+        Expr::ArrayLit { elements, .. } => {
+            for elem in elements {
+                collect_wait_point_hints_expr(elem, suspends_set, out);
+            }
+        }
+        Expr::MapLit { entries, .. } => {
+            for (key_expr, val_expr) in entries {
+                collect_wait_point_hints_expr(key_expr, suspends_set, out);
+                collect_wait_point_hints_expr(val_expr, suspends_set, out);
+            }
+        }
+        Expr::PostfixOp { receiver, .. } => {
+            collect_wait_point_hints_expr(receiver, suspends_set, out);
+        }
+        Expr::Is { expr: inner, .. } => {
+            collect_wait_point_hints_expr(inner, suspends_set, out);
+        }
+        Expr::InterpolatedString(parts, _) => {
+            for part in parts {
+                if let ynz_ast::nodes::StringPart::Expr(e, _) = part {
+                    collect_wait_point_hints_expr(e, suspends_set, out);
+                }
+            }
+        }
+        // Genuine leaves — no sub-expressions to recurse into.
+        Expr::Ident(..)
+        | Expr::StringLit(..)
+        | Expr::IntLit(..)
+        | Expr::NumberLit(..)
+        | Expr::BoolLit(..)
+        | Expr::SelfValue { .. }
+        | Expr::NoneLit { .. }
+        | Expr::Error(..) => {}
+    }
+}
+
+/// Walk an expression for nested suspending calls, but do NOT emit a hint for the
+/// top-level call itself (because the parent is already an explicit `wait`).
+///
+/// Recurses into the call's arguments so a suspending call passed as an argument
+/// to an already-waited call still gets its own hint.  Any non-Call top-level
+/// expression delegates to the full walker — the suppression applies only to the
+/// immediately-waited Call, not to arbitrary deeper expressions.
+fn collect_wait_point_hints_expr_no_top(
+    expr: &Expr,
+    suspends_set: &HashSet<String>,
+    out: &mut Vec<WaitPointHint>,
+) {
+    match expr {
+        Expr::Call(c) => {
+            // The top-level call is already `wait`'d — skip emitting a hint for it.
+            // Its args are fair game: a suspending argument still needs its own hint.
+            for arg in &c.args {
+                collect_wait_point_hints_expr(arg, suspends_set, out);
+            }
+        }
+        // Anything else falls through to the full walker — suppression is only for
+        // the directly-waited Call node, not for every sub-expression underneath it.
+        _ => collect_wait_point_hints_expr(expr, suspends_set, out),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// background_routing pass (Informational placement)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Emit a muted routing comment at each `background` spawn site.
+///
+/// The comment says `// routed to I/O pool — <callee> suspends here` when the
+/// callee is in the effective suspend set (state-machine, routes to
+/// `ynz_rt_spawn`), or `// routed to CPU pool — no may-block calls in call
+/// graph` otherwise (routes to `ynz_rt_spawn_blocking`).
+///
+/// Per `.claude/rules/inference.md`, this is an Informational-category hint: the
+/// compiler made a decision with no typeable equivalent syntax, so the hint is a
+/// muted comment annotation rather than an Addition/Replacement hint.
+///
+/// Uses the EFFECTIVE suspend set (local-suspending names PLUS imported-suspending
+/// names from `module_signatures_query`), mirroring exactly what codegen builds at
+/// `crates/ynz-codegen/src/queries.rs:90-94`.  Without this, `background
+/// importedFn()` where `importedFn` suspends would show "CPU pool" in the hint
+/// while the binary routes to the I/O pool — the hint lies and the binary contradicts
+/// it (confirmed live, two-module test).
+///
+/// Time: O(n) AST walk.  Space: O(hints).
+#[salsa::tracked]
+pub fn background_routing_hints(
+    db: &dyn SourceFileRegistry,
+    source: SourceFile,
+) -> Vec<BackgroundRoutingHint> {
+    let parse = parse_query(db, source);
+    let check = check_query(db, source);
+    let sig_output = module_signatures_query(db, source);
+    // WHY: single SSOT — `build_effective_suspend_set` is the same computation that
+    // feeds codegen frame-layout and routing, so the hint can never drift from the
+    // binary's actual suspension decisions.
+    let effective_suspends =
+        build_effective_suspend_set(&check.suspends_set, &sig_output.imported_fns);
+    let suspends_set = &effective_suspends;
+
+    let mut hints = Vec::new();
+    for item in &parse.module.items {
+        if let Item::Function(f) = item {
+            collect_background_routing_hints_block(&f.body, suspends_set, &mut hints);
+        }
+    }
+    hints
+}
+
+/// Walk a block collecting `BackgroundRoutingHint`s.
+fn collect_background_routing_hints_block(
+    block: &Block,
+    suspends_set: &HashSet<String>,
+    out: &mut Vec<BackgroundRoutingHint>,
+) {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Expr(Expr::Background(inner, bg_span)) => {
+                emit_background_routing_hint(inner, bg_span, suspends_set, out);
+                // Recurse into the inner call's args for nested background/wait sites.
+                collect_background_routing_hints_expr(inner, suspends_set, out);
+            }
+            Stmt::Expr(e) | Stmt::Let { value: e, .. } => {
+                collect_background_routing_hints_expr(e, suspends_set, out);
+            }
+            Stmt::Assign { value, .. } | Stmt::FieldAssign { value, .. } => {
+                collect_background_routing_hints_expr(value, suspends_set, out);
+            }
+            Stmt::IndexAssign { index, value, .. } => {
+                collect_background_routing_hints_expr(index, suspends_set, out);
+                collect_background_routing_hints_expr(value, suspends_set, out);
+            }
+            Stmt::Return { value: Some(e), .. } => {
+                collect_background_routing_hints_expr(e, suspends_set, out);
+            }
+            Stmt::If { cond, body, .. } => {
+                collect_background_routing_hints_expr(cond, suspends_set, out);
+                collect_background_routing_hints_block(body, suspends_set, out);
+            }
+            Stmt::While { cond, body, .. } => {
+                collect_background_routing_hints_expr(cond, suspends_set, out);
+                collect_background_routing_hints_block(body, suspends_set, out);
+            }
+            Stmt::For { iter, body, .. } => {
+                collect_background_routing_hints_expr(iter, suspends_set, out);
+                collect_background_routing_hints_block(body, suspends_set, out);
+            }
+            Stmt::Match {
+                scrutinee,
+                arms,
+                else_arm,
+                ..
+            } => {
+                collect_background_routing_hints_expr(scrutinee, suspends_set, out);
+                for arm in arms {
+                    collect_background_routing_hints_block(&arm.body, suspends_set, out);
+                }
+                if let Some(eb) = else_arm {
+                    collect_background_routing_hints_block(eb, suspends_set, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Emit a `BackgroundRoutingHint` for a `background inner` spawn site.
+fn emit_background_routing_hint(
+    inner: &Expr,
+    bg_span: &SourceSpan,
+    suspends_set: &HashSet<String>,
+    out: &mut Vec<BackgroundRoutingHint>,
+) {
+    let callee_name = match inner {
+        Expr::Call(c) => match &c.callee {
+            Expr::Ident(name, _) => Some(name.as_str()),
+            _ => None,
+        },
+        _ => None,
+    };
+
+    let label = if let Some(name) = callee_name {
+        if suspends_set.contains(name) {
+            format!("// routed to I/O pool — {} suspends here", name)
+        } else {
+            "// routed to CPU pool — no may-block calls in call graph".to_string()
+        }
+    } else {
+        // Complex callee (non-ident, e.g. method call desugared) — emit CPU routing
+        // as the conservative default (mirrors codegen's complex-callee branch).
+        "// routed to CPU pool — no may-block calls in call graph".to_string()
+    };
+
+    out.push(BackgroundRoutingHint {
+        position: bg_span.end,
+        label,
+    });
+}
+
+/// Recurse into an expression collecting `BackgroundRoutingHint`s for nested
+/// `background` sites inside the expression.
+///
+/// The match is exhaustive — every `Expr` variant is named explicitly so that a
+/// future AST variant forces a conscious decision instead of silently dropping
+/// nested `background` spawns buried in compound expressions.
+fn collect_background_routing_hints_expr(
+    expr: &Expr,
+    suspends_set: &HashSet<String>,
+    out: &mut Vec<BackgroundRoutingHint>,
+) {
+    match expr {
+        Expr::Background(inner, bg_span) => {
+            emit_background_routing_hint(inner, bg_span, suspends_set, out);
+            collect_background_routing_hints_expr(inner, suspends_set, out);
+        }
+        Expr::Wait(inner, _) => {
+            collect_background_routing_hints_expr(inner, suspends_set, out);
+        }
+        Expr::Call(c) => {
+            collect_background_routing_hints_expr(&c.callee, suspends_set, out);
+            for arg in &c.args {
+                collect_background_routing_hints_expr(arg, suspends_set, out);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            collect_background_routing_hints_expr(receiver, suspends_set, out);
+            for arg in args {
+                collect_background_routing_hints_expr(arg, suspends_set, out);
+            }
+        }
+        // Compound expressions — a nested `background` buried in any of these was
+        // silently dropped before this fix.  Mirror the reference walker
+        // `collect_maybe_mutated_expr` which handles all of these.
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_background_routing_hints_expr(lhs, suspends_set, out);
+            collect_background_routing_hints_expr(rhs, suspends_set, out);
+        }
+        Expr::UnaryOp { operand, .. } => {
+            collect_background_routing_hints_expr(operand, suspends_set, out);
+        }
+        Expr::FieldAccess { receiver, .. } => {
+            collect_background_routing_hints_expr(receiver, suspends_set, out);
+        }
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => {
+            collect_background_routing_hints_expr(receiver, suspends_set, out);
+            collect_background_routing_hints_expr(index, suspends_set, out);
+        }
+        Expr::StructLit { fields, .. } => {
+            for field in fields {
+                collect_background_routing_hints_expr(&field.value, suspends_set, out);
+            }
+        }
+        Expr::ArrayLit { elements, .. } => {
+            for elem in elements {
+                collect_background_routing_hints_expr(elem, suspends_set, out);
+            }
+        }
+        Expr::MapLit { entries, .. } => {
+            for (key_expr, val_expr) in entries {
+                collect_background_routing_hints_expr(key_expr, suspends_set, out);
+                collect_background_routing_hints_expr(val_expr, suspends_set, out);
+            }
+        }
+        Expr::PostfixOp { receiver, .. } => {
+            collect_background_routing_hints_expr(receiver, suspends_set, out);
+        }
+        Expr::Is { expr: inner, .. } => {
+            collect_background_routing_hints_expr(inner, suspends_set, out);
+        }
+        Expr::InterpolatedString(parts, _) => {
+            for part in parts {
+                if let ynz_ast::nodes::StringPart::Expr(e, _) = part {
+                    collect_background_routing_hints_expr(e, suspends_set, out);
+                }
+            }
+        }
+        // Genuine leaves — no sub-expressions to recurse into.
+        Expr::Ident(..)
+        | Expr::StringLit(..)
+        | Expr::IntLit(..)
+        | Expr::NumberLit(..)
+        | Expr::BoolLit(..)
+        | Expr::SelfValue { .. }
+        | Expr::NoneLit { .. }
+        | Expr::Error(..) => {}
     }
 }
