@@ -1,5 +1,75 @@
 # Changelog
 
+## [0.3.0-m5] — 2026-06-09 — M3e + M3b: Cross-Module Frame Serialization + Auto-Parallelization
+
+Commit range: v0.3.0-m4..v0.3.0-m5
+
+### What changed
+
+v0.3.0-m5 bundles two concurrency milestones. **M3e** lets a suspending function be
+called across module boundaries — the M2/M3a substrate could only suspend within one
+module. **M3b** makes independent suspending statements overlap automatically: write
+straight-line code, get concurrent I/O for free, with no `async`/`await` and no spawn
+syntax. Programs that compiled before are byte-identical; the new `--no-auto-parallel`
+build flag is a permanent escape hatch and the cross-implementation consistency oracle.
+
+#### Features (M3e — cross-module frame serialization)
+
+- **Cross-module `wait`** — a function in one module can now `wait` on a suspending
+  function defined in another module. The callee's full task-frame layout is serialized
+  through the export table so the state-machine codegen can rebuild it on the caller's
+  side. The universal-reject floor M3b shipped as an honest partial is lifted.
+- **Conservative cross-boundary safety** — an unresolvable edge (dynamic dispatch, FFI)
+  still produces a clean teaching error, never a silent non-suspension.
+
+#### Features (M3b — auto-parallelization)
+
+- **Independent suspending statements overlap** — two statements that each suspend and
+  don't depend on each other run concurrently via a single-threaded interleaved poll
+  (default ≈ the slower of the two, vs `--no-auto-parallel` ≈ the sum). Zero new runtime
+  symbols — no thread spawn.
+- **`wait` is the ordering barrier** — `wait foo()` completes (and joins all in-flight
+  overlapped work) before the next statement starts. Loop iterations stay sequential.
+- **`background` give/copy figured out for you** — a value handed to a `background` task
+  is automatically given (move) when unused after, or deep-copied when still used. Heap
+  values get a real deep copy, freed when the task completes — no use-after-free, no leak.
+- **Two new IDE hints** — `wait_points` (where the compiler suspends on I/O) and
+  `background_routing` (which pool a `background` task lands in) render as muted inlay
+  hints that read the *effective* suspend set, so they can't drift from actual behavior.
+
+#### Soundness (M3b)
+
+Auto-parallelization is sound by a **type-based conservative floor**: any argument whose
+type is mutable-heap (a `shape`, `array`, `map`, `maybe`, union, or `dynamic`) is treated
+as a potential aliased write, so a statement pair touching one runs sequentially. Golden
+Rule 5 (compile-time safety) outranks Golden Rule 10 (efficiency) — the compiler forfeits
+read-only-heap overlap rather than risk a data race. Primitive and `string` arguments
+still overlap.
+
+#### Known limitations / deferrals
+
+- **`background`-handle result collection** (`ec-wrapper-collect-on-completion`) — moved to
+  v0.3-M4. Collecting a `background`-spawned `-> T errors` task's result via a handle needs
+  the handle-collection syntax (`.send`/`.receive`), which ships separately. The inline-poll
+  path for `-> T errors` works today.
+- **Read-only-heap overlap forfeited** — the conservative floor sequentializes mutable-heap
+  arguments even when the callee only reads them. Reversal path: a type+alias-aware ownership
+  analysis. Documented in `design/concurrency.md`.
+
+#### Pre-existing bugs surfaced (not introduced by this release)
+
+Two silent-wrong-output bugs were found during M3b adversarial review and confirmed to
+pre-date auto-parallelization (identical wrong output with and without `--no-auto-parallel`).
+Tracked on the roadmap as milestone M3f (blocks the `v0.3.0` final release) and in
+`.claude/todos.md`: (1) same-callee wide-`errors` (`-> number errors`) result slot reuse;
+(2) a crossing local inside control flow after a `wait`. Neither is a regression.
+
+### Tests
+
+1929 passing across the workspace (0 failed, 6 ignored). Cross-implementation oracle:
+`--no-auto-parallel` equals default output on 196 + 31 fixtures, zero real divergence.
+M3b passed a 5-reviewer cumulative review; M3e passed its own at close-out.
+
 ## [0.3.0-m4] — 2026-06-04 — M3a: `wait` in Loops + Frame-Backed Crossing Locals
 
 Commit range: v0.3.0-m3..v0.3.0-m4
