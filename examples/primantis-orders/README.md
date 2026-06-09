@@ -37,6 +37,7 @@ These files are INTENTIONALLY broken — they're not meant to compile. The point
 | **v0_2_m5_errors.ynz** | ✅ shipped | LSP rename + refactor errors |
 | **[v0_3_m1_errors.ynz](v0_3_m1_errors.ynz)** | ✅ shipped | share-param (carry-forward), lend-cross-thread, large-copy warning, kernel-mode rejections (commented, triggered in-process) |
 | **[v0_3_m3e_errors.ynz](v0_3_m3e_errors.ynz)** | ✅ shipped | DynamicDispatch reject (vtable call in suspending context); FFI cross-module suspension (not yet reachable — documented for when FFI ships). Universal cross-module reject removed — all analyzable cross-module suspending calls now compile and run. |
+| **v0_3_m3f_errors.ynz** | deliberate omission — no entry | M3f introduced no new compile-error class. Both bugs (same-callee wide-EC aliasing; parallel-group bool frame-slot corruption) were SILENT miscompiles — no diagnostic fired, no error to trigger. The fix makes the programs produce correct values, not new errors. Regression coverage lives in permanent fixtures under `crates/ynz-driver/tests/fixtures/v0_3_m3f_*.ynz` instead. |
 
 ## Why this exists
 

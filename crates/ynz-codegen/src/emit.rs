@@ -3703,7 +3703,9 @@ fn flush_var_slot_to_frame<'ctx>(
             cg.builder
                 .build_unconditional_branch(flush_merge_bb)
                 .map_err(|e| format!("crossing flush ec_num copy->merge {name}: {e}"))?;
-            // Error path: store zeros so the frame slots have defined values.
+            // Error path (f0 != 0): slots N+1/N+2 retain their zero-init from
+            // ynz_alloc_zeroed — no stores are emitted here. Callers check f0 first
+            // and never read the ok-value slots on the error path.
             cg.builder.position_at_end(flush_merge_bb);
         } else {
             // All other ErrorsCapable {i64,i64}: f1 is the ok-word (a heap pointer or
@@ -5754,7 +5756,8 @@ fn bind_sm_result_and_flush<'ctx>(
                     .into_int_value();
                 // Per-binding stable storage allocated unconditionally so the pointer is
                 // always valid for the EC struct's f1 field. Error path: f0 != 0 → `.or()`
-                // reads f0 first and branches to the fallback without ever loading f1.
+                // reads f0 first and branches to the fallback; ok_bits (f1) is extracted
+                // above but never dereferenced as a pointer on the error path.
                 let binding_alloca = cg
                     .builder
                     .build_alloca(cg.ctx.i128_type(), &format!("{name}_dec_own"))
@@ -13299,7 +13302,8 @@ fn lower_errors_capable_call_result<'ctx>(
             .into_int_value();
         // Per-binding stable storage allocated unconditionally so f1 always points to
         // valid memory. Error path: f0 != 0 → `.or()` reads f0 first and branches to
-        // the fallback without ever loading f1.
+        // the fallback; ok_bits (f1) is extracted above but never dereferenced as a
+        // pointer on the error path.
         let binding_alloca = cg
             .builder
             .build_alloca(cg.ctx.i128_type(), "ec_cob_dec_own")

@@ -1,0 +1,33 @@
+// Fixture (Bug-2 matrix — ≥3 group members): three independent suspending bindings
+// (int, int, bool) are auto-grouped; all three cross a subsequent `wait`; all three
+// are read afterward. Tests that the bool-slot fix composes correctly across
+// groups larger than 2 members.
+//
+// Expected output (correct):
+//   42
+//   99
+//   true
+function slowCall() -> int {
+  wait sleep(40)
+  return 42
+}
+
+function otherInt() -> int {
+  wait sleep(40)
+  return 99
+}
+
+function flagFn() -> boolean {
+  wait sleep(40)
+  return true
+}
+
+function entrypoint() -> nothing {
+  let a = slowCall()
+  let b = otherInt()
+  let flag = flagFn()
+  wait sleep(1)
+  print(a.toString())
+  print(b.toString())
+  print(flag.toString())
+}

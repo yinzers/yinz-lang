@@ -3,7 +3,7 @@ slug: v0-3-m3f-codegen-correctness-fixes
 type: execution
 owner: Patrick Rizzardi
 roadmap: v0-3-concurrency-perf
-status: active
+status: done
 created: 2026-06-09
 last_updated: 2026-06-09
 plan_base: d24a5f45e2c1485416f694eea6a3cdb3edddadb8
@@ -393,7 +393,7 @@ _(D_count = 1 approach deviation judged PASS. Carve-out: plan-adherence AC6 BLOC
 - [x] plan-adherence-verifier: PASS 2026-06-09T19:30 (3/3 steps; scope clean — only emit.rs)
 - [x] acceptance-verifier: PASS 2026-06-09T19:30 (5/5 ACs MET, full 9-case matrix live, 328/0)
 - [x] design-compliance-reviewer: PASS 2026-06-09T19:30
-- [ ] Committed: <commit SHA>
+- [x] Committed: 05262d3
 _(D_count = 0 — executor touched only emit.rs (matches plan); the 2 documented "scope deviations" were coordinator/hook artifacts, not executor changes. No deviation-judges this phase.)_
 
 **Findings Log**:
@@ -432,34 +432,37 @@ _(D_count = 0 — executor touched only emit.rs (matches plan); the 2 documented
 5. Close `.claude/todos.md:178` + `:180` (tick + date + "shipped M3f"); mark roadmap M3f "Tracked bugs" 1 & 2 shipped; leave `:170` (aliased-shape) open with its m3c deferral. **When closing :178, state the reframe explicitly** so nobody reconciling the roadmap thinks a crash was fixed: ":178 described an LLVM 'does not dominate all uses' compile crash; that symptom no longer reproduces on `main` (the crossing-local read-scan already recurses — incidentally closed by earlier M3 work). What M3f actually fixed in this area is the live mode-divergent silent miscompile (parallel-group bool sibling reads 0; default ≠ --no-auto-parallel) that the same root area surfaced. Closing :178 as the area's tracked bug, fixed via the Bug-2 reframe."
 6. Cumulative cross-impl sweep: assert `default == YNZ_NO_AUTO_PARALLEL=1` across ALL fixtures + the existing suite; `cargo clippy --workspace -- -D warnings`; `cargo fmt --all --check`; jargon audit.
 **Acceptance criteria**:
-- [ ] Permanent regression fixtures for the full Bug-2 matrix + Bug-1 multi-binding exist with insta snapshots + cross-impl assertions; all pass both modes (live)
-  - Evidence: (filled at phase completion)
-- [ ] `pirates-roster/entrypoint.ynz` demonstrates both fixed patterns; `expected_stdout.txt` regenerated and matches the live run
-  - Evidence: (filled at phase completion)
-- [ ] `design/concurrency.md` ECWrapperResultCollection claim corrected (inline-poll path hole + M3f fix noted)
-  - Evidence: (filled at phase completion)
-- [ ] todos.md :178 + :180 closed; roadmap M3f bugs 1&2 marked shipped; :170 left open with m3c deferral
-  - Evidence: (filled at phase completion)
-- [ ] Cumulative `default == --no-auto-parallel` holds on every fixture; `cargo test --workspace` green; clippy/fmt/jargon clean
-  - Evidence: (filled at phase completion)
+- [x] Permanent regression fixtures for the full Bug-2 matrix + Bug-1 multi-binding exist with insta snapshots + cross-impl assertions; all pass both modes (live)
+  - Evidence: 12 `v0_3_m3f_*.ynz` fixtures + 12 integration tests; `cargo test -p ynz-driver --test integration v0_3_m3f` → **12 passed, 0 failed**; every test calls `build_to_tmpdir_and_run` for both modes + asserts `assert_eq!(par, seq, ...)` cross-impl (integration.rs:6580-6877). Includes the EC<Number>(3-slot)+bool(1-slot) interleave `v0_3_m3f_parallel_group_ec_number_and_bool` (`24.50\ntrue` PAR==SEQ), the 3-binding `v0_3_m3f_ec_three_bindings` (`24.50\n31.75\n24.50`), and the failed-branch `v0_3_m3f_ec_failed_then_ok` (`true\n0.0\n99.9`). (acceptance-verifier cumulative, live)
+- [x] `pirates-roster/entrypoint.ynz` demonstrates both fixed patterns; `expected_stdout.txt` regenerated and matches the live run
+  - Evidence: demo M3f section (`m3f_demo()`, entrypoint.ynz:930-956) — two same-callee EC `fetchScoutRating(0/1)` + an int/bool parallel group crossing `wait sleep(1)`. LIVE-run M3f lines (`87.50`/`92.25`/`draft slot available: 14`) byte-identical to `expected_stdout.txt` and deterministic across 3 runs (same md5); `expected_stdout.txt` regenerated via the script (not hand-edited). (The only diff vs live is the pre-existing M3b `background` print-ordering non-determinism — todos:176 — NOT the M3f lines.) (acceptance-verifier cumulative, live)
+- [x] `design/concurrency.md` ECWrapperResultCollection claim corrected (inline-poll path hole + M3f fix noted)
+  - Evidence: `design/concurrency.md:458` false "the inline path is correct and complete" removed; durable Note at :460 documents the same-callee staging-slot hole + M3f copy-on-bind fix, preserving the distinct `background`-wrapper deferral. States current reality, not changelog. (acceptance-verifier + design-compliance + rules-compliance, cumulative)
+- [x] todos.md :178 + :180 closed; roadmap M3f bugs 1&2 marked shipped; :170 left open with m3c deferral
+  - Evidence: todos.md :178 → `- [x]` with explicit REFRAME text + commit `05262d3`; :180 → `- [x]` CLOSED via copy-on-bind + commit `9e7ee78`; roadmap bugs 1&2 struck-through + "SHIPPED v0.3-M3f"; :170 aliased-shape still `- [ ]` open with intact m3c deferral trigger. (acceptance-verifier + plan-adherence, cumulative)
+- [x] Cumulative `default == --no-auto-parallel` holds on every fixture; `cargo test --workspace` green; clippy/fmt/jargon clean
+  - Evidence: LIVE all-green gate — full `cargo test --workspace` every binary **0 failed** (exit 0; driver integration 338 passed); 40 `par, seq` cross-impl asserts in integration.rs; `cargo clippy --workspace -- -D warnings` exit 0; `cargo fmt --all --check` exit 0; jargon audit 8 passed/0 failed. (acceptance-verifier cumulative + coordinator all-green gate, live)
 **Quality gate**:
-- [ ] Every new fixture has a cross-impl (`default == --no-auto-parallel`) assertion
-- [ ] Demo uses only real Yinz operations; expected_stdout regenerated, not hand-edited
-- [ ] Design-doc correction is durable (states current reality), not a changelog note
-- [ ] Aliased-shape bug (:170) NOT silently dropped — stays tracked with trigger
-- [ ] No new compile-error gallery entry (documented why)
+- [x] Every new fixture has a cross-impl (`default == --no-auto-parallel`) assertion — verified (40 `assert_eq!(par, seq, ...)` across the m3f tests)
+- [x] Demo uses only real Yinz operations; expected_stdout regenerated, not hand-edited — verified by code-reviewer (no `__testFallibleAsync` leak in the demo; error-injection confined to the `ec_failed_then_ok` test fixture); regenerated via script
+- [x] Design-doc correction is durable (states current reality), not a changelog note — verified by rules-compliance + design-compliance
+- [x] Aliased-shape bug (:170) NOT silently dropped — stays tracked with trigger — :170 left `- [ ]` open with m3c deferral
+- [x] No new compile-error gallery entry (documented why) — `primantis-orders/README.md` carries the deliberate-omission row (M3f adds no compile-error class)
 **Verification**: full `cargo test --workspace`; cross-impl sweep script; `examples/pirates-roster` run vs `expected_stdout.txt`; clippy/fmt/jargon.
 
-**Phase Review Gates** (filled at phase completion by coordinator):
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
-- [ ] design-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] Committed: <commit SHA>
+**Phase Review Gates** (filled at phase completion by coordinator — CUMULATIVE opus sweep per Step 4.a; this serves as both Phase-4 and end-of-plan review):
+- [x] code-reviewer (opus, cumulative): PASS 2026-06-09T20:30 (3 non-blocking comment-precision concerns + 1 release-gate flag — all addressed in the cumulative-review cleanup)
+- [x] rules-compliance-reviewer (opus, cumulative): PASS 2026-06-09T20:30 (26 files, 0 violations; suspension-codegen corpse does not fire)
+- [x] plan-adherence-verifier (opus, cumulative): PASS 2026-06-09T20:30 (all 4 phases' steps MET, scope clean, independence.rs untouched)
+- [x] acceptance-verifier (opus, cumulative): PASS 2026-06-09T20:30 (all 26 ACs across all 4 phases MET; Phase 4 graded fresh live)
+- [x] design-compliance-reviewer (opus, cumulative): PASS 2026-06-09T20:30 (both fixes restore locked invariants; doc correction valid; M2-HALT no-block_on honored)
+- [x] deviation-judge #1 (opus, cumulative — Phase-2 crossing rework, cross-phase angle): PASS 2026-06-09T20:30 (3-slot EC<Number> × 1-slot bool compose with zero collision; disjoint slot lanes + dispatch arms, verified via IR offset map)
+- [x] Committed: <commit SHA>
 
 **Findings Log**:
-_(empty until a reviewer returns BLOCK)_
+- 2026-06-09T20:30 — END-OF-PLAN cumulative opus sweep (Step 4.a; 5 reviewers + 1 cross-phase deviation-judge): **ALL PASS**. All 26 ACs across all 4 phases MET (Phase 4 graded fresh live; Phases 1-3 Evidence holds). Both silent miscompiles closed: Bug-1 `31.75/31.75`→`24.50/31.75`, Bug-2 `0`-vs-`42` divergence→`42` both modes. `independence.rs` untouched (no grouping-suppression duct tape). The Phase-2 3-slot EC rework × Phase-3 bool-truncate compose with zero collision (cross-phase judge verified via IR offset map). All-green gate: `cargo test --workspace` exit 0, every binary 0 failed; clippy/fmt/jargon clean.
+  - **Cumulative-review cleanup (coordinator, Rule 11 — confirmed non-blocking findings fixed):** (1) emit.rs EC<Number> flush error-path comment rewritten — was a "store zeros" tripwire, now accurately states slots retain zero-init from `ynz_alloc_zeroed`; (2) "f1 never loaded" comments tightened to "never dereferenced on error" (f1 IS loaded + int_to_ptr'd, just not dereferenced); (3) todos.md hardening-note first clause corrected (HashSet check inside `_` arm, not a dedicated match arm); (4) the pre-existing `ynz-watch` `read_debounce_ms_invalid_falls_back` env-race flake tracked in todos.md (M3f-orthogonal; proven green single-threaded; intermittent — did NOT trip the all-green gate run). Build + 12 m3f tests + fmt all confirmed clean after cleanup.
+  - **Deferred to future (tracked in todos.md, NOT M3f bugs):** Phase-2 EC-wrapper phi `get_previous_basic_block()` fragility (emit.rs:~2709); Phase-3 bool-safety-via-HashSet in the `_` arm (i8/i16 future hazard); the ynz-watch env-race flake. All non-blocking; harden when codegen/ynz-watch next touched (M4+).
 
 **Exit Sequence — RUN THESE STEPS (FINAL PHASE):**
 1. Pre-reviewer bookkeeping; verify ALL phases' AC + quality-gate checkboxes accurate; update the Quality Checklist below.
@@ -470,17 +473,17 @@ _(empty until a reviewer returns BLOCK)_
 6. Prompt user with every verdict individually. "M3f complete — all 4 phases green, cumulative opus sweep PASS. Ready to `/release v0.3.0-m6`?" **STOP — do not auto-release** (standing instruction). Present for Patrick's go.
 
 ## Quality Checklist (verify at completion)
-- [ ] Both RED repros written first (Phase 1) and turned GREEN by their fixing phases
-- [ ] Bug 1: wide-EC same-callee bindings hold distinct correct values; alloc==free; both fix sites (SM + inline-poll)
-- [ ] Bug 2: parallel-group results survive a subsequent wait; `default == --no-auto-parallel` restored; headline overlap preserved
-- [ ] No grouping-suppression duct tape (independence.rs intact or justified)
-- [ ] Cross-impl consistency holds on every fixture (the M3b invariant)
-- [ ] Types complete (no `any`-equivalent; Rust types proper); arrow/style rules N/A (Rust crate)
-- [ ] Existing tests still pass (`cargo test --workspace`); golden IR byte-identical for unaffected fns
-- [ ] clippy `-D warnings` + `cargo fmt --check` + jargon audit clean
-- [ ] Demo (`pirates-roster`) extended + expected_stdout regenerated; no new error-gallery entry (documented why)
-- [ ] `design/concurrency.md` ECWrapperResultCollection corrected; todos :178/:180 closed; :170 left open (m3c)
-- [ ] Every phase received all-reviewer + all-judge PASS before committing (Step 9a)
-- [ ] Final cumulative opus reviewer sweep passed (Step 10f)
-- [ ] Plan-file AC checkboxes accurate across all phases (Step 9b)
-- [ ] `/release v0.3.0-m6` presented to Patrick (NOT auto-run)
+- [x] Both RED repros written first (Phase 1) and turned GREEN by their fixing phases
+- [x] Bug 1: wide-EC same-callee bindings hold distinct correct values; alloc==free; both fix sites (SM + inline-poll)
+- [x] Bug 2: parallel-group results survive a subsequent wait; `default == --no-auto-parallel` restored; headline overlap preserved
+- [x] No grouping-suppression duct tape (independence.rs intact or justified) — independence.rs empty diff across the whole plan
+- [x] Cross-impl consistency holds on every fixture (the M3b invariant) — 40 `par==seq` asserts
+- [x] Types complete (no `any`-equivalent; Rust types proper); arrow/style rules N/A (Rust crate)
+- [x] Existing tests still pass (`cargo test --workspace`); golden IR byte-identical for unaffected fns
+- [x] clippy `-D warnings` + `cargo fmt --check` + jargon audit clean
+- [x] Demo (`pirates-roster`) extended + expected_stdout regenerated; no new error-gallery entry (documented why)
+- [x] `design/concurrency.md` ECWrapperResultCollection corrected; todos :178/:180 closed; :170 left open (m3c)
+- [x] Every phase received all-reviewer + all-judge PASS before committing (Step 9a) — Phase 1 (2 rounds), Phase 2 (3 rounds), Phase 3 (1 round), Phase 4 cumulative
+- [x] Final cumulative opus reviewer sweep passed (Step 10f) — all 5 reviewers + cross-phase judge PASS
+- [x] Plan-file AC checkboxes accurate across all phases (Step 9b)
+- [x] `/release v0.3.0-m6` presented to Patrick (NOT auto-run)

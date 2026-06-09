@@ -1,0 +1,26 @@
+// Fixture (Bug-2 matrix — bool+bool): two independent suspending boolean bindings are
+// auto-grouped; both cross a subsequent `wait`; both are read at the top level.
+//
+// Bug 2 trigger boundary: two boolean group results crossing the same later wait.
+// Each bool uses the i1 alloca path; both must survive with their correct values.
+//
+// Expected output (correct — first returns true, second returns false):
+//   true
+//   false
+function flagA() -> boolean {
+  wait sleep(40)
+  return true
+}
+
+function flagB() -> boolean {
+  wait sleep(40)
+  return false
+}
+
+function entrypoint() -> nothing {
+  let a = flagA()
+  let b = flagB()
+  wait sleep(1)
+  print(a.toString())
+  print(b.toString())
+}

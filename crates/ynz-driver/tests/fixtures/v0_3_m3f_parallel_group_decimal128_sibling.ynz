@@ -1,0 +1,25 @@
+// Fixture (Bug-2 matrix — decimal128 sibling + bool): a decimal128 (number) result and
+// a boolean result are auto-grouped; both cross a subsequent `wait`; both are read
+// afterward. Tests that the 2-slot decimal128 frame path composes correctly with
+// the bool 1-slot path across the wait boundary.
+//
+// Expected output (correct):
+//   3.14
+//   true
+function priceCall() -> number {
+  wait sleep(40)
+  return 3.14
+}
+
+function flagFn() -> boolean {
+  wait sleep(40)
+  return true
+}
+
+function entrypoint() -> nothing {
+  let price = priceCall()
+  let flag = flagFn()
+  wait sleep(1)
+  print(price.toString())
+  print(flag.toString())
+}

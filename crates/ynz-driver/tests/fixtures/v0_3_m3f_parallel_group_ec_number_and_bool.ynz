@@ -1,0 +1,30 @@
+// Fixture (Bug-2 matrix — EC `-> number errors` 3-slot + bool 1-slot interleaving):
+// a `-> number errors` result (3-slot post-Phase-2 copy-on-bind path: discriminant +
+// ok-word + per-binding i128 alloca) paired with a boolean result (1-slot), both
+// auto-grouped and crossing the same subsequent `wait`.
+//
+// This is the most likely slot-index-shift hiding spot: the 3-slot EC<Number> path
+// shifts the bool's slot index if the cursor doesn't correctly sum per-type widths.
+// Both results must survive with correct values.
+//
+// Expected output (correct — price is 24.50; flag is true):
+//   24.50
+//   true
+function fetchPrice() -> number errors {
+  wait sleep(40)
+  return 24.50
+}
+
+function flagFn() -> boolean {
+  wait sleep(40)
+  return true
+}
+
+function entrypoint() -> nothing {
+  let price = fetchPrice()
+  let flag = flagFn()
+  wait sleep(1)
+  let pv = price.or(0.0)
+  print(pv.toString())
+  print(flag.toString())
+}

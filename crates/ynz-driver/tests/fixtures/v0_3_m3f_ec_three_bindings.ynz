@@ -1,0 +1,34 @@
+// Fixture (Bug-1 — multi-binding ok-path): three live bindings of the SAME
+// `-> number errors` callee with three distinct arguments. Value semantics requires
+// each binding to hold the value produced by its own call; a second or third call
+// to the same callee must not clobber earlier bindings' ok-values.
+//
+// Bug 1 root: copy-on-bind for wide-EC same-callee returns. Each binding gets its
+// own per-binding stable storage before the next call can reuse the staging slot.
+//
+// Expected output (correct — value semantics, each binding holds its own call's value):
+//   24.50
+//   31.75
+//   24.50
+function fetchPrice(which: int) -> number errors {
+  wait sleep(1)
+  if (which == 0) {
+    return 24.50
+  }
+  if (which == 1) {
+    return 31.75
+  }
+  return 12.25
+}
+
+function entrypoint() -> nothing {
+  let p1 = fetchPrice(0)
+  let p2 = fetchPrice(1)
+  let p3 = fetchPrice(0)
+  let v1 = p1.or(0.0)
+  let v2 = p2.or(0.0)
+  let v3 = p3.or(0.0)
+  print(v1.toString())
+  print(v2.toString())
+  print(v3.toString())
+}
