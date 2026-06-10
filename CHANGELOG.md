@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.3.0-m6] — 2026-06-10 — M3f: Pre-Existing Codegen Correctness Fixes
+
+Commit range: v0.3.0-m5..v0.3.0-m6
+
+### What changed
+
+v0.3.0-m6 closes two confirmed silent miscompiles in the state-machine /
+auto-parallelization codegen — both wrong-answer-at-runtime bugs that v0.3.0-m5 shipped
+with. No new language surface: programs that were already correct are byte-identical; only
+programs that were silently producing wrong values change (now correct). This unblocks the
+final v0.3.0 release.
+
+#### Fixes (M3f)
+
+- **Wide-`errors` same-callee value aliasing** — two `let` bindings of the same
+  `-> number errors` function (e.g. `let p1 = fetchPrice(0); let p2 = fetchPrice(1)`) no
+  longer collapse to the same value. A `number` (decimal128) ok-value too wide for the
+  result word used to live in the callee's shared staging slot, and a second same-callee
+  call clobbered the first binding before it was read. Each binding now copies its value
+  into its own storage at bind time. (Was: `31.75 / 31.75`; now: `24.50 / 31.75`.)
+- **Parallel-group boolean sibling corruption** — when independent suspending statements
+  auto-parallelize and a boolean result is live across a later `wait`, a sibling integer
+  result no longer reads back `0`. The boolean's frame store was an 8-byte write into a
+  1-byte slot, overrunning the adjacent result. Restores the cross-implementation
+  consistency oracle (`--no-auto-parallel` produces byte-identical output to the default).
+  (Was: default `0` vs `--no-auto-parallel` `42`; now: `42` in both.)
+
+### Tests
+
+12 new regression fixtures + 12 integration tests covering the full trigger matrix (mixed
+result types — int, boolean, decimal128, and wide-`errors` — in parallel groups crossing a
+later `wait`), each asserting `--no-auto-parallel` byte-identity. The `pirates-roster`
+demo exercises both fixed patterns. Full workspace suite green.
+
 ## [0.3.0-m5] — 2026-06-09 — M3e + M3b: Cross-Module Frame Serialization + Auto-Parallelization
 
 Commit range: v0.3.0-m4..v0.3.0-m5
