@@ -1,0 +1,30 @@
+// Fixture (Bug-2 matrix — bool-first-then-int, reverse declaration order): the bool
+// binding is declared BEFORE the int binding (reverse of MIN-1 order). Both are
+// auto-grouped; both cross a subsequent `wait`; the int is read inside a nested `if`
+// guarded by the bool.
+//
+// This variant flushes out any slot-ordering-matches-declaration-order assumption:
+// even when bool occupies slot 0 and int occupies slot 1 (not the slot-0-int default),
+// the int must survive the wait with the correct value.
+//
+// Bug 2 trigger: same class as MIN-1 but with reversed group-member declaration order.
+// Expected output (correct — same as MIN-1; correctness is independent of order):
+//   42
+function other() -> boolean {
+  wait sleep(40)
+  return true
+}
+
+function slowCall() -> int {
+  wait sleep(40)
+  return 42
+}
+
+function entrypoint() -> nothing {
+  let cond = other()
+  let a = slowCall()
+  wait sleep(1)
+  if (cond) {
+    print(a.toString())
+  }
+}

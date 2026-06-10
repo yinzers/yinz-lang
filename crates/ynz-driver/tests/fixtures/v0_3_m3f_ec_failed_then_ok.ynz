@@ -1,0 +1,32 @@
+// Fixture (Bug-1 — failed-branch interleave): one binding of `fetchPrice` takes the
+// error path (`__testFallibleAsync(true)` returns an error), then a later same-callee
+// call succeeds and returns a specific decimal128 value.
+//
+// Tests that:
+//   (a) The errored binding surfaces `.failed()=true` and `.or(0.0)=0.0` (the fallback,
+//       NOT the later ok-call's value — no cross-contamination).
+//   (b) The ok binding is unaffected: `.or(0.0)=99.9`.
+//   (c) The `f0==0` success guard at copy-on-bind sites prevents a null-deref when
+//       the first binding took the error path (f1=0 on error → no staging-slot deref).
+//
+// Expected output (correct):
+//   true
+//   0.0
+//   99.9
+function fetchPrice(fail: boolean) -> number errors {
+  wait sleep(1)
+  if (fail) {
+    let v = wait __testFallibleAsync(true)
+    const n = v.toNumber()
+    return n
+  }
+  return 99.9
+}
+
+function entrypoint() -> nothing {
+  let errored = fetchPrice(true)
+  let ok = fetchPrice(false)
+  print(errored.failed().toString())
+  print(errored.or(0.0).toString())
+  print(ok.or(0.0).toString())
+}

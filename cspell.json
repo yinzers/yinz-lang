@@ -131,6 +131,14 @@
     "Yinz",
     "ynz",
     "ynzfmt",
+    "inttoptr",
+    "nonsm",
+    "nopar",
+    "ptrtoint",
+    "repoint",
+    "trunc",
+    "unbuilt",
+    "zext",
     "zstd"
   ]
 }

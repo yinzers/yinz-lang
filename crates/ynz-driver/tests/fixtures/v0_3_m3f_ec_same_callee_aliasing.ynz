@@ -1,0 +1,31 @@
+// RED until Phase 2 (M3f) — wide-EC same-callee staging-slot aliasing
+//
+// Fixture: two live bindings of the same `-> number errors` callee with DIFFERENT arguments.
+// Value semantics requires each binding to hold the value produced by its own call.
+//
+// Bug 1 root: `bind_sm_return_value` (non-crossing EC arm, emit.rs:5059) and
+// `lower_errors_capable_call_result` (non-SM inline-poll path, emit.rs:12723) both store the
+// `{i64,i64}` EC struct but leave the ok-word pointing into the callee's 16-byte decimal128
+// staging slot rather than copying the value out. A second call to the same callee reuses that
+// slot, clobbering p1's ok-word before p1 is read. Bug is present in BOTH modes (both aliased
+// identically wrong), so the M3b cross-impl oracle still holds here — both are wrong together.
+//
+// Expected output (correct — value semantics, each binding holds its own call's value):
+//   24.50
+//   31.75
+function fetchPrice(which: int) -> number errors {
+  wait sleep(1)
+  if (which == 0) {
+    return 24.50
+  }
+  return 31.75
+}
+
+function entrypoint() -> nothing {
+  let p1 = fetchPrice(0)
+  let p2 = fetchPrice(1)
+  let v1 = p1.or(0.0)
+  let v2 = p2.or(0.0)
+  print(v1.toString())
+  print(v2.toString())
+}

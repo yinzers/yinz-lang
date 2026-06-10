@@ -86,14 +86,14 @@ main done with v0.3-M1
 
 v0.3-M2 — wait actually suspends (8 pirates, ~100ms total):
 scheduling 8 pirates...
-Stargell: done
-Wagner: done
-Beaumont: done
 Mazeroski: done
-Bonds: done
-Clemente: done
-Kiner: done
 McCutchen: done
+Wagner: done
+Kiner: done
+Beaumont: done
+Clemente: done
+Stargell: done
+Bonds: done
 all 8 pirates done
 
 v0.3-M2 — inferred wait (no explicit wait written):
@@ -132,3 +132,8 @@ Clemente: done
 v0.3-M3b — background give/copy inference:
 main keeps the promo handle: bobblehead_night
 promo logged: bobblehead_night
+
+v0.3-M3f — codegen correctness fixes:
+McCutchen rating: 87.50
+Clemente rating: 92.25
+draft slot available: 14

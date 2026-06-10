@@ -1,0 +1,27 @@
+// Fixture (Bug-2 matrix — int+int, top-level use): two independent suspending int
+// bindings are auto-grouped; both results cross a subsequent `wait`; both are read
+// at the top level of the function body (not inside a nested if/while/for body).
+//
+// This case was CORRECT before the Bug-2 fix and must stay correct afterward
+// (regression guard — int+int grouping must not regress).
+//
+// Expected output (correct):
+//   42
+//   99
+function slowCall() -> int {
+  wait sleep(40)
+  return 42
+}
+
+function otherInt() -> int {
+  wait sleep(40)
+  return 99
+}
+
+function entrypoint() -> nothing {
+  let a = slowCall()
+  let b = otherInt()
+  wait sleep(1)
+  print(a.toString())
+  print(b.toString())
+}

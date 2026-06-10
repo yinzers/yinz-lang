@@ -252,6 +252,8 @@ function entrypoint() -> nothing {
   // `wait` before m3b_demo() keeps THIS section ordered after m3e. The auto-parallel
   // overlap happens INSIDE m3b_demo (two independent fetches), not between demo sections.
   wait m3b_demo()
+  // ────── v0.3-M3f: codegen correctness — same-callee EC + parallel bool ──────
+  wait m3f_demo()
 }
 
 // ────── M3 helper functions ──────
@@ -875,5 +877,81 @@ function m3b_demo() -> nothing {
   print(`main keeps the promo handle: ${promo}`)
   // Keep main alive long enough for the background task to finish and print.
   wait sleep(120)
+}
+
+// ── v0.3-M3f: codegen correctness — same-callee EC bindings + parallel-group bool ──
+//
+// M3f closed two silent-miscompile bugs in the state-machine codegen:
+//
+// Bug 1 — Same-callee wide-`errors` staging-slot aliasing: when the same
+// `-> number errors` function was called twice, both bindings silently held the
+// SECOND call's value. Fixed by copy-on-bind: each binding now gets its own
+// per-binding stable storage before the next call can reuse the callee's staging slot.
+//
+// Bug 2 — Parallel-group bool sibling corrupts int frame slot: when an int and a
+// boolean were both auto-grouped and crossed a subsequent `wait`, the bool's
+// i1-alloca store overwrote 7 bytes of the adjacent int's alloca, returning 0.
+// Fixed by truncating i64→i1 before the bool alloca store (the reload side already
+// truncated; the store side was the missing half).
+//
+// Both bugs were mode-divergent (default vs --no-auto-parallel differed for Bug 2)
+// and confirmed via live bisection on v0.3.0-m5 before the fixes.
+
+// fetchScoutRating returns an arg-dependent decimal128 scouting rating.
+// Two calls with distinct args (scoringWeight 0 and 1) must hold distinct values
+// — demonstrating Bug-1's fix: each binding owns its own copy of the wide-EC ok-value.
+function fetchScoutRating(scoringWeight: int) -> number errors {
+  wait sleep(5)
+  if (scoringWeight == 0) {
+    return 87.50
+  }
+  return 92.25
+}
+
+// checkAvailability returns whether a prospect is available on a given date.
+// Used with fetchScoutRating in a parallel group to demonstrate Bug-2's fix:
+// the boolean result and the int result both survive a subsequent `wait` with
+// their correct values — no frame-slot corruption.
+function checkAvailability() -> boolean {
+  wait sleep(5)
+  return true
+}
+
+// fetchDraftSlot returns the int draft slot for a prospect.
+// Paired with checkAvailability in an independent parallel group.
+function fetchDraftSlot() -> int {
+  wait sleep(5)
+  return 14
+}
+
+// m3f_demo — demonstrates both M3f codegen correctness fixes in a realistic
+// scouting-week context: (a) two same-callee wide-EC ratings stay distinct;
+// (b) a parallel-group int + bool both survive a wait barrier with correct values.
+function m3f_demo() -> nothing {
+  print(``)
+  print(`v0.3-M3f — codegen correctness fixes:`)
+
+  // (a) BUG-1 FIX: same-callee wide-EC bindings hold distinct values.
+  // Two calls to `fetchScoutRating` with DIFFERENT args — each binding must
+  // hold its OWN call's value. Before the fix both printed the second rating.
+  let ratingA = fetchScoutRating(0)
+  let ratingB = fetchScoutRating(1)
+  let rA = ratingA.or(0.0)
+  let rB = ratingB.or(0.0)
+  print(`McCutchen rating: ${rA.toString()}`)
+  print(`Clemente rating: ${rB.toString()}`)
+
+  // (b) BUG-2 FIX: parallel-group int + bool both survive a subsequent wait.
+  // `fetchDraftSlot` and `checkAvailability` are independent — the compiler
+  // overlaps their suspensions into one parallel group. The subsequent
+  // `wait sleep(1)` is an ordering barrier; both group results must survive it
+  // with their correct values. Before the fix, `slot` read 0 in parallel mode.
+  let slot = fetchDraftSlot()
+  let available = checkAvailability()
+  wait sleep(1)
+  if (available) {
+    let slotStr = slot.toString()
+    print(`draft slot available: ${slotStr}`)
+  }
 }
 

@@ -6507,3 +6507,370 @@ fn v03_m3b_p4_share_read_vs_lend_write_correct_output() {
         "lend-write must complete before share-read (w before r); sequential stdout:\n{seq}"
     );
 }
+
+#[test]
+fn v0_3_m3f_ec_same_callee_aliasing_distinct_values() {
+    // WHY (M3f Bug 1): value semantics requires each `let` binding of a `-> number errors`
+    // callee to hold the value produced by ITS OWN call. The ok-word in the EC struct
+    // (`{i64,i64}`) points into the callee's 16-byte decimal128 staging slot instead of
+    // copying the value out. A second call to the same callee reuses that slot, clobbering
+    // the first binding before it is read. Both modes aliased identically wrong (31.75/31.75)
+    // when the correct values are 24.50 (which==0) and 31.75 (which==1).
+    //
+    // Expected: "24.50\n31.75\n" — derived from value-binding semantics (each call's return
+    // belongs to that call's binding; a subsequent same-callee call cannot mutate it).
+    //
+    // RED until Phase 2 (M3f): bind_sm_return_value EC arm + lower_errors_capable_call_result
+    // must copy the wide ok-value out of the shared staging slot into per-binding stable storage.
+    let src = fixture("v0_3_m3f_ec_same_callee_aliasing.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "ec-same-callee-aliasing build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par, "24.50\n31.75\n",
+        "p1=fetchPrice(0) must be 24.50 and p2=fetchPrice(1) must be 31.75; stdout:\n{par}"
+    );
+}
+
+#[test]
+fn v0_3_m3f_parallel_group_bool_sibling_survives_wait() {
+    // WHY (M3f Bug 2): a parallel-group result binding (int `a`) must survive a subsequent
+    // `wait` intact regardless of whether a sibling group result is a boolean. The boolean
+    // crossing-local flush/reload path (i1→i64 zext on flush, i64→i1 trunc on reload) corrupts
+    // the int sibling's frame slot when both are parallel-group results crossing the same later
+    // wait. `a` reloads as 0 (default mode) instead of 42 (correct). --no-auto-parallel (no
+    // grouping) correctly returns 42 — demonstrating the divergence breaks the M3b cross-impl
+    // consistency invariant.
+    //
+    // Expected: "42\n" — derived from suspension-preservation semantics (a let binding's value
+    // survives suspension; default and --no-auto-parallel must be byte-identical).
+    //
+    // RED until Phase 3 (M3f): the frame-slot materialization for mixed-type parallel-group
+    // results crossing a wait must assign non-overlapping slots; the bool's zext/trunc must
+    // touch only its own slot.
+    let src = fixture("v0_3_m3f_parallel_group_bool_sibling.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel bool-sibling build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel bool-sibling build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par, "42\n",
+        "parallel mode: a must be 42 (not 0); stdout:\n{par}"
+    );
+    assert_eq!(
+        par, seq,
+        "default and --no-auto-parallel must be byte-identical (cross-impl consistency); \
+         parallel stdout:\n{par}\n--no-auto-parallel stdout:\n{seq}"
+    );
+}
+
+// ── v0.3-M3f Phase 4: permanent regression fixtures ──────────────────────────
+
+// -- Bug-2 (parallel-group bool-sibling frame-slot) trigger matrix --
+
+#[test]
+fn v0_3_m3f_parallel_group_int_int_top_level() {
+    // WHY (M3f Bug-2 regression guard — int+int, top-level use): two independent
+    // suspending int bindings are auto-grouped and both cross a subsequent `wait`;
+    // both are read at the top level (not inside a nested body). This case was
+    // CORRECT before the Bug-2 fix and must remain correct — prevents grouping
+    // suppression from silently making it wrong again.
+    // Expected: "42\n99\n" in both modes.
+    let src = fixture("v0_3_m3f_parallel_group_int_int_top.ynz");
+    let (par, par_err, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_err, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "int+int top parallel build must exit 0; stderr:\n{par_err}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "int+int top sequential build must exit 0; stderr:\n{seq_err}"
+    );
+    assert_eq!(
+        par, "42\n99\n",
+        "int+int top: a must be 42, b must be 99; stdout:\n{par}"
+    );
+    assert_eq!(
+        par, seq,
+        "int+int top: default and --no-auto-parallel must be byte-identical; \
+         par:\n{par}\nseq:\n{seq}"
+    );
+}
+
+#[test]
+fn v0_3_m3f_parallel_group_int_int_nested() {
+    // WHY (M3f Bug-2 regression guard — int+int, nested-only use): both int group
+    // results are read ONLY inside a nested `if` body. Confirms that the Bug-2 fix
+    // does not accidentally suppress grouping for int+int with nested access patterns.
+    // Expected: "42\n99\n" in both modes.
+    let src = fixture("v0_3_m3f_parallel_group_int_int_nested.ynz");
+    let (par, par_err, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_err, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "int+int nested parallel build must exit 0; stderr:\n{par_err}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "int+int nested sequential build must exit 0; stderr:\n{seq_err}"
+    );
+    assert_eq!(
+        par, "42\n99\n",
+        "int+int nested: a must be 42, b must be 99; stdout:\n{par}"
+    );
+    assert_eq!(
+        par, seq,
+        "int+int nested: default and --no-auto-parallel must be byte-identical; \
+         par:\n{par}\nseq:\n{seq}"
+    );
+}
+
+#[test]
+fn v0_3_m3f_parallel_group_int_bool_top_level() {
+    // WHY (M3f Bug-2 regression fixture — int+bool, top-level use): an int and a
+    // boolean both cross a subsequent `wait` and are read at the top level. The
+    // Bug-2 fix (bool i64→i1 truncate before alloca store) must preserve the int
+    // sibling's value regardless of the bool member's presence.
+    // Expected: "42\ntrue\n" in both modes.
+    let src = fixture("v0_3_m3f_parallel_group_int_bool_top.ynz");
+    let (par, par_err, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_err, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "int+bool top parallel build must exit 0; stderr:\n{par_err}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "int+bool top sequential build must exit 0; stderr:\n{seq_err}"
+    );
+    assert_eq!(
+        par, "42\ntrue\n",
+        "int+bool top: int must be 42, bool must be true; stdout:\n{par}"
+    );
+    assert_eq!(
+        par, seq,
+        "int+bool top: default and --no-auto-parallel must be byte-identical; \
+         par:\n{par}\nseq:\n{seq}"
+    );
+}
+
+#[test]
+fn v0_3_m3f_parallel_group_bool_first_then_int() {
+    // WHY (M3f Bug-2 regression fixture — bool-first-then-int, reversed declaration
+    // order): the bool binding is declared BEFORE the int binding, so bool occupies
+    // slot 0 and int occupies slot 1 — the reverse of the MIN-1 fixture. Flushes
+    // out any slot-ordering-matches-declaration-order assumption in the fix.
+    // Expected: "42\n" (int `a` is read inside the if-body guarded by the bool).
+    let src = fixture("v0_3_m3f_parallel_group_bool_first_then_int.ynz");
+    let (par, par_err, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_err, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "bool-first-then-int parallel build must exit 0; stderr:\n{par_err}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "bool-first-then-int sequential build must exit 0; stderr:\n{seq_err}"
+    );
+    assert_eq!(
+        par, "42\n",
+        "bool-first-then-int: a must be 42; stdout:\n{par}"
+    );
+    assert_eq!(
+        par, seq,
+        "bool-first-then-int: default and --no-auto-parallel must be byte-identical; \
+         par:\n{par}\nseq:\n{seq}"
+    );
+}
+
+#[test]
+fn v0_3_m3f_parallel_group_bool_bool() {
+    // WHY (M3f Bug-2 regression fixture — bool+bool): two boolean group results cross
+    // the same subsequent `wait`. Both use the i1 alloca path; the fix must ensure
+    // each bool survives with its correct value (true for flagA, false for flagB).
+    // Expected: "true\nfalse\n" in both modes.
+    let src = fixture("v0_3_m3f_parallel_group_bool_bool.ynz");
+    let (par, par_err, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_err, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "bool+bool parallel build must exit 0; stderr:\n{par_err}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "bool+bool sequential build must exit 0; stderr:\n{seq_err}"
+    );
+    assert_eq!(
+        par, "true\nfalse\n",
+        "bool+bool: a must be true, b must be false; stdout:\n{par}"
+    );
+    assert_eq!(
+        par, seq,
+        "bool+bool: default and --no-auto-parallel must be byte-identical; \
+         par:\n{par}\nseq:\n{seq}"
+    );
+}
+
+#[test]
+fn v0_3_m3f_parallel_group_three_members() {
+    // WHY (M3f Bug-2 regression fixture — ≥3 group members): three independent
+    // suspending bindings (int, int, bool) are all auto-grouped; all three cross
+    // the same subsequent `wait`. Tests that the bool-slot fix composes correctly
+    // for groups larger than 2 members.
+    // Expected: "42\n99\ntrue\n" in both modes.
+    let src = fixture("v0_3_m3f_parallel_group_three_members.ynz");
+    let (par, par_err, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_err, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "3-member parallel build must exit 0; stderr:\n{par_err}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "3-member sequential build must exit 0; stderr:\n{seq_err}"
+    );
+    assert_eq!(
+        par, "42\n99\ntrue\n",
+        "3-member: a must be 42, b must be 99, flag must be true; stdout:\n{par}"
+    );
+    assert_eq!(
+        par, seq,
+        "3-member: default and --no-auto-parallel must be byte-identical; \
+         par:\n{par}\nseq:\n{seq}"
+    );
+}
+
+#[test]
+fn v0_3_m3f_parallel_group_decimal128_sibling() {
+    // WHY (M3f Bug-2 regression fixture — decimal128 sibling + bool): a decimal128
+    // (number) result and a boolean result both cross the same subsequent `wait`.
+    // The 2-slot decimal128 frame path must compose correctly with the 1-slot bool
+    // path — tests that the per-type slot-width cursor doesn't shift the bool's index.
+    // Expected: "3.14\ntrue\n" in both modes.
+    let src = fixture("v0_3_m3f_parallel_group_decimal128_sibling.ynz");
+    let (par, par_err, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_err, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "decimal128+bool parallel build must exit 0; stderr:\n{par_err}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "decimal128+bool sequential build must exit 0; stderr:\n{seq_err}"
+    );
+    assert_eq!(
+        par, "3.14\ntrue\n",
+        "decimal128+bool: price must be 3.14, flag must be true; stdout:\n{par}"
+    );
+    assert_eq!(
+        par, seq,
+        "decimal128+bool: default and --no-auto-parallel must be byte-identical; \
+         par:\n{par}\nseq:\n{seq}"
+    );
+}
+
+#[test]
+fn v0_3_m3f_parallel_group_ec_number_and_bool() {
+    // WHY (M3f Bug-2 regression fixture — EC `-> number errors` 3-slot + bool 1-slot
+    // interleaving): a `-> number errors` result (3-slot post-Phase-2 copy-on-bind
+    // path) paired with a boolean result (1-slot), both crossing the same wait.
+    // This is the most likely slot-index-shift hiding spot: the 3-slot EC<Number>
+    // cursor must sum correctly so the bool's slot index is not shifted. Both
+    // Phase-2 (copy-on-bind) and Phase-3 (bool-truncate) fixes must compose.
+    // Expected: "24.50\ntrue\n" in both modes.
+    let src = fixture("v0_3_m3f_parallel_group_ec_number_and_bool.ynz");
+    let (par, par_err, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_err, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "EC-number+bool parallel build must exit 0; stderr:\n{par_err}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "EC-number+bool sequential build must exit 0; stderr:\n{seq_err}"
+    );
+    assert_eq!(
+        par, "24.50\ntrue\n",
+        "EC-number+bool: price must be 24.50, flag must be true; stdout:\n{par}"
+    );
+    assert_eq!(
+        par, seq,
+        "EC-number+bool: default and --no-auto-parallel must be byte-identical; \
+         par:\n{par}\nseq:\n{seq}"
+    );
+}
+
+// -- Bug-1 (wide-EC same-callee copy-on-bind) permanent fixtures --
+
+#[test]
+fn v0_3_m3f_ec_three_bindings_distinct_values() {
+    // WHY (M3f Bug-1 regression fixture — multi-binding ok-path): three live bindings
+    // of the SAME `-> number errors` callee with three distinct arguments must each
+    // hold the value produced by their own call. A second or third call to the same
+    // callee must not clobber earlier bindings via the shared staging slot.
+    // Bug-1 copy-on-bind fix: per-binding stable storage is allocated before the next
+    // call can reuse the staging slot.
+    // Expected: "24.50\n31.75\n24.50\n" in both modes.
+    let src = fixture("v0_3_m3f_ec_three_bindings.ynz");
+    let (par, par_err, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_err, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "3-binding EC parallel build must exit 0; stderr:\n{par_err}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "3-binding EC sequential build must exit 0; stderr:\n{seq_err}"
+    );
+    assert_eq!(
+        par, "24.50\n31.75\n24.50\n",
+        "3-binding EC: p1 must be 24.50, p2 must be 31.75, p3 must be 24.50 (same arg as p1, not \
+         p2's value — staging-slot aliasing is closed); stdout:\n{par}"
+    );
+    assert_eq!(
+        par, seq,
+        "3-binding EC: default and --no-auto-parallel must be byte-identical; \
+         par:\n{par}\nseq:\n{seq}"
+    );
+}
+
+#[test]
+fn v0_3_m3f_ec_failed_then_ok_no_cross_contamination() {
+    // WHY (M3f Bug-1 regression fixture — failed-branch interleave): one binding of a
+    // `-> number errors` callee takes the error path; a later same-callee call succeeds.
+    // The errored binding must surface `.failed()=true` and `.or(0.0)=0.0` (the fallback,
+    // NOT the later ok-call's value). The ok binding must be unaffected.
+    // The `f0==0` success guard at copy-on-bind sites prevents a null-deref on the error
+    // path (f1=0 → no staging-slot deref).
+    // Expected: "true\n0.0\n99.9\n" in both modes.
+    let src = fixture("v0_3_m3f_ec_failed_then_ok.ynz");
+    let (par, par_err, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_err, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "failed-then-ok EC parallel build must exit 0; stderr:\n{par_err}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "failed-then-ok EC sequential build must exit 0; stderr:\n{seq_err}"
+    );
+    assert_eq!(
+        par, "true\n0.0\n99.9\n",
+        "failed-then-ok: errored binding must surface failed=true + or=0.0 (not 99.9); \
+         ok binding must be 99.9; stdout:\n{par}"
+    );
+    assert_eq!(
+        par, seq,
+        "failed-then-ok EC: default and --no-auto-parallel must be byte-identical; \
+         par:\n{par}\nseq:\n{seq}"
+    );
+}

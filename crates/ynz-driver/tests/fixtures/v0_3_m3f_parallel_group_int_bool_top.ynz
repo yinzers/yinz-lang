@@ -1,0 +1,28 @@
+// Fixture (Bug-2 matrix — int+bool, top-level use): two independent suspending bindings
+// — one int, one boolean — are auto-grouped; both cross a subsequent `wait`; both are
+// read at the TOP LEVEL of the function body.
+//
+// Bug 2 trigger: {auto-parallel group} × {bool result live across later wait}.
+// This case DIVERGED before the fix: default → `42\ntrue`; --no-auto-parallel → `42\ntrue`.
+// After the fix both modes must produce identical correct output.
+//
+// Expected output (correct):
+//   42
+//   true
+function slowCall() -> int {
+  wait sleep(40)
+  return 42
+}
+
+function other() -> boolean {
+  wait sleep(40)
+  return true
+}
+
+function entrypoint() -> nothing {
+  let a = slowCall()
+  let cond = other()
+  wait sleep(1)
+  print(a.toString())
+  print(cond.toString())
+}
