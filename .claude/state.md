@@ -27,7 +27,7 @@
 - webpage-docs (Patrick Rizzardi) — 0 active plans — 2026-05-20
 
 ### Active Workstreams
-- v0-3-m3d-cpu-parallelization (Patrick Rizzardi) — 11 files touched — 3/99 done — roadmap: v0-3-concurrency-perf — 2026-06-11
+- v0-3-m3d-cpu-parallelization (Patrick Rizzardi) — 11 files touched — 30/116 done — roadmap: v0-3-concurrency-perf — 2026-06-11
 <!-- RADAR-END -->
 
 ---

@@ -487,3 +487,39 @@ FRAME_HEADER_SIZE
 **Severity**: critical — silent under-sizing of an embedded sub-frame → SIGILL/memory corruption, and the test goes green because the resolved value coincides with the fallback. Worst failure class (no crash in the happy-path fixture; detonates only on a callee with a non-trivial frame).
 
 **Originating incident**: 2026-06-06, v0.3-M3e Phase 1. `build_frame_layouts_with_resolver`'s `compute_frame_size` loop cached the `FRAME_HEADER_SIZE` fallback for imported callees before the `or_insert_with(resolver)` seed ran → the cross-module resolver was dead code. The recursion unit test passed at `doWork.total_size==64` only because the leaf callee's real frame happened to equal the 32-byte fallback. code-reviewer's adversarial probe (vary the resolver return → output invariant; `Cell` counter → resolver never fired) caught it; acceptance-verifier's claim-trusting PASS missed it. Fixed: resolver-seed moved before `compute_frame_size`; test rewritten with a >32 callee frame + anti-bypass sentinel (`resolver→56 → 88`). See `.claude/plans/active/v0-3-m3e-cross-module-frame-serialization.md` Phase 1 Findings Log (round-2/round-3).
+
+## Silent Envelope Narrowing — Gated-Path Decline Widens While Output Tests Stay Green — 2026-06-12
+
+**Scope**: any conditional/gated codegen or optimization path with a correct sequential/fallback lowering — currently the M3d spike admission gates in `crates/ynz-codegen/src/emit.rs` (`spike_cpu_candidates`, `spike_cpu_group_result_names`, `spike_extract_cpu_group`) and any future auto-parallelization/auto-promotion admission predicate (M3d P1+ productionized passes, `prefer-fixed` promotion, auto-SoA). Sibling of the 2026-06-06 "Test Green on Fallback Coincidence" corpse — same disease family (correct fallback masks a dead feature), different mechanism (admission predicate widened a decline vs. injected resolver bypassed by memo ordering).
+**Exemption**:
+- A decline condition added together with evidence that every fixture/test claiming to exercise the gated path still ADMITS post-change (e.g. an IR-grep assertion for the runtime call, a fire-counter, a snapshot containing the gated instruction) — that is the correct shape of a gate fix.
+- An intentional envelope narrowing that updates the plan/design's declared FIRE/DECLINE table in the same diff AND corrects every fixture header/test name that claimed gated-path coverage — honest narrowing is allowed; silent narrowing is not.
+- Decline conditions in throwaway code explicitly scoped as decline-only fixtures (fixture headers that already say "DECLINE fixture").
+**Last verified**: 2026-06-12
+**Category**: regex+judgment
+
+**Pre-filter patterns**:
+```
+spike_cpu_candidates
+spike_extract_cpu_group
+spike_cpu_group_result_names
+stmt_contains_wait
+stmt_contains_suspending_call
+return None
+ynz_rt_spawn_blocking_joinable
+YNZ_M3D_SPIKE
+```
+
+**Cause**: a fix round added a decline predicate (`stmt_contains_wait` on post-pair statements) that was WIDER than the bug class it targeted (`wait sleep(0)` intrinsic waits embed no child sub-frame, posing zero aliasing risk, yet matched the predicate) — and because the decline path lowers to always-correct sequential code, every byte-identical output test stayed green while 11 of 17 fixtures silently stopped exercising the feature.
+**Detection signature**: (1) CODE — a diff adds or widens a decline/early-return condition inside an admission-gate function (predicate functions feeding `return None`/`return false` in `spike_*`/`*_candidates`/`*_extract_*` or any future admission pass) with NO accompanying fire-assertion change. (2) TEST/FIXTURE — fixtures or tests whose headers/names claim gated-path behavior ("proves the spike…", "reload across suspension…") with verification that only compares outputs between modes — byte-identical is trivially true when both modes take the fallback. (3) PLAN — a phase shipping a gated path with no declared FIRE/DECLINE envelope table, so reviewers have no contract to diff admission changes against.
+
+**Constraint**: any diff touching an admission-gate predicate MUST come with mechanism-fired evidence for every input that is supposed to stay admitted (IR grep for the gated runtime call ≥1, fire-counter, or gated-instruction snapshot), and any plan introducing a gated path MUST declare its admission envelope (which input shapes FIRE, which DECLINE) as a plan-time table — a fix that flips an input from FIRE to DECLINE is then a visible contract violation instead of a 7th-round forensic discovery. Output equality between gated and fallback modes is necessary but NEVER sufficient.
+
+**Bouncer checks** (each runnable as shell against a diff):
+- [ ] Diff adds/edits a condition in an admission-gate function (`grep -E "spike_(cpu_candidates|extract_cpu_group|cpu_group_result_names)|fn .*_candidates|fn .*admission"` on changed hunks) AND introduces/widens a `return None`/decline branch: verify the same diff (or its cited evidence) shows a FIRES check for the still-admitted inputs — e.g. `grep -c "call.*ynz_rt_spawn_blocking_joinable" <fixture>.ll` ≥ 1 per admitted fixture. Decline-widening with output-only evidence → BLOCK.
+- [ ] Diff touches fixture files whose header comments claim gated-path coverage (`grep -E "proves|exercises|reload|spike SM" crates/ynz-driver/tests/fixtures/v0_3_m3d_*.ynz`): verify each claimed-FIRE fixture is in the FIRES set post-diff, not silently moved to DECLINE. Header claims FIRE but IR shows 0 gated calls → BLOCK (lying fixture).
+- [ ] Plan diff adds a phase introducing a gated/conditional codegen path: verify the phase declares a FIRE/DECLINE envelope table (which input shapes admit vs decline). Missing → plan-reviewer BLOCK at plan time.
+
+**Severity**: critical — the feature under test silently stops existing while its entire test suite stays green; downstream phases inherit "proven" machinery with zero live coverage. Cost when it fired: rounds 6–8 of an 8-round gate saga (one full extra fix round + re-gate) to discover and undo a narrowing that a plan-time envelope table would have flagged instantly.
+
+**Originating incident**: 2026-06-12, v0.3-M3d Phase 0 round 7. The ISSUE-B fix declined post-pair statements on `stmt_contains_wait || stmt_contains_suspending_call`; the `stmt_contains_wait` clause also caught intrinsic `wait sleep(0)`, flipping fixtures (g)/(h)/(i)/(j)/(n) from FIRE to DECLINE — IR-verified zero `ynz_rt_spawn_blocking_joinable` call sites — making the cross-suspension reload machinery (built and debugged across 5 prior fix rounds, deviations #9/#14) dead code while all 17 fixtures stayed byte-identical green. Caught only because the coordinator primed all four round-7 gate agents on the "does the spike still FIRE, not just match output" question; deviation-judge #15 traced it at IR level and named the one-clause fix (keep only `stmt_contains_suspending_call`, which already excludes sleep via `M2_MAY_BLOCK_INTRINSICS`). Fixed in round 8; FIRES restored 0→2 spawn calls per fixture. See `.claude/plans/active/v0-3-m3d-cpu-parallelization.md` Phase 0 Findings Log (R7/R8 entries) — committed dcc1432.
