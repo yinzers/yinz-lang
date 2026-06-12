@@ -1,0 +1,30 @@
+// Spike nested-wait fixture (n): wait inside a nested if-block in rest_stmts.
+//
+// reload_params_from_frame is called at every suspension, including ones that
+// originate inside nested if/while/for bodies (sm_scope_depth > 0). Since
+// spike_reload_cpu_results_from_frame is now called from within
+// reload_params_from_frame's reload_crossing:true path, CPU results are
+// correctly re-planted regardless of the nesting depth at which the suspension occurs.
+//
+// Both default and --no-auto-parallel modes must produce the same output.
+//
+// Expected output (both modes):
+//   55
+//   89
+function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+
+function entrypoint() -> nothing {
+  let a = fib(10)
+  let b = fib(11)
+  let flag = 1
+  if (flag > 0) {
+    wait sleep(0)
+  }
+  print(a)
+  print(b)
+}

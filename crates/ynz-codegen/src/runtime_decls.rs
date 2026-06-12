@@ -204,6 +204,31 @@ pub struct RuntimeDecls<'ctx> {
     //   never reachable from inside a ynz_sm_*_resume function (those inline-poll-yield).
     //   Uses Handle::block_on on Tokio threads; RUNTIME.block_on outside Tokio.
     pub ynz_rt_run_entrypoint: FunctionValue<'ctx>,
+
+    // ── v0.3-M3d (spike): joinable CPU spawn + poll + drop ───────────────
+    //
+    // These three functions implement the poll-based CPU join protocol. They are
+    // declared unconditionally so the LLVM module is always valid; call sites are
+    // emitted only when YNZ_M3D_SPIKE=1 is set (the spike-gated path in emit.rs).
+    //
+    // ynz_rt_spawn_blocking_joinable(fn_ptr, ctx_ptr, ctx_size) → *mut u8
+    //   fn_ptr: extern "C" fn(*mut u8) -> YnzCpuResult  (trampoline calling the real fn)
+    //   ctx_ptr: pointer to the ctx bytes to copy into the child's heap buffer
+    //   ctx_size: number of bytes to copy (0 = pass null to fn_ptr)
+    //   Returns: Box::into_raw(Box<CpuJoinHandle>) cast to *mut u8.
+    //            Null when called before ynz_rt_init or after ynz_rt_shutdown.
+    pub ynz_rt_spawn_blocking_joinable: FunctionValue<'ctx>,
+    // ynz_rt_join_poll(handle_ptr, waker_ctx, result_out) → i32
+    //   handle_ptr: the *mut u8 returned by ynz_rt_spawn_blocking_joinable
+    //   waker_ctx:  the &mut Context<'_> forwarded from the enclosing SM poll
+    //   result_out: *mut u8 pointing to 16 bytes for the YnzCpuResult ([i64; 2])
+    //   Returns: 1 = Pending (waker registered), 0 = Ready (16 bytes written + handle freed).
+    //            On Ready(panic): re-raises via resume_unwind (extern "C-unwind").
+    pub ynz_rt_join_poll: FunctionValue<'ctx>,
+    // ynz_rt_join_handle_free(handle_ptr) → void
+    //   Drops the Box<CpuJoinHandle>, detaching the blocking task. Null-safe.
+    //   Called by the frame drop shim when a parent SM is cancelled mid-join.
+    pub ynz_rt_join_handle_free: FunctionValue<'ctx>,
 }
 
 impl<'ctx> RuntimeDecls<'ctx> {
@@ -637,6 +662,27 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 // Drives the state machine to completion; return value is a legacy i32
                 // (wrapper reads typed value directly from frame[16] instead).
                 i32.fn_type(&[ptr.into(), ptr.into(), i64.into()], false),
+            ),
+
+            // v0.3-M3d spike: joinable CPU spawn + poll + drop.
+            // Declared unconditionally; call sites only emitted when YNZ_M3D_SPIKE=1.
+            ynz_rt_spawn_blocking_joinable: declare_fn(
+                module,
+                "ynz_rt_spawn_blocking_joinable",
+                // (fn_ptr: ptr, ctx_ptr: ptr, ctx_size: i64) -> *mut u8
+                ptr.fn_type(&[ptr.into(), ptr.into(), i64.into()], false),
+            ),
+            ynz_rt_join_poll: declare_fn(
+                module,
+                "ynz_rt_join_poll",
+                // (handle_ptr: ptr, waker_ctx: ptr, result_out: ptr) -> i32
+                i32.fn_type(&[ptr.into(), ptr.into(), ptr.into()], false),
+            ),
+            ynz_rt_join_handle_free: declare_fn(
+                module,
+                "ynz_rt_join_handle_free",
+                // (handle_ptr: ptr) -> void
+                void.fn_type(&[ptr.into()], false),
             ),
         }
     }

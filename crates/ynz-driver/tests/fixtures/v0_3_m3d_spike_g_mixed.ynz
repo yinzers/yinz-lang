@@ -1,0 +1,27 @@
+// Spike fixture (g): CPU call + I/O sleep in the same SM body.
+//
+// In the Phase 0 spike, the CPU group (fib(10) + fib(11)) is parallelized via
+// ynz_rt_spawn_blocking_joinable. The remaining wait sleep(50) then runs sequentially
+// through the normal SM inline-poll path. True concurrent CPU+I/O mixing (both
+// pending simultaneously) is a P3 deliverable; this fixture proves the spike SM
+// can hand off correctly from the CPU join path into the existing inline-poll path.
+//
+// Expected output:
+//   55
+//   89
+//   done
+function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+
+function entrypoint() -> nothing {
+  let a = fib(10)
+  let b = fib(11)
+  wait sleep(50)
+  print(a)
+  print(b)
+  print(`done`)
+}

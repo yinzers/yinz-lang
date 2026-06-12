@@ -1,0 +1,26 @@
+// Spike admission fixture (l): CPU calls have arity != 1 — spike must be declined.
+//
+// The args_lowerable closure in spike_extract_cpu_group requires call.args.len() == 1.
+// A two-argument call like add(10, 20) or a zero-argument call like getval() fails this
+// check and is not extracted as a CPU group member. The function runs sequentially.
+//
+// Both default and --no-auto-parallel modes must produce the same output.
+//
+// Expected output (both modes):
+//   30
+//   42
+function add(a: int, b: int) -> int {
+  return a + b
+}
+
+function getval() -> int {
+  return 42
+}
+
+function entrypoint() -> nothing {
+  let a = add(10, 20)
+  let b = getval()
+  wait sleep(0)
+  print(a)
+  print(b)
+}

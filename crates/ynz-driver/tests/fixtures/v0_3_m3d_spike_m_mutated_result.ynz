@@ -1,0 +1,28 @@
+// Spike mutation fixture (m): CPU-group result is reassigned in rest_stmts.
+//
+// The static admission gate (spike_cpu_candidates + spike_extract_cpu_group) detects
+// that `a` is assigned in rest_stmts (stmt_assigns_name walk) and declines the group.
+// Both modes lower sequentially, so `a = 999` runs after fib(10) completes, the
+// suspension flushes the SM crossing slot for `a`, and print(a) sees 999.
+//
+// Because the group is declined, b = fib(11) also runs sequentially. The output is
+// byte-identical between spike and non-spike modes.
+//
+// Expected output (both modes):
+//   999
+//   89
+function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+
+function entrypoint() -> nothing {
+  let a = fib(10)
+  let b = fib(11)
+  a = 999
+  wait sleep(0)
+  print(a)
+  print(b)
+}

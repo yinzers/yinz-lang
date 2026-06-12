@@ -9,6 +9,9 @@
 ///   - `ynz_rt_run_entrypoint(resume_fn, frame_ptr, frame_size)` — program-entry state-machine driver (M2)
 ///   - `ynz_rt_check_preempt()` — cooperative yield point at loop back-edges + call sites
 ///   - `ynz_rt_shutdown()` — drain the runtime at program end
+///   - `ynz_rt_spawn_blocking_joinable(fn_ptr, ctx_ptr, ctx_size)` — blocking-pool CPU task returning a joinable handle (M3d)
+///   - `ynz_rt_join_poll(handle, waker_ctx, result_out)` — poll a CPU join handle (M3d)
+///   - `ynz_rt_join_handle_free(handle)` — detach/drop a CPU join handle (M3d)
 ///
 /// These are called by compiler-generated code; users never see Tokio types directly.
 ///
@@ -39,7 +42,7 @@ static RUNTIME: OnceLock<Mutex<Option<tokio::runtime::Runtime>>> = OnceLock::new
 ///
 /// Frame layout (mirrors `crates/ynz-codegen/src/state_machine.rs`):
 ///   bytes 0–3   : resume_point (i32)
-///   bytes 4–7   : padding
+///   bytes 4–7   : padding (zero for normal SM frames; spike discriminator for spike frames)
 ///   bytes 8–15  : sleep_handle (*mut Pin<Box<Sleep>>, or null)
 ///   bytes 16+   : local-variable slots (i64 each)
 ///
@@ -48,6 +51,26 @@ static RUNTIME: OnceLock<Mutex<Option<tokio::runtime::Runtime>>> = OnceLock::new
 /// It MUST stay in sync with `FRAME_OFFSET_SLEEP_HANDLE` in state_machine.rs — both are
 /// `8` and derive from the same frame layout decision.
 const FRAME_SLEEP_HANDLE_OFFSET: usize = 8;
+
+/// Byte offset of the spike-frame discriminator within a state-machine frame.
+///
+/// Normal frames: bytes 4-7 are always zero (ynz_alloc_zeroed guarantees it).
+/// Spike frames: codegen writes SPIKE_FRAME_MAGIC here at spawn time so that
+/// `SpawnStateFnFuture::drop` can distinguish a spike frame (CPU handles at 32/40)
+/// from a normal SM frame (no CPU handles, no free needed at those offsets).
+const FRAME_SPIKE_DISCRIMINATOR_OFFSET: usize = 4;
+
+/// Magic value written to bytes 4-7 of a spike frame at CPU-group spawn time.
+/// ASCII "SPIK". Non-spike frames always have 0 at this offset (ynz_alloc_zeroed).
+/// `SpawnStateFnFuture::drop` reads this to decide whether to free handle slots 32/40.
+const SPIKE_FRAME_MAGIC: u32 = 0x5350_494B;
+
+/// Byte offset of the first CPU join handle pointer in a spike frame.
+/// Slot holds *mut CpuJoinHandle (8 bytes), null when handle was consumed by Ready poll.
+const SPIKE_HANDLE_0_OFFSET: usize = 32;
+
+/// Byte offset of the second CPU join handle pointer in a spike frame.
+const SPIKE_HANDLE_1_OFFSET: usize = 40;
 
 /// Initialise the Tokio multi-thread runtime.
 ///
@@ -396,7 +419,7 @@ pub struct BgArgDropEntry {
 ///
 /// Separate from `SyncStateFnFuture` so `ynz_rt_spawn`'s external C-ABI signature
 /// stays `void` (no return channel at the ABI level).
-struct SpawnStateFnFuture {
+pub(crate) struct SpawnStateFnFuture {
     resume_fn: unsafe extern "C" fn(*mut u8, *mut u8) -> i32,
     frame_ptr: *mut u8,
     /// Byte length of the heap frame, used by `Drop` to free it via `ynz_free`.
@@ -420,8 +443,81 @@ struct SpawnStateFnFuture {
     arg_drop_count: usize,
 }
 
+impl SpawnStateFnFuture {
+    /// Construct a `SpawnStateFnFuture` for testing. The `new_*` path exists so tests
+    /// can build the future, hold it locally, and drop it without having to spawn it
+    /// (which would require a live Tokio runtime and would prevent observing drop behaviour
+    /// on the frame before the task runs).
+    #[cfg(test)]
+    pub(crate) fn new(
+        resume_fn: unsafe extern "C" fn(*mut u8, *mut u8) -> i32,
+        frame_ptr: *mut u8,
+        frame_size: i64,
+        rec_slot: *mut u8,
+        arg_drop_ptr: *const BgArgDropEntry,
+        arg_drop_count: i64,
+    ) -> Self {
+        let _ = rec_slot; // tested via recursion_slot_offset=-1 path
+        Self {
+            resume_fn,
+            frame_ptr,
+            frame_size,
+            recursion_slot_offset: -1,
+            arg_drop_ptr,
+            arg_drop_count: arg_drop_count as usize,
+        }
+    }
+}
+
 // SAFETY: SpawnStateFnFuture is owned exclusively by the spawned task for its lifetime.
 unsafe impl Send for SpawnStateFnFuture {}
+
+/// Free live CPU join handles stored in a spike frame, if any.
+///
+/// Reads the discriminator at frame offset 4. Normal frames always have 0 there
+/// (ynz_alloc_zeroed initialises the frame). Spike frames have SPIKE_FRAME_MAGIC written
+/// by codegen at spawn time, enabling this function to safely access handle slots at
+/// offsets 32 and 40 without misreading a normal frame.
+///
+/// For each non-null handle slot: drops the Box<CpuJoinHandle>, detaching the blocking-pool
+/// task (it runs to completion; results are discarded). Null slots are skipped — they were
+/// either never spawned or already consumed by a Ready poll.
+///
+/// Called from `SpawnStateFnFuture::drop` on cancellation. Extracted as a `pub(crate)` helper
+/// so the discriminator + handle-free logic can be tested independently without constructing
+/// a full `SpawnStateFnFuture` (which requires live resume-fn scaffolding).
+///
+/// # Safety
+/// `frame_ptr` must be a non-null, valid pointer to at least 48 bytes when the discriminator
+/// matches, or at least 8 bytes for the discriminator read (4 bytes at offset 4) to be safe.
+/// The spike frame allocated by codegen always satisfies this: header (32 bytes) + handle
+/// region (48 bytes) = 80 bytes minimum.
+pub(crate) unsafe fn cleanup_spike_cpu_handles(frame_ptr: *mut u8) {
+    // Normal frames: bytes 4-7 are always zero. Spike frames: SPIKE_FRAME_MAGIC written at
+    // spawn time. Only free handle slots when the discriminator confirms this is a spike frame.
+    let disc_slot = frame_ptr.add(FRAME_SPIKE_DISCRIMINATOR_OFFSET) as *const u32;
+    if *disc_slot == SPIKE_FRAME_MAGIC {
+        // SAFETY: spike_cpu_candidates declines any host with ≥1 params, so the frame is
+        // always ≥80 bytes (32-byte header + 48-byte spike region). The discriminator check
+        // above is proof that this is a spike frame, making the 48-byte region accessible.
+        // The compile-time assertion below documents the layout invariant: handle slots
+        // must both fit within the 80-byte minimum spike frame.
+        const _: () = assert!(
+            SPIKE_HANDLE_1_OFFSET + 8 <= 80,
+            "spike region must fit within 80-byte minimum spike frame"
+        );
+        for handle_offset in [SPIKE_HANDLE_0_OFFSET, SPIKE_HANDLE_1_OFFSET] {
+            let slot = frame_ptr.add(handle_offset) as *mut *mut u8;
+            let ptr = *slot;
+            if !ptr.is_null() {
+                drop(Box::from_raw(ptr as *mut CpuJoinHandle));
+                // Null the slot after free to prevent double-free if cleanup is called
+                // again (or if the frame is inspected after this function returns).
+                *slot = std::ptr::null_mut();
+            }
+        }
+    }
+}
 
 impl Drop for SpawnStateFnFuture {
     /// Free all resources owned by this spawned task — on normal completion AND
@@ -449,6 +545,10 @@ impl Drop for SpawnStateFnFuture {
             if !handle_ptr.is_null() {
                 drop(Box::from_raw(handle_ptr as *mut Pin<Box<Sleep>>));
             }
+
+            // 1.5. Free CPU join handles if this is a spike frame (discriminator at bytes 4-7).
+            // SAFETY: frame_ptr is valid for at least the spike frame body (caller guarantee).
+            cleanup_spike_cpu_handles(self.frame_ptr);
 
             // 2. Free heap arg-copies stored as i64 bit-patterns in this frame's local slots.
             //    Each BgArgDropEntry names one frame slot (by byte offset) and the free protocol.
@@ -829,4 +929,356 @@ pub unsafe extern "C" fn ynz_rt_run_entrypoint(
         Ok(value) => value,
         Err(e) => std::panic::resume_unwind(e),
     }
+}
+
+// ── v0.3-M3d: CPU-parallel join shims ─────────────────────────────────────────
+//
+// These three shims back the joinable CPU-spawn mechanism for pure-CPU statement
+// parallelization. ABI invariants (locked in P0 Decision Record):
+//
+//   YnzCpuResult = [i64; 2] (16-byte POD, covers every supported return class:
+//     int/bool: [i64_val, 0], float: [f64_bits, 0], string/array/map: [ptr_bits, 0],
+//     number/decimal128: [lo, hi], T-errors: [err_tag, ok_bits]).
+//
+//   ynz_rt_spawn_blocking_joinable: copies ctx, spawns on the blocking pool,
+//     returns heap-boxed JoinHandle<YnzCpuResult> as *mut u8.
+//   ynz_rt_join_poll: polls the handle with the real forwarded waker (NO fabricated
+//     wakers — identical discipline to ynz_rt_async_sleep_poll).
+//   ynz_rt_join_handle_free: detaches (drops) a handle that was never polled to Ready.
+//
+// The join is POLL-BASED — returning Pending from ynz_rt_join_poll suspends the
+// enclosing state-machine and hands the thread back to the scheduler. This is the
+// key invariant: no synchronous join (block_on, thread::park, spin-wait) anywhere in
+// these call paths. Violation would reintroduce the M2-HALT block_on corpse.
+
+/// The 16-byte return type for CPU-spawned children.
+///
+/// Every Yinz return class that may be returned from a CPU child maps to two i64 fields:
+///   int / bool             → [value_bits, 0]
+///   float                  → [f64_as_i64_bits, 0]   (bit-cast, not truncation)
+///   string / array / map   → [heap_ptr_as_i64, 0]
+///   number (decimal128)    → [lo_word, hi_word]
+///   T errors (EC pair)     → [err_tag, ok_bits]
+///
+/// Shape and Shape-errors returns are NOT in this contract: the promotion pass declines
+/// candidates whose callee returns a Shape type (WideValueSuspendingReturn decline rule).
+///
+/// Alignment: the frame result slot must be 16-byte aligned to hold a decimal128 or EC pair
+/// without SIGBUS on architectures with strict alignment. Codegen ensures this via its
+/// alloca-with-alignment path for result slots.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct YnzCpuResult(pub [i64; 2]);
+
+/// A heap-boxed JoinHandle for a CPU-spawned child task.
+///
+/// Opaque to the codegen: stored as `*mut u8` in the parent's frame handle slot.
+/// Ownership protocol:
+///   - Created by `ynz_rt_spawn_blocking_joinable`; pointer returned to caller.
+///   - Consumed (Ready): `ynz_rt_join_poll` drops the Box on Ready. Pointer is dangling after.
+///   - Dropped (drop path): `ynz_rt_join_handle_free` drops the Box (detach — task runs to completion).
+///   - The two paths are mutually exclusive by construction: codegen nulls the handle slot
+///     after each Ready poll and the drop shim only fires on non-null slots.
+///
+/// `pub(crate)` so unit tests in lib.rs can construct a panicking handle directly
+/// without going through the `extern "C" fn` boundary (which aborts on panic, RFC 2945).
+/// The inner field is private — all construction goes through `CpuJoinHandle::new` so
+/// codegen cannot directly call `.abort()` or `.poll()` on the handle (those paths are
+/// mutually exclusive and must stay that way: Ready poll drops the box; drop-shim detaches).
+pub(crate) struct CpuJoinHandle {
+    inner: tokio::task::JoinHandle<YnzCpuResult>,
+    /// Test-only per-handle drop probe. When this specific handle is dropped, the Arc
+    /// counter increments. Injected via `set_drop_probe` before boxing — scoped to ONE
+    /// handle so concurrent drops from other tests can never race into the assertion window.
+    #[cfg(test)]
+    probe: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+}
+
+impl CpuJoinHandle {
+    /// Wrap a `JoinHandle<YnzCpuResult>` into the opaque handle type.
+    ///
+    /// The only construction path — keeps callers from holding a direct `JoinHandle`
+    /// reference, which would let them call `.abort()` independently of the slot-null
+    /// protocol that prevents double-frees.
+    pub(crate) fn new(h: tokio::task::JoinHandle<YnzCpuResult>) -> Self {
+        CpuJoinHandle {
+            inner: h,
+            #[cfg(test)]
+            probe: None,
+        }
+    }
+
+    /// Test-only: inject a drop probe into this handle.
+    ///
+    /// When the handle is dropped (via Box::from_raw + drop), the Arc counter increments.
+    /// Assertions compare before/after count for THIS specific handle — unaffected by
+    /// concurrent drops from other tests because the Arc is not shared globally.
+    #[cfg(test)]
+    pub(crate) fn set_drop_probe(&mut self, arc: std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        self.probe = Some(arc);
+    }
+}
+
+#[cfg(test)]
+impl Drop for CpuJoinHandle {
+    fn drop(&mut self) {
+        if let Some(probe) = &self.probe {
+            probe.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
+/// Schedule a pure-CPU function on the blocking thread pool and return a joinable handle.
+///
+/// # Flow
+/// 1. Copy `ctx_size` bytes from `ctx_ptr` to a heap buffer (RAII via `FrameDropGuard`).
+///    The child owns its ctx copy; the parent frame may be dropped at any time without
+///    dangling the child's args (the UAF-on-cancellation fix from Research Finding 3).
+/// 2. Spawn via `Handle::spawn_blocking(closure)`. The closure calls `fn_ptr(ctx_heap_ptr)`
+///    and returns the `YnzCpuResult`. `spawn_blocking` is non-async: the CPU work runs on
+///    a dedicated blocking-pool OS thread, not on an I/O event-loop thread.
+/// 3. Box the `JoinHandle<YnzCpuResult>` — gives it a stable heap address for the frame
+///    handle slot. Return the box pointer as `*mut u8`.
+///
+/// # Failure modes
+/// - `ynz_rt_init` was never called: logs a warning, returns null. Caller must treat null
+///   as "run inline sequentially" (codegen always runs after ynz_rt_init in generated main;
+///   null only occurs in hand-written misuse). Polling a null handle aborts with a message.
+/// - `ynz_rt_shutdown` was already called: logs a warning, returns null.
+/// - The CPU closure panics: caught by the JoinHandle as `JoinError::is_panic()`.
+///   `ynz_rt_join_poll` re-raises via `resume_unwind` so the parent's panic handler takes over —
+///   matching the observable behavior of sequential execution on the same panicking callee.
+/// - `ctx_size == 0` or `ctx_ptr` is null: `fn_ptr(null)` is called in the child.
+///
+/// # Side effects
+/// Heap-allocates `ctx_size` bytes (ctx copy) and one `Box<CpuJoinHandle>` per call.
+/// Both are freed by `ynz_rt_join_poll` on Ready (the normal path) or by
+/// `ynz_rt_join_handle_free` on the drop path. No double-free is possible because
+/// the two paths are mutually exclusive.
+///
+/// # Safety
+/// - `ctx_ptr` must point to at least `ctx_size` valid bytes for the duration of this call.
+///   The bytes are copied; ownership of the original buffer stays with the caller.
+/// - `fn_ptr` must be safe to call with a single `*mut u8` argument on a blocking-pool thread.
+#[no_mangle]
+pub unsafe extern "C" fn ynz_rt_spawn_blocking_joinable(
+    fn_ptr: extern "C" fn(*mut u8) -> YnzCpuResult,
+    ctx_ptr: *mut u8,
+    ctx_size: i64,
+) -> *mut u8 {
+    // Resolve the runtime handle using the same ladder as ynz_rt_spawn_blocking:
+    // try_current() first (avoids the RUNTIME mutex when already inside Tokio),
+    // then fall through to the global RUNTIME for the main-thread path.
+    let handle = match tokio::runtime::Handle::try_current() {
+        Ok(h) => h,
+        Err(_) => {
+            let Some(guard) = RUNTIME.get() else {
+                eprintln!(
+                    "ynz runtime: ynz_rt_spawn_blocking_joinable called before ynz_rt_init — handle is null"
+                );
+                return std::ptr::null_mut();
+            };
+            let lock = match guard.lock() {
+                Ok(l) => l,
+                Err(e) => e.into_inner(),
+            };
+            match lock.as_ref() {
+                Some(rt) => rt.handle().clone(),
+                None => {
+                    eprintln!("ynz runtime: ynz_rt_spawn_blocking_joinable called after ynz_rt_shutdown — handle is null");
+                    return std::ptr::null_mut();
+                }
+            }
+        }
+    };
+
+    // Copy ctx bytes to the heap. The FrameDropGuard moves into the closure so it
+    // runs on both normal return and panic unwind — preventing a ctx leak if the
+    // child panics before fn_ptr returns.
+    let (ctx_heap_ptr, ctx_heap_len): (*mut u8, usize) = if ctx_size > 0 && !ctx_ptr.is_null() {
+        let len = ctx_size as usize;
+        let mut buf: Box<[u8]> = vec![0u8; len].into_boxed_slice();
+        // SAFETY: ctx_ptr is valid for ctx_size bytes (caller guarantee). The source and
+        // destination are non-overlapping (heap allocation vs caller's stack/frame).
+        std::ptr::copy_nonoverlapping(ctx_ptr, buf.as_mut_ptr(), len);
+        let raw = buf.as_mut_ptr();
+        std::mem::forget(buf); // ownership moves into FrameDropGuard below
+        (raw, len)
+    } else {
+        (std::ptr::null_mut(), 0)
+    };
+
+    let ctx_guard = FrameDropGuard {
+        ptr: ctx_heap_ptr,
+        len: ctx_heap_len,
+    };
+
+    // Spawn on the blocking pool. The closure is Send because FrameDropGuard: Send.
+    // spawn_blocking returns a JoinHandle<YnzCpuResult> immediately (non-async).
+    //
+    // WHY catch_unwind here: fn_ptr is `extern "C" fn`, and RFC 2945 / Rust 1.71+
+    // specifies that a panic crossing an `extern "C"` boundary aborts the process —
+    // before Tokio's own catch_unwind (which wraps the closure result) can form a
+    // JoinError. Capturing the unwind here converts it into a native Rust panic inside
+    // Tokio's harness, so ynz_rt_join_poll's Ready(Err(panic)) → resume_unwind path
+    // becomes reachable end-to-end. Mirrors ynz_rt_spawn_blocking at runtime.rs:198-200.
+    let join_handle = handle.spawn_blocking(move || {
+        let ctx_for_call = ctx_guard.ptr;
+        let _guard = ctx_guard; // freed on normal return and on unwind
+
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fn_ptr(ctx_for_call)));
+        match result {
+            Ok(v) => v,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+        // YnzCpuResult is Copy/trivially-movable — no special drop needed.
+    });
+
+    // Box the JoinHandle to give it a stable heap address. The codegen stores the
+    // returned pointer in the parent frame's handle slot.
+    let boxed = Box::new(CpuJoinHandle::new(join_handle));
+    Box::into_raw(boxed) as *mut u8
+}
+
+/// Poll an in-flight CPU join handle created by `ynz_rt_spawn_blocking_joinable`.
+///
+/// # Flow
+/// 1. Cast `handle_ptr` back to `*mut CpuJoinHandle` and pin it mutably.
+/// 2. Cast `waker_ctx` back to `&mut Context<'_>` — the real Tokio waker forwarded
+///    from the enclosing state-machine poll. No fabricated Wakers — same discipline
+///    as `ynz_rt_async_sleep_poll`.
+/// 3. Call `Pin::new(&mut join_handle).poll(cx)`.
+/// 4. On `Pending`: the Tokio task runtime has registered the real waker; it will be
+///    woken when the blocking task finishes. Return 1 (Pending) so the state-machine
+///    saves resume_point and yields Pending up to its own caller.
+/// 5. On `Ready(Ok(result))`: write 16 bytes to `result_out` (the frame result slot),
+///    drop the `Box<CpuJoinHandle>`, return 0 (Ready).
+/// 6. On `Ready(Err(join_err))` where `join_err.is_panic()`: the child panicked.
+///    Re-raise via `resume_unwind` so the parent's panic handler fires — matching
+///    the observable behavior of sequential execution on a panicking callee.
+///    (Other JoinError variants — like abort — are treated as panics for the same reason.)
+///
+/// # Result layout in `result_out`
+/// Writes exactly 16 bytes: `[lo: i64, hi: i64]` in little-endian host byte order.
+/// The frame result slot must be at least 16-byte aligned (codegen ensures this).
+///
+/// # Failure modes
+/// - `handle_ptr` is null: aborts with a clear message (indicates codegen bug — the
+///   parent frame should not be polling a null handle slot).
+/// - Child panicked: `resume_unwind` re-raises. Program terminates with the same
+///   diagnostic as sequential execution of the panicking callee.
+///
+/// # Side effects
+/// On Ready: frees the `Box<CpuJoinHandle>` heap allocation (the JoinHandle is dropped,
+/// detaching the blocking thread if it hasn't already finished). Writes 16 bytes to `result_out`.
+///
+/// # Safety
+/// - `handle_ptr` must be a non-null pointer previously returned by
+///   `ynz_rt_spawn_blocking_joinable` and not yet consumed (i.e., poll has not yet returned 0
+///   for this handle).
+/// - `waker_ctx` must be a valid `*mut u8` pointing to a live `&mut Context<'_>` for
+///   the duration of this call (same contract as `ynz_rt_async_sleep_poll`).
+/// - `result_out` must be valid and writable for at least 16 bytes, and at least 8-byte
+///   aligned (i64 writes). Codegen ensures 16-byte alignment for decimal128 correctness.
+/// # ABI note: `extern "C-unwind"`
+///
+/// This function uses `extern "C-unwind"` instead of `extern "C"` because on the
+/// `Ready(Err(panic))` path it calls `std::panic::resume_unwind`, which initiates a Rust
+/// unwind. An `extern "C"` function that unwinds aborts the process (Rust RFC 2945); an
+/// `extern "C-unwind"` function allows the unwind to propagate to the caller.
+///
+/// Current deployment: `ynz_rt_join_poll` is called from `SpawnStateFnFuture::poll`
+/// (pure Rust, no C boundary) and from the codegen-emitted SM resume functions. The SM
+/// resume functions are emitted as `extern "C"` — an unwind originating here that reaches
+/// the SM resume boundary will abort the process. Full end-to-end `C-unwind` propagation
+/// (resume functions emitted as `extern "C-unwind"`) is a future deliverable for P1.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn ynz_rt_join_poll(
+    handle_ptr: *mut u8,
+    waker_ctx: *mut u8,
+    result_out: *mut u8,
+) -> i32 {
+    if handle_ptr.is_null() {
+        // Null handle means codegen emitted a poll on a slot that was already Ready or
+        // was never set — either is a codegen bug.
+        panic!(
+            "ynz runtime: ynz_rt_join_poll called with null handle (codegen bug — \
+             poll a join handle slot that was already consumed or never initialised)"
+        );
+    }
+
+    // SAFETY: handle_ptr was returned by ynz_rt_spawn_blocking_joinable (Box::into_raw
+    // of Box<CpuJoinHandle>). Valid, aligned, exclusively owned by this call.
+    let join_box = &mut *(handle_ptr as *mut CpuJoinHandle);
+    // SAFETY: waker_ctx was cast from &mut Context<'_> by the enclosing SM's poll.
+    // Valid for the duration of this call.
+    let cx = &mut *(waker_ctx as *mut Context<'_>);
+
+    // Pin the JoinHandle reference for polling. JoinHandle<T> implements Future<Output=Result<T,JoinError>>.
+    // The pin is trivial here — JoinHandle is Unpin.
+    match std::pin::Pin::new(&mut join_box.inner).poll(cx) {
+        Poll::Pending => 1i32,
+        Poll::Ready(Ok(result)) => {
+            // Write 16 bytes to the frame result slot before dropping the handle.
+            // SAFETY: result_out is valid for 16 bytes (caller guarantee from frame layout).
+            let out = result_out as *mut [i64; 2];
+            *out = result.0;
+            // Drop the Box (frees the JoinHandle) — safe because we've already read the result.
+            drop(Box::from_raw(handle_ptr as *mut CpuJoinHandle));
+            0i32
+        }
+        Poll::Ready(Err(join_err)) => {
+            // Child panicked (or was aborted — treated identically for sequential-parity).
+            // Re-raise via resume_unwind so the parent's panic handler takes over,
+            // matching the observable behavior of sequential execution on a panicking callee.
+            // The Box is intentionally not freed here: resume_unwind unwinds through this
+            // call frame, so FrameDropGuard patterns won't fire on the local allocation —
+            // but the JoinHandle is already exhausted by the JoinError extraction, so no
+            // double-free occurs. The Box leaks on this path (bounded: one per panicking
+            // child), UNLESS SpawnStateFnFuture::drop rescues it. For spike frames,
+            // SpawnStateFnFuture::drop reads the discriminator at frame offset 4, detects
+            // the spike magic, and frees any non-null handle slots at offsets 32/40 — so
+            // the leak is bounded to non-spike-frame callers (which is only the P0 spike
+            // test path). Production P1+ codegen always emits spike frames and is rescued.
+            if join_err.is_panic() {
+                std::panic::resume_unwind(join_err.into_panic());
+            } else {
+                // Abort (non-panic cancellation via JoinHandle::abort). Treat as a panic
+                // with a clear message so the parent sees a loud failure rather than a
+                // silent wrong value.
+                panic!("ynz runtime: CPU child task was aborted before it could produce a result");
+            }
+        }
+    }
+}
+
+/// Detach a CPU join handle, freeing it without collecting its result.
+///
+/// Called by the parent frame's drop shim when the parent is cancelled mid-join:
+/// a frame handle slot that is non-null at drop time has an in-flight child that was
+/// never polled to Ready. Dropping the JoinHandle detaches it — the blocking-pool task
+/// runs to completion, results are discarded. No UAF: the child owns its ctx copy.
+///
+/// This mirrors the sleep-handle free discipline: `SpawnStateFnFuture::drop` frees the
+/// sleep_handle slot on cancellation; this function frees the join handle slot on
+/// cancellation.
+///
+/// # Idempotence
+/// Never called after a Ready poll — the parent frame's drop shim only fires on slots
+/// whose pointer is non-null, and codegen nulls the handle slot when `ynz_rt_join_poll`
+/// returns 0 (Ready). Double-free is impossible by construction.
+///
+/// # Safety
+/// - `handle_ptr` must be a non-null pointer previously returned by
+///   `ynz_rt_spawn_blocking_joinable` and not yet consumed (poll returned 0 or this
+///   function was already called for this handle).
+#[no_mangle]
+pub unsafe extern "C" fn ynz_rt_join_handle_free(handle_ptr: *mut u8) {
+    if handle_ptr.is_null() {
+        return;
+    }
+    // Reconstruct and drop the Box — detaches the blocking task.
+    // SAFETY: handle_ptr is valid and exclusively owned (caller guarantee).
+    drop(Box::from_raw(handle_ptr as *mut CpuJoinHandle));
 }

@@ -724,6 +724,32 @@ pub fn emit_artifact(
     // explicit salsa input parameter. Deferred until `ynz watch --no-auto-parallel` or
     // LSP codegen integration lands. Tracked: .claude/todos.md "no-auto-parallel env-var".
     let no_auto_parallel = std::env::var("YNZ_NO_AUTO_PARALLEL").is_ok_and(|v| v == "1");
+    // Gates the CPU-parallel join spike: when set to "1", the entrypoint's adjacent
+    // non-suspending int-returning call pair is emitted via spawn_blocking + poll join
+    // instead of sequential call lowering. All other programs lower identically.
+    let m3d_spike = std::env::var("YNZ_M3D_SPIKE").is_ok_and(|v| v == "1");
+
+    // Spike: extend the suspend_set with any function that contains a CPU-parallel
+    // candidate group (≥2 calls to the same non-suspending int-returning callee).
+    // This forces those functions through the state-machine codegen path so the
+    // spike CPU-join emission can run. Without the extension, non-suspending parent
+    // functions would take the trivial non-SM path and bypass the spike completely.
+    let spike_suspend_set: SuspendSet = if m3d_spike {
+        let mut extended = suspend_set.clone();
+        for item in &typed_module.module.items {
+            if let ynz_ast::nodes::Item::Function(f) = item {
+                if !f.generics.is_empty() {
+                    continue;
+                }
+                if spike_cpu_candidates(f, typed_module, &suspend_set).is_some() {
+                    extended.insert(f.name.clone());
+                }
+            }
+        }
+        extended
+    } else {
+        suspend_set.clone()
+    };
 
     build_module(
         &context,
@@ -735,10 +761,11 @@ pub fn emit_artifact(
         generic_fn_table,
         mono_table,
         imported_options,
-        &suspend_set,
+        &spike_suspend_set,
         imported_fns,
         frame_layouts,
         no_auto_parallel,
+        m3d_spike,
     )?;
 
     module
@@ -805,6 +832,7 @@ fn build_module<'ctx, 'g>(
     imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
     frame_layouts_arg: &HashMap<String, FrameLayout>,
     no_auto_parallel: bool,
+    m3d_spike: bool,
 ) -> Result<(), String> {
     let rt = RuntimeDecls::declare(ctx, module);
 
@@ -1027,6 +1055,7 @@ fn build_module<'ctx, 'g>(
                 imported_fns,
                 sig_table,
                 no_auto_parallel,
+                m3d_spike,
             )?,
             Item::Function(_)
             | Item::ShapeDecl(_)
@@ -1230,6 +1259,10 @@ fn lower_generic_function<'ctx>(
         // Generic functions never reach lower_sm_block; the empty table satisfies
         // the struct field without the caller needing a real SignatureTable.
         sig_table: empty_sig_table(),
+        // Generic functions never enter the M3d spike path.
+        m3d_spike: false,
+        m3d_spike_cpu_result_names: Vec::new(),
+        m3d_spike_cpu_result_allocas: HashMap::new(),
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -1531,6 +1564,42 @@ struct Cg<'ctx, 'g> {
     // Stored here so the independence analysis can consume `param_ownerships` from
     // function signatures without re-deriving them (corpse b compliance).
     sig_table: &'g SignatureTable,
+    // v0.3-M3d spike: when true, the CPU-parallel join path is active.
+    // Controlled by YNZ_M3D_SPIKE=1 in the environment at codegen time.
+    // Zero default-build behavior change when false (the default).
+    m3d_spike: bool,
+    // CPU-result (name, frame_offset) pairs owned by the spike reload mechanism.
+    //
+    // Each pair names a local bound by the CPU group's all_done_bb AND records the
+    // SPIKE_RESULT_N_OFFSET where its value lives persistently across suspensions.
+    //
+    // Two invariants:
+    //   1. reload_params_from_frame SKIPS these names in its crossing-local loop (they
+    //      live at SPIKE_RESULT_N_OFFSET, not SM crossing slot indices) AND calls
+    //      spike_reload_cpu_results_from_frame for the pairs at reload_crossing:true time
+    //      — this fires at ANY sm_scope_depth, fixing the depth-asymmetry bug (#10).
+    //   2. When rest_stmts processes a Stmt::Assign whose target matches a name here,
+    //      the pair is REMOVED before the assign is lowered — the crossing machinery
+    //      then owns that name (flush + reload from crossing slot), so the mutation is
+    //      visible after the next suspension (#9 fix).
+    //
+    // Only consulted when m3d_spike is true (always empty for non-spike builds).
+    m3d_spike_cpu_result_names: Vec<(String, u64)>,
+    // sm_entry allocas for CPU-group result bindings.
+    //
+    // Pre-allocated in the function entry block (sm_entry) so they dominate all state
+    // blocks. LLVM SSA requires allocas to be in the entry block when their values are
+    // loaded in multiple basic blocks (e.g., after each suspension the reload path reads
+    // from the same alloca). Creating allocas in a non-entry state block would produce
+    // "Instruction does not dominate all uses" for any load that follows a different
+    // control-flow path (e.g., a second suspension state block).
+    //
+    // emit_cpu_group_spawn_join stores results into these allocas (found via cg.locals).
+    // spike_reload_cpu_results_from_frame reloads frame bytes into these same allocas
+    // instead of creating fresh ones — no alloca needed at reload time.
+    //
+    // Always empty when m3d_spike is false.
+    m3d_spike_cpu_result_allocas: HashMap<String, PointerValue<'ctx>>,
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
@@ -1839,6 +1908,7 @@ fn lower_function<'ctx, 'g>(
     imported_fns: &'g std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
     sig_table: &'g SignatureTable,
     no_auto_parallel: bool,
+    m3d_spike: bool,
 ) -> Result<(), String> {
     // v0.3-M2 P7 path selection: functions in the transitive suspend_set get the
     // state-machine path. Uses suspend_set (from typeck FunctionSig.suspends) instead
@@ -1863,6 +1933,7 @@ fn lower_function<'ctx, 'g>(
             imported_fns,
             sig_table,
             no_auto_parallel,
+            m3d_spike,
         );
     }
 
@@ -1926,6 +1997,11 @@ fn lower_function<'ctx, 'g>(
         // sig_table unused for non-SM functions — independence analysis runs only in
         // lower_sm_block which is never reached from the non-SM path.
         sig_table,
+        // Non-SM functions are never in the spike suspend_set extension, so m3d_spike
+        // only matters for SM functions. Forward the flag so future callers are consistent.
+        m3d_spike,
+        m3d_spike_cpu_result_names: Vec::new(),
+        m3d_spike_cpu_result_allocas: HashMap::new(),
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -2078,9 +2154,19 @@ fn lower_function_with_waits<'ctx, 'g>(
     imported_fns: &'g std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
     sig_table: &'g SignatureTable,
     no_auto_parallel: bool,
+    m3d_spike: bool,
 ) -> Result<(), String> {
     // Collect the names of parameters. ALL parameters are live across any wait.
     let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
+
+    // Cache the spike-candidacy probe once. spike_cpu_candidates walks the function body
+    // to identify an adjacent pure-CPU pair; calling it three times per function would
+    // triple that scan cost. The result is stable (pure read of f + typed + suspend_set).
+    let spike_candidates = if m3d_spike {
+        spike_cpu_candidates(f, typed, suspend_set)
+    } else {
+        None
+    };
 
     // Compute the set of locals that cross a suspension boundary (declared before
     // a wait, read after it). These must live in the heap frame instead of SSA
@@ -2095,14 +2181,58 @@ fn lower_function_with_waits<'ctx, 'g>(
     );
 
     // Slot index layout: params occupy slots [0..n_params), crossing locals occupy
-    // slots starting at n_params. decimal128 + EC use 2 consecutive slots; shapes use
-    // ceil(N/8) consecutive slots (frame-embedded); all others use 1.
+    // slots starting at n_params (or n_params+SPIKE_SLOT_RESERVE when spike is active —
+    // see below). decimal128 + EC use 2 consecutive slots; shapes use ceil(N/8) consecutive
+    // slots (frame-embedded); all others use 1.
     // This matches the slot counting in build_frame_layouts.
     let n_params = param_names.len();
+
+    // Spike functions reserve 48 bytes (6 × 8-byte slots) immediately after the frame
+    // header for CPU handle and result slots.
+    //
+    // Spike frame byte layout (zero-param hosts only — spike_cpu_candidates declines
+    // any host with ≥1 params to avoid the collision below):
+    //   bytes  0..31 : frame header (resume_point, discriminator, sleep_handle, return_slot)
+    //   bytes 32..39 : SPIKE_HANDLE_0 — *mut CpuJoinHandle (runtime contract, must stay at 32)
+    //   bytes 40..47 : SPIKE_HANDLE_1 — *mut CpuJoinHandle (runtime contract, must stay at 40)
+    //   bytes 48..63 : SPIKE_RESULT_0 — YnzCpuResult = [i64;2] (16 bytes)
+    //   bytes 64..79 : SPIKE_RESULT_1 — YnzCpuResult = [i64;2] (16 bytes)
+    //   bytes 80+    : crossing locals (no params for spike hosts, so no param slots here)
+    //
+    // Non-spike frame:
+    //   bytes  0..31 : frame header
+    //   bytes 32+    : params (0..n_params slots) then crossing locals
+    //
+    // Zero-param invariant: admitting a param'd host would place param slot 0 at byte 32
+    // (= SPIKE_HANDLE_0_OFFSET), colliding with the handle pointer. spike_cpu_candidates
+    // guards this: returns None for any host with params. This is why `n_params == 0` here
+    // when spike_active_here is true.
+    let spike_active_here = spike_candidates.is_some();
+    // Number of 8-byte slots reserved for the spike handle+result region after the frame header.
+    //
+    // Derivation (each slot = 8 bytes; frame header = 32 bytes = 4 slots):
+    //   slot 0 (byte 32): SPIKE_HANDLE_0  — *mut CpuJoinHandle (8 bytes)
+    //   slot 1 (byte 40): SPIKE_HANDLE_1  — *mut CpuJoinHandle (8 bytes)
+    //   slot 2 (byte 48): SPIKE_RESULT_0 lo — first i64 of YnzCpuResult (8 bytes)
+    //   slot 3 (byte 56): SPIKE_RESULT_0 hi — second i64 of YnzCpuResult (8 bytes)
+    //   slot 4 (byte 64): SPIKE_RESULT_1 lo — first i64 of YnzCpuResult (8 bytes)
+    //   slot 5 (byte 72): SPIKE_RESULT_1 hi — second i64 of YnzCpuResult (8 bytes)
+    //   ─────────────────────────────────────────────────────────────────
+    //   Total: 2 handles × 8B + 2 results × 16B = 16 + 32 = 48 bytes = 6 slots
+    //
+    // Crossing locals for spike functions start at slot n_params+6 (byte 80+), so they
+    // never overlap the spike region. Non-spike functions use n_params+0 (no reserve).
+    const SPIKE_SLOT_RESERVE: usize = 6;
+    let crossing_slot_base = if spike_active_here {
+        n_params + SPIKE_SLOT_RESERVE
+    } else {
+        n_params
+    };
+
     // Compute per-crossing-local slot indices using typeck types (catches inferred number).
     let crossing_slot_indices: Vec<usize> = {
         let mut indices = Vec::with_capacity(crossing_names.len());
-        let mut cursor = n_params;
+        let mut cursor = crossing_slot_base;
         for cname in &crossing_names {
             indices.push(cursor);
             let ty = find_let_typeck_type_in_stmts(&f.body.stmts, cname.as_str(), typed);
@@ -2121,16 +2251,44 @@ fn lower_function_with_waits<'ctx, 'g>(
         }
         indices
     };
-    let n_locals =
-        n_params + crossing_local_total_slots(f, &crossing_names, typed, shape_abi_sizes);
+    // n_locals counts the slots the frame must accommodate for params + crossing locals.
+    // For spike functions, SPIKE_SLOT_RESERVE is included so the fallback frame-size
+    // formula (FRAME_HEADER_SIZE + own_locals_size(n_locals)) produces the right total
+    // without double-counting spike_extra_frame_bytes.
+    let n_locals = if spike_active_here {
+        n_params
+            + SPIKE_SLOT_RESERVE
+            + crossing_local_total_slots(f, &crossing_names, typed, shape_abi_sizes)
+    } else {
+        n_params + crossing_local_total_slots(f, &crossing_names, typed, shape_abi_sizes)
+    };
 
     // Look up the composed frame layout for this function. The total_size covers
     // header(32) + own_locals + optional 16-byte number-errors staging slot + embedded child
     // sub-frames = ONE allocation per task tree.
     let frame_layout = frame_layouts.get(&f.name);
-    let frame_bytes = frame_layout.map(|l| l.total_size).unwrap_or_else(|| {
+    // Spike frame layout (byte offsets from frame base):
+    //   +0..31  : standard SM frame header (resume_point, padding/discriminator, sleep_handle, return_slot)
+    //   +32..39 : spike handle slot 0 (*mut CpuJoinHandle, 8 bytes) — runtime contract, MUST stay at 32
+    //   +40..47 : spike handle slot 1 (*mut CpuJoinHandle, 8 bytes) — runtime contract, MUST stay at 40
+    //   +48..63 : spike result slot 0 (YnzCpuResult = [i64;2], 16 bytes)
+    //   +64..79 : spike result slot 1 (YnzCpuResult = [i64;2], 16 bytes)
+    //   +80..   : params (n_params × 8 bytes) then crossing locals
+    //
+    // For spike functions, `build_frame_layouts` (invoked before spike detection) does not
+    // know about the 48-byte handle/result region — it computes total_size = 32 + n_params*8 +
+    // crossing_bytes. Using that stale size as frame_bytes_base would under-allocate by 48 bytes
+    // and overlap the spike region with param/crossing slots. We therefore always use the
+    // fallback formula for spike functions (FRAME_HEADER_SIZE + own_locals_size(n_locals)), where
+    // n_locals now includes SPIKE_SLOT_RESERVE (see above), giving the correct 80 + param*8 +
+    // crossing_bytes total. Non-spike functions continue to use the frame_layout path unchanged.
+    let frame_bytes: u64 = if spike_active_here {
         state_machine::FRAME_HEADER_SIZE + state_machine::own_locals_size(n_locals)
-    });
+    } else {
+        frame_layout.map(|l| l.total_size).unwrap_or_else(|| {
+            state_machine::FRAME_HEADER_SIZE + state_machine::own_locals_size(n_locals)
+        })
+    };
     let number_errors_staging_offset = frame_layout.and_then(|l| l.number_errors_staging_offset);
 
     let is_main = f.name == "entrypoint";
@@ -2159,7 +2317,21 @@ fn lower_function_with_waits<'ctx, 'g>(
     // Pre-create state blocks.
     // Count ALL suspension points: explicit `wait` nodes + calls to suspending callees.
     // Each suspension point needs a poll-loop continuation state.
-    let n_waits = count_suspension_points(&f.body, suspend_set);
+    let n_waits_base = count_suspension_points(&f.body, suspend_set);
+    // Spike: a CPU-parallel group occupies two states — the spawn state (state 0, which is
+    // the initial dispatch state, always present) and the poll state (state 1, the extra one).
+    // After emit_cpu_group_spawn_join, *current_state is advanced by 2. Any subsequent
+    // wait-bearing statement uses *current_state as its "current" slot and
+    // *current_state + 1 as its "continuation" slot, so we need 2 extra state blocks
+    // beyond what the base wait count provides. Without the +2 here, a mixed body
+    // (CPU group + at least one `wait`) would request a continuation index that exceeds
+    // the pre-allocated state_blocks vector.
+    let spike_extra_states = if spike_candidates.is_some() {
+        2usize
+    } else {
+        0
+    };
+    let n_waits = n_waits_base + spike_extra_states;
     // States: 0 = before first wait, 1..n_waits = each continuation, plus a dead/error block.
     let state_blocks: Vec<inkwell::basic_block::BasicBlock<'ctx>> = (0..=n_waits)
         .map(|i| ctx.append_basic_block(resume_fn, &format!("sm_s{i}")))
@@ -2243,6 +2415,13 @@ fn lower_function_with_waits<'ctx, 'g>(
         // sig_table forwarded so independence analysis can read param_ownerships
         // without re-deriving write effects from scratch (corpse b compliance).
         sig_table,
+        // Gate gate-1 / gate-2 coherence: lower_sm_block's spike path (gate 2) only fires
+        // when cg.m3d_spike is true. If spike_candidates is None — because this host was
+        // declined (e.g. has params) — set m3d_spike to false so gate 2 cannot emit a CPU
+        // group that gate 1 never allocated state slots or frame bytes for.
+        m3d_spike: spike_candidates.is_some(),
+        m3d_spike_cpu_result_names: Vec::new(),
+        m3d_spike_cpu_result_allocas: HashMap::new(), // populated in Step 1c below
     };
 
     // Step 1 — Emit allocas in the entry block (sm_entry). LLVM SSA requires all allocas
@@ -2421,6 +2600,37 @@ fn lower_function_with_waits<'ctx, 'g>(
         cg_resume.sm_crossing_ec_struct_allocas = ec_struct_allocas;
         cg_resume.sm_crossing_shape_names = shape_names_map;
         cg_resume.sm_crossing_shape_allocas = shape_allocas_map;
+    }
+
+    // Step 1c — Pre-allocate CPU-group result allocas in sm_entry (spike only).
+    //
+    // emit_cpu_group_spawn_join stores results into these allocas after the join completes
+    // (all_done_bb). spike_reload_cpu_results_from_frame reloads frame bytes into these
+    // same allocas after every subsequent suspension. Both use the alloca via cg.locals.
+    //
+    // Pre-allocation here — while the builder is still in sm_entry (resume_entry) — is
+    // required so that the allocas dominate all state blocks. Creating allocas later (e.g.
+    // in a state block like cont_state_bb) would violate LLVM SSA dominance: a load in a
+    // different state block would not be dominated by the alloca's defining block.
+    //
+    // The candidate names are extracted by the same adjacency + arg-lowering + dependency
+    // scan as spike_extract_cpu_group so the sets always agree. When spike_cpu_group_result_names
+    // declines a group (suspending callee or mutation in rest stmts), it returns an empty set,
+    // so no allocas are pre-allocated for that group. This function is invoked only when
+    // cg_resume.m3d_spike is true, meaning spike_cpu_candidates already admitted the group;
+    // all three gates use identical predicates and therefore agree on admission.
+    if cg_resume.m3d_spike {
+        let candidate_names = spike_cpu_group_result_names(&f.body.stmts, suspend_set, typed);
+        let mut result_allocas: HashMap<String, PointerValue> = HashMap::new();
+        for name in &candidate_names {
+            let alloca = cg_resume
+                .builder
+                .build_alloca(cg_resume.i64(), &format!("{name}_result_alloca"))
+                .map_err(|e| format!("spike result pre-alloc `{name}`: {e}"))?;
+            cg_resume.locals.insert(name.clone(), alloca);
+            result_allocas.insert(name.clone(), alloca);
+        }
+        cg_resume.m3d_spike_cpu_result_allocas = result_allocas;
     }
 
     // Step 1b — Wire shape crossing-local ptr allocas to point into the composed frame.
@@ -3022,6 +3232,34 @@ fn stmt_contains_suspending_call(stmt: &Stmt, suspend_set: &SuspendSet) -> bool 
     }
 }
 
+/// True if `stmt` or any statement nested inside it is a `Stmt::Assign` whose target
+/// equals `name`.
+///
+/// Used by the spike static admission gates (`spike_cpu_candidates`, `spike_extract_cpu_group`,
+/// `spike_cpu_group_result_names`) to detect assignments to CPU-result locals at any nesting
+/// depth. When any rest statement assigns a CPU-result bind name, the gates decline the whole
+/// group so that sequential lowering (which is always correct) handles the program instead.
+/// This ensures the spike only emits code for programs in the proven-safe admission envelope.
+///
+/// Time: O(n) where n = total AST nodes in stmt  Space: O(d) call-stack depth where d = nesting
+fn stmt_assigns_name(stmt: &Stmt, name: &str) -> bool {
+    match stmt {
+        Stmt::Assign { target, .. } => target.as_str() == name,
+        Stmt::If { body, .. } => body.stmts.iter().any(|s| stmt_assigns_name(s, name)),
+        Stmt::While { body, .. } | Stmt::For { body, .. } => {
+            body.stmts.iter().any(|s| stmt_assigns_name(s, name))
+        }
+        Stmt::Match { arms, else_arm, .. } => {
+            arms.iter()
+                .any(|a| a.body.stmts.iter().any(|s| stmt_assigns_name(s, name)))
+                || else_arm
+                    .as_ref()
+                    .is_some_and(|b| b.stmts.iter().any(|s| stmt_assigns_name(s, name)))
+        }
+        _ => false,
+    }
+}
+
 fn expr_contains_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool {
     match expr {
         Expr::Call(c) => {
@@ -3106,7 +3344,17 @@ fn reload_params_from_frame<'ctx>(
             let ec_number_i128_allocas = cg.sm_crossing_ec_number_i128_allocas.clone();
             let shape_embed_set = cg.sm_crossing_shape_embed_set.clone();
             let ec_struct_allocas = cg.sm_crossing_ec_struct_allocas.clone();
+            // Spike CPU-result names are reloaded exclusively by
+            // spike_reload_cpu_results_from_frame (called below, after the crossing loop).
+            // That function plants fresh allocas from SPIKE_RESULT_N_OFFSET — the fixed
+            // per-result frame slots. Letting the crossing loop handle these names would use
+            // sm_crossing_slot_indices (SM slot indices, NOT the fixed result offsets) and
+            // would clobber the freshly-planted allocas.
+            let spike_pairs = cg.m3d_spike_cpu_result_names.clone();
             for (i, cname) in crossing_names.iter().enumerate() {
+                if !spike_pairs.is_empty() && spike_pairs.iter().any(|(n, _)| n == cname) {
+                    continue;
+                }
                 let slot_idx = slot_indices[i];
                 let bits =
                     state_machine::load_local_slot(ctx, &cg.builder, frame_ptr, slot_idx, cname)?;
@@ -3319,6 +3567,15 @@ fn reload_params_from_frame<'ctx>(
                 // that was never entered before the first suspension), the frame slot holds zeroed
                 // bytes — safe to skip since the local is not yet in scope.
             }
+            // Reload any spike CPU-result pairs that remain after the join. The admission
+            // gate already declined groups where any post-pair statement assigns a CPU-result
+            // bind name, so every name in spike_pairs is stable across the entire post-pair
+            // region. The SM crossing loop above skips these names (their frame offsets are
+            // SPIKE_RESULT_N_OFFSET, not SM crossing slot indices), so this call provides
+            // the exclusive reload for spike-owned results.
+            if !spike_pairs.is_empty() {
+                spike_reload_cpu_results_from_frame(cg, &spike_pairs, frame_ptr)?;
+            }
         }
     } // end reload_crossing guard
     Ok(())
@@ -3464,6 +3721,97 @@ fn lower_sm_block<'ctx, 'g>(
             }
         }
         return Ok(());
+    }
+
+    // Spike CPU-parallel path: if the spike flag is active AND we are at the top-level
+    // SM body (sm_scope_depth == 0), scan for a CPU candidate group and emit it via
+    // spawn+poll join before falling through to the normal partition for remaining
+    // statements.
+    //
+    // The depth guard is critical for correctness: spike_cpu_candidates (gate 1, in
+    // lower_function_with_waits) scans ONLY the top-level function body non-recursively,
+    // so it allocates frame bytes and state slots for exactly one CPU group at depth 0.
+    // lower_sm_block is called recursively for if/while/for bodies (sm_scope_depth > 0);
+    // allowing the spike to fire inside a nested body would spawn handles into frame slots
+    // that gate 1 never reserved — producing state-index collisions and OOB frame GEPs.
+    if cg.m3d_spike && cg.sm_scope_depth == 0 {
+        let cpu_group = spike_extract_cpu_group(&block.stmts, cg.suspend_set, cg.typed);
+        if let Some((pre_stmts, cpu_stmts, post_stmts)) = cpu_group {
+            // Lower pre-pair statements sequentially before spawning. Any locals they
+            // produce (e.g. `let n = 10` before the CPU pair) are allocated to their
+            // own allocas here so callee arguments that reference those names resolve
+            // to a properly initialized alloca when emit_cpu_group_spawn_join loads them.
+            for stmt in &pre_stmts {
+                if is_block_terminated(cg) {
+                    break;
+                }
+                if stmt_contains_wait(stmt) || stmt_contains_suspending_call(stmt, cg.suspend_set) {
+                    lower_sm_stmt_with_wait(
+                        cg,
+                        stmt,
+                        state_blocks,
+                        pending_block,
+                        frame_ptr,
+                        waker_ctx,
+                        param_names,
+                        f,
+                        shape_table,
+                        current_state,
+                    )?;
+                } else {
+                    lower_stmt(cg, stmt)?;
+                    flush_crossing_local_if_needed(cg, stmt, frame_ptr)?;
+                }
+            }
+
+            let spike_crossing = emit_cpu_group_spawn_join(
+                cg,
+                &cpu_stmts,
+                f,
+                state_blocks,
+                pending_block,
+                frame_ptr,
+                waker_ctx,
+                current_state,
+            )?;
+            // Store (name, frame_offset) pairs so reload_params_from_frame can call
+            // spike_reload at ANY suspension depth (fixes depth-asymmetry: spike_reload
+            // now fires inside reload_params_from_frame's reload_crossing:true path, which
+            // is reached from lower_sm_stmt_with_wait at all sm_scope_depths — depth-0
+            // post_stmts loop AND nested if/while/for bodies).
+            cg.m3d_spike_cpu_result_names = spike_crossing.clone();
+
+            // Lower the post-pair statements via the normal sequential path.
+            // spike_extract_cpu_group already declined if any post stmt assigns a CPU-result
+            // bind name, so no prune is needed here.
+            for stmt in &post_stmts {
+                if is_block_terminated(cg) {
+                    break;
+                }
+                if stmt_contains_wait(stmt) || stmt_contains_suspending_call(stmt, cg.suspend_set) {
+                    // lower_sm_stmt_with_wait calls reload_params_from_frame internally after
+                    // the suspension. reload_params_from_frame now calls spike_reload for
+                    // any remaining pairs in cg.m3d_spike_cpu_result_names — no explicit
+                    // post-suspension spike_reload call needed here.
+                    lower_sm_stmt_with_wait(
+                        cg,
+                        stmt,
+                        state_blocks,
+                        pending_block,
+                        frame_ptr,
+                        waker_ctx,
+                        param_names,
+                        f,
+                        shape_table,
+                        current_state,
+                    )?;
+                } else {
+                    lower_stmt(cg, stmt)?;
+                    flush_crossing_local_if_needed(cg, stmt, frame_ptr)?;
+                }
+            }
+            return Ok(());
+        }
     }
 
     // Auto-parallel path: partition the block into independent groups.
@@ -6056,6 +6404,1128 @@ fn is_direct_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool {
         }
     }
     false
+}
+
+// ── v0.3-M3d spike: CPU-parallel join helpers ────────────────────────────────
+//
+// ALL code in this section is gated behind `YNZ_M3D_SPIKE=1`. Zero of it runs in
+// default builds. These helpers prove the poll-based CPU join mechanism end-to-end
+// through the real compiler before production phases (P1–P3) harden the design.
+
+/// Byte offset of spike handle slot 0 within the parent SM frame.
+///
+/// The spike appends two handle slots and two result slots immediately after the
+/// standard frame header (FRAME_HEADER_SIZE = 32). Offsets are stable per the
+/// contract in `lower_function_with_waits` which pads `frame_bytes` by 48 when
+/// a CPU candidate group is detected.
+const SPIKE_HANDLE_0_OFFSET: u64 = 32;
+const SPIKE_HANDLE_1_OFFSET: u64 = 40;
+const SPIKE_RESULT_0_OFFSET: u64 = 48;
+const SPIKE_RESULT_1_OFFSET: u64 = 64;
+
+/// Detect a 2-member CPU-parallel candidate group in `f`.
+///
+/// Returns `Some(callee_name)` when `f` contains an adjacent pair of `let x = callee(...)`
+/// statements whose callees:
+/// - are NOT in the suspend_set (pure CPU — not a state machine)
+/// - return `int` (maps to `YnzCpuResult` scalar slot)
+///
+/// **Admission envelope** (all must hold; sequential fallback is always correct):
+/// - Host must be named `"entrypoint"` — non-entrypoint spike hosts require the
+///   caller to pre-allocate a correctly-sized frame (via `frame_layouts`) before this
+///   spike bypass path runs. Callers that go through the normal wrapper emit the frame
+///   size from `frame_layouts` (pre-spike), so the resume function writes bytes 48–95
+///   into a heap block that was only allocated 32 bytes. Declining non-entrypoint hosts
+///   eliminates the corruption without requiring frame_layouts integration (P3's job).
+/// - Zero params — param slots start at byte 32 (FRAME_HEADER_SIZE), colliding with
+///   SPIKE_HANDLE_0_OFFSET. P3's canonical slot system lifts this.
+/// - No rest-statement assigns a CPU-result bind name (at any depth). When a result name
+///   is assigned after the group, the SM crossing machinery must own it from the start —
+///   the upfront-prune approach left the initial read sourcing from a never-populated
+///   crossing slot, returning zeroed bytes instead of the computed value.
+///
+/// Used in both `emit_artifact` (suspend_set extension) and `lower_function_with_waits`
+/// (frame-size + state-count injection).
+///
+/// Time: O(n) where n = items in typed module  Space: O(k) where k = int-returning fns
+fn spike_cpu_candidates(
+    f: &FunctionDecl,
+    typed: &TypedModule,
+    suspend_set: &SuspendSet,
+) -> Option<String> {
+    // Entrypoint-only: non-entrypoint spike hosts have their frame allocated by the
+    // caller's emit_suspending_call_heap_boxed fallback, which reads from frame_layouts
+    // (computed before spike promotion). That pre-spike layout is too small: the spike
+    // resume function writes handle/result bytes at offsets 32–79 into a frame sized
+    // without the 48-byte spike reserve — heap corruption. Sequential is always correct.
+    if f.name != "entrypoint" {
+        return None;
+    }
+
+    // Zero-param hosts only. Param slots start at byte 32 (FRAME_HEADER_SIZE),
+    // which is the same byte SPIKE_HANDLE_0_OFFSET occupies. A host with ≥1 params would
+    // put the param reload into the handle slot — silent corruption or invalid-free.
+    if !f.params.is_empty() {
+        return None;
+    }
+
+    let int_returning_callees: std::collections::HashSet<String> = typed
+        .module
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let Item::Function(func) = item {
+                if matches!(func.return_type, ynz_ast::nodes::Type::Int) {
+                    Some(func.name.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Collect indices for all non-suspending int-returning direct-call statements.
+    let mut call_indices: Vec<usize> = Vec::new();
+    for (i, stmt) in f.body.stmts.iter().enumerate() {
+        let is_eligible = match stmt {
+            Stmt::Let {
+                value: Expr::Call(c),
+                ..
+            }
+            | Stmt::Expr(Expr::Call(c)) => {
+                if let Expr::Ident(name, _) = &c.callee {
+                    !suspend_set.contains(name.as_str()) && int_returning_callees.contains(name)
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        };
+        if is_eligible {
+            call_indices.push(i);
+        }
+    }
+
+    // Need an adjacent pair.
+    let adjacent_pair = call_indices
+        .windows(2)
+        .find(|w| w[1] == w[0] + 1)
+        .map(|w| (w[0], w[1]));
+    let (first_idx, second_idx) = adjacent_pair?;
+
+    // Collect bind names for the pair.
+    let bind_names: Vec<&str> = [first_idx, second_idx]
+        .iter()
+        .filter_map(|&i| match &f.body.stmts[i] {
+            Stmt::Let { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    // Decline when any pre-pair statement contains a wait or suspending call.
+    // A wait-bearing pre-pair statement is lowered via lower_sm_stmt_with_wait which
+    // advances current_state and positions the builder in a new post_wait_bb. The
+    // subsequent emit_cpu_group_spawn_join then emits into a spawn_bb that has no
+    // predecessor branch from that post_wait_bb — the post_wait_bb gets no terminator,
+    // triggering "Basic Block does not have terminator!" in the LLVM verifier.
+    // Declining routes the whole body through sequential lowering, which is always correct.
+    let pre_stmts: Vec<&Stmt> = f.body.stmts.iter().take(first_idx).collect();
+    if pre_stmts
+        .iter()
+        .any(|s| stmt_contains_wait(s) || stmt_contains_suspending_call(s, suspend_set))
+    {
+        return None;
+    }
+
+    // Decline when any rest statement (at any depth) assigns a CPU-result bind name.
+    // Declining routes the whole group through sequential lowering which is always correct.
+    let rest_stmts: Vec<&Stmt> = f
+        .body
+        .stmts
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != first_idx && *i != second_idx)
+        .map(|(_, s)| s)
+        .collect();
+    for bind_name in &bind_names {
+        if rest_stmts.iter().any(|s| stmt_assigns_name(s, bind_name)) {
+            return None;
+        }
+    }
+
+    // Decline when any post-pair statement contains a suspending user-defined callee.
+    // A user-defined suspending callee embeds a child sub-frame inside the parent frame.
+    // The spike host frame's child sub-frame offset is computed pre-spike (without the
+    // 48-byte spike reserve), so the embedded child frame aliases the spike result region
+    // (SPIKE_RESULT_{0,1}_OFFSET). Intrinsic waits (e.g. `wait sleep(...)`) use the
+    // standard SM inline-poll path with no embedded child sub-frame, posing no aliasing
+    // risk and therefore not matching stmt_contains_suspending_call. Declining routes the
+    // whole body through sequential lowering, which is always correct and avoids aliasing.
+    let post_stmts: Vec<&Stmt> = f.body.stmts.iter().skip(second_idx + 1).collect();
+    if post_stmts
+        .iter()
+        .any(|s| stmt_contains_suspending_call(s, suspend_set))
+    {
+        return None;
+    }
+
+    // Report the first eligible callee as representative.
+    match &f.body.stmts[first_idx] {
+        Stmt::Let {
+            value: Expr::Call(c),
+            ..
+        }
+        | Stmt::Expr(Expr::Call(c)) => {
+            if let Expr::Ident(name, _) = &c.callee {
+                return Some(name.clone());
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+/// Return the bind names of the CPU group that `spike_extract_cpu_group` would extract.
+///
+/// Applies the same adjacency, arg-lowering, data-dependency, and result-assignment-decline
+/// checks as `spike_extract_cpu_group` so the two functions always agree on which statements
+/// form the group. Returns the `let`-binding names for each group member (up to 2); returns
+/// an empty Vec when no eligible adjacent pair exists or when any gate declines the group.
+///
+/// The entrypoint-only and zero-param gates are enforced by the caller (`lower_function_with_waits`
+/// step 1c) which only calls this function when `spike_candidates.is_some()`. This function
+/// applies the remaining gates that operate on the statement list.
+///
+/// Used during sm_entry pre-allocation (Step 1c) to create allocas in the function entry
+/// block before the state machine blocks exist. Pre-allocating here ensures the allocas
+/// dominate every state block, satisfying LLVM SSA dominance. When the group is declined,
+/// the empty return means no allocas are created — correct because gate-2 will also decline.
+///
+/// Time: O(n) where n = stmts length  Space: O(k) where k = int-returning fns in typed module
+fn spike_cpu_group_result_names(
+    stmts: &[Stmt],
+    suspend_set: &SuspendSet,
+    typed: &TypedModule,
+) -> Vec<String> {
+    let int_returning_callees: std::collections::HashSet<String> = typed
+        .module
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let Item::Function(func) = item {
+                if matches!(func.return_type, ynz_ast::nodes::Type::Int) {
+                    Some(func.name.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Collect indices of non-suspending int-returning direct-call statements.
+    let mut call_indices: Vec<usize> = Vec::new();
+    for (i, stmt) in stmts.iter().enumerate() {
+        let is_eligible = match stmt {
+            Stmt::Let {
+                value: Expr::Call(c),
+                ..
+            }
+            | Stmt::Expr(Expr::Call(c)) => {
+                if let Expr::Ident(name, _) = &c.callee {
+                    !suspend_set.contains(name.as_str())
+                        && int_returning_callees.contains(name.as_str())
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        };
+        if is_eligible {
+            call_indices.push(i);
+        }
+    }
+
+    // Find first adjacent pair.
+    let adjacent_pair = call_indices
+        .windows(2)
+        .find(|w| w[1] == w[0] + 1)
+        .map(|w| (w[0], w[1]));
+    let (first_idx, second_idx) = match adjacent_pair {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+
+    // Decline when any pre-pair statement contains a wait or suspending call.
+    // Mirrors the guard in spike_cpu_candidates and spike_extract_cpu_group so all three
+    // gates agree: when a wait-bearing pre-pair statement exists the group is declined and
+    // no result allocas are pre-allocated (which would leave unreachable alloca instructions).
+    let has_suspending_pre = stmts[..first_idx]
+        .iter()
+        .any(|s| stmt_contains_wait(s) || stmt_contains_suspending_call(s, suspend_set));
+    if has_suspending_pre {
+        return Vec::new();
+    }
+
+    // Arg-lowering gate: exactly one arg, IntLit or Ident.
+    let args_lowerable = |stmt: &Stmt| -> bool {
+        let call = match stmt {
+            Stmt::Let {
+                value: Expr::Call(c),
+                ..
+            }
+            | Stmt::Expr(Expr::Call(c)) => c,
+            _ => return false,
+        };
+        call.args.len() == 1
+            && call
+                .args
+                .iter()
+                .all(|arg| matches!(arg, Expr::IntLit(_, _) | Expr::Ident(_, _)))
+    };
+    if !args_lowerable(&stmts[first_idx]) || !args_lowerable(&stmts[second_idx]) {
+        return Vec::new();
+    }
+
+    // Data-dependency gate: second call must not use first call's bind name.
+    let first_bind_name: Option<&str> = match &stmts[first_idx] {
+        Stmt::Let { name, .. } => Some(name.as_str()),
+        _ => None,
+    };
+    if let Some(bind_name) = first_bind_name {
+        let second_uses_first = match &stmts[second_idx] {
+            Stmt::Let {
+                value: Expr::Call(c),
+                ..
+            }
+            | Stmt::Expr(Expr::Call(c)) => c
+                .args
+                .iter()
+                .any(|arg| matches!(arg, Expr::Ident(n, _) if n.as_str() == bind_name)),
+            _ => false,
+        };
+        if second_uses_first {
+            return Vec::new();
+        }
+    }
+
+    // Collect bind names for the group members.
+    let bind_names: Vec<String> = [first_idx, second_idx]
+        .iter()
+        .filter_map(|&i| match &stmts[i] {
+            Stmt::Let { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+
+    // Result-assignment decline gate (mirrors spike_cpu_candidates and spike_extract_cpu_group):
+    // when any rest statement assigns a CPU-result bind name at any depth, the SM crossing
+    // machinery must own that name from the start. Declining ensures gate-1, gate-2, and
+    // this pre-allocation function always agree on the group.
+    let rest_stmts: Vec<&Stmt> = stmts
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != first_idx && *i != second_idx)
+        .map(|(_, s)| s)
+        .collect();
+    for bind_name in &bind_names {
+        if rest_stmts
+            .iter()
+            .any(|s| stmt_assigns_name(s, bind_name.as_str()))
+        {
+            return Vec::new();
+        }
+    }
+
+    // Decline when any post-pair statement contains a suspending user-defined callee.
+    // Mirrors the guard in spike_cpu_candidates and spike_extract_cpu_group: when a
+    // user-defined suspending callee is present in post-pair stmts, no result allocas are
+    // pre-allocated (leaving unreachable alloca instructions for declined groups). Intrinsic
+    // waits (e.g. `wait sleep(...)`) embed no child sub-frame and pose no aliasing risk;
+    // stmt_contains_suspending_call excludes them via the M2_MAY_BLOCK_INTRINSICS guard.
+    let has_suspending_post = stmts[(second_idx + 1)..]
+        .iter()
+        .any(|s| stmt_contains_suspending_call(s, suspend_set));
+    if has_suspending_post {
+        return Vec::new();
+    }
+
+    bind_names
+}
+
+/// Extract a 2-member CPU group from `stmts`, returning `(pre_stmts, group_stmts, post_stmts)`.
+///
+/// Scans for the first two ADJACENT non-suspending int-returning direct calls in the statement
+/// list. "Adjacent" means `second_idx == first_idx + 1` — the two calls have no intervening
+/// statements between them. This is required to avoid a data-dependency hole: if there is a
+/// `let b = a + 1` between `let a = f()` and `let c = g(b)`, extracting calls 0 and 2 would
+/// spawn `g(b)` before `b` is computed (because the intervening let is in `rest`, lowered
+/// after spawn). Adjacency ensures the group's arguments can only reference locals that are
+/// already available at spawn time.
+///
+/// The same `int_returning_callees` membership filter as `spike_cpu_candidates` is applied so
+/// the gate-1 check (frame sizing) and gate-2 check (group extraction) always agree: a callee
+/// that gate-1 would not count for frame-slot allocation is never extracted by gate-2 either.
+/// Without this filter, a non-int-returning non-suspending callee could appear in the extracted
+/// group and produce an LLVM type mismatch on the trampoline's return type.
+///
+/// **Edge cases**: calls whose `args` has arity ≠ 1 are skipped by `args_lowerable` — the
+/// trampoline ABI passes exactly one i64 argument; zero-arg and multi-arg calls are declined.
+/// A call with a literal-only argument (e.g. `fib(10)`) is included; a call whose argument
+/// is an expression other than `Ident` or `IntLit` is excluded.
+///
+/// `pre_stmts`: statements before the pair (indices 0..first_idx). These must be lowered
+/// sequentially before spawning the pair, so any locals they produce are in scope at spawn time.
+///
+/// `post_stmts`: statements after the pair (indices first_idx+2..). These are lowered after join.
+///
+/// Returns `None` when no eligible adjacent pair exists, or when any post statement assigns
+/// a CPU-result bind name (mirrors the decline gate in spike_cpu_candidates).
+///
+/// Time: O(n) where n = stmts length  Space: O(k) where k = int-returning fns in typed module
+fn spike_extract_cpu_group<'s>(
+    stmts: &'s [Stmt],
+    suspend_set: &SuspendSet,
+    typed: &TypedModule,
+) -> Option<(Vec<&'s Stmt>, Vec<&'s Stmt>, Vec<&'s Stmt>)> {
+    // Build the same int-returning callee set used by spike_cpu_candidates so the
+    // two gates cannot disagree on callee eligibility.
+    let int_returning_callees: std::collections::HashSet<String> = typed
+        .module
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let Item::Function(func) = item {
+                if matches!(func.return_type, ynz_ast::nodes::Type::Int) {
+                    Some(func.name.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Collect indices for all non-suspending int-returning direct-call statements.
+    let mut call_indices: Vec<usize> = Vec::new();
+    for (i, stmt) in stmts.iter().enumerate() {
+        let is_eligible = match stmt {
+            Stmt::Let {
+                value: Expr::Call(c),
+                ..
+            }
+            | Stmt::Expr(Expr::Call(c)) => {
+                if let Expr::Ident(name, _) = &c.callee {
+                    !suspend_set.contains(name.as_str())
+                        && int_returning_callees.contains(name.as_str())
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        };
+        if is_eligible {
+            call_indices.push(i);
+        }
+    }
+
+    // Need at least 2 eligible calls; find the first adjacent pair.
+    // Non-adjacent pairs are skipped: extracting non-adjacent calls could spawn the
+    // second call's trampoline before the intervening statements (which may produce
+    // values the second callee's argument depends on) have been lowered.
+    let adjacent_pair = call_indices
+        .windows(2)
+        .find(|w| w[1] == w[0] + 1)
+        .map(|w| (w[0], w[1]));
+
+    let (first_idx, second_idx) = adjacent_pair?;
+
+    // Decline when any pre-pair statement contains a wait or suspending call.
+    // A wait-bearing pre-pair statement advances current_state and positions the builder
+    // in a new post_wait_bb. The subsequent emit_cpu_group_spawn_join emits into a spawn_bb
+    // with no predecessor branch from that post_wait_bb — the post_wait_bb gets no
+    // terminator, causing "Basic Block does not have terminator!" in the LLVM verifier.
+    // Sequential lowering is always correct; declining is always safe.
+    if stmts[..first_idx]
+        .iter()
+        .any(|s| stmt_contains_wait(s) || stmt_contains_suspending_call(s, suspend_set))
+    {
+        return None;
+    }
+
+    // Arg-lowering eligibility: the spike arg-evaluator in emit_cpu_group_spawn_join can
+    // only lower exactly one IntLit or Ident argument. The trampoline ctx holds a single
+    // i64 — multi-arg or zero-arg callees cannot be packed into it without a wider ctx
+    // layout (P3's job). Decline rather than emitting an LLVM verifier abort or Err on
+    // a syntactically valid program.
+    let args_lowerable = |stmt: &Stmt| -> bool {
+        let call = match stmt {
+            Stmt::Let {
+                value: Expr::Call(c),
+                ..
+            }
+            | Stmt::Expr(Expr::Call(c)) => c,
+            _ => return false,
+        };
+        // Exactly one arg, and it must be a literal or a simple ident.
+        // Zero args: no value to pack into ctx. Two+ args: ctx is only 8 bytes (one i64).
+        call.args.len() == 1
+            && call
+                .args
+                .iter()
+                .all(|arg| matches!(arg, Expr::IntLit(_, _) | Expr::Ident(_, _)))
+    };
+    if !args_lowerable(&stmts[first_idx]) || !args_lowerable(&stmts[second_idx]) {
+        return None;
+    }
+
+    // Data-dependency check: if the first statement binds a name (let a = f(...))
+    // and the second call's argument list references that name, the two calls are not
+    // independent — the second depends on the result of the first. Spawning them in
+    // parallel would evaluate the second's arg at spawn time before `a` is bound.
+    // In that case, decline the group and run both sequentially.
+    let first_bind_name: Option<&str> = match &stmts[first_idx] {
+        Stmt::Let { name, .. } => Some(name.as_str()),
+        _ => None,
+    };
+    if let Some(bind_name) = first_bind_name {
+        let second_uses_first = match &stmts[second_idx] {
+            Stmt::Let {
+                value: Expr::Call(c),
+                ..
+            }
+            | Stmt::Expr(Expr::Call(c)) => c
+                .args
+                .iter()
+                .any(|arg| matches!(arg, Expr::Ident(n, _) if n.as_str() == bind_name)),
+            _ => false,
+        };
+        if second_uses_first {
+            return None;
+        }
+    }
+
+    // Collect bind names for the pair to check result-assignment in post stmts.
+    let mut bind_names: Vec<String> = Vec::new();
+    for idx in [first_idx, second_idx] {
+        if let Stmt::Let { name, .. } = &stmts[idx] {
+            bind_names.push(name.clone());
+        }
+    }
+
+    // Decline when any post statement assigns a CPU-result bind name at any depth.
+    // The same guard lives in spike_cpu_candidates and spike_cpu_group_result_names;
+    // all three gates must agree so frame-slot allocation and extraction are consistent.
+    let post_stmts: Vec<&Stmt> = stmts[(second_idx + 1)..].iter().collect();
+    for bind_name in &bind_names {
+        if post_stmts
+            .iter()
+            .any(|s| stmt_assigns_name(s, bind_name.as_str()))
+        {
+            return None;
+        }
+    }
+
+    // Decline when any post-pair statement contains a suspending user-defined callee.
+    // A user-defined suspending callee embeds its child sub-frame at the pre-spike frame
+    // offset (computed before the 48-byte spike reserve was added). For a spike host with
+    // 0 own locals that offset equals SPIKE_RESULT_0_OFFSET (byte 48), so the callee's
+    // resume_point write aliases the joined result. Intrinsic waits (e.g. `wait sleep(...)`)
+    // use the SM inline-poll path with no embedded child sub-frame and therefore do not
+    // alias — stmt_contains_suspending_call excludes them via the M2_MAY_BLOCK_INTRINSICS
+    // guard. Declining routes the whole body through sequential lowering, which is always
+    // correct.
+    if post_stmts
+        .iter()
+        .any(|s| stmt_contains_suspending_call(s, suspend_set))
+    {
+        return None;
+    }
+
+    let group = vec![&stmts[first_idx], &stmts[second_idx]];
+    let pre_stmts: Vec<&Stmt> = stmts[..first_idx].iter().collect();
+    Some((pre_stmts, group, post_stmts))
+}
+
+/// Reload CPU-group result locals from their persistent frame slots into pre-allocated sm_entry allocas.
+///
+/// After `emit_cpu_group_spawn_join` completes all joins, each CPU result is stored in
+/// both a local alloca (for the current resume-fn invocation) AND in the persistent frame
+/// slot at `SPIKE_RESULT_{0,1}_OFFSET`. When a subsequent suspension causes Tokio to call
+/// resume_fn again with a fresh stack frame, the frame slot still holds the value. This
+/// function reloads each remaining bound CPU result from its persistent frame slot into the
+/// pre-allocated sm_entry alloca for that name, refreshing the alloca's content for the
+/// current resume invocation.
+///
+/// **Pre-allocated allocas**: result allocas are created in the function entry block
+/// (sm_entry) during Step 1c of `lower_function_with_waits`. This ensures they dominate
+/// all state blocks, satisfying LLVM SSA dominance. This function NEVER calls `build_alloca`
+/// — doing so in a non-entry state block would place the alloca after a conditional branch,
+/// violating "Instruction does not dominate all uses" for any load in a different state.
+///
+/// **Called from**: `reload_params_from_frame`'s `reload_crossing: true` path (fires at
+/// every suspension depth, not just the outermost one). The crossing-local loop in that
+/// function skips names present in `cg.m3d_spike_cpu_result_names` because their frame
+/// offsets are `SPIKE_RESULT_N_OFFSET` — distinct from SM crossing slot indices. Loading
+/// from a crossing slot index for a spike name would read the wrong frame bytes.
+///
+/// **Edge case — mutated result**: if any post-pair statement assigns a CPU-result bind
+/// name, the static admission gate declines the group entirely so that sequential
+/// lowering handles the whole body. This means every name in `crossing_results` is
+/// stable (never reassigned in rest_stmts), and this function is only called for groups
+/// that the gate admitted.
+///
+/// Time: O(k) where k = crossing_results length  Space: O(1) per call
+fn spike_reload_cpu_results_from_frame<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    crossing_results: &[(String, u64)],
+    frame_ptr: inkwell::values::PointerValue<'ctx>,
+) -> Result<(), String> {
+    if crossing_results.is_empty() {
+        return Ok(());
+    }
+    let ctx = cg.ctx;
+    let i64_ty = ctx.i64_type();
+    let i8_ty = ctx.i8_type();
+    for (name, frame_offset) in crossing_results {
+        // GEP to the byte at frame_ptr + frame_offset (SPIKE_RESULT_N_OFFSET).
+        // The frame slot holds YnzCpuResult = {i64, i64}; the first i64 is the value.
+        let slot_ptr = if *frame_offset == 0 {
+            frame_ptr
+        } else {
+            unsafe {
+                cg.builder
+                    .build_gep(
+                        i8_ty,
+                        frame_ptr,
+                        &[i64_ty.const_int(*frame_offset, false)],
+                        &format!("{name}_reload_slot"),
+                    )
+                    .map_err(|e| format!("spike reload GEP `{name}`: {e}"))?
+            }
+        };
+        // Load the i64 value from the slot (same layout as result_slot in all_done_bb).
+        let reloaded = cg
+            .builder
+            .build_load(i64_ty, slot_ptr, &format!("{name}_reloaded"))
+            .map_err(|e| format!("spike reload load `{name}`: {e}"))?;
+        // Use the sm_entry alloca pre-allocated in Step 1c. LLVM SSA requires that the
+        // alloca dominate all uses — a build_alloca here (in a state block) would not
+        // dominate loads in other state blocks, producing "does not dominate all uses".
+        let pre_alloc = cg
+            .m3d_spike_cpu_result_allocas
+            .get(name.as_str())
+            .copied()
+            .ok_or_else(|| {
+                format!(
+                    "spike reload: no sm_entry alloca for `{name}` — \
+                     Step 1c pre-allocation and gate-2 must agree on group membership"
+                )
+            })?;
+        cg.builder
+            .build_store(pre_alloc, reloaded)
+            .map_err(|e| format!("spike reload store `{name}`: {e}"))?;
+        // cg.locals already points to pre_alloc from Step 1c; refreshing the store above
+        // makes the alloca's content valid for this resume invocation without re-inserting.
+        cg.locals.insert(name.clone(), pre_alloc);
+    }
+    Ok(())
+}
+
+/// Emit a CPU-parallel spawn+join group via the spike polling protocol.
+///
+/// # What this does
+///
+/// For a 2-member group `[let a = callee(arg_a), let b = callee(arg_b)]`:
+///
+/// 1. **Spawn state** (state `*current_state`, which is 0 for a pure-spike function):
+///    - Build a trampoline function per callee invocation (`ptr → YnzCpuResult`)
+///      that unpacks the i64 arg from a ctx copy, calls the compiled callee, packs result.
+///    - `ynz_rt_spawn_blocking_joinable(trampoline, ctx_ptr, ctx_size)` → handle ptr
+///    - Store each handle ptr in a dedicated frame slot (SPIKE_HANDLE_0/1_OFFSET).
+///    - Store resume_point = next_state (the poll state), then branch to pending_block.
+///
+/// 2. **Poll state** (state `*current_state + 1`, entered on re-entry):
+///    - `ynz_rt_join_poll(handle_0, waker_ctx, &result_0)` → 0=Ready, 1=Pending
+///    - `ynz_rt_join_poll(handle_1, waker_ctx, &result_1)` → 0=Ready, 1=Pending
+///    - If any Pending: store resume_point = poll_state again, branch to pending_block.
+///    - If all Ready: load result i64 from each result slot, store into local allocas.
+///
+/// # Frame slot usage (spike-only, not part of the canonical frame layout system)
+///
+/// - `SPIKE_HANDLE_0/1_OFFSET`: stores the `*mut u8` handle pointer (8 bytes each)
+/// - `SPIKE_RESULT_0/1_OFFSET`: stores the `YnzCpuResult = [i64;2]` (16 bytes each)
+///
+/// # Edge cases
+///
+/// - **Null handles**: `ynz_rt_join_poll` panics on a null handle (codegen bug guard). In the
+///   spike this cannot happen: handles are stored unconditionally at spawn time and polled
+///   exactly once in the poll state.
+/// - **Cancellation**: if the parent SM is cancelled mid-poll (Tokio drops the future before
+///   the all-Ready branch fires), `SpawnStateFnFuture::drop` reads `SPIKE_FRAME_MAGIC` at
+///   frame offset 4 and frees any non-null handle slots — no resource leak.
+/// - **Same-callee vs distinct-callee**: the trampoline is built per invocation (using
+///   `call_idx` for name disambiguation), so two `fib(10)` + `fib(11)` calls work correctly
+///   even though they have the same callee.
+///
+/// # Non-goals
+///
+/// This is spike code. It hardwires 2-member groups, uses fixed frame offsets, and bypasses
+/// the canonical frame-layout system. Production codegen (P3) will use proper frame slots
+/// and support N members.
+///
+/// Time: O(1) LLVM instructions emitted (fixed 2-member protocol)  Space: O(1)
+#[allow(clippy::too_many_arguments)]
+fn emit_cpu_group_spawn_join<'ctx, 'g>(
+    cg: &mut Cg<'ctx, 'g>,
+    stmts: &[&Stmt],
+    f: &FunctionDecl,
+    state_blocks: &[inkwell::basic_block::BasicBlock<'ctx>],
+    pending_block: inkwell::basic_block::BasicBlock<'ctx>,
+    frame_ptr: PointerValue<'ctx>,
+    waker_ctx: PointerValue<'ctx>,
+    current_state: &mut usize,
+) -> Result<Vec<(String, u64)>, String> {
+    // Returns: Vec<(bind_name, frame_result_offset)> for each CPU-group member that bound
+    // its result to a local name. The caller uses this to reload the results from their
+    // persistent frame slots after any subsequent suspension (where the local allocas
+    // created in this invocation's all_done_bb would otherwise be unreachable).
+    let ctx = cg.ctx;
+
+    // --- Collect call info for the two group members ---
+
+    struct CpuChild {
+        /// Name to bind the result to (from `let name = callee(arg)`), or None for bare call.
+        bind_name: Option<String>,
+        /// Callee function name.
+        callee: String,
+        /// Argument expressions (should be exactly one integer literal or ident).
+        args: Vec<Expr>,
+    }
+
+    let mut children: Vec<CpuChild> = Vec::with_capacity(stmts.len());
+    for &stmt in stmts {
+        match stmt {
+            Stmt::Let {
+                name,
+                value: Expr::Call(c),
+                ..
+            } => {
+                if let Expr::Ident(callee_name, _) = &c.callee {
+                    children.push(CpuChild {
+                        bind_name: Some(name.clone()),
+                        callee: callee_name.clone(),
+                        args: c.args.clone(),
+                    });
+                } else {
+                    return Err("spike cpu group: non-ident callee in let stmt".to_string());
+                }
+            }
+            Stmt::Expr(Expr::Call(c)) => {
+                if let Expr::Ident(callee_name, _) = &c.callee {
+                    children.push(CpuChild {
+                        bind_name: None,
+                        callee: callee_name.clone(),
+                        args: c.args.clone(),
+                    });
+                } else {
+                    return Err("spike cpu group: non-ident callee in expr stmt".to_string());
+                }
+            }
+            _ => return Err("spike cpu group: stmt is not a direct call".to_string()),
+        }
+    }
+
+    if children.len() != 2 {
+        return Err(format!(
+            "spike cpu group: expected 2 members, got {}",
+            children.len()
+        ));
+    }
+
+    // --- Build trampolines ---
+    //
+    // Each trampoline has signature `ptr → [i64 × 2]` (i.e. `{i64,i64}` struct
+    // returned by value, matching YnzCpuResult's C repr as two i64 fields).
+    // The ctx layout is simply 8 bytes holding the i64 argument value.
+    let i64_ty = ctx.i64_type();
+    let cpu_result_ty = ctx.struct_type(&[i64_ty.into(), i64_ty.into()], false);
+    let trampoline_ty =
+        cpu_result_ty.fn_type(&[ctx.ptr_type(AddressSpace::default()).into()], false);
+
+    // Helper: build one trampoline for child[idx].
+    // The trampoline: loads ctx[0..8] as i64, calls callee(arg), packs into {i64,0}.
+    let mut trampoline_fns: Vec<FunctionValue<'ctx>> = Vec::with_capacity(2);
+    for (idx, child) in children.iter().enumerate() {
+        let trampoline_name = format!("__ynz_spike_trampoline_{}_{}_{}", f.name, child.callee, idx);
+        let trampoline_fn = cg
+            .module
+            .add_function(&trampoline_name, trampoline_ty, None);
+        let tramp_entry = ctx.append_basic_block(trampoline_fn, "entry");
+        let tramp_builder = ctx.create_builder();
+        tramp_builder.position_at_end(tramp_entry);
+
+        // Load the i64 arg from ctx (offset 0).
+        let ctx_param = trampoline_fn
+            .get_nth_param(0)
+            .ok_or("trampoline: missing ctx param")?
+            .into_pointer_value();
+        let arg_val = tramp_builder
+            .build_load(i64_ty, ctx_param, "spike_arg")
+            .map_err(|e| format!("trampoline load arg {idx}: {e}"))?
+            .into_int_value();
+
+        // Call the compiled callee(arg_val).
+        let callee_fn = cg
+            .module
+            .get_function(child.callee.as_str())
+            .ok_or_else(|| format!("spike: callee `{}` not declared", child.callee))?;
+        let call_result = tramp_builder
+            .build_call(callee_fn, &[arg_val.into()], "spike_call")
+            .map_err(|e| format!("trampoline call {idx}: {e}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| format!("spike callee `{}` returned void", child.callee))?
+            .into_int_value();
+
+        // Pack into {i64, 0}.
+        let packed = cpu_result_ty.const_zero();
+        let packed = tramp_builder
+            .build_insert_value(packed, call_result, 0, "spike_pack_val")
+            .map_err(|e| format!("trampoline insert val {idx}: {e}"))?
+            .into_struct_value();
+        let packed = tramp_builder
+            .build_insert_value(packed, i64_ty.const_int(0, false), 1, "spike_pack_zero")
+            .map_err(|e| format!("trampoline insert zero {idx}: {e}"))?
+            .into_struct_value();
+
+        tramp_builder
+            .build_return(Some(&packed))
+            .map_err(|e| format!("trampoline ret {idx}: {e}"))?;
+
+        trampoline_fns.push(trampoline_fn);
+    }
+
+    // --- Spawn state (state_blocks[*current_state]) ---
+
+    let spawn_state = state_blocks[*current_state];
+    // Poll state is the next pre-allocated state block.
+    let poll_state_idx = *current_state + 1;
+    let poll_state = state_blocks
+        .get(poll_state_idx)
+        .copied()
+        .ok_or_else(|| format!("spike: no poll state block at index {poll_state_idx}"))?;
+
+    cg.builder.position_at_end(spawn_state);
+
+    // Write spike frame discriminator to bytes 4-7 of the parent frame.
+    // Normal (non-spike) SM frames leave bytes 4-7 as zero (ynz_alloc_zeroed guarantee).
+    // SpawnStateFnFuture::drop reads this magic to decide whether to free the CPU handle
+    // slots at offsets 32/40 on cancellation. The write happens once at spawn time; it
+    // survives across resume_fn invocations because it is in the persistent heap frame.
+    {
+        let i8_ty = ctx.i8_type();
+        let i32_ty = ctx.i32_type();
+        // SPIKE_FRAME_MAGIC = 0x5350_494B ("SPIK")
+        const SPIKE_FRAME_MAGIC: u32 = 0x5350_494B;
+        // Offset 4 is within the frame header; use a byte GEP then cast to i32*.
+        let disc_byte_ptr = unsafe {
+            cg.builder
+                .build_gep(
+                    i8_ty,
+                    frame_ptr,
+                    &[i64_ty.const_int(4, false)],
+                    "spike_disc_ptr",
+                )
+                .map_err(|e| format!("spike disc GEP: {e}"))?
+        };
+        cg.builder
+            .build_store(
+                disc_byte_ptr,
+                i32_ty.const_int(SPIKE_FRAME_MAGIC as u64, false),
+            )
+            .map_err(|e| format!("spike disc store: {e}"))?;
+    }
+
+    // Helper: get a byte ptr into the frame at a fixed offset.
+    let frame_byte_ptr = |offset: u64, name: &str| -> Result<PointerValue<'ctx>, String> {
+        if offset == 0 {
+            return Ok(frame_ptr);
+        }
+        unsafe {
+            cg.builder
+                .build_gep(
+                    ctx.i8_type(),
+                    frame_ptr,
+                    &[i64_ty.const_int(offset, false)],
+                    name,
+                )
+                .map_err(|e| format!("spike frame GEP {name}: {e}"))
+        }
+    };
+
+    // For each child: allocate a 8-byte ctx on the stack, write the arg, spawn.
+    let handle_offsets = [SPIKE_HANDLE_0_OFFSET, SPIKE_HANDLE_1_OFFSET];
+    for (idx, child) in children.iter().enumerate() {
+        // Evaluate the argument expression (must be a simple integer — ident or literal).
+        let arg_llvm = match child.args.first() {
+            Some(Expr::IntLit(n, _)) => i64_ty.const_int(*n as u64, true),
+            Some(Expr::Ident(name, span)) => {
+                // Load from local alloca.
+                let local_ptr = cg
+                    .locals
+                    .get(name.as_str())
+                    .copied()
+                    .ok_or_else(|| format!("spike: local `{name}` not found at {:?}", span))?;
+                cg.builder
+                    .build_load(i64_ty, local_ptr, &format!("spike_arg_{idx}"))
+                    .map_err(|e| format!("spike load arg {idx}: {e}"))?
+                    .into_int_value()
+            }
+            Some(other) => {
+                return Err(format!(
+                    "spike: unsupported arg expr for child {idx}: {other:?}"
+                ))
+            }
+            None => return Err(format!("spike: child {idx} has no arguments")),
+        };
+
+        // Allocate an 8-byte ctx on the stack.
+        let ctx_alloca = cg
+            .builder
+            .build_alloca(i64_ty, &format!("spike_ctx_{idx}"))
+            .map_err(|e| format!("spike ctx alloca {idx}: {e}"))?;
+        cg.builder
+            .build_store(ctx_alloca, arg_llvm)
+            .map_err(|e| format!("spike ctx store {idx}: {e}"))?;
+
+        // Call ynz_rt_spawn_blocking_joinable(trampoline_ptr, ctx_ptr, ctx_size=8).
+        let handle = cg
+            .builder
+            .build_call(
+                cg.rt.ynz_rt_spawn_blocking_joinable,
+                &[
+                    trampoline_fns[idx]
+                        .as_global_value()
+                        .as_pointer_value()
+                        .into(),
+                    ctx_alloca.into(),
+                    i64_ty.const_int(8, false).into(),
+                ],
+                &format!("spike_handle_{idx}"),
+            )
+            .map_err(|e| format!("spike spawn {idx}: {e}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| format!("spike spawn {idx}: expected ptr return"))?
+            .into_pointer_value();
+
+        // Store handle into frame slot.
+        let handle_slot = frame_byte_ptr(handle_offsets[idx], &format!("spike_hslot_{idx}"))?;
+        cg.builder
+            .build_store(handle_slot, handle)
+            .map_err(|e| format!("spike handle store {idx}: {e}"))?;
+    }
+
+    // Save resume_point = poll_state_idx so that on any subsequent re-entry the SM
+    // dispatch switch lands in poll_state (not back here in spawn_state).
+    state_machine::store_resume_point(ctx, &cg.builder, frame_ptr, poll_state_idx as u64)?;
+    // Branch to poll_state immediately — the first poll of both handles registers
+    // the waker with each JoinHandle so the runtime can wake the SM when tasks finish.
+    // Branching directly to pending_block here would skip the first poll, leaving
+    // the waker unregistered and hanging the SM forever (the bug this fixes).
+    cg.builder
+        .build_unconditional_branch(poll_state)
+        .map_err(|e| format!("spike spawn-to-poll branch: {e}"))?;
+
+    // --- Poll state (state_blocks[poll_state_idx]) ---
+
+    cg.builder.position_at_end(poll_state);
+
+    // Reset "any still pending?" accumulator at the top of every poll-state entry.
+    // The alloca sits in poll_state (a non-entry block), which is valid because each call
+    // to the resume_fn gets a fresh stack frame — poll_state is only ever entered from the
+    // SM dispatch switch in sm_entry, so the alloca always dominates its uses in this
+    // invocation. OptimizationLevel::None means mem2reg does not run; the alloca stays
+    // as a stack slot, not an SSA value, so LLVM does not require entry-block placement
+    // for correctness here.
+    let any_pending = cg
+        .builder
+        .build_alloca(ctx.i32_type(), "spike_any_pending")
+        .map_err(|e| format!("spike any_pending alloca: {e}"))?;
+    cg.builder
+        .build_store(any_pending, ctx.i32_type().const_int(0, false))
+        .map_err(|e| format!("spike any_pending init: {e}"))?;
+
+    let ptr_ty = ctx.ptr_type(AddressSpace::default());
+    let result_offsets = [SPIKE_RESULT_0_OFFSET, SPIKE_RESULT_1_OFFSET];
+    for idx in 0..2usize {
+        // Load handle from frame slot.
+        let handle_slot = frame_byte_ptr(handle_offsets[idx], &format!("spike_hslot_re_{idx}"))?;
+        let handle = cg
+            .builder
+            .build_load(ptr_ty, handle_slot, &format!("spike_handle_re_{idx}"))
+            .map_err(|e| format!("spike handle load {idx}: {e}"))?
+            .into_pointer_value();
+
+        // If this child was already Ready on a prior re-poll, the handle slot was nulled.
+        // Skip polling it again to avoid a UAF on the already-freed JoinHandle box.
+        let is_null = cg
+            .builder
+            .build_is_null(handle, &format!("spike_is_null_{idx}"))
+            .map_err(|e| format!("spike null check {idx}: {e}"))?;
+
+        let skip_bb = ctx.append_basic_block(cg.current_fn, &format!("spike_skip_{idx}"));
+        let poll_bb = ctx.append_basic_block(cg.current_fn, &format!("spike_dopoll_{idx}"));
+        let next_bb = ctx.append_basic_block(cg.current_fn, &format!("spike_next_{idx}"));
+
+        cg.builder
+            .build_conditional_branch(is_null, skip_bb, poll_bb)
+            .map_err(|e| format!("spike null branch {idx}: {e}"))?;
+
+        // poll_bb: call ynz_rt_join_poll.
+        cg.builder.position_at_end(poll_bb);
+        let result_slot = frame_byte_ptr(result_offsets[idx], &format!("spike_rslot_{idx}"))?;
+        let poll_result = cg
+            .builder
+            .build_call(
+                cg.rt.ynz_rt_join_poll,
+                &[handle.into(), waker_ctx.into(), result_slot.into()],
+                &format!("spike_poll_{idx}"),
+            )
+            .map_err(|e| format!("spike poll {idx}: {e}"))?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| format!("spike poll {idx}: expected i32 return"))?
+            .into_int_value();
+
+        // is_pending = (poll_result != 0)
+        let is_pending = cg
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                poll_result,
+                ctx.i32_type().const_int(0, false),
+                &format!("spike_ispend_{idx}"),
+            )
+            .map_err(|e| format!("spike poll cmp {idx}: {e}"))?;
+
+        let pend_bb = ctx.append_basic_block(cg.current_fn, &format!("spike_pend_{idx}"));
+        let ready_bb = ctx.append_basic_block(cg.current_fn, &format!("spike_ready_{idx}"));
+        cg.builder
+            .build_conditional_branch(is_pending, pend_bb, ready_bb)
+            .map_err(|e| format!("spike poll branch {idx}: {e}"))?;
+
+        // pend_bb: set accumulator, continue to next_bb.
+        cg.builder.position_at_end(pend_bb);
+        cg.builder
+            .build_store(any_pending, ctx.i32_type().const_int(1, false))
+            .map_err(|e| format!("spike pend store {idx}: {e}"))?;
+        cg.builder
+            .build_unconditional_branch(next_bb)
+            .map_err(|e| format!("spike pend cont {idx}: {e}"))?;
+
+        // ready_bb: null the handle slot (ynz_rt_join_poll already freed the box).
+        // Nulling prevents a UAF if this child finishes before its sibling and
+        // poll_state is re-entered for the still-pending sibling.
+        cg.builder.position_at_end(ready_bb);
+        cg.builder
+            .build_store(handle_slot, ptr_ty.const_null())
+            .map_err(|e| format!("spike null slot {idx}: {e}"))?;
+        cg.builder
+            .build_unconditional_branch(next_bb)
+            .map_err(|e| format!("spike ready cont {idx}: {e}"))?;
+
+        // skip_bb: handle was already null (child done on a prior re-poll), nothing to do.
+        cg.builder.position_at_end(skip_bb);
+        cg.builder
+            .build_unconditional_branch(next_bb)
+            .map_err(|e| format!("spike skip cont {idx}: {e}"))?;
+
+        cg.builder.position_at_end(next_bb);
+    }
+
+    // Check accumulator: if any pending, re-save state and yield.
+    let any_val = cg
+        .builder
+        .build_load(ctx.i32_type(), any_pending, "spike_any_val")
+        .map_err(|e| format!("spike any_val load: {e}"))?
+        .into_int_value();
+    let had_pending = cg
+        .builder
+        .build_int_compare(
+            IntPredicate::NE,
+            any_val,
+            ctx.i32_type().const_int(0, false),
+            "spike_had_pending",
+        )
+        .map_err(|e| format!("spike had_pending cmp: {e}"))?;
+
+    let all_done_bb = ctx.append_basic_block(cg.current_fn, "spike_all_done");
+    cg.builder
+        .build_conditional_branch(had_pending, pending_block, all_done_bb)
+        .map_err(|e| format!("spike final branch: {e}"))?;
+
+    // resume_point was set to poll_state_idx at spawn time and is left unchanged on
+    // Pending — on every re-entry the SM dispatch switch sees poll_state_idx and lands
+    // here to re-poll. Branching directly to pending_block is correct: the frame already
+    // holds the right state index.
+
+    // all_done_bb: all children are Ready; read results and bind locals.
+    cg.builder.position_at_end(all_done_bb);
+
+    for (idx, child) in children.iter().enumerate() {
+        let Some(bind_name) = &child.bind_name else {
+            continue;
+        };
+
+        // Load the i64 result from result_slot[0] (the value field of YnzCpuResult).
+        let result_slot = frame_byte_ptr(result_offsets[idx], &format!("spike_rslot_load_{idx}"))?;
+        let result_val = cg
+            .builder
+            .build_load(i64_ty, result_slot, &format!("spike_result_{idx}"))
+            .map_err(|e| format!("spike result load {idx}: {e}"))?
+            .into_int_value();
+
+        // Use the sm_entry alloca pre-allocated in Step 1c. Step 1c runs spike_cpu_group_result_names
+        // with the same gates as gate-2, so every bind_name here was pre-allocated. The lookup
+        // must always succeed; a miss means Step 1c and gate-2 disagree on group membership.
+        let local_ptr = cg
+            .m3d_spike_cpu_result_allocas
+            .get(bind_name.as_str())
+            .copied()
+            .ok_or_else(|| {
+                format!(
+                    "spike all_done_bb: no sm_entry alloca for `{bind_name}` — \
+                     Step 1c pre-allocation and gate-2 must agree on group membership"
+                )
+            })?;
+        cg.locals.insert(bind_name.clone(), local_ptr);
+        cg.builder
+            .build_store(local_ptr, result_val)
+            .map_err(|e| format!("spike result store `{bind_name}`: {e}"))?;
+    }
+
+    // Build the caller-visible list of (name, frame_offset) for result-crossing reload.
+    // The frame result slots are persistent across suspension — the callee uses them to
+    // reload bound names into fresh allocas after any subsequent suspension in rest_stmts.
+    let crossing_results: Vec<(String, u64)> = children
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, child)| {
+            child
+                .bind_name
+                .as_ref()
+                .map(|name| (name.clone(), result_offsets[idx]))
+        })
+        .collect();
+
+    *current_state += 2;
+    Ok(crossing_results)
 }
 
 /// Emit interleaved inline-poll for a parallel group of ≥2 independent suspending statements.

@@ -23,11 +23,11 @@
 <!-- RADAR-START -->
 ### Active Roadmaps
 - v0-2-1-lsp-gap-closure (Patrick Rizzardi) — 0 active plans — 2026-05-30
-- v0-3-concurrency-perf (Patrick Rizzardi) — 0 active plans — 2026-05-31
+- v0-3-concurrency-perf (Patrick Rizzardi) — 1 active plans — 2026-05-31
 - webpage-docs (Patrick Rizzardi) — 0 active plans — 2026-05-20
 
 ### Active Workstreams
-*(no active workstreams)*
+- v0-3-m3d-cpu-parallelization (Patrick Rizzardi) — 11 files touched — 3/99 done — roadmap: v0-3-concurrency-perf — 2026-06-11
 <!-- RADAR-END -->
 
 ---
@@ -38,6 +38,7 @@
 **Language**: Rust (compiler implementation)
 **Toolchain**: Rust 1.95 stable, LLVM 18.1.8, cargo workspace
 **LLVM prefix**: `/usr/lib/llvm-18` (set in `.cargo/config.toml` via `LLVM_SYS_PREFIX`)
+**⚠️ Build env**: LLVM 18 + glibc 2.39 exist ONLY in the devcontainer (Ubuntu 24.04). The WSL host (Debian bookworm, glibc 2.36, LLVM 15) CANNOT build `ynz-codegen`/`ynz-driver` or run `./target/debug/ynz`. All compiler build/test/fixture work happens inside the devcontainer; `ynz-runtime` alone builds on the host. (Discovered 2026-06-11 mid-M3d-Phase-0.)
 
 ```bash
 source $HOME/.cargo/env    # activate Rust in this shell session

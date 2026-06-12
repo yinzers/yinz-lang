@@ -1,0 +1,30 @@
+// Spike fixture (h): CPU pair + two subsequent wait sleeps.
+//
+// The CPU group (fib(10) + fib(11)) is spawned and joined via the spike
+// polling protocol. Then two sequential wait sleep() calls follow. Each
+// suspension crosses into a new resume_fn invocation whose stack has no
+// record of the all_done_bb allocas from the prior invocation.
+//
+// spike_reload_cpu_results_from_frame must re-plant fresh allocas for `a`
+// and `b` after EACH suspension so that print(a) and print(b) in the third
+// invocation load from correct, dominated allocas rather than dangling
+// pointers to the first invocation's stack.
+//
+// Expected output:
+//   55
+//   89
+function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+
+function entrypoint() -> nothing {
+  let a = fib(10)
+  let b = fib(11)
+  wait sleep(0)
+  wait sleep(0)
+  print(a)
+  print(b)
+}

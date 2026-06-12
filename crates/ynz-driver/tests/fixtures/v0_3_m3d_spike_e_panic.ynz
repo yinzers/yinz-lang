@@ -1,0 +1,11 @@
+function panicking_work(n: int) -> int {
+  let x = 100 / n
+  return x
+}
+
+function entrypoint() -> nothing {
+  let a = panicking_work(0)
+  let b = panicking_work(5)
+  print(a)
+  print(b)
+}

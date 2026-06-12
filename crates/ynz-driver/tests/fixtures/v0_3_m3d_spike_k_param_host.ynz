@@ -1,0 +1,32 @@
+// Spike admission fixture (k): the SM function hosting the CPU pair has params.
+//
+// spike_cpu_candidates returns None for any host with >=1 params because param slots
+// start at byte 32 = SPIKE_HANDLE_0_OFFSET. Admitting a param'd host would write
+// the handle pointer into the param's frame slot — silent corruption on reload.
+//
+// `driver` is a SM function with one param that contains an adjacent fib pair +
+// a wait sleep. spike_cpu_candidates declines `driver` (param guard). The fib
+// calls run sequentially. Both default and --no-auto-parallel modes must produce
+// the same output.
+//
+// Expected output (both modes):
+//   55
+//   89
+function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+
+function driver(offset: int) -> nothing {
+  let a = fib(10)
+  let b = fib(11)
+  wait sleep(0)
+  print(a + offset - offset)
+  print(b + offset - offset)
+}
+
+function entrypoint() -> nothing {
+  driver(0)
+}
