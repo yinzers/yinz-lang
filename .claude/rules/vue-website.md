@@ -3,6 +3,8 @@ paths:
   - 'website/**'
 ---
 
+> Extends `~/.claude/rules/vue.md` (generic Vue 3 + reusability mandate — auto-loaded). Below: PROJECT-specific deltas only.
+
 # Nuxt 4 + Tailwind v4 + Bun — Website Standards
 
 The Yinz website (`yinzlang.com`) is a Nuxt 4 SSG site under `website/`. Stack locked per `.claude/plans/roadmaps/webpage-docs.md`:
@@ -16,37 +18,6 @@ The Yinz website (`yinzlang.com`) is a Nuxt 4 SSG site under `website/`. Stack l
 - **No Pinia, no Reka UI, no Lucide, no Axios, no fetch wrapper** — the MVP site has no cross-page state to manage, no interactive widgets beyond the mobile nav drawer, and no runtime API calls. If a real need emerges, justify it in the plan first.
 
 All site code is dark-only (coal background per `shared.css`); there is no light theme.
-
----
-
-## Component Structure
-
-Every `.vue` file follows this order:
-
-```vue
-<script setup lang="ts">
-  // 1. Imports (rare — Nuxt auto-imports components, composables, refs/computed/etc.)
-  // 2. Props & emits
-  // 3. Composables & injections
-  // 4. Reactive state
-  // 5. Computed properties
-  // 6. Watchers
-  // 7. Functions (arrow only)
-  // 8. Lifecycle hooks
-</script>
-
-<template>
-  <!-- Single root element preferred but not required (Vue 3 supports fragments) -->
-</template>
-```
-
-**No `<style>` blocks for normal styling — use Tailwind utility classes.** The exceptions:
-
-1. **`<Transition>` animations** (see Transitions section)
-2. **Complex CSS Tailwind utilities cannot express** — pseudo-elements (`::before` grain on body), `color-mix()` / `backdrop-filter` cocktails not yet in Tailwind, grid-template subgrid overrides, the prototype's `.code-gutter` grid pattern
-3. **Token-driven styles that would create utility-class soup** — e.g., a multi-stop `linear-gradient(var(--gold), var(--gold-deep))` border accent reads cleaner as scoped CSS than as a long arbitrary-value Tailwind class
-
-When you do use `<style scoped>`, reference design tokens via CSS variables (`var(--color-gold)`, `var(--font-display)`) so the `@theme` block stays the single source of truth.
 
 ---
 
@@ -79,124 +50,21 @@ Nuxt auto-imports anything under `app/components/`, `app/composables/`, and `app
 
 ---
 
-## TypeScript: No Escape Hatches
+## Styling: `<style>` Block Exceptions
 
-Per `~/.claude/rules/coding-style.md`:
+**No `<style>` blocks for normal styling — use Tailwind utility classes.** The exceptions:
 
-- **NEVER** use `any`. Use `unknown` + type narrowing if the shape is genuinely unknowable.
-- **NEVER** use `as any` or `as unknown as T` (unless absolutely last-resort with a comment explaining why).
-- **NEVER** use non-null assertion `!`. Use a guard: `if (!ref.value) return; ref.value.foo()`.
-- **Use `T | null` for optional object fields, NOT `T?`** — `T?` lets construction sites silently omit the field. `T | null` forces every construction site to declare absence. Round-trips through JSON.
-- **`satisfies` over `as`** when validating a literal matches a type without widening.
-- **Arrow functions only** in script blocks (`const foo = (): void => { ... }`). No `function` keyword in non-class code.
+1. **`<Transition>` animations** (see global vue.md)
+2. **Complex CSS Tailwind utilities cannot express** — pseudo-elements (`::before` grain on body), `color-mix()` / `backdrop-filter` cocktails not yet in Tailwind, grid-template subgrid overrides, the prototype's `.code-gutter` grid pattern
+3. **Token-driven styles that would create utility-class soup** — e.g., a multi-stop `linear-gradient(var(--gold), var(--gold-deep))` border accent reads cleaner as scoped CSS than as a long arbitrary-value Tailwind class
 
-```typescript
-// ✅ Good
-interface Post {
-  title: string;
-  publishedAt: string | null;     // null, not omitted
-  tags: Array<string> | null;
-}
-
-const props = defineProps<{
-  post: Post;
-  showExcerpt: boolean;
-}>();
-
-const wordCount = computed((): number => props.post.title.split(/\s+/).length);
-
-// ❌ Bad
-interface Post {
-  title: string;
-  publishedAt?: string;            // ❌ T? silently omittable
-  tags?: Array<string>;            // ❌ same
-}
-
-const props = defineProps<{
-  post: any;                       // ❌ any
-}>();
-
-function getWordCount() {           // ❌ function keyword
-  return (props.post as Post).title!.split(/\s+/).length;  // ❌ as, !
-}
-```
-
-### Type-based defineProps + withDefaults
-
-```typescript
-const props = defineProps<{
-  variant: 'primary' | 'ghost';
-  href: string | null;             // null, not omitted
-  disabled: boolean;
-}>();
-
-// With defaults — use null in the type, default value in withDefaults
-const props = withDefaults(
-  defineProps<{
-    variant: 'primary' | 'ghost';
-    disabled: boolean;
-  }>(),
-  { variant: 'primary', disabled: false },
-);
-```
-
-### Type-based defineEmits
-
-```typescript
-const emit = defineEmits<{
-  select: [tag: string];
-  close: [];
-}>();
-```
-
-### Template refs
-
-```typescript
-const navEl = ref<HTMLElement | null>(null);
-
-onMounted(() => {
-  if (!navEl.value) return;
-  navEl.value.focus();
-});
-```
-
-### defineModel for v-model
-
-```typescript
-const query = defineModel<string>({ required: true });
-```
+When you do use `<style scoped>`, reference design tokens via CSS variables (`var(--color-gold)`, `var(--font-display)`) so the `@theme` block stays the single source of truth.
 
 ---
 
-## Reactivity
+## Reactivity: Nuxt-Specific Additions
 
-### Use ref() over reactive()
-
-`ref()` is the default. `reactive()` loses reactivity when destructured, can't be reassigned, and has proxy identity issues with `===`.
-
-```typescript
-// ✅ Good
-const isOpen = ref(false);
-const activeTag = ref<string | null>(null);
-
-// ❌ Avoid
-const state = reactive({ isOpen: false, activeTag: null as string | null });
-```
-
-### Never destructure reactive() objects
-
-If you must use `reactive`, access properties directly (`state.foo`) — never destructure.
-
-### Use shallowRef() for large objects and non-reactive library instances
-
-```typescript
-// ✅ Shiki highlighter instance — never deep-reactive
-const highlighter = shallowRef<Highlighter | null>(null);
-```
-
-Also use `markRaw()` for objects that must never be reactive (third-party class instances, build-time data dumps).
-
-### SSR-safe state: useState
+### SSR-safe state: `useState`
 
 For state that must survive SSR → hydration (e.g., a flag set during server render), use Nuxt's `useState`. It's like `ref` but SSR-safe and globally identified.
 
@@ -213,75 +81,9 @@ The MVP site has no cross-page state. If a need emerges (e.g., persisted theme t
 
 ---
 
-## Computed
+## Watchers: SSR Caveat
 
-### No side effects in computed getters
-
-```typescript
-// ❌ Side effect in computed
-const filteredPosts = computed(() => {
-  analytics.track('filter');
-  return posts.value.filter((p) => p.tag === activeTag.value);
-});
-
-// ✅ Pure
-const filteredPosts = computed(() => posts.value.filter((p) => p.tag === activeTag.value));
-```
-
-### Computed over methods for derived state
-
-Computed caches until dependencies change. Methods recalculate every render.
-
-### Never mutate source data in computed — return new arrays/objects
-
-```typescript
-// ❌ Mutates
-const sortedPosts = computed(() => posts.value.sort((a, b) => a.publishedAt.localeCompare(b.publishedAt)));
-
-// ✅ Returns new array
-const sortedPosts = computed(() => [...posts.value].sort((a, b) => a.publishedAt.localeCompare(b.publishedAt)));
-```
-
-### Use computed for conditional class logic
-
-```typescript
-const pillClass = computed((): string => {
-  const map: Record<string, string> = {
-    shipped: 'bg-gold/15 text-gold-soft border-gold/30',
-    inProgress: 'bg-river/15 text-river border-river/30',
-    planned: 'bg-line-strong/30 text-ink-mute border-line-strong',
-  };
-  return map[props.status] ?? map.planned;
-});
-```
-
----
-
-## Watchers
-
-### Use getter function to watch specific properties
-
-```typescript
-// ❌ Watches entire object
-watch(state, () => { /* fires on ANY property change */ });
-
-// ✅ Watches specific property
-watch(() => state.count, (newVal) => { /* fires only when count changes */ });
-```
-
-### watch vs watchEffect
-
-- `watch`: explicit sources, old + new values, lazy by default
-- `watchEffect`: auto-tracks dependencies, runs immediately, no old value
-
-Use `watch` for old/new comparison. Use `watchEffect` for "run whenever any dependency changes."
-
-### SSR caveat: don't access DOM in eager watchers
-
-`watchEffect` runs immediately, which on SSR means it runs server-side where `document`/`window` don't exist. For DOM-touching watchers, either:
-
-- Wrap the side effect in `if (import.meta.client) { ... }`
-- Or move the logic into `onMounted` if it should only run once
+`watchEffect` runs during SSR where `document`/`window` don't exist. For page titles + meta tags, ALWAYS use `useHead` / `useSeoMeta` — never poke `document.title` directly.
 
 ```typescript
 // ❌ Throws on SSR — document not defined
@@ -293,13 +95,11 @@ watchEffect(() => {
 useHead({ title: () => pageTitle.value });
 ```
 
-For page titles + meta tags, ALWAYS use `useHead` / `useSeoMeta` (see SEO section) — never poke `document.title` directly.
-
 ---
 
-## Components
+## Components: Nuxt 4 Specifics
 
-### Y* prefix for our primitives
+### `Y*` prefix for our primitives
 
 Every component we author is prefixed `Y` to distinguish from Nuxt built-ins (`NuxtLink`, `NuxtImg`, `ClientOnly`, `Suspense`) and any third-party additions:
 
@@ -312,7 +112,7 @@ Every component we author is prefixed `Y` to distinguish from Nuxt built-ins (`N
 <Link to="/docs">Docs</Link>
 ```
 
-### PascalCase in templates (Nuxt requires it for auto-import)
+### PascalCase in templates (required for Nuxt auto-import)
 
 ```vue
 <!-- ✅ -->
@@ -321,23 +121,6 @@ Every component we author is prefixed `Y` to distinguish from Nuxt built-ins (`N
 <!-- ❌ Auto-import doesn't match kebab-case -->
 <y-pill variant="shipped">v0.1</y-pill>
 ```
-
-### Props down, events up
-
-Parents pass data via props. Children communicate via `defineEmits()`. No `ref()` access to child internals for data flow.
-
-### Use provide/inject for deep component trees (avoid prop drilling)
-
-```typescript
-import type { InjectionKey } from 'vue';
-const NAV_KEY: InjectionKey<Ref<boolean>> = Symbol('nav-open');
-provide(NAV_KEY, isOpen);
-
-// Deep child
-const isOpen = inject(NAV_KEY);
-```
-
-Use Symbol keys to avoid collisions. Mutations happen in the provider, not consumers.
 
 ### Internal routing: NuxtLink
 
@@ -381,56 +164,7 @@ import YButton from '~/components/primitives/YButton.vue';
 
 ---
 
-## Composables
-
-### Naming: use{Feature}, return object with named refs
-
-```typescript
-// ✅ app/composables/useScrollLock.ts
-export const useScrollLock = () => {
-  const isLocked = ref(false);
-
-  const lock = (): void => {
-    if (!import.meta.client) return;
-    document.body.style.overflow = 'hidden';
-    isLocked.value = true;
-  };
-
-  const unlock = (): void => {
-    if (!import.meta.client) return;
-    document.body.style.overflow = '';
-    isLocked.value = false;
-  };
-
-  onUnmounted(unlock);
-
-  return { isLocked, lock, unlock } as const;
-};
-```
-
-### Composable vs utility function
-
-- **Composable**: uses Vue reactivity (`ref`, `computed`, `watch`, lifecycle hooks). Lives in `app/composables/`. Auto-imported.
-- **Utility**: pure function, no Vue API. Lives in `app/utils/`. Also auto-imported.
-
-If it doesn't touch Vue, it's a utility — not a composable.
-
-### Expose readonly state, keep mutations internal
-
-```typescript
-export const useMobileNav = () => {
-  const _isOpen = ref(false);
-  const isOpen = readonly(_isOpen);
-
-  const toggle = (): void => {
-    _isOpen.value = !_isOpen.value;
-  };
-
-  return { isOpen, toggle } as const;
-};
-```
-
-### SSR-safe by default
+## Composables: SSR-safe by default
 
 Composables run during SSR. Any DOM access must be guarded:
 
@@ -455,56 +189,34 @@ Never access `window`, `document`, `localStorage`, or `navigator` at the top lev
 
 The MVP site is fully static — no runtime fetching. Data lives in markdown files or build-time TOML files, read at build time.
 
-When a future milestone needs build-time data (e.g., M3 roadmap registry reads `registry/roadmap.toml`, M4 docs reads `spec/*.md`):
-
-### Use useAsyncData with native $fetch
+### Use `useAsyncData` with native `$fetch`
 
 ```typescript
 // Build-time: this runs during nuxi generate
 const { data: roadmap } = await useAsyncData('roadmap', () =>
-  $fetch<RoadmapEntry[]>('/api/roadmap.json'), // generated at build time by a Nitro route
+  $fetch<RoadmapEntry[]>('/api/roadmap.json'),
 );
 ```
 
 For reading local files at build time, use a Nuxt module or `nitro:build:before` hook that emits a JSON file under `public/` or generates a virtual `~/data/...` import. Don't ship runtime API calls.
 
-### NO Axios, NO fetch wrapper, NO API_BASE constants
+### NO Axios, NO fetch wrapper, NO `API_BASE` constants
 
 The MVP site doesn't hit any APIs at runtime. If a runtime fetch becomes necessary (it shouldn't pre-v1.0), use Nuxt's native `$fetch` — it's a typed wrapper around fetch that integrates with SSR.
 
 ---
 
-## Templates
+## Templates: Project-Specific Notes
 
-### Never use v-html with untrusted content (XSS)
+### `v-html` exception for Shiki
 
 The only place `v-html` appears in our site is `<YCode>` rendering Shiki's pre-highlighted HTML — and Shiki's output is trusted because the `code` prop is hand-authored in `.vue` markup, NOT user input. M9 playground will need to revisit this if user-supplied code lands.
-
-### Never combine v-if and v-for on the same element
-
-```vue
-<!-- ❌ v-if evaluated for every item -->
-<li v-for="post in posts" v-if="post.published">
-
-<!-- ✅ Filter first with computed -->
-<li v-for="post in publishedPosts">
-```
-
-### Use v-show for frequent toggles, v-if for rare ones
-
-`v-show` keeps the element in DOM. `v-if` destroys/recreates. Mobile drawer = `v-show`. Conditional sections that depend on a build flag = `v-if`.
-
-### Always use :key with v-for
-
-```vue
-<YPostCard v-for="post in posts" :key="post.slug" :post="post" />
-```
 
 ---
 
 ## Tailwind v4
 
-### Tokens live in @theme — not in components
+### Tokens live in `@theme` — not in components
 
 All colors, fonts, radii, breakpoints, and container widths live in `app/assets/css/tailwind.css` under the `@theme` block. Source of truth is the prototype `shared.css` `:root` vars.
 
@@ -529,48 +241,19 @@ All colors, fonts, radii, breakpoints, and container widths live in `app/assets/
 
 NEVER hardcode a hex code in a component. NEVER hardcode a font family. NEVER hardcode a radius value. Always reference the theme token via a Tailwind utility (`bg-bg`, `text-gold`, `rounded-lg`, `font-display`) or — for scoped CSS — via `var(--color-gold)`.
 
-### No utility extraction for one-off styles
+### `@apply` threshold
 
-Use Tailwind classes directly. Don't `@apply` unless a combination repeats 3+ times.
-
-### Dynamic classes — object syntax or computed
-
-```vue
-<!-- ✅ Object syntax -->
-<div :class="{ 'text-ember': hasError, 'text-gold': !hasError }">
-
-<!-- ✅ Computed for complex logic (see Computed section) -->
-<div :class="statusClass">
-```
-
-### Never concatenate Tailwind class names dynamically
-
-```typescript
-// ❌ Tailwind can't detect these at build time — purged from CSS
-const color = `text-${status}`;
-
-// ✅ Complete class names in a lookup
-const colorMap: Record<string, string> = {
-  shipped: 'text-gold',
-  inProgress: 'text-river',
-  planned: 'text-ink-mute',
-};
-const color = colorMap[status];
-```
-
-### Responsive design: mobile-first
-
-```vue
-<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
-```
-
-Breakpoints from the prototype: `<600px` (`sm`), `<900px` (`md`), default `lg`. Tailwind v4 ships these out of the box.
+Don't `@apply` unless a combination repeats **3+ times** (stricter than the global 2+ rule for this project).
 
 ### Dark mode: N/A
 
 Site is dark-only. No `dark:` variants. No theme toggle. The coal background is the brand.
 
-### Tailwind v4 `@theme` HMR caveat
+### Responsive breakpoints
+
+Breakpoints from the prototype: `<600px` (`sm`), `<900px` (`md`), default `lg`. Tailwind v4 ships these out of the box.
+
+### `@theme` HMR caveat
 
 Edits to `@theme` block sometimes don't HMR cleanly. If a token edit doesn't reflect on save, restart the dev server (`docker compose restart web`).
 
@@ -580,10 +263,9 @@ Edits to `@theme` block sometimes don't HMR cleanly. If a token edit doesn't ref
 
 Use Nuxt's SEO primitives — never poke `document.head` or `<meta>` manually.
 
-### useHead for per-page title + meta
+### `useHead` for per-page title + meta
 
 ```typescript
-// app/pages/docs/getting-started.vue
 useHead({
   title: 'Getting Started',
   meta: [
@@ -592,9 +274,9 @@ useHead({
 });
 ```
 
-The base title template lives in `app/app.vue` (set once, e.g. `'%s · Yinz'`) — per-page only sets the `%s` portion.
+The base title template lives in `app/app.vue` (e.g. `'%s · Yinz'`) — per-page only sets the `%s` portion.
 
-### useSeoMeta for OG + Twitter cards
+### `useSeoMeta` for OG + Twitter cards
 
 ```typescript
 useSeoMeta({
@@ -605,19 +287,17 @@ useSeoMeta({
 });
 ```
 
-For per-page generated OG images, the `nuxt-og-image` module renders them at build time — define the template per page, the module produces the PNG.
+For per-page generated OG images, `nuxt-og-image` renders them at build time.
 
-### Structured data via nuxt-schema-org
+### Structured data via `nuxt-schema-org`
 
-Schema.org JSON-LD via `useSchemaOrg` — only on pages where it's meaningful (homepage Organization, docs Article, blog BlogPosting).
+Schema.org JSON-LD via `useSchemaOrg` — only on pages where meaningful (homepage Organization, docs Article, blog BlogPosting).
 
 ---
 
-## Yinz code snippets
+## Yinz Code Snippets (Anti-Drift Rule)
 
 Every Yinz snippet rendered on the site MUST be anchored to a real `.ynz` file in `examples/website/` (or equivalent — exact path locked by M5). CI builds + runs that file; output is captured via `insta` snapshots. The snippet on the site comes from the file, not from copy-pasted source in a `.vue` markup.
-
-This is the **anti-drift commitment** from the roadmap. Hand-pasted Yinz snippets in `.vue` markup are banned outside the foundation milestone's `/_dev/components` gallery (which is dev-only and noindex'd).
 
 ```vue
 <!-- ❌ Banned in production pages — drifts from compiler -->
@@ -627,15 +307,13 @@ This is the **anti-drift commitment** from the roadmap. Hand-pasted Yinz snippet
 <YCode lang="yinz" :code="snippets.helloWorld" filename="hello.ynz" />
 ```
 
-The `<YCode>` component itself is built in foundation milestone Phase 4 — it consumes pre-highlighted HTML from a build-time Nuxt module that runs Shiki against `tooling/vscode-ynz/syntaxes/ynz.tmLanguage.json` (synced via `bun run sync-grammar`).
-
 ---
 
-## Performance
+## Performance: SSG-Specific Notes
 
 ### SSG-first — no runtime JS for static content
 
-The whole site renders to static HTML at build time. Components used only for static content (most of the site) emit zero runtime JS beyond Vue's hydration.
+The whole site renders to static HTML at build time. Components used only for static content emit zero runtime JS beyond Vue's hydration.
 
 Use `<ClientOnly>` to wrap genuinely client-side-only widgets (a future search input, a playground editor) so they don't run during SSR.
 
@@ -645,72 +323,13 @@ Use `<ClientOnly>` to wrap genuinely client-side-only widgets (a future search i
 </ClientOnly>
 ```
 
-### Lazy-load heavy components with defineAsyncComponent
-
-For widgets that aren't above-the-fold (search panel, video embeds, future playground):
-
-```typescript
-import { defineAsyncComponent } from 'vue';
-
-const YPlayground = defineAsyncComponent({
-  loader: () => import('~/components/playground/YPlayground.vue'),
-  loadingComponent: YPlaygroundSkeleton,
-  delay: 200,
-});
-```
-
-Pair with `<Suspense>` for fallback UI.
-
-### Use v-once for static content that never re-renders
-
-```vue
-<footer v-once>
-  <p>Forged in Pittsburgh · Apache 2.0</p>
-</footer>
-```
-
-### Use shallowRef for large datasets that replace entirely (not mutate)
-
-```typescript
-const docTree = shallowRef<DocNode[]>([]);
-// Replace whole tree on update — no deep reactivity tax
-docTree.value = await loadDocTree();
-```
-
-### Prefer computed over watchers for derived state
-
-If a watcher updates a ref based on other refs, it should probably be a computed.
-
 ### Don't ship Pagefind index on the home page
 
 Pagefind (search, M4) ships its index as separate `.pf_*` files lazy-loaded only when the search input is focused. Foundation phases don't touch this.
 
 ---
 
-## Transitions
-
-The other exception to "no `<style>` blocks" — Vue `<Transition>` components need CSS classes. Keep them tight:
-
-```vue
-<Transition name="fade">
-  <div v-if="visible">Content</div>
-</Transition>
-
-<style scoped>
-  .fade-enter-active,
-  .fade-leave-active {
-    transition: opacity 0.2s ease;
-  }
-  .fade-enter-from,
-  .fade-leave-to {
-    opacity: 0;
-  }
-</style>
-```
-
----
-
-## What's NOT in this stack (and why)
+## What's NOT in this Stack (and Why)
 
 | Thing | Why we don't use it |
 |---|---|
@@ -730,7 +349,7 @@ If a future milestone genuinely needs one of these, justify it in the plan first
 
 ## Cross-References
 
-- `~/.claude/rules/coding-style.md` — `T \| null` over `T?`, no `any`, arrow functions, satisfies/as guidance
+- `~/.claude/rules/coding-style.md` — `T | null` over `T?`, no `any`, arrow functions, satisfies/as guidance
 - `.claude/plans/roadmaps/webpage-docs.md` — locked stack decisions (Nuxt 4, Tailwind v4, Bun, hosting, fonts, SSG)
 - `.claude/plans/active/webpage-foundation.md` — current milestone (component inventory, phase breakdown)
 - `/tmp/yinz-design/yinz/project/shared.css` — design token source-of-truth (extracted into `@theme` block in foundation Phase 2)
