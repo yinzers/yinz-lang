@@ -75,7 +75,8 @@ pub use inlay_hint_passes::{
 pub use intrinsics::PrimitiveIntrinsicTable;
 pub use may_block::suspends_set_for_test as may_block_suspends_set;
 pub use queries::{
-    check_query, exports_query, module_signatures_query, CheckOutput, SignatureOutput,
+    check_query, cpu_promotion_query, exports_query, module_signatures_query, no_auto_parallel_env,
+    CheckOutput, PromotionOutput, SignatureOutput,
 };
 pub use shapes::{ShapeDef, ShapeTable};
 pub use signatures::{build_effective_suspend_set, SignatureTable};

@@ -124,6 +124,10 @@ pub enum IndependentGroup<'a> {
 /// reference (`shape`/`array`/`map`/...) — the conservative floor in `write_positions_for_sig`.
 /// This is sound by construction without consulting any per-form effective-ownership
 /// classification (see that function's doc for why).
+///
+/// Time: O(S²) where S = statements in `stmts` (each candidate is checked for
+/// independence against every pending group member).  Space: O(S) for the pending
+/// group + output groups.
 pub fn partition_independent_groups<'a>(
     stmts: &'a [Stmt],
     suspend_set: &HashSet<String>,
@@ -190,12 +194,239 @@ fn flush_pending<'a>(pending: &mut Vec<&'a Stmt>, groups: &mut Vec<IndependentGr
     }
 }
 
+// ── Class-aware (CPU + I/O) candidacy (v0.3-M3d) ──────────────────────────────
+
+/// The execution class of a parallel-group member.
+///
+/// A `Parallel` group from [`partition_groups_classified`] may MIX classes
+/// (Research Finding / Question 1): an I/O child interleaves via inline-poll, a CPU
+/// child spawns onto the blocking pool and join-polls. Both share one continuation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemberClass {
+    /// A suspending (I/O / `wait`-reachable) call — M3b's interleaved inline-poll class.
+    Suspending,
+    /// A non-suspending pure-CPU call whose callee `does_real_work` — M3d's
+    /// spawn-onto-blocking-pool class.
+    Cpu,
+}
+
+/// Inputs the CPU-aware candidacy needs beyond the suspending-only path: the
+/// worth-it set and the enclosing function name (a callee that IS the enclosing
+/// function is a self-recursive call and is never a CPU group member — it would
+/// spawn the very frame it runs in).
+pub struct CpuCandidacy<'a> {
+    /// Functions that transitively do real work (`FunctionSig.does_real_work`).
+    pub does_real_work: &'a HashSet<String>,
+    /// The name of the function whose body is being partitioned.
+    pub enclosing_fn: &'a str,
+}
+
+/// Classify a statement as a CPU-parallel candidate, returning the callee name when
+/// it qualifies.
+///
+/// A CPU candidate is a direct ident call `f(args)` (bare or `let x = f(args)`,
+/// never `wait`-prefixed) where the callee `f`:
+/// - is NOT suspending (suspending calls take the existing I/O candidacy path),
+/// - `does_real_work` (the worth-it proxy — trivial/leaf callees run inline),
+/// - returns a class representable in the 16-byte `YnzCpuResult` ABI (NOT a bare
+///   `Shape` or `Shape errors` — those are the WideValueSuspendingReturn decline),
+/// - is not the enclosing function itself (a self-recursive spawn).
+fn stmt_cpu_callee(
+    stmt: &Stmt,
+    suspend_set: &HashSet<String>,
+    sig_table: &SignatureTable,
+    imported_fns: &HashMap<String, FunctionSig>,
+    cpu: &CpuCandidacy,
+) -> Option<String> {
+    if stmt_has_explicit_wait(stmt) {
+        return None;
+    }
+    let (callee_name, _args) = stmt_call_args(stmt)?;
+    if suspend_set.contains(callee_name) {
+        return None; // suspending — not a CPU member
+    }
+    if !cpu.does_real_work.contains(callee_name) {
+        return None; // worth-it proxy: trivial/leaf callee runs inline
+    }
+    if callee_name == cpu.enclosing_fn {
+        return None; // self-recursive spawn — never a CPU group member
+    }
+    // The callee's return class must fit the YnzCpuResult ABI.
+    let sig = sig_table
+        .fns
+        .get(callee_name)
+        .or_else(|| imported_fns.get(callee_name))?;
+    if !returns_cpu_supported_class(&sig.ret) {
+        return None; // Shape / Shape-errors — WideValueSuspendingReturn decline
+    }
+    Some(callee_name.to_string())
+}
+
+/// True when a return type maps to the 16-byte `YnzCpuResult` ABI (Decision Record
+/// item 1): scalars, decimal128, heap pointers, and `T errors` where `T` is not a
+/// shape. Bare `Shape` and `Shape errors` are excluded (WideValueSuspendingReturn —
+/// a shape-by-value return from a suspended function needs variable-size frame
+/// staging that is not yet implemented).
+fn returns_cpu_supported_class(ret: &crate::types::Type) -> bool {
+    use crate::types::Type;
+    match ret {
+        // Bare shape return: declined.
+        Type::Shape { .. } => false,
+        // `T errors`: supported unless the inner success value is a shape.
+        Type::ErrorsCapable { inner } => !matches!(inner.as_ref(), Type::Shape { .. }),
+        // `nothing` carries no value to join-bind — there is nothing to parallelize a
+        // result for, so it is not a CPU group candidate.
+        Type::Nothing => false,
+        // An earlier type error already poisoned this signature — never promote.
+        Type::Error => false,
+        // Everything else (int/float/bool/number/string/array/map/maybe/union/
+        // dynamic/range/generic) fits the 16-byte ABI as a scalar, a heap pointer,
+        // or a decimal128 lo/hi pair.
+        _ => true,
+    }
+}
+
+/// Class-aware partition: a member may be a suspending (I/O) call OR a CPU call.
+///
+/// Shares ALL independence machinery with [`partition_independent_groups`]
+/// (`stmts_are_independent`, `build_write_effect_summary`, the wait-barrier reset) —
+/// the only addition is class-aware candidacy and same-callee rules:
+/// - **Suspending members** keep M3b's distinct-callee restriction (the composed
+///   frame allocates one sub-frame slot per unique callee name).
+/// - **CPU members** lift it (per-invocation ctx + member-index slot keying, Research
+///   Finding 6) — two calls to the same CPU callee CAN share a group.
+/// - **Mixed groups** (a CPU member next to a suspending member) are permitted; the
+///   join loop polls each child by its own class.
+///
+/// Returns each `Parallel` group alongside the per-member class vector (same order as
+/// the group's statements). `Singleton` groups carry no class (they lower
+/// sequentially regardless).
+///
+/// This is the typeck-side producer the v0.3-M3d promotion query consumes. Codegen's
+/// existing M3b path stays on [`partition_independent_groups`] (suspending-only) until
+/// Phase 3 wires the CPU lowering — so this function ships in Phase 2 with no default
+/// codegen consumer (zero behavior change).
+///
+/// Time: O(S²) where S = statements in `stmts` (each candidate is checked for
+/// independence against every pending group member).  Space: O(S) for the pending
+/// group + output groups.
+pub fn partition_groups_classified<'a>(
+    stmts: &'a [Stmt],
+    suspend_set: &HashSet<String>,
+    sig_table: &SignatureTable,
+    imported_fns: &HashMap<String, FunctionSig>,
+    cpu: &CpuCandidacy,
+) -> Vec<ClassifiedGroup<'a>> {
+    let write_effects = build_write_effect_summary(sig_table, imported_fns);
+
+    let mut groups: Vec<ClassifiedGroup<'a>> = Vec::new();
+    let mut pending: Vec<(&Stmt, MemberClass)> = Vec::new();
+
+    for stmt in stmts {
+        // Explicit `wait` prefix resets the group — `wait` is a sequential barrier.
+        if stmt_has_explicit_wait(stmt) {
+            flush_classified(&mut pending, &mut groups);
+            groups.push(ClassifiedGroup::Singleton(stmt));
+            continue;
+        }
+
+        // Determine the member class: suspending (I/O) takes priority — a suspending
+        // callee is never a CPU member even if it also did real work.
+        let class = if stmt_direct_suspending_callee(stmt, suspend_set).is_some() {
+            Some(MemberClass::Suspending)
+        } else if stmt_cpu_callee(stmt, suspend_set, sig_table, imported_fns, cpu).is_some() {
+            Some(MemberClass::Cpu)
+        } else {
+            None
+        };
+
+        let Some(class) = class else {
+            flush_classified(&mut pending, &mut groups);
+            groups.push(ClassifiedGroup::Singleton(stmt));
+            continue;
+        };
+
+        // Same-callee constraint applies to SUSPENDING members only (one sub-frame
+        // slot per unique callee name). CPU members get per-invocation ctx + member-
+        // index slots, so two calls to the same CPU callee may share a group.
+        if class == MemberClass::Suspending {
+            let callee = stmt_direct_suspending_callee(stmt, suspend_set);
+            let callee_already_in_group = pending.iter().any(|(s, c)| {
+                *c == MemberClass::Suspending
+                    && stmt_direct_suspending_callee(s, suspend_set) == callee
+            });
+            if callee_already_in_group {
+                flush_classified(&mut pending, &mut groups);
+                pending.push((stmt, class));
+                continue;
+            }
+        }
+
+        // Independence against every pending member (class-agnostic data-dep +
+        // write-effect floor — identical to the suspending-only path).
+        let independent_of_all = pending
+            .iter()
+            .all(|&(prev, _)| stmts_are_independent(prev, stmt, &write_effects));
+
+        if independent_of_all {
+            pending.push((stmt, class));
+        } else {
+            flush_classified(&mut pending, &mut groups);
+            pending.push((stmt, class));
+        }
+    }
+
+    flush_classified(&mut pending, &mut groups);
+    groups
+}
+
+/// A classified independence group: a `Singleton` (lowered sequentially) or a
+/// `Parallel` group carrying its members and their per-member execution classes.
+#[derive(Debug)]
+pub enum ClassifiedGroup<'a> {
+    Singleton(&'a Stmt),
+    Parallel {
+        stmts: Vec<&'a Stmt>,
+        classes: Vec<MemberClass>,
+    },
+}
+
+/// Drain `pending` into `groups`: a single pending member becomes a `Singleton`, two
+/// or more become a `Parallel` group carrying their classes.
+///
+/// Time: O(P) where P = pending members.  Space: O(P) for the moved-out group.
+fn flush_classified<'a>(
+    pending: &mut Vec<(&'a Stmt, MemberClass)>,
+    groups: &mut Vec<ClassifiedGroup<'a>>,
+) {
+    match pending.len() {
+        0 => {}
+        1 => {
+            let (stmt, _) = pending.remove(0);
+            groups.push(ClassifiedGroup::Singleton(stmt));
+        }
+        _ => {
+            let taken = std::mem::take(pending);
+            let mut stmts = Vec::with_capacity(taken.len());
+            let mut classes = Vec::with_capacity(taken.len());
+            for (s, c) in taken {
+                stmts.push(s);
+                classes.push(c);
+            }
+            groups.push(ClassifiedGroup::Parallel { stmts, classes });
+        }
+    }
+}
+
 // ── Independence predicate ────────────────────────────────────────────────────
 
 /// Returns `true` ONLY when the analysis can PROVE `a` and `b` are independent:
 /// no data dependency AND no shared-write conflict.
 ///
 /// Conservative: when in doubt, returns `false` (sequential, never silent-wrong).
+///
+/// Time: O(A²) where A = identifiers referenced across `a` and `b` (read/define set
+/// construction plus the read∩write conflict checks).  Space: O(A) for the name sets.
 fn stmts_are_independent(a: &Stmt, b: &Stmt, write_effects: &WriteEffectMap) -> bool {
     let defs_a = stmt_defines(a);
     let reads_a = stmt_reads(a);
@@ -325,6 +556,9 @@ fn stmt_reads(stmt: &Stmt) -> HashSet<String> {
 }
 
 /// Collect ident name references from an expression (conservative — includes all reads).
+///
+/// Time: O(N) where N = expression nodes under `expr`.  Space: O(N) for the recursion
+/// stack and the accumulated name set.
 fn collect_ident_refs<'a>(expr: &'a Expr, out: &mut HashSet<&'a str>) {
     match expr {
         Expr::Ident(name, _) => {
@@ -395,6 +629,9 @@ fn collect_ident_refs<'a>(expr: &'a Expr, out: &mut HashSet<&'a str>) {
 }
 
 /// Collect all ident names in an expression into an owned HashSet.
+///
+/// Time: O(N) where N = expression sub-nodes (one `collect_ident_refs` descent).
+/// Space: O(N) — the worst case (every node an ident) owns N copied name strings.
 fn collect_ident_names(expr: &Expr, out: &mut HashSet<String>) {
     let mut tmp = HashSet::new();
     collect_ident_refs(expr, &mut tmp);
@@ -469,6 +706,9 @@ fn is_mutable_heap_type(ty: &crate::types::Type) -> bool {
 /// Per-position write-capability is the conservative floor: a position is write-capable iff
 /// its parameter TYPE is a mutable heap reference (see `write_positions_for_sig`). Local
 /// definitions take priority over imported ones of the same name.
+///
+/// Time: O(F · P) where F = local + imported functions, P = params per function
+/// (treated as O(F) for bounded arities).  Space: O(F) for the summary map.
 fn build_write_effect_summary(
     sig_table: &SignatureTable,
     imported_fns: &HashMap<String, FunctionSig>,
@@ -490,6 +730,11 @@ fn build_write_effect_summary(
 }
 
 /// Names of arguments passed at write-capable positions in a call.
+///
+/// Time: O(A · N) where A = arguments and N = sub-nodes per argument expression
+/// (`collect_ident_names` descends each write-capable argument; `write_positions` is a
+/// small bounded slice, so its `contains` is treated as O(1)).
+/// Space: O(W · N) where W = write-capable arguments collected (the others are skipped).
 fn call_site_write_set(args: &[Expr], write_positions: &[usize]) -> HashSet<String> {
     let mut writes = HashSet::new();
     for (i, arg) in args.iter().enumerate() {
@@ -549,6 +794,13 @@ pub fn stmt_direct_suspending_callee(stmt: &Stmt, suspend_set: &HashSet<String>)
         }
         _ => None,
     }
+}
+
+/// Returns the direct ident callee name of a `let x = f(args)` or bare `f(args)`
+/// statement, regardless of class or `wait` prefix. `None` for method calls, nested
+/// calls, and non-call statements. Used to collect a CPU group's spawned callees.
+pub fn stmt_direct_callee_name(stmt: &Stmt) -> Option<String> {
+    stmt_call_args(stmt).map(|(name, _)| name.to_string())
 }
 
 /// Returns `true` if the statement has an explicit `wait` prefix.
@@ -638,6 +890,7 @@ mod tests {
             },
             contains_wait: false,
             suspends: true,
+            does_real_work: false,
             original_name: None,
         }
     }

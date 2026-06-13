@@ -724,7 +724,7 @@ pub fn emit_artifact(
     // no visibility into env vars. The correct fix is to thread `no_auto_parallel` as an
     // explicit salsa input parameter. Deferred until `ynz watch --no-auto-parallel` or
     // LSP codegen integration lands. Tracked: .claude/todos.md "no-auto-parallel env-var".
-    let no_auto_parallel = std::env::var("YNZ_NO_AUTO_PARALLEL").is_ok_and(|v| v == "1");
+    let no_auto_parallel = ynz_typeck::no_auto_parallel_env();
     // Gates the CPU-parallel join spike: when set to "1", the entrypoint's adjacent
     // non-suspending int-returning call pair is emitted via spawn_blocking + poll join
     // instead of sequential call lowering. All other programs lower identically.

@@ -19,7 +19,7 @@ files:
   - examples/primantis-orders/**
   - tooling/vscode-ynz/**
 created: 2026-06-11
-last_updated: 2026-06-11
+last_updated: 2026-06-13
 ---
 
 # Plan: v0.3-M3d — Pure-CPU Statement Parallelization
@@ -488,7 +488,7 @@ The original chat ran on the WSL host and hit the LLVM 18 environment blocker ab
 - [x] plan-adherence-verifier: PASS 2026-06-12T (R4 — Steps 1-5 MET; m2_spike.rs touch authorized+minimal; banned-phrase grep clean)
 - [x] acceptance-verifier: PASS 2026-06-12T (R4 — all 4 ACs MET on live runs; 1958/0; clippy clean)
 - [x] design-compliance-reviewer: PASS 2026-06-12T (R4 — no [locked]-doc contradiction; no-synchronous-join invariant intact)
-- [ ] Committed: <commit SHA>
+- [x] Committed: 23f4e81
 
 **Findings Log**:
 - 2026-06-12 — coordinator tier-classification (no Executor tier field): Phase 1 → complex (trigger: "production C-ABI runtime functions … panic capture → re-raise contract, waker forwarding" + M2-HALT-corpse adjacency). Executor dispatched at Opus.
@@ -540,33 +540,65 @@ The original chat ran on the WSL host and hit the LLVM 18 environment blocker ab
 6. Gating: promotion disabled under `kernel_mode` and `--no-auto-parallel` (both checked at the query entry).
 7. Tests: every guard shape from Research Finding 4 as a fixture that compiled pre-M3d — assert it STILL compiles with zero new diagnostics and is NOT promoted; promotion-positive cases (clean 2-member group → promoted, suspend set extended, callers promoted transitively); cross-module `does_real_work` propagation; cycle decline; `--no-auto-parallel` + kernel decline; determinism (two runs, identical promotion sets).
 **Acceptance criteria**:
-- [ ] Relocation commit is verbatim-move + import-path-only (reviewable as such) with full suite green before any feature logic lands
-  - Evidence: (filled at phase completion)
-- [ ] `does_real_work` propagates cross-module (fixture: importer parallelizes calls to an imported loop-containing callee)
-  - Evidence: (filled at phase completion)
-- [ ] Every guard-shape fixture compiles with IDENTICAL diagnostics pre/post promotion logic and declines silently
-  - Evidence: (filled at phase completion)
-- [ ] Promotion query is deterministic and respects kernel-mode + `--no-auto-parallel`
-  - Evidence: (filled at phase completion)
-- [ ] P2 ships zero default behavior change (suspend-set extension not yet consumed by codegen — full fixture corpus byte-identical)
-  - Evidence: (filled at phase completion)
+- [x] Relocation commit is verbatim-move + import-path-only (reviewable as such) with full suite green before any feature logic lands
+  - Evidence: commit `724a765` ("phase 2 step 1 — verbatim relocation of independence.rs to ynz-typeck") is the SOLE committed object in `git log 23f4e81..HEAD`; `git show 724a765:crates/ynz-typeck/src/independence.rs` has ZERO feature symbols (MemberClass/partition_groups_classified absent); `emit.rs` diff is import-path-only (re-pointed to `ynz_typeck::independence`); feature logic stays uncommitted in queries.rs (lands after). 20 promotion_tests green live at the relocation boundary. (acceptance-verifier R4)
+- [x] `does_real_work` propagates cross-module (fixture: importer parallelizes calls to an imported loop-containing callee)
+  - Evidence: `queries::promotion_tests::imported_real_work_callee_promotes_importer` — two-file salsa project (`lib.ynz` exports `heavy()` with a `while` loop; `entrypoint.ynz` calls `heavy(20)`/`heavy(21)`), calls `cpu_promotion_query`, asserts `promoted.contains("entrypoint")`. Live: `ok`. (acceptance-verifier R4)
+- [x] Every guard-shape fixture compiles with IDENTICAL diagnostics pre/post promotion logic and declines silently
+  - Evidence: all 8 guards have decline fixtures, 20 promotion_tests pass live. 5 valid-but-unpromotable guards assert `!promoted && !has_errors` (`wide_shape_return_*`, `nested_shape_crossing_local_*`, `param_nested_let_shadow_*`, `array_shape_runtime_field_crossing_*`, `mutual_cycle_member_never_promotes`). 3 for-wait guards (StoredRange/FixedArrayIter/ExpressionIter) — whose shapes ERROR pre-M3d via check_function's pre-existing M2/M3 guards (check.rs:584-650), so `!has_errors` is structurally unconstructible (judge #10 R4: probe-fire ⟺ baseline-error coupling is TOTAL — both call the identical `find_*` helpers under the same `has_explicit_waits` gate) — assert `!promoted` (non-vacuous: real fib-pair candidate reaches the probe + declines via rollback, proven by the `wait_free_for_loop_does_not_block_promotion` mutation control) + `error_whats` shows exactly the pre-existing guard message and NEITHER sibling (M3d introduced ZERO NEW diagnostics). (acceptance-verifier + judge #10 + code-reviewer + plan-adherence, all R4)
+- [x] Promotion query is deterministic and respects kernel-mode + `--no-auto-parallel`
+  - Evidence: `promotion_is_deterministic_across_runs` (two runs, identical set), `kernel_mode_declines_all`, `no_auto_parallel_flag_declines_all`, `salsa_query_respects_no_auto_parallel_env` (ENV_LOCK-serialized) — all pass live. Shared `no_auto_parallel_env()` (`.is_ok_and(|v| v=="1")`) read by BOTH typeck + codegen (emit.rs:727) so the gate can't drift. (acceptance-verifier R4)
+- [x] P2 ships zero default behavior change (suspend-set extension not yet consumed by codegen — full fixture corpus byte-identical)
+  - Evidence: coordinator pre-gate probe + acceptance-verifier R4: `git grep -nE 'cpu_promotion_query|compute_cpu_promotions|PromotionOutput|does_real_work' -- crates/ynz-codegen/src crates/ynz-driver/src crates/ynz-lsp/src` → ZERO matches; `emit.rs` diff is import re-path + `no_auto_parallel_env()` unification only; `PromotionOutput` docblock states "computed but UNCONSUMED"; codegen SM-lowering still reads only `CheckOutput::suspends_set`. Full workspace green. (acceptance-verifier R4)
 **Quality gate**:
-- [ ] No parallel implementation: partition has ONE home (typeck); codegen imports it
-- [ ] Probe predicates REUSE the guard implementations (`check.rs`) — not re-derived copies
-- [ ] Salsa-tracked queries (incremental-safe); no global mutable state
-- [ ] No `unwrap()` on fallible paths; clippy clean
+- [x] No parallel implementation: partition has ONE home (typeck); codegen imports it — verbatim relocation `724a765`; codegen `emit.rs` imports from `ynz_typeck::independence` (code-reviewer + judge #8/#9 R1-R4)
+- [x] Probe predicates REUSE the guard implementations (`check.rs`) — not re-derived copies — `suspension_guards_fire_for_fn` calls the same `param_has_nested_let_shadow`/`find_*`/`crossing_local_names` helpers `check_function` uses; `resolve_type_for_guard_free` is DRY delegation (judge #4 R1-R2, code-reviewer)
+- [x] Salsa-tracked queries (incremental-safe); no global mutable state — `cpu_promotion_query` is `#[salsa::tracked(lru=64, cycle_fn=…)]`; `cpu_callees_by_candidate` is a local (design-compliance + judge #5)
+- [x] No `unwrap()` on fallible paths; clippy clean — production `cargo clippy --workspace -- -D warnings` clean; test `.expect()` only (rules-compliance R1-R4)
 **Verification**: `cargo test -p ynz-typeck` + `cargo test --workspace` green; cross-impl consistency harness on full corpus (must be trivially green since codegen unconsumed); determinism check run twice.
 
-**Phase Review Gates**:
-- [ ] code-reviewer: <verdict + ISO timestamp>
-- [ ] rules-compliance-reviewer: <verdict + ISO timestamp>
-- [ ] plan-adherence-verifier: <verdict + ISO timestamp>
-- [ ] acceptance-verifier: <verdict + ISO timestamp>
-- [ ] design-compliance-reviewer: <verdict + ISO timestamp>
+**Phase Review Gates** (4 gate rounds; each line = latest verdict, full per-round history in Findings Log):
+- [x] code-reviewer: PASS 2026-06-13T03:45 (R4; R1 BLOCK→fixed)
+- [x] rules-compliance-reviewer: PASS 2026-06-13T03:45 (R4; R1/R2/R3 Big-O BLOCKs→fixed)
+- [x] plan-adherence-verifier: PASS 2026-06-13T03:45 (R4; R1/R2 scope+Step7 BLOCKs→fixed)
+- [x] acceptance-verifier: PASS 2026-06-13T03:45 (R4, 5/5 ACs MET; R1 AC1 WEAK→fixed)
+- [x] design-compliance-reviewer: PASS 2026-06-13T03:45 (R1-R4, no `block_on`/coloring)
+- [x] deviation-judge #1 (scope: completion.rs): PASS — LSP completion path blind to `does_real_work`
+- [x] deviation-judge #2 (scope: hover.rs): PASS — hover renderer blind to `does_real_work`
+- [x] deviation-judge #3 (scope: tests/check.rs kernel helper): PASS — empty-set init structurally correct
+- [x] deviation-judge #4 (approach: probe param-shadow predicate): PASS — predicate matches check_function exactly (R2 fix)
+- [x] deviation-judge #5 (approach: per-candidate CPU-callee seed): PASS — over-rollback closed + true-positive preserved (R1 BLOCK→fixed)
+- [x] deviation-judge #6 (approach: kernel_mode=false query entry): PASS — faithful deferral; P3 carry-forward (wire real --kernel signal)
+- [x] deviation-judge #7 (scope: typeck/lib.rs re-exports): PASS — over-exposed `compute_cpu_promotions` narrowed to `pub(crate)` (R2 BLOCK→fixed)
+- [x] deviation-judge #8 (scope: codegen/lib.rs dereg): PASS — one-line mirror, zero stranded consumers
+- [x] deviation-judge #9 (scope: resolve_import.rs propagation): PASS — the ONLY correct propagation home (exports.rs can't access CheckOutput)
+- [x] deviation-judge #10 (approach: for-wait decline fixtures): PASS — `!promoted`+zero-new-diagnostics contract honest; probe-fire⟺baseline-error coupling proven total (R3 BLOCK→fixed)
 - [ ] Committed: <commit SHA>
 
 **Findings Log**:
-_(empty)_
+- 2026-06-13T00:22 — coordinator tier-classification (no Executor tier field): Phase 2 → complex (trigger: "`does_real_work` fixpoint + salsa-tracked promotion query + transitive guard-probe rollback" — type-system internals + novel-algorithm-no-pattern). Executor dispatched at Opus. Note: code-reviewer also runs at Opus this phase (same model tier as executor); the 4 Sonnet verifiers + judges retain cross-model coverage. Informational, not a gate.
+- 2026-06-13T00:30 — coordinator probe (pre-gate): suspicion that promotion query/`does_real_work` might have a production consumer in codegen/driver/lsp (would break the "zero behavior change" AC). Command: `git grep -nE 'cpu_promotion_query|compute_cpu_promotions|PromotionOutput|does_real_work' -- crates/ynz-codegen/src crates/ynz-driver/src crates/ynz-lsp/src`. Result: REFUTED (no matches; new promotion API confined to ynz-typeck). Routing: proceeding to full fan-out unchanged.
+- 2026-06-13T01:25 — **Round 1 gate: 5 PASS / 6 BLOCK** (5 reviewers + 6 deviation-judges). Tree-integrity check: code blobs byte-identical to pre-fan-out snapshot (only `.md` bookkeeping changed via radar hook) — verdicts produced against correct tree. No Planned RED Repros declared → no carve-out; all BLOCKs routed to fix loop.
+  - design-compliance: PASS (no `block_on`/coloring; both pre-approved M3b divergences confirmed real tradeoffs).
+  - deviation-judge #1 (scope/completion.rs): PASS. #2 (scope/hover.rs): PASS. #3 (scope/check.rs kernel helper): PASS. #4 (approach/probe guard-set): PASS (7 guards covered, MutualSuspensionCycle pre-filtered at candidacy; `resolve_type_for_guard_free` is DRY delegation not parallel copy). #6 (approach/kernel_mode=false): PASS (faithful deferral — mirrors pre-existing `check_query`, no `--kernel` signal exists yet, wiring point documented).
+  - **deviation-judge #5 (approach/CPU-callee seeding): BLOCK** — global seed of `cpu_callees` into `suspending_fns` (queries.rs:808-811) over-rolls-back a SOUND candidate. Proven trace: non-candidate caller `wrapper` calls CPU callee `fib` in a subexpr (`let x = fib(10)+1`) + calls candidate `caller`; `fib` globally "suspending" → subexpr guard fires on `wrapper` → rollback walk removes `caller`. False-negative. FIX: scope the seed per-candidate (`HashMap<candidate→callee_set>`, augment `suspending_fns` inside the probe loop only when `candidates.contains(&f.name)`).
+  - **code-reviewer: BLOCK (2)** — (1) [check.rs:7626-7634] guard probe calls WRONG shadow predicate `find_shadow_in_stmts` (needs top-level `let <param>`) vs `check_function`'s `param_has_nested_let_shadow` (nested in any block); EMPIRICALLY PROVEN silent-compile-break (host promotes `{"host"}` while check_function fires `ShadowsCrossingLocal`). FIX: probe must call `param_has_nested_let_shadow` (make `pub(crate)`); add param-nested-shadow decline test. (2) [queries.rs:131] `--no-auto-parallel` env gate parity lie: promotion reads `.is_ok()` (any value) vs codegen `.is_ok_and(|v| v=="1")`; docstring falsely claims "same signal codegen reads"; split-brain in P3 when var=`0`/``. FIX: extract ONE shared helper both call (preferred per no-duct-tape #7), fix docstring.
+  - **rules-compliance: BLOCK (9 Big-O)** — comments.md:361 Big-O on Tier-2+ fns: 5 new (`partition_groups_classified`, `flush_classified`, `recursive_members`, `block/expr/stmt_calls_imported_name` cluster, `block/stmt_contains_loop`) + 4 moved (`partition_independent_groups`, `collect_ident_refs`, `build_write_effect_summary`, `stmts_are_independent`). Moved-fn annotations go in the FEATURE commit, not the verbatim-relocation commit.
+  - **plan-adherence: BLOCK (5)** — 3 undocumented scope touches (`lib.rs` +`pub mod`/re-exports; `codegen/lib.rs` −`pub mod`; `resolve_import.rs` cross-module propagation — note plan named `exports.rs` but landed in `resolve_import.rs::load_export_table`); 6 guard-shape decline fixtures missing (only WideValueSuspendingReturn + nested-shape present); relocation not an isolated reviewable commit.
+  - **acceptance-verifier: BLOCK (AC1 WEAK)** — relocation isn't a standalone verbatim commit; `independence.rs` has ~225 lines of Step 3 feature logic baked into the same uncommitted blob. AC2/AC3/AC4/AC5 all MET (live-run verified: `imported_real_work_callee_promotes_importer`, the two decline tests asserting `!promoted && !has_errors`, determinism + kernel + no-auto-parallel decline tests, zero codegen consumption).
+- 2026-06-13T01:30 — **Round 1 fixes applied** (Opus executor; partial-then-completed across the interruption). Both PROVEN bugs fixed with RED-repro-first: param-shadow predicate swapped to `param_has_nested_let_shadow` (matches `check_function`); per-candidate CPU-callee seed map (`cpu_callees_by_candidate`) replaced the global seed. Shared `no_auto_parallel_env()` helper (codegen + typeck both call it). 9 Big-O added. 5 missing guard fixtures added. 3 scope deviations documented (#7/#8/#9). Relocation split into its own verbatim commit `724a765`; feature work left uncommitted for the phase-boundary commit. Coordinator structural probe confirmed all fixes landed before re-gate.
+- 2026-06-13T02:05 — **Round 2 re-gate: 8 PASS / 3 BLOCK** (5 reviewers + judges #4/#5/#6/#7/#8/#9 re-fired; #1/#2/#3 carried round-1 PASS — hunk-file blobs unchanged). Tree-integrity exact match pre/post. Round-1 BLOCKs all verified RESOLVED.
+  - PASS: code-reviewer (both round-1 fixes traced clean), acceptance-verifier (all 5 ACs MET incl. AC1 on committed `724a765`), design-compliance, judge #4 (param-shadow predicate matches `check_function` across 6 strategies), judge #5 (per-candidate fix closes over-rollback AND preserves true-positive), judge #6 (kernel gate untouched), judge #8 (codegen dereg clean, 0 stranded consumers), judge #9 (`resolve_import.rs` is the ONLY correct propagation home — `exports.rs` structurally can't access `CheckOutput`).
+  - **rules-compliance: BLOCK (6 NEW Big-O)** — round-2 changes surfaced Tier-2+ fns missing `comments.md:361` Big-O: `walk_cpu_groups` (queries.rs:885), `function_has_cpu_group` (935), `collect_cpu_callees` (959), `candidates_reachable_from` (990); plus 2 moved fns `call_site_write_set` (independence.rs:730), `collect_ident_names` (632). Different fns from round 1 → progress.
+  - **judge #7: BLOCK (over-exposed pure core)** — FIX-2 re-exported the 10-arg `compute_cpu_promotions` (queries.rs:694) as crate-`pub` (lib.rs:78) with ZERO external callers; its raw `kernel_mode`/`no_auto_parallel` bool args let a future P3 caller bypass the salsa-query gate (silent promotion in a `--kernel` build). FIX: `pub fn`→`pub(crate) fn` + drop from lib.rs:78 (intra-crate tests use `super::*`; the 3 legit re-exports `cpu_promotion_query`/`no_auto_parallel_env`/`PromotionOutput` stay `pub`).
+  - **plan-adherence: BLOCK (1 — undocumented Step-7 approach divergence)** — `for_with_wait_guards_structurally_cannot_fire_via_cpu_promotion` asserts `promoted.contains(...)` not Step-7's `!promoted`, undocumented. Coordinator assessment (LATER OVERTURNED — see R3 judge #10): believed the divergence CORRECT (structural impossibility). FIX applied R2: documented as approach deviation #10 + strengthened comment.
+- 2026-06-13T02:25 — **Round 2 fixes applied**: 6 Big-O added; `compute_cpu_promotions` `pub`→`pub(crate)` + dropped from lib.rs re-export; deviation #10 documented (structural-impossibility) + test comment strengthened. Coordinator probe confirmed all landed.
+- 2026-06-13T02:55 — **Round 3 re-gate: 8 PASS / 2 BLOCK** (5 reviewers + judges #5/#6/#7/#10; #1/#2/#3/#4/#8/#9 carried). Tree-integrity exact match. R2 BLOCKs verified resolved (judge #7 over-exposure closed; plan-adherence accepted deviation #10).
+  - PASS: code-reviewer, acceptance-verifier (5 ACs MET, `pub(crate)` strengthens AC5), design-compliance, plan-adherence (deviation #10 rationale verified accurate by its own source reads — but see judge #10), judge #5 (seed logic byte-identical), judge #6 (kernel gate intact), judge #7 (over-exposure CLOSED — `pub(crate)`, no stranded consumer).
+  - **judge #10: BLOCK (rationale OVERTURNED)** — the deviation-#10 "structural impossibility" claim is FALSE. `wait <non-suspending-fn>()` is warning-only (check.rs:2564, compiles) → `block_contains_wait=true` (`has_explicit_waits`) but NOT in `base_suspends` (transitive `suspends` predicate diverges from local `contains_wait`). Such a fn PASSES the candidacy gate, reaches the probe, and `StoredRangeWithWait` fires → declines. So the 3 for-wait guards ARE reachable via the CPU-promotion probe and a `!promoted` fixture is NON-vacuous. Coordinator verified the crux (warning-only path at check.rs:2564-2589). FIX: add real `!promoted` decline fixtures for StoredRangeWithWait / FixedArrayIterWithWait / ExpressionIterWithWait using `wait <non-suspending-fn>()` shapes (per judge #10's narrower fix); keep the non-interference test; correct deviation #10. Plan-adherence's original R2 instinct (Step 7 needs real `!promoted` fixtures) was right.
+  - **rules-compliance: BLOCK (1 — `cpu_promotion_query` Big-O)** — the salsa wrapper (queries.rs:617) has merge loops + delegates `O(C·F²·E)` but its docblock lacks `Time:`/`Space:`. Coordinator sweep confirms this is the LAST genuine new-production Tier-2+ gap (one-liners/test-fns/trivial-stubs/pre-existing excluded). FIX: add `Time: O(C·F²·E) Space: O(F)` to the docblock.
+- 2026-06-13T03:10 — **Round 3 fix executor BLOCKED (verify-first caught a bad prescription).** FIX 2 (cpu_promotion_query Big-O) DONE. FIX 1: executor ran the judge's repro before building and found `!promoted && !has_errors` UNSATISFIABLE for the 3 for-wait shapes. Paper-trace: all 3 are NOT in base_suspends (reach the probe, `!promoted` non-vacuous — judge #10 correct) BUT error at baseline (the explicit `wait` trips check_function's PRE-EXISTING M2/M3 for-wait guards at check.rs:584-650, same `has_explicit_waits` gate as the probe). No shape decouples probe-fire from baseline-error.
+  - **Coordinator adjudication (testing-contract, facts settle it — not escalated):** Step 7 targets shapes "that compiled pre-M3d"; the for-wait shapes never compiled pre-M3d (already-erroring), so the honest satisfiable contract is **`!promoted` + "M3d introduced ZERO NEW diagnostics"** (assert the SPECIFIC pre-existing for-wait error is present + unchanged — NOT `!has_errors`). This exercises the real probe-decline path, matches the AC ("identical diagnostics pre/post promotion logic and declines silently"), and beats dropping the fixtures (which would leave the probe's for-wait guards with no regression test). Re-spawning executor with this decision. The non-interference test stays (renamed, false "structurally cannot fire" comment corrected); deviation #10 rewritten to the TRUE situation (guards reachable, shapes error at baseline, `!has_errors` impossible).
 
 ### Phase 3: Codegen — SM-promotion lowering + CPU children in the group poll
 **PR scope**: Promoted functions lower through the SM path; the group poll gains the CPU-child class (spawn at group entry, join-poll, result bind, panic re-raise); frame layout gains per-member handle + result slots; trampolines emitted; drop shim frees live handles. The feature goes LIVE in default builds here.

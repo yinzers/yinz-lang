@@ -2621,6 +2621,7 @@ fn run_kernel(source: &str) -> CheckOutput {
         mono_table,
         diagnostics: all_diags,
         suspends_set: std::collections::HashSet::new(),
+        does_real_work_set: std::collections::HashSet::new(),
     }
 }
 

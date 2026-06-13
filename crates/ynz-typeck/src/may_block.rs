@@ -145,6 +145,422 @@ pub fn suspends_set_for_test(
     analyze(module, imported_fn_names, &HashSet::new()).suspends
 }
 
+/// Run the suspends fixpoint with an EXTRA set of suspension seeds beyond the
+/// intrinsic-rooted seeds.
+///
+/// The v0.3-M3d CPU promotion pass uses this to compute the transitive
+/// state-machine closure of a candidate promotion set: a promoted CPU function
+/// becomes a state machine, so every (non-`background`) caller of it becomes a
+/// state machine too — exactly the propagation a real `wait` would cause. Passing
+/// the promoted set as `extra_seeds` yields `base_suspends ∪ closure(promoted)`,
+/// which is the set of functions the guard-probe must check for decline.
+///
+/// `extra_seeds` are added to the seed set alongside the intrinsic-rooted seeds and
+/// imported-suspending seeds; the same Kleene fixpoint then propagates all of them
+/// up the call graph.
+///
+/// Time: O(F² · E)  Space: O(F + E)
+pub fn suspends_with_extra_seeds(
+    module: &Module,
+    imported_fn_names: &HashSet<String>,
+    imported_suspending_names: &HashSet<String>,
+    extra_seeds: &HashSet<String>,
+) -> HashSet<String> {
+    let graph = build_call_graph(module, imported_fn_names, imported_suspending_names);
+
+    let mut suspends: HashSet<String> = HashSet::new();
+    for (fn_name, edges) in &graph.edges {
+        if edges.calls_may_block_intrinsic || extra_seeds.contains(fn_name) {
+            suspends.insert(fn_name.clone());
+        }
+    }
+
+    loop {
+        let mut changed = false;
+        for (fn_name, edges) in &graph.edges {
+            if suspends.contains(fn_name) {
+                continue;
+            }
+            if edges.direct.iter().any(|callee| suspends.contains(callee)) {
+                suspends.insert(fn_name.clone());
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    suspends
+}
+
+/// Expose the direct (non-`background`) callee adjacency of the intra-unit call
+/// graph: `fn_name → its direct callees`.
+///
+/// Used by the v0.3-M3d promotion rollback to walk which promoted candidates a
+/// guard-violating function transitively reaches. Reuses the same `build_call_graph`
+/// the suspends fixpoint uses, so the edge set is identical (background edges cut).
+///
+/// Time: O(F · E)  Space: O(F + E)
+pub fn direct_callee_adjacency(
+    module: &Module,
+    imported_fn_names: &HashSet<String>,
+) -> HashMap<String, Vec<String>> {
+    let graph = build_call_graph(module, imported_fn_names, &HashSet::new());
+    graph
+        .edges
+        .into_iter()
+        .map(|(name, edges)| (name, edges.direct))
+        .collect()
+}
+
+// ── Worth-it ("does real work") fixpoint ──────────────────────────────────────
+//
+// The auto-parallel worth-it proxy (Research Finding 9): spawning a CPU task onto
+// the blocking pool is only worth its overhead when the callee transitively does
+// non-trivial work. A trivial/leaf/arithmetic callee runs inline. The proxy for
+// "does real work" is: the callee's call graph reaches a loop (`while`/`for`) or a
+// recursion (self or mutual). The promotion query (v0.3-M3d Phase 3) consults this
+// to gate which independent CPU statement pairs actually spawn.
+//
+// This is a SEPARATE property from `suspends`: a function can do real work without
+// suspending (a pure compute loop) and can suspend without a loop (a single
+// `wait sleep`). They ride the same call-graph walk but seed and propagate
+// independently.
+
+/// Run the transitive "does real work" fixpoint over the intra-unit module.
+///
+/// A function does real work iff it:
+/// - directly contains a loop (`while`/`for`) anywhere in its own body, OR
+/// - participates in recursion (self-recursion `f → f`, or a mutual cycle of size
+///   ≥ 2 in the call graph), OR
+/// - transitively calls a function that does real work (local OR an imported fn in
+///   `imported_real_work_names`).
+///
+/// `imported_real_work_names` is the subset of imported fns known to do real work
+/// (derived from each imported module's `check_query` result), seeded exactly like
+/// `imported_suspending_names` in [`analyze`]. `background`-cut edges are NOT
+/// followed (a fire-and-forget child's work is not the parent's work) — the same
+/// graph-cut discipline `analyze` uses.
+///
+/// Time: O(F² · E)  Space: O(F + E)
+pub fn does_real_work_set(
+    module: &Module,
+    imported_fn_names: &HashSet<String>,
+    imported_real_work_names: &HashSet<String>,
+) -> HashSet<String> {
+    // The call graph already excludes `background`-cut edges and records direct
+    // intra-unit callees — exactly the adjacency the propagation needs. Imported
+    // suspending names are irrelevant to this property, so pass an empty set; the
+    // edges built here carry only the call structure, not suspension seeds.
+    let graph = build_call_graph(module, imported_fn_names, &HashSet::new());
+
+    // Seed 1 — a function whose own body directly contains a loop.
+    let mut does_real_work: HashSet<String> = HashSet::new();
+    for item in &module.items {
+        let Item::Function(f) = item else { continue };
+        if block_contains_loop(&f.body.stmts) {
+            does_real_work.insert(f.name.clone());
+        }
+    }
+
+    // Seed 2 — a function that participates in recursion. Self-recursion (`f → f`)
+    // and any strongly-connected component of size ≥ 2 both qualify: a cycle means
+    // the work is unbounded-at-compile-time, which is exactly the heavy-work proxy.
+    for member in recursive_members(&graph) {
+        does_real_work.insert(member);
+    }
+
+    // Seed 3 — a function that directly calls an imported fn known to do real work.
+    // Imported callees are NOT in `graph.edges[*].direct` (that holds only intra-unit
+    // callees), so scan each function body for a direct ident call to an imported
+    // real-work name. `background`-cut calls do not count (the parent doesn't perform
+    // the child's work).
+    if !imported_real_work_names.is_empty() {
+        for item in &module.items {
+            let Item::Function(f) = item else { continue };
+            if block_calls_imported_name(&f.body.stmts, imported_real_work_names) {
+                does_real_work.insert(f.name.clone());
+            }
+        }
+    }
+
+    // Kleene fixpoint — propagate `does_real_work` up the call graph: a function that
+    // (non-background) calls a real-work function does real work too. Monotone over a
+    // finite set → terminates.
+    loop {
+        let mut changed = false;
+        for (fn_name, edges) in &graph.edges {
+            if does_real_work.contains(fn_name) {
+                continue;
+            }
+            if edges
+                .direct
+                .iter()
+                .any(|callee| does_real_work.contains(callee))
+            {
+                does_real_work.insert(fn_name.clone());
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    does_real_work
+}
+
+/// True when any statement in `stmts` (recursively, through nested blocks and
+/// expressions) makes a direct ident call to a name in `targets`, NOT through a
+/// `background` cut. Used by the does-real-work Seed 3 to find local callers of an
+/// imported real-work function (imported callees are not in the intra-unit edge set).
+///
+/// Cluster entry for the `block`/`stmt`/`expr_calls_imported_name` mutual recursion
+/// over the AST.
+///
+/// Time: O(N) where N = AST nodes in `stmts`.  Space: O(D) where D = nesting depth.
+fn block_calls_imported_name(stmts: &[Stmt], targets: &HashSet<String>) -> bool {
+    stmts.iter().any(|s| stmt_calls_imported_name(s, targets))
+}
+
+/// Recursive sibling of [`block_calls_imported_name`] over a single statement.
+///
+/// Time: O(N) where N = AST nodes under `stmt`.  Space: O(D) where D = nesting depth.
+fn stmt_calls_imported_name(stmt: &Stmt, targets: &HashSet<String>) -> bool {
+    match stmt {
+        Stmt::Expr(e) => expr_calls_imported_name(e, targets),
+        Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
+            expr_calls_imported_name(value, targets)
+        }
+        Stmt::Return { value, .. } => value
+            .as_ref()
+            .map(|v| expr_calls_imported_name(v, targets))
+            .unwrap_or(false),
+        Stmt::FieldAssign { target, value, .. } => {
+            expr_calls_imported_name(target, targets) || expr_calls_imported_name(value, targets)
+        }
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => {
+            expr_calls_imported_name(receiver, targets)
+                || expr_calls_imported_name(index, targets)
+                || expr_calls_imported_name(value, targets)
+        }
+        Stmt::If { cond, body, .. } => {
+            expr_calls_imported_name(cond, targets)
+                || block_calls_imported_name(&body.stmts, targets)
+        }
+        Stmt::While { cond, body, .. } => {
+            expr_calls_imported_name(cond, targets)
+                || block_calls_imported_name(&body.stmts, targets)
+        }
+        Stmt::For { iter, body, .. } => {
+            expr_calls_imported_name(iter, targets)
+                || block_calls_imported_name(&body.stmts, targets)
+        }
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
+            expr_calls_imported_name(scrutinee, targets)
+                || arms
+                    .iter()
+                    .any(|arm| block_calls_imported_name(&arm.body.stmts, targets))
+                || else_arm
+                    .as_ref()
+                    .map(|b| block_calls_imported_name(&b.stmts, targets))
+                    .unwrap_or(false)
+        }
+    }
+}
+
+/// Deepest sibling of the `block`/`stmt`/`expr_calls_imported_name` cluster —
+/// walks an expression tree for any call to an imported target name.
+///
+/// Time: O(N) where N = expression nodes under `expr`.  Space: O(D) where D = nesting depth.
+fn expr_calls_imported_name(expr: &Expr, targets: &HashSet<String>) -> bool {
+    match expr {
+        // `background f()` is a graph cut — the parent does not do the child's work.
+        // Still recurse into the args (evaluated in the calling context).
+        Expr::Background(inner, _) => {
+            if let Expr::Call(c) = inner.as_ref() {
+                c.args.iter().any(|a| expr_calls_imported_name(a, targets))
+            } else {
+                expr_calls_imported_name(inner, targets)
+            }
+        }
+        Expr::Call(c) => {
+            let direct_hit = matches!(&c.callee, Expr::Ident(name, _) if targets.contains(name));
+            direct_hit
+                || expr_calls_imported_name(&c.callee, targets)
+                || c.args.iter().any(|a| expr_calls_imported_name(a, targets))
+        }
+        Expr::Wait(inner, _) => expr_calls_imported_name(inner, targets),
+        Expr::BinOp { lhs, rhs, .. } => {
+            expr_calls_imported_name(lhs, targets) || expr_calls_imported_name(rhs, targets)
+        }
+        Expr::UnaryOp { operand, .. } => expr_calls_imported_name(operand, targets),
+        Expr::MethodCall { receiver, args, .. } => {
+            expr_calls_imported_name(receiver, targets)
+                || args.iter().any(|a| expr_calls_imported_name(a, targets))
+        }
+        Expr::IndexAccess {
+            receiver, index, ..
+        } => {
+            expr_calls_imported_name(receiver, targets) || expr_calls_imported_name(index, targets)
+        }
+        Expr::FieldAccess { receiver, .. } => expr_calls_imported_name(receiver, targets),
+        Expr::StructLit { fields, .. } => fields
+            .iter()
+            .any(|f| expr_calls_imported_name(&f.value, targets)),
+        Expr::ArrayLit { elements, .. } => elements
+            .iter()
+            .any(|e| expr_calls_imported_name(e, targets)),
+        Expr::MapLit { entries, .. } => entries.iter().any(|(k, v)| {
+            expr_calls_imported_name(k, targets) || expr_calls_imported_name(v, targets)
+        }),
+        Expr::Is { expr: inner, .. } => expr_calls_imported_name(inner, targets),
+        Expr::InterpolatedString(parts, _) => parts.iter().any(|p| {
+            if let ynz_ast::nodes::StringPart::Expr(e, _) = p {
+                expr_calls_imported_name(e, targets)
+            } else {
+                false
+            }
+        }),
+        Expr::PostfixOp { receiver, .. } => expr_calls_imported_name(receiver, targets),
+        Expr::Ident(..)
+        | Expr::IntLit(..)
+        | Expr::NumberLit(..)
+        | Expr::BoolLit(..)
+        | Expr::StringLit(..)
+        | Expr::SelfValue { .. }
+        | Expr::NoneLit { .. }
+        | Expr::Error(..) => false,
+    }
+}
+
+/// True when a statement list directly contains a `while`/`for` loop, scanning
+/// recursively through nested control-flow blocks (`if`/`match`/loop bodies) but
+/// NOT into other function declarations (those have their own analysis entry).
+///
+/// Time: O(N) where N = AST nodes in `stmts`.  Space: O(D) where D = nesting depth.
+fn block_contains_loop(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(stmt_contains_loop)
+}
+
+/// Recursive sibling of [`block_contains_loop`] over a single statement.
+///
+/// Time: O(N) where N = AST nodes under `stmt`.  Space: O(D) where D = nesting depth.
+fn stmt_contains_loop(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::While { .. } | Stmt::For { .. } => true,
+        Stmt::If { body, .. } => block_contains_loop(&body.stmts),
+        Stmt::Match { arms, else_arm, .. } => {
+            arms.iter().any(|arm| block_contains_loop(&arm.body.stmts))
+                || else_arm
+                    .as_ref()
+                    .map(|b| block_contains_loop(&b.stmts))
+                    .unwrap_or(false)
+        }
+        Stmt::Expr(_)
+        | Stmt::Let { .. }
+        | Stmt::Assign { .. }
+        | Stmt::Return { .. }
+        | Stmt::FieldAssign { .. }
+        | Stmt::IndexAssign { .. } => false,
+    }
+}
+
+/// Names of all functions that participate in recursion: self-recursive functions
+/// (`f` appears in its own direct-callee set) and every member of a call-graph SCC
+/// of size ≥ 2 (mutual recursion). Uses Kosaraju's two-pass iterative SCC algorithm
+/// over the full intra-unit call graph.
+///
+/// Time: O(V + E)  Space: O(V + E)  where V = functions, E = call-graph edges
+/// (Kosaraju: two linear DFS passes over the graph and its transpose).
+fn recursive_members(graph: &CallGraph) -> HashSet<String> {
+    let fns: Vec<&str> = graph.edges.keys().map(String::as_str).collect();
+    let fn_index: HashMap<&str, usize> = fns.iter().enumerate().map(|(i, n)| (*n, i)).collect();
+    let n = fns.len();
+
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut radj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut self_recursive: HashSet<String> = HashSet::new();
+    for (fn_name, edges) in &graph.edges {
+        let Some(&fi) = fn_index.get(fn_name.as_str()) else {
+            continue;
+        };
+        for callee in &edges.direct {
+            if callee == fn_name {
+                self_recursive.insert(fn_name.clone());
+            }
+            if let Some(&ci) = fn_index.get(callee.as_str()) {
+                adj[fi].push(ci);
+                radj[ci].push(fi);
+            }
+        }
+    }
+
+    // Kosaraju pass 1: forward DFS, collect finish order (iterative to avoid deep
+    // recursion on large programs).
+    let mut visited = vec![false; n];
+    let mut finish_order: Vec<usize> = Vec::with_capacity(n);
+    for start in 0..n {
+        if visited[start] {
+            continue;
+        }
+        let mut stack: Vec<(usize, usize)> = vec![(start, 0)];
+        visited[start] = true;
+        while let Some((node, child_idx)) = stack.last_mut() {
+            let node = *node;
+            if *child_idx < adj[node].len() {
+                let next = adj[node][*child_idx];
+                *child_idx += 1;
+                if !visited[next] {
+                    visited[next] = true;
+                    stack.push((next, 0));
+                }
+            } else {
+                finish_order.push(node);
+                stack.pop();
+            }
+        }
+    }
+
+    // Kosaraju pass 2: reverse DFS in reverse finish order → SCCs.
+    let mut visited2 = vec![false; n];
+    let mut members: HashSet<String> = self_recursive;
+    for &start in finish_order.iter().rev() {
+        if visited2[start] {
+            continue;
+        }
+        let mut component: Vec<usize> = Vec::new();
+        let mut stack: Vec<usize> = vec![start];
+        visited2[start] = true;
+        while let Some(node) = stack.pop() {
+            component.push(node);
+            for &nb in &radj[node] {
+                if !visited2[nb] {
+                    visited2[nb] = true;
+                    stack.push(nb);
+                }
+            }
+        }
+        if component.len() >= 2 {
+            for &i in &component {
+                members.insert(fns[i].to_string());
+            }
+        }
+    }
+    members
+}
+
 // ── Internal call-graph types ─────────────────────────────────────────────────
 
 struct CallGraph {
@@ -1198,5 +1614,182 @@ function entrypoint() -> nothing {
             !suspends.contains("entrypoint"),
             "caller of user-fn-named-sleep without intrinsic must NOT be suspends"
         );
+    }
+
+    // ── does_real_work fixpoint (v0.3-M3d worth-it proxy) ─────────────────────
+
+    fn real_work_set(src: &str) -> HashSet<String> {
+        let module = parse_module(src);
+        does_real_work_set(&module, &HashSet::new(), &HashSet::new())
+    }
+
+    #[test]
+    fn leaf_arithmetic_fn_does_no_real_work() {
+        // WHY: a trivial leaf with no loop and no recursion is NOT worth spawning —
+        // the worth-it proxy must classify it as does-no-real-work so the promotion
+        // query never parallelizes calls to it.
+        let work = real_work_set(
+            r#"
+function add(x: int) -> int { return x + 1 }
+function entrypoint() -> nothing { print("hi") }
+"#,
+        );
+        assert!(
+            !work.contains("add"),
+            "leaf arithmetic fn must NOT do real work"
+        );
+        assert!(!work.contains("entrypoint"));
+    }
+
+    #[test]
+    fn loop_containing_fn_does_real_work() {
+        // WHY: a `while`/`for` loop is the worth-it proxy's primary signal.
+        let work = real_work_set(
+            r#"
+function sumTo(n: int) -> int {
+    let total = 0
+    let i = 0
+    while (i < n) {
+        total = total + i
+        i = i + 1
+    }
+    return total
+}
+function entrypoint() -> nothing { print("hi") }
+"#,
+        );
+        assert!(
+            work.contains("sumTo"),
+            "loop-containing fn must do real work"
+        );
+    }
+
+    #[test]
+    fn self_recursive_fn_does_real_work() {
+        // WHY: self-recursion (fib-style) is unbounded-at-compile-time work — the
+        // headline CPU-parallel callee shape.
+        let work = real_work_set(
+            r#"
+function fib(n: int) -> int {
+    if (n < 2) { return n }
+    let a = fib(n - 1)
+    let b = fib(n - 2)
+    return a + b
+}
+function entrypoint() -> nothing { print("hi") }
+"#,
+        );
+        assert!(work.contains("fib"), "self-recursive fn must do real work");
+    }
+
+    #[test]
+    fn mutual_recursion_does_real_work() {
+        // WHY: a mutual cycle (isEven/isOdd) is recursion too — both members do work.
+        let work = real_work_set(
+            r#"
+function isEven(n: int) -> bool {
+    if (n == 0) { return true }
+    return isOdd(n - 1)
+}
+function isOdd(n: int) -> bool {
+    if (n == 0) { return false }
+    return isEven(n - 1)
+}
+function entrypoint() -> nothing { print("hi") }
+"#,
+        );
+        assert!(
+            work.contains("isEven"),
+            "mutual-cycle member must do real work"
+        );
+        assert!(
+            work.contains("isOdd"),
+            "mutual-cycle member must do real work"
+        );
+    }
+
+    #[test]
+    fn real_work_propagates_transitively_up_callers() {
+        // WHY: a caller of a real-work function does real work too (the work happens
+        // inside the call) — needed so a thin wrapper around `fib` is still worth it.
+        let work = real_work_set(
+            r#"
+function fib(n: int) -> int {
+    if (n < 2) { return n }
+    return fib(n - 1) + fib(n - 2)
+}
+function wrapper(n: int) -> int { return fib(n) }
+function entrypoint() -> nothing { print("hi") }
+"#,
+        );
+        assert!(work.contains("fib"));
+        assert!(
+            work.contains("wrapper"),
+            "caller of real-work fn must do real work"
+        );
+    }
+
+    #[test]
+    fn imported_real_work_seeds_local_caller() {
+        // WHY: cross-module worth-it propagation — a local fn that calls an imported
+        // real-work callee does real work, exactly like the suspends seed path.
+        let module = parse_module(
+            r#"
+function entrypoint() -> nothing {
+    heavyImported()
+}
+"#,
+        );
+        let imported: HashSet<String> = ["heavyImported"].iter().map(|s| s.to_string()).collect();
+        let imported_real_work: HashSet<String> =
+            ["heavyImported"].iter().map(|s| s.to_string()).collect();
+        let work = does_real_work_set(&module, &imported, &imported_real_work);
+        assert!(
+            work.contains("entrypoint"),
+            "caller of imported real-work fn must do real work; got: {work:?}"
+        );
+    }
+
+    #[test]
+    fn imported_trivial_callee_does_not_seed_real_work() {
+        // WHY: an imported callee NOT in the real-work set is a trivial leaf — the
+        // caller must not be marked.
+        let module = parse_module(
+            r#"
+function entrypoint() -> nothing {
+    trivialImported()
+}
+"#,
+        );
+        let imported: HashSet<String> = ["trivialImported"].iter().map(|s| s.to_string()).collect();
+        let work = does_real_work_set(&module, &imported, &HashSet::new());
+        assert!(
+            !work.contains("entrypoint"),
+            "caller of imported trivial fn must NOT do real work; got: {work:?}"
+        );
+    }
+
+    #[test]
+    fn does_real_work_is_deterministic_across_runs() {
+        // WHY: the fixpoint must be order-independent (no nondeterministic builds).
+        let src = r#"
+function fib(n: int) -> int {
+    if (n < 2) { return n }
+    return fib(n - 1) + fib(n - 2)
+}
+function sumTo(n: int) -> int {
+    let t = 0
+    let i = 0
+    while (i < n) { t = t + i; i = i + 1 }
+    return t
+}
+function leaf(x: int) -> int { return x }
+function entrypoint() -> nothing { print("hi") }
+"#;
+        let a = real_work_set(src);
+        let b = real_work_set(src);
+        assert_eq!(a, b, "does_real_work_set must be deterministic across runs");
+        assert!(a.contains("fib") && a.contains("sumTo"));
+        assert!(!a.contains("leaf") && !a.contains("entrypoint"));
     }
 }

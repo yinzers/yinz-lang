@@ -5390,28 +5390,7 @@ impl<'b> Checker<'b> {
     /// that would push an error). Callers use the result only for the
     /// UnsupportedCrossingLocalType guard; unresolved annotations are silently skipped.
     fn resolve_type_for_guard(&self, ast_ty: &AstType) -> Option<Type> {
-        match ast_ty {
-            // Union alias: `let fig: Figure = ...` where `Figure = Circle | Square`.
-            AstType::Named(n, _) if self.union_aliases.contains_key(n) => {
-                Some(self.union_aliases[n].clone())
-            }
-            // Inline union: `let x: Circle | Square = ...`
-            AstType::Union { variants, .. } if variants.len() >= 2 => {
-                Some(Type::Union {
-                    // Inner types not needed for classification; use placeholders.
-                    variants: vec![Type::Int; variants.len()],
-                })
-            }
-            // `maybe<T>` annotation.
-            AstType::Maybe { .. } => Some(Type::Maybe {
-                inner: Box::new(Type::Int),
-            }),
-            // `dynamic Contract` annotation.
-            AstType::Dynamic { contract, .. } => Some(Type::Dynamic {
-                contract: contract.clone(),
-            }),
-            _ => None,
-        }
+        resolve_type_for_guard_free(ast_ty, &self.union_aliases)
     }
 
     fn check_option_name_arm(
@@ -5481,7 +5460,7 @@ fn resolve_alias_type(ast_ty: &AstType, shape_table: &crate::shapes::ShapeTable)
 ///
 /// These are union type aliases like `shape Shape = Circle | Square | Triangle`.
 /// The alias name maps to the resolved alias type.
-fn collect_union_aliases(
+pub(crate) fn collect_union_aliases(
     module: &Module,
     shape_table: &crate::shapes::ShapeTable,
 ) -> HashMap<String, Type> {
@@ -5603,7 +5582,7 @@ pub fn type_attached_const_type(type_name: &str, const_name: &str) -> Option<Typ
 // or crash.
 
 /// Returns true if the block contains any `wait` expression anywhere in its tree.
-fn block_contains_wait(block: &Block) -> bool {
+pub(crate) fn block_contains_wait(block: &Block) -> bool {
     block.stmts.iter().any(stmt_contains_wait_anywhere)
 }
 
@@ -5728,7 +5707,7 @@ pub fn find_crossing_local_typeck_type(
 /// Implementation of type lookup using an expr_types map directly.
 /// Called from Check 2 after check_stmts runs (where self.expr_types is populated)
 /// and from the public helper above.
-fn find_crossing_local_typeck_type_in_map(
+pub(crate) fn find_crossing_local_typeck_type_in_map(
     stmts: &[Stmt],
     target: &str,
     expr_types: &HashMap<(usize, usize), Type>,
@@ -5786,7 +5765,7 @@ fn find_crossing_local_typeck_type_in_map(
 ///
 /// Returns the ITERATOR's element type (e.g. `Type::MapEntry{..}` for a map iter,
 /// `elem` for an array iter), or `None` if the target name is not a for-loop var.
-fn find_for_loop_var_type_in_stmts(
+pub(crate) fn find_for_loop_var_type_in_stmts(
     stmts: &[Stmt],
     target: &str,
     expr_types: &HashMap<(usize, usize), Type>,
@@ -6271,7 +6250,7 @@ fn outer_is_genuine_crossing_local(
 /// safe-conservative compile error for all suspending functions.
 ///
 /// Time: O(n) where n = total statement count in `stmts` (recursive).
-fn param_has_nested_let_shadow(stmts: &[Stmt], target: &str) -> bool {
+pub(crate) fn param_has_nested_let_shadow(stmts: &[Stmt], target: &str) -> bool {
     for stmt in stmts {
         let bodies: Vec<&[Stmt]> = match stmt {
             Stmt::If { body, .. } => vec![&body.stmts],
@@ -6674,7 +6653,7 @@ fn collect_for_loop_synthetic_crossings_inner(
 /// `fixed<T>` arrays are stack-allocated in the resume function's stack frame. After
 /// suspension the stack frame is freed; the pointer stored in the crossing-local frame
 /// slot becomes dangling. Returns the span of the first such `for`, or `None`.
-fn find_fixed_array_iter_wait_in_for(
+pub(crate) fn find_fixed_array_iter_wait_in_for(
     stmts: &[Stmt],
     expr_types: &std::collections::HashMap<(usize, usize), Type>,
 ) -> Option<SourceSpan> {
@@ -6736,7 +6715,7 @@ fn find_fixed_array_iter_wait_in_for(
 ///
 /// Returns the span of the first such `for` statement found, or `None`.
 /// The caller emits `StoredRangeWithWait` when `Some`.
-fn find_stored_range_wait_in_for(
+pub(crate) fn find_stored_range_wait_in_for(
     stmts: &[Stmt],
     expr_types: &std::collections::HashMap<(usize, usize), Type>,
 ) -> Option<SourceSpan> {
@@ -6791,7 +6770,7 @@ fn find_stored_range_wait_in_for(
 /// A call-expression iterator is re-evaluated by the SM codegen on every loop header
 /// visit, producing N+1 evaluations instead of 1. Returns the span of the first such
 /// `for` statement found, or `None`. The caller emits `ExpressionIterWithWait`.
-fn find_expr_iter_wait_in_for(stmts: &[Stmt]) -> Option<SourceSpan> {
+pub(crate) fn find_expr_iter_wait_in_for(stmts: &[Stmt]) -> Option<SourceSpan> {
     for stmt in stmts {
         match stmt {
             Stmt::For {
@@ -7660,13 +7639,210 @@ struct SubExprSuspendViolation {
 /// `suspending` is the set of user-defined function names whose `suspends == true`
 /// in the current compilation unit. May-block intrinsics (`sleep`,
 /// `__testFallibleAsync`) are included via `M2_MAY_BLOCK_INTRINSICS`.
-fn suspending_calls_in_subexpr_position(
+pub(crate) fn suspending_calls_in_subexpr_position(
     stmts: &[Stmt],
     suspending: &std::collections::HashSet<&str>,
 ) -> Vec<(SourceSpan, String)> {
     let mut out = Vec::new();
     collect_subexpr_violations_in_stmts(stmts, suspending, &mut out);
     out.into_iter().map(|v| (v.span, v.callee_name)).collect()
+}
+
+/// Probe whether ANY state-machine suspension guard would fire on `f` if it were a
+/// state machine, under the effective suspending-function set `suspending_fns`.
+///
+/// This is the v0.3-M3d **decline-to-promote** predicate (Decision Record item 8c):
+/// the CPU-promotion query marks a candidate's whole transitive-SM closure as
+/// suspending, then calls this on every newly-SM function. A `true` verdict means
+/// promoting that function would turn previously-compiling code into a guard error,
+/// so the promotion is rolled back (declines to sequential lowering — never a new
+/// compile error).
+///
+/// It REUSES the exact guard predicates the diagnostic-emitting `check_function`
+/// path runs (`suspending_calls_in_subexpr_position`, `crossing_local_names`,
+/// `find_stored_range_wait_in_for`, `find_fixed_array_iter_wait_in_for`,
+/// `find_expr_iter_wait_in_for`, `find_map_entry_field_after_wait`,
+/// `find_array_shape_runtime_field_crossing`, the wide-return classifier, the
+/// nested-shape / unsupported-crossing-type / shadow checks). The gating mirrors
+/// `check_function` exactly: the function is treated as `is_suspending_fn = true`,
+/// and `has_explicit_waits` is read from its body. No guard logic is re-derived —
+/// only the boolean verdict is consumed here instead of a formatted diagnostic.
+///
+/// `expr_types` MUST be the map from the baseline `check` pass (the guards read
+/// resolved crossing-local types from it). `kernel_mode` short-circuits to `false`
+/// because every guard above is `!kernel_mode`-gated in `check_function` (kernel
+/// mode never promotes, so the probe is moot there, but the parameter keeps the
+/// contract explicit).
+///
+/// Time: O(stmts · crossings)  Space: O(crossings)
+pub(crate) fn suspension_guards_fire_for_fn(
+    f: &ynz_ast::nodes::FunctionDecl,
+    ret_ty: &Type,
+    suspending_fns: &std::collections::HashSet<&str>,
+    shape_table: &ShapeTable,
+    union_aliases: &HashMap<String, Type>,
+    expr_types: &HashMap<(usize, usize), Type>,
+    kernel_mode: bool,
+) -> bool {
+    if kernel_mode {
+        return false;
+    }
+    let has_explicit_waits = block_contains_wait(&f.body);
+
+    // WideValueSuspendingReturn: a suspending fn returning a bare shape or `Shape errors`.
+    let is_wide_return = match ret_ty {
+        Type::Shape { .. } => true,
+        Type::ErrorsCapable { inner } => matches!(inner.as_ref(), Type::Shape { .. }),
+        _ => false,
+    };
+    if is_wide_return {
+        return true;
+    }
+
+    // Suspending call in a sub-expression position.
+    if !suspending_calls_in_subexpr_position(&f.body.stmts, suspending_fns).is_empty() {
+        return true;
+    }
+
+    // StoredRangeWithWait / FixedArrayIterWithWait / ExpressionIterWithWait — explicit-wait gated.
+    if has_explicit_waits {
+        if find_stored_range_wait_in_for(&f.body.stmts, expr_types).is_some() {
+            return true;
+        }
+        if find_fixed_array_iter_wait_in_for(&f.body.stmts, expr_types).is_some() {
+            return true;
+        }
+        if find_expr_iter_wait_in_for(&f.body.stmts).is_some() {
+            return true;
+        }
+    }
+
+    // Crossing-local guards (nested-shape, UnsupportedCrossingLocalType, shadow).
+    let param_names_ref: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
+    let crossings =
+        crossing_local_names(&f.body.stmts, &param_names_ref, suspending_fns, expr_types);
+
+    for crossing_name in &crossings {
+        // Nested-shape crossing.
+        let resolved_ty = find_crossing_local_typeck_type_in_map(
+            &f.body.stmts,
+            crossing_name.as_str(),
+            expr_types,
+        )
+        .or_else(|| {
+            find_for_loop_var_type_in_stmts(&f.body.stmts, crossing_name.as_str(), expr_types)
+        });
+        if let Some(Type::Shape { name: shape_name }) = &resolved_ty {
+            let has_nested_shape = shape_table
+                .shapes
+                .get(shape_name.as_str())
+                .is_some_and(|def| {
+                    def.fields
+                        .iter()
+                        .any(|field| matches!(&field.ty, Type::Shape { .. }))
+                });
+            if has_nested_shape {
+                return true;
+            }
+        }
+
+        // UnsupportedCrossingLocalType: union/maybe/dynamic/fixed/range crossing.
+        let rhs_ty = find_crossing_local_typeck_type_in_map(
+            &f.body.stmts,
+            crossing_name.as_str(),
+            expr_types,
+        );
+        let ann_ty = find_let_annotation_type_in_stmts(&f.body.stmts, crossing_name.as_str())
+            .and_then(|ast_ty| resolve_type_for_guard_free(&ast_ty, union_aliases));
+        let for_var_ty =
+            find_for_loop_var_type_in_stmts(&f.body.stmts, crossing_name.as_str(), expr_types);
+        let unsupported = [&ann_ty, &rhs_ty, &for_var_ty].iter().any(|opt| {
+            opt.as_ref().is_some_and(|ty| {
+                matches!(
+                    ty,
+                    Type::Union { .. }
+                        | Type::Maybe { .. }
+                        | Type::Dynamic { .. }
+                        | Type::BuiltinFixed { .. }
+                        | Type::Range { .. }
+                )
+            })
+        });
+        if unsupported {
+            return true;
+        }
+
+        // ShadowsCrossingLocal: nested or top-level redeclaration of the crossing name.
+        if outer_is_genuine_crossing_local(&f.body.stmts, crossing_name.as_str(), suspending_fns) {
+            if find_shadow_in_stmts(&f.body.stmts, crossing_name.as_str()) {
+                return true;
+            }
+            if has_top_level_let_after_suspension(
+                &f.body.stmts,
+                crossing_name.as_str(),
+                suspending_fns,
+            ) {
+                return true;
+            }
+        }
+    }
+
+    // MapEntryFieldAfterWait.
+    if find_map_entry_field_after_wait(&f.body.stmts, expr_types).is_some() {
+        return true;
+    }
+
+    // ArrayShapeRuntimeFieldWithWait.
+    if find_array_shape_runtime_field_crossing(&crossings, &f.body.stmts).is_some() {
+        return true;
+    }
+
+    // Parameter-shadow guard — mirrors `check_function`'s Check 3b EXACTLY (the probe
+    // must decline any host the real checker would later reject once it becomes SM).
+    //   Shape (a): a nested `let <param>` in ANY block body fires unconditionally — the
+    //     name-keyed frame slot is shared even when the inner binding does not itself
+    //     cross a suspension. This is the case the CPU join exposes: a promoted host has
+    //     no explicit top-level `wait`, so the suspension-gated shape (b) below would not
+    //     run, but the slot collision is real once the host is a state machine.
+    //   Shape (b): a top-level `let <param>` redeclaration, gated behind a top-level
+    //     suspension (matches `check_function` line ~1049).
+    for p in &f.params {
+        if param_has_nested_let_shadow(&f.body.stmts, p.name.as_str()) {
+            return true;
+        }
+    }
+    if first_top_level_suspension_idx(&f.body.stmts, suspending_fns).is_some() {
+        for p in &f.params {
+            if has_top_level_let_in_stmts(&f.body.stmts, p.name.as_str()) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// Free-function form of `Checker::resolve_type_for_guard` — resolves a crossing
+/// local's annotation type for the UnsupportedCrossingLocalType probe. Reuses the
+/// same union-alias map the checker uses; no other checker state is consulted.
+fn resolve_type_for_guard_free(
+    ast_ty: &ynz_ast::nodes::Type,
+    union_aliases: &HashMap<String, Type>,
+) -> Option<Type> {
+    use ynz_ast::nodes::Type as AstType;
+    match ast_ty {
+        AstType::Named(n, _) if union_aliases.contains_key(n) => Some(union_aliases[n].clone()),
+        AstType::Union { variants, .. } if variants.len() >= 2 => Some(Type::Union {
+            variants: vec![Type::Int; variants.len()],
+        }),
+        AstType::Maybe { .. } => Some(Type::Maybe {
+            inner: Box::new(Type::Int),
+        }),
+        AstType::Dynamic { contract, .. } => Some(Type::Dynamic {
+            contract: contract.clone(),
+        }),
+        _ => None,
+    }
 }
 
 fn collect_subexpr_violations_in_stmts(
