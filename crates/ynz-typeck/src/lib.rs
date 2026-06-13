@@ -44,6 +44,7 @@ pub mod check;
 pub mod effective_ownership;
 pub mod exports;
 pub mod generics;
+pub mod independence;
 pub mod inlay_hint_passes;
 pub mod intrinsics;
 pub mod may_block;

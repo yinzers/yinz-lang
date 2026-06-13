@@ -43,7 +43,7 @@
 //! # Corpse guard (no-duct-tape.md + graveyard 2026-06-04)
 //!
 //! This module CONSUMES the authoritative producers:
-//! - The mutable-heap test reuses `ynz_typeck::is_trivially_copyable` — never a local
+//! - The mutable-heap test reuses `crate::is_trivially_copyable` — never a local
 //!   re-implementation of the same `matches!`.
 //! - Crossing membership is NOT re-derived here; that is `crossing_local_names`'s job.
 //!
@@ -89,7 +89,8 @@
 use std::collections::{HashMap, HashSet};
 
 use ynz_ast::nodes::{Expr, Stmt, StringPart};
-use ynz_typeck::{is_trivially_copyable, signatures::FunctionSig, SignatureTable};
+
+use crate::{is_trivially_copyable, signatures::FunctionSig, SignatureTable};
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -454,8 +455,8 @@ fn write_positions_for_sig(sig: &FunctionSig) -> Vec<usize> {
 /// union OF mutable types) is a mutable-heap reference: passing it shares the underlying
 /// object, so a write through it IS observable at the call site. maybe/union/dynamic are
 /// treated as mutable-heap conservatively (they may wrap a mutable shape).
-fn is_mutable_heap_type(ty: &ynz_typeck::Type) -> bool {
-    use ynz_typeck::Type;
+fn is_mutable_heap_type(ty: &crate::types::Type) -> bool {
+    use crate::types::Type;
     if is_trivially_copyable(ty) {
         return false;
     }
@@ -608,8 +609,8 @@ mod tests {
     }
 
     /// A heap (non-trivially-copyable) parameter type for write-effect tests.
-    fn heap_ty() -> ynz_typeck::Type {
-        ynz_typeck::Type::Shape {
+    fn heap_ty() -> crate::types::Type {
+        crate::types::Type::Shape {
             name: "Box".to_string(),
         }
     }
@@ -619,8 +620,8 @@ mod tests {
     /// The conservative-floor write-effect (`write_positions_for_sig`) reads ONLY the
     /// parameter TYPES (mutable-heap vs scalar/string) — never the declared modifier and
     /// never an effective-ownership classification. `param_ownerships` is filled with `None`.
-    fn sig_typed(tys: Vec<ynz_typeck::Type>) -> FunctionSig {
-        use ynz_typeck::Type;
+    fn sig_typed(tys: Vec<crate::types::Type>) -> FunctionSig {
+        use crate::types::Type;
         let params: Vec<(String, Type)> = tys
             .iter()
             .enumerate()
@@ -644,7 +645,7 @@ mod tests {
     /// Build a `SignatureTable` from a per-function declaration of `(name, [Type])`. The sig
     /// supplies parameter types for the mutable-heap test — the only input the conservative
     /// floor consumes. This is the single builder for the partition tests.
-    fn table_only(defs: &[(&str, Vec<ynz_typeck::Type>)]) -> SignatureTable {
+    fn table_only(defs: &[(&str, Vec<crate::types::Type>)]) -> SignatureTable {
         let mut table = SignatureTable {
             fns: HashMap::new(),
         };
@@ -737,7 +738,7 @@ mod tests {
         // `b` was aliased from `a` or is a distinct object — alias analysis is required to
         // distinguish the two cases, and we don't have it.
         // slowBump: pos 0 is a heap arg (potential write under the floor), pos 1 is a scalar.
-        let table = table_only(&[("slowBump", vec![heap_ty(), ynz_typeck::Type::Int])]);
+        let table = table_only(&[("slowBump", vec![heap_ty(), crate::types::Type::Int])]);
         let imported: HashMap<String, _> = HashMap::new();
         let susp = suspend_set(&["slowBump"]);
         let a_stmt = call_stmt("slowBump", vec![ident("a"), ident("10")]);
@@ -931,8 +932,8 @@ mod tests {
         // parameter is NOT write-capable (the heap-type test excludes it). Two such calls must
         // collapse into ONE Parallel group.
         let table = table_only(&[
-            ("addA", vec![ynz_typeck::Type::Int]),
-            ("addB", vec![ynz_typeck::Type::Int]),
+            ("addA", vec![crate::types::Type::Int]),
+            ("addB", vec![crate::types::Type::Int]),
         ]);
         let imported: HashMap<String, _> = HashMap::new();
         let susp = suspend_set(&["addA", "addB"]);
@@ -960,8 +961,8 @@ mod tests {
         // must parallelize even when the position's effective ownership is `Writes`/`Unknown`,
         // because the value itself cannot be mutated through the reference.
         let table = table_only(&[
-            ("emitA", vec![ynz_typeck::Type::String]),
-            ("emitB", vec![ynz_typeck::Type::String]),
+            ("emitA", vec![crate::types::Type::String]),
+            ("emitB", vec![crate::types::Type::String]),
         ]);
         let imported: HashMap<String, _> = HashMap::new();
         let susp = suspend_set(&["emitA", "emitB"]);

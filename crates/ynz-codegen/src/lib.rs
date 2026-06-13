@@ -27,7 +27,6 @@
 
 pub mod artifact;
 pub mod emit;
-pub mod independence;
 pub mod queries;
 pub mod runtime_decls;
 pub mod shape_types;

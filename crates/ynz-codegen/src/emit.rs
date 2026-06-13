@@ -28,13 +28,14 @@ use ynz_ast::nodes::{
 };
 use ynz_numerics; // parse(s: &str) -> Option<u128>
 use ynz_typeck::{
-    build_effective_suspend_set, crossing_local_names, type_attached_const_type, GenericFnTable,
-    MonomorphizationTable, ShapeTable, SignatureTable, Type, TypedModule,
+    build_effective_suspend_set, crossing_local_names,
+    independence::{partition_independent_groups, IndependentGroup},
+    type_attached_const_type, GenericFnTable, MonomorphizationTable, ShapeTable, SignatureTable,
+    Type, TypedModule,
 };
 
 use crate::{
     artifact::{sha256, CompiledArtifact},
-    independence::{partition_independent_groups, IndependentGroup},
     runtime_decls::RuntimeDecls,
     shape_types::{emit_shape_types, ShapeLlvmTypes},
     state_machine,
