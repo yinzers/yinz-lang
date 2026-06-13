@@ -205,11 +205,12 @@ pub struct RuntimeDecls<'ctx> {
     //   Uses Handle::block_on on Tokio threads; RUNTIME.block_on outside Tokio.
     pub ynz_rt_run_entrypoint: FunctionValue<'ctx>,
 
-    // ── v0.3-M3d (spike): joinable CPU spawn + poll + drop ───────────────
+    // ── v0.3-M3d: joinable CPU spawn + poll + drop ───────────────────────
     //
-    // These three functions implement the poll-based CPU join protocol. They are
-    // declared unconditionally so the LLVM module is always valid; call sites are
-    // emitted only when YNZ_M3D_SPIKE=1 is set (the spike-gated path in emit.rs).
+    // These three functions implement the poll-based CPU join protocol (production
+    // runtime ABI). They are declared unconditionally so the LLVM module is always
+    // valid; production call sites are emitted by the SM-promotion lowering phase.
+    // Until then, only the YNZ_M3D_SPIKE=1 path in emit.rs emits calls against them.
     //
     // ynz_rt_spawn_blocking_joinable(fn_ptr, ctx_ptr, ctx_size) → *mut u8
     //   fn_ptr: extern "C" fn(*mut u8) -> YnzCpuResult  (trampoline calling the real fn)
@@ -664,8 +665,8 @@ impl<'ctx> RuntimeDecls<'ctx> {
                 i32.fn_type(&[ptr.into(), ptr.into(), i64.into()], false),
             ),
 
-            // v0.3-M3d spike: joinable CPU spawn + poll + drop.
-            // Declared unconditionally; call sites only emitted when YNZ_M3D_SPIKE=1.
+            // v0.3-M3d: joinable CPU spawn + poll + drop (production runtime ABI).
+            // Declared unconditionally; production call sites land with SM-promotion lowering.
             ynz_rt_spawn_blocking_joinable: declare_fn(
                 module,
                 "ynz_rt_spawn_blocking_joinable",

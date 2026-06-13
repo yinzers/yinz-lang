@@ -2772,22 +2772,26 @@ unsafe fn bignum_binop(
     cstr.into_raw()
 }
 
-// ── v0.3-M3d P0: CPU-parallel join shim tests ─────────────────────────────────
+// ── v0.3-M3d: CPU-parallel join shim tests ────────────────────────────────────
 //
-// These tests exercise the three new C-ABI shims in isolation — without any Yinz
-// codegen involved — to verify the poll-based join protocol is correct before
-// the spike codegen path is wired in Phase 1.
+// These tests exercise the three production C-ABI shims in isolation — without any Yinz
+// codegen involved — pinning the poll-based join ABI contract so codegen can emit calls
+// against it without re-litigating the runtime semantics.
 //
 // All tests run through a real Tokio runtime (not mocked) to confirm:
-//   1. value roundtrip — result bytes written by ynz_rt_join_poll match what fn_ptr returned
-//   2. saturation — i64::MIN and i64::MAX survive the [i64;2] ABI without truncation
-//   3. drop-detach — ynz_rt_join_handle_free drops the handle without UAF or double-free
+//   1. value roundtrip per return class — int, float (bit-cast), pointer, decimal128
+//      ([lo, hi] with an explicit 16-byte-aligned i128 load), and the `T errors` pair —
+//      the result bytes ynz_rt_join_poll writes match what fn_ptr returned, no truncation
+//   2. saturation — i64::MIN/i64::MAX survive the [i64;2] ABI AND ≥600 concurrent joins
+//      complete without deadlock (poll-based join never parks a thread)
+//   3. drop-detach — ynz_rt_join_handle_free frees the handle Box (proven by a drop-probe
+//      counter, not just a "ran" witness) while the detached child still completes
 //   4. panic re-raise — a panicking child propagates via resume_unwind to the parent
-//   5. no-blockage — the join is poll-based; existing tests still green with gate off
+//   5. pre-init discard — spawn before ynz_rt_init returns null (the documented discard signal)
 //
-// The test helpers build the Context<'_> via a ManuallyDrop waker with a real Tokio
-// waker obtained by running a trivial future, matching the runtime contract that
-// waker_ctx points to a &mut Context<'_> from inside a Future::poll call.
+// The Context<'_> is obtained from inside a real Future::poll via `with_cx` — never a
+// fabricated waker (the M2-HALT corpse) — matching the runtime contract that waker_ctx
+// points to a &mut Context<'_> from the enclosing state machine's poll.
 #[cfg(test)]
 mod m3d_join_shims {
     use super::*;
@@ -2920,6 +2924,144 @@ mod m3d_join_shims {
         }
     }
 
+    // float result: the f64 is bit-cast (NOT truncated) into the low i64 word.
+    extern "C" fn returns_float(_ctx: *mut u8) -> YnzCpuResult {
+        YnzCpuResult([(std::f64::consts::PI).to_bits() as i64, 0])
+    }
+
+    // heap-pointer result (string/array/map class): an arbitrary pointer-shaped bit pattern
+    // in the low word. The runtime treats it as opaque bits — it does not dereference it.
+    extern "C" fn returns_ptr_bits(_ctx: *mut u8) -> YnzCpuResult {
+        YnzCpuResult([0x0000_7FFF_DEAD_C0DE_u64 as i64, 0])
+    }
+
+    // number/decimal128 result: a 128-bit value split little-endian into [lo_word, hi_word].
+    // Uses a value with non-trivial bits in BOTH words so a lo/hi swap or a dropped high word
+    // would fail the reconstruction assertion.
+    const DECIMAL128_TEST_VALUE: u128 = 0x1234_5678_9ABC_DEF0_0FED_CBA9_8765_4321_u128;
+    extern "C" fn returns_decimal128(_ctx: *mut u8) -> YnzCpuResult {
+        let lo = DECIMAL128_TEST_VALUE as u64;
+        let hi = (DECIMAL128_TEST_VALUE >> 64) as u64;
+        YnzCpuResult([lo as i64, hi as i64])
+    }
+
+    // `T errors` (error-channel pair) result: [err_tag, ok_bits]. err_tag != 0 marks the
+    // error variant; the ok word carries whatever the codegen packs alongside.
+    extern "C" fn returns_error_pair(_ctx: *mut u8) -> YnzCpuResult {
+        YnzCpuResult([7, 0])
+    }
+
+    // Poll a freshly spawned handle to Ready and return the 16 bytes written to result_out.
+    // 16-byte aligned result slot via #[repr(align(16))] so the decimal128/i128 read path is
+    // exercised under the alignment the frame result slot guarantees.
+    #[repr(C, align(16))]
+    struct AlignedResultSlot([i64; 2]);
+
+    // Time: O(n) where n = number of Pending polls before the blocking task completes
+    // (one yield-to-executor cycle per Pending). Space: O(1) — a single 16-byte result slot.
+    async fn spawn_join_collect(
+        fn_ptr: extern "C" fn(*mut u8) -> YnzCpuResult,
+    ) -> AlignedResultSlot {
+        unsafe {
+            let handle_ptr = ynz_rt_spawn_blocking_joinable(fn_ptr, std::ptr::null_mut(), 0);
+            assert!(!handle_ptr.is_null(), "spawn must return a non-null handle");
+
+            let mut slot = AlignedResultSlot([0i64; 2]);
+            let result_ptr = slot.0.as_mut_ptr() as *mut u8;
+
+            // Poll until Ready — yield to the executor between Pending cycles so the blocking
+            // pool can make progress without a busy loop.
+            loop {
+                let status = with_cx(|cx| {
+                    let waker_ctx = cx as *mut std::task::Context<'_> as *mut u8;
+                    ynz_rt_join_poll(handle_ptr, waker_ctx, result_ptr)
+                })
+                .await;
+                if status == 0 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            slot
+        }
+    }
+
+    #[tokio::test]
+    async fn value_roundtrip_float() {
+        // WHY: the float return class bit-casts an f64 into the low i64 word. A truncation
+        // or an int-cast (instead of a bit-cast) would corrupt the value; reconstructing the
+        // f64 from the round-tripped bits proves the ABI preserves the exact bit pattern.
+        let slot = spawn_join_collect(returns_float).await;
+        let recovered = f64::from_bits(slot.0[0] as u64);
+        assert_eq!(
+            recovered,
+            std::f64::consts::PI,
+            "float must survive the [i64;2] ABI as an exact bit-cast"
+        );
+        assert_eq!(slot.0[1], 0, "high word must be zero for the float class");
+    }
+
+    #[tokio::test]
+    async fn value_roundtrip_ptr() {
+        // WHY: string/array/map returns pack a heap pointer into the low word. The runtime
+        // moves the bits opaquely; this guards that no pointer bits are clobbered in transit.
+        let slot = spawn_join_collect(returns_ptr_bits).await;
+        assert_eq!(
+            slot.0[0] as u64, 0x0000_7FFF_DEAD_C0DE_u64,
+            "pointer-shaped low word must round-trip unchanged"
+        );
+        assert_eq!(slot.0[1], 0, "high word must be zero for the pointer class");
+    }
+
+    #[tokio::test]
+    async fn value_roundtrip_decimal128_aligned() {
+        // WHY: number/decimal128 returns use BOTH i64 words ([lo, hi]). A decimal128 is a
+        // 128-bit value; reading the round-tripped result slot AS an i128 is only correct
+        // when the slot is 16-byte aligned — a misaligned i128 load is a SIGBUS / silent-wrong
+        // class on strict-alignment targets (the failure mode the plan calls out explicitly).
+        // This test (a) confirms both words survive without a lo/hi swap, and (b) asserts the
+        // result slot is 16-byte aligned and reads back as the exact i128 via an aligned load.
+        let slot = spawn_join_collect(returns_decimal128).await;
+
+        // (a) Both words survive independently.
+        let lo = slot.0[0] as u64;
+        let hi = slot.0[1] as u64;
+        let reconstructed = ((hi as u128) << 64) | (lo as u128);
+        assert_eq!(
+            reconstructed, DECIMAL128_TEST_VALUE,
+            "decimal128 must round-trip through [lo, hi] without word swap or truncation"
+        );
+
+        // (b) Explicit 16-byte alignment assertion on the result slot, then an aligned i128
+        // load. AlignedResultSlot is #[repr(C, align(16))] so the slot base is 16-aligned —
+        // the same alignment codegen guarantees for the frame result slot. Reading it as a
+        // *const u128 must not fault and must equal the expected value.
+        let slot_addr = slot.0.as_ptr() as usize;
+        assert_eq!(
+            slot_addr % 16,
+            0,
+            "decimal128 result slot must be 16-byte aligned (misaligned i128 load is SIGBUS/silent-wrong class)"
+        );
+        // SAFETY: slot_addr is 16-byte aligned (asserted above) and points to 16 valid bytes.
+        let as_i128 = unsafe { (slot.0.as_ptr() as *const u128).read() };
+        assert_eq!(
+            as_i128, DECIMAL128_TEST_VALUE,
+            "aligned i128 load of the result slot must equal the original decimal128 value"
+        );
+    }
+
+    #[tokio::test]
+    async fn value_roundtrip_error_pair() {
+        // WHY: `T errors` returns pack [err_tag, ok_bits]. Both words are load-bearing — the
+        // tag selects the variant and must not be dropped or merged with the ok word.
+        let slot = spawn_join_collect(returns_error_pair).await;
+        assert_eq!(
+            slot.0,
+            [7, 0],
+            "error-channel pair must round-trip both words ([err_tag, ok_bits])"
+        );
+    }
+
     #[tokio::test]
     async fn ctx_copy_contents_reach_child() {
         // WHY: guards the ctx-copy path — child must see the same bytes that were in
@@ -3026,6 +3168,147 @@ mod m3d_join_shims {
         assert!(
             completed.load(Ordering::Acquire),
             "child must have run to completion even after parent dropped the handle"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn handle_free_detaches_and_frees_box() {
+        // WHY: the drop-detach contract has two halves the plan requires PROVEN separately:
+        //   (1) the child task runs to completion after the parent frees the handle (detach), and
+        //   (2) the handle's heap Box is actually FREED, not leaked.
+        // An Arc<bool> "ran" witness only proves (1). Half (2) — the FREE — is proven here with a
+        // per-handle drop-probe counter: CpuJoinHandle::Drop increments the counter exactly when
+        // THIS Box is dropped. A leak would leave the counter at 0; a detach-only path would still
+        // run the child but never increment. The counter is Arc-local so concurrent drops from
+        // other parallel tests can never bleed into this assertion window. This is the allocation
+        // ledger the plan asks for: free-count == 1 for the one handle allocated.
+        use crate::runtime::CpuJoinHandle;
+        use std::sync::atomic::AtomicUsize;
+
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_child = completed.clone();
+
+        // Box-free probe: incremented exactly once, when this CpuJoinHandle's Box is dropped.
+        let free_count = Arc::new(AtomicUsize::new(0));
+
+        // Build the handle the same way ynz_rt_spawn_blocking_joinable does (Box<CpuJoinHandle>),
+        // but with a drop probe injected so the FREE is observable. Going through CpuJoinHandle::new
+        // keeps the construction identical to the production path.
+        let join_handle = tokio::task::spawn_blocking(move || -> YnzCpuResult {
+            completed_child.store(true, Ordering::Release);
+            YnzCpuResult([0, 0])
+        });
+        let mut cpu_handle = CpuJoinHandle::new(join_handle);
+        cpu_handle.set_drop_probe(Arc::clone(&free_count));
+        let handle_ptr = Box::into_raw(Box::new(cpu_handle)) as *mut u8;
+
+        // Parent cancels mid-join: free the handle before collecting any result.
+        unsafe {
+            ynz_rt_join_handle_free(handle_ptr);
+        }
+
+        // (2) The Box was freed exactly once — proven by the drop-probe counter, not by "ran".
+        assert_eq!(
+            free_count.load(Ordering::SeqCst),
+            1,
+            "ynz_rt_join_handle_free must drop (free) the handle Box exactly once — \
+             a leak leaves this at 0"
+        );
+
+        // (1) The detached child still runs to completion (its ctx copy outlives the handle free).
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            completed.load(Ordering::Acquire),
+            "detached child must run to completion after the handle was freed"
+        );
+
+        // Idempotence half of the contract: freeing a null handle is a no-op (never aborts).
+        unsafe {
+            ynz_rt_join_handle_free(std::ptr::null_mut());
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    // Time: O(n) where n = number of Pending polls before the blocking task completes  Space: O(1) — single result slot.
+    async fn joinable_spawn_frees_ctx_copy_exactly_once() {
+        // WHY: Step 5's ctx-free accounting requires that the FrameDropGuard ctx COPY made by
+        // the REAL ynz_rt_spawn_blocking_joinable is freed exactly once (no leak) when the spawn
+        // closure completes. Constructing a CpuJoinHandle directly (as handle_free_detaches_and_
+        // frees_box does) makes no ctx copy, so it cannot prove this half. This test drives the
+        // real FFI entry point with a NON-NULL ctx so the ctx copy actually happens, then asserts
+        // the ctx heap buffer's FREE — not merely that the child "ran" — via a per-spawn drop
+        // probe on the ctx FrameDropGuard. The process-global ynz_alloc/ynz_free counters can't
+        // see this free: the ctx copy uses the Rust allocator and the lib unit-test binary never
+        // calls ynz_rt_init. A leak would leave the probe at 0; a double-free would abort.
+        use crate::runtime::arm_ctx_free_probe;
+        use std::sync::atomic::AtomicUsize;
+
+        // The child reads its ctx copy to prove the bytes survived the copy, then returns them.
+        extern "C" fn echo_ctx_first_word(ctx: *mut u8) -> YnzCpuResult {
+            assert!(!ctx.is_null(), "ctx copy must be non-null in the child");
+            // SAFETY: ynz_rt_spawn_blocking_joinable copied ctx_size (8) bytes into this buffer.
+            let word = unsafe { (ctx as *const i64).read_unaligned() };
+            YnzCpuResult([word, 0])
+        }
+
+        let ctx_free_count = Arc::new(AtomicUsize::new(0));
+
+        let mut ctx_bytes: [u8; 8] = 0xABCD_i64.to_ne_bytes();
+        let ctx_ptr = ctx_bytes.as_mut_ptr();
+
+        // Arm the probe on THIS thread, then call the real FFI fn on THIS thread — the probe is
+        // read at guard construction (caller's thread) and baked into the guard before it moves
+        // into the blocking-pool closure.
+        arm_ctx_free_probe(Arc::clone(&ctx_free_count));
+        let handle_ptr = unsafe { ynz_rt_spawn_blocking_joinable(echo_ctx_first_word, ctx_ptr, 8) };
+        assert!(!handle_ptr.is_null(), "spawn must return a non-null handle");
+
+        // Poll to Ready so the child closure runs to completion and its ctx FrameDropGuard drops.
+        let mut slot = [0i64; 2];
+        let result_ptr = slot.as_mut_ptr() as *mut u8;
+        loop {
+            let status = with_cx(|cx| {
+                let waker_ctx = cx as *mut std::task::Context<'_> as *mut u8;
+                unsafe { ynz_rt_join_poll(handle_ptr, waker_ctx, result_ptr) }
+            })
+            .await;
+            if status == 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        assert_eq!(slot[0], 0xABCD, "child must observe the copied ctx bytes");
+        assert_eq!(
+            ctx_free_count.load(Ordering::SeqCst),
+            1,
+            "the ctx heap copy made by ynz_rt_spawn_blocking_joinable must be freed exactly once \
+             — a leak leaves this at 0"
+        );
+    }
+
+    #[test]
+    fn spawn_before_init_returns_null() {
+        // WHY: outside any Tokio context AND with the global RUNTIME uninitialised,
+        // ynz_rt_spawn_blocking_joinable must DISCARD (return null) with a warning rather than
+        // panic or abort — mirroring ynz_rt_spawn's pre-init/post-shutdown discard contract.
+        // The doc names null as the pre-init/post-shutdown signal; this pins that the early-return
+        // ladder actually produces null in that state.
+        //
+        // Determinism note: this is a plain #[test] (NOT #[tokio::test]), so Handle::try_current()
+        // returns Err. In the lib crate's unit-test binary no test calls ynz_rt_init (init/shutdown
+        // live only in the separate tests/*.rs integration binaries), so the process-global RUNTIME
+        // OnceLock is never populated here — RUNTIME.get() is None and the spawn takes the
+        // "called before ynz_rt_init" discard branch deterministically.
+        extern "C" fn never_runs(_ctx: *mut u8) -> YnzCpuResult {
+            YnzCpuResult([1, 0])
+        }
+        let handle_ptr =
+            unsafe { ynz_rt_spawn_blocking_joinable(never_runs, std::ptr::null_mut(), 0) };
+        assert!(
+            handle_ptr.is_null(),
+            "spawn before ynz_rt_init (no Tokio context) must return a null handle (discard), \
+             not a live handle"
         );
     }
 

@@ -115,6 +115,13 @@ pub extern "C" fn ynz_rt_init() {
 struct FrameDropGuard {
     ptr: *mut u8,
     len: usize,
+    /// Test-only ctx-free probe. When this guard drops (freeing its heap buffer), the
+    /// Arc counter increments. Installed only by `ynz_rt_spawn_blocking_joinable` (from a
+    /// per-spawn thread-local) so the ctx-free of ONE joinable spawn is observable without
+    /// affecting `ynz_rt_spawn`/`ynz_rt_spawn_blocking`. Scoped to one guard — concurrent
+    /// drops from other tests cannot race into the assertion window.
+    #[cfg(test)]
+    free_probe: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
 }
 
 // SAFETY: FrameDropGuard wraps a heap pointer owned exclusively by one background task.
@@ -128,8 +135,30 @@ impl Drop for FrameDropGuard {
             // once per FrameDropGuard value (captured by value into the closure).
             let slice = unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) };
             let _ = unsafe { Box::from_raw(slice as *mut [u8]) };
+            #[cfg(test)]
+            if let Some(probe) = &self.free_probe {
+                probe.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
         }
     }
+}
+
+// Test-only channel for injecting a ctx-free probe into the next
+// `ynz_rt_spawn_blocking_joinable` call's ctx `FrameDropGuard`. The probe is read on the
+// caller's thread at guard-construction time (before the guard moves into the blocking-pool
+// closure), so the Arc is baked into the guard and survives the cross-thread move. Mirrors
+// the per-handle `CpuJoinHandle` drop probe.
+#[cfg(test)]
+thread_local! {
+    static CTX_FREE_PROBE: std::cell::RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test-only: arm a ctx-free probe for the next `ynz_rt_spawn_blocking_joinable` call on
+/// this thread. The probe fires once when that spawn's ctx heap copy is freed.
+#[cfg(test)]
+pub(crate) fn arm_ctx_free_probe(arc: std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    CTX_FREE_PROBE.with(|p| *p.borrow_mut() = Some(arc));
 }
 
 /// Schedule a function on the blocking thread pool.
@@ -158,6 +187,7 @@ impl Drop for FrameDropGuard {
 /// - If `ctx_size` == 0 or `ctx_ptr` is null: `fn_ptr(null)` is called.
 ///
 /// # Side effects
+/// Time: O(n) where n = ctx_size bytes (the heap ctx copy)  Space: O(n) (heap ctx buffer).
 /// Spawns a Tokio blocking task; heap-allocates `ctx_size` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn ynz_rt_spawn_blocking(
@@ -208,6 +238,8 @@ pub unsafe extern "C" fn ynz_rt_spawn_blocking(
     let ctx_guard = FrameDropGuard {
         ptr: ctx_heap_ptr,
         len: ctx_heap_len,
+        #[cfg(test)]
+        free_probe: None,
     };
 
     handle.spawn_blocking(move || {
@@ -674,6 +706,8 @@ impl Future for SpawnStateFnFuture {
 /// - `resume_fn` panics: caught by Tokio's task wrapper; JoinHandle carries the panic.
 ///
 /// # Side effects
+/// Time: O(1)  Space: O(1) — the frame is MOVED into the future (no byte copy here);
+/// `frame_size` bytes are reused, not duplicated.
 /// Enqueues a work-stealing task on the Tokio I/O pool. The frame pointed to by
 /// `frame_ptr` must remain valid until the spawned future completes (ownership transfers
 /// into the future at spawn time — the caller must NOT free or alias frame_ptr after
@@ -791,6 +825,7 @@ pub extern "C" fn ynz_rt_async_sleep_create(ms: i64) -> *mut u8 {
 ///   handled by the Tokio task wrapper around the state machine's Future.
 ///
 /// # Side effects
+/// Time: O(1)  Space: O(1) — one `Sleep::poll` call, no loop; frees one heap box on Ready.
 /// - On Ready: frees the `Pin<Box<Sleep>>` heap allocation.
 /// - On Pending: `Sleep::poll` registers the real Tokio timer waker — the task is woken
 ///   automatically when the timer fires, with no tight-loop polling.
@@ -934,7 +969,7 @@ pub unsafe extern "C" fn ynz_rt_run_entrypoint(
 // ── v0.3-M3d: CPU-parallel join shims ─────────────────────────────────────────
 //
 // These three shims back the joinable CPU-spawn mechanism for pure-CPU statement
-// parallelization. ABI invariants (locked in P0 Decision Record):
+// parallelization. ABI invariants (locked in the P0 Decision Record):
 //
 //   YnzCpuResult = [i64; 2] (16-byte POD, covers every supported return class:
 //     int/bool: [i64_val, 0], float: [f64_bits, 0], string/array/map: [ptr_bits, 0],
@@ -1051,6 +1086,8 @@ impl Drop for CpuJoinHandle {
 /// - `ctx_size == 0` or `ctx_ptr` is null: `fn_ptr(null)` is called in the child.
 ///
 /// # Side effects
+/// Time: O(n) where n = ctx_size bytes (the heap ctx copy)  Space: O(n) (ctx buffer +
+/// one fixed-size `Box<CpuJoinHandle>`).
 /// Heap-allocates `ctx_size` bytes (ctx copy) and one `Box<CpuJoinHandle>` per call.
 /// Both are freed by `ynz_rt_join_poll` on Ready (the normal path) or by
 /// `ynz_rt_join_handle_free` on the drop path. No double-free is possible because
@@ -1111,17 +1148,26 @@ pub unsafe extern "C" fn ynz_rt_spawn_blocking_joinable(
     let ctx_guard = FrameDropGuard {
         ptr: ctx_heap_ptr,
         len: ctx_heap_len,
+        // Drains the per-spawn ctx-free probe armed by tests on this thread (read here, on the
+        // caller's thread, so the Arc moves into the closure with the guard). None in production.
+        #[cfg(test)]
+        free_probe: CTX_FREE_PROBE.with(|p| p.borrow_mut().take()),
     };
 
     // Spawn on the blocking pool. The closure is Send because FrameDropGuard: Send.
     // spawn_blocking returns a JoinHandle<YnzCpuResult> immediately (non-async).
     //
-    // WHY catch_unwind here: fn_ptr is `extern "C" fn`, and RFC 2945 / Rust 1.71+
-    // specifies that a panic crossing an `extern "C"` boundary aborts the process —
-    // before Tokio's own catch_unwind (which wraps the closure result) can form a
-    // JoinError. Capturing the unwind here converts it into a native Rust panic inside
-    // Tokio's harness, so ynz_rt_join_poll's Ready(Err(panic)) → resume_unwind path
-    // becomes reachable end-to-end. Mirrors ynz_rt_spawn_blocking at runtime.rs:198-200.
+    // WHY the inner catch_unwind around fn_ptr: `fn_ptr` is `extern "C" fn`, and a panic
+    // crossing an `extern "C"` boundary aborts the process (Rust RFC 2945) before Tokio's
+    // own task-harness catch_unwind can form a JoinError. Capturing the unwind here, then
+    // re-raising it as a native Rust panic INSIDE the closure body (after the C boundary),
+    // lets Tokio's harness catch it and surface it as `JoinError::is_panic()` at the
+    // JoinHandle. That makes ynz_rt_join_poll's Ready(Err(panic)) → resume_unwind branch
+    // reachable at the JoinHandle boundary. (End-to-end propagation all the way back to the
+    // user's panic handler additionally requires the SM resume functions that CALL
+    // ynz_rt_join_poll to be emitted as `extern "C-unwind"`; that codegen ABI flip lands in
+    // a later phase. Phase 1 hardens the runtime side of the contract.) Mirrors the
+    // catch_unwind in ynz_rt_spawn_blocking.
     let join_handle = handle.spawn_blocking(move || {
         let ctx_for_call = ctx_guard.ptr;
         let _guard = ctx_guard; // freed on normal return and on unwind
@@ -1170,6 +1216,7 @@ pub unsafe extern "C" fn ynz_rt_spawn_blocking_joinable(
 ///   diagnostic as sequential execution of the panicking callee.
 ///
 /// # Side effects
+/// Time: O(1)  Space: O(1) — one poll, writes ≤16 bytes, no loop; frees one box on Ready.
 /// On Ready: frees the `Box<CpuJoinHandle>` heap allocation (the JoinHandle is dropped,
 /// detaching the blocking thread if it hasn't already finished). Writes 16 bytes to `result_out`.
 ///
@@ -1189,10 +1236,15 @@ pub unsafe extern "C" fn ynz_rt_spawn_blocking_joinable(
 /// `extern "C-unwind"` function allows the unwind to propagate to the caller.
 ///
 /// Current deployment: `ynz_rt_join_poll` is called from `SpawnStateFnFuture::poll`
-/// (pure Rust, no C boundary) and from the codegen-emitted SM resume functions. The SM
-/// resume functions are emitted as `extern "C"` — an unwind originating here that reaches
-/// the SM resume boundary will abort the process. Full end-to-end `C-unwind` propagation
-/// (resume functions emitted as `extern "C-unwind"`) is a future deliverable for P1.
+/// (pure Rust, no C boundary) and — once codegen wires it — from the emitted SM resume
+/// functions. Those resume functions are emitted as `extern "C"` today, so an unwind
+/// originating here that reaches the SM resume boundary aborts the process at that boundary.
+/// Full end-to-end `C-unwind` propagation (resume functions emitted as `extern "C-unwind"`
+/// so the unwind reaches the user's panic path) is the codegen ABI flip that lands with the
+/// SM-promotion lowering phase — it is NOT part of this runtime-ABI phase. The runtime side
+/// (this function's `extern "C-unwind"` ABI + the `catch_unwind` re-raise in
+/// `ynz_rt_spawn_blocking_joinable`) is complete and pinned by the unit tests below.
+/// deferral-tracked: .claude/plans/active/v0-3-m3d-cpu-parallelization.md Phase 3 (SM-promotion lowering — end-to-end C-unwind resume-fn ABI)
 #[no_mangle]
 pub unsafe extern "C-unwind" fn ynz_rt_join_poll(
     handle_ptr: *mut u8,
@@ -1232,15 +1284,17 @@ pub unsafe extern "C-unwind" fn ynz_rt_join_poll(
             // Child panicked (or was aborted — treated identically for sequential-parity).
             // Re-raise via resume_unwind so the parent's panic handler takes over,
             // matching the observable behavior of sequential execution on a panicking callee.
-            // The Box is intentionally not freed here: resume_unwind unwinds through this
-            // call frame, so FrameDropGuard patterns won't fire on the local allocation —
-            // but the JoinHandle is already exhausted by the JoinError extraction, so no
-            // double-free occurs. The Box leaks on this path (bounded: one per panicking
-            // child), UNLESS SpawnStateFnFuture::drop rescues it. For spike frames,
-            // SpawnStateFnFuture::drop reads the discriminator at frame offset 4, detects
-            // the spike magic, and frees any non-null handle slots at offsets 32/40 — so
-            // the leak is bounded to non-spike-frame callers (which is only the P0 spike
-            // test path). Production P1+ codegen always emits spike frames and is rescued.
+            //
+            // Box ownership on this path: the JoinHandle inside the Box is already exhausted
+            // by the JoinError extraction (the result was consumed), so there is no
+            // double-free risk. The Box itself is not freed here, because resume_unwind
+            // unwinds through this call frame before any local cleanup could run. The leak
+            // is bounded — at most one Box per panicking child — and a panicking child means
+            // the program is terminating anyway, so the bounded leak never accumulates. The
+            // frame-cancellation path (`cleanup_spike_cpu_handles`, reached from
+            // `SpawnStateFnFuture::drop` via the frame discriminator) reclaims any non-null
+            // handle slot a frame still owns when its task is dropped; that path is what frees
+            // handles on the non-panic cancellation route.
             if join_err.is_panic() {
                 std::panic::resume_unwind(join_err.into_panic());
             } else {
@@ -1263,6 +1317,16 @@ pub unsafe extern "C-unwind" fn ynz_rt_join_poll(
 /// This mirrors the sleep-handle free discipline: `SpawnStateFnFuture::drop` frees the
 /// sleep_handle slot on cancellation; this function frees the join handle slot on
 /// cancellation.
+///
+/// # Flow
+/// Drop the `Box<CpuJoinHandle>` unconditionally; detaches the blocking-pool child.
+///
+/// # Failure modes
+/// Null `handle_ptr` → no-op early return.
+///
+/// # Side effects
+/// Time: O(1)  Space: O(1) — drops one `Box<CpuJoinHandle>`, no loop.
+/// Frees the heap Box; the detached child runs to completion and its result is discarded.
 ///
 /// # Idempotence
 /// Never called after a Ready poll — the parent frame's drop shim only fires on slots
