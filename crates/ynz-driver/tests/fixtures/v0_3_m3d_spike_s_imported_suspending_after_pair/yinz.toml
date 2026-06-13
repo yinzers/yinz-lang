@@ -1,0 +1,3 @@
+[project]
+name = "v0_3_m3d_spike_s_imported_suspending_after_pair"
+entry = "entrypoint.ynz"

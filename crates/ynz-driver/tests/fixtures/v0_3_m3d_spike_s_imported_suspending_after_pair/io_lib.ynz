@@ -1,0 +1,8 @@
+// Imported suspending leaf for spike fixture (s). `ioWork` transitively hits `sleep`,
+// so the may-block fixpoint marks it suspending and it lands in the importer's EFFECTIVE
+// suspend set (local ∪ imported-suspending) — but NOT in the importer's BARE local
+// suspend set. That gap is the entire point of the fixture (see entrypoint.ynz).
+
+export function ioWork() -> nothing {
+  wait sleep(0)
+}

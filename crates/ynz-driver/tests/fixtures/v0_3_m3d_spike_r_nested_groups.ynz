@@ -1,0 +1,49 @@
+// Spike nested-CPU-group fixture (r): a CPU group whose members are themselves
+// functions that own CPU groups. Regression guard for the union-poisoning hazard.
+//
+// `fib` is a recursive leaf. `work` has an adjacent pair of fib calls, so typeck
+// promotes it. `entrypoint` has an adjacent pair of `work` calls, so typeck ALSO
+// promotes it — the promotion set is {work, entrypoint}.
+//
+// The hazard: if codegen unioned the FULL promotion set into the suspend set that
+// `spike_cpu_candidates` reads, `work` would land IN that set and entrypoint's own
+// callee-eligibility filter (`!suspend_set.contains("work")`) would exclude `work`,
+// silently DECLINING entrypoint's group — defeating the parallelism typeck approved
+// AND SM-lowering `work` while entrypoint calls it as a plain int-returning fn.
+//
+// The fix (`spike_host_subset`) reconciles the promotion set down to what codegen can
+// actually HOST this slice (entrypoint only) using the BASE suspend set, so `work`
+// never poisons the union. entrypoint's group FIRES (work(5)/work(6) spawned as plain
+// int-returning fns); work's own inner fib group runs sequentially this slice (the
+// intended slice-2 carry-forward).
+//
+// Arithmetic: fib(5)=5, fib(6)=8, fib(7)=13.
+//   work(5) = fib(5) + fib(6) = 5 + 8  = 13
+//   work(6) = fib(6) + fib(7) = 8 + 13 = 21
+//   total   = 13 + 21 = 34
+//
+// Expected output (both modes — default and YNZ_NO_AUTO_PARALLEL=1):
+//   13
+//   21
+//   34
+function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+
+function work(n: int) -> int {
+  let lo = fib(n)
+  let hi = fib(n + 1)
+  return lo + hi
+}
+
+function entrypoint() -> nothing {
+  let work5 = work(5)
+  let work6 = work(6)
+  let total = work5 + work6
+  print(work5)
+  print(work6)
+  print(total)
+}

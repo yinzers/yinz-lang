@@ -186,6 +186,28 @@ fn build_wait_cache(typed: &TypedModule) -> WaitCache {
 /// compile to straight-line code with zero suspension overhead.
 pub type SuspendSet = HashSet<String>;
 
+/// Per-member slot reservation for one member of a CPU-parallel group (v0.3-M3d).
+///
+/// Each spawned CPU child needs two frame regions: an 8-byte handle slot (holds the
+/// `*mut CpuJoinHandle` between spawn and join-Ready) and a 16-byte result slot (holds
+/// the `YnzCpuResult = [i64;2]` the join writes on Ready). Both live inside the parent's
+/// composed frame so the whole group shares ONE allocation — alloc-once per task tree.
+///
+/// Slots are keyed by `(group_id, member_index)` — NEVER by callee name. A same-callee
+/// CPU pair (`let a = fib(40); let b = fib(41)`) gets two distinct slots because identity
+/// is the statement position in the group, not the function called.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CpuGroupSlot {
+    /// Which parallel group within the function (0-based, source order).
+    pub group_id: usize,
+    /// Which member within the group (0-based, source order).
+    pub member_index: usize,
+    /// Byte offset of the 8-byte `*mut CpuJoinHandle` slot from the frame base.
+    pub handle_offset: u64,
+    /// Byte offset of the 16-byte `YnzCpuResult` slot from the frame base.
+    pub result_offset: u64,
+}
+
 /// Composed-frame layout for one suspending function.
 ///
 /// A composed frame embeds the sub-frames of all directly-called suspending children
@@ -213,6 +235,14 @@ pub struct FrameLayout {
     /// read. It is placed after all own-local slots and before child sub-frames so it lives
     /// inside the single composed frame allocation (zero extra `ynz_alloc`).
     pub number_errors_staging_offset: Option<u64>,
+    /// CPU-parallel-group member slots (v0.3-M3d), keyed by `(group_id, member_index)`.
+    ///
+    /// Empty for every function that does not contain a promoted CPU group — non-promoted
+    /// functions carry an empty Vec and their layout is byte-identical to pre-M3d. The
+    /// handle/result regions sit immediately after the frame header (handles first, then
+    /// results) so the byte offsets are computed ONCE here instead of via the Phase-0
+    /// hardcoded `SPIKE_*_OFFSET` constants at the emission site.
+    pub cpu_group_slots: Vec<CpuGroupSlot>,
 }
 
 /// True when `f` is a suspending function that returns `-> number errors` (decimal128 EC).
@@ -331,9 +361,26 @@ pub fn build_frame_layouts_with_resolver(
                 &typed.expr_types,
             );
             let crossing_slots = crossing_local_total_slots(f, &crossing, typed, shape_abi_sizes);
+
+            // v0.3-M3d CPU-group slots. A promoted host (admitted by spike_cpu_candidates)
+            // reserves a handle+result region immediately after the frame header, BEFORE its
+            // own-local slots. Handles come first (8 bytes each), then results (16 bytes each),
+            // matching the runtime drop-shim contract (`cleanup_spike_cpu_handles` reads handle
+            // slots at frame offsets 32/40). The offsets are computed here ONCE; the emission
+            // site reads them from `cpu_group_slots` instead of hardcoded SPIKE_*_OFFSET consts.
+            //
+            // The Phase-0 envelope admits exactly one group of two members on a zero-param
+            // entrypoint, so this produces handles @ 32/40 and results @ 48/64. The general
+            // multi-group / N-member layout is a later slice; the keying (group_id,
+            // member_index) is already shape-correct for it.
+            let (cpu_group_slots, cpu_reserve) = cpu_group_slots_and_reserve(f, typed, suspend_set);
+
             let n_locals = f.params.len() + crossing_slots;
-            let own_base =
-                state_machine::FRAME_HEADER_SIZE + state_machine::own_locals_size(n_locals);
+            // own_base (start of own-local slots) is pushed past the CPU-slot reserve so
+            // crossing locals never alias a handle/result slot.
+            let own_base = state_machine::FRAME_HEADER_SIZE
+                + cpu_reserve
+                + state_machine::own_locals_size(n_locals);
             let children_raw = direct_children.get(&f.name).cloned().unwrap_or_default();
 
             // Reserve a 16-byte staging slot after own-local slots when the function returns
@@ -373,6 +420,23 @@ pub fn build_frame_layouts_with_resolver(
             }
 
             let total_size = cursor;
+
+            // Lock the two frame-size computations together: `total_size` here MUST equal
+            // the value `compute_frame_size` cached in `sizes` for this fn (read as
+            // `child_frame_size` when a parent embeds this fn as a composed callee). Both
+            // now route their CPU reserve through `cpu_group_slots_and_reserve`, so a spike
+            // fn's own-base — and therefore its total — agrees on both paths. If a future
+            // edit re-diverges them, this fires in debug builds before a parent can
+            // under-allocate an embedded spike child and alias its next sub-frame.
+            debug_assert_eq!(
+                sizes.get(&f.name).copied(),
+                Some(total_size),
+                "frame-size divergence for {}: build_frame_layouts={total_size}, \
+                 compute_frame_size memo={:?} — the CPU reserve must match on both paths",
+                f.name,
+                sizes.get(&f.name).copied(),
+            );
+
             layouts.insert(
                 f.name.clone(),
                 FrameLayout {
@@ -381,11 +445,102 @@ pub fn build_frame_layouts_with_resolver(
                     children,
                     recursion_slot,
                     number_errors_staging_offset,
+                    cpu_group_slots,
                 },
             );
         }
     }
     layouts
+}
+
+/// Number of members in the Phase-0 CPU group (one adjacent pair). The general N-member
+/// group is a later slice; the per-member slot layout below is already keyed for it.
+const CPU_GROUP_MEMBER_COUNT: usize = 2;
+/// Bytes per CPU-child handle slot (`*mut CpuJoinHandle`).
+const CPU_HANDLE_SLOT_BYTES: u64 = 8;
+/// Bytes per CPU-child result slot (`YnzCpuResult = [i64; 2]`).
+const CPU_RESULT_SLOT_BYTES: u64 = 16;
+
+/// Compute the per-member CPU-group slot offsets for `member_count` members of group 0.
+///
+/// Layout (immediately after the 32-byte frame header): all handle slots first (8 bytes
+/// each), then all result slots (16 bytes each). For the Phase-0 two-member case this is
+/// handles @ 32/40 and results @ 48/64 — byte-identical to the hardcoded SPIKE_*_OFFSET
+/// constants. Returns an empty Vec when `member_count == 0` (non-promoted function).
+///
+/// Time: O(m)  Space: O(m) where m = member_count.
+fn build_cpu_group_slots(member_count: usize) -> Vec<CpuGroupSlot> {
+    if member_count == 0 {
+        return Vec::new();
+    }
+    let handles_base = state_machine::FRAME_HEADER_SIZE;
+    let results_base = handles_base + (member_count as u64) * CPU_HANDLE_SLOT_BYTES;
+    (0..member_count)
+        .map(|m| CpuGroupSlot {
+            group_id: 0,
+            member_index: m,
+            handle_offset: handles_base + (m as u64) * CPU_HANDLE_SLOT_BYTES,
+            result_offset: results_base + (m as u64) * CPU_RESULT_SLOT_BYTES,
+        })
+        .collect()
+}
+
+/// Byte span (header → end of the last result slot) that a CPU group's handle/result
+/// region occupies, for the given slot list. Zero when the slice is empty. This is the
+/// single source of truth both frame-size computations use to push own-local slots and
+/// composed-child sub-frames past the CPU reserve.
+///
+/// Time: O(m)  Space: O(1) where m = slots.len().
+fn cpu_reserve_bytes(slots: &[CpuGroupSlot]) -> u64 {
+    slots
+        .iter()
+        .map(|s| {
+            (s.result_offset + CPU_RESULT_SLOT_BYTES)
+                .saturating_sub(state_machine::FRAME_HEADER_SIZE)
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// CPU-group slots + reserve bytes for `f`, the single computation both frame-size paths
+/// share. A function `spike_cpu_candidates` admits reserves a handle+result region after
+/// the frame header (per `CPU_GROUP_MEMBER_COUNT`); all others reserve nothing. Binding
+/// `build_frame_layouts_with_resolver` and `compute_frame_size` to ONE helper is what
+/// keeps the `sizes` memo (read as a composed child's `child_frame_size`) in lockstep with
+/// the host's own `total_size` — a divergence here under-allocates an embedded spike child
+/// by the reserve and aliases the parent's next sub-frame (silent heap corruption).
+///
+/// Time: O(k)  Space: O(m) where k = AST nodes scanned by `spike_cpu_candidates`,
+/// m = group members.
+fn cpu_group_slots_and_reserve(
+    f: &FunctionDecl,
+    typed: &TypedModule,
+    suspend_set: &SuspendSet,
+) -> (Vec<CpuGroupSlot>, u64) {
+    let member_count = spike_cpu_candidates(f, typed, suspend_set)
+        .map(|_| CPU_GROUP_MEMBER_COUNT)
+        .unwrap_or(0);
+    let slots = build_cpu_group_slots(member_count);
+    let reserve = cpu_reserve_bytes(&slots);
+    (slots, reserve)
+}
+
+/// Number of 8-byte slots the CPU-group handle/result region occupies after the frame
+/// header, derived from a layout's `cpu_group_slots`. Zero when the function has no CPU
+/// group. Used by `lower_function_with_waits` to place crossing-local slots past the
+/// reserve without re-deriving the byte math.
+///
+/// Time: O(m)  Space: O(1) where m = group members.
+fn cpu_slot_reserve_slots(layout: &FrameLayout) -> usize {
+    let max_end = layout
+        .cpu_group_slots
+        .iter()
+        .map(|s| s.result_offset + CPU_RESULT_SLOT_BYTES)
+        .max();
+    match max_end {
+        Some(end) => ((end - state_machine::FRAME_HEADER_SIZE) / CPU_HANDLE_SLOT_BYTES) as usize,
+        None => 0,
+    }
 }
 
 /// Collect the unique suspending callee names called directly in `block` (in call order).
@@ -569,8 +724,14 @@ fn compute_frame_size(
     }
     visiting.insert(fn_name.to_string());
 
-    // Find n_locals and staging requirements for this fn.
-    let (n_locals, needs_number_errors_staging) = typed
+    // Find n_locals, staging requirements, and the CPU-group reserve for this fn.
+    //
+    // The CPU reserve MUST match `build_frame_layouts_with_resolver`'s own-base computation
+    // for the same fn — this `sizes` memo is read as `child_frame_size` when a parent embeds
+    // this fn as a composed callee. A reserve omitted here under-allocates an embedded spike
+    // child by the reserve, aliasing the parent's next sub-frame (silent heap corruption).
+    // Both paths call `cpu_group_slots_and_reserve`, so they can never diverge.
+    let (n_locals, needs_number_errors_staging, cpu_reserve) = typed
         .module
         .items
         .iter()
@@ -588,14 +749,20 @@ fn compute_frame_size(
                     );
                     let crossing_slots =
                         crossing_local_total_slots(f, &crossing, typed, shape_abi_sizes);
-                    return Some((f.params.len() + crossing_slots, is_number_errors_return(f)));
+                    let (_, reserve) = cpu_group_slots_and_reserve(f, typed, suspend_set);
+                    return Some((
+                        f.params.len() + crossing_slots,
+                        is_number_errors_return(f),
+                        reserve,
+                    ));
                 }
             }
             None
         })
-        .unwrap_or((0, false));
+        .unwrap_or((0, false, 0));
 
-    let own_base = state_machine::FRAME_HEADER_SIZE + state_machine::own_locals_size(n_locals);
+    let own_base =
+        state_machine::FRAME_HEADER_SIZE + cpu_reserve + state_machine::own_locals_size(n_locals);
     // Include the 16-byte `number errors` staging slot in the own-locals region when needed.
     let staging_size = if needs_number_errors_staging { 16 } else { 0 };
     let mut total = own_base + staging_size;
@@ -674,6 +841,7 @@ pub fn emit_artifact(
     suspends_set_arg: &HashSet<String>,
     imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
     frame_layouts: &HashMap<String, FrameLayout>,
+    cpu_promoted: &HashSet<String>,
 ) -> Result<CompiledArtifact, String> {
     let context = Context::create();
     let module_id = module_identifier(source_path);
@@ -725,32 +893,17 @@ pub fn emit_artifact(
     // explicit salsa input parameter. Deferred until `ynz watch --no-auto-parallel` or
     // LSP codegen integration lands. Tracked: .claude/todos.md "no-auto-parallel env-var".
     let no_auto_parallel = ynz_typeck::no_auto_parallel_env();
-    // Gates the CPU-parallel join spike: when set to "1", the entrypoint's adjacent
-    // non-suspending int-returning call pair is emitted via spawn_blocking + poll join
-    // instead of sequential call lowering. All other programs lower identically.
-    let m3d_spike = std::env::var("YNZ_M3D_SPIKE").is_ok_and(|v| v == "1");
-
-    // Spike: extend the suspend_set with any function that contains a CPU-parallel
-    // candidate group (≥2 calls to the same non-suspending int-returning callee).
-    // This forces those functions through the state-machine codegen path so the
-    // spike CPU-join emission can run. Without the extension, non-suspending parent
-    // functions would take the trivial non-SM path and bypass the spike completely.
-    let spike_suspend_set: SuspendSet = if m3d_spike {
-        let mut extended = suspend_set.clone();
-        for item in &typed_module.module.items {
-            if let ynz_ast::nodes::Item::Function(f) = item {
-                if !f.generics.is_empty() {
-                    continue;
-                }
-                if spike_cpu_candidates(f, typed_module, &suspend_set).is_some() {
-                    extended.insert(f.name.clone());
-                }
-            }
-        }
-        extended
-    } else {
-        suspend_set.clone()
-    };
+    // v0.3-M3d CPU-statement parallelization trigger. `cpu_promoted` is the typeck
+    // promotion set (`cpu_promotion_query`) — the single source of truth that drives the
+    // suspend-set extension, the inlay hints, and codegen routing per the registry's
+    // "hint and binary always agree" contract. A non-empty set means at least one function
+    // contains a CPU-parallelizable group, so the per-function spike-candidacy probe in
+    // `lower_function_with_waits` must run; when empty, no program lowers a CPU group.
+    //
+    // The promoted functions are ALREADY in `suspend_set` (unioned at the codegen_query
+    // boundary), so they route through `lower_function_with_waits` automatically via the
+    // existing `suspend_set.contains` dispatch — no separate suspend-set extension here.
+    let m3d_spike = !cpu_promoted.is_empty();
 
     build_module(
         &context,
@@ -762,7 +915,7 @@ pub fn emit_artifact(
         generic_fn_table,
         mono_table,
         imported_options,
-        &spike_suspend_set,
+        &suspend_set,
         imported_fns,
         frame_layouts,
         no_auto_parallel,
@@ -1565,9 +1718,10 @@ struct Cg<'ctx, 'g> {
     // Stored here so the independence analysis can consume `param_ownerships` from
     // function signatures without re-deriving them (corpse b compliance).
     sig_table: &'g SignatureTable,
-    // v0.3-M3d spike: when true, the CPU-parallel join path is active.
-    // Controlled by YNZ_M3D_SPIKE=1 in the environment at codegen time.
-    // Zero default-build behavior change when false (the default).
+    // v0.3-M3d: when true, at least one function was promoted for CPU-statement
+    // parallelization (the typeck `cpu_promotion_query` set is non-empty), so the
+    // CPU-parallel join path may fire for any function `spike_cpu_candidates` admits.
+    // False for every module that promotes nothing — zero behavior change there.
     m3d_spike: bool,
     // CPU-result (name, frame_offset) pairs owned by the spike reload mechanism.
     //
@@ -2221,14 +2375,25 @@ fn lower_function_with_waits<'ctx, 'g>(
     //   ─────────────────────────────────────────────────────────────────
     //   Total: 2 handles × 8B + 2 results × 16B = 16 + 32 = 48 bytes = 6 slots
     //
-    // Crossing locals for spike functions start at slot n_params+6 (byte 80+), so they
-    // never overlap the spike region. Non-spike functions use n_params+0 (no reserve).
-    const SPIKE_SLOT_RESERVE: usize = 6;
-    let crossing_slot_base = if spike_active_here {
-        n_params + SPIKE_SLOT_RESERVE
+    // Crossing locals for spike functions start past the CPU-slot reserve (byte 80+ for the
+    // Phase-0 two-member group), so they never overlap the handle/result region. Non-spike
+    // functions use n_params+0 (no reserve).
+    //
+    // The reserve is read from the composed frame layout's `cpu_group_slots` (the SSOT
+    // computed in `build_frame_layouts`) rather than a hardcoded constant, so the size math
+    // here and the offsets the join emission uses cannot drift. Falls back to the 6-slot
+    // (48-byte) Phase-0 reserve only if the layout entry is missing, which cannot happen for
+    // a spike-active (in-suspend-set) function.
+    let spike_slot_reserve: usize = if spike_active_here {
+        frame_layouts
+            .get(&f.name)
+            .map(cpu_slot_reserve_slots)
+            .filter(|&s| s > 0)
+            .unwrap_or(6)
     } else {
-        n_params
+        0
     };
+    let crossing_slot_base = n_params + spike_slot_reserve;
 
     // Compute per-crossing-local slot indices using typeck types (catches inferred number).
     let crossing_slot_indices: Vec<usize> = {
@@ -2253,12 +2418,12 @@ fn lower_function_with_waits<'ctx, 'g>(
         indices
     };
     // n_locals counts the slots the frame must accommodate for params + crossing locals.
-    // For spike functions, SPIKE_SLOT_RESERVE is included so the fallback frame-size
+    // For spike functions, the CPU-slot reserve is included so the fallback frame-size
     // formula (FRAME_HEADER_SIZE + own_locals_size(n_locals)) produces the right total
     // without double-counting spike_extra_frame_bytes.
     let n_locals = if spike_active_here {
         n_params
-            + SPIKE_SLOT_RESERVE
+            + spike_slot_reserve
             + crossing_local_total_slots(f, &crossing_names, typed, shape_abi_sizes)
     } else {
         n_params + crossing_local_total_slots(f, &crossing_names, typed, shape_abi_sizes)
@@ -6407,18 +6572,21 @@ fn is_direct_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool {
     false
 }
 
-// ── v0.3-M3d spike: CPU-parallel join helpers ────────────────────────────────
+// ── v0.3-M3d: CPU-parallel join helpers ──────────────────────────────────────
 //
-// ALL code in this section is gated behind `YNZ_M3D_SPIKE=1`. Zero of it runs in
-// default builds. These helpers prove the poll-based CPU join mechanism end-to-end
-// through the real compiler before production phases (P1–P3) harden the design.
+// Code in this section fires for any function the typeck `cpu_promotion_query` promotes
+// (the production trigger). The poll-based CPU join mechanism it emits was proven
+// end-to-end through the real compiler in Phase 0; later slices generalize the layout
+// from the fixed Phase-0 two-member group to N-member / multi-group bodies.
 
-/// Byte offset of spike handle slot 0 within the parent SM frame.
+/// Fallback byte offset of CPU handle slot 0 within the parent SM frame.
 ///
-/// The spike appends two handle slots and two result slots immediately after the
-/// standard frame header (FRAME_HEADER_SIZE = 32). Offsets are stable per the
-/// contract in `lower_function_with_waits` which pads `frame_bytes` by 48 when
-/// a CPU candidate group is detected.
+/// The live offsets come from `FrameLayout::cpu_group_slots` (computed in
+/// `build_frame_layouts` — the single source of truth). These constants are the
+/// defensive fallback the join emission uses only if a layout entry is somehow absent,
+/// which cannot happen for a promoted (in-suspend-set) function. They encode the Phase-0
+/// two-member layout: two handle slots then two result slots immediately after the
+/// 32-byte frame header.
 const SPIKE_HANDLE_0_OFFSET: u64 = 32;
 const SPIKE_HANDLE_1_OFFSET: u64 = 40;
 const SPIKE_RESULT_0_OFFSET: u64 = 48;
@@ -6586,6 +6754,67 @@ fn spike_cpu_candidates(
         _ => {}
     }
     None
+}
+
+/// Of the functions typeck promoted, the subset codegen will actually spike-HOST in this
+/// slice — probed against the EFFECTIVE suspend set (local suspending names ∪
+/// imported-suspending names), the SAME set both query boundaries size the frame with.
+///
+/// This reconciliation is the fix for the union-poisoning hazard: typeck's
+/// `compute_cpu_promotions` promotes EVERY function that owns a CPU group (e.g. both an
+/// inner `work` and an outer `entrypoint` in a nested program), but slice-1 codegen can
+/// only host `entrypoint` (the entrypoint-only gate in `spike_cpu_candidates`). Unioning
+/// the FULL promotion set into the SM suspend-set would (a) make a promoted-but-unhosted
+/// callee like `work` an SM whose callers still call it as a plain int-returning fn
+/// (trampoline mismatch), and (b) place `work` IN the suspend set `spike_cpu_candidates`
+/// reads, so the host's own callee-eligibility filter (`!suspend_set.contains(callee)`)
+/// would exclude `work` and the host's group would silently DECLINE — defeating the
+/// parallelism typeck approved. Reconciling down to the actual host subset keeps a promoted
+/// non-host callee out of the union: it neither becomes an SM nor poisons the host's
+/// admission.
+///
+/// WHY the EFFECTIVE set, not the bare local set: `spike_cpu_candidates`'s post-pair
+/// decline gate (`stmt_contains_suspending_call`) must see imported-suspending callees so
+/// that BOTH query boundaries — `frame_layouts_query` (which SIZES the frame) and
+/// `codegen_query` (which LAYS IT OUT) — reach the SAME spike-host admission decision and
+/// size the host's frame identically. An imported-suspending name is absent from the bare
+/// local set: probing with the bare set at one boundary would ADMIT a host that the other
+/// boundary, probing with the effective set, DECLINED — frame_layouts then sizes the frame
+/// sequentially (with the imported callee's child sub-frame) while codegen lays it out as a
+/// spike host (omitting that sub-frame), under-allocating the heap block by exactly the
+/// imported callee's frame size and corrupting it when the child writes at its offset. Both
+/// callers MUST pass the effective set; a future caller reverted to the bare set walks back
+/// into that under-allocation. The `imported_suspending_after_pair_*` tests are the tripwire.
+///
+/// Slice-2 carry-forward: a promoted inner host (`work`) is NOT spike-hosted here, so its
+/// own CPU group runs sequentially this slice. That is the intended residual — codegen
+/// catches up to typeck's full promotion set as the entrypoint-only gate is relaxed in
+/// later slices. Output stays correct (sequential is always correct); only the inner
+/// overlap is deferred.
+///
+/// Slice-2 carry-forward (benign over-allocation, logged in the plan Findings Log): an
+/// `entrypoint` that calls ITSELF in a post-pair statement gets `"entrypoint"` into the
+/// emit-time `suspends_with_promotions` host union but NOT into this probe's `promoted`
+/// input at probe time, so the emit-time re-probe declines while this probe admitted →
+/// a 48-byte OVER-allocation (dead spike reserve, NOT under-allocation — no corruption).
+/// Slice 2 should align this probe's input set with the emit-time host set to drop even
+/// that benign waste.
+///
+/// Time: O(p · k) where p = promoted fns, k = AST nodes scanned per candidate.
+/// Space: O(p).
+pub fn spike_host_subset(
+    typed: &TypedModule,
+    suspend_set: &SuspendSet,
+    promoted: &HashSet<String>,
+) -> HashSet<String> {
+    let mut hosts: HashSet<String> = HashSet::new();
+    for item in &typed.module.items {
+        let Item::Function(f) = item else { continue };
+        if promoted.contains(&f.name) && spike_cpu_candidates(f, typed, suspend_set).is_some() {
+            hosts.insert(f.name.clone());
+        }
+    }
+    hosts
 }
 
 /// Return the bind names of the CPU group that `spike_extract_cpu_group` would extract.
@@ -7148,6 +7377,29 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
         ));
     }
 
+    // Read per-member handle/result byte offsets from the composed frame layout
+    // (`build_frame_layouts` computed them, keyed by member index — group 0). The layout is
+    // the single source of truth: the reserve, the size math, and these offsets all derive
+    // from `build_cpu_group_slots`, so they cannot drift apart. The fallback to the
+    // SPIKE_*_OFFSET constants only fires if no layout entry exists, which cannot happen for
+    // a promoted (in-suspend-set) function — kept defensive so a future refactor that drops
+    // the layout entry fails loud at the join, not silently mis-offset.
+    let (handle_offsets, result_offsets): ([u64; 2], [u64; 2]) = cg
+        .frame_layouts
+        .get(&f.name)
+        .filter(|l| l.cpu_group_slots.len() >= 2)
+        .map(|l| {
+            let s = &l.cpu_group_slots;
+            (
+                [s[0].handle_offset, s[1].handle_offset],
+                [s[0].result_offset, s[1].result_offset],
+            )
+        })
+        .unwrap_or((
+            [SPIKE_HANDLE_0_OFFSET, SPIKE_HANDLE_1_OFFSET],
+            [SPIKE_RESULT_0_OFFSET, SPIKE_RESULT_1_OFFSET],
+        ));
+
     // --- Build trampolines ---
     //
     // Each trampoline has signature `ptr → [i64 × 2]` (i.e. `{i64,i64}` struct
@@ -7270,7 +7522,7 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
     };
 
     // For each child: allocate a 8-byte ctx on the stack, write the arg, spawn.
-    let handle_offsets = [SPIKE_HANDLE_0_OFFSET, SPIKE_HANDLE_1_OFFSET];
+    // `handle_offsets` is read from the composed frame layout (computed above).
     for (idx, child) in children.iter().enumerate() {
         // Evaluate the argument expression (must be a simple integer — ident or literal).
         let arg_llvm = match child.args.first() {
@@ -7363,7 +7615,7 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
         .map_err(|e| format!("spike any_pending init: {e}"))?;
 
     let ptr_ty = ctx.ptr_type(AddressSpace::default());
-    let result_offsets = [SPIKE_RESULT_0_OFFSET, SPIKE_RESULT_1_OFFSET];
+    // `result_offsets` is read from the composed frame layout (computed above).
     for idx in 0..2usize {
         // Load handle from frame slot.
         let handle_slot = frame_byte_ptr(handle_offsets[idx], &format!("spike_hslot_re_{idx}"))?;
@@ -11785,7 +12037,7 @@ fn prepare_bg_arg_for_ctx<'ctx>(
             // @follow-up When kernel-mode sized-dealloc lands (a custom allocator whose free
             //   DOES use the size), thread `shape_abi_sizes` into `prepare_bg_arg_for_ctx` and
             //   look the size up by shape name instead of this fallback.
-            // @triggers `--kernel` sized-dealloc support (design/future/no-runtime-mode.md).
+            // @triggers `--kernel` sized-dealloc support (design/no-runtime-mode.md).
             let byte_size = byte_size_val.get_zero_extended_constant().unwrap_or(0);
             Ok((heap_ptr.into(), BgArgFreeKind::HeapShape { byte_size }))
         }
@@ -16157,12 +16409,113 @@ fn try_build_shape_global<'ctx>(
 
 #[cfg(test)]
 mod tests {
-    use super::function_contains_wait;
+    use super::{
+        build_cpu_group_slots, cpu_slot_reserve_slots, function_contains_wait, CpuGroupSlot,
+        FrameLayout,
+    };
     use ynz_ast::nodes::{Block, Expr, Stmt};
     use ynz_diagnostics::SourceSpan;
 
     fn dummy_span() -> SourceSpan {
         SourceSpan::new("test.ynz", 0, 1)
+    }
+
+    /// A bare FrameLayout carrying only the CPU slots under test. The other fields are
+    /// irrelevant to `cpu_slot_reserve_slots`, which reads `cpu_group_slots` exclusively.
+    fn layout_with_cpu_slots(cpu_group_slots: Vec<CpuGroupSlot>) -> FrameLayout {
+        FrameLayout {
+            total_size: 0,
+            n_locals: 0,
+            children: Vec::new(),
+            recursion_slot: None,
+            number_errors_staging_offset: None,
+            cpu_group_slots,
+        }
+    }
+
+    // WHY: pins the exact byte offsets the two-member CPU group occupies. These offsets
+    // (handles @ 32/40, results @ 48/64) are an ABI contract with the runtime drop-shim
+    // `cleanup_spike_cpu_handles`, which reads handle slots at 32/40. A regression here
+    // silently mis-offsets the join result or the freed handle — corpse-class corruption.
+    #[test]
+    fn build_cpu_group_slots_two_members_pins_abi_offsets() {
+        let slots = build_cpu_group_slots(2);
+        assert_eq!(
+            slots,
+            vec![
+                CpuGroupSlot {
+                    group_id: 0,
+                    member_index: 0,
+                    handle_offset: 32,
+                    result_offset: 48,
+                },
+                CpuGroupSlot {
+                    group_id: 0,
+                    member_index: 1,
+                    handle_offset: 40,
+                    result_offset: 64,
+                },
+            ],
+            "two-member CPU group must place handles @ 32/40 and results @ 48/64"
+        );
+    }
+
+    // WHY: the (group_id, member_index) keying must generalize before slice 2 relies on
+    // N>2 members. Three members put handles contiguously (32/40/48 — one 8-byte slot
+    // each) then results contiguously (56/72/88 — one 16-byte slot each). If the handle
+    // and result regions ever interleave instead of grouping, this catches it.
+    #[test]
+    fn build_cpu_group_slots_three_members_generalizes() {
+        let slots = build_cpu_group_slots(3);
+        let handle_offsets: Vec<u64> = slots.iter().map(|s| s.handle_offset).collect();
+        let result_offsets: Vec<u64> = slots.iter().map(|s| s.result_offset).collect();
+        assert_eq!(
+            handle_offsets,
+            vec![32, 40, 48],
+            "three handle slots are contiguous 8-byte slots after the 32-byte header"
+        );
+        assert_eq!(
+            result_offsets,
+            vec![56, 72, 88],
+            "three result slots are contiguous 16-byte slots after the handle region"
+        );
+    }
+
+    // WHY: a zero-member group (every non-promoted function) must reserve nothing — its
+    // frame stays byte-identical to pre-M3d. A non-empty Vec here would inflate every
+    // frame, breaking the zero-cost-for-non-promoted invariant.
+    #[test]
+    fn build_cpu_group_slots_zero_members_is_empty() {
+        assert!(
+            build_cpu_group_slots(0).is_empty(),
+            "a non-promoted function reserves no CPU slots"
+        );
+    }
+
+    // WHY: `cpu_slot_reserve_slots` returns the count of 8-byte slots own-locals must skip
+    // to clear the CPU region. For the two-member group the region spans header(32) → 80
+    // (result 64 + 16), i.e. 48 bytes = 6 eight-byte slots. An off-by-one here aliases a
+    // crossing-local slot onto a result slot — silent wrong join value after a suspension.
+    #[test]
+    fn cpu_slot_reserve_slots_two_member_group_is_six() {
+        let layout = layout_with_cpu_slots(build_cpu_group_slots(2));
+        assert_eq!(
+            cpu_slot_reserve_slots(&layout),
+            6,
+            "two-member CPU region (header→80) is 6 eight-byte slots"
+        );
+    }
+
+    // WHY: an empty CPU group reserves zero slots — own-locals start immediately after the
+    // header, preserving pre-M3d frame layout for non-promoted functions.
+    #[test]
+    fn cpu_slot_reserve_slots_empty_group_is_zero() {
+        let layout = layout_with_cpu_slots(Vec::new());
+        assert_eq!(
+            cpu_slot_reserve_slots(&layout),
+            0,
+            "no CPU group reserves zero slots"
+        );
     }
 
     fn wait_expr() -> Expr {

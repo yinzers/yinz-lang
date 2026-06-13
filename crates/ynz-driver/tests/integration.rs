@@ -2403,6 +2403,44 @@ fn v03_m3e_cross_module_no_auto_parallel_byte_identical() {
     }
 }
 
+#[test]
+fn v03_m3d_imported_suspending_after_pair_byte_identical_and_clean() {
+    // WHY: regression guard for the cross-boundary suspend-set divergence (deviation-judge #2 /
+    // code-reviewer, Slice-1 Round 2). A local CPU pair followed by a post-pair call to an
+    // IMPORTED suspending function must compile, run CLEAN (no heap corruption), and produce
+    // byte-identical output under default and --no-auto-parallel. The spike-host decision is made
+    // at two salsa query boundaries (frame_layouts_query sizes the frame; codegen_query lays it
+    // out + emits); both now probe spike admission against the same EFFECTIVE suspend set
+    // (local ∪ imported-suspending). If they used different sets, codegen could admit a host
+    // frame_layouts sized sequentially → the imported callee's child sub-frame would be written
+    // past the under-allocated heap block. The companion codegen-crate test
+    // (`imported_suspending_after_pair_declines_consistently_across_boundaries`) pins the 0-spawn
+    // mechanism + boundary agreement; this test pins the end-to-end observable behavior: a clean,
+    // byte-identical run in both modes. A crash or output divergence here means the under-allocation
+    // went live — fix the suspend-set reconciliation in codegen_query, not this test.
+    let project_root = fixture("v0_3_m3d_spike_s_imported_suspending_after_pair");
+    let (par_stdout, par_stderr, par_code) = build_multimodule_and_run(&project_root, false);
+    assert_eq!(
+        par_code, 0,
+        "default build must run clean (exit 0) — a non-zero exit signals heap corruption from \
+         under-allocation; stderr:\n{par_stderr}"
+    );
+    let (seq_stdout, seq_stderr, seq_code) = build_multimodule_and_run(&project_root, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must run clean (exit 0); stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout.trim(),
+        "55\n89",
+        "output must be the computed fib values; stdout:\n{par_stdout}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "default and --no-auto-parallel stdout must be byte-identical"
+    );
+}
+
 // ── M8 P6: bignum — number<N> for N > 34 ─────────────────────────────────────
 // (m8_bignum_number100_runs above covers the literal print case)
 
@@ -5114,6 +5152,79 @@ fn v03_m3b_p4_two_independent_parallel_byte_identical_to_sequential() {
     assert_eq!(
         par_stdout, seq_stdout,
         "parallel and sequential stdout must be byte-identical"
+    );
+}
+
+/// Build `src` to a tmpdir with `--emit-ir` and return the LLVM IR text. The build runs
+/// in default (auto-parallel) mode. Panics if the build fails.
+fn build_to_tmpdir_emit_ir(src: &Path) -> String {
+    let tmp = tempfile::TempDir::new().expect("failed to create tmpdir");
+    let src_filename = src.file_name().expect("src must have a filename");
+    let isolated_src = tmp.path().join(src_filename);
+    std::fs::copy(src, &isolated_src).expect("failed to copy source to tmpdir");
+
+    let build_out = Command::new(ynz_binary())
+        .arg("build")
+        .arg(&isolated_src)
+        .arg("--emit-ir")
+        .env("CLICOLOR", "0")
+        .output()
+        .expect("failed to spawn ynz build");
+    assert!(
+        build_out.status.success(),
+        "build failed: {}",
+        String::from_utf8_lossy(&build_out.stderr)
+    );
+
+    let ll_path = isolated_src.with_extension("ll");
+    std::fs::read_to_string(&ll_path).expect("emitted .ll must be readable")
+}
+
+#[test]
+fn v03_m3d_nested_groups_byte_identical_and_fires() {
+    // WHY: regression guard for the union-poisoning hazard (deviation-judge #2). When typeck
+    // promotes BOTH an inner host (`work`) and the outer host (`entrypoint`), codegen must
+    // reconcile the promotion set down to what it can actually spike-host this slice
+    // (`spike_host_subset`). If it instead unioned the full set, `work` would land in the
+    // suspend set entrypoint's callee-eligibility filter reads, silently DECLINING
+    // entrypoint's group. This test asserts (a) output is correct + byte-identical in both
+    // modes, and (b) entrypoint's group actually FIRES (2 spawn-call instructions, NOT 0).
+    // If you're tempted to relax the spawn-count assertion, the parallelism regressed —
+    // fix the reconciliation, not this test.
+    let src = fixture("v0_3_m3d_spike_r_nested_groups.ynz");
+
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "default build must exit 0; stderr:\n{par_stderr}"
+    );
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout.trim(),
+        "13\n21\n34",
+        "nested-group output must be the computed values; stdout:\n{par_stdout}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "default and --no-auto-parallel stdout must be byte-identical"
+    );
+
+    // The poisoning is gone only if entrypoint's group FIRES: exactly 2
+    // `call @ynz_rt_spawn_blocking_joinable` instructions (one per group member). The
+    // `declare` line is not a `call`, so filtering on `call ` excludes it.
+    let ir = build_to_tmpdir_emit_ir(&src);
+    let spawn_calls = ir
+        .lines()
+        .filter(|l| l.contains("call") && l.contains("@ynz_rt_spawn_blocking_joinable"))
+        .count();
+    assert_eq!(
+        spawn_calls, 2,
+        "entrypoint's nested CPU group must FIRE with 2 spawn calls (0 = union poisoning \
+         silently declined the group); IR:\n{ir}"
     );
 }
 

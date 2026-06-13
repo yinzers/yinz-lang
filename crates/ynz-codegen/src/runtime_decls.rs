@@ -209,8 +209,8 @@ pub struct RuntimeDecls<'ctx> {
     //
     // These three functions implement the poll-based CPU join protocol (production
     // runtime ABI). They are declared unconditionally so the LLVM module is always
-    // valid; production call sites are emitted by the SM-promotion lowering phase.
-    // Until then, only the YNZ_M3D_SPIKE=1 path in emit.rs emits calls against them.
+    // valid; call sites are emitted by the CPU-group join lowering for any function the
+    // typeck `cpu_promotion_query` promotes (a module that promotes nothing emits none).
     //
     // ynz_rt_spawn_blocking_joinable(fn_ptr, ctx_ptr, ctx_size) → *mut u8
     //   fn_ptr: extern "C" fn(*mut u8) -> YnzCpuResult  (trampoline calling the real fn)
