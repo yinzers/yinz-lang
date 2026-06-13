@@ -174,6 +174,51 @@ If a user genuinely doesn't care about iteration order and wants to skip the ove
 
 ---
 
+## `set<T>` — Unique-Value Collection (PLANNED — not yet implemented)
+
+> **Status**: Direction locked 2026-06-13; **co-ships with v0.4** (the linting tier) per `design/mvp-scope.md` — the last language-feature version before stdlib, and the earliest slot where set's auto-promotion lint + muted hint can exist. A core collection **language feature**, sibling to `map<K,V>` — NOT a stdlib module.
+
+A `set<T>` holds unique values of one type and answers "is value `X` present?" in O(1). It is `map<K,V>` with keys only — same machinery, no values.
+
+### Why it's a distinct type (not `array` + a rule)
+
+`fixed`/`array` find by **position** (`thing[5]` is O(1); "is `X` present?" is an O(n) scan). A `set` finds by **value** ("is `X` present?" is O(1); there is no position). Enforcing uniqueness on an `array` would require an O(n) scan per insert → O(n²) to build; a set's by-value (hash) storage makes both uniqueness AND membership O(1). Different access model, different storage — not a constraint bolted onto `array`. Same reasoning that makes `map` distinct from `array`.
+
+### No `fixed` set
+
+Sets are inherently growable (hash-table backed, like `array`/`map`), so there is no stack-allocated size-locked set. `set<T>` is the only form. (A compile-time-constant set of literals MAY get a perfect-hash codegen optimization — see map's four-tier hashing — but that's codegen, not a separate `fixed`-set type.)
+
+### Implementation — shares everything with `map<K,V>`
+
+A set IS a map with keys only, so it reuses map's locked decisions verbatim:
+- **Swiss Tables** backing store (see `map<K,V>` section above).
+- **Four-tier hashing** (SipHash-2-4 safe default → xxhash3 trusted → perfect-hash compile-time-constant → identity for ints). Same auto-pick, same override story.
+- **Insertion-order iteration** (same rationale as map — predictable, no "passes locally / fails in CI").
+
+### Operations (ILLUSTRATIVE — proposed, exact names settled at version turn)
+
+- `set.has(value) -> bool` — O(1) membership (pure, no `errors`).
+- `set.add(value)` — inserts; duplicate add is a no-op.
+- `set.remove(value)` — removes if present.
+- `set.size` — count (field access, no parens, per dot-postfix rule).
+- Set algebra: `a.union(b)`, `a.intersection(b)`, `a.difference(b)`, `a.isSubsetOf(b)`.
+
+### `array.unique()` companion
+
+The one-time "dedupe this list" case is NOT a set — it's a method on `array`: `array.unique() -> array<T>` returns a new array with duplicates removed (insertion order preserved), implemented by passing values through a set internally. Ships alongside `set<T>`. Rule of thumb: `.unique()` for one-shot dedup; `set<T>` when you keep the collection and repeatedly query membership.
+
+### Open questions (decided at version turn)
+
+- Set-algebra methods: return new sets vs mutate in place (lean: return new, immutable-by-default per stdlib philosophy).
+- Set literal syntax — `{1, 2, 3}` collides with shape/map `{...}` literals; needs disambiguation (same family of problems as map literals).
+- Whether the unordered opt-out variant (map's TBD-M4 syntax) applies to set too (it should — same overhead tradeoff).
+
+### Auto-promotion
+
+`array<T>` → `set<T>` when the array is used only for membership — see "Auto-promotion: `array<T>` → `set<T>`" below.
+
+---
+
 ## `shape` Field Layout — Compiler Auto-Reorders for Optimal Packing
 
 When the compiler emits the memory layout for a `shape` declaration, it auto-reorders fields for optimal packing (largest-alignment first, smallest last). User code is unaffected — `shape` access syntax (`player.health`) and field semantics stay identical. Only the in-memory byte layout changes.
@@ -387,6 +432,29 @@ Why hybrid (not pure-silent or pure-suggestion):
 - **Hybrid** gets all three — perf is automatic, the inference is visible (muted hint), the explicit form is taught (lint suggestion).
 
 For auto-promotions where the explicit form has NO typeable syntax (e.g., auto-SoA, where there's no `soa array<T>` keyword in v0.3), only the lint-suggestion surface applies — the muted-hint protocol requires click-to-make-explicit to produce real Yinz syntax. See `design/future/auto-soa.md` and `.claude/rules/inference.md` "Two Surfaces for the Same Decision" section.
+
+---
+
+## Auto-promotion: `array<T>` → `set<T>` (membership-only usage)
+
+When the compiler proves an `array<T>` is used ONLY for membership — `.contains()` / `.add()` / `.remove()` / `.size`, with NO indexing, NO reliance on element order, and NO reliance on duplicate storage — the array is doing a set's job at an array's O(n²) cost. Promoting it to `set<T>` storage takes membership + uniqueness from O(n²) → O(n). Real perf win.
+
+Surfaces (same hybrid model as `array → fixed`, with one key difference):
+- **Codegen auto-promotion**: when the proof holds, emit `set<T>` storage. Because the proof needs whole-program escape/usage analysis, it's gated to `--release` (like auto-SoA), not every dev build.
+- **Tier 3 lint suggestion (primary surface)**: `prefer-set-for-membership` — recommends declaring `set<T>` explicitly. This is the *main* surface here, because the real fix is "you reached for the wrong type."
+- **Muted IDE hint**: `set<T>` IS typeable, so the protocol applies — click-to-make-explicit rewrites the declaration to `set<T>`.
+
+**Why the proof is stricter than `array → fixed`**: `fixed` supports every `array` operation except growth, so promoting is transparent when growth is absent. `set` drops indexing, positional order, AND duplicate storage — so the compiler must prove NONE of those three are observed before it can swap. When it can't prove it, the lint still fires (teaching) but the codegen swap does not (safety).
+
+### Why `fixed<T>` is NOT blanket-promoted to `set<T>`
+
+The same membership-only *usage* analysis applies to `fixed`, but promoting `fixed → set` is **usually a pessimization**, so the compiler does NOT do it by default. Named cost: `fixed` is small + stack-allocated + cache-hot; a `set` is a heap-allocated hash table. For the small N that `fixed` is built for, a linear scan over a contiguous stack buffer **beats** a hash lookup (no hashing overhead, no pointer chasing, no heap allocation). Per the auto-promotion rule, we only auto-promote when the stricter form is *unambiguously* better — `fixed → set` fails that test (it depends on size).
+
+What the compiler does instead for a membership-checked `fixed`:
+- **Compile-time-constant contents** (`fixed<int> = [1, 5, 10, 42]` used for `.contains()`) → a **perfect-hash or branchless comparison / jump table**, computed at compile time, **zero heap** — strictly better than a runtime `set`. (Ties into the perfect-hash tier of map's four-tier hashing.)
+- **Genuinely large `fixed` + heavy membership** → a `set` *could* win, but that's a size-threshold heuristic, not a clean promotion; flagged as a possible `--release` analysis, not a default.
+
+So: `array → set` is a real promotion (arrays are heap + variable-size already, so set storage is a lateral-or-better move); `fixed → set` is deliberately declined in favor of zero-alloc membership strategies for the small/constant fixeds that are `fixed`'s whole reason to exist.
 
 ---
 

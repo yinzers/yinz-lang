@@ -235,9 +235,11 @@ The compiler starts emitting the third severity tier — suggestions — during 
 
 No separate `ynz lint` command — the compiler IS the linter. Customization (config file) comes in v1.x.
 
+**Co-shipping: `set<T>` core collection** (committed 2026-06-13) — the unique-value collection sibling of `map<K,V>`, plus the `array.unique()` method and the `array<T> → set<T>` auto-promotion. Designed in `design/collections.md`. **Why v0.4 specifically:** it's the last language-feature version before the stdlib sequence (v0.5+) begins — so it lands before any stdlib leans on it — AND it's the *earliest* slot where set can ship COMPLETE rather than as a half-feature: its `prefer-set-for-membership` lint + muted hint need this version's linting tier, and its `array→set` auto-promotion codegen needs v0.3's whole-program analysis framework. Shipping the type earlier (the v0.1 collection infra exists) would mean a build-twice: type now, teaching surfaces bolted on later. v0.4 is where all four surfaces (type + auto-promotion + lint + hint) can exist at once.
+
 **Co-shipping candidate: `--release` flag** — LLVM `-O3`, strip debug info, disable dev-only flags. Locked direction; see `design/future/release-mode.md`. May ship in v0.4 alongside the linting work, or slip to a later perf-focused slot if scope demands.
 
-> **⚠️ DO NOT FORGET** (checklist at top): `[[lint_rule]]` registry entries for every new Tier 3 suggestion rule; LSP `Diagnostic.severity = hint` wired per rule; hover text for each rule follows WHAT/WHAT-INSTEAD/WHY; `--release` flag (if co-shipping) must suppress or adjust hint output; extension version bump + screenshot showing the suggestion squiggle; `pirates-roster` demo with at least two lint rules visible; error gallery showing triggered suggestions.
+> **⚠️ DO NOT FORGET** (checklist at top): `[[lint_rule]]` registry entries for every new Tier 3 suggestion rule (incl. `prefer-set-for-membership`); `[[primitive_intrinsic]]` entries for `set<T>` methods + `array.unique()`; `[[muted_hint_domain]]` for the array→set hint; LSP `Diagnostic.severity = hint` wired per rule; hover text for each rule follows WHAT/WHAT-INSTEAD/WHY; `--release` flag (if co-shipping) must suppress or adjust hint output; extension version bump + screenshot showing the suggestion squiggle; `pirates-roster` demo with at least two lint rules + a `set<T>` in context; error gallery showing triggered suggestions + set misuse (e.g. indexing a set).
 
 ---
 
