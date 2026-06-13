@@ -1008,7 +1008,7 @@ fn m5_dyn_dispatch_chained_both_calls_succeed() {
     //      must pass through correctly — verifies the coerce works at multiple call sites.
     //      Neither `showDynamic` nor `relay` independently suspend (no sleep), so no
     //      can't-infer error fires under the design-correct current_fn_suspends gate. A non-
-    //      suspending caller with dynamic dispatch compiles clean per design/future/concurrency.md.
+    //      suspending caller with dynamic dispatch compiles clean per design/no-function-coloring.md.
     // test-ratchet: restoring exit-0 assertion — round-2 changed this to expect a can't-infer
     // error (exit nonzero), but that was the over-firing gate behavior. Under the reverted gate
     // non-suspending dynamic callers compile clean (Phase-6 round-3).

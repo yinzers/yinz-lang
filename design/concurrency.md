@@ -27,7 +27,7 @@ Most developers don't bother parallelizing reads — they write sequential code 
 
 This is the authoritative statement of what `wait` means. Two different jobs were historically conflated — they are separate, and only the second is `wait`'s job.
 
-**Suspension is automatic. You never write `wait` for it.** A call that can block (transitively reaches an I/O / may-block operation — in v0.3 that is `sleep`) is compiled into a suspension point by the compiler's whole-program may-block analysis (no function coloring — see `design/future/concurrency.md`). The function suspends and hands its thread back to the scheduler automatically. The IDE shows the inferred suspension as the muted `wait_points` hint. The user does **not** type `wait` to make a call suspend correctly — that shipped in v0.3-M2.
+**Suspension is automatic. You never write `wait` for it.** A call that can block (transitively reaches an I/O / may-block operation — in v0.3 that is `sleep`) is compiled into a suspension point by the compiler's whole-program may-block analysis (no function coloring — see `design/no-function-coloring.md`). The function suspends and hands its thread back to the scheduler automatically. The IDE shows the inferred suspension as the muted `wait_points` hint. The user does **not** type `wait` to make a call suspend correctly — that shipped in v0.3-M2.
 
 **Ordering is also mostly automatic.** The compiler orders operations it can prove are dependent:
 - **Data dependency** — if B uses A's result, B waits for A. (No `wait` needed.)

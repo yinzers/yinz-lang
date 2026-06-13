@@ -1259,13 +1259,13 @@ ships_in = "v2+"
 design_doc = "design/mvp-scope.md"
 triggers = "Writing `gpu` as an identifier (not yet a reserved keyword)"
 
-# --- `--kernel` flag — no-runtime mode (design/future/no-runtime-mode.md) ---
+# --- `--kernel` flag — no-runtime mode (design/no-runtime-mode.md) ---
 [[deferred_tooling_feature]]
 name = "--kernel"
 substitute = "All programs currently require the full Yinz runtime. Bare-metal / kernel-mode targets ship in v0.3."
 why = "The `--kernel` (or `--bare`) compiler flag disables runtime-dependent features and requires the user to provide their own allocator, scheduler, and panic handler. Design is locked; the flag ships in v0.3."
 ships_in = "v0.3"
-design_doc = "design/future/no-runtime-mode.md"
+design_doc = "design/no-runtime-mode.md"
 triggers = "Passing `--kernel` to `ynz build` (flag not yet recognized)"
 
 # --- Binary package format reservation (design/future/packages.md) ---
@@ -1332,7 +1332,7 @@ name = "lsp-inlay-hint-wait-points"
 substitute = "Users write explicit `wait` at I/O call sites. No auto-insertion analysis exists in v0.1."
 why = "The wait_points muted-hint domain (Addition category) emits `wait (db.fetch may suspend on I/O)` before I/O calls the compiler can prove suspend. Yinz v0.1 has no I/O-suspension analysis — all calls are synchronous. The M5 LSP protocol handler emits no hints until the analysis ships."
 ships_in = "v0.3"
-design_doc = "design/future/concurrency.md"
+design_doc = "design/no-function-coloring.md"
 triggers = "`wait`-auto-insertion analysis ships in the concurrency milestone."
 
 # Inlay hint — lifetimes domain (awaiting explicit lifetime UI, may stay fully implicit).
@@ -1359,7 +1359,7 @@ name = "background-handle-form"
 substitute = "Use fire-and-forget `background fn(value.give)` or `background fn(value.copy)` for now. Handles (`let h = background fn()`) and channel-based value passing ship in v0.3-M4."
 why = "The handle form needs channels to pass results back to the caller. Channels ship in v0.3-M4 alongside the handle-form syntax."
 ships_in = "v0.3-M4"
-design_doc = "design/future/concurrency.md"
+design_doc = "design/no-function-coloring.md"
 triggers = "`let h = background fn()` — already rejected by typeck with a compile error pointing to this deferred feature"
 
 # Rename — aliased re-export deferred to v0.3+.
@@ -1516,13 +1516,13 @@ why_template = "`background` runs this function outside the current scope. A `le
 kind_name = "KernelModeRejectsBackground"
 what_template = "`background` is not available in --kernel mode."
 what_instead_template = "Remove the keyword or build without `--kernel`. Kernel-mode programs run without a scheduler runtime."
-why_template = "The thread-pool runtime that powers `background` does not run in kernel mode. See design/future/no-runtime-mode.md for the kernel-mode contract."
+why_template = "The thread-pool runtime that powers `background` does not run in kernel mode. See design/no-runtime-mode.md for the kernel-mode contract."
 
 [[diagnostic_template]]
 kind_name = "KernelModeRejectsWait"
 what_template = "`wait` is not available in --kernel mode."
 what_instead_template = "Remove the keyword or build without `--kernel`. Kernel-mode programs run without a scheduler runtime."
-why_template = "The thread-pool runtime that powers `wait` does not run in kernel mode. See design/future/no-runtime-mode.md for the kernel-mode contract."
+why_template = "The thread-pool runtime that powers `wait` does not run in kernel mode. See design/no-runtime-mode.md for the kernel-mode contract."
 
 [[diagnostic_template]]
 kind_name = "BackgroundLargeStructCopy"

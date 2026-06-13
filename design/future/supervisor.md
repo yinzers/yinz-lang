@@ -113,7 +113,7 @@ Spawns a `background` task with a panic handler attached. Does NOT auto-restart 
 
 ## v0.2 Implementation notes
 
-- The supervisor builds on `background` task primitives (see `concurrency.md`).
+- The supervisor builds on `background` task primitives (see `design/no-function-coloring.md`).
 - Restart logic lives in the supervisor itself, not the runtime — implemented as a Yinz stdlib type, not a special-cased compiler feature.
 - Backoff uses a monotonic clock (won't drift on system-clock changes).
 - The `onPanic` callback runs in the supervisor's task, not the panicked task — the panicked task is already dead.
@@ -125,7 +125,7 @@ The v0.2 milestone plan must address: cancellation (how does `supervise.alwaysRe
 
 ## Cross-references
 
-- [`design/future/concurrency.md`](concurrency.md) (`background` keyword, scheduler)
+- [`design/no-function-coloring.md`](../no-function-coloring.md) (`background` keyword, scheduler)
 - [`design/future/panic-safety.md`](panic-safety.md) (task isolation, drop-on-unwind)
 - [`design/future/http-framework.md`](http-framework.md) (HTTP server is supervised by default — canonical example of the meta-rule)
 - `design/stdlib/` (where stdlib design lives; this doc is the supervisor contract)

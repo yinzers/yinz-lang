@@ -256,7 +256,7 @@ The v0.2 milestone plan must include these in `### Performance` and `### Runtime
 
 - [`spec/errors.md`](../../spec/errors.md) (user spec for the `errors` keyword)
 - [`design/errors.md`](../errors.md) (design rationale for `errors`-keyword auto-propagation, why no try/catch)
-- [`design/future/concurrency.md`](concurrency.md) (the `background` keyword + scheduler)
+- [`design/no-function-coloring.md`](../no-function-coloring.md) (the `background` keyword + scheduler)
 - [`design/future/supervisor.md`](supervisor.md) (stdlib supervisor helpers)
 - [`design/ownership.md`](../ownership.md) (drop-on-scope-exit cleanup during unwind)
 - `.claude/graveyard.md` Entry 5 (mechanical enforcement of try/catch rejection)

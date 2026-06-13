@@ -195,7 +195,7 @@ Same shape, same semantics, ~33% less memory for this example. Multiply by N ent
 **Why no opt-out keyword in Yinz**: the only legitimate reasons to pin field layout are:
 1. **FFI to C** — handled by FFI bindings at the boundary, not by polluting the shape declaration. (FFI is v2+ per `design/mvp-scope.md`.)
 2. **Wire protocols / file formats** — handled by serializer codegen (per `.claude/rules/stdlib-design.md` Rule 6 — compiler-generated specialized serializers per shape) which decides wire layout independently from internal layout.
-3. **Memory-mapped hardware** — handled by `--kernel` mode infrastructure when v0.3 ships (per `design/future/no-runtime-mode.md`).
+3. **Memory-mapped hardware** — handled by `--kernel` mode infrastructure when v0.3 ships (per `design/no-runtime-mode.md`).
 
 None of these require a `layout: c` modifier on the shape itself — the layout constraint comes from the BOUNDARY (FFI, wire, hardware), not from the shape. Yinz can do better than Rust here by handling layout at the boundary, not in the shape declaration. Locked: no user-facing layout-pinning syntax for shapes.
 

@@ -18,7 +18,7 @@ This is genuinely novel — Rust can't do it (locked into type-level async by 1.
 
 Three things Rust gave up that Yinz keeps:
 
-1. **Yinz ships a runtime.** Rust deliberately doesn't (so it can target microcontrollers and kernels). Without a language-controlled runtime, Rust can't do whole-program may-block analysis — there's no scheduler to suspend on. Yinz HAS a runtime (`libynz_rt.a`), so the analysis is tractable. Kernel-mode support is handled separately via [`design/future/no-runtime-mode.md`](no-runtime-mode.md), not by skipping the runtime everywhere.
+1. **Yinz ships a runtime.** Rust deliberately doesn't (so it can target microcontrollers and kernels). Without a language-controlled runtime, Rust can't do whole-program may-block analysis — there's no scheduler to suspend on. Yinz HAS a runtime (`libynz_rt.a`), so the analysis is tractable. Kernel-mode support is handled separately via [`design/no-runtime-mode.md`](no-runtime-mode.md), not by skipping the runtime everywhere.
 
 2. **Yinz controls the IDE.** Rust's async syntax has to work without IDE support (some embedded environments edit Rust in vim with no rust-analyzer). Yinz's teaching mission means the IDE is REQUIRED infrastructure — muted hints carry the load that explicit `await` syntax carries in Rust.
 
@@ -30,7 +30,7 @@ Three things Rust gave up that Yinz keeps:
 
 ### Compile time
 
-1. The compiler builds a call graph for every function in the program (Yinz code + Yinz packages — see `packages.md` for the binary metadata that makes cross-package analysis work).
+1. The compiler builds a call graph for every function in the program (Yinz code + Yinz packages — see `design/future/packages.md` for the binary metadata that makes cross-package analysis work).
 2. For each function, the compiler determines whether it transitively calls any I/O intrinsic, FFI function marked `may-block`, or `wait`-expression. The "may-block" property propagates up the call graph.
 3. At every call site to a may-block function, the compiler emits a **suspension point** in the codegen. This is the no-coloring mechanism — automatic, never typed by the user.
 4. The IDE protocol shows the inferred suspension as the muted `wait_points` hint before the call expression.
@@ -42,7 +42,7 @@ Three things Rust gave up that Yinz keeps:
 1. `wait` desugars to a state-machine suspension (stackless coroutines, like Rust's async — low memory, fast spawn, minimal context-switch cost).
 2. The runtime scheduler (in `libynz_rt.a`) drives suspended state machines forward as I/O completes.
 3. `background` spawns a new task onto the scheduler. Tasks are cheap (state-machine memory, no per-task OS stack).
-4. Cross-thread shared state crosses a `background` boundary via auto-inferred `Arc<T>` wrapping. The IDE shows the auto-Arc as a muted hint (cautionary red-tinted styling because reference counting has cost). See [`design/ownership.md`](../ownership.md) for share/lend semantics across thread boundaries.
+4. Cross-thread shared state crosses a `background` boundary via auto-inferred `Arc<T>` wrapping. The IDE shows the auto-Arc as a muted hint (cautionary red-tinted styling because reference counting has cost). See [`design/ownership.md`](ownership.md) for share/lend semantics across thread boundaries.
 
 ---
 
@@ -64,7 +64,7 @@ This is one line per C function declared. Far less burden than Rust's `async fn`
 
 When the compiler emits a binary Yinz package (`.ynzlib` or whatever format), it MUST embed `may-block` metadata per exported function. This is the BAKE-IN-NOW item: the binary format must reserve space for this metadata from v0.1, even though v0.1 doesn't populate it. Retrofitting later is painful.
 
-See [`design/future/packages.md`](packages.md) for the binary format spec.
+See [`design/future/packages.md`](future/packages.md) for the binary format spec.
 
 When a downstream project consumes a compiled Yinz package, the compiler reads the package's `may-block` metadata and includes the package's functions in its call graph for analysis. Same `wait` insertion works across package boundaries.
 
@@ -292,7 +292,7 @@ There are two sleep intrinsics, distinguished by what they do to the OS thread:
 
 | Context | Wrong choice | Diagnostic |
 |---|---|---|
-| **`--kernel` mode** | `wait sleep(ms)` (no scheduler to yield to) | **COMPILE ERROR** — `KernelModeRejectsWait`, with WHAT-INSTEAD redirecting to `sleepBlocking(ms)` (pauses without a scheduler). Ships when `--kernel` is wired to emit (post-v0.3; reserved in the registry, 0 code sites today). See `design/future/no-runtime-mode.md`. |
+| **`--kernel` mode** | `wait sleep(ms)` (no scheduler to yield to) | **COMPILE ERROR** — `KernelModeRejectsWait`, with WHAT-INSTEAD redirecting to `sleepBlocking(ms)` (pauses without a scheduler). Ships when `--kernel` is wired to emit (post-v0.3; reserved in the registry, 0 code sites today). See `design/no-runtime-mode.md`. |
 | **Normal mode** | `sleepBlocking(ms)` (holds a thread idle when a scheduler is available) | **Tier 3 lint** `prefer-yielding-sleep` (suggestion, dismissable — NOT an error) → use `wait sleep(ms)`. Ships in **M4** (rides the `[[lint_rule]]` infra built there; M4's `background` handle-form also removes the last legit non-kernel blocking-sleep use — the keepalive pattern — so the lint stops nagging a valid case). Must be a suggestion, not an error: rare legit uses exist + respect explicit intent (`.claude/rules/auto-promotion.md`). |
 
 Tracked for execution in `.claude/plans/roadmaps/v0-3-concurrency-perf.md` ("Sleep intrinsic naming + blocking-vs-yielding teaching" architectural decision + M4 scope).
@@ -312,9 +312,9 @@ The v0.2 milestone plan must include these in its `### Open questions` section b
 
 ## Cross-references
 
-- [`design/ide-hints.md`](../ide-hints.md) (muted `wait` rendering protocol)
-- [`design/ownership.md`](../ownership.md) (auto-`Arc` for cross-thread shared state)
-- [`design/future/panic-safety.md`](panic-safety.md) (panics in `background` tasks)
-- [`design/future/supervisor.md`](supervisor.md) (stdlib supervisor helpers)
-- [`design/future/packages.md`](packages.md) (binary metadata for may-block propagation across packages)
-- [`design/future/no-runtime-mode.md`](no-runtime-mode.md) (kernel-mode disables this entire system; users provide their own scheduler)
+- [`design/ide-hints.md`](ide-hints.md) (muted `wait` rendering protocol)
+- [`design/ownership.md`](ownership.md) (auto-`Arc` for cross-thread shared state)
+- [`design/future/panic-safety.md`](future/panic-safety.md) (panics in `background` tasks)
+- [`design/future/supervisor.md`](future/supervisor.md) (stdlib supervisor helpers)
+- [`design/future/packages.md`](future/packages.md) (binary metadata for may-block propagation across packages)
+- [`design/no-runtime-mode.md`](no-runtime-mode.md) (kernel-mode disables this entire system; users provide their own scheduler)

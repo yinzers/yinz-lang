@@ -75,11 +75,11 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Topic | File | What's in it |
 |-------|------|--------------|
 | Future index | `design/future/index.md` | TOC for all future-locked designs + parking lot for ideas not yet committed |
-| Concurrency (no function coloring) | `design/future/concurrency.md` | v0.2 — whole-program may-block analysis, auto-inserted `wait`, FFI annotation, stackless state machines |
+| Concurrency (no function coloring) | `design/no-function-coloring.md` | v0.2 — whole-program may-block analysis, auto-inserted `wait`, FFI annotation, stackless state machines |
 | Panic safety | `design/future/panic-safety.md` | v0.2 — task-isolated panics, no try/catch, no mutex poisoning, drop-on-scope-exit cleanup, supervisor pattern |
 | Supervisor helpers | `design/future/supervisor.md` | v0.2 — stdlib `supervise.alwaysRestart` / `.withBackoff` / `.maxRestarts`, default-supervision meta-rule for stdlib long-running loops |
 | Self-referential shapes | `design/future/self-references.md` | v0.3+ — Approach A (relative/offset pointers). Compiler auto-detects, `self-referential` modifier as muted IDE hint. Rejection rationale for B (fix-up on move) and C (pin-in-place). |
-| No-runtime mode | `design/future/no-runtime-mode.md` | v0.3 — `--kernel` flag, plug-in runtime architecture (user provides allocator/scheduler/panic handler/output). Chipset, kernel, NASA-grade targets. |
+| No-runtime mode | `design/no-runtime-mode.md` | v0.3 — `--kernel` flag, plug-in runtime architecture (user provides allocator/scheduler/panic handler/output). Chipset, kernel, NASA-grade targets. |
 | Arena allocators | `design/future/arena.md` | v0.2 (A1/A2) + v0.3+ (B). `arena scratch {}` scope blocks ship v0.2 — 10-100x faster than malloc for scope-bounded workloads. Compiler internals should adopt arenas in M8 polish. |
 | HTTP framework | `design/future/http-framework.md` | v0.3+ — supervised-by-default HTTP server. Per-request task isolation, accept-loop supervision, custom `supervise:` config option, default 500 handler. |
 | Compiled-package binary format | `design/future/packages.md` | v0.1 binary-format reservation + v0.2 implementation. May-block metadata, ownership signatures, kernel-mode compatibility flags, allocator requirements, LLVM attribute hints, self-referential markers, doc comments per exported item. |

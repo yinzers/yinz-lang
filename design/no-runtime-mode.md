@@ -90,7 +90,7 @@ let buffer = array<int>()
 //   Kernels don't have an OS-provided allocator. fixed<T, N> uses stack memory
 //   (size locked at compile time). For dynamic sizing, plug in your kernel's
 //   allocator via array<int>.in(...) — the language ships allocator-injection
-//   for exactly this scenario. See design/future/no-runtime-mode.md.
+//   for exactly this scenario. See design/no-runtime-mode.md.
 ```
 
 Every kernel-mode error MUST follow this format. The error is also a teaching moment for kernel devs — they probably haven't seen Yinz's allocator-injection pattern before.
@@ -99,7 +99,7 @@ Every kernel-mode error MUST follow this format. The error is also a teaching mo
 
 ## Forward-compatibility for v0.1-v0.2 features
 
-Every NEW feature from M3 onward MUST declare its runtime dependencies and kernel-mode behavior in its milestone plan's `### Runtime Dependencies` and `### Kernel-Mode Behavior` sub-sections (per [`.claude/rules/plan-invariants.md`](../../.claude/rules/plan-invariants.md)).
+Every NEW feature from M3 onward MUST declare its runtime dependencies and kernel-mode behavior in its milestone plan's `### Runtime Dependencies` and `### Kernel-Mode Behavior` sub-sections (per [`.claude/rules/plan-invariants.md`](../.claude/rules/plan-invariants.md)).
 
 Examples:
 
@@ -134,7 +134,7 @@ Some of these target audiences (NASA, avionics) need MORE than `--kernel` — th
 
 Formal verification is a v3+ research project, not in scope for `--kernel` mode itself. But `--kernel` mode is a prerequisite: without controlling memory allocation and runtime dependencies, formal verification is much harder. Adding `--kernel` now makes the formal-verification step tractable later.
 
-See [`design/future/index.md`](index.md) "Parking Lot" section for formal verification.
+See [`design/future/index.md`](future/index.md) "Parking Lot" section for formal verification.
 
 ---
 
@@ -152,8 +152,8 @@ The v0.3 milestone plan must address:
 
 ## Cross-references
 
-- [`.claude/rules/plan-invariants.md`](../../.claude/rules/plan-invariants.md) (M4+ plans declare runtime dependencies + kernel-mode behavior — mechanical enforcement for forward-compat)
-- [`design/future/concurrency.md`](concurrency.md) (background/wait require the scheduler, which is disabled in kernel mode unless custom-provided)
-- [`design/future/arena.md`](arena.md) (arenas work in kernel mode with user-provided base allocator)
-- [`design/future/packages.md`](packages.md) (binary metadata includes per-item kernel-mode compatibility flags)
-- [`.claude/plans/active/v0-1-compiler.md`](../../.claude/plans/active/v0-1-compiler.md) "Forward-Compatibility Constraints" (Phase 5 locks the requirement)
+- [`.claude/rules/plan-invariants.md`](../.claude/rules/plan-invariants.md) (M4+ plans declare runtime dependencies + kernel-mode behavior — mechanical enforcement for forward-compat)
+- [`design/no-function-coloring.md`](no-function-coloring.md) (background/wait require the scheduler, which is disabled in kernel mode unless custom-provided)
+- [`design/future/arena.md`](future/arena.md) (arenas work in kernel mode with user-provided base allocator)
+- [`design/future/packages.md`](future/packages.md) (binary metadata includes per-item kernel-mode compatibility flags)
+- [`.claude/plans/active/v0-1-compiler.md`](../.claude/plans/done/v0-1-compiler.md) "Forward-Compatibility Constraints" (Phase 5 locks the requirement)

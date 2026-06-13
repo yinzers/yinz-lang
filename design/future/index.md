@@ -13,7 +13,6 @@ Each doc in this directory has a **Status header** stating one of:
 
 | Doc | Status | Target | One-line description |
 |-----|--------|--------|----------------------|
-| [`concurrency.md`](concurrency.md) | Locked | v0.2 | No-function-coloring async — compiler does whole-program may-block analysis, IDE shows muted `wait` hints, FFI annotated explicitly. |
 | [`panic-safety.md`](panic-safety.md) | Locked | v0.2 | Errors auto-propagate; panics auto-isolate to `background` tasks. NO try/catch ever. Drop-on-scope-exit + supervisor pattern. |
 | [`supervisor.md`](supervisor.md) | Locked | v0.2 | Stdlib supervisor helpers (`supervise.alwaysRestart`, `.withBackoff`, `.maxRestarts`, `.onPanic`). Meta-rule: any long-running stdlib loop is supervised by default. |
 
@@ -22,7 +21,6 @@ Each doc in this directory has a **Status header** stating one of:
 | Doc | Status | Target | One-line description |
 |-----|--------|--------|----------------------|
 | [`self-references.md`](self-references.md) | Locked (Approach A) | v0.3+ | Self-referential shapes via relative pointers (~1 cycle/access). Opt-in via `self-referential` modifier or compiler-inferred. |
-| [`no-runtime-mode.md`](no-runtime-mode.md) | Locked | v0.3 | `--kernel` (or `--bare`) flag — plug-in runtime architecture for chipset/NASA targets. |
 | [`arena.md`](arena.md) | Locked | v0.2 (A1/A2) + v0.3+ (B) | `arena {}` scope blocks ship v0.2 as the default; explicit `Arena()` + `.reset()` deferred to v0.3+. |
 | [`http-framework.md`](http-framework.md) | Locked | v0.3+ | Supervision-by-default HTTP server. |
 | [`auto-soa.md`](auto-soa.md) | Locked (commitment) | v0.3+ | Compiler auto-transforms `array<shape>` to Struct-of-Arrays layout for hot loops accessing 1-2 fields. User code unchanged; IDE shows the transform as muted hint. |
@@ -32,6 +30,17 @@ Each doc in this directory has a **Status header** stating one of:
 | [`doc-generator.md`](doc-generator.md) | Parking lot — direction confirmed | v0.3+ or v0.4+ | `ynz doc` command: generates structured HTML/JSON/Markdown docs from `//` leading comments + type signatures derived from the AST. No `@param` tags — types ARE the structured docs. |
 | [`macos-platform-support.md`](macos-platform-support.md) | Deferred (infra) | TBD — needs a Mac | macOS dropped from CI 2026-06-01 (codegen golden tests x86_64-linux-pinned; some failures may be real macOS codegen differences unverifiable from Linux). Re-add `macos-latest` once codegen is validated + per-triple goldens recorded on a Mac. |
 | [`cross-module-frame-serialization.md`](cross-module-frame-serialization.md) | Locked, M3e | v0.3-M3e | Full FrameLayout serialization across the export table. Replaces the scalar `composed_frame_size` shortcut; enables re-export chains, shape crossing-locals, and EC×transitive combos across module boundaries. |
+
+---
+
+## Promoted out of `future/` (now load-bearing — see `design/` proper)
+
+Per the "Implementing a locked design" procedure below, these moved out of `future/` once they became load-bearing for active milestone work:
+
+| Was | Now | Why |
+|-----|-----|-----|
+| `future/concurrency.md` | [`design/no-function-coloring.md`](../no-function-coloring.md) | No-coloring async model; v0.3 implements it now (M3D). Renamed on move — `design/concurrency.md` is a different doc (auto-parallelization). |
+| `future/no-runtime-mode.md` | [`design/no-runtime-mode.md`](../no-runtime-mode.md) | `--kernel` behavior is a hard per-milestone contract every M4+ plan must declare today. |
 
 ---
 

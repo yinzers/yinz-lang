@@ -33,7 +33,7 @@ Some features are locked but ship after v0.1. They appear in the source as comme
 - `arena scratch { ... }` — v0.2 per `design/future/arena.md`
 - `verified { ... }` — v0.3+ (unsafe escape hatch, name reserved per `.claude/rules/vocabulary.md`)
 - Self-referential shapes — v0.3+ per `design/future/self-references.md`
-- `--kernel` mode (custom allocator plug-in) — v0.3+ per `design/future/no-runtime-mode.md`
+- `--kernel` mode (custom allocator plug-in) — v0.3+ per `design/no-runtime-mode.md`
 
 When they ship, they replace the placeholder comments with real demo content.
 

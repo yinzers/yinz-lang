@@ -295,7 +295,7 @@ struct Checker<'b> {
     /// (reaches an intra-unit `sleep`) AND makes an unanalyzable cross-module or
     /// dynamic-dispatch call gets the clean compile error. A caller that does NOT
     /// independently suspend treats the boundary call as a non-suspending leaf — the
-    /// M2-documented under-approximation per `design/future/concurrency.md:61-67`
+    /// M2-documented under-approximation per `design/no-function-coloring.md:61-67`
     /// (cross-module suspension propagation requires M8 binary package metadata and
     /// ships in M3).
     current_fn_suspends: bool,
@@ -402,7 +402,7 @@ impl<'b> Checker<'b> {
         // diagnostic gates on this: a function that independently reaches a suspension point
         // (intra-unit `sleep`) AND makes an unanalyzable boundary call gets the error.
         // Functions that do NOT independently suspend treat the boundary call as a
-        // non-suspending leaf — the M2 under-approximation per design/future/concurrency.md:75.
+        // non-suspending leaf — the M2 under-approximation per design/no-function-coloring.md:75.
         self.current_fn_suspends = self
             .sig_table
             .fns
@@ -2156,7 +2156,7 @@ impl<'b> Checker<'b> {
                         span.clone(),
                         "`wait` is not available in --kernel mode.",
                         "Remove the keyword or build without `--kernel`. Kernel-mode programs run without a scheduler runtime.",
-                        "The thread-pool runtime that powers `wait` does not run in kernel mode. See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
+                        "The thread-pool runtime that powers `wait` does not run in kernel mode. See `design/no-runtime-mode.md` for the kernel-mode contract.",
                     ));
                     // Return Type::Error without recursing into the inner expression. Recursing
                     // would visit the inner Expr::Call and trigger the call-dispatch kernel guard,
@@ -2194,7 +2194,7 @@ impl<'b> Checker<'b> {
                         span.clone(),
                         "`background` is not available in --kernel mode.",
                         "Remove the keyword or build without `--kernel`. Kernel-mode programs run without a scheduler runtime.",
-                        "The thread-pool runtime that powers `background` does not run in kernel mode. See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
+                        "The thread-pool runtime that powers `background` does not run in kernel mode. See `design/no-runtime-mode.md` for the kernel-mode contract.",
                     ));
                     // Still infer inner for completeness; return Nothing.
                     let _ = self.infer_expr(inner, None);
@@ -2440,7 +2440,7 @@ impl<'b> Checker<'b> {
                          Kernel-mode programs run without a scheduler runtime.",
                         "`sleep` requires the Tokio runtime (started by `ynz_rt_init`), \
                          which does not run in kernel mode. \
-                         See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
+                         See `design/no-runtime-mode.md` for the kernel-mode contract.",
                     ));
                     for arg in &call.args {
                         self.infer_expr(arg, None);
@@ -2557,7 +2557,7 @@ impl<'b> Checker<'b> {
                             call.span.clone(),
                             format!("`{name}` suspends, which is not available in --kernel mode."),
                             format!("Remove the call to `{name}` or build without `--kernel`. Kernel-mode programs run without a scheduler runtime."),
-                            "Suspension requires the thread-pool runtime, which does not run in kernel mode. See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
+                            "Suspension requires the thread-pool runtime, which does not run in kernel mode. See `design/no-runtime-mode.md` for the kernel-mode contract.",
                         ));
                     }
 
@@ -2904,7 +2904,7 @@ impl<'b> Checker<'b> {
             // coerce at the call site); only passing an ALREADY-dynamic value triggers this.
             // Gate on current_fn_suspends: only a caller that independently reaches a
             // suspension point needs this error; non-suspending callers treat dynamic calls
-            // as non-suspending leaves per design/future/concurrency.md:75.
+            // as non-suspending leaves per design/no-function-coloring.md:75.
             if let (
                 Type::Dynamic {
                     contract: expected_contract,
@@ -3463,7 +3463,7 @@ impl<'b> Checker<'b> {
                     // cannot be determined. Gate on current_fn_suspends: only callers that
                     // independently reach a suspension point (intra-unit `sleep`) get the
                     // error; non-suspending callers treat this as a non-suspending leaf per
-                    // design/future/concurrency.md:75 (the M2 intentional under-approximation).
+                    // design/no-function-coloring.md:75 (the M2 intentional under-approximation).
                     if self.current_fn_suspends {
                         self.diags.push(Diagnostic::error(
                             method_span.clone(),
@@ -3526,7 +3526,7 @@ impl<'b> Checker<'b> {
                                 method_span.clone(),
                                 format!("`{method}` suspends, which is not available in --kernel mode."),
                                 format!("Remove the call to `{method}` or build without `--kernel`. Kernel-mode programs run without a scheduler runtime."),
-                                "Suspension requires the thread-pool runtime, which does not run in kernel mode. See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
+                                "Suspension requires the thread-pool runtime, which does not run in kernel mode. See `design/no-runtime-mode.md` for the kernel-mode contract.",
                             ));
                             return sig.ret.clone();
                         }

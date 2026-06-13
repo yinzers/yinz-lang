@@ -286,7 +286,7 @@ Every locked deferred feature documented in `design/future/*.md` gets a `[[defer
 | `supervisor.md` | `deferred_stdlib_api` (RESERVED kind — zero entries in M1) | N/A — stdlib module | v0.2 |
 | `index.md` | Skip — this is the index, not a feature doc | N/A | N/A |
 
-**Phase 5b deliverable**: every row with a `deferred_language_feature` or `deferred_tooling_feature` kind gets a registry entry in `registry/features.toml`. Rows marked "N/A" or "RESERVED kind" are explicitly not added (documented here so Phase 5b reviewers know the omission is intentional). The `design/future/concurrency.md` and `design/future/panic-safety.md` gaps (already shipped via M8 keywords + M7 `errors`) are documented in Phase 5b PR description.
+**Phase 5b deliverable**: every row with a `deferred_language_feature` or `deferred_tooling_feature` kind gets a registry entry in `registry/features.toml`. Rows marked "N/A" or "RESERVED kind" are explicitly not added (documented here so Phase 5b reviewers know the omission is intentional). The `design/no-function-coloring.md` and `design/future/panic-safety.md` gaps (already shipped via M8 keywords + M7 `errors`) are documented in Phase 5b PR description.
 
 Additionally, `design/mvp-scope.md` v2+ section covers: `f32`, `f64`, `i8`–`i64`, `u8`–`u64` (sized numerics — Phase 5a), `foreign` keyword (FFI), and `gpu` keyword. These get `[[deferred_language_feature]]` entries in Phase 5a (sized numerics, which have existing lexer handlers) and Phase 5b (foreign/gpu, from the design catalog).
 

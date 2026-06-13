@@ -30,13 +30,13 @@ Pre-M4 milestone plans (M1, M2, M3) are exempt — the rule kicks in for M4 (typ
 
 Every plan MUST include a **`## Design-Doc Alignment`** section that:
 
-1. **Cites the governing design doc(s)** the plan builds toward (e.g. `design/future/concurrency.md`, `design/type-system.md`). "None — no design doc covers this" is an allowed answer ONLY after confirming `/design/` truly has no relevant file; if it doesn't, that's a signal the design should be written first.
+1. **Cites the governing design doc(s)** the plan builds toward (e.g. `design/no-function-coloring.md`, `design/type-system.md`). "None — no design doc covers this" is an allowed answer ONLY after confirming `/design/` truly has no relevant file; if it doesn't, that's a signal the design should be written first.
 2. **Confirms the plan's model matches the cited docs**, OR enumerates every divergence in the form **"design doc `X` says A; this plan does B because <reason>"** with Patrick's explicit sign-off recorded. An un-surfaced divergence is a plan defect, not a judgment call.
 3. **Flags any milestone-boundary assumption** the plan depends on (e.g. "this defers feature F to milestone N") and confirms that deferral is itself documented in the roadmap / mvp-scope — not invented by the plan. A plan that defers a capability the design says is load-bearing for THIS milestone has cut the boundary at the wrong line (see the v0.3-M2 HALT below).
 
 **Plan-reviewer obligation (Step 7) and per-phase reviewer obligation (Step 9a):** reviewers MUST diff the plan/diff against the cited design docs, not only against the plan's own internal consistency. "The phase does what the phase says" is necessary but NOT sufficient — the question is also "does what the phase says match the design?" If a reviewer finds the plan contradicts a design doc, that is a BLOCK with the citation, regardless of how internally consistent the plan is.
 
-**Why this exists:** v0.3-M2 was HALTED at Phase 5 because the plan shipped a `block_on` sync bridge that directly contradicted `design/future/concurrency.md` ("Concurrency — No Function Coloring": whole-program transitive may-block analysis + auto-inserted `wait`, no bridge anywhere). The bridge was invented to fill a gap created by cutting the M2/M3 milestone boundary at the wrong line (state machines in M2, may-block analysis deferred to M3 — but a correct state-machine layer REQUIRES the analysis). Three rounds of adversarial plan-review + a P0 gate + five per-phase 4-agent gates never caught it, because every review checked the plan against ITSELF, never against the design doc it was violating. This section makes design-doc alignment a first-class, reviewer-enforced gate.
+**Why this exists:** v0.3-M2 was HALTED at Phase 5 because the plan shipped a `block_on` sync bridge that directly contradicted `design/no-function-coloring.md` ("Concurrency — No Function Coloring": whole-program transitive may-block analysis + auto-inserted `wait`, no bridge anywhere). The bridge was invented to fill a gap created by cutting the M2/M3 milestone boundary at the wrong line (state machines in M2, may-block analysis deferred to M3 — but a correct state-machine layer REQUIRES the analysis). Three rounds of adversarial plan-review + a P0 gate + five per-phase 4-agent gates never caught it, because every review checked the plan against ITSELF, never against the design doc it was violating. This section makes design-doc alignment a first-class, reviewer-enforced gate.
 
 ---
 
@@ -107,7 +107,7 @@ For each runtime dependency listed above: what is the behavior in `--kernel` mod
 **Examples (for M4)**:
 - `shape` declarations: always work in `--kernel` mode (compile-time only)
 - Heap-allocating shape instances: COMPILE ERROR in `--kernel` mode unless user provides an allocator via `... .in(myKernelAllocator)`
-- Error message format: WHAT/WHAT-INSTEAD/WHY pointing to `design/future/no-runtime-mode.md` for the plug-in allocator API
+- Error message format: WHAT/WHAT-INSTEAD/WHY pointing to `design/no-runtime-mode.md` for the plug-in allocator API
 
 ### `### Demo & Error Gallery`
 
@@ -179,4 +179,4 @@ See `.claude/plans/active/design-lockdown-from-gemini-review.md` for the origina
 - `~/.claude/skills/plan/SKILL.md` (the global /plan skill — its plan template can/should be extended to include this section by default once /plan is project-aware)
 - `.claude/graveyard.md` (Entries 1, 3, 4 enforce this rule)
 - `.claude/plans/active/v0-1-compiler.md` `## Forward-Compatibility Constraints` (cites this rule)
-- `design/future/no-runtime-mode.md` (defines the kernel-mode behavior the rule references)
+- `design/no-runtime-mode.md` (defines the kernel-mode behavior the rule references)

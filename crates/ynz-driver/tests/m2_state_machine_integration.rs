@@ -542,7 +542,7 @@ fn recursion_cancellation_negative_control_skip_drop_leaks() {
     );
 }
 
-// WHY: "one alloc per task tree" is the design-doc model (design/future/concurrency.md:
+// WHY: "one alloc per task tree" is the design-doc model (design/no-function-coloring.md:
 // "low memory, fast spawn — like Rust's async"). A per-call alloc would mean N sleep
 // calls = N allocs. Instrumenting ynz_alloc with a counter and asserting count==1 for a
 // 3-level synchronous tree proves composed frames are actually ONE allocation.

@@ -133,7 +133,7 @@ This is internal compiler work; it has nothing to do with the user-facing arena 
 
 ## Kernel-mode compatibility
 
-In `--kernel` mode (see [`no-runtime-mode.md`](no-runtime-mode.md)), the default allocator doesn't exist. `arena {}` blocks still WORK — they need a base allocator to get their buffer from, which the user injects via `runtime.setAllocator(myKernelAllocator)`. Once that's set, `arena {}` blocks function normally.
+In `--kernel` mode (see [`no-runtime-mode.md`](../no-runtime-mode.md)), the default allocator doesn't exist. `arena {}` blocks still WORK — they need a base allocator to get their buffer from, which the user injects via `runtime.setAllocator(myKernelAllocator)`. Once that's set, `arena {}` blocks function normally.
 
 This is one of the kernel-mode wins: the bump-pointer allocator pattern is perfect for kernels (deterministic, fast, no fragmentation). Arenas work AS WELL in kernel mode as in regular mode — no kernel-specific limitations.
 
@@ -165,8 +165,8 @@ If/when Option B is implemented:
 
 ## Cross-references
 
-- [`design/future/no-runtime-mode.md`](no-runtime-mode.md) (arenas work in kernel mode if user provides base allocator)
+- [`design/no-runtime-mode.md`](../no-runtime-mode.md) (arenas work in kernel mode if user provides base allocator)
 - [`design/ide-hints.md`](../ide-hints.md) (muted `.in(arena)` rendering protocol)
 - [`design/ownership.md`](../ownership.md) (escape-analysis rules apply to arena-allocated values)
 - `.claude/todos.md` (Yinz compiler internals should use arenas — M8 polish task)
-- [`.claude/plans/active/design-lockdown-from-gemini-review.md`](../../.claude/plans/active/design-lockdown-from-gemini-review.md) (originating decision)
+- [`.claude/plans/done/design-lockdown-from-gemini-review.md`](../../.claude/plans/done/design-lockdown-from-gemini-review.md) (originating decision)
