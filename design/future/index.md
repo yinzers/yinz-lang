@@ -33,6 +33,16 @@ Each doc in this directory has a **Status header** stating one of:
 
 ---
 
+## Multi-file topics (subfolders)
+
+Some future topics span several files and get a subfolder instead of one flat doc:
+
+| Folder | Status | Target | What's in it |
+|--------|--------|--------|--------------|
+| [`gui/`](gui/index.md) | Direction locked | post-v0.5 | GUI & cross-platform apps. Webview-hosted native shell (Tauri/Capacitor model): one HTML/CSS/JS frontend → native binaries for web/desktop/iOS/Android. Files: `architecture.md` (model + decision + rejected alternatives), `capabilities.md` (device APIs + permissions), `build-targets.md` (per-platform compile + WASM web target). |
+
+---
+
 ## Promoted out of `future/` (now load-bearing — see `design/` proper)
 
 Per the "Implementing a locked design" procedure below, these moved out of `future/` once they became load-bearing for active milestone work:
