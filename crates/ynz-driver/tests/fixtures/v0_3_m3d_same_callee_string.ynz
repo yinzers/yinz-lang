@@ -1,0 +1,21 @@
+// v0.3-M3d same-callee distinctness: two calls to the SAME function with DIFFERENT inputs,
+// run at the same time, each returning a `string`. `a` is buildStr(3) (len=3) and `b` is
+// buildStr(5) (len=5) — the two results stay separate, so the prints differ. Both print the
+// same lines whether or not the two calls run at the same time.
+
+function buildStr(n: int) -> string {
+  let count: int = 0
+  let i: int = 0
+  while (i < n) {
+    count = count + 1
+    i = i + 1
+  }
+  return `len=${count}`
+}
+
+function entrypoint() -> nothing {
+  let a = buildStr(3)
+  let b = buildStr(5)
+  print(a)
+  print(b)
+}

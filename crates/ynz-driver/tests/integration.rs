@@ -5496,6 +5496,348 @@ fn v03_m3d_return_class_maybe_declines_and_ir_inert() {
     );
 }
 
+// ── v0.3-M3d Phase 3 Slice 3: same-callee distinctness + worth-it/trivial-leaf ────────
+//
+// Slice 2 proved DISTINCT-callee parallelism for the full return-class matrix. These tests
+// prove SAME-callee distinctness: two adjacent calls to the SAME function name with DIFFERENT
+// arguments must bind DISTINCT, correct results. That is the per-(group, member-index) keying
+// proof — if the result slots were keyed by callee NAME instead of member index, the two
+// same-callee members would alias and the second bind would clobber (or read) the first. Every
+// fixture below picks args whose results DIFFER, so an aliasing regression changes the output.
+// All reuse `m3d_assert_fires_byte_identical_alloc_free` (FIRES with 2 spawns + byte-identical
+// to `--no-auto-parallel` + alloc==free).
+
+#[test]
+fn v03_m3d_same_callee_int_distinct_values() {
+    // WHY: same callee `sumTo`, args 5 and 6 → 10 and 15 (distinct). The 2-spawn FIRE assertion
+    // plus the distinct oracle prove the members are keyed by group position, not callee name —
+    // a name-keyed result slot would make both members read the same slot. If you relax the
+    // spawn-count assertion, the parallelism regressed to sequential; fix the codegen, not this
+    // test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_int.ynz", "10\n15");
+}
+
+#[test]
+fn v03_m3d_same_callee_bool_distinct_values() {
+    // WHY: same callee `sumExceeds`, args 4 and 6 → false and true (distinct). Proves the
+    // bool pack/bind path keeps same-callee members separate. FIRE + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_bool.ynz", "false\ntrue");
+}
+
+#[test]
+fn v03_m3d_same_callee_float_distinct_values() {
+    // WHY: same callee `sumf`, args 2 and 4 → 3 and 6 (distinct). Proves the f64 result word is
+    // bound per member, not shared across two same-callee members. FIRE + byte-identical +
+    // alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_float.ynz", "3\n6");
+}
+
+#[test]
+fn v03_m3d_same_callee_number_distinct_values() {
+    // WHY: `number` is the trickiest class — the result word is a pointer to a heap-stable
+    // 16-byte value, so a name-keyed (rather than member-keyed) result slot would make both
+    // same-callee members point at the same heap value. Same callee `sumn`, args 2 and 4 → 3.0
+    // and 6.0 (distinct) catches that. FIRE + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_number.ynz", "3.0\n6.0");
+}
+
+#[test]
+fn v03_m3d_same_callee_string_distinct_values() {
+    // WHY: same callee `buildStr`, args 3 and 5 → len=3 and len=5 (distinct heap strings).
+    // Proves two same-callee members each carry their own owning heap value, not a shared one.
+    // FIRE + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_string.ynz", "len=3\nlen=5");
+}
+
+#[test]
+fn v03_m3d_same_callee_array_distinct_values() {
+    // WHY: same callee `buildArr`, args 3 and 4 → element counts 3 and 4 (distinct, order-
+    // independent). Proves same-callee members bind separate `array<int>` values. FIRE +
+    // byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_array.ynz", "3\n4");
+}
+
+#[test]
+fn v03_m3d_same_callee_map_distinct_values() {
+    // WHY: same callee `buildMap`, args 3 and 5 → entry counts 3 and 5 (distinct, order-
+    // independent). Proves same-callee members bind separate `map<int, int>` values. FIRE +
+    // byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_map.ynz", "3\n5");
+}
+
+#[test]
+fn v03_m3d_same_callee_int_errors_distinct_values() {
+    // WHY: same callee `compute` returning `int errors`, args 4 and 5 → 6 and 10 (distinct).
+    // The errors ABI carries both an error word and a success word; a name-keyed slot would
+    // make the second `.or(-1)` read the first member's pair. Both callees succeed, so `.or(-1)`
+    // prints the distinct totals. FIRE + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_int_errors.ynz", "6\n10");
+}
+
+#[test]
+fn v03_m3d_worth_it_trivial_leaf_runs_inline() {
+    // WHY: the worth-it proxy is a perf gate, never a correctness gate. Two tiny straight-line
+    // callees (`double`/`triple`, no loop, no recursion) are NOT worth coordinating to run at
+    // the same time, so the compiler DECLINES the group and runs them inline — exactly 0 spawn
+    // calls. The output is still correct (40, 63) and byte-identical to `--no-auto-parallel`.
+    // This is the contrast partner of `v03_m3d_worth_it_loop_callee_fires`: identical entrypoint
+    // shape, but loop-bearing callees there fire while these trivial leaves decline. If you make
+    // this fire (≠ 0 spawns), the worth-it proxy stopped gating trivial leaves — fix the gate,
+    // not this test.
+    m3d_assert_declines_byte_identical("v0_3_m3d_worth_it_trivial_leaf_inline.ynz", "40\n63");
+}
+
+#[test]
+fn v03_m3d_worth_it_loop_callee_fires() {
+    // WHY: the positive companion to `v03_m3d_worth_it_trivial_leaf_runs_inline`. Same entrypoint
+    // shape (two adjacent distinct-callee binds), but each callee loops, so the worth-it proxy
+    // admits the group and it FIRES (2 spawns) — the loop is the proxy's primary signal. Output
+    // (190, 420) byte-identical between modes. Together the two tests prove the worth-it proxy
+    // discriminates on callee body (loop/recursion present), not on the call-site shape.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_worth_it_loop_overlaps.ynz", "190\n420");
+}
+
+// ── v0.3-M3d runtime-correctness axis: compile-forced fixture coverage ─────────────────
+//
+// The R6 `cpu_result_abi_gate_parity` test (ynz-codegen `emit.rs`) compile-forces the
+// CLASSIFICATION axis: every `ynz_typeck::types::Type` variant must be classified admit/decline,
+// and the two gate functions must agree. It does NOT force the RUNTIME-CORRECTNESS axis — an
+// admitted (FIRE) class with no live `.ynz` fixture would classify fine yet never be proven to
+// produce the right value at runtime. Both runtime matrices below hand-listed which classes
+// FIRE, so adding a newly-admitted class to `cpu_result_abi_supports` did not break the build
+// until someone manually wired a runtime test (graveyard corpse "Hand-Listed Test Over a Closed
+// Enumerable Domain"; the project bar is compile-forced exhaustiveness for this closed domain).
+//
+// `runtime_axis_coverage` closes that gap for BOTH the slice-2 distinct-callee matrix
+// (`v03_m3d_return_class_*`) AND the slice-3 same-callee matrix (`v03_m3d_same_callee_*`): it is
+// an exhaustive `match` over `Type` with no `_` arm, so a future-added variant is a BUILD ERROR
+// until classified, and every `Fires` arm structurally REQUIRES naming the runtime fixture(s)
+// that exercise it. A new FIRE class therefore cannot reach `main` without a runtime fixture.
+
+/// Runtime-axis coverage for one resolved `Type` return class.
+///
+/// `Fires` names the live `.ynz` fixtures that drive the admitted class through the real
+/// blocking pool in BOTH runtime matrices — the slice-2 distinct-callee fixtures and the
+/// slice-3 same-callee fixture. `Declines` carries no fixture: the class lowers sequentially
+/// (the decline matrix asserts 0 spawns via `m3d_assert_declines_byte_identical`).
+enum RuntimeAxisCoverage {
+    Fires {
+        /// Slice-2 distinct-callee fixtures (`v03_m3d_return_class_*`). One or more — `int`
+        /// carries three (distinct/timing/saturation) because it is the headline class.
+        distinct: &'static [&'static str],
+        /// Slice-3 same-callee fixture (`v03_m3d_same_callee_*`) — the per-(group, member-index)
+        /// keying proof for this class.
+        same_callee: &'static str,
+    },
+    /// The class lowers sequentially. `_why` documents the decline reason at the call site so a
+    /// reader sees WHY without cross-referencing the production gate.
+    Declines(&'static str),
+}
+
+/// Map a resolved return class to the runtime fixtures that prove it (FIRE) or to a decline.
+///
+/// EXHAUSTIVE over `ynz_typeck::types::Type` with NO `_` arm BY DESIGN: a new variant on the
+/// `Type` enum makes this fail to compile until it is classified, and a `Fires` classification
+/// cannot be written without naming its runtime fixtures. This is the runtime-axis twin of
+/// `parity_case`'s classification-axis exhaustiveness — together they make a new admitted return
+/// class impossible to ship without BOTH a parity row AND a runtime fixture.
+fn runtime_axis_coverage(variant: &ynz_typeck::types::Type) -> RuntimeAxisCoverage {
+    use ynz_typeck::types::Type;
+    match variant {
+        // ── Admitted (FIRE) classes: each names its distinct-callee + same-callee fixtures ──
+        Type::Int => RuntimeAxisCoverage::Fires {
+            distinct: &[
+                "v0_3_m3d_spike_a_distinct.ynz",
+                "v0_3_m3d_spike_c_timing.ynz",
+                "v0_3_m3d_spike_d_saturation.ynz",
+            ],
+            same_callee: "v0_3_m3d_same_callee_int.ynz",
+        },
+        Type::Float => RuntimeAxisCoverage::Fires {
+            distinct: &["v0_3_m3d_return_class_float.ynz"],
+            same_callee: "v0_3_m3d_same_callee_float.ynz",
+        },
+        Type::Bool => RuntimeAxisCoverage::Fires {
+            distinct: &["v0_3_m3d_return_class_bool.ynz"],
+            same_callee: "v0_3_m3d_same_callee_bool.ynz",
+        },
+        // bare `number` admits (heap-stable ABI ptr); `number errors` declines (wide-EC UAF) —
+        // the EC decline is on the `ErrorsCapable` arm, this bare arm fires.
+        Type::Number { .. } => RuntimeAxisCoverage::Fires {
+            distinct: &["v0_3_m3d_return_class_number.ynz"],
+            same_callee: "v0_3_m3d_same_callee_number.ynz",
+        },
+        Type::String => RuntimeAxisCoverage::Fires {
+            distinct: &["v0_3_m3d_return_class_string.ynz"],
+            same_callee: "v0_3_m3d_same_callee_string.ynz",
+        },
+        Type::BuiltinArray { .. } => RuntimeAxisCoverage::Fires {
+            distinct: &["v0_3_m3d_return_class_array.ynz"],
+            same_callee: "v0_3_m3d_same_callee_array.ynz",
+        },
+        Type::BuiltinMap { .. } => RuntimeAxisCoverage::Fires {
+            distinct: &["v0_3_m3d_return_class_map.ynz"],
+            same_callee: "v0_3_m3d_same_callee_map.ynz",
+        },
+        // `T errors` admits only when the inner is a safe-to-carry word (int/float/bool/string/
+        // array/map). The `int errors` fixtures exercise the admitted EC path in both matrices;
+        // the declined `number errors` inner is locked separately by
+        // `v03_m3d_return_class_number_errors_declines_byte_identical`.
+        Type::ErrorsCapable { .. } => RuntimeAxisCoverage::Fires {
+            distinct: &["v0_3_m3d_return_class_int_errors.ynz"],
+            same_callee: "v0_3_m3d_same_callee_int_errors.ynz",
+        },
+        // ── Declined classes: sequential lowering, no FIRE fixture ──
+        Type::BuiltinFixed { .. } => RuntimeAxisCoverage::Declines(
+            "fixed's non-suspending return is a pre-existing base bug",
+        ),
+        Type::Shape { .. } => {
+            RuntimeAxisCoverage::Declines("by-value shape needs variable-size frame staging")
+        }
+        Type::Dynamic { .. } => RuntimeAxisCoverage::Declines("dynamic value is a fat pointer"),
+        Type::Generic { .. } => {
+            RuntimeAxisCoverage::Declines("user-defined generic shape (distinct from array/map)")
+        }
+        Type::Maybe { .. } => RuntimeAxisCoverage::Declines("maybe is outside the carried set"),
+        Type::Union { .. } => RuntimeAxisCoverage::Declines("union value carries a tag word"),
+        Type::Range { .. } => RuntimeAxisCoverage::Declines("range is not a value return class"),
+        Type::Options { .. } => RuntimeAxisCoverage::Declines("options is an i8-tag value"),
+        Type::Sensitive { .. } => RuntimeAxisCoverage::Declines("sensitive wraps a declined value"),
+        Type::Nothing => RuntimeAxisCoverage::Declines("no value to join-bind"),
+        Type::Error => RuntimeAxisCoverage::Declines("poisoned sig from an earlier type error"),
+        Type::MapEntry { .. } => RuntimeAxisCoverage::Declines("MapEntry is not a carried class"),
+        Type::TypeParam { .. } => RuntimeAxisCoverage::Declines(
+            "generic-fn returns live in GenericFnTable, never in the CPU-gated SignatureTable",
+        ),
+    }
+}
+
+#[test]
+fn cpu_runtime_axis_fixtures_compile_forced_exhaustive() {
+    // WHY: closes the runtime-correctness half of the CPU-result-ABI gate. The R6 parity test
+    // compile-forces CLASSIFICATION (admit/decline per `Type` variant); this test compile-forces
+    // RUNTIME COVERAGE (every admitted/FIRE class has a live `.ynz` fixture in BOTH runtime
+    // matrices). Invariant: adding a newly-admitted return class to `cpu_result_abi_supports`
+    // cannot ship without a runtime fixture — the exhaustive `runtime_axis_coverage` match makes
+    // a new `Type` variant a build error, and its `Fires` arm cannot be written without naming
+    // fixtures. The cross-check below also catches an admit/decline FLIP on an existing variant
+    // (one-sided edit to `cpu_result_abi_supports`) as a loud test failure. If a fixture is
+    // renamed, fix the name here — do NOT delete the coverage entry.
+    use ynz_typeck::independence::cpu_result_abi_supports;
+    use ynz_typeck::types::Type;
+
+    // One representative per resolved `Type` variant. The classifier (`runtime_axis_coverage`) is
+    // the exhaustiveness driver — every variant here is matched by an arm with no `_` fallback,
+    // so the compiler rejects any future variant that is not classified.
+    let all_variants: Vec<Type> = vec![
+        Type::Int,
+        Type::Float,
+        Type::Bool,
+        Type::Number { precision: 34 },
+        Type::String,
+        Type::BuiltinArray {
+            elem: Box::new(Type::Int),
+        },
+        Type::BuiltinMap {
+            key: Box::new(Type::Int),
+            val: Box::new(Type::Int),
+        },
+        Type::ErrorsCapable {
+            inner: Box::new(Type::Int),
+        },
+        Type::BuiltinFixed {
+            elem: Box::new(Type::Int),
+            size: None,
+        },
+        Type::Shape {
+            name: "Player".to_string(),
+        },
+        Type::Dynamic {
+            contract: "Damageable".to_string(),
+        },
+        Type::Generic {
+            name: "Pair".to_string(),
+            args: vec![Type::Int, Type::Int],
+        },
+        Type::Maybe {
+            inner: Box::new(Type::Int),
+        },
+        Type::Union {
+            variants: vec![
+                Type::Shape {
+                    name: "Circle".to_string(),
+                },
+                Type::Shape {
+                    name: "Square".to_string(),
+                },
+            ],
+        },
+        Type::Range {
+            element: Box::new(Type::Int),
+            end_inclusive: false,
+        },
+        Type::Options {
+            name: "Status".to_string(),
+        },
+        Type::Sensitive {
+            inner: Box::new(Type::String),
+        },
+        Type::Nothing,
+        Type::Error,
+        Type::MapEntry {
+            key: Box::new(Type::Int),
+            val: Box::new(Type::Int),
+        },
+        Type::TypeParam {
+            name: "T".to_string(),
+        },
+    ];
+
+    for variant in &all_variants {
+        match runtime_axis_coverage(variant) {
+            RuntimeAxisCoverage::Fires {
+                distinct,
+                same_callee,
+            } => {
+                // The runtime-axis verdict must match the production gate. A one-sided edit that
+                // flips an existing variant decline→admit in `cpu_result_abi_supports` (or here)
+                // fails this assertion — the two cannot drift.
+                assert!(
+                    cpu_result_abi_supports(variant),
+                    "runtime_axis_coverage marks {variant:?} as FIRE, but \
+                     cpu_result_abi_supports declines it — the runtime matrix and the production \
+                     gate disagree. Reconcile both."
+                );
+                // Every FIRE class must have live fixtures on disk in BOTH matrices.
+                assert!(
+                    !distinct.is_empty(),
+                    "FIRE class {variant:?} must name at least one distinct-callee fixture"
+                );
+                for fx in distinct {
+                    assert!(
+                        fixture(fx).exists(),
+                        "distinct-callee fixture {fx} for FIRE class {variant:?} is missing on \
+                         disk — add the runtime fixture before admitting the class"
+                    );
+                }
+                assert!(
+                    fixture(same_callee).exists(),
+                    "same-callee fixture {same_callee} for FIRE class {variant:?} is missing on \
+                     disk — add the runtime fixture before admitting the class"
+                );
+            }
+            RuntimeAxisCoverage::Declines(_why) => {
+                // A declined class must also be declined by the production gate (no spawn).
+                assert!(
+                    !cpu_result_abi_supports(variant),
+                    "runtime_axis_coverage marks {variant:?} as Declines, but \
+                     cpu_result_abi_supports admits it — reconcile both."
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn v03_m3b_p4_wait_barrier_first_correct_output() {
     // WHY: `wait` as the first call is an ordering barrier — waiter must complete

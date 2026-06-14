@@ -1,0 +1,22 @@
+// v0.3-M3d same-callee distinctness: two calls to the SAME function with DIFFERENT inputs,
+// run at the same time, each returning a `map<int, int>`. `a` is buildMap(3) (3 entries) and
+// `b` is buildMap(5) (5 entries) — the two results stay separate, so the entry counts differ.
+// Both print the same lines (the entry counts, which don't depend on the order the two
+// finish in) whether or not the two calls run at the same time.
+
+function buildMap(n: int) -> map<int, int> {
+  let m: map<int, int> = {}
+  let i: int = 0
+  while (i < n) {
+    m.set(i, i * 10)
+    i = i + 1
+  }
+  return m
+}
+
+function entrypoint() -> nothing {
+  let a = buildMap(3)
+  let b = buildMap(5)
+  print(a.count())
+  print(b.count())
+}

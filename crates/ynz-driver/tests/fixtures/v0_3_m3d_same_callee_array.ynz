@@ -1,0 +1,21 @@
+// v0.3-M3d same-callee distinctness: two calls to the SAME function with DIFFERENT inputs,
+// run at the same time, each returning an `array<int>`. `a` is buildArr(3) (3 items) and `b`
+// is buildArr(4) (4 items) — the two results stay separate, so the element counts differ.
+// Both print the same lines whether or not the two calls run at the same time.
+
+function buildArr(n: int) -> array<int> {
+  let arr: array<int> = []
+  let i: int = 0
+  while (i < n) {
+    arr.add(i)
+    i = i + 1
+  }
+  return arr
+}
+
+function entrypoint() -> nothing {
+  let a = buildArr(3)
+  let b = buildArr(4)
+  print(a.count())
+  print(b.count())
+}

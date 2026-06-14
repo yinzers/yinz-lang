@@ -1,0 +1,21 @@
+// v0.3-M3d same-callee distinctness: two calls to the SAME function with DIFFERENT inputs,
+// run at the same time, each returning a boolean. `a` is sumExceeds(4) (false) and `b` is
+// sumExceeds(6) (true) — the two results stay separate, so the prints differ. Both print the
+// same lines whether or not the two calls run at the same time.
+
+function sumExceeds(n: int) -> boolean {
+  let sum: int = 0
+  let i: int = 0
+  while (i < n) {
+    sum = sum + i
+    i = i + 1
+  }
+  return sum > 10
+}
+
+function entrypoint() -> nothing {
+  let a = sumExceeds(4)
+  let b = sumExceeds(6)
+  print(a)
+  print(b)
+}
