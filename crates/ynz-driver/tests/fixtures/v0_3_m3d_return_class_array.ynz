@@ -1,0 +1,31 @@
+// v0.3-M3d return-class matrix: two independent computations, each calling a different
+// function that returns an `array<int>`. They run at the same time; each result is available
+// after both finish. Both print the same lines (the element counts, which don't depend on the
+// order the two finish in) whether or not they run at the same time.
+
+function buildArr(n: int) -> array<int> {
+  let arr: array<int> = []
+  let i: int = 0
+  while (i < n) {
+    arr.add(i)
+    i = i + 1
+  }
+  return arr
+}
+
+function buildArr2(n: int) -> array<int> {
+  let arr: array<int> = []
+  let i: int = 0
+  while (i < n) {
+    arr.add(i * 2)
+    i = i + 1
+  }
+  return arr
+}
+
+function entrypoint() -> nothing {
+  let a = buildArr(3)
+  let b = buildArr2(4)
+  print(a.count())
+  print(b.count())
+}

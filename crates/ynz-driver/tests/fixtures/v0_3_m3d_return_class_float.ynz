@@ -1,0 +1,32 @@
+// v0.3-M3d return-class matrix: two independent computations, each calling a different
+// function that returns a `float`. They run at the same time; each result is available after
+// both finish. Both print the same lines whether or not they run at the same time.
+//
+// Each function loops, so it does enough work to be worth running alongside the other.
+
+function sumf(n: int) -> float {
+  let total: float = 0.0.toFloat()
+  let i: int = 0
+  while (i < n) {
+    total = total + 1.5.toFloat()
+    i = i + 1
+  }
+  return total
+}
+
+function sumf2(n: int) -> float {
+  let total: float = 0.0.toFloat()
+  let i: int = 0
+  while (i < n) {
+    total = total + 2.5.toFloat()
+    i = i + 1
+  }
+  return total
+}
+
+function entrypoint() -> nothing {
+  let a = sumf(4)
+  let b = sumf2(6)
+  print(a)
+  print(b)
+}

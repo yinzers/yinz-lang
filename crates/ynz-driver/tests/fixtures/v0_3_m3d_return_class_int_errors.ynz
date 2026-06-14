@@ -1,0 +1,36 @@
+// v0.3-M3d return-class matrix: two independent computations, each calling a different
+// function that returns an `int` that can fail (`int errors`). They run at the same time; each
+// result is available after both finish. Both functions always succeed here, so `.or(-1)`
+// prints the computed totals. Both print the same lines whether or not they run at the same
+// time.
+//
+// Note: the error case is unreachable in this file — Yinz has no way yet to raise an error
+// inside a function. When a future slice adds error-raising, a companion fixture covers the
+// case where one of the two functions fails.
+
+function compute(n: int) -> int errors {
+  let total: int = 0
+  let i: int = 0
+  while (i < n) {
+    total = total + i
+    i = i + 1
+  }
+  return total
+}
+
+function compute2(n: int) -> int errors {
+  let total: int = 0
+  let i: int = 0
+  while (i < n) {
+    total = total + i * 2
+    i = i + 1
+  }
+  return total
+}
+
+function entrypoint() -> nothing {
+  let a = compute(4)
+  let b = compute2(5)
+  print(a.or(-1))
+  print(b.or(-1))
+}

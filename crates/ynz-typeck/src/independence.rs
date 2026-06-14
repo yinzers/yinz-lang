@@ -256,34 +256,92 @@ fn stmt_cpu_callee(
         .fns
         .get(callee_name)
         .or_else(|| imported_fns.get(callee_name))?;
-    if !returns_cpu_supported_class(&sig.ret) {
-        return None; // Shape / Shape-errors — WideValueSuspendingReturn decline
+    if !cpu_result_abi_supports(&sig.ret) {
+        return None; // class the CPU result ABI cannot safely carry — sequential
     }
     Some(callee_name.to_string())
 }
 
-/// True when a return type maps to the 16-byte `YnzCpuResult` ABI (Decision Record
-/// item 1): scalars, decimal128, heap pointers, and `T errors` where `T` is not a
-/// shape. Bare `Shape` and `Shape errors` are excluded (WideValueSuspendingReturn —
-/// a shape-by-value return from a suspended function needs variable-size frame
-/// staging that is not yet implemented).
-fn returns_cpu_supported_class(ret: &crate::types::Type) -> bool {
+/// THE single source of truth for which return classes a CPU-parallel group member may
+/// have. Both the typeck promotion path (this crate) and codegen's join-bind path
+/// (`return_type_fits_cpu_result_abi` in `ynz-codegen/src/emit.rs`, which mirrors this over
+/// the un-resolved AST `Type`) MUST admit/decline the IDENTICAL set, so the IDE
+/// `parallel_groups` hint (driven by this promotion query) and the emitted binary (driven by
+/// codegen's gate) never disagree on which calls overlap. That equivalence is locked by the
+/// `cpu_result_abi_gate_parity_*` tests in `ynz-codegen` — a divergence there is a build
+/// failure, not a silent miscompile.
+///
+/// **ADMITS** (the value, or a heap-stable pointer to it, fits the 16-byte `YnzCpuResult`
+/// ABI and survives the worker thread that produced it):
+/// - `int` / `bool` / `float` — scalar in one i64/f64 word.
+/// - bare `number` (decimal128) — the non-SM ABI returns a pointer to a heap-stable i128, so
+///   the value outlives the worker frame.
+/// - `string` / `array<_>` / `map<_,_>` — a single owning heap pointer.
+/// - `T errors` ONLY when `T` is one of the above safe-to-carry classes whose success word is
+///   a value or a heap-stable pointer (int/bool/float/string/array/map).
+///
+/// **DECLINES** (sequential lowering is always correct — declining is a first-class
+/// auto-promotion outcome, never an error):
+/// - `Shape` / `Shape errors` — a by-value shape needs variable-size frame staging not built
+///   here (WideValueSuspendingReturn).
+/// - `number errors` (and any wide-value-EC inner) — the `{i64 err + i128 ok}` pair is 24
+///   bytes, too wide for the 16-byte slot, so the ABI would smuggle a pointer into the
+///   *worker thread's* dead stack; dereferencing it at join-bind is a use-after-free. This is
+///   the parallel-path manifestation of the wide-value-EC staging-slot family tracked in
+///   `.claude/todos.md` — declined here per the plan's "Hotfix that isn't" rule, fixed on its
+///   own track (heap-stabilize the wide ok-word), NOT inside M3d.
+/// - `maybe` / `union` / `dynamic` / `range` / `options` / a `MapEntry` / a `Sensitive`
+///   wrapper / any non-(array|fixed|map) `Generic` — outside this milestone's carried set;
+///   sequential is correct.
+/// - `nothing` — no value to join-bind. `Error` — an earlier type error poisoned the sig.
+///
+/// Time: O(d) where d = nesting depth of the `ErrorsCapable` wrapper (≤ 1 in practice).
+/// Space: O(1).
+pub fn cpu_result_abi_supports(ret: &crate::types::Type) -> bool {
     use crate::types::Type;
     match ret {
-        // Bare shape return: declined.
-        Type::Shape { .. } => false,
-        // `T errors`: supported unless the inner success value is a shape.
-        Type::ErrorsCapable { inner } => !matches!(inner.as_ref(), Type::Shape { .. }),
-        // `nothing` carries no value to join-bind — there is nothing to parallelize a
-        // result for, so it is not a CPU group candidate.
-        Type::Nothing => false,
-        // An earlier type error already poisoned this signature — never promote.
-        Type::Error => false,
-        // Everything else (int/float/bool/number/string/array/map/maybe/union/
-        // dynamic/range/generic) fits the 16-byte ABI as a scalar, a heap pointer,
-        // or a decimal128 lo/hi pair.
-        _ => true,
+        Type::Int | Type::Float | Type::Bool | Type::Number { .. } | Type::String => true,
+        // Growable/keyed heap collections return a single owning heap pointer. The resolver
+        // lowers `array<_>`/`map<_,_>` to `BuiltinArray`/`BuiltinMap` (never to `Generic`), so
+        // those are the only live admit forms here. `fixed` lowers to `BuiltinFixed` and is
+        // declined below by the catch-all (its non-suspending return path is a pre-existing
+        // base bug — see the codegen mirror's doc; admitting it would be dead since it never
+        // fires). A `Generic` here is always a user-defined generic shape, which declines.
+        Type::BuiltinArray { .. } | Type::BuiltinMap { .. } => true,
+        // `T errors`: admitted only when the success word is a safe-to-carry class. A wide
+        // inner (number → a dead-worker-stack pointer; shape → variable-size staging) is
+        // declined to keep the ok-word stable across the worker boundary.
+        Type::ErrorsCapable { inner } => cpu_result_ec_inner_is_safe(inner),
+        // Everything else declines (sequential is always correct):
+        // Shape, Dynamic, Maybe, Union, Range, Options, MapEntry, Sensitive, TypeParam,
+        // BuiltinFixed, Nothing, Error, and any Generic (user-defined generic shape).
+        _ => false,
     }
+}
+
+/// True when `T` in a `T errors` return is safe to carry in the 8-byte ok-word of the
+/// `{i64, i64}` errors ABI within the 16-byte `YnzCpuResult` slot: scalars whose value fits a
+/// word, and heap classes whose owning pointer is stable across the worker boundary.
+///
+/// `number` is EXCLUDED here even though bare `number` is admitted by
+/// [`cpu_result_abi_supports`]: bare `number` returns a heap-stable ABI pointer, but
+/// `number errors` packs the i128 into the callee's own (worker-thread) staging slot and the
+/// ok-word points into it — that pointer dangles the instant the worker frame dies. Shapes are
+/// excluded for the same family of reasons (variable-size value). See the wide-value-EC entry
+/// in `.claude/todos.md`.
+fn cpu_result_ec_inner_is_safe(inner: &crate::types::Type) -> bool {
+    use crate::types::Type;
+    // The resolver lowers `array<_>`/`map<_,_>` to `BuiltinArray`/`BuiltinMap` (never to
+    // `Generic`), so those are the only heap-collection inners that can arrive here.
+    matches!(
+        inner,
+        Type::Int
+            | Type::Float
+            | Type::Bool
+            | Type::String
+            | Type::BuiltinArray { .. }
+            | Type::BuiltinMap { .. }
+    )
 }
 
 /// Class-aware partition: a member may be a suspending (I/O) call OR a CPU call.

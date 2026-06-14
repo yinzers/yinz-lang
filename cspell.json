@@ -18,6 +18,8 @@
     "codegen",
     "codepoint",
     "DEMA",
+    "deref",
+    "derefs",
     "desugars",
     "didChange",
     "didClose",

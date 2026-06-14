@@ -1,0 +1,30 @@
+// v0.3-M3d return-class matrix: two independent computations, each calling a different
+// function that returns a `number`. They run at the same time; each result is available after
+// both finish. Both print the same lines whether or not they run at the same time.
+
+function sumn(n: int) -> number {
+  let total: number = 0.0
+  let i: int = 0
+  while (i < n) {
+    total = total + 1.5
+    i = i + 1
+  }
+  return total
+}
+
+function sumn2(n: int) -> number {
+  let total: number = 0.0
+  let i: int = 0
+  while (i < n) {
+    total = total + 2.5
+    i = i + 1
+  }
+  return total
+}
+
+function entrypoint() -> nothing {
+  let a = sumn(4)
+  let b = sumn2(6)
+  print(a)
+  print(b)
+}

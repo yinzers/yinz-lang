@@ -5158,18 +5158,26 @@ fn v03_m3b_p4_two_independent_parallel_byte_identical_to_sequential() {
 /// Build `src` to a tmpdir with `--emit-ir` and return the LLVM IR text. The build runs
 /// in default (auto-parallel) mode. Panics if the build fails.
 fn build_to_tmpdir_emit_ir(src: &Path) -> String {
+    build_to_tmpdir_emit_ir_mode(src, false)
+}
+
+/// Build `src` to a tmpdir with `--emit-ir` and return the LLVM IR text, choosing default or
+/// `--no-auto-parallel` mode. Panics if the build fails.
+fn build_to_tmpdir_emit_ir_mode(src: &Path, no_auto_parallel: bool) -> String {
     let tmp = tempfile::TempDir::new().expect("failed to create tmpdir");
     let src_filename = src.file_name().expect("src must have a filename");
     let isolated_src = tmp.path().join(src_filename);
     std::fs::copy(src, &isolated_src).expect("failed to copy source to tmpdir");
 
-    let build_out = Command::new(ynz_binary())
-        .arg("build")
+    let mut cmd = Command::new(ynz_binary());
+    cmd.arg("build")
         .arg(&isolated_src)
         .arg("--emit-ir")
-        .env("CLICOLOR", "0")
-        .output()
-        .expect("failed to spawn ynz build");
+        .env("CLICOLOR", "0");
+    if no_auto_parallel {
+        cmd.env("YNZ_NO_AUTO_PARALLEL", "1");
+    }
+    let build_out = cmd.output().expect("failed to spawn ynz build");
     assert!(
         build_out.status.success(),
         "build failed: {}",
@@ -5225,6 +5233,266 @@ fn v03_m3d_nested_groups_byte_identical_and_fires() {
         spawn_calls, 2,
         "entrypoint's nested CPU group must FIRE with 2 spawn calls (0 = union poisoning \
          silently declined the group); IR:\n{ir}"
+    );
+}
+
+/// Count `call @ynz_rt_spawn_blocking_joinable` instructions in `ir` (the `declare` line is
+/// not a `call`, so filtering on `call ` excludes it).
+fn count_spawn_calls(ir: &str) -> usize {
+    ir.lines()
+        .filter(|l| l.contains("call") && l.contains("@ynz_rt_spawn_blocking_joinable"))
+        .count()
+}
+
+/// Assert a v0.3-M3d CPU-group fixture clears all three Slice-2 gates at once:
+///   1. default-mode output equals the captured oracle output (exit 0),
+///   2. default mode is byte-identical to `--no-auto-parallel` (the cross-impl oracle),
+///   3. the group FIRES — exactly 2 `ynz_rt_spawn_blocking_joinable` calls in the IR
+///      (output alone is INSUFFICIENT — a declined group runs sequentially with the same
+///      output; the spawn-count assertion is what proves the mechanism actually fired, per
+///      the project's gated-path-fire-assertions discipline),
+///   4. alloc == free (the one task frame is allocated and freed; no leak).
+fn m3d_assert_fires_byte_identical_alloc_free(fixture_name: &str, expected_stdout: &str) {
+    let src = fixture(fixture_name);
+
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "default build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par_stdout.trim(),
+        expected_stdout,
+        "default-mode output must equal the oracle; stdout:\n{par_stdout}"
+    );
+
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "default and --no-auto-parallel stdout must be byte-identical"
+    );
+
+    let ir = build_to_tmpdir_emit_ir(&src);
+    assert_eq!(
+        count_spawn_calls(&ir),
+        2,
+        "the CPU group must FIRE with 2 spawn calls (0 = silently declined to sequential); \
+         IR:\n{ir}"
+    );
+
+    let (alloc, free) = ynz_run_with_alloc_counter(fixture_name);
+    assert_eq!(
+        alloc, free,
+        "alloc must equal free (no task-frame/ctx leak on the CPU-parallel path); \
+         alloc={alloc}, free={free}"
+    );
+}
+
+#[test]
+fn v03_m3d_return_class_int_distinct_fires_byte_identical() {
+    // WHY: the int distinct-callee CPU pair is the headline pattern — two independent int-
+    // returning calls must fire 2 spawns AND stay byte-identical to `--no-auto-parallel`.
+    // Invariant: distinct int callees parallelize without changing output. If you relax the
+    // spawn-count assertion, the parallelism regressed to sequential — fix the codegen, not
+    // this test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_spike_a_distinct.ynz", "6765\n10946");
+}
+
+#[test]
+fn v03_m3d_return_class_int_timing_fires_byte_identical() {
+    // WHY: the timing fixture (fib(40)/fib(41)) is the wall-clock overlap proof. The
+    // identical-output gate plus the 2-spawn FIRE assertion together stand in for the
+    // measured-speedup AC: if sequential were ~2x slower, the parallelism is real.
+    // CI coverage: 2 spawns required; 0 spawns = the timing pair regressed to sequential.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_spike_c_timing.ynz",
+        "102334155\n165580141",
+    );
+}
+
+#[test]
+fn v03_m3d_return_class_int_saturation_fires_byte_identical() {
+    // WHY: the saturation fixture drives two heavy joins through the real blocking pool.
+    // Invariant: the source-level 2-join CPU path fires 2 spawns and stays byte-identical to
+    // `--no-auto-parallel` while routing through the real worker pool (the ≥600-join
+    // pool-saturation proof itself lives in the runtime-crate `saturation_600_joins` test).
+    // A 0-spawn here means the heavy-join path stopped parallelizing.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_spike_d_saturation.ynz",
+        "832040\n1346269",
+    );
+}
+
+#[test]
+fn v03_m3d_return_class_float_fires_byte_identical() {
+    // WHY: a `float`-returning CPU pair must FIRE and bind the f64 result through the
+    // canonical bind discipline (the trampoline bitcasts f64→i64 into the result slot; the
+    // join load bitcasts back). Invariant: a non-int scalar return class still parallelizes —
+    // a narrowed candidacy gate that admitted only `int` would leave output byte-identical but
+    // run 0 spawns (sequential). The spawn-count assertion is the only thing that catches that
+    // silent regression.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_return_class_float.ynz", "6\n15");
+}
+
+#[test]
+fn v03_m3d_return_class_number_fires_byte_identical() {
+    // WHY: `number` (decimal128) is the trickiest class — the non-SM ABI returns a POINTER to
+    // a heap-stable 16-byte i128, so the trampoline must DEREFERENCE it (not ptr_to_int) and
+    // pack lo/hi. A regression to ptr_to_int prints `0.000...0` (the pointer bits read as the
+    // i128 low half), so this test locks the deref. Also asserts the group FIRES (2 spawns),
+    // not silently sequential.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_return_class_number.ynz", "6.0\n15.0");
+}
+
+#[test]
+fn v03_m3d_return_class_string_fires_byte_identical() {
+    // WHY: a `string`-returning CPU pair. The returned heap pointer IS the value (carried as a
+    // pointer word). Asserts FIRE + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_return_class_string.ynz",
+        "len=3\ntotal=10",
+    );
+}
+
+#[test]
+fn v03_m3d_return_class_array_fires_byte_identical() {
+    // WHY: an `array<int>`-returning CPU pair. Output asserts the element counts
+    // (order-independent — no interleaving-dependent assertion). Asserts FIRE +
+    // byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_return_class_array.ynz", "3\n4");
+}
+
+#[test]
+fn v03_m3d_return_class_map_fires_byte_identical() {
+    // WHY: a `map<int, int>`-returning CPU pair. Output asserts the entry counts
+    // (order-independent). Asserts FIRE + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_return_class_map.ynz", "3\n5");
+}
+
+#[test]
+fn v03_m3d_return_class_int_errors_fires_byte_identical() {
+    // WHY: an `int errors` (ErrorsCapable) CPU pair. The callee returns the `{i64, i64}`
+    // errors pair; the trampoline must carry BOTH words (error + success) to the result slot
+    // — dropping field0 would turn an error into a success. Both callees succeed here, so
+    // `.or(-1)` prints the totals. Asserts FIRE + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_return_class_int_errors.ynz", "6\n20");
+}
+
+#[test]
+fn v03_m3d_return_class_bool_fires_byte_identical() {
+    // WHY: `boolean` is admitted by the shared CPU-result-ABI gate with a dedicated
+    // zero-extend pack path (the trampoline widens the i1 to the result-slot word). Before
+    // this test the bool path fired in production with NO coverage. Asserts the group FIRES
+    // (2 spawns) + byte-identical + alloc==free. If you relax the spawn-count assertion, the
+    // bool path regressed to sequential — fix the codegen, not this test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_return_class_bool.ynz", "true\ntrue");
+}
+
+/// Assert a v0.3-M3d fixture whose return class the shared gate DECLINES runs sequentially:
+///   1. default-mode output equals the oracle (exit 0),
+///   2. default mode is byte-identical to `--no-auto-parallel`,
+///   3. the group is DECLINED — exactly 0 `ynz_rt_spawn_blocking_joinable` calls in the IR.
+///
+/// Declining is a first-class auto-promotion outcome (the class lowers sequentially,
+/// always correct). The 0-spawn assertion is the inverse of the FIRE assertion: it proves
+/// the decline is real (the hint and the binary both see 0 promoted members) rather than a
+/// silent admission that runs unsafely.
+fn m3d_assert_declines_byte_identical(fixture_name: &str, expected_stdout: &str) {
+    let src = fixture(fixture_name);
+
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "default build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par_stdout.trim(),
+        expected_stdout,
+        "default-mode output must equal the oracle; stdout:\n{par_stdout}"
+    );
+
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "default and --no-auto-parallel stdout must be byte-identical"
+    );
+
+    let ir = build_to_tmpdir_emit_ir(&src);
+    assert_eq!(
+        count_spawn_calls(&ir),
+        0,
+        "a declined return class must NOT spawn (0 = sequential, as designed); IR:\n{ir}"
+    );
+}
+
+#[test]
+fn v03_m3d_return_class_number_errors_declines_byte_identical() {
+    // WHY: `number errors` is DECLINED by the shared gate — the 24-byte {error word + i128
+    // value} pair overflows the 16-byte result slot, so admitting it would make join-bind
+    // dereference a pointer into the dead worker frame (use-after-free). The decline routes
+    // it to the sequential path, which is correct (distinct callees give distinct values:
+    // 6.0 / 10.0). This test locks the decline: 0 spawns + byte-identical. If you make this
+    // fire, you have reopened the wide-EC use-after-free — fix the wide-EC ABI on its own
+    // track (see .claude/todos.md), do NOT admit it here.
+    m3d_assert_declines_byte_identical("v0_3_m3d_return_class_number_errors.ynz", "6.0\n10.0");
+}
+
+#[test]
+fn v03_m3d_return_class_maybe_declines_and_ir_inert() {
+    // WHY: `maybe<int>` is outside this milestone's carried return-class set and is DECLINED
+    // by the shared gate. Invariant: the IDE `parallel_groups` hint (driven by typeck) and the
+    // emitted binary (driven by codegen) must agree on `maybe` — both see 0 promoted members.
+    // If the gate admitted `maybe` on only one side, the hint would mark the group parallel
+    // while the binary ran it sequentially. This test locks the agreement two ways: (1) the
+    // group is DECLINED (0 spawn calls), and (2) the auto-parallel pass is fully INERT — the
+    // emitted IR is byte-identical between default and `--no-auto-parallel`, proving the
+    // decline changed nothing in codegen. The loops make the worth-it proxy pass, so a 0 here
+    // is the decline, not a trivial-callee skip. If you make `maybe` fire, you reopened the
+    // hint/binary divergence — fix the gate, not this test.
+    //
+    // NOTE: stdout is intentionally NOT asserted here. Two adjacent `maybe<int>`-returning
+    // binds hit a pre-existing base-codegen bug (the second bind reads an uninitialized
+    // staging slot — same wide-value staging-slot family as the sequential same-callee bug
+    // tracked in .claude/todos.md), producing a non-deterministic value in BOTH modes. That
+    // bug is orthogonal to auto-parallel (the IR is identical between modes, as this test
+    // asserts) and is tracked separately — declining `maybe` from CPU promotion is correct
+    // regardless.
+    let src = fixture("v0_3_m3d_return_class_maybe.ynz");
+
+    let ir_default = build_to_tmpdir_emit_ir_mode(&src, false);
+    let ir_seq = build_to_tmpdir_emit_ir_mode(&src, true);
+    assert_eq!(
+        count_spawn_calls(&ir_default),
+        0,
+        "a declined `maybe` return must NOT spawn (0 = sequential, as designed); IR:\n{ir_default}"
+    );
+    // Each build runs in its own tmpdir, so the ModuleID / source_filename / @.source.file
+    // lines carry a different random path. Drop those path-bearing lines before comparing —
+    // they are not codegen output, and including them would make the comparison spuriously
+    // fail on the path alone.
+    let strip_paths = |ir: &str| -> String {
+        ir.lines()
+            .filter(|l| {
+                !l.contains("ModuleID")
+                    && !l.contains("source_filename")
+                    && !l.contains("@.source.file")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert_eq!(
+        strip_paths(&ir_default),
+        strip_paths(&ir_seq),
+        "the auto-parallel pass must be inert for a declined class — default and \
+         --no-auto-parallel IR must be identical (ignoring the per-build tmpdir path)"
     );
 }
 

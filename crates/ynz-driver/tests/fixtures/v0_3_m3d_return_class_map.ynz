@@ -1,0 +1,31 @@
+// v0.3-M3d return-class matrix: two independent computations, each calling a different
+// function that returns a `map<int, int>`. They run at the same time; each result is available
+// after both finish. Both print the same lines (the entry counts, which don't depend on the
+// order the two finish in) whether or not they run at the same time.
+
+function buildMap(n: int) -> map<int, int> {
+  let m: map<int, int> = {}
+  let i: int = 0
+  while (i < n) {
+    m.set(i, i * 10)
+    i = i + 1
+  }
+  return m
+}
+
+function buildMap2(n: int) -> map<int, int> {
+  let m: map<int, int> = {}
+  let i: int = 0
+  while (i < n) {
+    m.set(i, i * 20)
+    i = i + 1
+  }
+  return m
+}
+
+function entrypoint() -> nothing {
+  let a = buildMap(3)
+  let b = buildMap2(5)
+  print(a.count())
+  print(b.count())
+}

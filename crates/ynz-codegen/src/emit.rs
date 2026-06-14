@@ -6592,12 +6592,78 @@ const SPIKE_HANDLE_1_OFFSET: u64 = 40;
 const SPIKE_RESULT_0_OFFSET: u64 = 48;
 const SPIKE_RESULT_1_OFFSET: u64 = 64;
 
+/// Codegen's AST-level mirror of typeck's `cpu_result_abi_supports`
+/// (`ynz-typeck/src/independence.rs`) — THE single source of truth for which return classes a
+/// CPU-parallel group member may have. This function classifies the *un-resolved* AST `Type`
+/// codegen has at its candidacy gates; the typeck predicate classifies the resolved `Type`.
+/// Both MUST admit/decline the IDENTICAL set so the IDE `parallel_groups` hint (driven by
+/// typeck promotion) and the emitted binary (driven by this gate) never disagree on which
+/// calls overlap. That equivalence is not left to inspection — it is locked by the
+/// `cpu_result_abi_gate_parity` test below, which resolves a representative spread of types
+/// and asserts both gates agree.
+///
+/// **ADMITS** (value or heap-stable pointer fits the 16-byte `YnzCpuResult` slot and outlives
+/// the worker frame that produced it):
+/// - `int` / `bool` / `float` — scalar word; bare `number` (decimal128) — heap-stable ABI ptr.
+/// - `string` / `array<_>` / `map<_,_>` — a single owning heap pointer.
+/// - `T errors` ONLY when `T` is a safe-to-carry class (int/bool/float/string/array/map).
+///
+/// **DECLINES** (sequential lowering is always correct — declining is a first-class
+/// auto-promotion outcome, never an error):
+/// - bare `Shape` / `Shape errors` — by-value shape needs variable-size staging
+///   (WideValueSuspendingReturn). At the AST level a shape is a `Named` that is not `string`.
+/// - `number errors` (and any wide-value-EC inner) — the 24-byte `{i64 err + i128 ok}` pair
+///   overflows the 16-byte slot, so the ABI smuggles a pointer into the worker thread's dead
+///   stack; join-bind would dereference it (use-after-free). Wide-EC is the parallel-path
+///   manifestation of the staging-slot family tracked in `.claude/todos.md`; declined per the
+///   plan's "Hotfix that isn't" rule and fixed on its own track, NOT in M3d.
+/// - `fixed<_>` — the non-suspending `fixed`-return path returns a count of 0 (a separate
+///   pre-existing base-codegen bug, byte-identical in both modes so not a parallel divergence);
+///   admitting it would be dead anyway (it never fires), so it declines here to keep both
+///   gates honest. Tracked with the `fixed`-return bug, not fixed in M3d.
+/// - `maybe` / `union` / `dynamic` / `range` / any non-(array|map) `Generic` / a `Named` that
+///   is not `string` (shape/options/union-alias) — outside this milestone's carried set.
+/// - `nothing` — no value to join-bind; `Error` — an earlier type error poisoned the sig.
+fn return_type_fits_cpu_result_abi(ret: &ynz_ast::nodes::Type) -> bool {
+    use ynz_ast::nodes::Type as AstType;
+    match ret {
+        AstType::Int | AstType::Float | AstType::Bool | AstType::Number { .. } => true,
+        // `string` is the only `Named` that fits — every other `Named` is a user shape, an
+        // options type, or a union alias, all declined.
+        AstType::Named(n, _) => n == "string",
+        // Only growable/keyed heap collections return a single owning heap pointer. `fixed`
+        // declines (see doc above).
+        AstType::Generic { name, .. } => matches!(name.as_str(), "array" | "map"),
+        // `T errors` admits only when the success word is a safe-to-carry class. A wide inner
+        // (number → dead-worker-stack pointer; shape → variable-size staging) is declined.
+        AstType::ErrorCapable { inner, .. } => ec_inner_fits_cpu_result_abi(inner),
+        _ => false,
+    }
+}
+
+/// True when `T` in an AST `T errors` return is safe to carry in the 8-byte ok-word of the
+/// `{i64, i64}` errors ABI. Mirrors typeck's `cpu_result_ec_inner_is_safe`. `number` is
+/// EXCLUDED even though bare `number` is admitted by [`return_type_fits_cpu_result_abi`]: bare
+/// `number` returns a heap-stable ABI pointer, but `number errors` packs the i128 into the
+/// callee's worker-thread staging slot and the ok-word points into it — that pointer dangles
+/// the instant the worker frame dies. Shapes (`Named` ≠ `string`) and `fixed` are excluded for
+/// the same wide/unstable-value family of reasons.
+fn ec_inner_fits_cpu_result_abi(inner: &ynz_ast::nodes::Type) -> bool {
+    use ynz_ast::nodes::Type as AstType;
+    match inner {
+        AstType::Int | AstType::Float | AstType::Bool => true,
+        AstType::Named(n, _) => n == "string",
+        AstType::Generic { name, .. } => matches!(name.as_str(), "array" | "map"),
+        _ => false,
+    }
+}
+
 /// Detect a 2-member CPU-parallel candidate group in `f`.
 ///
 /// Returns `Some(callee_name)` when `f` contains an adjacent pair of `let x = callee(...)`
 /// statements whose callees:
 /// - are NOT in the suspend_set (pure CPU — not a state machine)
-/// - return `int` (maps to `YnzCpuResult` scalar slot)
+/// - return a class that fits the `YnzCpuResult` ABI (`return_type_fits_cpu_result_abi`)
 ///
 /// **Admission envelope** (all must hold; sequential fallback is always correct):
 /// - Host must be named `"entrypoint"` — non-entrypoint spike hosts require the
@@ -6616,7 +6682,7 @@ const SPIKE_RESULT_1_OFFSET: u64 = 64;
 /// Used in both `emit_artifact` (suspend_set extension) and `lower_function_with_waits`
 /// (frame-size + state-count injection).
 ///
-/// Time: O(n) where n = items in typed module  Space: O(k) where k = int-returning fns
+/// Time: O(n) where n = items in typed module  Space: O(k) where k = CPU-ABI-returning fns
 fn spike_cpu_candidates(
     f: &FunctionDecl,
     typed: &TypedModule,
@@ -6638,13 +6704,17 @@ fn spike_cpu_candidates(
         return None;
     }
 
-    let int_returning_callees: std::collections::HashSet<String> = typed
+    // Callees whose return class the CPU result ABI can safely carry — the exact set
+    // `return_type_fits_cpu_result_abi` admits (its doc enumerates the admit/decline set and
+    // the shared-truth invariant with typeck's `cpu_result_abi_supports`). Declined classes
+    // run sequentially, byte-identical to `--no-auto-parallel`.
+    let cpu_supported_callees: std::collections::HashSet<String> = typed
         .module
         .items
         .iter()
         .filter_map(|item| {
             if let Item::Function(func) = item {
-                if matches!(func.return_type, ynz_ast::nodes::Type::Int) {
+                if return_type_fits_cpu_result_abi(&func.return_type) {
                     Some(func.name.clone())
                 } else {
                     None
@@ -6655,7 +6725,8 @@ fn spike_cpu_candidates(
         })
         .collect();
 
-    // Collect indices for all non-suspending int-returning direct-call statements.
+    // Collect indices for all non-suspending direct-call statements whose callee returns a
+    // CPU-result-ABI class.
     let mut call_indices: Vec<usize> = Vec::new();
     for (i, stmt) in f.body.stmts.iter().enumerate() {
         let is_eligible = match stmt {
@@ -6665,7 +6736,7 @@ fn spike_cpu_candidates(
             }
             | Stmt::Expr(Expr::Call(c)) => {
                 if let Expr::Ident(name, _) = &c.callee {
-                    !suspend_set.contains(name.as_str()) && int_returning_callees.contains(name)
+                    !suspend_set.contains(name.as_str()) && cpu_supported_callees.contains(name)
                 } else {
                     false
                 }
@@ -6833,19 +6904,19 @@ pub fn spike_host_subset(
 /// dominate every state block, satisfying LLVM SSA dominance. When the group is declined,
 /// the empty return means no allocas are created — correct because gate-2 will also decline.
 ///
-/// Time: O(n) where n = stmts length  Space: O(k) where k = int-returning fns in typed module
+/// Time: O(n) where n = stmts length  Space: O(k) where k = CPU-ABI-returning fns in module
 fn spike_cpu_group_result_names(
     stmts: &[Stmt],
     suspend_set: &SuspendSet,
     typed: &TypedModule,
 ) -> Vec<String> {
-    let int_returning_callees: std::collections::HashSet<String> = typed
+    let cpu_supported_callees: std::collections::HashSet<String> = typed
         .module
         .items
         .iter()
         .filter_map(|item| {
             if let Item::Function(func) = item {
-                if matches!(func.return_type, ynz_ast::nodes::Type::Int) {
+                if return_type_fits_cpu_result_abi(&func.return_type) {
                     Some(func.name.clone())
                 } else {
                     None
@@ -6856,7 +6927,9 @@ fn spike_cpu_group_result_names(
         })
         .collect();
 
-    // Collect indices of non-suspending int-returning direct-call statements.
+    // Collect indices of non-suspending direct-call statements whose callee returns a
+    // CPU-result-ABI class. Must match `spike_cpu_candidates` / `spike_extract_cpu_group`
+    // exactly so the Step-1c pre-alloc set agrees with the extraction set.
     let mut call_indices: Vec<usize> = Vec::new();
     for (i, stmt) in stmts.iter().enumerate() {
         let is_eligible = match stmt {
@@ -6867,7 +6940,7 @@ fn spike_cpu_group_result_names(
             | Stmt::Expr(Expr::Call(c)) => {
                 if let Expr::Ident(name, _) = &c.callee {
                     !suspend_set.contains(name.as_str())
-                        && int_returning_callees.contains(name.as_str())
+                        && cpu_supported_callees.contains(name.as_str())
                 } else {
                     false
                 }
@@ -6996,11 +7069,11 @@ fn spike_cpu_group_result_names(
 /// after spawn). Adjacency ensures the group's arguments can only reference locals that are
 /// already available at spawn time.
 ///
-/// The same `int_returning_callees` membership filter as `spike_cpu_candidates` is applied so
-/// the gate-1 check (frame sizing) and gate-2 check (group extraction) always agree: a callee
-/// that gate-1 would not count for frame-slot allocation is never extracted by gate-2 either.
-/// Without this filter, a non-int-returning non-suspending callee could appear in the extracted
-/// group and produce an LLVM type mismatch on the trampoline's return type.
+/// The same `return_type_fits_cpu_result_abi` membership filter as `spike_cpu_candidates` is
+/// applied so the gate-1 check (frame sizing) and gate-2 check (group extraction) always agree:
+/// a callee that gate-1 would not count for frame-slot allocation is never extracted by gate-2
+/// either. The trampoline + join-bind serialize each admitted class into the 16-byte result
+/// slot, so a class mismatch between the two gates can never surface a wrong-typed bind.
 ///
 /// **Edge cases**: calls whose `args` has arity ≠ 1 are skipped by `args_lowerable` — the
 /// trampoline ABI passes exactly one i64 argument; zero-arg and multi-arg calls are declined.
@@ -7015,21 +7088,21 @@ fn spike_cpu_group_result_names(
 /// Returns `None` when no eligible adjacent pair exists, or when any post statement assigns
 /// a CPU-result bind name (mirrors the decline gate in spike_cpu_candidates).
 ///
-/// Time: O(n) where n = stmts length  Space: O(k) where k = int-returning fns in typed module
+/// Time: O(n) where n = stmts length  Space: O(k) where k = CPU-ABI-returning fns in module
 fn spike_extract_cpu_group<'s>(
     stmts: &'s [Stmt],
     suspend_set: &SuspendSet,
     typed: &TypedModule,
 ) -> Option<(Vec<&'s Stmt>, Vec<&'s Stmt>, Vec<&'s Stmt>)> {
-    // Build the same int-returning callee set used by spike_cpu_candidates so the
+    // Build the same CPU-result-ABI callee set used by spike_cpu_candidates so the
     // two gates cannot disagree on callee eligibility.
-    let int_returning_callees: std::collections::HashSet<String> = typed
+    let cpu_supported_callees: std::collections::HashSet<String> = typed
         .module
         .items
         .iter()
         .filter_map(|item| {
             if let Item::Function(func) = item {
-                if matches!(func.return_type, ynz_ast::nodes::Type::Int) {
+                if return_type_fits_cpu_result_abi(&func.return_type) {
                     Some(func.name.clone())
                 } else {
                     None
@@ -7040,7 +7113,7 @@ fn spike_extract_cpu_group<'s>(
         })
         .collect();
 
-    // Collect indices for all non-suspending int-returning direct-call statements.
+    // Collect indices for all non-suspending CPU-result-ABI direct-call statements.
     let mut call_indices: Vec<usize> = Vec::new();
     for (i, stmt) in stmts.iter().enumerate() {
         let is_eligible = match stmt {
@@ -7051,7 +7124,7 @@ fn spike_extract_cpu_group<'s>(
             | Stmt::Expr(Expr::Call(c)) => {
                 if let Expr::Ident(name, _) = &c.callee {
                     !suspend_set.contains(name.as_str())
-                        && int_returning_callees.contains(name.as_str())
+                        && cpu_supported_callees.contains(name.as_str())
                 } else {
                     false
                 }
@@ -7411,7 +7484,19 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
         cpu_result_ty.fn_type(&[ctx.ptr_type(AddressSpace::default()).into()], false);
 
     // Helper: build one trampoline for child[idx].
-    // The trampoline: loads ctx[0..8] as i64, calls callee(arg), packs into {i64,0}.
+    //
+    // The trampoline loads the i64 arg from ctx[0..8], calls the compiled callee, and packs
+    // the callee's return value into the 16-byte `YnzCpuResult` ({i64, i64}) using the SAME
+    // serialization the canonical SM return slot uses (`state_machine::store_return_value_*`).
+    // The join-side bind then reads the slot back through `load_sm_return_value_typed` +
+    // `bind_sm_result_and_flush`, so a CPU group binds every return class exactly as a
+    // sequential call would. Packing dispatches on the callee's LLVM return value kind:
+    //   - i64           (int/bool)      → field0 = value,           field1 = 0
+    //   - i128          (number)        → field0 = lo, field1 = hi  (the 16 bytes ARE the i128)
+    //   - f64           (float)         → field0 = bitcast→i64,      field1 = 0
+    //   - ptr           (string/array/map) → field0 = ptr→i64,      field1 = 0
+    //   - {i64, i64}    (`T errors`)    → field0 = error word,       field1 = success word
+    let i128_ty = ctx.i128_type();
     let mut trampoline_fns: Vec<FunctionValue<'ctx>> = Vec::with_capacity(2);
     for (idx, child) in children.iter().enumerate() {
         let trampoline_name = format!("__ynz_spike_trampoline_{}_{}_{}", f.name, child.callee, idx);
@@ -7442,18 +7527,109 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
             .map_err(|e| format!("trampoline call {idx}: {e}"))?
             .try_as_basic_value()
             .basic()
-            .ok_or_else(|| format!("spike callee `{}` returned void", child.callee))?
-            .into_int_value();
+            .ok_or_else(|| format!("spike callee `{}` returned void", child.callee))?;
 
-        // Pack into {i64, 0}.
+        // Pack the callee's return value into the 16-byte {i64, i64} result.
+        let (word0, word1): (
+            inkwell::values::IntValue<'ctx>,
+            inkwell::values::IntValue<'ctx>,
+        ) = match call_result {
+            inkwell::values::BasicValueEnum::IntValue(iv) if iv.get_type() == i128_ty => {
+                // number (decimal128): the 16-byte slot holds the full i128 as lo/hi.
+                let lo = tramp_builder
+                    .build_int_truncate(iv, i64_ty, "spike_num_lo")
+                    .map_err(|e| format!("trampoline num lo {idx}: {e}"))?;
+                let hi_shift = tramp_builder
+                    .build_right_shift(iv, i128_ty.const_int(64, false), false, "spike_num_sh")
+                    .map_err(|e| format!("trampoline num shift {idx}: {e}"))?;
+                let hi = tramp_builder
+                    .build_int_truncate(hi_shift, i64_ty, "spike_num_hi")
+                    .map_err(|e| format!("trampoline num hi {idx}: {e}"))?;
+                (lo, hi)
+            }
+            inkwell::values::BasicValueEnum::IntValue(iv) => {
+                // int/bool: zero-extend a narrow bool to i64; an i64 passes through.
+                let v = if iv.get_type() == i64_ty {
+                    iv
+                } else {
+                    tramp_builder
+                        .build_int_z_extend(iv, i64_ty, "spike_int_widen")
+                        .map_err(|e| format!("trampoline int widen {idx}: {e}"))?
+                };
+                (v, i64_ty.const_int(0, false))
+            }
+            inkwell::values::BasicValueEnum::FloatValue(fv) => {
+                // float: store the raw IEEE-754 bits (bitcast f64 → i64), matching
+                // `store_return_value_f64` so the bind's f64-bitcast load reverses it.
+                let bits = tramp_builder
+                    .build_bit_cast(fv, i64_ty, "spike_f_to_i")
+                    .map_err(|e| format!("trampoline float bitcast {idx}: {e}"))?
+                    .into_int_value();
+                (bits, i64_ty.const_int(0, false))
+            }
+            inkwell::values::BasicValueEnum::PointerValue(pv) => {
+                if callee_returns_bare_number(cg.typed, cg.imported_fns, &child.callee) {
+                    // number (decimal128): the non-SM ABI returns a POINTER to a
+                    // heap-stable 16-byte i128. Dereference it and pack lo/hi so the
+                    // result slot holds the raw i128 the join-side i128 load expects.
+                    let i128_val = tramp_builder
+                        .build_load(i128_ty, pv, "spike_num_load")
+                        .map_err(|e| format!("trampoline num load {idx}: {e}"))?
+                        .into_int_value();
+                    let lo = tramp_builder
+                        .build_int_truncate(i128_val, i64_ty, "spike_num_lo")
+                        .map_err(|e| format!("trampoline num lo {idx}: {e}"))?;
+                    let hi_shift = tramp_builder
+                        .build_right_shift(
+                            i128_val,
+                            i128_ty.const_int(64, false),
+                            false,
+                            "spike_num_sh",
+                        )
+                        .map_err(|e| format!("trampoline num shift {idx}: {e}"))?;
+                    let hi = tramp_builder
+                        .build_int_truncate(hi_shift, i64_ty, "spike_num_hi")
+                        .map_err(|e| format!("trampoline num hi {idx}: {e}"))?;
+                    (lo, hi)
+                } else {
+                    // string/array/map: the returned heap pointer IS the value. Store it
+                    // as i64 (ptr_to_int); the heap block outlives the blocking-pool task,
+                    // so the parent reads it post-join.
+                    let bits = tramp_builder
+                        .build_ptr_to_int(pv, i64_ty, "spike_ptr_to_i")
+                        .map_err(|e| format!("trampoline ptr_to_int {idx}: {e}"))?;
+                    (bits, i64_ty.const_int(0, false))
+                }
+            }
+            inkwell::values::BasicValueEnum::StructValue(sv) => {
+                // `T errors`: {i64 error word, i64 success word}. Both words must reach
+                // the result slot — dropping field0 would turn an error into a success.
+                let err = tramp_builder
+                    .build_extract_value(sv, 0, "spike_ec_err")
+                    .map_err(|e| format!("trampoline ec err {idx}: {e}"))?
+                    .into_int_value();
+                let ok = tramp_builder
+                    .build_extract_value(sv, 1, "spike_ec_ok")
+                    .map_err(|e| format!("trampoline ec ok {idx}: {e}"))?
+                    .into_int_value();
+                (err, ok)
+            }
+            other => {
+                return Err(format!(
+                    "spike trampoline: unsupported callee `{}` return value {other:?}",
+                    child.callee
+                ))
+            }
+        };
+
         let packed = cpu_result_ty.const_zero();
         let packed = tramp_builder
-            .build_insert_value(packed, call_result, 0, "spike_pack_val")
-            .map_err(|e| format!("trampoline insert val {idx}: {e}"))?
+            .build_insert_value(packed, word0, 0, "spike_pack_w0")
+            .map_err(|e| format!("trampoline insert w0 {idx}: {e}"))?
             .into_struct_value();
         let packed = tramp_builder
-            .build_insert_value(packed, i64_ty.const_int(0, false), 1, "spike_pack_zero")
-            .map_err(|e| format!("trampoline insert zero {idx}: {e}"))?
+            .build_insert_value(packed, word1, 1, "spike_pack_w1")
+            .map_err(|e| format!("trampoline insert w1 {idx}: {e}"))?
             .into_struct_value();
 
         tramp_builder
@@ -7736,31 +7912,54 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
             continue;
         };
 
-        // Load the i64 result from result_slot[0] (the value field of YnzCpuResult).
-        let result_slot = frame_byte_ptr(result_offsets[idx], &format!("spike_rslot_load_{idx}"))?;
-        let result_val = cg
-            .builder
-            .build_load(i64_ty, result_slot, &format!("spike_result_{idx}"))
-            .map_err(|e| format!("spike result load {idx}: {e}"))?
-            .into_int_value();
-
-        // Use the sm_entry alloca pre-allocated in Step 1c. Step 1c runs spike_cpu_group_result_names
-        // with the same gates as gate-2, so every bind_name here was pre-allocated. The lookup
-        // must always succeed; a miss means Step 1c and gate-2 disagree on group membership.
-        let local_ptr = cg
-            .m3d_spike_cpu_result_allocas
-            .get(bind_name.as_str())
-            .copied()
-            .ok_or_else(|| {
-                format!(
-                    "spike all_done_bb: no sm_entry alloca for `{bind_name}` — \
-                     Step 1c pre-allocation and gate-2 must agree on group membership"
+        // The 16-byte result slot is laid out exactly like a canonical SM return slot (which
+        // lives at `FRAME_OFFSET_RETURN_SLOT` = 16 within its frame). Synthesize a frame
+        // pointer = `result_slot - 16` so `load_sm_return_value_typed` (which reads at +16)
+        // reads the result slot, decoding the callee's return class the same way the
+        // sequential SM path does — int/bool i64, float f64-bits, number i128 lo/hi, pointer
+        // classes, and the `{i64,i64}` errors pair. `result_offset` is always ≥ 48 (handle
+        // region precedes it), so subtracting the 16-byte return-slot offset stays inside the
+        // frame header region and never GEPs below the frame base (negative offset).
+        let synth_offset = result_offsets[idx] - state_machine::FRAME_OFFSET_RETURN_SLOT;
+        // Inline GEP (not the `frame_byte_ptr` closure) so no immutable `cg` borrow lingers
+        // into the `&mut cg` binder calls below. synth_offset ≥ 32, so it is never 0.
+        let synth_frame = unsafe {
+            cg.builder
+                .build_gep(
+                    ctx.i8_type(),
+                    frame_ptr,
+                    &[i64_ty.const_int(synth_offset, false)],
+                    &format!("spike_synth_frame_{idx}"),
                 )
-            })?;
-        cg.locals.insert(bind_name.clone(), local_ptr);
-        cg.builder
-            .build_store(local_ptr, result_val)
-            .map_err(|e| format!("spike result store `{bind_name}`: {e}"))?;
+                .map_err(|e| format!("spike synth frame GEP {idx}: {e}"))?
+        };
+        let ret_val = load_sm_return_value_typed(
+            cg,
+            ctx,
+            synth_frame,
+            &child.callee,
+            &format!("spike_ret_{idx}"),
+        )?;
+
+        // Bind through the same unified binder the sequential and I/O-parallel SM let-paths
+        // use (`bind_sm_result_and_flush`) — no CPU-only store that could drift from the
+        // canonical per-class discipline (corpse guard (a)). For a non-crossing result (read
+        // before any subsequent suspension — every spike-firing fixture in this slice) it
+        // creates a fresh, correctly-typed alloca; for a crossing result it reuses the
+        // dominating entry-block alloca and flushes to its frame slot(s).
+        let alloca = bind_sm_result_and_flush(cg, bind_name, ret_val, frame_ptr, &child.callee)?;
+        cg.locals.insert(bind_name.clone(), alloca);
+
+        // `T errors` results must be tracked so a later `.or(...)` / propagation extracts the
+        // success word instead of dereferencing the companion-struct pointer — mirrors the
+        // sequential SM let-arms and the I/O-parallel join bind.
+        if cg
+            .sm_crossing_errors_capable_set
+            .contains(bind_name.as_str())
+            || is_errors_capable_fn(cg.typed, cg.imported_fns, &child.callee)
+        {
+            cg.errors_capable_locals.insert(bind_name.clone());
+        }
     }
 
     // Build the caller-visible list of (name, frame_offset) for result-crossing reload.
@@ -14856,6 +15055,37 @@ fn lower_maybe_method<'ctx>(
 
 // ── M7 P4a: errors-capable helpers ───────────────────────────────────────────
 
+/// True when the named function returns a bare `number` (decimal128, precision ≤ 34) —
+/// NOT `number errors`. The non-SM `number` ABI returns a POINTER to a heap-stable 16-byte
+/// i128 (see the wrapper at the `Type::Number` arm of the SM wrapper), so a CPU trampoline
+/// must DEREFERENCE that pointer to recover the i128 value before packing it into the result
+/// slot — unlike string/array/map, where the returned pointer IS the value (`ptr_to_int`).
+///
+/// Time: O(n) where n = items in the typed module  Space: O(1)
+fn callee_returns_bare_number(
+    typed: &TypedModule,
+    imported_fns: &std::collections::HashMap<String, ynz_typeck::signatures::FunctionSig>,
+    fn_name: &str,
+) -> bool {
+    let local = typed.module.items.iter().any(|item| {
+        if let ynz_ast::nodes::Item::Function(f) = item {
+            f.name == fn_name
+                && matches!(
+                    f.return_type,
+                    ynz_ast::nodes::Type::Number { precision } if precision <= 34
+                )
+        } else {
+            false
+        }
+    });
+    if local {
+        return true;
+    }
+    imported_fns.get(fn_name).is_some_and(
+        |sig| matches!(sig.ret, ynz_typeck::types::Type::Number { precision } if precision <= 34),
+    )
+}
+
 /// True when the named function has `errors_capable = true`, checking both local
 /// module items and the imported function table for cross-module callees.
 fn is_errors_capable_fn(
@@ -16410,11 +16640,12 @@ fn try_build_shape_global<'ctx>(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_cpu_group_slots, cpu_slot_reserve_slots, function_contains_wait, CpuGroupSlot,
-        FrameLayout,
+        build_cpu_group_slots, cpu_slot_reserve_slots, function_contains_wait,
+        return_type_fits_cpu_result_abi, CpuGroupSlot, FrameLayout,
     };
     use ynz_ast::nodes::{Block, Expr, Stmt};
     use ynz_diagnostics::SourceSpan;
+    use ynz_typeck::independence::cpu_result_abi_supports;
 
     fn dummy_span() -> SourceSpan {
         SourceSpan::new("test.ynz", 0, 1)
@@ -16430,6 +16661,439 @@ mod tests {
             recursion_slot: None,
             number_errors_staging_offset: None,
             cpu_group_slots,
+        }
+    }
+
+    /// One return-type variant's classification for the parity test.
+    ///
+    /// A `Reachable` case carries a representative AST form, the EXACT resolved form the
+    /// resolver emits for it, and the expected shared verdict in BOTH the bare and the
+    /// `errors`-wrapped (EC-inner) positions. An `UnreachableAsReturnInner` case names a
+    /// resolved variant that no function-return annotation can ever produce, with the WHY —
+    /// it is counted by the exhaustive classifier (so the compiler still forces it to be
+    /// addressed) but has no gate run.
+    enum ParityCase {
+        Reachable {
+            label: &'static str,
+            ast: ynz_ast::nodes::Type,
+            resolved: ynz_typeck::types::Type,
+            /// Expected gate verdict for the bare `-> T` form.
+            bare_expected: bool,
+            /// Expected gate verdict for the `-> T errors` (EC-inner) form.
+            ec_expected: bool,
+        },
+        UnreachableAsReturnInner(&'static str),
+    }
+
+    /// Classify ONE resolved `Type` variant for the CPU-result-ABI parity invariant.
+    ///
+    /// This `match` has NO `_` arm BY DESIGN: it is what makes `cpu_result_abi_gate_parity`
+    /// compile-forced exhaustive. Adding a variant to `ynz_typeck::types::Type` makes this
+    /// function fail to compile (`non-exhaustive patterns: ... not covered`) until someone
+    /// classifies the new variant here — so no return class can ever be silently left
+    /// unpinned by the parity test again. Each `Reachable` row pairs the AST form with the
+    /// EXACT resolved form the typeck resolver emits (verified against `check.rs`'s
+    /// `ast_type_to_type` + `signatures.rs`), so the rows drive the live production paths.
+    fn parity_case(variant: &ynz_typeck::types::Type) -> ParityCase {
+        use ynz_ast::nodes::Type as Ast;
+        use ynz_typeck::types::Type as Resolved;
+        let span = dummy_span();
+        match variant {
+            // ── Admitted classes: value or single owning heap pointer fits the 16-byte slot ──
+            Resolved::Int => ParityCase::Reachable {
+                label: "int",
+                ast: Ast::Int,
+                resolved: Resolved::Int,
+                bare_expected: true,
+                ec_expected: true,
+            },
+            Resolved::Float => ParityCase::Reachable {
+                label: "float",
+                ast: Ast::Float,
+                resolved: Resolved::Float,
+                bare_expected: true,
+                ec_expected: true,
+            },
+            Resolved::Bool => ParityCase::Reachable {
+                label: "bool",
+                ast: Ast::Bool,
+                resolved: Resolved::Bool,
+                bare_expected: true,
+                ec_expected: true,
+            },
+            // `string` is the only `Named` that fits at the AST level; resolves to `String`.
+            Resolved::String => ParityCase::Reachable {
+                label: "string",
+                ast: Ast::Named("string".to_string(), span.clone()),
+                resolved: Resolved::String,
+                bare_expected: true,
+                ec_expected: true,
+            },
+            // bare `number` admits (heap-stable ABI ptr); `number errors` declines — the i128
+            // ok-word points into the worker thread's dead staging slot (wide-EC UAF).
+            Resolved::Number { .. } => ParityCase::Reachable {
+                label: "number",
+                ast: Ast::Number { precision: 34 },
+                resolved: Resolved::Number { precision: 34 },
+                bare_expected: true,
+                ec_expected: false,
+            },
+            // `array<_>`/`map<_,_>` resolve to `BuiltinArray`/`BuiltinMap` (never `Generic`);
+            // both admit bare and EC (the ok-word is the collection's owning heap pointer).
+            Resolved::BuiltinArray { .. } => ParityCase::Reachable {
+                label: "array<int>",
+                ast: Ast::Generic {
+                    name: "array".to_string(),
+                    name_span: span.clone(),
+                    args: vec![Ast::Int],
+                    span: span.clone(),
+                },
+                resolved: Resolved::BuiltinArray {
+                    elem: Box::new(Resolved::Int),
+                },
+                bare_expected: true,
+                ec_expected: true,
+            },
+            Resolved::BuiltinMap { .. } => ParityCase::Reachable {
+                label: "map<int,int>",
+                ast: Ast::Generic {
+                    name: "map".to_string(),
+                    name_span: span.clone(),
+                    args: vec![Ast::Int, Ast::Int],
+                    span: span.clone(),
+                },
+                resolved: Resolved::BuiltinMap {
+                    key: Box::new(Resolved::Int),
+                    val: Box::new(Resolved::Int),
+                },
+                bare_expected: true,
+                ec_expected: true,
+            },
+            // ── Declined classes: sequential lowering is always correct, never an error ──
+            // `fixed` lowers to `BuiltinFixed`; its non-suspending return path is a pre-existing
+            // base bug, so it declines in both positions (admitting it would be dead anyway).
+            Resolved::BuiltinFixed { .. } => ParityCase::Reachable {
+                label: "fixed<int>",
+                ast: Ast::Generic {
+                    name: "fixed".to_string(),
+                    name_span: span.clone(),
+                    args: vec![Ast::Int],
+                    span: span.clone(),
+                },
+                resolved: Resolved::BuiltinFixed {
+                    elem: Box::new(Resolved::Int),
+                    size: None,
+                },
+                bare_expected: false,
+                ec_expected: false,
+            },
+            // A by-value shape needs variable-size frame staging (WideValueSuspendingReturn).
+            Resolved::Shape { .. } => ParityCase::Reachable {
+                label: "Shape",
+                ast: Ast::Named("Player".to_string(), span.clone()),
+                resolved: Resolved::Shape {
+                    name: "Player".to_string(),
+                },
+                bare_expected: false,
+                ec_expected: false,
+            },
+            Resolved::Dynamic { .. } => ParityCase::Reachable {
+                label: "dynamic Damageable",
+                ast: Ast::Dynamic {
+                    contract: "Damageable".to_string(),
+                    span: span.clone(),
+                },
+                resolved: Resolved::Dynamic {
+                    contract: "Damageable".to_string(),
+                },
+                bare_expected: false,
+                ec_expected: false,
+            },
+            // A user-defined generic shape resolves to `Resolved::Generic` (distinct from the
+            // built-in `array`/`map` paths above) — declines in both positions.
+            Resolved::Generic { .. } => ParityCase::Reachable {
+                label: "user generic Pair<int,int>",
+                ast: Ast::Generic {
+                    name: "Pair".to_string(),
+                    name_span: span.clone(),
+                    args: vec![Ast::Int, Ast::Int],
+                    span: span.clone(),
+                },
+                resolved: Resolved::Generic {
+                    name: "Pair".to_string(),
+                    args: vec![Resolved::Int, Resolved::Int],
+                },
+                bare_expected: false,
+                ec_expected: false,
+            },
+            Resolved::Maybe { .. } => ParityCase::Reachable {
+                label: "maybe<int>",
+                ast: Ast::Maybe {
+                    inner: Box::new(Ast::Int),
+                    span: span.clone(),
+                },
+                resolved: Resolved::Maybe {
+                    inner: Box::new(Resolved::Int),
+                },
+                bare_expected: false,
+                ec_expected: false,
+            },
+            Resolved::Union { .. } => ParityCase::Reachable {
+                label: "union",
+                ast: Ast::Union {
+                    variants: vec![
+                        Ast::Named("Circle".to_string(), span.clone()),
+                        Ast::Named("Square".to_string(), span.clone()),
+                    ],
+                    span: span.clone(),
+                },
+                resolved: Resolved::Union {
+                    variants: vec![
+                        Resolved::Shape {
+                            name: "Circle".to_string(),
+                        },
+                        Resolved::Shape {
+                            name: "Square".to_string(),
+                        },
+                    ],
+                },
+                bare_expected: false,
+                ec_expected: false,
+            },
+            // `range` as a return annotation parses to `Named("range")` (no dedicated AST range
+            // type) and resolves to `Resolved::Range`. The bare AST form is the `Named`, not
+            // `Ast::Range` (which resolves to `Error` and is never written in type position).
+            Resolved::Range { .. } => ParityCase::Reachable {
+                label: "range",
+                ast: Ast::Named("range".to_string(), span.clone()),
+                resolved: Resolved::Range {
+                    element: Box::new(Resolved::Int),
+                    end_inclusive: false,
+                },
+                bare_expected: false,
+                ec_expected: false,
+            },
+            // An `options` type name resolves to `Resolved::Options` (distinct from `Shape`).
+            Resolved::Options { .. } => ParityCase::Reachable {
+                label: "options",
+                ast: Ast::Named("Status".to_string(), span.clone()),
+                resolved: Resolved::Options {
+                    name: "Status".to_string(),
+                },
+                bare_expected: false,
+                ec_expected: false,
+            },
+            // `sensitive string` — wraps `string`; resolves to `Resolved::Sensitive`. Declines.
+            Resolved::Sensitive { .. } => ParityCase::Reachable {
+                label: "sensitive string",
+                ast: Ast::Sensitive(Box::new(Ast::Named("string".to_string(), span.clone()))),
+                resolved: Resolved::Sensitive {
+                    inner: Box::new(Resolved::String),
+                },
+                bare_expected: false,
+                ec_expected: false,
+            },
+            // `-> nothing` and `-> nothing errors` are BOTH production-handled (check.rs:1074
+            // skips return-path analysis for `ErrorsCapable { inner: Nothing }`); there is no
+            // value to join-bind, so both decline. NOT unreachable — the R5 mis-classification
+            // (marking `Nothing` unreachable) is exactly what this row prevents recurring.
+            Resolved::Nothing => ParityCase::Reachable {
+                label: "nothing",
+                ast: Ast::Nothing,
+                resolved: Resolved::Nothing,
+                bare_expected: false,
+                ec_expected: false,
+            },
+            // A function whose return annotation fails to resolve carries `sig.ret = Error`
+            // (the function already emitted a type error and never compiles to a binary, but
+            // the gate is a pure classifier and must decline it). The AST counterpart is the
+            // error-recovery placeholder `Ast::Error`, which codegen's gate also declines.
+            // EC over `Error` is the same poisoned-sig story — declines.
+            Resolved::Error => ParityCase::Reachable {
+                label: "Error (poisoned sig)",
+                ast: Ast::Error,
+                resolved: Resolved::Error,
+                bare_expected: false,
+                ec_expected: false,
+            },
+            // `MapEntry<K,V>` IS writable as a return annotation (the `Generic { name: "MapEntry" }`
+            // resolver arm at check.rs:3841 produces it), so `sig.ret` can be `MapEntry` — it is
+            // reachable, not synthetic-only at the gate. Declines in both positions.
+            Resolved::MapEntry { .. } => ParityCase::Reachable {
+                label: "MapEntry<int,int>",
+                ast: Ast::Generic {
+                    name: "MapEntry".to_string(),
+                    name_span: span.clone(),
+                    args: vec![Ast::Int, Ast::Int],
+                    span: span.clone(),
+                },
+                resolved: Resolved::MapEntry {
+                    key: Box::new(Resolved::Int),
+                    val: Box::new(Resolved::Int),
+                },
+                bare_expected: false,
+                ec_expected: false,
+            },
+            // `TypeParam` is the ONLY genuinely-unreachable return class at the gate: generic
+            // functions are routed to the `GenericFnTable`, NOT the `SignatureTable.fns` that the
+            // CPU candidacy gate looks callees up in (signatures.rs:132 skips `!generics.is_empty()`).
+            // A gated callee is therefore always non-generic, and its `sig.ret` is concrete — a
+            // bare `TypeParam` never reaches `cpu_result_abi_supports`. Counted by the exhaustive
+            // match (so a future variant still forces a decision) but no gate run.
+            Resolved::TypeParam { .. } => ParityCase::UnreachableAsReturnInner(
+                "generic-fn return types live in GenericFnTable, never in the CPU-gated SignatureTable.fns",
+            ),
+            // The `ErrorsCapable` wrapper itself is never a `-> T` inner of ANOTHER
+            // `ErrorsCapable` (no `-> T errors errors` syntax); it is exercised via the
+            // `ec_expected` arm of every Reachable bare class above, not as its own bare row.
+            Resolved::ErrorsCapable { .. } => ParityCase::UnreachableAsReturnInner(
+                "errors-wrapping is tested via the ec_expected arm of every bare class; \
+                 a doubly-wrapped `T errors errors` is not expressible",
+            ),
+        }
+    }
+
+    // WHY: the CPU-parallel candidacy gate lives in two places that classify return types over
+    // two DIFFERENT enums — codegen's `return_type_fits_cpu_result_abi` (un-resolved AST `Type`)
+    // and typeck's `cpu_result_abi_supports` (resolved `Type`). Invariant: for every return
+    // class, both gates must reach the IDENTICAL admit/decline verdict, in BOTH the bare and the
+    // `errors`-wrapped form. If they diverge, the IDE `parallel_groups` hint (driven by typeck)
+    // marks a call parallel while the emitted binary runs it sequentially — or worse, codegen
+    // admits a class typeck declined (the number-errors UAF class).
+    //
+    // Coverage is COMPILE-FORCED exhaustive: `parity_case` is a `match` over every resolved
+    // `Type` variant with no `_` arm, so a future-added variant is a BUILD ERROR until it is
+    // classified here. Three prior rounds (R3 map, R4 maybe, R5 nothing) each found one more
+    // variant the old hand-listed `cases` vec had silently omitted; this structure makes that
+    // class of gap impossible. If you change one gate, change the other; do NOT relax this test.
+    #[test]
+    fn cpu_result_abi_gate_parity() {
+        use ynz_ast::nodes::Type as Ast;
+        use ynz_typeck::types::Type as Resolved;
+
+        let span = dummy_span();
+        // One representative per resolved `Type` variant. The classifier (`parity_case`) is the
+        // exhaustiveness driver — every variant present here is matched by an arm that has no
+        // `_` fallback, so the compiler rejects any future variant that is not classified.
+        let all_variants: Vec<Resolved> = vec![
+            Resolved::Nothing,
+            Resolved::String,
+            Resolved::Error,
+            Resolved::Int,
+            Resolved::Float,
+            Resolved::Number { precision: 34 },
+            Resolved::Bool,
+            Resolved::Range {
+                element: Box::new(Resolved::Int),
+                end_inclusive: false,
+            },
+            Resolved::Shape {
+                name: "Player".to_string(),
+            },
+            Resolved::Dynamic {
+                contract: "Damageable".to_string(),
+            },
+            Resolved::TypeParam {
+                name: "T".to_string(),
+            },
+            Resolved::Generic {
+                name: "Pair".to_string(),
+                args: vec![Resolved::Int, Resolved::Int],
+            },
+            Resolved::BuiltinArray {
+                elem: Box::new(Resolved::Int),
+            },
+            Resolved::BuiltinFixed {
+                elem: Box::new(Resolved::Int),
+                size: None,
+            },
+            Resolved::Maybe {
+                inner: Box::new(Resolved::Int),
+            },
+            Resolved::BuiltinMap {
+                key: Box::new(Resolved::Int),
+                val: Box::new(Resolved::Int),
+            },
+            Resolved::MapEntry {
+                key: Box::new(Resolved::Int),
+                val: Box::new(Resolved::Int),
+            },
+            Resolved::Options {
+                name: "Status".to_string(),
+            },
+            Resolved::Union {
+                variants: vec![
+                    Resolved::Shape {
+                        name: "Circle".to_string(),
+                    },
+                    Resolved::Shape {
+                        name: "Square".to_string(),
+                    },
+                ],
+            },
+            Resolved::ErrorsCapable {
+                inner: Box::new(Resolved::Int),
+            },
+            Resolved::Sensitive {
+                inner: Box::new(Resolved::String),
+            },
+        ];
+
+        // Assert the representative set is itself complete: if a variant were missing from
+        // `all_variants`, this loop would never drive `parity_case` for it, so the compile-time
+        // exhaustiveness guard would not protect it. `parity_case` covering every variant is the
+        // compile-time half; iterating every variant here is the runtime half — together they
+        // guarantee each variant is BOTH classified and exercised.
+        for variant in &all_variants {
+            match parity_case(variant) {
+                ParityCase::Reachable {
+                    label,
+                    ast,
+                    resolved,
+                    bare_expected,
+                    ec_expected,
+                } => {
+                    // Bare `-> T` form: both gates classify the un-wrapped type.
+                    let bare_codegen = return_type_fits_cpu_result_abi(&ast);
+                    let bare_typeck = cpu_result_abi_supports(&resolved);
+                    assert_eq!(
+                        bare_codegen, bare_typeck,
+                        "gate divergence for bare `{label}`: codegen={bare_codegen}, \
+                         typeck={bare_typeck} — both gates must agree (hint/binary parity)"
+                    );
+                    assert_eq!(
+                        bare_codegen, bare_expected,
+                        "wrong verdict for bare `{label}`: got {bare_codegen}, \
+                         expected {bare_expected}"
+                    );
+
+                    // `-> T errors` form: wrap both forms and re-run. This drives codegen's
+                    // `ec_inner_fits_cpu_result_abi` and typeck's `cpu_result_ec_inner_is_safe`.
+                    let ec_ast = Ast::ErrorCapable {
+                        inner: Box::new(ast),
+                        span: span.clone(),
+                    };
+                    let ec_resolved = Resolved::ErrorsCapable {
+                        inner: Box::new(resolved),
+                    };
+                    let ec_codegen = return_type_fits_cpu_result_abi(&ec_ast);
+                    let ec_typeck = cpu_result_abi_supports(&ec_resolved);
+                    assert_eq!(
+                        ec_codegen, ec_typeck,
+                        "gate divergence for `{label} errors`: codegen={ec_codegen}, \
+                         typeck={ec_typeck} — both gates must agree (hint/binary parity)"
+                    );
+                    assert_eq!(
+                        ec_codegen, ec_expected,
+                        "wrong verdict for `{label} errors`: got {ec_codegen}, \
+                         expected {ec_expected}"
+                    );
+                }
+                // No gate run — the variant cannot appear as a function-return type. It is still
+                // classified by the exhaustive `parity_case` match (the compiler counted it), so
+                // a future variant cannot slip in unclassified.
+                ParityCase::UnreachableAsReturnInner(_why) => {}
+            }
         }
     }
 
