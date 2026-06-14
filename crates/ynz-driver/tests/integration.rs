@@ -5392,6 +5392,19 @@ fn v03_m3d_return_class_bool_fires_byte_identical() {
     m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_return_class_bool.ynz", "true\ntrue");
 }
 
+#[test]
+fn v03_m3d_promoted_host_seq_fires_byte_identical() {
+    // WHY: a host that is NOT the entrypoint must spike-host its own CPU pair. `combine` owns
+    // the adjacent `score` pair and is called once, in plain sequence, by `entrypoint`. The
+    // invariant: a non-entrypoint host spike-hosts its own pair, so there are 2 spawns inside
+    // `combine`; 0 spawns means it regressed to running the pair sequentially. The frame for a
+    // non-entrypoint host carries the handle/result reserve because `build_frame_layouts` and
+    // the emit-time frame size both route through the same `cpu_group_slots_and_reserve`
+    // helper — under-allocation cannot occur. If you relax the spawn-count assertion,
+    // non-entrypoint hosts stopped parallelizing — fix the codegen, not this test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_promoted_host_seq.ynz", "9907");
+}
+
 /// Assert a v0.3-M3d fixture whose return class the shared gate DECLINES runs sequentially:
 ///   1. default-mode output equals the oracle (exit 0),
 ///   2. default mode is byte-identical to `--no-auto-parallel`,

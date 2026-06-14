@@ -336,13 +336,13 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
     // reads THIS set, so it too must carry the imported-suspending names to agree with the
     // frame-layout sizing decision above.
     //
-    // Slice-2 carry-forward (benign over-allocation, logged in the plan Findings Log): an
-    // `entrypoint` that calls ITSELF in a post-pair statement lands `"entrypoint"` in this
-    // host union (so the emit-time re-probe sees it suspending and declines) but it was NOT
-    // in `spike_host_subset`'s `promoted` probe input at probe time — the probe admitted while
-    // the emit-time re-probe declines → a 48-byte OVER-allocation (dead spike reserve, NOT
-    // under-allocation, so no corruption). Slice 2 should align the probe input with this
-    // emit-time host set to eliminate even that benign waste. See `spike_host_subset` doc.
+    // Probe/emit-time asymmetry (benign over-allocation; tracked residual): a host whose
+    // post-pair statement calls ANOTHER host lands that callee in this union, so the
+    // emit-time re-probe declines the host (post-pair-suspending gate) while
+    // `spike_host_subset` — probed against the effective set BEFORE this union — admitted it.
+    // The admitted-but-declined host gets a dead 48-byte reserve (OVER-allocation, never
+    // under, so output stays correct and alloc==free). Exact reconciliation needs a fixpoint
+    // over the host set, so it is deferred rather than approximated. See `spike_host_subset`.
     let mut suspends_with_promotions = effective_suspend_set;
     for name in &spike_hosts {
         suspends_with_promotions.insert(name.clone());

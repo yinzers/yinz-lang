@@ -6688,14 +6688,13 @@ fn spike_cpu_candidates(
     typed: &TypedModule,
     suspend_set: &SuspendSet,
 ) -> Option<String> {
-    // Entrypoint-only: non-entrypoint spike hosts have their frame allocated by the
-    // caller's emit_suspending_call_heap_boxed fallback, which reads from frame_layouts
-    // (computed before spike promotion). That pre-spike layout is too small: the spike
-    // resume function writes handle/result bytes at offsets 32–79 into a frame sized
-    // without the 48-byte spike reserve — heap corruption. Sequential is always correct.
-    if f.name != "entrypoint" {
-        return None;
-    }
+    // Any promoted host (not just `entrypoint`) may spike-host its own CPU group. The frame
+    // a non-entrypoint host needs is sized through the SAME `cpu_group_slots_and_reserve`
+    // single-source helper that feeds both `build_frame_layouts` (which the caller's
+    // `emit_suspending_call_heap_boxed` reads as `child_frame_size`) and `compute_frame_size`,
+    // so a hosted child's heap block already carries the 48-byte handle/result reserve — the
+    // under-allocation the entrypoint-only gate once defused can no longer occur. Sequential
+    // fallback remains correct for any host this gate's later checks decline.
 
     // Zero-param hosts only. Param slots start at byte 32 (FRAME_HEADER_SIZE),
     // which is the same byte SPIKE_HANDLE_0_OFFSET occupies. A host with ≥1 params would
@@ -6857,19 +6856,18 @@ fn spike_cpu_candidates(
 /// callers MUST pass the effective set; a future caller reverted to the bare set walks back
 /// into that under-allocation. The `imported_suspending_after_pair_*` tests are the tripwire.
 ///
-/// Slice-2 carry-forward: a promoted inner host (`work`) is NOT spike-hosted here, so its
-/// own CPU group runs sequentially this slice. That is the intended residual — codegen
-/// catches up to typeck's full promotion set as the entrypoint-only gate is relaxed in
-/// later slices. Output stays correct (sequential is always correct); only the inner
-/// overlap is deferred.
-///
-/// Slice-2 carry-forward (benign over-allocation, logged in the plan Findings Log): an
-/// `entrypoint` that calls ITSELF in a post-pair statement gets `"entrypoint"` into the
-/// emit-time `suspends_with_promotions` host union but NOT into this probe's `promoted`
-/// input at probe time, so the emit-time re-probe declines while this probe admitted →
-/// a 48-byte OVER-allocation (dead spike reserve, NOT under-allocation — no corruption).
-/// Slice 2 should align this probe's input set with the emit-time host set to drop even
-/// that benign waste.
+/// Probe/emit-time asymmetry (benign over-allocation; tracked residual). This probe
+/// evaluates each candidate against `suspend_set` (the EFFECTIVE set, BEFORE the spike-host
+/// names are unioned in). The emit-time re-probe in `lower_function_with_waits` instead sees
+/// `suspends_with_promotions` (= effective ∪ spike-hosts). The two disagree for a host whose
+/// POST-PAIR statement calls ANOTHER host: at probe time the callee is not yet a known
+/// suspending name so the post-pair gate admits, but at emit time the callee is in the host
+/// union so the post-pair gate declines. The probe then reserves the 48-byte handle/result
+/// region for a host the emitter runs sequentially → dead reserve (OVER-allocation, never
+/// under — the embedded child sub-frame still fits, so no aliasing and no corruption; output
+/// stays correct and alloc==free). Reconciling the two sets exactly requires a fixpoint
+/// (removing a host can re-admit a fn that declined only because that host was suspending,
+/// which can in turn re-decline a third fn), so it is deferred rather than approximated here.
 ///
 /// Time: O(p · k) where p = promoted fns, k = AST nodes scanned per candidate.
 /// Space: O(p).
