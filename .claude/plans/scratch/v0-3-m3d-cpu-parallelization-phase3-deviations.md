@@ -1,36 +1,35 @@
-# v0-3-m3d-cpu-parallelization Phase 3 Deviations — captured 2026-06-14 (Sub-slice 4a)
+# v0-3-m3d-cpu-parallelization Phase 3 Deviations — captured 2026-06-14 (Sub-slice 4b, live-locals + for-body-decline fix)
 
 D_count: 2
 
-> NOTE: Phase 3 is built INCREMENTALLY across live-verified slices (Patrick decision, 2026-06-13),
-> one commit at the phase boundary. Slice 4 itself is decomposed into sub-slices 4a–4e (coordinator
-> plan in the plan-file Phase-3 Findings Log, 2026-06-14). This scratch file reflects the CURRENT
-> sub-slice's deviation set. Slices 1/2/3 (committed 0cc0ae0/d8bef4e/8e984fa) deviation records +
-> their judge PASS verdicts live durably in the plan-file Findings Log + committed scratch snapshots.
-> Cumulative 4.a re-judges the full Phase-3 deviation set from those durable records.
+> NOTE: Phase 3 built incrementally across sub-slices 4a–4e. This scratch reflects the CURRENT 4b state
+> after the live-locals crossing-slot fix (Patrick Option-2) AND the for-body-decline fix round (R1 gate
+> found for-body FIRE over-admits nested shapes → declined per the pre-authorized verify-first escape).
+> The accumulator straight-line fix (the load-bearing Option-2 win) STANDS and is validated. Prior R1/R2
+> deviations are SUPERSEDED. Sub-slice 4a committed deaa30c. BASE for 4b = deaa30c.
 
 ## Scope Deviations (verbatim from executor report)
 
-None — stayed within declared scope. (All touched files are under `crates/ynz-codegen/src/`, `crates/ynz-driver/tests/`, plus `.claude/todos.md` which the envelope explicitly directed for the tracked carry-forward.)
+None — stayed within declared scope. (All code changes in `crates/ynz-typeck/src/**` + `crates/ynz-codegen/src/**` + `crates/ynz-driver/tests/**` + `.claude/todos.md`, all in the plan front-matter `files:`. `.claude/state.md` shows a 1-line hook-generated radar delta — not touched by the executor.)
 
 ## Approach Deviations (verbatim from executor report)
 
-**Deviation #1** (4a-ii FIRE-vs-DECLINE — the envelope's own conditional branch, documented honestly): the envelope said `the existing v03_m3d_nested_groups inner work group fires (2→4) IFF verify-first proves nested-spawn-from-worker safe`. I did `DECLINED 4a-ii and kept the test at 2 spawns`. Rationale: `verify-first empirically established that work CANNOT fire under 4a regardless of concurrency safety — it takes a parameter and the zero-param host gate (line 6700, an explicit 4e concern that 4a does not lift) declines it; and the nested-spawn-from-worker hazard itself is architecturally unreachable in 4a because the candidate filter structurally bars any promoted host from being a parallel child. Firing it would require lifting the 4e param gate, outside 4a scope. Per the envelope this conditional DECLINE is not a narrowing — it is the explicitly-sanctioned honest outcome, with the residual tracked in todos and the nested fixture header verified still accurate.` Diff hunks: `crates/ynz-driver/tests/integration.rs:5395-5410` (new 4a-i test; the nested test at integration.rs:5191-5237 was deliberately left unchanged).
+**Deviation #1** (codegen reload path — `reload_spike_results: bool` param on the canonical `reload_params_from_frame`, now corrected): the live-locals fix added a `reload_spike_results: bool` param to gate the trailing spike-result reload (which fails for nested groups with no Step-1c sm_entry alloca). The R1 gate (judge #1) found it was left `true` at the orphan-block terminator → a pure nested-if group with NO surrounding crossing local aborted codegen. Fix-round corrected emit.rs:3877 to `false`. Rationale: `orphan blocks are dead/unreachable code (they exist only to satisfy LLVM's terminator requirement), so the spike-result reload there is a no-op — false is safe regardless of nested vs top-level placement. The post-join site stays false; the 5 wait/IO sites stay true (judge #1 confirmed those correct). The wait/I-O callers keep existing behavior.` Diff hunks: `crates/ynz-codegen/src/emit.rs:3514-3530` (helper signature), `crates/ynz-codegen/src/emit.rs:3877` (orphan-terminator site corrected to false).
 
-**Deviation #2** (carry-forward fold-in left as tracked residual, not fixed): the envelope said `fold in the entrypoint-self-recursion-post-pair benign over-allocation if cheaply in-scope`. I did `left it as a tracked carry-forward and durably re-documented it (now generalized to host-calls-host chains)`. Rationale: `verify-first showed exact probe/emit-set reconciliation requires a fixpoint (removing a host can re-admit a fn that declined only because that host was suspending, which can re-decline a third fn — non-monotone in one pass), and the naive full-promoted-union probe risks re-introducing the slice-1 union-poisoning corpse. The waste is benign (OVER-allocation only, output correct, alloc=free verified on a mid→other host-chain probe). The envelope explicitly permits leaving it tracked if not cheap/safe.` Diff hunks: `crates/ynz-codegen/src/emit.rs:6859-6871, crates/ynz-codegen/src/queries.rs:339-345, .claude/todos.md:194-195`.
+**Deviation #2** (for-body DECLINE — the pre-authorized verify-first escape outcome): the live-locals fix re-enabled for-body FIRE, but the R1 gate (code-reviewer) found it over-admits: a CPU group in a for-body nested under an `if` silently miscompiled, and a group in the inner of two nested for-loops aborted codegen. Per the verify-first escape (for-body needs multi-level synthetic-index work beyond crossing-slot reservation), the fix-round DECLINES ALL for-body. Rationale: `spike_nested_blocks reverted to exclude For/While so a CPU group in ANY for/while body declines to sequential (byte-identical); the nested for-body placements need multi-level synthetic-index reservation deferred to a dedicated future loop-placement-matrix slice; the for-loop cpu_supported threading reverted as now-dead (no-duct-tape); judge #2 proved the SIMPLE top-level for-body case fires correctly, which de-risks the future slice. Two DECLINE regression fixtures (for-under-if, inner-nested-for) lock the corpse-prevention (no abort, no silent-wrong).` Diff hunks: `crates/ynz-codegen/src/emit.rs:7011` (`spike_nested_blocks` excludes For), `crates/ynz-typeck/src/check.rs:6588-6612` (for-loop cpu_supported threading reverted), `crates/ynz-driver/tests/integration.rs:5854-5950` (for-body test FIRE→DECLINE + 2 new DECLINE regressions + 1 new orphan-terminator FIRE fixture).
 
 ## Resolved spawn list (orchestrator's parsed view)
 
 ### Deviation #1
 - **type**: approach
-- **rationale**: 4a-ii FIRE-vs-DECLINE conditional branch documented honestly (verify-first: `work` is param-gated by 4e zero-param gate + nested-spawn-from-worker architecturally unreachable via candidate-filter structural bar; envelope-sanctioned conditional DECLINE, residual tracked, nested fixture header verified accurate).
-- **diff hunks**: crates/ynz-driver/tests/integration.rs:5395-5410
-- **judge identity hash**: fa1a160c80ee403a65702cbf495d39c2724b7d7b
-- **carry status**: fresh
+- **rationale**: nested-group-in-host-with-suspension DECLINE (closes judge #1's abort). spike_cpu_candidates (emit.rs:6903) declines a nested CPU group when the host body contains any other wait/suspending op. Verify-first refined the shape: an explicit `wait` makes the host a non-promotion-candidate (declines harmlessly, never reaches the gate); the REAL abort needs a nested group + a PROMOTED suspending CALLEE (invisible at candidate-id → host promoted → Step-1c spike_cpu_group_result_names scans only top-level → nested bind names get no alloca → wait/IO resume reload aborts). Decline-around: nested group fires only in a pure-CPU host; mixed CPU+wait deferred to 4c (proper FIRE needs Step-1c nested-block walk). Top-level group + suspension still FIRES (no regression). The orphan-terminator bool fix (emit.rs:3877 false) from the prior round stays. RISK: a nested+suspension shape that still FIRES into the abort despite the decline.
+- **diff hunks**: crates/ynz-codegen/src/emit.rs:6903, crates/ynz-driver/tests/fixtures/v0_3_m3d_nested_group_with_suspending_callee.ynz:1-50, crates/ynz-driver/tests/integration.rs:5994-6051
+- **judge identity hash**: fae99f4893e3d6e7f6cd1d33dda864da6e6d7bee
+- **carry status**: re-judged at fix round (nested+suspension decline replaces the partial orphan-only fix)
 
 ### Deviation #2
 - **type**: approach
-- **rationale**: carry-forward (entrypoint-self-recursion over-alloc) left as tracked residual not fixed — exact probe/emit-set reconciliation needs a non-monotone fixpoint; naive full-promoted-union probe risks slice-1 union-poisoning corpse; waste is benign OVER-allocation only (output correct, alloc=free); envelope permits leaving tracked; durably re-documented generalized to host-calls-host chains.
-- **diff hunks**: crates/ynz-codegen/src/emit.rs:6859-6871, crates/ynz-codegen/src/queries.rs:339-345, .claude/todos.md:194-195
-- **judge identity hash**: 2ea40721ef270751b4b06e83cd6461b7390b4301
-- **carry status**: fresh
+- **rationale**: for-body DECLINE (verify-first escape) — spike_nested_blocks excludes For/While, any for/while-body CPU group declines to sequential; nested placements need multi-level synthetic-index work deferred to a future slice; for-loop cpu_supported threading reverted as dead; judge #2 validated the simple case works. RISK: an unenumerated for/while-body shape that still FIRES into the corpse (silent-wrong or abort) instead of declining.
+- **diff hunks**: crates/ynz-codegen/src/emit.rs:7011, crates/ynz-typeck/src/check.rs:6588-6612, crates/ynz-driver/tests/integration.rs:5854-5950
+- **judge identity hash**: b66edde4de80160fa9a8a397b181c591424c52b8
+- **carry status**: re-judged at fix round (for-body FIRE → DECLINE)

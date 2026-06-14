@@ -1,0 +1,48 @@
+// v0.3-M3d: `combine` makes two independent `score(...)` calls inside an `if` branch, AND also
+// calls `other()`, which itself runs two independent `score(...)` calls at the same time. Because
+// `combine` reaches a second concurrency point (the call to `other`, which runs in parallel
+// internally), the two nested calls inside `combine`'s `if` run in plain sequence — only `other`'s
+// own pair runs at the same time.
+//
+// score(seed) loops, so each call does enough work to be worth running alongside another, and
+// returns the loop sum plus its seed for a distinct result.
+//
+// Arithmetic: loopSum = 0+1+...+99 = 4950.
+//   score(1) = 4951, score(2) = 4952 → other  = 9903
+//   score(3) = 4953, score(4) = 4954 → if-sum = 9907
+//   combine  = 9907 + 9903 = 19810
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   19810
+function score(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function other() -> int {
+  let a = score(1)
+  let b = score(2)
+  return a + b
+}
+
+function combine() -> int {
+  let result = 0
+  let go = true
+  if (go) {
+    let lo = score(3)
+    let hi = score(4)
+    result = lo + hi
+  }
+  let extra = other()
+  return result + extra
+}
+
+function entrypoint() -> nothing {
+  let r = combine()
+  print(r)
+}

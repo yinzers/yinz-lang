@@ -1,0 +1,32 @@
+// v0.3-M3d: two independent `score(...)` computations run at the same time. A `running` total
+// is set up before they start and is added to their two results once both finish, so its value
+// has to survive while the two computations run. The output is the same whether or not the two
+// computations run at the same time.
+//
+// score(seed) loops, so it does enough work to be worth running alongside the other call, and
+// returns the loop sum plus its seed, giving each call a distinct result.
+//
+// Arithmetic: loopSum = 0+1+...+99 = 4950.
+//   score(1) = 4951
+//   score(2) = 4952
+//   running starts at 1000, then becomes 1000 + 4951 + 4952 = 10903
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   10903
+function score(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function entrypoint() -> nothing {
+  let running = 1000
+  let a = score(1)
+  let b = score(2)
+  running = running + a + b
+  print(running)
+}

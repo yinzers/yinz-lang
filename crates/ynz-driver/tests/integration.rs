@@ -5192,7 +5192,7 @@ fn build_to_tmpdir_emit_ir_mode(src: &Path, no_auto_parallel: bool) -> String {
 fn v03_m3d_nested_groups_byte_identical_and_fires() {
     // WHY: regression guard for the union-poisoning hazard (deviation-judge #2). When typeck
     // promotes BOTH an inner host (`work`) and the outer host (`entrypoint`), codegen must
-    // reconcile the promotion set down to what it can actually spike-host this slice
+    // reconcile the promotion set down to what it can actually spike-host
     // (`spike_host_subset`). If it instead unioned the full set, `work` would land in the
     // suspend set entrypoint's callee-eligibility filter reads, silently DECLINING
     // entrypoint's group. This test asserts (a) output is correct + byte-identical in both
@@ -5849,6 +5849,200 @@ fn cpu_runtime_axis_fixtures_compile_forced_exhaustive() {
             }
         }
     }
+}
+
+// A CPU group may sit at the top level of a promoted function OR inside ONE `if` arm or matching
+// arm; a sole group in either placement spike-hosts from the recursive SM lowering of that body,
+// reusing the same group-0 frame slots. A function spike-hosts IFF it has EXACTLY ONE CPU group
+// across all depths. A group inside a loop body needs loop-index crossing-slot work that is not
+// yet implemented (see .claude/todos.md). A function with TWO-or-more groups (top-level plus
+// nested, or two nested, in ANY source order) would alias the single reserved group-0 slot
+// region, so it declines ALL spiking. Every decline lowers sequentially, byte-identical.
+
+#[test]
+fn v03_m3d_accumulator_crossing_fires_byte_identical() {
+    // WHY: a local declared BEFORE a CPU pair and READ after the join (`running = running + a + b`)
+    // must survive the join. The CPU-group join is a suspension boundary, so `running` is a
+    // crossing local: typeck's crossing collector registers the join as a suspension, the frame
+    // reserves a slot for `running`, the pre-pair lowering flushes it, and the post-join path
+    // reloads it before the read. Without this the read sources stale/garbage frame bytes and the
+    // group FIRES into a silent wrong answer (observed live: 4389230 vs the correct 10903 oracle) —
+    // the accumulator-corruption class. This must FIRE (2 spawns) AND equal 10903 in both modes.
+    // If the value diverges from 10903, the crossing flush/reload regressed; if the spawn count
+    // drops to 0, admission regressed to sequential. Fix the codegen/crossing collection, not this
+    // test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_accumulator_crossing.ynz", "10903");
+}
+
+#[test]
+fn v03_m3d_nested_if_group_fires_byte_identical() {
+    // WHY: a CPU group placed inside an `if` branch must FIRE (2 spawns) from the nested SM
+    // lowering, byte-identical to `--no-auto-parallel`, with alloc==free. The group reuses the
+    // group-0 handle/result slots (32/40/48/64) — the same reservation a top-level group uses,
+    // since the function still has exactly one group. If you relax the spawn-count assertion the
+    // nested group regressed to sequential; if the value diverges from `9907` the nested spike
+    // reads the wrong slot. Fix the codegen, not this test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_nested_if_group.ynz", "9907");
+}
+
+#[test]
+fn v03_m3d_nested_match_group_fires_byte_identical() {
+    // WHY: a CPU group placed inside a matching arm (`if (pick) { 1 => { ... } }`) must FIRE
+    // (2 spawns) from the arm-body SM lowering, byte-identical to `--no-auto-parallel`, alloc==
+    // free. The arm-body routing is separate from the plain-`if` routing, so this locks the
+    // match-arm path independently. A 0 here means the arm body took the non-SM `lower_stmt`
+    // path that has no spawn-join. Fix the routing, not this test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_nested_match_group.ynz", "9907");
+}
+
+#[test]
+fn v03_m3d_nested_for_body_group_declines_byte_identical() {
+    // WHY: a CPU group inside a `for`-iteration body must DECLINE to sequential lowering (0 spawns)
+    // and stay byte-identical to `--no-auto-parallel` (29706). Firing it would require the loop's
+    // synthetic iteration index and every loop-carried local to survive the group's join across the
+    // loop's resume — the SM resumes inside the body without re-running the loop header — and that
+    // multi-level synthetic-index reservation is NOT provided for loop-body groups. `for`/`while`
+    // bodies are excluded from `spike_nested_blocks`, so a loop-body group is never detected and
+    // never fires. If this shows ANY spawns, loop-body admission regressed (a corpse-class
+    // silent-wrong risk — see the nested-placement decline fixtures); fix the gate, not this test.
+    // (For-body CPU parallelism for all placements is deferred — see .claude/todos.md.)
+    m3d_assert_declines_byte_identical("v0_3_m3d_nested_for_body_group.ynz", "29706");
+}
+
+#[test]
+fn v03_m3d_for_under_if_group_declines_byte_identical() {
+    // WHY: a CPU group in a `for` body that is itself nested under an `if` must DECLINE (0 spawns)
+    // and stay byte-identical (29706). This is a corpse-prevention lock: firing a loop-body group
+    // one level under a branch silently miscompiled (observed 9905/19807 vs the 29706 oracle)
+    // because the synthetic loop-index/loop-carried slots are unreserved at that depth. Loop bodies
+    // are excluded from `spike_nested_blocks`, so the group is never detected and never fires. If
+    // this shows ANY spawns, the loop-body exclusion regressed — fix the gate, not this test.
+    m3d_assert_declines_byte_identical("v0_3_m3d_for_under_if_group.ynz", "29706");
+}
+
+#[test]
+fn v03_m3d_inner_nested_for_group_declines_byte_identical() {
+    // WHY: a CPU group in the INNER body of two nested `for` loops must DECLINE (0 spawns), stay
+    // byte-identical (59412), AND not abort codegen. This is a corpse-prevention lock: firing it
+    // hard-aborted the backend (`__ynz_for_idx_1 not found in frame`) — a compile error on
+    // previously-valid code, which auto-promotion must never produce. Loop bodies are excluded from
+    // `spike_nested_blocks`, so the inner-loop group is never detected and never fires; the function
+    // compiles and runs sequentially. If this aborts or shows ANY spawns, the loop-body exclusion
+    // regressed — fix the gate, not this test.
+    m3d_assert_declines_byte_identical("v0_3_m3d_inner_nested_for_group.ynz", "59412");
+}
+
+#[test]
+fn v03_m3d_nested_if_no_crossing_fires_byte_identical() {
+    // WHY: a pure nested-`if` CPU group that returns its join result DIRECTLY (no local declared
+    // before the pair and read after the join) must FIRE (2 spawns) and stay byte-identical (9907),
+    // with alloc==free. This shape populates the join's result names while the top-level crossing
+    // scan finds no surrounding crossing local, so `m3d_spike_cpu_result_allocas` is empty. The
+    // orphan (unreachable) state-block terminator must NOT attempt to reload spike results there
+    // (reload bool is `false`) — otherwise the empty-alloca lookup aborts codegen. If this aborts,
+    // the orphan-terminator reload regressed to `true`; if spawns drop to 0, admission regressed.
+    // Fix the codegen, not this test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_nested_if_no_crossing.ynz", "9907");
+}
+
+#[test]
+fn v03_m3d_nested_multi_group_declines_byte_identical() {
+    // WHY: a promoted function with BOTH a top-level CPU group and a nested one is a MULTI-GROUP
+    // function — it declines ALL spiking (0 spawns) and runs fully sequentially, byte-identical
+    // (19810). The single reserved group-0 slot region holds exactly one group; firing two groups
+    // into it would alias the first group's handles (silent wrong answer). This fixture places the
+    // top-level pair first; `v0_3_m3d_nested_group_before_top.ynz` places the nested pair first —
+    // both must decline identically because the multi-group decline is order-INDEPENDENT (the
+    // count check runs before any representative-callee selection). If this shows ANY spawns,
+    // multi-group admission regressed — fix the gate (count != 1 must decline BEFORE the
+    // top-level early-return), not this test. Partial hosting (fire one group, decline the rest)
+    // needs per-group slot reservation that is not yet implemented (see .claude/todos.md).
+    m3d_assert_declines_byte_identical("v0_3_m3d_nested_multi_group.ynz", "19810");
+}
+
+#[test]
+fn v03_m3d_nested_group_before_top_declines_byte_identical() {
+    // WHY: a multi-group function with the NESTED group placed BEFORE the top-level group in
+    // source order must decline ALL spiking (0 spawns) and stay byte-identical (19810) — exactly
+    // like `v0_3_m3d_nested_multi_group.ynz` where the ordering is reversed. This locks the
+    // order-INDEPENDENCE of the multi-group decline: the `count_cpu_groups_all_depths != 1` check
+    // runs BEFORE `spike_pair_in_block` selects any representative callee, so a nested-first
+    // function cannot have its nested group selected and sized while the top-level group fires
+    // into the same single reserved slot region. If the count check is moved back after the
+    // representative selection, this fixture compiles to a corrupt binary (the nested arm fires,
+    // the top-level pair aliases the one reserved group-0 slot region — observed 4389422 vs the
+    // correct 19810 oracle). A 0-spawn DECLINE is the only correct outcome until per-group slot
+    // reservation lands (see .claude/todos.md). If this shows ANY spawns, the order-independence
+    // broke — fix the gate ordering, not this test.
+    m3d_assert_declines_byte_identical("v0_3_m3d_nested_group_before_top.ynz", "19810");
+}
+
+#[test]
+fn v03_m3d_nested_group_with_outer_wait_declines_byte_identical() {
+    // WHY: a single nested CPU group in a function that ALSO has a separate `wait` is a
+    // mixed CPU+I/O function — it declines the nested spike (0 spawns) and runs fully
+    // sequentially, byte-identical (9907). The nested group's result allocas are pre-allocated
+    // only by the top-level Step-1c scan; a nested pair is invisible to that scan, so firing it
+    // while a second suspension (the `wait`) later reloads spike results crashes the backend
+    // ("no sm_entry alloca"). Declining when any other suspension exists keeps the nested fire
+    // safe. If this shows ANY spawns OR fails to build, the nested-with-outer-suspension decline
+    // regressed — fix the admission gate, not this test. Firing this safely (Step-1c walking
+    // nested blocks) is a mixed CPU+I/O concern tracked in .claude/todos.md.
+    m3d_assert_declines_byte_identical("v0_3_m3d_nested_group_with_outer_wait.ynz", "9907");
+}
+
+#[test]
+fn v03_m3d_nested_group_with_suspending_callee_no_abort_byte_identical() {
+    // WHY: this is the exact shape that crashed the backend before the nested-with-outer-
+    // suspension decline landed. `combine` owns a nested CPU group AND calls `other` — a function
+    // promoted to run its own pair concurrently, which makes `other` a suspension point inside
+    // `combine`. The nested group's result allocas are pre-allocated only by the top-level
+    // Step-1c scan, so a nested pair has none; resuming after the `other` call reloads spike
+    // results into the (empty) alloca map and aborts machine-code generation ("no sm_entry
+    // alloca for `lo`"). The fix declines `combine`'s nested group while `other`'s OWN top-level
+    // group still fires. The invariant: the build SUCCEEDS, output is byte-identical (19810), and
+    // exactly 2 spawns appear — both from `other`, none from `combine`'s declined nested group.
+    // If the build aborts, the decline regressed; if spawns != 2, `combine`'s nested group either
+    // fired (4 spawns — the corruption door reopened) or `other` stopped firing. Fix the codegen,
+    // not this test.
+    let fixture_name = "v0_3_m3d_nested_group_with_suspending_callee.ynz";
+    let src = fixture(fixture_name);
+
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "default build must SUCCEED (no backend abort); stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par_stdout.trim(),
+        "19810",
+        "default-mode output must equal the oracle; stdout:\n{par_stdout}"
+    );
+
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "default and --no-auto-parallel stdout must be byte-identical"
+    );
+
+    let ir = build_to_tmpdir_emit_ir(&src);
+    assert_eq!(
+        count_spawn_calls(&ir),
+        2,
+        "exactly 2 spawns — both from `other`'s top-level group; `combine`'s nested group must \
+         decline (0 of its own spawns). 4 spawns = the nested group fired into corruption; \
+         0 = `other` stopped firing. IR:\n{ir}"
+    );
+
+    let (alloc, free) = ynz_run_with_alloc_counter(fixture_name);
+    assert_eq!(
+        alloc, free,
+        "alloc must equal free (no leak on the partial-decline path); alloc={alloc}, free={free}"
+    );
 }
 
 #[test]

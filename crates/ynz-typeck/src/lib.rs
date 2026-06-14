@@ -60,8 +60,8 @@ pub mod type_at_offset;
 pub mod types;
 
 pub use check::{
-    check, check_with_kernel_mode, crossing_local_names, type_attached_const_type,
-    LocalCrossesWait, TypedModule,
+    check, check_with_kernel_mode, crossing_local_names, crossing_local_names_with_cpu_spike,
+    type_attached_const_type, LocalCrossesWait, TypedModule,
 };
 pub use effective_ownership::{EffectiveOwnership, EffectiveOwnershipReport};
 pub use exports::ExportTable;

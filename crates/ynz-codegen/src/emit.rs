@@ -28,7 +28,7 @@ use ynz_ast::nodes::{
 };
 use ynz_numerics; // parse(s: &str) -> Option<u128>
 use ynz_typeck::{
-    build_effective_suspend_set, crossing_local_names,
+    build_effective_suspend_set, crossing_local_names_with_cpu_spike,
     independence::{partition_independent_groups, IndependentGroup},
     type_attached_const_type, GenericFnTable, MonomorphizationTable, ShapeTable, SignatureTable,
     Type, TypedModule,
@@ -354,10 +354,18 @@ pub fn build_frame_layouts_with_resolver(
             // decimal128 crossing locals use 2 slots (16 bytes); all others use 1.
             let param_names_ref: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
             let suspending_refs: HashSet<&str> = suspend_set.iter().map(|s| s.as_str()).collect();
-            let crossing = crossing_local_names(
+            // A spike host's CPU-group join is a suspension boundary: a local declared before
+            // the pair and read after the join must be frame-backed. Passing the CPU-supported
+            // set (non-empty only for a spike host) makes the collector reserve those slots so
+            // the reservation here matches what the join emission flushes/reloads.
+            let cpu_supported_owner = cpu_supported_callees(typed);
+            let cpu_supported_refs =
+                spike_host_cpu_supported(f, typed, suspend_set, &cpu_supported_owner);
+            let crossing = crossing_local_names_with_cpu_spike(
                 &f.body.stmts,
                 &param_names_ref,
                 &suspending_refs,
+                &cpu_supported_refs,
                 &typed.expr_types,
             );
             let crossing_slots = crossing_local_total_slots(f, &crossing, typed, shape_abi_sizes);
@@ -741,10 +749,17 @@ fn compute_frame_size(
                     let param_names: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
                     let suspending_refs: HashSet<&str> =
                         suspend_set.iter().map(|s| s.as_str()).collect();
-                    let crossing = crossing_local_names(
+                    // Match the spike-aware crossing set `build_frame_layouts` computes, so the
+                    // size memo this produces (read as `child_frame_size` when a parent embeds
+                    // this callee) reserves the same locals-across-the-join slots.
+                    let cpu_supported_owner = cpu_supported_callees(typed);
+                    let cpu_supported_refs =
+                        spike_host_cpu_supported(f, typed, suspend_set, &cpu_supported_owner);
+                    let crossing = crossing_local_names_with_cpu_spike(
                         &f.body.stmts,
                         &param_names,
                         &suspending_refs,
+                        &cpu_supported_refs,
                         &typed.expr_types,
                     );
                     let crossing_slots =
@@ -1417,6 +1432,7 @@ fn lower_generic_function<'ctx>(
         m3d_spike: false,
         m3d_spike_cpu_result_names: Vec::new(),
         m3d_spike_cpu_result_allocas: HashMap::new(),
+        m3d_spike_fired: false,
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -1755,6 +1771,14 @@ struct Cg<'ctx, 'g> {
     //
     // Always empty when m3d_spike is false.
     m3d_spike_cpu_result_allocas: HashMap<String, PointerValue<'ctx>>,
+    // True once this function's single CPU group has spike-fired (top-level or nested).
+    // The frame reserves exactly one group's handle/result slots (group 0); a second fire
+    // would reuse those slots and alias the first group's handles. `spike_cpu_candidates`
+    // admits only single-group functions (a multi-group function declines entirely), so at
+    // most one group is ever eligible to fire; this flag is the lowering-time guard that the
+    // single eligible group spawns exactly once — the FIRST group encountered in lowering
+    // order fires while this is false, then sets it. Reset per function.
+    m3d_spike_fired: bool,
 }
 
 impl<'ctx, 'g> Cg<'ctx, 'g> {
@@ -2157,6 +2181,7 @@ fn lower_function<'ctx, 'g>(
         m3d_spike,
         m3d_spike_cpu_result_names: Vec::new(),
         m3d_spike_cpu_result_allocas: HashMap::new(),
+        m3d_spike_fired: false,
     };
 
     let entry = ctx.append_basic_block(fn_val, "entry");
@@ -2328,10 +2353,22 @@ fn lower_function_with_waits<'ctx, 'g>(
     // registers so their values survive across resume calls.
     let param_name_refs: Vec<&str> = param_names.iter().map(|s| s.as_str()).collect();
     let suspending_refs: HashSet<&str> = suspend_set.iter().map(|s| s.as_str()).collect();
-    let crossing_names: Vec<String> = crossing_local_names(
+    // For a spike host, the CPU-group join is a suspension boundary — a local declared before
+    // the pair and read after the join (the accumulator `result = result + a + b`) must be
+    // frame-backed. The CPU-supported set is non-empty IFF this function is an admitted spike
+    // host (`spike_candidates`), so the crossing set here matches the slots `build_frame_layouts`
+    // reserved and the join emission flushes/reloads.
+    let cpu_supported_owner = cpu_supported_callees(typed);
+    let cpu_supported_refs: HashSet<&str> = if spike_candidates.is_some() {
+        cpu_supported_owner.iter().map(String::as_str).collect()
+    } else {
+        HashSet::new()
+    };
+    let crossing_names: Vec<String> = crossing_local_names_with_cpu_spike(
         &f.body.stmts,
         &param_name_refs,
         &suspending_refs,
+        &cpu_supported_refs,
         &typed.expr_types,
     );
 
@@ -2588,6 +2625,7 @@ fn lower_function_with_waits<'ctx, 'g>(
         m3d_spike: spike_candidates.is_some(),
         m3d_spike_cpu_result_names: Vec::new(),
         m3d_spike_cpu_result_allocas: HashMap::new(), // populated in Step 1c below
+        m3d_spike_fired: false,
     };
 
     // Step 1 — Emit allocas in the entry block (sm_entry). LLVM SSA requires all allocas
@@ -3473,6 +3511,14 @@ fn expr_contains_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool 
 /// to the frame at their definition site — no prior stored value exists to reload).
 /// `reload_crossing` controls whether frame-backed crossing locals are also reloaded.
 /// Pass `false` for state 0 (locals not yet stored) and `true` for all continuation states.
+///
+/// `reload_spike_results` controls the trailing reload of spike CPU-group result names. The
+/// `wait`/I/O resume paths pass `true`: a result bound by a top-level group must be restored
+/// from its frame slot in every later resume invocation, into the sm_entry alloca Step 1c
+/// pre-allocated for it. The immediate post-join caller passes `false`: the results were just
+/// bound in the join's all-done block (no reload needed yet), AND a nested group's result names
+/// have no Step 1c entry alloca (Step 1c scans only the top-level body), so reloading them there
+/// would fail the entry-alloca lookup. Only the surrounding crossing locals need restoring there.
 fn reload_params_from_frame<'ctx>(
     cg: &mut Cg<'ctx, '_>,
     frame_ptr: PointerValue<'ctx>,
@@ -3480,6 +3526,7 @@ fn reload_params_from_frame<'ctx>(
     f: &FunctionDecl,
     shape_table: &ShapeTable,
     reload_crossing: bool,
+    reload_spike_results: bool,
 ) -> Result<(), String> {
     let ctx = cg.ctx;
     // Reload parameters.
@@ -3738,8 +3785,9 @@ fn reload_params_from_frame<'ctx>(
             // bind name, so every name in spike_pairs is stable across the entire post-pair
             // region. The SM crossing loop above skips these names (their frame offsets are
             // SPIKE_RESULT_N_OFFSET, not SM crossing slot indices), so this call provides
-            // the exclusive reload for spike-owned results.
-            if !spike_pairs.is_empty() {
+            // the exclusive reload for spike-owned results. Skipped at the immediate post-join
+            // (results just bound; a nested group's names have no Step 1c entry alloca).
+            if reload_spike_results && !spike_pairs.is_empty() {
                 spike_reload_cpu_results_from_frame(cg, &spike_pairs, frame_ptr)?;
             }
         }
@@ -3780,7 +3828,7 @@ fn lower_sm_body<'ctx, 'g>(
     // State 0 already has the builder positioned by the caller. Reload params from frame.
     // Crossing locals are NOT reloaded here — they are defined inline later in this state
     // and stored to the frame at their definition site (no prior stored value to load).
-    reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, false)?;
+    reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, false, true)?;
 
     // Track which state block index we are currently emitting into.
     let mut current_state: usize = 0;
@@ -3819,7 +3867,14 @@ fn lower_sm_body<'ctx, 'g>(
     for &bb in state_blocks.iter() {
         if bb.get_terminator().is_none() {
             cg.builder.position_at_end(bb);
-            reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, false)?;
+            // Orphan state blocks are dead code: they exist only to satisfy LLVM's
+            // requirement that every basic block carry a terminator, and no control
+            // path reaches them. Spike CPU-result reload must be `false` here: a nested
+            // group populates `m3d_spike_cpu_result_names` but Step 1c scans only the
+            // top-level body, leaving `m3d_spike_cpu_result_allocas` empty, so a reload
+            // would fail the entry-alloca lookup. The reload is a no-op in unreachable
+            // code, so `false` is safe regardless of top-level vs nested placement.
+            reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, false, false)?;
             state_machine::store_return_value_i64(
                 cg.ctx,
                 &cg.builder,
@@ -3889,18 +3944,21 @@ fn lower_sm_block<'ctx, 'g>(
         return Ok(());
     }
 
-    // Spike CPU-parallel path: if the spike flag is active AND we are at the top-level
-    // SM body (sm_scope_depth == 0), scan for a CPU candidate group and emit it via
-    // spawn+poll join before falling through to the normal partition for remaining
-    // statements.
+    // Spike CPU-parallel path: if the spike flag is active and this function's single CPU
+    // group has not yet fired, scan THIS block (the top-level body at depth 0, or a nested
+    // `if`/`match` arm body when reached recursively) for the group and emit it via spawn+poll
+    // join before falling through to the normal partition for the remaining statements.
     //
-    // The depth guard is critical for correctness: spike_cpu_candidates (gate 1, in
-    // lower_function_with_waits) scans ONLY the top-level function body non-recursively,
-    // so it allocates frame bytes and state slots for exactly one CPU group at depth 0.
-    // lower_sm_block is called recursively for if/while/for bodies (sm_scope_depth > 0);
-    // allowing the spike to fire inside a nested body would spawn handles into frame slots
-    // that gate 1 never reserved — producing state-index collisions and OOB frame GEPs.
-    if cg.m3d_spike && cg.sm_scope_depth == 0 {
+    // `spike_cpu_candidates` (gate 1, in lower_function_with_waits) admits a function with
+    // EXACTLY ONE CPU group at any depth and reserves the group-0 handle/result slots plus 2
+    // state blocks for it — the same reservation whether the group is top-level or nested (a
+    // nested group is a later spawn site, not a wider frame). The `!m3d_spike_fired` guard makes
+    // the FIRST group encountered in lowering order claim those single-group slots: a sole
+    // top-level group fires at depth 0; for a sole nested group depth 0 finds nothing and the
+    // nested `lower_sm_block` fires it. A multi-group function is never admitted (gate 1 declines
+    // it entirely), so the flag never has to arbitrate between two competing groups — the single
+    // group-0 slot region is owned by the one admitted group with no aliasing possible.
+    if cg.m3d_spike && !cg.m3d_spike_fired {
         let cpu_group = spike_extract_cpu_group(&block.stmts, cg.suspend_set, cg.typed);
         if let Some((pre_stmts, cpu_stmts, post_stmts)) = cpu_group {
             // Lower pre-pair statements sequentially before spawning. Any locals they
@@ -3947,6 +4005,23 @@ fn lower_sm_block<'ctx, 'g>(
             // post_stmts loop AND nested if/while/for bodies).
             cg.m3d_spike_cpu_result_names = spike_crossing.clone();
 
+            // This function's single CPU group has now spawned; the flag prevents any further
+            // spike fire so nothing can re-enter and reuse the single group-0 slot region.
+            cg.m3d_spike_fired = true;
+
+            // The spike join yields Pending and resumes in a fresh resume-fn invocation, so any
+            // local declared before the pair and read after the join (the accumulator
+            // `result = result + a + b`) must be reloaded from its frame slot into this
+            // invocation's alloca before the post-pair statements read it — the builder is
+            // positioned in the join's all-done block here. This is the same reload the SM
+            // performs after a `wait`; routing through `reload_params_from_frame` (corpse guard
+            // (a)) reuses the canonical per-type reload, and its crossing loop skips the spike
+            // CPU-result names (already bound by the join) so only the surrounding crossing
+            // locals are restored. Typeck's crossing collector registered the join as the
+            // suspension that makes these locals crossing, and `build_frame_layouts` reserved
+            // their slots; the pre-pair lowering above flushed them on first entry.
+            reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, true, false)?;
+
             // Lower the post-pair statements via the normal sequential path.
             // spike_extract_cpu_group already declined if any post stmt assigns a CPU-result
             // bind name, so no prune is needed here.
@@ -3992,8 +4067,19 @@ fn lower_sm_block<'ctx, 'g>(
         }
         match group {
             IndependentGroup::Singleton(stmt) => {
-                // Existing sequential path unchanged for single statements.
-                if stmt_contains_wait(stmt) || stmt_contains_suspending_call(stmt, cg.suspend_set) {
+                // A wait-bearing statement, OR an `if`/`match` statement that wraps a CPU group,
+                // routes through the SM walker: its arm bodies recurse into `lower_sm_block`,
+                // where the depth-agnostic spike path fires the nested group's spawn-join. `for`
+                // and `while` bodies are deliberately NOT detected here (`spike_nested_blocks`,
+                // which `stmt_contains_cpu_group` consults, excludes loop bodies), so a group in a
+                // loop body declines to sequential — the loop index and loop-carried locals are
+                // not frame-backed across the join. The plain `lower_stmt` path has no spawn-join
+                // lowering, so a CPU-group-bearing control-flow statement must not take it.
+                // `m3d_spike` gates the extra recursion to promoted functions only.
+                let routes_to_sm = stmt_contains_wait(stmt)
+                    || stmt_contains_suspending_call(stmt, cg.suspend_set)
+                    || (cg.m3d_spike && stmt_contains_cpu_group(stmt, cg.suspend_set, cg.typed));
+                if routes_to_sm {
                     lower_sm_stmt_with_wait(
                         cg,
                         stmt,
@@ -5612,15 +5698,22 @@ fn lower_sm_match<'ctx, 'g>(
             .map_err(|e| format!("SM match arm cond: {e}"))?;
 
         cg.builder.position_at_end(arm_body_bb);
-        let arm_has_wait = function_contains_wait(&arm.body)
+        // An arm body routes through the SM walker when it suspends OR (in a promoted host) the
+        // arm body directly holds a CPU group — `lower_sm_block` is where the spike spawn-join
+        // fires; the plain `lower_stmt` path below has none. The arm body is itself a
+        // straight-line block, so a direct group there is detected with
+        // `stmt_block_has_direct_cpu_group`.
+        let arm_routes_to_sm = function_contains_wait(&arm.body)
             || arm
                 .body
                 .stmts
                 .iter()
-                .any(|s| stmt_contains_suspending_call(s, cg.suspend_set));
+                .any(|s| stmt_contains_suspending_call(s, cg.suspend_set))
+            || (cg.m3d_spike
+                && stmt_block_has_direct_cpu_group(&arm.body.stmts, cg.suspend_set, cg.typed));
         let locals_snapshot = cg.locals.clone();
         cg.sm_scope_depth += 1;
-        if arm_has_wait {
+        if arm_routes_to_sm {
             lower_sm_block(
                 cg,
                 &arm.body,
@@ -5659,14 +5752,16 @@ fn lower_sm_match<'ctx, 'g>(
     // Else arm (if present).
     if let Some(else_body) = else_arm {
         cg.builder.position_at_end(final_fallthrough_bb);
-        let else_has_wait = function_contains_wait(else_body)
+        let else_routes_to_sm = function_contains_wait(else_body)
             || else_body
                 .stmts
                 .iter()
-                .any(|s| stmt_contains_suspending_call(s, cg.suspend_set));
+                .any(|s| stmt_contains_suspending_call(s, cg.suspend_set))
+            || (cg.m3d_spike
+                && stmt_block_has_direct_cpu_group(&else_body.stmts, cg.suspend_set, cg.typed));
         let locals_snapshot = cg.locals.clone();
         cg.sm_scope_depth += 1;
-        if else_has_wait {
+        if else_routes_to_sm {
             lower_sm_block(
                 cg,
                 else_body,
@@ -6658,6 +6753,56 @@ fn ec_inner_fits_cpu_result_abi(inner: &ynz_ast::nodes::Type) -> bool {
     }
 }
 
+/// The set of module callee names whose return class the CPU result ABI can safely carry —
+/// exactly the set `return_type_fits_cpu_result_abi` admits (its doc enumerates the admit/decline
+/// set and the shared-truth invariant with typeck's `cpu_result_abi_supports`). Declined classes
+/// run sequentially, byte-identical to `--no-auto-parallel`.
+///
+/// This is the single construction every spike gate consumes (the admission gate, the routing
+/// predicates, the result-name pre-alloc, the group extractor). Routing and admission agree on
+/// callee eligibility because they read the SAME set — a future change to
+/// `return_type_fits_cpu_result_abi` propagates to all callers at once, never to four of five.
+///
+/// Time: O(items)  Space: O(k) where k = CPU-ABI-returning fns.
+fn cpu_supported_callees(typed: &TypedModule) -> std::collections::HashSet<String> {
+    typed
+        .module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(func) if return_type_fits_cpu_result_abi(&func.return_type) => {
+                Some(func.name.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The CPU-supported callee set to hand the crossing-local collector for `f`, as borrowed
+/// `&str`s owned by `owner`.
+///
+/// Non-empty ONLY when `f` is a spike host (`spike_cpu_candidates` admits it under the
+/// effective `suspend_set`). For every other function it is empty, so the collector's spike-pair
+/// recognition is inert and the crossing set is computed exactly as before. Gating on the SAME
+/// admission predicate the join emission uses keeps the reserved frame slots and the fired join
+/// in lock-step: a function reserves a slot for a local-live-across-the-join IFF its join will
+/// actually fire.
+///
+/// Time: O(N) where N = AST nodes in `f` (the `spike_cpu_candidates` scan)  Space: O(k) where
+/// k = CPU-ABI-returning fns
+fn spike_host_cpu_supported<'a>(
+    f: &FunctionDecl,
+    typed: &TypedModule,
+    suspend_set: &SuspendSet,
+    owner: &'a std::collections::HashSet<String>,
+) -> std::collections::HashSet<&'a str> {
+    if spike_cpu_candidates(f, typed, suspend_set).is_some() {
+        owner.iter().map(String::as_str).collect()
+    } else {
+        std::collections::HashSet::new()
+    }
+}
+
 /// Detect a 2-member CPU-parallel candidate group in `f`.
 ///
 /// Returns `Some(callee_name)` when `f` contains an adjacent pair of `let x = callee(...)`
@@ -6665,24 +6810,31 @@ fn ec_inner_fits_cpu_result_abi(inner: &ynz_ast::nodes::Type) -> bool {
 /// - are NOT in the suspend_set (pure CPU — not a state machine)
 /// - return a class that fits the `YnzCpuResult` ABI (`return_type_fits_cpu_result_abi`)
 ///
+/// The group may be at the top level of `f`'s body OR inside ONE straight-line nested branch
+/// block (an `if`/`match` arm). Both placements reserve the same group-0 handle/result slots
+/// (32/40/48/64) — a nested group is not a wider frame, just a later spawn site. A top-level
+/// group is reported directly; a nested group is reported when it is the function's sole group.
+/// Loop bodies are excluded (`spike_nested_blocks`): a group inside a `for`/`while` body needs
+/// loop-index crossing-slot work that is not yet implemented (see .claude/todos.md).
+///
 /// **Admission envelope** (all must hold; sequential fallback is always correct):
-/// - Host must be named `"entrypoint"` — non-entrypoint spike hosts require the
-///   caller to pre-allocate a correctly-sized frame (via `frame_layouts`) before this
-///   spike bypass path runs. Callers that go through the normal wrapper emit the frame
-///   size from `frame_layouts` (pre-spike), so the resume function writes bytes 48–95
-///   into a heap block that was only allocated 32 bytes. Declining non-entrypoint hosts
-///   eliminates the corruption without requiring frame_layouts integration (P3's job).
 /// - Zero params — param slots start at byte 32 (FRAME_HEADER_SIZE), colliding with
-///   SPIKE_HANDLE_0_OFFSET. P3's canonical slot system lifts this.
+///   SPIKE_HANDLE_0_OFFSET. A host with ≥1 param declines (canonical slot system not yet
+///   implemented — see .claude/todos.md).
+/// - Exactly one CPU group across all depths. The single group-0 slot region holds one group;
+///   a function with two-or-more groups (top-level plus nested, or two nested, in ANY source
+///   order) would alias the earlier group's handles, so it declines ALL spiking and lowers
+///   sequentially. Partial hosting (fire one, decline the rest) needs per-group slot
+///   reservation that is not yet implemented (see .claude/todos.md).
 /// - No rest-statement assigns a CPU-result bind name (at any depth). When a result name
 ///   is assigned after the group, the SM crossing machinery must own it from the start —
-///   the upfront-prune approach left the initial read sourcing from a never-populated
-///   crossing slot, returning zeroed bytes instead of the computed value.
+///   an upfront prune leaves the initial read sourcing from a never-populated crossing slot,
+///   returning zeroed bytes instead of the computed value.
 ///
 /// Used in both `emit_artifact` (suspend_set extension) and `lower_function_with_waits`
 /// (frame-size + state-count injection).
 ///
-/// Time: O(n) where n = items in typed module  Space: O(k) where k = CPU-ABI-returning fns
+/// Time: O(N) where N = AST nodes scanned  Space: O(k) where k = CPU-ABI-returning fns
 fn spike_cpu_candidates(
     f: &FunctionDecl,
     typed: &TypedModule,
@@ -6693,8 +6845,9 @@ fn spike_cpu_candidates(
     // single-source helper that feeds both `build_frame_layouts` (which the caller's
     // `emit_suspending_call_heap_boxed` reads as `child_frame_size`) and `compute_frame_size`,
     // so a hosted child's heap block already carries the 48-byte handle/result reserve — the
-    // under-allocation the entrypoint-only gate once defused can no longer occur. Sequential
-    // fallback remains correct for any host this gate's later checks decline.
+    // host's frame and its caller's view of that frame size are sized from one source, so a
+    // hosted child can never be under-allocated. Sequential fallback remains correct for any
+    // host this gate's later checks decline.
 
     // Zero-param hosts only. Param slots start at byte 32 (FRAME_HEADER_SIZE),
     // which is the same byte SPIKE_HANDLE_0_OFFSET occupies. A host with ≥1 params would
@@ -6703,31 +6856,77 @@ fn spike_cpu_candidates(
         return None;
     }
 
-    // Callees whose return class the CPU result ABI can safely carry — the exact set
-    // `return_type_fits_cpu_result_abi` admits (its doc enumerates the admit/decline set and
-    // the shared-truth invariant with typeck's `cpu_result_abi_supports`). Declined classes
-    // run sequentially, byte-identical to `--no-auto-parallel`.
-    let cpu_supported_callees: std::collections::HashSet<String> = typed
-        .module
-        .items
-        .iter()
-        .filter_map(|item| {
-            if let Item::Function(func) = item {
-                if return_type_fits_cpu_result_abi(&func.return_type) {
-                    Some(func.name.clone())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .collect();
+    let supported = cpu_supported_callees(typed);
 
-    // Collect indices for all non-suspending direct-call statements whose callee returns a
-    // CPU-result-ABI class.
+    // Single-group constraint: a function spike-hosts IFF it has EXACTLY ONE CPU group across
+    // all depths (top-level OR nested). The reservation sizes for one group-0 slot region
+    // (handles/results at 32/40/48/64) and the `!m3d_spike_fired` dispatch claims it for the
+    // first group lowering reaches. A function with two-or-more groups (e.g. a top-level group
+    // AND a nested arm group, or two nested groups, in ANY source order) would spike-host more
+    // than one group into that same single slot region, aliasing the earlier group's handles —
+    // a silent wrong answer. Zero groups means nothing to host. Either way, decline ALL spiking
+    // and lower the whole function sequentially, which is always byte-identical to
+    // `--no-auto-parallel`.
+    //
+    // This count check runs BEFORE selecting any representative callee so the multi-group
+    // decline is order-independent: a nested group appearing before a top-level group in source
+    // declines identically to the reverse order. Partial multi-group hosting (fire one group,
+    // decline the rest) needs per-group slot reservation that is not yet implemented (see
+    // .claude/todos.md).
+    if count_cpu_groups_all_depths(&f.body.stmts, suspend_set, &supported) != 1 {
+        return None;
+    }
+
+    // Exactly one group. A top-level group is hosted by the depth-0 spike path and is the
+    // representative the frame reservation sizes for (the group-0 handle/result slots).
+    if let Some(callee) = spike_pair_in_block(&f.body.stmts, suspend_set, &supported) {
+        return Some(callee);
+    }
+
+    // The sole group is placed inside one straight-line nested branch block (an `if`/`match`
+    // arm); it is hosted from the recursive `lower_sm_block` for that body and reuses the SAME
+    // group-0 frame slots (32/40/48/64) — the reservation is identical to a top-level group, so
+    // no extra layout work is needed.
+    //
+    // A nested group declines when the host also contains any OTHER suspension point — an
+    // explicit `wait`, or a call to a suspending callee. Result allocas for the group's bind
+    // names are pre-allocated in `sm_entry` only by Step 1c, which scans the TOP-LEVEL body
+    // non-recursively; a nested group's pair is invisible to that scan, so its result allocas
+    // are never created. When the only suspension is the nested-group join itself, the
+    // immediate post-join reload passes `reload_spike_results=false` and never needs those
+    // allocas. But a SECOND suspension point resumes through `reload_params_from_frame` with
+    // `reload_spike_results=true`, which looks the bind names up in the (empty) alloca map and
+    // aborts the backend ("no sm_entry alloca"). The host is pure-CPU IFF its only suspension is
+    // the nested join, so declining when any other suspension exists keeps the nested fire safe.
+    // Firing this requires Step 1c to walk nested blocks so a nested group's bind names ARE
+    // pre-allocated — a mixed-CPU+I/O concern tracked in .claude/todos.md.
+    if f.body
+        .stmts
+        .iter()
+        .any(|s| stmt_contains_wait(s) || stmt_contains_suspending_call(s, suspend_set))
+    {
+        return None;
+    }
+
+    spike_nested_group_callee(&f.body.stmts, suspend_set, &supported)
+}
+
+/// Find the first admissible adjacent CPU pair in a single straight-line statement list and
+/// return its representative (first) callee name. Applies the same adjacency, pre-pair-clean,
+/// rest-assignment, and post-pair-suspending gates the depth-0 path enforces, so block-level
+/// admission matches what `spike_extract_cpu_group` extracts for the same block.
+///
+/// `stmts` is one block's statements (top-level body or a nested arm/iteration body) — the
+/// gates operate within that block; cross-block control flow is the caller's concern.
+///
+/// Time: O(n) where n = stmts length  Space: O(1).
+fn spike_pair_in_block(
+    stmts: &[Stmt],
+    suspend_set: &SuspendSet,
+    cpu_supported_callees: &std::collections::HashSet<String>,
+) -> Option<String> {
     let mut call_indices: Vec<usize> = Vec::new();
-    for (i, stmt) in f.body.stmts.iter().enumerate() {
+    for (i, stmt) in stmts.iter().enumerate() {
         let is_eligible = match stmt {
             Stmt::Let {
                 value: Expr::Call(c),
@@ -6747,17 +6946,15 @@ fn spike_cpu_candidates(
         }
     }
 
-    // Need an adjacent pair.
     let adjacent_pair = call_indices
         .windows(2)
         .find(|w| w[1] == w[0] + 1)
         .map(|w| (w[0], w[1]));
     let (first_idx, second_idx) = adjacent_pair?;
 
-    // Collect bind names for the pair.
     let bind_names: Vec<&str> = [first_idx, second_idx]
         .iter()
-        .filter_map(|&i| match &f.body.stmts[i] {
+        .filter_map(|&i| match &stmts[i] {
             Stmt::Let { name, .. } => Some(name.as_str()),
             _ => None,
         })
@@ -6770,19 +6967,16 @@ fn spike_cpu_candidates(
     // predecessor branch from that post_wait_bb — the post_wait_bb gets no terminator,
     // triggering "Basic Block does not have terminator!" in the LLVM verifier.
     // Declining routes the whole body through sequential lowering, which is always correct.
-    let pre_stmts: Vec<&Stmt> = f.body.stmts.iter().take(first_idx).collect();
-    if pre_stmts
+    if stmts[..first_idx]
         .iter()
         .any(|s| stmt_contains_wait(s) || stmt_contains_suspending_call(s, suspend_set))
     {
         return None;
     }
 
-    // Decline when any rest statement (at any depth) assigns a CPU-result bind name.
-    // Declining routes the whole group through sequential lowering which is always correct.
-    let rest_stmts: Vec<&Stmt> = f
-        .body
-        .stmts
+    // Decline when any rest statement (at any depth within this block) assigns a CPU-result
+    // bind name. Declining routes the whole group through sequential lowering, always correct.
+    let rest_stmts: Vec<&Stmt> = stmts
         .iter()
         .enumerate()
         .filter(|(i, _)| *i != first_idx && *i != second_idx)
@@ -6802,8 +6996,7 @@ fn spike_cpu_candidates(
     // standard SM inline-poll path with no embedded child sub-frame, posing no aliasing
     // risk and therefore not matching stmt_contains_suspending_call. Declining routes the
     // whole body through sequential lowering, which is always correct and avoids aliasing.
-    let post_stmts: Vec<&Stmt> = f.body.stmts.iter().skip(second_idx + 1).collect();
-    if post_stmts
+    if stmts[(second_idx + 1)..]
         .iter()
         .any(|s| stmt_contains_suspending_call(s, suspend_set))
     {
@@ -6811,7 +7004,7 @@ fn spike_cpu_candidates(
     }
 
     // Report the first eligible callee as representative.
-    match &f.body.stmts[first_idx] {
+    match &stmts[first_idx] {
         Stmt::Let {
             value: Expr::Call(c),
             ..
@@ -6822,6 +7015,116 @@ fn spike_cpu_candidates(
             }
         }
         _ => {}
+    }
+    None
+}
+
+/// The nested straight-line blocks (`if`/`match` arm bodies) reachable directly inside `stmts`,
+/// in lowering order. Hosts a CPU group placed one level inside a branch arm.
+///
+/// `for` and `while` bodies are excluded: a CPU group inside any loop body needs the loop index
+/// (and every loop-carried local) frame-backed across the group's poll-yield, because the SM
+/// resumes inside the body without re-running the loop header. The spike host's single-group
+/// reservation does not cover those synthetic-index slots — and nested loop placement needs
+/// multi-level synthetic-index reservation the spike path does not yet provide. A CPU group in a
+/// loop body therefore DECLINES to sequential lowering (it is never detected here, so the spike
+/// never fires there).
+///
+/// Time: O(A) where A = match arms  Space: O(A)
+fn spike_nested_blocks(stmt: &Stmt) -> Vec<&[Stmt]> {
+    match stmt {
+        Stmt::If { body, .. } => vec![body.stmts.as_slice()],
+        Stmt::Match { arms, else_arm, .. } => {
+            let mut v: Vec<&[Stmt]> = arms.iter().map(|a| a.body.stmts.as_slice()).collect();
+            if let Some(eb) = else_arm {
+                v.push(eb.stmts.as_slice());
+            }
+            v
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Count admissible CPU groups across `stmts` and every nested block reachable from it. Used
+/// to enforce the single-group constraint: a function spike-hosts exactly one group (top-level
+/// OR nested) so the group-0 frame slots are never aliased by a second group.
+///
+/// Time: O(N) where N = AST nodes  Space: O(D) recursion depth.
+fn count_cpu_groups_all_depths(
+    stmts: &[Stmt],
+    suspend_set: &SuspendSet,
+    cpu_supported_callees: &std::collections::HashSet<String>,
+) -> usize {
+    let mut count = 0;
+    if spike_pair_in_block(stmts, suspend_set, cpu_supported_callees).is_some() {
+        count += 1;
+    }
+    for stmt in stmts {
+        for block in spike_nested_blocks(stmt) {
+            count += count_cpu_groups_all_depths(block, suspend_set, cpu_supported_callees);
+        }
+    }
+    count
+}
+
+/// True when a statement (an `if`/`match` arm) directly contains an admissible CPU group at any
+/// depth inside it. Used at the SM dispatch to route such a statement through the recursive
+/// `lower_sm_block` path (where the spike machinery fires) instead of the plain non-SM
+/// `lower_stmt` path that has no spawn-join lowering. Loop bodies are excluded
+/// (`spike_nested_blocks`), so a CPU group inside a `for`/`while` body is not detected here.
+///
+/// Builds the CPU-ABI callee set from `typed` (via `cpu_supported_callees`) so the routing
+/// predicate and the admission gate (`spike_cpu_candidates`) read the same set and agree on
+/// which callees are CPU members.
+///
+/// Time: O(N) where N = AST nodes  Space: O(k) where k = CPU-ABI-returning fns.
+fn stmt_contains_cpu_group(stmt: &Stmt, suspend_set: &SuspendSet, typed: &TypedModule) -> bool {
+    let supported = cpu_supported_callees(typed);
+    for block in spike_nested_blocks(stmt) {
+        if count_cpu_groups_all_depths(block, suspend_set, &supported) > 0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when the straight-line block `stmts` contains an admissible CPU group at its own top
+/// level (not only inside a deeper nested block). Used where the caller already holds a block
+/// (e.g. a match-arm body) and needs to know whether the spike will fire directly in it.
+///
+/// Time: O(N) where N = AST nodes  Space: O(k) where k = CPU-ABI-returning fns.
+fn stmt_block_has_direct_cpu_group(
+    stmts: &[Stmt],
+    suspend_set: &SuspendSet,
+    typed: &TypedModule,
+) -> bool {
+    let supported = cpu_supported_callees(typed);
+    spike_pair_in_block(stmts, suspend_set, &supported).is_some()
+}
+
+/// The representative callee of the single CPU group nested inside `stmts` (one level into an
+/// `if`/`match` arm), searched in lowering order. The caller has
+/// already established (via `count_cpu_groups_all_depths`) that exactly one group exists, so
+/// the first nested group found is THE group. Returns the same callee `spike_pair_in_block`
+/// reports for that nested block.
+///
+/// Time: O(N) where N = AST nodes  Space: O(D) recursion depth.
+fn spike_nested_group_callee(
+    stmts: &[Stmt],
+    suspend_set: &SuspendSet,
+    cpu_supported_callees: &std::collections::HashSet<String>,
+) -> Option<String> {
+    for stmt in stmts {
+        for block in spike_nested_blocks(stmt) {
+            if let Some(callee) = spike_pair_in_block(block, suspend_set, cpu_supported_callees) {
+                return Some(callee);
+            }
+            if let Some(callee) =
+                spike_nested_group_callee(block, suspend_set, cpu_supported_callees)
+            {
+                return Some(callee);
+            }
+        }
     }
     None
 }
@@ -6908,22 +7211,7 @@ fn spike_cpu_group_result_names(
     suspend_set: &SuspendSet,
     typed: &TypedModule,
 ) -> Vec<String> {
-    let cpu_supported_callees: std::collections::HashSet<String> = typed
-        .module
-        .items
-        .iter()
-        .filter_map(|item| {
-            if let Item::Function(func) = item {
-                if return_type_fits_cpu_result_abi(&func.return_type) {
-                    Some(func.name.clone())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .collect();
+    let supported = cpu_supported_callees(typed);
 
     // Collect indices of non-suspending direct-call statements whose callee returns a
     // CPU-result-ABI class. Must match `spike_cpu_candidates` / `spike_extract_cpu_group`
@@ -6937,8 +7225,7 @@ fn spike_cpu_group_result_names(
             }
             | Stmt::Expr(Expr::Call(c)) => {
                 if let Expr::Ident(name, _) = &c.callee {
-                    !suspend_set.contains(name.as_str())
-                        && cpu_supported_callees.contains(name.as_str())
+                    !suspend_set.contains(name.as_str()) && supported.contains(name.as_str())
                 } else {
                     false
                 }
@@ -7092,24 +7379,9 @@ fn spike_extract_cpu_group<'s>(
     suspend_set: &SuspendSet,
     typed: &TypedModule,
 ) -> Option<(Vec<&'s Stmt>, Vec<&'s Stmt>, Vec<&'s Stmt>)> {
-    // Build the same CPU-result-ABI callee set used by spike_cpu_candidates so the
-    // two gates cannot disagree on callee eligibility.
-    let cpu_supported_callees: std::collections::HashSet<String> = typed
-        .module
-        .items
-        .iter()
-        .filter_map(|item| {
-            if let Item::Function(func) = item {
-                if return_type_fits_cpu_result_abi(&func.return_type) {
-                    Some(func.name.clone())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .collect();
+    // The same CPU-result-ABI callee set the admission gate reads, so the two gates cannot
+    // disagree on callee eligibility.
+    let supported = cpu_supported_callees(typed);
 
     // Collect indices for all non-suspending CPU-result-ABI direct-call statements.
     let mut call_indices: Vec<usize> = Vec::new();
@@ -7121,8 +7393,7 @@ fn spike_extract_cpu_group<'s>(
             }
             | Stmt::Expr(Expr::Call(c)) => {
                 if let Expr::Ident(name, _) = &c.callee {
-                    !suspend_set.contains(name.as_str())
-                        && cpu_supported_callees.contains(name.as_str())
+                    !suspend_set.contains(name.as_str()) && supported.contains(name.as_str())
                 } else {
                     false
                 }
@@ -7637,10 +7908,19 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
         trampoline_fns.push(trampoline_fn);
     }
 
-    // --- Spawn state (state_blocks[*current_state]) ---
+    // --- Spawn state (the builder's current insertion block) ---
 
-    let spawn_state = state_blocks[*current_state];
-    // Poll state is the next pre-allocated state block.
+    // The spawn happens in whatever block the builder currently sits in. At depth 0 the caller
+    // positioned the builder in state_blocks[0] (the entry-dispatch target), so the spawn is
+    // the function's initial state. For a nested group the spawn block is the enclosing arm /
+    // iteration body block (e.g. sm_if_then) — the spawn runs inline there, no separate
+    // state-0 entry. Either way the POLL state must be a pre-allocated state block so the SM
+    // dispatch switch can re-enter it on every wakeup; poll_state_idx is the next free
+    // continuation index, set as resume_point at spawn time.
+    let spawn_state = cg
+        .builder
+        .get_insert_block()
+        .ok_or("spike: no current insertion block before spawn")?;
     let poll_state_idx = *current_state + 1;
     let poll_state = state_blocks
         .get(poll_state_idx)
@@ -7942,9 +8222,9 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
         // Bind through the same unified binder the sequential and I/O-parallel SM let-paths
         // use (`bind_sm_result_and_flush`) — no CPU-only store that could drift from the
         // canonical per-class discipline (corpse guard (a)). For a non-crossing result (read
-        // before any subsequent suspension — every spike-firing fixture in this slice) it
-        // creates a fresh, correctly-typed alloca; for a crossing result it reuses the
-        // dominating entry-block alloca and flushes to its frame slot(s).
+        // before any subsequent suspension) it creates a fresh, correctly-typed alloca; for a
+        // crossing result it reuses the dominating entry-block alloca and flushes to its frame
+        // slot(s).
         let alloca = bind_sm_result_and_flush(cg, bind_name, ret_val, frame_ptr, &child.callee)?;
         cg.locals.insert(bind_name.clone(), alloca);
 
@@ -8251,7 +8531,7 @@ fn emit_independent_group_poll<'ctx, 'g>(
     // still have a live sleep timer return 1 and re-register the parent waker for the
     // next wake-up. After polling all children, yield if any still Pending; otherwise post.
     cg.builder.position_at_end(cont_state_bb);
-    reload_params_from_frame(cg, parent_frame, param_names, f, shape_table, true)?;
+    reload_params_from_frame(cg, parent_frame, param_names, f, shape_table, true, true)?;
 
     let re_suspend_bb = ctx.append_basic_block(cg.current_fn, "par_re_suspend");
     let re_post_bb = ctx.append_basic_block(cg.current_fn, "par_re_post");
@@ -8657,7 +8937,7 @@ fn emit_suspending_call_inline_poll<'ctx, 'g>(
     // GEPs must be recomputed in each basic block (LLVM SSA dominance requirement).
     *current_state = continuation_state;
     cg.builder.position_at_end(cont_state_bb);
-    reload_params_from_frame(cg, parent_frame, param_names, f, shape_table, true)?;
+    reload_params_from_frame(cg, parent_frame, param_names, f, shape_table, true, true)?;
 
     // Recompute child frame pointer (same offset, but new instruction in this BB).
     let child_frame_re = state_machine::child_frame_ptr(
@@ -8888,7 +9168,7 @@ fn emit_suspending_call_heap_boxed<'ctx, 'g>(
     // cont_state_bb: re-poll.
     *current_state = continuation_state;
     cg.builder.position_at_end(cont_state_bb);
-    reload_params_from_frame(cg, parent_frame, param_names, f, shape_table, true)?;
+    reload_params_from_frame(cg, parent_frame, param_names, f, shape_table, true, true)?;
 
     // Reload the heap child frame pointer from the recursion slot.
     let rec_frame =
@@ -9076,7 +9356,7 @@ fn emit_wait_point<'ctx, 'g>(
         *current_state = continuation_state;
         // Fill the continuation state with a direct branch to post_wait_bb.
         cg.builder.position_at_end(cont_state_bb);
-        reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, true)?;
+        reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, true, true)?;
         cg.builder
             .build_unconditional_branch(post_wait_bb)
             .map_err(|e| format!("cont noop branch: {e}"))?;
@@ -9171,7 +9451,7 @@ fn emit_wait_point<'ctx, 'g>(
     // Then re-poll the handle to confirm Ready and transition to post_wait_bb.
     *current_state = continuation_state;
     cg.builder.position_at_end(cont_state_bb);
-    reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, true)?;
+    reload_params_from_frame(cg, frame_ptr, param_names, f, shape_table, true, true)?;
     state_machine::emit_sleep_poll_branch(
         ctx,
         &cg.builder,
@@ -16638,15 +16918,103 @@ fn try_build_shape_global<'ctx>(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_cpu_group_slots, cpu_slot_reserve_slots, function_contains_wait,
-        return_type_fits_cpu_result_abi, CpuGroupSlot, FrameLayout,
+        build_cpu_group_slots, count_cpu_groups_all_depths, cpu_slot_reserve_slots,
+        function_contains_wait, return_type_fits_cpu_result_abi, spike_nested_group_callee,
+        spike_pair_in_block, CpuGroupSlot, FrameLayout,
     };
-    use ynz_ast::nodes::{Block, Expr, Stmt};
+    use std::collections::HashSet;
+    use ynz_ast::nodes::{Block, CallExpr, Expr, MatchArm, MatchPattern, MatchPatternKind, Stmt};
     use ynz_diagnostics::SourceSpan;
     use ynz_typeck::independence::cpu_result_abi_supports;
 
     fn dummy_span() -> SourceSpan {
         SourceSpan::new("test.ynz", 0, 1)
+    }
+
+    // These exercise the pure block-scan helpers (`spike_pair_in_block`,
+    // `count_cpu_groups_all_depths`, `spike_nested_group_callee`) directly on hand-built
+    // statement lists — no TypedModule needed because they take the CPU-callee set as input.
+
+    /// `let _ = callee(0)` — one admissible CPU-call statement (callee returns a CPU-ABI class
+    /// and is not suspending, as long as `callee` is in the passed cpu-supported set).
+    fn cpu_call_let(bind: &str, callee: &str) -> Stmt {
+        Stmt::Let {
+            is_const: false,
+            name: bind.to_string(),
+            name_span: dummy_span(),
+            ty: None,
+            value: Expr::Call(Box::new(CallExpr {
+                callee: Expr::Ident(callee.to_string(), dummy_span()),
+                type_args: None,
+                args: vec![Expr::IntLit(0, dummy_span())],
+                span: dummy_span(),
+            })),
+            span: dummy_span(),
+        }
+    }
+
+    fn block(stmts: Vec<Stmt>) -> Block {
+        Block {
+            stmts,
+            span: dummy_span(),
+        }
+    }
+
+    fn if_stmt(body: Vec<Stmt>) -> Stmt {
+        Stmt::If {
+            cond: Expr::Ident("flag".to_string(), dummy_span()),
+            body: block(body),
+            span: dummy_span(),
+        }
+    }
+
+    fn match_stmt(arm_body: Vec<Stmt>) -> Stmt {
+        Stmt::Match {
+            scrutinee: Expr::Ident("sel".to_string(), dummy_span()),
+            arms: vec![MatchArm {
+                pattern: MatchPattern {
+                    kind: MatchPatternKind::Value(Expr::IntLit(1, dummy_span())),
+                    span: dummy_span(),
+                },
+                body: block(arm_body),
+                arrow_span: dummy_span(),
+            }],
+            else_arm: None,
+            span: dummy_span(),
+        }
+    }
+
+    fn for_stmt(body: Vec<Stmt>) -> Stmt {
+        Stmt::For {
+            var: "k".to_string(),
+            var_span: dummy_span(),
+            iter: Expr::Call(Box::new(CallExpr {
+                callee: Expr::Ident("range".to_string(), dummy_span()),
+                type_args: None,
+                args: vec![Expr::IntLit(0, dummy_span()), Expr::IntLit(3, dummy_span())],
+                span: dummy_span(),
+            })),
+            body: block(body),
+            span: dummy_span(),
+            destructure_pattern: None,
+            map_destructure_pattern: None,
+        }
+    }
+
+    fn while_stmt(body: Vec<Stmt>) -> Stmt {
+        Stmt::While {
+            cond: Expr::BoolLit(true, dummy_span()),
+            body: block(body),
+            span: dummy_span(),
+        }
+    }
+
+    /// `score` is a CPU-ABI callee; the suspend set is empty (pure CPU).
+    fn cpu_callee_set() -> HashSet<String> {
+        ["score".to_string()].into_iter().collect()
+    }
+    fn empty_suspend() -> HashSet<String> {
+        HashSet::new()
     }
 
     /// A bare FrameLayout carrying only the CPU slots under test. The other fields are
@@ -17178,6 +17546,122 @@ mod tests {
             0,
             "no CPU group reserves zero slots"
         );
+    }
+
+    // WHY: `spike_pair_in_block` is the block-level admission core both the depth-0 and nested
+    // spike paths share. An adjacent CPU-callee pair in a straight-line block must be admitted;
+    // a single call (no pair) must not. If this regresses, nested admission either fires with no
+    // reserved slots or silently declines a valid group.
+    #[test]
+    fn spike_pair_in_block_admits_adjacent_pair_only() {
+        let cpu = cpu_callee_set();
+        let susp = empty_suspend();
+        // Adjacent pair → admitted (representative = first callee).
+        let pair = vec![cpu_call_let("lo", "score"), cpu_call_let("hi", "score")];
+        assert_eq!(
+            spike_pair_in_block(&pair, &susp, &cpu),
+            Some("score".to_string())
+        );
+        // Single call → no pair → declined.
+        let single = vec![cpu_call_let("lo", "score")];
+        assert_eq!(spike_pair_in_block(&single, &susp, &cpu), None);
+    }
+
+    // WHY: the single-group constraint (admit IFF exactly one group across all depths) is what
+    // keeps a second group from aliasing the single reserved group-0 slot region. The count is
+    // the gate input: it must return 1 for a sole top-level group, 1 for a sole nested group, and
+    // 2 for any two-group function REGARDLESS of source order (top-then-nested, nested-then-top,
+    // two-nested) — the count is order-independent, which is what makes the multi-group decline
+    // order-independent. If any two-group arrangement returned 1, that arrangement would be
+    // admitted and the two groups would alias the single slot region (the corrupt-binary class).
+    #[test]
+    fn count_cpu_groups_all_depths_counts_top_and_nested() {
+        let cpu = cpu_callee_set();
+        let susp = empty_suspend();
+        let pair = || vec![cpu_call_let("lo", "score"), cpu_call_let("hi", "score")];
+
+        // One top-level group.
+        let top_only = pair();
+        assert_eq!(count_cpu_groups_all_depths(&top_only, &susp, &cpu), 1);
+
+        // One group nested inside an `if` arm.
+        let nested_only = vec![if_stmt(pair())];
+        assert_eq!(count_cpu_groups_all_depths(&nested_only, &susp, &cpu), 1);
+
+        // A top-level group THEN a nested group → 2 (multi-group, declines entirely).
+        let mut top_then_nested = pair();
+        top_then_nested.push(if_stmt(pair()));
+        assert_eq!(
+            count_cpu_groups_all_depths(&top_then_nested, &susp, &cpu),
+            2
+        );
+
+        // A nested group THEN a top-level group → 2 — same count, source order flipped. This is
+        // the arrangement that aliases the single slot region if the count check is bypassed.
+        let mut nested_then_top = vec![if_stmt(pair())];
+        nested_then_top.extend(pair());
+        assert_eq!(
+            count_cpu_groups_all_depths(&nested_then_top, &susp, &cpu),
+            2
+        );
+
+        // Two nested groups (two separate `if` arms) → 2.
+        let two_nested = vec![if_stmt(pair()), if_stmt(pair())];
+        assert_eq!(count_cpu_groups_all_depths(&two_nested, &susp, &cpu), 2);
+
+        // Nested inside a matching arm also counts.
+        let nested_match = vec![match_stmt(pair())];
+        assert_eq!(count_cpu_groups_all_depths(&nested_match, &susp, &cpu), 1);
+    }
+
+    // WHY: neither a `for` nor a `while` body is a spike-hosting site (`spike_nested_blocks`
+    // excludes both), so a CPU group inside either counts as ZERO across-depths groups — it
+    // DECLINES to sequential lowering. A loop body would need its loop index (and every
+    // loop-carried local) frame-backed across the group's poll-yield; the spike host's
+    // single-group reservation does not cover those synthetic-index slots, and nested loop
+    // placement needs multi-level synthetic-index reservation the spike path does not provide. If
+    // either body regressed to one, the loop group would fire without a reserved index slot and
+    // read its spike result through unreserved bytes (corruption).
+    #[test]
+    fn count_cpu_groups_all_depths_excludes_for_and_while_bodies() {
+        let cpu = cpu_callee_set();
+        let susp = empty_suspend();
+        let pair = || vec![cpu_call_let("lo", "score"), cpu_call_let("hi", "score")];
+        let for_group = vec![for_stmt(pair())];
+        assert_eq!(count_cpu_groups_all_depths(&for_group, &susp, &cpu), 0);
+        let while_group = vec![while_stmt(pair())];
+        assert_eq!(count_cpu_groups_all_depths(&while_group, &susp, &cpu), 0);
+    }
+
+    // WHY: when a group lives one level inside an `if`/`match` arm,
+    // `spike_nested_group_callee` must find it (the representative the reservation sizes for). A
+    // group inside a `for` or `while` body must NOT be found (a loop body has no reserved
+    // synthetic iteration index to frame-back, so it is not a hosting site — it DECLINES).
+    #[test]
+    fn spike_nested_group_callee_finds_branch_group_not_loop() {
+        let cpu = cpu_callee_set();
+        let susp = empty_suspend();
+        let pair = || vec![cpu_call_let("lo", "score"), cpu_call_let("hi", "score")];
+
+        let nested_if = vec![if_stmt(pair())];
+        assert_eq!(
+            spike_nested_group_callee(&nested_if, &susp, &cpu),
+            Some("score".to_string())
+        );
+
+        let nested_match = vec![match_stmt(pair())];
+        assert_eq!(
+            spike_nested_group_callee(&nested_match, &susp, &cpu),
+            Some("score".to_string())
+        );
+
+        // A group in a `for` body is NOT a hosting site → None.
+        let nested_for = vec![for_stmt(pair())];
+        assert_eq!(spike_nested_group_callee(&nested_for, &susp, &cpu), None);
+
+        // A group in a `while` body is NOT a hosting site → None.
+        let nested_while = vec![while_stmt(pair())];
+        assert_eq!(spike_nested_group_callee(&nested_while, &susp, &cpu), None);
     }
 
     fn wait_expr() -> Expr {

@@ -6509,7 +6509,45 @@ pub fn crossing_local_names(
     suspending: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
 ) -> Vec<String> {
-    let crossings = locals_crossing_wait(stmts, param_names, suspending);
+    crossing_local_names_with_cpu_spike(
+        stmts,
+        param_names,
+        suspending,
+        &std::collections::HashSet::new(),
+        expr_types,
+    )
+}
+
+/// Crossing-local collection that additionally treats a CPU spike group's join as a
+/// suspension point.
+///
+/// A pure-CPU parallel group (an adjacent pair of `let x = callee(...)` whose callees are
+/// non-suspending and in `cpu_supported`) is spawned-and-join-polled by the M3d codegen,
+/// and that join is a real suspension boundary: a local declared before the pair and read
+/// after the join must survive across it via a frame slot, exactly like a local crossing a
+/// `wait`. The plain [`crossing_local_names`] entry point passes an empty `cpu_supported`
+/// set, so its behavior is unchanged for every caller that is not collecting slots for a
+/// spike host.
+///
+/// `cpu_supported` is the set of callee names whose return class fits the CPU-result ABI —
+/// the codegen spike-host's eligibility filter — and is non-empty ONLY when collecting for a
+/// function the codegen will actually spike-host. This keeps the typeck crossing set and the
+/// codegen frame reservation in lock-step: both recognize the same pair as the same
+/// suspension. Polluting `suspending` with the CPU callees instead would make the codegen's
+/// `!suspend_set.contains(callee)` eligibility filter drop the pair (the callees would look
+/// like state machines), so the join would NOT fire while the crossing slot was reserved —
+/// the divergence that corrupts. The join, not the callees, is the suspension.
+///
+/// Time: O(N log N) where N = AST nodes (one crossing scan + a final name sort)  Space: O(C)
+/// where C = crossing local names collected
+pub fn crossing_local_names_with_cpu_spike(
+    stmts: &[Stmt],
+    param_names: &[&str],
+    suspending: &std::collections::HashSet<&str>,
+    cpu_supported: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
+) -> Vec<String> {
+    let crossings = locals_crossing_wait(stmts, param_names, suspending, cpu_supported);
     let mut seen = std::collections::HashSet::new();
     let mut names: Vec<String> = crossings
         .into_iter()
@@ -6526,6 +6564,9 @@ pub fn crossing_local_names(
     // giving it a named frame slot (prefixed `__ynz_for_idx_`) integrates it with the
     // existing crossing-local slot machinery. The name is deterministic and collision-free
     // (user code cannot declare names starting with `__ynz_`).
+    // Only `wait`/may-block loop bodies suspend here: a CPU spike-group inside a loop body
+    // DECLINES to sequential lowering (the codegen `spike_nested_blocks` excludes loop
+    // bodies), so it is never a suspension point and needs no synthetic iteration slot.
     collect_for_loop_synthetic_crossings(stmts, suspending, &mut seen, &mut names, expr_types);
     names.sort();
     names
@@ -6540,6 +6581,9 @@ pub fn crossing_local_names(
 ///
 /// The synthetic name is guaranteed not to alias user code because Yinz identifiers
 /// may not start with `__ynz_` (reserved prefix).
+///
+/// Time: O(N) where N = AST nodes in `stmts`  Space: O(D) recursion depth + O(F) synthetic
+/// names where F = suspending for-loops
 fn collect_for_loop_synthetic_crossings(
     stmts: &[Stmt],
     suspending: &std::collections::HashSet<&str>,
@@ -6550,6 +6594,7 @@ fn collect_for_loop_synthetic_crossings(
     collect_for_loop_synthetic_crossings_inner(stmts, suspending, seen, names, &mut 0, expr_types);
 }
 
+/// Time: O(N) where N = AST nodes in `stmts`  Space: O(D) recursion depth
 fn collect_for_loop_synthetic_crossings_inner(
     stmts: &[Stmt],
     suspending: &std::collections::HashSet<&str>,
@@ -7108,20 +7153,114 @@ fn expr_reads_field_of(expr: &Expr, target: &str) -> bool {
 ///
 /// Function parameters are excluded: the SM codegen gives every parameter a frame
 /// slot and reloads it at each resume point, so they are always safe.
+///
+/// Time: O(N) where N = AST nodes scanned  Space: O(C) where C = crossing locals collected
 pub fn locals_crossing_wait(
     stmts: &[Stmt],
     param_names: &[&str],
     suspending: &std::collections::HashSet<&str>,
+    cpu_supported: &std::collections::HashSet<&str>,
 ) -> Vec<LocalCrossesWait> {
     let mut problems = Vec::new();
     collect_crossings_in_stmts(
         stmts,
         param_names,
         suspending,
+        cpu_supported,
         &mut Vec::new(),
         &mut problems,
     );
     problems
+}
+
+/// Whether `stmt` binds a non-suspending CPU-result-ABI call — the statement shape that
+/// can be one member of an M3d CPU spike group.
+///
+/// A spike group member is `let x = callee(...)` (or a bare `callee(...)`) where `callee`
+/// is NOT in `suspending` (it is pure CPU, not a state machine) and IS in `cpu_supported`
+/// (its return class fits the join's 16-byte result ABI). Mirrors the codegen eligibility
+/// filter in `spike_pair_in_block` so the two sides recognize the same members.
+///
+/// Time: O(1)  Space: O(1)
+fn stmt_is_cpu_spike_member(
+    stmt: &Stmt,
+    suspending: &std::collections::HashSet<&str>,
+    cpu_supported: &std::collections::HashSet<&str>,
+) -> bool {
+    let c = match stmt {
+        Stmt::Let {
+            value: Expr::Call(c),
+            ..
+        }
+        | Stmt::Expr(Expr::Call(c)) => c,
+        _ => return false,
+    };
+    match call_name(c) {
+        Some(name) => !suspending.contains(name.as_str()) && cpu_supported.contains(name.as_str()),
+        None => false,
+    }
+}
+
+/// Index of the first member of an adjacent CPU spike pair in `stmts`, or `None`.
+///
+/// The M3d codegen spike-hosts the FIRST adjacent pair of eligible CPU members in a block
+/// (`spike_pair_in_block`); the join after that pair is the block's suspension point. Returns
+/// the index of the first member so the crossing analysis can mark every prior local as
+/// crossing and treat the two member binds as result-bindings (safe across their own join).
+///
+/// Time: O(n) where n = stmts length  Space: O(1).
+fn cpu_spike_pair_first_index(
+    stmts: &[Stmt],
+    suspending: &std::collections::HashSet<&str>,
+    cpu_supported: &std::collections::HashSet<&str>,
+) -> Option<usize> {
+    if cpu_supported.is_empty() {
+        return None;
+    }
+    stmts.windows(2).position(|w| {
+        stmt_is_cpu_spike_member(&w[0], suspending, cpu_supported)
+            && stmt_is_cpu_spike_member(&w[1], suspending, cpu_supported)
+    })
+}
+
+/// Whether `block` contains an adjacent CPU spike pair (at its top level, or inside a nested
+/// `if` body), making the block a suspension point for outer crossing analysis.
+///
+/// Parallels [`block_contains_inferred_suspension`] for the CPU-join suspension class. Loop
+/// and match bodies are scanned by the caller's own recursion in `collect_crossings_in_stmts`;
+/// this helper covers the `if`-body shape the inferred-suspension predicate also handles.
+///
+/// Time: O(N) where N = AST nodes in `block` (recurses through nested `if` bodies)  Space: O(D)
+/// recursion depth
+fn block_contains_cpu_spike_pair(
+    block: &Block,
+    suspending: &std::collections::HashSet<&str>,
+    cpu_supported: &std::collections::HashSet<&str>,
+) -> bool {
+    if cpu_supported.is_empty() {
+        return false;
+    }
+    if cpu_spike_pair_first_index(&block.stmts, suspending, cpu_supported).is_some() {
+        return true;
+    }
+    block.stmts.iter().any(|stmt| match stmt {
+        Stmt::If { body, .. } => block_contains_cpu_spike_pair(body, suspending, cpu_supported),
+        _ => false,
+    })
+}
+
+/// Whether `block` suspends through any M3d-recognized boundary: an explicit `wait`, an
+/// inferred-suspension call, OR a CPU spike-group join.
+///
+/// Time: O(N) where N = AST nodes in `block`  Space: O(D) recursion depth
+fn block_suspends_m3d(
+    block: &Block,
+    suspending: &std::collections::HashSet<&str>,
+    cpu_supported: &std::collections::HashSet<&str>,
+) -> bool {
+    block_contains_wait(block)
+        || block_contains_inferred_suspension(block, suspending)
+        || block_contains_cpu_spike_pair(block, suspending, cpu_supported)
 }
 
 /// Recursive crossing-analysis kernel.
@@ -7130,13 +7269,21 @@ pub fn locals_crossing_wait(
 /// so far in this statement sequence. When a suspension point (explicit `wait` node
 /// OR an inferred-suspension call) is encountered, subsequent statements are scanned
 /// for references to those accumulated names.
+///
+/// Time: O(N) where N = AST nodes scanned  Space: O(D) recursion depth + O(L) declared locals
 fn collect_crossings_in_stmts(
     stmts: &[Stmt],
     param_names: &[&str],
     suspending: &std::collections::HashSet<&str>,
+    cpu_supported: &std::collections::HashSet<&str>,
     declared: &mut Vec<String>,
     out: &mut Vec<LocalCrossesWait>,
 ) {
+    // Index of the first member of an adjacent CPU spike pair in THIS statement list, if any.
+    // The join after that pair is a suspension point: locals declared before it cross it, and
+    // the two member binds are result-bindings safe across their own join. Empty `cpu_supported`
+    // (every non-spike-host caller) makes this `None`, preserving the original behavior.
+    let spike_first_idx = cpu_spike_pair_first_index(stmts, suspending, cpu_supported);
     // Whether a reachable suspension point has been seen in this statement list.
     let mut past_wait = false;
     // Result-binding names from the most-recent suspension step, not yet flushed
@@ -7147,7 +7294,30 @@ fn collect_crossings_in_stmts(
     // suspension and the next one are not falsely flagged.
     let mut pending_result_bindings: Vec<String> = Vec::new();
 
-    for stmt in stmts {
+    for (idx, stmt) in stmts.iter().enumerate() {
+        // CPU spike-group join: the first member of the adjacent pair marks the suspension.
+        // Before the pair, mark `past_wait` so every prior `declared` local is checked against
+        // post-join reads (the accumulator bug). The two member binds are deferred into
+        // `pending_result_bindings` (safe across their own join, crossing candidates only for a
+        // LATER suspension), and the second member is consumed here so it is not re-processed as
+        // a plain `let` that would push it into `declared` prematurely.
+        if !past_wait && spike_first_idx == Some(idx) {
+            past_wait = true;
+            for member_idx in [idx, idx + 1] {
+                if let Stmt::Let { name, .. } = &stmts[member_idx] {
+                    if !param_names.contains(&name.as_str())
+                        && !pending_result_bindings.contains(name)
+                    {
+                        pending_result_bindings.push(name.clone());
+                    }
+                }
+            }
+            continue;
+        }
+        // Consume the second member of the spike pair (already handled above).
+        if spike_first_idx == Some(idx.wrapping_sub(1)) {
+            continue;
+        }
         if past_wait {
             // Before checking references, flush any result-binding names from the
             // PREVIOUS suspension that were deferred. At this point we are inside a
@@ -7218,55 +7388,53 @@ fn collect_crossings_in_stmts(
                 // dominance failure ("Instruction does not dominate all uses").
                 match stmt {
                     Stmt::If { body, .. }
-                        if block_contains_wait(body)
-                            || block_contains_inferred_suspension(body, suspending) =>
+                        if block_suspends_m3d(body, suspending, cpu_supported) =>
                     {
                         let mut branch_declared = declared.clone();
                         collect_crossings_in_stmts(
                             &body.stmts,
                             param_names,
                             suspending,
+                            cpu_supported,
                             &mut branch_declared,
                             out,
                         );
                     }
                     Stmt::While { body, .. } | Stmt::For { body, .. }
-                        if block_contains_wait(body)
-                            || block_contains_inferred_suspension(body, suspending) =>
+                        if block_suspends_m3d(body, suspending, cpu_supported) =>
                     {
                         let mut branch_declared = declared.clone();
                         collect_crossings_in_stmts(
                             &body.stmts,
                             param_names,
                             suspending,
+                            cpu_supported,
                             &mut branch_declared,
                             out,
                         );
                     }
                     Stmt::Match { arms, else_arm, .. } => {
                         for arm in arms {
-                            if block_contains_wait(&arm.body)
-                                || block_contains_inferred_suspension(&arm.body, suspending)
-                            {
+                            if block_suspends_m3d(&arm.body, suspending, cpu_supported) {
                                 let mut branch_declared = declared.clone();
                                 collect_crossings_in_stmts(
                                     &arm.body.stmts,
                                     param_names,
                                     suspending,
+                                    cpu_supported,
                                     &mut branch_declared,
                                     out,
                                 );
                             }
                         }
                         if let Some(eb) = else_arm {
-                            if block_contains_wait(eb)
-                                || block_contains_inferred_suspension(eb, suspending)
-                            {
+                            if block_suspends_m3d(eb, suspending, cpu_supported) {
                                 let mut branch_declared = declared.clone();
                                 collect_crossings_in_stmts(
                                     &eb.stmts,
                                     param_names,
                                     suspending,
+                                    cpu_supported,
                                     &mut branch_declared,
                                     out,
                                 );
@@ -7346,10 +7514,7 @@ fn collect_crossings_in_stmts(
                 //       potential suspension inside the branch.
                 //   (b) Locals declared INSIDE the branch, before the suspension, and
                 //       read after it IN THE SAME BRANCH — handled via recursive call.
-                Stmt::If { body, .. }
-                    if block_contains_wait(body)
-                        || block_contains_inferred_suspension(body, suspending) =>
-                {
+                Stmt::If { body, .. } if block_suspends_m3d(body, suspending, cpu_supported) => {
                     // Sub-case (b): recurse into the branch, seeding with the outer
                     // `declared` set so outer-scope names are also tracked inside.
                     let mut branch_declared = declared.clone();
@@ -7357,6 +7522,7 @@ fn collect_crossings_in_stmts(
                         &body.stmts,
                         param_names,
                         suspending,
+                        cpu_supported,
                         &mut branch_declared,
                         out,
                     );
@@ -7379,10 +7545,7 @@ fn collect_crossings_in_stmts(
                 // survive each `wait` via the frame slot. A purely forward textual scan
                 // misses this because the write and the condition-read both appear before
                 // the `wait` in textual order, yet execution cycles back through them.
-                Stmt::While { body, .. }
-                    if block_contains_wait(body)
-                        || block_contains_inferred_suspension(body, suspending) =>
-                {
+                Stmt::While { body, .. } if block_suspends_m3d(body, suspending, cpu_supported) => {
                     // Scan the condition and body for reads of outer-declared locals.
                     // This catches the back-edge case: counter/accumulator locals are
                     // read by the condition on each iteration, which comes AFTER the
@@ -7393,6 +7556,7 @@ fn collect_crossings_in_stmts(
                         &body.stmts,
                         param_names,
                         suspending,
+                        cpu_supported,
                         &mut branch_declared,
                         out,
                     );
@@ -7405,8 +7569,7 @@ fn collect_crossings_in_stmts(
                 // are still crossing locals — a forward scan seeded with the outer `declared`
                 // set catches them. Mark past_wait so post-for statements are scanned.
                 Stmt::For { body, iter, .. }
-                    if block_contains_wait(body)
-                        || block_contains_inferred_suspension(body, suspending) =>
+                    if block_suspends_m3d(body, suspending, cpu_supported) =>
                 {
                     // Scan the iter expression and body for reads of outer-declared locals.
                     // The iter expression may reference an outer local (e.g., the collection
@@ -7418,6 +7581,7 @@ fn collect_crossings_in_stmts(
                         &body.stmts,
                         param_names,
                         suspending,
+                        cpu_supported,
                         &mut branch_declared,
                         out,
                     );
@@ -7430,39 +7594,37 @@ fn collect_crossings_in_stmts(
                     else_arm,
                     scrutinee,
                     ..
-                } if arms.iter().any(|a| {
-                    block_contains_wait(&a.body)
-                        || block_contains_inferred_suspension(&a.body, suspending)
-                }) || else_arm.as_ref().is_some_and(|eb| {
-                    block_contains_wait(eb) || block_contains_inferred_suspension(eb, suspending)
-                }) =>
+                } if arms
+                    .iter()
+                    .any(|a| block_suspends_m3d(&a.body, suspending, cpu_supported))
+                    || else_arm
+                        .as_ref()
+                        .is_some_and(|eb| block_suspends_m3d(eb, suspending, cpu_supported)) =>
                 {
                     // Scrutinee may reference outer-declared locals.
                     let _ = scrutinee; // scanned via collect_ident_refs_in_stmt
                     collect_ident_refs_in_stmt(stmt, declared, out);
                     for arm in arms {
-                        if block_contains_wait(&arm.body)
-                            || block_contains_inferred_suspension(&arm.body, suspending)
-                        {
+                        if block_suspends_m3d(&arm.body, suspending, cpu_supported) {
                             let mut arm_declared = declared.clone();
                             collect_crossings_in_stmts(
                                 &arm.body.stmts,
                                 param_names,
                                 suspending,
+                                cpu_supported,
                                 &mut arm_declared,
                                 out,
                             );
                         }
                     }
                     if let Some(eb) = else_arm {
-                        if block_contains_wait(eb)
-                            || block_contains_inferred_suspension(eb, suspending)
-                        {
+                        if block_suspends_m3d(eb, suspending, cpu_supported) {
                             let mut eb_declared = declared.clone();
                             collect_crossings_in_stmts(
                                 &eb.stmts,
                                 param_names,
                                 suspending,
+                                cpu_supported,
                                 &mut eb_declared,
                                 out,
                             );

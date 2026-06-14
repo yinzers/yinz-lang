@@ -1,0 +1,41 @@
+// v0.3-M3d: inside the `if` branch, `combine` makes two independent `score(...)` calls and
+// returns their sum DIRECTLY from the branch — there is no local declared before the pair that
+// is read after the join. This is the pure-nested-group shape: the join's result names are
+// populated, but no surrounding crossing local exists, so the top-level crossing scan finds
+// nothing to back. The two calls run at the same time; `entrypoint` calls `combine` once. Both
+// modes print the same line.
+//
+// score(seed) loops, so it does enough work to be worth running alongside the other call, and
+// returns the loop sum plus its seed, giving each call a distinct result.
+//
+// Arithmetic: loopSum = 0+1+...+99 = 4950.
+//   score(3) = 4950 + 3 = 4953
+//   score(4) = 4950 + 4 = 4954
+//   sum      = 4953 + 4954 = 9907
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   9907
+function score(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function combine() -> int {
+  let go = true
+  if (go) {
+    let lo = score(3)
+    let hi = score(4)
+    return lo + hi
+  }
+  return 0
+}
+
+function entrypoint() -> nothing {
+  let r = combine()
+  print(r)
+}

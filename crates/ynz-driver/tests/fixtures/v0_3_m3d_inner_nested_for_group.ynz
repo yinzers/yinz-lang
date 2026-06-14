@@ -1,0 +1,44 @@
+// v0.3-M3d: a CPU group sits in the INNER body of two nested `for` loops. A CPU group inside any
+// loop body runs sequentially (the two `score(k)` calls do NOT overlap): the inner loop index, the
+// outer loop index, and every loop-carried local would each have to survive the group's join across
+// both loops' resume points, which needs multi-level synthetic-index reservation the compiler
+// does not yet support for loop-body groups. The group declines to sequential lowering, so the
+// output is identical to --no-auto-parallel — and codegen must NOT abort. This locks the decline
+// so a future relaxation cannot regress to the compile error previously-valid code triggered when
+// the inner nested-for group was accepted.
+//
+// score(seed) loops, so it does enough work to be worth running alongside the other call, and
+// returns the loop sum plus its seed.
+//
+// Arithmetic: loopSum = 0+1+...+99 = 4950; per inner pass, score(k)+score(k) = 2*(4950+k).
+//   inner k=0..2 total per outer pass = 9900 + 9902 + 9904 = 29706
+//   outer j=0..1 → 2 * 29706 = 59412
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   59412
+function score(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function combine() -> int {
+  let acc = 0
+  for (j in range(0, 2)) {
+    for (k in range(0, 3)) {
+      let lo = score(k)
+      let hi = score(k)
+      acc = acc + lo + hi
+    }
+  }
+  return acc
+}
+
+function entrypoint() -> nothing {
+  let r = combine()
+  print(r)
+}
