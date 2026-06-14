@@ -29,7 +29,8 @@
 - webpage-docs (Patrick Rizzardi) — 0 active plans — 2026-05-20
 
 ### Active Workstreams
-- v0-3-m3d-cpu-parallelization (Patrick Rizzardi) — 11 files touched — 44/116 done — roadmap: v0-3-concurrency-perf — 2026-06-13
+- docs-tree-restructure (Patrick Rizzardi) — 9 files touched — 0/88 done — 2026-06-14
+- v0-3-m3d-cpu-parallelization (Patrick Rizzardi) — 11 files touched — 69/126 done — roadmap: v0-3-concurrency-perf — 2026-06-13
 <!-- RADAR-END -->
 
 ---
@@ -150,6 +151,8 @@ cargo fmt --all
 - **M3a — Suspension Codegen Completion** (`plans/active/v0-3-m3a-suspension-codegen.md`, status: pending_approval, plan-reviewer PASS Tier A): lifts `LocalCrossesWait` + `WaitInsideLoop` via frame-backed mutable locals (P1) + loop/match suspension (P2 while, P3 for+match); P0 = `sleepAsync`→`sleep` / `sleepMs`→`sleepBlocking` rename + reword the two KEPT guards; P4 = demo/gallery/verification. KEEPS `SubExprSuspendViolation` (Golden Rule 7) + `MutualSuspensionCycle` (rare) as permanent design decisions. **Three stale roadmap claims corrected by source verification:** M8 cross-file typeck is ALREADY DONE (not a blocker); `ynz_rt_spawn` already exists (shipped M2); sleep rename was decided-but-undone. Tier-A trap caught in review: `number` is decimal128 (16 bytes) but frame local slots are 8-byte i64 → P1 must use two-slot/pointer-back, never truncate.
 - **M3b — Cross-Module + Auto-Parallelization** (`v0-3-m3b-auto-parallelization`, planned AFTER M3a ships): cross-module `suspends` propagation (rides existing salsa `module_signatures_query` — no compiled-package format needed), dependency-graph auto-parallelize pass, `background` give/copy inference, CPU/IO routing, `wait_points` + `background_routing` IDE hints.
 **Status: M3a EXECUTED + SHIPPED as v0.3.0-m4 (2026-06-04). Plan in `done/`. Next: M3b (auto-parallel) or M3c (array-by-value) — both planned, neither started.**
+
+**[2026-06-14] M3d Phase-3 scope corrected + new milestone M3g split out (Patrick):** During M3d (pure-CPU parallelization) sub-slice 4c, a verify-first pass proved **mixed CPU+I/O overlap** (fusing M3b's I/O inline-poll path with M3d's CPU join-poll path) is milestone-sized, not a sub-slice (the two paths share no continuation; forcing the fire deadlocks). Root cause: the M3d execution plan's Phase-3 Objective OVER-REACHED — it listed "mixed CPU+I/O" but the roadmap scopes M3d as **pure-CPU only**. Fixed both docs: roadmap `v0-3-concurrency-perf.md` gained a **Capability Ledger** (SSOT for capability→milestone ownership — the structural fix for recurring scope-bleed) + milestone **M3g `v0-3-m3g-mixed-cpu-io-overlap`** (depends on M3b+M3d; does NOT block v0.3.0) + an "Explicitly NOT in M3d" boundary; the M3d plan gained a per-phase **Scope Boundary** block. The mixed-CPU+I/O DECLINE is locked by committed fixtures so it can't silently regress. **M3d Phase 3 is mid-flight (pure-CPU): slices 1–3 + sub-slices 4a/4b/4c committed (`ee880b2` = 4c). NEXT = sub-slice 4d (panic+cancel, BASE `ee880b2`) → 4e (gate lifts + sweep) → Phase-3 completion gate.** Full landing instructions in the M3d plan Findings Log "▶▶ NEXT / WHERE A FRESH CHAT LANDS ◀◀" entry. The global `/plan`-skill capability-ledger discipline is Patrick's separate chat. (Note: `/plan` skill mtime changed 2026-06-14 — Patrick's parallel chat.)
 
 ---
 

@@ -4,7 +4,7 @@ type: roadmap
 owner: Patrick Rizzardi
 status: active
 created: 2026-05-21
-last_updated: 2026-05-31
+last_updated: 2026-06-14
 milestones:
   - v0-3-m1-runtime-and-background
   - v0-3-m2-wait-and-state-machines
@@ -12,6 +12,7 @@ milestones:
   - v0-3-m3b-auto-parallelization      # I/O-overlap auto-parallel (interleaved inline poll, zero new runtime)
   - v0-3-m3d-cpu-parallelization       # SPLIT 2026-06-05 from M3b: pure-CPU statement parallelization (new runtime ABI + SM-promotion + deadlock-safe join)
   - v0-3-m3e-cross-module-frame-serialization  # SPLIT 2026-06-05 from M3b P1: full cross-module FrameLayout serialization (lifts P1's loud-reject guards for re-export-transitive / shape-in-callee / errors×transitive)
+  - v0-3-m3g-mixed-cpu-io-overlap       # SPLIT 2026-06-14 from M3d Phase 3: mixed CPU+I/O poll-path fusion (the M3d plan over-reached by listing it; the roadmap scopes M3d as PURE-CPU only)
   - v0-3-m4-channels-soa-release
 ---
 
@@ -253,6 +254,7 @@ These BLOCK the milestones listed next to them. They must be resolved (and the r
 - **Blocking-pool exhaustion / deadlock safety**: N independent CPU groups (or recursion that spawns CPU groups) must not exhaust the blocking pool and deadlock on a synchronous join — adversarial gate mandatory.
 - **Kernel-mode**: a CPU-only auto-parallel function under `--kernel` (no runtime/scheduler) — clean reject vs. inline-sequential fallback (decide at plan time).
 - Demo (`pirates-roster` CPU multicore section) + error gallery + cross-impl consistency on all CPU fixtures.
+**Explicitly NOT in M3d (owned elsewhere — per the Capability Ledger):** **mixed CPU+I/O overlap** (one CPU child + one I/O `wait` child in one group) is **M3g** — it is the FUSION of M3b's I/O inline-poll path and M3d's CPU join-poll path, not pure-CPU work, and the 4c verify-first pass (2026-06-14) proved fusing them is milestone-sized (deadlocks without a shared continuation). M3d locks the safe DECLINE (mixed groups → sequential, byte-identical) so M3g can't silently regress it. Also NOT in M3d: loop-body CPU groups (declined — future loop-placement work), multi-group ≥2 (declined — future per-group-slot work), unsupported return-classes (declined). M3d delivers pure-CPU statement parallelization and nothing else.
 **Trigger to schedule**: after M3b ships, or whenever compute-bound multicore speedup is wanted. **Adversarial gate is mandatory** — the CPU join is M2-HALT-corpse-adjacent (one synchronous-join mistake reintroduces the crash); the plan MUST validate every join path through the real compiler + a blocking-pool-exhaustion stress fixture.
 **Ships via**: `/pr` per phase, `/release` for a `v0.3.0-m{next}` tag.
 
@@ -281,6 +283,20 @@ These BLOCK the milestones listed next to them. They must be resolved (and the r
 **Related (same crossing-local family — fold into bug-2's fix pass if cheap)**: aliased shape + `lend`-across-`wait` loses the write-back (`let b = a` shape-alias × frame-backed crossing-local `lend` mutation after a `wait` → the second mutation through the alias is dropped, prints `n:10` not `n:110`). Tracked in `todos.md`; same M3a frame-backed-crossing-local write-back discipline intersecting shallow-shape-alias semantics (m3c family).
 **Ships via**: `/pr`, then folds into the `v0.3.0` release (M4) or a standalone `v0.3.0-m6` tag — Patrick's call at plan time.
 
+### Milestone 3g: v0.3-M3g — Mixed CPU+I/O Overlap (poll-path fusion) — multi-session
+> **⚠️ SPLIT 2026-06-14 from M3d Phase 3 (Patrick decision).** The M3d execution plan's Phase 3 **Objective** listed "mixed CPU+I/O groups" as an M3d deliverable — but the roadmap scopes M3d as **pure-CPU only** (the CPU/I/O split was deliberate: I/O overlap = M3b's interleaved inline poll, pure-CPU overlap = M3d's joinable spawn+join; their FUSION was never scoped). M3d sub-slice 4c ran a full verify-first pass: the executor BUILT both attempted fusion fixes and PROVED each unsafe (the CPU join-poll and I/O inline-poll paths share no continuation; forcing a nested CPU group to fire alongside an outer suspension DEADLOCKS the binary — the spawned handle is never re-polled from the outer suspension's resume). Two adversarial deviation-judges vindicated the DECLINE as genuine milestone-sized unsafety, not avoidance. So this capability gets its own milestone instead of bloating M3d. **This split is itself the first catch of the new Capability Ledger discipline.**
+**Value delivered**: a function body that mixes one heavy CPU call and one I/O (`wait`) call as independent operations runs them *concurrently* (CPU on a worker core, I/O suspended) instead of in sequence — the last gap in "all independent operations auto-parallelize," covering groups that mix the two work-classes. Until M3g, such mixed groups run sequentially (correct, just not overlapped).
+**Execution plan**: `v0-3-m3g-mixed-cpu-io-overlap` (status: NOT YET PLANNED — run `/plan` when picked up; do not detail-plan now)
+**Depends on**: v0.3-M3b (the I/O inline-poll path) AND v0.3-M3d (the pure-CPU join-poll path) — both must be complete; M3g fuses them. Does NOT block the `v0.3.0` release (M4): M3d declines mixed groups safely to sequential, so v0.3.0 ships correct-but-unoptimized for mixed groups and M3g is a pure perf enhancement that can land before or after the tag.
+**Rough scope** (its `/plan` sharpens this — full root-cause + machinery live in `.claude/todos.md` "mixed CPU+I/O overlap" residual, written by M3d sub-slice 4c):
+- **Codegen poll-path fusion**: route codegen off typeck's class-aware `partition_groups_classified` / `ClassifiedGroup` (already shipped in typeck with NO codegen consumer by design), so ONE group's continuation drives BOTH a CPU join-poll (`ynz_rt_join_poll`) and an I/O inline-poll (`resume_fn`) — re-driving every live spawn handle on each resume of the shared continuation.
+- **Dual-kind frame layout**: reserve BOTH a CPU handle/result-slot region AND the I/O child sub-frame in the same group's frame layout.
+- **Typeck — promote already-suspending hosts**: let a function already in `base_suspends` (its own `wait` or a suspending callee) still drive `m3d_spike` for a CPU group in its body, AND guard-probe its CPU-join crossings (today `compute_cpu_promotions` / guard-probe skip `base_suspends` functions, so a nested CPU group inside a suspending host never fires).
+- **Deadlock-safety gate (mandatory — M2-HALT-corpse-adjacent)**: the fused continuation must never deadlock (the 4c failure mode) — adversarial gate + the M3d DECLINE fixtures (`v03_m3d_mixed_cpu_io_group_declines`, `..._nested_group_with_outer_wait`, `..._nested_group_with_suspending_callee`) FLIP from DECLINE-asserting to FIRE-asserting as the acceptance signal.
+- Demo (`pirates-roster` mixed CPU+I/O section) + error gallery + cross-impl consistency.
+**Trigger to schedule**: after M3d completes (pure-CPU must work before fusing it with I/O), whenever mixed-class overlap is wanted. Not a `v0.3.0` blocker.
+**Ships via**: `/pr` per phase, `/release` for a `v0.3.0-m{next}` tag.
+
 ### Milestone 4: v0.3-M4 — Channels + Auto-Arc + Auto-SoA + v0.3.0 Release — multi-session
 **Value delivered**: `channel<T>()` for bounded task communication (the `background` handle-form). Cross-thread shared state gets auto-`Arc` wrapping. `array<Shape>` hot loops that access ≤2 fields get SoA layout automatically (10-40× cache improvement on large arrays). Cuts the `v0.3.0` release tag — first version where Yinz code actually runs concurrently.
 **Execution plan**: `v0-3-m4-channels-soa-release` (status: planned)
@@ -305,6 +321,26 @@ These BLOCK the milestones listed next to them. They must be resolved (and the r
   - VSCode extension: full v0.3 polish pass — version bump, updated `wait`/`background` hover docs (updated text from M1 carries forward), screenshots for channels, auto-Arc hint, SoA lint
   - `pirates-roster` must demonstrate ALL four M4 surfaces: channel communication, auto-Arc hint, SoA lint squiggle, false-sharing padding
 **Ships via**: `/pr` per phase, `/release` for `v0.3.0` tag
+
+---
+
+## Capability Ledger (SSOT for capability → milestone ownership)
+
+> **Added 2026-06-14 (Patrick) to stop recurring scope-bleed.** Every named capability in this initiative maps to EXACTLY ONE milestone here. This table is the source of truth for "which milestone owns what." An execution-plan phase that delivers a capability the ledger assigns to a DIFFERENT milestone (or doesn't list at all) is scope-bleed — caught at plan-review by diffing the phase's named capabilities against this table, not at execution time. The recurring failure this prevents: a phase **Objective** silently bundles a capability the roadmap put elsewhere (M3d's plan listed "mixed CPU+I/O" — a capability the roadmap split into M3b's I/O path + M3d's CPU path, never the fusion). New capabilities discovered mid-execution get a row here (status `unscoped → needs a milestone`) before they're worked, never folded into the active milestone.
+
+| Capability | Owning milestone | Status | Notes |
+|---|---|---|---|
+| Runtime bootstrap + fire-and-forget `background` | M1 | shipped | |
+| `wait` suspension + state-machine codegen + intra-unit may-block inference | M2 | shipped | |
+| Suspension codegen — hard cases (heap-boxed child frames, recursion) | M3a | shipped | |
+| Full variable-shadowing parity (per-binding-slot identity) | M3c | planned | |
+| Cross-module may-block propagation | M3b | shipped | |
+| **I/O statement overlap** — suspending-callee groups overlap via interleaved inline poll, ZERO new threads | M3b | shipped | one thread, interleaved suspensions |
+| Cross-module `FrameLayout` serialization | M3e | shipped | |
+| **Pure-CPU statement parallelization** — joinable `spawn_blocking` + async join + SM-promotion; independent heavy CPU calls run on separate cores | M3d | **active** | pure-CPU groups ONLY; M3d declines mixed-CPU+I/O / loop-body / multi-group / unsupported return-classes safely to sequential |
+| Pre-existing codegen correctness fixes (same-callee wide-`errors`, crossing-local-in-post-`wait` CF) | M3f | planned | blocks the `v0.3.0` final tag |
+| **Mixed CPU+I/O overlap** — fuse the CPU join-poll path + the I/O inline-poll path so ONE group can carry a CPU child AND an I/O (`wait`) child concurrently | **M3g** | **planned** | needs M3b (I/O path) + M3d (CPU path) both done; M3d locks the safe DECLINE so this can't silently regress; does NOT block `v0.3.0` (declines safely) |
+| Channels + auto-Arc + auto-SoA + `v0.3.0` release | M4 | planned | |
 
 ---
 
