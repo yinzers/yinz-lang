@@ -6046,6 +6046,21 @@ fn v03_m3d_nested_group_with_suspending_callee_no_abort_byte_identical() {
 }
 
 #[test]
+fn v03_m3d_mixed_cpu_io_group_declines_byte_identical() {
+    // WHY: a pure-CPU call (`score`) next to an I/O call (`fetch`, which `wait`s on a timer)
+    // is a mixed CPU+I/O group. The CPU spawn-join path and the I/O inline-poll path use
+    // separate mechanisms with no shared continuation — driving them together deadlocks the
+    // join: the spawned CPU handle is never re-polled from inside the I/O suspension's resume.
+    // The admission gate therefore declines a mixed group to sequential: `score` runs inline,
+    // `fetch` suspends, both in order — 0 spawns, byte-identical to `--no-auto-parallel` (4958).
+    // The 0-spawn assertion is the safety wire: any spawns here mean the mixed-overlap path got
+    // activated while the fused-continuation machinery is absent — fix the codegen, not this test.
+    // Firing this safely (CPU join-poll + I/O inline-poll fused into one continuation) is tracked
+    // in .claude/todos.md.
+    m3d_assert_declines_byte_identical("v0_3_m3d_mixed_cpu_io_group_declines.ynz", "4958");
+}
+
+#[test]
 fn v03_m3b_p4_wait_barrier_first_correct_output() {
     // WHY: `wait` as the first call is an ordering barrier — waiter must complete
     // before worker and helper start. Output order must be deterministic: waiter then done.

@@ -1,0 +1,36 @@
+// v0.3-M3d: `entrypoint` makes two independent calls next to each other — `score(...)`, which
+// is pure number-crunching, and `fetch(...)`, which waits on a timer before returning. One call
+// does compute work, the other waits on a timer. These two kinds of work do not run at the same
+// time — both calls run one after the other in plain sequence. `entrypoint` then adds the
+// two results. Both modes (default and --no-auto-parallel) print the same line.
+//
+// score(seed) loops, so it does real work, and returns the loop sum plus its seed. fetch(seed)
+// waits on a timer (no real compute) and returns seed + 1.
+//
+// Arithmetic: loopSum = 0+1+...+99 = 4950.
+//   score(3) = 4950 + 3 = 4953
+//   fetch(4) = 4 + 1    = 5
+//   sum      = 4953 + 5 = 4958
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   4958
+function score(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function fetch(seed: int) -> int {
+  wait sleep(0)
+  return seed + 1
+}
+
+function entrypoint() -> nothing {
+  let a = score(3)
+  let b = fetch(4)
+  print(a + b)
+}
