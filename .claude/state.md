@@ -30,7 +30,7 @@
 
 ### Active Workstreams
 - docs-tree-restructure (Patrick Rizzardi) — 9 files touched — 0/102 done — 2026-06-15
-- v0-3-m3d-cpu-parallelization (Patrick Rizzardi) — 11 files touched — 69/126 done — roadmap: v0-3-concurrency-perf — 2026-06-14
+- v0-3-m3d-cpu-parallelization (Patrick Rizzardi) — 11 files touched — 80/127 done — roadmap: v0-3-concurrency-perf — 2026-06-14
 <!-- RADAR-END -->
 
 > **Gate-check note (2026-06-15):** `/execute-plan docs-tree-restructure` was invoked and **correctly HALTED at the precondition** — no phases ran, no files changed (this chat = slug-claim + read-only gate check only). The plan is hard-blocked until `v0-3-m3d-cpu-parallelization` reaches `status: done`/moves to `plans/done/`; m3d is still `active` (69/126). Also note we're on branch `feat/m3d-cpu-parallelization`, so docs work would collide with in-flight compiler edits. Unblock = finish m3d → flip done → branch docs work off clean main → re-invoke.
@@ -43,24 +43,23 @@
 **Language**: Rust (compiler implementation)
 **Toolchain**: Rust 1.95 stable, LLVM 18.1.8, cargo workspace
 **LLVM prefix**: `/usr/lib/llvm-18` (set in `.cargo/config.toml` via `LLVM_SYS_PREFIX`)
-**⚠️ Build env**: LLVM 18 + glibc 2.39 exist ONLY in the devcontainer (Ubuntu 24.04). The WSL host (Debian bookworm, glibc 2.36, LLVM 15) CANNOT build `ynz-codegen`/`ynz-driver` or run `./target/debug/ynz`. All compiler build/test/fixture work happens inside the devcontainer; `ynz-runtime` alone builds on the host. (Discovered 2026-06-11 mid-M3d-Phase-0.)
+**⚠️ Build env**: LLVM 18 + glibc 2.39 are required and live in the `docker-compose.yml` `dev` container (Ubuntu 24.04, image `ynz-dev`). The WSL host (Debian bookworm, glibc 2.36, LLVM 15) CANNOT build `ynz-codegen`/`ynz-driver` or run `./target/debug/ynz`. All compiler build/test/fixture work runs via `docker compose run --rm dev cargo …`; `target/` is bind-mounted so binaries land on the host at uid 1000.
 
 ```bash
-source $HOME/.cargo/env    # activate Rust in this shell session
+# All cargo commands run inside the dev container (LLVM 18 lives there, not on WSL host)
+docker compose run --rm dev cargo build --workspace
+docker compose run --rm dev cargo test --workspace     # 310 tests as of M3
+docker compose run --rm dev cargo clippy --workspace -- -D warnings
+docker compose run --rm dev cargo fmt --all
 
-cargo build --workspace    # build all crates
-cargo test --workspace     # run all tests (310 as of M3)
-cargo clippy --workspace -- -D warnings
-cargo fmt --all
-
-# Run the compiler
-./target/debug/ynz run crates/ynz-driver/tests/fixtures/hello.ynz
+# Run the compiler (binary is bind-mounted to host target/debug/ynz)
+docker compose run --rm dev ./target/debug/ynz run crates/ynz-driver/tests/fixtures/hello.ynz
 # → hello, yinz
 
-./target/debug/ynz run crates/ynz-driver/tests/fixtures/m3_fib.ynz
+docker compose run --rm dev ./target/debug/ynz run crates/ynz-driver/tests/fixtures/m3_fib.ynz
 # → 55
 
-./target/debug/ynz run crates/ynz-driver/tests/fixtures/m4_player.ynz
+docker compose run --rm dev ./target/debug/ynz run crates/ynz-driver/tests/fixtures/m4_player.ynz
 # → Patrick / 120 / Patrick  (M4 P4 success-criteria fixture)
 
 # Current branch: main (v0.1.0 shipped; v0.2-M1 planning in progress)

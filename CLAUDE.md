@@ -84,14 +84,45 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 
 ---
 
-## Tech Stack (fill in as compiler is built)
+## Tech Stack
 
-**Compiler target**: LLVM (planned)
-**Package manager**: TBD
-**Compiler implementation language**: TBD
+**Compiler target**: LLVM 18 (`inkwell` bindings, `llvm-18-dev` / `clang-18` / `libclang-18-dev`)
+**Compiler implementation language**: Rust (stable)
+**Package manager**: Cargo (workspace, `Cargo.toml`)
+**Node.js**: v22 (for `tooling/vscode-ynz/` VSCode extension build — `npm install && npx vsce package`)
+
+**Dev container**: `docker-compose.yml` defines a `dev` service (image `ynz-dev`, built from `Dockerfile`).
+All compiler build / test / fixture work runs inside this container. The bind mount `.:/work` makes
+`target/` host-readable (uid 1000 / patrick) so `trading-v4` can mount `target/release`.
 
 ```bash
-# CLI commands (spec — not yet implemented)
+# Start the dev container (background)
+docker compose up -d dev
+
+# Or run one-shot commands (container exits after each)
+docker compose run --rm dev cargo build --workspace
+docker compose run --rm dev cargo build -p ynz-driver
+docker compose run --rm dev cargo build -p ynz-driver --release
+docker compose run --rm dev cargo build -p ynz-lsp --release
+docker compose run --rm dev cargo test --workspace
+docker compose run --rm dev cargo clippy --workspace -- -D warnings
+docker compose run --rm dev cargo fmt --all
+
+# Run the compiler directly inside a running dev container
+docker compose exec dev ./target/debug/ynz run crates/ynz-driver/tests/fixtures/hello.ynz
+# → hello, yinz
+
+# VSCode extension build (runs as root-step apt + user-step npm)
+docker compose run --rm dev bash -c "cd tooling/vscode-ynz && npm install && npm run build && npx vsce package --no-yarn"
+```
+
+**Cargo registry cache**: stored in the named Docker volume `cargo-registry` (compose name;
+Docker prefixes the project name at runtime, so `docker volume ls` shows it as
+`ynz_cargo-registry`). Mounted at `/home/ubuntu/.cargo/registry`. Crates survive container
+rebuilds. `target/` stays on the host bind mount — do NOT put it in a named volume.
+
+```bash
+# CLI commands (spec — not yet implemented in the Yinz language itself)
 ynz build entrypoint.ynz
 ynz run entrypoint.ynz
 ```

@@ -1,0 +1,19 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ynz-dev
+    volumes:
+      # Bind-mount the whole project so cargo writes target/ onto the host.
+      # trading-v4 mounts the host ynz/target/release to reach the built binary,
+      # so target/ must stay inside this bind mount — never in a named volume.
+      - .:/work
+      # Named volume for the cargo registry so downloaded crates survive rebuilds.
+      # Matched to the ubuntu user's CARGO_HOME location (rustup default: ~/.cargo).
+      - cargo-registry:/home/ubuntu/.cargo/registry
+    working_dir: /work
+    command: ["sleep", "infinity"]
+
+volumes:
+  cargo-registry:
