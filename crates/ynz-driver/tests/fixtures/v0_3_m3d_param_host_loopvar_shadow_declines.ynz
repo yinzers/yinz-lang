@@ -1,0 +1,50 @@
+// v0.3-M3d: `combine` reads its parameter `seed` AFTER its CPU pair (`let z = seed + 1`) AND a
+// LATER post-join `for` loop binds a variable named `seed`, which shadows the parameter only
+// inside that loop's body. The post-join read of `seed` (in `let z = seed + 1`) is a genuine
+// read-after-join — the exact shape the spike frame layout cannot serve (the wrapper writes
+// param slot 0 at the byte the first CPU-handle slot occupies, so a post-join param reload reads
+// the handle pointer's bytes instead of its value). The gate must DECLINE: 0 spawns, sequential,
+// byte-identical to --no-auto-parallel.
+//
+// This pins the loop-local shadow-removal contract in `stmt_tree_ident_reads`: the post-join
+// `for (seed in ...)` loop-var name must be stripped only from THAT loop's own body reads, never
+// from the shared post-join accumulator. If the loop-var removal leaked to the shared set, it
+// would erase the earlier `let z = seed + 1` read, flip the gate to ADMIT, fire an unsafe
+// param-read-post-join, and corrupt the frame slot the read sources from (a silent wrong answer:
+// the spawn's handle store clobbers byte 32, so the post-join `z` reload returns the handle
+// pointer's bytes, dropping `seed`'s contribution from the result).
+//
+// score(seed) loops 0..99 (sum 4950) and returns the loop sum plus its seed.
+//
+// Arithmetic: loopSum = 0+1+...+99 = 4950.
+//   combine(3):
+//     score(3) = 4953
+//     score(3) = 4953
+//     z        = seed + 1 = 4
+//     result   = 4953 + 4953 + 4 = 9910
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   9910
+function score(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function combine(seed: int) -> int {
+  let a = score(seed)
+  let b = score(seed)
+  let z = seed + 1
+  for (seed in range(1, 2)) {
+  }
+  return a + b + z
+}
+
+function entrypoint() -> nothing {
+  let r = combine(3)
+  print(r)
+}

@@ -29,7 +29,7 @@ use ynz_ast::nodes::{
 use ynz_numerics; // parse(s: &str) -> Option<u128>
 use ynz_typeck::{
     build_effective_suspend_set, crossing_local_names_with_cpu_spike,
-    independence::{partition_independent_groups, IndependentGroup},
+    independence::{collect_ident_names, partition_independent_groups, IndependentGroup},
     type_attached_const_type, GenericFnTable, MonomorphizationTable, ShapeTable, SignatureTable,
     Type, TypedModule,
 };
@@ -377,10 +377,12 @@ pub fn build_frame_layouts_with_resolver(
             // slots at frame offsets 32/40). The offsets are computed here ONCE; the emission
             // site reads them from `cpu_group_slots` instead of hardcoded SPIKE_*_OFFSET consts.
             //
-            // The Phase-0 envelope admits exactly one group of two members on a zero-param
-            // entrypoint, so this produces handles @ 32/40 and results @ 48/64. The general
-            // multi-group / N-member layout is a later slice; the keying (group_id,
-            // member_index) is already shape-correct for it.
+            // The envelope admits exactly one group across all depths, with N ≥ 2 members; for
+            // a two-member group this produces handles @ 32/40 and results @ 48/64. The keying
+            // is (group_id, member_index), so an N-member group sizes the reserve from the
+            // member count. A param-host's params share the slot region with the handles (param
+            // slot 0 at byte 32 overlaps SPIKE_HANDLE_0); the reserve and `n_locals` below both
+            // count `f.params.len()`, so the frame is sized for params + reserve + crossings.
             let (cpu_group_slots, cpu_reserve) = cpu_group_slots_and_reserve(f, typed, suspend_set);
 
             let n_locals = f.params.len() + crossing_slots;
@@ -461,9 +463,10 @@ pub fn build_frame_layouts_with_resolver(
     layouts
 }
 
-/// Number of members in the Phase-0 CPU group (one adjacent pair). The general N-member
-/// group is a later slice; the per-member slot layout below is already keyed for it.
-const CPU_GROUP_MEMBER_COUNT: usize = 2;
+/// Minimum members in an admissible CPU group (a lone eligible call is not a group). A group
+/// is a maximal run of N ≥ this many adjacent eligible CPU calls; the per-member slot layout
+/// below is keyed `(group_id, member_index)` for arbitrary N.
+const CPU_GROUP_MIN_MEMBERS: usize = 2;
 /// Bytes per CPU-child handle slot (`*mut CpuJoinHandle`).
 const CPU_HANDLE_SLOT_BYTES: u64 = 8;
 /// Bytes per CPU-child result slot (`YnzCpuResult = [i64; 2]`).
@@ -512,11 +515,13 @@ fn cpu_reserve_bytes(slots: &[CpuGroupSlot]) -> u64 {
 
 /// CPU-group slots + reserve bytes for `f`, the single computation both frame-size paths
 /// share. A function `spike_cpu_candidates` admits reserves a handle+result region after
-/// the frame header (per `CPU_GROUP_MEMBER_COUNT`); all others reserve nothing. Binding
-/// `build_frame_layouts_with_resolver` and `compute_frame_size` to ONE helper is what
+/// the frame header sized for its group's ACTUAL member count; all others reserve nothing.
+/// Binding `build_frame_layouts_with_resolver` and `compute_frame_size` to ONE helper is what
 /// keeps the `sizes` memo (read as a composed child's `child_frame_size`) in lockstep with
 /// the host's own `total_size` — a divergence here under-allocates an embedded spike child
-/// by the reserve and aliases the parent's next sub-frame (silent heap corruption).
+/// by the reserve and aliases the parent's next sub-frame (silent heap corruption). The
+/// member count is read from `spike_cpu_group_member_count`, the SAME source the spawn/join
+/// emission iterates, so the reserve and the emission can never disagree on N.
 ///
 /// Time: O(k)  Space: O(m) where k = AST nodes scanned by `spike_cpu_candidates`,
 /// m = group members.
@@ -525,9 +530,11 @@ fn cpu_group_slots_and_reserve(
     typed: &TypedModule,
     suspend_set: &SuspendSet,
 ) -> (Vec<CpuGroupSlot>, u64) {
-    let member_count = spike_cpu_candidates(f, typed, suspend_set)
-        .map(|_| CPU_GROUP_MEMBER_COUNT)
-        .unwrap_or(0);
+    let member_count = if spike_cpu_candidates(f, typed, suspend_set).is_some() {
+        spike_cpu_group_member_count(f, typed, suspend_set)
+    } else {
+        0
+    };
     let slots = build_cpu_group_slots(member_count);
     let reserve = cpu_reserve_bytes(&slots);
     (slots, reserve)
@@ -2382,23 +2389,29 @@ fn lower_function_with_waits<'ctx, 'g>(
     // Spike functions reserve 48 bytes (6 × 8-byte slots) immediately after the frame
     // header for CPU handle and result slots.
     //
-    // Spike frame byte layout (zero-param hosts only — spike_cpu_candidates declines
-    // any host with ≥1 params to avoid the collision below):
+    // Spike frame byte layout:
     //   bytes  0..31 : frame header (resume_point, discriminator, sleep_handle, return_slot)
     //   bytes 32..39 : SPIKE_HANDLE_0 — *mut CpuJoinHandle (runtime contract, must stay at 32)
     //   bytes 40..47 : SPIKE_HANDLE_1 — *mut CpuJoinHandle (runtime contract, must stay at 40)
     //   bytes 48..63 : SPIKE_RESULT_0 — YnzCpuResult = [i64;2] (16 bytes)
     //   bytes 64..79 : SPIKE_RESULT_1 — YnzCpuResult = [i64;2] (16 bytes)
-    //   bytes 80+    : crossing locals (no params for spike hosts, so no param slots here)
+    //   bytes 80+    : crossing locals (for a param-host, params occupy slots [0..n_params)
+    //                  starting at byte 32 — see param-slot/handle-slot overlap below)
     //
     // Non-spike frame:
     //   bytes  0..31 : frame header
     //   bytes 32+    : params (0..n_params slots) then crossing locals
     //
-    // Zero-param invariant: admitting a param'd host would place param slot 0 at byte 32
-    // (= SPIKE_HANDLE_0_OFFSET), colliding with the handle pointer. spike_cpu_candidates
-    // guards this: returns None for any host with params. This is why `n_params == 0` here
-    // when spike_active_here is true.
+    // Param-slot/handle-slot overlap (tolerated by the admission gate): the wrapper writes
+    // param slot 0 at byte 32 — the byte SPIKE_HANDLE_0 occupies. sm_entry loads each param
+    // into a stack alloca BEFORE the spawn runs, so a param used in the group's spawn args is
+    // read from its alloca with the correct value; the handle store then overwrites byte 32, but
+    // that frame slot is never reloaded (a dead store). `spike_cpu_candidates` admits a param-
+    // host ONLY when no param is read after the join — so the clobbered frame param slot is
+    // never read back. A post-join param read would need param-slot reservation past the CPU
+    // region (.claude/todos.md); that case declines. The frame still reserves `n_params` slots
+    // (counted into `n_locals` below) so a param-host's frame is sized for params + the 48-byte
+    // CPU reserve + crossing locals — over-allocated at the overlapping byte, never under.
     let spike_active_here = spike_candidates.is_some();
     // Number of 8-byte slots reserved for the spike handle+result region after the frame header.
     //
@@ -6674,19 +6687,6 @@ fn is_direct_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool {
 // end-to-end through the real compiler in Phase 0; later slices generalize the layout
 // from the fixed Phase-0 two-member group to N-member / multi-group bodies.
 
-/// Fallback byte offset of CPU handle slot 0 within the parent SM frame.
-///
-/// The live offsets come from `FrameLayout::cpu_group_slots` (computed in
-/// `build_frame_layouts` — the single source of truth). These constants are the
-/// defensive fallback the join emission uses only if a layout entry is somehow absent,
-/// which cannot happen for a promoted (in-suspend-set) function. They encode the Phase-0
-/// two-member layout: two handle slots then two result slots immediately after the
-/// 32-byte frame header.
-const SPIKE_HANDLE_0_OFFSET: u64 = 32;
-const SPIKE_HANDLE_1_OFFSET: u64 = 40;
-const SPIKE_RESULT_0_OFFSET: u64 = 48;
-const SPIKE_RESULT_1_OFFSET: u64 = 64;
-
 /// Cross-crate frame-ABI binding: the runtime's CPU-handle region begins immediately after
 /// the state-machine frame header, so `ynz_abi::SPIKE_HANDLE_BASE_OFFSET` MUST equal codegen's
 /// `FRAME_HEADER_SIZE`. The two are coupled only through the shared `ynz-abi` constant, so a
@@ -6713,24 +6713,6 @@ const _: () = assert!(
     CPU_HANDLE_SLOT_BYTES == ynz_abi::SPIKE_HANDLE_SLOT_BYTES as u64,
     "frame-ABI drift: codegen CPU_HANDLE_SLOT_BYTES must equal ynz_abi::SPIKE_HANDLE_SLOT_BYTES \
      (runtime iterates handle slots at this stride; codegen writes them at this stride)"
-);
-
-/// Cross-crate frame-ABI binding: the two fallback handle offsets are exactly the first two
-/// entries of the canonical handle region (`SPIKE_HANDLE_BASE_OFFSET + i * SPIKE_HANDLE_SLOT_BYTES`).
-/// Keeping the named literals (the doc comment + the `decline` reasoning at the zero-param-host
-/// gate reference `SPIKE_HANDLE_0_OFFSET` by name) while binding them to the shared base+stride
-/// turns any future drift of base or stride into a build error here rather than a silent fallback
-/// that writes handles where the runtime won't look for them.
-const _: () = assert!(
-    SPIKE_HANDLE_0_OFFSET == ynz_abi::SPIKE_HANDLE_BASE_OFFSET as u64,
-    "frame-ABI drift: SPIKE_HANDLE_0_OFFSET must equal ynz_abi::SPIKE_HANDLE_BASE_OFFSET \
-     (handle slot 0 is the first slot of the CPU-handle region)"
-);
-const _: () = assert!(
-    SPIKE_HANDLE_1_OFFSET
-        == (ynz_abi::SPIKE_HANDLE_BASE_OFFSET + ynz_abi::SPIKE_HANDLE_SLOT_BYTES) as u64,
-    "frame-ABI drift: SPIKE_HANDLE_1_OFFSET must equal SPIKE_HANDLE_BASE_OFFSET + SPIKE_HANDLE_SLOT_BYTES \
-     (handle slot 1 is one stride past slot 0)"
 );
 
 /// Re-export of the shared spike-frame tag so codegen writes the IDENTICAL high-16-bit
@@ -6854,6 +6836,117 @@ fn spike_host_cpu_supported<'a>(
     }
 }
 
+/// Collect every identifier name READ anywhere in a statement, descending into nested control
+/// flow (`if`/`match`/`while`/`for` bodies). Conservative by construction: a name appearing in
+/// any reachable sub-expression is reported, so a caller using this to gate on "is this param
+/// read here?" can only over-report (decline a safe case), never under-report (admit an unsafe
+/// case). Used by the spike param-host gate to find post-join param reads.
+///
+/// Time: O(N) where N = AST nodes under `stmt`  Space: O(N) recursion + accumulated name set.
+fn stmt_tree_ident_reads(stmt: &Stmt, out: &mut std::collections::HashSet<String>) {
+    let block_reads = |b: &ynz_ast::nodes::Block, out: &mut std::collections::HashSet<String>| {
+        for s in &b.stmts {
+            stmt_tree_ident_reads(s, out);
+        }
+    };
+    match stmt {
+        Stmt::Expr(e) | Stmt::Let { value: e, .. } | Stmt::Assign { value: e, .. } => {
+            collect_ident_names(e, out)
+        }
+        Stmt::Return { value: Some(v), .. } => collect_ident_names(v, out),
+        Stmt::Return { value: None, .. } => {}
+        Stmt::FieldAssign { target, value, .. } => {
+            collect_ident_names(target, out);
+            collect_ident_names(value, out);
+        }
+        Stmt::IndexAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => {
+            collect_ident_names(receiver, out);
+            collect_ident_names(index, out);
+            collect_ident_names(value, out);
+        }
+        Stmt::If { cond, body, .. } => {
+            collect_ident_names(cond, out);
+            block_reads(body, out);
+        }
+        Stmt::While { cond, body, .. } => {
+            collect_ident_names(cond, out);
+            block_reads(body, out);
+        }
+        Stmt::For {
+            iter,
+            body,
+            var,
+            destructure_pattern,
+            map_destructure_pattern,
+            ..
+        } => {
+            // The iter expression is evaluated in the enclosing scope, so its reads belong to
+            // the shared accumulator. The loop variable (and any destructure-bound names) shadow
+            // outer names ONLY inside the body — so the shadow removal MUST apply to a loop-local
+            // read set, never to the shared `out`. Removing the loop var from `out` directly
+            // would erase a same-named param read that an EARLIER post-join statement legitimately
+            // recorded, flipping the gate from decline to admit and corrupting the frame slot the
+            // post-join param read sources from. Union the (shadow-stripped) body reads back in.
+            collect_ident_names(iter, out);
+            let mut body_reads = std::collections::HashSet::new();
+            block_reads(body, &mut body_reads);
+            body_reads.remove(var.as_str());
+            if let Some(bindings) = destructure_pattern {
+                for b in bindings {
+                    let bound = b.alias.as_deref().unwrap_or(b.field.as_str());
+                    body_reads.remove(bound);
+                }
+            }
+            if let Some((key, value)) = map_destructure_pattern {
+                body_reads.remove(key.as_str());
+                body_reads.remove(value.as_str());
+            }
+            out.extend(body_reads);
+        }
+        Stmt::Match {
+            scrutinee,
+            arms,
+            else_arm,
+            ..
+        } => {
+            collect_ident_names(scrutinee, out);
+            for arm in arms {
+                block_reads(&arm.body, out);
+            }
+            if let Some(eb) = else_arm {
+                block_reads(eb, out);
+            }
+        }
+    }
+}
+
+/// True when any of `f`'s parameters is READ in a statement that runs AFTER the CPU group's
+/// join (the `post_stmts` slice). A post-join param read is the one shape the spike frame layout
+/// cannot serve: the wrapper writes param slot 0 at byte 32 — exactly the byte the first CPU
+/// handle occupies — so the spawn overwrites it, and a post-join reload returns the handle
+/// pointer's bytes instead of the parameter value (a silent wrong answer). A param read ONLY in
+/// the spawn args (the group's call arguments) is safe: that load happens before the handle
+/// store overwrites byte 32, so the corruption never manifests there.
+///
+/// Returns `true` (decline) when a post-join read exists; `false` (admit) otherwise.
+///
+/// Time: O(N) where N = AST nodes across `post_stmts`  Space: O(P) param-name set.
+fn spike_param_read_after_join(f: &FunctionDecl, post_stmts: &[Stmt]) -> bool {
+    if f.params.is_empty() {
+        return false;
+    }
+    let mut reads: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for s in post_stmts {
+        stmt_tree_ident_reads(s, &mut reads);
+    }
+    f.params.iter().any(|p| reads.contains(p.name.as_str()))
+}
+
 /// Detect a 2-member CPU-parallel candidate group in `f`.
 ///
 /// Returns `Some(callee_name)` when `f` contains an adjacent pair of `let x = callee(...)`
@@ -6869,10 +6962,17 @@ fn spike_host_cpu_supported<'a>(
 /// loop-index crossing-slot work that is not yet implemented (see .claude/todos.md).
 ///
 /// **Admission envelope** (all must hold; sequential fallback is always correct):
-/// - Zero params — param slots start at byte 32 (FRAME_HEADER_SIZE), colliding with
-///   SPIKE_HANDLE_0_OFFSET. A host with ≥1 param declines (canonical slot system not yet
-///   implemented — see .claude/todos.md).
-/// - Exactly one CPU group across all depths. The single group-0 slot region holds one group;
+/// - No post-join param read — the wrapper writes param slot 0 at byte 32 (the start of the
+///   CPU-handle region, `ynz_abi::SPIKE_HANDLE_BASE_OFFSET`), so the spawn's handle store
+///   overwrites byte 32. A parameter loaded into the group's spawn args (before the handle
+///   store) round-trips safely, but a parameter READ after the join reloads the handle
+///   pointer's bytes instead of its value. A top-level param-host therefore fires when its
+///   params are used only in spawn args, and declines when any param is read in a post-join
+///   statement (read-after-join needs param-slot reservation past the CPU region — see
+///   .claude/todos.md). A nested-group param-host always declines (its post-join frontier
+///   crosses the branch boundary — same deferral).
+/// - Exactly one CPU group across all depths (of N ≥ 2 adjacent members). The group's slot
+///   region holds one group;
 ///   a function with two-or-more groups (top-level plus nested, or two nested, in ANY source
 ///   order) would alias the earlier group's handles, so it declines ALL spiking and lowers
 ///   sequentially. Partial hosting (fire one, decline the rest) needs per-group slot
@@ -6900,13 +7000,6 @@ fn spike_cpu_candidates(
     // hosted child can never be under-allocated. Sequential fallback remains correct for any
     // host this gate's later checks decline.
 
-    // Zero-param hosts only. Param slots start at byte 32 (FRAME_HEADER_SIZE),
-    // which is the same byte SPIKE_HANDLE_0_OFFSET occupies. A host with ≥1 params would
-    // put the param reload into the handle slot — silent corruption or invalid-free.
-    if !f.params.is_empty() {
-        return None;
-    }
-
     let supported = cpu_supported_callees(typed);
 
     // Single-group constraint: a function spike-hosts IFF it has EXACTLY ONE CPU group across
@@ -6931,6 +7024,22 @@ fn spike_cpu_candidates(
     // Exactly one group. A top-level group is hosted by the depth-0 spike path and is the
     // representative the frame reservation sizes for (the group-0 handle/result slots).
     if let Some(callee) = spike_pair_in_block(&f.body.stmts, suspend_set, &supported) {
+        // Param-host safety: the spike frame writes param slot 0 at byte 32 — the byte the first
+        // CPU handle occupies — so a parameter READ after the join would reload the handle
+        // pointer's bytes instead of its value. The spawn-arg load happens BEFORE the handle
+        // store, so a param used ONLY in the group's call args round-trips safely. Decline only
+        // when a param is read in a post-join statement; otherwise the param-host fires. (The
+        // read-after-join case needs param-slot reservation past the CPU region — see
+        // .claude/todos.md.)
+        if let Some(members) =
+            spike_cpu_group_member_indices(&f.body.stmts, suspend_set, &supported)
+        {
+            let last_idx = *members.last().expect("group has ≥2 members");
+            let post_stmts = &f.body.stmts[(last_idx + 1)..];
+            if spike_param_read_after_join(f, post_stmts) {
+                return None;
+            }
+        }
         return Some(callee);
     }
 
@@ -6959,6 +7068,17 @@ fn spike_cpu_candidates(
         return None;
     }
 
+    // Nested-group param-host: a param read after a nested join can live either inside the
+    // nested block (after the pair) or in the top-level body after the branch. Tracking that
+    // post-join frontier across the branch boundary is the same param-slot reservation work the
+    // top-level read-after-join case defers (.claude/todos.md). Until that lands, a nested group
+    // in a function that takes a parameter declines — the spawn-args-only safe case is currently
+    // only fired for top-level groups, where the post-join frontier is a single straight-line
+    // slice. A zero-param nested host is unaffected and fires as before.
+    if !f.params.is_empty() {
+        return None;
+    }
+
     spike_nested_group_callee(&f.body.stmts, suspend_set, &supported)
 }
 
@@ -6976,6 +7096,47 @@ fn spike_pair_in_block(
     suspend_set: &SuspendSet,
     cpu_supported_callees: &std::collections::HashSet<String>,
 ) -> Option<String> {
+    let members = spike_cpu_group_member_indices(stmts, suspend_set, cpu_supported_callees)?;
+    let first_idx = members[0];
+    match &stmts[first_idx] {
+        Stmt::Let {
+            value: Expr::Call(c),
+            ..
+        }
+        | Stmt::Expr(Expr::Call(c)) => match &c.callee {
+            Expr::Ident(name, _) => Some(name.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The statement indices of the single admissible CPU group in one straight-line block, or
+/// `None` if no group is admissible there. A group is a maximal run of N ≥ 2 adjacent eligible
+/// CPU calls (`let x = callee(arg)` / `callee(arg)` where the callee is non-suspending and in
+/// `cpu_supported_callees`) that passes every admission gate. This is the SINGLE source of
+/// truth for "which statements are this block's CPU group" — `spike_pair_in_block` (counting +
+/// representative callee), `count_cpu_groups_all_depths`, and `spike_extract_cpu_group`
+/// (lowering) all derive from it, so the count gate, the admission gate, and the extraction
+/// can never disagree on the member set (a divergence would size the frame for a group that
+/// does not fire, or fire a group the frame did not reserve for).
+///
+/// Admission gates (all must hold; sequential fallback is always correct):
+/// - run length ≥ 2 (a lone eligible call is not a group),
+/// - every member has exactly one literal/ident argument (the 8-byte trampoline ctx),
+/// - no member's argument references an EARLIER member's bind name (independence),
+/// - no pre-group statement suspends (a pre-group wait leaves a terminator-less block),
+/// - no post-group statement assigns a member's bind name (the bind would source a stale slot),
+/// - no post-group statement calls a user-defined suspending callee (its embedded child
+///   sub-frame would alias a joined result slot; intrinsic `wait sleep` is exempt — it has no
+///   embedded child sub-frame).
+///
+/// Time: O(n) where n = stmts length  Space: O(m) where m = group members.
+fn spike_cpu_group_member_indices(
+    stmts: &[Stmt],
+    suspend_set: &SuspendSet,
+    cpu_supported_callees: &std::collections::HashSet<String>,
+) -> Option<Vec<usize>> {
     let mut call_indices: Vec<usize> = Vec::new();
     for (i, stmt) in stmts.iter().enumerate() {
         let is_eligible = match stmt {
@@ -6997,27 +7158,81 @@ fn spike_pair_in_block(
         }
     }
 
-    let adjacent_pair = call_indices
+    // First adjacent pair anchors the group; extend forward over every further adjacent call.
+    let first_idx = call_indices
         .windows(2)
         .find(|w| w[1] == w[0] + 1)
-        .map(|w| (w[0], w[1]));
-    let (first_idx, second_idx) = adjacent_pair?;
+        .map(|w| w[0])?;
+    let mut last_idx = first_idx + 1;
+    while call_indices.contains(&(last_idx + 1)) {
+        last_idx += 1;
+    }
+    let member_indices: Vec<usize> = (first_idx..=last_idx).collect();
 
-    let bind_names: Vec<&str> = [first_idx, second_idx]
-        .iter()
-        .filter_map(|&i| match &stmts[i] {
+    let args_lowerable = |i: usize| -> bool {
+        let call = match &stmts[i] {
+            Stmt::Let {
+                value: Expr::Call(c),
+                ..
+            }
+            | Stmt::Expr(Expr::Call(c)) => c,
+            _ => return false,
+        };
+        call.args.len() == 1
+            && call
+                .args
+                .iter()
+                .all(|arg| matches!(arg, Expr::IntLit(_, _) | Expr::Ident(_, _)))
+    };
+    if member_indices.iter().any(|&i| !args_lowerable(i)) {
+        return None;
+    }
+
+    // No member may read an earlier member's bind name (independence).
+    let member_bind_name = |i: usize| -> Option<&str> {
+        match &stmts[i] {
             Stmt::Let { name, .. } => Some(name.as_str()),
             _ => None,
-        })
+        }
+    };
+    let member_arg_idents = |i: usize| -> Vec<&str> {
+        match &stmts[i] {
+            Stmt::Let {
+                value: Expr::Call(c),
+                ..
+            }
+            | Stmt::Expr(Expr::Call(c)) => c
+                .args
+                .iter()
+                .filter_map(|arg| match arg {
+                    Expr::Ident(n, _) => Some(n.as_str()),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    };
+    // `earlier_bind_names` is COMPACTED (filter_map drops non-`Let` members, which have no bind
+    // name), but `pos` indexes the FULL `member_indices`. When an earlier member is a bare
+    // expression call (no bind), the compacted list is shorter than `pos`, so `..pos` (clamped by
+    // `.min(len)`) slices a SUPERSET of the genuine earlier binds. Invariant making this safe:
+    // data dependencies flow forward-only, so a member can only read names bound STRICTLY before
+    // it — the superset can therefore only trigger a spurious DECLINE (over-conservative
+    // sequential fallback for a no-bind-member-0 shape), never a false-ADMIT of a genuinely
+    // dependent member. Worst case is an unnecessary sequential lowering for a rare shape, which
+    // is always byte-identical to --no-auto-parallel.
+    let earlier_bind_names: Vec<&str> = member_indices
+        .iter()
+        .filter_map(|&i| member_bind_name(i))
         .collect();
+    for (pos, &i) in member_indices.iter().enumerate() {
+        let prior = &earlier_bind_names[..pos.min(earlier_bind_names.len())];
+        if member_arg_idents(i).iter().any(|a| prior.contains(a)) {
+            return None;
+        }
+    }
 
-    // Decline when any pre-pair statement contains a wait or suspending call.
-    // A wait-bearing pre-pair statement is lowered via lower_sm_stmt_with_wait which
-    // advances current_state and positions the builder in a new post_wait_bb. The
-    // subsequent emit_cpu_group_spawn_join then emits into a spawn_bb that has no
-    // predecessor branch from that post_wait_bb — the post_wait_bb gets no terminator,
-    // triggering "Basic Block does not have terminator!" in the LLVM verifier.
-    // Declining routes the whole body through sequential lowering, which is always correct.
+    // No pre-group statement may suspend.
     if stmts[..first_idx]
         .iter()
         .any(|s| stmt_contains_wait(s) || stmt_contains_suspending_call(s, suspend_set))
@@ -7025,49 +7240,29 @@ fn spike_pair_in_block(
         return None;
     }
 
-    // Decline when any rest statement (at any depth within this block) assigns a CPU-result
-    // bind name. Declining routes the whole group through sequential lowering, always correct.
-    let rest_stmts: Vec<&Stmt> = stmts
+    // No post-group statement may assign a member's bind name (the bind would source a
+    // never-populated crossing slot, returning zeroed bytes instead of the computed value).
+    let bind_names: Vec<&str> = member_indices
         .iter()
-        .enumerate()
-        .filter(|(i, _)| *i != first_idx && *i != second_idx)
-        .map(|(_, s)| s)
+        .filter_map(|&i| member_bind_name(i))
         .collect();
+    let post_stmts = &stmts[(last_idx + 1)..];
     for bind_name in &bind_names {
-        if rest_stmts.iter().any(|s| stmt_assigns_name(s, bind_name)) {
+        if post_stmts.iter().any(|s| stmt_assigns_name(s, bind_name)) {
             return None;
         }
     }
 
-    // Decline when any post-pair statement contains a suspending user-defined callee.
-    // A user-defined suspending callee embeds a child sub-frame inside the parent frame.
-    // The spike host frame's child sub-frame offset is computed pre-spike (without the
-    // 48-byte spike reserve), so the embedded child frame aliases the spike result region
-    // (SPIKE_RESULT_{0,1}_OFFSET). Intrinsic waits (e.g. `wait sleep(...)`) use the
-    // standard SM inline-poll path with no embedded child sub-frame, posing no aliasing
-    // risk and therefore not matching stmt_contains_suspending_call. Declining routes the
-    // whole body through sequential lowering, which is always correct and avoids aliasing.
-    if stmts[(second_idx + 1)..]
+    // No post-group statement may call a user-defined suspending callee (its embedded child
+    // sub-frame would alias a joined result slot). Intrinsic waits are exempt.
+    if post_stmts
         .iter()
         .any(|s| stmt_contains_suspending_call(s, suspend_set))
     {
         return None;
     }
 
-    // Report the first eligible callee as representative.
-    match &stmts[first_idx] {
-        Stmt::Let {
-            value: Expr::Call(c),
-            ..
-        }
-        | Stmt::Expr(Expr::Call(c)) => {
-            if let Expr::Ident(name, _) = &c.callee {
-                return Some(name.clone());
-            }
-        }
-        _ => {}
-    }
-    None
+    Some(member_indices)
 }
 
 /// The nested straight-line blocks (`if`/`match` arm bodies) reachable directly inside `stmts`,
@@ -7116,6 +7311,39 @@ fn count_cpu_groups_all_depths(
         }
     }
     count
+}
+
+/// Member count of `f`'s single admitted CPU group (top-level or one level inside an `if`/`match`
+/// arm). The caller establishes exactly one group exists (`count_cpu_groups_all_depths == 1`), so
+/// the first group found at any depth is THE group. Reads from `spike_cpu_group_member_indices`,
+/// the same source the spawn/join emission iterates, so the frame reserve and the emission agree
+/// on N. Returns 0 if no admissible group exists.
+///
+/// Time: O(N) where N = AST nodes  Space: O(D) recursion depth.
+fn spike_cpu_group_member_count(
+    f: &FunctionDecl,
+    typed: &TypedModule,
+    suspend_set: &SuspendSet,
+) -> usize {
+    let supported = cpu_supported_callees(typed);
+    fn group_size_in_block(
+        stmts: &[Stmt],
+        suspend_set: &SuspendSet,
+        supported: &std::collections::HashSet<String>,
+    ) -> Option<usize> {
+        if let Some(members) = spike_cpu_group_member_indices(stmts, suspend_set, supported) {
+            return Some(members.len());
+        }
+        for stmt in stmts {
+            for block in spike_nested_blocks(stmt) {
+                if let Some(n) = group_size_in_block(block, suspend_set, supported) {
+                    return Some(n);
+                }
+            }
+        }
+        None
+    }
+    group_size_in_block(&f.body.stmts, suspend_set, &supported).unwrap_or(0)
 }
 
 /// True when a statement (an `if`/`match` arm) directly contains an admissible CPU group at any
@@ -7247,9 +7475,10 @@ pub fn spike_host_subset(
 /// form the group. Returns the `let`-binding names for each group member (up to 2); returns
 /// an empty Vec when no eligible adjacent pair exists or when any gate declines the group.
 ///
-/// The entrypoint-only and zero-param gates are enforced by the caller (`lower_function_with_waits`
-/// step 1c) which only calls this function when `spike_candidates.is_some()`. This function
-/// applies the remaining gates that operate on the statement list.
+/// The function-level admission gates (single-group, param-read-after-join) are enforced by the
+/// caller (`lower_function_with_waits` step 1c) which only calls this function when
+/// `spike_candidates.is_some()`. This function applies the remaining gates that operate on the
+/// statement list.
 ///
 /// Used during sm_entry pre-allocation (Step 1c) to create allocas in the function entry
 /// block before the state machine blocks exist. Pre-allocating here ensures the allocas
@@ -7262,167 +7491,32 @@ fn spike_cpu_group_result_names(
     suspend_set: &SuspendSet,
     typed: &TypedModule,
 ) -> Vec<String> {
+    // Derive the group from the single source of truth so the Step-1c pre-alloc set agrees
+    // with `spike_extract_cpu_group`'s lowering set member-for-member.
     let supported = cpu_supported_callees(typed);
-
-    // Collect indices of non-suspending direct-call statements whose callee returns a
-    // CPU-result-ABI class. Must match `spike_cpu_candidates` / `spike_extract_cpu_group`
-    // exactly so the Step-1c pre-alloc set agrees with the extraction set.
-    let mut call_indices: Vec<usize> = Vec::new();
-    for (i, stmt) in stmts.iter().enumerate() {
-        let is_eligible = match stmt {
-            Stmt::Let {
-                value: Expr::Call(c),
-                ..
-            }
-            | Stmt::Expr(Expr::Call(c)) => {
-                if let Expr::Ident(name, _) = &c.callee {
-                    !suspend_set.contains(name.as_str()) && supported.contains(name.as_str())
-                } else {
-                    false
-                }
-            }
-            _ => false,
-        };
-        if is_eligible {
-            call_indices.push(i);
-        }
-    }
-
-    // Find first adjacent pair.
-    let adjacent_pair = call_indices
-        .windows(2)
-        .find(|w| w[1] == w[0] + 1)
-        .map(|w| (w[0], w[1]));
-    let (first_idx, second_idx) = match adjacent_pair {
-        Some(p) => p,
-        None => return Vec::new(),
-    };
-
-    // Decline when any pre-pair statement contains a wait or suspending call.
-    // Mirrors the guard in spike_cpu_candidates and spike_extract_cpu_group so all three
-    // gates agree: when a wait-bearing pre-pair statement exists the group is declined and
-    // no result allocas are pre-allocated (which would leave unreachable alloca instructions).
-    let has_suspending_pre = stmts[..first_idx]
-        .iter()
-        .any(|s| stmt_contains_wait(s) || stmt_contains_suspending_call(s, suspend_set));
-    if has_suspending_pre {
+    let Some(member_indices) = spike_cpu_group_member_indices(stmts, suspend_set, &supported)
+    else {
         return Vec::new();
-    }
-
-    // Arg-lowering gate: exactly one arg, IntLit or Ident.
-    let args_lowerable = |stmt: &Stmt| -> bool {
-        let call = match stmt {
-            Stmt::Let {
-                value: Expr::Call(c),
-                ..
-            }
-            | Stmt::Expr(Expr::Call(c)) => c,
-            _ => return false,
-        };
-        call.args.len() == 1
-            && call
-                .args
-                .iter()
-                .all(|arg| matches!(arg, Expr::IntLit(_, _) | Expr::Ident(_, _)))
     };
-    if !args_lowerable(&stmts[first_idx]) || !args_lowerable(&stmts[second_idx]) {
-        return Vec::new();
-    }
-
-    // Data-dependency gate: second call must not use first call's bind name.
-    let first_bind_name: Option<&str> = match &stmts[first_idx] {
-        Stmt::Let { name, .. } => Some(name.as_str()),
-        _ => None,
-    };
-    if let Some(bind_name) = first_bind_name {
-        let second_uses_first = match &stmts[second_idx] {
-            Stmt::Let {
-                value: Expr::Call(c),
-                ..
-            }
-            | Stmt::Expr(Expr::Call(c)) => c
-                .args
-                .iter()
-                .any(|arg| matches!(arg, Expr::Ident(n, _) if n.as_str() == bind_name)),
-            _ => false,
-        };
-        if second_uses_first {
-            return Vec::new();
-        }
-    }
-
-    // Collect bind names for the group members.
-    let bind_names: Vec<String> = [first_idx, second_idx]
+    member_indices
         .iter()
         .filter_map(|&i| match &stmts[i] {
             Stmt::Let { name, .. } => Some(name.clone()),
             _ => None,
         })
-        .collect();
-
-    // Result-assignment decline gate (mirrors spike_cpu_candidates and spike_extract_cpu_group):
-    // when any rest statement assigns a CPU-result bind name at any depth, the SM crossing
-    // machinery must own that name from the start. Declining ensures gate-1, gate-2, and
-    // this pre-allocation function always agree on the group.
-    let rest_stmts: Vec<&Stmt> = stmts
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| *i != first_idx && *i != second_idx)
-        .map(|(_, s)| s)
-        .collect();
-    for bind_name in &bind_names {
-        if rest_stmts
-            .iter()
-            .any(|s| stmt_assigns_name(s, bind_name.as_str()))
-        {
-            return Vec::new();
-        }
-    }
-
-    // Decline when any post-pair statement contains a suspending user-defined callee.
-    // Mirrors the guard in spike_cpu_candidates and spike_extract_cpu_group: when a
-    // user-defined suspending callee is present in post-pair stmts, no result allocas are
-    // pre-allocated (leaving unreachable alloca instructions for declined groups). Intrinsic
-    // waits (e.g. `wait sleep(...)`) embed no child sub-frame and pose no aliasing risk;
-    // stmt_contains_suspending_call excludes them via the M2_MAY_BLOCK_INTRINSICS guard.
-    let has_suspending_post = stmts[(second_idx + 1)..]
-        .iter()
-        .any(|s| stmt_contains_suspending_call(s, suspend_set));
-    if has_suspending_post {
-        return Vec::new();
-    }
-
-    bind_names
+        .collect()
 }
 
-/// Extract a 2-member CPU group from `stmts`, returning `(pre_stmts, group_stmts, post_stmts)`.
+/// Extract the single CPU group from `stmts`, returning `(pre_stmts, group_stmts, post_stmts)`.
 ///
-/// Scans for the first two ADJACENT non-suspending int-returning direct calls in the statement
-/// list. "Adjacent" means `second_idx == first_idx + 1` — the two calls have no intervening
-/// statements between them. This is required to avoid a data-dependency hole: if there is a
-/// `let b = a + 1` between `let a = f()` and `let c = g(b)`, extracting calls 0 and 2 would
-/// spawn `g(b)` before `b` is computed (because the intervening let is in `rest`, lowered
-/// after spawn). Adjacency ensures the group's arguments can only reference locals that are
-/// already available at spawn time.
+/// The group is the maximal run of N ≥ 2 ADJACENT non-suspending CPU-result-ABI direct calls
+/// (computed by [`spike_cpu_group_member_indices`], the single source of truth shared with the
+/// count gate and the Step-1c pre-alloc). All N members spawn together as one group.
 ///
-/// The same `return_type_fits_cpu_result_abi` membership filter as `spike_cpu_candidates` is
-/// applied so the gate-1 check (frame sizing) and gate-2 check (group extraction) always agree:
-/// a callee that gate-1 would not count for frame-slot allocation is never extracted by gate-2
-/// either. The trampoline + join-bind serialize each admitted class into the 16-byte result
-/// slot, so a class mismatch between the two gates can never surface a wrong-typed bind.
-///
-/// **Edge cases**: calls whose `args` has arity ≠ 1 are skipped by `args_lowerable` — the
-/// trampoline ABI passes exactly one i64 argument; zero-arg and multi-arg calls are declined.
-/// A call with a literal-only argument (e.g. `fib(10)`) is included; a call whose argument
-/// is an expression other than `Ident` or `IntLit` is excluded.
-///
-/// `pre_stmts`: statements before the pair (indices 0..first_idx). These must be lowered
-/// sequentially before spawning the pair, so any locals they produce are in scope at spawn time.
-///
-/// `post_stmts`: statements after the pair (indices first_idx+2..). These are lowered after join.
-///
-/// Returns `None` when no eligible adjacent pair exists, or when any post statement assigns
-/// a CPU-result bind name (mirrors the decline gate in spike_cpu_candidates).
+/// `pre_stmts`: statements before the group. Lowered sequentially before spawning, so any
+/// locals they produce are in scope at spawn time. `post_stmts`: statements after the group,
+/// lowered after the join. Returns `None` when no admissible group exists (see
+/// `spike_cpu_group_member_indices` for the admission gates).
 ///
 /// Time: O(n) where n = stmts length  Space: O(k) where k = CPU-ABI-returning fns in module
 fn spike_extract_cpu_group<'s>(
@@ -7430,147 +7524,17 @@ fn spike_extract_cpu_group<'s>(
     suspend_set: &SuspendSet,
     typed: &TypedModule,
 ) -> Option<(Vec<&'s Stmt>, Vec<&'s Stmt>, Vec<&'s Stmt>)> {
-    // The same CPU-result-ABI callee set the admission gate reads, so the two gates cannot
-    // disagree on callee eligibility.
+    // Derive the group from the single source of truth so the count gate
+    // (`count_cpu_groups_all_depths` → `spike_pair_in_block`), the Step-1c pre-alloc set
+    // (`spike_cpu_group_result_names`), and this extraction all agree member-for-member.
     let supported = cpu_supported_callees(typed);
+    let member_indices = spike_cpu_group_member_indices(stmts, suspend_set, &supported)?;
+    let first_idx = member_indices[0];
+    let last_idx = member_indices[member_indices.len() - 1];
 
-    // Collect indices for all non-suspending CPU-result-ABI direct-call statements.
-    let mut call_indices: Vec<usize> = Vec::new();
-    for (i, stmt) in stmts.iter().enumerate() {
-        let is_eligible = match stmt {
-            Stmt::Let {
-                value: Expr::Call(c),
-                ..
-            }
-            | Stmt::Expr(Expr::Call(c)) => {
-                if let Expr::Ident(name, _) = &c.callee {
-                    !suspend_set.contains(name.as_str()) && supported.contains(name.as_str())
-                } else {
-                    false
-                }
-            }
-            _ => false,
-        };
-        if is_eligible {
-            call_indices.push(i);
-        }
-    }
-
-    // Need at least 2 eligible calls; find the first adjacent pair.
-    // Non-adjacent pairs are skipped: extracting non-adjacent calls could spawn the
-    // second call's trampoline before the intervening statements (which may produce
-    // values the second callee's argument depends on) have been lowered.
-    let adjacent_pair = call_indices
-        .windows(2)
-        .find(|w| w[1] == w[0] + 1)
-        .map(|w| (w[0], w[1]));
-
-    let (first_idx, second_idx) = adjacent_pair?;
-
-    // Decline when any pre-pair statement contains a wait or suspending call.
-    // A wait-bearing pre-pair statement advances current_state and positions the builder
-    // in a new post_wait_bb. The subsequent emit_cpu_group_spawn_join emits into a spawn_bb
-    // with no predecessor branch from that post_wait_bb — the post_wait_bb gets no
-    // terminator, causing "Basic Block does not have terminator!" in the LLVM verifier.
-    // Sequential lowering is always correct; declining is always safe.
-    if stmts[..first_idx]
-        .iter()
-        .any(|s| stmt_contains_wait(s) || stmt_contains_suspending_call(s, suspend_set))
-    {
-        return None;
-    }
-
-    // Arg-lowering eligibility: the spike arg-evaluator in emit_cpu_group_spawn_join can
-    // only lower exactly one IntLit or Ident argument. The trampoline ctx holds a single
-    // i64 — multi-arg or zero-arg callees cannot be packed into it without a wider ctx
-    // layout (P3's job). Decline rather than emitting an LLVM verifier abort or Err on
-    // a syntactically valid program.
-    let args_lowerable = |stmt: &Stmt| -> bool {
-        let call = match stmt {
-            Stmt::Let {
-                value: Expr::Call(c),
-                ..
-            }
-            | Stmt::Expr(Expr::Call(c)) => c,
-            _ => return false,
-        };
-        // Exactly one arg, and it must be a literal or a simple ident.
-        // Zero args: no value to pack into ctx. Two+ args: ctx is only 8 bytes (one i64).
-        call.args.len() == 1
-            && call
-                .args
-                .iter()
-                .all(|arg| matches!(arg, Expr::IntLit(_, _) | Expr::Ident(_, _)))
-    };
-    if !args_lowerable(&stmts[first_idx]) || !args_lowerable(&stmts[second_idx]) {
-        return None;
-    }
-
-    // Data-dependency check: if the first statement binds a name (let a = f(...))
-    // and the second call's argument list references that name, the two calls are not
-    // independent — the second depends on the result of the first. Spawning them in
-    // parallel would evaluate the second's arg at spawn time before `a` is bound.
-    // In that case, decline the group and run both sequentially.
-    let first_bind_name: Option<&str> = match &stmts[first_idx] {
-        Stmt::Let { name, .. } => Some(name.as_str()),
-        _ => None,
-    };
-    if let Some(bind_name) = first_bind_name {
-        let second_uses_first = match &stmts[second_idx] {
-            Stmt::Let {
-                value: Expr::Call(c),
-                ..
-            }
-            | Stmt::Expr(Expr::Call(c)) => c
-                .args
-                .iter()
-                .any(|arg| matches!(arg, Expr::Ident(n, _) if n.as_str() == bind_name)),
-            _ => false,
-        };
-        if second_uses_first {
-            return None;
-        }
-    }
-
-    // Collect bind names for the pair to check result-assignment in post stmts.
-    let mut bind_names: Vec<String> = Vec::new();
-    for idx in [first_idx, second_idx] {
-        if let Stmt::Let { name, .. } = &stmts[idx] {
-            bind_names.push(name.clone());
-        }
-    }
-
-    // Decline when any post statement assigns a CPU-result bind name at any depth.
-    // The same guard lives in spike_cpu_candidates and spike_cpu_group_result_names;
-    // all three gates must agree so frame-slot allocation and extraction are consistent.
-    let post_stmts: Vec<&Stmt> = stmts[(second_idx + 1)..].iter().collect();
-    for bind_name in &bind_names {
-        if post_stmts
-            .iter()
-            .any(|s| stmt_assigns_name(s, bind_name.as_str()))
-        {
-            return None;
-        }
-    }
-
-    // Decline when any post-pair statement contains a suspending user-defined callee.
-    // A user-defined suspending callee embeds its child sub-frame at the pre-spike frame
-    // offset (computed before the 48-byte spike reserve was added). For a spike host with
-    // 0 own locals that offset equals SPIKE_RESULT_0_OFFSET (byte 48), so the callee's
-    // resume_point write aliases the joined result. Intrinsic waits (e.g. `wait sleep(...)`)
-    // use the SM inline-poll path with no embedded child sub-frame and therefore do not
-    // alias — stmt_contains_suspending_call excludes them via the M2_MAY_BLOCK_INTRINSICS
-    // guard. Declining routes the whole body through sequential lowering, which is always
-    // correct.
-    if post_stmts
-        .iter()
-        .any(|s| stmt_contains_suspending_call(s, suspend_set))
-    {
-        return None;
-    }
-
-    let group = vec![&stmts[first_idx], &stmts[second_idx]];
     let pre_stmts: Vec<&Stmt> = stmts[..first_idx].iter().collect();
+    let group: Vec<&Stmt> = member_indices.iter().map(|&i| &stmts[i]).collect();
+    let post_stmts: Vec<&Stmt> = stmts[(last_idx + 1)..].iter().collect();
     Some((pre_stmts, group, post_stmts))
 }
 
@@ -7764,35 +7728,34 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
         }
     }
 
-    if children.len() != 2 {
+    let member_count = children.len();
+    if member_count < CPU_GROUP_MIN_MEMBERS {
         return Err(format!(
-            "spike cpu group: expected 2 members, got {}",
-            children.len()
+            "spike cpu group: expected ≥{CPU_GROUP_MIN_MEMBERS} members, got {member_count}"
         ));
     }
 
     // Read per-member handle/result byte offsets from the composed frame layout
-    // (`build_frame_layouts` computed them, keyed by member index — group 0). The layout is
-    // the single source of truth: the reserve, the size math, and these offsets all derive
-    // from `build_cpu_group_slots`, so they cannot drift apart. The fallback to the
-    // SPIKE_*_OFFSET constants only fires if no layout entry exists, which cannot happen for
-    // a promoted (in-suspend-set) function — kept defensive so a future refactor that drops
-    // the layout entry fails loud at the join, not silently mis-offset.
-    let (handle_offsets, result_offsets): ([u64; 2], [u64; 2]) = cg
+    // (`build_frame_layouts` computed them via `build_cpu_group_slots`, keyed by member index —
+    // group 0). The layout is the single source of truth: the reserve, the size math, and these
+    // offsets all derive from `build_cpu_group_slots`, so they cannot drift apart. The fallback
+    // recomputes the canonical base+stride layout for N members (handles first at
+    // `SPIKE_HANDLE_BASE_OFFSET + i * SPIKE_HANDLE_SLOT_BYTES`, then results) and only fires if
+    // no layout entry exists, which cannot happen for a promoted (in-suspend-set) function —
+    // kept defensive so a future refactor that drops the layout entry stays byte-correct rather
+    // than silently mis-offset. Deriving the fallback from the shared `ynz-abi` constants (not a
+    // fixed two-slot literal) keeps it correct for arbitrary N.
+    let fallback_slots = build_cpu_group_slots(member_count);
+    let (handle_offsets, result_offsets): (Vec<u64>, Vec<u64>) = cg
         .frame_layouts
         .get(&f.name)
-        .filter(|l| l.cpu_group_slots.len() >= 2)
-        .map(|l| {
-            let s = &l.cpu_group_slots;
-            (
-                [s[0].handle_offset, s[1].handle_offset],
-                [s[0].result_offset, s[1].result_offset],
-            )
-        })
-        .unwrap_or((
-            [SPIKE_HANDLE_0_OFFSET, SPIKE_HANDLE_1_OFFSET],
-            [SPIKE_RESULT_0_OFFSET, SPIKE_RESULT_1_OFFSET],
-        ));
+        .filter(|l| l.cpu_group_slots.len() >= member_count)
+        .map(|l| &l.cpu_group_slots)
+        .unwrap_or(&fallback_slots)
+        .iter()
+        .take(member_count)
+        .map(|s| (s.handle_offset, s.result_offset))
+        .unzip();
 
     // --- Build trampolines ---
     //
@@ -7818,7 +7781,7 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
     //   - ptr           (string/array/map) → field0 = ptr→i64,      field1 = 0
     //   - {i64, i64}    (`T errors`)    → field0 = error word,       field1 = success word
     let i128_ty = ctx.i128_type();
-    let mut trampoline_fns: Vec<FunctionValue<'ctx>> = Vec::with_capacity(2);
+    let mut trampoline_fns: Vec<FunctionValue<'ctx>> = Vec::with_capacity(member_count);
     for (idx, child) in children.iter().enumerate() {
         let trampoline_name = format!("__ynz_spike_trampoline_{}_{}_{}", f.name, child.callee, idx);
         let trampoline_fn = cg
@@ -8122,8 +8085,10 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
         .map_err(|e| format!("spike any_pending init: {e}"))?;
 
     let ptr_ty = ctx.ptr_type(AddressSpace::default());
-    // `result_offsets` is read from the composed frame layout (computed above).
-    for idx in 0..2usize {
+    // `result_offsets` is read from the composed frame layout (computed above). One poll pass
+    // over every group member per re-entry; the `any_pending` accumulator yields if any handle
+    // is still outstanding.
+    for idx in 0..member_count {
         // Load handle from frame slot.
         let handle_slot = frame_byte_ptr(handle_offsets[idx], &format!("spike_hslot_re_{idx}"))?;
         let handle = cg

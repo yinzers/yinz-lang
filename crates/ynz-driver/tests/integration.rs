@@ -5244,7 +5244,7 @@ fn count_spawn_calls(ir: &str) -> usize {
         .count()
 }
 
-/// Assert a v0.3-M3d CPU-group fixture clears all three Slice-2 gates at once:
+/// Assert a v0.3-M3d CPU-group fixture clears all four gates at once:
 ///   1. default-mode output equals the captured oracle output (exit 0),
 ///   2. default mode is byte-identical to `--no-auto-parallel` (the cross-impl oracle),
 ///   3. the group FIRES — exactly 2 `ynz_rt_spawn_blocking_joinable` calls in the IR
@@ -5253,6 +5253,18 @@ fn count_spawn_calls(ir: &str) -> usize {
 ///      the project's gated-path-fire-assertions discipline),
 ///   4. alloc == free (the one task frame is allocated and freed; no leak).
 fn m3d_assert_fires_byte_identical_alloc_free(fixture_name: &str, expected_stdout: &str) {
+    m3d_assert_fires_n_byte_identical_alloc_free(fixture_name, expected_stdout, 2);
+}
+
+/// `m3d_assert_fires_byte_identical_alloc_free` parametrized on member count: the group must
+/// FIRE exactly `expected_spawns` `ynz_rt_spawn_blocking_joinable` calls (one per member). An
+/// N-member group spawns N tasks; the alloc==free check still holds (one composed frame for the
+/// whole group regardless of member count).
+fn m3d_assert_fires_n_byte_identical_alloc_free(
+    fixture_name: &str,
+    expected_stdout: &str,
+    expected_spawns: usize,
+) {
     let src = fixture(fixture_name);
 
     let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
@@ -5279,9 +5291,9 @@ fn m3d_assert_fires_byte_identical_alloc_free(fixture_name: &str, expected_stdou
     let ir = build_to_tmpdir_emit_ir(&src);
     assert_eq!(
         count_spawn_calls(&ir),
-        2,
-        "the CPU group must FIRE with 2 spawn calls (0 = silently declined to sequential); \
-         IR:\n{ir}"
+        expected_spawns,
+        "the CPU group must FIRE with {expected_spawns} spawn calls (one per member; \
+         0 = silently declined to sequential); IR:\n{ir}"
     );
 
     let (alloc, free) = ynz_run_with_alloc_counter(fixture_name);
@@ -5589,6 +5601,118 @@ fn v03_m3d_promoted_host_seq_fires_byte_identical() {
     // helper — under-allocation cannot occur. If you relax the spawn-count assertion,
     // non-entrypoint hosts stopped parallelizing — fix the codegen, not this test.
     m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_promoted_host_seq.ynz", "9907");
+}
+
+#[test]
+fn v03_m3d_n3_group_fires_three_spawns_byte_identical() {
+    // WHY: a CPU group is a maximal run of N >= 2 adjacent independent calls, not a fixed pair.
+    // Three adjacent `score` calls form ONE group of three members; each spawns its own task
+    // (3 spawns), each binds a DISTINCT result via per-(group, member-index) slot keying, and
+    // the composed frame is allocated once (alloc==free). The invariant: the group fires every
+    // member — 2 spawns would mean the third member silently fell back to sequential while the
+    // frame still reserved its slot (a layout/extraction disagreement). If you relax the
+    // spawn-count assertion, the N-member extraction regressed to a pair — fix the codegen, not
+    // this test.
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m3d_n3_group.ynz",
+        "4952\n4957\n4961\n14870",
+        3,
+    );
+}
+
+#[test]
+fn v03_m3d_prepair_wait_declines_byte_identical() {
+    // WHY: a host that suspends on a timer (`wait sleep`) BEFORE a would-be CPU pair is already
+    // a step-by-step waiter; promoting it would require treating the spike join as a second
+    // suspension point inside an already-suspending host — the mixed CPU+I/O fusion deferred to
+    // milestone M3g (.claude/todos.md). M3d locks the safe DECLINE: 0 spawns, sequential,
+    // byte-identical to --no-auto-parallel. If this fires (spawns > 0), a pre-pair-wait host was
+    // promoted without the M3g machinery — sustain the decline, do not relax this assertion.
+    m3d_assert_declines_byte_identical("v0_3_m3d_prepair_wait_declines.ynz", "9907");
+}
+
+#[test]
+fn v03_m3d_param_host_declines_byte_identical() {
+    // WHY: a host that READS a parameter AFTER its CPU join cannot spike-host. The wrapper
+    // writes param slot 0 at the byte the first CPU-handle slot occupies; the spawn's handle
+    // store overwrites that byte, so a post-join param reload reads the handle pointer's bytes
+    // instead of its value (a silent wrong answer). Reserving param slots past the CPU-handle
+    // region is the param-host read-after-join work tracked in .claude/todos.md. M3d locks the
+    // safe DECLINE for this shape: 0 spawns, sequential, byte-identical. `combine` reads its
+    // parameter after the pair (`return seed + a + b`), exactly the read-after-join shape that
+    // corrupts. The narrowed gate still admits a param-host whose params are used ONLY in spawn
+    // args (see v03_m3d_param_host_spawn_args_only_fires_byte_identical) — this test pins that
+    // the read-after-join subset stays declined. If this fires, the read-after-join corruption
+    // was reopened — sustain the decline, do not relax this assertion.
+    m3d_assert_declines_byte_identical("v0_3_m3d_param_host_declines.ynz", "9910");
+}
+
+#[test]
+fn v03_m3d_param_host_spawn_args_only_fires_byte_identical() {
+    // WHY: a param-host whose parameter is used ONLY in the group's spawn args (and never read
+    // after the join) is SAFE to fire. sm_entry loads each param into a stack alloca BEFORE the
+    // spawn runs, so the spawn-arg load reads the correct value; the handle store then clobbers
+    // the param's frame slot at byte 32, but that slot is never reloaded (a dead store). The
+    // narrowed param-host gate fires this case — 2 spawns, byte-identical, alloc==free. `compute`
+    // reads `seed` only to build the second seed (a pre-pair statement) and as a call argument;
+    // its `return a + b` reads neither param. The invariant: the corruption surface is a
+    // post-join param READ, not the mere presence of a param. If this DECLINES (0 spawns), the
+    // gate over-declined a safe param-host (regressed to the wholesale param decline) — fix the
+    // gate, not this test. If it fires with wrong output, the param/handle byte-32 overlap
+    // corrupted a value that WAS read post-join — re-check the gate's post-join read walk.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_param_host_spawn_args_only.ynz", "9907");
+}
+
+#[test]
+fn v03_m3d_param_host_n3_spawn_args_only_fires_three_spawns() {
+    // WHY: the narrowed param-host gate composes with the N-member group extension. A 3-member
+    // group on a param-host whose params are spawn-args-only fires all three spawns (one per
+    // member) and stays byte-identical, proving the post-join-read gate does not special-case
+    // member count — it gates on whether ANY param is read after the (whole) group's join,
+    // independent of how many members the group has. If this fires fewer than 3 spawns, the
+    // N-extension and the param gate disagreed on the group; if it declines, the param gate
+    // over-declined an N-member spawn-args-only host. Fix the codegen, not this test.
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m3d_param_host_n3_spawn_args_only.ynz",
+        "14862",
+        3,
+    );
+}
+
+#[test]
+fn v03_m3d_param_host_loopvar_shadow_declines_byte_identical() {
+    // WHY: a post-join `for` loop whose loop variable name shadows a function parameter MUST NOT
+    // erase an EARLIER post-join statement's genuine read of that parameter. The post-join
+    // read-walk (`stmt_tree_ident_reads`) strips the loop-var shadow from the loop's OWN body
+    // reads only — never from the shared cross-statement accumulator. `combine` reads `seed` in
+    // `let z = seed + 1` (a real read-after-join) and a later `for (seed in ...)` rebinds the
+    // name; the gate must still see the earlier read and DECLINE: 0 spawns, sequential,
+    // byte-identical. If this FIRES (spawns > 0), the loop-var removal leaked to the shared
+    // accumulator, erased the param read, flipped the gate to admit, and reopened the byte-32
+    // param/handle corruption — sustain the decline, do NOT relax this assertion. (Without the
+    // loop-local fix this fixture admits and the spawn's handle store clobbers the slot `z` reads
+    // post-join, diverging from --no-auto-parallel.)
+    m3d_assert_declines_byte_identical("v0_3_m3d_param_host_loopvar_shadow_declines.ynz", "9910");
+}
+
+#[test]
+fn v03_m3d_param_host_loopvar_shadow_fires_byte_identical() {
+    // WHY: the FIRE companion to the loop-var-shadow decline. A post-join `for` whose loop var
+    // shadows a parameter is SAFE to spike-host when the parameter itself is never read after the
+    // join (used only in spawn args). The loop-local shadow-removal in `stmt_tree_ident_reads`
+    // strips the loop-var name from the loop's own body reads, so this case is correctly seen as
+    // spawn-args-only and FIRES (2 spawns, alloc==free, byte-identical). `compute` reads `seed`
+    // only pre-pair (`other = seed + 1`) and as a call arg; the post-join `for (seed in ...)`
+    // rebinds the name and its body reads only the loop var. The invariant: the shadow fix must
+    // recover this safe case while still declining the one where an EARLIER statement reads the
+    // param (v03_m3d_param_host_loopvar_shadow_declines). If this DECLINES (0 spawns), the
+    // loop-local removal over-stripped and erased nothing-but-still-declined — fix the walk, not
+    // this test. If it fires with wrong output, the byte-32 overlap corrupted a value that WAS
+    // read post-join — re-check the post-join read walk.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_param_host_loopvar_shadow_fires.ynz",
+        "9908",
+    );
 }
 
 /// Assert a v0.3-M3d fixture whose return class the shared gate DECLINES runs sequentially:

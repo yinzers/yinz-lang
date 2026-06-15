@@ -1,0 +1,39 @@
+// v0.3-M3d: `compute` takes a value and uses it ONLY to build the two computations that run
+// next to each other. The value is read before the pair (to make a second seed) and as a call
+// argument — it is NOT read again after the two computations finish. Because the value is never
+// read after the pair, the two computations safely run at the same time. `compute` returns the
+// sum of the two results (no read of the original value after the pair). `entrypoint` calls
+// `compute` once. Both modes (default and --no-auto-parallel) print the same line.
+//
+// score(seed) loops, so each call does enough work to be worth running alongside the other,
+// and returns the loop sum plus its seed for a distinct result.
+//
+// Arithmetic: loopSum = 0+1+...+99 = 4950.
+//   compute(3): other = 3 + 1 = 4
+//     score(3) = 4953
+//     score(4) = 4954
+//     result   = 4953 + 4954 = 9907
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   9907
+function score(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function compute(seed: int) -> int {
+  let other = seed + 1
+  let a = score(seed)
+  let b = score(other)
+  return a + b
+}
+
+function entrypoint() -> nothing {
+  let r = compute(3)
+  print(r)
+}

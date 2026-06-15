@@ -690,7 +690,7 @@ fn collect_ident_refs<'a>(expr: &'a Expr, out: &mut HashSet<&'a str>) {
 ///
 /// Time: O(N) where N = expression sub-nodes (one `collect_ident_refs` descent).
 /// Space: O(N) — the worst case (every node an ident) owns N copied name strings.
-fn collect_ident_names(expr: &Expr, out: &mut HashSet<String>) {
+pub fn collect_ident_names(expr: &Expr, out: &mut HashSet<String>) {
     let mut tmp = HashSet::new();
     collect_ident_refs(expr, &mut tmp);
     out.extend(tmp.into_iter().map(|s| s.to_string()));

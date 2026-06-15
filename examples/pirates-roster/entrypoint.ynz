@@ -254,6 +254,10 @@ function entrypoint() -> nothing {
   wait m3b_demo()
   // ────── v0.3-M3f: codegen correctness — same-callee EC + parallel bool ──────
   wait m3f_demo()
+  // ────── v0.3-M3d: pure-CPU parallelization — independent crunches on separate cores ──────
+  // No `wait`: m3d_demo is pure-CPU (it never suspends), so there is nothing to order against.
+  // The three crunches inside it run at the same time on separate cores.
+  m3d_demo()
 }
 
 // ────── M3 helper functions ──────
@@ -953,5 +957,46 @@ function m3f_demo() -> nothing {
     let slotStr = slot.toString()
     print(`draft slot available: ${slotStr}`)
   }
+}
+
+// ── v0.3-M3d: pure-CPU parallelization — independent crunches run on separate cores ──
+//
+// When several independent number-crunching calls sit next to each other with no data
+// flowing between them, the compiler runs them all at the same time on separate cores.
+// No special syntax — the same step-by-step code runs faster. `--no-auto-parallel` turns
+// the overlap off; the output is byte-identical either way.
+//
+// crunchStat loops over a season's worth of games to roll up one counting stat for a
+// player. It does enough work to be worth running alongside the others.
+
+function crunchStat(perGame: int) -> int {
+  let total = 0
+  let game = 0
+  while (game < 162) {
+    total = total + perGame
+    game = game + 1
+  }
+  return total
+}
+
+// m3d_demo — three independent stat crunches over the roster run at the same time as one
+// group. Each call is independent (no result feeds another), so the compiler runs all three
+// on separate cores; the season totals are added after all three finish.
+function m3d_demo() -> nothing {
+  print(``)
+  print(`v0.3-M3d — pure-CPU: three independent season crunches run at the same time:`)
+
+  // These three calls have no data dependency on each other, so the compiler runs all three
+  // at the same time on separate cores. There is intentionally NO statement between them —
+  // adjacency is what lets the compiler group them.
+  let hits = crunchStat(2)
+  let walks = crunchStat(1)
+  let steals = crunchStat(1)
+  // The prints READ the results, so they stay after all three crunches finish and in this
+  // exact order. The overlap is in the computation, not the print order, so the output is
+  // deterministic and byte-identical with --no-auto-parallel.
+  print(`season hits: ${hits.toString()}`)
+  print(`season walks: ${walks.toString()}`)
+  print(`season steals: ${steals.toString()}`)
 }
 

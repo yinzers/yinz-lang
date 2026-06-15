@@ -1,13 +1,15 @@
-// Spike admission fixture (k): the SM function hosting the CPU pair has params.
+// Spike admission fixture (k): the SM function hosting the CPU pair takes a param AND
+// reads it after the pair's join.
 //
-// spike_cpu_candidates returns None for any host with >=1 params because param slots
-// start at byte 32 = SPIKE_HANDLE_0_OFFSET. Admitting a param'd host would write
-// the handle pointer into the param's frame slot — silent corruption on reload.
+// The first param slot lands at byte 32 — the byte the first CPU handle occupies — so a
+// param READ after the join would reload the handle pointer's bytes instead of its value.
+// A host that reads its param after the join therefore declines (it would be silent
+// corruption on reload). A param used only in spawn args round-trips safely and fires; this
+// fixture is the read-after-join shape that stays declined.
 //
-// `driver` is a SM function with one param that contains an adjacent fib pair +
-// a wait sleep. spike_cpu_candidates declines `driver` (param guard). The fib
-// calls run sequentially. Both default and --no-auto-parallel modes must produce
-// the same output.
+// `driver` is a SM function with one param that contains an adjacent fib pair, a wait sleep,
+// and two prints that read `offset` after the pair. The host declines and the fib calls run
+// sequentially. Both default and --no-auto-parallel modes must produce the same output.
 //
 // Expected output (both modes):
 //   55

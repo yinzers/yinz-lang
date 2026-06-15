@@ -6,8 +6,8 @@
 // group so that both modes lower sequentially.
 //
 // Without the guard, the spike host frame's child sub-frame offsets would be computed using
-// the pre-spike own_base (FRAME_HEADER_SIZE = 32 for 0 own locals). The worker sub-frame
-// would embed at byte 48 (= SPIKE_RESULT_0_OFFSET), causing worker's resume_point write to
+// the pre-spike own base (the 32-byte frame header for 0 own locals). The worker sub-frame
+// would embed at byte 48 (the first CPU result slot), causing worker's resume-point write to
 // alias the joined result `a` and produce a silent wrong value (55/1/89 instead of 55/55/89).
 //
 // The declination ensures byte-identical output in both modes.

@@ -1,27 +1,8 @@
-// Spike fixture (s): an adjacent local CPU pair FOLLOWED by a post-pair call to an
-// IMPORTED suspending function. The imported variant of fixture (q).
-//
-// Invariant this guards (deviation-judge #2 / code-reviewer, Slice-1 Round 2): the
-// spike-host decision is made at TWO salsa query boundaries that must agree on the frame
-// size. `frame_layouts_query` probes spike admission against the EFFECTIVE suspend set
-// (local ∪ imported-suspending); `codegen_query` must probe against the SAME set. If
-// codegen probed only the BARE local set (imports absent), it could ADMIT a host that
-// frame_layouts sized sequentially — laying the frame out with the spike reserve but
-// WITHOUT the imported callee's child sub-frame, under-allocating the heap block and
-// corrupting it when the imported child writes at its layout offset.
-//
-// Current reachability (verified live, 2026-06-13): for THIS shape, typeck's
-// `cpu_promotion_query` guard-probe rollback already DECLINES `entrypoint` — a CPU group
-// plus a post-pair imported-suspending call makes a suspension guard fire once entrypoint
-// becomes a state machine, so the promotion set is empty and no host is admitted at either
-// boundary. The bare-vs-effective asymmetry is therefore MASKED today, not live corruption.
-// The fix routes both boundaries through the effective set anyway, so the masking can never
-// silently flip to corruption if a future slice relaxes the entrypoint-only gate or the
-// guard-probe. This fixture pins: compiles, byte-identical both modes, clean run, and (via
-// the codegen-crate test) entrypoint emits ZERO spawn calls + both boundaries agree.
-//
-// A LOCAL suspending callee (fixture q) declines in both boundaries because it's in the
-// bare local set too; this fixture exercises the IMPORTED-only gap the fix closes.
+// v0.3-M3d: two independent computations next to each other, then a call to an imported
+// function that waits on a timer. Because `entrypoint` waits, the two computations before the
+// wait run one after the other in plain sequence — they do NOT run at the same time. The
+// imported `ioWork` lives in another file (`io_lib`) and itself waits. The output is identical
+// whether or not auto-parallel is on.
 //
 // Arithmetic: fib(10)=55, fib(11)=89.
 //

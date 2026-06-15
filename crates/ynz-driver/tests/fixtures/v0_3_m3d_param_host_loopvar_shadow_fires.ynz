@@ -1,0 +1,49 @@
+// v0.3-M3d: `compute` is a param-host whose parameter `seed` is used ONLY in spawn args
+// (`other = seed + 1` pre-pair, `score(seed)`), never read AFTER the join. A post-join `for` loop
+// binds a variable named `seed` that shadows the parameter inside its body, but the parameter
+// itself is never read post-join. The loop-local shadow-removal in `stmt_tree_ident_reads` must
+// recognize this as a SAFE spawn-args-only host: the shadowing loop var does not constitute a
+// post-join param read, so the gate FIRES (2 spawns, byte-identical, alloc==free).
+//
+// This is the FIRE companion to v0_3_m3d_param_host_loopvar_shadow_declines: there the same
+// loop-var name ALSO had an earlier genuine post-join param read, so the gate declined; here the
+// only occurrence of the name post-join is the loop binding, so the gate fires. Together they pin
+// that the loop-var shadow is stripped from the loop's OWN body reads (recovering this safe case)
+// without erasing an earlier statement's param read (sustaining the unsafe-case decline).
+//
+// score(seed) loops 0..99 (sum 4950) and returns the loop sum plus its seed.
+//
+// Arithmetic: loopSum = 0+1+...+99 = 4950.
+//   compute(3): other = 4
+//     score(3) = 4953
+//     score(4) = 4954
+//     acc loops over `seed` in {0,1}: acc = 0 + 1 = 1
+//     result   = 4953 + 4954 + 1 = 9908
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   9908
+function score(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function compute(seed: int) -> int {
+  let other = seed + 1
+  let a = score(seed)
+  let b = score(other)
+  let acc = 0
+  for (seed in range(0, 2)) {
+    acc = acc + seed
+  }
+  return a + b + acc
+}
+
+function entrypoint() -> nothing {
+  let r = compute(3)
+  print(r)
+}

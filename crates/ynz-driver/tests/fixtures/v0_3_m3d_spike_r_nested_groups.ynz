@@ -1,21 +1,9 @@
-// Spike nested-CPU-group fixture (r): a CPU group whose members are themselves
-// functions that own CPU groups. Regression guard for the union-poisoning hazard.
-//
-// `fib` is a recursive leaf. `work` has an adjacent pair of fib calls, so typeck
-// promotes it. `entrypoint` has an adjacent pair of `work` calls, so typeck ALSO
-// promotes it — the promotion set is {work, entrypoint}.
-//
-// The hazard: if codegen unioned the FULL promotion set into the suspend set that
-// `spike_cpu_candidates` reads, `work` would land IN that set and entrypoint's own
-// callee-eligibility filter (`!suspend_set.contains("work")`) would exclude `work`,
-// silently DECLINING entrypoint's group — defeating the parallelism typeck approved
-// AND SM-lowering `work` while entrypoint calls it as a plain int-returning fn.
-//
-// The fix (`spike_host_subset`) reconciles the promotion set down to what codegen can
-// actually HOST this slice (entrypoint only) using the BASE suspend set, so `work`
-// never poisons the union. entrypoint's group FIRES (work(5)/work(6) spawned as plain
-// int-returning fns); work's own inner fib group runs sequentially this slice (the
-// intended slice-2 carry-forward).
+// v0.3-M3d: a group whose two members are themselves functions that each run an
+// independent pair. `entrypoint` calls `work(5)` and `work(6)` next to each other, so those
+// two run at the same time. `work` itself calls `fib(n)` and `fib(n+1)`; those two run one
+// after the other inside `work` (a function that is itself running alongside another runs its
+// own work in plain sequence). The output is identical whether or not the outer pair runs at
+// the same time.
 //
 // Arithmetic: fib(5)=5, fib(6)=8, fib(7)=13.
 //   work(5) = fib(5) + fib(6) = 5 + 8  = 13

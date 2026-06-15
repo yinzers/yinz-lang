@@ -1,0 +1,38 @@
+// v0.3-M3d: `combine` takes a value and makes two independent computations that depend on it.
+// Because `combine` takes a value, its two computations run one after the other in plain
+// sequence — they do NOT run at the same time. `combine` then adds its starting value to both
+// results and returns the sum. `entrypoint` calls `combine` once. Both modes (default and
+// --no-auto-parallel) print the same line.
+//
+// score(seed) loops, so each call does enough work to be worth running alongside the other,
+// and returns the loop sum plus its seed.
+//
+// Arithmetic: loopSum = 0+1+...+99 = 4950.
+//   combine(3): other = 4
+//     score(3) = 4953
+//     score(4) = 4954
+//     result   = 3 + 4953 + 4954 = 9910
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   9910
+function score(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function combine(seed: int) -> int {
+  let other = seed + 1
+  let a = score(seed)
+  let b = score(other)
+  return seed + a + b
+}
+
+function entrypoint() -> nothing {
+  let r = combine(3)
+  print(r)
+}
