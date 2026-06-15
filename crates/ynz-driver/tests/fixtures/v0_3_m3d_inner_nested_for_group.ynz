@@ -1,4 +1,4 @@
-// v0.3-M3d: a CPU group sits in the INNER body of two nested `for` loops. A CPU group inside any
+// a CPU group sits in the INNER body of two nested `for` loops. A CPU group inside any
 // loop body runs sequentially (the two `score(k)` calls do NOT overlap): the inner loop index, the
 // outer loop index, and every loop-carried local would each have to survive the group's join across
 // both loops' resume points, which needs multi-level synthetic-index reservation the compiler

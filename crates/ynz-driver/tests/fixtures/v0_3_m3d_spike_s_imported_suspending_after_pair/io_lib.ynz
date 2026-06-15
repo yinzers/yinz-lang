@@ -1,4 +1,4 @@
-// v0.3-M3d: an imported function that waits on a timer. `entrypoint.ynz` imports `ioWork`
+// an imported function that waits on a timer. `entrypoint.ynz` imports `ioWork`
 // and waits on it after two independent computations.
 
 export function ioWork() -> nothing {

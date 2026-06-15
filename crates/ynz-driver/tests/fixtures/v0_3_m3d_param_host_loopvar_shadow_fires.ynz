@@ -1,4 +1,4 @@
-// v0.3-M3d: `compute` is a param-host whose parameter `seed` is used ONLY in spawn args
+// `compute` is a param-host whose parameter `seed` is used ONLY in spawn args
 // (`other = seed + 1` pre-pair, `score(seed)`), never read AFTER the join. A post-join `for` loop
 // binds a variable named `seed` that shadows the parameter inside its body, but the parameter
 // itself is never read post-join. The loop-local shadow-removal in `stmt_tree_ident_reads` must

@@ -1,4 +1,4 @@
-// v0.3-M3d: `combine` makes one pair of independent `score(...)` calls in plain sequence, then
+// `combine` makes one pair of independent `score(...)` calls in plain sequence, then
 // another pair inside an `if` branch — two pairs in one function. A function with more than one
 // pair runs every call one after the other (no pair runs at the same time), so the printed line
 // is the same as plain sequence. `entrypoint` calls `combine` once.

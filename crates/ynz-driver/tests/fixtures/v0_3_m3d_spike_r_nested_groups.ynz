@@ -1,4 +1,4 @@
-// v0.3-M3d: a group whose two members are themselves functions that each run an
+// a group whose two members are themselves functions that each run an
 // independent pair. `entrypoint` calls `work(5)` and `work(6)` next to each other, so those
 // two run at the same time. `work` itself calls `fib(n)` and `fib(n+1)`; those two run one
 // after the other inside `work` (a function that is itself running alongside another runs its

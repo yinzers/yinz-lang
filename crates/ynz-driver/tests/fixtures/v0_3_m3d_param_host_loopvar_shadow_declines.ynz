@@ -1,4 +1,4 @@
-// v0.3-M3d: `combine` reads its parameter `seed` AFTER its CPU pair (`let z = seed + 1`) AND a
+// `combine` reads its parameter `seed` AFTER its CPU pair (`let z = seed + 1`) AND a
 // LATER post-join `for` loop binds a variable named `seed`, which shadows the parameter only
 // inside that loop's body. The post-join read of `seed` (in `let z = seed + 1`) is a genuine
 // read-after-join — the exact shape the spike frame layout cannot serve (the wrapper writes

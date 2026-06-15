@@ -1,4 +1,4 @@
-// v0.3-M3d: three independent computations sit next to each other, so all three run at the
+// three independent computations sit next to each other, so all three run at the
 // same time as one group. Each calls the same function with a different seed, so each result
 // is distinct. The three results are added after all three finish. Whether or not they run at
 // the same time, the output is identical.

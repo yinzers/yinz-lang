@@ -1,4 +1,4 @@
-// v0.3-M3d: inside a matching branch, `combine` makes two independent `score(...)` calls.
+// inside a matching branch, `combine` makes two independent `score(...)` calls.
 // They run at the same time, and `combine` adds their results once both finish. The branch is
 // chosen by the value of `pick`. Both print the same line whether or not the two calls run at
 // the same time.

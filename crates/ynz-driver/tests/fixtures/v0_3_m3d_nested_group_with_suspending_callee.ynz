@@ -1,4 +1,4 @@
-// v0.3-M3d: `combine` makes two independent `score(...)` calls inside an `if` branch, AND also
+// `combine` makes two independent `score(...)` calls inside an `if` branch, AND also
 // calls `other()`, which itself runs two independent `score(...)` calls at the same time. Because
 // `combine` reaches a second concurrency point (the call to `other`, which runs in parallel
 // internally), the two nested calls inside `combine`'s `if` run in plain sequence — only `other`'s

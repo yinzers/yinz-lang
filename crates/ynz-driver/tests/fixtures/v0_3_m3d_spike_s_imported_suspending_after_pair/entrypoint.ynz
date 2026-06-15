@@ -1,4 +1,4 @@
-// v0.3-M3d: two independent computations next to each other, then a call to an imported
+// two independent computations next to each other, then a call to an imported
 // function that waits on a timer. Because `entrypoint` waits, the two computations before the
 // wait run one after the other in plain sequence — they do NOT run at the same time. The
 // imported `ioWork` lives in another file (`io_lib`) and itself waits. The output is identical

@@ -1,4 +1,4 @@
-// v0.3-M3d: `combine` makes two independent `score(...)` calls inside an `if` branch and then
+// `combine` makes two independent `score(...)` calls inside an `if` branch and then
 // waits on a timer before returning. The wait is a second suspension point in the same function
 // as the nested call pair. When a function has a suspension point OTHER than the nested pair, the
 // two nested calls run in plain sequence — they do NOT run at the same time. `entrypoint` calls

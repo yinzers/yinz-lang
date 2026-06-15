@@ -1,4 +1,4 @@
-// v0.3-M3d: `combine` makes one pair of independent `score(...)` calls inside an `if` branch,
+// `combine` makes one pair of independent `score(...)` calls inside an `if` branch,
 // then another pair in plain sequence at the top level. Two pairs in one function — a
 // multi-group function. Multi-group functions run every call one after the other (no pair runs
 // at the same time), so the printed line is the same whichever order the pairs appear in.

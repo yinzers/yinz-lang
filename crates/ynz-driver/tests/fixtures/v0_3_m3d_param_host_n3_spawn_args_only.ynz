@@ -1,4 +1,4 @@
-// v0.3-M3d: `compute` takes a value and uses it ONLY to build three computations that run next
+// `compute` takes a value and uses it ONLY to build three computations that run next
 // to each other as one group. The value is read before the group (to make two more seeds) and
 // as a call argument — it is NOT read after the three computations finish. Because the value is
 // never read after the group, all three computations safely run at the same time. `compute`

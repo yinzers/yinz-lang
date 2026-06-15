@@ -1,4 +1,4 @@
-// v0.3-M3d: inside one pass of the loop, `combine` makes two independent `score(k)` calls and
+// inside one pass of the loop, `combine` makes two independent `score(k)` calls and
 // adds their results into the running total. The loop repeats three times, one pass after
 // another. `entrypoint` calls `combine` once.
 //

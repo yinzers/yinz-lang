@@ -1,4 +1,4 @@
-// v0.3-M3d: `combine` takes a value and makes two independent computations that depend on it.
+// `combine` takes a value and makes two independent computations that depend on it.
 // Because `combine` takes a value, its two computations run one after the other in plain
 // sequence — they do NOT run at the same time. `combine` then adds its starting value to both
 // results and returns the sum. `entrypoint` calls `combine` once. Both modes (default and

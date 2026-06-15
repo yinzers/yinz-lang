@@ -1,4 +1,4 @@
-// v0.3-M3d: `combine` makes two independent `score(...)` calls; they run at the same time,
+// `combine` makes two independent `score(...)` calls; they run at the same time,
 // and `combine` returns their sum once both finish. `entrypoint` calls `combine` once, in
 // plain sequence — it has only the one call, so there is nothing alongside it to run.
 //

@@ -1,4 +1,4 @@
-// v0.3-M3d: inside the `if` branch, `combine` makes two independent `score(...)` calls.
+// inside the `if` branch, `combine` makes two independent `score(...)` calls.
 // They run at the same time, and `combine` adds their results once both finish. `entrypoint`
 // calls `combine` once. Both print the same line whether or not the two calls run at the same
 // time.

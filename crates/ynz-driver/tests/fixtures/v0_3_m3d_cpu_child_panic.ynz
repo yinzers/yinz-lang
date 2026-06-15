@@ -1,4 +1,4 @@
-// v0.3-M3d: `combine` makes two independent `crunch(...)` calls that run at the same time.
+// `combine` makes two independent `crunch(...)` calls that run at the same time.
 // The first call divides by its seed, and the seed is 0, so it fails with a division-by-zero
 // error. Whether the two calls run at the same time or one after the other, the program must
 // stop with the SAME error message and the same exit — running work alongside another call

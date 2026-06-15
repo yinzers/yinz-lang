@@ -1,4 +1,4 @@
-// v0.3-M3d: `entrypoint` makes two independent calls next to each other — `score(...)`, which
+// `entrypoint` makes two independent calls next to each other — `score(...)`, which
 // is pure number-crunching, and `fetch(...)`, which waits on a timer before returning. One call
 // does compute work, the other waits on a timer. These two kinds of work do not run at the same
 // time — both calls run one after the other in plain sequence. `entrypoint` then adds the

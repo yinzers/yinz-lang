@@ -1,4 +1,4 @@
-// v0.3-M3d: inside the `if` branch, `combine` makes two independent `score(...)` calls and
+// inside the `if` branch, `combine` makes two independent `score(...)` calls and
 // returns their sum DIRECTLY from the branch — there is no local declared before the pair that
 // is read after the join. This is the pure-nested-group shape: the join's result names are
 // populated, but no surrounding crossing local exists, so the top-level crossing scan finds

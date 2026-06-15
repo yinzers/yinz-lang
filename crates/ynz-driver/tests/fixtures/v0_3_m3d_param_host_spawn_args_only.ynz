@@ -1,4 +1,4 @@
-// v0.3-M3d: `compute` takes a value and uses it ONLY to build the two computations that run
+// `compute` takes a value and uses it ONLY to build the two computations that run
 // next to each other. The value is read before the pair (to make a second seed) and as a call
 // argument — it is NOT read again after the two computations finish. Because the value is never
 // read after the pair, the two computations safely run at the same time. `compute` returns the
