@@ -4,6 +4,7 @@ type: execution
 owner: Patrick Rizzardi
 status: done
 roadmap: v0-2-dev-loop-tooling
+milestone: v0-2-m3-fmt
 created: 2026-05-20
 last_updated: 2026-05-20  # Phase 6 complete — final code-reviewer PASS, ready for /release
 review_rounds:

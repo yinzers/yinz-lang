@@ -4,6 +4,7 @@ type: execution
 owner: Patrick Rizzardi
 status: done
 roadmap: v0-2-dev-loop-tooling
+milestone: v0-2-m5-lsp-full-and-release
 created: 2026-05-20
 last_updated: 2026-05-21 (COMPLETE — v0.2.0 tag cut, GitHub release created, vsix attached, plan status: done)
 files:

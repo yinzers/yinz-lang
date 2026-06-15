@@ -4,6 +4,7 @@ type: execution
 owner: Patrick Rizzardi
 status: done
 roadmap: v0-2-dev-loop-tooling
+milestone: v0-2-m2-lsp-thin-slice
 created: 2026-05-20
 last_updated: 2026-05-20
 files:
