@@ -4,6 +4,7 @@ type: execution
 owner: Patrick Rizzardi
 status: active
 roadmap: v0-3-concurrency-perf
+milestone: v0-3-m3d-cpu-parallelization
 depends_on: [v0-3-m3b-auto-parallelization]
 plan_base: 8b99ac9c626468ff7ce7c123f2e061e3a8df22cd
 files:

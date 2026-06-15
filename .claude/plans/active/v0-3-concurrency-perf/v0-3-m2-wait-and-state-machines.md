@@ -6,6 +6,7 @@ status: done
 created: 2026-05-30
 last_updated: 2026-06-01 (SHIPPED as v0.3.0-m3 — all phases complete, merged to main with M10)
 roadmap: v0-3-concurrency-perf
+milestone: v0-3-m2-wait-and-state-machines
 files:
   - crates/ynz-runtime/**
   - crates/ynz-codegen/src/**

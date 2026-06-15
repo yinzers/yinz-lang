@@ -3,6 +3,7 @@ slug: v0-3-m3a-suspension-codegen
 type: execution
 owner: Patrick Rizzardi
 roadmap: v0-3-concurrency-perf
+milestone: v0-3-m3a-suspension-codegen
 status: done
 depends_on: [v0-3-m2-wait-and-state-machines]
 plan_base: 24d7fee081d96ab6eb04dfa493649f0435ae6a79

@@ -4,6 +4,7 @@ type: execution
 owner: Patrick Rizzardi
 status: done
 roadmap: v0-3-concurrency-perf
+milestone: v0-3-m3e-cross-module-frame-serialization
 depends_on: [v0-3-m3b-auto-parallelization]
 plan_base: 7bdd5f9
 files:

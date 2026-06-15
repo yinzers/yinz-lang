@@ -3,6 +3,7 @@ slug: v0-3-m3f-codegen-correctness-fixes
 type: execution
 owner: Patrick Rizzardi
 roadmap: v0-3-concurrency-perf
+milestone: v0-3-m3f-codegen-correctness-fixes
 status: done
 created: 2026-06-09
 last_updated: 2026-06-09

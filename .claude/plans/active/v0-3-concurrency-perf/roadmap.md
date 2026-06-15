@@ -12,6 +12,7 @@ milestones:
   - v0-3-m3b-auto-parallelization      # I/O-overlap auto-parallel (interleaved inline poll, zero new runtime)
   - v0-3-m3d-cpu-parallelization       # SPLIT 2026-06-05 from M3b: pure-CPU statement parallelization (new runtime ABI + SM-promotion + deadlock-safe join)
   - v0-3-m3e-cross-module-frame-serialization  # SPLIT 2026-06-05 from M3b P1: full cross-module FrameLayout serialization (lifts P1's loud-reject guards for re-export-transitive / shape-in-callee / errors×transitive)
+  - v0-3-m3f-codegen-correctness-fixes  # shipped 2026-06-09; child declared the roadmap but was omitted from this list — added during ledger-format migration
   - v0-3-m3g-mixed-cpu-io-overlap       # SPLIT 2026-06-14 from M3d Phase 3: mixed CPU+I/O poll-path fusion (the M3d plan over-reached by listing it; the roadmap scopes M3d as PURE-CPU only)
   - v0-3-m4-channels-soa-release
 ---

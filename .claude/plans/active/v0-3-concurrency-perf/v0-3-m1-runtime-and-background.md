@@ -6,6 +6,7 @@ status: done
 created: 2026-05-21
 last_updated: 2026-05-21-p6
 roadmap: v0-3-concurrency-perf
+milestone: v0-3-m1-runtime-and-background
 files:
   - crates/ynz-parser/src/**
   - crates/ynz-runtime/**

@@ -4,6 +4,7 @@ type: execution
 owner: Patrick Rizzardi
 status: done
 roadmap: v0-3-concurrency-perf
+milestone: v0-3-m3b-auto-parallelization
 plan_base: 0a4b6d8390b1cffd462681429d159ce8db25198a
 files:
   - crates/ynz-typeck/src/may_block.rs
