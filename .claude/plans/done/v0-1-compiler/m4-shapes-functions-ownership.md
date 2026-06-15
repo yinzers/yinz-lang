@@ -2,6 +2,8 @@
 slug: m4-shapes-functions-ownership
 owner: patrick
 status: done
+roadmap: v0-1-compiler
+milestone: m4-shapes-functions-ownership
 files:
   - crates/ynz-parser/src/**
   - crates/ynz-ast/src/**

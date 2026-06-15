@@ -2,6 +2,8 @@
 slug: m7-strings-errors-iterables
 owner: patrick
 status: done
+roadmap: v0-1-compiler
+milestone: m7-strings-errors-iterables
 files:
   - Cargo.toml
   - crates/**

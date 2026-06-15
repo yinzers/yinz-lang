@@ -2,6 +2,8 @@
 slug: m6-options-unions
 owner: patrick
 status: shipped
+roadmap: v0-1-compiler
+milestone: m6-options-unions
 files:
   - crates/ynz-ast/**
   - crates/ynz-parser/**

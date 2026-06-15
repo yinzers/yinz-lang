@@ -2,6 +2,8 @@
 slug: m2-literals-arithmetic
 owner: patrick
 status: done
+roadmap: v0-1-compiler
+milestone: m2-literals-arithmetic
 files:
   - crates/ynz-numerics/**
   - crates/ynz-runtime/**

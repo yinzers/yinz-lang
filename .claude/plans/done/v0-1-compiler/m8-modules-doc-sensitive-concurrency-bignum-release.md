@@ -4,6 +4,7 @@ type: execution
 owner: patrick
 status: done
 roadmap: v0-1-compiler
+milestone: m8-modules-doc-sensitive-concurrency-bignum-release
 depends_on: [m7-strings-errors-iterables]
 files:
   - crates/**

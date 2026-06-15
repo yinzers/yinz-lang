@@ -2,6 +2,8 @@
 slug: m5-generics
 owner: patrick
 status: shipped
+roadmap: v0-1-compiler
+milestone: m5-generics
 files:
   - Cargo.toml
   - crates/ynz-ast/**

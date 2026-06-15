@@ -3,6 +3,8 @@ slug: m8-typeck-cross-file-resolution
 type: execution
 owner: Patrick Rizzardi
 status: done
+roadmap: v0-1-compiler
+milestone: m8-typeck-cross-file-resolution
 files:
   - crates/ynz-typeck/src/**
   - crates/ynz-driver/src/build.rs

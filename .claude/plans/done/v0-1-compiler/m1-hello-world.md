@@ -2,6 +2,8 @@
 slug: m1-hello-world
 owner: patrick
 status: done
+roadmap: v0-1-compiler
+milestone: m1-hello-world
 files:
   - Cargo.toml
   - crates/**

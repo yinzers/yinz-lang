@@ -1,5 +1,6 @@
 ---
 slug: v0-1-compiler
+type: roadmap
 owner: patrick
 status: done
 files:
@@ -10,6 +11,16 @@ files:
   - .github/workflows/**
 created: 2026-05-12
 last_updated: 2026-05-18
+milestones:
+  - m1-hello-world
+  - m2-literals-arithmetic
+  - m3-control-flow-fns
+  - m4-shapes-functions-ownership
+  - m5-generics
+  - m6-options-unions
+  - m7-strings-errors-iterables
+  - m8-modules-doc-sensitive-concurrency-bignum-release
+  - m8-typeck-cross-file-resolution
 ---
 
 # Plan: v0.1 Compiler Implementation

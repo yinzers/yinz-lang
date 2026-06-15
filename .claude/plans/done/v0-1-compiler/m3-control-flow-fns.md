@@ -2,6 +2,8 @@
 slug: m3-control-flow-fns
 owner: patrick
 status: done
+roadmap: v0-1-compiler
+milestone: m3-control-flow-fns
 files:
   - crates/ynz-parser/**
   - crates/ynz-ast/**
