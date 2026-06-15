@@ -25,13 +25,15 @@
 <!-- RADAR-START -->
 ### Active Roadmaps
 - v0-2-1-lsp-gap-closure (Patrick Rizzardi) — 0 active plans — 2026-05-30
-- v0-3-concurrency-perf (Patrick Rizzardi) — 1 active plans — 2026-05-31
+- v0-3-concurrency-perf (Patrick Rizzardi) — 1 active plans — 2026-06-14
 - webpage-docs (Patrick Rizzardi) — 0 active plans — 2026-05-20
 
 ### Active Workstreams
-- docs-tree-restructure (Patrick Rizzardi) — 9 files touched — 0/88 done — 2026-06-14
-- v0-3-m3d-cpu-parallelization (Patrick Rizzardi) — 11 files touched — 69/126 done — roadmap: v0-3-concurrency-perf — 2026-06-13
+- docs-tree-restructure (Patrick Rizzardi) — 9 files touched — 0/102 done — 2026-06-15
+- v0-3-m3d-cpu-parallelization (Patrick Rizzardi) — 11 files touched — 69/126 done — roadmap: v0-3-concurrency-perf — 2026-06-14
 <!-- RADAR-END -->
+
+> **Gate-check note (2026-06-15):** `/execute-plan docs-tree-restructure` was invoked and **correctly HALTED at the precondition** — no phases ran, no files changed (this chat = slug-claim + read-only gate check only). The plan is hard-blocked until `v0-3-m3d-cpu-parallelization` reaches `status: done`/moves to `plans/done/`; m3d is still `active` (69/126). Also note we're on branch `feat/m3d-cpu-parallelization`, so docs work would collide with in-flight compiler edits. Unblock = finish m3d → flip done → branch docs work off clean main → re-invoke.
 
 ---
 
