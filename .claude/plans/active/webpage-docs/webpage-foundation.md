@@ -3,13 +3,14 @@ slug: webpage-foundation
 type: execution
 owner: Patrick Rizzardi
 status: done
+roadmap: webpage-docs
+milestone: webpage-foundation
 files:
   - website/**
   - .github/workflows/website.yml
   - .claude/plans/roadmaps/webpage-docs.md
 created: 2026-05-20
 last_updated: 2026-05-20
-roadmap: webpage-docs
 depends_on: []
 ---
 
