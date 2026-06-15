@@ -5292,6 +5292,192 @@ fn m3d_assert_fires_byte_identical_alloc_free(fixture_name: &str, expected_stdou
     );
 }
 
+/// Strip the per-build tmpdir source path from a runtime-error line so two builds of the same
+/// fixture (each in its own tmpdir) produce comparable diagnostics. The path appears once, in
+/// the `at <path>:line:col` clause; everything else (the WHAT/WHY body) is path-independent.
+///
+/// Time: O(n)  Space: O(n)  where n = total bytes of stderr (one pass over lines, rebuilt joined).
+fn strip_runtime_error_path(stderr: &str) -> String {
+    stderr
+        .lines()
+        .map(|l| match l.find(" at ") {
+            Some(i) if l.starts_with("RUNTIME ERROR:") => l[..i].to_string(),
+            _ => l.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Assert a v0.3-M3d CPU-group fixture where one child raises a runtime error (e.g. division
+/// by zero) FIRES the group AND surfaces the SAME failure under both modes:
+///   1. the group FIRES — exactly 2 `ynz_rt_spawn_blocking_joinable` calls in the IR (a child
+///      that raises must still have been spawned, not silently run sequentially),
+///   2. both modes exit with the SAME non-zero code (the raise terminates the program),
+///   3. both modes emit byte-identical diagnostics (path-normalized) starting with the
+///      expected `RUNTIME ERROR:` prefix — running a call alongside another never hides or
+///      changes an error the call raises (the panic re-raise / abort parity guarantee).
+///
+/// Time: O(n)  Space: O(n)  where n = fixture source size; one IR build + IR scan plus two
+/// compile-and-run passes (parallel + sequential) dominate — the cost is two full compilations.
+fn m3d_assert_panic_fires_byte_identical(fixture_name: &str, expected_error_prefix: &str) {
+    let src = fixture(fixture_name);
+
+    let ir = build_to_tmpdir_emit_ir(&src);
+    assert_eq!(
+        count_spawn_calls(&ir),
+        2,
+        "a panicking CPU group must still FIRE 2 spawns (0 = silently sequential); IR:\n{ir}"
+    );
+
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+
+    assert_ne!(par_code, 0, "default build must exit non-zero on the raise");
+    assert_eq!(
+        par_code, seq_code,
+        "default and --no-auto-parallel must exit with the SAME code on the raise; \
+         default={par_code}, sequential={seq_code}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "default and --no-auto-parallel stdout must be byte-identical (no value bound before the raise)"
+    );
+    assert!(
+        par_stderr.starts_with(expected_error_prefix),
+        "default stderr must start with `{expected_error_prefix}`; got:\n{par_stderr}"
+    );
+    assert_eq!(
+        strip_runtime_error_path(&par_stderr),
+        strip_runtime_error_path(&seq_stderr),
+        "default and --no-auto-parallel diagnostics must be byte-identical (path-normalized)"
+    );
+}
+
+#[test]
+fn v03_m3d_cpu_child_panic_fires_byte_identical() {
+    // WHY: a CPU child that raises a runtime error (division by zero) must be re-raised to the
+    // program with the SAME observable behavior as a sequential call — same diagnostic, same
+    // non-zero exit — and the group must still have FIRED (2 spawns). Running work alongside
+    // another call must NEVER swallow or alter an error the work raises (a joined result is
+    // load-bearing; a discarded raise would be a silent wrong answer). The runtime side of the
+    // re-raise contract is the `C-unwind` resume-fn ABI + the `catch_unwind`/`resume_unwind`
+    // pair; Yinz runtime errors additionally abort the process directly, so the parity holds
+    // regardless of which thread the child runs on. If you relax the spawn-count assertion the
+    // panicking pair regressed to sequential; if you relax the diagnostic-equality assertion an
+    // error became mode-dependent — fix the codegen/runtime, not this test.
+    m3d_assert_panic_fires_byte_identical(
+        "v0_3_m3d_cpu_child_panic.ynz",
+        "RUNTIME ERROR: division by zero (int)",
+    );
+}
+
+/// Return the set of attribute-group ids (`#N`) whose definition line contains `nounwind`.
+///
+/// Time: O(n)  Space: O(g)  where n = bytes of IR, g = number of `attributes #N = {...}` lines.
+fn nounwind_attr_group_ids(ir: &str) -> std::collections::HashSet<&str> {
+    ir.lines()
+        .filter(|l| l.starts_with("attributes #") && l.contains("nounwind"))
+        .filter_map(|l| l.split_whitespace().nth(1))
+        .collect()
+}
+
+/// Assert that no codegen-emitted `@ynz_sm_*_resume` function carries `nounwind` — neither
+/// inline on the `define` line nor via a referenced `#N` attribute group that is nounwind.
+///
+/// A `nounwind` resume function would tell LLVM the body cannot unwind; the optimizer is then
+/// free to turn a panic that DOES propagate (a CPU child re-raised via `resume_unwind`) into an
+/// immediate `abort` at the IR boundary instead of letting it travel to the entrypoint driver's
+/// `catch_unwind`. No Yinz program reaches the live non-abort unwind path today (runtime errors
+/// abort directly), so only this IR-level check guards the invariant the `C-unwind` ABI depends
+/// on. Mirrors the spawn-count FIRE assertions: it reads the emitted IR, not runtime behavior.
+///
+/// Time: O(n)  Space: O(g)  where n = bytes of IR, g = number of nounwind attribute groups.
+fn assert_no_resume_fn_is_nounwind(ir: &str) {
+    let nounwind_groups = nounwind_attr_group_ids(ir);
+    let mut resume_defines = 0usize;
+    for line in ir.lines().filter(|l| l.starts_with("define")) {
+        if !line.contains("@ynz_sm_") || !line.contains("_resume(") {
+            continue;
+        }
+        resume_defines += 1;
+        // Inline attributes appear between the closing `)` of the params and the opening `{`.
+        let tail = line.rsplit_once(')').map(|(_, t)| t).unwrap_or(line);
+        assert!(
+            !tail.contains("nounwind"),
+            "resume fn carries inline `nounwind`, which breaks panic unwind propagation; line:\n{line}"
+        );
+        // Referenced attribute group (`... ) #N {`) must not be a nounwind group.
+        for tok in tail.split_whitespace() {
+            if tok.starts_with('#') && nounwind_groups.contains(tok) {
+                panic!(
+                    "resume fn references nounwind attribute group {tok}, which breaks panic \
+                     unwind propagation; line:\n{line}"
+                );
+            }
+        }
+    }
+    assert!(
+        resume_defines > 0,
+        "fixture emitted no @ynz_sm_*_resume functions — the no-nounwind check exercised nothing; \
+         IR:\n{ir}"
+    );
+}
+
+#[test]
+fn v03_m3d_resume_fns_are_not_nounwind() {
+    // WHY: the C-unwind panic-propagation chain (a CPU child re-raised via resume_unwind reaching
+    // the entrypoint driver's catch_unwind) is correct ONLY if codegen-emitted resume fns are NOT
+    // marked `nounwind`. A `nounwind` resume fn lets LLVM fold a propagating unwind into an abort
+    // at the IR boundary — silently breaking the re-raise contract with NO runtime test catching
+    // it, because no Yinz program exercises the live (non-abort) unwind path yet. This IR-level
+    // guard is the only tripwire for that drift. If it fails, codegen started attaching a nounwind
+    // attribute (inline or via an attribute group) to resume fns — fix the codegen, not this test.
+    let src = fixture("v0_3_m3d_cpu_child_panic.ynz");
+    let ir = build_to_tmpdir_emit_ir(&src);
+    assert_no_resume_fn_is_nounwind(&ir);
+}
+
+#[test]
+fn v03_m3d_resume_nounwind_check_is_non_vacuous() {
+    // WHY: the no-nounwind guard above must actually FAIL when a resume fn is nounwind — otherwise
+    // it is a green rubber-stamp. This drives the checker against a doctored IR where the resume
+    // fn references a nounwind attribute group, and asserts the checker rejects it. If this test
+    // fails, the checker has a hole (it would pass a nounwind resume fn) — fix the checker.
+    let doctored = "\
+define i32 @ynz_sm_combine_resume(ptr %0, ptr %1) #1 {
+  ret i32 0
+}
+attributes #1 = { nounwind willreturn }
+";
+    let caught = std::panic::catch_unwind(|| assert_no_resume_fn_is_nounwind(doctored)).is_err();
+    assert!(
+        caught,
+        "the no-nounwind checker must REJECT a resume fn that references a nounwind attribute \
+         group; it passed, so the guard is vacuous"
+    );
+}
+
+#[test]
+fn v03_m3d_resume_nounwind_check_rejects_inline_nounwind() {
+    // WHY: the checker has TWO detection paths — a referenced `#N` attribute group (covered by
+    // the non-vacuous test above) AND an inline `nounwind` on the `define` line itself. LLVM can
+    // emit either form, so a hole in the inline path would let a nounwind resume fn through with
+    // no other test catching it (no Yinz program exercises the live unwind path yet). This drives
+    // the inline form through the checker and asserts it rejects it. If this fails, the inline
+    // branch (`tail.contains("nounwind")`) has a hole — fix the checker, not this test.
+    let doctored = "\
+define i32 @ynz_sm_combine_resume(ptr %0, ptr %1) nounwind {
+  ret i32 0
+}
+";
+    let caught = std::panic::catch_unwind(|| assert_no_resume_fn_is_nounwind(doctored)).is_err();
+    assert!(
+        caught,
+        "the no-nounwind checker must REJECT a resume fn carrying inline `nounwind`; it passed, \
+         so the inline-detection path is vacuous"
+    );
+}
+
 #[test]
 fn v03_m3d_return_class_int_distinct_fires_byte_identical() {
     // WHY: the int distinct-callee CPU pair is the headline pattern — two independent int-

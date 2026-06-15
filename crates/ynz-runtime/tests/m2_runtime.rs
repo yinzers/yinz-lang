@@ -311,7 +311,7 @@ impl Drop for SyncValueSm {
 // extern "C" resume function for SyncValueSm.
 // On Ready: writes 42 into the return slot at frame offset 16, then returns 0.
 // SyncStateFnFuture::poll reads frame offset 16 as i64, truncates to i32 → 42.
-unsafe extern "C" fn sync_value_sm_resume(frame_ptr: *mut u8, waker_ctx: *mut u8) -> i32 {
+unsafe extern "C-unwind" fn sync_value_sm_resume(frame_ptr: *mut u8, waker_ctx: *mut u8) -> i32 {
     // SAFETY: frame_ptr was cast from *mut SyncValueSm; cast is valid.
     let sm = &mut *(frame_ptr as *mut SyncValueSm);
     // SAFETY: waker_ctx was cast from &mut Context<'_>; valid for call duration.
@@ -476,7 +476,7 @@ impl Future for SignalSm {
 }
 
 // extern "C" resume function for SignalSm — passed to ynz_rt_spawn.
-unsafe extern "C" fn signal_sm_resume(frame_ptr: *mut u8, waker_ctx: *mut u8) -> i32 {
+unsafe extern "C-unwind" fn signal_sm_resume(frame_ptr: *mut u8, waker_ctx: *mut u8) -> i32 {
     // SAFETY: frame_ptr was cast from *mut SignalSm; cast is valid.
     let sm = &mut *(frame_ptr as *mut SignalSm);
     // SAFETY: waker_ctx was cast from &mut Context<'_>; valid for call duration.

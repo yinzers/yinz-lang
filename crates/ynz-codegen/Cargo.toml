@@ -16,6 +16,12 @@ ynz-numerics    = { path = "../ynz-numerics" }
 ynz-parser      = { workspace = true }
 ynz-typeck      = { workspace = true }
 ynz-registry    = { workspace = true }
+# Shared frame-ABI constants only (spike discriminator tag + handle base offset). The
+# compile-time assertion in emit.rs binds codegen's FRAME_HEADER_SIZE to the runtime's
+# handle-region base via these constants — a header-size drift becomes a COMPILE ERROR,
+# not silent heap corruption. ynz-abi is dependency-free, so the runtime's tokio tree
+# stays OUT of the compiler's dependency graph.
+ynz-abi         = { workspace = true }
 
 [dev-dependencies]
 insta    = { workspace = true }

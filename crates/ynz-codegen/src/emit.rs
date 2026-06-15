@@ -6687,6 +6687,57 @@ const SPIKE_HANDLE_1_OFFSET: u64 = 40;
 const SPIKE_RESULT_0_OFFSET: u64 = 48;
 const SPIKE_RESULT_1_OFFSET: u64 = 64;
 
+/// Cross-crate frame-ABI binding: the runtime's CPU-handle region begins immediately after
+/// the state-machine frame header, so `ynz_abi::SPIKE_HANDLE_BASE_OFFSET` MUST equal codegen's
+/// `FRAME_HEADER_SIZE`. The two are coupled only through the shared `ynz-abi` constant, so a
+/// silent drift (e.g. a header-size change here) would make the runtime read handle slots at
+/// the wrong offset on cancellation — reading live locals as `*mut CpuJoinHandle` and freeing
+/// garbage (heap corruption). This compile-time assertion turns that drift into a build error.
+/// `FRAME_HEADER_SIZE` stays codegen-local (~15 call sites here) and is bound to the shared
+/// offset rather than moved into `ynz-abi`.
+const _: () = assert!(
+    ynz_abi::SPIKE_HANDLE_BASE_OFFSET as u64 == state_machine::FRAME_HEADER_SIZE,
+    "frame-ABI drift: ynz_abi::SPIKE_HANDLE_BASE_OFFSET must equal codegen FRAME_HEADER_SIZE \
+     (the CPU-handle region begins immediately after the frame header)"
+);
+
+/// Cross-crate frame-ABI binding: the runtime's cancellation cleanup iterates the CPU-handle
+/// slots at a fixed stride (`SPIKE_HANDLE_BASE_OFFSET + i * SPIKE_HANDLE_SLOT_BYTES`), so codegen
+/// MUST write each handle at that same stride. The two strides are coupled only through the
+/// shared `ynz-abi` constant; a silent drift (e.g. `CpuJoinHandle` growing so the slot widens
+/// here while `ynz-abi` stays 8) would make codegen write handles at one stride while the runtime
+/// reads them at another — `Box::from_raw` on a result-slot word, i.e. heap corruption on
+/// cancellation of any multi-child spike frame. This compile-time assertion turns that drift into
+/// a build error.
+const _: () = assert!(
+    CPU_HANDLE_SLOT_BYTES == ynz_abi::SPIKE_HANDLE_SLOT_BYTES as u64,
+    "frame-ABI drift: codegen CPU_HANDLE_SLOT_BYTES must equal ynz_abi::SPIKE_HANDLE_SLOT_BYTES \
+     (runtime iterates handle slots at this stride; codegen writes them at this stride)"
+);
+
+/// Cross-crate frame-ABI binding: the two fallback handle offsets are exactly the first two
+/// entries of the canonical handle region (`SPIKE_HANDLE_BASE_OFFSET + i * SPIKE_HANDLE_SLOT_BYTES`).
+/// Keeping the named literals (the doc comment + the `decline` reasoning at the zero-param-host
+/// gate reference `SPIKE_HANDLE_0_OFFSET` by name) while binding them to the shared base+stride
+/// turns any future drift of base or stride into a build error here rather than a silent fallback
+/// that writes handles where the runtime won't look for them.
+const _: () = assert!(
+    SPIKE_HANDLE_0_OFFSET == ynz_abi::SPIKE_HANDLE_BASE_OFFSET as u64,
+    "frame-ABI drift: SPIKE_HANDLE_0_OFFSET must equal ynz_abi::SPIKE_HANDLE_BASE_OFFSET \
+     (handle slot 0 is the first slot of the CPU-handle region)"
+);
+const _: () = assert!(
+    SPIKE_HANDLE_1_OFFSET
+        == (ynz_abi::SPIKE_HANDLE_BASE_OFFSET + ynz_abi::SPIKE_HANDLE_SLOT_BYTES) as u64,
+    "frame-ABI drift: SPIKE_HANDLE_1_OFFSET must equal SPIKE_HANDLE_BASE_OFFSET + SPIKE_HANDLE_SLOT_BYTES \
+     (handle slot 1 is one stride past slot 0)"
+);
+
+/// Re-export of the shared spike-frame tag so codegen writes the IDENTICAL high-16-bit
+/// discriminator the runtime's `cleanup_spike_cpu_handles` checks. The low 16 bits of the
+/// stored word carry the live CPU-handle count. One shared constant = one format contract.
+const SPIKE_FRAME_TAG: u32 = ynz_abi::SPIKE_FRAME_TAG;
+
 /// Codegen's AST-level mirror of typeck's `cpu_result_abi_supports`
 /// (`ynz-typeck/src/independence.rs`) — THE single source of truth for which return classes a
 /// CPU-parallel group member may have. This function classifies the *un-resolved* AST `Type`
@@ -7638,8 +7689,9 @@ fn spike_reload_cpu_results_from_frame<'ctx, 'g>(
 ///   spike this cannot happen: handles are stored unconditionally at spawn time and polled
 ///   exactly once in the poll state.
 /// - **Cancellation**: if the parent SM is cancelled mid-poll (Tokio drops the future before
-///   the all-Ready branch fires), `SpawnStateFnFuture::drop` reads `SPIKE_FRAME_MAGIC` at
-///   frame offset 4 and frees any non-null handle slots — no resource leak.
+///   the all-Ready branch fires), `SpawnStateFnFuture::drop` reads the packed spike
+///   discriminator at frame offset 4 (tag + handle count) and frees the encoded number of
+///   non-null handle slots — no resource leak.
 /// - **Same-callee vs distinct-callee**: the trampoline is built per invocation (using
 ///   `call_idx` for name disambiguation), so two `fib(10)` + `fib(11)` calls work correctly
 ///   even though they have the same callee.
@@ -7929,32 +7981,33 @@ fn emit_cpu_group_spawn_join<'ctx, 'g>(
 
     cg.builder.position_at_end(spawn_state);
 
-    // Write spike frame discriminator to bytes 4-7 of the parent frame.
+    // Write the spike-frame discriminator word to bytes 4-7 of the parent frame.
     // Normal (non-spike) SM frames leave bytes 4-7 as zero (ynz_alloc_zeroed guarantee).
-    // SpawnStateFnFuture::drop reads this magic to decide whether to free the CPU handle
-    // slots at offsets 32/40 on cancellation. The write happens once at spawn time; it
-    // survives across resume_fn invocations because it is in the persistent heap frame.
+    // The word packs (SPIKE_FRAME_TAG << 16 | handle_count): the high-16-bit tag marks the
+    // frame as a spike frame, and the low 16 bits carry the live CPU-handle count so the
+    // runtime's `cleanup_spike_cpu_handles` frees exactly that many contiguous handle slots
+    // on cancellation — layout-driven for any group size, not a fixed two-slot scan. The
+    // write happens once at spawn time and survives across resume_fn invocations because it
+    // is in the persistent heap frame.
     {
         let i8_ty = ctx.i8_type();
         let i32_ty = ctx.i32_type();
-        // SPIKE_FRAME_MAGIC = 0x5350_494B ("SPIK")
-        const SPIKE_FRAME_MAGIC: u32 = 0x5350_494B;
-        // Offset 4 is within the frame header; use a byte GEP then cast to i32*.
+        let disc_word = (SPIKE_FRAME_TAG << 16) | (children.len() as u32);
+        // The discriminator word lives in the frame header; codegen writes it and the runtime
+        // reads it at the SAME shared offset, so neither side can drift the layout. Byte GEP
+        // then cast to i32*.
         let disc_byte_ptr = unsafe {
             cg.builder
                 .build_gep(
                     i8_ty,
                     frame_ptr,
-                    &[i64_ty.const_int(4, false)],
+                    &[i64_ty.const_int(ynz_abi::SPIKE_FRAME_DISCRIMINATOR_OFFSET as u64, false)],
                     "spike_disc_ptr",
                 )
                 .map_err(|e| format!("spike disc GEP: {e}"))?
         };
         cg.builder
-            .build_store(
-                disc_byte_ptr,
-                i32_ty.const_int(SPIKE_FRAME_MAGIC as u64, false),
-            )
+            .build_store(disc_byte_ptr, i32_ty.const_int(disc_word as u64, false))
             .map_err(|e| format!("spike disc store: {e}"))?;
     }
 

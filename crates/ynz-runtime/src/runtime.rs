@@ -52,25 +52,37 @@ static RUNTIME: OnceLock<Mutex<Option<tokio::runtime::Runtime>>> = OnceLock::new
 /// `8` and derive from the same frame layout decision.
 const FRAME_SLEEP_HANDLE_OFFSET: usize = 8;
 
-/// Byte offset of the spike-frame discriminator within a state-machine frame.
-///
-/// Normal frames: bytes 4-7 are always zero (ynz_alloc_zeroed guarantees it).
-/// Spike frames: codegen writes SPIKE_FRAME_MAGIC here at spawn time so that
-/// `SpawnStateFnFuture::drop` can distinguish a spike frame (CPU handles at 32/40)
-/// from a normal SM frame (no CPU handles, no free needed at those offsets).
-const FRAME_SPIKE_DISCRIMINATOR_OFFSET: usize = 4;
+// Spike-frame layout contract. These live in `ynz-abi` (a dependency-free crate) so codegen
+// and the runtime read the identical values without codegen depending on the runtime's tokio
+// tree. `SPIKE_FRAME_TAG` is the high-16-bit frame tag; `SPIKE_FRAME_DISCRIMINATOR_OFFSET` is
+// the byte offset of the discriminator word codegen writes and the runtime reads;
+// `SPIKE_HANDLE_BASE_OFFSET` is where the contiguous CPU-handle region begins (== codegen's
+// FRAME_HEADER_SIZE, bound by a const-assert in emit.rs); `SPIKE_HANDLE_SLOT_BYTES` is the
+// per-slot stride.
+//
+// The discriminator is a single u32 that BOTH tags the frame as a spike frame AND carries the
+// live CPU-handle count, packed as `(SPIKE_FRAME_TAG << 16) | handle_count`:
+//   - high 16 bits: `SPIKE_FRAME_TAG` ("SP") — present iff this is a spike frame.
+//   - low 16 bits:  the number of contiguous CPU-handle slots starting at
+//     `SPIKE_HANDLE_BASE_OFFSET` that `cleanup_spike_cpu_handles` must inspect on drop.
+// Packing the count into the discriminator (rather than a fixed two-slot scan) makes the
+// cancellation free-path layout-driven for an arbitrary number of CPU-group members: drop reads
+// the count and frees exactly that many slots. Normal (non-spike) SM frames leave bytes 4-7 as
+// zero (ynz_alloc_zeroed guarantee), so the high-bits tag never false-matches.
+use ynz_abi::{
+    SPIKE_FRAME_DISCRIMINATOR_OFFSET, SPIKE_FRAME_TAG, SPIKE_HANDLE_BASE_OFFSET,
+    SPIKE_HANDLE_SLOT_BYTES,
+};
 
-/// Magic value written to bytes 4-7 of a spike frame at CPU-group spawn time.
-/// ASCII "SPIK". Non-spike frames always have 0 at this offset (ynz_alloc_zeroed).
-/// `SpawnStateFnFuture::drop` reads this to decide whether to free handle slots 32/40.
-const SPIKE_FRAME_MAGIC: u32 = 0x5350_494B;
-
-/// Byte offset of the first CPU join handle pointer in a spike frame.
-/// Slot holds *mut CpuJoinHandle (8 bytes), null when handle was consumed by Ready poll.
-const SPIKE_HANDLE_0_OFFSET: usize = 32;
-
-/// Byte offset of the second CPU join handle pointer in a spike frame.
-const SPIKE_HANDLE_1_OFFSET: usize = 40;
+/// Extract the spike tag (high 16 bits) and handle count (low 16 bits) from a
+/// discriminator word. Returns `None` when the word is not a spike discriminator.
+fn decode_spike_discriminator(disc: u32) -> Option<usize> {
+    if (disc >> 16) == SPIKE_FRAME_TAG {
+        Some((disc & 0xFFFF) as usize)
+    } else {
+        None
+    }
+}
 
 /// Initialise the Tokio multi-thread runtime.
 ///
@@ -358,8 +370,18 @@ pub extern "C" fn ynz_thread_sleep_ms(ms: i64) {
 // for the LLVM backend but no call sites are emitted until Phase 2 codegen lands.
 //
 // ABI invariants (locked in Spike Findings):
-//   - resume_fn: extern "C" fn(frame_ptr: *mut u8, waker_ctx: *mut u8) -> i32
+//   - resume_fn: extern "C-unwind" fn(frame_ptr: *mut u8, waker_ctx: *mut u8) -> i32
 //     Returns 0 = Ready, 1 = Pending.
+//   - The `C-unwind` ABI (not plain `C`) is load-bearing: a CPU child that panics is
+//     re-raised by `ynz_rt_join_poll` (also `C-unwind`) via `resume_unwind`. That unwind
+//     must travel up THROUGH this call site to the entrypoint driver's `catch_unwind`.
+//     The codegen-emitted resume fns themselves lack the `nounwind` attribute and carry
+//     `.eh_frame`, so an unwind already propagates through THEIR bodies. The abort is a
+//     property of the *call site*: a Rust-typed plain `extern "C" fn` call site inserts an
+//     abort shim on a foreign unwind (RFC 2945). Declaring this call site `C-unwind`
+//     removes that shim, so the unwind passes through to the program's panic path —
+//     matching the observable behavior of a sequential panicking callee. Both runtime
+//     call sites of a resume fn are `C-unwind`, so no abort shim exists in the path.
 //   - waker_ctx: *mut u8 pointing to &mut Context<'_>. The resume_fn casts back
 //     via `&mut *(waker_ctx as *mut Context<'_>)`. No fabricated Wakers.
 //   - frame_size: i64 byte length of the heap-allocated state-machine frame.
@@ -377,7 +399,7 @@ pub extern "C" fn ynz_thread_sleep_ms(ms: i64) {
 /// Used exclusively by `ynz_rt_run_entrypoint` (program-entry driver).
 /// `ynz_rt_spawn` uses `SpawnStateFnFuture` (Output=()) — fire-and-forget; value discarded.
 struct SyncStateFnFuture {
-    resume_fn: unsafe extern "C" fn(*mut u8, *mut u8) -> i32,
+    resume_fn: unsafe extern "C-unwind" fn(*mut u8, *mut u8) -> i32,
     frame_ptr: *mut u8,
     // frame_size carries the byte length for the Phase 2 deallocation path.
     // Not read by poll() — the resume_fn owns the frame layout.
@@ -452,7 +474,7 @@ pub struct BgArgDropEntry {
 /// Separate from `SyncStateFnFuture` so `ynz_rt_spawn`'s external C-ABI signature
 /// stays `void` (no return channel at the ABI level).
 pub(crate) struct SpawnStateFnFuture {
-    resume_fn: unsafe extern "C" fn(*mut u8, *mut u8) -> i32,
+    resume_fn: unsafe extern "C-unwind" fn(*mut u8, *mut u8) -> i32,
     frame_ptr: *mut u8,
     /// Byte length of the heap frame, used by `Drop` to free it via `ynz_free`.
     frame_size: i64,
@@ -482,7 +504,7 @@ impl SpawnStateFnFuture {
     /// on the frame before the task runs).
     #[cfg(test)]
     pub(crate) fn new(
-        resume_fn: unsafe extern "C" fn(*mut u8, *mut u8) -> i32,
+        resume_fn: unsafe extern "C-unwind" fn(*mut u8, *mut u8) -> i32,
         frame_ptr: *mut u8,
         frame_size: i64,
         rec_slot: *mut u8,
@@ -506,10 +528,12 @@ unsafe impl Send for SpawnStateFnFuture {}
 
 /// Free live CPU join handles stored in a spike frame, if any.
 ///
-/// Reads the discriminator at frame offset 4. Normal frames always have 0 there
-/// (ynz_alloc_zeroed initialises the frame). Spike frames have SPIKE_FRAME_MAGIC written
-/// by codegen at spawn time, enabling this function to safely access handle slots at
-/// offsets 32 and 40 without misreading a normal frame.
+/// Reads the discriminator word at frame offset 4. Normal frames always have 0 there
+/// (ynz_alloc_zeroed initialises the frame). Spike frames have a packed discriminator
+/// written by codegen at spawn time: the high-16-bit `SPIKE_FRAME_TAG` confirms the frame
+/// is a spike frame, and the low 16 bits give the live CPU-handle count. The count drives
+/// the scan, so this is correct for an arbitrary number of CPU-group members — the handle
+/// region is a contiguous run of `count` slots starting at `SPIKE_HANDLE_BASE_OFFSET`.
 ///
 /// For each non-null handle slot: drops the Box<CpuJoinHandle>, detaching the blocking-pool
 /// task (it runs to completion; results are discarded). Null slots are skipped — they were
@@ -519,34 +543,30 @@ unsafe impl Send for SpawnStateFnFuture {}
 /// so the discriminator + handle-free logic can be tested independently without constructing
 /// a full `SpawnStateFnFuture` (which requires live resume-fn scaffolding).
 ///
+/// Time: O(n)  Space: O(1) where n = the encoded handle count (one drop per non-null slot).
+///
 /// # Safety
-/// `frame_ptr` must be a non-null, valid pointer to at least 48 bytes when the discriminator
-/// matches, or at least 8 bytes for the discriminator read (4 bytes at offset 4) to be safe.
-/// The spike frame allocated by codegen always satisfies this: header (32 bytes) + handle
-/// region (48 bytes) = 80 bytes minimum.
+/// `frame_ptr` must be a non-null, valid pointer to at least 8 bytes for the discriminator
+/// read (4 bytes at offset 4), and — when the discriminator tags it as a spike frame with
+/// count `n` — to at least `SPIKE_HANDLE_BASE_OFFSET + n * SPIKE_HANDLE_SLOT_BYTES` bytes.
+/// The spike frame codegen allocates always satisfies this: it sizes the handle region from
+/// the same per-member layout that produced the count written here.
 pub(crate) unsafe fn cleanup_spike_cpu_handles(frame_ptr: *mut u8) {
-    // Normal frames: bytes 4-7 are always zero. Spike frames: SPIKE_FRAME_MAGIC written at
-    // spawn time. Only free handle slots when the discriminator confirms this is a spike frame.
-    let disc_slot = frame_ptr.add(FRAME_SPIKE_DISCRIMINATOR_OFFSET) as *const u32;
-    if *disc_slot == SPIKE_FRAME_MAGIC {
-        // SAFETY: spike_cpu_candidates declines any host with ≥1 params, so the frame is
-        // always ≥80 bytes (32-byte header + 48-byte spike region). The discriminator check
-        // above is proof that this is a spike frame, making the 48-byte region accessible.
-        // The compile-time assertion below documents the layout invariant: handle slots
-        // must both fit within the 80-byte minimum spike frame.
-        const _: () = assert!(
-            SPIKE_HANDLE_1_OFFSET + 8 <= 80,
-            "spike region must fit within 80-byte minimum spike frame"
-        );
-        for handle_offset in [SPIKE_HANDLE_0_OFFSET, SPIKE_HANDLE_1_OFFSET] {
-            let slot = frame_ptr.add(handle_offset) as *mut *mut u8;
-            let ptr = *slot;
-            if !ptr.is_null() {
-                drop(Box::from_raw(ptr as *mut CpuJoinHandle));
-                // Null the slot after free to prevent double-free if cleanup is called
-                // again (or if the frame is inspected after this function returns).
-                *slot = std::ptr::null_mut();
-            }
+    // Normal frames: bytes 4-7 are zero, so `decode_spike_discriminator` returns None and no
+    // handle slots are touched. Spike frames carry the tag + the live handle count.
+    let disc_slot = frame_ptr.add(SPIKE_FRAME_DISCRIMINATOR_OFFSET) as *const u32;
+    let Some(handle_count) = decode_spike_discriminator(*disc_slot) else {
+        return;
+    };
+    for i in 0..handle_count {
+        let handle_offset = SPIKE_HANDLE_BASE_OFFSET + i * SPIKE_HANDLE_SLOT_BYTES;
+        let slot = frame_ptr.add(handle_offset) as *mut *mut u8;
+        let ptr = *slot;
+        if !ptr.is_null() {
+            drop(Box::from_raw(ptr as *mut CpuJoinHandle));
+            // Null the slot after free to prevent double-free if cleanup is called
+            // again (or if the frame is inspected after this function returns).
+            *slot = std::ptr::null_mut();
         }
     }
 }
@@ -723,7 +743,7 @@ impl Future for SpawnStateFnFuture {
 ///   May be null when `arg_drop_count == 0` (no heap arg-copies).
 #[no_mangle]
 pub unsafe extern "C" fn ynz_rt_spawn(
-    resume_fn: unsafe extern "C" fn(*mut u8, *mut u8) -> i32,
+    resume_fn: unsafe extern "C-unwind" fn(*mut u8, *mut u8) -> i32,
     frame_ptr: *mut u8,
     frame_size: i64,
     recursion_slot_offset: i64,
@@ -915,9 +935,15 @@ pub unsafe extern "C" fn ynz_rt_async_sleep_poll(handle_ptr: *mut u8, waker_ctx:
 /// - `resume_fn` must be a valid function pointer matching the `(frame, waker_ctx) -> i32` ABI.
 /// - `frame_ptr` must be valid for `frame_size` bytes for the duration of this call.
 ///   The frame is NOT freed by this function; the caller retains ownership and must free it.
+///
+/// # ABI: `extern "C-unwind"`
+/// On the `Err` branch this function re-raises the caught panic via `resume_unwind`. The
+/// `C-unwind` ABI lets that unwind propagate out to the codegen-emitted `main` wrapper
+/// instead of aborting at the C boundary (RFC 2945) — required so a CPU child's panic
+/// reaches the program's panic path with the same observable behavior as sequential code.
 #[no_mangle]
-pub unsafe extern "C" fn ynz_rt_run_entrypoint(
-    resume_fn: unsafe extern "C" fn(*mut u8, *mut u8) -> i32,
+pub unsafe extern "C-unwind" fn ynz_rt_run_entrypoint(
+    resume_fn: unsafe extern "C-unwind" fn(*mut u8, *mut u8) -> i32,
     frame_ptr: *mut u8,
     frame_size: i64,
 ) -> i32 {

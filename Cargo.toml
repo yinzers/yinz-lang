@@ -8,6 +8,7 @@ members = [
     "crates/ynz-typeck",
     "crates/ynz-codegen",
     "crates/ynz-numerics",
+    "crates/ynz-abi",
     "crates/ynz-runtime",
     "crates/ynz-registry",
     "crates/ynz-lsp",
@@ -54,5 +55,6 @@ ynz-parser       = { path = "crates/ynz-parser" }
 ynz-typeck       = { path = "crates/ynz-typeck" }
 ynz-codegen      = { path = "crates/ynz-codegen" }
 ynz-numerics     = { path = "crates/ynz-numerics" }
+ynz-abi          = { path = "crates/ynz-abi" }
 ynz-fmt          = { path = "crates/ynz-fmt" }
 ynz-watch        = { path = "crates/ynz-watch" }

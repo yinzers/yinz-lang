@@ -1,0 +1,32 @@
+// v0.3-M3d: `combine` makes two independent `crunch(...)` calls that run at the same time.
+// The first call divides by its seed, and the seed is 0, so it fails with a division-by-zero
+// error. Whether the two calls run at the same time or one after the other, the program must
+// stop with the SAME error message and the same exit — running work alongside another call
+// must never hide or change an error that the work raises.
+//
+// crunch(seed) loops (so it is worth running alongside the other call), then divides the loop
+// sum by seed. crunch(0) divides by zero and stops the program.
+//
+// Expected (both modes — default and --no-auto-parallel): the program stops with a
+// "division by zero" error and a non-zero exit. No number is printed.
+function crunch(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  let guard = total / seed
+  return guard + seed
+}
+
+function combine() -> int {
+  let lo = crunch(0)
+  let hi = crunch(4)
+  return lo + hi
+}
+
+function entrypoint() -> nothing {
+  let result = combine()
+  print(result)
+}

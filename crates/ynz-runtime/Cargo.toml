@@ -14,6 +14,7 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 ynz-numerics = { workspace = true }
+ynz-abi = { workspace = true }
 simdutf8 = "=0.1.4"
 unicode-normalization = "=0.1.24"
 memchr = "=2.7.4"

@@ -2798,6 +2798,13 @@ mod m3d_join_shims {
     use runtime::{ynz_rt_join_handle_free, ynz_rt_join_poll};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
+    // The canonical spike-frame layout constants the runtime reads on drop. Tests plant the
+    // same discriminator + handle slots codegen emits, so they import the shared constants
+    // rather than hardcoding 0x5350 / frame offsets at each spawn site.
+    use ynz_abi::{
+        SPIKE_FRAME_DISCRIMINATOR_OFFSET, SPIKE_FRAME_TAG, SPIKE_HANDLE_BASE_OFFSET,
+        SPIKE_HANDLE_SLOT_BYTES,
+    };
 
     // A trivially-copyable int result: [42, 0]
     extern "C" fn returns_42(_ctx: *mut u8) -> YnzCpuResult {
@@ -3500,10 +3507,10 @@ mod m3d_join_shims {
     }
 
     /// Verify the spike-frame discriminator drop path:
-    ///   1. A frame buffer with SPIKE_FRAME_MAGIC + a live CpuJoinHandle in slot 0 → handle
-    ///      is freed (child detaches, witness Arc eventually completes).
+    ///   1. A frame buffer with the packed spike discriminator (tag + handle count 2) and a
+    ///      live CpuJoinHandle in slot 0 → handle is freed (child detaches, witness completes).
     ///   2. The second handle slot is null → no spurious free attempted.
-    ///   3. A zeroed frame (no magic) → discriminator branch skipped, no free attempted.
+    ///   3. A zeroed frame (no tag) → discriminator branch skipped, no free attempted.
     ///
     /// Tests `cleanup_spike_cpu_handles` directly rather than constructing a full
     /// SpawnStateFnFuture (which requires a live resume-fn and frame allocation).
@@ -3547,15 +3554,17 @@ mod m3d_join_shims {
         assert!(!frame_ptr.is_null(), "frame alloc must succeed");
 
         unsafe {
-            // Write SPIKE_FRAME_MAGIC at offset 4.
-            const SPIKE_FRAME_MAGIC: u32 = 0x5350_494B;
-            (frame_ptr.add(4) as *mut u32).write(SPIKE_FRAME_MAGIC);
+            // Write the packed discriminator at offset 4: tag in the high 16 bits,
+            // handle count = 2 in the low 16 bits (two slots to inspect — slot 0 live,
+            // slot 1 null).
+            (frame_ptr.add(SPIKE_FRAME_DISCRIMINATOR_OFFSET) as *mut u32)
+                .write((SPIKE_FRAME_TAG << 16) | 2);
             // Plant the live handle pointer at slot 0 (offset 32). Slot 1 stays null.
-            (frame_ptr.add(32) as *mut *mut u8).write(handle_ptr);
+            (frame_ptr.add(SPIKE_HANDLE_BASE_OFFSET) as *mut *mut u8).write(handle_ptr);
         }
 
         // Build a minimal no-op resume function for SpawnStateFnFuture::new.
-        unsafe extern "C" fn noop_resume_c1(_frame: *mut u8, _waker: *mut u8) -> i32 {
+        unsafe extern "C-unwind" fn noop_resume_c1(_frame: *mut u8, _waker: *mut u8) -> i32 {
             1 // Pending — never polled, so never called.
         }
 
@@ -3589,7 +3598,7 @@ mod m3d_join_shims {
         // --- Case 2: zeroed frame (no magic) → discriminator branch skipped ---
         //
         // Write a live handle pointer into the "handle slot 0" position of a NON-spike frame.
-        // cleanup_spike_cpu_handles must NOT free it (discriminator is zero, not SPIKE_FRAME_MAGIC).
+        // cleanup_spike_cpu_handles must NOT free it (discriminator is zero, not the spike tag).
         // We verify this by placing a sentinel value there and confirming it is untouched after
         // the call (no Box reconstruction / no drop of a fake pointer).
         let completed2 = Arc::new(AtomicBool::new(false));
@@ -3605,13 +3614,13 @@ mod m3d_join_shims {
         unsafe {
             // No magic at offset 4 — frame looks like a normal (non-spike) SM frame.
             // Write the handle pointer at offset 32 to confirm it is NOT freed.
-            (frame2.as_mut_ptr().add(32) as *mut *mut u8).write(handle_ptr2);
+            (frame2.as_mut_ptr().add(SPIKE_HANDLE_BASE_OFFSET) as *mut *mut u8).write(handle_ptr2);
 
             // Call the helper — discriminator is zero, so the if-branch must be skipped.
             cleanup_spike_cpu_handles(frame2.as_mut_ptr());
 
             // The handle pointer at offset 32 must still be non-null and valid.
-            let still_there = *(frame2.as_ptr().add(32) as *const *mut u8);
+            let still_there = *(frame2.as_ptr().add(SPIKE_HANDLE_BASE_OFFSET) as *const *mut u8);
             assert_eq!(
                 still_there, handle_ptr2,
                 "non-spike frame: handle pointer must be untouched by cleanup"
@@ -3625,6 +3634,117 @@ mod m3d_join_shims {
         assert!(
             completed2.load(Ordering::Acquire),
             "non-spike child must still complete after manual free"
+        );
+    }
+
+    /// Verify the count-driven cleanup frees EVERY live handle of an N=2 group, not just
+    /// slot 0. A two-member CPU group cancelled mid-join has both handle slots live; the
+    /// discriminator's encoded count (2) must drive the scan over both, freeing each box.
+    ///
+    /// This is the N=2 cancellation path the layout-driven cleanup must cover: a fixed
+    /// "slot 0 only" scan would leak slot 1's handle on every cancellation of a full group.
+    /// alloc=free is proven by the two per-handle drop probes both reaching 1.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cleanup_frees_both_handles_of_full_n2_group() {
+        use crate::runtime::{cleanup_spike_cpu_handles, CpuJoinHandle};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        // Two independent drop probes — one per handle. Both must reach 1 (each box freed once).
+        let drop0 = Arc::new(AtomicUsize::new(0));
+        let drop1 = Arc::new(AtomicUsize::new(0));
+
+        let plant = |probe: &Arc<AtomicUsize>| -> *mut u8 {
+            let jh = tokio::task::spawn_blocking(|| -> YnzCpuResult { YnzCpuResult([7, 0]) });
+            let mut h = CpuJoinHandle::new(jh);
+            h.set_drop_probe(Arc::clone(probe));
+            Box::into_raw(Box::new(h)) as *mut u8
+        };
+        let handle0 = plant(&drop0);
+        let handle1 = plant(&drop1);
+
+        // Allocate via ynz_alloc_zeroed so the layout matches a real spike frame. Both handle
+        // slots (base and base+stride) hold a live handle; the discriminator encodes count = 2.
+        let slot0 = SPIKE_HANDLE_BASE_OFFSET;
+        let slot1 = SPIKE_HANDLE_BASE_OFFSET + SPIKE_HANDLE_SLOT_BYTES;
+        let frame_ptr = unsafe { ynz_alloc_zeroed(80) };
+        assert!(!frame_ptr.is_null(), "frame alloc must succeed");
+        unsafe {
+            (frame_ptr.add(SPIKE_FRAME_DISCRIMINATOR_OFFSET) as *mut u32)
+                .write((SPIKE_FRAME_TAG << 16) | 2);
+            (frame_ptr.add(slot0) as *mut *mut u8).write(handle0);
+            (frame_ptr.add(slot1) as *mut *mut u8).write(handle1);
+            cleanup_spike_cpu_handles(frame_ptr);
+            // Both slots must be nulled after free (double-free guard).
+            assert!(
+                (*(frame_ptr.add(slot0) as *const *mut u8)).is_null(),
+                "slot 0 must be nulled after free"
+            );
+            assert!(
+                (*(frame_ptr.add(slot1) as *const *mut u8)).is_null(),
+                "slot 1 must be nulled after free"
+            );
+            ynz_free(frame_ptr, 80);
+        }
+
+        assert_eq!(
+            drop0.load(Ordering::SeqCst),
+            1,
+            "handle 0 (slot 0) must be freed exactly once"
+        );
+        assert_eq!(
+            drop1.load(Ordering::SeqCst),
+            1,
+            "handle 1 (slot 1) must be freed exactly once — count-driven scan covers it"
+        );
+    }
+
+    /// Verify the cleanup is correct-by-construction for N>2: a discriminator count of 3
+    /// drives the scan over three contiguous handle slots (offsets 32/40/48), freeing the
+    /// live ones and skipping a null. Codegen currently emits only two-member groups, so a
+    /// live N>2 group is not yet reachable end-to-end; the runtime free-path is nonetheless
+    /// count-driven and layout-agnostic. This pins that the free-path handles any member
+    /// count, so widening the codegen group size needs no runtime change.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cleanup_is_layout_driven_for_n_greater_than_two() {
+        use crate::runtime::{cleanup_spike_cpu_handles, CpuJoinHandle};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let drop0 = Arc::new(AtomicUsize::new(0));
+        let drop2 = Arc::new(AtomicUsize::new(0));
+        let plant = |probe: &Arc<AtomicUsize>| -> *mut u8 {
+            let jh = tokio::task::spawn_blocking(|| -> YnzCpuResult { YnzCpuResult([3, 0]) });
+            let mut h = CpuJoinHandle::new(jh);
+            h.set_drop_probe(Arc::clone(probe));
+            Box::into_raw(Box::new(h)) as *mut u8
+        };
+        let handle0 = plant(&drop0);
+        let handle2 = plant(&drop2);
+
+        // Frame large enough for three handle slots (base, base+stride, base+2*stride) + slack.
+        // Slot 1 stays null (e.g. a member whose handle was already consumed by a Ready poll).
+        let slot0 = SPIKE_HANDLE_BASE_OFFSET;
+        let slot2 = SPIKE_HANDLE_BASE_OFFSET + 2 * SPIKE_HANDLE_SLOT_BYTES;
+        let frame_ptr = unsafe { ynz_alloc_zeroed(96) };
+        assert!(!frame_ptr.is_null(), "frame alloc must succeed");
+        unsafe {
+            (frame_ptr.add(SPIKE_FRAME_DISCRIMINATOR_OFFSET) as *mut u32)
+                .write((SPIKE_FRAME_TAG << 16) | 3);
+            (frame_ptr.add(slot0) as *mut *mut u8).write(handle0);
+            // slot 1 (base + stride) null
+            (frame_ptr.add(slot2) as *mut *mut u8).write(handle2);
+            cleanup_spike_cpu_handles(frame_ptr);
+            assert!((*(frame_ptr.add(slot0) as *const *mut u8)).is_null());
+            assert!((*(frame_ptr.add(slot2) as *const *mut u8)).is_null());
+            ynz_free(frame_ptr, 96);
+        }
+
+        assert_eq!(drop0.load(Ordering::SeqCst), 1, "slot 0 handle freed once");
+        assert_eq!(
+            drop2.load(Ordering::SeqCst),
+            1,
+            "slot 2 handle freed once — third slot reached by the count-driven scan"
         );
     }
 
@@ -3668,17 +3788,18 @@ mod m3d_join_shims {
         assert!(!frame_ptr.is_null(), "frame alloc must succeed");
 
         unsafe {
-            // Write SPIKE_FRAME_MAGIC at offset 4.
-            const SPIKE_FRAME_MAGIC: u32 = 0x5350_494B;
-            (frame_ptr.add(4) as *mut u32).write(SPIKE_FRAME_MAGIC);
+            // Write the packed discriminator at offset 4: tag in the high 16 bits,
+            // handle count = 2 in the low 16 bits (slot 0 live, slot 1 null).
+            (frame_ptr.add(SPIKE_FRAME_DISCRIMINATOR_OFFSET) as *mut u32)
+                .write((SPIKE_FRAME_TAG << 16) | 2);
             // Plant the live handle pointer at slot 0 (offset 32).
-            (frame_ptr.add(32) as *mut *mut u8).write(handle_ptr);
+            (frame_ptr.add(SPIKE_HANDLE_BASE_OFFSET) as *mut *mut u8).write(handle_ptr);
             // Slot 1 (offset 40) stays null.
         }
 
         // Build a minimal no-op resume function (never called, but SpawnStateFnFuture
         // requires a valid function pointer in the slot).
-        unsafe extern "C" fn noop_resume(_frame: *mut u8, _waker: *mut u8) -> i32 {
+        unsafe extern "C-unwind" fn noop_resume(_frame: *mut u8, _waker: *mut u8) -> i32 {
             1 // Pending — would keep the task alive if polled; but we won't poll it.
         }
 
