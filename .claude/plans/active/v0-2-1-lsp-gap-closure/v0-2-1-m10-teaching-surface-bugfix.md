@@ -2,6 +2,7 @@
 slug: v0-2-1-m10-teaching-surface-bugfix
 type: execution
 roadmap: v0-2-1-lsp-gap-closure
+milestone: v0-2-1-m10-teaching-surface-bugfix
 owner: Patrick Rizzardi
 status: done
 created: 2026-05-30
