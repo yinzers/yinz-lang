@@ -1,0 +1,36 @@
+// v0.3-M3d hostile fixture — heavy-LOOKING straight-line work that is NOT run at the same time.
+// Both functions do a chain of arithmetic but contain no loop and no self-call, so the compiler
+// judges them not worth running at the same time and runs them one after the other (the same
+// judgement as `v0_3_m3d_worth_it_trivial_leaf_inline.ynz`). The compiler can be wrong here in
+// the cautious direction — it skips work that might have been worth overlapping — but skipping is
+// ONLY a missed speed-up, never a wrong answer. The output is identical between default and
+// --no-auto-parallel.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   82
+//   177
+
+function heavy(n: int) -> int {
+  let a = n + 1
+  let b = a * 2
+  let c = b - 3
+  let d = c + a
+  let e = d * 2
+  return e + b
+}
+
+function heavy2(n: int) -> int {
+  let a = n + 2
+  let b = a * 3
+  let c = b - 1
+  let d = c + a
+  let e = d * 3
+  return e + b
+}
+
+function entrypoint() -> nothing {
+  let a = heavy(10)
+  let b = heavy2(10)
+  print(a)
+  print(b)
+}

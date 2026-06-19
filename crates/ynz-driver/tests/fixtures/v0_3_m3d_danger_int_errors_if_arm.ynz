@@ -1,0 +1,51 @@
+// v0.3-M3d danger matrix — two different functions returning an `int` that can fail
+// (`int errors`), run at the same time inside an `if` branch. Both functions succeed here, so
+// `.or(-1)` yields the totals; both prints match in both modes.
+//
+// compute(n) loops, so it is worth running alongside the other call, then returns an int that
+// can fail (it never fails here).
+//
+// Arithmetic: sum(0..4) = 6; sum(0..6) with *2 step = 30.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   6
+//   30
+
+function compute(n: int) -> int errors {
+  let total: int = 0
+  let i: int = 0
+  while (i < n) {
+    total = total + i
+    i = i + 1
+  }
+  return total
+}
+
+function compute2(n: int) -> int errors {
+  let total: int = 0
+  let i: int = 0
+  while (i < n) {
+    total = total + i * 2
+    i = i + 1
+  }
+  return total
+}
+
+function combine() -> int {
+  let go = true
+  let lo = 0
+  let hi = 0
+  if (go) {
+    let loRes = compute(4)
+    let hiRes = compute2(6)
+    lo = loRes.or(-1)
+    hi = hiRes.or(-1)
+  }
+  print(lo)
+  return hi
+}
+
+function entrypoint() -> nothing {
+  let r = combine()
+  print(r)
+}

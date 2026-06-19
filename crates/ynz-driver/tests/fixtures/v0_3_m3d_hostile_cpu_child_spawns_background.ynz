@@ -1,0 +1,47 @@
+// v0.3-M3d hostile fixture — a call that itself starts a `background` task, run at the same time
+// as another call. `entrypoint` runs two `leaf` calls at the same time; the first `leaf` starts
+// a background task before its loop. A call that runs at the same time as another, and which
+// itself starts a background task, must not crash and must print the same line in both modes.
+//
+// leaf(n) starts a background task, then loops, so it is worth running alongside the other call.
+//
+// The background task's own output is not part of this fixture's contract (a started background
+// task may not finish printing before the program exits); the contract is that the two calls run
+// at the same time, the started background task does not crash the program, and the summed result
+// is identical in both modes.
+//
+// Arithmetic: leaf(50) = sum(0..50) = 1225; leaf2(50) = sum(0..50)*2-pattern = 2450; total 3675.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   3675
+
+function doWork() -> nothing {
+  wait sleep(0)
+}
+
+function leaf(n: int) -> int {
+  background doWork()
+  let t = 0
+  let i = 0
+  while (i < n) {
+    t = t + i
+    i = i + 1
+  }
+  return t
+}
+
+function leaf2(n: int) -> int {
+  let t = 0
+  let i = 0
+  while (i < n) {
+    t = t + i * 2
+    i = i + 1
+  }
+  return t
+}
+
+function entrypoint() -> nothing {
+  let a = leaf(50)
+  let b = leaf2(50)
+  print(a + b)
+}

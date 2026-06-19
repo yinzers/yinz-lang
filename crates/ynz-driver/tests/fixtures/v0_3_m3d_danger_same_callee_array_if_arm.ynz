@@ -1,0 +1,40 @@
+// v0.3-M3d danger matrix — two calls to the SAME array-returning function with DIFFERENT inputs,
+// run at the same time inside an `if` branch. Each call's result is kept separate, so the two
+// element counts differ (3, 6) — if they were mixed up they would be equal. Both prints (the
+// counts, which don't depend on finishing order) match in both modes.
+//
+// build(n) loops, so it is worth running alongside the other call, then returns an array of
+// `n` elements.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   3
+//   6
+
+function build(n: int) -> array<int> {
+  let arr: array<int> = []
+  let i: int = 0
+  while (i < n) {
+    arr.add(i)
+    i = i + 1
+  }
+  return arr
+}
+
+function combine() -> int {
+  let go = true
+  let loCount = 0
+  let hiCount = 0
+  if (go) {
+    let lo = build(3)
+    let hi = build(6)
+    loCount = lo.count()
+    hiCount = hi.count()
+  }
+  print(loCount)
+  return hiCount
+}
+
+function entrypoint() -> nothing {
+  let r = combine()
+  print(r)
+}

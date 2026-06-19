@@ -1,0 +1,36 @@
+// v0.3-M3d danger matrix — one call that number-crunches and one call that waits on a timer,
+// placed next to each other. Running a compute call at the same time as a waiting call is OUT
+// of scope for M3d (it belongs to a later milestone — see the Scope Boundary in the plan), so
+// the two calls run one after the other in plain sequence. Both modes (default and
+// --no-auto-parallel) print the same lines.
+//
+// score(n) loops adding 1.5 each pass, so it does real work, then returns a number.
+// fetch(n) waits on a timer (no real compute) and returns a fixed number.
+//
+// Arithmetic: score(4) = 4 * 1.5 = 6.0; fetch(4) = 2.5.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   6.0
+//   2.5
+
+function score(n: int) -> number {
+  let total: number = 0.0
+  let i: int = 0
+  while (i < n) {
+    total = total + 1.5
+    i = i + 1
+  }
+  return total
+}
+
+function fetch(n: int) -> number {
+  wait sleep(0)
+  return 2.5
+}
+
+function entrypoint() -> nothing {
+  let a = score(4)
+  let b = fetch(4)
+  print(a)
+  print(b)
+}

@@ -1,0 +1,50 @@
+// v0.3-M3d danger matrix — two calls inside a `match` branch whose results are USED in a
+// statement AFTER the branch ends. The two results are assigned inside the branch but read
+// (`print(lo)` / `return hi`) after the branch closes, so each result has to live on past the
+// branch. Carrying a result across the branch boundary is OUT of scope for M3d, so the two calls
+// run one after the other in plain sequence, byte-identical between default and
+// --no-auto-parallel. This locks the boundary: results used INSIDE the branch run at the same
+// time (see `..._bool_match_arm`); results used after the branch ends run one after the other.
+// Both modes print the same lines.
+//
+// over(n) loops summing, so it is worth running alongside the other call, then returns whether
+// the sum exceeds a threshold.
+//
+// Arithmetic: sum(0..3) = 3 (false); sum(0..6) = 15 (true).
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   false
+//   true
+
+function over(n: int) -> boolean {
+  let sum: int = 0
+  let i: int = 0
+  while (i < n) {
+    sum = sum + i
+    i = i + 1
+  }
+  return sum > 10
+}
+
+function combine() -> boolean {
+  let pick = 1
+  let lo = false
+  let hi = false
+  if (pick) {
+    1 => {
+      lo = over(3)
+      hi = over(6)
+    }
+    else => {
+      lo = false
+      hi = false
+    }
+  }
+  print(lo)
+  return hi
+}
+
+function entrypoint() -> nothing {
+  let r = combine()
+  print(r)
+}

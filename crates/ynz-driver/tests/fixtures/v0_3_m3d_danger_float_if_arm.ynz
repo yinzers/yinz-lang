@@ -1,0 +1,49 @@
+// v0.3-M3d danger matrix — two different functions returning a `float`, run at the same time
+// inside a taken `if` branch. Each result is available after both finish; both prints match in
+// both modes.
+//
+// addf(n) loops adding 1.5 each pass, so it is worth running alongside the other call.
+//
+// Arithmetic: addf(4) = 4 * 1.5 = 6.0; addf2(6) = 6 * 2.5 = 15.0. A whole-valued `float` prints
+// without a trailing `.0` in Yinz, so the lines are `6` and `15`.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   6
+//   15
+
+function addf(n: int) -> float {
+  let total: float = 0.0.toFloat()
+  let i: int = 0
+  while (i < n) {
+    total = total + 1.5.toFloat()
+    i = i + 1
+  }
+  return total
+}
+
+function addf2(n: int) -> float {
+  let total: float = 0.0.toFloat()
+  let i: int = 0
+  while (i < n) {
+    total = total + 2.5.toFloat()
+    i = i + 1
+  }
+  return total
+}
+
+function combine() -> float {
+  let result: float = 0.0.toFloat()
+  let go = true
+  if (go) {
+    let lo = addf(4)
+    let hi = addf2(6)
+    print(lo)
+    result = hi
+  }
+  return result
+}
+
+function entrypoint() -> nothing {
+  let r = combine()
+  print(r)
+}

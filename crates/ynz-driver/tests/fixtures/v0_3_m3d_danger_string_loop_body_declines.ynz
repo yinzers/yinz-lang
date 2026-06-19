@@ -1,0 +1,36 @@
+// v0.3-M3d danger matrix — two string-returning calls inside one pass of a loop body. The loop
+// repeats three times. Running two calls at the same time inside a loop body is OUT of scope for
+// M3d (a later loop-placement slice — see the Scope Boundary), so the two calls run one after
+// the other in plain sequence. Both modes (default and --no-auto-parallel) print the same line.
+//
+// tag(n) loops, so it does real work, then returns a string built from the input.
+//
+// The loop concatenates one string per pass; the final value is the third pass's `hi`.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   hi=2
+
+function tag(n: int) -> string {
+  let count: int = 0
+  let i: int = 0
+  while (i < n) {
+    count = count + 1
+    i = i + 1
+  }
+  return `hi=${count}`
+}
+
+function combine() -> string {
+  let last: string = ``
+  for (k in range(0, 3)) {
+    let lo = tag(k)
+    let hi = tag(k)
+    last = hi
+  }
+  return last
+}
+
+function entrypoint() -> nothing {
+  let r = combine()
+  print(r)
+}

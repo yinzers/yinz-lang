@@ -3156,30 +3156,31 @@ fn lower_function_with_waits<'ctx, 'g>(
             }
             Type::Number { precision } if *precision <= 34 => {
                 // Decimal128 (i128): the resume fn stored the full 16-byte i128 value
-                // directly in the 16-byte return slot. The wrapper is declared as ptr-returning
-                // (matching the non-SM number ABI: callers expect a pointer to a heap i128).
-                // Allocate 16 bytes, copy the i128 from the return slot, free the frame, then
-                // return the heap pointer — the caller owns the allocation and may read from it.
+                // directly in the 16-byte return slot. The wrapper is declared as ptr-returning;
+                // the non-SM `number` lowering returns a pointer to a caller-local i128 the
+                // caller copies out immediately and never frees (a stack-backed, copy-and-forget
+                // ABI — see the non-SM `addUp`/`combine` lowering: `ret ptr %resultN` where
+                // `%resultN = alloca i128`). The SM wrapper MUST return the same shape so the
+                // single shared caller contract holds for both lowerings. A heap allocation here
+                // would have no owner: no `number` call site frees its returned pointer (the
+                // non-SM ABI taught every caller it is unowned), so a heap block leaks once per
+                // promoted `number` returned out of its function. Mirror the non-SM ABI: copy the
+                // i128 into a wrapper-local stack slot, free the frame, return that slot's
+                // pointer. The pointee lives until this wrapper returns; the caller's copy
+                // happens at the call site before the slot is reused — identical to the non-SM
+                // path. (Freeing inside the wrapper is impossible: the caller's copy is at its
+                // own call site, after this return — a free here would dangle the pointee.)
                 let i128_val =
                     state_machine::load_return_value_i128(ctx, &builder, frame_ptr, "ret_i128")?;
-                // Allocate 16 bytes for the i128 return value on the heap.
-                let heap_ptr = builder
-                    .build_call(
-                        rt.ynz_alloc,
-                        &[ctx.i64_type().const_int(16, false).into()],
-                        "ret_dec_alloc",
-                    )
-                    .map_err(|e| format!("ret_dec_alloc: {e}"))?
-                    .try_as_basic_value()
-                    .basic()
-                    .ok_or("ret_dec_alloc: expected ptr")?
-                    .into_pointer_value();
+                let ret_slot = builder
+                    .build_alloca(ctx.i128_type(), "ret_dec_slot")
+                    .map_err(|e| format!("ret_dec_slot: {e}"))?;
                 builder
-                    .build_store(heap_ptr, i128_val)
+                    .build_store(ret_slot, i128_val)
                     .map_err(|e| format!("ret_dec_store: {e}"))?;
                 state_machine::free_frame(ctx, &builder, rt, frame_ptr, frame_bytes)?;
                 builder
-                    .build_return(Some(&heap_ptr))
+                    .build_return(Some(&ret_slot))
                     .map_err(|e| format!("wrapper number ret: {e}"))?;
             }
             Type::String

@@ -22,9 +22,21 @@ fn ynz_binary() -> PathBuf {
 
 /// Run `ynz run <path>` and return (stdout, stderr, exit_code).
 fn run_ynz(path: &Path) -> (String, String, i32) {
-    let out = Command::new(ynz_binary())
-        .args(["run", path.to_str().unwrap()])
-        .env("CLICOLOR", "0")
+    run_ynz_mode(path, false)
+}
+
+/// Run `ynz run <path>` in default (auto-parallel) or `--no-auto-parallel` mode and return
+/// (stdout, stderr, exit_code). The sequential mode is selected via the `YNZ_NO_AUTO_PARALLEL`
+/// env var (the `run` subcommand reads it; the `build` subcommand takes the `--no-auto-parallel`
+/// flag — both select the same sequential lowering).
+fn run_ynz_mode(path: &Path, no_auto_parallel: bool) -> (String, String, i32) {
+    let mut cmd = Command::new(ynz_binary());
+    cmd.args(["run", path.to_str().unwrap()])
+        .env("CLICOLOR", "0");
+    if no_auto_parallel {
+        cmd.env("YNZ_NO_AUTO_PARALLEL", "1");
+    }
+    let out = cmd
         .output()
         .unwrap_or_else(|e| panic!("failed to spawn ynz: {e}"));
     (
@@ -193,6 +205,83 @@ fn corpus_produces_deterministic_output_across_runs() {
         "determinism failures ({} / {} non-timing files):\n{}",
         failures.len(),
         corpus_size,
+        failures.join("\n\n")
+    );
+}
+
+// WHY: the auto-parallel pass must be OBSERVABLY INVISIBLE across the ENTIRE corpus — every
+// program must produce byte-identical stdout/stderr/exit-code in default (auto-parallel) mode
+// and `--no-auto-parallel` (forced-sequential) mode. This is the strongest cross-impl invariant
+// the milestone carries: parallelizing independent statements changes WHEN work runs, never
+// WHAT the program observes. A divergence here is a silent miscompile (a parallel pack/bind that
+// disagrees with the sequential path) — exactly the failure class the per-fixture m3d FIRE/
+// DECLINE tests guard one fixture at a time, lifted to the whole corpus so a NEW fixture is
+// covered the moment it lands without anyone wiring a bespoke twin assertion.
+//
+// Timing/background/concurrent fixtures are excluded for the same reason the determinism test
+// excludes them: their print ordering is scheduler-dependent within a single mode, so a strict
+// byte comparison across modes would flag a non-bug.
+//
+// Quality gate: at least 30 non-excluded files (validates coverage, not a stub).
+#[test]
+fn corpus_byte_identical_across_auto_parallel_modes() {
+    let corpus = collect_corpus();
+
+    let mut compared = 0usize;
+    let mut failures: Vec<String> = Vec::new();
+
+    for path in &corpus {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        // Same exclusions as the determinism harness: ordering of these is scheduler-dependent
+        // WITHIN a single run, so cross-mode byte comparison would flag scheduling noise, not a
+        // codegen divergence.
+        let is_scheduling_nondeterministic = name.contains("timing")
+            || name.contains("background")
+            || name.contains("concurrent")
+            || name == "v0_3_m3d_return_class_maybe.ynz"
+            // Model-A intended reorder: two independent I/O calls with print side effects whose
+            // finish order differs by design between the modes (`B\nA` parallel vs `A\nB`
+            // sequential). The fixture's own header states it is NOT part of the byte-identical
+            // sweep — `wait`, not the absence of parallelism, is the user's ordering tool
+            // (design/concurrency.md Model A). A pure-CPU group has no such observable side
+            // effect (its members only return values, bound after the join), so this exception
+            // is specific to I/O-side-effect ordering and does not weaken the CPU-parallel
+            // invariant the sweep protects.
+            || name == "v0_3_m3b_p4_model_a_intended_reorder.ynz"
+            || (name == "entrypoint.ynz"
+                && path
+                    .parent()
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
+                    == Some("pirates-roster"));
+        if is_scheduling_nondeterministic {
+            continue;
+        }
+
+        let (par_out, par_err, par_code) = run_ynz_mode(path, false);
+        let (seq_out, seq_err, seq_code) = run_ynz_mode(path, true);
+        compared += 1;
+
+        if par_out != seq_out || par_err != seq_err || par_code != seq_code {
+            failures.push(format!(
+                "MODE-DIVERGENT: {:?}\n  default  stdout: {:?} exit {par_code}\n  sequential stdout: {:?} exit {seq_code}",
+                path.file_name().unwrap_or_default(),
+                &par_out[..par_out.len().min(200)],
+                &seq_out[..seq_out.len().min(200)],
+            ));
+        }
+    }
+
+    assert!(
+        compared >= 30,
+        "expected at least 30 corpus files to compare across modes (got {compared}); discovery \
+         or exclusion logic may be broken"
+    );
+    assert!(
+        failures.is_empty(),
+        "auto-parallel mode divergences ({} / {} compared files):\n{}",
+        failures.len(),
+        compared,
         failures.join("\n\n")
     );
 }

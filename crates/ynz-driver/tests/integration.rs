@@ -6370,6 +6370,259 @@ fn v03_m3d_mixed_cpu_io_group_declines_byte_identical() {
     m3d_assert_declines_byte_identical("v0_3_m3d_mixed_cpu_io_group_declines.ynz", "4958");
 }
 
+// WHY (group): the feature-development tests (slices 1–4) covered the simple top-level
+// distinct/same-callee return-class FIRE and the int-only placement FIRE/DECLINE. The danger
+// matrix targets the UNCOVERED cross-product cells where a return-class ABI pack/bind path
+// (heap-pointer, wide-value decimal128, i64→i1 bool truncation, error-capable tagged pair)
+// intersects a non-trivial PLACEMENT (if-arm, match-arm) or same-callee distinctness inside an
+// arm. Those intersections are where silent miscompiles hid in this codegen area's history (the
+// Silent-Envelope and parallel-per-type-dispatch corpses). Every FIRE cell asserts 2 spawns +
+// byte-identical; every DECLINE cell asserts 0 spawns + byte-identical. The byte-identical check
+// plus the determinism harness (cross_impl_consistency.rs runs each fixture twice) supply the
+// multiple-run garbage detection for the frame-slot-touching cells. If you relax any
+// spawn-count assertion, a cell silently regressed FIRE↔DECLINE — fix the codegen, not the test.
+
+#[test]
+fn v03_m3d_danger_string_if_arm_fires_byte_identical() {
+    // WHY: a heap-pointer return (`string`) packed inside an `if` arm. The result slot holds a
+    // pointer, not an inline value; that pack/bind must survive the if-arm frame machinery.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_danger_string_if_arm.ynz",
+        "first=3\nsecond=5",
+    );
+}
+
+#[test]
+fn v03_m3d_danger_array_match_arm_fires_byte_identical() {
+    // WHY: a heap-pointer return (`array<int>`) packed inside a `match` arm. Same pointer-slot
+    // risk as the string-if-arm cell, but in match-arm frame machinery and with the counts read
+    // inside the arm (so the int counts, not the array pointers, cross the arm boundary).
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_array_match_arm.ynz", "3\n5");
+}
+
+#[test]
+fn v03_m3d_danger_number_if_arm_fires_byte_identical() {
+    // WHY: a wide-value return (`number`/decimal128) packs into BOTH words of the 16-byte result
+    // slot; that two-word pack/bind must survive the if-arm frame machinery. The result is
+    // RETURNED out of the wrapper, so this also pins that the promoted `number` return ABI matches
+    // the non-SM lowering (a stack-backed, caller-copies-and-forgets pointer): alloc==free, no
+    // heap stabilization block leaked. A regression to a heap-returning wrapper would re-open the
+    // one-allocation leak this cell now strictly guards against.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_number_if_arm.ynz", "6.0\n15.0");
+}
+
+#[test]
+fn v03_m3d_danger_bool_match_arm_fires_byte_identical() {
+    // WHY: a bool returns as an i64 in the result slot and must be truncated to i1 before the
+    // bool alloca store (M3f truncation discipline). The two members produce DIFFERENT bools, so
+    // a missed truncation or slot aliasing changes the output. Reads are kept inside the arm.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_bool_match_arm.ynz", "false\ntrue");
+}
+
+#[test]
+fn v03_m3d_danger_same_callee_string_if_arm_fires_byte_identical() {
+    // WHY: same-callee distinctness with a heap-pointer return INSIDE an `if` arm — the
+    // per-(group, member-index) slot keying must hold for a pointer pack AND inside nested
+    // control flow at once. The two calls give DIFFERENT strings (n=3, n=7); aliasing would make
+    // them equal.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_danger_same_callee_string_if_arm.ynz",
+        "n=3\nn=7",
+    );
+}
+
+#[test]
+fn v03_m3d_danger_same_callee_number_match_arm_fires_byte_identical() {
+    // WHY: same-callee distinctness with a wide-value return INSIDE a `match` arm — the two-word
+    // decimal128 pack and the member-index slot keying must both hold inside a match arm. Results
+    // DIFFER (6.0, 9.0). Returned out of the wrapper, so this also strictly guards alloc==free:
+    // the promoted `number` return ABI must match the non-SM stack-backed lowering, leaking no
+    // heap stabilization block.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_danger_same_callee_number_match_arm.ynz",
+        "6.0\n9.0",
+    );
+}
+
+#[test]
+fn v03_m3d_danger_same_callee_bool_match_arm_fires_byte_identical() {
+    // WHY: same-callee distinctness with a bool return INSIDE a `match` arm — combines i64→i1
+    // truncation + member-index slot keying + match-arm machinery. Results DIFFER (false, true).
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_danger_same_callee_bool_match_arm.ynz",
+        "false\ntrue",
+    );
+}
+
+#[test]
+fn v03_m3d_danger_same_callee_array_if_arm_fires_byte_identical() {
+    // WHY: same-callee distinctness with a heap-pointer (`array<int>`) return INSIDE an `if` arm.
+    // The member-index slot keying must hold for a pointer pack in nested control flow; the two
+    // calls give DIFFERENT counts (3, 6).
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_danger_same_callee_array_if_arm.ynz",
+        "3\n6",
+    );
+}
+
+#[test]
+fn v03_m3d_danger_int_errors_if_arm_fires_byte_identical() {
+    // WHY: an error-capable return (`int errors`) packs as a tagged {error word, ok bits} pair;
+    // the join-bind must normalize the ok word and route through the EC decode path. That EC
+    // pack/bind must survive the if-arm frame machinery. Both functions succeed (6, 30).
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_int_errors_if_arm.ynz", "6\n30");
+}
+
+#[test]
+fn v03_m3d_danger_float_if_arm_fires_byte_identical() {
+    // WHY: a `float` (f64 bits in one word) packed inside an `if` arm. The f64 bit pattern must
+    // travel through the result slot intact. A whole-valued float prints without a trailing `.0`.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_float_if_arm.ynz", "6\n15");
+}
+
+#[test]
+fn v03_m3d_danger_map_match_arm_fires_byte_identical() {
+    // WHY: a heap-pointer return (`map<int, int>`) packed inside a `match` arm. The map's heap
+    // pointer travels through the result slot; that pack/bind must survive match-arm machinery.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_map_match_arm.ynz", "3\n5");
+}
+
+#[test]
+fn v03_m3d_danger_mixed_string_declines_byte_identical() {
+    // WHY: a mixed group with a heap-pointer (`string`) CPU child DECLINES — mixed CPU+I/O
+    // overlap is M3g, not M3d. The heap-pointer pack must not make the mixed group fire here.
+    // 0 spawns + byte-identical locks the decline for the heap-pointer CPU-child case.
+    m3d_assert_declines_byte_identical(
+        "v0_3_m3d_danger_mixed_string_declines.ynz",
+        "built=3\nwaited",
+    );
+}
+
+#[test]
+fn v03_m3d_danger_mixed_number_declines_byte_identical() {
+    // WHY: a mixed group with a wide-value (`number`) CPU child DECLINES — mixed CPU+I/O overlap
+    // is M3g, not M3d. The decline keeps the program clean (no number leak here, since the group
+    // never fires). 0 spawns + byte-identical locks the wide-value mixed-child decline.
+    m3d_assert_declines_byte_identical("v0_3_m3d_danger_mixed_number_declines.ynz", "6.0\n2.5");
+}
+
+#[test]
+fn v03_m3d_danger_string_loop_body_declines_byte_identical() {
+    // WHY: a heap-pointer (`string`) group inside a loop body DECLINES — loop-body CPU groups are
+    // a future loop-placement slice, not M3d. The heap-pointer pack must not make a loop-body
+    // group fire. 0 spawns + byte-identical locks the loop-body decline for the heap-pointer case.
+    m3d_assert_declines_byte_identical("v0_3_m3d_danger_string_loop_body_declines.ynz", "hi=2");
+}
+
+#[test]
+fn v03_m3d_danger_read_after_arm_declines_byte_identical() {
+    // WHY: a CPU group inside a `match` arm whose results are READ in a statement AFTER the arm
+    // closes DECLINES — the result must survive the arm boundary as a crossing local, which the
+    // arm-placement path does not reserve for cross-boundary reads. This locks the boundary:
+    // reads kept INSIDE the arm FIRE (danger_bool_match_arm), reads that cross OUT decline. 0
+    // spawns + byte-identical. If this fired, the cross-arm crossing-slot path is being exercised
+    // without the reservation — fix the crossing machinery, not this test.
+    m3d_assert_declines_byte_identical(
+        "v0_3_m3d_danger_read_after_arm_declines.ynz",
+        "false\ntrue",
+    );
+}
+
+// WHY (group): structured stress cases that feature-development testing does not naturally hit —
+// deep promotion chains, recursion, nested background spawns, reverse completion order, and loop
+// trip-count boundaries. Each asserts the expected FIRE/DECLINE plus byte-identical output. The
+// pool-exhaustion (>=512 concurrent joins), cancellation-mid-join, and panic-reraise ABI cases
+// live at the runtime-crate unit-test level (saturation_600_joins, drop_detach_no_uaf,
+// discriminator_drop_frees_spike_handles, panic_reraises_in_parent in ynz-runtime) because the
+// Yinz source layer cannot express 600 joins or an out-of-band cancellation in one program; the
+// source-expressible panic case is v03_m3d_cpu_child_panic_fires_byte_identical above.
+
+#[test]
+fn v03_m3d_hostile_deep_promoted_chain_fires_byte_identical() {
+    // WHY: a deep call chain (top → middle → combine) where the bottom function hosts the CPU
+    // group and the enclosing callers are state machines driving the one below. The bottom group
+    // must still FIRE through the chain. 2 spawns + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_hostile_deep_promoted_chain.ynz", "102");
+}
+
+#[test]
+fn v03_m3d_hostile_cpu_child_spawns_background_fires_byte_identical() {
+    // WHY: a CPU child that itself spawns a `background` task — the spawn-from-a-blocking-pool
+    // thread path. The CPU group must FIRE, the nested spawn must not crash, and the result must
+    // be byte-identical in both modes. The detached background task's own output is not part of
+    // the contract (it may not flush before exit).
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_hostile_cpu_child_spawns_background.ynz",
+        "3675",
+    );
+}
+
+#[test]
+fn v03_m3d_hostile_reverse_completion_fires_byte_identical() {
+    // WHY: reverse completion order — a HEAVY child finishes long after a LIGHT child, so the
+    // children complete out of declaration order. The post-join binds must stay attached to the
+    // right member regardless of completion order (slots keyed by position, not finish time).
+    // Output is order-independent (12497500, 3) and byte-identical.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_hostile_reverse_completion.ynz",
+        "12497500\n3",
+    );
+}
+
+#[test]
+fn v03_m3d_hostile_self_recursive_group_declines_byte_identical() {
+    // WHY: a self-recursive function holding a CPU group in its base case DECLINES — a function
+    // in a call cycle is excluded from parallelization (recursion's heap-boxed frame would
+    // intersect the per-member handle/result slots). 0 spawns + byte-identical locks the
+    // recursion exclusion. If this fired, recursion × per-member-slot is being exercised unsafely.
+    m3d_assert_declines_byte_identical("v0_3_m3d_hostile_self_recursive_group_declines.ynz", "100");
+}
+
+#[test]
+fn v03_m3d_hostile_mixed_reverse_completion_declines_byte_identical() {
+    // WHY: a mixed group (CPU child + I/O child) where the CPU child would complete BEFORE the
+    // I/O child suspends — the highest-risk completion ordering for a shared continuation across
+    // two child classes. Mixed CPU+I/O is M3g, so this DECLINES: 0 spawns + byte-identical.
+    m3d_assert_declines_byte_identical(
+        "v0_3_m3d_hostile_mixed_reverse_completion_declines.ynz",
+        "4958",
+    );
+}
+
+#[test]
+fn v03_m3d_hostile_worth_it_false_negative_declines_byte_identical() {
+    // WHY: a worth-it FALSE NEGATIVE — heavy-looking straight-line callees with no loop or
+    // self-call, so the loop/recursion-keyed worth-it proxy declines them. A false negative is
+    // only a missed perf opportunity, never a wrong answer: 0 spawns + byte-identical output.
+    // This locks that the proxy is a perf gate, never a correctness gate.
+    m3d_assert_declines_byte_identical(
+        "v0_3_m3d_hostile_worth_it_false_negative_declines.ynz",
+        "82\n177",
+    );
+}
+
+#[test]
+fn v03_m3d_hostile_zero_iteration_loop_group_declines_byte_identical() {
+    // WHY: a CPU group inside a ZERO-iteration loop body — the boundary case for the loop-body
+    // decline. The loop never runs, the group declines (loop-body groups are a future slice), the
+    // accumulator stays at its initial value. 0 spawns + byte-identical, output 0.
+    m3d_assert_declines_byte_identical(
+        "v0_3_m3d_hostile_zero_iteration_loop_group_declines.ynz",
+        "0",
+    );
+}
+
+#[test]
+fn v03_m3d_hostile_many_iteration_loop_group_declines_byte_identical() {
+    // WHY: a CPU group inside a 10,000-iteration loop body — the high-trip-count stress companion
+    // to the zero-iteration boundary. The loop-body decline must hold whether the body runs zero
+    // or ten thousand times, with byte-identical accumulated output. 0 spawns + byte-identical.
+    m3d_assert_declines_byte_identical(
+        "v0_3_m3d_hostile_many_iteration_loop_group_declines.ynz",
+        "100890000",
+    );
+}
+
 #[test]
 fn v03_m3b_p4_wait_barrier_first_correct_output() {
     // WHY: `wait` as the first call is an ordering barrier — waiter must complete

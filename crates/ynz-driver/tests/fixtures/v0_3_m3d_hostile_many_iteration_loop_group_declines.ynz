@@ -1,0 +1,39 @@
+// v0.3-M3d hostile fixture — two calls inside a high-pass-count (10,000-pass) loop body. Running
+// two calls at the same time inside a loop body is OUT of scope for M3d (a later loop-placement
+// slice — see the Scope Boundary), so they run one after the other in plain sequence regardless
+// of how many times the loop runs. The high pass count is the stress companion to the
+// zero-pass boundary case — the result must be identical between default and --no-auto-parallel
+// whether the loop body runs zero times or ten thousand.
+//
+// score(seed) loops a small fixed amount per call, so the per-pass cost is bounded.
+//
+// Arithmetic: per pass, score(k)+score(k) = 2*(45+k) where 45 = sum(0..10).
+//   total = sum over k in 0..10000 of 2*(45+k) = 2*(45*10000 + sum(0..10000))
+//         = 2*(450000 + 49995000) = 2*50445000 = 100890000.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   100890000
+
+function score(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 10) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function combine() -> int {
+  let acc = 0
+  for (k in range(0, 10000)) {
+    let lo = score(k)
+    let hi = score(k)
+    acc = acc + lo + hi
+  }
+  return acc
+}
+
+function entrypoint() -> nothing {
+  print(combine())
+}

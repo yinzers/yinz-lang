@@ -1,0 +1,37 @@
+// v0.3-M3d danger matrix — two calls to the SAME string-returning function with DIFFERENT
+// inputs, run at the same time inside an `if` branch. Each call's result is kept separate, so
+// the two differ (n=3, n=7) — if they were mixed up the two prints would match instead. Both
+// print the same lines whether or not the two calls run at the same time.
+//
+// label(n) loops, so it is worth running alongside the other call, then returns a string built
+// from the input.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   n=3
+//   n=7
+
+function label(n: int) -> string {
+  let count: int = 0
+  let i: int = 0
+  while (i < n) {
+    count = count + 1
+    i = i + 1
+  }
+  return `n=${count}`
+}
+
+function combine() -> string {
+  let result: string = ``
+  let go = true
+  if (go) {
+    let lo = label(3)
+    let hi = label(7)
+    result = `${lo}\n${hi}`
+  }
+  return result
+}
+
+function entrypoint() -> nothing {
+  let r = combine()
+  print(r)
+}
