@@ -992,9 +992,7 @@ pub unsafe extern "C-unwind" fn ynz_rt_run_entrypoint(
     }
 }
 
-// ── v0.3-M3d: CPU-parallel join shims ─────────────────────────────────────────
-//
-// These three shims back the joinable CPU-spawn mechanism for pure-CPU statement
+// The CPU-parallel join shims back the joinable CPU-spawn mechanism for pure-CPU statement
 // parallelization. ABI invariants (locked in the P0 Decision Record):
 //
 //   YnzCpuResult = [i64; 2] (16-byte POD, covers every supported return class:

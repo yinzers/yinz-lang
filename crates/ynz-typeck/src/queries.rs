@@ -543,8 +543,6 @@ pub fn check_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Check
     })
 }
 
-// ── v0.3-M3d CPU-statement promotion query ────────────────────────────────────
-
 /// The result of the CPU-statement promotion analysis.
 ///
 /// `promoted` is the set of NON-suspending functions that become state machines
@@ -1040,8 +1038,6 @@ fn candidates_reachable_from(
     reachable
 }
 
-// ── v0.3-M3d CPU-promotion tests ──────────────────────────────────────────────
-
 #[cfg(test)]
 mod promotion_tests {
     use super::*;
@@ -1382,8 +1378,8 @@ function entrypoint() -> nothing {{
         );
     }
 
-    // ── Guard-probe decline: a CPU group whose host would trip a suspension guard
-    //    declines silently and the program still compiles with no new errors. ──
+    // Guard-probe decline: a CPU group whose host would trip a suspension guard declines
+    // silently and the program still compiles with no new errors.
 
     /// Run the full check pass and return whether it produced any ERROR diagnostic.
     fn has_errors(src: &str) -> bool {

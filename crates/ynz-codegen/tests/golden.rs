@@ -901,3 +901,116 @@ fn two_cpu_groups_decline_emits_no_spawn() {
          joinable-spawn call instructions:\n{ir}"
     );
 }
+
+/// Number of `ynz_rt_spawn_blocking_joinable` call instructions in `ir` — one per spawned CPU
+/// group member.
+fn joinable_spawn_count(ir: &str) -> usize {
+    ir.lines()
+        .filter(|l| l.contains("call") && l.contains("ynz_rt_spawn_blocking_joinable"))
+        .count()
+}
+
+/// The admitted CPU group for the named function in `source`, computed exactly the way the
+/// inlay-hint pass and codegen compute it (effective suspend set + CPU-ABI supported callees).
+/// Returns `None` when the authority declines to spike-host the function.
+fn admitted_group_for(
+    source: &str,
+    fn_name: &str,
+) -> Option<ynz_typeck::cpu_admission::AdmittedCpuGroup> {
+    use ynz_typeck::cpu_admission::admitted_cpu_group;
+    use ynz_typeck::queries::{check_query, module_signatures_query};
+    use ynz_typeck::signatures::build_effective_suspend_set;
+
+    let db = CompilerDb::default();
+    let sf = SourceFile::new(
+        &db,
+        format!("/tmp/ynz_xpin_{fn_name}.ynz"),
+        source.to_string(),
+    );
+
+    let sig_output = module_signatures_query(&db, sf);
+    let check_out = check_query(&db, sf);
+    let effective_suspends =
+        build_effective_suspend_set(&check_out.suspends_set, &sig_output.imported_fns);
+    let supported: std::collections::HashSet<String> = sig_output
+        .sig_table
+        .fns
+        .iter()
+        .filter(|(_, sig)| ynz_typeck::independence::cpu_result_abi_supports(&sig.ret))
+        .map(|(name, _)| name.clone())
+        .collect();
+
+    let parse = ynz_parser::parse_query(&db, sf);
+    let f = parse.module.items.iter().find_map(|it| match it {
+        ynz_ast::nodes::Item::Function(f) if f.name == fn_name => Some(f),
+        _ => None,
+    })?;
+    admitted_cpu_group(f, &effective_suspends, &supported)
+}
+
+const XPIN_FIRE_SOURCE: &str = r#"
+function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+
+function entrypoint() -> nothing {
+  let a = fib(20)
+  let b = fib(21)
+  print(a)
+  print(b)
+}
+"#;
+
+#[test]
+fn cross_pin_fire_spawn_count_equals_admitted_member_count() {
+    // WHY: pins the BINARY's emitted spawn count directly to the single admission AUTHORITY
+    //      (`admitted_cpu_group`), not to a hardcoded literal. The hint side is already pinned to
+    //      the authority (ynz-typeck/tests/parallel_group_hint_parity.rs); without this the codegen
+    //      side only asserted hand-written `expected_spawns` numbers, so a unification bug that
+    //      silently changed which members spawn could go green. The invariant: for an admitted
+    //      function, codegen emits exactly one `ynz_rt_spawn_blocking_joinable` per admitted group
+    //      member. If you're tempted to relax `== members.len()` to a tolerance or a literal, the
+    //      bug is a spike-admission/codegen divergence — fix that, not this assertion.
+    let ir = run_m2_sm_codegen("xpin_fire.ynz", XPIN_FIRE_SOURCE);
+    let spawns = joinable_spawn_count(&ir);
+
+    let group =
+        admitted_group_for(XPIN_FIRE_SOURCE, "entrypoint").expect("entrypoint must be admitted");
+    assert_eq!(
+        spawns,
+        group.member_indices.len(),
+        "emitted joinable-spawn count ({spawns}) must equal the authority's admitted member count \
+         ({}); a mismatch is a spike-admission ⇄ codegen divergence (the exact hint↔binary \
+         silent-drift class). IR:\n{ir}",
+        group.member_indices.len()
+    );
+    // Sanity: a clean 2-member group fires 2 spawns. If this changes, the fixture changed, not the
+    // invariant — the assertion above is the real guard.
+    assert_eq!(spawns, 2, "clean 2-member group must spawn exactly 2");
+}
+
+#[test]
+fn cross_pin_decline_means_zero_spawns() {
+    // WHY: the DECLINE half of the cross-pin invariant — `admitted_cpu_group(...) == None` MUST
+    //      coincide with ZERO emitted spawns. Together with the FIRE test this makes the binary's
+    //      spawn behavior a direct function of the admission authority in BOTH directions, closing
+    //      the gap the prior hardcoded-`expected_spawns` golden tests left open. A two-CPU-group
+    //      function is the canonical decline (single-group constraint). If this fails, an admission
+    //      change started spawning for a declined function — fix the divergence, not this test.
+    let ir = run_m2_sm_codegen("xpin_decline.ynz", TWO_CPU_GROUPS_SOURCE);
+    let spawns = joinable_spawn_count(&ir);
+
+    let group = admitted_group_for(TWO_CPU_GROUPS_SOURCE, "entrypoint");
+    assert!(
+        group.is_none(),
+        "two-CPU-group function must be DECLINED by the authority; got {group:?}"
+    );
+    assert_eq!(
+        spawns, 0,
+        "a declined function (admitted_cpu_group == None) must emit ZERO spawns; got {spawns}. \
+         IR:\n{ir}"
+    );
+}

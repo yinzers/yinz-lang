@@ -205,12 +205,10 @@ pub struct RuntimeDecls<'ctx> {
     //   Uses Handle::block_on on Tokio threads; RUNTIME.block_on outside Tokio.
     pub ynz_rt_run_entrypoint: FunctionValue<'ctx>,
 
-    // ── v0.3-M3d: joinable CPU spawn + poll + drop ───────────────────────
-    //
-    // These three functions implement the poll-based CPU join protocol (production
-    // runtime ABI). They are declared unconditionally so the LLVM module is always
-    // valid; call sites are emitted by the CPU-group join lowering for any function the
-    // typeck `cpu_promotion_query` promotes (a module that promotes nothing emits none).
+    // The joinable CPU spawn/poll/drop functions implement the poll-based CPU join protocol
+    // (production runtime ABI). They are declared unconditionally so the LLVM module is always
+    // valid; call sites are emitted by the CPU-group join lowering for any function the typeck
+    // `cpu_promotion_query` promotes (a module that promotes nothing emits none).
     //
     // ynz_rt_spawn_blocking_joinable(fn_ptr, ctx_ptr, ctx_size) → *mut u8
     //   fn_ptr: extern "C" fn(*mut u8) -> YnzCpuResult  (trampoline calling the real fn)

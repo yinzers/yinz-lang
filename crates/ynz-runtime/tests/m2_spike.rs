@@ -1906,8 +1906,6 @@ fn sync_bridge_overhead_measurement() {
     });
 }
 
-// ── v0.3-M3d: post-shutdown joinable-spawn discard ────────────────────────────
-//
 // WHY: ynz_rt_spawn_blocking_joinable's post-shutdown branch (RUNTIME populated, inner
 // None after shutdown) must DISCARD by returning null — never panic, abort, or spawn onto
 // a dead runtime. spawn_before_init_returns_null (in lib.rs unit tests) only covers the

@@ -254,7 +254,7 @@ function entrypoint() -> nothing {
   wait m3b_demo()
   // ────── v0.3-M3f: codegen correctness — same-callee EC + parallel bool ──────
   wait m3f_demo()
-  // ────── v0.3-M3d: pure-CPU parallelization — independent crunches on separate cores ──────
+  // v0.3-M3d: pure-CPU parallelization — independent crunches on separate cores.
   // No `wait`: m3d_demo is pure-CPU (it never suspends), so there is nothing to order against.
   // The three crunches inside it run at the same time on separate cores.
   m3d_demo()
@@ -959,7 +959,7 @@ function m3f_demo() -> nothing {
   }
 }
 
-// ── v0.3-M3d: pure-CPU parallelization — independent crunches run on separate cores ──
+// v0.3-M3d: pure-CPU parallelization — independent crunches run on separate cores.
 //
 // When several independent number-crunching calls sit next to each other with no data
 // flowing between them, the compiler runs them all at the same time on separate cores.

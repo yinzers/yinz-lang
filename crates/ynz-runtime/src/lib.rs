@@ -2772,11 +2772,9 @@ unsafe fn bignum_binop(
     cstr.into_raw()
 }
 
-// ── v0.3-M3d: CPU-parallel join shim tests ────────────────────────────────────
-//
-// These tests exercise the three production C-ABI shims in isolation — without any Yinz
-// codegen involved — pinning the poll-based join ABI contract so codegen can emit calls
-// against it without re-litigating the runtime semantics.
+// The CPU-parallel join shim tests exercise the three production C-ABI shims in isolation —
+// without any Yinz codegen involved — pinning the poll-based join ABI contract so codegen can
+// emit calls against it without re-litigating the runtime semantics.
 //
 // All tests run through a real Tokio runtime (not mocked) to confirm:
 //   1. value roundtrip per return class — int, float (bit-cast), pointer, decimal128

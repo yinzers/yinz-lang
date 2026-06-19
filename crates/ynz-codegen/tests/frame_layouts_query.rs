@@ -294,8 +294,6 @@ fn reexport_chain_b_total_size_includes_a_sub_frame() {
     );
 }
 
-// ── M3d slice-1 — spike-host admission agrees across query boundaries ─────────────────────
-
 #[test]
 fn imported_suspending_after_pair_declines_consistently_across_boundaries() {
     // WHY: the spike-host decision is made at TWO salsa query boundaries — `frame_layouts_query`

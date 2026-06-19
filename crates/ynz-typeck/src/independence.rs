@@ -194,8 +194,6 @@ fn flush_pending<'a>(pending: &mut Vec<&'a Stmt>, groups: &mut Vec<IndependentGr
     }
 }
 
-// ── Class-aware (CPU + I/O) candidacy (v0.3-M3d) ──────────────────────────────
-
 /// The execution class of a parallel-group member.
 ///
 /// A `Parallel` group from [`partition_groups_classified`] may MIX classes

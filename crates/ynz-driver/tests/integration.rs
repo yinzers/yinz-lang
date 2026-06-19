@@ -5819,8 +5819,6 @@ fn v03_m3d_return_class_maybe_declines_and_ir_inert() {
     );
 }
 
-// ── v0.3-M3d Phase 3 Slice 3: same-callee distinctness + worth-it/trivial-leaf ────────
-//
 // Slice 2 proved DISTINCT-callee parallelism for the full return-class matrix. These tests
 // prove SAME-callee distinctness: two adjacent calls to the SAME function name with DIFFERENT
 // arguments must bind DISTINCT, correct results. That is the per-(group, member-index) keying
@@ -5920,8 +5918,6 @@ fn v03_m3d_worth_it_loop_callee_fires() {
     m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_worth_it_loop_overlaps.ynz", "190\n420");
 }
 
-// ── v0.3-M3d runtime-correctness axis: compile-forced fixture coverage ─────────────────
-//
 // The R6 `cpu_result_abi_gate_parity` test (ynz-codegen `emit.rs`) compile-forces the
 // CLASSIFICATION axis: every `ynz_typeck::types::Type` variant must be classified admit/decline,
 // and the two gate functions must agree. It does NOT force the RUNTIME-CORRECTNESS axis — an
@@ -5967,7 +5963,7 @@ enum RuntimeAxisCoverage {
 fn runtime_axis_coverage(variant: &ynz_typeck::types::Type) -> RuntimeAxisCoverage {
     use ynz_typeck::types::Type;
     match variant {
-        // ── Admitted (FIRE) classes: each names its distinct-callee + same-callee fixtures ──
+        // Admitted (FIRE) classes: each names its distinct-callee + same-callee fixtures.
         Type::Int => RuntimeAxisCoverage::Fires {
             distinct: &[
                 "v0_3_m3d_spike_a_distinct.ynz",
@@ -6010,7 +6006,7 @@ fn runtime_axis_coverage(variant: &ynz_typeck::types::Type) -> RuntimeAxisCovera
             distinct: &["v0_3_m3d_return_class_int_errors.ynz"],
             same_callee: "v0_3_m3d_same_callee_int_errors.ynz",
         },
-        // ── Declined classes: sequential lowering, no FIRE fixture ──
+        // Declined classes: sequential lowering, no FIRE fixture.
         Type::BuiltinFixed { .. } => RuntimeAxisCoverage::Declines(
             "fixed's non-suspending return is a pre-existing base bug",
         ),

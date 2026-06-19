@@ -6507,12 +6507,10 @@ fn is_direct_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool {
     false
 }
 
-// ── v0.3-M3d: CPU-parallel join helpers ──────────────────────────────────────
-//
-// Code in this section fires for any function the typeck `cpu_promotion_query` promotes
-// (the production trigger). The poll-based CPU join mechanism it emits was proven
-// end-to-end through the real compiler in Phase 0; later slices generalize the layout
-// from the fixed Phase-0 two-member group to N-member / multi-group bodies.
+// The CPU-parallel join helpers fire for any function the typeck `cpu_promotion_query` promotes
+// (the production trigger). The poll-based CPU join mechanism they emit was proven end-to-end
+// through the real compiler in Phase 0; later slices generalize the layout from the fixed
+// Phase-0 two-member group to N-member / multi-group bodies.
 
 /// Cross-crate frame-ABI binding: the runtime's CPU-handle region begins immediately after
 /// the state-machine frame header, so `ynz_abi::SPIKE_HANDLE_BASE_OFFSET` MUST equal codegen's
@@ -6663,27 +6661,23 @@ fn spike_host_cpu_supported<'a>(
     }
 }
 
-/// True when any of `f`'s parameters is READ in a statement that runs AFTER the CPU group's join.
-/// Delegates to the typeck admission module — the single source the inlay-hint pass also reads.
-fn spike_param_read_after_join(f: &FunctionDecl, post_stmts: &[Stmt]) -> bool {
-    ynz_typeck::cpu_admission::param_read_after_join(f, post_stmts)
-}
-
-/// Detect a 2-member CPU-parallel candidate group in `f`.
+/// The representative (first) callee of `f`'s single admitted CPU group, or `None` when the
+/// function lowers sequentially.
 ///
-/// Returns `Some(callee_name)` when `f` contains an adjacent pair of `let x = callee(...)`
-/// statements whose callees:
-/// - are NOT in the suspend_set (pure CPU — not a state machine)
-/// - return a class that fits the `YnzCpuResult` ABI (`return_type_fits_cpu_result_abi`)
+/// The admission DECISION is delegated to `ynz_typeck::cpu_admission::admitted_cpu_group` — the
+/// single authority the `parallel_groups` inlay-hint pass also consumes, so the binary's spawn
+/// set and the IDE's "separate core" hint set can never disagree (a second composition of the
+/// gate sequence here would re-open the hint↔binary silent-drift class). This function only maps
+/// the admitted group to its representative callee for the frame-reservation site.
 ///
-/// The group may be at the top level of `f`'s body OR inside ONE straight-line nested branch
-/// block (an `if`/`match` arm). Both placements reserve the same group-0 handle/result slots
-/// (32/40/48/64) — a nested group is not a wider frame, just a later spawn site. A top-level
-/// group is reported directly; a nested group is reported when it is the function's sole group.
-/// Loop bodies are excluded (`spike_nested_blocks`): a group inside a `for`/`while` body needs
-/// loop-index crossing-slot work that is not yet implemented (see .claude/todos.md).
+/// A group fits when it is an adjacent run (N ≥ 2) of `let x = callee(...)` statements whose
+/// callees are NOT suspending (pure CPU) and return a class fitting the `YnzCpuResult` ABI
+/// (`return_type_fits_cpu_result_abi`). The group may be top-level or inside ONE straight-line
+/// nested branch block (an `if`/`match` arm); both placements reserve the same group-0
+/// handle/result slots (32/40/48/64). Loop bodies are excluded (`spike_nested_blocks`).
 ///
-/// **Admission envelope** (all must hold; sequential fallback is always correct):
+/// **Admission envelope** (enforced by the authority; all must hold; sequential fallback is
+/// always correct):
 /// - No post-join param read — the wrapper writes param slot 0 at byte 32 (the start of the
 ///   CPU-handle region, `ynz_abi::SPIKE_HANDLE_BASE_OFFSET`), so the spawn's handle store
 ///   overwrites byte 32. A parameter loaded into the group's spawn args (before the handle
@@ -6724,84 +6718,38 @@ fn spike_cpu_candidates(
 
     let supported = cpu_supported_callees(typed);
 
-    // Single-group constraint: a function spike-hosts IFF it has EXACTLY ONE CPU group across
-    // all depths (top-level OR nested). The reservation sizes for one group-0 slot region
-    // (handles/results at 32/40/48/64) and the `!m3d_spike_fired` dispatch claims it for the
-    // first group lowering reaches. A function with two-or-more groups (e.g. a top-level group
-    // AND a nested arm group, or two nested groups, in ANY source order) would spike-host more
-    // than one group into that same single slot region, aliasing the earlier group's handles —
-    // a silent wrong answer. Zero groups means nothing to host. Either way, decline ALL spiking
-    // and lower the whole function sequentially, which is always byte-identical to
-    // `--no-auto-parallel`.
-    //
-    // This count check runs BEFORE selecting any representative callee so the multi-group
-    // decline is order-independent: a nested group appearing before a top-level group in source
-    // declines identically to the reverse order. Partial multi-group hosting (fire one group,
-    // decline the rest) needs per-group slot reservation that is not yet implemented (see
-    // .claude/todos.md).
-    if count_cpu_groups_all_depths(&f.body.stmts, suspend_set, &supported) != 1 {
-        return None;
-    }
+    // The admission DECISION (single-group constraint, post-join param-read decline,
+    // nested-suspension decline, nested-param decline, nested-path selection) is owned by
+    // `ynz_typeck::cpu_admission::admitted_cpu_group` — the single authority the
+    // `parallel_groups` inlay-hint pass also reads. Codegen does NOT re-decide it here: a
+    // second composition of the same gate sequence would drift from the hint's composition (the
+    // hint↔binary silent-drift class — see .claude/graveyard.md "Silent Envelope Narrowing").
+    // When the authority declines (`None`), the whole function lowers sequentially, byte-
+    // identical to `--no-auto-parallel`. When it admits, this function maps the admitted group
+    // to its representative (first) callee — an EXTRACTION step, not a re-decision.
+    let group = ynz_typeck::cpu_admission::admitted_cpu_group(f, suspend_set, &supported)?;
+    spike_group_representative_callee(f, &group, suspend_set, &supported)
+}
 
-    // Exactly one group. A top-level group is hosted by the depth-0 spike path and is the
-    // representative the frame reservation sizes for (the group-0 handle/result slots).
-    if let Some(callee) = spike_pair_in_block(&f.body.stmts, suspend_set, &supported) {
-        // Param-host safety: the spike frame writes param slot 0 at byte 32 — the byte the first
-        // CPU handle occupies — so a parameter READ after the join would reload the handle
-        // pointer's bytes instead of its value. The spawn-arg load happens BEFORE the handle
-        // store, so a param used ONLY in the group's call args round-trips safely. Decline only
-        // when a param is read in a post-join statement; otherwise the param-host fires. (The
-        // read-after-join case needs param-slot reservation past the CPU region — see
-        // .claude/todos.md.)
-        if let Some(members) =
-            spike_cpu_group_member_indices(&f.body.stmts, suspend_set, &supported)
-        {
-            let last_idx = *members.last().expect("group has ≥2 members");
-            let post_stmts = &f.body.stmts[(last_idx + 1)..];
-            if spike_param_read_after_join(f, post_stmts) {
-                return None;
-            }
-        }
-        return Some(callee);
+/// Map an admitted CPU group to its representative (first) callee name by navigating the group's
+/// `block_path` to the block that holds it, then reading the first member's callee. This is a
+/// pure extraction over the decision `admitted_cpu_group` already made — it does not re-run any
+/// admission gate. Returns `None` only if the path is malformed (the authority and the navigation
+/// disagree on structure), which cannot happen for a group the authority just produced.
+///
+/// Time: O(D + n) where D = nesting depth, n = target block length  Space: O(1).
+fn spike_group_representative_callee(
+    f: &FunctionDecl,
+    group: &ynz_typeck::cpu_admission::AdmittedCpuGroup,
+    suspend_set: &SuspendSet,
+    supported: &std::collections::HashSet<String>,
+) -> Option<String> {
+    let mut block: &[Stmt] = &f.body.stmts;
+    for step in &group.block_path {
+        let stmt = block.get(step.stmt_index)?;
+        block = *spike_nested_blocks(stmt).get(step.block_index)?;
     }
-
-    // The sole group is placed inside one straight-line nested branch block (an `if`/`match`
-    // arm); it is hosted from the recursive `lower_sm_block` for that body and reuses the SAME
-    // group-0 frame slots (32/40/48/64) — the reservation is identical to a top-level group, so
-    // no extra layout work is needed.
-    //
-    // A nested group declines when the host also contains any OTHER suspension point — an
-    // explicit `wait`, or a call to a suspending callee. Result allocas for the group's bind
-    // names are pre-allocated in `sm_entry` only by Step 1c, which scans the TOP-LEVEL body
-    // non-recursively; a nested group's pair is invisible to that scan, so its result allocas
-    // are never created. When the only suspension is the nested-group join itself, the
-    // immediate post-join reload passes `reload_spike_results=false` and never needs those
-    // allocas. But a SECOND suspension point resumes through `reload_params_from_frame` with
-    // `reload_spike_results=true`, which looks the bind names up in the (empty) alloca map and
-    // aborts the backend ("no sm_entry alloca"). The host is pure-CPU IFF its only suspension is
-    // the nested join, so declining when any other suspension exists keeps the nested fire safe.
-    // Firing this requires Step 1c to walk nested blocks so a nested group's bind names ARE
-    // pre-allocated — a mixed-CPU+I/O concern tracked in .claude/todos.md.
-    if f.body
-        .stmts
-        .iter()
-        .any(|s| stmt_contains_wait(s) || stmt_contains_suspending_call(s, suspend_set))
-    {
-        return None;
-    }
-
-    // Nested-group param-host: a param read after a nested join can live either inside the
-    // nested block (after the pair) or in the top-level body after the branch. Tracking that
-    // post-join frontier across the branch boundary is the same param-slot reservation work the
-    // top-level read-after-join case defers (.claude/todos.md). Until that lands, a nested group
-    // in a function that takes a parameter declines — the spawn-args-only safe case is currently
-    // only fired for top-level groups, where the post-join frontier is a single straight-line
-    // slice. A zero-param nested host is unaffected and fires as before.
-    if !f.params.is_empty() {
-        return None;
-    }
-
-    spike_nested_group_callee(&f.body.stmts, suspend_set, &supported)
+    spike_pair_in_block(block, suspend_set, supported)
 }
 
 /// Find the first admissible adjacent CPU pair in a single straight-line statement list and
@@ -6949,25 +6897,6 @@ fn stmt_block_has_direct_cpu_group(
 ) -> bool {
     let supported = cpu_supported_callees(typed);
     spike_pair_in_block(stmts, suspend_set, &supported).is_some()
-}
-
-/// The representative callee of the single CPU group nested inside `stmts` (one level into an
-/// `if`/`match` arm), searched in lowering order. The caller has
-/// already established (via `count_cpu_groups_all_depths`) that exactly one group exists, so
-/// the first nested group found is THE group. Returns the same callee `spike_pair_in_block`
-/// reports for that nested block.
-///
-/// Time: O(N) where N = AST nodes  Space: O(D) recursion depth.
-fn spike_nested_group_callee(
-    stmts: &[Stmt],
-    suspend_set: &SuspendSet,
-    cpu_supported_callees: &std::collections::HashSet<String>,
-) -> Option<String> {
-    ynz_typeck::cpu_admission::nested_group_representative_callee(
-        stmts,
-        suspend_set,
-        cpu_supported_callees,
-    )
 }
 
 /// Of the functions typeck promoted, the subset codegen will actually spike-HOST in this
@@ -16499,8 +16428,8 @@ fn try_build_shape_global<'ctx>(
 mod tests {
     use super::{
         build_cpu_group_slots, count_cpu_groups_all_depths, cpu_slot_reserve_slots,
-        function_contains_wait, return_type_fits_cpu_result_abi, spike_nested_group_callee,
-        spike_pair_in_block, CpuGroupSlot, FrameLayout,
+        function_contains_wait, return_type_fits_cpu_result_abi, spike_pair_in_block, CpuGroupSlot,
+        FrameLayout,
     };
     use std::collections::HashSet;
     use ynz_ast::nodes::{Block, CallExpr, Expr, MatchArm, MatchPattern, MatchPatternKind, Stmt};
@@ -16512,8 +16441,9 @@ mod tests {
     }
 
     // These exercise the pure block-scan helpers (`spike_pair_in_block`,
-    // `count_cpu_groups_all_depths`, `spike_nested_group_callee`) directly on hand-built
-    // statement lists — no TypedModule needed because they take the CPU-callee set as input.
+    // `count_cpu_groups_all_depths`, and the authority's `nested_group_representative_callee`)
+    // directly on hand-built statement lists — no TypedModule needed because they take the
+    // CPU-callee set as input.
 
     /// `let _ = callee(0)` — one admissible CPU-call statement (callee returns a CPU-ABI class
     /// and is not suspending, as long as `callee` is in the passed cpu-supported set).
@@ -16645,7 +16575,7 @@ mod tests {
         use ynz_typeck::types::Type as Resolved;
         let span = dummy_span();
         match variant {
-            // ── Admitted classes: value or single owning heap pointer fits the 16-byte slot ──
+            // Admitted classes: a value or single owning heap pointer fits the 16-byte slot.
             Resolved::Int => ParityCase::Reachable {
                 label: "int",
                 ast: Ast::Int,
@@ -16715,7 +16645,7 @@ mod tests {
                 bare_expected: true,
                 ec_expected: true,
             },
-            // ── Declined classes: sequential lowering is always correct, never an error ──
+            // Declined classes: sequential lowering is always correct, never an error.
             // `fixed` lowers to `BuiltinFixed`; its non-suspending return path is a pre-existing
             // base bug, so it declines in both positions (admitting it would be dead anyway).
             Resolved::BuiltinFixed { .. } => ParityCase::Reachable {
@@ -17214,34 +17144,42 @@ mod tests {
     }
 
     // WHY: when a group lives one level inside an `if`/`match` arm,
-    // `spike_nested_group_callee` must find it (the representative the reservation sizes for). A
-    // group inside a `for` or `while` body must NOT be found (a loop body has no reserved
-    // synthetic iteration index to frame-back, so it is not a hosting site — it DECLINES).
+    // `nested_group_representative_callee` must find it (the representative the reservation sizes
+    // for). A group inside a `for` or `while` body must NOT be found (a loop body has no reserved
+    // synthetic iteration index to frame-back, so it is not a hosting site — it DECLINES). This
+    // is the authority codegen now reads through `admitted_cpu_group` for its nested-group path.
     #[test]
-    fn spike_nested_group_callee_finds_branch_group_not_loop() {
+    fn nested_group_representative_callee_finds_branch_group_not_loop() {
+        use ynz_typeck::cpu_admission::nested_group_representative_callee;
         let cpu = cpu_callee_set();
         let susp = empty_suspend();
         let pair = || vec![cpu_call_let("lo", "score"), cpu_call_let("hi", "score")];
 
         let nested_if = vec![if_stmt(pair())];
         assert_eq!(
-            spike_nested_group_callee(&nested_if, &susp, &cpu),
+            nested_group_representative_callee(&nested_if, &susp, &cpu),
             Some("score".to_string())
         );
 
         let nested_match = vec![match_stmt(pair())];
         assert_eq!(
-            spike_nested_group_callee(&nested_match, &susp, &cpu),
+            nested_group_representative_callee(&nested_match, &susp, &cpu),
             Some("score".to_string())
         );
 
         // A group in a `for` body is NOT a hosting site → None.
         let nested_for = vec![for_stmt(pair())];
-        assert_eq!(spike_nested_group_callee(&nested_for, &susp, &cpu), None);
+        assert_eq!(
+            nested_group_representative_callee(&nested_for, &susp, &cpu),
+            None
+        );
 
         // A group in a `while` body is NOT a hosting site → None.
         let nested_while = vec![while_stmt(pair())];
-        assert_eq!(spike_nested_group_callee(&nested_while, &susp, &cpu), None);
+        assert_eq!(
+            nested_group_representative_callee(&nested_while, &susp, &cpu),
+            None
+        );
     }
 
     fn wait_expr() -> Expr {

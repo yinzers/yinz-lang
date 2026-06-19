@@ -41,7 +41,7 @@
   - v0-3-m2-wait-and-state-machines (Patrick Rizzardi) — 15 files touched — 188/235 done — roadmap: v0-3-concurrency-perf — 2026-06-01 (SHIPPED as v0.3.0-m3 — all phases complete, merged to main with M10)
   - v0-3-m3a-suspension-codegen (Patrick Rizzardi) — 12 files touched — 93/109 done — roadmap: v0-3-concurrency-perf — 2026-06-01
   - v0-3-m3b-auto-parallelization (Patrick Rizzardi) — 15 files touched — 100/150 done — roadmap: v0-3-concurrency-perf — 2026-06-05
-  - v0-3-m3d-cpu-parallelization (Patrick Rizzardi) — 11 files touched — 94/128 done — roadmap: v0-3-concurrency-perf — 2026-06-14
+  - v0-3-m3d-cpu-parallelization (Patrick Rizzardi) — 11 files touched — 113/132 done — roadmap: v0-3-concurrency-perf — 2026-06-14
   - v0-3-m3e-cross-module-frame-serialization (Patrick Rizzardi) — 15 files touched — 59/84 done — roadmap: v0-3-concurrency-perf — 2026-06-07
   - v0-3-m3f-codegen-correctness-fixes (Patrick Rizzardi) — 9 files touched — 79/79 done — roadmap: v0-3-concurrency-perf — 2026-06-09
 - [webpage-docs] initiative

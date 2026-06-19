@@ -214,9 +214,8 @@ pub fn direct_callee_adjacency(
         .collect()
 }
 
-// ── Worth-it ("does real work") fixpoint ──────────────────────────────────────
-//
-// The auto-parallel worth-it proxy (Research Finding 9): spawning a CPU task onto
+// The worth-it ("does real work") fixpoint is the auto-parallel proxy (Research Finding 9):
+// spawning a CPU task onto
 // the blocking pool is only worth its overhead when the callee transitively does
 // non-trivial work. A trivial/leaf/arithmetic callee runs inline. The proxy for
 // "does real work" is: the callee's call graph reaches a loop (`while`/`for`) or a
@@ -1615,8 +1614,6 @@ function entrypoint() -> nothing {
             "caller of user-fn-named-sleep without intrinsic must NOT be suspends"
         );
     }
-
-    // ── does_real_work fixpoint (v0.3-M3d worth-it proxy) ─────────────────────
 
     fn real_work_set(src: &str) -> HashSet<String> {
         let module = parse_module(src);
