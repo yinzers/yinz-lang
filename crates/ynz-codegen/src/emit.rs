@@ -29,7 +29,7 @@ use ynz_ast::nodes::{
 use ynz_numerics; // parse(s: &str) -> Option<u128>
 use ynz_typeck::{
     build_effective_suspend_set, crossing_local_names_with_cpu_spike,
-    independence::{collect_ident_names, partition_independent_groups, IndependentGroup},
+    independence::{partition_independent_groups, IndependentGroup},
     type_attached_const_type, GenericFnTable, MonomorphizationTable, ShapeTable, SignatureTable,
     Type, TypedModule,
 };
@@ -59,64 +59,9 @@ pub fn function_contains_wait(body: &ynz_ast::nodes::Block) -> bool {
 }
 
 fn stmt_contains_wait(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Expr(e) => expr_contains_wait(e),
-        Stmt::Let { value, .. } => expr_contains_wait(value),
-        Stmt::Assign { value, .. } => expr_contains_wait(value),
-        Stmt::If { cond, body, .. } => expr_contains_wait(cond) || function_contains_wait(body),
-        Stmt::Match {
-            scrutinee,
-            arms,
-            else_arm,
-            ..
-        } => {
-            expr_contains_wait(scrutinee)
-                || arms.iter().any(|a| function_contains_wait(&a.body))
-                || else_arm.as_ref().is_some_and(function_contains_wait)
-        }
-        Stmt::While { cond, body, .. } => expr_contains_wait(cond) || function_contains_wait(body),
-        Stmt::For { iter, body, .. } => expr_contains_wait(iter) || function_contains_wait(body),
-        Stmt::Return { value, .. } => value.as_ref().is_some_and(expr_contains_wait),
-        Stmt::FieldAssign { target, value, .. } => {
-            expr_contains_wait(target) || expr_contains_wait(value)
-        }
-        Stmt::IndexAssign {
-            receiver,
-            index,
-            value,
-            ..
-        } => expr_contains_wait(receiver) || expr_contains_wait(index) || expr_contains_wait(value),
-    }
-}
-
-fn expr_contains_wait(expr: &Expr) -> bool {
-    match expr {
-        Expr::Wait(..) => true,
-        Expr::Background(inner, _) => expr_contains_wait(inner),
-        Expr::Call(c) => c.args.iter().any(expr_contains_wait),
-        Expr::BinOp { lhs, rhs, .. } => expr_contains_wait(lhs) || expr_contains_wait(rhs),
-        Expr::UnaryOp { operand, .. } => expr_contains_wait(operand),
-        Expr::MethodCall { receiver, args, .. } => {
-            expr_contains_wait(receiver) || args.iter().any(expr_contains_wait)
-        }
-        Expr::FieldAccess { receiver, .. } => expr_contains_wait(receiver),
-        Expr::IndexAccess {
-            receiver, index, ..
-        } => expr_contains_wait(receiver) || expr_contains_wait(index),
-        Expr::StructLit { fields, .. } => fields.iter().any(|f| expr_contains_wait(&f.value)),
-        Expr::ArrayLit { elements, .. } => elements.iter().any(expr_contains_wait),
-        Expr::MapLit { entries, .. } => entries
-            .iter()
-            .any(|(k, v)| expr_contains_wait(k) || expr_contains_wait(v)),
-        Expr::InterpolatedString(parts, _) => parts.iter().any(|p| match p {
-            ynz_ast::nodes::StringPart::Expr(e, _) => expr_contains_wait(e),
-            ynz_ast::nodes::StringPart::Lit(..) => false,
-        }),
-        Expr::PostfixOp { receiver, .. } => expr_contains_wait(receiver),
-        Expr::Is { expr: inner, .. } => expr_contains_wait(inner),
-        // Leaf nodes (literals, idents, NoneLit, SelfValue, Error) — no nested waits.
-        _ => false,
-    }
+    // Delegates to the typeck admission module so codegen's spike gate and the `parallel_groups`
+    // inlay-hint pass read one definition of "contains a wait".
+    ynz_typeck::cpu_admission::stmt_contains_wait_deep(stmt)
 }
 
 /// Cache of `function_contains_wait` results keyed by Yinz function name.
@@ -3384,128 +3329,9 @@ fn count_suspension_expr(expr: &Expr, suspend_set: &SuspendSet) -> usize {
 /// explicit `wait` token (transitive case). Background expressions are excluded because
 /// they spawn independently and don't suspend the current function.
 fn stmt_contains_suspending_call(stmt: &Stmt, suspend_set: &SuspendSet) -> bool {
-    match stmt {
-        Stmt::Expr(e) => expr_contains_suspending_call(e, suspend_set),
-        Stmt::Let { value, .. } | Stmt::Assign { value, .. } => {
-            expr_contains_suspending_call(value, suspend_set)
-        }
-        Stmt::Return { value, .. } => value
-            .as_ref()
-            .is_some_and(|e| expr_contains_suspending_call(e, suspend_set)),
-        Stmt::FieldAssign { target, value, .. } => {
-            expr_contains_suspending_call(target, suspend_set)
-                || expr_contains_suspending_call(value, suspend_set)
-        }
-        Stmt::IndexAssign {
-            receiver,
-            index,
-            value,
-            ..
-        } => {
-            expr_contains_suspending_call(receiver, suspend_set)
-                || expr_contains_suspending_call(index, suspend_set)
-                || expr_contains_suspending_call(value, suspend_set)
-        }
-        Stmt::If { cond, body, .. } => {
-            expr_contains_suspending_call(cond, suspend_set)
-                || body
-                    .stmts
-                    .iter()
-                    .any(|s| stmt_contains_suspending_call(s, suspend_set))
-        }
-        Stmt::While { cond, body, .. } => {
-            expr_contains_suspending_call(cond, suspend_set)
-                || body
-                    .stmts
-                    .iter()
-                    .any(|s| stmt_contains_suspending_call(s, suspend_set))
-        }
-        Stmt::For { iter, body, .. } => {
-            expr_contains_suspending_call(iter, suspend_set)
-                || body
-                    .stmts
-                    .iter()
-                    .any(|s| stmt_contains_suspending_call(s, suspend_set))
-        }
-        Stmt::Match {
-            scrutinee,
-            arms,
-            else_arm,
-            ..
-        } => {
-            expr_contains_suspending_call(scrutinee, suspend_set)
-                || arms.iter().any(|a| {
-                    a.body
-                        .stmts
-                        .iter()
-                        .any(|s| stmt_contains_suspending_call(s, suspend_set))
-                })
-                || else_arm.as_ref().is_some_and(|b| {
-                    b.stmts
-                        .iter()
-                        .any(|s| stmt_contains_suspending_call(s, suspend_set))
-                })
-        }
-    }
-}
-
-/// True if `stmt` or any statement nested inside it is a `Stmt::Assign` whose target
-/// equals `name`.
-///
-/// Used by the spike static admission gates (`spike_cpu_candidates`, `spike_extract_cpu_group`,
-/// `spike_cpu_group_result_names`) to detect assignments to CPU-result locals at any nesting
-/// depth. When any rest statement assigns a CPU-result bind name, the gates decline the whole
-/// group so that sequential lowering (which is always correct) handles the program instead.
-/// This ensures the spike only emits code for programs in the proven-safe admission envelope.
-///
-/// Time: O(n) where n = total AST nodes in stmt  Space: O(d) call-stack depth where d = nesting
-fn stmt_assigns_name(stmt: &Stmt, name: &str) -> bool {
-    match stmt {
-        Stmt::Assign { target, .. } => target.as_str() == name,
-        Stmt::If { body, .. } => body.stmts.iter().any(|s| stmt_assigns_name(s, name)),
-        Stmt::While { body, .. } | Stmt::For { body, .. } => {
-            body.stmts.iter().any(|s| stmt_assigns_name(s, name))
-        }
-        Stmt::Match { arms, else_arm, .. } => {
-            arms.iter()
-                .any(|a| a.body.stmts.iter().any(|s| stmt_assigns_name(s, name)))
-                || else_arm
-                    .as_ref()
-                    .is_some_and(|b| b.stmts.iter().any(|s| stmt_assigns_name(s, name)))
-        }
-        _ => false,
-    }
-}
-
-fn expr_contains_suspending_call(expr: &Expr, suspend_set: &SuspendSet) -> bool {
-    match expr {
-        Expr::Call(c) => {
-            if let Expr::Ident(name, _) = &c.callee {
-                if suspend_set.contains(name.as_str())
-                    && !M2_MAY_BLOCK_INTRINSICS.contains(&name.as_str())
-                {
-                    return true;
-                }
-            }
-            c.args
-                .iter()
-                .any(|a| expr_contains_suspending_call(a, suspend_set))
-        }
-        Expr::Wait(inner, _) => expr_contains_suspending_call(inner, suspend_set),
-        Expr::Background(_inner, _) => false, // background spawns separately, doesn't suspend current fn
-        Expr::BinOp { lhs, rhs, .. } => {
-            expr_contains_suspending_call(lhs, suspend_set)
-                || expr_contains_suspending_call(rhs, suspend_set)
-        }
-        Expr::UnaryOp { operand, .. } => expr_contains_suspending_call(operand, suspend_set),
-        Expr::MethodCall { receiver, args, .. } => {
-            expr_contains_suspending_call(receiver, suspend_set)
-                || args
-                    .iter()
-                    .any(|a| expr_contains_suspending_call(a, suspend_set))
-        }
-        _ => false,
-    }
+    // Delegates to the typeck admission module so codegen's spike gate and the `parallel_groups`
+    // inlay-hint pass read one definition of "contains a suspending call".
+    ynz_typeck::cpu_admission::stmt_contains_suspending_call_deep(stmt, suspend_set)
 }
 
 /// Reload parameters and crossing locals from their frame slots into allocas.
@@ -6836,115 +6662,10 @@ fn spike_host_cpu_supported<'a>(
     }
 }
 
-/// Collect every identifier name READ anywhere in a statement, descending into nested control
-/// flow (`if`/`match`/`while`/`for` bodies). Conservative by construction: a name appearing in
-/// any reachable sub-expression is reported, so a caller using this to gate on "is this param
-/// read here?" can only over-report (decline a safe case), never under-report (admit an unsafe
-/// case). Used by the spike param-host gate to find post-join param reads.
-///
-/// Time: O(N) where N = AST nodes under `stmt`  Space: O(N) recursion + accumulated name set.
-fn stmt_tree_ident_reads(stmt: &Stmt, out: &mut std::collections::HashSet<String>) {
-    let block_reads = |b: &ynz_ast::nodes::Block, out: &mut std::collections::HashSet<String>| {
-        for s in &b.stmts {
-            stmt_tree_ident_reads(s, out);
-        }
-    };
-    match stmt {
-        Stmt::Expr(e) | Stmt::Let { value: e, .. } | Stmt::Assign { value: e, .. } => {
-            collect_ident_names(e, out)
-        }
-        Stmt::Return { value: Some(v), .. } => collect_ident_names(v, out),
-        Stmt::Return { value: None, .. } => {}
-        Stmt::FieldAssign { target, value, .. } => {
-            collect_ident_names(target, out);
-            collect_ident_names(value, out);
-        }
-        Stmt::IndexAssign {
-            receiver,
-            index,
-            value,
-            ..
-        } => {
-            collect_ident_names(receiver, out);
-            collect_ident_names(index, out);
-            collect_ident_names(value, out);
-        }
-        Stmt::If { cond, body, .. } => {
-            collect_ident_names(cond, out);
-            block_reads(body, out);
-        }
-        Stmt::While { cond, body, .. } => {
-            collect_ident_names(cond, out);
-            block_reads(body, out);
-        }
-        Stmt::For {
-            iter,
-            body,
-            var,
-            destructure_pattern,
-            map_destructure_pattern,
-            ..
-        } => {
-            // The iter expression is evaluated in the enclosing scope, so its reads belong to
-            // the shared accumulator. The loop variable (and any destructure-bound names) shadow
-            // outer names ONLY inside the body — so the shadow removal MUST apply to a loop-local
-            // read set, never to the shared `out`. Removing the loop var from `out` directly
-            // would erase a same-named param read that an EARLIER post-join statement legitimately
-            // recorded, flipping the gate from decline to admit and corrupting the frame slot the
-            // post-join param read sources from. Union the (shadow-stripped) body reads back in.
-            collect_ident_names(iter, out);
-            let mut body_reads = std::collections::HashSet::new();
-            block_reads(body, &mut body_reads);
-            body_reads.remove(var.as_str());
-            if let Some(bindings) = destructure_pattern {
-                for b in bindings {
-                    let bound = b.alias.as_deref().unwrap_or(b.field.as_str());
-                    body_reads.remove(bound);
-                }
-            }
-            if let Some((key, value)) = map_destructure_pattern {
-                body_reads.remove(key.as_str());
-                body_reads.remove(value.as_str());
-            }
-            out.extend(body_reads);
-        }
-        Stmt::Match {
-            scrutinee,
-            arms,
-            else_arm,
-            ..
-        } => {
-            collect_ident_names(scrutinee, out);
-            for arm in arms {
-                block_reads(&arm.body, out);
-            }
-            if let Some(eb) = else_arm {
-                block_reads(eb, out);
-            }
-        }
-    }
-}
-
-/// True when any of `f`'s parameters is READ in a statement that runs AFTER the CPU group's
-/// join (the `post_stmts` slice). A post-join param read is the one shape the spike frame layout
-/// cannot serve: the wrapper writes param slot 0 at byte 32 — exactly the byte the first CPU
-/// handle occupies — so the spawn overwrites it, and a post-join reload returns the handle
-/// pointer's bytes instead of the parameter value (a silent wrong answer). A param read ONLY in
-/// the spawn args (the group's call arguments) is safe: that load happens before the handle
-/// store overwrites byte 32, so the corruption never manifests there.
-///
-/// Returns `true` (decline) when a post-join read exists; `false` (admit) otherwise.
-///
-/// Time: O(N) where N = AST nodes across `post_stmts`  Space: O(P) param-name set.
+/// True when any of `f`'s parameters is READ in a statement that runs AFTER the CPU group's join.
+/// Delegates to the typeck admission module — the single source the inlay-hint pass also reads.
 fn spike_param_read_after_join(f: &FunctionDecl, post_stmts: &[Stmt]) -> bool {
-    if f.params.is_empty() {
-        return false;
-    }
-    let mut reads: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for s in post_stmts {
-        stmt_tree_ident_reads(s, &mut reads);
-    }
-    f.params.iter().any(|p| reads.contains(p.name.as_str()))
+    ynz_typeck::cpu_admission::param_read_after_join(f, post_stmts)
 }
 
 /// Detect a 2-member CPU-parallel candidate group in `f`.
@@ -7096,19 +6817,7 @@ fn spike_pair_in_block(
     suspend_set: &SuspendSet,
     cpu_supported_callees: &std::collections::HashSet<String>,
 ) -> Option<String> {
-    let members = spike_cpu_group_member_indices(stmts, suspend_set, cpu_supported_callees)?;
-    let first_idx = members[0];
-    match &stmts[first_idx] {
-        Stmt::Let {
-            value: Expr::Call(c),
-            ..
-        }
-        | Stmt::Expr(Expr::Call(c)) => match &c.callee {
-            Expr::Ident(name, _) => Some(name.clone()),
-            _ => None,
-        },
-        _ => None,
-    }
+    ynz_typeck::cpu_admission::pair_representative_callee(stmts, suspend_set, cpu_supported_callees)
 }
 
 /// The statement indices of the single admissible CPU group in one straight-line block, or
@@ -7137,132 +6846,7 @@ fn spike_cpu_group_member_indices(
     suspend_set: &SuspendSet,
     cpu_supported_callees: &std::collections::HashSet<String>,
 ) -> Option<Vec<usize>> {
-    let mut call_indices: Vec<usize> = Vec::new();
-    for (i, stmt) in stmts.iter().enumerate() {
-        let is_eligible = match stmt {
-            Stmt::Let {
-                value: Expr::Call(c),
-                ..
-            }
-            | Stmt::Expr(Expr::Call(c)) => {
-                if let Expr::Ident(name, _) = &c.callee {
-                    !suspend_set.contains(name.as_str()) && cpu_supported_callees.contains(name)
-                } else {
-                    false
-                }
-            }
-            _ => false,
-        };
-        if is_eligible {
-            call_indices.push(i);
-        }
-    }
-
-    // First adjacent pair anchors the group; extend forward over every further adjacent call.
-    let first_idx = call_indices
-        .windows(2)
-        .find(|w| w[1] == w[0] + 1)
-        .map(|w| w[0])?;
-    let mut last_idx = first_idx + 1;
-    while call_indices.contains(&(last_idx + 1)) {
-        last_idx += 1;
-    }
-    let member_indices: Vec<usize> = (first_idx..=last_idx).collect();
-
-    let args_lowerable = |i: usize| -> bool {
-        let call = match &stmts[i] {
-            Stmt::Let {
-                value: Expr::Call(c),
-                ..
-            }
-            | Stmt::Expr(Expr::Call(c)) => c,
-            _ => return false,
-        };
-        call.args.len() == 1
-            && call
-                .args
-                .iter()
-                .all(|arg| matches!(arg, Expr::IntLit(_, _) | Expr::Ident(_, _)))
-    };
-    if member_indices.iter().any(|&i| !args_lowerable(i)) {
-        return None;
-    }
-
-    // No member may read an earlier member's bind name (independence).
-    let member_bind_name = |i: usize| -> Option<&str> {
-        match &stmts[i] {
-            Stmt::Let { name, .. } => Some(name.as_str()),
-            _ => None,
-        }
-    };
-    let member_arg_idents = |i: usize| -> Vec<&str> {
-        match &stmts[i] {
-            Stmt::Let {
-                value: Expr::Call(c),
-                ..
-            }
-            | Stmt::Expr(Expr::Call(c)) => c
-                .args
-                .iter()
-                .filter_map(|arg| match arg {
-                    Expr::Ident(n, _) => Some(n.as_str()),
-                    _ => None,
-                })
-                .collect(),
-            _ => Vec::new(),
-        }
-    };
-    // `earlier_bind_names` is COMPACTED (filter_map drops non-`Let` members, which have no bind
-    // name), but `pos` indexes the FULL `member_indices`. When an earlier member is a bare
-    // expression call (no bind), the compacted list is shorter than `pos`, so `..pos` (clamped by
-    // `.min(len)`) slices a SUPERSET of the genuine earlier binds. Invariant making this safe:
-    // data dependencies flow forward-only, so a member can only read names bound STRICTLY before
-    // it — the superset can therefore only trigger a spurious DECLINE (over-conservative
-    // sequential fallback for a no-bind-member-0 shape), never a false-ADMIT of a genuinely
-    // dependent member. Worst case is an unnecessary sequential lowering for a rare shape, which
-    // is always byte-identical to --no-auto-parallel.
-    let earlier_bind_names: Vec<&str> = member_indices
-        .iter()
-        .filter_map(|&i| member_bind_name(i))
-        .collect();
-    for (pos, &i) in member_indices.iter().enumerate() {
-        let prior = &earlier_bind_names[..pos.min(earlier_bind_names.len())];
-        if member_arg_idents(i).iter().any(|a| prior.contains(a)) {
-            return None;
-        }
-    }
-
-    // No pre-group statement may suspend.
-    if stmts[..first_idx]
-        .iter()
-        .any(|s| stmt_contains_wait(s) || stmt_contains_suspending_call(s, suspend_set))
-    {
-        return None;
-    }
-
-    // No post-group statement may assign a member's bind name (the bind would source a
-    // never-populated crossing slot, returning zeroed bytes instead of the computed value).
-    let bind_names: Vec<&str> = member_indices
-        .iter()
-        .filter_map(|&i| member_bind_name(i))
-        .collect();
-    let post_stmts = &stmts[(last_idx + 1)..];
-    for bind_name in &bind_names {
-        if post_stmts.iter().any(|s| stmt_assigns_name(s, bind_name)) {
-            return None;
-        }
-    }
-
-    // No post-group statement may call a user-defined suspending callee (its embedded child
-    // sub-frame would alias a joined result slot). Intrinsic waits are exempt.
-    if post_stmts
-        .iter()
-        .any(|s| stmt_contains_suspending_call(s, suspend_set))
-    {
-        return None;
-    }
-
-    Some(member_indices)
+    ynz_typeck::cpu_admission::cpu_group_member_indices(stmts, suspend_set, cpu_supported_callees)
 }
 
 /// The nested straight-line blocks (`if`/`match` arm bodies) reachable directly inside `stmts`,
@@ -7278,17 +6862,7 @@ fn spike_cpu_group_member_indices(
 ///
 /// Time: O(A) where A = match arms  Space: O(A)
 fn spike_nested_blocks(stmt: &Stmt) -> Vec<&[Stmt]> {
-    match stmt {
-        Stmt::If { body, .. } => vec![body.stmts.as_slice()],
-        Stmt::Match { arms, else_arm, .. } => {
-            let mut v: Vec<&[Stmt]> = arms.iter().map(|a| a.body.stmts.as_slice()).collect();
-            if let Some(eb) = else_arm {
-                v.push(eb.stmts.as_slice());
-            }
-            v
-        }
-        _ => Vec::new(),
-    }
+    ynz_typeck::cpu_admission::nested_blocks(stmt)
 }
 
 /// Count admissible CPU groups across `stmts` and every nested block reachable from it. Used
@@ -7301,16 +6875,11 @@ fn count_cpu_groups_all_depths(
     suspend_set: &SuspendSet,
     cpu_supported_callees: &std::collections::HashSet<String>,
 ) -> usize {
-    let mut count = 0;
-    if spike_pair_in_block(stmts, suspend_set, cpu_supported_callees).is_some() {
-        count += 1;
-    }
-    for stmt in stmts {
-        for block in spike_nested_blocks(stmt) {
-            count += count_cpu_groups_all_depths(block, suspend_set, cpu_supported_callees);
-        }
-    }
-    count
+    ynz_typeck::cpu_admission::count_cpu_groups_all_depths(
+        stmts,
+        suspend_set,
+        cpu_supported_callees,
+    )
 }
 
 /// Member count of `f`'s single admitted CPU group (top-level or one level inside an `if`/`match`
@@ -7393,19 +6962,11 @@ fn spike_nested_group_callee(
     suspend_set: &SuspendSet,
     cpu_supported_callees: &std::collections::HashSet<String>,
 ) -> Option<String> {
-    for stmt in stmts {
-        for block in spike_nested_blocks(stmt) {
-            if let Some(callee) = spike_pair_in_block(block, suspend_set, cpu_supported_callees) {
-                return Some(callee);
-            }
-            if let Some(callee) =
-                spike_nested_group_callee(block, suspend_set, cpu_supported_callees)
-            {
-                return Some(callee);
-            }
-        }
-    }
-    None
+    ynz_typeck::cpu_admission::nested_group_representative_callee(
+        stmts,
+        suspend_set,
+        cpu_supported_callees,
+    )
 }
 
 /// Of the functions typeck promoted, the subset codegen will actually spike-HOST in this

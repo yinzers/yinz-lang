@@ -239,6 +239,49 @@ If `loadDashboard()` is marked `errors`, the error auto-propagates to the caller
 
 ---
 
+## Heavy number-crunching also runs in parallel
+
+Everything above is about waiting for network calls and disk reads — things that pause while
+waiting for the outside world.  Yinz does the same thing for heavy CPU work.
+
+If you have multiple calculations that don't depend on each other, the compiler runs them
+on different cores at the same time:
+
+```ynz
+function analyzeGame(game: Game) -> Stats {
+    let hits    = crunchStat(game.hits)
+    let rbi     = crunchStat(game.rbi)
+    let average = crunchStat(game.average)
+    return combineStats(hits, rbi, average)
+}
+```
+
+`hits`, `rbi`, and `average` don't depend on each other, so the compiler runs all three
+`crunchStat` calls at the same time — each on its own core.  `combineStats` runs only after
+all three finish.
+
+You don't write anything special.  No `background`, no `wait`.  Just normal code.
+
+The compiler only does this when `crunchStat` is actually doing heavy work (has a loop or
+complex math inside).  Simple functions that return immediately aren't worth running in
+parallel — the overhead of starting a new core would cost more than just running it directly.
+
+Your editor shows what's happening in muted text:
+
+```ynz
+function analyzeGame(game: Game) -> Stats {
+    let hits    = crunchStat(game.hits)    // runs at the same time as line 4, line 5 — separate core
+    let rbi     = crunchStat(game.rbi)     // runs at the same time as line 3, line 5 — separate core
+    let average = crunchStat(game.average) // runs at the same time as line 3, line 4 — separate core
+    return combineStats(hits, rbi, average)
+}
+```
+
+These annotations are read-only notes — nothing to change.  They show you what the compiler
+decided so you understand what's actually running in parallel.
+
+---
+
 ## That's it
 
 ```
@@ -246,4 +289,7 @@ wait           // complete this before continuing
 background     // run this outside this function's lifetime
 ```
 
-Two keywords. Everything else is automatic. The compiler builds the dependency graph, runs independent operations in parallel, sequences writes to the same resource, manages thread pools, and handles cleanup. You don't see any of it — you just write normal code.
+Two keywords. Everything else is automatic. The compiler builds the dependency graph, runs
+independent operations in parallel on all available cores, sequences writes to the same
+resource, manages core pools, and handles cleanup. You don't see any of it — you just write
+normal code.

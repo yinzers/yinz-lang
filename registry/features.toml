@@ -1550,7 +1550,7 @@ why_template = "v0.3-M2 can only preserve function parameters across a `wait` po
 kind_name = "WaitOnNonMayBlockWarning"
 what_template = "`wait` on a function that does not suspend — the `wait` has no effect."
 what_instead_template = "Remove the `wait` keyword — call `{callee_name}({args})` directly."
-why_template = "`wait` only has effect when the awaited expression can suspend (calls a may-block intrinsic or another function whose body contains `wait`). Currently, the callee is purely CPU-bound; the runtime semantics are identical with or without `wait`."
+why_template = "`wait` only has effect when the awaited expression can suspend (calls a may-block intrinsic or another function whose body contains `wait`). Calling a purely CPU-bound callee with explicit `wait` is an ordering barrier — it ends any parallel group that `{callee_name}` could have joined — so removing `wait` lets the compiler overlap this call with adjacent independent calls when that is safe."
 
 [[diagnostic_template]]
 kind_name = "WaitOnNonCallExpression"
@@ -2090,6 +2090,21 @@ description = "Shows which thread pool a `background` spawn routes to — I/O po
 example_source = "background process(order)"
 example_hint_rendered = "// routed to I/O pool — calls sleep (may suspend)"
 active_since = "v0.3-M3b"
+
+# v0.3-M3d: CPU-group members of a parallel group show which other statement they run
+# alongside. CPU members note the separate-core routing; I/O members note the overlap
+# without the core detail (the I/O event loop handles them in one cooperative pass).
+# Reads the same partition query codegen reads, so the hint and the binary always agree.
+[[muted_hint_domain]]
+domain = "parallel_groups"
+placement_category = "Informational"
+description = "Shows which other statement this one runs at the same time as. CPU-bound calls run on a separate computing unit; I/O-bound calls overlap cooperatively. Both are compiler decisions driven by the independence analysis — the same analysis that controls the actual parallel execution in the binary."
+example_source = "let hits = crunchStat(2)"
+example_hint_rendered = "// runs at the same time as line 12 — separate core"
+hover_what = "These statements overlap because no data flows between them — neither one reads what the other writes, so the compiler runs them at the same time instead of one after the other."
+hover_what_instead = "Write `wait` before the second call to force them to run in order — that resets the group, so the second statement waits for the first to finish."
+hover_why = "The compiler matched these statements into one parallel group: the listed lines have no shared reads or writes, so running them together is safe and faster. Adding a `wait` (or any statement that depends on an earlier value) splits the group back into sequential order."
+active_since = "v0.3-M3d"
 
 [[muted_hint_domain]]
 domain = "lifetimes"

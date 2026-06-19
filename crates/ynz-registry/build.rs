@@ -434,9 +434,24 @@ fn emit_muted_hint_domains(table: &TomlTable, out: &mut String) {
         let description = get_str(entry, "description", kind, domain);
         let example_source = get_str(entry, "example_source", kind, domain);
         let example_hint = get_str(entry, "example_hint_rendered", kind, domain);
+        let hover_what = entry.get("hover_what").and_then(|v| v.as_str());
+        let hover_what_instead = entry.get("hover_what_instead").and_then(|v| v.as_str());
+        let hover_why = entry.get("hover_why").and_then(|v| v.as_str());
+        let hw = match hover_what {
+            Some(s) => format!("Some({s:?})"),
+            None => "None".to_string(),
+        };
+        let hwi = match hover_what_instead {
+            Some(s) => format!("Some({s:?})"),
+            None => "None".to_string(),
+        };
+        let hwy = match hover_why {
+            Some(s) => format!("Some({s:?})"),
+            None => "None".to_string(),
+        };
         writeln!(
             out,
-            "    crate::MutedHintDomainEntry {{ domain: {domain:?}, placement_category: {placement:?}, description: {description:?}, example_source: {example_source:?}, example_hint_rendered: {example_hint:?} }},",
+            "    crate::MutedHintDomainEntry {{ domain: {domain:?}, placement_category: {placement:?}, description: {description:?}, example_source: {example_source:?}, example_hint_rendered: {example_hint:?}, hover_what: {hw}, hover_what_instead: {hwi}, hover_why: {hwy} }},",
         )
         .unwrap();
     }

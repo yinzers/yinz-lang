@@ -1,0 +1,16 @@
+// M3d — CPU Statement Parallelization
+//
+// M3d ships no new compile-error classes.  CPU parallelization is fully automatic:
+// the compiler decides what to parallelize and what to run sequentially.  There is
+// no opt-in syntax that a user can write incorrectly, and no new type rules that
+// produce new diagnostics.
+//
+// The feature that IS detectable at compile time — using `wait` on a CPU-bound
+// callee (which silently defeats parallelization by acting as an ordering barrier)
+// — was already covered by the WaitOnNonMayBlockWarning diagnostic introduced in
+// M2 and exercised in v0_3_m2_errors.ynz.  That diagnostic now explains the
+// ordering-barrier consequence in its why-text, which is the only M3d change to
+// existing diagnostics.
+//
+// See design/concurrency.md "CPU Statement Parallelization (M3d)" for the
+// promotion rules, decline rules, and design divergences.

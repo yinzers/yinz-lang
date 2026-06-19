@@ -1,6 +1,6 @@
 //! `textDocument/inlayHint` LSP handler — teaching annotations for the editor.
 //!
-//! Fires 7 of the 9 registry-defined muted-hint domains; the remaining 2 return
+//! Fires 8 of the 10 registry-defined muted-hint domains; the remaining 2 return
 //! empty lists (protocol-only).
 //!
 //! # Firing domains
@@ -14,6 +14,7 @@
 //! | `let_to_const_promotion` | Replacement | decoration on never-mutated lets |
 //! | `wait_points` | Addition | muted `wait` before suspending call sites |
 //! | `background_routing` | Informational | I/O-pool vs CPU-pool routing comment |
+//! | `parallel_groups` | Informational | concurrent-statement overlap comment |
 //!
 //! Every firing hint carries a WHAT / WHAT-INSTEAD / WHY hover tooltip sourced
 //! from the registry via `ynz_registry::lsp_inlay_hint_hover_for`.  Per Golden
@@ -22,9 +23,9 @@
 //!
 //! # Protocol-only domains (empty list, no error)
 //!
-//! `function_param_type`, `lifetimes` — each handled here but returning `[]`.
-//! When future milestones add the underlying analysis, those branches emit real
-//! hints with no further LSP code change.
+//! `function_param_type`, `lifetimes` — handled here but returning `[]` until the
+//! underlying analysis lands.  When future milestones add the analysis, those
+//! branches emit real hints with no further LSP change.
 //!
 //! # Viewport filtering
 //!
@@ -39,8 +40,8 @@ use ynz_diagnostics::{Severity, SourceSpan};
 use ynz_typeck::queries::check_query;
 use ynz_typeck::{
     array_to_fixed_promotion_hints, background_routing_hints, copy_point_hints,
-    let_to_const_promotion_hints, ownership_call_site_hints, variable_type_hints,
-    wait_points_hints,
+    let_to_const_promotion_hints, ownership_call_site_hints, parallel_group_hints,
+    variable_type_hints, wait_points_hints,
 };
 
 use crate::{capabilities::PositionEncoding, position::LineTable, state::ServerState};
@@ -335,6 +336,24 @@ pub fn inlay_hint_response(
                 format!("  {}", h.label),
                 InlayHintKind::PARAMETER,
                 "background_routing",
+            ));
+        }
+    }
+
+    // Domain 9: parallel_groups (Informational) — concurrent-statement overlap.
+    //    Fires for I/O-overlap groups and CPU-parallel-group groups.
+    //    Reads the same admission decision codegen spawns from — hint and binary always agree.
+
+    for h in parallel_group_hints(&state.db, sf) {
+        if !in_viewport(h.position, vp_start, vp_end) {
+            continue;
+        }
+        if let Some(pos) = byte_to_position(text, h.position, table, state.encoding) {
+            hints.push(make_hint(
+                pos,
+                format!("  {}", h.label),
+                InlayHintKind::PARAMETER,
+                "parallel_groups",
             ));
         }
     }

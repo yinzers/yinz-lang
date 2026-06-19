@@ -2408,8 +2408,10 @@ impl<'b> Checker<'b> {
                 format!(
                     "`wait` only has effect when the awaited expression can suspend \
                      (calls a may-block intrinsic or another function whose body contains \
-                     `wait`). Currently, `{callee_name}` is purely CPU-bound; the runtime \
-                     semantics are identical with or without `wait`."
+                     `wait`). Calling a purely CPU-bound callee with explicit `wait` is an \
+                     ordering barrier — it ends any parallel group that `{callee_name}` could \
+                     have joined — so removing `wait` lets the compiler overlap this call with \
+                     adjacent independent calls when that is safe."
                 ),
             ));
         }

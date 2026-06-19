@@ -110,40 +110,55 @@ pub fn muted_hint_domain_lookup(domain: &str) -> Option<&'static MutedHintDomain
 
 /// Render a WHAT / WHAT-INSTEAD / WHY hover tooltip for an inlay hint domain.
 ///
-/// Returns markdown suitable for an LSP `InlayHint.tooltip` field, sourcing:
-/// - **WHAT**: the registry entry's `description` (what the compiler decided)
-/// - **WHAT INSTEAD**: the entry's `example_hint_rendered` (the explicit form)
-/// - **WHY**: a context sentence derived from the `placement_category`
+/// Returns markdown suitable for an LSP `InlayHint.tooltip` field.
+///
+/// Each part prefers the entry's EXPLICIT hover field (`hover_what` / `hover_what_instead` /
+/// `hover_why`) when set, and otherwise falls back to the generic derivation:
+/// - **WHAT**: `hover_what`, else the entry's `description`.
+/// - **WHAT INSTEAD**: `hover_what_instead`, else "write `{example_hint_rendered}` to make the
+///   decision explicit". The fallback is correct only for Addition/Replacement domains whose
+///   rendered hint IS a typeable source form; Informational comment-style domains (e.g.
+///   `parallel_groups`) have no typeable equivalent and MUST set `hover_what_instead` to an
+///   actionable sentence rather than asking the user to type a comment.
+/// - **WHY**: `hover_why`, else a generic sentence keyed off `placement_category`.
 ///
 /// Returns `None` when the domain is not in the registry (deferred/unknown).
 ///
-/// Per Golden Rule 11, every teaching surface must answer WHAT / WHAT-INSTEAD /
-/// WHY.  Inlay hints without a hover tooltip are muted annotations the user
-/// cannot learn from — that violates the teaching mission of v0.2-M5.
+/// Per Golden Rule 11, every teaching surface must answer WHAT / WHAT-INSTEAD / WHY. Inlay hints
+/// without a hover tooltip are muted annotations the user cannot learn from.
 pub fn lsp_inlay_hint_hover_for(domain: &str) -> Option<String> {
     let entry = muted_hint_domain_lookup(domain)?;
 
-    let why = match entry.placement_category {
-        "Addition" => {
-            "The compiler figured this out from context. Click to make it explicit in source."
+    let what = entry.hover_what.unwrap_or(entry.description).to_string();
+
+    let what_instead = match entry.hover_what_instead {
+        Some(s) => s.to_string(),
+        None => format!(
+            "`{}` — write this to make the decision explicit in source.",
+            entry.example_hint_rendered
+        ),
+    };
+
+    let why = match entry.hover_why {
+        Some(s) => s.to_string(),
+        None => match entry.placement_category {
+            "Addition" => {
+                "The compiler figured this out from context. Click to make it explicit in source."
+            }
+            "Replacement" => {
+                "The compiler picked the stricter form automatically. Hover to see the alternative \
+                 you could write explicitly."
+            }
+            "Informational" => {
+                "This shows what the compiler decided at this call site. No source change is needed."
+            }
+            _ => "The compiler figured this out automatically.",
         }
-        "Replacement" => {
-            "The compiler picked the stricter form automatically. Hover to see the alternative \
-             you could write explicitly."
-        }
-        "Informational" => {
-            "This shows what the compiler decided at this call site. No source change is needed."
-        }
-        _ => "The compiler figured this out automatically.",
+        .to_string(),
     };
 
     Some(format!(
-        "**WHAT**: {what}\n\n\
-         **WHAT INSTEAD**: `{hint}` — write this to make the decision explicit in source.\n\n\
-         **WHY**: {why}",
-        what = entry.description,
-        hint = entry.example_hint_rendered,
-        why = why,
+        "**WHAT**: {what}\n\n**WHAT INSTEAD**: {what_instead}\n\n**WHY**: {why}",
     ))
 }
 

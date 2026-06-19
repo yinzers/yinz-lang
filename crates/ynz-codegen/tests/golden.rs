@@ -858,3 +858,46 @@ function entrypoint() -> nothing {
     );
     insta::assert_snapshot!("v03_m2_main_rt_init_first", ir);
 }
+
+const TWO_CPU_GROUPS_SOURCE: &str = r#"
+function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+
+function entrypoint() -> nothing {
+  let a = fib(10)
+  let b = fib(11)
+  print(a)
+  print(b)
+  if (a > 0) {
+    let c = fib(12)
+    let d = fib(13)
+    print(c)
+    print(d)
+  }
+}
+"#;
+
+#[test]
+fn two_cpu_groups_decline_emits_no_spawn() {
+    // WHY: a function with TWO CPU groups (a top-level pair + a nested-arm pair) is declined by the
+    // single-group admission constraint, so codegen must emit ZERO `ynz_rt_spawn_blocking_joinable`
+    // calls — the whole function lowers sequentially. This is the binary half of the hint↔binary
+    // agreement invariant: the typeck `parallel_group_hints` pass emits no separate-core hint for
+    // this shape (see ynz-typeck/tests/parallel_group_hint_parity.rs), and the IR proves the
+    // binary spawns nothing. If a future change spawns one of the two groups, this catches the
+    // hint/binary divergence (the hint would also have to start firing — both ends move together).
+    let ir = run_m2_sm_codegen("two_cpu_groups.ynz", TWO_CPU_GROUPS_SOURCE);
+    let joinable_spawns = ir
+        .lines()
+        .filter(|l| l.contains("call") && l.contains("ynz_rt_spawn_blocking_joinable"))
+        .count();
+    assert_eq!(
+        joinable_spawns, 0,
+        "two-CPU-group function must spawn nothing (sequential lowering); got {joinable_spawns} \
+         joinable-spawn call instructions:\n{ir}"
+    );
+}

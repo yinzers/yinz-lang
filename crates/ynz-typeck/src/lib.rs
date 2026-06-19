@@ -41,6 +41,7 @@
 pub mod ast_offset;
 pub mod builtins;
 pub mod check;
+pub mod cpu_admission;
 pub mod effective_ownership;
 pub mod exports;
 pub mod generics;
@@ -68,9 +69,9 @@ pub use exports::ExportTable;
 pub use generics::{GenericFnTable, GenericShapeTable, MonomorphizationTable};
 pub use inlay_hint_passes::{
     array_to_fixed_promotion_hints, background_routing_hints, copy_point_hints,
-    let_to_const_promotion_hints, ownership_call_site_hints, variable_type_hints,
-    wait_points_hints, BackgroundRoutingHint, CopyHint, OwnershipHint, PromotionHint,
-    PromotionKind, TypeHint, WaitPointHint,
+    let_to_const_promotion_hints, ownership_call_site_hints, parallel_group_hints,
+    variable_type_hints, wait_points_hints, BackgroundRoutingHint, CopyHint, OwnershipHint,
+    ParallelGroupHint, PromotionHint, PromotionKind, TypeHint, WaitPointHint,
 };
 pub use intrinsics::PrimitiveIntrinsicTable;
 pub use may_block::suspends_set_for_test as may_block_suspends_set;
