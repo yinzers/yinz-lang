@@ -750,7 +750,7 @@ The original chat ran on the WSL host and hit the LLVM 18 environment blocker ab
 - **What**: the real `tooling/vscode-ynz/screenshots/cpu-parallel-hints.png` — a live VSCode capture of the `parallel_groups` muted hints rendering on the pirates-roster CPU section. A `cpu-parallel-hints.png.PLACEHOLDER` (excluded from the `.vsix` via `.vscodeignore`) stands in until then.
 - **Why**: the compiler dev container is headless (no display server) — `vsce`/VSCode cannot capture a live IDE screenshot. The hint *mechanism* is proven by the `parallel_group_hint_parity` test (hint set == codegen spawn set) + live LSP wiring; only the visual artifact is missing.
 - **Cost to fix later**: one manual capture in desktop VSCode with `ynz-lsp` active (minutes), no code change. Replace the `.PLACEHOLDER` with the real PNG; remove the `.vscodeignore` exclusion line.
-- **Trigger**: the `v0.3.0-m7` `/release` step (which captures + attaches VSCode assets anyway per CLAUDE.md "VSCode extension release convention"). AC1 + AC5 remain unticked (deferred-with-anchor) until then; coordinator overrides the acceptance-verifier WEAK on these two ACs at the Phase-4 gate citing this anchor.
+- **Trigger**: **when the VSCode extension is actually published** (Patrick 2026-06-19 — the extension is local-install-only today, NOT on the marketplace, so the screenshot is moot until publish; do NOT re-raise it before then). At publish time, capture the live PNG, drop the `.PLACEHOLDER` + its `.vscodeignore` line. AC1 + AC5 stay unticked (deferred-with-anchor) until then; coordinator overrode the acceptance-verifier WEAK on these two ACs at the Phase-4 gate citing this anchor.
 
 **Phase Review Gates**:
 - [x] code-reviewer: PASS 2026-06-19 (R3 — relocation byte-identical, why-text synced; R1 5 fixes + R2 all clear)
@@ -759,7 +759,7 @@ The original chat ran on the WSL host and hit the LLVM 18 environment blocker ab
 - [x] acceptance-verifier: PASS 2026-06-19 (R3 — AC2/AC3/AC4 MET; AC1/AC5 DEFERRED-with-anchor → coordinator-override per Patrick-approved screenshot deferral, logged below)
 - [x] design-compliance-reviewer: PASS 2026-06-19 (R2, carried to R3 — locked-doc globs untouched by the R3 check.rs-only delta; same-callee + worth-it docs corrected)
 - [x] deviation-judge (consolidated, 7 deviations): PASS 2026-06-19 (R2, carried to R3 — deviation hunks untouched by R3 delta). Per-deviation all PASS: #1 cpu_admission.rs new-module, #2 emit.rs delegation, #3 golden.rs binary-parity, #4 build.rs hover-fields, #5 full-relocation (IR byte-identical), #6 hover-WHY-static (GR11 architectural ceiling), #7 placeholder-deferral cleared.
-- [ ] Committed: <commit SHA>
+- [x] Committed: 48c2f84 (Phase 4; SHA-writeback edit rides into Phase 5's commit per this plan's convention)
 
 **Findings Log**:
 - 2026-06-19 — **Gate Round 1: 0 PASS / 6 BLOCK** (executor Sonnet; BASE `46ccaf1`; diff `git diff 46ccaf1`; 2 new files `git add -N`'d). Tree-integrity: post-gate hash mismatch reconciled to coordinator's OWN `state.md` resume-marker write (Stop hook) — all 10 Phase-4 code/doc blobs byte-unchanged, no agent mutation. D_count=1 (scratch `…/scratch/v0-3-m3d-cpu-parallelization-phase4-deviations.md`, identity `2dad7fb9`).

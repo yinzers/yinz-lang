@@ -4,7 +4,7 @@ type: roadmap
 owner: Patrick Rizzardi
 status: active
 created: 2026-05-21
-last_updated: 2026-06-14
+last_updated: 2026-06-19
 milestones:
   - v0-3-m1-runtime-and-background
   - v0-3-m2-wait-and-state-machines
@@ -13,7 +13,8 @@ milestones:
   - v0-3-m3d-cpu-parallelization       # SPLIT 2026-06-05 from M3b: pure-CPU statement parallelization (new runtime ABI + SM-promotion + deadlock-safe join)
   - v0-3-m3e-cross-module-frame-serialization  # SPLIT 2026-06-05 from M3b P1: full cross-module FrameLayout serialization (lifts P1's loud-reject guards for re-export-transitive / shape-in-callee / errors×transitive)
   - v0-3-m3f-codegen-correctness-fixes  # shipped 2026-06-09; child declared the roadmap but was omitted from this list — added during ledger-format migration
-  - v0-3-m3g-mixed-cpu-io-overlap       # SPLIT 2026-06-14 from M3d Phase 3: mixed CPU+I/O poll-path fusion (the M3d plan over-reached by listing it; the roadmap scopes M3d as PURE-CPU only)
+  - v0-3-m3g-mixed-cpu-io-overlap       # SPLIT 2026-06-14 from M3d Phase 3: mixed CPU+I/O poll-path fusion. MANDATORY per Patrick 2026-06-19 (efficiency mission) — sequence after M3d P5, before the v0.3.0 tag.
+  - v0-3-m3c-shadow-parity              # ANCHOR-BUG FIX 2026-06-19: had a roadmap §Milestone 3c but was missing from this list (couldn't be scheduled). Documented deferral → post-v0.3.0 hotfix (Patrick 2026-06-19); 4-field anchor in §Milestone 3c + capability-ledger.
   - v0-3-m4-channels-soa-release
 ---
 
@@ -213,6 +214,8 @@ These BLOCK the milestones listed next to them. They must be resolved (and the r
 
 ### Milestone 3c: v0.3-M3c — Full Variable Shadowing Parity (per-binding-slot identity) — single-session (1-2 sessions)
 > **Added 2026-06-03 (Patrick) out of the M3a Phase 2 shadow saga.** M3a Phase 2 established that Yinz ALLOWS variable shadowing (`design/linting.md` `shadowed-variables` lint = warn, not error) and made it work in NON-async functions (entry-block alloca + restore-all lexical scope). It does NOT yet work inside async (state-machine) functions: the frame-slot system keys crossing-local slots by NAME, so two same-named bindings around a suspension share one slot → the second write clobbers the first. M3a P2 round 6 tried to partially lift this (allow non-crossing shadows in SM functions) and hit the EXACT silent-wrong-answer the deferral doc predicted (`reload_params_from_frame` writes the resumed value into the shadow's alloca, leaving the real binding uninitialized → garbage read); round 7 reverted to the documented conservative clean-reject. M3c does the COMPLETE fix.
+>
+> **📌 DOCUMENTED DEFERRAL — Patrick-approved 2026-06-19 (post-v0.3.0 hotfix).** Per `no-duct-tape.md` §When To Document Instead Of Fix (4 fields): **WHAT** is deferred — full shadowing parity across `wait`; v0.3.0 ships the safe `ShadowsCrossingLocal` clean-reject instead. **WHY** — the clean-reject is a papercut (rename your variable), NOT a correctness or perf gap; the efficiency mission prioritizes M3g (mandatory perf) + M4 (release) first. **COST to fix later** — 1-2 sessions (per-binding-slot identity keying; M3a P2 proved the partial fix silently miscompiles, so the complete fix + the full shadow-matrix adversarial gate are required — see Rough scope). **TRIGGER** — schedule as a v0.3.x hotfix after v0.3.0 ships, or earlier on user demand for name-reuse around a suspension. **Anchor bug FIXED 2026-06-19**: `v0-3-m3c-shadow-parity` added to the front-matter `milestones:` list (was absent — couldn't be scheduled); the capability-ledger row now owns it. This is a tracked deferral with a named trigger, NOT an open-ended "someday."
 **Value delivered**: A nested `let` may re-use a name already bound (param or local) anywhere — including across/around a `wait` inside an async function — and compiles correctly (Rust-level shadowing parity). Lifts the `ShadowsCrossingLocal` clean-reject; users no longer must rename inner bindings in async functions.
 **Execution plan**: `v0-3-m3c-shadow-parity` (status: NOT YET PLANNED — run `/plan` when picked up; do not detail-plan now)
 **Depends on**: v0.3-M3a (the suspension-codegen substrate + the non-async lexical-scope fix it shipped). Independent of M3b — can land before or after.
@@ -288,14 +291,15 @@ These BLOCK the milestones listed next to them. They must be resolved (and the r
 > **⚠️ SPLIT 2026-06-14 from M3d Phase 3 (Patrick decision).** The M3d execution plan's Phase 3 **Objective** listed "mixed CPU+I/O groups" as an M3d deliverable — but the roadmap scopes M3d as **pure-CPU only** (the CPU/I/O split was deliberate: I/O overlap = M3b's interleaved inline poll, pure-CPU overlap = M3d's joinable spawn+join; their FUSION was never scoped). M3d sub-slice 4c ran a full verify-first pass: the executor BUILT both attempted fusion fixes and PROVED each unsafe (the CPU join-poll and I/O inline-poll paths share no continuation; forcing a nested CPU group to fire alongside an outer suspension DEADLOCKS the binary — the spawned handle is never re-polled from the outer suspension's resume). Two adversarial deviation-judges vindicated the DECLINE as genuine milestone-sized unsafety, not avoidance. So this capability gets its own milestone instead of bloating M3d. **This split is itself the first catch of the new Capability Ledger discipline.**
 **Value delivered**: a function body that mixes one heavy CPU call and one I/O (`wait`) call as independent operations runs them *concurrently* (CPU on a worker core, I/O suspended) instead of in sequence — the last gap in "all independent operations auto-parallelize," covering groups that mix the two work-classes. Until M3g, such mixed groups run sequentially (correct, just not overlapped).
 **Execution plan**: `v0-3-m3g-mixed-cpu-io-overlap` (status: NOT YET PLANNED — run `/plan` when picked up; do not detail-plan now)
-**Depends on**: v0.3-M3b (the I/O inline-poll path) AND v0.3-M3d (the pure-CPU join-poll path) — both must be complete; M3g fuses them. Does NOT block the `v0.3.0` release (M4): M3d declines mixed groups safely to sequential, so v0.3.0 ships correct-but-unoptimized for mixed groups and M3g is a pure perf enhancement that can land before or after the tag.
+**MANDATORY (Patrick 2026-06-19).** Originally framed as a non-blocker perf enhancement; the "most efficient language" mission reclassifies mixed-group sequential execution as a real perf gap that v0.3 must close. **Sequence: after M3d Phase 5 completes, BEFORE the v0.3.0 tag** (exact slot vs M4's feature work is a `/plan`-time call; the tag does not cut until M3g lands). M3d's safe DECLINE (mixed→sequential, byte-identical) remains the correctness floor M3g must not regress.
+**Depends on**: v0.3-M3b (the I/O inline-poll path) AND v0.3-M3d (the pure-CPU join-poll path) — both must be complete; M3g fuses them.
 **Rough scope** (its `/plan` sharpens this — full root-cause + machinery live in `.claude/todos.md` "mixed CPU+I/O overlap" residual, written by M3d sub-slice 4c):
 - **Codegen poll-path fusion**: route codegen off typeck's class-aware `partition_groups_classified` / `ClassifiedGroup` (already shipped in typeck with NO codegen consumer by design), so ONE group's continuation drives BOTH a CPU join-poll (`ynz_rt_join_poll`) and an I/O inline-poll (`resume_fn`) — re-driving every live spawn handle on each resume of the shared continuation.
 - **Dual-kind frame layout**: reserve BOTH a CPU handle/result-slot region AND the I/O child sub-frame in the same group's frame layout.
 - **Typeck — promote already-suspending hosts**: let a function already in `base_suspends` (its own `wait` or a suspending callee) still drive `m3d_spike` for a CPU group in its body, AND guard-probe its CPU-join crossings (today `compute_cpu_promotions` / guard-probe skip `base_suspends` functions, so a nested CPU group inside a suspending host never fires).
 - **Deadlock-safety gate (mandatory — M2-HALT-corpse-adjacent)**: the fused continuation must never deadlock (the 4c failure mode) — adversarial gate + the M3d DECLINE fixtures (`v03_m3d_mixed_cpu_io_group_declines`, `..._nested_group_with_outer_wait`, `..._nested_group_with_suspending_callee`) FLIP from DECLINE-asserting to FIRE-asserting as the acceptance signal.
 - Demo (`pirates-roster` mixed CPU+I/O section) + error gallery + cross-impl consistency.
-**Trigger to schedule**: after M3d completes (pure-CPU must work before fusing it with I/O), whenever mixed-class overlap is wanted. Not a `v0.3.0` blocker.
+**Trigger to schedule**: immediately after M3d Phase 5 completes (pure-CPU must work before fusing it with I/O). **Now a `v0.3.0` blocker** (mandatory per Patrick 2026-06-19) — run `/plan` for `v0-3-m3g-mixed-cpu-io-overlap` as the next milestone after M3d.
 **Ships via**: `/pr` per phase, `/release` for a `v0.3.0-m{next}` tag.
 
 ### Milestone 4: v0.3-M4 — Channels + Auto-Arc + Auto-SoA + v0.3.0 Release — multi-session
