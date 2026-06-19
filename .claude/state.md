@@ -24,13 +24,24 @@
 
 <!-- RADAR-START -->
 ### Active Roadmaps
-- v0-2-1-lsp-gap-closure (Patrick Rizzardi) — 0 active plans — 2026-05-30
-- v0-3-concurrency-perf (Patrick Rizzardi) — 1 active plans — 2026-06-14
-- webpage-docs (Patrick Rizzardi) — 0 active plans — 2026-05-20
+- v0-2-1-lsp-gap-closure (Patrick Rizzardi) — 1 plans — 2026-05-30
+- v0-3-concurrency-perf (Patrick Rizzardi) — 7 plans — 2026-06-14
+- webpage-docs (Patrick Rizzardi) — 1 plans — 2026-05-20
 
 ### Active Workstreams
 - docs-tree-restructure (Patrick Rizzardi) — 9 files touched — 0/102 done — 2026-06-15
-- v0-3-m3d-cpu-parallelization (Patrick Rizzardi) — 11 files touched — 80/127 done — roadmap: v0-3-concurrency-perf — 2026-06-14
+- [v0-2-1-lsp-gap-closure] initiative
+  - v0-2-1-m10-teaching-surface-bugfix (Patrick Rizzardi) — 12 files touched — 126/142 done — roadmap: v0-2-1-lsp-gap-closure — 2026-05-31 (Phase 2 complete)
+- [v0-3-concurrency-perf] initiative
+  - v0-3-m1-runtime-and-background (Patrick Rizzardi) — 12 files touched — 113/117 done — roadmap: v0-3-concurrency-perf — 2026-05-21-p6
+  - v0-3-m2-wait-and-state-machines (Patrick Rizzardi) — 15 files touched — 188/235 done — roadmap: v0-3-concurrency-perf — 2026-06-01 (SHIPPED as v0.3.0-m3 — all phases complete, merged to main with M10)
+  - v0-3-m3a-suspension-codegen (Patrick Rizzardi) — 12 files touched — 93/109 done — roadmap: v0-3-concurrency-perf — 2026-06-01
+  - v0-3-m3b-auto-parallelization (Patrick Rizzardi) — 15 files touched — 100/150 done — roadmap: v0-3-concurrency-perf — 2026-06-05
+  - v0-3-m3d-cpu-parallelization (Patrick Rizzardi) — 11 files touched — 81/127 done — roadmap: v0-3-concurrency-perf — 2026-06-14
+  - v0-3-m3e-cross-module-frame-serialization (Patrick Rizzardi) — 15 files touched — 59/84 done — roadmap: v0-3-concurrency-perf — 2026-06-07
+  - v0-3-m3f-codegen-correctness-fixes (Patrick Rizzardi) — 9 files touched — 79/79 done — roadmap: v0-3-concurrency-perf — 2026-06-09
+- [webpage-docs] initiative
+  - webpage-foundation (Patrick Rizzardi) — 3 files touched — 124/125 done — roadmap: webpage-docs — 2026-05-20
 <!-- RADAR-END -->
 
 > **Gate-check note (2026-06-15):** `/execute-plan docs-tree-restructure` was invoked and **correctly HALTED at the precondition** — no phases ran, no files changed (this chat = slug-claim + read-only gate check only). The plan is hard-blocked until `v0-3-m3d-cpu-parallelization` reaches `status: done`/moves to `plans/done/`; m3d is still `active` (69/126). Also note we're on branch `feat/m3d-cpu-parallelization`, so docs work would collide with in-flight compiler edits. Unblock = finish m3d → flip done → branch docs work off clean main → re-invoke.
