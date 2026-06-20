@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.3.0-m7] — 2026-06-19 — M3d: Pure-CPU Statement Parallelization
+
+Commit range: v0.3.0-m6..v0.3.0-m7
+
+### What ships
+
+v0.3.0-m7 extends auto-concurrency to pure compute: when a function contains independent
+heavy pure-CPU calls, the compiler runs them on separate cores automatically — zero new
+syntax, output byte-identical to `--no-auto-parallel`. This is the CPU counterpart to M3b's
+I/O overlap — the developer writes straight-line code and the compiler finds the
+parallelism. Promotion is conservative (declining to sequential is always safe) and is
+gated off in kernel mode and under `--no-auto-parallel`.
+
+### Compiler features (M3d)
+
+- **ynz-typeck**: new `cpu_admission` module — the single authority deciding which statement
+  groups become parallel CPU groups, consumed by both the IDE hint and codegen. A
+  `does_real_work` fixpoint (the "worth-it" proxy, keyed on loops/recursion) gates promotion
+  on real compute; promotion respects kernel mode and `--no-auto-parallel`.
+- **ynz-codegen**: state-machine promotion lowering — independent CPU callees spawn onto a
+  blocking pool and join through the group poll. Codegen reads admission from the
+  `cpu_admission` authority, cross-pinned to the IDE hint by a spawn-count parity test.
+- **ynz-runtime**: joinable CPU spawn / poll / free C-ABI, with panic re-raise (identical to
+  sequential) and drop-detach (a cancelled parent leaves an in-flight CPU child to finish
+  harmlessly). Poll-based throughout — no synchronous join.
+- **ynz-abi** (new crate): single-sources the spike-frame layout offsets, const-asserted
+  across the codegen / runtime boundary.
+- **Teaching surface**: a `parallel_groups` inlay hint shows which calls overlap and why.
+
+### Tests
+
+15 danger-matrix fixtures (return-class × placement × callee-distinctness) + 8 hostile
+fixtures (pool exhaustion, cancellation, panic re-raise, reverse completion, deep promoted
+chains) + a corpus-wide cross-implementation sweep asserting every program is byte-identical
+between default and `--no-auto-parallel`, plus spawn-count cross-pin parity tests binding the
+IDE hint and the emitted binary to one admission authority. Full workspace suite green.
+
+
 ## [0.3.0-m6] — 2026-06-10 — M3f: Pre-Existing Codegen Correctness Fixes
 
 Commit range: v0.3.0-m5..v0.3.0-m6
