@@ -1,8 +1,9 @@
 pub mod runtime;
 pub use runtime::{
     ynz_rt_async_sleep_create, ynz_rt_async_sleep_poll, ynz_rt_check_preempt, ynz_rt_init,
-    ynz_rt_run_entrypoint, ynz_rt_shutdown, ynz_rt_spawn, ynz_rt_spawn_blocking,
-    ynz_thread_sleep_ms,
+    ynz_rt_join_handle_free, ynz_rt_join_poll, ynz_rt_run_entrypoint, ynz_rt_shutdown,
+    ynz_rt_spawn, ynz_rt_spawn_blocking, ynz_rt_spawn_blocking_joinable, ynz_thread_sleep_ms,
+    YnzCpuResult,
 };
 
 use unicode_normalization::UnicodeNormalization;
@@ -2769,4 +2770,1065 @@ unsafe fn bignum_binop(
         std::process::abort();
     });
     cstr.into_raw()
+}
+
+// The CPU-parallel join shim tests exercise the three production C-ABI shims in isolation —
+// without any Yinz codegen involved — pinning the poll-based join ABI contract so codegen can
+// emit calls against it without re-litigating the runtime semantics.
+//
+// All tests run through a real Tokio runtime (not mocked) to confirm:
+//   1. value roundtrip per return class — int, float (bit-cast), pointer, decimal128
+//      ([lo, hi] with an explicit 16-byte-aligned i128 load), and the `T errors` pair —
+//      the result bytes ynz_rt_join_poll writes match what fn_ptr returned, no truncation
+//   2. saturation — i64::MIN/i64::MAX survive the [i64;2] ABI AND ≥600 concurrent joins
+//      complete without deadlock (poll-based join never parks a thread)
+//   3. drop-detach — ynz_rt_join_handle_free frees the handle Box (proven by a drop-probe
+//      counter, not just a "ran" witness) while the detached child still completes
+//   4. panic re-raise — a panicking child propagates via resume_unwind to the parent
+//   5. pre-init discard — spawn before ynz_rt_init returns null (the documented discard signal)
+//
+// The Context<'_> is obtained from inside a real Future::poll via `with_cx` — never a
+// fabricated waker (the M2-HALT corpse) — matching the runtime contract that waker_ctx
+// points to a &mut Context<'_> from the enclosing state machine's poll.
+#[cfg(test)]
+mod m3d_join_shims {
+    use super::*;
+    use runtime::{ynz_rt_join_handle_free, ynz_rt_join_poll};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+    // The canonical spike-frame layout constants the runtime reads on drop. Tests plant the
+    // same discriminator + handle slots codegen emits, so they import the shared constants
+    // rather than hardcoding 0x5350 / frame offsets at each spawn site.
+    use ynz_abi::{
+        SPIKE_FRAME_DISCRIMINATOR_OFFSET, SPIKE_FRAME_TAG, SPIKE_HANDLE_BASE_OFFSET,
+        SPIKE_HANDLE_SLOT_BYTES,
+    };
+
+    // A trivially-copyable int result: [42, 0]
+    extern "C" fn returns_42(_ctx: *mut u8) -> YnzCpuResult {
+        YnzCpuResult([42, 0])
+    }
+
+    // Returns saturated values to confirm [i64::MIN, i64::MAX] survives the ABI.
+    extern "C" fn returns_saturated(_ctx: *mut u8) -> YnzCpuResult {
+        YnzCpuResult([i64::MIN, i64::MAX])
+    }
+
+    // Spawn a blocking task that panics and return the heap-boxed CpuJoinHandle pointer.
+    //
+    // Bypasses ynz_rt_spawn_blocking_joinable to avoid the extern "C" fn pointer boundary,
+    // which in Rust 1.71+ turns panics into aborts (RFC 2945, Rust tracking issue #96300).
+    // The test exercises ynz_rt_join_poll's Ready(Err(panic)) branch directly — the
+    // mechanism under test is the resume_unwind call in join_poll, not the fn_ptr boundary.
+    fn spawn_panicking_handle() -> *mut u8 {
+        use crate::runtime::CpuJoinHandle;
+        let join_handle = tokio::task::spawn_blocking(|| -> YnzCpuResult {
+            panic!("intentional panic from CPU child");
+        });
+        // Box the handle to match the heap layout produced by ynz_rt_spawn_blocking_joinable.
+        // CpuJoinHandle::new is pub(crate) precisely to enable this test path; the inner
+        // field is private so external callers cannot directly .abort() or .poll() the handle.
+        let boxed = Box::new(CpuJoinHandle::new(join_handle));
+        Box::into_raw(boxed) as *mut u8
+    }
+
+    // Helper: yields the inner poll result from a closure that receives a real Context<'_>.
+    //
+    // This is the only correct way to get a real Context<'_> — fabricating a waker would
+    // violate the waker-forwarding invariant and is exactly what the M2-HALT corpse did.
+    async fn with_cx<F, R>(f: F) -> R
+    where
+        F: FnOnce(&mut std::task::Context<'_>) -> R,
+    {
+        // A one-shot future that captures the context and calls f.
+        // Unpin: Option<F> and PhantomData are both Unpin when F: Unpin (closure is Unpin).
+        struct CaptureCtx<F, R>(Option<F>, std::marker::PhantomData<R>);
+        impl<F: Unpin, R> Unpin for CaptureCtx<F, R> {}
+        impl<F, R> std::future::Future for CaptureCtx<F, R>
+        where
+            F: FnOnce(&mut std::task::Context<'_>) -> R,
+        {
+            type Output = R;
+            fn poll(
+                self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<R> {
+                // SAFETY: CaptureCtx is Unpin (declared above); get_unchecked_mut is safe here.
+                let inner = unsafe { self.get_unchecked_mut() };
+                let f = inner.0.take().expect("polled twice");
+                std::task::Poll::Ready(f(cx))
+            }
+        }
+        CaptureCtx::<F, R>(Some(f), std::marker::PhantomData).await
+    }
+
+    #[tokio::test]
+    async fn value_roundtrip_int() {
+        // WHY: guards that ynz_rt_join_poll writes the correct 16-byte result to the
+        // result_out slot and returns 0 (Ready) when the child has finished.
+        unsafe {
+            let handle_ptr = ynz_rt_spawn_blocking_joinable(returns_42, std::ptr::null_mut(), 0);
+            assert!(
+                !handle_ptr.is_null(),
+                "spawn must return a non-null handle in a live Tokio context"
+            );
+
+            // We may need to poll more than once if the blocking task hasn't finished yet.
+            let mut result_slot = [0i64; 2];
+            let result_ptr = result_slot.as_mut_ptr() as *mut u8;
+
+            // Give the blocking thread a moment; then poll.
+            // Using a small sleep ensures the spawned task has time to complete before we
+            // poll — making the test deterministic without a busy loop.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+            let status = with_cx(|cx| {
+                let waker_ctx = cx as *mut std::task::Context<'_> as *mut u8;
+                ynz_rt_join_poll(handle_ptr, waker_ctx, result_ptr)
+            })
+            .await;
+
+            assert_eq!(
+                status, 0,
+                "poll must return 0 (Ready) after the child has completed"
+            );
+            assert_eq!(
+                result_slot,
+                [42, 0],
+                "result must be [42, 0] for returns_42"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn value_roundtrip_saturation() {
+        // WHY: decimal128 paths write [lo_word, hi_word]; this test uses [i64::MIN, i64::MAX]
+        // to confirm neither word is truncated or sign-extended incorrectly through the ABI.
+        unsafe {
+            let handle_ptr =
+                ynz_rt_spawn_blocking_joinable(returns_saturated, std::ptr::null_mut(), 0);
+            assert!(!handle_ptr.is_null());
+
+            let mut result_slot = [0i64; 2];
+            let result_ptr = result_slot.as_mut_ptr() as *mut u8;
+
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+            let status = with_cx(|cx| {
+                let waker_ctx = cx as *mut std::task::Context<'_> as *mut u8;
+                ynz_rt_join_poll(handle_ptr, waker_ctx, result_ptr)
+            })
+            .await;
+
+            assert_eq!(status, 0, "must be Ready");
+            assert_eq!(
+                result_slot,
+                [i64::MIN, i64::MAX],
+                "saturated values must survive the ABI unchanged"
+            );
+        }
+    }
+
+    // float result: the f64 is bit-cast (NOT truncated) into the low i64 word.
+    extern "C" fn returns_float(_ctx: *mut u8) -> YnzCpuResult {
+        YnzCpuResult([(std::f64::consts::PI).to_bits() as i64, 0])
+    }
+
+    // heap-pointer result (string/array/map class): an arbitrary pointer-shaped bit pattern
+    // in the low word. The runtime treats it as opaque bits — it does not dereference it.
+    extern "C" fn returns_ptr_bits(_ctx: *mut u8) -> YnzCpuResult {
+        YnzCpuResult([0x0000_7FFF_DEAD_C0DE_u64 as i64, 0])
+    }
+
+    // number/decimal128 result: a 128-bit value split little-endian into [lo_word, hi_word].
+    // Uses a value with non-trivial bits in BOTH words so a lo/hi swap or a dropped high word
+    // would fail the reconstruction assertion.
+    const DECIMAL128_TEST_VALUE: u128 = 0x1234_5678_9ABC_DEF0_0FED_CBA9_8765_4321_u128;
+    extern "C" fn returns_decimal128(_ctx: *mut u8) -> YnzCpuResult {
+        let lo = DECIMAL128_TEST_VALUE as u64;
+        let hi = (DECIMAL128_TEST_VALUE >> 64) as u64;
+        YnzCpuResult([lo as i64, hi as i64])
+    }
+
+    // `T errors` (error-channel pair) result: [err_tag, ok_bits]. err_tag != 0 marks the
+    // error variant; the ok word carries whatever the codegen packs alongside.
+    extern "C" fn returns_error_pair(_ctx: *mut u8) -> YnzCpuResult {
+        YnzCpuResult([7, 0])
+    }
+
+    // Poll a freshly spawned handle to Ready and return the 16 bytes written to result_out.
+    // 16-byte aligned result slot via #[repr(align(16))] so the decimal128/i128 read path is
+    // exercised under the alignment the frame result slot guarantees.
+    #[repr(C, align(16))]
+    struct AlignedResultSlot([i64; 2]);
+
+    // Time: O(n) where n = number of Pending polls before the blocking task completes
+    // (one yield-to-executor cycle per Pending). Space: O(1) — a single 16-byte result slot.
+    async fn spawn_join_collect(
+        fn_ptr: extern "C" fn(*mut u8) -> YnzCpuResult,
+    ) -> AlignedResultSlot {
+        unsafe {
+            let handle_ptr = ynz_rt_spawn_blocking_joinable(fn_ptr, std::ptr::null_mut(), 0);
+            assert!(!handle_ptr.is_null(), "spawn must return a non-null handle");
+
+            let mut slot = AlignedResultSlot([0i64; 2]);
+            let result_ptr = slot.0.as_mut_ptr() as *mut u8;
+
+            // Poll until Ready — yield to the executor between Pending cycles so the blocking
+            // pool can make progress without a busy loop.
+            loop {
+                let status = with_cx(|cx| {
+                    let waker_ctx = cx as *mut std::task::Context<'_> as *mut u8;
+                    ynz_rt_join_poll(handle_ptr, waker_ctx, result_ptr)
+                })
+                .await;
+                if status == 0 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            slot
+        }
+    }
+
+    #[tokio::test]
+    async fn value_roundtrip_float() {
+        // WHY: the float return class bit-casts an f64 into the low i64 word. A truncation
+        // or an int-cast (instead of a bit-cast) would corrupt the value; reconstructing the
+        // f64 from the round-tripped bits proves the ABI preserves the exact bit pattern.
+        let slot = spawn_join_collect(returns_float).await;
+        let recovered = f64::from_bits(slot.0[0] as u64);
+        assert_eq!(
+            recovered,
+            std::f64::consts::PI,
+            "float must survive the [i64;2] ABI as an exact bit-cast"
+        );
+        assert_eq!(slot.0[1], 0, "high word must be zero for the float class");
+    }
+
+    #[tokio::test]
+    async fn value_roundtrip_ptr() {
+        // WHY: string/array/map returns pack a heap pointer into the low word. The runtime
+        // moves the bits opaquely; this guards that no pointer bits are clobbered in transit.
+        let slot = spawn_join_collect(returns_ptr_bits).await;
+        assert_eq!(
+            slot.0[0] as u64, 0x0000_7FFF_DEAD_C0DE_u64,
+            "pointer-shaped low word must round-trip unchanged"
+        );
+        assert_eq!(slot.0[1], 0, "high word must be zero for the pointer class");
+    }
+
+    #[tokio::test]
+    async fn value_roundtrip_decimal128_aligned() {
+        // WHY: number/decimal128 returns use BOTH i64 words ([lo, hi]). A decimal128 is a
+        // 128-bit value; reading the round-tripped result slot AS an i128 is only correct
+        // when the slot is 16-byte aligned — a misaligned i128 load is a SIGBUS / silent-wrong
+        // class on strict-alignment targets (the failure mode the plan calls out explicitly).
+        // This test (a) confirms both words survive without a lo/hi swap, and (b) asserts the
+        // result slot is 16-byte aligned and reads back as the exact i128 via an aligned load.
+        let slot = spawn_join_collect(returns_decimal128).await;
+
+        // (a) Both words survive independently.
+        let lo = slot.0[0] as u64;
+        let hi = slot.0[1] as u64;
+        let reconstructed = ((hi as u128) << 64) | (lo as u128);
+        assert_eq!(
+            reconstructed, DECIMAL128_TEST_VALUE,
+            "decimal128 must round-trip through [lo, hi] without word swap or truncation"
+        );
+
+        // (b) Explicit 16-byte alignment assertion on the result slot, then an aligned i128
+        // load. AlignedResultSlot is #[repr(C, align(16))] so the slot base is 16-aligned —
+        // the same alignment codegen guarantees for the frame result slot. Reading it as a
+        // *const u128 must not fault and must equal the expected value.
+        let slot_addr = slot.0.as_ptr() as usize;
+        assert_eq!(
+            slot_addr % 16,
+            0,
+            "decimal128 result slot must be 16-byte aligned (misaligned i128 load is SIGBUS/silent-wrong class)"
+        );
+        // SAFETY: slot_addr is 16-byte aligned (asserted above) and points to 16 valid bytes.
+        let as_i128 = unsafe { (slot.0.as_ptr() as *const u128).read() };
+        assert_eq!(
+            as_i128, DECIMAL128_TEST_VALUE,
+            "aligned i128 load of the result slot must equal the original decimal128 value"
+        );
+    }
+
+    #[tokio::test]
+    async fn value_roundtrip_error_pair() {
+        // WHY: `T errors` returns pack [err_tag, ok_bits]. Both words are load-bearing — the
+        // tag selects the variant and must not be dropped or merged with the ok word.
+        let slot = spawn_join_collect(returns_error_pair).await;
+        assert_eq!(
+            slot.0,
+            [7, 0],
+            "error-channel pair must round-trip both words ([err_tag, ok_bits])"
+        );
+    }
+
+    #[tokio::test]
+    async fn ctx_copy_contents_reach_child() {
+        // WHY: guards the ctx-copy path — child must see the same bytes that were in
+        // the parent's ctx at spawn time. Uses a 16-byte ctx with a recognizable pattern.
+        extern "C" fn reads_ctx(ctx: *mut u8) -> YnzCpuResult {
+            // Read two i64 from the ctx and return them as the result.
+            // SAFETY: caller passed 16 valid bytes.
+            let a = unsafe { (ctx as *const i64).read() };
+            let b = unsafe { (ctx as *const i64).add(1).read() };
+            YnzCpuResult([a, b])
+        }
+
+        let mut ctx_data = [0u8; 16];
+        {
+            let ptr = ctx_data.as_mut_ptr() as *mut i64;
+            unsafe {
+                ptr.write(0x1234_5678);
+                ptr.add(1).write(0xDEAD_BEEF_i64);
+            }
+        }
+
+        unsafe {
+            let handle_ptr = ynz_rt_spawn_blocking_joinable(
+                reads_ctx,
+                ctx_data.as_mut_ptr(),
+                ctx_data.len() as i64,
+            );
+            assert!(!handle_ptr.is_null());
+
+            let mut result_slot = [0i64; 2];
+            let result_ptr = result_slot.as_mut_ptr() as *mut u8;
+
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+            let status = with_cx(|cx| {
+                let waker_ctx = cx as *mut std::task::Context<'_> as *mut u8;
+                ynz_rt_join_poll(handle_ptr, waker_ctx, result_ptr)
+            })
+            .await;
+
+            assert_eq!(status, 0, "must be Ready");
+            assert_eq!(
+                result_slot,
+                [0x1234_5678, 0xDEAD_BEEF_i64],
+                "ctx bytes must be faithfully copied and visible to the child"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn drop_detach_no_uaf() {
+        // WHY: guards ynz_rt_join_handle_free — dropping a handle mid-flight must not
+        // UAF or double-free. An Arc<AtomicBool> witness lets us confirm the child ran to
+        // completion AND that the ctx-copy heap buffer reached the child intact despite
+        // the parent having freed the join handle.
+        //
+        // Allocation ledger (the detach path):
+        //   ALLOC 1: Arc<AtomicBool> (parent holds ref; clone into ctx = ref 2)
+        //   ALLOC 2: ctx heap copy (ynz_rt_spawn_blocking_joinable copies 16 bytes)
+        //   ALLOC 3: Box<CpuJoinHandle> (returned as handle_ptr)
+        //   FREE  3: ynz_rt_join_handle_free drops Box<CpuJoinHandle> (detaches task)
+        //   FREE  2: FrameDropGuard inside child closure frees the ctx heap copy on return
+        //   FREE  1: Arc dropped by child (sets flag), outer Arc dropped at test end
+        // Expected: no UAF (FREE 2 happens inside the child, after the child runs; the
+        // parent's ynz_rt_join_handle_free dropped only the Box — not the ctx copy).
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_clone = completed.clone();
+
+        // Capture the Arc pointer as a raw ptr in ctx (16 bytes: pointer + sentinel).
+        // The child reads it out, runs to completion, and sets the flag.
+        let arc_ptr = Arc::into_raw(completed_clone) as u64;
+        let mut ctx_data = [0u8; 16];
+        unsafe {
+            let p = ctx_data.as_mut_ptr() as *mut u64;
+            p.write(arc_ptr);
+            p.add(1).write(0xCAFE_BABE);
+        }
+
+        extern "C" fn sets_flag_and_returns(ctx: *mut u8) -> YnzCpuResult {
+            // Read the Arc pointer back and signal completion.
+            // SAFETY: ctx is valid for 16 bytes (caller guarantee).
+            let arc_ptr = unsafe { (ctx as *const u64).read() };
+            let arc: Arc<AtomicBool> = unsafe { Arc::from_raw(arc_ptr as *const AtomicBool) };
+            arc.store(true, Ordering::Release);
+            // Arc drops here — release ref from the child.
+            YnzCpuResult([0, 0])
+        }
+
+        unsafe {
+            let handle_ptr = ynz_rt_spawn_blocking_joinable(
+                sets_flag_and_returns,
+                ctx_data.as_mut_ptr(),
+                ctx_data.len() as i64,
+            );
+            assert!(!handle_ptr.is_null());
+
+            // Drop the handle immediately — parent is "cancelled mid-join".
+            ynz_rt_join_handle_free(handle_ptr);
+        }
+
+        // Give the blocking task time to run and set the flag.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        assert!(
+            completed.load(Ordering::Acquire),
+            "child must have run to completion even after parent dropped the handle"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn handle_free_detaches_and_frees_box() {
+        // WHY: the drop-detach contract has two halves the plan requires PROVEN separately:
+        //   (1) the child task runs to completion after the parent frees the handle (detach), and
+        //   (2) the handle's heap Box is actually FREED, not leaked.
+        // An Arc<bool> "ran" witness only proves (1). Half (2) — the FREE — is proven here with a
+        // per-handle drop-probe counter: CpuJoinHandle::Drop increments the counter exactly when
+        // THIS Box is dropped. A leak would leave the counter at 0; a detach-only path would still
+        // run the child but never increment. The counter is Arc-local so concurrent drops from
+        // other parallel tests can never bleed into this assertion window. This is the allocation
+        // ledger the plan asks for: free-count == 1 for the one handle allocated.
+        use crate::runtime::CpuJoinHandle;
+        use std::sync::atomic::AtomicUsize;
+
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_child = completed.clone();
+
+        // Box-free probe: incremented exactly once, when this CpuJoinHandle's Box is dropped.
+        let free_count = Arc::new(AtomicUsize::new(0));
+
+        // Build the handle the same way ynz_rt_spawn_blocking_joinable does (Box<CpuJoinHandle>),
+        // but with a drop probe injected so the FREE is observable. Going through CpuJoinHandle::new
+        // keeps the construction identical to the production path.
+        let join_handle = tokio::task::spawn_blocking(move || -> YnzCpuResult {
+            completed_child.store(true, Ordering::Release);
+            YnzCpuResult([0, 0])
+        });
+        let mut cpu_handle = CpuJoinHandle::new(join_handle);
+        cpu_handle.set_drop_probe(Arc::clone(&free_count));
+        let handle_ptr = Box::into_raw(Box::new(cpu_handle)) as *mut u8;
+
+        // Parent cancels mid-join: free the handle before collecting any result.
+        unsafe {
+            ynz_rt_join_handle_free(handle_ptr);
+        }
+
+        // (2) The Box was freed exactly once — proven by the drop-probe counter, not by "ran".
+        assert_eq!(
+            free_count.load(Ordering::SeqCst),
+            1,
+            "ynz_rt_join_handle_free must drop (free) the handle Box exactly once — \
+             a leak leaves this at 0"
+        );
+
+        // (1) The detached child still runs to completion (its ctx copy outlives the handle free).
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            completed.load(Ordering::Acquire),
+            "detached child must run to completion after the handle was freed"
+        );
+
+        // Idempotence half of the contract: freeing a null handle is a no-op (never aborts).
+        unsafe {
+            ynz_rt_join_handle_free(std::ptr::null_mut());
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    // Time: O(n) where n = number of Pending polls before the blocking task completes  Space: O(1) — single result slot.
+    async fn joinable_spawn_frees_ctx_copy_exactly_once() {
+        // WHY: Step 5's ctx-free accounting requires that the FrameDropGuard ctx COPY made by
+        // the REAL ynz_rt_spawn_blocking_joinable is freed exactly once (no leak) when the spawn
+        // closure completes. Constructing a CpuJoinHandle directly (as handle_free_detaches_and_
+        // frees_box does) makes no ctx copy, so it cannot prove this half. This test drives the
+        // real FFI entry point with a NON-NULL ctx so the ctx copy actually happens, then asserts
+        // the ctx heap buffer's FREE — not merely that the child "ran" — via a per-spawn drop
+        // probe on the ctx FrameDropGuard. The process-global ynz_alloc/ynz_free counters can't
+        // see this free: the ctx copy uses the Rust allocator and the lib unit-test binary never
+        // calls ynz_rt_init. A leak would leave the probe at 0; a double-free would abort.
+        use crate::runtime::arm_ctx_free_probe;
+        use std::sync::atomic::AtomicUsize;
+
+        // The child reads its ctx copy to prove the bytes survived the copy, then returns them.
+        extern "C" fn echo_ctx_first_word(ctx: *mut u8) -> YnzCpuResult {
+            assert!(!ctx.is_null(), "ctx copy must be non-null in the child");
+            // SAFETY: ynz_rt_spawn_blocking_joinable copied ctx_size (8) bytes into this buffer.
+            let word = unsafe { (ctx as *const i64).read_unaligned() };
+            YnzCpuResult([word, 0])
+        }
+
+        let ctx_free_count = Arc::new(AtomicUsize::new(0));
+
+        let mut ctx_bytes: [u8; 8] = 0xABCD_i64.to_ne_bytes();
+        let ctx_ptr = ctx_bytes.as_mut_ptr();
+
+        // Arm the probe on THIS thread, then call the real FFI fn on THIS thread — the probe is
+        // read at guard construction (caller's thread) and baked into the guard before it moves
+        // into the blocking-pool closure.
+        arm_ctx_free_probe(Arc::clone(&ctx_free_count));
+        let handle_ptr = unsafe { ynz_rt_spawn_blocking_joinable(echo_ctx_first_word, ctx_ptr, 8) };
+        assert!(!handle_ptr.is_null(), "spawn must return a non-null handle");
+
+        // Poll to Ready so the child closure runs to completion and its ctx FrameDropGuard drops.
+        let mut slot = [0i64; 2];
+        let result_ptr = slot.as_mut_ptr() as *mut u8;
+        loop {
+            let status = with_cx(|cx| {
+                let waker_ctx = cx as *mut std::task::Context<'_> as *mut u8;
+                unsafe { ynz_rt_join_poll(handle_ptr, waker_ctx, result_ptr) }
+            })
+            .await;
+            if status == 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        assert_eq!(slot[0], 0xABCD, "child must observe the copied ctx bytes");
+        assert_eq!(
+            ctx_free_count.load(Ordering::SeqCst),
+            1,
+            "the ctx heap copy made by ynz_rt_spawn_blocking_joinable must be freed exactly once \
+             — a leak leaves this at 0"
+        );
+    }
+
+    #[test]
+    fn spawn_before_init_returns_null() {
+        // WHY: outside any Tokio context AND with the global RUNTIME uninitialised,
+        // ynz_rt_spawn_blocking_joinable must DISCARD (return null) with a warning rather than
+        // panic or abort — mirroring ynz_rt_spawn's pre-init/post-shutdown discard contract.
+        // The doc names null as the pre-init/post-shutdown signal; this pins that the early-return
+        // ladder actually produces null in that state.
+        //
+        // Determinism note: this is a plain #[test] (NOT #[tokio::test]), so Handle::try_current()
+        // returns Err. In the lib crate's unit-test binary no test calls ynz_rt_init (init/shutdown
+        // live only in the separate tests/*.rs integration binaries), so the process-global RUNTIME
+        // OnceLock is never populated here — RUNTIME.get() is None and the spawn takes the
+        // "called before ynz_rt_init" discard branch deterministically.
+        extern "C" fn never_runs(_ctx: *mut u8) -> YnzCpuResult {
+            YnzCpuResult([1, 0])
+        }
+        let handle_ptr =
+            unsafe { ynz_rt_spawn_blocking_joinable(never_runs, std::ptr::null_mut(), 0) };
+        assert!(
+            handle_ptr.is_null(),
+            "spawn before ynz_rt_init (no Tokio context) must return a null handle (discard), \
+             not a live handle"
+        );
+    }
+
+    #[tokio::test]
+    async fn detach_child_runs_after_handle_free() {
+        // WHY: guards that a spawned child runs to completion even when the parent calls
+        // ynz_rt_join_handle_free before the child has started (cancellation path). Without
+        // this guarantee, a cancelled parent would leave the ctx copy dangling — the child
+        // reads from it after the parent's FrameDropGuard frees it (UAF).
+        //
+        // Ledger approach: an AtomicUsize counter is stored in ctx (8 bytes). The child
+        // reads the pointer out of ctx, increments the counter to signal "child ran",
+        // then drops. After the test, the counter must be 1 (child ran exactly once)
+        // and the test process must not have crashed (no UAF on the ctx copy).
+        // Proves: the child ran exactly once AND reached the return point without a UAF
+        // crash. Does not measure allocator malloc/free balance directly — the UAF-free
+        // assertion is the proof of interest here.
+        let ran_counter = Arc::new(AtomicUsize::new(0));
+        let counter_ptr = Arc::as_ptr(&ran_counter) as u64;
+
+        let mut ctx_data = [0u8; 8];
+        unsafe {
+            (ctx_data.as_mut_ptr() as *mut u64).write(counter_ptr);
+        }
+
+        extern "C" fn increment_counter(ctx: *mut u8) -> YnzCpuResult {
+            // SAFETY: ctx holds an 8-byte counter pointer; the Arc is still alive
+            // (the outer test holds a ref; this does not take ownership).
+            let ptr = unsafe { (ctx as *const u64).read() } as *const AtomicUsize;
+            unsafe { (*ptr).fetch_add(1, Ordering::Release) };
+            YnzCpuResult([0, 0])
+        }
+
+        unsafe {
+            let handle_ptr =
+                ynz_rt_spawn_blocking_joinable(increment_counter, ctx_data.as_mut_ptr(), 8);
+            assert!(!handle_ptr.is_null(), "spawn must return non-null handle");
+
+            // Free the handle immediately (simulate parent cancellation mid-join).
+            // The ctx COPY inside FrameDropGuard is still owned by the child closure.
+            ynz_rt_join_handle_free(handle_ptr);
+        }
+
+        // Give the child time to run.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        assert_eq!(
+            ran_counter.load(Ordering::Acquire),
+            1,
+            "child must have run exactly once — ctx copy was intact after handle free"
+        );
+        // If there were a UAF, the child's read of the counter pointer from ctx would
+        // crash (SIGSEGV) rather than reaching this assertion. The absence of a crash
+        // confirms the ctx copy is valid for the child's full duration.
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn panic_reraises_in_parent() {
+        // WHY: a panicking child must propagate via resume_unwind so the parent's panic
+        // handler fires — matching the observable behavior of sequential execution.
+        // Without this, a panicking child would be silently swallowed (M3d regression class).
+        //
+        // The catch is done inside with_cx so the context is a real Tokio waker.
+        // catch_unwind wraps the poll call; resume_unwind on the Ready(Err(panic)) path
+        // re-raises the original panic payload rather than a JoinError wrapper.
+        unsafe {
+            // Use spawn_panicking_handle() to bypass the extern "C" fn boundary abort.
+            // The handle_ptr points to a Box<CpuJoinHandle> wrapping a JoinHandle whose
+            // blocking task panicked — exactly what ynz_rt_join_poll's Ready(Err) branch
+            // is designed to handle.
+            let handle_ptr = spawn_panicking_handle();
+            assert!(!handle_ptr.is_null());
+
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+            let mut result_slot = [0i64; 2];
+            let result_ptr = result_slot.as_mut_ptr() as *mut u8;
+
+            // catch_unwind must be INSIDE block_in_place: resume_unwind panics while on the
+            // blocking OS thread; if catch_unwind were outside, the panic would try to cross
+            // the block_in_place boundary (which aborts per tokio::task::block_in_place docs).
+            let caught = tokio::task::block_in_place(|| {
+                let rt = tokio::runtime::Handle::current();
+                // catch_unwind inside block_in_place captures the resume_unwind before it crosses
+                // the block_in_place OS-thread boundary.
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    rt.block_on(with_cx(|cx| {
+                        let waker_ctx = cx as *mut std::task::Context<'_> as *mut u8;
+                        ynz_rt_join_poll(handle_ptr, waker_ctx, result_ptr)
+                    }))
+                }))
+            });
+
+            assert!(
+                caught.is_err(),
+                "poll must panic (via resume_unwind) when the child panicked"
+            );
+            let payload = caught.unwrap_err();
+            let msg = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("<non-string>");
+            assert!(
+                msg.contains("intentional panic"),
+                "panic message must be the child's original message, got: {msg}"
+            );
+        }
+    }
+
+    /// Spawn ≥600 concurrent joinable tasks through the real blocking pool and poll them
+    /// all to completion, verifying:
+    ///   1. No deadlock: poll-based join never holds a thread, so pool saturation (default
+    ///      512 threads) only queues excess tasks — the joiner is suspended, not parked.
+    ///   2. All results are correct: each task returns its own sequence number × 2 packed
+    ///      into the low i64 word of YnzCpuResult.
+    ///   3. The blocking pool runs through the real `ynz_rt_spawn_blocking_joinable` ABI —
+    ///      this is the runtime-level proof that Step 3(d)'s "≥600 spawned joins" claim
+    ///      holds. (The Yinz-source fixture (d) only exercises 2 joins per entrypoint call;
+    ///      this test provides the saturation guarantee that fixture alone cannot.)
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn saturation_600_joins() {
+        // WHY: validates that ynz_rt_spawn_blocking_joinable + ynz_rt_join_poll can drive
+        // ≥600 concurrent blocking tasks through the Tokio blocking pool without deadlock.
+        // Each join is poll-based (no thread parked), so pool exhaustion only queues tasks.
+        const JOIN_COUNT: usize = 640; // well above the 512-thread default pool size
+
+        extern "C" fn double_seq(ctx: *mut u8) -> YnzCpuResult {
+            // Read the sequence number from ctx (8 bytes) and return seq × 2.
+            let seq = unsafe { (ctx as *const i64).read() };
+            YnzCpuResult([seq * 2, 0])
+        }
+
+        let mut handles: Vec<*mut u8> = Vec::with_capacity(JOIN_COUNT);
+        let mut ctx_data: Vec<[u8; 8]> = Vec::with_capacity(JOIN_COUNT);
+
+        // Spawn all tasks before polling any of them — maximises pool pressure.
+        unsafe {
+            for i in 0..JOIN_COUNT {
+                let mut buf = [0u8; 8];
+                (buf.as_mut_ptr() as *mut i64).write(i as i64);
+                ctx_data.push(buf);
+                let handle =
+                    ynz_rt_spawn_blocking_joinable(double_seq, ctx_data[i].as_mut_ptr(), 8);
+                assert!(
+                    !handle.is_null(),
+                    "spawn {i}: expected non-null handle from live Tokio context"
+                );
+                handles.push(handle);
+            }
+        }
+
+        // Allow time for most tasks to complete before polling to confirm no deadlock.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        let mut completed = 0usize;
+        for (i, handle_ptr) in handles.iter().copied().enumerate() {
+            let mut result_slot = [0i64; 2];
+            let result_ptr = result_slot.as_mut_ptr() as *mut u8;
+
+            // Poll until Ready — most tasks will already be done; a handful still running
+            // may need one Pending cycle before the waker fires.
+            loop {
+                let status = with_cx(|cx| unsafe {
+                    let waker_ctx = cx as *mut std::task::Context<'_> as *mut u8;
+                    ynz_rt_join_poll(handle_ptr, waker_ctx, result_ptr)
+                })
+                .await;
+                if status == 0 {
+                    break;
+                }
+                // Still pending — yield to the executor so the blocking pool can make progress.
+                tokio::task::yield_now().await;
+            }
+
+            let expected = (i as i64) * 2;
+            assert_eq!(
+                result_slot[0], expected,
+                "task {i}: expected {expected}, got {}",
+                result_slot[0]
+            );
+            completed += 1;
+        }
+
+        assert_eq!(
+            completed, JOIN_COUNT,
+            "all {JOIN_COUNT} joins must complete without deadlock"
+        );
+    }
+
+    /// Verify the spike-frame discriminator drop path:
+    ///   1. A frame buffer with the packed spike discriminator (tag + handle count 2) and a
+    ///      live CpuJoinHandle in slot 0 → handle is freed (child detaches, witness completes).
+    ///   2. The second handle slot is null → no spurious free attempted.
+    ///   3. A zeroed frame (no tag) → discriminator branch skipped, no free attempted.
+    ///
+    /// Tests `cleanup_spike_cpu_handles` directly rather than constructing a full
+    /// SpawnStateFnFuture (which requires a live resume-fn and frame allocation).
+    /// The function is the extracted core of SpawnStateFnFuture::drop's step 1.5.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn discriminator_drop_frees_spike_handles() {
+        // WHY: SpawnStateFnFuture::drop's discriminator branch (step 1.5) had zero test
+        // coverage before this test. A bug there would silently leak CpuJoinHandle boxes
+        // on every parent cancellation mid-join — one per live handle per cancel, unbounded
+        // over program lifetime. The test proves both the "magic present, free handles" path
+        // and the "no magic, skip" path fire correctly.
+        use crate::runtime::{cleanup_spike_cpu_handles, CpuJoinHandle, SpawnStateFnFuture};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        // --- Case 1: spike frame with magic + live handle in slot 0, null in slot 1 ---
+        //
+        // Exercises the full SpawnStateFnFuture::drop → cleanup_spike_cpu_handles delegation
+        // path. The frame is allocated via ynz_alloc_zeroed (matches the allocator drop uses)
+        // and a live CpuJoinHandle is planted in slot 0. Dropping the future triggers the
+        // SpawnStateFnFuture::drop path that calls cleanup_spike_cpu_handles. Commenting out
+        // that delegation line causes the probe count to stay 0 and this test to FAIL.
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_child = completed.clone();
+
+        // Per-handle drop probe: incremented exactly when THIS CpuJoinHandle is dropped.
+        // Arc-local — concurrent drops from other tests never race into this assertion window.
+        let drop_count = Arc::new(AtomicUsize::new(0));
+
+        // Spawn a real blocking task so CpuJoinHandle wraps a live JoinHandle.
+        let join_handle = tokio::task::spawn_blocking(move || -> YnzCpuResult {
+            completed_child.store(true, Ordering::Release);
+            YnzCpuResult([1, 0])
+        });
+        let mut cpu_handle = CpuJoinHandle::new(join_handle);
+        cpu_handle.set_drop_probe(Arc::clone(&drop_count));
+        let handle_ptr = Box::into_raw(Box::new(cpu_handle)) as *mut u8;
+
+        // Allocate via ynz_alloc_zeroed — same allocator SpawnStateFnFuture::drop uses to free.
+        let frame_ptr = unsafe { ynz_alloc_zeroed(80) };
+        assert!(!frame_ptr.is_null(), "frame alloc must succeed");
+
+        unsafe {
+            // Write the packed discriminator at offset 4: tag in the high 16 bits,
+            // handle count = 2 in the low 16 bits (two slots to inspect — slot 0 live,
+            // slot 1 null).
+            (frame_ptr.add(SPIKE_FRAME_DISCRIMINATOR_OFFSET) as *mut u32)
+                .write((SPIKE_FRAME_TAG << 16) | 2);
+            // Plant the live handle pointer at slot 0 (offset 32). Slot 1 stays null.
+            (frame_ptr.add(SPIKE_HANDLE_BASE_OFFSET) as *mut *mut u8).write(handle_ptr);
+        }
+
+        // Build a minimal no-op resume function for SpawnStateFnFuture::new.
+        unsafe extern "C-unwind" fn noop_resume_c1(_frame: *mut u8, _waker: *mut u8) -> i32 {
+            1 // Pending — never polled, so never called.
+        }
+
+        // Drop the future immediately: SpawnStateFnFuture::drop calls cleanup_spike_cpu_handles
+        // which frees slot 0 → probe increments. If the delegation line is commented out,
+        // the probe stays 0 and the assertion below fails.
+        {
+            let _future = SpawnStateFnFuture::new(
+                noop_resume_c1,
+                frame_ptr,
+                80,
+                std::ptr::null_mut::<u8>(),
+                std::ptr::null::<runtime::BgArgDropEntry>(),
+                0,
+            );
+        }
+
+        assert_eq!(
+            drop_count.load(Ordering::SeqCst),
+            1,
+            "SpawnStateFnFuture::drop must free exactly 1 CpuJoinHandle (slot 0) via cleanup delegation"
+        );
+
+        // Give the child task time to complete after the handle is dropped (detaches).
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            completed.load(Ordering::Acquire),
+            "child must have run to completion after handle was dropped (detached)"
+        );
+
+        // --- Case 2: zeroed frame (no magic) → discriminator branch skipped ---
+        //
+        // Write a live handle pointer into the "handle slot 0" position of a NON-spike frame.
+        // cleanup_spike_cpu_handles must NOT free it (discriminator is zero, not the spike tag).
+        // We verify this by placing a sentinel value there and confirming it is untouched after
+        // the call (no Box reconstruction / no drop of a fake pointer).
+        let completed2 = Arc::new(AtomicBool::new(false));
+        let completed2_child = completed2.clone();
+        let join_handle2 = tokio::task::spawn_blocking(move || -> YnzCpuResult {
+            completed2_child.store(true, Ordering::Release);
+            YnzCpuResult([2, 0])
+        });
+        let cpu_handle2 = Box::new(CpuJoinHandle::new(join_handle2));
+        let handle_ptr2 = Box::into_raw(cpu_handle2) as *mut u8;
+
+        let mut frame2 = vec![0u8; 80];
+        unsafe {
+            // No magic at offset 4 — frame looks like a normal (non-spike) SM frame.
+            // Write the handle pointer at offset 32 to confirm it is NOT freed.
+            (frame2.as_mut_ptr().add(SPIKE_HANDLE_BASE_OFFSET) as *mut *mut u8).write(handle_ptr2);
+
+            // Call the helper — discriminator is zero, so the if-branch must be skipped.
+            cleanup_spike_cpu_handles(frame2.as_mut_ptr());
+
+            // The handle pointer at offset 32 must still be non-null and valid.
+            let still_there = *(frame2.as_ptr().add(SPIKE_HANDLE_BASE_OFFSET) as *const *mut u8);
+            assert_eq!(
+                still_there, handle_ptr2,
+                "non-spike frame: handle pointer must be untouched by cleanup"
+            );
+
+            // Manually free the handle so the test does not leak it.
+            ynz_rt_join_handle_free(handle_ptr2);
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            completed2.load(Ordering::Acquire),
+            "non-spike child must still complete after manual free"
+        );
+    }
+
+    /// Verify the count-driven cleanup frees EVERY live handle of an N=2 group, not just
+    /// slot 0. A two-member CPU group cancelled mid-join has both handle slots live; the
+    /// discriminator's encoded count (2) must drive the scan over both, freeing each box.
+    ///
+    /// This is the N=2 cancellation path the layout-driven cleanup must cover: a fixed
+    /// "slot 0 only" scan would leak slot 1's handle on every cancellation of a full group.
+    /// alloc=free is proven by the two per-handle drop probes both reaching 1.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cleanup_frees_both_handles_of_full_n2_group() {
+        use crate::runtime::{cleanup_spike_cpu_handles, CpuJoinHandle};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        // Two independent drop probes — one per handle. Both must reach 1 (each box freed once).
+        let drop0 = Arc::new(AtomicUsize::new(0));
+        let drop1 = Arc::new(AtomicUsize::new(0));
+
+        let plant = |probe: &Arc<AtomicUsize>| -> *mut u8 {
+            let jh = tokio::task::spawn_blocking(|| -> YnzCpuResult { YnzCpuResult([7, 0]) });
+            let mut h = CpuJoinHandle::new(jh);
+            h.set_drop_probe(Arc::clone(probe));
+            Box::into_raw(Box::new(h)) as *mut u8
+        };
+        let handle0 = plant(&drop0);
+        let handle1 = plant(&drop1);
+
+        // Allocate via ynz_alloc_zeroed so the layout matches a real spike frame. Both handle
+        // slots (base and base+stride) hold a live handle; the discriminator encodes count = 2.
+        let slot0 = SPIKE_HANDLE_BASE_OFFSET;
+        let slot1 = SPIKE_HANDLE_BASE_OFFSET + SPIKE_HANDLE_SLOT_BYTES;
+        let frame_ptr = unsafe { ynz_alloc_zeroed(80) };
+        assert!(!frame_ptr.is_null(), "frame alloc must succeed");
+        unsafe {
+            (frame_ptr.add(SPIKE_FRAME_DISCRIMINATOR_OFFSET) as *mut u32)
+                .write((SPIKE_FRAME_TAG << 16) | 2);
+            (frame_ptr.add(slot0) as *mut *mut u8).write(handle0);
+            (frame_ptr.add(slot1) as *mut *mut u8).write(handle1);
+            cleanup_spike_cpu_handles(frame_ptr);
+            // Both slots must be nulled after free (double-free guard).
+            assert!(
+                (*(frame_ptr.add(slot0) as *const *mut u8)).is_null(),
+                "slot 0 must be nulled after free"
+            );
+            assert!(
+                (*(frame_ptr.add(slot1) as *const *mut u8)).is_null(),
+                "slot 1 must be nulled after free"
+            );
+            ynz_free(frame_ptr, 80);
+        }
+
+        assert_eq!(
+            drop0.load(Ordering::SeqCst),
+            1,
+            "handle 0 (slot 0) must be freed exactly once"
+        );
+        assert_eq!(
+            drop1.load(Ordering::SeqCst),
+            1,
+            "handle 1 (slot 1) must be freed exactly once — count-driven scan covers it"
+        );
+    }
+
+    /// Verify the cleanup is correct-by-construction for N>2: a discriminator count of 3
+    /// drives the scan over three contiguous handle slots (offsets 32/40/48), freeing the
+    /// live ones and skipping a null. Codegen currently emits only two-member groups, so a
+    /// live N>2 group is not yet reachable end-to-end; the runtime free-path is nonetheless
+    /// count-driven and layout-agnostic. This pins that the free-path handles any member
+    /// count, so widening the codegen group size needs no runtime change.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cleanup_is_layout_driven_for_n_greater_than_two() {
+        use crate::runtime::{cleanup_spike_cpu_handles, CpuJoinHandle};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let drop0 = Arc::new(AtomicUsize::new(0));
+        let drop2 = Arc::new(AtomicUsize::new(0));
+        let plant = |probe: &Arc<AtomicUsize>| -> *mut u8 {
+            let jh = tokio::task::spawn_blocking(|| -> YnzCpuResult { YnzCpuResult([3, 0]) });
+            let mut h = CpuJoinHandle::new(jh);
+            h.set_drop_probe(Arc::clone(probe));
+            Box::into_raw(Box::new(h)) as *mut u8
+        };
+        let handle0 = plant(&drop0);
+        let handle2 = plant(&drop2);
+
+        // Frame large enough for three handle slots (base, base+stride, base+2*stride) + slack.
+        // Slot 1 stays null (e.g. a member whose handle was already consumed by a Ready poll).
+        let slot0 = SPIKE_HANDLE_BASE_OFFSET;
+        let slot2 = SPIKE_HANDLE_BASE_OFFSET + 2 * SPIKE_HANDLE_SLOT_BYTES;
+        let frame_ptr = unsafe { ynz_alloc_zeroed(96) };
+        assert!(!frame_ptr.is_null(), "frame alloc must succeed");
+        unsafe {
+            (frame_ptr.add(SPIKE_FRAME_DISCRIMINATOR_OFFSET) as *mut u32)
+                .write((SPIKE_FRAME_TAG << 16) | 3);
+            (frame_ptr.add(slot0) as *mut *mut u8).write(handle0);
+            // slot 1 (base + stride) null
+            (frame_ptr.add(slot2) as *mut *mut u8).write(handle2);
+            cleanup_spike_cpu_handles(frame_ptr);
+            assert!((*(frame_ptr.add(slot0) as *const *mut u8)).is_null());
+            assert!((*(frame_ptr.add(slot2) as *const *mut u8)).is_null());
+            ynz_free(frame_ptr, 96);
+        }
+
+        assert_eq!(drop0.load(Ordering::SeqCst), 1, "slot 0 handle freed once");
+        assert_eq!(
+            drop2.load(Ordering::SeqCst),
+            1,
+            "slot 2 handle freed once — third slot reached by the count-driven scan"
+        );
+    }
+
+    /// Verifies that dropping a `SpawnStateFnFuture` before the first poll (i.e., cancellation
+    /// of a task that was never polled) correctly frees CPU join handles through the
+    /// `cleanup_spike_cpu_handles` delegation in `SpawnStateFnFuture::drop`.
+    ///
+    /// This is the end-to-end path: task cancelled before first poll → Drop::drop →
+    /// cleanup_spike_cpu_handles via the discriminator branch.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_state_fn_future_drop_before_first_poll_frees_handles() {
+        // WHY: SpawnStateFnFuture::drop's step 1.5 (cleanup_spike_cpu_handles delegation)
+        // is only useful if it fires on every cancellation path, including drop-before-poll.
+        // This test creates a SpawnStateFnFuture with a spike-magic frame + live handle,
+        // drops it immediately without polling, and verifies the handle's task completes
+        // AND the CpuJoinHandle Drop counter increments (proving the Box was freed, not leaked —
+        // a detach-only path would satisfy "task ran" without incrementing the counter).
+        use crate::runtime::{CpuJoinHandle, SpawnStateFnFuture};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_child = completed.clone();
+
+        // Per-handle drop probe: incremented exactly when THIS CpuJoinHandle is dropped.
+        // Arc-local so concurrent drops in saturation_600_joins etc. can't race this window.
+        let drop_count = Arc::new(AtomicUsize::new(0));
+
+        // Spawn a real blocking task to create a live CpuJoinHandle.
+        let join_handle = tokio::task::spawn_blocking(move || -> YnzCpuResult {
+            completed_child.store(true, Ordering::Release);
+            YnzCpuResult([42, 0])
+        });
+        let mut cpu_handle = CpuJoinHandle::new(join_handle);
+        cpu_handle.set_drop_probe(Arc::clone(&drop_count));
+        let handle_ptr = Box::into_raw(Box::new(cpu_handle)) as *mut u8;
+
+        // Allocate via the same allocator SpawnStateFnFuture::drop uses to free — ynz_alloc_zeroed.
+        // Using std::alloc here would be a mismatched-allocator crash when Drop calls ynz_free.
+        let frame_ptr = unsafe { ynz_alloc_zeroed(80) };
+        assert!(!frame_ptr.is_null(), "frame alloc must succeed");
+
+        unsafe {
+            // Write the packed discriminator at offset 4: tag in the high 16 bits,
+            // handle count = 2 in the low 16 bits (slot 0 live, slot 1 null).
+            (frame_ptr.add(SPIKE_FRAME_DISCRIMINATOR_OFFSET) as *mut u32)
+                .write((SPIKE_FRAME_TAG << 16) | 2);
+            // Plant the live handle pointer at slot 0 (offset 32).
+            (frame_ptr.add(SPIKE_HANDLE_BASE_OFFSET) as *mut *mut u8).write(handle_ptr);
+            // Slot 1 (offset 40) stays null.
+        }
+
+        // Build a minimal no-op resume function (never called, but SpawnStateFnFuture
+        // requires a valid function pointer in the slot).
+        unsafe extern "C-unwind" fn noop_resume(_frame: *mut u8, _waker: *mut u8) -> i32 {
+            1 // Pending — would keep the task alive if polled; but we won't poll it.
+        }
+
+        // Create the future but NEVER poll it — drop fires cleanup immediately.
+        {
+            let _future = SpawnStateFnFuture::new(
+                noop_resume,
+                frame_ptr,
+                80,
+                std::ptr::null_mut::<u8>(), // rec_slot — none (-1 path in new())
+                std::ptr::null::<runtime::BgArgDropEntry>(), // arg_drops — none
+                0,                          // arg_drop_count
+            );
+            // Drop fires here: step 1.5 calls cleanup_spike_cpu_handles → frees handle at slot 0.
+        }
+
+        // drop_count is incremented exactly when the probe'd CpuJoinHandle is dropped.
+        // If cleanup_spike_cpu_handles was skipped (commented out), the box leaks and
+        // the drop impl never fires — count stays 0 and this assertion fails.
+        assert_eq!(
+            drop_count.load(Ordering::SeqCst),
+            1,
+            "SpawnStateFnFuture::drop must free exactly 1 CpuJoinHandle (slot 0) before-first-poll"
+        );
+
+        // After drop, frame_ptr was freed by SpawnStateFnFuture::drop (step 5). We must not
+        // access frame_ptr here. Give the child task time to complete after detach.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            completed.load(Ordering::Acquire),
+            "blocking task must complete after handle was freed on drop-before-poll"
+        );
+    }
 }

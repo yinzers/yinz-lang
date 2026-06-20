@@ -36,6 +36,20 @@ pub struct FunctionSig {
     ///
     /// v0.3-M3 extends this to cross-module call graphs via M8 package metadata.
     pub suspends: bool,
+    /// True when this function **transitively** does non-trivial work: its call
+    /// graph reaches a loop (`while`/`for`) or a recursion (self or mutual).
+    ///
+    /// This is the v0.3-M3d auto-parallel "worth-it" proxy, computed by
+    /// `crate::may_block::does_real_work_set`. It is initially `false` in the
+    /// signature pre-pass and set to the analysis result before the body-checking
+    /// pass runs in `check_query`, exactly like `suspends`. The CPU-statement
+    /// promotion query (Phase 3) only spawns a parallel group when both callees
+    /// `does_real_work` — a trivial/leaf/arithmetic callee runs inline because the
+    /// spawn overhead would exceed the win.
+    ///
+    /// Propagated cross-module through `module_signatures_query` / `exports.rs`
+    /// exactly as `suspends` is.
+    pub does_real_work: bool,
     /// The function's exported name in its defining module, when the caller imported it
     /// under an alias (`import { getValue as fetchVal } from "data_ops"`).
     ///
@@ -178,6 +192,10 @@ pub fn collect_signatures(
                         // Populated by `check_query` after `may_block::analyze` runs.
                         // False during the signature pre-pass; must not be used there.
                         suspends: false,
+                        // Populated by `check_query` after
+                        // `may_block::does_real_work_set` runs. False during the
+                        // signature pre-pass; must not be used there.
+                        does_real_work: false,
                         // Functions from the local module are never aliased from the
                         // module's own perspective — their local name IS their symbol name.
                         original_name: None,

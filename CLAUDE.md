@@ -66,10 +66,10 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 
 ## When Working on This Project
 
-- **Design docs (`/design/`) are the GOVERNING source of truth — read them before planning AND keep them open while executing.** `/design/` (especially `design/future/` for end-state vision like `design/future/concurrency.md`) defines what the language IS; a plan is just a route to that destination, never an override of it. Mandatory:
+- **Design docs (`/design/`) are the GOVERNING source of truth — read them before planning AND keep them open while executing.** `/design/` (especially `design/future/` for end-state vision like `design/no-function-coloring.md`) defines what the language IS; a plan is just a route to that destination, never an override of it. Mandatory:
   - **Before planning ANY feature**: read the relevant `/design/` doc(s) for that feature. This is part of the `/plan` research step — searching the codebase for *how it works today* is NOT a substitute for reading the design for *what it's supposed to be*.
   - **While executing**: refer back to the design docs whenever a question or ambiguity pops up. The answer is usually already written down.
-  - **On any contradiction or gap between the plan and a design doc: STOP and surface it explicitly** in the form **"design doc `X` says A; the plan says B"** — do NOT silently follow the plan. The design doc wins unless Patrick explicitly decides to change the design (in which case update the doc). A milestone (v0.3-M2) was HALTED because a plan shipped a `block_on` bridge that directly contradicted `design/future/concurrency.md`'s documented no-coloring/whole-program-may-block-analysis model, and three rounds of review never caught it because they only checked the plan against itself. Never again — diff the plan against the design.
+  - **On any contradiction or gap between the plan and a design doc: STOP and surface it explicitly** in the form **"design doc `X` says A; the plan says B"** — do NOT silently follow the plan. The design doc wins unless Patrick explicitly decides to change the design (in which case update the doc). A milestone (v0.3-M2) was HALTED because a plan shipped a `block_on` bridge that directly contradicted `design/no-function-coloring.md`'s documented no-coloring/whole-program-may-block-analysis model, and three rounds of review never caught it because they only checked the plan against itself. Never again — diff the plan against the design.
 - **Yinz is NOT object-oriented.** Data shapes hold fields + contract signatures; methods are standalone functions; `value.method()` is parser-level sugar for `method(value)` (UFCS — both call forms work). NO methods inside shape declarations; NO `override` keyword; `extends` is data-only inheritance. See `.claude/rules/non-oop.md` for the full model — this is the most common modeling mistake to drift back into. Locked r10–r13 (2026-05-16).
 - **Every milestone plan MUST grow the canonical demo project + error gallery.** Per `.claude/rules/plan-invariants.md` `### Demo & Error Gallery` subsection: each phase that adds executable surface MUST extend `examples/pirates-roster/entrypoint.ynz` with the new feature in context AND extend `examples/primantis-orders/m{N}_errors.ynz` with intentional triggers for every new compile error class. This is how Patrick reviews the language UX after each phase — without it, features ship and never get hands-on validation. The `pirates-roster/` project covers EVERY v0.1 language feature (M1–M8) in one growing demo; stdlib modules (v0.5+) get their own per-module example projects under `examples/<themed-name>/` (use the SINGLE-ENTRY layout — mirror `examples/pirates-roster/`'s shape, one yinz.toml + one entrypoint.ynz + plain subfolders, Pittsburgh-themed folder name per `.claude/rules/examples-structure.md`).
 - **Project layout has two locked shapes (per `examples/README.md`)**: single-entry (`yinz.toml` with one `entry = "..."`, code in plain subfolders, used by `examples/pirates-roster/` and all stdlib module examples — the ~95% case) and multi-entry (one `yinz.toml` with `[entries]` table, ships under `ships/`, shared code in plain folders — v0.22 feature, previewed in `examples/stadium-fleet/`). When in doubt, single-entry. The `[entries]` multi-ship shape is opt-in for projects that genuinely have N co-shipped binaries.
@@ -84,14 +84,45 @@ File extension: `.ynz`. Compiler target: LLVM native machine code.
 
 ---
 
-## Tech Stack (fill in as compiler is built)
+## Tech Stack
 
-**Compiler target**: LLVM (planned)
-**Package manager**: TBD
-**Compiler implementation language**: TBD
+**Compiler target**: LLVM 18 (`inkwell` bindings, `llvm-18-dev` / `clang-18` / `libclang-18-dev`)
+**Compiler implementation language**: Rust (stable)
+**Package manager**: Cargo (workspace, `Cargo.toml`)
+**Node.js**: v22 (for `tooling/vscode-ynz/` VSCode extension build — `npm install && npx vsce package`)
+
+**Dev container**: `docker-compose.yml` defines a `dev` service (image `ynz-dev`, built from `Dockerfile`).
+All compiler build / test / fixture work runs inside this container. The bind mount `.:/work` makes
+`target/` host-readable (uid 1000 / patrick) so `trading-v4` can mount `target/release`.
 
 ```bash
-# CLI commands (spec — not yet implemented)
+# Start the dev container (background)
+docker compose up -d dev
+
+# Or run one-shot commands (container exits after each)
+docker compose run --rm dev cargo build --workspace
+docker compose run --rm dev cargo build -p ynz-driver
+docker compose run --rm dev cargo build -p ynz-driver --release
+docker compose run --rm dev cargo build -p ynz-lsp --release
+docker compose run --rm dev cargo test --workspace
+docker compose run --rm dev cargo clippy --workspace -- -D warnings
+docker compose run --rm dev cargo fmt --all
+
+# Run the compiler directly inside a running dev container
+docker compose exec dev ./target/debug/ynz run crates/ynz-driver/tests/fixtures/hello.ynz
+# → hello, yinz
+
+# VSCode extension build (runs as root-step apt + user-step npm)
+docker compose run --rm dev bash -c "cd tooling/vscode-ynz && npm install && npm run build && npx vsce package --no-yarn"
+```
+
+**Cargo registry cache**: stored in the named Docker volume `cargo-registry` (compose name;
+Docker prefixes the project name at runtime, so `docker volume ls` shows it as
+`ynz_cargo-registry`). Mounted at `/home/ubuntu/.cargo/registry`. Crates survive container
+rebuilds. `target/` stays on the host bind mount — do NOT put it in a named volume.
+
+```bash
+# CLI commands (spec — not yet implemented in the Yinz language itself)
 ynz build entrypoint.ynz
 ynz run entrypoint.ynz
 ```

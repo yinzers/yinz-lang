@@ -1,0 +1,55 @@
+// v0.3-M3d danger matrix — two different functions returning a `map<int, int>`, run at the same
+// time inside a `match` branch. Each result is available after both finish; both prints (the
+// entry counts, which don't depend on finishing order) match in both modes.
+//
+// build(n) loops, so it is worth running alongside the other call, then returns a map of `n`
+// entries.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   3
+//   5
+
+function build(n: int) -> map<int, int> {
+  let m: map<int, int> = {}
+  let i: int = 0
+  while (i < n) {
+    m.set(i, i * 10)
+    i = i + 1
+  }
+  return m
+}
+
+function build2(n: int) -> map<int, int> {
+  let m: map<int, int> = {}
+  let i: int = 0
+  while (i < n) {
+    m.set(i, i * 20)
+    i = i + 1
+  }
+  return m
+}
+
+function combine() -> int {
+  let pick = 1
+  let loCount = 0
+  let hiCount = 0
+  if (pick) {
+    1 => {
+      let lo = build(3)
+      let hi = build2(5)
+      loCount = lo.count()
+      hiCount = hi.count()
+    }
+    else => {
+      loCount = 0
+      hiCount = 0
+    }
+  }
+  print(loCount)
+  return hiCount
+}
+
+function entrypoint() -> nothing {
+  let r = combine()
+  print(r)
+}

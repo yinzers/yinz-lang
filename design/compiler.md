@@ -54,7 +54,7 @@ Debug and release produce different binaries. Development always uses debug. Dep
 
 `ynz build --release` produces a **statically-linked binary** by default, linking against `musl libc`. The binary runs on any Linux kernel ≥ 3.2 with no glibc version dependency.
 
-Dynamic glibc linking is available via `ynz build --dynamic-glibc` for users who explicitly need glibc-specific behavior (locale support beyond what musl provides, certain NSS plugins, etc.). The `--kernel` build (per `design/future/no-runtime-mode.md`) uses no libc at all.
+Dynamic glibc linking is available via `ynz build --dynamic-glibc` for users who explicitly need glibc-specific behavior (locale support beyond what musl provides, certain NSS plugins, etc.). The `--kernel` build (per `design/no-runtime-mode.md`) uses no libc at all.
 
 ### Why musl + static by default
 
@@ -73,7 +73,7 @@ For workloads where these specific musl limitations matter, `--dynamic-glibc` is
 ### Cross-references
 
 - `lockin-build-and-crossplat.md` Finding #12 for glibc version skew details.
-- `design/future/no-runtime-mode.md` for the `--kernel` build mode (no libc at all).
+- `design/no-runtime-mode.md` for the `--kernel` build mode (no libc at all).
 
 ---
 

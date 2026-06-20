@@ -1008,7 +1008,7 @@ fn m5_dyn_dispatch_chained_both_calls_succeed() {
     //      must pass through correctly — verifies the coerce works at multiple call sites.
     //      Neither `showDynamic` nor `relay` independently suspend (no sleep), so no
     //      can't-infer error fires under the design-correct current_fn_suspends gate. A non-
-    //      suspending caller with dynamic dispatch compiles clean per design/future/concurrency.md.
+    //      suspending caller with dynamic dispatch compiles clean per design/no-function-coloring.md.
     // test-ratchet: restoring exit-0 assertion — round-2 changed this to expect a can't-infer
     // error (exit nonzero), but that was the over-firing gate behavior. Under the reverted gate
     // non-suspending dynamic callers compile clean (Phase-6 round-3).
@@ -2401,6 +2401,44 @@ fn v03_m3e_cross_module_no_auto_parallel_byte_identical() {
             "--no-auto-parallel stdout must be byte-identical to default for {fixture_name}"
         );
     }
+}
+
+#[test]
+fn v03_m3d_imported_suspending_after_pair_byte_identical_and_clean() {
+    // WHY: regression guard for the cross-boundary suspend-set divergence (deviation-judge #2 /
+    // code-reviewer, Slice-1 Round 2). A local CPU pair followed by a post-pair call to an
+    // IMPORTED suspending function must compile, run CLEAN (no heap corruption), and produce
+    // byte-identical output under default and --no-auto-parallel. The spike-host decision is made
+    // at two salsa query boundaries (frame_layouts_query sizes the frame; codegen_query lays it
+    // out + emits); both now probe spike admission against the same EFFECTIVE suspend set
+    // (local ∪ imported-suspending). If they used different sets, codegen could admit a host
+    // frame_layouts sized sequentially → the imported callee's child sub-frame would be written
+    // past the under-allocated heap block. The companion codegen-crate test
+    // (`imported_suspending_after_pair_declines_consistently_across_boundaries`) pins the 0-spawn
+    // mechanism + boundary agreement; this test pins the end-to-end observable behavior: a clean,
+    // byte-identical run in both modes. A crash or output divergence here means the under-allocation
+    // went live — fix the suspend-set reconciliation in codegen_query, not this test.
+    let project_root = fixture("v0_3_m3d_spike_s_imported_suspending_after_pair");
+    let (par_stdout, par_stderr, par_code) = build_multimodule_and_run(&project_root, false);
+    assert_eq!(
+        par_code, 0,
+        "default build must run clean (exit 0) — a non-zero exit signals heap corruption from \
+         under-allocation; stderr:\n{par_stderr}"
+    );
+    let (seq_stdout, seq_stderr, seq_code) = build_multimodule_and_run(&project_root, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must run clean (exit 0); stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout.trim(),
+        "55\n89",
+        "output must be the computed fib values; stdout:\n{par_stdout}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "default and --no-auto-parallel stdout must be byte-identical"
+    );
 }
 
 // ── M8 P6: bignum — number<N> for N > 34 ─────────────────────────────────────
@@ -5114,6 +5152,1470 @@ fn v03_m3b_p4_two_independent_parallel_byte_identical_to_sequential() {
     assert_eq!(
         par_stdout, seq_stdout,
         "parallel and sequential stdout must be byte-identical"
+    );
+}
+
+/// Build `src` to a tmpdir with `--emit-ir` and return the LLVM IR text. The build runs
+/// in default (auto-parallel) mode. Panics if the build fails.
+fn build_to_tmpdir_emit_ir(src: &Path) -> String {
+    build_to_tmpdir_emit_ir_mode(src, false)
+}
+
+/// Build `src` to a tmpdir with `--emit-ir` and return the LLVM IR text, choosing default or
+/// `--no-auto-parallel` mode. Panics if the build fails.
+fn build_to_tmpdir_emit_ir_mode(src: &Path, no_auto_parallel: bool) -> String {
+    let tmp = tempfile::TempDir::new().expect("failed to create tmpdir");
+    let src_filename = src.file_name().expect("src must have a filename");
+    let isolated_src = tmp.path().join(src_filename);
+    std::fs::copy(src, &isolated_src).expect("failed to copy source to tmpdir");
+
+    let mut cmd = Command::new(ynz_binary());
+    cmd.arg("build")
+        .arg(&isolated_src)
+        .arg("--emit-ir")
+        .env("CLICOLOR", "0");
+    if no_auto_parallel {
+        cmd.env("YNZ_NO_AUTO_PARALLEL", "1");
+    }
+    let build_out = cmd.output().expect("failed to spawn ynz build");
+    assert!(
+        build_out.status.success(),
+        "build failed: {}",
+        String::from_utf8_lossy(&build_out.stderr)
+    );
+
+    let ll_path = isolated_src.with_extension("ll");
+    std::fs::read_to_string(&ll_path).expect("emitted .ll must be readable")
+}
+
+#[test]
+fn v03_m3d_nested_groups_byte_identical_and_fires() {
+    // WHY: regression guard for the union-poisoning hazard (deviation-judge #2). When typeck
+    // promotes BOTH an inner host (`work`) and the outer host (`entrypoint`), codegen must
+    // reconcile the promotion set down to what it can actually spike-host
+    // (`spike_host_subset`). If it instead unioned the full set, `work` would land in the
+    // suspend set entrypoint's callee-eligibility filter reads, silently DECLINING
+    // entrypoint's group. This test asserts (a) output is correct + byte-identical in both
+    // modes, and (b) entrypoint's group actually FIRES (2 spawn-call instructions, NOT 0).
+    // If you're tempted to relax the spawn-count assertion, the parallelism regressed —
+    // fix the reconciliation, not this test.
+    let src = fixture("v0_3_m3d_spike_r_nested_groups.ynz");
+
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "default build must exit 0; stderr:\n{par_stderr}"
+    );
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout.trim(),
+        "13\n21\n34",
+        "nested-group output must be the computed values; stdout:\n{par_stdout}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "default and --no-auto-parallel stdout must be byte-identical"
+    );
+
+    // The poisoning is gone only if entrypoint's group FIRES: exactly 2
+    // `call @ynz_rt_spawn_blocking_joinable` instructions (one per group member). The
+    // `declare` line is not a `call`, so filtering on `call ` excludes it.
+    let ir = build_to_tmpdir_emit_ir(&src);
+    let spawn_calls = ir
+        .lines()
+        .filter(|l| l.contains("call") && l.contains("@ynz_rt_spawn_blocking_joinable"))
+        .count();
+    assert_eq!(
+        spawn_calls, 2,
+        "entrypoint's nested CPU group must FIRE with 2 spawn calls (0 = union poisoning \
+         silently declined the group); IR:\n{ir}"
+    );
+}
+
+/// Count `call @ynz_rt_spawn_blocking_joinable` instructions in `ir` (the `declare` line is
+/// not a `call`, so filtering on `call ` excludes it).
+fn count_spawn_calls(ir: &str) -> usize {
+    ir.lines()
+        .filter(|l| l.contains("call") && l.contains("@ynz_rt_spawn_blocking_joinable"))
+        .count()
+}
+
+/// Assert a v0.3-M3d CPU-group fixture clears all four gates at once:
+///   1. default-mode output equals the captured oracle output (exit 0),
+///   2. default mode is byte-identical to `--no-auto-parallel` (the cross-impl oracle),
+///   3. the group FIRES — exactly 2 `ynz_rt_spawn_blocking_joinable` calls in the IR
+///      (output alone is INSUFFICIENT — a declined group runs sequentially with the same
+///      output; the spawn-count assertion is what proves the mechanism actually fired, per
+///      the project's gated-path-fire-assertions discipline),
+///   4. alloc == free (the one task frame is allocated and freed; no leak).
+fn m3d_assert_fires_byte_identical_alloc_free(fixture_name: &str, expected_stdout: &str) {
+    m3d_assert_fires_n_byte_identical_alloc_free(fixture_name, expected_stdout, 2);
+}
+
+/// `m3d_assert_fires_byte_identical_alloc_free` parametrized on member count: the group must
+/// FIRE exactly `expected_spawns` `ynz_rt_spawn_blocking_joinable` calls (one per member). An
+/// N-member group spawns N tasks; the alloc==free check still holds (one composed frame for the
+/// whole group regardless of member count).
+fn m3d_assert_fires_n_byte_identical_alloc_free(
+    fixture_name: &str,
+    expected_stdout: &str,
+    expected_spawns: usize,
+) {
+    let src = fixture(fixture_name);
+
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "default build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par_stdout.trim(),
+        expected_stdout,
+        "default-mode output must equal the oracle; stdout:\n{par_stdout}"
+    );
+
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "default and --no-auto-parallel stdout must be byte-identical"
+    );
+
+    let ir = build_to_tmpdir_emit_ir(&src);
+    assert_eq!(
+        count_spawn_calls(&ir),
+        expected_spawns,
+        "the CPU group must FIRE with {expected_spawns} spawn calls (one per member; \
+         0 = silently declined to sequential); IR:\n{ir}"
+    );
+
+    let (alloc, free) = ynz_run_with_alloc_counter(fixture_name);
+    assert_eq!(
+        alloc, free,
+        "alloc must equal free (no task-frame/ctx leak on the CPU-parallel path); \
+         alloc={alloc}, free={free}"
+    );
+}
+
+/// Strip the per-build tmpdir source path from a runtime-error line so two builds of the same
+/// fixture (each in its own tmpdir) produce comparable diagnostics. The path appears once, in
+/// the `at <path>:line:col` clause; everything else (the WHAT/WHY body) is path-independent.
+///
+/// Time: O(n)  Space: O(n)  where n = total bytes of stderr (one pass over lines, rebuilt joined).
+fn strip_runtime_error_path(stderr: &str) -> String {
+    stderr
+        .lines()
+        .map(|l| match l.find(" at ") {
+            Some(i) if l.starts_with("RUNTIME ERROR:") => l[..i].to_string(),
+            _ => l.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Assert a v0.3-M3d CPU-group fixture where one child raises a runtime error (e.g. division
+/// by zero) FIRES the group AND surfaces the SAME failure under both modes:
+///   1. the group FIRES — exactly 2 `ynz_rt_spawn_blocking_joinable` calls in the IR (a child
+///      that raises must still have been spawned, not silently run sequentially),
+///   2. both modes exit with the SAME non-zero code (the raise terminates the program),
+///   3. both modes emit byte-identical diagnostics (path-normalized) starting with the
+///      expected `RUNTIME ERROR:` prefix — running a call alongside another never hides or
+///      changes an error the call raises (the panic re-raise / abort parity guarantee).
+///
+/// Time: O(n)  Space: O(n)  where n = fixture source size; one IR build + IR scan plus two
+/// compile-and-run passes (parallel + sequential) dominate — the cost is two full compilations.
+fn m3d_assert_panic_fires_byte_identical(fixture_name: &str, expected_error_prefix: &str) {
+    let src = fixture(fixture_name);
+
+    let ir = build_to_tmpdir_emit_ir(&src);
+    assert_eq!(
+        count_spawn_calls(&ir),
+        2,
+        "a panicking CPU group must still FIRE 2 spawns (0 = silently sequential); IR:\n{ir}"
+    );
+
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+
+    assert_ne!(par_code, 0, "default build must exit non-zero on the raise");
+    assert_eq!(
+        par_code, seq_code,
+        "default and --no-auto-parallel must exit with the SAME code on the raise; \
+         default={par_code}, sequential={seq_code}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "default and --no-auto-parallel stdout must be byte-identical (no value bound before the raise)"
+    );
+    assert!(
+        par_stderr.starts_with(expected_error_prefix),
+        "default stderr must start with `{expected_error_prefix}`; got:\n{par_stderr}"
+    );
+    assert_eq!(
+        strip_runtime_error_path(&par_stderr),
+        strip_runtime_error_path(&seq_stderr),
+        "default and --no-auto-parallel diagnostics must be byte-identical (path-normalized)"
+    );
+}
+
+#[test]
+fn v03_m3d_cpu_child_panic_fires_byte_identical() {
+    // WHY: a CPU child that raises a runtime error (division by zero) must be re-raised to the
+    // program with the SAME observable behavior as a sequential call — same diagnostic, same
+    // non-zero exit — and the group must still have FIRED (2 spawns). Running work alongside
+    // another call must NEVER swallow or alter an error the work raises (a joined result is
+    // load-bearing; a discarded raise would be a silent wrong answer). The runtime side of the
+    // re-raise contract is the `C-unwind` resume-fn ABI + the `catch_unwind`/`resume_unwind`
+    // pair; Yinz runtime errors additionally abort the process directly, so the parity holds
+    // regardless of which thread the child runs on. If you relax the spawn-count assertion the
+    // panicking pair regressed to sequential; if you relax the diagnostic-equality assertion an
+    // error became mode-dependent — fix the codegen/runtime, not this test.
+    m3d_assert_panic_fires_byte_identical(
+        "v0_3_m3d_cpu_child_panic.ynz",
+        "RUNTIME ERROR: division by zero (int)",
+    );
+}
+
+/// Return the set of attribute-group ids (`#N`) whose definition line contains `nounwind`.
+///
+/// Time: O(n)  Space: O(g)  where n = bytes of IR, g = number of `attributes #N = {...}` lines.
+fn nounwind_attr_group_ids(ir: &str) -> std::collections::HashSet<&str> {
+    ir.lines()
+        .filter(|l| l.starts_with("attributes #") && l.contains("nounwind"))
+        .filter_map(|l| l.split_whitespace().nth(1))
+        .collect()
+}
+
+/// Assert that no codegen-emitted `@ynz_sm_*_resume` function carries `nounwind` — neither
+/// inline on the `define` line nor via a referenced `#N` attribute group that is nounwind.
+///
+/// A `nounwind` resume function would tell LLVM the body cannot unwind; the optimizer is then
+/// free to turn a panic that DOES propagate (a CPU child re-raised via `resume_unwind`) into an
+/// immediate `abort` at the IR boundary instead of letting it travel to the entrypoint driver's
+/// `catch_unwind`. No Yinz program reaches the live non-abort unwind path today (runtime errors
+/// abort directly), so only this IR-level check guards the invariant the `C-unwind` ABI depends
+/// on. Mirrors the spawn-count FIRE assertions: it reads the emitted IR, not runtime behavior.
+///
+/// Time: O(n)  Space: O(g)  where n = bytes of IR, g = number of nounwind attribute groups.
+fn assert_no_resume_fn_is_nounwind(ir: &str) {
+    let nounwind_groups = nounwind_attr_group_ids(ir);
+    let mut resume_defines = 0usize;
+    for line in ir.lines().filter(|l| l.starts_with("define")) {
+        if !line.contains("@ynz_sm_") || !line.contains("_resume(") {
+            continue;
+        }
+        resume_defines += 1;
+        // Inline attributes appear between the closing `)` of the params and the opening `{`.
+        let tail = line.rsplit_once(')').map(|(_, t)| t).unwrap_or(line);
+        assert!(
+            !tail.contains("nounwind"),
+            "resume fn carries inline `nounwind`, which breaks panic unwind propagation; line:\n{line}"
+        );
+        // Referenced attribute group (`... ) #N {`) must not be a nounwind group.
+        for tok in tail.split_whitespace() {
+            if tok.starts_with('#') && nounwind_groups.contains(tok) {
+                panic!(
+                    "resume fn references nounwind attribute group {tok}, which breaks panic \
+                     unwind propagation; line:\n{line}"
+                );
+            }
+        }
+    }
+    assert!(
+        resume_defines > 0,
+        "fixture emitted no @ynz_sm_*_resume functions — the no-nounwind check exercised nothing; \
+         IR:\n{ir}"
+    );
+}
+
+#[test]
+fn v03_m3d_resume_fns_are_not_nounwind() {
+    // WHY: the C-unwind panic-propagation chain (a CPU child re-raised via resume_unwind reaching
+    // the entrypoint driver's catch_unwind) is correct ONLY if codegen-emitted resume fns are NOT
+    // marked `nounwind`. A `nounwind` resume fn lets LLVM fold a propagating unwind into an abort
+    // at the IR boundary — silently breaking the re-raise contract with NO runtime test catching
+    // it, because no Yinz program exercises the live (non-abort) unwind path yet. This IR-level
+    // guard is the only tripwire for that drift. If it fails, codegen started attaching a nounwind
+    // attribute (inline or via an attribute group) to resume fns — fix the codegen, not this test.
+    let src = fixture("v0_3_m3d_cpu_child_panic.ynz");
+    let ir = build_to_tmpdir_emit_ir(&src);
+    assert_no_resume_fn_is_nounwind(&ir);
+}
+
+#[test]
+fn v03_m3d_resume_nounwind_check_is_non_vacuous() {
+    // WHY: the no-nounwind guard above must actually FAIL when a resume fn is nounwind — otherwise
+    // it is a green rubber-stamp. This drives the checker against a doctored IR where the resume
+    // fn references a nounwind attribute group, and asserts the checker rejects it. If this test
+    // fails, the checker has a hole (it would pass a nounwind resume fn) — fix the checker.
+    let doctored = "\
+define i32 @ynz_sm_combine_resume(ptr %0, ptr %1) #1 {
+  ret i32 0
+}
+attributes #1 = { nounwind willreturn }
+";
+    let caught = std::panic::catch_unwind(|| assert_no_resume_fn_is_nounwind(doctored)).is_err();
+    assert!(
+        caught,
+        "the no-nounwind checker must REJECT a resume fn that references a nounwind attribute \
+         group; it passed, so the guard is vacuous"
+    );
+}
+
+#[test]
+fn v03_m3d_resume_nounwind_check_rejects_inline_nounwind() {
+    // WHY: the checker has TWO detection paths — a referenced `#N` attribute group (covered by
+    // the non-vacuous test above) AND an inline `nounwind` on the `define` line itself. LLVM can
+    // emit either form, so a hole in the inline path would let a nounwind resume fn through with
+    // no other test catching it (no Yinz program exercises the live unwind path yet). This drives
+    // the inline form through the checker and asserts it rejects it. If this fails, the inline
+    // branch (`tail.contains("nounwind")`) has a hole — fix the checker, not this test.
+    let doctored = "\
+define i32 @ynz_sm_combine_resume(ptr %0, ptr %1) nounwind {
+  ret i32 0
+}
+";
+    let caught = std::panic::catch_unwind(|| assert_no_resume_fn_is_nounwind(doctored)).is_err();
+    assert!(
+        caught,
+        "the no-nounwind checker must REJECT a resume fn carrying inline `nounwind`; it passed, \
+         so the inline-detection path is vacuous"
+    );
+}
+
+#[test]
+fn v03_m3d_return_class_int_distinct_fires_byte_identical() {
+    // WHY: the int distinct-callee CPU pair is the headline pattern — two independent int-
+    // returning calls must fire 2 spawns AND stay byte-identical to `--no-auto-parallel`.
+    // Invariant: distinct int callees parallelize without changing output. If you relax the
+    // spawn-count assertion, the parallelism regressed to sequential — fix the codegen, not
+    // this test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_spike_a_distinct.ynz", "6765\n10946");
+}
+
+#[test]
+fn v03_m3d_return_class_int_timing_fires_byte_identical() {
+    // WHY: the timing fixture (fib(40)/fib(41)) is the wall-clock overlap proof. The
+    // identical-output gate plus the 2-spawn FIRE assertion together stand in for the
+    // measured-speedup AC: if sequential were ~2x slower, the parallelism is real.
+    // CI coverage: 2 spawns required; 0 spawns = the timing pair regressed to sequential.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_spike_c_timing.ynz",
+        "102334155\n165580141",
+    );
+}
+
+#[test]
+fn v03_m3d_return_class_int_saturation_fires_byte_identical() {
+    // WHY: the saturation fixture drives two heavy joins through the real blocking pool.
+    // Invariant: the source-level 2-join CPU path fires 2 spawns and stays byte-identical to
+    // `--no-auto-parallel` while routing through the real worker pool (the ≥600-join
+    // pool-saturation proof itself lives in the runtime-crate `saturation_600_joins` test).
+    // A 0-spawn here means the heavy-join path stopped parallelizing.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_spike_d_saturation.ynz",
+        "832040\n1346269",
+    );
+}
+
+#[test]
+fn v03_m3d_return_class_float_fires_byte_identical() {
+    // WHY: a `float`-returning CPU pair must FIRE and bind the f64 result through the
+    // canonical bind discipline (the trampoline bitcasts f64→i64 into the result slot; the
+    // join load bitcasts back). Invariant: a non-int scalar return class still parallelizes —
+    // a narrowed candidacy gate that admitted only `int` would leave output byte-identical but
+    // run 0 spawns (sequential). The spawn-count assertion is the only thing that catches that
+    // silent regression.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_return_class_float.ynz", "6\n15");
+}
+
+#[test]
+fn v03_m3d_return_class_number_fires_byte_identical() {
+    // WHY: `number` (decimal128) is the trickiest class — the non-SM ABI returns a POINTER to
+    // a heap-stable 16-byte i128, so the trampoline must DEREFERENCE it (not ptr_to_int) and
+    // pack lo/hi. A regression to ptr_to_int prints `0.000...0` (the pointer bits read as the
+    // i128 low half), so this test locks the deref. Also asserts the group FIRES (2 spawns),
+    // not silently sequential.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_return_class_number.ynz", "6.0\n15.0");
+}
+
+#[test]
+fn v03_m3d_return_class_string_fires_byte_identical() {
+    // WHY: a `string`-returning CPU pair. The returned heap pointer IS the value (carried as a
+    // pointer word). Asserts FIRE + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_return_class_string.ynz",
+        "len=3\ntotal=10",
+    );
+}
+
+#[test]
+fn v03_m3d_return_class_array_fires_byte_identical() {
+    // WHY: an `array<int>`-returning CPU pair. Output asserts the element counts
+    // (order-independent — no interleaving-dependent assertion). Asserts FIRE +
+    // byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_return_class_array.ynz", "3\n4");
+}
+
+#[test]
+fn v03_m3d_return_class_map_fires_byte_identical() {
+    // WHY: a `map<int, int>`-returning CPU pair. Output asserts the entry counts
+    // (order-independent). Asserts FIRE + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_return_class_map.ynz", "3\n5");
+}
+
+#[test]
+fn v03_m3d_return_class_int_errors_fires_byte_identical() {
+    // WHY: an `int errors` (ErrorsCapable) CPU pair. The callee returns the `{i64, i64}`
+    // errors pair; the trampoline must carry BOTH words (error + success) to the result slot
+    // — dropping field0 would turn an error into a success. Both callees succeed here, so
+    // `.or(-1)` prints the totals. Asserts FIRE + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_return_class_int_errors.ynz", "6\n20");
+}
+
+#[test]
+fn v03_m3d_return_class_bool_fires_byte_identical() {
+    // WHY: `boolean` is admitted by the shared CPU-result-ABI gate with a dedicated
+    // zero-extend pack path (the trampoline widens the i1 to the result-slot word). Before
+    // this test the bool path fired in production with NO coverage. Asserts the group FIRES
+    // (2 spawns) + byte-identical + alloc==free. If you relax the spawn-count assertion, the
+    // bool path regressed to sequential — fix the codegen, not this test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_return_class_bool.ynz", "true\ntrue");
+}
+
+#[test]
+fn v03_m3d_promoted_host_seq_fires_byte_identical() {
+    // WHY: a host that is NOT the entrypoint must spike-host its own CPU pair. `combine` owns
+    // the adjacent `score` pair and is called once, in plain sequence, by `entrypoint`. The
+    // invariant: a non-entrypoint host spike-hosts its own pair, so there are 2 spawns inside
+    // `combine`; 0 spawns means it regressed to running the pair sequentially. The frame for a
+    // non-entrypoint host carries the handle/result reserve because `build_frame_layouts` and
+    // the emit-time frame size both route through the same `cpu_group_slots_and_reserve`
+    // helper — under-allocation cannot occur. If you relax the spawn-count assertion,
+    // non-entrypoint hosts stopped parallelizing — fix the codegen, not this test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_promoted_host_seq.ynz", "9907");
+}
+
+#[test]
+fn v03_m3d_n3_group_fires_three_spawns_byte_identical() {
+    // WHY: a CPU group is a maximal run of N >= 2 adjacent independent calls, not a fixed pair.
+    // Three adjacent `score` calls form ONE group of three members; each spawns its own task
+    // (3 spawns), each binds a DISTINCT result via per-(group, member-index) slot keying, and
+    // the composed frame is allocated once (alloc==free). The invariant: the group fires every
+    // member — 2 spawns would mean the third member silently fell back to sequential while the
+    // frame still reserved its slot (a layout/extraction disagreement). If you relax the
+    // spawn-count assertion, the N-member extraction regressed to a pair — fix the codegen, not
+    // this test.
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m3d_n3_group.ynz",
+        "4952\n4957\n4961\n14870",
+        3,
+    );
+}
+
+#[test]
+fn v03_m3d_prepair_wait_declines_byte_identical() {
+    // WHY: a host that suspends on a timer (`wait sleep`) BEFORE a would-be CPU pair is already
+    // a step-by-step waiter; promoting it would require treating the spike join as a second
+    // suspension point inside an already-suspending host — the mixed CPU+I/O fusion deferred to
+    // milestone M3g (.claude/todos.md). M3d locks the safe DECLINE: 0 spawns, sequential,
+    // byte-identical to --no-auto-parallel. If this fires (spawns > 0), a pre-pair-wait host was
+    // promoted without the M3g machinery — sustain the decline, do not relax this assertion.
+    m3d_assert_declines_byte_identical("v0_3_m3d_prepair_wait_declines.ynz", "9907");
+}
+
+#[test]
+fn v03_m3d_param_host_declines_byte_identical() {
+    // WHY: a host that READS a parameter AFTER its CPU join cannot spike-host. The wrapper
+    // writes param slot 0 at the byte the first CPU-handle slot occupies; the spawn's handle
+    // store overwrites that byte, so a post-join param reload reads the handle pointer's bytes
+    // instead of its value (a silent wrong answer). Reserving param slots past the CPU-handle
+    // region is the param-host read-after-join work tracked in .claude/todos.md. M3d locks the
+    // safe DECLINE for this shape: 0 spawns, sequential, byte-identical. `combine` reads its
+    // parameter after the pair (`return seed + a + b`), exactly the read-after-join shape that
+    // corrupts. The narrowed gate still admits a param-host whose params are used ONLY in spawn
+    // args (see v03_m3d_param_host_spawn_args_only_fires_byte_identical) — this test pins that
+    // the read-after-join subset stays declined. If this fires, the read-after-join corruption
+    // was reopened — sustain the decline, do not relax this assertion.
+    m3d_assert_declines_byte_identical("v0_3_m3d_param_host_declines.ynz", "9910");
+}
+
+#[test]
+fn v03_m3d_param_host_spawn_args_only_fires_byte_identical() {
+    // WHY: a param-host whose parameter is used ONLY in the group's spawn args (and never read
+    // after the join) is SAFE to fire. sm_entry loads each param into a stack alloca BEFORE the
+    // spawn runs, so the spawn-arg load reads the correct value; the handle store then clobbers
+    // the param's frame slot at byte 32, but that slot is never reloaded (a dead store). The
+    // narrowed param-host gate fires this case — 2 spawns, byte-identical, alloc==free. `compute`
+    // reads `seed` only to build the second seed (a pre-pair statement) and as a call argument;
+    // its `return a + b` reads neither param. The invariant: the corruption surface is a
+    // post-join param READ, not the mere presence of a param. If this DECLINES (0 spawns), the
+    // gate over-declined a safe param-host (regressed to the wholesale param decline) — fix the
+    // gate, not this test. If it fires with wrong output, the param/handle byte-32 overlap
+    // corrupted a value that WAS read post-join — re-check the gate's post-join read walk.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_param_host_spawn_args_only.ynz", "9907");
+}
+
+#[test]
+fn v03_m3d_param_host_n3_spawn_args_only_fires_three_spawns() {
+    // WHY: the narrowed param-host gate composes with the N-member group extension. A 3-member
+    // group on a param-host whose params are spawn-args-only fires all three spawns (one per
+    // member) and stays byte-identical, proving the post-join-read gate does not special-case
+    // member count — it gates on whether ANY param is read after the (whole) group's join,
+    // independent of how many members the group has. If this fires fewer than 3 spawns, the
+    // N-extension and the param gate disagreed on the group; if it declines, the param gate
+    // over-declined an N-member spawn-args-only host. Fix the codegen, not this test.
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m3d_param_host_n3_spawn_args_only.ynz",
+        "14862",
+        3,
+    );
+}
+
+#[test]
+fn v03_m3d_param_host_loopvar_shadow_declines_byte_identical() {
+    // WHY: a post-join `for` loop whose loop variable name shadows a function parameter MUST NOT
+    // erase an EARLIER post-join statement's genuine read of that parameter. The post-join
+    // read-walk (`stmt_tree_ident_reads`) strips the loop-var shadow from the loop's OWN body
+    // reads only — never from the shared cross-statement accumulator. `combine` reads `seed` in
+    // `let z = seed + 1` (a real read-after-join) and a later `for (seed in ...)` rebinds the
+    // name; the gate must still see the earlier read and DECLINE: 0 spawns, sequential,
+    // byte-identical. If this FIRES (spawns > 0), the loop-var removal leaked to the shared
+    // accumulator, erased the param read, flipped the gate to admit, and reopened the byte-32
+    // param/handle corruption — sustain the decline, do NOT relax this assertion. (Without the
+    // loop-local fix this fixture admits and the spawn's handle store clobbers the slot `z` reads
+    // post-join, diverging from --no-auto-parallel.)
+    m3d_assert_declines_byte_identical("v0_3_m3d_param_host_loopvar_shadow_declines.ynz", "9910");
+}
+
+#[test]
+fn v03_m3d_param_host_loopvar_shadow_fires_byte_identical() {
+    // WHY: the FIRE companion to the loop-var-shadow decline. A post-join `for` whose loop var
+    // shadows a parameter is SAFE to spike-host when the parameter itself is never read after the
+    // join (used only in spawn args). The loop-local shadow-removal in `stmt_tree_ident_reads`
+    // strips the loop-var name from the loop's own body reads, so this case is correctly seen as
+    // spawn-args-only and FIRES (2 spawns, alloc==free, byte-identical). `compute` reads `seed`
+    // only pre-pair (`other = seed + 1`) and as a call arg; the post-join `for (seed in ...)`
+    // rebinds the name and its body reads only the loop var. The invariant: the shadow fix must
+    // recover this safe case while still declining the one where an EARLIER statement reads the
+    // param (v03_m3d_param_host_loopvar_shadow_declines). If this DECLINES (0 spawns), the
+    // loop-local removal over-stripped and erased nothing-but-still-declined — fix the walk, not
+    // this test. If it fires with wrong output, the byte-32 overlap corrupted a value that WAS
+    // read post-join — re-check the post-join read walk.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_param_host_loopvar_shadow_fires.ynz",
+        "9908",
+    );
+}
+
+/// Assert a v0.3-M3d fixture whose return class the shared gate DECLINES runs sequentially:
+///   1. default-mode output equals the oracle (exit 0),
+///   2. default mode is byte-identical to `--no-auto-parallel`,
+///   3. the group is DECLINED — exactly 0 `ynz_rt_spawn_blocking_joinable` calls in the IR.
+///
+/// Declining is a first-class auto-promotion outcome (the class lowers sequentially,
+/// always correct). The 0-spawn assertion is the inverse of the FIRE assertion: it proves
+/// the decline is real (the hint and the binary both see 0 promoted members) rather than a
+/// silent admission that runs unsafely.
+fn m3d_assert_declines_byte_identical(fixture_name: &str, expected_stdout: &str) {
+    let src = fixture(fixture_name);
+
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "default build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par_stdout.trim(),
+        expected_stdout,
+        "default-mode output must equal the oracle; stdout:\n{par_stdout}"
+    );
+
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "default and --no-auto-parallel stdout must be byte-identical"
+    );
+
+    let ir = build_to_tmpdir_emit_ir(&src);
+    assert_eq!(
+        count_spawn_calls(&ir),
+        0,
+        "a declined return class must NOT spawn (0 = sequential, as designed); IR:\n{ir}"
+    );
+}
+
+#[test]
+fn v03_m3d_return_class_number_errors_declines_byte_identical() {
+    // WHY: `number errors` is DECLINED by the shared gate — the 24-byte {error word + i128
+    // value} pair overflows the 16-byte result slot, so admitting it would make join-bind
+    // dereference a pointer into the dead worker frame (use-after-free). The decline routes
+    // it to the sequential path, which is correct (distinct callees give distinct values:
+    // 6.0 / 10.0). This test locks the decline: 0 spawns + byte-identical. If you make this
+    // fire, you have reopened the wide-EC use-after-free — fix the wide-EC ABI on its own
+    // track (see .claude/todos.md), do NOT admit it here.
+    m3d_assert_declines_byte_identical("v0_3_m3d_return_class_number_errors.ynz", "6.0\n10.0");
+}
+
+#[test]
+fn v03_m3d_return_class_maybe_declines_and_ir_inert() {
+    // WHY: `maybe<int>` is outside this milestone's carried return-class set and is DECLINED
+    // by the shared gate. Invariant: the IDE `parallel_groups` hint (driven by typeck) and the
+    // emitted binary (driven by codegen) must agree on `maybe` — both see 0 promoted members.
+    // If the gate admitted `maybe` on only one side, the hint would mark the group parallel
+    // while the binary ran it sequentially. This test locks the agreement two ways: (1) the
+    // group is DECLINED (0 spawn calls), and (2) the auto-parallel pass is fully INERT — the
+    // emitted IR is byte-identical between default and `--no-auto-parallel`, proving the
+    // decline changed nothing in codegen. The loops make the worth-it proxy pass, so a 0 here
+    // is the decline, not a trivial-callee skip. If you make `maybe` fire, you reopened the
+    // hint/binary divergence — fix the gate, not this test.
+    //
+    // NOTE: stdout is intentionally NOT asserted here. Two adjacent `maybe<int>`-returning
+    // binds hit a pre-existing base-codegen bug (the second bind reads an uninitialized
+    // staging slot — same wide-value staging-slot family as the sequential same-callee bug
+    // tracked in .claude/todos.md), producing a non-deterministic value in BOTH modes. That
+    // bug is orthogonal to auto-parallel (the IR is identical between modes, as this test
+    // asserts) and is tracked separately — declining `maybe` from CPU promotion is correct
+    // regardless.
+    let src = fixture("v0_3_m3d_return_class_maybe.ynz");
+
+    let ir_default = build_to_tmpdir_emit_ir_mode(&src, false);
+    let ir_seq = build_to_tmpdir_emit_ir_mode(&src, true);
+    assert_eq!(
+        count_spawn_calls(&ir_default),
+        0,
+        "a declined `maybe` return must NOT spawn (0 = sequential, as designed); IR:\n{ir_default}"
+    );
+    // Each build runs in its own tmpdir, so the ModuleID / source_filename / @.source.file
+    // lines carry a different random path. Drop those path-bearing lines before comparing —
+    // they are not codegen output, and including them would make the comparison spuriously
+    // fail on the path alone.
+    let strip_paths = |ir: &str| -> String {
+        ir.lines()
+            .filter(|l| {
+                !l.contains("ModuleID")
+                    && !l.contains("source_filename")
+                    && !l.contains("@.source.file")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert_eq!(
+        strip_paths(&ir_default),
+        strip_paths(&ir_seq),
+        "the auto-parallel pass must be inert for a declined class — default and \
+         --no-auto-parallel IR must be identical (ignoring the per-build tmpdir path)"
+    );
+}
+
+// Slice 2 proved DISTINCT-callee parallelism for the full return-class matrix. These tests
+// prove SAME-callee distinctness: two adjacent calls to the SAME function name with DIFFERENT
+// arguments must bind DISTINCT, correct results. That is the per-(group, member-index) keying
+// proof — if the result slots were keyed by callee NAME instead of member index, the two
+// same-callee members would alias and the second bind would clobber (or read) the first. Every
+// fixture below picks args whose results DIFFER, so an aliasing regression changes the output.
+// All reuse `m3d_assert_fires_byte_identical_alloc_free` (FIRES with 2 spawns + byte-identical
+// to `--no-auto-parallel` + alloc==free).
+
+#[test]
+fn v03_m3d_same_callee_int_distinct_values() {
+    // WHY: same callee `sumTo`, args 5 and 6 → 10 and 15 (distinct). The 2-spawn FIRE assertion
+    // plus the distinct oracle prove the members are keyed by group position, not callee name —
+    // a name-keyed result slot would make both members read the same slot. If you relax the
+    // spawn-count assertion, the parallelism regressed to sequential; fix the codegen, not this
+    // test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_int.ynz", "10\n15");
+}
+
+#[test]
+fn v03_m3d_same_callee_bool_distinct_values() {
+    // WHY: same callee `sumExceeds`, args 4 and 6 → false and true (distinct). Proves the
+    // bool pack/bind path keeps same-callee members separate. FIRE + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_bool.ynz", "false\ntrue");
+}
+
+#[test]
+fn v03_m3d_same_callee_float_distinct_values() {
+    // WHY: same callee `sumf`, args 2 and 4 → 3 and 6 (distinct). Proves the f64 result word is
+    // bound per member, not shared across two same-callee members. FIRE + byte-identical +
+    // alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_float.ynz", "3\n6");
+}
+
+#[test]
+fn v03_m3d_same_callee_number_distinct_values() {
+    // WHY: `number` is the trickiest class — the result word is a pointer to a heap-stable
+    // 16-byte value, so a name-keyed (rather than member-keyed) result slot would make both
+    // same-callee members point at the same heap value. Same callee `sumn`, args 2 and 4 → 3.0
+    // and 6.0 (distinct) catches that. FIRE + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_number.ynz", "3.0\n6.0");
+}
+
+#[test]
+fn v03_m3d_same_callee_string_distinct_values() {
+    // WHY: same callee `buildStr`, args 3 and 5 → len=3 and len=5 (distinct heap strings).
+    // Proves two same-callee members each carry their own owning heap value, not a shared one.
+    // FIRE + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_string.ynz", "len=3\nlen=5");
+}
+
+#[test]
+fn v03_m3d_same_callee_array_distinct_values() {
+    // WHY: same callee `buildArr`, args 3 and 4 → element counts 3 and 4 (distinct, order-
+    // independent). Proves same-callee members bind separate `array<int>` values. FIRE +
+    // byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_array.ynz", "3\n4");
+}
+
+#[test]
+fn v03_m3d_same_callee_map_distinct_values() {
+    // WHY: same callee `buildMap`, args 3 and 5 → entry counts 3 and 5 (distinct, order-
+    // independent). Proves same-callee members bind separate `map<int, int>` values. FIRE +
+    // byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_map.ynz", "3\n5");
+}
+
+#[test]
+fn v03_m3d_same_callee_int_errors_distinct_values() {
+    // WHY: same callee `compute` returning `int errors`, args 4 and 5 → 6 and 10 (distinct).
+    // The errors ABI carries both an error word and a success word; a name-keyed slot would
+    // make the second `.or(-1)` read the first member's pair. Both callees succeed, so `.or(-1)`
+    // prints the distinct totals. FIRE + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_int_errors.ynz", "6\n10");
+}
+
+#[test]
+fn v03_m3d_worth_it_trivial_leaf_runs_inline() {
+    // WHY: the worth-it proxy is a perf gate, never a correctness gate. Two tiny straight-line
+    // callees (`double`/`triple`, no loop, no recursion) are NOT worth coordinating to run at
+    // the same time, so the compiler DECLINES the group and runs them inline — exactly 0 spawn
+    // calls. The output is still correct (40, 63) and byte-identical to `--no-auto-parallel`.
+    // This is the contrast partner of `v03_m3d_worth_it_loop_callee_fires`: identical entrypoint
+    // shape, but loop-bearing callees there fire while these trivial leaves decline. If you make
+    // this fire (≠ 0 spawns), the worth-it proxy stopped gating trivial leaves — fix the gate,
+    // not this test.
+    m3d_assert_declines_byte_identical("v0_3_m3d_worth_it_trivial_leaf_inline.ynz", "40\n63");
+}
+
+#[test]
+fn v03_m3d_worth_it_loop_callee_fires() {
+    // WHY: the positive companion to `v03_m3d_worth_it_trivial_leaf_runs_inline`. Same entrypoint
+    // shape (two adjacent distinct-callee binds), but each callee loops, so the worth-it proxy
+    // admits the group and it FIRES (2 spawns) — the loop is the proxy's primary signal. Output
+    // (190, 420) byte-identical between modes. Together the two tests prove the worth-it proxy
+    // discriminates on callee body (loop/recursion present), not on the call-site shape.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_worth_it_loop_overlaps.ynz", "190\n420");
+}
+
+// The R6 `cpu_result_abi_gate_parity` test (ynz-codegen `emit.rs`) compile-forces the
+// CLASSIFICATION axis: every `ynz_typeck::types::Type` variant must be classified admit/decline,
+// and the two gate functions must agree. It does NOT force the RUNTIME-CORRECTNESS axis — an
+// admitted (FIRE) class with no live `.ynz` fixture would classify fine yet never be proven to
+// produce the right value at runtime. Both runtime matrices below hand-listed which classes
+// FIRE, so adding a newly-admitted class to `cpu_result_abi_supports` did not break the build
+// until someone manually wired a runtime test (graveyard corpse "Hand-Listed Test Over a Closed
+// Enumerable Domain"; the project bar is compile-forced exhaustiveness for this closed domain).
+//
+// `runtime_axis_coverage` closes that gap for BOTH the slice-2 distinct-callee matrix
+// (`v03_m3d_return_class_*`) AND the slice-3 same-callee matrix (`v03_m3d_same_callee_*`): it is
+// an exhaustive `match` over `Type` with no `_` arm, so a future-added variant is a BUILD ERROR
+// until classified, and every `Fires` arm structurally REQUIRES naming the runtime fixture(s)
+// that exercise it. A new FIRE class therefore cannot reach `main` without a runtime fixture.
+
+/// Runtime-axis coverage for one resolved `Type` return class.
+///
+/// `Fires` names the live `.ynz` fixtures that drive the admitted class through the real
+/// blocking pool in BOTH runtime matrices — the slice-2 distinct-callee fixtures and the
+/// slice-3 same-callee fixture. `Declines` carries no fixture: the class lowers sequentially
+/// (the decline matrix asserts 0 spawns via `m3d_assert_declines_byte_identical`).
+enum RuntimeAxisCoverage {
+    Fires {
+        /// Slice-2 distinct-callee fixtures (`v03_m3d_return_class_*`). One or more — `int`
+        /// carries three (distinct/timing/saturation) because it is the headline class.
+        distinct: &'static [&'static str],
+        /// Slice-3 same-callee fixture (`v03_m3d_same_callee_*`) — the per-(group, member-index)
+        /// keying proof for this class.
+        same_callee: &'static str,
+    },
+    /// The class lowers sequentially. `_why` documents the decline reason at the call site so a
+    /// reader sees WHY without cross-referencing the production gate.
+    Declines(&'static str),
+}
+
+/// Map a resolved return class to the runtime fixtures that prove it (FIRE) or to a decline.
+///
+/// EXHAUSTIVE over `ynz_typeck::types::Type` with NO `_` arm BY DESIGN: a new variant on the
+/// `Type` enum makes this fail to compile until it is classified, and a `Fires` classification
+/// cannot be written without naming its runtime fixtures. This is the runtime-axis twin of
+/// `parity_case`'s classification-axis exhaustiveness — together they make a new admitted return
+/// class impossible to ship without BOTH a parity row AND a runtime fixture.
+fn runtime_axis_coverage(variant: &ynz_typeck::types::Type) -> RuntimeAxisCoverage {
+    use ynz_typeck::types::Type;
+    match variant {
+        // Admitted (FIRE) classes: each names its distinct-callee + same-callee fixtures.
+        Type::Int => RuntimeAxisCoverage::Fires {
+            distinct: &[
+                "v0_3_m3d_spike_a_distinct.ynz",
+                "v0_3_m3d_spike_c_timing.ynz",
+                "v0_3_m3d_spike_d_saturation.ynz",
+            ],
+            same_callee: "v0_3_m3d_same_callee_int.ynz",
+        },
+        Type::Float => RuntimeAxisCoverage::Fires {
+            distinct: &["v0_3_m3d_return_class_float.ynz"],
+            same_callee: "v0_3_m3d_same_callee_float.ynz",
+        },
+        Type::Bool => RuntimeAxisCoverage::Fires {
+            distinct: &["v0_3_m3d_return_class_bool.ynz"],
+            same_callee: "v0_3_m3d_same_callee_bool.ynz",
+        },
+        // bare `number` admits (heap-stable ABI ptr); `number errors` declines (wide-EC UAF) —
+        // the EC decline is on the `ErrorsCapable` arm, this bare arm fires.
+        Type::Number { .. } => RuntimeAxisCoverage::Fires {
+            distinct: &["v0_3_m3d_return_class_number.ynz"],
+            same_callee: "v0_3_m3d_same_callee_number.ynz",
+        },
+        Type::String => RuntimeAxisCoverage::Fires {
+            distinct: &["v0_3_m3d_return_class_string.ynz"],
+            same_callee: "v0_3_m3d_same_callee_string.ynz",
+        },
+        Type::BuiltinArray { .. } => RuntimeAxisCoverage::Fires {
+            distinct: &["v0_3_m3d_return_class_array.ynz"],
+            same_callee: "v0_3_m3d_same_callee_array.ynz",
+        },
+        Type::BuiltinMap { .. } => RuntimeAxisCoverage::Fires {
+            distinct: &["v0_3_m3d_return_class_map.ynz"],
+            same_callee: "v0_3_m3d_same_callee_map.ynz",
+        },
+        // `T errors` admits only when the inner is a safe-to-carry word (int/float/bool/string/
+        // array/map). The `int errors` fixtures exercise the admitted EC path in both matrices;
+        // the declined `number errors` inner is locked separately by
+        // `v03_m3d_return_class_number_errors_declines_byte_identical`.
+        Type::ErrorsCapable { .. } => RuntimeAxisCoverage::Fires {
+            distinct: &["v0_3_m3d_return_class_int_errors.ynz"],
+            same_callee: "v0_3_m3d_same_callee_int_errors.ynz",
+        },
+        // Declined classes: sequential lowering, no FIRE fixture.
+        Type::BuiltinFixed { .. } => RuntimeAxisCoverage::Declines(
+            "fixed's non-suspending return is a pre-existing base bug",
+        ),
+        Type::Shape { .. } => {
+            RuntimeAxisCoverage::Declines("by-value shape needs variable-size frame staging")
+        }
+        Type::Dynamic { .. } => RuntimeAxisCoverage::Declines("dynamic value is a fat pointer"),
+        Type::Generic { .. } => {
+            RuntimeAxisCoverage::Declines("user-defined generic shape (distinct from array/map)")
+        }
+        Type::Maybe { .. } => RuntimeAxisCoverage::Declines("maybe is outside the carried set"),
+        Type::Union { .. } => RuntimeAxisCoverage::Declines("union value carries a tag word"),
+        Type::Range { .. } => RuntimeAxisCoverage::Declines("range is not a value return class"),
+        Type::Options { .. } => RuntimeAxisCoverage::Declines("options is an i8-tag value"),
+        Type::Sensitive { .. } => RuntimeAxisCoverage::Declines("sensitive wraps a declined value"),
+        Type::Nothing => RuntimeAxisCoverage::Declines("no value to join-bind"),
+        Type::Error => RuntimeAxisCoverage::Declines("poisoned sig from an earlier type error"),
+        Type::MapEntry { .. } => RuntimeAxisCoverage::Declines("MapEntry is not a carried class"),
+        Type::TypeParam { .. } => RuntimeAxisCoverage::Declines(
+            "generic-fn returns live in GenericFnTable, never in the CPU-gated SignatureTable",
+        ),
+    }
+}
+
+#[test]
+fn cpu_runtime_axis_fixtures_compile_forced_exhaustive() {
+    // WHY: closes the runtime-correctness half of the CPU-result-ABI gate. The R6 parity test
+    // compile-forces CLASSIFICATION (admit/decline per `Type` variant); this test compile-forces
+    // RUNTIME COVERAGE (every admitted/FIRE class has a live `.ynz` fixture in BOTH runtime
+    // matrices). Invariant: adding a newly-admitted return class to `cpu_result_abi_supports`
+    // cannot ship without a runtime fixture — the exhaustive `runtime_axis_coverage` match makes
+    // a new `Type` variant a build error, and its `Fires` arm cannot be written without naming
+    // fixtures. The cross-check below also catches an admit/decline FLIP on an existing variant
+    // (one-sided edit to `cpu_result_abi_supports`) as a loud test failure. If a fixture is
+    // renamed, fix the name here — do NOT delete the coverage entry.
+    use ynz_typeck::independence::cpu_result_abi_supports;
+    use ynz_typeck::types::Type;
+
+    // One representative per resolved `Type` variant. The classifier (`runtime_axis_coverage`) is
+    // the exhaustiveness driver — every variant here is matched by an arm with no `_` fallback,
+    // so the compiler rejects any future variant that is not classified.
+    let all_variants: Vec<Type> = vec![
+        Type::Int,
+        Type::Float,
+        Type::Bool,
+        Type::Number { precision: 34 },
+        Type::String,
+        Type::BuiltinArray {
+            elem: Box::new(Type::Int),
+        },
+        Type::BuiltinMap {
+            key: Box::new(Type::Int),
+            val: Box::new(Type::Int),
+        },
+        Type::ErrorsCapable {
+            inner: Box::new(Type::Int),
+        },
+        Type::BuiltinFixed {
+            elem: Box::new(Type::Int),
+            size: None,
+        },
+        Type::Shape {
+            name: "Player".to_string(),
+        },
+        Type::Dynamic {
+            contract: "Damageable".to_string(),
+        },
+        Type::Generic {
+            name: "Pair".to_string(),
+            args: vec![Type::Int, Type::Int],
+        },
+        Type::Maybe {
+            inner: Box::new(Type::Int),
+        },
+        Type::Union {
+            variants: vec![
+                Type::Shape {
+                    name: "Circle".to_string(),
+                },
+                Type::Shape {
+                    name: "Square".to_string(),
+                },
+            ],
+        },
+        Type::Range {
+            element: Box::new(Type::Int),
+            end_inclusive: false,
+        },
+        Type::Options {
+            name: "Status".to_string(),
+        },
+        Type::Sensitive {
+            inner: Box::new(Type::String),
+        },
+        Type::Nothing,
+        Type::Error,
+        Type::MapEntry {
+            key: Box::new(Type::Int),
+            val: Box::new(Type::Int),
+        },
+        Type::TypeParam {
+            name: "T".to_string(),
+        },
+    ];
+
+    for variant in &all_variants {
+        match runtime_axis_coverage(variant) {
+            RuntimeAxisCoverage::Fires {
+                distinct,
+                same_callee,
+            } => {
+                // The runtime-axis verdict must match the production gate. A one-sided edit that
+                // flips an existing variant decline→admit in `cpu_result_abi_supports` (or here)
+                // fails this assertion — the two cannot drift.
+                assert!(
+                    cpu_result_abi_supports(variant),
+                    "runtime_axis_coverage marks {variant:?} as FIRE, but \
+                     cpu_result_abi_supports declines it — the runtime matrix and the production \
+                     gate disagree. Reconcile both."
+                );
+                // Every FIRE class must have live fixtures on disk in BOTH matrices.
+                assert!(
+                    !distinct.is_empty(),
+                    "FIRE class {variant:?} must name at least one distinct-callee fixture"
+                );
+                for fx in distinct {
+                    assert!(
+                        fixture(fx).exists(),
+                        "distinct-callee fixture {fx} for FIRE class {variant:?} is missing on \
+                         disk — add the runtime fixture before admitting the class"
+                    );
+                }
+                assert!(
+                    fixture(same_callee).exists(),
+                    "same-callee fixture {same_callee} for FIRE class {variant:?} is missing on \
+                     disk — add the runtime fixture before admitting the class"
+                );
+            }
+            RuntimeAxisCoverage::Declines(_why) => {
+                // A declined class must also be declined by the production gate (no spawn).
+                assert!(
+                    !cpu_result_abi_supports(variant),
+                    "runtime_axis_coverage marks {variant:?} as Declines, but \
+                     cpu_result_abi_supports admits it — reconcile both."
+                );
+            }
+        }
+    }
+}
+
+// A CPU group may sit at the top level of a promoted function OR inside ONE `if` arm or matching
+// arm; a sole group in either placement spike-hosts from the recursive SM lowering of that body,
+// reusing the same group-0 frame slots. A function spike-hosts IFF it has EXACTLY ONE CPU group
+// across all depths. A group inside a loop body needs loop-index crossing-slot work that is not
+// yet implemented (see .claude/todos.md). A function with TWO-or-more groups (top-level plus
+// nested, or two nested, in ANY source order) would alias the single reserved group-0 slot
+// region, so it declines ALL spiking. Every decline lowers sequentially, byte-identical.
+
+#[test]
+fn v03_m3d_accumulator_crossing_fires_byte_identical() {
+    // WHY: a local declared BEFORE a CPU pair and READ after the join (`running = running + a + b`)
+    // must survive the join. The CPU-group join is a suspension boundary, so `running` is a
+    // crossing local: typeck's crossing collector registers the join as a suspension, the frame
+    // reserves a slot for `running`, the pre-pair lowering flushes it, and the post-join path
+    // reloads it before the read. Without this the read sources stale/garbage frame bytes and the
+    // group FIRES into a silent wrong answer (observed live: 4389230 vs the correct 10903 oracle) —
+    // the accumulator-corruption class. This must FIRE (2 spawns) AND equal 10903 in both modes.
+    // If the value diverges from 10903, the crossing flush/reload regressed; if the spawn count
+    // drops to 0, admission regressed to sequential. Fix the codegen/crossing collection, not this
+    // test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_accumulator_crossing.ynz", "10903");
+}
+
+#[test]
+fn v03_m3d_nested_if_group_fires_byte_identical() {
+    // WHY: a CPU group placed inside an `if` branch must FIRE (2 spawns) from the nested SM
+    // lowering, byte-identical to `--no-auto-parallel`, with alloc==free. The group reuses the
+    // group-0 handle/result slots (32/40/48/64) — the same reservation a top-level group uses,
+    // since the function still has exactly one group. If you relax the spawn-count assertion the
+    // nested group regressed to sequential; if the value diverges from `9907` the nested spike
+    // reads the wrong slot. Fix the codegen, not this test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_nested_if_group.ynz", "9907");
+}
+
+#[test]
+fn v03_m3d_nested_match_group_fires_byte_identical() {
+    // WHY: a CPU group placed inside a matching arm (`if (pick) { 1 => { ... } }`) must FIRE
+    // (2 spawns) from the arm-body SM lowering, byte-identical to `--no-auto-parallel`, alloc==
+    // free. The arm-body routing is separate from the plain-`if` routing, so this locks the
+    // match-arm path independently. A 0 here means the arm body took the non-SM `lower_stmt`
+    // path that has no spawn-join. Fix the routing, not this test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_nested_match_group.ynz", "9907");
+}
+
+#[test]
+fn v03_m3d_nested_for_body_group_declines_byte_identical() {
+    // WHY: a CPU group inside a `for`-iteration body must DECLINE to sequential lowering (0 spawns)
+    // and stay byte-identical to `--no-auto-parallel` (29706). Firing it would require the loop's
+    // synthetic iteration index and every loop-carried local to survive the group's join across the
+    // loop's resume — the SM resumes inside the body without re-running the loop header — and that
+    // multi-level synthetic-index reservation is NOT provided for loop-body groups. `for`/`while`
+    // bodies are excluded from `spike_nested_blocks`, so a loop-body group is never detected and
+    // never fires. If this shows ANY spawns, loop-body admission regressed (a corpse-class
+    // silent-wrong risk — see the nested-placement decline fixtures); fix the gate, not this test.
+    // (For-body CPU parallelism for all placements is deferred — see .claude/todos.md.)
+    m3d_assert_declines_byte_identical("v0_3_m3d_nested_for_body_group.ynz", "29706");
+}
+
+#[test]
+fn v03_m3d_for_under_if_group_declines_byte_identical() {
+    // WHY: a CPU group in a `for` body that is itself nested under an `if` must DECLINE (0 spawns)
+    // and stay byte-identical (29706). This is a corpse-prevention lock: firing a loop-body group
+    // one level under a branch silently miscompiled (observed 9905/19807 vs the 29706 oracle)
+    // because the synthetic loop-index/loop-carried slots are unreserved at that depth. Loop bodies
+    // are excluded from `spike_nested_blocks`, so the group is never detected and never fires. If
+    // this shows ANY spawns, the loop-body exclusion regressed — fix the gate, not this test.
+    m3d_assert_declines_byte_identical("v0_3_m3d_for_under_if_group.ynz", "29706");
+}
+
+#[test]
+fn v03_m3d_inner_nested_for_group_declines_byte_identical() {
+    // WHY: a CPU group in the INNER body of two nested `for` loops must DECLINE (0 spawns), stay
+    // byte-identical (59412), AND not abort codegen. This is a corpse-prevention lock: firing it
+    // hard-aborted the backend (`__ynz_for_idx_1 not found in frame`) — a compile error on
+    // previously-valid code, which auto-promotion must never produce. Loop bodies are excluded from
+    // `spike_nested_blocks`, so the inner-loop group is never detected and never fires; the function
+    // compiles and runs sequentially. If this aborts or shows ANY spawns, the loop-body exclusion
+    // regressed — fix the gate, not this test.
+    m3d_assert_declines_byte_identical("v0_3_m3d_inner_nested_for_group.ynz", "59412");
+}
+
+#[test]
+fn v03_m3d_nested_if_no_crossing_fires_byte_identical() {
+    // WHY: a pure nested-`if` CPU group that returns its join result DIRECTLY (no local declared
+    // before the pair and read after the join) must FIRE (2 spawns) and stay byte-identical (9907),
+    // with alloc==free. This shape populates the join's result names while the top-level crossing
+    // scan finds no surrounding crossing local, so `m3d_spike_cpu_result_allocas` is empty. The
+    // orphan (unreachable) state-block terminator must NOT attempt to reload spike results there
+    // (reload bool is `false`) — otherwise the empty-alloca lookup aborts codegen. If this aborts,
+    // the orphan-terminator reload regressed to `true`; if spawns drop to 0, admission regressed.
+    // Fix the codegen, not this test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_nested_if_no_crossing.ynz", "9907");
+}
+
+#[test]
+fn v03_m3d_nested_multi_group_declines_byte_identical() {
+    // WHY: a promoted function with BOTH a top-level CPU group and a nested one is a MULTI-GROUP
+    // function — it declines ALL spiking (0 spawns) and runs fully sequentially, byte-identical
+    // (19810). The single reserved group-0 slot region holds exactly one group; firing two groups
+    // into it would alias the first group's handles (silent wrong answer). This fixture places the
+    // top-level pair first; `v0_3_m3d_nested_group_before_top.ynz` places the nested pair first —
+    // both must decline identically because the multi-group decline is order-INDEPENDENT (the
+    // count check runs before any representative-callee selection). If this shows ANY spawns,
+    // multi-group admission regressed — fix the gate (count != 1 must decline BEFORE the
+    // top-level early-return), not this test. Partial hosting (fire one group, decline the rest)
+    // needs per-group slot reservation that is not yet implemented (see .claude/todos.md).
+    m3d_assert_declines_byte_identical("v0_3_m3d_nested_multi_group.ynz", "19810");
+}
+
+#[test]
+fn v03_m3d_nested_group_before_top_declines_byte_identical() {
+    // WHY: a multi-group function with the NESTED group placed BEFORE the top-level group in
+    // source order must decline ALL spiking (0 spawns) and stay byte-identical (19810) — exactly
+    // like `v0_3_m3d_nested_multi_group.ynz` where the ordering is reversed. This locks the
+    // order-INDEPENDENCE of the multi-group decline: the `count_cpu_groups_all_depths != 1` check
+    // runs BEFORE `spike_pair_in_block` selects any representative callee, so a nested-first
+    // function cannot have its nested group selected and sized while the top-level group fires
+    // into the same single reserved slot region. If the count check is moved back after the
+    // representative selection, this fixture compiles to a corrupt binary (the nested arm fires,
+    // the top-level pair aliases the one reserved group-0 slot region — observed 4389422 vs the
+    // correct 19810 oracle). A 0-spawn DECLINE is the only correct outcome until per-group slot
+    // reservation lands (see .claude/todos.md). If this shows ANY spawns, the order-independence
+    // broke — fix the gate ordering, not this test.
+    m3d_assert_declines_byte_identical("v0_3_m3d_nested_group_before_top.ynz", "19810");
+}
+
+#[test]
+fn v03_m3d_nested_group_with_outer_wait_declines_byte_identical() {
+    // WHY: a single nested CPU group in a function that ALSO has a separate `wait` is a
+    // mixed CPU+I/O function — it declines the nested spike (0 spawns) and runs fully
+    // sequentially, byte-identical (9907). The nested group's result allocas are pre-allocated
+    // only by the top-level Step-1c scan; a nested pair is invisible to that scan, so firing it
+    // while a second suspension (the `wait`) later reloads spike results crashes the backend
+    // ("no sm_entry alloca"). Declining when any other suspension exists keeps the nested fire
+    // safe. If this shows ANY spawns OR fails to build, the nested-with-outer-suspension decline
+    // regressed — fix the admission gate, not this test. Firing this safely (Step-1c walking
+    // nested blocks) is a mixed CPU+I/O concern tracked in .claude/todos.md.
+    m3d_assert_declines_byte_identical("v0_3_m3d_nested_group_with_outer_wait.ynz", "9907");
+}
+
+#[test]
+fn v03_m3d_nested_group_with_suspending_callee_no_abort_byte_identical() {
+    // WHY: this is the exact shape that crashed the backend before the nested-with-outer-
+    // suspension decline landed. `combine` owns a nested CPU group AND calls `other` — a function
+    // promoted to run its own pair concurrently, which makes `other` a suspension point inside
+    // `combine`. The nested group's result allocas are pre-allocated only by the top-level
+    // Step-1c scan, so a nested pair has none; resuming after the `other` call reloads spike
+    // results into the (empty) alloca map and aborts machine-code generation ("no sm_entry
+    // alloca for `lo`"). The fix declines `combine`'s nested group while `other`'s OWN top-level
+    // group still fires. The invariant: the build SUCCEEDS, output is byte-identical (19810), and
+    // exactly 2 spawns appear — both from `other`, none from `combine`'s declined nested group.
+    // If the build aborts, the decline regressed; if spawns != 2, `combine`'s nested group either
+    // fired (4 spawns — the corruption door reopened) or `other` stopped firing. Fix the codegen,
+    // not this test.
+    let fixture_name = "v0_3_m3d_nested_group_with_suspending_callee.ynz";
+    let src = fixture(fixture_name);
+
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "default build must SUCCEED (no backend abort); stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par_stdout.trim(),
+        "19810",
+        "default-mode output must equal the oracle; stdout:\n{par_stdout}"
+    );
+
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "default and --no-auto-parallel stdout must be byte-identical"
+    );
+
+    let ir = build_to_tmpdir_emit_ir(&src);
+    assert_eq!(
+        count_spawn_calls(&ir),
+        2,
+        "exactly 2 spawns — both from `other`'s top-level group; `combine`'s nested group must \
+         decline (0 of its own spawns). 4 spawns = the nested group fired into corruption; \
+         0 = `other` stopped firing. IR:\n{ir}"
+    );
+
+    let (alloc, free) = ynz_run_with_alloc_counter(fixture_name);
+    assert_eq!(
+        alloc, free,
+        "alloc must equal free (no leak on the partial-decline path); alloc={alloc}, free={free}"
+    );
+}
+
+#[test]
+fn v03_m3d_mixed_cpu_io_group_declines_byte_identical() {
+    // WHY: a pure-CPU call (`score`) next to an I/O call (`fetch`, which `wait`s on a timer)
+    // is a mixed CPU+I/O group. The CPU spawn-join path and the I/O inline-poll path use
+    // separate mechanisms with no shared continuation — driving them together deadlocks the
+    // join: the spawned CPU handle is never re-polled from inside the I/O suspension's resume.
+    // The admission gate therefore declines a mixed group to sequential: `score` runs inline,
+    // `fetch` suspends, both in order — 0 spawns, byte-identical to `--no-auto-parallel` (4958).
+    // The 0-spawn assertion is the safety wire: any spawns here mean the mixed-overlap path got
+    // activated while the fused-continuation machinery is absent — fix the codegen, not this test.
+    // Firing this safely (CPU join-poll + I/O inline-poll fused into one continuation) is tracked
+    // in .claude/todos.md.
+    m3d_assert_declines_byte_identical("v0_3_m3d_mixed_cpu_io_group_declines.ynz", "4958");
+}
+
+// WHY (group): the feature-development tests (slices 1–4) covered the simple top-level
+// distinct/same-callee return-class FIRE and the int-only placement FIRE/DECLINE. The danger
+// matrix targets the UNCOVERED cross-product cells where a return-class ABI pack/bind path
+// (heap-pointer, wide-value decimal128, i64→i1 bool truncation, error-capable tagged pair)
+// intersects a non-trivial PLACEMENT (if-arm, match-arm) or same-callee distinctness inside an
+// arm. Those intersections are where silent miscompiles hid in this codegen area's history (the
+// Silent-Envelope and parallel-per-type-dispatch corpses). Every FIRE cell asserts 2 spawns +
+// byte-identical; every DECLINE cell asserts 0 spawns + byte-identical. The byte-identical check
+// plus the determinism harness (cross_impl_consistency.rs runs each fixture twice) supply the
+// multiple-run garbage detection for the frame-slot-touching cells. If you relax any
+// spawn-count assertion, a cell silently regressed FIRE↔DECLINE — fix the codegen, not the test.
+
+#[test]
+fn v03_m3d_danger_string_if_arm_fires_byte_identical() {
+    // WHY: a heap-pointer return (`string`) packed inside an `if` arm. The result slot holds a
+    // pointer, not an inline value; that pack/bind must survive the if-arm frame machinery.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_danger_string_if_arm.ynz",
+        "first=3\nsecond=5",
+    );
+}
+
+#[test]
+fn v03_m3d_danger_array_match_arm_fires_byte_identical() {
+    // WHY: a heap-pointer return (`array<int>`) packed inside a `match` arm. Same pointer-slot
+    // risk as the string-if-arm cell, but in match-arm frame machinery and with the counts read
+    // inside the arm (so the int counts, not the array pointers, cross the arm boundary).
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_array_match_arm.ynz", "3\n5");
+}
+
+#[test]
+fn v03_m3d_danger_number_if_arm_fires_byte_identical() {
+    // WHY: a wide-value return (`number`/decimal128) packs into BOTH words of the 16-byte result
+    // slot; that two-word pack/bind must survive the if-arm frame machinery. The result is
+    // RETURNED out of the wrapper, so this also pins that the promoted `number` return ABI matches
+    // the non-SM lowering (a stack-backed, caller-copies-and-forgets pointer): alloc==free, no
+    // heap stabilization block leaked. A regression to a heap-returning wrapper would re-open the
+    // one-allocation leak this cell now strictly guards against.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_number_if_arm.ynz", "6.0\n15.0");
+}
+
+#[test]
+fn v03_m3d_danger_bool_match_arm_fires_byte_identical() {
+    // WHY: a bool returns as an i64 in the result slot and must be truncated to i1 before the
+    // bool alloca store (M3f truncation discipline). The two members produce DIFFERENT bools, so
+    // a missed truncation or slot aliasing changes the output. Reads are kept inside the arm.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_bool_match_arm.ynz", "false\ntrue");
+}
+
+#[test]
+fn v03_m3d_danger_same_callee_string_if_arm_fires_byte_identical() {
+    // WHY: same-callee distinctness with a heap-pointer return INSIDE an `if` arm — the
+    // per-(group, member-index) slot keying must hold for a pointer pack AND inside nested
+    // control flow at once. The two calls give DIFFERENT strings (n=3, n=7); aliasing would make
+    // them equal.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_danger_same_callee_string_if_arm.ynz",
+        "n=3\nn=7",
+    );
+}
+
+#[test]
+fn v03_m3d_danger_same_callee_number_match_arm_fires_byte_identical() {
+    // WHY: same-callee distinctness with a wide-value return INSIDE a `match` arm — the two-word
+    // decimal128 pack and the member-index slot keying must both hold inside a match arm. Results
+    // DIFFER (6.0, 9.0). Returned out of the wrapper, so this also strictly guards alloc==free:
+    // the promoted `number` return ABI must match the non-SM stack-backed lowering, leaking no
+    // heap stabilization block.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_danger_same_callee_number_match_arm.ynz",
+        "6.0\n9.0",
+    );
+}
+
+#[test]
+fn v03_m3d_danger_same_callee_bool_match_arm_fires_byte_identical() {
+    // WHY: same-callee distinctness with a bool return INSIDE a `match` arm — combines i64→i1
+    // truncation + member-index slot keying + match-arm machinery. Results DIFFER (false, true).
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_danger_same_callee_bool_match_arm.ynz",
+        "false\ntrue",
+    );
+}
+
+#[test]
+fn v03_m3d_danger_same_callee_array_if_arm_fires_byte_identical() {
+    // WHY: same-callee distinctness with a heap-pointer (`array<int>`) return INSIDE an `if` arm.
+    // The member-index slot keying must hold for a pointer pack in nested control flow; the two
+    // calls give DIFFERENT counts (3, 6).
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_danger_same_callee_array_if_arm.ynz",
+        "3\n6",
+    );
+}
+
+#[test]
+fn v03_m3d_danger_int_errors_if_arm_fires_byte_identical() {
+    // WHY: an error-capable return (`int errors`) packs as a tagged {error word, ok bits} pair;
+    // the join-bind must normalize the ok word and route through the EC decode path. That EC
+    // pack/bind must survive the if-arm frame machinery. Both functions succeed (6, 30).
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_int_errors_if_arm.ynz", "6\n30");
+}
+
+#[test]
+fn v03_m3d_danger_float_if_arm_fires_byte_identical() {
+    // WHY: a `float` (f64 bits in one word) packed inside an `if` arm. The f64 bit pattern must
+    // travel through the result slot intact. A whole-valued float prints without a trailing `.0`.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_float_if_arm.ynz", "6\n15");
+}
+
+#[test]
+fn v03_m3d_danger_map_match_arm_fires_byte_identical() {
+    // WHY: a heap-pointer return (`map<int, int>`) packed inside a `match` arm. The map's heap
+    // pointer travels through the result slot; that pack/bind must survive match-arm machinery.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_map_match_arm.ynz", "3\n5");
+}
+
+#[test]
+fn v03_m3d_danger_mixed_string_declines_byte_identical() {
+    // WHY: a mixed group with a heap-pointer (`string`) CPU child DECLINES — mixed CPU+I/O
+    // overlap is M3g, not M3d. The heap-pointer pack must not make the mixed group fire here.
+    // 0 spawns + byte-identical locks the decline for the heap-pointer CPU-child case.
+    m3d_assert_declines_byte_identical(
+        "v0_3_m3d_danger_mixed_string_declines.ynz",
+        "built=3\nwaited",
+    );
+}
+
+#[test]
+fn v03_m3d_danger_mixed_number_declines_byte_identical() {
+    // WHY: a mixed group with a wide-value (`number`) CPU child DECLINES — mixed CPU+I/O overlap
+    // is M3g, not M3d. The decline keeps the program clean (no number leak here, since the group
+    // never fires). 0 spawns + byte-identical locks the wide-value mixed-child decline.
+    m3d_assert_declines_byte_identical("v0_3_m3d_danger_mixed_number_declines.ynz", "6.0\n2.5");
+}
+
+#[test]
+fn v03_m3d_danger_string_loop_body_declines_byte_identical() {
+    // WHY: a heap-pointer (`string`) group inside a loop body DECLINES — loop-body CPU groups are
+    // a future loop-placement slice, not M3d. The heap-pointer pack must not make a loop-body
+    // group fire. 0 spawns + byte-identical locks the loop-body decline for the heap-pointer case.
+    m3d_assert_declines_byte_identical("v0_3_m3d_danger_string_loop_body_declines.ynz", "hi=2");
+}
+
+#[test]
+fn v03_m3d_danger_read_after_arm_declines_byte_identical() {
+    // WHY: a CPU group inside a `match` arm whose results are READ in a statement AFTER the arm
+    // closes DECLINES — the result must survive the arm boundary as a crossing local, which the
+    // arm-placement path does not reserve for cross-boundary reads. This locks the boundary:
+    // reads kept INSIDE the arm FIRE (danger_bool_match_arm), reads that cross OUT decline. 0
+    // spawns + byte-identical. If this fired, the cross-arm crossing-slot path is being exercised
+    // without the reservation — fix the crossing machinery, not this test.
+    m3d_assert_declines_byte_identical(
+        "v0_3_m3d_danger_read_after_arm_declines.ynz",
+        "false\ntrue",
+    );
+}
+
+// WHY (group): structured stress cases that feature-development testing does not naturally hit —
+// deep promotion chains, recursion, nested background spawns, reverse completion order, and loop
+// trip-count boundaries. Each asserts the expected FIRE/DECLINE plus byte-identical output. The
+// pool-exhaustion (>=512 concurrent joins), cancellation-mid-join, and panic-reraise ABI cases
+// live at the runtime-crate unit-test level (saturation_600_joins, drop_detach_no_uaf,
+// discriminator_drop_frees_spike_handles, panic_reraises_in_parent in ynz-runtime) because the
+// Yinz source layer cannot express 600 joins or an out-of-band cancellation in one program; the
+// source-expressible panic case is v03_m3d_cpu_child_panic_fires_byte_identical above.
+
+#[test]
+fn v03_m3d_hostile_deep_promoted_chain_fires_byte_identical() {
+    // WHY: a deep call chain (top → middle → combine) where the bottom function hosts the CPU
+    // group and the enclosing callers are state machines driving the one below. The bottom group
+    // must still FIRE through the chain. 2 spawns + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_hostile_deep_promoted_chain.ynz", "102");
+}
+
+#[test]
+fn v03_m3d_hostile_cpu_child_spawns_background_fires_byte_identical() {
+    // WHY: a CPU child that itself spawns a `background` task — the spawn-from-a-blocking-pool
+    // thread path. The CPU group must FIRE, the nested spawn must not crash, and the result must
+    // be byte-identical in both modes. The detached background task's own output is not part of
+    // the contract (it may not flush before exit).
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_hostile_cpu_child_spawns_background.ynz",
+        "3675",
+    );
+}
+
+#[test]
+fn v03_m3d_hostile_reverse_completion_fires_byte_identical() {
+    // WHY: reverse completion order — a HEAVY child finishes long after a LIGHT child, so the
+    // children complete out of declaration order. The post-join binds must stay attached to the
+    // right member regardless of completion order (slots keyed by position, not finish time).
+    // Output is order-independent (12497500, 3) and byte-identical.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_hostile_reverse_completion.ynz",
+        "12497500\n3",
+    );
+}
+
+#[test]
+fn v03_m3d_hostile_self_recursive_group_declines_byte_identical() {
+    // WHY: a self-recursive function holding a CPU group in its base case DECLINES — a function
+    // in a call cycle is excluded from parallelization (recursion's heap-boxed frame would
+    // intersect the per-member handle/result slots). 0 spawns + byte-identical locks the
+    // recursion exclusion. If this fired, recursion × per-member-slot is being exercised unsafely.
+    m3d_assert_declines_byte_identical("v0_3_m3d_hostile_self_recursive_group_declines.ynz", "100");
+}
+
+#[test]
+fn v03_m3d_hostile_mixed_reverse_completion_declines_byte_identical() {
+    // WHY: a mixed group (CPU child + I/O child) where the CPU child would complete BEFORE the
+    // I/O child suspends — the highest-risk completion ordering for a shared continuation across
+    // two child classes. Mixed CPU+I/O is M3g, so this DECLINES: 0 spawns + byte-identical.
+    m3d_assert_declines_byte_identical(
+        "v0_3_m3d_hostile_mixed_reverse_completion_declines.ynz",
+        "4958",
+    );
+}
+
+#[test]
+fn v03_m3d_hostile_worth_it_false_negative_declines_byte_identical() {
+    // WHY: a worth-it FALSE NEGATIVE — heavy-looking straight-line callees with no loop or
+    // self-call, so the loop/recursion-keyed worth-it proxy declines them. A false negative is
+    // only a missed perf opportunity, never a wrong answer: 0 spawns + byte-identical output.
+    // This locks that the proxy is a perf gate, never a correctness gate.
+    m3d_assert_declines_byte_identical(
+        "v0_3_m3d_hostile_worth_it_false_negative_declines.ynz",
+        "82\n177",
+    );
+}
+
+#[test]
+fn v03_m3d_hostile_zero_iteration_loop_group_declines_byte_identical() {
+    // WHY: a CPU group inside a ZERO-iteration loop body — the boundary case for the loop-body
+    // decline. The loop never runs, the group declines (loop-body groups are a future slice), the
+    // accumulator stays at its initial value. 0 spawns + byte-identical, output 0.
+    m3d_assert_declines_byte_identical(
+        "v0_3_m3d_hostile_zero_iteration_loop_group_declines.ynz",
+        "0",
+    );
+}
+
+#[test]
+fn v03_m3d_hostile_many_iteration_loop_group_declines_byte_identical() {
+    // WHY: a CPU group inside a 10,000-iteration loop body — the high-trip-count stress companion
+    // to the zero-iteration boundary. The loop-body decline must hold whether the body runs zero
+    // or ten thousand times, with byte-identical accumulated output. 0 spawns + byte-identical.
+    m3d_assert_declines_byte_identical(
+        "v0_3_m3d_hostile_many_iteration_loop_group_declines.ynz",
+        "100890000",
     );
 }
 

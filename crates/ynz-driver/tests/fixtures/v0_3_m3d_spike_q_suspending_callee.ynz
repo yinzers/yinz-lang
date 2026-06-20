@@ -1,0 +1,37 @@
+// Spike regression fixture (q): suspending callee in post-pair stmts declines the group.
+//
+// The entrypoint calls a suspending function `worker()` after the CPU pair (fib(10), fib(11)).
+// The static admission gates (spike_cpu_candidates, spike_extract_cpu_group,
+// spike_cpu_group_result_names) detect the suspending post-pair statement and decline the
+// group so that both modes lower sequentially.
+//
+// Without the guard, the spike host frame's child sub-frame offsets would be computed using
+// the pre-spike own base (the 32-byte frame header for 0 own locals). The worker sub-frame
+// would embed at byte 48 (the first CPU result slot), causing worker's resume-point write to
+// alias the joined result `a` and produce a silent wrong value (55/1/89 instead of 55/55/89).
+//
+// The declination ensures byte-identical output in both modes.
+//
+// Expected output (both modes):
+//   55
+//   55
+//   89
+function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+
+function worker() -> nothing {
+  wait sleep(0)
+  print(fib(10))
+}
+
+function entrypoint() -> nothing {
+  let a = fib(10)
+  let b = fib(11)
+  wait worker()
+  print(a)
+  print(b)
+}

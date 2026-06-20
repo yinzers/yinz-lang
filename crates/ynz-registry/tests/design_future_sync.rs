@@ -24,16 +24,8 @@ fn design_future_dir() -> PathBuf {
 const SKIP: &[(&str, &str)] = &[
     ("index.md", "index file, not a feature doc"),
     (
-        "inline-shape-types.md",
-        "shipped in v0.1-polish — no deferred entry needed",
-    ),
-    (
         "auto-soa.md",
         "codegen-only optimization, no user-facing token",
-    ),
-    (
-        "concurrency.md",
-        "covered by M8 wait/background keywords, no deferred token",
     ),
     (
         "http-framework.md",

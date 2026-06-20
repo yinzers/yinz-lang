@@ -295,7 +295,7 @@ struct Checker<'b> {
     /// (reaches an intra-unit `sleep`) AND makes an unanalyzable cross-module or
     /// dynamic-dispatch call gets the clean compile error. A caller that does NOT
     /// independently suspend treats the boundary call as a non-suspending leaf — the
-    /// M2-documented under-approximation per `design/future/concurrency.md:61-67`
+    /// M2-documented under-approximation per `design/no-function-coloring.md:61-67`
     /// (cross-module suspension propagation requires M8 binary package metadata and
     /// ships in M3).
     current_fn_suspends: bool,
@@ -402,7 +402,7 @@ impl<'b> Checker<'b> {
         // diagnostic gates on this: a function that independently reaches a suspension point
         // (intra-unit `sleep`) AND makes an unanalyzable boundary call gets the error.
         // Functions that do NOT independently suspend treat the boundary call as a
-        // non-suspending leaf — the M2 under-approximation per design/future/concurrency.md:75.
+        // non-suspending leaf — the M2 under-approximation per design/no-function-coloring.md:75.
         self.current_fn_suspends = self
             .sig_table
             .fns
@@ -2156,7 +2156,7 @@ impl<'b> Checker<'b> {
                         span.clone(),
                         "`wait` is not available in --kernel mode.",
                         "Remove the keyword or build without `--kernel`. Kernel-mode programs run without a scheduler runtime.",
-                        "The thread-pool runtime that powers `wait` does not run in kernel mode. See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
+                        "The thread-pool runtime that powers `wait` does not run in kernel mode. See `design/no-runtime-mode.md` for the kernel-mode contract.",
                     ));
                     // Return Type::Error without recursing into the inner expression. Recursing
                     // would visit the inner Expr::Call and trigger the call-dispatch kernel guard,
@@ -2194,7 +2194,7 @@ impl<'b> Checker<'b> {
                         span.clone(),
                         "`background` is not available in --kernel mode.",
                         "Remove the keyword or build without `--kernel`. Kernel-mode programs run without a scheduler runtime.",
-                        "The thread-pool runtime that powers `background` does not run in kernel mode. See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
+                        "The thread-pool runtime that powers `background` does not run in kernel mode. See `design/no-runtime-mode.md` for the kernel-mode contract.",
                     ));
                     // Still infer inner for completeness; return Nothing.
                     let _ = self.infer_expr(inner, None);
@@ -2408,8 +2408,10 @@ impl<'b> Checker<'b> {
                 format!(
                     "`wait` only has effect when the awaited expression can suspend \
                      (calls a may-block intrinsic or another function whose body contains \
-                     `wait`). Currently, `{callee_name}` is purely CPU-bound; the runtime \
-                     semantics are identical with or without `wait`."
+                     `wait`). Calling a purely CPU-bound callee with explicit `wait` is an \
+                     ordering barrier — it ends any parallel group that `{callee_name}` could \
+                     have joined — so removing `wait` lets the compiler overlap this call with \
+                     adjacent independent calls when that is safe."
                 ),
             ));
         }
@@ -2440,7 +2442,7 @@ impl<'b> Checker<'b> {
                          Kernel-mode programs run without a scheduler runtime.",
                         "`sleep` requires the Tokio runtime (started by `ynz_rt_init`), \
                          which does not run in kernel mode. \
-                         See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
+                         See `design/no-runtime-mode.md` for the kernel-mode contract.",
                     ));
                     for arg in &call.args {
                         self.infer_expr(arg, None);
@@ -2557,7 +2559,7 @@ impl<'b> Checker<'b> {
                             call.span.clone(),
                             format!("`{name}` suspends, which is not available in --kernel mode."),
                             format!("Remove the call to `{name}` or build without `--kernel`. Kernel-mode programs run without a scheduler runtime."),
-                            "Suspension requires the thread-pool runtime, which does not run in kernel mode. See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
+                            "Suspension requires the thread-pool runtime, which does not run in kernel mode. See `design/no-runtime-mode.md` for the kernel-mode contract.",
                         ));
                     }
 
@@ -2904,7 +2906,7 @@ impl<'b> Checker<'b> {
             // coerce at the call site); only passing an ALREADY-dynamic value triggers this.
             // Gate on current_fn_suspends: only a caller that independently reaches a
             // suspension point needs this error; non-suspending callers treat dynamic calls
-            // as non-suspending leaves per design/future/concurrency.md:75.
+            // as non-suspending leaves per design/no-function-coloring.md:75.
             if let (
                 Type::Dynamic {
                     contract: expected_contract,
@@ -3463,7 +3465,7 @@ impl<'b> Checker<'b> {
                     // cannot be determined. Gate on current_fn_suspends: only callers that
                     // independently reach a suspension point (intra-unit `sleep`) get the
                     // error; non-suspending callers treat this as a non-suspending leaf per
-                    // design/future/concurrency.md:75 (the M2 intentional under-approximation).
+                    // design/no-function-coloring.md:75 (the M2 intentional under-approximation).
                     if self.current_fn_suspends {
                         self.diags.push(Diagnostic::error(
                             method_span.clone(),
@@ -3526,7 +3528,7 @@ impl<'b> Checker<'b> {
                                 method_span.clone(),
                                 format!("`{method}` suspends, which is not available in --kernel mode."),
                                 format!("Remove the call to `{method}` or build without `--kernel`. Kernel-mode programs run without a scheduler runtime."),
-                                "Suspension requires the thread-pool runtime, which does not run in kernel mode. See `design/future/no-runtime-mode.md` for the kernel-mode contract.",
+                                "Suspension requires the thread-pool runtime, which does not run in kernel mode. See `design/no-runtime-mode.md` for the kernel-mode contract.",
                             ));
                             return sig.ret.clone();
                         }
@@ -5390,28 +5392,7 @@ impl<'b> Checker<'b> {
     /// that would push an error). Callers use the result only for the
     /// UnsupportedCrossingLocalType guard; unresolved annotations are silently skipped.
     fn resolve_type_for_guard(&self, ast_ty: &AstType) -> Option<Type> {
-        match ast_ty {
-            // Union alias: `let fig: Figure = ...` where `Figure = Circle | Square`.
-            AstType::Named(n, _) if self.union_aliases.contains_key(n) => {
-                Some(self.union_aliases[n].clone())
-            }
-            // Inline union: `let x: Circle | Square = ...`
-            AstType::Union { variants, .. } if variants.len() >= 2 => {
-                Some(Type::Union {
-                    // Inner types not needed for classification; use placeholders.
-                    variants: vec![Type::Int; variants.len()],
-                })
-            }
-            // `maybe<T>` annotation.
-            AstType::Maybe { .. } => Some(Type::Maybe {
-                inner: Box::new(Type::Int),
-            }),
-            // `dynamic Contract` annotation.
-            AstType::Dynamic { contract, .. } => Some(Type::Dynamic {
-                contract: contract.clone(),
-            }),
-            _ => None,
-        }
+        resolve_type_for_guard_free(ast_ty, &self.union_aliases)
     }
 
     fn check_option_name_arm(
@@ -5481,7 +5462,7 @@ fn resolve_alias_type(ast_ty: &AstType, shape_table: &crate::shapes::ShapeTable)
 ///
 /// These are union type aliases like `shape Shape = Circle | Square | Triangle`.
 /// The alias name maps to the resolved alias type.
-fn collect_union_aliases(
+pub(crate) fn collect_union_aliases(
     module: &Module,
     shape_table: &crate::shapes::ShapeTable,
 ) -> HashMap<String, Type> {
@@ -5603,7 +5584,7 @@ pub fn type_attached_const_type(type_name: &str, const_name: &str) -> Option<Typ
 // or crash.
 
 /// Returns true if the block contains any `wait` expression anywhere in its tree.
-fn block_contains_wait(block: &Block) -> bool {
+pub(crate) fn block_contains_wait(block: &Block) -> bool {
     block.stmts.iter().any(stmt_contains_wait_anywhere)
 }
 
@@ -5728,7 +5709,7 @@ pub fn find_crossing_local_typeck_type(
 /// Implementation of type lookup using an expr_types map directly.
 /// Called from Check 2 after check_stmts runs (where self.expr_types is populated)
 /// and from the public helper above.
-fn find_crossing_local_typeck_type_in_map(
+pub(crate) fn find_crossing_local_typeck_type_in_map(
     stmts: &[Stmt],
     target: &str,
     expr_types: &HashMap<(usize, usize), Type>,
@@ -5786,7 +5767,7 @@ fn find_crossing_local_typeck_type_in_map(
 ///
 /// Returns the ITERATOR's element type (e.g. `Type::MapEntry{..}` for a map iter,
 /// `elem` for an array iter), or `None` if the target name is not a for-loop var.
-fn find_for_loop_var_type_in_stmts(
+pub(crate) fn find_for_loop_var_type_in_stmts(
     stmts: &[Stmt],
     target: &str,
     expr_types: &HashMap<(usize, usize), Type>,
@@ -6271,7 +6252,7 @@ fn outer_is_genuine_crossing_local(
 /// safe-conservative compile error for all suspending functions.
 ///
 /// Time: O(n) where n = total statement count in `stmts` (recursive).
-fn param_has_nested_let_shadow(stmts: &[Stmt], target: &str) -> bool {
+pub(crate) fn param_has_nested_let_shadow(stmts: &[Stmt], target: &str) -> bool {
     for stmt in stmts {
         let bodies: Vec<&[Stmt]> = match stmt {
             Stmt::If { body, .. } => vec![&body.stmts],
@@ -6530,7 +6511,45 @@ pub fn crossing_local_names(
     suspending: &std::collections::HashSet<&str>,
     expr_types: &HashMap<(usize, usize), Type>,
 ) -> Vec<String> {
-    let crossings = locals_crossing_wait(stmts, param_names, suspending);
+    crossing_local_names_with_cpu_spike(
+        stmts,
+        param_names,
+        suspending,
+        &std::collections::HashSet::new(),
+        expr_types,
+    )
+}
+
+/// Crossing-local collection that additionally treats a CPU spike group's join as a
+/// suspension point.
+///
+/// A pure-CPU parallel group (an adjacent pair of `let x = callee(...)` whose callees are
+/// non-suspending and in `cpu_supported`) is spawned-and-join-polled by the M3d codegen,
+/// and that join is a real suspension boundary: a local declared before the pair and read
+/// after the join must survive across it via a frame slot, exactly like a local crossing a
+/// `wait`. The plain [`crossing_local_names`] entry point passes an empty `cpu_supported`
+/// set, so its behavior is unchanged for every caller that is not collecting slots for a
+/// spike host.
+///
+/// `cpu_supported` is the set of callee names whose return class fits the CPU-result ABI —
+/// the codegen spike-host's eligibility filter — and is non-empty ONLY when collecting for a
+/// function the codegen will actually spike-host. This keeps the typeck crossing set and the
+/// codegen frame reservation in lock-step: both recognize the same pair as the same
+/// suspension. Polluting `suspending` with the CPU callees instead would make the codegen's
+/// `!suspend_set.contains(callee)` eligibility filter drop the pair (the callees would look
+/// like state machines), so the join would NOT fire while the crossing slot was reserved —
+/// the divergence that corrupts. The join, not the callees, is the suspension.
+///
+/// Time: O(N log N) where N = AST nodes (one crossing scan + a final name sort)  Space: O(C)
+/// where C = crossing local names collected
+pub fn crossing_local_names_with_cpu_spike(
+    stmts: &[Stmt],
+    param_names: &[&str],
+    suspending: &std::collections::HashSet<&str>,
+    cpu_supported: &std::collections::HashSet<&str>,
+    expr_types: &HashMap<(usize, usize), Type>,
+) -> Vec<String> {
+    let crossings = locals_crossing_wait(stmts, param_names, suspending, cpu_supported);
     let mut seen = std::collections::HashSet::new();
     let mut names: Vec<String> = crossings
         .into_iter()
@@ -6547,6 +6566,9 @@ pub fn crossing_local_names(
     // giving it a named frame slot (prefixed `__ynz_for_idx_`) integrates it with the
     // existing crossing-local slot machinery. The name is deterministic and collision-free
     // (user code cannot declare names starting with `__ynz_`).
+    // Only `wait`/may-block loop bodies suspend here: a CPU spike-group inside a loop body
+    // DECLINES to sequential lowering (the codegen `spike_nested_blocks` excludes loop
+    // bodies), so it is never a suspension point and needs no synthetic iteration slot.
     collect_for_loop_synthetic_crossings(stmts, suspending, &mut seen, &mut names, expr_types);
     names.sort();
     names
@@ -6561,6 +6583,9 @@ pub fn crossing_local_names(
 ///
 /// The synthetic name is guaranteed not to alias user code because Yinz identifiers
 /// may not start with `__ynz_` (reserved prefix).
+///
+/// Time: O(N) where N = AST nodes in `stmts`  Space: O(D) recursion depth + O(F) synthetic
+/// names where F = suspending for-loops
 fn collect_for_loop_synthetic_crossings(
     stmts: &[Stmt],
     suspending: &std::collections::HashSet<&str>,
@@ -6571,6 +6596,7 @@ fn collect_for_loop_synthetic_crossings(
     collect_for_loop_synthetic_crossings_inner(stmts, suspending, seen, names, &mut 0, expr_types);
 }
 
+/// Time: O(N) where N = AST nodes in `stmts`  Space: O(D) recursion depth
 fn collect_for_loop_synthetic_crossings_inner(
     stmts: &[Stmt],
     suspending: &std::collections::HashSet<&str>,
@@ -6674,7 +6700,7 @@ fn collect_for_loop_synthetic_crossings_inner(
 /// `fixed<T>` arrays are stack-allocated in the resume function's stack frame. After
 /// suspension the stack frame is freed; the pointer stored in the crossing-local frame
 /// slot becomes dangling. Returns the span of the first such `for`, or `None`.
-fn find_fixed_array_iter_wait_in_for(
+pub(crate) fn find_fixed_array_iter_wait_in_for(
     stmts: &[Stmt],
     expr_types: &std::collections::HashMap<(usize, usize), Type>,
 ) -> Option<SourceSpan> {
@@ -6736,7 +6762,7 @@ fn find_fixed_array_iter_wait_in_for(
 ///
 /// Returns the span of the first such `for` statement found, or `None`.
 /// The caller emits `StoredRangeWithWait` when `Some`.
-fn find_stored_range_wait_in_for(
+pub(crate) fn find_stored_range_wait_in_for(
     stmts: &[Stmt],
     expr_types: &std::collections::HashMap<(usize, usize), Type>,
 ) -> Option<SourceSpan> {
@@ -6791,7 +6817,7 @@ fn find_stored_range_wait_in_for(
 /// A call-expression iterator is re-evaluated by the SM codegen on every loop header
 /// visit, producing N+1 evaluations instead of 1. Returns the span of the first such
 /// `for` statement found, or `None`. The caller emits `ExpressionIterWithWait`.
-fn find_expr_iter_wait_in_for(stmts: &[Stmt]) -> Option<SourceSpan> {
+pub(crate) fn find_expr_iter_wait_in_for(stmts: &[Stmt]) -> Option<SourceSpan> {
     for stmt in stmts {
         match stmt {
             Stmt::For {
@@ -7129,20 +7155,114 @@ fn expr_reads_field_of(expr: &Expr, target: &str) -> bool {
 ///
 /// Function parameters are excluded: the SM codegen gives every parameter a frame
 /// slot and reloads it at each resume point, so they are always safe.
+///
+/// Time: O(N) where N = AST nodes scanned  Space: O(C) where C = crossing locals collected
 pub fn locals_crossing_wait(
     stmts: &[Stmt],
     param_names: &[&str],
     suspending: &std::collections::HashSet<&str>,
+    cpu_supported: &std::collections::HashSet<&str>,
 ) -> Vec<LocalCrossesWait> {
     let mut problems = Vec::new();
     collect_crossings_in_stmts(
         stmts,
         param_names,
         suspending,
+        cpu_supported,
         &mut Vec::new(),
         &mut problems,
     );
     problems
+}
+
+/// Whether `stmt` binds a non-suspending CPU-result-ABI call — the statement shape that
+/// can be one member of an M3d CPU spike group.
+///
+/// A spike group member is `let x = callee(...)` (or a bare `callee(...)`) where `callee`
+/// is NOT in `suspending` (it is pure CPU, not a state machine) and IS in `cpu_supported`
+/// (its return class fits the join's 16-byte result ABI). Mirrors the codegen eligibility
+/// filter in `spike_pair_in_block` so the two sides recognize the same members.
+///
+/// Time: O(1)  Space: O(1)
+fn stmt_is_cpu_spike_member(
+    stmt: &Stmt,
+    suspending: &std::collections::HashSet<&str>,
+    cpu_supported: &std::collections::HashSet<&str>,
+) -> bool {
+    let c = match stmt {
+        Stmt::Let {
+            value: Expr::Call(c),
+            ..
+        }
+        | Stmt::Expr(Expr::Call(c)) => c,
+        _ => return false,
+    };
+    match call_name(c) {
+        Some(name) => !suspending.contains(name.as_str()) && cpu_supported.contains(name.as_str()),
+        None => false,
+    }
+}
+
+/// Index of the first member of an adjacent CPU spike pair in `stmts`, or `None`.
+///
+/// The M3d codegen spike-hosts the FIRST adjacent pair of eligible CPU members in a block
+/// (`spike_pair_in_block`); the join after that pair is the block's suspension point. Returns
+/// the index of the first member so the crossing analysis can mark every prior local as
+/// crossing and treat the two member binds as result-bindings (safe across their own join).
+///
+/// Time: O(n) where n = stmts length  Space: O(1).
+fn cpu_spike_pair_first_index(
+    stmts: &[Stmt],
+    suspending: &std::collections::HashSet<&str>,
+    cpu_supported: &std::collections::HashSet<&str>,
+) -> Option<usize> {
+    if cpu_supported.is_empty() {
+        return None;
+    }
+    stmts.windows(2).position(|w| {
+        stmt_is_cpu_spike_member(&w[0], suspending, cpu_supported)
+            && stmt_is_cpu_spike_member(&w[1], suspending, cpu_supported)
+    })
+}
+
+/// Whether `block` contains an adjacent CPU spike pair (at its top level, or inside a nested
+/// `if` body), making the block a suspension point for outer crossing analysis.
+///
+/// Parallels [`block_contains_inferred_suspension`] for the CPU-join suspension class. Loop
+/// and match bodies are scanned by the caller's own recursion in `collect_crossings_in_stmts`;
+/// this helper covers the `if`-body shape the inferred-suspension predicate also handles.
+///
+/// Time: O(N) where N = AST nodes in `block` (recurses through nested `if` bodies)  Space: O(D)
+/// recursion depth
+fn block_contains_cpu_spike_pair(
+    block: &Block,
+    suspending: &std::collections::HashSet<&str>,
+    cpu_supported: &std::collections::HashSet<&str>,
+) -> bool {
+    if cpu_supported.is_empty() {
+        return false;
+    }
+    if cpu_spike_pair_first_index(&block.stmts, suspending, cpu_supported).is_some() {
+        return true;
+    }
+    block.stmts.iter().any(|stmt| match stmt {
+        Stmt::If { body, .. } => block_contains_cpu_spike_pair(body, suspending, cpu_supported),
+        _ => false,
+    })
+}
+
+/// Whether `block` suspends through any M3d-recognized boundary: an explicit `wait`, an
+/// inferred-suspension call, OR a CPU spike-group join.
+///
+/// Time: O(N) where N = AST nodes in `block`  Space: O(D) recursion depth
+fn block_suspends_m3d(
+    block: &Block,
+    suspending: &std::collections::HashSet<&str>,
+    cpu_supported: &std::collections::HashSet<&str>,
+) -> bool {
+    block_contains_wait(block)
+        || block_contains_inferred_suspension(block, suspending)
+        || block_contains_cpu_spike_pair(block, suspending, cpu_supported)
 }
 
 /// Recursive crossing-analysis kernel.
@@ -7151,13 +7271,21 @@ pub fn locals_crossing_wait(
 /// so far in this statement sequence. When a suspension point (explicit `wait` node
 /// OR an inferred-suspension call) is encountered, subsequent statements are scanned
 /// for references to those accumulated names.
+///
+/// Time: O(N) where N = AST nodes scanned  Space: O(D) recursion depth + O(L) declared locals
 fn collect_crossings_in_stmts(
     stmts: &[Stmt],
     param_names: &[&str],
     suspending: &std::collections::HashSet<&str>,
+    cpu_supported: &std::collections::HashSet<&str>,
     declared: &mut Vec<String>,
     out: &mut Vec<LocalCrossesWait>,
 ) {
+    // Index of the first member of an adjacent CPU spike pair in THIS statement list, if any.
+    // The join after that pair is a suspension point: locals declared before it cross it, and
+    // the two member binds are result-bindings safe across their own join. Empty `cpu_supported`
+    // (every non-spike-host caller) makes this `None`, preserving the original behavior.
+    let spike_first_idx = cpu_spike_pair_first_index(stmts, suspending, cpu_supported);
     // Whether a reachable suspension point has been seen in this statement list.
     let mut past_wait = false;
     // Result-binding names from the most-recent suspension step, not yet flushed
@@ -7168,7 +7296,30 @@ fn collect_crossings_in_stmts(
     // suspension and the next one are not falsely flagged.
     let mut pending_result_bindings: Vec<String> = Vec::new();
 
-    for stmt in stmts {
+    for (idx, stmt) in stmts.iter().enumerate() {
+        // CPU spike-group join: the first member of the adjacent pair marks the suspension.
+        // Before the pair, mark `past_wait` so every prior `declared` local is checked against
+        // post-join reads (the accumulator bug). The two member binds are deferred into
+        // `pending_result_bindings` (safe across their own join, crossing candidates only for a
+        // LATER suspension), and the second member is consumed here so it is not re-processed as
+        // a plain `let` that would push it into `declared` prematurely.
+        if !past_wait && spike_first_idx == Some(idx) {
+            past_wait = true;
+            for member_idx in [idx, idx + 1] {
+                if let Stmt::Let { name, .. } = &stmts[member_idx] {
+                    if !param_names.contains(&name.as_str())
+                        && !pending_result_bindings.contains(name)
+                    {
+                        pending_result_bindings.push(name.clone());
+                    }
+                }
+            }
+            continue;
+        }
+        // Consume the second member of the spike pair (already handled above).
+        if spike_first_idx == Some(idx.wrapping_sub(1)) {
+            continue;
+        }
         if past_wait {
             // Before checking references, flush any result-binding names from the
             // PREVIOUS suspension that were deferred. At this point we are inside a
@@ -7239,55 +7390,53 @@ fn collect_crossings_in_stmts(
                 // dominance failure ("Instruction does not dominate all uses").
                 match stmt {
                     Stmt::If { body, .. }
-                        if block_contains_wait(body)
-                            || block_contains_inferred_suspension(body, suspending) =>
+                        if block_suspends_m3d(body, suspending, cpu_supported) =>
                     {
                         let mut branch_declared = declared.clone();
                         collect_crossings_in_stmts(
                             &body.stmts,
                             param_names,
                             suspending,
+                            cpu_supported,
                             &mut branch_declared,
                             out,
                         );
                     }
                     Stmt::While { body, .. } | Stmt::For { body, .. }
-                        if block_contains_wait(body)
-                            || block_contains_inferred_suspension(body, suspending) =>
+                        if block_suspends_m3d(body, suspending, cpu_supported) =>
                     {
                         let mut branch_declared = declared.clone();
                         collect_crossings_in_stmts(
                             &body.stmts,
                             param_names,
                             suspending,
+                            cpu_supported,
                             &mut branch_declared,
                             out,
                         );
                     }
                     Stmt::Match { arms, else_arm, .. } => {
                         for arm in arms {
-                            if block_contains_wait(&arm.body)
-                                || block_contains_inferred_suspension(&arm.body, suspending)
-                            {
+                            if block_suspends_m3d(&arm.body, suspending, cpu_supported) {
                                 let mut branch_declared = declared.clone();
                                 collect_crossings_in_stmts(
                                     &arm.body.stmts,
                                     param_names,
                                     suspending,
+                                    cpu_supported,
                                     &mut branch_declared,
                                     out,
                                 );
                             }
                         }
                         if let Some(eb) = else_arm {
-                            if block_contains_wait(eb)
-                                || block_contains_inferred_suspension(eb, suspending)
-                            {
+                            if block_suspends_m3d(eb, suspending, cpu_supported) {
                                 let mut branch_declared = declared.clone();
                                 collect_crossings_in_stmts(
                                     &eb.stmts,
                                     param_names,
                                     suspending,
+                                    cpu_supported,
                                     &mut branch_declared,
                                     out,
                                 );
@@ -7367,10 +7516,7 @@ fn collect_crossings_in_stmts(
                 //       potential suspension inside the branch.
                 //   (b) Locals declared INSIDE the branch, before the suspension, and
                 //       read after it IN THE SAME BRANCH — handled via recursive call.
-                Stmt::If { body, .. }
-                    if block_contains_wait(body)
-                        || block_contains_inferred_suspension(body, suspending) =>
-                {
+                Stmt::If { body, .. } if block_suspends_m3d(body, suspending, cpu_supported) => {
                     // Sub-case (b): recurse into the branch, seeding with the outer
                     // `declared` set so outer-scope names are also tracked inside.
                     let mut branch_declared = declared.clone();
@@ -7378,6 +7524,7 @@ fn collect_crossings_in_stmts(
                         &body.stmts,
                         param_names,
                         suspending,
+                        cpu_supported,
                         &mut branch_declared,
                         out,
                     );
@@ -7400,10 +7547,7 @@ fn collect_crossings_in_stmts(
                 // survive each `wait` via the frame slot. A purely forward textual scan
                 // misses this because the write and the condition-read both appear before
                 // the `wait` in textual order, yet execution cycles back through them.
-                Stmt::While { body, .. }
-                    if block_contains_wait(body)
-                        || block_contains_inferred_suspension(body, suspending) =>
-                {
+                Stmt::While { body, .. } if block_suspends_m3d(body, suspending, cpu_supported) => {
                     // Scan the condition and body for reads of outer-declared locals.
                     // This catches the back-edge case: counter/accumulator locals are
                     // read by the condition on each iteration, which comes AFTER the
@@ -7414,6 +7558,7 @@ fn collect_crossings_in_stmts(
                         &body.stmts,
                         param_names,
                         suspending,
+                        cpu_supported,
                         &mut branch_declared,
                         out,
                     );
@@ -7426,8 +7571,7 @@ fn collect_crossings_in_stmts(
                 // are still crossing locals — a forward scan seeded with the outer `declared`
                 // set catches them. Mark past_wait so post-for statements are scanned.
                 Stmt::For { body, iter, .. }
-                    if block_contains_wait(body)
-                        || block_contains_inferred_suspension(body, suspending) =>
+                    if block_suspends_m3d(body, suspending, cpu_supported) =>
                 {
                     // Scan the iter expression and body for reads of outer-declared locals.
                     // The iter expression may reference an outer local (e.g., the collection
@@ -7439,6 +7583,7 @@ fn collect_crossings_in_stmts(
                         &body.stmts,
                         param_names,
                         suspending,
+                        cpu_supported,
                         &mut branch_declared,
                         out,
                     );
@@ -7451,39 +7596,37 @@ fn collect_crossings_in_stmts(
                     else_arm,
                     scrutinee,
                     ..
-                } if arms.iter().any(|a| {
-                    block_contains_wait(&a.body)
-                        || block_contains_inferred_suspension(&a.body, suspending)
-                }) || else_arm.as_ref().is_some_and(|eb| {
-                    block_contains_wait(eb) || block_contains_inferred_suspension(eb, suspending)
-                }) =>
+                } if arms
+                    .iter()
+                    .any(|a| block_suspends_m3d(&a.body, suspending, cpu_supported))
+                    || else_arm
+                        .as_ref()
+                        .is_some_and(|eb| block_suspends_m3d(eb, suspending, cpu_supported)) =>
                 {
                     // Scrutinee may reference outer-declared locals.
                     let _ = scrutinee; // scanned via collect_ident_refs_in_stmt
                     collect_ident_refs_in_stmt(stmt, declared, out);
                     for arm in arms {
-                        if block_contains_wait(&arm.body)
-                            || block_contains_inferred_suspension(&arm.body, suspending)
-                        {
+                        if block_suspends_m3d(&arm.body, suspending, cpu_supported) {
                             let mut arm_declared = declared.clone();
                             collect_crossings_in_stmts(
                                 &arm.body.stmts,
                                 param_names,
                                 suspending,
+                                cpu_supported,
                                 &mut arm_declared,
                                 out,
                             );
                         }
                     }
                     if let Some(eb) = else_arm {
-                        if block_contains_wait(eb)
-                            || block_contains_inferred_suspension(eb, suspending)
-                        {
+                        if block_suspends_m3d(eb, suspending, cpu_supported) {
                             let mut eb_declared = declared.clone();
                             collect_crossings_in_stmts(
                                 &eb.stmts,
                                 param_names,
                                 suspending,
+                                cpu_supported,
                                 &mut eb_declared,
                                 out,
                             );
@@ -7660,13 +7803,210 @@ struct SubExprSuspendViolation {
 /// `suspending` is the set of user-defined function names whose `suspends == true`
 /// in the current compilation unit. May-block intrinsics (`sleep`,
 /// `__testFallibleAsync`) are included via `M2_MAY_BLOCK_INTRINSICS`.
-fn suspending_calls_in_subexpr_position(
+pub(crate) fn suspending_calls_in_subexpr_position(
     stmts: &[Stmt],
     suspending: &std::collections::HashSet<&str>,
 ) -> Vec<(SourceSpan, String)> {
     let mut out = Vec::new();
     collect_subexpr_violations_in_stmts(stmts, suspending, &mut out);
     out.into_iter().map(|v| (v.span, v.callee_name)).collect()
+}
+
+/// Probe whether ANY state-machine suspension guard would fire on `f` if it were a
+/// state machine, under the effective suspending-function set `suspending_fns`.
+///
+/// This is the v0.3-M3d **decline-to-promote** predicate (Decision Record item 8c):
+/// the CPU-promotion query marks a candidate's whole transitive-SM closure as
+/// suspending, then calls this on every newly-SM function. A `true` verdict means
+/// promoting that function would turn previously-compiling code into a guard error,
+/// so the promotion is rolled back (declines to sequential lowering — never a new
+/// compile error).
+///
+/// It REUSES the exact guard predicates the diagnostic-emitting `check_function`
+/// path runs (`suspending_calls_in_subexpr_position`, `crossing_local_names`,
+/// `find_stored_range_wait_in_for`, `find_fixed_array_iter_wait_in_for`,
+/// `find_expr_iter_wait_in_for`, `find_map_entry_field_after_wait`,
+/// `find_array_shape_runtime_field_crossing`, the wide-return classifier, the
+/// nested-shape / unsupported-crossing-type / shadow checks). The gating mirrors
+/// `check_function` exactly: the function is treated as `is_suspending_fn = true`,
+/// and `has_explicit_waits` is read from its body. No guard logic is re-derived —
+/// only the boolean verdict is consumed here instead of a formatted diagnostic.
+///
+/// `expr_types` MUST be the map from the baseline `check` pass (the guards read
+/// resolved crossing-local types from it). `kernel_mode` short-circuits to `false`
+/// because every guard above is `!kernel_mode`-gated in `check_function` (kernel
+/// mode never promotes, so the probe is moot there, but the parameter keeps the
+/// contract explicit).
+///
+/// Time: O(stmts · crossings)  Space: O(crossings)
+pub(crate) fn suspension_guards_fire_for_fn(
+    f: &ynz_ast::nodes::FunctionDecl,
+    ret_ty: &Type,
+    suspending_fns: &std::collections::HashSet<&str>,
+    shape_table: &ShapeTable,
+    union_aliases: &HashMap<String, Type>,
+    expr_types: &HashMap<(usize, usize), Type>,
+    kernel_mode: bool,
+) -> bool {
+    if kernel_mode {
+        return false;
+    }
+    let has_explicit_waits = block_contains_wait(&f.body);
+
+    // WideValueSuspendingReturn: a suspending fn returning a bare shape or `Shape errors`.
+    let is_wide_return = match ret_ty {
+        Type::Shape { .. } => true,
+        Type::ErrorsCapable { inner } => matches!(inner.as_ref(), Type::Shape { .. }),
+        _ => false,
+    };
+    if is_wide_return {
+        return true;
+    }
+
+    // Suspending call in a sub-expression position.
+    if !suspending_calls_in_subexpr_position(&f.body.stmts, suspending_fns).is_empty() {
+        return true;
+    }
+
+    // StoredRangeWithWait / FixedArrayIterWithWait / ExpressionIterWithWait — explicit-wait gated.
+    if has_explicit_waits {
+        if find_stored_range_wait_in_for(&f.body.stmts, expr_types).is_some() {
+            return true;
+        }
+        if find_fixed_array_iter_wait_in_for(&f.body.stmts, expr_types).is_some() {
+            return true;
+        }
+        if find_expr_iter_wait_in_for(&f.body.stmts).is_some() {
+            return true;
+        }
+    }
+
+    // Crossing-local guards (nested-shape, UnsupportedCrossingLocalType, shadow).
+    let param_names_ref: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
+    let crossings =
+        crossing_local_names(&f.body.stmts, &param_names_ref, suspending_fns, expr_types);
+
+    for crossing_name in &crossings {
+        // Nested-shape crossing.
+        let resolved_ty = find_crossing_local_typeck_type_in_map(
+            &f.body.stmts,
+            crossing_name.as_str(),
+            expr_types,
+        )
+        .or_else(|| {
+            find_for_loop_var_type_in_stmts(&f.body.stmts, crossing_name.as_str(), expr_types)
+        });
+        if let Some(Type::Shape { name: shape_name }) = &resolved_ty {
+            let has_nested_shape = shape_table
+                .shapes
+                .get(shape_name.as_str())
+                .is_some_and(|def| {
+                    def.fields
+                        .iter()
+                        .any(|field| matches!(&field.ty, Type::Shape { .. }))
+                });
+            if has_nested_shape {
+                return true;
+            }
+        }
+
+        // UnsupportedCrossingLocalType: union/maybe/dynamic/fixed/range crossing.
+        let rhs_ty = find_crossing_local_typeck_type_in_map(
+            &f.body.stmts,
+            crossing_name.as_str(),
+            expr_types,
+        );
+        let ann_ty = find_let_annotation_type_in_stmts(&f.body.stmts, crossing_name.as_str())
+            .and_then(|ast_ty| resolve_type_for_guard_free(&ast_ty, union_aliases));
+        let for_var_ty =
+            find_for_loop_var_type_in_stmts(&f.body.stmts, crossing_name.as_str(), expr_types);
+        let unsupported = [&ann_ty, &rhs_ty, &for_var_ty].iter().any(|opt| {
+            opt.as_ref().is_some_and(|ty| {
+                matches!(
+                    ty,
+                    Type::Union { .. }
+                        | Type::Maybe { .. }
+                        | Type::Dynamic { .. }
+                        | Type::BuiltinFixed { .. }
+                        | Type::Range { .. }
+                )
+            })
+        });
+        if unsupported {
+            return true;
+        }
+
+        // ShadowsCrossingLocal: nested or top-level redeclaration of the crossing name.
+        if outer_is_genuine_crossing_local(&f.body.stmts, crossing_name.as_str(), suspending_fns) {
+            if find_shadow_in_stmts(&f.body.stmts, crossing_name.as_str()) {
+                return true;
+            }
+            if has_top_level_let_after_suspension(
+                &f.body.stmts,
+                crossing_name.as_str(),
+                suspending_fns,
+            ) {
+                return true;
+            }
+        }
+    }
+
+    // MapEntryFieldAfterWait.
+    if find_map_entry_field_after_wait(&f.body.stmts, expr_types).is_some() {
+        return true;
+    }
+
+    // ArrayShapeRuntimeFieldWithWait.
+    if find_array_shape_runtime_field_crossing(&crossings, &f.body.stmts).is_some() {
+        return true;
+    }
+
+    // Parameter-shadow guard — mirrors `check_function`'s Check 3b EXACTLY (the probe
+    // must decline any host the real checker would later reject once it becomes SM).
+    //   Shape (a): a nested `let <param>` in ANY block body fires unconditionally — the
+    //     name-keyed frame slot is shared even when the inner binding does not itself
+    //     cross a suspension. This is the case the CPU join exposes: a promoted host has
+    //     no explicit top-level `wait`, so the suspension-gated shape (b) below would not
+    //     run, but the slot collision is real once the host is a state machine.
+    //   Shape (b): a top-level `let <param>` redeclaration, gated behind a top-level
+    //     suspension (matches `check_function` line ~1049).
+    for p in &f.params {
+        if param_has_nested_let_shadow(&f.body.stmts, p.name.as_str()) {
+            return true;
+        }
+    }
+    if first_top_level_suspension_idx(&f.body.stmts, suspending_fns).is_some() {
+        for p in &f.params {
+            if has_top_level_let_in_stmts(&f.body.stmts, p.name.as_str()) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// Free-function form of `Checker::resolve_type_for_guard` — resolves a crossing
+/// local's annotation type for the UnsupportedCrossingLocalType probe. Reuses the
+/// same union-alias map the checker uses; no other checker state is consulted.
+fn resolve_type_for_guard_free(
+    ast_ty: &ynz_ast::nodes::Type,
+    union_aliases: &HashMap<String, Type>,
+) -> Option<Type> {
+    use ynz_ast::nodes::Type as AstType;
+    match ast_ty {
+        AstType::Named(n, _) if union_aliases.contains_key(n) => Some(union_aliases[n].clone()),
+        AstType::Union { variants, .. } if variants.len() >= 2 => Some(Type::Union {
+            variants: vec![Type::Int; variants.len()],
+        }),
+        AstType::Maybe { .. } => Some(Type::Maybe {
+            inner: Box::new(Type::Int),
+        }),
+        AstType::Dynamic { contract, .. } => Some(Type::Dynamic {
+            contract: contract.clone(),
+        }),
+        _ => None,
+    }
 }
 
 fn collect_subexpr_violations_in_stmts(

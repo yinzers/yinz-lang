@@ -18,11 +18,15 @@
 // cross-module suspending calls legal — the reexport_chain test now verifies that
 // frame_layouts_query produces the correct composed total_size end-to-end.
 
-use std::{cell::Cell, collections::HashMap, path::PathBuf};
+use std::{
+    cell::Cell,
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 use ynz_codegen::emit::{build_frame_layouts_with_resolver, SuspendSet};
-use ynz_codegen::frame_layouts_query;
 use ynz_codegen::state_machine::{own_locals_size, FRAME_HEADER_SIZE};
+use ynz_codegen::{codegen_query, frame_layouts_query};
 use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::{check_query, module_signatures_query};
 
@@ -287,6 +291,175 @@ fn reexport_chain_b_total_size_includes_a_sub_frame() {
     assert_eq!(
         b_do_work_sentinel.total_size, 88,
         "Concrete anti-bypass check: sentinel run doWork total_size must be 88 (32+0+56)"
+    );
+}
+
+#[test]
+fn imported_suspending_after_pair_declines_consistently_across_boundaries() {
+    // WHY: the spike-host decision is made at TWO salsa query boundaries — `frame_layouts_query`
+    // (sizes the frame) and `codegen_query` (lays it out + emits). They MUST probe spike admission
+    // against the SAME suspend set, or they can disagree on whether a function is a host: one sizes
+    // the frame sequentially (with an imported callee's child sub-frame), the other lays it out as a
+    // spike host (omitting that sub-frame) → the heap block is under-allocated by exactly that
+    // sub-frame and the child-frame write corrupts past the allocation. The fix routes BOTH
+    // boundaries through the same EFFECTIVE suspend set (local ∪ imported-suspending).
+    //
+    // This is the IMPORTED variant of fixture (q) (which uses a LOCAL suspending callee — already
+    // in the bare set, so it never exercised the imported-only gap). For THIS shape the typeck
+    // guard-probe rollback already declines `entrypoint` (a CPU group plus a post-pair imported
+    // suspending call makes a guard fire when entrypoint becomes a state machine), so the promotion
+    // set is empty and no host is admitted at EITHER boundary regardless of which suspend set
+    // codegen reads — the bug is masked today. This test pins TWO things that must hold so the
+    // masking can never silently flip to corruption:
+    //   1. The function declines: entrypoint emits ZERO `call @ynz_rt_spawn_blocking_joinable`.
+    //   2. The two boundaries agree by construction: `spike_host_subset` returns the SAME host set
+    //      whether probed against the bare local set or the effective set, for this fixture's
+    //      promotion set. (If a future change relaxes the typeck guard so this shape promotes, a
+    //      bare-vs-effective divergence would re-introduce the under-allocation; this assertion is
+    //      the tripwire.)
+    // If you're tempted to relax the spawn-count assertion to "> 0 is fine because output is still
+    // correct" — the under-allocation is silent; correct output does NOT prove the heap was intact.
+    // Fix the suspend-set reconciliation in `codegen_query`, not this test.
+    let mut db = CompilerDb::default();
+    // Both files must be registered before the queries run so cross-file import resolution
+    // (entrypoint → io_lib) can find io_lib by its canonical path.
+    let fixture_dir = "v0_3_m3d_spike_s_imported_suspending_after_pair";
+    let _io_sf = register_fixture(&mut db, fixture_dir, "io_lib.ynz");
+    let entry_sf = register_fixture(&mut db, fixture_dir, "entrypoint.ynz");
+
+    // (1) The emitted entrypoint IR declines the spike.
+    let codegen_out = codegen_query(&db, entry_sf);
+    assert!(
+        !codegen_out.diagnostics.has_errors(),
+        "codegen_query(entrypoint) must succeed; diagnostics: {:?}",
+        codegen_out.diagnostics
+    );
+    let ir = &codegen_out.artifact.ir_text;
+    // A `call` instruction to the joinable spawn — the `declare` line is not a `call`, so
+    // filtering on `call ` excludes the forward declaration.
+    let spawn_calls = ir
+        .lines()
+        .filter(|l| l.contains("call") && l.contains("@ynz_rt_spawn_blocking_joinable"))
+        .count();
+    assert_eq!(
+        spawn_calls, 0,
+        "entrypoint declines the spike (imported suspending callee after the CPU pair) → 0 spawn \
+         calls. A non-zero count means a host was admitted where the frame was sized sequentially \
+         — the cross-boundary divergence (silent heap under-allocation). IR:\n{ir}"
+    );
+
+    // (2) The two boundaries agree by construction: same host set for the bare vs effective probe.
+    let check = check_query(&db, entry_sf);
+    let sig = module_signatures_query(&db, entry_sf);
+    let promotion = ynz_typeck::cpu_promotion_query(&db, entry_sf);
+    let effective = ynz_typeck::build_effective_suspend_set(&check.suspends_set, &sig.imported_fns);
+    let hosts_bare = ynz_codegen::emit::spike_host_subset(
+        &check.typed_module,
+        &check.suspends_set,
+        &promotion.promoted,
+    );
+    let hosts_effective =
+        ynz_codegen::emit::spike_host_subset(&check.typed_module, &effective, &promotion.promoted);
+    assert_eq!(
+        hosts_bare, hosts_effective,
+        "spike_host_subset must return the same hosts for the bare and effective suspend sets on \
+         this fixture (empty today). A difference is the exact bare-vs-effective admission \
+         divergence the fix removes; codegen_query must probe against the effective set."
+    );
+    assert!(
+        hosts_effective.is_empty(),
+        "entrypoint must NOT be a spike host (typeck guard-probe declines the CPU-group + post-pair \
+         imported-suspending shape); got hosts: {hosts_effective:?}"
+    );
+    // NOTE: on THIS fixture the promotion set is empty (typeck guard-probe declines
+    // entrypoint), so `spike_host_subset` short-circuits on `promoted.contains(&f.name)`
+    // and never reads the suspend-set argument — the bare-vs-effective comparison above is
+    // structurally indistinguishable and cannot, on its own, catch a caller reverted to the
+    // bare set. This test is the masked END-TO-END guard (it proves the real fixture
+    // compiles, declines, and the two boundaries agree as wired today). The NON-tautological
+    // probe of the divergence — bare set ADMITS, effective set DECLINES — lives in
+    // `spike_host_subset_bare_admits_effective_declines_on_imported_post_pair` below, which
+    // forces a NON-EMPTY promotion set so the suspend-set argument is actually read.
+}
+
+#[test]
+fn spike_host_subset_bare_admits_effective_declines_on_imported_post_pair() {
+    // WHY: `spike_host_subset` MUST be probed against the EFFECTIVE suspend set (local ∪
+    // imported-suspending) at BOTH query boundaries. If a caller is reverted to the bare
+    // local set, an imported-suspending callee after a CPU pair becomes invisible to
+    // `spike_cpu_candidates`'s post-pair decline gate → that boundary ADMITS the host while
+    // the effective-set boundary DECLINES it → frame_layouts sizes the frame sequentially
+    // (with the imported child sub-frame) while codegen lays it out as a spike host (without
+    // it) → the heap block is under-allocated by exactly the imported callee's frame size
+    // and the child-frame write corrupts past the allocation.
+    //
+    // The masked end-to-end fixture above can't catch this: typeck's guard-probe declines
+    // entrypoint there, so the promotion set is empty and `spike_host_subset` short-circuits
+    // before it ever reads the suspend-set argument — bare and effective are indistinguishable.
+    // This test forces a NON-EMPTY promotion set (`{"entrypoint"}`) so the gate actually runs,
+    // pinning the EXACT divergence the masking hides:
+    //   - bare set (imported name absent)   → post-pair gate does NOT fire → ADMITS {"entrypoint"}
+    //   - effective set (imported name present) → post-pair gate FIRES     → DECLINES {}
+    // Any future revert of a `spike_host_subset` caller to the bare set re-introduces the
+    // under-allocation and fails this test. Do NOT relax either assertion to make it pass —
+    // the divergence is the bug; fix the caller's suspend set, not this test.
+    let mut db = CompilerDb::default();
+    // Reuse the real divergence shape: entrypoint with an adjacent local int-returning CPU
+    // pair (fib(10)/fib(11)) FOLLOWED by a post-pair call to the imported suspending `ioWork`.
+    let fixture_dir = "v0_3_m3d_spike_s_imported_suspending_after_pair";
+    let _io_sf = register_fixture(&mut db, fixture_dir, "io_lib.ynz");
+    let entry_sf = register_fixture(&mut db, fixture_dir, "entrypoint.ynz");
+
+    let check = check_query(&db, entry_sf);
+    assert!(
+        !check.diagnostics.has_errors(),
+        "fixture must typecheck; diagnostics: {:?}",
+        check.diagnostics
+    );
+
+    // Force a NON-EMPTY promotion set so `spike_host_subset` actually probes entrypoint
+    // (bypassing the typeck guard-probe that empties it on this shape today). This isolates
+    // the bare-vs-effective gate behavior, which is what the cross-boundary fix protects.
+    let promoted: HashSet<String> = [String::from("entrypoint")].into_iter().collect();
+
+    // BARE local set: imported `ioWork` is ABSENT. The post-pair `wait ioWork()` is not seen
+    // as suspending → the decline gate does not fire → entrypoint is admitted as a host.
+    let bare: SuspendSet = check.suspends_set.clone();
+    let hosts_bare = ynz_codegen::emit::spike_host_subset(&check.typed_module, &bare, &promoted);
+    assert!(
+        hosts_bare.contains("entrypoint"),
+        "BARE set lacks the imported suspending name → post-pair gate does NOT fire → \
+         spike_host_subset must ADMIT entrypoint. This is the WRONG admission the effective \
+         set corrects; got hosts: {hosts_bare:?}"
+    );
+
+    // EFFECTIVE set: local ∪ imported-suspending → `ioWork` is PRESENT. The post-pair
+    // `wait ioWork()` is now seen as suspending → the decline gate fires → entrypoint declines.
+    let sig = module_signatures_query(&db, entry_sf);
+    let effective = ynz_typeck::build_effective_suspend_set(&check.suspends_set, &sig.imported_fns);
+    assert!(
+        effective.contains("ioWork"),
+        "effective set must include the imported suspending callee `ioWork`; got: {effective:?}"
+    );
+    let hosts_effective =
+        ynz_codegen::emit::spike_host_subset(&check.typed_module, &effective, &promoted);
+    assert!(
+        hosts_effective.is_empty(),
+        "EFFECTIVE set has the imported suspending name → post-pair gate FIRES → \
+         spike_host_subset must DECLINE entrypoint (return empty). A non-empty result means a \
+         host was admitted where frame_layouts sized the frame sequentially — the silent heap \
+         under-allocation; got hosts: {hosts_effective:?}"
+    );
+
+    // The divergence is REAL: the two sets produce DIFFERENT admission decisions. The masked
+    // end-to-end test asserts equality (because its promotion set is empty); this test asserts
+    // they differ once the gate is actually exercised — that difference IS the bug surface the
+    // cross-boundary fix neutralizes by forcing both callers onto the effective set.
+    assert_ne!(
+        hosts_bare, hosts_effective,
+        "the bare and effective probes MUST disagree on this shape (bare admits, effective \
+         declines) — if they agree, the post-pair gate is no longer reading the suspend set and \
+         this test has stopped guarding the cross-boundary divergence"
     );
 }
 

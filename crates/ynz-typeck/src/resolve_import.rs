@@ -459,6 +459,12 @@ fn load_export_table(
     // non-suspending regardless of its body.
     for (name, sig) in export_table.functions.iter_mut() {
         sig.suspends = check_out.suspends_set.contains(name.as_str());
+        // Same correction for the worth-it proxy: the pre-analysis sig_table always
+        // has does_real_work=false (the fixpoint runs later in check_query), so set
+        // it from the authoritative result. Without this, an imported loop/recursion
+        // callee would appear trivial and the importer would never parallelize calls
+        // to it (v0.3-M3d cross-module worth-it propagation).
+        sig.does_real_work = check_out.does_real_work_set.contains(name.as_str());
     }
     export_table
 }

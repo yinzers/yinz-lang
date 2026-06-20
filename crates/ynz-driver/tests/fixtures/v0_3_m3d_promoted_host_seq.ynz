@@ -1,0 +1,36 @@
+// `combine` makes two independent `score(...)` calls; they run at the same time,
+// and `combine` returns their sum once both finish. `entrypoint` calls `combine` once, in
+// plain sequence — it has only the one call, so there is nothing alongside it to run.
+//
+// Both print the same line whether or not the two `score` calls run at the same time.
+//
+// score(seed) loops, so it does enough work to be worth running alongside the other call,
+// and returns the loop sum plus its seed, giving each call a distinct result.
+//
+// Arithmetic: loopSum = 0+1+...+99 = 4950.
+//   score(3) = 4950 + 3 = 4953
+//   score(4) = 4950 + 4 = 4954
+//   combine  = 4953 + 4954 = 9907
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   9907
+function score(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function combine() -> int {
+  let lo = score(3)
+  let hi = score(4)
+  return lo + hi
+}
+
+function entrypoint() -> nothing {
+  let result = combine()
+  print(result)
+}

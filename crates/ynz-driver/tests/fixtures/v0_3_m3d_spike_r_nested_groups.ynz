@@ -1,0 +1,37 @@
+// a group whose two members are themselves functions that each run an
+// independent pair. `entrypoint` calls `work(5)` and `work(6)` next to each other, so those
+// two run at the same time. `work` itself calls `fib(n)` and `fib(n+1)`; those two run one
+// after the other inside `work` (a function that is itself running alongside another runs its
+// own work in plain sequence). The output is identical whether or not the outer pair runs at
+// the same time.
+//
+// Arithmetic: fib(5)=5, fib(6)=8, fib(7)=13.
+//   work(5) = fib(5) + fib(6) = 5 + 8  = 13
+//   work(6) = fib(6) + fib(7) = 8 + 13 = 21
+//   total   = 13 + 21 = 34
+//
+// Expected output (both modes — default and YNZ_NO_AUTO_PARALLEL=1):
+//   13
+//   21
+//   34
+function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+
+function work(n: int) -> int {
+  let lo = fib(n)
+  let hi = fib(n + 1)
+  return lo + hi
+}
+
+function entrypoint() -> nothing {
+  let work5 = work(5)
+  let work6 = work(6)
+  let total = work5 + work6
+  print(work5)
+  print(work6)
+  print(total)
+}

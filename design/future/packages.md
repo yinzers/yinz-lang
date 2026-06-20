@@ -22,9 +22,9 @@ Per exported function/type/value:
 
 | Metadata field | Purpose | Used by |
 |----------------|---------|---------|
-| **May-block flag** | Does this function (or anything it transitively calls) suspend on I/O or call a may-block FFI? | Concurrency analysis (`design/future/concurrency.md`) — consumers do whole-program wait-insertion across package boundaries |
+| **May-block flag** | Does this function (or anything it transitively calls) suspend on I/O or call a may-block FFI? | Concurrency analysis (`design/no-function-coloring.md`) — consumers do whole-program wait-insertion across package boundaries |
 | **Ownership signature** | Param-by-param: is it `share`, `lend`, or `give`? Return type ownership. | Ownership analysis at call sites in consumer code. IDE muted-hint generation. |
-| **Kernel-mode compatibility flags** | Does this require heap? Scheduler? Default panic handler? OS file I/O? | `--kernel` mode (`design/future/no-runtime-mode.md`) — consumers in kernel mode must reject uses of incompatible package items at compile time |
+| **Kernel-mode compatibility flags** | Does this require heap? Scheduler? Default panic handler? OS file I/O? | `--kernel` mode (`design/no-runtime-mode.md`) — consumers in kernel mode must reject uses of incompatible package items at compile time |
 | **Allocator requirements** | Does this use the default allocator implicitly, or accept one via `.in(...)`? | Allocator-aware code generation. Arena-allocator integration. |
 | **LLVM attribute hints** | Was this function's params declared `share` (gets `readonly` LLVM attribute)? Const-binding contexts? | LLVM codegen in consumer — preserve aliasing optimizations across package boundaries |
 | **Self-referential markers** | Which shapes have self-references? Which fields are internal references? | Self-references analysis (`design/future/self-references.md`) — consumer code can safely move/copy these shapes |
@@ -94,8 +94,8 @@ The v0.2 milestone plan must include these. The format-design decision itself ca
 ## Cross-references
 
 - [`design/packages.md`](../packages.md) (source-level package model — `ynz add`, `ynz_modules`, etc.)
-- [`design/future/concurrency.md`](concurrency.md) (consumer of may-block metadata for cross-package analysis)
-- [`design/future/no-runtime-mode.md`](no-runtime-mode.md) (consumer of kernel-mode compatibility flags)
+- [`design/no-function-coloring.md`](../no-function-coloring.md) (consumer of may-block metadata for cross-package analysis)
+- [`design/no-runtime-mode.md`](../no-runtime-mode.md) (consumer of kernel-mode compatibility flags)
 - [`design/future/self-references.md`](self-references.md) (consumer of self-referential markers)
 - [`design/ownership.md`](../ownership.md) (consumer of ownership signatures for cross-package call-site analysis)
-- [`.claude/plans/active/v0-1-compiler.md`](../../.claude/plans/active/v0-1-compiler.md) "Forward-Compatibility Constraints" (Phase 5 locks the v0.1 obligation)
+- [`.claude/plans/done/v0-1-compiler.md`](../../.claude/plans/done/v0-1-compiler.md) "Forward-Compatibility Constraints" (Phase 5 locks the v0.1 obligation)

@@ -1,0 +1,27 @@
+// Spike fixture (d): saturation — blocking pool drives two heavy CPU joins.
+//
+// At the Yinz-source level, the spike can express exactly one CPU group per entrypoint
+// call (the spike's hardwired 2-member lowering). This fixture exercises that 2-join path
+// through the real compiler and blocking pool (fib(30)=832040, fib(31)=1346269).
+//
+// The ≥600-join pool-saturation proof (Step 3(d)) is covered at the runtime level by the
+// `saturation_600_joins` test in crates/ynz-runtime/src/lib.rs, which spawns 640 concurrent
+// ynz_rt_spawn_blocking_joinable handles through the real Tokio blocking pool without
+// deadlock — the Yinz-source layer cannot express 600 joins in one program with this spike.
+//
+// Expected output:
+//   832040
+//   1346269
+function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+
+function entrypoint() -> nothing {
+  let a = fib(30)
+  let b = fib(31)
+  print(a)
+  print(b)
+}

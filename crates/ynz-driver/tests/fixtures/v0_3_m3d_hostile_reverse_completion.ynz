@@ -1,0 +1,40 @@
+// v0.3-M3d hostile fixture — finishing out of order. A HEAVY call and a LIGHT call run at the
+// same time; the heavy one finishes long after the light one, so the two finish in the opposite
+// order from how they were written. Each result must stay attached to the right call no matter
+// which one finished first. Both prints are order-independent and match in both modes.
+//
+// Both functions loop, so each is worth running alongside the other; `heavy` simply loops far
+// more times than `light`.
+//
+// Arithmetic: heavy(5000) = sum(0..5000) = 12497500; light(3) = sum(0..3) = 3.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   12497500
+//   3
+
+function light(n: int) -> int {
+  let t = 0
+  let i = 0
+  while (i < n) {
+    t = t + i
+    i = i + 1
+  }
+  return t
+}
+
+function heavy(n: int) -> int {
+  let t = 0
+  let i = 0
+  while (i < n) {
+    t = t + i
+    i = i + 1
+  }
+  return t
+}
+
+function entrypoint() -> nothing {
+  let a = heavy(5000)
+  let b = light(3)
+  print(a)
+  print(b)
+}

@@ -1,0 +1,25 @@
+// v0.3-M3d same-callee distinctness: two calls to the SAME function with DIFFERENT inputs,
+// run at the same time, each returning an `int` that can fail (`int errors`). `a` is
+// compute(4) (6) and `b` is compute(5) (10) — the two results stay separate, so `.or(-1)`
+// prints the distinct totals. Both functions succeed here, so the error fallback is never
+// used. Both print the same lines whether or not the two calls run at the same time.
+//
+// This fixture exercises the success path of an `int errors` callee. The failing path is not
+// expressible: Yinz has no error-raising syntax, so a `compute` call cannot fail here.
+
+function compute(n: int) -> int errors {
+  let total: int = 0
+  let i: int = 0
+  while (i < n) {
+    total = total + i
+    i = i + 1
+  }
+  return total
+}
+
+function entrypoint() -> nothing {
+  let a = compute(4)
+  let b = compute(5)
+  print(a.or(-1))
+  print(b.or(-1))
+}

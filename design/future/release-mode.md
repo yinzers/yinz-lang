@@ -36,7 +36,7 @@ The default Yinz compile path (`ynz build`, no flag) optimizes for **fast feedba
 Triggers to implement:
 - v0.4 perf work begins (probably the dedicated optimization-pass milestone)
 - A real user runs Yinz in production and hits perf or binary-size friction
-- Combined with a `--kernel` build (per `no-runtime-mode.md`), since kernel-mode usually wants the same optimization treatment
+- Combined with a `--kernel` build (per `design/no-runtime-mode.md`), since kernel-mode usually wants the same optimization treatment
 
 ---
 
@@ -76,6 +76,6 @@ This means `--reveal-sensitive` and any future dev-only flags need a correspondi
 ## Cross-references
 
 - `design/mvp-scope.md` — v0.4+ deferred features section (this entry)
-- `design/future/no-runtime-mode.md` — `--kernel` flag (often combined with `--release`)
+- `design/no-runtime-mode.md` — `--kernel` flag (often combined with `--release`)
 - `design/open-questions.md` "CLI flags planned" — release/kernel/emit-ir entries
 - `spec/sensitive.md` — `--reveal-sensitive` flag (stripped from release per this design)

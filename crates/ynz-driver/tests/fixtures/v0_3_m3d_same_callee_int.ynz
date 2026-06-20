@@ -1,0 +1,21 @@
+// v0.3-M3d same-callee distinctness: two calls to the SAME function with DIFFERENT inputs,
+// run at the same time. Each call's result is kept separate — `a` is sumTo(5) and `b` is
+// sumTo(6), never mixed up — so the two prints differ (10 then 15). Both print the same lines
+// whether or not the two calls run at the same time.
+
+function sumTo(n: int) -> int {
+  let total: int = 0
+  let i: int = 0
+  while (i < n) {
+    total = total + i
+    i = i + 1
+  }
+  return total
+}
+
+function entrypoint() -> nothing {
+  let a = sumTo(5)
+  let b = sumTo(6)
+  print(a)
+  print(b)
+}

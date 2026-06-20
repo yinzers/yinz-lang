@@ -1,0 +1,20 @@
+// v0.3-M3d worth-it proxy (negative): both functions are tiny — straight-line arithmetic with
+// no loop and no self-call, so each finishes almost instantly. The compiler runs them inline,
+// one after the other, because splitting two near-instant computations to run at the same time
+// would cost more to coordinate than it saves. The output is identical to running them at the
+// same time — only the print values matter, never the order they were computed in.
+
+function double(n: int) -> int {
+  return n + n
+}
+
+function triple(n: int) -> int {
+  return n + n + n
+}
+
+function entrypoint() -> nothing {
+  let a = double(20)
+  let b = triple(21)
+  print(a)
+  print(b)
+}

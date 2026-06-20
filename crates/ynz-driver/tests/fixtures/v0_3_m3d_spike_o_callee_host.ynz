@@ -1,0 +1,32 @@
+// Spike entrypoint-only gate fixture (o): the CPU pair lives in a non-entrypoint function.
+//
+// `runner` is a zero-param function with an adjacent pair of fib calls — it would be
+// admitted by the arity/adjacency/arg gates but must be DECLINED because the entrypoint-only
+// gate fires first. Declining falls through to sequential lowering, which produces the
+// correct output via the normal non-SM path.
+//
+// This fixture proves that the entrypoint-only gate prevents frame-layout corruption
+// from a caller that allocates a 32-byte frame (the pre-spike-promotion size) while the
+// resume function would write bytes 48-95 if spike were admitted for `runner`.
+//
+// Expected output (both modes):
+//   55
+//   89
+function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+
+function runner() -> nothing {
+  let a = fib(10)
+  let b = fib(11)
+  wait sleep(0)
+  print(a)
+  print(b)
+}
+
+function entrypoint() -> nothing {
+  wait runner()
+}

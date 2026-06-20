@@ -1,0 +1,38 @@
+// three independent computations sit next to each other, so all three run at the
+// same time as one group. Each calls the same function with a different seed, so each result
+// is distinct. The three results are added after all three finish. Whether or not they run at
+// the same time, the output is identical.
+//
+// score(seed) loops, so each call does enough work to be worth running alongside the others,
+// and returns the loop sum plus its seed for a distinct result.
+//
+// Arithmetic: loopSum = 0+1+...+99 = 4950.
+//   score(2)  = 4952
+//   score(7)  = 4957
+//   score(11) = 4961
+//   total     = 4952 + 4957 + 4961 = 14870
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   4952
+//   4957
+//   4961
+//   14870
+function score(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function entrypoint() -> nothing {
+  let a = score(2)
+  let b = score(7)
+  let c = score(11)
+  print(a)
+  print(b)
+  print(c)
+  print(a + b + c)
+}

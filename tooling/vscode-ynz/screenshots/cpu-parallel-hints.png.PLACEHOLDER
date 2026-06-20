@@ -1,0 +1,11 @@
+This screenshot shows the parallel_groups muted-hint domain in action.
+
+Expected content:
+  A Yinz source file with a function containing 3 independent crunchStat() calls.
+  Each call shows a muted grey comment after it:
+    let hits = crunchStat(game.hits)      // runs at the same time as line 4, line 5 — separate core
+    let rbi  = crunchStat(game.rbi)       // runs at the same time as line 3, line 5 — separate core
+    let avg  = crunchStat(game.average)   // runs at the same time as line 3, line 4 — separate core
+
+Replace this placeholder with a real VSCode screenshot before the v0.3.0 release.
+The VSCode extension must be running (ynz-lsp active) to capture the hints live.

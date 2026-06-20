@@ -1,0 +1,38 @@
+// v0.3-M3d hostile fixture — one compute call and one waiting call placed next to each other,
+// where the compute call would finish before the waiting call is done. Running a compute call at
+// the same time as a waiting call is OUT of scope for M3d (it belongs to a later milestone — see
+// the Scope Boundary in the plan), so the two calls run one after the other in plain sequence.
+// This is the hardest finish ordering (the compute call finishing first), and it still runs in
+// plain sequence. Both modes (default and --no-auto-parallel) print the same line.
+//
+// crunch(seed) loops, so it does real work, then returns the loop sum plus its seed. fetch(seed)
+// waits on a timer (no real compute) and returns seed + 1.
+//
+// Arithmetic: loopSum = 0+1+...+99 = 4950.
+//   crunch(3) = 4950 + 3 = 4953
+//   fetch(4)  = 4 + 1    = 5
+//   sum       = 4953 + 5 = 4958
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   4958
+
+function crunch(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function fetch(seed: int) -> int {
+  wait sleep(0)
+  return seed + 1
+}
+
+function entrypoint() -> nothing {
+  let a = crunch(3)
+  let b = fetch(4)
+  print(a + b)
+}

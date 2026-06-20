@@ -1,0 +1,46 @@
+// v0.3-M3d danger matrix — two calls to the SAME number-returning function with DIFFERENT
+// inputs, run at the same time inside a `match` branch. Each call's result is kept separate, so
+// the two differ (6.0, 9.0) — if they were mixed up the output would change. Both results are
+// used INSIDE the branch (a result used after the branch ends would run the two calls one after
+// the other — see the `..._read_after_arm_declines` companion). Both print the same lines
+// whether or not the two calls run at the same time.
+//
+// addUp(n) loops adding 1.5 each pass, so it is worth running alongside the other call.
+//
+// Arithmetic: addUp(4) = 6.0; addUp(6) = 9.0.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   6.0
+//   9.0
+
+function addUp(n: int) -> number {
+  let total: number = 0.0
+  let i: int = 0
+  while (i < n) {
+    total = total + 1.5
+    i = i + 1
+  }
+  return total
+}
+
+function combine() -> number {
+  let pick = 1
+  let result: number = 0.0
+  if (pick) {
+    1 => {
+      let lo = addUp(4)
+      let hi = addUp(6)
+      print(lo)
+      result = hi
+    }
+    else => {
+      result = 0.0
+    }
+  }
+  return result
+}
+
+function entrypoint() -> nothing {
+  let r = combine()
+  print(r)
+}

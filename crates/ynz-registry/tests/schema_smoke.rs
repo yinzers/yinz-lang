@@ -263,7 +263,7 @@ fn deferred_tooling_feature_lookup() {
         .find(|e| e.name == "--kernel")
         .expect("--kernel deferred_tooling_feature not found (Phase 5b migration)");
     assert_eq!(entry.ships_in, "v0.3");
-    assert_eq!(entry.design_doc, "design/future/no-runtime-mode.md");
+    assert_eq!(entry.design_doc, "design/no-runtime-mode.md");
 }
 
 #[test]

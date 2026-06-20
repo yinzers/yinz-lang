@@ -184,9 +184,9 @@ The inference model: the compiler analyzes the full call graph of each compilati
 
 #### Improvements
 
-- **Composed frames = one allocation per task tree** — the whole SM call tree (entrypoint → middle → inner → sleepAsync) is ONE composed struct and ONE `ynz_alloc`, not one allocation per call. Matches `design/future/concurrency.md`'s "low memory, fast spawn — like Rust's async."
+- **Composed frames = one allocation per task tree** — the whole SM call tree (entrypoint → middle → inner → sleepAsync) is ONE composed struct and ONE `ynz_alloc`, not one allocation per call. Matches `design/no-function-coloring.md`'s "low memory, fast spawn — like Rust's async."
 - **Errors cascade correctly** — errors produced after a `wait` suspension are propagated through the SM return slot to callers. The error frame pointer (`{i64,i64}` ABI field0) survives the `Poll<T>` boundary.
-- **No OS bridge** — the `ynz_rt_call_state_machine_sync` sync bridge shipped in earlier drafts was fully removed (Phase 8). Every suspending call uses inline poll-and-yield. Only `RUNTIME.block_on(entrypoint)` at program entry is the top-level driver. This matches `design/future/concurrency.md`'s no-bridge model.
+- **No OS bridge** — the `ynz_rt_call_state_machine_sync` sync bridge shipped in earlier drafts was fully removed (Phase 8). Every suspending call uses inline poll-and-yield. Only `RUNTIME.block_on(entrypoint)` at program entry is the top-level driver. This matches `design/no-function-coloring.md`'s no-bridge model.
 - **Concurrency proof** — 8 background tasks each calling `wait sleepAsync(100)` complete in ~100ms total (not 800ms), proving they share OS threads via state-machine suspension.
 
 #### New diagnostics (WHAT/WHAT-INSTEAD/WHY format)

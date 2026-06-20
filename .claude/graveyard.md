@@ -69,7 +69,7 @@ may-block
 no.*coloring
 ```
 
-**Cause**: The v0.3-M2 plan shipped a `block_on` sync bridge as its "no-coloring delivery mechanism." `design/future/concurrency.md` ("Concurrency — No Function Coloring") documents the actual model: whole-program TRANSITIVE may-block analysis up the call graph + auto-inserted `wait` at every suspension point + stackless state machines; FFI declares `may-block` (the only "can't infer → user" case). **There is no bridge in the design.** The bridge was invented to fill the gap created by cutting the M2/M3 milestone boundary at the wrong line (state machines in M2, may-block analysis deferred to M3 — but a correct state-machine layer REQUIRES the analysis). It both crashed at runtime (the HALT) and contradicted the documented design. Three rounds of adversarial plan-review + a P0 spike gate + five per-phase 4-agent review gates all PASSED it — because every review checked the plan against ITSELF (internal consistency, AC evidence, rule violations), never against the design doc it was violating.
+**Cause**: The v0.3-M2 plan shipped a `block_on` sync bridge as its "no-coloring delivery mechanism." `design/no-function-coloring.md` ("Concurrency — No Function Coloring") documents the actual model: whole-program TRANSITIVE may-block analysis up the call graph + auto-inserted `wait` at every suspension point + stackless state machines; FFI declares `may-block` (the only "can't infer → user" case). **There is no bridge in the design.** The bridge was invented to fill the gap created by cutting the M2/M3 milestone boundary at the wrong line (state machines in M2, may-block analysis deferred to M3 — but a correct state-machine layer REQUIRES the analysis). It both crashed at runtime (the HALT) and contradicted the documented design. Three rounds of adversarial plan-review + a P0 spike gate + five per-phase 4-agent review gates all PASSED it — because every review checked the plan against ITSELF (internal consistency, AC evidence, rule violations), never against the design doc it was violating.
 
 **Detection signature**: (1) An execution plan file lacks a `## Design-Doc Alignment` section. OR (2) A plan defers a capability to a later milestone (`defer ... to M3`, `... is M3`, "deferred to v0.x") where that capability is named load-bearing for the CURRENT milestone in a `/design/` doc. OR (3) A plan introduces a runtime mechanism (`block_on`, sync bridge, thread-hold) for a behavior a `/design/` doc says is resolved at COMPILE time (inference / whole-program analysis).
 
@@ -78,11 +78,11 @@ no.*coloring
 **Bouncer checks** (each runnable as shell against a diff):
 - [ ] For each added/modified `.claude/plans/{active,paused}/*.md` that is an execution plan (front-matter `type: execution` or absent): grep the body for `^## Design-Doc Alignment$`. Missing → WARNING.
 - [ ] If a plan body contains a deferral phrase (`defer.*to (M|v0\.)[0-9]`, `is (M[0-9]|v0\.[0-9])`, `deferred to`) for a capability, the `## Design-Doc Alignment` section MUST acknowledge whether that deferral is documented in the roadmap/mvp-scope or invented by the plan. Deferral phrase present + no Design-Doc Alignment acknowledgment → WARNING.
-- [ ] If a plan introduces `block_on` / "sync bridge" / "hold the thread" / "blocking pool" language for a behavior, and `design/future/concurrency.md` (or any cited design doc) describes that behavior as compile-time-inferred → judgment BLOCK, cite "design doc says inferred-at-compile-time; plan introduces a runtime block".
+- [ ] If a plan introduces `block_on` / "sync bridge" / "hold the thread" / "blocking pool" language for a behavior, and `design/no-function-coloring.md` (or any cited design doc) describes that behavior as compile-time-inferred → judgment BLOCK, cite "design doc says inferred-at-compile-time; plan introduces a runtime block".
 
 **Severity**: critical (a plan that contradicts the governing design ships the WRONG language; this one cost a halted milestone + a full re-plan).
 
-**Originating incident**: 2026-05-31 — during the v0.3-M2 re-spike + re-plan, Patrick asked "if `wait` is inferred at compile time, why is anything slower at runtime?" and "did we have this documented?" Reading `design/future/concurrency.md` (which the `/plan` research step had skipped — only the codebase was mapped) revealed the doc had the correct transitive-inference / no-bridge model all along. The bridge was a plan invention contradicting it. See `.claude/plans/active/v0-3-m2-wait-and-state-machines.md` Findings Log "🔴 VERIFIED ROOT CAUSE."
+**Originating incident**: 2026-05-31 — during the v0.3-M2 re-spike + re-plan, Patrick asked "if `wait` is inferred at compile time, why is anything slower at runtime?" and "did we have this documented?" Reading `design/no-function-coloring.md` (which the `/plan` research step had skipped — only the codebase was mapped) revealed the doc had the correct transitive-inference / no-bridge model all along. The bridge was a plan invention contradicting it. See `.claude/plans/active/v0-3-m2-wait-and-state-machines.md` Findings Log "🔴 VERIFIED ROOT CAUSE."
 
 ---
 
@@ -178,11 +178,11 @@ crates/
 ```
 
 
-**Cause**: The `--kernel` mode design (see `design/future/no-runtime-mode.md`) for chipset/NASA/embedded targets requires every Yinz language and stdlib feature to declare its runtime dependencies (heap allocator? scheduler? OS I/O? none?) and kernel-mode behavior (compile error? works with user-provided primitive? always works?). Without enforcement, features ship with hidden heap dependencies and the v0.3 kernel-mode work hits a wall trying to retroactively analyze every feature.
+**Cause**: The `--kernel` mode design (see `design/no-runtime-mode.md`) for chipset/NASA/embedded targets requires every Yinz language and stdlib feature to declare its runtime dependencies (heap allocator? scheduler? OS I/O? none?) and kernel-mode behavior (compile error? works with user-provided primitive? always works?). Without enforcement, features ship with hidden heap dependencies and the v0.3 kernel-mode work hits a wall trying to retroactively analyze every feature.
 
 **Detection signature**: A plan file dated 2026-05-15+ with `files:` matching `crates/**` (i.e., adds compiler or stdlib features) does NOT contain `### Runtime Dependencies` AND `### Kernel-Mode Behavior` subsections within its Invariants section. These are required parts of the 5-subsection structure but called out separately because they're the KERNEL-specific check.
 
-**Constraint**: Any plan adding language or stdlib features must declare runtime dependencies and kernel-mode behavior in the `### Runtime Dependencies` and `### Kernel-Mode Behavior` subsections of `## Invariants This Milestone Must Preserve`. Each lists per-feature: what the feature depends on at runtime, and what happens in `--kernel` mode (compile error with which message? plug-in API? always works?). See `.claude/rules/plan-invariants.md` and `design/future/no-runtime-mode.md`.
+**Constraint**: Any plan adding language or stdlib features must declare runtime dependencies and kernel-mode behavior in the `### Runtime Dependencies` and `### Kernel-Mode Behavior` subsections of `## Invariants This Milestone Must Preserve`. Each lists per-feature: what the feature depends on at runtime, and what happens in `--kernel` mode (compile error with which message? plug-in API? always works?). See `.claude/rules/plan-invariants.md` and `design/no-runtime-mode.md`.
 
 **Bouncer checks**:
 - [ ] For each plan-file diff dated 2026-05-15+ with `files:` containing `crates/`: grep file body for `^### Runtime Dependencies$` AND `^### Kernel-Mode Behavior$`. Missing either → WARNING.
@@ -487,3 +487,39 @@ FRAME_HEADER_SIZE
 **Severity**: critical — silent under-sizing of an embedded sub-frame → SIGILL/memory corruption, and the test goes green because the resolved value coincides with the fallback. Worst failure class (no crash in the happy-path fixture; detonates only on a callee with a non-trivial frame).
 
 **Originating incident**: 2026-06-06, v0.3-M3e Phase 1. `build_frame_layouts_with_resolver`'s `compute_frame_size` loop cached the `FRAME_HEADER_SIZE` fallback for imported callees before the `or_insert_with(resolver)` seed ran → the cross-module resolver was dead code. The recursion unit test passed at `doWork.total_size==64` only because the leaf callee's real frame happened to equal the 32-byte fallback. code-reviewer's adversarial probe (vary the resolver return → output invariant; `Cell` counter → resolver never fired) caught it; acceptance-verifier's claim-trusting PASS missed it. Fixed: resolver-seed moved before `compute_frame_size`; test rewritten with a >32 callee frame + anti-bypass sentinel (`resolver→56 → 88`). See `.claude/plans/active/v0-3-m3e-cross-module-frame-serialization.md` Phase 1 Findings Log (round-2/round-3).
+
+## Silent Envelope Narrowing — Gated-Path Decline Widens While Output Tests Stay Green — 2026-06-12
+
+**Scope**: any conditional/gated codegen or optimization path with a correct sequential/fallback lowering — currently the M3d spike admission gates in `crates/ynz-codegen/src/emit.rs` (`spike_cpu_candidates`, `spike_cpu_group_result_names`, `spike_extract_cpu_group`) and any future auto-parallelization/auto-promotion admission predicate (M3d P1+ productionized passes, `prefer-fixed` promotion, auto-SoA). Sibling of the 2026-06-06 "Test Green on Fallback Coincidence" corpse — same disease family (correct fallback masks a dead feature), different mechanism (admission predicate widened a decline vs. injected resolver bypassed by memo ordering).
+**Exemption**:
+- A decline condition added together with evidence that every fixture/test claiming to exercise the gated path still ADMITS post-change (e.g. an IR-grep assertion for the runtime call, a fire-counter, a snapshot containing the gated instruction) — that is the correct shape of a gate fix.
+- An intentional envelope narrowing that updates the plan/design's declared FIRE/DECLINE table in the same diff AND corrects every fixture header/test name that claimed gated-path coverage — honest narrowing is allowed; silent narrowing is not.
+- Decline conditions in throwaway code explicitly scoped as decline-only fixtures (fixture headers that already say "DECLINE fixture").
+**Last verified**: 2026-06-12
+**Category**: regex+judgment
+
+**Pre-filter patterns**:
+```
+spike_cpu_candidates
+spike_extract_cpu_group
+spike_cpu_group_result_names
+stmt_contains_wait
+stmt_contains_suspending_call
+return None
+ynz_rt_spawn_blocking_joinable
+YNZ_M3D_SPIKE
+```
+
+**Cause**: a fix round added a decline predicate (`stmt_contains_wait` on post-pair statements) that was WIDER than the bug class it targeted (`wait sleep(0)` intrinsic waits embed no child sub-frame, posing zero aliasing risk, yet matched the predicate) — and because the decline path lowers to always-correct sequential code, every byte-identical output test stayed green while 11 of 17 fixtures silently stopped exercising the feature.
+**Detection signature**: (1) CODE — a diff adds or widens a decline/early-return condition inside an admission-gate function (predicate functions feeding `return None`/`return false` in `spike_*`/`*_candidates`/`*_extract_*` or any future admission pass) with NO accompanying fire-assertion change. (2) TEST/FIXTURE — fixtures or tests whose headers/names claim gated-path behavior ("proves the spike…", "reload across suspension…") with verification that only compares outputs between modes — byte-identical is trivially true when both modes take the fallback. (3) PLAN — a phase shipping a gated path with no declared FIRE/DECLINE envelope table, so reviewers have no contract to diff admission changes against.
+
+**Constraint**: any diff touching an admission-gate predicate MUST come with mechanism-fired evidence for every input that is supposed to stay admitted (IR grep for the gated runtime call ≥1, fire-counter, or gated-instruction snapshot), and any plan introducing a gated path MUST declare its admission envelope (which input shapes FIRE, which DECLINE) as a plan-time table — a fix that flips an input from FIRE to DECLINE is then a visible contract violation instead of a 7th-round forensic discovery. Output equality between gated and fallback modes is necessary but NEVER sufficient.
+
+**Bouncer checks** (each runnable as shell against a diff):
+- [ ] Diff adds/edits a condition in an admission-gate function (`grep -E "spike_(cpu_candidates|extract_cpu_group|cpu_group_result_names)|fn .*_candidates|fn .*admission"` on changed hunks) AND introduces/widens a `return None`/decline branch: verify the same diff (or its cited evidence) shows a FIRES check for the still-admitted inputs — e.g. `grep -c "call.*ynz_rt_spawn_blocking_joinable" <fixture>.ll` ≥ 1 per admitted fixture. Decline-widening with output-only evidence → BLOCK.
+- [ ] Diff touches fixture files whose header comments claim gated-path coverage (`grep -E "proves|exercises|reload|spike SM" crates/ynz-driver/tests/fixtures/v0_3_m3d_*.ynz`): verify each claimed-FIRE fixture is in the FIRES set post-diff, not silently moved to DECLINE. Header claims FIRE but IR shows 0 gated calls → BLOCK (lying fixture).
+- [ ] Plan diff adds a phase introducing a gated/conditional codegen path: verify the phase declares a FIRE/DECLINE envelope table (which input shapes admit vs decline). Missing → plan-reviewer BLOCK at plan time.
+
+**Severity**: critical — the feature under test silently stops existing while its entire test suite stays green; downstream phases inherit "proven" machinery with zero live coverage. Cost when it fired: rounds 6–8 of an 8-round gate saga (one full extra fix round + re-gate) to discover and undo a narrowing that a plan-time envelope table would have flagged instantly.
+
+**Originating incident**: 2026-06-12, v0.3-M3d Phase 0 round 7. The ISSUE-B fix declined post-pair statements on `stmt_contains_wait || stmt_contains_suspending_call`; the `stmt_contains_wait` clause also caught intrinsic `wait sleep(0)`, flipping fixtures (g)/(h)/(i)/(j)/(n) from FIRE to DECLINE — IR-verified zero `ynz_rt_spawn_blocking_joinable` call sites — making the cross-suspension reload machinery (built and debugged across 5 prior fix rounds, deviations #9/#14) dead code while all 17 fixtures stayed byte-identical green. Caught only because the coordinator primed all four round-7 gate agents on the "does the spike still FIRE, not just match output" question; deviation-judge #15 traced it at IR level and named the one-clause fix (keep only `stmt_contains_suspending_call`, which already excludes sleep via `M2_MAY_BLOCK_INTRINSICS`). Fixed in round 8; FIRES restored 0→2 spawn calls per fixture. See `.claude/plans/active/v0-3-m3d-cpu-parallelization.md` Phase 0 Findings Log (R7/R8 entries) — committed dcc1432.

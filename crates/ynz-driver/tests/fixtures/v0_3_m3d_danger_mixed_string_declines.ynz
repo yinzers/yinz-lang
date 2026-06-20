@@ -1,0 +1,34 @@
+// v0.3-M3d danger matrix — one call that builds a string and one call that waits on a timer,
+// placed next to each other. Running a compute call at the same time as a waiting call is OUT of
+// scope for M3d (it belongs to a later milestone — see the Scope Boundary in the plan), so the
+// two calls run one after the other in plain sequence. Both modes (default and
+// --no-auto-parallel) print the same lines.
+//
+// build(n) loops, so it does real work, then returns a string. fetch(n) waits on a timer (no
+// real compute) and returns a fixed string.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   built=3
+//   waited
+
+function build(n: int) -> string {
+  let count: int = 0
+  let i: int = 0
+  while (i < n) {
+    count = count + 1
+    i = i + 1
+  }
+  return `built=${count}`
+}
+
+function fetch(n: int) -> string {
+  wait sleep(0)
+  return `waited`
+}
+
+function entrypoint() -> nothing {
+  let a = build(3)
+  let b = fetch(4)
+  print(a)
+  print(b)
+}

@@ -1,0 +1,32 @@
+// Spike regression fixture (p): wait-bearing pre-pair statement declines the group.
+//
+// A `wait sleep(0)` statement precedes the CPU pair (fib(10), fib(11)). The static
+// admission gates (spike_cpu_candidates, spike_extract_cpu_group,
+// spike_cpu_group_result_names) detect a suspending pre-pair statement and decline
+// the group so that both modes lower sequentially.
+//
+// Without the guard, the wait in pre_stmts would be lowered by lower_sm_stmt_with_wait,
+// advancing current_state and positioning the builder in a new post_wait_bb. The
+// subsequent emit_cpu_group_spawn_join would then emit into a spawn_bb with no
+// predecessor branch from that post_wait_bb — leaving the post_wait_bb without a
+// terminator and triggering "Basic Block does not have terminator!" in the LLVM verifier.
+//
+// The decline ensures byte-identical output in both modes.
+//
+// Expected output (both modes):
+//   55
+//   89
+function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+
+function entrypoint() -> nothing {
+  wait sleep(0)
+  let a = fib(10)
+  let b = fib(11)
+  print(a)
+  print(b)
+}

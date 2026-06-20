@@ -1,0 +1,13 @@
+[package]
+name = "ynz-abi"
+description = "Zero-dependency frame-ABI constants shared between the Yinz compiler (ynz-codegen) and the runtime (ynz-runtime) — the single contract for the spike-frame discriminator and CPU-handle layout"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Intentionally empty. This crate exists so codegen can read the shared frame-ABI
+# constants WITHOUT pulling the runtime's tokio/simdutf8/num_cpus tree into the
+# compiler's dependency graph. Adding any dependency here defeats that purpose.

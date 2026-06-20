@@ -1,0 +1,36 @@
+// v0.3-M3d hostile fixture — two calls inside a ZERO-iteration loop body. The loop never runs,
+// so the two calls inside it never execute. Running two calls at the same time inside a loop body
+// is OUT of scope for M3d (a later loop-placement slice — see the Scope Boundary), so they would
+// run one after the other in plain sequence regardless of how many times the loop runs. A
+// zero-pass loop is the boundary case — the running total stays at its initial value. Both modes
+// (default and --no-auto-parallel) print the same line.
+//
+// score(seed) loops, so it would be worth running alongside the other call were the loop body
+// eligible.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   0
+
+function score(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function combine() -> int {
+  let acc = 0
+  for (k in range(0, 0)) {
+    let lo = score(k)
+    let hi = score(k)
+    acc = acc + lo + hi
+  }
+  return acc
+}
+
+function entrypoint() -> nothing {
+  print(combine())
+}

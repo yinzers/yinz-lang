@@ -1,0 +1,31 @@
+// v0.3-M3d return-class matrix: two independent computations that each return a boolean, run
+// at the same time. Each result is available after both finish. Both print the same lines
+// whether or not they run at the same time.
+
+function isEvenCount(n: int) -> boolean {
+  let count: int = 0
+  let i: int = 0
+  while (i < n) {
+    count = count + 1
+    i = i + 1
+  }
+  let half: int = count / 2
+  return half * 2 == count
+}
+
+function exceedsLimit(n: int) -> boolean {
+  let sum: int = 0
+  let i: int = 0
+  while (i < n) {
+    sum = sum + i
+    i = i + 1
+  }
+  return sum > 10
+}
+
+function entrypoint() -> nothing {
+  let a = isEvenCount(4)
+  let b = exceedsLimit(6)
+  print(a)
+  print(b)
+}

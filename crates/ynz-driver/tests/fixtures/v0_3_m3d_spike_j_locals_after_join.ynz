@@ -1,0 +1,30 @@
+// Spike fixture (j): CPU pair + derived local computed after the join, then a wait.
+//
+// Regression for the second silent-wrong repro: `let c = a + b` after the CPU group
+// is a crossing local whose flush collided with the spike result region. After the
+// second wait, reload read the clobbered slot and printed the wrong value for `a`.
+//
+// With the shift fix, crossing locals (including `c`) are at byte 80+, so the
+// spike result slots (bytes 48-79) are never written by the flush of `c`.
+//
+// Expected output:
+//   55
+//   89
+//   144
+function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+
+function entrypoint() -> nothing {
+  let a = fib(10)
+  let b = fib(11)
+  wait sleep(0)
+  let c = a + b
+  wait sleep(0)
+  print(a)
+  print(b)
+  print(c)
+}

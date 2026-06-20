@@ -1,0 +1,29 @@
+// Spike fixture (i): CPU pair + a non-spike crossing local between two waits.
+//
+// Regression for the frame-slot collision where crossing local `c` (slot idx 2 in
+// a non-spike frame = byte 48) overlapped the first CPU result slot (also byte 48).
+// The flush of `c` after the first wait physically overwrote the fib(10) result.
+//
+// With the shift fix, crossing locals start at byte 80 (slot idx 6+), so `c` lands
+// at byte 80 and the spike result slots at bytes 48-79 are never touched by flush.
+//
+// Expected output:
+//   99
+//   55
+//   89
+function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+
+function entrypoint() -> nothing {
+  let c = 99
+  let a = fib(10)
+  let b = fib(11)
+  wait sleep(0)
+  print(c)
+  print(a)
+  print(b)
+}

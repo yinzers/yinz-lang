@@ -1,0 +1,31 @@
+// v0.3-M3d return-class matrix DECLINE case: a `maybe int` return is not part of the set of
+// return kinds that can run at the same time as another computation this milestone, so the
+// compiler keeps these two calls in order. The output is the same whether or not they could
+// run together. This file locks that the compiler declines to overlap them.
+
+function lastOrNone(n: int) -> maybe<int> {
+  let arr: array<int> = []
+  let i: int = 0
+  while (i < n) {
+    arr.add(i + 1)
+    i = i + 1
+  }
+  return arr.get(n - 1)
+}
+
+function lastDoubledOrNone(n: int) -> maybe<int> {
+  let arr: array<int> = []
+  let i: int = 0
+  while (i < n) {
+    arr.add((i + 1) * 2)
+    i = i + 1
+  }
+  return arr.get(n - 1)
+}
+
+function entrypoint() -> nothing {
+  let a = lastOrNone(4)
+  let b = lastDoubledOrNone(6)
+  print(a.or(-1))
+  print(b.or(-1))
+}

@@ -1,0 +1,27 @@
+// two independent computations next to each other, then a call to an imported
+// function that waits on a timer. Because `entrypoint` waits, the two computations before the
+// wait run one after the other in plain sequence — they do NOT run at the same time. The
+// imported `ioWork` lives in another file (`io_lib`) and itself waits. The output is identical
+// whether or not auto-parallel is on.
+//
+// Arithmetic: fib(10)=55, fib(11)=89.
+//
+// Expected output (both modes — default and YNZ_NO_AUTO_PARALLEL=1):
+//   55
+//   89
+import { ioWork } from `io_lib`
+
+function fib(n: int) -> int {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+
+function entrypoint() -> nothing {
+  let a = fib(10)
+  let b = fib(11)
+  wait ioWork()
+  print(a)
+  print(b)
+}

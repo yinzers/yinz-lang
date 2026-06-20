@@ -112,4 +112,17 @@ pub struct MutedHintDomainEntry {
     pub description: &'static str,
     pub example_source: &'static str,
     pub example_hint_rendered: &'static str,
+    /// Explicit hover WHAT, used verbatim when set. When `None`, the hover path derives WHAT from
+    /// `description`. Needed for domains where the rendered hint is not itself the explicit form
+    /// (Informational comment-style hints have no typeable equivalent — see `parallel_groups`).
+    pub hover_what: Option<&'static str>,
+    /// Explicit hover WHAT-INSTEAD, used verbatim when set. When `None`, the hover path uses
+    /// `example_hint_rendered` (correct only for Addition/Replacement domains whose rendered hint
+    /// IS the explicit source form). Informational domains must set this to an actionable sentence
+    /// rather than ask the user to type a comment.
+    pub hover_what_instead: Option<&'static str>,
+    /// Explicit hover WHY, used verbatim when set. When `None`, the hover path derives a generic
+    /// WHY from `placement_category`. Set this to a contextual reason naming what the decision
+    /// depends on.
+    pub hover_why: Option<&'static str>,
 }

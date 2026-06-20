@@ -2621,6 +2621,7 @@ fn run_kernel(source: &str) -> CheckOutput {
         mono_table,
         diagnostics: all_diags,
         suspends_set: std::collections::HashSet::new(),
+        does_real_work_set: std::collections::HashSet::new(),
     }
 }
 
@@ -4002,7 +4003,7 @@ fn cross_module_call_from_fn_with_local_sleep_compiles_clean() {
 
 // WHY: a function that independently suspends (local sleep) AND makes a
 // dynamic-dispatch call through a vtable gets the can't-infer compile error. This is
-// the design-correct gate per design/future/concurrency.md:75 — the caller already IS
+// the design-correct gate per design/no-function-coloring.md:75 — the caller already IS
 // a state machine, and calling an unanalyzable vtable from inside a state machine
 // requires the fence. A non-suspending caller with only dynamic dispatch compiles clean
 // (M2 under-approximation — dynamic suspension propagation deferred to a future version).
@@ -4111,7 +4112,7 @@ function entrypoint() -> nothing {
 }
 
 // WHY: a non-suspending function that only makes a dynamic-dispatch call must NOT fire
-// the can't-infer error. Guards the R2 regression: design/future/concurrency.md:75
+// the can't-infer error. Guards the R2 regression: design/no-function-coloring.md:75
 // specifies that dynamic dispatch from a non-suspending caller is treated as a
 // non-suspending leaf in the M2 under-approximation (cross-module/dynamic suspension
 // propagation is deferred to M3+M8). A future gate edit that re-broke R2 (over-firing
@@ -4155,7 +4156,7 @@ function entrypoint() -> nothing {
         cant_infer_errors.is_empty(),
         "non-suspending dynamic caller must NOT fire can't-infer error; \
          re-enabling the gate unconditionally would break the M2 under-approximation \
-         (design/future/concurrency.md:75). got: {:#?}",
+         (design/no-function-coloring.md:75). got: {:#?}",
         cant_infer_errors
     );
 }

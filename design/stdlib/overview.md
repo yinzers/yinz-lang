@@ -96,4 +96,44 @@ The questions that previously lived in `design/open-questions.md` have been reso
 - **Compression** — Ships v0.18.
 - **Database (`db` module)** — RESOLVED. Ships v0.10 with **DuckDB + Postgres only**. All other drivers (MySQL, SQLite, MariaDB, MS SQL, etc.) **deferred until after v1.0 launch**. See `design/stdlib/database.md`.
 
-Open questions remaining: the per-module API designs themselves (designed at each module's version turn). The list of modules is locked.
+Open questions remaining: the per-module API designs themselves (designed at each module's version turn). The **committed** module list (the version table above) is locked; **candidate** additions not yet slotted into the sequence are tracked in the next section.
+
+---
+
+## Candidate Modules (brainstorm — not yet locked into the version sequence)
+
+Proposed 2026-06-13. These are NOT promises and NOT designed yet — they're a holding pen so good ideas don't get lost. When one is committed, it moves into the version table above (or the v2+ deferred rows) and gets a design doc at its version turn. This is the single home for "stdlib ideas we like but haven't sequenced" — don't scatter them into other docs.
+
+### Strong candidates (near-embarrassing gaps)
+
+| Candidate | What | Note |
+|---|---|---|
+| **`encoding`** | base64 (std + URL-safe), hex, URL/percent codec | **Already has a design doc** → [encoding.md](encoding.md). `stdlib-design.md` Rule 8 names base64; `request` v0.15 needs URL-encoding. Slot before/with v0.15. |
+| **`uuid`** | UUID v4/v7, ULID generation | Ubiquitous, tiny. Pure-compute, no I/O. |
+| **`tls`** | TLS handshake + cert validation | `request` (v0.15) and `server` (v0.21) imply HTTPS — TLS is the module-sized dependency neither currently names. Sequence *before* v0.15. |
+| **auth: password hashing + JWT** | argon2/bcrypt KDF, JWT sign/verify | Distinct from `crypto` v0.17 primitives (SHA/AES/HMAC). Auth is universal. |
+| **`toml`** (+ maybe `yaml`) | config-format parse/emit | Dogfoods `yinz.toml` (Yinz's own config format); sibling to `json`/`csv` in `data.md`. |
+
+### Folded into existing modules (NOT new modules)
+
+| Idea | Folds into | Why not standalone |
+|---|---|---|
+| **WebSocket** | `network.md` / `server` (v0.21) | WS bootstraps via an HTTP `Upgrade` handshake on the same accept loop, then switches to RFC 6455 frame protocol. Belongs as a `server` section, not a separate module — but the frame protocol is real added code, not free. |
+| **`set<T>`** ✅ COMMITTED 2026-06-13 → **v0.4** | core collections (`design/collections.md`) — a **language feature**, like `map` (co-ships with the v0.4 linting tier) | A set is `map<K,V>` with keys only: O(1) membership + auto-uniqueness + set algebra. Inherently growable (no "fixed set"). Designed in `collections.md`. Includes `array<T> → set<T>` auto-promotion (membership-only). |
+| **`array.unique()`** ✅ COMMITTED 2026-06-13 | core collections (`design/collections.md`) | The "dedupe a list once" case — a method on `array`, not a type. Ships with `set<T>`. |
+
+### Worth designing (secondary)
+
+| Candidate | What |
+|---|---|
+| **i18n / `locale`** | locale-aware formatting + message catalogs. Fits the "no platform-default locale" rule (Rule 3) — explicit locale, never silent. |
+| **validation / schema** | runtime validation at the external-data boundary (parsed JSON → typed `shape`). OPEN: may be a language feature (`shape` + `errors`) rather than a stdlib module — decide before designing. |
+| **test-framework extensions** | property-based testing, fuzzing, benchmarking. Next tier above the `test` keyword (v0.13). |
+| **`dns`** | name resolution; networking floor below `request`. |
+| **caching / LRU** | in-memory bounded cache (Rule 4: bounded by default). |
+| **templating** | HTML/text templating; ties to the GUI/web work (`design/future/gui/`). |
+| **observability** | metrics + tracing, above basic `log` (v0.11) / logging framework (v0.23). |
+
+### v2+ / niche (parked so they're not forgotten)
+
+Media codecs (image/audio/PDF), email/SMTP, gRPC/protobuf, complex numbers + units-of-measure, embedded I/O (serial/USB/Bluetooth). None committed; each needs a real use case to graduate.

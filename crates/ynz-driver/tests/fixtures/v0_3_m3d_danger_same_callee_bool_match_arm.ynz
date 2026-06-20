@@ -1,0 +1,46 @@
+// v0.3-M3d danger matrix — two calls to the SAME boolean-returning function with DIFFERENT
+// inputs, run at the same time inside a `match` branch. Each call's result is kept separate, so
+// the two differ (false then true) — if they were mixed up the output would change. Both results
+// are used INSIDE the branch. Both print the same lines whether or not the two calls run at the
+// same time.
+//
+// over(n) loops summing, so it is worth running alongside the other call, then returns whether
+// the sum exceeds a threshold.
+//
+// Arithmetic: sum(0..3) = 3 (not > 10 → false); sum(0..6) = 15 (> 10 → true).
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   false
+//   true
+
+function over(n: int) -> boolean {
+  let sum: int = 0
+  let i: int = 0
+  while (i < n) {
+    sum = sum + i
+    i = i + 1
+  }
+  return sum > 10
+}
+
+function combine() -> boolean {
+  let pick = 1
+  let result = false
+  if (pick) {
+    1 => {
+      let lo = over(3)
+      let hi = over(6)
+      print(lo)
+      result = hi
+    }
+    else => {
+      result = false
+    }
+  }
+  return result
+}
+
+function entrypoint() -> nothing {
+  let r = combine()
+  print(r)
+}

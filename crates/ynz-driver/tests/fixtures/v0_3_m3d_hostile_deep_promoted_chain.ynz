@@ -1,0 +1,43 @@
+// v0.3-M3d hostile fixture — a deep call chain top → middle → combine, where the bottom function
+// runs two `leaf` calls at the same time and each enclosing caller just passes the result up.
+// Running the two calls at the same time must still happen even when it sits at the bottom of a
+// chain of plain callers. Both modes print the same line.
+//
+// leaf(n) loops, so it is worth running alongside the other call.
+//
+// Arithmetic: leaf(10) = sum(0..10) = 45; leaf(11) = sum(0..11) = 55; combine = 100;
+//   middle = 100 + 1 = 101; top = 101 + 1 = 102.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   102
+
+function leaf(n: int) -> int {
+  let t = 0
+  let i = 0
+  while (i < n) {
+    t = t + i
+    i = i + 1
+  }
+  return t
+}
+
+function combine() -> int {
+  let a = leaf(10)
+  let b = leaf(11)
+  return a + b
+}
+
+function middle() -> int {
+  let r = combine()
+  return r + 1
+}
+
+function top() -> int {
+  let r = middle()
+  return r + 1
+}
+
+function entrypoint() -> nothing {
+  let x = top()
+  print(x)
+}

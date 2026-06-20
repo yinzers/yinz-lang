@@ -1,0 +1,44 @@
+// `combine` makes one pair of independent `score(...)` calls inside an `if` branch,
+// then another pair in plain sequence at the top level. Two pairs in one function — a
+// multi-group function. Multi-group functions run every call one after the other (no pair runs
+// at the same time), so the printed line is the same whichever order the pairs appear in.
+// `entrypoint` calls `combine` once.
+//
+// score(seed) loops, so it does enough work to be worth running alongside another call, and
+// returns the loop sum plus its seed.
+//
+// Arithmetic: loopSum = 0+1+...+99 = 4950.
+//   branch pair: score(3)+score(4) = 4953 + 4954 = 9907
+//   top pair:    score(1)+score(2) = 4951 + 4952 = 9903
+//   combine    = 9907 + 9903 = 19810
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   19810
+function score(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function combine() -> int {
+  let result = 0
+  let go = true
+  if (go) {
+    let lo = score(3)
+    let hi = score(4)
+    result = result + lo + hi
+  }
+  let a = score(1)
+  let b = score(2)
+  result = result + a + b
+  return result
+}
+
+function entrypoint() -> nothing {
+  let r = combine()
+  print(r)
+}

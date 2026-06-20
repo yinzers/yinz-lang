@@ -1,0 +1,47 @@
+// v0.3-M3d danger matrix — two different functions returning a `string`, run at the same time
+// inside a taken `if` branch. Each result is available after both finish; both prints match
+// whether or not the two run at the same time (only the printed values matter, never the order
+// they finished in).
+//
+// buildLabel(n) loops, so it is worth running alongside the other call, then returns a string
+// built from the loop count.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   first=3
+//   second=5
+
+function buildLabel(n: int) -> string {
+  let count: int = 0
+  let i: int = 0
+  while (i < n) {
+    count = count + 1
+    i = i + 1
+  }
+  return `first=${count}`
+}
+
+function buildLabel2(n: int) -> string {
+  let count: int = 0
+  let i: int = 0
+  while (i < n) {
+    count = count + 1
+    i = i + 1
+  }
+  return `second=${count}`
+}
+
+function combine() -> string {
+  let result: string = ``
+  let go = true
+  if (go) {
+    let lo = buildLabel(3)
+    let hi = buildLabel2(5)
+    result = `${lo}\n${hi}`
+  }
+  return result
+}
+
+function entrypoint() -> nothing {
+  let r = combine()
+  print(r)
+}

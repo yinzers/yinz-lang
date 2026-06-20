@@ -1,0 +1,37 @@
+// v0.3-M3d hostile fixture — a function that calls ITSELF and holds two would-be-parallel calls
+// in its base case. `recwork` calls itself until the base case, where two `leaf` calls would
+// otherwise run at the same time. A function that calls itself is left out of running calls at
+// the same time, so the two `leaf` calls run one after the other in plain sequence, byte-identical
+// between default and --no-auto-parallel. This locks that a self-calling function keeps its calls
+// in plain sequence. Both modes print the same line.
+//
+// leaf(n) loops, so it would be worth running alongside the other call were the function eligible.
+//
+// Arithmetic: at the base, leaf(10) = 45, leaf(11) = 55, so the result is 100.
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   100
+
+function leaf(n: int) -> int {
+  let t = 0
+  let i = 0
+  while (i < n) {
+    t = t + i
+    i = i + 1
+  }
+  return t
+}
+
+function recwork(depth: int) -> int {
+  if (depth < 1) {
+    let a = leaf(10)
+    let b = leaf(11)
+    return a + b
+  }
+  return recwork(depth - 1)
+}
+
+function entrypoint() -> nothing {
+  let x = recwork(3)
+  print(x)
+}

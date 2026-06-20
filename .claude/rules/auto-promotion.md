@@ -52,8 +52,8 @@ This is the practical mechanism behind Golden Rule 10 ("efficiency first, dynami
 ### Codegen-only (no typeable form)
 
 - **Auto-SoA layout transform** (`design/future/auto-soa.md`): compiler picks Struct-of-Arrays for hot loops. No source-level `soa` keyword. Codegen + Tier 3 lint (no muted hint).
-- **Auto-Arc inference** for cross-thread shared state (`design/future/concurrency.md`): codegen-only; no source-level `Arc<T>` type to make explicit.
-- **Auto-`wait` insertion** at I/O suspension points (`design/future/concurrency.md`): the muted hint DOES apply here because `wait` IS typeable. Edge case — codegen + muted hint, but no lint suggestion (writing explicit `wait` everywhere would be noise, not improvement).
+- **Auto-Arc inference** for cross-thread shared state (`design/no-function-coloring.md`): codegen-only; no source-level `Arc<T>` type to make explicit.
+- **Auto-`wait` insertion** at I/O suspension points (`design/no-function-coloring.md`): the muted hint DOES apply here because `wait` IS typeable. Edge case — codegen + muted hint, but no lint suggestion (writing explicit `wait` everywhere would be noise, not improvement).
 - **Auto-parallelization of independent statements** (`design/concurrency.md`): codegen-only; no syntax for "schedule these in parallel."
 
 ### When NOT to auto-promote
@@ -97,7 +97,7 @@ When M4 implements map syntax, BOTH override forms must be designed together wit
 
 **Static dispatch on `follows`** (`design/type-system.md`): auto-picks static when concrete type is known. Override form: `dynamic Foo` for the case where the user explicitly wants runtime-lookup dispatch on a stored value. The reverse (force static when type is unknown) is impossible — the compiler can't manufacture knowledge it doesn't have.
 
-**Auto-Arc cross-thread** (`design/future/concurrency.md`): auto-wraps in Arc when value crosses thread boundary. Override form: `.give` or `.copy` at the spawn site to avoid Arc. The reverse (force Arc when no boundary crossing) doesn't make sense — Arc has cost, and if the compiler doesn't need it, manufacturing it would be pointless.
+**Auto-Arc cross-thread** (`design/no-function-coloring.md`): auto-wraps in Arc when value crosses thread boundary. Override form: `.give` or `.copy` at the spawn site to avoid Arc. The reverse (force Arc when no boundary crossing) doesn't make sense — Arc has cost, and if the compiler doesn't need it, manufacturing it would be pointless.
 
 ### Examples — both directions handled by existing syntax
 
@@ -179,4 +179,4 @@ The following violate this rule and should be flagged in code review or design r
 - `.claude/rules/plan-invariants.md` (milestone plans must check auto-promotion)
 - `design/teaching-mission.md` (the broader teaching goal this pattern serves)
 - `design/future/auto-soa.md` (codegen-only example — no typeable form)
-- `design/future/concurrency.md` (auto-Arc, auto-`wait`, auto-parallelization examples)
+- `design/no-function-coloring.md` (auto-Arc, auto-`wait`, auto-parallelization examples)

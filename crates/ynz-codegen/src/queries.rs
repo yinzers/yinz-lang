@@ -4,11 +4,16 @@ use inkwell::context::Context;
 use ynz_ast::nodes::{ImportKind, Item};
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket};
 use ynz_parser::{parse_query, SourceFile, SourceFileRegistry};
-use ynz_typeck::{build_effective_suspend_set, check_query, module_signatures_query};
+use ynz_typeck::{
+    build_effective_suspend_set, check_query, cpu_promotion_query, module_signatures_query,
+};
 
 use crate::{
     artifact::CompiledArtifact,
-    emit::{build_frame_layouts_with_resolver, emit_artifact, FrameLayout, SuspendSet},
+    emit::{
+        build_frame_layouts_with_resolver, emit_artifact, spike_host_subset, FrameLayout,
+        SuspendSet,
+    },
     state_machine,
 };
 
@@ -88,8 +93,32 @@ pub fn frame_layouts_query(
     // WHY: single SSOT for the effective suspend set — local + imported suspending
     // names.  `build_effective_suspend_set` is the canonical computation; using it
     // here ensures frame-layout, codegen routing, and IDE hints all read the same set.
+    //
+    // v0.3-M3d: union the CPU-promotion set so promoted functions are sized as state
+    // machines (their CPU group joins are suspension points). `cpu_promotion_query` is the
+    // production trigger for CPU-statement parallelization; build_frame_layouts consumes the
+    // promoted functions through this set so the composed-frame size includes their CPU
+    // handle/result reserve (computed there, not via a fallback at emit time).
+    //
+    // Reconcile typeck's promotion set with what codegen will actually spike-HOST this
+    // slice (`spike_host_subset`, probed against the EFFECTIVE suspend set built above —
+    // local ∪ imported-suspending). Unioning the full promotion set would poison nested
+    // hosts: a promoted-but-unhosted inner callee would land IN the suspend set the host's
+    // callee-eligibility filter reads, silently declining the host's group. Probing with
+    // the effective set (the SAME set codegen_query uses) keeps both query boundaries'
+    // host-admission decisions identical. See `spike_host_subset` for the full rationale.
     let effective_suspend_set: SuspendSet =
         build_effective_suspend_set(&check.suspends_set, &sig_output.imported_fns);
+    let promotion = cpu_promotion_query(db, source);
+    let spike_hosts = spike_host_subset(
+        &check.typed_module,
+        &effective_suspend_set,
+        &promotion.promoted,
+    );
+    let mut effective_suspend_set = effective_suspend_set;
+    for name in &spike_hosts {
+        effective_suspend_set.insert(name.clone());
+    }
 
     // Build a map from imported function name → the SourceFile it was imported from.
     // Needed by Guard G2: the callee-size resolver calls frame_layouts_query on the
@@ -235,6 +264,9 @@ pub fn frame_layouts_query(
                 children: Vec::new(),
                 recursion_slot: None,
                 number_errors_staging_offset: None,
+                // Imported-callee stubs carry no CPU groups — those belong to the importer's
+                // own frame, not the callee's.
+                cpu_group_slots: Vec::new(),
             },
         );
     }
@@ -270,9 +302,56 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
     // Salsa memoizes this — the check_query call inside frame_layouts_query is already
     // cached from the call above, so there is no re-parse or re-typecheck cost.
     let layouts_arc = frame_layouts_query(db, source);
-    // Pass check.suspends_set (from may_block::analyze via check_query) directly to
-    // emit_artifact so codegen reads the TRANSITIVE suspends flags, not the pre-analysis
-    // sig_table (which has suspends=false for all fns — the Phase-7 seam fix).
+
+    // v0.3-M3d: the CPU-promotion set is the production trigger for CPU-statement
+    // parallelization. Functions codegen will spike-HOST route through the state-machine
+    // lowering (their CPU group joins are suspension points). Union ONLY the host subset
+    // into the suspends set emit_artifact consumes.
+    // Salsa memoizes this query (already evaluated inside frame_layouts_query above).
+    //
+    // Reconcile typeck's full promotion set down to what codegen actually hosts this slice
+    // (`spike_host_subset`). Unioning the full set would land a promoted-but-unhosted inner
+    // callee in the suspend set the host's own callee-eligibility filter reads, silently
+    // declining the host's group — and would SM-lower that callee while its callers still
+    // call it as a plain int-returning fn (trampoline mismatch). See `spike_host_subset`.
+    //
+    // The probe MUST run against the SAME effective suspend set `frame_layouts_query` uses
+    // (`build_effective_suspend_set` = local ∪ imported-suspending names). The base set
+    // alone omits imported suspending callees, so `spike_cpu_candidates`'s post-pair decline
+    // gate would admit a host here that `frame_layouts_query` declined — and the host's frame
+    // would be sized (there) sequentially-with-the-imported-child-sub-frame while codegen
+    // (here) lays it out as a spike host, under-allocating the heap block by exactly that
+    // sub-frame and corrupting it when the imported child writes at its layout offset. One
+    // canonical set across both query boundaries is the only thing that keeps the two
+    // sizing decisions in lock-step.
+    let effective_suspend_set: SuspendSet =
+        build_effective_suspend_set(&check.suspends_set, &sig_output.imported_fns);
+    let promotion = cpu_promotion_query(db, source);
+    let spike_hosts = spike_host_subset(
+        &check.typed_module,
+        &effective_suspend_set,
+        &promotion.promoted,
+    );
+    // emit_artifact's emit-time re-probe (`lower_function_with_waits` → `spike_cpu_candidates`)
+    // reads THIS set, so it too must carry the imported-suspending names to agree with the
+    // frame-layout sizing decision above.
+    //
+    // Probe/emit-time asymmetry (benign over-allocation; tracked residual): a host whose
+    // post-pair statement calls ANOTHER host lands that callee in this union, so the
+    // emit-time re-probe declines the host (post-pair-suspending gate) while
+    // `spike_host_subset` — probed against the effective set BEFORE this union — admitted it.
+    // The admitted-but-declined host gets a dead 48-byte reserve (OVER-allocation, never
+    // under, so output stays correct and alloc==free). Exact reconciliation needs a fixpoint
+    // over the host set, so it is deferred rather than approximated. See `spike_host_subset`.
+    let mut suspends_with_promotions = effective_suspend_set;
+    for name in &spike_hosts {
+        suspends_with_promotions.insert(name.clone());
+    }
+
+    // Pass suspends_with_promotions (may_block::analyze's transitive set ∪ CPU spike hosts)
+    // directly to emit_artifact so codegen reads the TRANSITIVE suspends flags plus the
+    // spike-host functions, not the pre-analysis sig_table (which has suspends=false for all
+    // fns — the Phase-7 seam fix).
     //
     // Pass imported_fns so emit_artifact can forward-declare cross-module functions as
     // LLVM external declarations — without these, calls to imported functions fail with
@@ -287,9 +366,10 @@ pub fn codegen_query(db: &dyn SourceFileRegistry, source: SourceFile) -> Arc<Cod
         &check.mono_table,
         None,
         &sig_output.imported_options,
-        &check.suspends_set,
+        &suspends_with_promotions,
         &sig_output.imported_fns,
         &layouts_arc,
+        &spike_hosts,
     ) {
         Ok(artifact) => Arc::new(CodegenOutput {
             artifact,

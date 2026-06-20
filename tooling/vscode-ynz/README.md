@@ -2,6 +2,17 @@
 
 Syntax highlighting, inline diagnostics, autocomplete, and hover docs for `.ynz` files.
 
+## What's new in v0.3.0-m7
+
+- **CPU parallel-group hints** — when the compiler auto-runs independent number-crunching
+  calls on separate cores, every call in the group shows a muted comment:
+  `// runs at the same time as line 12 — separate core`.  The hint appears for both CPU
+  groups (M3d) and I/O-overlap groups (M3b), letting you see the compiler's full scheduling
+  decision at a glance.  No source change required — the hint is informational only.
+- **`wait` ordering-barrier explanation** — the warning for `wait` on a CPU-bound callee
+  now explains that `wait` defeats parallelization by acting as an ordering barrier, not
+  just that the `wait` has no effect.
+
 ## What's new in v0.3.0-m2
 
 - **`wait` actually suspends** — `wait foo()` now suspends the calling function at a real state-machine boundary; the OS thread is freed for other tasks during the pause. Hover over `wait` to see the updated docs.

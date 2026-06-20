@@ -1,0 +1,41 @@
+// inside one pass of the loop, `combine` makes two independent `score(k)` calls and
+// adds their results into the running total. The loop repeats three times, one pass after
+// another. `entrypoint` calls `combine` once.
+//
+// A CPU group inside a loop body runs sequentially (the two `score(k)` calls do NOT overlap):
+// the loop index and every loop-carried local would have to survive the group's join across the
+// loop's resume, and that synthetic-index reservation is not provided for loop-body groups. The
+// group declines to sequential lowering, so the output is identical to --no-auto-parallel.
+//
+// score(seed) loops, so it does enough work to be worth running alongside the other call, and
+// returns the loop sum plus its seed.
+//
+// Arithmetic: loopSum = 0+1+...+99 = 4950; per pass, score(k)+score(k) = 2*(4950+k).
+//   k=0: 9900   k=1: 9902   k=2: 9904   →  total = 29706
+//
+// Expected output (both modes — default and --no-auto-parallel):
+//   29706
+function score(seed: int) -> int {
+  let total = 0
+  let i = 0
+  while (i < 100) {
+    total = total + i
+    i = i + 1
+  }
+  return total + seed
+}
+
+function combine() -> int {
+  let acc = 0
+  for (k in range(0, 3)) {
+    let lo = score(k)
+    let hi = score(k)
+    acc = acc + lo + hi
+  }
+  return acc
+}
+
+function entrypoint() -> nothing {
+  let r = combine()
+  print(r)
+}

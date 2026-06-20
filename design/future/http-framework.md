@@ -153,6 +153,6 @@ Locking the SUPERVISION-BY-DEFAULT design now (v0.1) means when v0.3 starts on H
 ## Cross-references
 
 - [`design/future/supervisor.md`](supervisor.md) (the stdlib supervisor helpers HTTP uses)
-- [`design/future/concurrency.md`](concurrency.md) (the `background` keyword + scheduler HTTP requires)
+- [`design/no-function-coloring.md`](../no-function-coloring.md) (the `background` keyword + scheduler HTTP requires)
 - [`design/future/panic-safety.md`](panic-safety.md) (task isolation, drop-on-unwind that HTTP relies on)
 - [`design/ide-hints.md`](../ide-hints.md) (muted supervision-policy rendering)

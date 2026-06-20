@@ -1,0 +1,32 @@
+// v0.3-M3d return-class matrix DECLINE case: a `number errors` return is NOT eligible to run
+// at the same time as another computation — the compiler keeps these two calls in order
+// instead. The output is the same whether or not they could run together (each call uses a
+// distinct function, so each result stays its own value). This file locks that the compiler
+// declines to overlap them.
+
+function priceA(n: int) -> number errors {
+  let total: number = 0.0
+  let i: int = 0
+  while (i < n) {
+    total = total + 1.5
+    i = i + 1
+  }
+  return total
+}
+
+function priceB(n: int) -> number errors {
+  let total: number = 0.0
+  let i: int = 0
+  while (i < n) {
+    total = total + 2.5
+    i = i + 1
+  }
+  return total
+}
+
+function entrypoint() -> nothing {
+  let a = priceA(4)
+  let b = priceB(4)
+  print(a.or(0.0))
+  print(b.or(0.0))
+}

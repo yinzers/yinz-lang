@@ -19,7 +19,7 @@
 //! hint lists.  `allocators` is also registered in the registry but not yet firing —
 //! it ships when arena allocation lands (v0.2+).  `lifetimes` remain protocol-only.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use ynz_ast::nodes::{Block, Expr, Item, OwnershipModifier, Stmt};
@@ -179,6 +179,26 @@ pub struct BackgroundRoutingHint {
     /// The rendered muted comment label, e.g.
     /// `"// routed to I/O pool — sleep suspends here"` or
     /// `"// routed to CPU pool — no may-block calls in call graph"`.
+    pub label: String,
+}
+
+/// Parallel-group membership hint at a statement in an auto-parallelized group.
+///
+/// Rendered as a muted comment AFTER the statement (Informational placement per
+/// `.claude/rules/inference.md` — no typeable Yinz form exists for "run at the
+/// same time as").  The hint names the 1-based source line(s) the statement runs
+/// alongside so the user understands the actual execution overlap.
+///
+/// CPU members append `— separate core` to note the blocking-pool routing;
+/// I/O members omit it because the overlap happens cooperatively within a single
+/// OS event loop pass (no extra computing unit is allocated).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParallelGroupHint {
+    /// Byte offset at the end of the statement — where the muted comment renders.
+    pub position: usize,
+    /// The rendered muted comment label, e.g.
+    /// `"// runs at the same time as line 12 — separate core"` (CPU member) or
+    /// `"// runs at the same time as line 12"` (I/O member).
     pub label: String,
 }
 
@@ -1694,4 +1714,249 @@ fn collect_background_routing_hints_expr(
         | Expr::NoneLit { .. }
         | Expr::Error(..) => {}
     }
+}
+
+// Domain 9: parallel_groups (Informational)
+
+/// Whether a group's members run on separate cores (CPU spawn) or overlap cooperatively (I/O).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GroupClass {
+    /// CPU-parallel members spawned onto separate cores; the hint appends "— separate core".
+    Cpu,
+    /// I/O-overlap members interleaved cooperatively in one event-loop pass; no "separate core".
+    Io,
+}
+
+/// Derive the 1-based line number of a byte offset `pos` in `source_text`.
+///
+/// Returns 1 when `pos` is 0 or the source is empty. Line numbers are for display in muted hint
+/// labels only; exact to character, not off-by-one.
+///
+/// Time: O(n) where n = `pos`  Space: O(1).
+fn byte_offset_to_line(source_text: &str, pos: usize) -> usize {
+    source_text[..pos.min(source_text.len())]
+        .bytes()
+        .filter(|&b| b == b'\n')
+        .count()
+        + 1
+}
+
+/// Return the byte offset at the end of `stmt` for hint positioning.
+///
+/// The muted parallel-group comment renders AFTER the statement, so we need the end byte.
+/// `Stmt::Expr` wraps an `Expr` with no outer span; the inner expression's span end is used.
+fn stmt_end_byte(stmt: &Stmt) -> Option<usize> {
+    match stmt {
+        Stmt::Let { span, .. }
+        | Stmt::Assign { span, .. }
+        | Stmt::FieldAssign { span, .. }
+        | Stmt::IndexAssign { span, .. }
+        | Stmt::Return { span, .. }
+        | Stmt::If { span, .. }
+        | Stmt::For { span, .. }
+        | Stmt::Match { span, .. } => Some(span.end),
+        Stmt::While { span, .. } => Some(span.end),
+        Stmt::Expr(e) => Some(e.span().end),
+    }
+}
+
+/// Emit one hint per member of a single concurrent group, naming the OTHER members' source lines.
+///
+/// `members` are the group's statements (≥2). CPU members append "— separate core"; I/O members
+/// omit it. The label carries NO leading spaces — the LSP layer owns hint spacing.
+///
+/// Time: O(m²) where m = members (each member lists every other member's line)  Space: O(m) lines.
+fn emit_group_member_hints(
+    members: &[&Stmt],
+    class: GroupClass,
+    source_text: &str,
+    out: &mut Vec<ParallelGroupHint>,
+) {
+    if members.len() < 2 {
+        return;
+    }
+    // End-byte + line for every member, so each member's hint can name the others' lines.
+    let member_info: Vec<(usize, usize)> = members
+        .iter()
+        .map(|s| {
+            let end = stmt_end_byte(s).unwrap_or(0);
+            // end - 1 lands on the statement's last character, not the terminating newline.
+            let line = byte_offset_to_line(source_text, end.saturating_sub(1));
+            (end, line)
+        })
+        .collect();
+
+    for (idx, (end_byte, _self_line)) in member_info.iter().enumerate() {
+        let other_lines: Vec<String> = member_info
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != idx)
+            .map(|(_, (_, line))| format!("line {line}"))
+            .collect();
+        if other_lines.is_empty() {
+            continue;
+        }
+        let other_text = other_lines.join(", ");
+        let label = match class {
+            GroupClass::Cpu => {
+                format!("// runs at the same time as {other_text} — separate core")
+            }
+            GroupClass::Io => format!("// runs at the same time as {other_text}"),
+        };
+        out.push(ParallelGroupHint {
+            position: *end_byte,
+            label,
+        });
+    }
+}
+
+/// Resolve a nested-block descent path to the statement slice it selects.
+///
+/// `block_path` is the typeck admission gate's descent record (which branch arm at each level).
+/// Returns the block holding the admitted CPU group, or `None` if the path doesn't resolve.
+///
+/// Time: O(p) where p = path length  Space: O(1).
+fn resolve_block_path<'a>(
+    top: &'a [Stmt],
+    block_path: &[crate::cpu_admission::BlockStep],
+) -> Option<&'a [Stmt]> {
+    let mut block = top;
+    for step in block_path {
+        let stmt = block.get(step.stmt_index)?;
+        let nested = crate::cpu_admission::nested_blocks(stmt);
+        block = nested.get(step.block_index).copied()?;
+    }
+    Some(block)
+}
+
+/// Emit I/O-overlap hints for every suspending-overlap group reachable from `stmts`, descending
+/// into nested control-flow blocks. A suspending (non-promoted) function never spawns onto a
+/// separate core, so these groups are always [`GroupClass::Io`] — the hint omits "separate core".
+///
+/// Time: O(N · S²) where N = AST nodes (recursive descent) and S = statements per block
+/// (`partition_independent_groups` is O(S²))  Space: O(D) recursion depth + O(hints).
+fn collect_io_overlap_hints(
+    stmts: &[Stmt],
+    suspend_set: &HashSet<String>,
+    sig_table: &SignatureTable,
+    imported_fns: &HashMap<String, FunctionSig>,
+    source_text: &str,
+    out: &mut Vec<ParallelGroupHint>,
+) {
+    let groups = crate::independence::partition_independent_groups(
+        stmts,
+        suspend_set,
+        sig_table,
+        imported_fns,
+    );
+    for group in &groups {
+        if let crate::independence::IndependentGroup::Parallel(members) = group {
+            emit_group_member_hints(members, GroupClass::Io, source_text, out);
+        }
+    }
+
+    for stmt in stmts {
+        let nested: Vec<&[Stmt]> = match stmt {
+            Stmt::If { body, .. } => vec![body.stmts.as_slice()],
+            Stmt::While { body, .. } | Stmt::For { body, .. } => vec![body.stmts.as_slice()],
+            Stmt::Match { arms, else_arm, .. } => {
+                let mut v: Vec<&[Stmt]> = arms.iter().map(|a| a.body.stmts.as_slice()).collect();
+                if let Some(eb) = else_arm {
+                    v.push(eb.stmts.as_slice());
+                }
+                v
+            }
+            _ => vec![],
+        };
+        for block in nested {
+            collect_io_overlap_hints(
+                block,
+                suspend_set,
+                sig_table,
+                imported_fns,
+                source_text,
+                out,
+            );
+        }
+    }
+}
+
+/// Compute `parallel_groups` inlay hints for every group the compiler actually runs concurrently.
+///
+/// The hint set MUST equal the codegen spawn set — the registry promise on `parallel_groups`
+/// ("the same set that drives codegen routing, so the hint and the binary always agree"). To
+/// enforce that, this pass reads the SAME admission decision codegen reads:
+///   - CPU groups come from [`crate::cpu_admission::admitted_cpu_group`] — the exact group codegen
+///     spawns. A function that owns a parallelizable group the admission gate DECLINES (two
+///     groups, a post-join param read, etc.) yields no hint, because codegen emits no spawn.
+///   - I/O-overlap groups come from `partition_independent_groups` for SUSPENDING functions only.
+///     A suspending function never spawns onto a separate core, so its hints omit "separate core".
+///
+/// A function is either promoted (CPU host, non-suspending) or suspending (I/O) — never both
+/// (`compute_cpu_promotions` only promotes non-suspending functions), so the two paths never
+/// double-emit on the same function.
+///
+/// Per `.claude/rules/inference.md` this is an Informational-category hint: no typeable Yinz form
+/// exists for "run at the same time as"; the hint is a muted comment showing the scheduling
+/// decision without requiring a source change.
+///
+/// Time: O(F · N · S²) where F = functions, N = AST nodes, S = statements per block
+/// Space: O(hints) + O(D) recursion depth.
+#[salsa::tracked]
+pub fn parallel_group_hints(
+    db: &dyn SourceFileRegistry,
+    source: SourceFile,
+) -> Vec<ParallelGroupHint> {
+    let parse = parse_query(db, source);
+    let sig_output = module_signatures_query(db, source);
+    let check_out = check_query(db, source);
+
+    let effective_suspends =
+        build_effective_suspend_set(&check_out.suspends_set, &sig_output.imported_fns);
+
+    // The CPU-result-ABI-supported callee set, built from resolved return types via
+    // `cpu_result_abi_supports`. This is the SAME set codegen's `cpu_supported_callees` builds
+    // from AST return types (an exhaustive parity test in `ynz-codegen` proves the two ABI checks
+    // agree over every return class), so the admission gate decides identically in both crates.
+    let supported_callees: HashSet<String> = sig_output
+        .sig_table
+        .fns
+        .iter()
+        .filter(|(_, sig)| crate::independence::cpu_result_abi_supports(&sig.ret))
+        .map(|(name, _)| name.clone())
+        .collect();
+
+    let source_text = source.text(db);
+    let mut hints: Vec<ParallelGroupHint> = Vec::new();
+
+    for item in &parse.module.items {
+        let Item::Function(f) = item else { continue };
+
+        if effective_suspends.contains(&f.name) {
+            // Suspending function: I/O-overlap groups, no separate core.
+            collect_io_overlap_hints(
+                &f.body.stmts,
+                &effective_suspends,
+                &sig_output.sig_table,
+                &sig_output.imported_fns,
+                &source_text,
+                &mut hints,
+            );
+            continue;
+        }
+
+        // Non-suspending function: emit a hint ONLY for the single CPU group codegen admits.
+        let Some(group) =
+            crate::cpu_admission::admitted_cpu_group(f, &effective_suspends, &supported_callees)
+        else {
+            continue;
+        };
+        let Some(block) = resolve_block_path(&f.body.stmts, &group.block_path) else {
+            continue;
+        };
+        let members: Vec<&Stmt> = group.member_indices.iter().map(|&i| &block[i]).collect();
+        emit_group_member_hints(&members, GroupClass::Cpu, &source_text, &mut hints);
+    }
+
+    hints
 }

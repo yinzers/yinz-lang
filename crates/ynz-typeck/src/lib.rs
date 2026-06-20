@@ -41,9 +41,11 @@
 pub mod ast_offset;
 pub mod builtins;
 pub mod check;
+pub mod cpu_admission;
 pub mod effective_ownership;
 pub mod exports;
 pub mod generics;
+pub mod independence;
 pub mod inlay_hint_passes;
 pub mod intrinsics;
 pub mod may_block;
@@ -59,22 +61,23 @@ pub mod type_at_offset;
 pub mod types;
 
 pub use check::{
-    check, check_with_kernel_mode, crossing_local_names, type_attached_const_type,
-    LocalCrossesWait, TypedModule,
+    check, check_with_kernel_mode, crossing_local_names, crossing_local_names_with_cpu_spike,
+    type_attached_const_type, LocalCrossesWait, TypedModule,
 };
 pub use effective_ownership::{EffectiveOwnership, EffectiveOwnershipReport};
 pub use exports::ExportTable;
 pub use generics::{GenericFnTable, GenericShapeTable, MonomorphizationTable};
 pub use inlay_hint_passes::{
     array_to_fixed_promotion_hints, background_routing_hints, copy_point_hints,
-    let_to_const_promotion_hints, ownership_call_site_hints, variable_type_hints,
-    wait_points_hints, BackgroundRoutingHint, CopyHint, OwnershipHint, PromotionHint,
-    PromotionKind, TypeHint, WaitPointHint,
+    let_to_const_promotion_hints, ownership_call_site_hints, parallel_group_hints,
+    variable_type_hints, wait_points_hints, BackgroundRoutingHint, CopyHint, OwnershipHint,
+    ParallelGroupHint, PromotionHint, PromotionKind, TypeHint, WaitPointHint,
 };
 pub use intrinsics::PrimitiveIntrinsicTable;
 pub use may_block::suspends_set_for_test as may_block_suspends_set;
 pub use queries::{
-    check_query, exports_query, module_signatures_query, CheckOutput, SignatureOutput,
+    check_query, cpu_promotion_query, exports_query, module_signatures_query, no_auto_parallel_env,
+    CheckOutput, PromotionOutput, SignatureOutput,
 };
 pub use shapes::{ShapeDef, ShapeTable};
 pub use signatures::{build_effective_suspend_set, SignatureTable};

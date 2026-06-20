@@ -1,0 +1,33 @@
+// v0.3-M3d worth-it proxy (positive): the contrast to the trivial-leaf file. Each function
+// loops, so it does enough work to be worth running alongside the other — the compiler runs
+// the two calls at the same time. The output is the same whether or not the two run at the
+// same time (only the print values matter, never the order they were computed in). Paired with
+// `v0_3_m3d_worth_it_trivial_leaf_inline.ynz`, which has the identical shape but tiny
+// straight-line callees that run inline instead.
+
+function sumRange(n: int) -> int {
+  let total: int = 0
+  let i: int = 0
+  while (i < n) {
+    total = total + i
+    i = i + 1
+  }
+  return total
+}
+
+function sumDoubled(n: int) -> int {
+  let total: int = 0
+  let i: int = 0
+  while (i < n) {
+    total = total + i * 2
+    i = i + 1
+  }
+  return total
+}
+
+function entrypoint() -> nothing {
+  let a = sumRange(20)
+  let b = sumDoubled(21)
+  print(a)
+  print(b)
+}

@@ -27,7 +27,7 @@ Most developers don't bother parallelizing reads — they write sequential code 
 
 This is the authoritative statement of what `wait` means. Two different jobs were historically conflated — they are separate, and only the second is `wait`'s job.
 
-**Suspension is automatic. You never write `wait` for it.** A call that can block (transitively reaches an I/O / may-block operation — in v0.3 that is `sleep`) is compiled into a suspension point by the compiler's whole-program may-block analysis (no function coloring — see `design/future/concurrency.md`). The function suspends and hands its thread back to the scheduler automatically. The IDE shows the inferred suspension as the muted `wait_points` hint. The user does **not** type `wait` to make a call suspend correctly — that shipped in v0.3-M2.
+**Suspension is automatic. You never write `wait` for it.** A call that can block (transitively reaches an I/O / may-block operation — in v0.3 that is `sleep`) is compiled into a suspension point by the compiler's whole-program may-block analysis (no function coloring — see `design/no-function-coloring.md`). The function suspends and hands its thread back to the scheduler automatically. The IDE shows the inferred suspension as the muted `wait_points` hint. The user does **not** type `wait` to make a call suspend correctly — that shipped in v0.3-M2.
 
 **Ordering is also mostly automatic.** The compiler orders operations it can prove are dependent:
 - **Data dependency** — if B uses A's result, B waits for A. (No `wait` needed.)
@@ -630,19 +630,135 @@ function loop(n: int) -> nothing { if (n > 0) { step(n); loop(n - 1) } }
 
 ---
 
+## CPU Statement Parallelization (M3d)
+
+### What This Is
+
+M3b auto-parallelizes independent suspending (I/O) calls by interleaving them in the
+state-machine's async event loop.  M3d extends that to **pure CPU-bound** calls: when two
+or more independent, CPU-heavy statements appear in the same straight-line block, the
+compiler schedules them on separate hardware cores concurrently, then collects results
+before the next dependent statement runs.
+
+The user writes exactly what they'd write without M3d:
+
+```ynz
+function analyzeGame(game: Game) -> Stats {
+    let hits    = crunchStat(game.hits)
+    let rbi     = crunchStat(game.rbi)
+    let average = crunchStat(game.average)
+    return combineStats(hits, rbi, average)
+}
+```
+
+The compiler sees that `hits`, `rbi`, and `average` are independent (no data flows between
+the three `crunchStat` calls) and emits parallel execution automatically.  The user never
+writes `background`, `wait`, or any synchronization primitive.
+
+### Promotion Rules (what gets parallelized)
+
+A straight-line block is **promoted** to CPU-parallel execution when ALL of the following
+hold:
+
+1. **The enclosing function is pure-CPU** — its call graph contains no may-block intrinsics
+   and no suspending helpers.  If the function is already a state machine (has `wait` inside
+   it or calls a suspending function), its statements are scheduled by the M3b I/O-overlap
+   path, not M3d.
+
+2. **Two or more independent groups exist** — the independence analysis (same analysis M3b
+   uses) finds a partition where at least one group holds ≥2 statements that share no data
+   dependency.
+
+3. **Every member of a CPU group does real work** — a statement is considered "CPU-heavy"
+   when the callee is listed in the `does_real_work` set: its call graph reaches a loop
+   (`while`/`for`) or recursion (self-recursion or a mutual cycle).  A cheap constant-return
+   function does not qualify; bundling it would add blocking-pool spawn overhead without saving
+   real compute time.
+
+4. **Minimum two qualifying members per parallel group** — a singleton group cannot be
+   parallelized with itself.
+
+### Decline Rules (what does NOT get parallelized)
+
+The compiler declines to promote when ANY of the following hold:
+
+- **The function calls a suspending helper** — it will be a state machine; M3b handles it.
+- **All groups are singletons** — nothing to parallelize in parallel with.
+- **No member does real work** — per rule 3 above, cheap helpers are not worth spawning.
+- **Auto-parallelization is disabled** — the `--no-auto-parallel` build flag (and `kernel` mode,
+  which has no scheduler to spawn onto) turns promotion off entirely.  The flag is currently
+  carried internally via the `YNZ_NO_AUTO_PARALLEL` env var read by both the promotion query and
+  codegen; threading it as an explicit salsa input (so `ynz watch`/LSP codegen honor it without an
+  env var) is a deferred mechanism tracked in `.claude/todos.md`.  It is the program-wide override
+  for the "force sequential" direction; per-site, an explicit `wait` between two statements forces
+  them to run in order.
+
+### Panic Re-Raise
+
+If any spawned task panics, the panic is re-raised on the driving coroutine after all tasks
+are joined.  The first panic wins; subsequent panics from other tasks are discarded.
+
+The user sees a normal panic (same message, same backtrace from the panicking task) — no
+special concurrency error type.
+
+### Cancellation Detach Constraint
+
+Spawned tasks cannot be cancelled once dispatched.  If the driving function returns early
+(e.g., a return inside an if-arm that runs before the join), the tasks run to completion
+and their results are discarded.  This matches Tokio `spawn_blocking` semantics: tasks are
+detached from the caller's lifecycle.
+
+Design rationale: cancellation tracking requires per-task abort handles and a drop-guard
+protocol that would surface a new primitive to the user.  The detach behavior is always
+safe (tasks finish, results are dropped); the only cost is wasted CPU on the early-exit
+path.
+
+### Worth-It Proxy
+
+M3d uses a conservative worth-it proxy rather than runtime profiling:
+
+- The function's call graph is inspected for loops (`Stmt::For`, `Stmt::While`) and for
+  recursion (self-recursion `f → f`, or a mutual cycle of size ≥ 2 in the call graph).
+- If either is found, the callee is marked `does_real_work = true` in the signature table.
+- Only `does_real_work` callees appear in CPU parallel groups.
+
+This proxy avoids the need for PGO or runtime cost models at the expense of potentially
+missing some genuinely-expensive functions that have neither loops nor recursion.
+That is acceptable: skipping a promotion is always correct; a false-positive promotion adds
+spawn overhead to a cheap function (soundness issue, not a miscompile — but wasteful).
+
+Future: PGO-based cost models (v0.6+) will replace the proxy with profile-guided thresholds.
+
+### Same-Callee Amendment
+
+M3d **lifts** the same-callee restriction for CPU members.  Two data-independent calls to the
+SAME CPU callee — `crunchStat(a)` + `crunchStat(b)`, or `fib(40)` + `fib(41)` — DO run in
+parallel: each spawn gets a per-invocation ctx, and the handle/result slots are keyed by
+`(group, member-index)` rather than by callee name, so the two invocations never alias each
+other's frame slots.  The independence analysis (`partition_groups_classified`) gates the
+same-callee branch on `MemberClass::Suspending` only, so CPU members skip it entirely.
+
+The restriction REMAINS for suspending (I/O) members: two calls to the same suspending function
+still collapse to sequential, because the I/O sub-frame is keyed by callee name (one slot per
+unique callee).  See the divergence entry below for the I/O cost and reversal path.
+
+---
+
 ## Design Divergences (v0.3-M3b Auto-Parallelization Pass)
 
 The following divergences from the full design doc are documented per `no-duct-tape.md` — each names the concrete cost and the reversal path.
 
-### Same-callee concurrent calls run sequentially
+### Same-callee concurrent calls run sequentially (suspending/I/O members only)
+
+**Scope**: applies to M3b I/O-overlap parallelization only.  M3d CPU parallelization LIFTS this restriction (see the Same-Callee Amendment above): two data-independent calls to the same CPU callee DO run in parallel, because CPU spawns are keyed by `(group, member-index)` with a per-invocation ctx rather than by callee name.
 
 **What the design says**: independent operations auto-parallelize regardless of which function they call.
 
-**What the v0.3 pass does**: two calls to the same suspending function (e.g., `worker(1)` followed by `worker(2)`) are lowered sequentially, even when they are data-independent.
+**What the v0.3 pass does**: two calls to the same *suspending* function (e.g., `worker(1)` followed by `worker(2)`) are lowered sequentially, even when they are data-independent.  This does NOT apply to CPU calls: two data-independent `crunchStat(x)` + `crunchStat(y)` (or `fib(40)` + `fib(41)`) parallelize, since the CPU path uses per-invocation ctx + member-index slot keying.
 
-**Named cost**: the composed frame allocates one sub-frame slot per unique callee name (keyed on the function name string). Two concurrent invocations of the same callee would require two slots with a disambiguation scheme — that is a separate concern in `build_frame_layouts`. Any case where the user calls the same suspending helper twice in a row doesn't parallelize in v0.3; it runs sequentially, which is always correct.
+**Named cost**: the I/O sub-frame allocates one slot per unique suspending callee name. Two concurrent invocations of the same *suspending* callee would require two slots with a disambiguation scheme — a separate concern in `build_frame_layouts`. Calling the same suspending helper twice in a row doesn't parallelize in v0.3; it runs sequentially, which is always correct.  CPU members pay no such cost.
 
-**Reversal path**: extend `build_frame_layouts` to allocate N sub-frame slots per callee name when a function is called more than once in a straight-line block, keyed on (callee_name, invocation_index). The independence analysis and join codegen are already class-agnostic; only the frame-layout phase needs the extension. Tracked in `design/future/` for a future phase.
+**Reversal path**: extend `build_frame_layouts` to allocate N sub-frame slots per suspending callee name when a suspending function is called more than once in a straight-line block, keyed on (callee_name, invocation_index) — mirroring the (group, member-index) keying the CPU path already uses. The independence analysis and join codegen are already class-agnostic; only the I/O frame-layout phase needs the extension. Tracked in `design/future/` for a future phase.
 
 ### Write-effect uses a TYPE-BASED conservative floor — mutable-heap arguments never parallelize
 
